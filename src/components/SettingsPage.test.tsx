@@ -179,5 +179,35 @@ describe("SettingsPage sidebar navigation", () => {
     expect(subnavWrapper).toHaveAttribute("aria-hidden", "false");
     expect(screen.getByRole("button", { name: /Entrim AI/ })).toBeInTheDocument();
   });
+
+  it("calls onClose when clicking the settings back button containing icon and Settings label", () => {
+    const onClose = vi.fn();
+    render(
+      <SettingsPage
+        providers={testProviders}
+        packages={[]}
+        toolCatalog={catalog}
+        disabledTools={[]}
+        appDataPath="/tmp/wackcode"
+        onClose={onClose}
+        onSave={vi.fn()}
+        onDelete={vi.fn()}
+        onSetDisabledTools={vi.fn()}
+        onRefresh={vi.fn().mockResolvedValue(undefined)}
+        onInstall={vi.fn()}
+        onTrust={vi.fn()}
+        onSearch={vi.fn().mockResolvedValue([])}
+        onRemove={vi.fn()}
+        onUpdate={vi.fn()}
+        onSetResources={vi.fn()}
+      />
+    );
+
+    const backBtn = screen.getByRole("button", { name: "Back to chats" });
+    expect(backBtn).toHaveTextContent("Settings");
+    fireEvent.click(backBtn);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
 });
+
 

@@ -562,8 +562,37 @@ button.reasoning-toggle.at-max .reasoning-toggle-label {
 
 /* ── Modals ────────────────────────────────────────── */
 .modal-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: rgb(3 4 3 / 68%); backdrop-filter: blur(8px); }
-.settings-head { height: 30px; margin: -8px 0 2px; padding: 0 8px; display: flex; align-items: center; gap: 4px; }
-.settings-title { color: var(--text-dim); font-size: 11px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
+.settings-head { height: 30px; margin: -8px 0 2px; padding: 0 4px; display: flex; align-items: center; }
+.settings-back-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  padding: 4px 6px;
+  cursor: pointer;
+  color: var(--text-dim);
+  transition: background .12s var(--ease), color .12s var(--ease);
+}
+.settings-back-button:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+.settings-back-button:hover .settings-title {
+  color: var(--text);
+}
+.settings-back-button svg {
+  width: 13px;
+  height: 13px;
+  color: var(--text-soft);
+  transition: transform .12s var(--ease), color .12s var(--ease);
+}
+.settings-back-button:hover svg {
+  color: var(--wc-accent);
+  transform: translateX(-1px);
+}
+.settings-title { color: var(--text-dim); font-size: 11px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; transition: color .12s var(--ease); }
 .settings-nav { padding: 2px 8px 10px; display: flex; flex-direction: column; gap: 1px; }
 .settings-nav-item { width: 100%; height: 32px; display: flex; align-items: center; gap: 9px; border: 0; background: transparent; color: var(--text-soft); border-radius: 7px; padding: 0 9px; cursor: pointer; text-align: left; font-size: 12.5px; }
 .settings-nav-item:hover { background: var(--surface); color: var(--text); }
@@ -723,6 +752,7 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   button.reasoning-toggle.at-max .reasoning-icon,
   button.reasoning-toggle.at-max .reasoning-toggle-label { animation: none; }
   .settings-subnav { transform: none !important; }
+  .settings-back-button svg { transform: none !important; }
   * { transition-duration: .01ms !important; animation-duration: .01ms !important; }
 }
 

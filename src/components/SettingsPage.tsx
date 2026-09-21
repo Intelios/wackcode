@@ -52,11 +52,11 @@ export function SettingsPage({
         <div className="titlebar-drag" data-tauri-drag-region />
         <div className="settings-head">
           <Tooltip label="Back to chats">
-            <button type="button" className="ghost-button" onClick={onClose} aria-label="Back to chats">
+            <button type="button" className="settings-back-button" onClick={onClose} aria-label="Back to chats">
               <Icon name="back" />
+              <span className="settings-title">Settings</span>
             </button>
           </Tooltip>
-          <span className="settings-title">Settings</span>
         </div>
         <nav className="settings-nav" aria-label="Settings sections">
           {SECTIONS.map((item) => (

@@ -43,6 +43,7 @@ export const api = {
   }) => invoke<string>("prompt", { input }),
   stopTask: (taskId: string) => invoke<void>("stop_task", { taskId }),
   archiveTask: (taskId: string) => invoke<TaskRecord>("archive_task", { taskId }),
+  unarchiveTask: (taskId: string) => invoke<TaskRecord>("unarchive_task", { taskId }),
   gitChanges: (taskId: string) => invoke<GitChanges>("git_changes", { taskId }),
   revealTask: (taskId: string) => invoke<void>("reveal_task", { taskId }),
   revealPath: (path: string) => invoke<void>("reveal_path", { path })

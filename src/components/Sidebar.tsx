@@ -5,7 +5,7 @@ import { MenuButton } from "./ui/MenuButton";
 import type { MenuEntry } from "./ui/Menu";
 import { Tooltip } from "./ui/Tooltip";
 
-export type TaskAction = "rename" | "worktree" | "reveal" | "copy" | "archive" | "delete";
+export type TaskAction = "rename" | "worktree" | "reveal" | "copy" | "archive" | "unarchive" | "delete";
 export type ProjectAction = "reveal" | "remove";
 
 interface SidebarProps {
@@ -48,7 +48,9 @@ export function Sidebar({ projects, tasks, selectedTaskId, showArchived, onSelec
       { label: "Reveal in Finder", icon: <Icon name="folder" />, onSelect: () => onTaskAction(task, "reveal") },
       { label: "Copy path", icon: <Icon name="copy" />, onSelect: () => onTaskAction(task, "copy") },
       "separator",
-      { label: "Archive", icon: <Icon name="archive" />, onSelect: () => onTaskAction(task, "archive") },
+      task.archived
+        ? { label: "Unarchive", icon: <Icon name="archive" />, onSelect: () => onTaskAction(task, "unarchive") }
+        : { label: "Archive", icon: <Icon name="archive" />, onSelect: () => onTaskAction(task, "archive") },
       { label: "Delete", icon: <Icon name="trash" />, danger: true, onSelect: () => onTaskAction(task, "delete") }
     ];
   }

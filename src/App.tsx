@@ -294,6 +294,11 @@ export default function App() {
         setData((current) => ({ ...current, tasks: current.tasks.map((item) => item.id === archived.id ? archived : item) }));
         selectAfterRemoval(task.id);
       } catch (reason) { setGlobalError(String(reason)); }
+    } else if (action === "unarchive") {
+      try {
+        const restored = await api.unarchiveTask(task.id);
+        setData((current) => ({ ...current, tasks: current.tasks.map((item) => item.id === restored.id ? restored : item) }));
+      } catch (reason) { setGlobalError(String(reason)); }
     } else if (action === "worktree") {
       try {
         const updated = await api.convertToWorktree(task.id);

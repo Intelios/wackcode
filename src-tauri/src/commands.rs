@@ -299,6 +299,16 @@ pub async fn archive_task(app: AppHandle, state: State<'_, MetadataState>, task_
 }
 
 #[tauri::command]
+pub fn unarchive_task(state: State<'_, MetadataState>, task_id: String) -> Result<TaskRecord, String> {
+    state.mutate(|data| {
+        let task = data.tasks.iter_mut().find(|task| task.id == task_id).ok_or_else(|| "Task not found".to_string())?;
+        task.archived = false;
+        task.updated_at = Utc::now().to_rfc3339();
+        Ok(task.clone())
+    })
+}
+
+#[tauri::command]
 pub fn rename_task(state: State<'_, MetadataState>, task_id: String, name: String) -> Result<TaskRecord, String> {
     let name = required(&name, "Chat name")?;
     state.mutate(|data| {

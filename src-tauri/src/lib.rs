@@ -32,6 +32,7 @@ pub fn run() {
             commands::prompt,
             commands::stop_task,
             commands::archive_task,
+            commands::unarchive_task,
             commands::rename_task,
             commands::delete_task,
             commands::convert_task_to_worktree,

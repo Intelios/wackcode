@@ -28,7 +28,7 @@ import { Composer } from "./components/Composer";
 import { Icon } from "./components/Icons";
 import { ProjectBar } from "./components/ProjectBar";
 import { SettingsPage } from "./components/SettingsPage";
-import { Sidebar, type ProjectAction, type TaskAction } from "./components/Sidebar";
+import { Sidebar, NO_PROJECT_KEY, type ProjectAction, type TaskAction } from "./components/Sidebar";
 import { Transcript } from "./components/Transcript";
 import { TodoPanel } from "./components/TodoPanel";
 import { InlineDialog, type ExtensionUIResponse } from "./components/InlineDialog";
@@ -39,8 +39,9 @@ const emptyData: AppData = { version: 1, providers: [], projects: [], tasks: [],
 
 const LAST_MODEL_KEY = "wackcode:lastModel";
 const LAST_PROJECT_KEY = "wackcode:lastProject";
-const NO_PROJECT_KEY = "none";
+const NO_PROJECT_MODEL_KEY = "none";
 const CHANGES_OPEN_KEY = "wackcode:changesOpen";
+const COLLAPSED_PROJECTS_KEY = "wackcode:collapsedProjects";
 
 interface ModelChoice {
   providerId: string;
@@ -85,6 +86,7 @@ export default function App() {
   const [changesWidth, setChangesWidth] = useState(() => loadJSON("wackcode:changesWidth", 430));
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [collapsedProjects, setCollapsedProjects] = useState<ReadonlySet<string>>(() => new Set(loadJSON<string[]>(COLLAPSED_PROJECTS_KEY, [])));
   const [confirm, setConfirm] = useState<ConfirmState>();
   const [extensionRequests, setExtensionRequests] = useState<ExtensionUIRequest[]>([]);
   const [booting, setBooting] = useState(true);
@@ -110,6 +112,26 @@ export default function App() {
   useEffect(() => { selectedTaskRef.current = selectedTaskId; }, [selectedTaskId]);
   useEffect(() => { localStorage.setItem(CHANGES_OPEN_KEY, JSON.stringify(changesOpen)); }, [changesOpen]);
   useEffect(() => { localStorage.setItem("wackcode:changesWidth", JSON.stringify(changesWidth)); }, [changesWidth]);
+  useEffect(() => { localStorage.setItem(COLLAPSED_PROJECTS_KEY, JSON.stringify([...collapsedProjects])); }, [collapsedProjects]);
+
+  const toggleProjectCollapsed = useCallback((key: string) => {
+    setCollapsedProjects((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }, []);
+
+  // Selecting a chat (directly or by creating one) must reveal its group, so a
+  // collapsed project can never hide the conversation the user just opened.
+  const selectedGroupKey = selectedTask ? selectedTask.projectId ?? NO_PROJECT_KEY : undefined;
+  useEffect(() => {
+    if (selectedGroupKey) {
+      setCollapsedProjects((current) => current.has(selectedGroupKey)
+        ? new Set([...current].filter((key) => key !== selectedGroupKey))
+        : current);
+    }
+  }, [selectedGroupKey]);
 
   const patchTask = useCallback((taskId: string, patch: Partial<TaskRecord>) => {
     setData((current) => ({ ...current, tasks: current.tasks.map((task) => task.id === taskId ? { ...task, ...patch } : task) }));
@@ -228,14 +250,14 @@ export default function App() {
 
   const rememberModel = useCallback((projectId: string | null, choice: ModelChoice) => {
     setLastModels((current) => {
-      const next = { ...current, [projectId ?? NO_PROJECT_KEY]: choice };
+      const next = { ...current, [projectId ?? NO_PROJECT_MODEL_KEY]: choice };
       localStorage.setItem(LAST_MODEL_KEY, JSON.stringify(next));
       return next;
     });
   }, []);
 
   const defaultChoice = useCallback((projectId: string | null): ModelChoice | undefined => {
-    const remembered = lastModels[projectId ?? NO_PROJECT_KEY];
+    const remembered = lastModels[projectId ?? NO_PROJECT_MODEL_KEY];
     const rememberedProvider = remembered && configuredProviders.find((item) => item.id === remembered.providerId);
     const rememberedModel = rememberedProvider?.models.find((model) => model.id === remembered.modelId && modelIsReady(model));
     if (rememberedProvider && rememberedModel) {
@@ -656,11 +678,13 @@ export default function App() {
         selectedTaskId={selectedTaskId}
         showArchived={showArchived}
         pendingDialogTaskIds={pendingDialogTaskIds}
+        collapsedProjectIds={collapsedProjects}
         onSelectTask={(id) => { setDraft(undefined); setSelectedTaskId(id); }}
         onNewChat={(project) => openDraft(project?.id ?? null)}
         onNewDraft={() => openDraft()}
         onAddProject={() => void addProject()}
         onToggleArchived={() => setShowArchived((value) => !value)}
+        onToggleProjectCollapsed={toggleProjectCollapsed}
         onOpenSettings={() => setSettingsOpen(true)}
         onTaskAction={(task, action) => void taskAction(task, action)}
         onProjectAction={(project, action) => void projectAction(project, action)}

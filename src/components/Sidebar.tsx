@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { ReactNode } from "react";
 import type { ProjectRecord, TaskRecord } from "../types";
 import { Icon } from "./Icons";
 import { MenuButton } from "./ui/MenuButton";
@@ -8,6 +9,9 @@ import { Tooltip } from "./ui/Tooltip";
 export type TaskAction = "rename" | "worktree" | "reveal" | "copy" | "archive" | "unarchive" | "delete";
 export type ProjectAction = "reveal" | "remove";
 
+/** Collapse-key for the "No project" group, which has no ProjectRecord id. */
+export const NO_PROJECT_KEY = "__no_project__";
+
 interface SidebarProps {
   projects: ProjectRecord[];
   tasks: TaskRecord[];
@@ -15,18 +19,21 @@ interface SidebarProps {
   showArchived: boolean;
   /** Task IDs that have a pending extension dialog waiting for a response. */
   pendingDialogTaskIds: ReadonlySet<string>;
+  /** Group keys (project ids or NO_PROJECT_KEY) whose chats are hidden. */
+  collapsedProjectIds: ReadonlySet<string>;
   onSelectTask: (id: string) => void;
   onNewChat: (project: ProjectRecord | null) => void;
   onNewDraft: () => void;
   onAddProject: () => void;
   onToggleArchived: () => void;
+  onToggleProjectCollapsed: (key: string) => void;
   onOpenSettings: () => void;
   onTaskAction: (task: TaskRecord, action: TaskAction) => void;
   onProjectAction: (project: ProjectRecord, action: ProjectAction) => void;
   onRenameTask: (taskId: string, name: string) => void;
 }
 
-export function Sidebar({ projects, tasks, selectedTaskId, showArchived, pendingDialogTaskIds, onSelectTask, onNewChat, onNewDraft, onAddProject, onToggleArchived, onOpenSettings, onTaskAction, onProjectAction, onRenameTask }: SidebarProps) {
+export function Sidebar({ projects, tasks, selectedTaskId, showArchived, pendingDialogTaskIds, collapsedProjectIds, onSelectTask, onNewChat, onNewDraft, onAddProject, onToggleArchived, onToggleProjectCollapsed, onOpenSettings, onTaskAction, onProjectAction, onRenameTask }: SidebarProps) {
   const [renamingId, setRenamingId] = useState<string>();
   const [renameValue, setRenameValue] = useState("");
   const hasArchived = tasks.some((task) => task.archived);
@@ -100,6 +107,44 @@ export function Sidebar({ projects, tasks, selectedTaskId, showArchived, pending
     );
   }
 
+  function renderHeading({ name, groupKey, plusLabel, title, groupTasks, onPlus, menu }: {
+    name: string;
+    groupKey: string;
+    plusLabel: string;
+    title?: string;
+    groupTasks: TaskRecord[];
+    onPlus: () => void;
+    menu?: ReactNode;
+  }) {
+    const collapsed = collapsedProjectIds.has(groupKey);
+    return (
+      <div className="project-heading" title={title} onClick={() => onToggleProjectCollapsed(groupKey)}>
+        <button
+          type="button"
+          className="ghost-button project-chevron"
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? `Expand ${name}` : `Collapse ${name}`}
+          onClick={(event) => { event.stopPropagation(); onToggleProjectCollapsed(groupKey); }}
+        >
+          <Icon name="chevron" />
+        </button>
+        <span className="project-name">{name}</span>
+        {collapsed && groupTasks.length > 0 && <span className="project-count">{groupTasks.length}</span>}
+        {collapsed && groupTasks.some((task) => pendingDialogTaskIds.has(task.id)) && (
+          <span className="sidebar-question-dot" title="A chat in this group is waiting for your answer" />
+        )}
+        <span className="project-actions" onClick={(event) => event.stopPropagation()}>
+          {menu}
+          <Tooltip label={plusLabel}>
+            <button type="button" className="ghost-button" onClick={onPlus} aria-label={plusLabel}>
+              <Icon name="plus" />
+            </button>
+          </Tooltip>
+        </span>
+      </div>
+    );
+  }
+
   return (
     <aside className="sidebar">
       <div className="titlebar-drag" data-tauri-drag-region />
@@ -115,40 +160,41 @@ export function Sidebar({ projects, tasks, selectedTaskId, showArchived, pending
         {projects.map((project) => {
           const projectTasks = tasks.filter((task) => task.projectId === project.id && (!task.archived || showArchived));
           return (
-            <section className="project-group" key={project.id}>
-              <div className="project-heading" title={project.path}>
-                <span>{project.name}</span>
-                <MenuButton
-                  className="ghost-button"
-                  label={`${project.name} menu`}
-                  items={() => [
-                    { label: "New chat", icon: <Icon name="plus" />, onSelect: () => onNewChat(project) },
-                    "separator",
-                    { label: "Reveal in Finder", icon: <Icon name="folder" />, onSelect: () => onProjectAction(project, "reveal") },
-                    { label: "Remove project", icon: <Icon name="trash" />, danger: true, onSelect: () => onProjectAction(project, "remove") }
-                  ]}
-                />
-                <Tooltip label={`New chat in ${project.name}`}>
-                  <button type="button" className="ghost-button" onClick={() => onNewChat(project)} aria-label={`New chat in ${project.name}`}>
-                    <Icon name="plus" />
-                  </button>
-                </Tooltip>
-              </div>
-              {projectTasks.map((task) => renderTask(task, project))}
+            <section className={`project-group ${collapsedProjectIds.has(project.id) ? "" : "open"}`} key={project.id}>
+              {renderHeading({
+                name: project.name,
+                groupKey: project.id,
+                plusLabel: `New chat in ${project.name}`,
+                title: project.path,
+                groupTasks: projectTasks,
+                onPlus: () => onNewChat(project),
+                menu: (
+                  <MenuButton
+                    className="ghost-button"
+                    label={`${project.name} menu`}
+                    items={() => [
+                      { label: "New chat", icon: <Icon name="plus" />, onSelect: () => onNewChat(project) },
+                      "separator",
+                      { label: "Reveal in Finder", icon: <Icon name="folder" />, onSelect: () => onProjectAction(project, "reveal") },
+                      { label: "Remove project", icon: <Icon name="trash" />, danger: true, onSelect: () => onProjectAction(project, "remove") }
+                    ]}
+                  />
+                )
+              })}
+              {!collapsedProjectIds.has(project.id) && projectTasks.map((task) => renderTask(task, project))}
             </section>
           );
         })}
         {looseTasks.length > 0 && (
-          <section className="project-group">
-            <div className="project-heading">
-              <span>No project</span>
-              <Tooltip label="New chat with no project">
-                <button type="button" className="ghost-button" onClick={() => onNewChat(null)} aria-label="New chat with no project">
-                  <Icon name="plus" />
-                </button>
-              </Tooltip>
-            </div>
-            {looseTasks.map((task) => renderTask(task))}
+          <section className={`project-group ${collapsedProjectIds.has(NO_PROJECT_KEY) ? "" : "open"}`}>
+            {renderHeading({
+              name: "No project",
+              groupKey: NO_PROJECT_KEY,
+              plusLabel: "New chat with no project",
+              groupTasks: looseTasks,
+              onPlus: () => onNewChat(null)
+            })}
+            {!collapsedProjectIds.has(NO_PROJECT_KEY) && looseTasks.map((task) => renderTask(task))}
           </section>
         )}
       </nav>

@@ -51,13 +51,20 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .project-list { flex: 1; overflow-y: auto; padding: 4px 8px 16px; }
 .project-group { margin-bottom: 14px; }
 .project-heading {
-  height: 28px; padding: 0 4px 0 9px; display: flex; align-items: center; gap: 2px;
+  height: 28px; padding: 0 4px 0 3px; display: flex; align-items: center; gap: 2px;
   color: var(--text-dim); font-size: 11px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase;
+  cursor: pointer;
 }
-.project-heading > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; min-width: 0; }
+.project-heading .project-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; min-width: 0; }
 .project-heading > :last-child { margin-left: auto; }
 .project-heading .ghost-button, .project-heading .icon-button { opacity: 0; transition: opacity .12s; }
 .project-heading:hover .ghost-button, .project-heading:hover .icon-button { opacity: 1; }
+.project-heading .project-chevron { opacity: 1; }
+.project-heading .project-chevron svg { width: 11px; height: 11px; color: var(--text-faint); transition: transform .15s var(--ease); }
+.project-group.open .project-chevron svg { transform: rotate(90deg); }
+.project-count { flex: 0 0 auto; color: var(--text-faint); font-size: 10px; font-weight: 500; background: #171a15; padding: 1px 6px; border-radius: 8px; }
+.project-actions { display: flex; align-items: center; gap: 1px; flex: 0 0 auto; }
+.project-heading .sidebar-question-dot { margin-left: 2px; }
 .ghost-button { border: 0; background: transparent; padding: 3px; cursor: pointer; color: var(--text-soft); border-radius: 5px; display: inline-grid; place-items: center; width: 22px; height: 22px; }
 .ghost-button:hover { color: var(--wc-accent); background: var(--surface-hover); }
 .ghost-button svg { width: 13px; height: 13px; }

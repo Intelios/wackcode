@@ -1,0 +1,45 @@
+{
+  "name": "wackcode",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build:web": "tsc -b && vite build",
+    "build:worker": "pnpm --dir worker build",
+    "prepare:worker": "node scripts/prepare-worker.mjs",
+    "prepare:runtime": "node scripts/prepare-runtime.mjs",
+    "mock:provider": "node scripts/mock-provider.mjs",
+    "dev:desktop": "tauri dev",
+    "build:desktop": "pnpm prepare:runtime && tauri build",
+    "test:web": "vitest run",
+    "test:worker": "pnpm --dir worker test",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test": "pnpm test:web && pnpm test:worker && pnpm test:rust",
+    "check": "pnpm build:web && pnpm build:worker && cargo check --manifest-path src-tauri/Cargo.toml",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.8.0",
+    "@tauri-apps/plugin-clipboard-manager": "^2.3.0",
+    "@tauri-apps/plugin-dialog": "^2.4.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.8.4",
+    "@testing-library/jest-dom": "6.9.1",
+    "@testing-library/react": "^16.3.0",
+    "@types/node": "^24.5.2",
+    "@types/react": "^19.1.16",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.3",
+    "jsdom": "^27.0.0",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.7",
+    "vitest": "^3.2.4"
+  },
+  "packageManager": "pnpm@11.5.0"
+}

@@ -1,0 +1,16 @@
+node_modules/
+.pnpm-store/
+dist/
+.DS_Store
+*.log
+*.tsbuildinfo
+
+# Tauri / Rust
+src-tauri/target/
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
+src-tauri/resources/worker/
+
+# Test output
+coverage/
+.vitest/

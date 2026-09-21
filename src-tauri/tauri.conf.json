@@ -1,0 +1,48 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "WackCode",
+  "version": "0.1.0",
+  "identifier": "com.wackcode.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm build:worker && pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build:web && pnpm prepare:worker",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "macOSPrivateApi": false,
+    "windows": [
+      {
+        "title": "WackCode",
+        "width": 1440,
+        "height": 920,
+        "minWidth": 980,
+        "minHeight": 640,
+        "resizable": true,
+        "fullscreen": false,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 17, "y": 18 },
+        "backgroundColor": "#111310"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: data:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'",
+      "capabilities": ["default"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "externalBin": ["binaries/wackcode-node"],
+    "resources": ["resources/worker"],
+    "copyright": "Copyright © 2026 Jack",
+    "category": "DeveloperTool",
+    "shortDescription": "A local desktop UI for Pi",
+    "longDescription": "WackCode is a local desktop coding workspace powered by the Pi coding agent.",
+    "macOS": {
+      "minimumSystemVersion": "12.0",
+      "signingIdentity": "-"
+    }
+  }
+}

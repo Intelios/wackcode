@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ToolCatalogEntry } from "../types";
+import type { ProviderRecord, ToolCatalogEntry } from "../types";
 import { SettingsPage } from "./SettingsPage";
 
 vi.mock("../api", () => ({ api: { revealPath: vi.fn().mockResolvedValue(undefined) } }));
@@ -75,3 +75,97 @@ describe("SettingsPage tools section", () => {
     expect(await screen.findByText(/Metadata lock was poisoned/)).toBeInTheDocument();
   });
 });
+
+const testProviders: ProviderRecord[] = [
+  {
+    id: "p1",
+    name: "Entrim AI",
+    baseUrl: "https://api.entrim.ai/v1",
+    apiFormat: "openai-completions",
+    models: [],
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+    hasApiKey: true
+  },
+  {
+    id: "p2",
+    name: "Test",
+    baseUrl: "https://api.test.com/v1",
+    apiFormat: "openai-completions",
+    models: [],
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+    hasApiKey: false
+  }
+];
+
+describe("SettingsPage sidebar navigation", () => {
+  it("renders providers subnav directly under the Providers button and before Packages/Tools", () => {
+    render(
+      <SettingsPage
+        providers={testProviders}
+        packages={[]}
+        toolCatalog={catalog}
+        disabledTools={[]}
+        appDataPath="/tmp/wackcode"
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+        onDelete={vi.fn()}
+        onSetDisabledTools={vi.fn()}
+        onRefresh={vi.fn().mockResolvedValue(undefined)}
+        onInstall={vi.fn()}
+        onTrust={vi.fn()}
+        onSearch={vi.fn().mockResolvedValue([])}
+        onRemove={vi.fn()}
+        onUpdate={vi.fn()}
+        onSetResources={vi.fn()}
+      />
+    );
+
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    const buttons = Array.from(nav.querySelectorAll("button")).map((btn) => btn.textContent?.trim());
+
+    // Expected order: Providers -> Entrim AI -> Test -> New connection -> Packages -> Tools
+    expect(buttons).toEqual([
+      "Providers",
+      "Entrim AI",
+      "Test",
+      "New connection",
+      "Packages",
+      "Tools"
+    ]);
+  });
+
+  it("hides provider subnav when switching to Packages or Tools", () => {
+    render(
+      <SettingsPage
+        providers={testProviders}
+        packages={[]}
+        toolCatalog={catalog}
+        disabledTools={[]}
+        appDataPath="/tmp/wackcode"
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+        onDelete={vi.fn()}
+        onSetDisabledTools={vi.fn()}
+        onRefresh={vi.fn().mockResolvedValue(undefined)}
+        onInstall={vi.fn()}
+        onTrust={vi.fn()}
+        onSearch={vi.fn().mockResolvedValue([])}
+        onRemove={vi.fn()}
+        onUpdate={vi.fn()}
+        onSetResources={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: /Entrim AI/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Packages" }));
+    expect(screen.queryByRole("button", { name: /Entrim AI/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /New connection/ })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Providers" }));
+    expect(screen.getByRole("button", { name: /Entrim AI/ })).toBeInTheDocument();
+  });
+});
+

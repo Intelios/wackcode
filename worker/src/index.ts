@@ -100,7 +100,8 @@ function normalizeMessage(message: unknown, index: number): NormalizedMessage | 
     role,
     timestamp,
     blocks,
-    stopReason: typeof raw.stopReason === "string" ? raw.stopReason : undefined
+    stopReason: typeof raw.stopReason === "string" ? raw.stopReason : undefined,
+    errorMessage: typeof raw.errorMessage === "string" ? raw.errorMessage : undefined
   };
 }
 
@@ -242,6 +243,16 @@ async function initialize(command: InitCommand): Promise<void> {
       eventType.startsWith("summarization_retry_")
     ) {
       send({ type: "activity", taskId: command.taskId, event: eventType, detail: value });
+    }
+    if (eventType === "agent_end" && value.willRetry !== true) {
+      const messages = Array.isArray(value.messages) ? value.messages : [];
+      const failed = [...messages].reverse().find((message) => {
+        const entry = message as Record<string, unknown> | undefined;
+        return entry?.role === "assistant" && entry.stopReason === "error";
+      }) as Record<string, unknown> | undefined;
+      if (typeof failed?.errorMessage === "string" && failed.errorMessage) {
+        send({ type: "worker_error", taskId: command.taskId, message: safeError(failed.errorMessage) });
+      }
     }
     if (
       eventType === "message_update" ||

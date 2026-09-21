@@ -53,6 +53,9 @@ pub async fn save_provider(
         .providers.iter().find(|provider| provider.id == id).map(|provider| provider.created_at.clone())
         .unwrap_or_else(|| now.clone());
     if let Some(api_key) = input.api_key.as_deref().map(str::trim).filter(|key| !key.is_empty()) {
+        if api_key.starts_with("http://") || api_key.starts_with("https://") {
+            return Err("That looks like a URL, not an API key — paste the key your provider issued".into());
+        }
         keychain_entry(&id)?.set_password(api_key).map_err(keychain_error)?;
     }
     let has_api_key = read_api_key(&id).is_ok();

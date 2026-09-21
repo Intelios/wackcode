@@ -49,6 +49,7 @@ function Message({ message }: { message: NormalizedMessage }) {
           if (block.type === "tool-call" || block.type === "tool-result") return <ToolBlock block={block} key={index} />;
           return <Markdown key={index}>{block.text ?? ""}</Markdown>;
         })}
+        {message.stopReason === "error" && <div className="message-error">{message.errorMessage || "The provider rejected the request."}</div>}
         {message.stopReason === "aborted" && <span className="aborted-label">Stopped</span>}
       </div>
     </article>

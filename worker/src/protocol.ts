@@ -59,6 +59,7 @@ export interface NormalizedMessage {
   timestamp?: number;
   blocks: NormalizedBlock[];
   stopReason?: string;
+  errorMessage?: string;
 }
 
 export interface SessionSnapshot {

@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AskQuestion, ExtensionUIRequest } from "../types";
-import { QuestionDialog } from "./QuestionDialog";
+import { QuestionCard } from "./QuestionDialog";
 
 afterEach(cleanup);
 
@@ -34,10 +34,10 @@ const request: Extract<ExtensionUIRequest, { method: "questions" }> = {
   ...base, method: "questions", title: "Questions", questions
 };
 
-describe("QuestionDialog", () => {
+describe("QuestionCard", () => {
   it("submits one answer per question with the picked option labels", () => {
     const onRespond = vi.fn();
-    render(<QuestionDialog request={request} onRespond={onRespond} />);
+    render(<QuestionCard request={request} onRespond={onRespond} />);
 
     // Single-select answers then auto-advances to the next question.
     fireEvent.click(screen.getByText("Postgres"));
@@ -55,7 +55,7 @@ describe("QuestionDialog", () => {
 
   it("keeps Submit disabled until every question has an answer", () => {
     const onRespond = vi.fn();
-    render(<QuestionDialog request={request} onRespond={onRespond} />);
+    render(<QuestionCard request={request} onRespond={onRespond} />);
     fireEvent.click(screen.getByText("SQLite"));
     expect(screen.getByRole("button", { name: "Submit" })).toBeDisabled();
     fireEvent.click(screen.getByText("Worker"));
@@ -65,7 +65,7 @@ describe("QuestionDialog", () => {
   it("lets a free-form Other answer replace the preset choices", () => {
     const onRespond = vi.fn();
     const single = { ...request, questions: [questions[0]] };
-    render(<QuestionDialog request={single} onRespond={onRespond} />);
+    render(<QuestionCard request={single} onRespond={onRespond} />);
 
     fireEvent.click(screen.getByText("SQLite"));
     fireEvent.change(screen.getByPlaceholderText(/Other/), { target: { value: "Just use files" } });
@@ -78,7 +78,7 @@ describe("QuestionDialog", () => {
 
   it("navigates between question tabs without losing answers", () => {
     const onRespond = vi.fn();
-    render(<QuestionDialog request={request} onRespond={onRespond} />);
+    render(<QuestionCard request={request} onRespond={onRespond} />);
     fireEvent.click(screen.getByText("SQLite"));
     fireEvent.click(screen.getByRole("tab", { name: /Approach/ }));
     expect(screen.getByText("SQLite").closest("button")).toHaveClass("selected");
@@ -88,17 +88,10 @@ describe("QuestionDialog", () => {
     expect(onRespond).toHaveBeenCalled();
   });
 
-  it("always answers on dismissal, because the tool is blocked waiting", () => {
-    for (const dismiss of [
-      () => fireEvent.click(screen.getByRole("button", { name: "Cancel" })),
-      () => fireEvent.keyDown(window, { key: "Escape" }),
-      () => fireEvent.mouseDown(document.querySelector(".modal-backdrop") as Element),
-    ]) {
-      const onRespond = vi.fn();
-      render(<QuestionDialog request={request} onRespond={onRespond} />);
-      dismiss();
-      expect(onRespond).toHaveBeenCalledWith({ cancelled: true });
-      cleanup();
-    }
+  it("sends cancelled when the Cancel button is clicked", () => {
+    const onRespond = vi.fn();
+    render(<QuestionCard request={request} onRespond={onRespond} />);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onRespond).toHaveBeenCalledWith({ cancelled: true });
   });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import type { AskQuestion, ExtensionUIRequest, QuestionAnswer } from "../types";
 import { Icon } from "./Icons";
 
@@ -22,10 +22,11 @@ function isAnswered(draft: Draft | undefined): boolean {
 
 /**
  * The questionnaire raised by the built-in ask_user_question tool: one card per question,
- * preset options with descriptions, and a free-form "Other". Like every dialog here, closing
- * sends an explicit `cancelled` — the tool is blocked inside the run awaiting a reply.
+ * preset options with descriptions, and a free-form "Other". Rendered inline above the
+ * composer — the extension is blocked inside the run awaiting a reply, so cancelling always
+ * sends an explicit `cancelled`.
  */
-export function QuestionDialog({ request, onRespond }: Props) {
+export function QuestionCard({ request, onRespond }: Props) {
   const questions = request.questions;
   const [tab, setTab] = useState(0);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
@@ -34,14 +35,6 @@ export function QuestionDialog({ request, onRespond }: Props) {
   const draft = drafts[question.id] ?? { selected: [], custom: "" };
   const allAnswered = questions.every((entry) => isAnswered(drafts[entry.id]));
   const last = tab === questions.length - 1;
-
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") onRespond({ cancelled: true });
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onRespond]);
 
   function update(patch: Partial<Draft>) {
     setDrafts((current) => {
@@ -76,77 +69,71 @@ export function QuestionDialog({ request, onRespond }: Props) {
   }
 
   return (
-    <div
-      className="modal-backdrop"
-      role="presentation"
-      onMouseDown={(event) => { if (event.target === event.currentTarget) onRespond({ cancelled: true }); }}
-    >
-      <div className="confirm-dialog extension-dialog question-dialog" role="alertdialog" aria-modal="true" aria-label="Questions">
-        <span className="eyebrow">Question</span>
+    <div className="inline-dialog-card question-card" role="region" aria-label="Questions">
+      <span className="eyebrow">Question</span>
 
-        {questions.length > 1 && (
-          <div className="question-tabs" role="tablist">
-            {questions.map((entry, index) => (
-              <button
-                key={entry.id}
-                type="button"
-                role="tab"
-                aria-selected={index === tab}
-                className={`question-tab ${index === tab ? "active" : ""}`}
-                onClick={() => setTab(index)}
-              >
-                {isAnswered(drafts[entry.id]) && <Icon name="check" className="question-tab-check" />}
-                {entry.header}
-              </button>
-            ))}
-          </div>
+      {questions.length > 1 && (
+        <div className="question-tabs" role="tablist">
+          {questions.map((entry, index) => (
+            <button
+              key={entry.id}
+              type="button"
+              role="tab"
+              aria-selected={index === tab}
+              className={`question-tab ${index === tab ? "active" : ""}`}
+              onClick={() => setTab(index)}
+            >
+              {isAnswered(drafts[entry.id]) && <Icon name="check" className="question-tab-check" />}
+              {entry.header}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <h3 className="question-title">{question.question}</h3>
+
+      <div className="extension-options" role={question.multiSelect ? "group" : "radiogroup"} aria-label={question.question}>
+        {question.options.map((option) => {
+          const selected = draft.selected.includes(option.label);
+          return (
+            <button
+              type="button"
+              key={option.label}
+              className={`question-option ${selected ? "selected" : ""}`}
+              onClick={() => pick(option.label)}
+            >
+              <span className={`question-marker ${question.multiSelect ? "box" : "dot"}`}>{selected && <Icon name="check" />}</span>
+              <span className="question-option-text">
+                <span className="question-option-label">{option.label}</span>
+                <span className="question-option-desc">{option.description}</span>
+              </span>
+            </button>
+          );
+        })}
+        <div className={`question-option other ${draft.custom.trim() ? "selected" : ""}`}>
+          <span className="question-marker dot">{draft.custom.trim() ? <Icon name="check" /> : null}</span>
+          <textarea
+            ref={otherRef}
+            className="question-other"
+            placeholder="Other — type a custom answer"
+            rows={2}
+            value={draft.custom}
+            onFocus={() => { if (draft.selected.length) update({ selected: [] }); }}
+            onChange={(event) => update({ custom: event.target.value, selected: [] })}
+          />
+        </div>
+      </div>
+
+      <div className="confirm-actions">
+        <button type="button" className="secondary-button" onClick={() => onRespond({ cancelled: true })}>Cancel</button>
+        {tab > 0 && (
+          <button type="button" className="secondary-button" onClick={() => setTab(tab - 1)}>Back</button>
         )}
-
-        <h3 className="question-title">{question.question}</h3>
-
-        <div className="extension-options" role={question.multiSelect ? "group" : "radiogroup"} aria-label={question.question}>
-          {question.options.map((option) => {
-            const selected = draft.selected.includes(option.label);
-            return (
-              <button
-                type="button"
-                key={option.label}
-                className={`question-option ${selected ? "selected" : ""}`}
-                onClick={() => pick(option.label)}
-              >
-                <span className={`question-marker ${question.multiSelect ? "box" : "dot"}`}>{selected && <Icon name="check" />}</span>
-                <span className="question-option-text">
-                  <span className="question-option-label">{option.label}</span>
-                  <span className="question-option-desc">{option.description}</span>
-                </span>
-              </button>
-            );
-          })}
-          <div className={`question-option other ${draft.custom.trim() ? "selected" : ""}`}>
-            <span className="question-marker dot">{draft.custom.trim() ? <Icon name="check" /> : null}</span>
-            <textarea
-              ref={otherRef}
-              className="question-other"
-              placeholder="Other — type a custom answer"
-              rows={2}
-              value={draft.custom}
-              onFocus={() => { if (draft.selected.length) update({ selected: [] }); }}
-              onChange={(event) => update({ custom: event.target.value, selected: [] })}
-            />
-          </div>
-        </div>
-
-        <div className="confirm-actions">
-          <button type="button" className="secondary-button" onClick={() => onRespond({ cancelled: true })}>Cancel</button>
-          {tab > 0 && (
-            <button type="button" className="secondary-button" onClick={() => setTab(tab - 1)}>Back</button>
-          )}
-          {last ? (
-            <button type="button" className="primary-button" disabled={!allAnswered} onClick={submit}>Submit</button>
-          ) : (
-            <button type="button" className="primary-button" onClick={() => setTab(tab + 1)}>Next</button>
-          )}
-        </div>
+        {last ? (
+          <button type="button" className="primary-button" disabled={!allAnswered} onClick={submit}>Submit</button>
+        ) : (
+          <button type="button" className="primary-button" onClick={() => setTab(tab + 1)}>Next</button>
+        )}
       </div>
     </div>
   );

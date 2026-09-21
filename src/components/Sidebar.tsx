@@ -13,6 +13,8 @@ interface SidebarProps {
   tasks: TaskRecord[];
   selectedTaskId?: string;
   showArchived: boolean;
+  /** Task IDs that have a pending extension dialog waiting for a response. */
+  pendingDialogTaskIds: ReadonlySet<string>;
   onSelectTask: (id: string) => void;
   onNewChat: (project: ProjectRecord | null) => void;
   onNewDraft: () => void;
@@ -24,7 +26,7 @@ interface SidebarProps {
   onRenameTask: (taskId: string, name: string) => void;
 }
 
-export function Sidebar({ projects, tasks, selectedTaskId, showArchived, onSelectTask, onNewChat, onNewDraft, onAddProject, onToggleArchived, onOpenSettings, onTaskAction, onProjectAction, onRenameTask }: SidebarProps) {
+export function Sidebar({ projects, tasks, selectedTaskId, showArchived, pendingDialogTaskIds, onSelectTask, onNewChat, onNewDraft, onAddProject, onToggleArchived, onOpenSettings, onTaskAction, onProjectAction, onRenameTask }: SidebarProps) {
   const [renamingId, setRenamingId] = useState<string>();
   const [renameValue, setRenameValue] = useState("");
   const hasArchived = tasks.some((task) => task.archived);
@@ -83,6 +85,7 @@ export function Sidebar({ projects, tasks, selectedTaskId, showArchived, onSelec
       >
         <span className={`task-status ${task.lastError ? "error" : task.status}`} />
         <span className="task-name">{task.name}</span>
+        {pendingDialogTaskIds.has(task.id) && <span className="sidebar-question-dot" title="Waiting for your answer" />}
         {task.mode === "plan" && <span className="task-mode-chip">Plan</span>}
         {task.usesWorktree && <Icon name="branch" className="task-branch-icon" />}
         <span className="task-actions" onClick={(event) => event.stopPropagation()} onDoubleClick={(event) => event.stopPropagation()}>

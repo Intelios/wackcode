@@ -15,7 +15,6 @@ import type {
   PackageResourceKind,
   ProjectRecord,
   ProviderRecord,
-  QuestionAnswer,
   SaveProviderInput,
   TaskMode,
   TaskRecord,
@@ -31,8 +30,7 @@ import { ProjectBar } from "./components/ProjectBar";
 import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar, type ProjectAction, type TaskAction } from "./components/Sidebar";
 import { Transcript } from "./components/Transcript";
-import { ExtensionDialog } from "./components/ExtensionDialog";
-import { QuestionDialog } from "./components/QuestionDialog";
+import { InlineDialog, type ExtensionUIResponse } from "./components/InlineDialog";
 import type { PlanAction } from "./components/PlanCard";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 
@@ -100,6 +98,13 @@ export default function App() {
   // The worker's latest plan_state is the freshest mode signal; the record (or the draft's
   // choice before a task exists) is the durable fallback.
   const currentMode: TaskMode = runtime?.planState?.mode ?? selectedTask?.mode ?? draft?.mode ?? "build";
+  const pendingDialogTaskIds = useMemo(() => new Set(extensionRequests.map((r) => r.taskId)), [extensionRequests]);
+
+  const handleExtensionRespond = useCallback((request: ExtensionUIRequest, response: ExtensionUIResponse) => {
+    setExtensionRequests((current) => current.filter((entry) => entry.requestId !== request.requestId));
+    void api.respondExtensionUi({ taskId: request.taskId, requestId: request.requestId, ...response })
+      .catch((reason) => setGlobalError(String(reason)));
+  }, []);
 
   useEffect(() => { selectedTaskRef.current = selectedTaskId; }, [selectedTaskId]);
   useEffect(() => { localStorage.setItem(CHANGES_OPEN_KEY, JSON.stringify(changesOpen)); }, [changesOpen]);
@@ -647,6 +652,7 @@ export default function App() {
         tasks={data.tasks}
         selectedTaskId={selectedTaskId}
         showArchived={showArchived}
+        pendingDialogTaskIds={pendingDialogTaskIds}
         onSelectTask={(id) => { setDraft(undefined); setSelectedTaskId(id); }}
         onNewChat={(project) => openDraft(project?.id ?? null)}
         onNewDraft={() => openDraft()}
@@ -723,6 +729,11 @@ export default function App() {
               planState={runtime?.planState}
               onPlanAction={(action) => void planAction(action)}
             />
+            <InlineDialog
+              requests={extensionRequests}
+              selectedTaskId={selectedTask.id}
+              onRespond={handleExtensionRespond}
+            />
             <Composer
               status={selectedTask.status}
               providerId={selectedTask.providerId}
@@ -731,6 +742,7 @@ export default function App() {
               providers={configuredProviders}
               stats={runtime?.snapshot?.stats}
               mode={currentMode}
+              disabled={pendingDialogTaskIds.has(selectedTask.id)}
               onModeChange={(mode) => void setTaskMode(mode)}
               onConfigure={(patch) => void configure(patch)}
               onSend={sendPrompt}
@@ -745,17 +757,6 @@ export default function App() {
         </>
       )}
 
-      {extensionRequests[0] && (() => {
-        const request = extensionRequests[0];
-        const onRespond = (response: { value?: string; confirmed?: boolean; cancelled?: true; answers?: QuestionAnswer[] }) => {
-          setExtensionRequests((current) => current.filter((entry) => entry.requestId !== request.requestId));
-          void api.respondExtensionUi({ taskId: request.taskId, requestId: request.requestId, ...response })
-            .catch((reason) => setGlobalError(String(reason)));
-        };
-        return request.method === "questions"
-          ? <QuestionDialog key={request.requestId} request={request} onRespond={onRespond} />
-          : <ExtensionDialog key={request.requestId} request={request} onRespond={onRespond} />;
-      })()}
       {confirm && <ConfirmDialog title={confirm.title} body={confirm.body} confirmLabel={confirm.confirmLabel} danger={confirm.danger} onConfirm={confirm.run} onCancel={() => setConfirm(undefined)} />}
       {globalError && <div className="global-toast"><span>{globalError}</span><button onClick={() => setGlobalError(undefined)}>×</button></div>}
     </div>

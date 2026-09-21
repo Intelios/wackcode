@@ -24,9 +24,11 @@ interface ComposerProps {
   onSend: (message: string) => Promise<boolean>;
   onStop: () => void;
   onOpenSettings: () => void;
+  /** When true the composer is visually dimmed and non-interactive (e.g. a dialog needs attention). */
+  disabled?: boolean;
 }
 
-export function Composer({ status, providerId, modelId, thinkingLevel, providers, stats, header, placeholder, popoverSide = "top", mode, onModeChange, onConfigure, onSend, onStop, onOpenSettings }: ComposerProps) {
+export function Composer({ status, providerId, modelId, thinkingLevel, providers, stats, header, placeholder, popoverSide = "top", mode, onModeChange, onConfigure, onSend, onStop, onOpenSettings, disabled }: ComposerProps) {
   const [draft, setDraft] = useState("");
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const busy = status === "running" || status === "stopping";
@@ -52,9 +54,9 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
     : undefined;
 
   return (
-    <div className="composer-wrap">
+    <div className={`composer-wrap ${disabled ? "disabled" : ""}`}>
       {header && <div className="composer-header">{header}</div>}
-      <div className="composer">
+      <div className="composer" aria-disabled={disabled || undefined}>
         <textarea
           ref={areaRef}
           value={draft}
@@ -67,7 +69,7 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
             }
           }}
           placeholder={placeholder ?? (providers.length === 0 ? "Connect a provider to start…" : busy ? "Pi is working — queue your next message…" : mode === "plan" ? "Describe the work — in Plan mode Pi inspects and proposes a plan without changing files…" : "Ask Pi to inspect, change, or run something…")}
-          disabled={providers.length === 0}
+          disabled={disabled || providers.length === 0}
         />
         <div className="composer-toolbar">
           <div className="composer-left">

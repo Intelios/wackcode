@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -11,9 +11,17 @@ interface Output {
   taskId?: string;
   state?: string;
   message?: string;
+  requestId?: string;
+  method?: string;
+  title?: string;
+  options?: string[];
+  level?: string;
+  errors?: Array<{ path: string; error: string }>;
   snapshot?: {
     sessionFile?: string;
     messages: Array<{ blocks: Array<{ type: string; text?: string }> }>;
+    tools?: Array<{ name: string; description: string; source: { kind: string; packageId?: string }; available: boolean; unavailableReason?: string }>;
+    activeTools?: string[];
   };
 }
 
@@ -192,7 +200,9 @@ async function initializeWorker(
   apiKey: string,
   workspace: string,
   taskId: string,
-  sessionFile?: string
+  sessionFile?: string,
+  disabledTools?: string[],
+  resources?: { extensions: string[]; skills: string[]; prompts: string[]; themes: string[] }
 ): Promise<{ worker: WorkerHarness; ready: Output }> {
   const worker = new WorkerHarness(workspace);
   worker.send({
@@ -220,7 +230,9 @@ async function initializeWorker(
     },
     modelId: "shared-model",
     apiKey,
-    thinkingLevel: "high"
+    thinkingLevel: "high",
+    disabledTools,
+    resources
   });
   return { worker, ready: await worker.waitFor((output) => output.type === "ready") };
 }
@@ -231,6 +243,169 @@ afterEach(async () => {
 });
 
 describe("Pi worker integration", () => {
+  it("answers an extension dialog raised mid-prompt, and keeps a broken extension non-fatal", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const root = await mkdtemp(join(tmpdir(), "wackcode-dialog-"));
+    cleanup.push(() => rm(root, { recursive: true, force: true }));
+
+    // Asks the user a question from inside a tool call — i.e. while session.prompt() is running
+    // and holding the worker's serial command queue.
+    const asking = join(root, "asking.ts");
+    await writeFile(asking,
+      `export default function (pi: any) {
+         pi.on("tool_call", async (_event: any, ctx: any) => {
+           const answer = await ctx.ui.select("Pick a branch", ["main", "develop"]);
+           ctx.ui.notify("picked:" + String(answer));
+         });
+       }\n`);
+    // Throws at module scope: must be reported and skipped, not fatal.
+    const broken = join(root, "broken.ts");
+    await writeFile(broken, `throw new Error("deliberately broken extension");\n`);
+
+    const { worker, ready } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", root, "dialog-task", undefined, undefined,
+      { extensions: [asking, broken], skills: [], prompts: [], themes: [] }
+    );
+    cleanup.push(() => worker.shutdown());
+
+    // The session came up despite the broken extension, and said why.
+    expect(ready.type).toBe("ready");
+    const loaded = await worker.waitFor((output) => output.type === "extensions_loaded");
+    expect(loaded.errors?.map((entry) => entry.path)).toContain(broken);
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "Go." });
+    const request = await worker.waitFor((output) => output.type === "extension_ui_request");
+    expect(request.method).toBe("select");
+    expect(request.title).toBe("Pick a branch");
+    expect(request.options).toEqual(["main", "develop"]);
+
+    // The run is still streaming, so this answer has to jump the queue or nothing completes.
+    worker.send({ id: crypto.randomUUID(), type: "extension_ui_response", requestId: request.requestId, value: "develop" });
+    const answered = await worker.waitFor((output) => output.type === "extension_notice" && output.message === "picked:develop");
+    expect(answered.level).toBe("info");
+
+    // And the prompt still finishes normally.
+    await worker.waitFor((output) => output.type === "snapshot" && output.snapshot?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha.")) === true);
+    expect(worker.child.exitCode).toBeNull();
+  });
+
+  it("keeps a disabled tool off even when an extension registers it during session_start", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const root = await mkdtemp(join(tmpdir(), "wackcode-dynamic-"));
+    cleanup.push(() => rm(root, { recursive: true, force: true }));
+
+    // Registers its tool after load, during session_start — the point at which Pi auto-activates
+    // anything new in the registry and would otherwise undo the user's choice.
+    const late = join(root, "late.ts");
+    await writeFile(late,
+      `export default function (pi: any) {
+         pi.on("session_start", () => {
+           pi.registerTool({ name: "late_tool", label: "l", description: "Registered at session_start", parameters: { type: "object", properties: {} }, async execute() { return { content: [] }; } });
+         });
+       }\n`);
+
+    const { worker, ready } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", root, "dynamic-task", undefined, ["late_tool"],
+      { extensions: [late], skills: [], prompts: [], themes: [] }
+    );
+    cleanup.push(() => worker.shutdown());
+
+    // It exists, so Settings can still show it as an off toggle...
+    expect((ready.snapshot?.tools ?? []).some((tool) => tool.name === "late_tool")).toBe(true);
+    // ...but it is not active, and the model is never offered it.
+    expect(ready.snapshot?.activeTools).not.toContain("late_tool");
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "Go." });
+    await worker.waitFor((output) => output.type === "snapshot" && output.snapshot?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha.")) === true);
+    const offered = (provider.requests[0].body.tools as Array<{ function: { name: string } }> ?? []).map((tool) => tool.function.name);
+    expect(offered).not.toContain("late_tool");
+  });
+
+  it("loads an extension's tool from an explicit path and offers it to the model, while a project .pi/ stays inert", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const root = await mkdtemp(join(tmpdir(), "wackcode-extension-"));
+    cleanup.push(() => rm(root, { recursive: true, force: true }));
+
+    // The extension the user installed and trusted, handed over by absolute path.
+    const trusted = join(root, "trusted");
+    await mkdir(trusted, { recursive: true });
+    await writeFile(join(trusted, "tool.ts"),
+      `export default function (pi: any) { pi.registerTool({ name: "trusted_tool", label: "t", description: "A tool from a trusted package", parameters: { type: "object", properties: {} }, async execute() { return { content: [{ type: "text", text: "ok" }] }; } }); }\n`);
+
+    // A project-local extension that must never run: the worker disables all auto-discovery.
+    const workspace = join(root, "workspace");
+    await mkdir(join(workspace, ".pi", "extensions"), { recursive: true });
+    await writeFile(join(workspace, ".pi", "extensions", "untrusted.ts"),
+      `export default function (pi: any) { pi.registerTool({ name: "untrusted_tool", label: "u", description: "Must never load", parameters: { type: "object", properties: {} }, async execute() { return { content: [] }; } }); }\n`);
+
+    const { worker, ready } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "extension-task", undefined, undefined,
+      { extensions: [join(trusted, "tool.ts")], skills: [], prompts: [], themes: [] }
+    );
+    cleanup.push(() => worker.shutdown());
+
+    const catalog = ready.snapshot?.tools ?? [];
+    const trustedTool = catalog.find((tool) => tool.name === "trusted_tool");
+    expect(trustedTool).toBeDefined();
+    // Extensions loaded by explicit path are attributed by path, not by a package name.
+    expect(trustedTool?.source.kind).toBe("package");
+    expect(catalog.some((tool) => tool.name === "untrusted_tool")).toBe(false);
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "Go." });
+    await worker.waitFor((output) => output.type === "snapshot" && output.snapshot?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha.")) === true);
+
+    const offered = (provider.requests[0].body.tools as Array<{ function: { name: string } }> ?? []).map((tool) => tool.function.name);
+    // The regression that matters: a hard `tools` allowlist used to erase this from the registry.
+    expect(offered).toContain("trusted_tool");
+    expect(offered).not.toContain("untrusted_tool");
+  });
+
+  it("advertises the full built-in tool catalogue and applies the denylist live, without a restart", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const root = await mkdtemp(join(tmpdir(), "wackcode-tools-"));
+    cleanup.push(() => rm(root, { recursive: true, force: true }));
+    const { worker, ready } = await initializeWorker(provider.baseUrl, "alpha-secret", root, "tools-task", undefined, ["find"]);
+    cleanup.push(() => worker.shutdown());
+
+    // Every tool Pi ships is in the registry, including the three the worker never used to enable.
+    const names = (ready.snapshot?.tools ?? []).map((tool) => tool.name).sort();
+    expect(names).toEqual(["bash", "edit", "find", "grep", "ls", "read", "write"]);
+    expect(ready.snapshot?.tools?.every((tool) => tool.source.kind === "builtin")).toBe(true);
+    // The denylist from `init` is applied before the first turn, and tools whose external
+    // binary is missing are never offered even though they stay listed in the catalogue.
+    const catalog = ready.snapshot?.tools ?? [];
+    const expectedActive = catalog
+      .filter((tool) => tool.available && tool.name !== "find")
+      .map((tool) => tool.name)
+      .sort();
+    expect(ready.snapshot?.activeTools?.sort()).toEqual(expectedActive);
+    for (const tool of catalog) {
+      expect(tool.available || typeof tool.unavailableReason === "string").toBe(true);
+    }
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "Create the fixture." });
+    await worker.waitFor((output) => output.type === "snapshot" && output.snapshot?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha.")) === true);
+
+    const offered = (request: (typeof provider.requests)[number]) =>
+      (request.body.tools as Array<{ function: { name: string } }> ?? []).map((tool) => tool.function.name).sort();
+    expect(offered(provider.requests[0])).toEqual(expectedActive);
+
+    // Toggling tools takes effect on the next turn with no worker restart.
+    worker.send({ id: crypto.randomUUID(), type: "set_tools", disabledTools: ["bash", "grep", "ls", "find"] });
+    await worker.waitFor((output) => output.type === "snapshot" && output.snapshot?.activeTools?.length === 3);
+    // `find`/`grep` availability varies by host, so assert the three that never depend on a binary.
+    const beforeSecondRun = provider.requests.length;
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-2", message: "Again." });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.snapshot === undefined && provider.requests.length > beforeSecondRun);
+
+    expect(offered(provider.requests[beforeSecondRun])).toEqual(["edit", "read", "write"]);
+    expect(worker.child.exitCode).toBeNull();
+  });
+
   it("keeps overlapping model IDs, credentials, sessions, and edits isolated across concurrent tasks", async () => {
     const provider = await startMockProvider();
     cleanup.push(provider.close);

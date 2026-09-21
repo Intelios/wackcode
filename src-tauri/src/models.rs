@@ -33,6 +33,96 @@ pub struct ProviderRecord {
     pub has_api_key: bool,
 }
 
+/// One resource file a package contributes, with whether the user's filters currently load it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageResourceRecord {
+    /// Absolute path on disk. This is what a task worker is handed.
+    pub path: String,
+    /// Path relative to the package root, which is what the user sees.
+    pub name: String,
+    pub enabled: bool,
+}
+
+/// An installed Pi package. `trusted_at` records that the user accepted the install warning;
+/// a package without it is never loaded into a session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageRecord {
+    pub source: String,
+    pub display_name: String,
+    pub kind: String,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub installed_path: Option<String>,
+    #[serde(default)]
+    pub extensions: Vec<PackageResourceRecord>,
+    #[serde(default)]
+    pub skills: Vec<PackageResourceRecord>,
+    #[serde(default)]
+    pub prompts: Vec<PackageResourceRecord>,
+    #[serde(default)]
+    pub themes: Vec<PackageResourceRecord>,
+    #[serde(default)]
+    pub errors: Vec<String>,
+    pub trusted_at: String,
+    pub installed_at: String,
+}
+
+impl PackageRecord {
+    /// Enabled resource paths of one kind. Only these are handed to a task worker.
+    pub fn enabled_paths(&self, kind: &str) -> Vec<String> {
+        let resources = match kind {
+            "extensions" => &self.extensions,
+            "skills" => &self.skills,
+            "prompts" => &self.prompts,
+            "themes" => &self.themes,
+            _ => return Vec::new(),
+        };
+        resources.iter().filter(|resource| resource.enabled).map(|resource| resource.path.clone()).collect()
+    }
+}
+
+/// Where a tool came from, mirrored from the worker's snapshot so Settings can group them.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolSource {
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+/// One tool the agent can be offered. Cached from the last worker snapshot so the Tools
+/// panel has something to render before any chat is open.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCatalogEntry {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub source: ToolSource,
+    #[serde(default = "default_true")]
+    pub available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Tools the user has switched off. A denylist, so a tool contributed by a newly
+/// installed package is on by default.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolConfig {
+    #[serde(default)]
+    pub disabled: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectRecord {
@@ -95,6 +185,12 @@ pub struct AppData {
     pub projects: Vec<ProjectRecord>,
     #[serde(default)]
     pub tasks: Vec<TaskRecord>,
+    #[serde(default)]
+    pub tool_config: ToolConfig,
+    #[serde(default)]
+    pub tool_catalog: Vec<ToolCatalogEntry>,
+    #[serde(default)]
+    pub packages: Vec<PackageRecord>,
 }
 
 impl Default for AppData {
@@ -104,6 +200,9 @@ impl Default for AppData {
             providers: Vec::new(),
             projects: Vec::new(),
             tasks: Vec::new(),
+            tool_config: ToolConfig::default(),
+            tool_catalog: Vec::new(),
+            packages: Vec::new(),
         }
     }
 }
@@ -141,6 +240,75 @@ pub struct PromptInput {
     pub provider_id: String,
     pub model_id: String,
     pub thinking_level: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchPackagesInput {
+    #[serde(default)]
+    pub query: Option<String>,
+    #[serde(default)]
+    pub from: Option<u32>,
+}
+
+/// One row in the Browse tab. Everything here comes from the public npm registry.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageSearchResult {
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub publisher: String,
+    pub npm_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+    pub published_at: String,
+    /// Which resource kinds the package declares, so the user knows what installing adds.
+    pub declares: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionUiResponseInput {
+    pub task_id: String,
+    pub request_id: String,
+    #[serde(default)]
+    pub value: Option<String>,
+    #[serde(default)]
+    pub confirmed: Option<bool>,
+    #[serde(default)]
+    pub cancelled: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallPackageInput {
+    pub source: String,
+    /// The user accepted the install warning. Without it the command refuses.
+    #[serde(default)]
+    pub trusted: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetPackageResourcesInput {
+    pub source: String,
+    /// Omit a kind to load all of it; an empty list loads none.
+    #[serde(default)]
+    pub extensions: Option<Vec<String>>,
+    #[serde(default)]
+    pub skills: Option<Vec<String>>,
+    #[serde(default)]
+    pub prompts: Option<Vec<String>>,
+    #[serde(default)]
+    pub themes: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetToolConfigInput {
+    #[serde(default)]
+    pub disabled: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]

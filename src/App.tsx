@@ -5,9 +5,14 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { api } from "./api";
 import { modelIsReady } from "./model-utils";
 import { titleFromPrompt } from "./chat-utils";
+import { pruneDisabledTools, sameToolCatalog } from "./tool-utils";
 import type {
   AppData,
+  ExtensionNotice,
+  ExtensionUIRequest,
   GitChanges,
+  PackageRecord,
+  PackageResourceKind,
   ProjectRecord,
   ProviderRecord,
   SaveProviderInput,
@@ -24,9 +29,10 @@ import { ProjectBar } from "./components/ProjectBar";
 import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar, type ProjectAction, type TaskAction } from "./components/Sidebar";
 import { Transcript } from "./components/Transcript";
+import { ExtensionDialog } from "./components/ExtensionDialog";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 
-const emptyData: AppData = { version: 1, providers: [], projects: [], tasks: [] };
+const emptyData: AppData = { version: 1, providers: [], projects: [], tasks: [], toolConfig: { disabled: [] }, toolCatalog: [], packages: [] };
 
 const LAST_MODEL_KEY = "wackcode:lastModel";
 const LAST_PROJECT_KEY = "wackcode:lastProject";
@@ -75,6 +81,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmState>();
+  const [extensionRequests, setExtensionRequests] = useState<ExtensionUIRequest[]>([]);
   const [booting, setBooting] = useState(true);
   const [globalError, setGlobalError] = useState<string>();
   const [lastModels, setLastModels] = useState<Record<string, ModelChoice>>(() => loadJSON(LAST_MODEL_KEY, {}));
@@ -91,6 +98,14 @@ export default function App() {
 
   const patchTask = useCallback((taskId: string, patch: Partial<TaskRecord>) => {
     setData((current) => ({ ...current, tasks: current.tasks.map((task) => task.id === taskId ? { ...task, ...patch } : task) }));
+  }, []);
+
+  const appendNotice = useCallback((taskId: string, entry: ExtensionNotice) => {
+    setRuntimes((current) => {
+      const existing = current[taskId]?.notices ?? [];
+      // Extensions can be chatty; keep the most recent few rather than growing without bound.
+      return { ...current, [taskId]: { ...current[taskId], notices: [...existing, entry].slice(-5) } };
+    });
   }, []);
 
   const patchRuntime = useCallback((taskId: string, patch: Partial<TaskRuntime>) => {
@@ -134,6 +149,10 @@ export default function App() {
       if (payload.type === "ready" || payload.type === "snapshot") {
         patchRuntime(taskId, { snapshot: payload.snapshot, partial: undefined, error: undefined });
         if (payload.snapshot.sessionFile) patchTask(taskId, { sessionFile: payload.snapshot.sessionFile });
+        const tools = payload.snapshot.tools;
+        if (tools) {
+          setData((current) => sameToolCatalog(current.toolCatalog, tools) ? current : { ...current, toolCatalog: tools });
+        }
       } else if (payload.type === "partial") {
         patchRuntime(taskId, { partial: payload.message });
       } else if (payload.type === "run_state") {
@@ -145,12 +164,21 @@ export default function App() {
       } else if (payload.type === "worker_error") {
         patchRuntime(taskId, { error: payload.message });
         patchTask(taskId, { lastError: payload.message });
+      } else if (payload.type === "extension_ui_request") {
+        setExtensionRequests((current) => [...current, payload]);
+      } else if (payload.type === "extension_notice") {
+        appendNotice(taskId, { message: payload.message, level: payload.level });
+      } else if (payload.type === "extensions_loaded") {
+        // Load failures are surfaced but never mark the chat as failed.
+        for (const entry of payload.errors) {
+          appendNotice(taskId, { message: `Extension failed to load (${entry.path}): ${entry.error}`, level: "warning" });
+        }
       } else if (payload.type === "response" && !payload.success && payload.error) {
         patchRuntime(taskId, { error: payload.error });
       }
     }).then((stop) => { unlisten = stop; });
     return () => unlisten?.();
-  }, [patchTask, patchRuntime, refreshChanges]);
+  }, [patchTask, patchRuntime, refreshChanges, appendNotice]);
 
   useEffect(() => {
     setChanges(undefined);
@@ -236,6 +264,40 @@ export default function App() {
     }));
     return saved;
   }
+
+  async function setDisabledTools(disabled: string[]) {
+    const pruned = pruneDisabledTools(disabled, data.toolCatalog);
+    const previous = data.toolConfig;
+    setData((current) => ({ ...current, toolConfig: { disabled: pruned } }));
+    try {
+      const saved = await api.setToolConfig(pruned);
+      setData((current) => ({ ...current, toolConfig: saved }));
+    } catch (reason) {
+      setData((current) => ({ ...current, toolConfig: previous }));
+      throw reason;
+    }
+  }
+
+  const refreshPackages = useCallback(async () => {
+    const packages = await api.refreshPackages();
+    setData((current) => ({ ...current, packages }));
+  }, []);
+
+  const runPackageAction = useCallback(async (action: () => Promise<PackageRecord[]>) => {
+    const packages = await action();
+    setData((current) => ({ ...current, packages }));
+  }, []);
+
+  const installPackage = useCallback((source: string) => runPackageAction(() => api.installPackage(source, true)), [runPackageAction]);
+  const trustPackage = useCallback((source: string) => runPackageAction(() => api.trustPackage(source)), [runPackageAction]);
+  const removePackage = useCallback((source: string) => runPackageAction(() => api.removePackage(source)), [runPackageAction]);
+  const updatePackage = useCallback((source: string) => runPackageAction(() => api.updatePackages(source)), [runPackageAction]);
+  const setPackageResources = useCallback(
+    (source: string, kind: PackageResourceKind, enabled: string[]) =>
+      runPackageAction(() => api.setPackageResources({ source, [kind]: enabled })),
+    [runPackageAction]
+  );
+  const searchPackages = useCallback((query: string) => api.searchPackages(query), []);
 
   async function deleteProvider(providerId: string) {
     await api.deleteProvider(providerId);
@@ -458,10 +520,21 @@ export default function App() {
       {settingsOpen ? (
         <SettingsPage
           providers={data.providers}
+          packages={data.packages}
+          toolCatalog={data.toolCatalog}
+          disabledTools={data.toolConfig.disabled}
           appDataPath={appDataPath}
           onClose={() => setSettingsOpen(false)}
           onSave={saveProvider}
           onDelete={deleteProvider}
+          onSetDisabledTools={setDisabledTools}
+          onRefresh={refreshPackages}
+          onInstall={installPackage}
+          onTrust={trustPackage}
+          onSearch={searchPackages}
+          onRemove={removePackage}
+          onUpdate={updatePackage}
+          onSetResources={setPackageResources}
         />
       ) : (
         <>
@@ -530,6 +603,12 @@ export default function App() {
             />
             {sharedWorkers.length > 0 && <div className="shared-notice"><span>!</span><strong>{sharedWorkers[0].name}</strong> is also running in this folder. File edits are shared.</div>}
             {(runtime?.error || selectedTask.lastError) && <div className="error-banner workspace-error"><span>{runtime?.error || selectedTask.lastError}</span><button onClick={() => patchRuntime(selectedTask.id, { error: undefined })}>Dismiss</button></div>}
+            {runtime?.notices?.map((entry, index) => (
+              <div className={`extension-notice ${entry.level}`} key={`${index}-${entry.message}`}>
+                <span>{entry.message}</span>
+                <button onClick={() => patchRuntime(selectedTask.id, { notices: runtime.notices?.filter((_, position) => position !== index) })}>Dismiss</button>
+              </div>
+            ))}
             <Transcript
               messages={runtime?.snapshot?.messages ?? []}
               partial={runtime?.partial}
@@ -556,6 +635,18 @@ export default function App() {
         </>
       )}
 
+      {extensionRequests[0] && (
+        <ExtensionDialog
+          key={extensionRequests[0].requestId}
+          request={extensionRequests[0]}
+          onRespond={(response) => {
+            const request = extensionRequests[0];
+            setExtensionRequests((current) => current.filter((entry) => entry.requestId !== request.requestId));
+            void api.respondExtensionUi({ taskId: request.taskId, requestId: request.requestId, ...response })
+              .catch((reason) => setGlobalError(String(reason)));
+          }}
+        />
+      )}
       {confirm && <ConfirmDialog title={confirm.title} body={confirm.body} confirmLabel={confirm.confirmLabel} danger={confirm.danger} onConfirm={confirm.run} onCancel={() => setConfirm(undefined)} />}
       {globalError && <div className="global-toast"><span>{globalError}</span><button onClick={() => setGlobalError(undefined)}>×</button></div>}
     </div>

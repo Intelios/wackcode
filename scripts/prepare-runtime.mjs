@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmod, copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,9 @@ if (process.platform !== runtime.platform || process.arch !== runtime.architectu
 }
 
 const destination = join(root, "src-tauri", "binaries", "wackcode-node-aarch64-apple-darwin");
+// npm ships inside the same checksum-verified tarball. Staging it keeps package installation
+// working in a packaged .app, which gets a minimal PATH and so usually cannot see a system npm.
+const npmDestination = join(root, "src-tauri", "resources", "npm");
 const temporary = await mkdtemp(join(tmpdir(), "wackcode-node-"));
 const archivePath = join(temporary, runtime.archive);
 
@@ -27,10 +30,18 @@ try {
   }
   await writeFile(archivePath, archive, { mode: 0o600 });
   await run("tar", ["-xJf", archivePath, "-C", temporary]);
-  const source = join(temporary, `node-v${runtime.version}-darwin-arm64`, "bin", "node");
-  await copyFile(source, destination);
+  const extracted = join(temporary, `node-v${runtime.version}-darwin-arm64`);
+  await copyFile(join(extracted, "bin", "node"), destination);
   await chmod(destination, 0o755);
-  process.stdout.write(`Prepared Node ${runtime.version} (${runtime.sha256.slice(0, 12)}…)\n`);
+
+  await rm(npmDestination, { recursive: true, force: true });
+  await mkdir(dirname(npmDestination), { recursive: true });
+  await cp(join(extracted, "lib", "node_modules", "npm"), npmDestination, { recursive: true });
+  const npmCli = join(npmDestination, "bin", "npm-cli.js");
+  if (!(await readFile(npmCli, "utf8").then(() => true).catch(() => false))) {
+    throw new Error(`Node ${runtime.version} did not contain lib/node_modules/npm/bin/npm-cli.js`);
+  }
+  process.stdout.write(`Prepared Node ${runtime.version} and npm (${runtime.sha256.slice(0, 12)}…)\n`);
 } finally {
   await rm(temporary, { recursive: true, force: true });
 }

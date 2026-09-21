@@ -15,6 +15,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(WorkerState::default())
+        .manage(worker::ManagerState::default())
         .setup(|app| {
             let state = MetadataState::load(&app.handle())?;
             app.manage(state);
@@ -25,6 +26,17 @@ pub fn run() {
             commands::save_provider,
             commands::delete_provider,
             commands::discover_models,
+            commands::set_tool_config,
+            commands::list_packages,
+            commands::refresh_packages,
+            commands::install_package,
+            commands::trust_package,
+            commands::remove_package,
+            commands::update_packages,
+            commands::set_package_resources,
+            commands::respond_extension_ui,
+            commands::search_packages,
+            commands::package_details,
             commands::add_project,
             commands::create_task,
             commands::configure_task,

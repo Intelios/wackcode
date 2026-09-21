@@ -52,11 +52,77 @@ export interface TaskRecord {
   updatedAt: string;
 }
 
+/** One resource file a package contributes. */
+export interface PackageResourceRecord {
+  /** Absolute path on disk. */
+  path: string;
+  /** Path relative to the package root, which is what the user sees. */
+  name: string;
+  enabled: boolean;
+}
+
+export type PackageResourceKind = "extensions" | "skills" | "prompts" | "themes";
+
+export const PACKAGE_RESOURCE_KINDS: PackageResourceKind[] = ["extensions", "skills", "prompts", "themes"];
+
+/** An installed Pi package. Without `trustedAt` nothing it contains is ever loaded. */
+export interface PackageRecord {
+  source: string;
+  displayName: string;
+  kind: "npm" | "git" | "local";
+  version?: string;
+  installedPath?: string;
+  extensions: PackageResourceRecord[];
+  skills: PackageResourceRecord[];
+  prompts: PackageResourceRecord[];
+  themes: PackageResourceRecord[];
+  errors: string[];
+  trustedAt: string;
+  installedAt: string;
+}
+
+/** One npm registry search hit in the Browse tab. */
+export interface PackageSearchResult {
+  name: string;
+  version: string;
+  description: string;
+  publisher: string;
+  npmUrl: string;
+  repository?: string;
+  publishedAt: string;
+  /** Resource kinds the package's `pi` manifest declares. Empty until details are fetched. */
+  declares: string[];
+}
+
+/** Where a tool came from, so Settings can group and attribute it. */
+export interface ToolSource {
+  kind: "builtin" | "package";
+  packageId?: string;
+  path?: string;
+}
+
+export interface ToolCatalogEntry {
+  name: string;
+  description: string;
+  source: ToolSource;
+  /** False when a required external binary is missing; the tool is not offered to the model. */
+  available: boolean;
+  unavailableReason?: string;
+}
+
+/** Tools the user switched off. A denylist, so a newly added tool is on by default. */
+export interface ToolConfig {
+  disabled: string[];
+}
+
 export interface AppData {
   version: number;
   providers: ProviderRecord[];
   projects: ProjectRecord[];
   tasks: TaskRecord[];
+  toolConfig: ToolConfig;
+  toolCatalog: ToolCatalogEntry[];
+  packages: PackageRecord[];
 }
 
 export interface BootstrapPayload {
@@ -99,6 +165,21 @@ export interface SessionSnapshot {
   thinkingLevel: ThinkingLevel;
   availableThinkingLevels: ThinkingLevel[];
   model?: { provider: string; id: string; name?: string };
+  tools: ToolCatalogEntry[];
+  activeTools: string[];
+}
+
+/** A question an extension asked, mirrored from the worker protocol. */
+export type ExtensionUIRequest = { taskId: string; requestId: string } & (
+  | { method: "select"; title: string; options: string[] }
+  | { method: "confirm"; title: string; message: string }
+  | { method: "input"; title: string; placeholder?: string }
+  | { method: "editor"; title: string; prefill?: string }
+);
+
+export interface ExtensionNotice {
+  message: string;
+  level: "info" | "warning" | "error";
 }
 
 export type WorkerEvent =
@@ -107,13 +188,18 @@ export type WorkerEvent =
   | { type: "run_state"; taskId: string; runId?: string; state: TaskStatus }
   | { type: "activity"; taskId: string; event: string; detail?: Record<string, unknown> }
   | { type: "worker_error"; taskId?: string; message: string }
-  | { type: "response"; taskId?: string; id: string; success: boolean; error?: string };
+  | { type: "response"; taskId?: string; id: string; success: boolean; error?: string }
+  | ({ type: "extension_ui_request" } & ExtensionUIRequest)
+  | ({ type: "extension_notice"; taskId: string } & ExtensionNotice)
+  | { type: "extensions_loaded"; taskId: string; loaded: string[]; errors: { path: string; error: string }[] };
 
 export interface TaskRuntime {
   snapshot?: SessionSnapshot;
   partial?: NormalizedMessage;
   activity?: string;
   error?: string;
+  /** Extension output and load failures. Informational only — never blocks a chat. */
+  notices?: ExtensionNotice[];
 }
 
 export interface GitChangeFile {

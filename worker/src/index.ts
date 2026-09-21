@@ -1,5 +1,7 @@
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { JsonLineDecoder } from "./framing.js";
 import {
@@ -9,6 +11,8 @@ import {
   type NormalizedMessage,
   type SessionSnapshot,
   type ThinkingLevel,
+  type ExtensionUIRequest,
+  type ToolCatalogEntry,
   type WorkerCommand,
   type WorkerModel,
   type WorkerOutput
@@ -31,6 +35,39 @@ let modelRuntime: ModelRuntime | undefined;
 let activeRunId: string | undefined;
 let activeCredential: string | undefined;
 let stopRequested = false;
+let disabledTools = new Set<string>();
+const pendingDialogs = new Map<string, (response: DialogResponse) => void>();
+
+interface DialogResponse {
+  value?: string;
+  confirmed?: boolean;
+  cancelled?: true;
+}
+
+// Pi registers a `powershell` base tool on every platform. WackCode is macOS-only, so keep it
+// out of the registry entirely rather than shipping a dead tool the user has to switch off.
+const UNSUPPORTED_TOOLS = ["powershell"];
+
+// grep and find shell out to these. Pi normally downloads them on demand, but the worker runs
+// with PI_OFFLINE=1, so a missing binary stays missing. Report the tool as unavailable instead
+// of letting the model call something that errors mid-task.
+const TOOL_BINARIES: Record<string, string> = { grep: "rg", find: "fd" };
+const binaryCache = new Map<string, boolean>();
+
+// Mirrors Pi's own resolution order (utils/tools-manager.ts): its bin directory first,
+// then whatever is on PATH.
+function hasBinary(binary: string): boolean {
+  const cached = binaryCache.get(binary);
+  if (cached !== undefined) return cached;
+  const piBin = join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), "bin", binary);
+  let found = existsSync(piBin);
+  if (!found) {
+    const probe = spawnSync(binary, ["--version"], { stdio: "ignore" });
+    found = !probe.error;
+  }
+  binaryCache.set(binary, found);
+  return found;
+}
 let commandQueue = Promise.resolve();
 let snapshotTimer: NodeJS.Timeout | undefined;
 let partialTimer: NodeJS.Timeout | undefined;
@@ -140,6 +177,39 @@ function contextBreakdown(stats: ReturnType<AgentSession["getSessionStats"]>): S
   };
 }
 
+// Pi attributes its own tools with a synthetic source of "builtin" (or "sdk" for tools
+// registered through the SDK). Anything else came from an extension file.
+//
+// Note: sourceInfo.source is NOT the package name for extensions loaded through
+// additionalExtensionPaths — Pi labels those "cli"/"temporary". Only the file path is
+// meaningful, so the host maps path -> package; `packageId` is deliberately left unset here.
+function toolCatalog(): ToolCatalogEntry[] {
+  if (!session) return [];
+  return session.getAllTools().map((tool) => {
+    const info = tool.sourceInfo as { source?: string; path?: string } | undefined;
+    const origin = info?.source;
+    const builtin = origin === "builtin" || origin === "sdk";
+    const binary = TOOL_BINARIES[tool.name];
+    const available = !binary || hasBinary(binary);
+    return {
+      name: tool.name,
+      description: tool.description ?? "",
+      source: builtin ? { kind: "builtin" as const } : { kind: "package" as const, path: info?.path },
+      available,
+      unavailableReason: available ? undefined : `Requires ${binary}, which is not installed`
+    };
+  });
+}
+
+// Every tool in the registry is active unless the user switched it off. A denylist keeps
+// tools contributed by a newly installed package on by default.
+function applyDisabledTools(): void {
+  if (!session) return;
+  session.setActiveToolsByName(
+    toolCatalog().filter((tool) => tool.available && !disabledTools.has(tool.name)).map((tool) => tool.name)
+  );
+}
+
 function getSnapshot(): SessionSnapshot {
   if (!session) throw new Error("Worker is not initialized");
   const stats = session.getSessionStats();
@@ -156,7 +226,9 @@ function getSnapshot(): SessionSnapshot {
     },
     thinkingLevel: session.thinkingLevel as ThinkingLevel,
     availableThinkingLevels: session.getAvailableThinkingLevels() as ThinkingLevel[],
-    model: model ? { provider: model.provider, id: model.id, name: model.name } : undefined
+    model: model ? { provider: model.provider, id: model.id, name: model.name } : undefined,
+    tools: toolCatalog(),
+    activeTools: session.getActiveToolNames()
   };
 }
 
@@ -199,6 +271,77 @@ function dropPartial(): void {
   if (partialTimer) clearTimeout(partialTimer);
   partialTimer = undefined;
   pendingPartial = undefined;
+}
+
+/**
+ * Ask the host a question on an extension's behalf.
+ *
+ * Resolving rather than rejecting on abort is deliberate and copied from Pi's RPC mode: an
+ * extension awaiting a dialog inside a tool call must never be left hanging when the user stops
+ * the run, so a cancelled dialog resolves to the caller's stated default.
+ */
+function askHost<T>(request: ExtensionUIRequest, onResponse: (response: DialogResponse) => T, fallback: T): Promise<T> {
+  if (!taskId) return Promise.resolve(fallback);
+  const requestId = crypto.randomUUID();
+  return new Promise<T>((resolve) => {
+    pendingDialogs.set(requestId, (response) => {
+      pendingDialogs.delete(requestId);
+      resolve(response.cancelled ? fallback : onResponse(response));
+    });
+    send({ type: "extension_ui_request", taskId: taskId as string, requestId, ...request });
+  });
+}
+
+function cancelPendingDialogs(): void {
+  for (const resolve of [...pendingDialogs.values()]) resolve({ cancelled: true });
+  pendingDialogs.clear();
+}
+
+function notice(message: string, level: "info" | "warning" | "error" = "info"): void {
+  if (taskId) send({ type: "extension_notice", taskId, message, level });
+}
+
+/**
+ * The subset of ExtensionUIContext that makes sense without a terminal. Dialogs are bridged to
+ * the desktop UI; ambient TUI affordances (status text, widgets, custom components, themes) are
+ * accepted and discarded, exactly as Pi's own RPC mode does for the ones it cannot render.
+ */
+function createExtensionUIContext(): Record<string, unknown> {
+  const ignore = () => undefined;
+  return {
+    select: (title: string, options: string[]) =>
+      askHost<string | undefined>({ method: "select", title, options }, (response) => response.value, undefined),
+    confirm: (title: string, message: string) =>
+      askHost<boolean>({ method: "confirm", title, message }, (response) => response.confirmed === true, false),
+    input: (title: string, placeholder?: string) =>
+      askHost<string | undefined>({ method: "input", title, placeholder }, (response) => response.value, undefined),
+    editor: (title: string, prefill?: string) =>
+      askHost<string | undefined>({ method: "editor", title, prefill }, (response) => response.value, undefined),
+    notify: (message: string, type?: "info" | "warning" | "error") => notice(message, type ?? "info"),
+    onTerminalInput: () => ignore,
+    setStatus: ignore,
+    setWorkingMessage: ignore,
+    setWorkingVisible: ignore,
+    setWorkingIndicator: ignore,
+    setHiddenThinkingLabel: ignore,
+    setWidget: ignore,
+    setFooter: ignore,
+    setHeader: ignore,
+    setTitle: ignore,
+    custom: () => Promise.resolve(undefined),
+    pasteToEditor: ignore,
+    setEditorText: ignore,
+    getEditorText: () => "",
+    addAutocompleteProvider: ignore,
+    setEditorComponent: ignore,
+    getEditorComponent: () => undefined,
+    theme: undefined,
+    getAllThemes: () => [],
+    getTheme: () => undefined,
+    setTheme: () => ({ success: false, error: "Themes are not available in WackCode" }),
+    getToolsExpanded: () => false,
+    setToolsExpanded: ignore
+  };
 }
 
 function modelDefinition(model: WorkerModel): Record<string, unknown> {
@@ -264,6 +407,10 @@ async function initialize(command: InitCommand): Promise<void> {
     compaction: { enabled: true },
     retry: { enabled: true }
   }, { projectTrusted: false });
+  // Every no* flag stays true: nothing is ever auto-discovered from settings or a project's
+  // own .pi/ directory. The additional*Paths below are the sole load route, and the host only
+  // puts paths there for packages the user installed and trusted.
+  const resources = command.resources;
   const resourceLoader = new pi.DefaultResourceLoader({
     cwd: command.cwd,
     agentDir: command.agentDir,
@@ -272,7 +419,11 @@ async function initialize(command: InitCommand): Promise<void> {
     noSkills: true,
     noPromptTemplates: true,
     noThemes: true,
-    noContextFiles: false
+    noContextFiles: false,
+    additionalExtensionPaths: resources?.extensions ?? [],
+    additionalSkillPaths: resources?.skills ?? [],
+    additionalPromptTemplatePaths: resources?.prompts ?? [],
+    additionalThemePaths: resources?.themes ?? []
   });
   await resourceLoader.reload();
   const created = await pi.createAgentSession({
@@ -281,12 +432,40 @@ async function initialize(command: InitCommand): Promise<void> {
     modelRuntime,
     model: selectedModel,
     thinkingLevel: command.thinkingLevel,
-    tools: ["read", "bash", "edit", "write"],
+    excludeTools: UNSUPPORTED_TOOLS,
     sessionManager,
     settingsManager,
     resourceLoader
   });
   session = created.session;
+  disabledTools = new Set(command.disabledTools ?? []);
+  applyDisabledTools();
+
+  // A broken extension must never stop a chat from starting, so load failures are reported
+  // and the session continues without them.
+  send({
+    type: "extensions_loaded",
+    taskId: command.taskId,
+    loaded: created.extensionsResult.extensions.map((extension) => String(extension.path)),
+    errors: created.extensionsResult.errors.map((entry) => ({ path: entry.path, error: safeError(entry.error) }))
+  });
+
+  // Binding gives extensions their UI surface and fires session_start. An extension that throws
+  // during startup must not prevent `ready` either.
+  try {
+    await session.bindExtensions({
+      uiContext: createExtensionUIContext() as never,
+      mode: "rpc",
+      abortHandler: () => { stopRequested = true; void session?.abort(); },
+      onError: (error: unknown) => notice(safeError(error), "error")
+    } as never);
+  } catch (error) {
+    notice(`An extension failed to start: ${safeError(error)}`, "error");
+  }
+  // Re-apply: an extension may register tools during session_start, and Pi auto-activates
+  // anything new in the registry, which would quietly undo the user's denylist.
+  applyDisabledTools();
+
   session.subscribe((event) => {
     const value = event as unknown as Record<string, unknown>;
     const eventType = String(value.type ?? "event");
@@ -363,6 +542,7 @@ async function handle(command: WorkerCommand): Promise<void> {
       return;
     } else if (command.type === "abort") {
       stopRequested = true;
+      cancelPendingDialogs();
       send({ type: "run_state", taskId, runId: activeRunId, state: "stopping" });
       await session.abort();
       activeRunId = undefined;
@@ -379,6 +559,16 @@ async function handle(command: WorkerCommand): Promise<void> {
     } else if (command.type === "set_thinking") {
       if (session.isStreaming) throw new Error("Wait for the current run before changing reasoning effort");
       session.setThinkingLevel(command.level);
+      emitSnapshot();
+    } else if (command.type === "extension_ui_response") {
+      pendingDialogs.get(command.requestId)?.({
+        value: command.value,
+        confirmed: command.confirmed,
+        cancelled: command.cancelled
+      });
+    } else if (command.type === "set_tools") {
+      disabledTools = new Set(command.disabledTools);
+      applyDisabledTools();
       emitSnapshot();
     } else if (command.type === "shutdown") {
       if (!session.isIdle) await session.abort();
@@ -409,9 +599,10 @@ process.stdin.on("data", (chunk: Buffer) => {
       send({ type: "worker_error", taskId, message: "The desktop bridge sent invalid JSON" });
       continue;
     }
-    // Cancellation must bypass the prompt queue: a prompt holds the queue until the
-    // agent settles, so serializing abort behind it would make Stop ineffective.
-    if (command.type === "abort") {
+    // Cancellation and dialog answers must bypass the prompt queue: a prompt holds the queue
+    // until the agent settles. An extension awaiting ctx.ui.confirm() is doing so *inside* that
+    // prompt, so queueing its answer behind the prompt would deadlock the run outright.
+    if (command.type === "abort" || command.type === "extension_ui_response") {
       void handle(command).catch((error) => {
         send({ type: "worker_error", taskId, message: safeError(error) });
       });

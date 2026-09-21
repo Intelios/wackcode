@@ -35,7 +35,7 @@
     "active": true,
     "targets": ["app"],
     "externalBin": ["binaries/wackcode-node"],
-    "resources": ["resources/worker"],
+    "resources": ["resources/worker", "resources/npm"],
     "copyright": "Copyright © 2026 Jack",
     "category": "DeveloperTool",
     "shortDescription": "A local desktop UI for Pi",

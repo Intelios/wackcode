@@ -10,6 +10,7 @@ src-tauri/target/
 src-tauri/binaries/*
 !src-tauri/binaries/.gitkeep
 src-tauri/resources/worker/
+src-tauri/resources/npm/
 
 # Test output
 coverage/

@@ -3,11 +3,14 @@ import type { NormalizedBlock } from "../types";
 import { summarizeTool } from "../tool-utils";
 import { Icon } from "./Icons";
 
-const TOOL_ICONS: Record<string, "file" | "pencil" | "terminal"> = {
+const TOOL_ICONS: Record<string, "file" | "pencil" | "terminal" | "search"> = {
   read: "file",
   edit: "pencil",
   write: "file",
-  bash: "terminal"
+  bash: "terminal",
+  grep: "search",
+  find: "search",
+  ls: "search"
 };
 
 function DiffLines({ diff }: { diff: string }) {
@@ -48,6 +51,9 @@ function ToolDetail({ call, result }: { call: NormalizedBlock; result?: Normaliz
   }
   if (summary.kind === "write" && typeof args.content === "string") {
     return <div className="tool-detail"><pre>{tail(args.content, 80)}</pre></div>;
+  }
+  if (summary.kind === "search") {
+    return <div className="tool-detail"><pre>{result?.text ? tail(result.text, 60) : "No matches"}</pre></div>;
   }
   return (
     <div className="tool-detail">

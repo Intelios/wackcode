@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { diffStats, editStats, summarizeTool } from "./tool-utils";
-import type { NormalizedBlock } from "./types";
+import { diffStats, editStats, groupTools, pruneDisabledTools, sameToolCatalog, summarizeTool } from "./tool-utils";
+import type { NormalizedBlock, ToolCatalogEntry } from "./types";
 
 function call(toolName: string, args: unknown): NormalizedBlock {
   return { type: "tool-call", toolName, toolCallId: "c1", arguments: args };
@@ -61,5 +61,38 @@ describe("diffStats", () => {
   it("returns undefined without changes", () => {
     expect(diffStats("no diff")).toBeUndefined();
     expect(diffStats(undefined)).toBeUndefined();
+  });
+});
+
+describe("tool catalogue", () => {
+  const builtin = (name: string, available = true): ToolCatalogEntry =>
+    ({ name, description: `${name} tool`, source: { kind: "builtin" }, available });
+  const fromPackage = (name: string, packageId: string): ToolCatalogEntry =>
+    ({ name, description: "", source: { kind: "package", packageId }, available: true });
+
+  it("puts built-ins first and sorts packages, keeping unattributed tools in Other", () => {
+    const groups = groupTools([
+      fromPackage("web_search", "npm:pi-web-access"),
+      builtin("read"),
+      { name: "mystery", description: "", source: { kind: "package" }, available: true },
+      fromPackage("delegate", "npm:pi-subagents"),
+      builtin("bash")
+    ]);
+    expect(groups.map((group) => group.id)).toEqual(["builtin", "npm:pi-subagents", "npm:pi-web-access", "other"]);
+    expect(groups[0].tools.map((tool) => tool.name)).toEqual(["bash", "read"]);
+    expect(groups[3].label).toBe("Other");
+  });
+
+  it("drops disabled names whose tool no longer exists, but keeps them when the catalogue is empty", () => {
+    const catalog = [builtin("read"), builtin("bash")];
+    expect(pruneDisabledTools(["bash", "gone"], catalog)).toEqual(["bash"]);
+    // An empty catalogue means "not loaded yet", not "nothing installed" — never prune then.
+    expect(pruneDisabledTools(["bash", "gone"], [])).toEqual(["bash", "gone"]);
+  });
+
+  it("treats an availability change as a different catalogue so Settings re-renders", () => {
+    expect(sameToolCatalog([builtin("grep")], [builtin("grep")])).toBe(true);
+    expect(sameToolCatalog([builtin("grep")], [builtin("grep", false)])).toBe(false);
+    expect(sameToolCatalog([builtin("grep")], [])).toBe(false);
   });
 });

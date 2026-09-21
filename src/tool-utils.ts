@@ -1,4 +1,4 @@
-import type { NormalizedBlock } from "./types";
+import type { NormalizedBlock, ToolCatalogEntry } from "./types";
 import { displayPath } from "./chat-utils";
 
 export interface ToolSummary {
@@ -11,7 +11,7 @@ export interface ToolSummary {
   additions?: number;
   deletions?: number;
   /** Kind controls what the expanded body shows. */
-  kind: "read" | "edit" | "write" | "bash" | "other";
+  kind: "read" | "edit" | "write" | "bash" | "search" | "other";
 }
 
 function args(block: NormalizedBlock): Record<string, unknown> {
@@ -82,7 +82,72 @@ export function summarizeTool(call: NormalizedBlock, result?: NormalizedBlock): 
     }
     case "bash":
       return { kind: "bash", activeVerb: "Running", doneVerb: "Ran", subject: str(toolArgs.command) };
+    case "grep":
+      return { kind: "search", activeVerb: "Searching", doneVerb: "Searched", subject: str(toolArgs.pattern) };
+    case "find":
+      return { kind: "search", activeVerb: "Finding", doneVerb: "Found", subject: str(toolArgs.pattern) };
+    case "ls":
+      return { kind: "search", activeVerb: "Listing", doneVerb: "Listed", subject: displayPath(str(toolArgs.path) || ".") };
     default:
       return { kind: "other", activeVerb: name, doneVerb: name, subject: "" };
   }
+}
+
+export interface ToolGroup {
+  /** Stable key: "builtin" for Pi's own tools, otherwise the package source string. */
+  id: string;
+  label: string;
+  tools: ToolCatalogEntry[];
+}
+
+/**
+ * Group the catalogue for the Tools panel: Pi's own tools first, then one group per package
+ * in stable alphabetical order. A package tool with no source string falls into "Other" rather
+ * than disappearing.
+ */
+export function groupTools(catalog: ToolCatalogEntry[]): ToolGroup[] {
+  const builtin: ToolCatalogEntry[] = [];
+  const byPackage = new Map<string, ToolCatalogEntry[]>();
+  for (const tool of [...catalog].sort((left, right) => left.name.localeCompare(right.name))) {
+    if (tool.source.kind === "builtin") {
+      builtin.push(tool);
+      continue;
+    }
+    const id = tool.source.packageId ?? "other";
+    const existing = byPackage.get(id);
+    if (existing) existing.push(tool);
+    else byPackage.set(id, [tool]);
+  }
+  const groups: ToolGroup[] = [];
+  if (builtin.length) groups.push({ id: "builtin", label: "Built-in", tools: builtin });
+  for (const id of [...byPackage.keys()].sort()) {
+    groups.push({ id, label: id === "other" ? "Other" : id, tools: byPackage.get(id) ?? [] });
+  }
+  return groups;
+}
+
+/**
+ * Drop names that are no longer in the catalogue. A denylist referencing a removed package's
+ * tool is harmless but accumulates, and showing a stale count in Settings is confusing.
+ */
+export function pruneDisabledTools(disabled: string[], catalog: ToolCatalogEntry[]): string[] {
+  if (!catalog.length) return [...disabled];
+  const known = new Set(catalog.map((tool) => tool.name));
+  return disabled.filter((name) => known.has(name));
+}
+
+/**
+ * Snapshots arrive constantly and almost always carry an identical catalogue. Compare before
+ * storing so Settings does not re-render on every streamed message.
+ */
+export function sameToolCatalog(left: ToolCatalogEntry[], right: ToolCatalogEntry[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((tool, index) => {
+    const other = right[index];
+    return tool.name === other.name
+      && tool.available === other.available
+      && tool.description === other.description
+      && tool.source.kind === other.source.kind
+      && tool.source.packageId === other.source.packageId;
+  });
 }

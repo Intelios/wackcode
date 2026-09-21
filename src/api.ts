@@ -2,11 +2,14 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   BootstrapPayload,
   GitChanges,
+  PackageRecord,
+  PackageSearchResult,
   ProjectRecord,
   ProviderRecord,
   SaveProviderInput,
   TaskRecord,
-  ThinkingLevel
+  ThinkingLevel,
+  ToolConfig
 } from "./types";
 
 export const api = {
@@ -14,6 +17,24 @@ export const api = {
   saveProvider: (input: SaveProviderInput) => invoke<ProviderRecord>("save_provider", { input }),
   deleteProvider: (providerId: string) => invoke<void>("delete_provider", { providerId }),
   discoverModels: (providerId: string) => invoke<string[]>("discover_models", { input: { providerId } }),
+  setToolConfig: (disabled: string[]) => invoke<ToolConfig>("set_tool_config", { input: { disabled } }),
+  listPackages: () => invoke<PackageRecord[]>("list_packages"),
+  searchPackages: (query: string, from = 0) =>
+    invoke<PackageSearchResult[]>("search_packages", { input: { query, from } }),
+  packageDetails: (name: string) => invoke<PackageSearchResult>("package_details", { name }),
+  refreshPackages: () => invoke<PackageRecord[]>("refresh_packages"),
+  installPackage: (source: string, trusted: boolean) =>
+    invoke<PackageRecord[]>("install_package", { input: { source, trusted } }),
+  trustPackage: (source: string) => invoke<PackageRecord[]>("trust_package", { input: { source, trusted: true } }),
+  removePackage: (source: string) => invoke<PackageRecord[]>("remove_package", { source }),
+  updatePackages: (source?: string) => invoke<PackageRecord[]>("update_packages", { source }),
+  setPackageResources: (input: {
+    source: string;
+    extensions?: string[];
+    skills?: string[];
+    prompts?: string[];
+    themes?: string[];
+  }) => invoke<PackageRecord[]>("set_package_resources", { input }),
   addProject: (path: string) => invoke<ProjectRecord>("add_project", { path }),
   createTask: (input: {
     projectId?: string | null;
@@ -46,5 +67,12 @@ export const api = {
   unarchiveTask: (taskId: string) => invoke<TaskRecord>("unarchive_task", { taskId }),
   gitChanges: (taskId: string) => invoke<GitChanges>("git_changes", { taskId }),
   revealTask: (taskId: string) => invoke<void>("reveal_task", { taskId }),
-  revealPath: (path: string) => invoke<void>("reveal_path", { path })
+  revealPath: (path: string) => invoke<void>("reveal_path", { path }),
+  respondExtensionUi: (input: {
+    taskId: string;
+    requestId: string;
+    value?: string;
+    confirmed?: boolean;
+    cancelled?: true;
+  }) => invoke<void>("respond_extension_ui", { input })
 };

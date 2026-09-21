@@ -1,4 +1,4 @@
-use crate::{models::{ProviderRecord, TaskRecord, TaskStatus}, storage::MetadataState};
+use crate::{models::{PackageRecord, ProviderRecord, TaskRecord, TaskStatus, ToolCatalogEntry}, storage::MetadataState};
 use nix::{sys::signal::{killpg, Signal}, unistd::Pid};
 use serde_json::{json, Value};
 use std::{collections::HashMap, path::PathBuf, process::Stdio, sync::{Arc, Mutex}};
@@ -43,6 +43,10 @@ impl WorkerState {
         Ok(false)
     }
 
+    pub fn task_ids(&self) -> Result<Vec<String>, String> {
+        Ok(self.workers.lock().map_err(|_| "Worker lock was poisoned".to_string())?.keys().cloned().collect())
+    }
+
     pub fn remove(&self, task_id: &str) -> Result<Option<WorkerProcess>, String> {
         Ok(self.workers.lock().map_err(|_| "Worker lock was poisoned".to_string())?.remove(task_id))
     }
@@ -56,10 +60,32 @@ impl WorkerState {
     }
 }
 
-pub fn fingerprint(provider: &ProviderRecord, model_id: &str) -> Result<String, String> {
+/// Enabled resource paths from trusted packages only, grouped by kind.
+///
+/// This is the single gate on what a session may execute. A package the user installed but
+/// never accepted the warning for contributes nothing, and a resource the user switched off
+/// contributes nothing — so neither can reach a worker at all.
+pub fn resource_paths(packages: &[PackageRecord]) -> Value {
+    let mut grouped = serde_json::Map::new();
+    for kind in ["extensions", "skills", "prompts", "themes"] {
+        let paths: Vec<String> = packages
+            .iter()
+            .filter(|package| !package.trusted_at.is_empty())
+            .flat_map(|package| package.enabled_paths(kind))
+            .collect();
+        grouped.insert(kind.to_string(), json!(paths));
+    }
+    Value::Object(grouped)
+}
+
+/// A worker is respawned when this changes. Resources are resolved once at spawn time, so they
+/// belong here alongside the provider and model; tool toggles do not, because `set_tools`
+/// applies them live.
+pub fn fingerprint(provider: &ProviderRecord, model_id: &str, resources: &Value) -> Result<String, String> {
     serde_json::to_string(&json!({
         "provider": provider,
         "modelId": model_id,
+        "resources": resources,
     })).map_err(|error| error.to_string())
 }
 
@@ -70,7 +96,11 @@ pub async fn ensure_worker(
     api_key: &str,
 ) -> Result<(), String> {
     let worker_state = app.state::<WorkerState>();
-    let wanted_fingerprint = fingerprint(provider, &task.model_id)?;
+    let wanted_fingerprint = {
+        let state = app.state::<MetadataState>();
+        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        fingerprint(provider, &task.model_id, &resource_paths(&data.packages))?
+    };
     if let Some(existing) = worker_state.get(&task.id)? {
         if existing.fingerprint == wanted_fingerprint { return Ok(()); }
         terminate_worker(app, &task.id, true).await?;
@@ -163,6 +193,12 @@ pub async fn ensure_worker(
         }
     });
 
+    let (disabled_tools, resources) = {
+        let state = app.state::<MetadataState>();
+        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        (data.tool_config.disabled.clone(), resource_paths(&data.packages))
+    };
+
     let models: Vec<Value> = provider.models.iter().filter_map(|model| {
         Some(json!({
             "id": model.id,
@@ -192,8 +228,20 @@ pub async fn ensure_worker(
         "modelId": task.model_id,
         "apiKey": api_key,
         "thinkingLevel": task.thinking_level,
+        "disabledTools": disabled_tools,
+        "resources": resources,
     });
     send(app, &task.id, &init).await
+}
+
+/// Best-effort fan-out to every running worker. A worker that has already exited is skipped
+/// rather than failing the whole call: the same value also travels in `init`, so the next
+/// spawn picks it up.
+pub async fn broadcast(app: &AppHandle, value: &Value) -> Result<(), String> {
+    for task_id in app.state::<WorkerState>().task_ids()? {
+        let _ = send(app, &task_id, value).await;
+    }
+    Ok(())
 }
 
 pub async fn send(app: &AppHandle, task_id: &str, value: &Value) -> Result<(), String> {
@@ -230,6 +278,172 @@ fn worker_entry_path(app: &AppHandle) -> Result<PathBuf, String> {
     }
 }
 
+fn manager_entry_path(app: &AppHandle) -> Result<PathBuf, String> {
+    if cfg!(debug_assertions) {
+        Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist/manager.js"))
+    } else {
+        Ok(app.path().resource_dir().map_err(|error| error.to_string())?.join("resources/worker/dist/manager.js"))
+    }
+}
+
+/// The npm staged out of the pinned Node tarball by `scripts/prepare-runtime.mjs`. A packaged
+/// .app launched from Finder gets a minimal PATH and usually cannot see a system npm, so Pi is
+/// pointed at this copy instead. Falls back to bare `npm` when the staged copy is absent.
+fn npm_command(app: &AppHandle) -> Option<Vec<String>> {
+    let node = node_executable_path().ok()?;
+    let cli = if cfg!(debug_assertions) {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/npm/bin/npm-cli.js")
+    } else {
+        app.path().resource_dir().ok()?.join("resources/npm/bin/npm-cli.js")
+    };
+    if !cli.exists() {
+        return None;
+    }
+    Some(vec![node.to_string_lossy().into_owned(), cli.to_string_lossy().into_owned()])
+}
+
+/// Shared store for installed packages: Pi's own settings.json plus npm/ and git/. Deliberately
+/// separate from the per-task agent directories, which are deleted with their task.
+/// Serializes package operations. Two concurrent installs would race Pi's settings.json and
+/// clobber each other's in-memory state.
+#[derive(Default)]
+pub struct ManagerState {
+    lock: AsyncMutex<()>,
+}
+
+/// Every manager protocol line carries this prefix. Pi spawns npm with inherited stdio and the
+/// override for that is not public API, so npm's own output arrives on the same stream; the
+/// prefix is what separates protocol from chatter.
+const MANAGER_FRAME: char = '\u{1e}';
+const MANAGER_NOISE_LIMIT: usize = 4_000;
+
+/// Run one package operation in a short-lived Node process and return the catalog it produced.
+///
+/// This process never receives an API key, and unlike a task worker it does not set PI_OFFLINE,
+/// because installing is the one thing it exists to do.
+pub async fn run_manager(app: &AppHandle, command: Value) -> Result<Value, String> {
+    let manager_state = app.state::<ManagerState>();
+    let _guard = manager_state.lock.lock().await;
+
+    let pi_dir = package_dir(app)?;
+    let entry = manager_entry_path(app)?;
+    let node = node_executable_path()?;
+    let mut command_builder = Command::new(node);
+    command_builder
+        .arg(entry)
+        .current_dir(&pi_dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .env("PI_TELEMETRY", "0")
+        .env("PI_SKIP_VERSION_CHECK", "1")
+        // Installing is the one thing this process exists for, and Pi gates installs on this.
+        .env_remove("PI_OFFLINE");
+    // npm and git run as children here; neither has any business seeing a provider key.
+    for key in PROVIDER_ENVIRONMENT_KEYS {
+        command_builder.env_remove(key);
+    }
+    let mut process = command_builder
+        .spawn()
+        .map_err(|error| format!("Could not start the package manager: {error}"))?;
+    let mut stdin = process.stdin.take().ok_or_else(|| "The package manager has no stdin".to_string())?;
+    let stdout = process.stdout.take().ok_or_else(|| "The package manager has no stdout".to_string())?;
+    let stderr = process.stderr.take().ok_or_else(|| "The package manager has no stderr".to_string())?;
+
+    let init = json!({
+        "id": uuid::Uuid::new_v4().to_string(),
+        "type": "init",
+        "piDir": pi_dir,
+        "npmCommand": npm_command(app),
+    });
+    let command_id = uuid::Uuid::new_v4().to_string();
+    let mut request = command;
+    if let Some(object) = request.as_object_mut() {
+        object.insert("id".into(), Value::String(command_id.clone()));
+    }
+    for line in [&init, &request] {
+        let mut bytes = serde_json::to_vec(line).map_err(|error| error.to_string())?;
+        bytes.push(b'\n');
+        stdin.write_all(&bytes).await.map_err(|error| format!("Could not reach the package manager: {error}"))?;
+    }
+    stdin.flush().await.map_err(|error| error.to_string())?;
+
+    let stderr_handle = tokio::spawn(async move {
+        let mut tail = String::new();
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            tail.push_str(&line);
+            tail.push('\n');
+        }
+        tail
+    });
+
+    let mut reader = BufReader::new(stdout).lines();
+    let mut catalog = Value::Null;
+    let mut noise = String::new();
+    let mut outcome: Option<Result<(), String>> = None;
+    while let Ok(Some(line)) = reader.next_line().await {
+        let Some(payload) = line.strip_prefix(MANAGER_FRAME) else {
+            if noise.len() < MANAGER_NOISE_LIMIT { noise.push_str(&line); noise.push('\n'); }
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(payload) else { continue; };
+        match value.get("type").and_then(Value::as_str) {
+            Some("catalog") => catalog = value.get("packages").cloned().unwrap_or(Value::Null),
+            Some("progress") => { let _ = app.emit("package-event", value); }
+            Some("manager_error") => {
+                if let Some(message) = value.get("message").and_then(Value::as_str) {
+                    outcome = Some(Err(redact_and_limit(message)));
+                    break;
+                }
+            }
+            Some("response") if value.get("id").and_then(Value::as_str) == Some(command_id.as_str()) => {
+                outcome = Some(if value.get("success").and_then(Value::as_bool) == Some(true) {
+                    Ok(())
+                } else {
+                    Err(redact_and_limit(value.get("error").and_then(Value::as_str).unwrap_or("The package operation failed")))
+                });
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    let _ = process.start_kill();
+    let stderr_tail = stderr_handle.await.unwrap_or_default();
+    match outcome {
+        Some(Ok(())) => Ok(catalog),
+        Some(Err(message)) => Err(with_context(message, &noise, &stderr_tail)),
+        None => Err(with_context(
+            "The package manager stopped before finishing".to_string(),
+            &noise,
+            &stderr_tail,
+        )),
+    }
+}
+
+/// npm reports the actionable part of a failure on its own streams, so fold a bounded tail of
+/// them into the message the user sees.
+fn with_context(message: String, noise: &str, stderr: &str) -> String {
+    let combined = format!("{noise}{stderr}");
+    let detail = combined.trim();
+    if detail.is_empty() {
+        return message;
+    }
+    let tail: String = {
+        let characters: Vec<char> = detail.chars().collect();
+        characters[characters.len().saturating_sub(600)..].iter().collect()
+    };
+    format!("{message}\n{}", redact_and_limit(&tail))
+}
+
+pub fn package_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app.path().app_data_dir().map_err(|error| error.to_string())?.join("pi");
+    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    Ok(dir)
+}
+
 fn node_executable_path() -> Result<PathBuf, String> {
     if cfg!(debug_assertions) {
         Ok(std::env::var_os("WACKCODE_NODE_PATH").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("node")))
@@ -244,11 +458,21 @@ fn handle_worker_line(app: &AppHandle, task_id: &str, line: &str) {
     let event_type = value.get("type").and_then(Value::as_str).unwrap_or("");
     let mut should_save = false;
     if event_type == "ready" || event_type == "snapshot" {
-        if let Some(session_file) = value.pointer("/snapshot/sessionFile").and_then(Value::as_str) {
-            if let Ok(mut data) = app.state::<MetadataState>().data.lock() {
+        if let Ok(mut data) = app.state::<MetadataState>().data.lock() {
+            if let Some(session_file) = value.pointer("/snapshot/sessionFile").and_then(Value::as_str) {
                 if let Some(task) = data.tasks.iter_mut().find(|task| task.id == task_id) {
                     if task.session_file.as_deref() != Some(session_file) {
                         task.session_file = Some(session_file.to_string());
+                        should_save = true;
+                    }
+                }
+            }
+            // The catalogue only exists on a live session, so cache the latest one for the
+            // Tools panel to render when no chat is open.
+            if let Some(tools) = value.pointer("/snapshot/tools") {
+                if let Ok(catalog) = serde_json::from_value::<Vec<ToolCatalogEntry>>(tools.clone()) {
+                    if data.tool_catalog != catalog {
+                        data.tool_catalog = catalog;
                         should_save = true;
                     }
                 }
@@ -297,4 +521,90 @@ fn redact_and_limit(message: &str) -> String {
         }
     }
     safe.chars().take(1_000).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{PackageResourceRecord, ProviderRecord};
+
+    fn package(source: &str, trusted: bool, resources: &[(&str, bool)]) -> PackageRecord {
+        PackageRecord {
+            source: source.into(),
+            display_name: source.into(),
+            kind: "npm".into(),
+            version: None,
+            installed_path: None,
+            extensions: resources.iter().map(|(path, enabled)| PackageResourceRecord {
+                path: (*path).into(), name: (*path).into(), enabled: *enabled,
+            }).collect(),
+            skills: Vec::new(),
+            prompts: Vec::new(),
+            themes: Vec::new(),
+            errors: Vec::new(),
+            trusted_at: if trusted { "2026-01-01T00:00:00Z".into() } else { String::new() },
+            installed_at: "2026-01-01T00:00:00Z".into(),
+        }
+    }
+
+    fn provider() -> ProviderRecord {
+        ProviderRecord {
+            id: "p".into(), name: "P".into(), base_url: "https://example.test/v1".into(),
+            api_format: "openai-completions".into(), models: Vec::new(),
+            created_at: "now".into(), updated_at: "now".into(), has_api_key: true,
+        }
+    }
+
+    #[test]
+    fn only_trusted_packages_contribute_resource_paths() {
+        let packages = vec![
+            package("npm:trusted", true, &[("/pkg/trusted/a.ts", true)]),
+            package("npm:untrusted", false, &[("/pkg/untrusted/evil.ts", true)]),
+        ];
+        let paths = resource_paths(&packages);
+        let extensions = paths["extensions"].as_array().unwrap();
+        assert_eq!(extensions.len(), 1);
+        assert_eq!(extensions[0], "/pkg/trusted/a.ts");
+    }
+
+    #[test]
+    fn a_switched_off_resource_never_reaches_a_worker() {
+        let packages = vec![package("npm:x", true, &[("/pkg/x/on.ts", true), ("/pkg/x/off.ts", false)])];
+        let extensions = resource_paths(&packages)["extensions"].as_array().unwrap().clone();
+        assert_eq!(extensions, vec!["/pkg/x/on.ts"]);
+    }
+
+    #[test]
+    fn an_untrusted_package_contributes_nothing_even_with_every_resource_enabled() {
+        let packages = vec![package("npm:appeared-somehow", false, &[
+            ("/pkg/a.ts", true), ("/pkg/b.ts", true),
+        ])];
+        let paths = resource_paths(&packages);
+        for kind in ["extensions", "skills", "prompts", "themes"] {
+            assert!(paths[kind].as_array().unwrap().is_empty(), "{kind} leaked from an untrusted package");
+        }
+    }
+
+    #[test]
+    fn fingerprint_changes_with_resources_so_workers_respawn() {
+        let before = resource_paths(&[package("npm:x", true, &[("/pkg/x/a.ts", true)])]);
+        let after = resource_paths(&[package("npm:x", true, &[("/pkg/x/a.ts", false)])]);
+        let provider = provider();
+        assert_ne!(
+            fingerprint(&provider, "m", &before).unwrap(),
+            fingerprint(&provider, "m", &after).unwrap()
+        );
+        assert_eq!(
+            fingerprint(&provider, "m", &before).unwrap(),
+            fingerprint(&provider, "m", &before).unwrap()
+        );
+    }
+
+    #[test]
+    fn manager_noise_is_bounded_and_redacted() {
+        let message = with_context("Install failed".into(), "npm warn deprecated\n", "sk-abcdefghijklmnop leaked");
+        assert!(message.starts_with("Install failed\n"));
+        assert!(message.contains("[credential redacted]"));
+        assert!(!message.contains("sk-abcdefghijklmnop"));
+    }
 }

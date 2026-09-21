@@ -1,35 +1,47 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { api } from "../api";
 import { mergeDiscoveredModels, modelIsReady } from "../model-utils";
-import type { ApiFormat, ModelRecord, ProviderRecord, SaveProviderInput, ThinkingLevel } from "../types";
-import { Icon } from "./Icons";
+import { groupTools } from "../tool-utils";
+import type { ApiFormat, ModelRecord, PackageRecord, ProviderRecord, SaveProviderInput, ThinkingLevel, ToolCatalogEntry } from "../types";
+import { Icon, type IconName } from "./Icons";
+import { PackagesSection, type PackageActions } from "./PackagesSection";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 import { Select } from "./ui/Select";
 import { Tooltip } from "./ui/Tooltip";
 
 const levels: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
-type SectionId = "providers";
+type SectionId = "providers" | "packages" | "tools";
 
 interface Section {
   id: SectionId;
   label: string;
-  icon: "key";
+  icon: IconName;
 }
 
 const SECTIONS: Section[] = [
-  { id: "providers", label: "Providers", icon: "key" }
+  { id: "providers", label: "Providers", icon: "key" },
+  { id: "packages", label: "Packages", icon: "spark" },
+  { id: "tools", label: "Tools", icon: "wrench" }
 ];
 
-interface Props {
+interface Props extends PackageActions {
   providers: ProviderRecord[];
+  packages: PackageRecord[];
+  toolCatalog: ToolCatalogEntry[];
+  disabledTools: string[];
   appDataPath: string;
   onClose: () => void;
   onSave: (input: SaveProviderInput) => Promise<ProviderRecord>;
   onDelete: (providerId: string) => Promise<void>;
+  onSetDisabledTools: (disabled: string[]) => Promise<void>;
 }
 
-export function SettingsPage({ providers, appDataPath, onClose, onSave, onDelete }: Props) {
+export function SettingsPage({
+  providers, packages, toolCatalog, disabledTools, appDataPath,
+  onClose, onSave, onDelete, onSetDisabledTools,
+  onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
+}: Props) {
   const [section, setSection] = useState<SectionId>("providers");
   const [selectedProviderId, setSelectedProviderId] = useState(providers[0]?.id ?? "new");
   const selectedSection = SECTIONS.find((item) => item.id === section);
@@ -90,8 +102,98 @@ export function SettingsPage({ providers, appDataPath, onClose, onSave, onDelete
             onDelete={onDelete}
           />
         )}
+        {section === "packages" && (
+          <PackagesSection
+            packages={packages}
+            onRefresh={onRefresh}
+            onInstall={onInstall}
+            onTrust={onTrust}
+            onSearch={onSearch}
+            onRemove={onRemove}
+            onUpdate={onUpdate}
+            onSetResources={onSetResources}
+          />
+        )}
+        {section === "tools" && (
+          <ToolsSection catalog={toolCatalog} disabled={disabledTools} onSetDisabled={onSetDisabledTools} />
+        )}
       </main>
     </>
+  );
+}
+
+interface ToolsSectionProps {
+  catalog: ToolCatalogEntry[];
+  disabled: string[];
+  onSetDisabled: (disabled: string[]) => Promise<void>;
+}
+
+function ToolsSection({ catalog, disabled, onSetDisabled }: ToolsSectionProps) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const groups = useMemo(() => groupTools(catalog), [catalog]);
+  const disabledSet = useMemo(() => new Set(disabled), [disabled]);
+
+  async function toggle(name: string, enabled: boolean): Promise<void> {
+    const next = enabled ? disabled.filter((item) => item !== name) : [...disabled, name];
+    setBusy(true);
+    setError(undefined);
+    try {
+      await onSetDisabled(next);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!catalog.length) {
+    return (
+      <div className="settings-scroll">
+        <div className="model-empty">
+          Tools are listed once a chat has started. Open or create a chat, then come back.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="settings-scroll">
+      <div className="section-heading-row">
+        <div>
+          <h3>Available tools</h3>
+          <p>Switched-off tools are not offered to the model. Changes apply to running chats on their next turn.</p>
+        </div>
+      </div>
+      {groups.map((group) => (
+        <section className="tool-setting-group" key={group.id}>
+          <h4>{group.label}</h4>
+          {group.tools.map((tool) => {
+            const enabled = tool.available && !disabledSet.has(tool.name);
+            return (
+              <div className={`tool-setting ${tool.available ? "" : "unavailable"}`} key={tool.name}>
+                <div className="tool-setting-text">
+                  <span className="tool-setting-name">{tool.name}</span>
+                  <span className="tool-setting-description">{tool.unavailableReason ?? tool.description}</span>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={enabled}
+                  aria-label={tool.name}
+                  className={`toggle ${enabled ? "on" : ""}`}
+                  disabled={busy || !tool.available}
+                  onClick={() => void toggle(tool.name, disabledSet.has(tool.name))}
+                >
+                  <span />
+                </button>
+              </div>
+            );
+          })}
+        </section>
+      ))}
+      {error && <div className="error-banner">{error}</div>}
+    </div>
   );
 }
 

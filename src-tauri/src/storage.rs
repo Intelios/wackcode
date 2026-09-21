@@ -78,6 +78,16 @@ mod tests {
     }
 
     #[test]
+    fn metadata_written_before_tool_settings_existed_still_loads() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("wackcode.json");
+        fs::write(&path, r#"{"version":1,"providers":[],"projects":[],"tasks":[]}"#).unwrap();
+        let data: AppData = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(data.tool_config.disabled.is_empty());
+        assert!(data.tool_catalog.is_empty());
+    }
+
+    #[test]
     fn startup_marks_active_tasks_interrupted_without_replaying_them() {
         let mut data = AppData {
             tasks: vec![TaskRecord {

@@ -2,7 +2,9 @@ use crate::{
     git,
     models::{
         BootstrapPayload, CreateTaskInput, GitChanges, ModelRecord, ProjectRecord, PromptInput,
-        ProviderRecord, SaveProviderInput, TaskRecord, TaskStatus,
+        ExtensionUiResponseInput, InstallPackageInput, PackageRecord, PackageSearchResult,
+        ProviderRecord, SaveProviderInput, SearchPackagesInput,
+        SetPackageResourcesInput, SetToolConfigInput, TaskRecord, TaskStatus, ToolConfig,
     },
     storage::MetadataState,
     worker::{self},
@@ -138,6 +140,323 @@ pub async fn discover_models(
     ids.dedup();
     if ids.is_empty() { return Err("The endpoint returned no model IDs. You can still add one manually.".into()); }
     Ok(ids)
+}
+
+const NPM_REGISTRY: &str = "https://registry.npmjs.org";
+const SEARCH_PAGE_SIZE: u32 = 25;
+
+/// Search the public npm registry for Pi packages.
+///
+/// pi.dev's own catalogue is exactly this: npm packages carrying the `pi-package` keyword. Its
+/// site has no API (every /api route answers 501), so the registry is queried directly. This is
+/// the only non-provider host WackCode contacts, and only when the user searches.
+#[tauri::command]
+pub async fn search_packages(input: SearchPackagesInput) -> Result<Vec<PackageSearchResult>, String> {
+    let query = input.query.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    let text = match query {
+        Some(query) => format!("keywords:pi-package {query}"),
+        None => "keywords:pi-package".to_string(),
+    };
+    let url = format!(
+        "{NPM_REGISTRY}/-/v1/search?text={}&size={SEARCH_PAGE_SIZE}&from={}",
+        urlencoding(&text),
+        input.from.unwrap_or(0)
+    );
+    let response = reqwest::Client::new()
+        .get(url)
+        .timeout(std::time::Duration::from_secs(20))
+        .send().await.map_err(|error| format!("Could not reach the npm registry: {error}"))?;
+    let status = response.status();
+    let body: Value = response.json().await
+        .map_err(|error| format!("The npm registry did not return JSON: {error}"))?;
+    if !status.is_success() {
+        return Err(format!("Package search failed ({status})."));
+    }
+    Ok(body.get("objects").and_then(Value::as_array).into_iter().flatten()
+        .filter_map(|item| search_result(item.get("package")?))
+        .collect())
+}
+
+fn search_result(package: &Value) -> Option<PackageSearchResult> {
+    let name = package.get("name").and_then(Value::as_str)?.to_string();
+    let links = package.get("links");
+    Some(PackageSearchResult {
+        npm_url: links.and_then(|links| links.get("npm")).and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("https://www.npmjs.com/package/{name}")),
+        repository: links.and_then(|links| links.get("repository")).and_then(Value::as_str).map(str::to_string),
+        version: package.get("version").and_then(Value::as_str).unwrap_or("").to_string(),
+        description: package.get("description").and_then(Value::as_str).unwrap_or("").to_string(),
+        publisher: package.pointer("/publisher/username").and_then(Value::as_str).unwrap_or("").to_string(),
+        published_at: package.get("date").and_then(Value::as_str).unwrap_or("").to_string(),
+        declares: Vec::new(),
+        name,
+    })
+}
+
+/// Fetch one package's manifest so the user can see what installing it actually adds before
+/// they accept the trust warning.
+#[tauri::command]
+pub async fn package_details(name: String) -> Result<PackageSearchResult, String> {
+    let name = required(&name, "Package name")?;
+    if name.contains("..") || name.contains(' ') {
+        return Err("That is not a valid npm package name.".into());
+    }
+    let response = reqwest::Client::new()
+        .get(format!("{NPM_REGISTRY}/{}/latest", urlencoding(&name)))
+        .timeout(std::time::Duration::from_secs(20))
+        .send().await.map_err(|error| format!("Could not reach the npm registry: {error}"))?;
+    let status = response.status();
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Err(format!("No package named {name} was found on npm."));
+    }
+    let body: Value = response.json().await
+        .map_err(|error| format!("The npm registry did not return JSON: {error}"))?;
+    if !status.is_success() {
+        return Err(format!("Could not load {name} ({status})."));
+    }
+    let mut result = search_result(&body).ok_or_else(|| "The npm registry returned an unexpected response.".to_string())?;
+    // The `pi` manifest says which resource kinds the package contributes.
+    if let Some(manifest) = body.get("pi").and_then(Value::as_object) {
+        result.declares = ["extensions", "skills", "prompts", "themes"].into_iter()
+            .filter(|kind| manifest.contains_key(*kind))
+            .map(str::to_string)
+            .collect();
+    }
+    // The manifest spells these differently from the search index: no `links` object, the
+    // publisher under `_npmUser`, and the repository as an object rather than a URL string.
+    result.publisher = body.pointer("/_npmUser/name").and_then(Value::as_str)
+        .or_else(|| body.pointer("/author/name").and_then(Value::as_str))
+        .unwrap_or("").to_string();
+    result.repository = body.pointer("/repository/url").and_then(Value::as_str)
+        .map(|url| url.trim_start_matches("git+").trim_end_matches(".git").to_string())
+        .or_else(|| body.get("homepage").and_then(Value::as_str).map(str::to_string));
+    Ok(result)
+}
+
+/// Minimal percent-encoding for query values. The registry only ever sees package names and
+/// search words, so the unreserved set plus a few safe characters is enough.
+fn urlencoding(value: &str) -> String {
+    value.chars().map(|character| match character {
+        'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' | ':' | '@' | '/' => character.to_string(),
+        ' ' => "+".to_string(),
+        other => other.to_string().bytes().map(|byte| format!("%{byte:02X}")).collect(),
+    }).collect()
+}
+
+/// Answer a dialog an extension raised. The worker routes this past its command queue, because
+/// the extension is usually waiting inside an in-flight prompt.
+#[tauri::command]
+pub async fn respond_extension_ui(app: AppHandle, input: ExtensionUiResponseInput) -> Result<(), String> {
+    let mut payload = json!({
+        "id": Uuid::new_v4().to_string(),
+        "type": "extension_ui_response",
+        "requestId": required(&input.request_id, "Dialog id")?,
+    });
+    if let Some(value) = input.value { payload["value"] = Value::String(value); }
+    if let Some(confirmed) = input.confirmed { payload["confirmed"] = Value::Bool(confirmed); }
+    if input.cancelled == Some(true) { payload["cancelled"] = Value::Bool(true); }
+    worker::send(&app, &input.task_id, &payload).await
+}
+
+/// Read the installed packages back from the shared store and reconcile them with the trust
+/// receipts in `wackcode.json`. A package present on disk but never trusted here stays untrusted
+/// and so never loads.
+async fn sync_packages(
+    app: &AppHandle,
+    state: &State<'_, MetadataState>,
+    catalog: Value,
+    // Source the user just accepted the warning for. Only this one may gain trust here.
+    newly_trusted: Option<&str>,
+) -> Result<Vec<PackageRecord>, String> {
+    let now = Utc::now().to_rfc3339();
+    let existing: Vec<PackageRecord> = {
+        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        data.packages.clone()
+    };
+
+    let empty = Vec::new();
+    let mut records = Vec::new();
+    for entry in catalog.as_array().unwrap_or(&empty) {
+        let source = entry.get("source").and_then(Value::as_str).unwrap_or_default().to_string();
+        if source.is_empty() { continue; }
+        let previous = existing.iter().find(|record| record.source == source);
+        records.push(PackageRecord {
+            source: source.clone(),
+            display_name: entry.get("displayName").and_then(Value::as_str).unwrap_or(&source).to_string(),
+            kind: entry.get("kind").and_then(Value::as_str).unwrap_or("local").to_string(),
+            version: entry.get("version").and_then(Value::as_str).map(str::to_string),
+            installed_path: entry.get("installedPath").and_then(Value::as_str).map(str::to_string),
+            extensions: resources(entry, "extensions"),
+            skills: resources(entry, "skills"),
+            prompts: resources(entry, "prompts"),
+            themes: resources(entry, "themes"),
+            errors: entry.get("errors").and_then(Value::as_array)
+                .map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                .unwrap_or_default(),
+            // Trust is only ever granted by an explicit install the user confirmed. A package
+            // that turns up in the shared store some other way stays untrusted, so nothing it
+            // contains can reach a worker until the user reviews it.
+            trusted_at: previous
+                .map(|record| record.trusted_at.clone())
+                .unwrap_or_else(|| if newly_trusted == Some(source.as_str()) { now.clone() } else { String::new() }),
+            installed_at: previous.map(|record| record.installed_at.clone()).unwrap_or_else(|| now.clone()),
+        });
+    }
+
+    state.mutate(|data| { data.packages = records.clone(); Ok(()) })?;
+    // Loaded resources are baked into a worker at spawn time, so every worker must restart.
+    // Collect first: the metadata guard must not be held across an await.
+    let task_ids: Vec<String> = {
+        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        data.tasks.iter().map(|task| task.id.clone()).collect()
+    };
+    for task_id in task_ids {
+        worker::terminate_worker(app, &task_id, true).await?;
+    }
+    Ok(records)
+}
+
+fn resources(entry: &Value, kind: &str) -> Vec<crate::models::PackageResourceRecord> {
+    entry.get(kind).and_then(Value::as_array).map(|items| {
+        items.iter().filter_map(|item| Some(crate::models::PackageResourceRecord {
+            path: item.get("path").and_then(Value::as_str)?.to_string(),
+            name: item.get("name").and_then(Value::as_str)?.to_string(),
+            enabled: item.get("enabled").and_then(Value::as_bool).unwrap_or(false),
+        })).collect()
+    }).unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn list_packages(state: State<'_, MetadataState>) -> Result<Vec<PackageRecord>, String> {
+    Ok(state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?.packages.clone())
+}
+
+#[tauri::command]
+pub async fn refresh_packages(app: AppHandle, state: State<'_, MetadataState>) -> Result<Vec<PackageRecord>, String> {
+    let catalog = worker::run_manager(&app, json!({ "type": "list" })).await?;
+    sync_packages(&app, &state, catalog, None).await
+}
+
+#[tauri::command]
+pub async fn install_package(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    input: InstallPackageInput,
+) -> Result<Vec<PackageRecord>, String> {
+    let source = validate_package_source(&input.source)?;
+    if !input.trusted {
+        return Err("Accept the installation warning before installing this package.".into());
+    }
+    refuse_while_busy(&state)?;
+    let catalog = worker::run_manager(&app, json!({ "type": "install", "source": source })).await?;
+    sync_packages(&app, &state, catalog, Some(&source)).await
+}
+
+#[tauri::command]
+pub async fn remove_package(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    source: String,
+) -> Result<Vec<PackageRecord>, String> {
+    let source = validate_package_source(&source)?;
+    refuse_while_busy(&state)?;
+    let catalog = worker::run_manager(&app, json!({ "type": "remove", "source": source })).await?;
+    sync_packages(&app, &state, catalog, None).await
+}
+
+#[tauri::command]
+pub async fn update_packages(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    source: Option<String>,
+) -> Result<Vec<PackageRecord>, String> {
+    refuse_while_busy(&state)?;
+    let mut command = json!({ "type": "update" });
+    if let Some(source) = source {
+        command["source"] = Value::String(validate_package_source(&source)?);
+    }
+    let catalog = worker::run_manager(&app, command).await?;
+    sync_packages(&app, &state, catalog, None).await
+}
+
+#[tauri::command]
+pub async fn set_package_resources(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    input: SetPackageResourcesInput,
+) -> Result<Vec<PackageRecord>, String> {
+    let source = validate_package_source(&input.source)?;
+    refuse_while_busy(&state)?;
+    let mut command = json!({ "type": "set_resources", "source": source });
+    for (kind, selection) in [
+        ("extensions", input.extensions),
+        ("skills", input.skills),
+        ("prompts", input.prompts),
+        ("themes", input.themes),
+    ] {
+        if let Some(selection) = selection {
+            command[kind] = json!(selection);
+        }
+    }
+    let catalog = worker::run_manager(&app, command).await?;
+    sync_packages(&app, &state, catalog, None).await
+}
+
+/// Grant trust to a package already present in the store but never confirmed here, so the user
+/// can review and accept it without reinstalling.
+#[tauri::command]
+pub async fn trust_package(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    input: InstallPackageInput,
+) -> Result<Vec<PackageRecord>, String> {
+    let source = validate_package_source(&input.source)?;
+    if !input.trusted {
+        return Err("Accept the installation warning before enabling this package.".into());
+    }
+    refuse_while_busy(&state)?;
+    let now = Utc::now().to_rfc3339();
+    let found = state.mutate(|data| {
+        let Some(record) = data.packages.iter_mut().find(|record| record.source == source) else {
+            return Ok(false);
+        };
+        if record.trusted_at.is_empty() {
+            record.trusted_at = now.clone();
+        }
+        Ok(true)
+    })?;
+    if !found {
+        return Err(format!("That package is not installed: {source}"));
+    }
+    let task_ids: Vec<String> = {
+        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        data.tasks.iter().map(|task| task.id.clone()).collect()
+    };
+    for task_id in task_ids {
+        worker::terminate_worker(&app, &task_id, true).await?;
+    }
+    list_packages(state)
+}
+
+/// Tool changes take effect on the next agent turn, so running workers are updated in place
+/// instead of being restarted the way a connection change restarts them.
+#[tauri::command]
+pub async fn set_tool_config(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    input: SetToolConfigInput,
+) -> Result<ToolConfig, String> {
+    let disabled = validate_tool_names(&input.disabled)?;
+    let config = ToolConfig { disabled: disabled.clone() };
+    state.mutate(|data| {
+        data.tool_config = config.clone();
+        Ok(())
+    })?;
+    worker::broadcast(&app, &json!({
+        "id": Uuid::new_v4().to_string(), "type": "set_tools", "disabledTools": disabled
+    })).await?;
+    Ok(config)
 }
 
 #[tauri::command]
@@ -503,6 +822,48 @@ fn validate_model_selection(provider: &ProviderRecord, model_id: &str, thinking_
     Ok(())
 }
 
+/// Accepts the source forms `pi install` accepts. Traversal is rejected outright: a package
+/// source arrives from the UI, and a relative escape has no legitimate use here.
+fn validate_package_source(source: &str) -> Result<String, String> {
+    let source = required(source, "Package source")?;
+    if source.contains("..") {
+        return Err("A package source cannot contain \"..\".".into());
+    }
+    let recognised = source.starts_with("npm:")
+        || source.starts_with("git:")
+        || source.starts_with("https://")
+        || source.starts_with("http://")
+        || source.starts_with("ssh://")
+        || source.starts_with("git://")
+        || source.starts_with('/');
+    if !recognised {
+        return Err("Enter a package source such as npm:pi-web-access, git:github.com/user/repo, or an absolute path.".into());
+    }
+    Ok(source)
+}
+
+/// Which resources load is fixed when a worker spawns, so package changes are refused while a
+/// chat is mid-run rather than silently applying on the next restart.
+fn refuse_while_busy(state: &State<'_, MetadataState>) -> Result<(), String> {
+    let busy = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?
+        .tasks.iter().any(|task| matches!(task.status, TaskStatus::Running | TaskStatus::Stopping));
+    if busy {
+        return Err("Wait for running chats to finish before changing installed packages.".into());
+    }
+    Ok(())
+}
+
+fn validate_tool_names(names: &[String]) -> Result<Vec<String>, String> {
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+    for name in names {
+        let name = required(name, "Tool name")?;
+        if seen.insert(name.clone()) { result.push(name); }
+    }
+    result.sort();
+    Ok(result)
+}
+
 fn validate_thinking(level: &str) -> Result<(), String> {
     if THINKING_LEVELS.contains(&level) { Ok(()) } else { Err(format!("Unsupported reasoning effort: {level}")) }
 }
@@ -541,6 +902,30 @@ mod tests {
             thinking_level_map: std::collections::BTreeMap::from([("off".into(), None)]),
         }];
         assert!(validate_models(&models).is_ok());
+    }
+
+    #[test]
+    fn package_sources_accept_every_form_pi_install_takes_and_reject_traversal() {
+        for source in ["npm:pi-web-access", "npm:@scope/pkg@1.2.3", "git:github.com/u/r@v1", "https://github.com/u/r", "/abs/path"] {
+            assert!(validate_package_source(source).is_ok(), "{source} should be accepted");
+        }
+        for source in ["", "   ", "pi-web-access", "../escape", "npm:../evil"] {
+            assert!(validate_package_source(source).is_err(), "{source} should be rejected");
+        }
+    }
+
+    #[test]
+    fn search_queries_are_encoded_without_breaking_the_keyword_filter() {
+        assert_eq!(urlencoding("keywords:pi-package mcp"), "keywords:pi-package+mcp");
+        assert_eq!(urlencoding("@scope/name"), "@scope/name");
+        assert_eq!(urlencoding("a&b=c"), "a%26b%3Dc");
+    }
+
+    #[test]
+    fn tool_names_are_trimmed_deduplicated_and_sorted() {
+        let names = vec!["write".into(), " read ".into(), "write".into(), "bash".into()];
+        assert_eq!(validate_tool_names(&names).unwrap(), vec!["bash", "read", "write"]);
+        assert!(validate_tool_names(&["  ".to_string()]).is_err());
     }
 
     #[test]

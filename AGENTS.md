@@ -8,7 +8,7 @@ Read `README.md` first for the user-facing feature set and security posture; thi
 
 - **Platform:** macOS on Apple Silicon only. `scripts/prepare-runtime.mjs` hard-fails elsewhere. Unix-only APIs (`nix::killpg`, `open(1)`) are used deliberately — do not file or "fix" these as cross-platform bugs.
 - **Package manager:** pnpm 11.5.0 (pinned in `package.json` → `packageManager`). Do not use npm/yarn; do not add a root `package-lock.json`.
-- **No telemetry, no account, no backend, no updater, no automatic model discovery.** Anything that "phones home" from the app itself is out of scope. Provider traffic goes only to user-configured OpenAI-compatible endpoints.
+- **No telemetry, no account, no backend, no updater, no automatic model discovery.** Anything that "phones home" from the app itself is out of scope. Outbound traffic is limited to three user-initiated destinations: user-configured OpenAI-compatible provider endpoints; the public npm registry (`registry.npmjs.org`), only while the user browses or installs a package; and the package's own npm or git source during that install. Nothing contacts any of them on launch or on a timer.
 - **No AGENTS.md loading in the bundled worker** — Pi's project instruction files (like this one) still load in the *user's* projects, but this repo's guide is for you, the agent working on WackCode itself.
 
 ## Architecture
@@ -17,7 +17,7 @@ Three layers, one repo, exactly one bridge between each pair:
 
 ```
 React frontend (src/)                Tauri v2 bridge                Rust backend (src-tauri/)
-  api.ts  ──invoke(snake_case)──►   commands.rs (19 commands)  ──►  storage.rs / secrets.rs / git.rs
+  api.ts  ──invoke(snake_case)──►   commands.rs (30 commands)  ──►  storage.rs / secrets.rs / git.rs
   App.tsx ◄──listen("worker-event")──  worker.rs (per-task Node child process)
                                                    │ stdin/stdout NDJSON
                                                    ▼
@@ -27,6 +27,8 @@ React frontend (src/)                Tauri v2 bridge                Rust backend
                                   user-configured OpenAI-compatible endpoint
 ```
 
+A third, short-lived process handles packages. It is spawned per operation by `worker::run_manager`, runs `worker/src/manager.ts` on the same bundled Node, and wraps Pi's `DefaultPackageManager` against a shared store at `<app-data>/pi/`. It **never receives an API key**, the provider env keys are stripped before spawn, and unlike a task worker it does not set `PI_OFFLINE` — installing is the one thing it exists to do. Its protocol lines are prefixed with `\x1e` because Pi spawns npm with inherited stdio and npm's own output lands on the same stream.
+
 Data flow for one prompt: `App.tsx` → `api.prompt` → `commands::prompt` (validates, ensures worker, generates `runId`) → `worker.rs` writes an NDJSON `prompt` line to the worker's stdin → `worker/src/index.ts` drives the Pi session → Pi streams back → worker emits `partial` / `activity` / `snapshot` / `run_state` NDJSON lines on stdout → `worker.rs::handle_worker_line` parses, persists key fields to `wackcode.json`, and re-emits every line as the single Tauri event `"worker-event"` → `App.tsx` dispatches on `payload.type` into `patchRuntime` / `patchTask`.
 
 ## Commands
@@ -34,7 +36,7 @@ Data flow for one prompt: `App.tsx` → `api.prompt` → `commands::prompt` (val
 | Command | What it does | When to use it |
 |---|---|---|
 | `pnpm install` | Install workspace deps (root app + `worker/`). | After clone, or when `pnpm-lock.yaml` changed. |
-| `pnpm prepare:runtime` | Download Node 24.18.0 (darwin-arm64) per `runtime-lock.json`, verify SHA-256, place at `src-tauri/binaries/wackcode-node-aarch64-apple-darwin`. | Once per machine, and after `runtime-lock.json` changes. Required for `tauri dev` and `tauri build`. |
+| `pnpm prepare:runtime` | Download Node 24.18.0 (darwin-arm64) per `runtime-lock.json`, verify SHA-256, place the binary at `src-tauri/binaries/wackcode-node-aarch64-apple-darwin` and stage npm from the same tarball into `src-tauri/resources/npm/`. | Once per machine, and after `runtime-lock.json` changes. Required for `tauri dev` and `tauri build`, and for installing packages. |
 | `pnpm dev:desktop` | `tauri dev`: builds the worker, starts Vite on port 1420, launches the app. Dev worker = `worker/dist/index.js`, dev Node = `$WACKCODE_NODE_PATH` or `node` on PATH. | Day-to-day development. |
 | `pnpm build:desktop` | `prepare:runtime` then `tauri build` → `src-tauri/target/release/bundle/macos/WackCode.app`. | Producing the self-contained app. Requires the pinned runtime downloaded above. |
 | `pnpm build:web` | `tsc -b && vite build` → type-check the frontend and emit `dist/`. | Catching TS errors without launching the app; also what `beforeBuildCommand` runs. |
@@ -42,7 +44,7 @@ Data flow for one prompt: `App.tsx` → `api.prompt` → `commands::prompt` (val
 | `pnpm prepare:worker` | Stage a self-contained worker package into `src-tauri/resources/worker/` via `pnpm deploy`. | Only as part of release bundling (`beforeBuildCommand` already does this). |
 | `pnpm test` | `test:web` → `test:worker` → `test:rust` in sequence. | Before any PR. |
 | `pnpm test:web` | `vitest run` on `src/**/*.test.{ts,tsx}` (jsdom). | Frontend unit/component changes. |
-| `pnpm test:worker` | Builds then runs `worker/src/*.test.ts` against an inline mock OpenAI server. | Worker or protocol changes. |
+| `pnpm test:worker` | Builds then runs `worker/src/*.test.ts` against an inline mock OpenAI server, plus `manager.test.ts` against a local fixture package (no network). | Worker, manager, or protocol changes. |
 | `pnpm test:rust` | `cargo test --manifest-path src-tauri/Cargo.toml`. | Rust changes. |
 | `pnpm check` | `build:web` + `build:worker` + `cargo check`. | Fast "does everything still compile" pass. |
 | `pnpm mock:provider` | Standalone mock endpoint on `http://127.0.0.1:43127/v1` (streams a fixed write-tool round trip; hangs on "wait until stopped" for cancellation testing). | Manual UI testing without a real provider. Configure as a Chat Completions connection. |
@@ -62,14 +64,16 @@ src/            React frontend (Vite entry: ../index.html → src/main.tsx)
   test/setup.ts Vitest setup (jest-dom).
 worker/         Node child process wrapping @earendil-works/pi-coding-agent 0.86.1 (pinned).
   src/index.ts    Main loop: init → session create/restore → prompt stream → abort/shutdown.
-  src/protocol.ts Command/event types. Single source of truth for the stdin/stdout protocol.
+  src/protocol.ts Command/event types. Single source of truth for the task worker's stdin/stdout protocol.
+  src/manager.ts  Short-lived package-manager process wrapping Pi's DefaultPackageManager.
+  src/manager-protocol.ts  Its protocol. Frames are \x1e-prefixed because npm shares stdout.
   src/framing.ts  JsonLineDecoder. Splits on LF only; U+2028/U+2029 inside strings are safe.
   dist/           tsc output. Build artifact, gitignored. Never edit by hand, never commit.
 src-tauri/
   src/main.rs     3-line entry calling wackcode_lib::run().
   src/lib.rs      Tauri builder, plugin init, .manage(WorkerState), generate_handler![...19 commands],
                   terminate_all on RunEvent::Exit.
-  src/commands.rs All 19 #[tauri::command] fns + validation helpers + tests. Error strings are user-facing.
+  src/commands.rs All 30 #[tauri::command] fns + validation helpers + tests. Error strings are user-facing.
   src/models.rs   Serde records that must stay in sync with src/types.ts.
   src/worker.rs   Spawns per-task Node workers, NDJSON bridge, crash detection, stderr redaction.
   src/git.rs      Shells out to system git (no git2). Worktrees, porcelain parsing, diff previews.
@@ -102,7 +106,7 @@ Adding or changing a field on a task/provider/project means **four** files, in s
 4. `api.ts`: add one line — scalar args for simple inputs, a single `{ input: {...} }` object for multi-field inputs (matches existing style exactly).
 5. `App.tsx` (or the one component that needs it): call `api.*`, then update state immutably via `patchTask` / `patchRuntime` / `setData`. Never mutate `data` in place. Handle errors per the tiers below.
 
-### The 19 commands (full surface, mirrored in `api.ts`)
+### The 30 commands (full surface, mirrored in `api.ts`)
 
 | Command | File:line | Summary |
 |---|---|---|
@@ -110,6 +114,7 @@ Adding or changing a field on a task/provider/project means **four** files, in s
 | `save_provider` | commands.rs:35 | Create/update a connection; restarts workers using it. |
 | `delete_provider` | commands.rs:89 | Refuses while tasks reference it. |
 | `discover_models` | commands.rs:114 | `GET {baseUrl}/models` (bearer, 20 s), sorted IDs. |
+| `set_tool_config` | commands.rs:146 | Persist the tool denylist; pushes `set_tools` to every running worker without restarting them. |
 | `add_project` | commands.rs:144 | Canonicalize folder; idempotent; records git root/HEAD. |
 | `create_task` | commands.rs:170 | New chat; optional worktree else per-chat scratch folder. |
 | `configure_task` | commands.rs:244 | Change provider/model/thinking; refuses while running; restarts worker. |
@@ -123,6 +128,12 @@ Adding or changing a field on a task/provider/project means **four** files, in s
 | `remove_project` | commands.rs:393 | Refuses while non-archived chats exist; deletes its tasks. |
 | `git_changes` | commands.rs:437 | Staged + unstaged + untracked diffs for the task workspace. |
 | `reveal_task` / `reveal_path` | commands.rs:445 / 454 | macOS `open` on the workspace / an arbitrary path. |
+| `list_packages` / `refresh_packages` | commands.rs | Cached package list / re-read the shared store via the manager process. |
+| `install_package` / `trust_package` | commands.rs | Install (refuses without `trusted`) / grant trust to a package already on disk. |
+| `remove_package` / `update_packages` | commands.rs | Remove, update. Both restart every worker. |
+| `set_package_resources` | commands.rs | Per-resource toggles, persisted as Pi's `PackageSource` object form. |
+| `search_packages` / `package_details` | commands.rs | npm registry search for `keywords:pi-package` / one package's manifest. |
+| `respond_extension_ui` | commands.rs | Answer a dialog an extension raised. |
 
 New plugin commands also need an entry in `src-tauri/capabilities/default.json`.
 
@@ -143,7 +154,21 @@ Rules that must not regress:
 - A dedicated test in `storage.rs` asserts `wackcode.json` contains no secrets. The earlier macOS-Keychain backend was deliberately removed (commit `ea25c08`) — do not reintroduce keyring unless that decision is explicitly revisited.
 
 ### Pi feature surface the worker hard-disables
-`worker/src/index.ts` sets `PI_TELEMETRY=0`, `PI_SKIP_VERSION_CHECK=1`, `PI_OFFLINE=1`, `allowModelNetwork: false`, `refreshOnCreate: false`, `cacheWarming: "off"`, `noExtensions`, `noSkills`, `noPromptTemplates`, `noThemes`, `defaultProjectTrust: "never"`, and Rust strips provider env keys. **Kept on purpose:** project instruction/context files (`noContextFiles: false` — so an `AGENTS.md` in the user's project still loads), compaction, and auto-retry. The Pi tools are fixed to `["read", "bash", "edit", "write"]`.
+`worker/src/index.ts` sets `PI_TELEMETRY=0`, `PI_SKIP_VERSION_CHECK=1`, `PI_OFFLINE=1`, `allowModelNetwork: false`, `refreshOnCreate: false`, `cacheWarming: "off"`, `noExtensions`, `noSkills`, `noPromptTemplates`, `noThemes`, `defaultProjectTrust: "never"`, and Rust strips provider env keys. **Kept on purpose:** project instruction/context files (`noContextFiles: false` — so an `AGENTS.md` in the user's project still loads), compaction, and auto-retry.
+
+The `no*` flags stay `true` even now that packages load. They switch off *discovery*, not loading: `DefaultResourceLoader` still honours `additionalExtensionPaths` / `additionalSkillPaths` / `additionalPromptTemplatePaths` / `additionalThemePaths` when they are set (`resource-loader.js`, the `noExtensions ? cliEnabledExtensions : merge(...)` branches). Rust fills those from `init.resources` with the enabled paths of trusted packages only. Nothing else can execute — a project's own `.pi/extensions` is unreachable regardless of trust settings.
+
+### Extension dialogs
+Extensions may call `ctx.ui.select/confirm/input/editor`. The worker implements a headless `ExtensionUIContext` modelled on Pi's RPC mode and bridges those four to React modals; ambient TUI affordances (`setStatus`, `setWidget`, `setFooter`, themes, custom components) are accepted and discarded.
+
+**`extension_ui_response` must bypass the worker's command queue, exactly like `abort`.** An extension awaiting a dialog is usually doing so inside a `tool_call` handler, which runs inside `session.prompt()`, which owns the serial queue — queueing the answer behind it deadlocks the run outright. There is a regression test for this (`integration.test.ts`, "answers an extension dialog raised mid-prompt"); removing the bypass makes it time out.
+
+### Tool selection (read this before touching tools)
+**Never pass `tools:` to `createAgentSession`.** In Pi 0.86.1 it sets `allowedToolNames`, a hard *registry* filter (`agent-session.js` `isAllowedTool`) — not just an initial active set. Anything not listed is erased from the registry, so extension-contributed tools disappear from `getAllTools()` entirely and can never be shown as an off toggle. `excludeTools:` erases in the same way; it is reserved for tools that must not exist at all, currently just `powershell` (registered on every platform, meaningless on macOS-only WackCode).
+
+The user's selection is a **denylist**, so a tool a newly installed package adds is on by default. It arrives as `init.disabledTools`, is applied with `session.setActiveToolsByName(...)` right after session creation, and is changed live by the `set_tools` command — `setActiveToolsByName` takes effect on the next agent turn, so tool changes **never restart a worker** (unlike provider/model, which are in the `worker.rs` fingerprint).
+
+`grep` and `find` shell out to `rg` and `fd`. Pi normally downloads those on demand, but `PI_OFFLINE=1` blocks that, so the worker probes for them (Pi's bin dir, then `PATH`) and reports missing ones as `available: false` with a reason rather than offering the model a tool that errors mid-task. A packaged `.app` launched from Finder gets a minimal `PATH`, so this is the common case, not the edge case — bundling those binaries is tracked with the npm bundling work.
 
 ### Git integration
 - Uses the **system `git` CLI** via `std::process::Command` — there is intentionally no `git2` crate.
@@ -176,8 +201,12 @@ Rules that must not regress:
 
 ## Out of scope for this milestone (do not propose as "fixes")
 
-MCP support, extension/skill management, subscription login, attachments, embedded editors and terminals, permission prompts, automatic merging, notarization, auto-updates, and any non-macOS platform. `todo.md` (gitignored) tracks longer-term Pi-surface ideas; coordinate before picking those up.
+Subscription login, attachments, embedded editors and terminals, permission prompts, automatic merging, notarization, auto-updates, and any non-macOS platform. MCP is not a WackCode feature, but is reachable by installing a package such as `npm:pi-mcp-adapter`.
+
+**In scope but not built:** per-project package overrides (Pi's project scope lives in the user's own `.pi/`, which is untrusted here by design), skill authoring, and theme selection. `todo.md` (gitignored) tracks longer-term Pi-surface ideas; coordinate before picking those up.
 
 ## Security posture to preserve
 
-No app-initiated network calls except user-configured provider endpoints (model listing via `GET {baseUrl}/models` and chat completions). CSP is `default-src 'self'` with only `ipc:` connect-src — a new network origin requires an explicit CSP change in `tauri.conf.json` and should be called out in the PR. The worker environment is sanitized, credentials travel only over a private stdin pipe, and local state lives under the app's macOS application-data directory.
+App-initiated network calls are limited to user-configured provider endpoints (`GET {baseUrl}/models` and chat completions) and, only on an explicit user action, the npm registry plus the chosen package's npm or git source. CSP is `default-src 'self'` with only `ipc:` connect-src and **must stay that way**: the renderer never fetches, so every remote call goes through Rust `reqwest` or the package-manager process. A new network origin still requires an explicit note in the PR. The worker environment is sanitized, credentials travel only over a private stdin pipe, and local state lives under the app's macOS application-data directory.
+
+**Installed packages are the largest trust boundary in the app.** An extension is ordinary local code running inside the task worker — the process holding the decrypted provider API key. The trust dialog is informed consent, not containment: it names the source and states the API-key exposure, and `trusted_at` gates whether a package's paths ever reach a worker (`worker::resource_paths`). Do not weaken that gate. **`trusted_at` is only ever set by an explicit `install_package` or `trust_package` the user confirmed** — `sync_packages` takes a `newly_trusted` argument precisely so that a package appearing in the shared store by any other route (a restored `wackcode.json`, or an already-installed extension editing `settings.json`) stays inert and is shown in Settings as "Not enabled" until reviewed. Never default it to the current time. Project-local `.pi/` remains unloadable by construction, not by a flag: the worker keeps every `no*` discovery option on and loads only the absolute paths Rust hands it.

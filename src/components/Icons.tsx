@@ -1,6 +1,6 @@
 import type { SVGProps } from "react";
 
-export type IconName = "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "copy" | "archive" | "send" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "terminal" | "file" | "pencil" | "external" | "brain" | "search" | "wrench";
+export type IconName = "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "copy" | "archive" | "send" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "terminal" | "file" | "pencil" | "external" | "brain" | "search" | "wrench" | "question";
 
 const paths: Record<IconName, React.ReactNode> = {
   plus: <><path d="M12 5v14M5 12h14" /></>,
@@ -35,7 +35,8 @@ const paths: Record<IconName, React.ReactNode> = {
       <path d="M15.5 13a3.5 3.5 0 0 0-3.5 3.5" />
       <path d="M8.5 13A3.5 3.5 0 0 1 12 16.5" />
     </g>
-  )
+  ),
+  question: <><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3" /><path d="M12 17h.01" /></>
 };
 
 export function Icon({ name, ...props }: SVGProps<SVGSVGElement> & { name: IconName }) {

@@ -42,6 +42,8 @@ pub fn run() {
             commands::configure_task,
             commands::open_task,
             commands::prompt,
+            commands::set_task_mode,
+            commands::export_plan,
             commands::stop_task,
             commands::archive_task,
             commands::unarchive_task,

@@ -16,12 +16,17 @@ interface Output {
   title?: string;
   options?: string[];
   level?: string;
+  mode?: string;
+  phase?: string;
+  plan?: string;
+  questions?: Array<{ id: string; header: string; question: string; multiSelect?: boolean; options: Array<{ label: string; description: string }> }>;
   errors?: Array<{ path: string; error: string }>;
   snapshot?: {
     sessionFile?: string;
-    messages: Array<{ blocks: Array<{ type: string; text?: string }> }>;
+    messages: Array<{ blocks: Array<{ type: string; text?: string; toolName?: string; details?: unknown }> }>;
     tools?: Array<{ name: string; description: string; source: { kind: string; packageId?: string }; available: boolean; unavailableReason?: string }>;
     activeTools?: string[];
+    planState?: { mode: string; phase: string; plan?: string };
   };
 }
 
@@ -147,26 +152,46 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
   }
   const suffix = authorization === "Bearer alpha-secret" ? "alpha" : "beta";
   const send = (value: unknown) => response.write(`data: ${JSON.stringify(value)}\n\n`);
+  // The last user message steers which tool the fake model "decides" to call, so tests can
+  // exercise specific tool paths through the real agent loop. Content arrives as an array
+  // of parts, not a bare string.
+  const lastUser = [...messages].reverse().find((message) => message.role === "user") as
+    { content?: unknown } | undefined;
+  const lastUserText = typeof lastUser?.content === "string"
+    ? lastUser.content
+    : Array.isArray(lastUser?.content)
+      ? (lastUser.content as Array<{ type?: string; text?: string }>)
+          .filter((part) => part.type === "text")
+          .map((part) => part.text ?? "")
+          .join("")
+      : "";
   if (!hasToolResult) {
-    send({
-      id: `tool-${suffix}`,
-      object: "chat.completion.chunk",
-      created: 1,
-      model: "shared-model",
-      choices: [{
-        index: 0,
-        delta: {
-          role: "assistant",
-          tool_calls: [{
-            index: 0,
-            id: `call-${suffix}`,
-            type: "function",
-            function: { name: "write", arguments: JSON.stringify({ path: `${suffix}.txt`, content: `changed by ${suffix}\n` }) }
-          }]
-        },
-        finish_reason: null
-      }]
+    const toolCall = (name: string, args: Record<string, unknown>) => ({
+      index: 0, id: `call-${suffix}`, type: "function",
+      function: { name, arguments: JSON.stringify(args) }
     });
+    const calls = lastUserText.startsWith("ask:")
+      ? [toolCall("ask_user_question", {
+          questions: [{
+            id: "approach", header: "Approach", question: "Which storage engine?",
+            options: [
+              { label: "SQLite", description: "Local file, zero ops." },
+              { label: "Postgres", description: "Shared server." }
+            ]
+          }]
+        })]
+      : lastUserText.startsWith("finish plan")
+        ? [toolCall("plan_mode_complete", { plan: "# The plan\n\n- Ship it" })]
+        : [toolCall("write", { path: `${suffix}.txt`, content: `changed by ${suffix}\n` })];
+    for (const [index, call] of calls.entries()) {
+      send({
+        id: `tool-${suffix}`,
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "shared-model",
+        choices: [{ index, delta: { role: "assistant", tool_calls: [call] }, finish_reason: null }]
+      });
+    }
     send({
       id: `tool-${suffix}`,
       object: "chat.completion.chunk",
@@ -202,7 +227,8 @@ async function initializeWorker(
   taskId: string,
   sessionFile?: string,
   disabledTools?: string[],
-  resources?: { extensions: string[]; skills: string[]; prompts: string[]; themes: string[] }
+  resources?: { extensions: string[]; skills: string[]; prompts: string[]; themes: string[] },
+  mode?: "build" | "plan"
 ): Promise<{ worker: WorkerHarness; ready: Output }> {
   const worker = new WorkerHarness(workspace);
   worker.send({
@@ -232,7 +258,8 @@ async function initializeWorker(
     apiKey,
     thinkingLevel: "high",
     disabledTools,
-    resources
+    resources,
+    mode
   });
   return { worker, ready: await worker.waitFor((output) => output.type === "ready") };
 }
@@ -371,10 +398,11 @@ describe("Pi worker integration", () => {
     const { worker, ready } = await initializeWorker(provider.baseUrl, "alpha-secret", root, "tools-task", undefined, ["find"]);
     cleanup.push(() => worker.shutdown());
 
-    // Every tool Pi ships is in the registry, including the three the worker never used to enable.
+    // Every tool Pi ships is in the registry, including the three the worker never used to
+    // enable, plus WackCode's two built-in extension tools.
     const names = (ready.snapshot?.tools ?? []).map((tool) => tool.name).sort();
-    expect(names).toEqual(["bash", "edit", "find", "grep", "ls", "read", "write"]);
-    expect(ready.snapshot?.tools?.every((tool) => tool.source.kind === "builtin")).toBe(true);
+    expect(names).toEqual(["ask_user_question", "bash", "edit", "find", "grep", "ls", "plan_mode_complete", "read", "write"]);
+    expect(ready.snapshot?.tools?.every((tool) => tool.source.kind === "builtin" || tool.source.kind === "wackcode")).toBe(true);
     // The denylist from `init` is applied before the first turn, and tools whose external
     // binary is missing are never offered even though they stay listed in the catalogue.
     const catalog = ready.snapshot?.tools ?? [];
@@ -394,15 +422,16 @@ describe("Pi worker integration", () => {
       (request.body.tools as Array<{ function: { name: string } }> ?? []).map((tool) => tool.function.name).sort();
     expect(offered(provider.requests[0])).toEqual(expectedActive);
 
-    // Toggling tools takes effect on the next turn with no worker restart.
+    // Toggling tools takes effect on the next turn with no worker restart. The two wackcode
+    // tools are exempt from the denylist, so five tools stay active.
     worker.send({ id: crypto.randomUUID(), type: "set_tools", disabledTools: ["bash", "grep", "ls", "find"] });
-    await worker.waitFor((output) => output.type === "snapshot" && output.snapshot?.activeTools?.length === 3);
-    // `find`/`grep` availability varies by host, so assert the three that never depend on a binary.
+    await worker.waitFor((output) => output.type === "snapshot" && output.snapshot?.activeTools?.length === 5);
+    // `find`/`grep` availability varies by host, so assert the five that never depend on a binary.
     const beforeSecondRun = provider.requests.length;
     worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-2", message: "Again." });
     await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.snapshot === undefined && provider.requests.length > beforeSecondRun);
 
-    expect(offered(provider.requests[beforeSecondRun])).toEqual(["edit", "read", "write"]);
+    expect(offered(provider.requests[beforeSecondRun])).toEqual(["ask_user_question", "edit", "plan_mode_complete", "read", "write"]);
     expect(worker.child.exitCode).toBeNull();
   });
 
@@ -479,5 +508,161 @@ describe("Pi worker integration", () => {
     await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
     expect(worker.outputs.some((output) => output.type === "run_state" && output.state === "stopping")).toBe(true);
     expect(worker.outputs.some((output) => output.type === "worker_error")).toBe(false);
+  });
+});
+
+describe("built-in extensions", () => {
+  it("registers ask_user_question and plan_mode_complete as wackcode tools that ignore the denylist", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-builtin-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    // Even a denylist that names them cannot switch built-in tools off.
+    const { worker, ready } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "builtin-task", undefined,
+      ["ask_user_question", "plan_mode_complete"]
+    );
+    cleanup.push(() => worker.shutdown());
+
+    const catalog = ready.snapshot?.tools ?? [];
+    const ask = catalog.find((tool) => tool.name === "ask_user_question");
+    const complete = catalog.find((tool) => tool.name === "plan_mode_complete");
+    expect(ask?.source.kind).toBe("wackcode");
+    expect(complete?.source.kind).toBe("wackcode");
+    expect(ready.snapshot?.activeTools).toContain("ask_user_question");
+    expect(ready.snapshot?.activeTools).toContain("plan_mode_complete");
+    expect(ready.snapshot?.planState?.mode).toBe("build");
+  });
+
+  it("round-trips an ask_user_question dialog while the prompt holds the queue", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-ask-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "ask-task");
+    cleanup.push(() => worker.shutdown());
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "ask: which engine?" });
+    const request = await worker.waitFor((output) => output.type === "extension_ui_request" && output.method === "questions");
+    expect(request.questions?.[0]?.id).toBe("approach");
+    expect(request.questions?.[0]?.options.map((option) => option.label)).toEqual(["SQLite", "Postgres"]);
+
+    // The tool is awaiting this inside the in-flight prompt, so the response must bypass
+    // the queue — if it didn't, this test would simply time out.
+    worker.send({
+      id: crypto.randomUUID(),
+      type: "extension_ui_response",
+      requestId: request.requestId,
+      answers: [{ questionId: "approach", selected: ["Postgres"] }]
+    });
+
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    // The model saw the formatted answer, not an error or a cancellation.
+    const toolResult = provider.requests[1].body.messages.find(
+      (message) => (message as { role?: string }).role === "tool"
+    ) as { content?: string } | undefined;
+    expect(toolResult?.content).toContain("Postgres");
+    expect(worker.child.exitCode).toBeNull();
+  });
+
+  it("cancelling the questions dialog resolves the tool instead of hanging the run", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-askcancel-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "ask-cancel-task");
+    cleanup.push(() => worker.shutdown());
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "ask: which engine?" });
+    const request = await worker.waitFor((output) => output.type === "extension_ui_request" && output.method === "questions");
+    worker.send({ id: crypto.randomUUID(), type: "extension_ui_response", requestId: request.requestId, cancelled: true });
+
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    const toolResult = provider.requests[1].body.messages.find(
+      (message) => (message as { role?: string }).role === "tool"
+    ) as { content?: string } | undefined;
+    expect(toolResult?.content).toContain("dismissed");
+  });
+});
+
+describe("Plan mode", () => {
+  it("publishes plan_state on mode changes and blocks mutating tools while planning", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-plan-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker, ready } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "plan-task");
+    cleanup.push(() => worker.shutdown());
+    expect(ready.snapshot?.planState?.mode).toBe("build");
+
+    worker.send({ id: crypto.randomUUID(), type: "set_mode", mode: "plan" });
+    const entered = await worker.waitFor((output) => output.type === "plan_state" && output.mode === "plan");
+    expect(entered.phase).toBe("planning");
+
+    // The fake model tries to `write` — Plan mode must block it, and the model must see why.
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "Create the fixture." });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    const toolResult = provider.requests[1].body.messages.find(
+      (message) => (message as { role?: string }).role === "tool"
+    ) as { content?: string } | undefined;
+    expect(toolResult?.content).toContain("Plan mode");
+    // Nothing was written: the policy blocked the call before it ran.
+    await expect(readFile(join(workspace, "alpha.txt"), "utf8")).rejects.toThrow();
+
+    worker.send({ id: crypto.randomUUID(), type: "set_mode", mode: "build" });
+    await worker.waitFor((output) => output.type === "plan_state" && output.mode === "build");
+  });
+
+  it("marks the state ready when the agent submits a plan, and clears it on revision", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-ready-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "ready-task", undefined, undefined, undefined, "plan"
+    );
+    cleanup.push(() => worker.shutdown());
+    await worker.waitFor((output) => output.type === "plan_state" && output.mode === "plan");
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "finish plan" });
+    const readyState = await worker.waitFor((output) => output.type === "plan_state" && output.phase === "ready");
+    expect(readyState.plan).toBe("# The plan\n\n- Ship it");
+
+    // A fresh prompt is revision feedback — the old plan can no longer be approved.
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-2", message: "Actually, change it." });
+    await worker.waitFor((output) => output.type === "plan_state" && output.phase === "planning" && output.mode === "plan");
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+  });
+
+  it("restores mode and plan across a worker restart, with the record's mode winning", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-restore-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+
+    const first = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "restore-task", undefined, undefined, undefined, "plan"
+    );
+    first.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "finish plan" });
+    await first.worker.waitFor((output) => output.type === "plan_state" && output.phase === "ready");
+    const sessionFile = first.ready.snapshot?.sessionFile;
+    expect(sessionFile).toBeTruthy();
+    await first.worker.shutdown();
+
+    // The session restores Plan mode + the proposed plan from its own entries.
+    const second = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "restore-task", sessionFile);
+    cleanup.push(() => second.worker.shutdown());
+    const restored = await second.worker.waitFor((output) => output.type === "plan_state" && output.phase === "ready");
+    expect(restored.mode).toBe("plan");
+    expect(restored.plan).toBe("# The plan\n\n- Ship it");
+    await second.worker.shutdown();
+
+    // But the task record's mode wins over the restored session when they disagree —
+    // the record is the user's latest explicit choice.
+    const third = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "restore-task", sessionFile, undefined, undefined, "build"
+    );
+    cleanup.push(() => third.worker.shutdown());
+    await third.worker.waitFor((output) => output.type === "plan_state" && output.mode === "build");
   });
 });

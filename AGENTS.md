@@ -17,7 +17,7 @@ Three layers, one repo, exactly one bridge between each pair:
 
 ```
 React frontend (src/)                Tauri v2 bridge                Rust backend (src-tauri/)
-  api.ts  ──invoke(snake_case)──►   commands.rs (30 commands)  ──►  storage.rs / secrets.rs / git.rs
+  api.ts  ──invoke(snake_case)──►   commands.rs (32 commands)  ──►  storage.rs / secrets.rs / git.rs
   App.tsx ◄──listen("worker-event")──  worker.rs (per-task Node child process)
                                                    │ stdin/stdout NDJSON
                                                    ▼
@@ -53,7 +53,7 @@ Data flow for one prompt: `App.tsx` → `api.prompt` → `commands::prompt` (val
 
 ```
 src/            React frontend (Vite entry: ../index.html → src/main.tsx)
-  App.tsx       Root orchestrator. Owns ALL state (563 lines). The only file that listens to "worker-event".
+  App.tsx       Root orchestrator. Owns ALL state (~760 lines). The only file that listens to "worker-event".
   api.ts        The only bridge to Rust: a flat `api` object of typed one-line `invoke` wrappers.
   types.ts      Shared contract with Rust/worker. Must mirror models.rs and worker/src/protocol.ts.
   model-utils.ts, chat-utils.ts, tool-utils.ts   Pure helpers; put testable logic here, not in components.
@@ -65,15 +65,16 @@ src/            React frontend (Vite entry: ../index.html → src/main.tsx)
 worker/         Node child process wrapping @earendil-works/pi-coding-agent 0.86.1 (pinned).
   src/index.ts    Main loop: init → session create/restore → prompt stream → abort/shutdown.
   src/protocol.ts Command/event types. Single source of truth for the task worker's stdin/stdout protocol.
+  src/builtin/    Built-in extensions (inline factories, always on): ask_user_question, plan-mode.
   src/manager.ts  Short-lived package-manager process wrapping Pi's DefaultPackageManager.
   src/manager-protocol.ts  Its protocol. Frames are \x1e-prefixed because npm shares stdout.
   src/framing.ts  JsonLineDecoder. Splits on LF only; U+2028/U+2029 inside strings are safe.
   dist/           tsc output. Build artifact, gitignored. Never edit by hand, never commit.
 src-tauri/
   src/main.rs     3-line entry calling wackcode_lib::run().
-  src/lib.rs      Tauri builder, plugin init, .manage(WorkerState), generate_handler![...19 commands],
+  src/lib.rs      Tauri builder, plugin init, .manage(WorkerState), generate_handler![...32 commands],
                   terminate_all on RunEvent::Exit.
-  src/commands.rs All 30 #[tauri::command] fns + validation helpers + tests. Error strings are user-facing.
+  src/commands.rs All 32 #[tauri::command] fns + validation helpers + tests. Error strings are user-facing.
   src/models.rs   Serde records that must stay in sync with src/types.ts.
   src/worker.rs   Spawns per-task Node workers, NDJSON bridge, crash detection, stderr redaction.
   src/git.rs      Shells out to system git (no git2). Worktrees, porcelain parsing, diff previews.
@@ -106,7 +107,7 @@ Adding or changing a field on a task/provider/project means **four** files, in s
 4. `api.ts`: add one line — scalar args for simple inputs, a single `{ input: {...} }` object for multi-field inputs (matches existing style exactly).
 5. `App.tsx` (or the one component that needs it): call `api.*`, then update state immutably via `patchTask` / `patchRuntime` / `setData`. Never mutate `data` in place. Handle errors per the tiers below.
 
-### The 30 commands (full surface, mirrored in `api.ts`)
+### The 32 commands (full surface, mirrored in `api.ts`)
 
 | Command | File:line | Summary |
 |---|---|---|
@@ -133,7 +134,9 @@ Adding or changing a field on a task/provider/project means **four** files, in s
 | `remove_package` / `update_packages` | commands.rs | Remove, update. Both restart every worker. |
 | `set_package_resources` | commands.rs | Per-resource toggles, persisted as Pi's `PackageSource` object form. |
 | `search_packages` / `package_details` | commands.rs | npm registry search for `keywords:pi-package` / one package's manifest. |
-| `respond_extension_ui` | commands.rs | Answer a dialog an extension raised. |
+| `respond_extension_ui` | commands.rs | Answer a dialog an extension raised (plain value or structured `answers`). |
+| `set_task_mode` | commands.rs:644 | Persist Build/Plan on the task record and push `set_mode` to a live worker. |
+| `export_plan` | commands.rs:665 | Write the ready plan to `PLAN.md` in the workspace; refuses to overwrite. |
 
 New plugin commands also need an entry in `src-tauri/capabilities/default.json`.
 
@@ -159,9 +162,16 @@ Rules that must not regress:
 The `no*` flags stay `true` even now that packages load. They switch off *discovery*, not loading: `DefaultResourceLoader` still honours `additionalExtensionPaths` / `additionalSkillPaths` / `additionalPromptTemplatePaths` / `additionalThemePaths` when they are set (`resource-loader.js`, the `noExtensions ? cliEnabledExtensions : merge(...)` branches). Rust fills those from `init.resources` with the enabled paths of trusted packages only. Nothing else can execute — a project's own `.pi/extensions` is unreachable regardless of trust settings.
 
 ### Extension dialogs
-Extensions may call `ctx.ui.select/confirm/input/editor`. The worker implements a headless `ExtensionUIContext` modelled on Pi's RPC mode and bridges those four to React modals; ambient TUI affordances (`setStatus`, `setWidget`, `setFooter`, themes, custom components) are accepted and discarded.
+Extensions may call `ctx.ui.select/confirm/input/editor`. The worker implements a headless `ExtensionUIContext` modelled on Pi's RPC mode and bridges those four to React modals; ambient TUI affordances (`setStatus`, `setWidget`, `setFooter`, themes, custom components) are accepted and discarded. A fifth `method: "questions"` (structured questionnaires, `answers` on the response) exists for the built-in `ask_user_question` tool and is rendered by `QuestionDialog.tsx`, not `ExtensionDialog.tsx`.
 
 **`extension_ui_response` must bypass the worker's command queue, exactly like `abort`.** An extension awaiting a dialog is usually doing so inside a `tool_call` handler, which runs inside `session.prompt()`, which owns the serial queue — queueing the answer behind it deadlocks the run outright. There is a regression test for this (`integration.test.ts`, "answers an extension dialog raised mid-prompt"); removing the bypass makes it time out.
+
+### Built-in extensions
+`worker/src/builtin/` ships extensions compiled into the worker itself. They are passed to `DefaultResourceLoader` as `extensionFactories`, so they load even with `noExtensions: true`, appear in the tool catalogue as `source: "wackcode"`, are hidden from the Settings toggles, and are **immune to the tool denylist** — a disabled `plan_mode_complete` would silently break Plan mode. They talk to React through a small `BuiltinHost` bridge (`askQuestions`, `emit`) over the normal `extension_ui_*` channel; they never touch `ctx.ui` dialogs directly. Settings → Packages lists them under "Built-In" for visibility (`BUILTIN_EXTENSIONS` in `PackagesSection.tsx` — keep it in sync when a built-in is added or renamed).
+
+Two are registered in `builtin/index.ts`:
+- **`ask-user-question`** — `ask_user_question` tool (1–3 questions, 2–4 options each, optional `multiSelect`, free-form "Other"). Available in every mode.
+- **`plan-mode`** — ported from `@narumitw/pi-plan-mode` 0.58.3 (MIT). Enforces a read-only policy while Plan mode is active (mutating tools and package tools blocked; bash limited to a fail-closed allowlist; `gh`/`git` validated per segment — upstream's whole-command prefix shortcut was removed because it let `--web` and command substitutions bypass validation). `plan_mode_complete` publishes `plan_state` and persists it via `pi.appendEntry`, so it survives worker restarts; a `<proposed_plan>` block is the fallback when the model skips the tool. Mode switches are model-visible via a hidden `custom` contract message, not a system-prompt rewrite. `TaskRecord.mode` is the durable hint; on init mismatch the record wins.
 
 ### Tool selection (read this before touching tools)
 **Never pass `tools:` to `createAgentSession`.** In Pi 0.86.1 it sets `allowedToolNames`, a hard *registry* filter (`agent-session.js` `isAllowedTool`) — not just an initial active set. Anything not listed is erased from the registry, so extension-contributed tools disappear from `getAllTools()` entirely and can never be shown as an off toggle. `excludeTools:` erases in the same way; it is reserved for tools that must not exist at all, currently just `powershell` (registered on every platform, meaningless on macOS-only WackCode).

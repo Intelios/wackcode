@@ -3,14 +3,16 @@ import type { NormalizedBlock } from "../types";
 import { summarizeTool } from "../tool-utils";
 import { Icon } from "./Icons";
 
-const TOOL_ICONS: Record<string, "file" | "pencil" | "terminal" | "search"> = {
+const TOOL_ICONS: Record<string, "file" | "pencil" | "terminal" | "search" | "question" | "brain"> = {
   read: "file",
   edit: "pencil",
   write: "file",
   bash: "terminal",
   grep: "search",
   find: "search",
-  ls: "search"
+  ls: "search",
+  ask_user_question: "question",
+  plan_mode_complete: "brain"
 };
 
 function DiffLines({ diff }: { diff: string }) {

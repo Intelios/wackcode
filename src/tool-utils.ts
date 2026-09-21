@@ -88,6 +88,13 @@ export function summarizeTool(call: NormalizedBlock, result?: NormalizedBlock): 
       return { kind: "search", activeVerb: "Finding", doneVerb: "Found", subject: str(toolArgs.pattern) };
     case "ls":
       return { kind: "search", activeVerb: "Listing", doneVerb: "Listed", subject: displayPath(str(toolArgs.path) || ".") };
+    case "ask_user_question": {
+      const questions = toolArgs.questions;
+      const first = Array.isArray(questions) ? questions[0] as Record<string, unknown> | undefined : undefined;
+      return { kind: "other", activeVerb: "Asking", doneVerb: "Asked", subject: str(first?.question) };
+    }
+    case "plan_mode_complete":
+      return { kind: "other", activeVerb: "Submitting plan", doneVerb: "Plan submitted", subject: "" };
     default:
       return { kind: "other", activeVerb: name, doneVerb: name, subject: "" };
   }
@@ -103,7 +110,8 @@ export interface ToolGroup {
 /**
  * Group the catalogue for the Tools panel: Pi's own tools first, then one group per package
  * in stable alphabetical order. A package tool with no source string falls into "Other" rather
- * than disappearing.
+ * than disappearing. WackCode's built-in extension tools are never listed — they are part of
+ * the app itself and can't be switched off.
  */
 export function groupTools(catalog: ToolCatalogEntry[]): ToolGroup[] {
   const builtin: ToolCatalogEntry[] = [];
@@ -111,6 +119,9 @@ export function groupTools(catalog: ToolCatalogEntry[]): ToolGroup[] {
   for (const tool of [...catalog].sort((left, right) => left.name.localeCompare(right.name))) {
     if (tool.source.kind === "builtin") {
       builtin.push(tool);
+      continue;
+    }
+    if (tool.source.kind === "wackcode") {
       continue;
     }
     const id = tool.source.packageId ?? "other";

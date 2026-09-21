@@ -118,6 +118,24 @@ describe("PackagesSection", () => {
   });
 });
 
+describe("PackagesSection built-ins", () => {
+  it("lists the compiled-in extensions with pinned-on, disabled toggles even with no packages", () => {
+    renderSection([]);
+    expect(screen.getByRole("heading", { name: "Built-In" })).toBeInTheDocument();
+    for (const name of ["Plan Mode", "Ask User Questions", "plan_mode_complete", "ask_user_question"]) {
+      const toggle = screen.getByRole("switch", { name });
+      expect(toggle).toBeDisabled();
+      expect(toggle).toHaveAttribute("aria-checked", "true");
+    }
+  });
+
+  it("still shows them alongside installed packages", () => {
+    renderSection([installed]);
+    expect(screen.getByRole("button", { name: "pi-web-access" })).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Plan Mode" })).toBeInTheDocument();
+  });
+});
+
 describe("PackagesSection browse tab", () => {
   const hit = {
     name: "pi-web-access",

@@ -12,6 +12,26 @@ const KIND_LABELS: Record<PackageResourceKind, string> = {
   themes: "Themes"
 };
 
+/**
+ * The extensions compiled into WackCode itself (worker/src/builtin/index.ts). They are shown
+ * here so nobody installs a package duplicating something that already ships with the app.
+ * They have no trust gate and no off switch — keep this list in sync with the worker.
+ */
+const BUILTIN_EXTENSIONS = [
+  {
+    name: "Plan Mode",
+    description:
+      "A read-only planning mode. Toggle Build/Plan in the composer or press ⇧Tab — the agent inspects the workspace and proposes a plan before changing anything.",
+    tools: ["plan_mode_complete"]
+  },
+  {
+    name: "Ask User Questions",
+    description:
+      "Lets the agent ask structured multiple-choice questions in a native dialog instead of guessing. Available in every mode.",
+    tools: ["ask_user_question"]
+  }
+] as const;
+
 export interface PackageActions {
   /** Re-reads the shared package store. The cached list can be stale if `pi` was used elsewhere. */
   onRefresh: () => Promise<void>;
@@ -148,6 +168,16 @@ export function PackagesSection({ packages, onRefresh, onInstall, onTrust, onSea
           />
         ))
       )}
+
+      <div className="section-heading-row builtin-heading">
+        <div>
+          <h3>Built-In</h3>
+          <p>Compiled into WackCode and always on — you don&rsquo;t need a package for these.</p>
+        </div>
+      </div>
+      {BUILTIN_EXTENSIONS.map((extension) => (
+        <BuiltinCard key={extension.name} extension={extension} />
+      ))}
       </>
       )}
 
@@ -172,6 +202,48 @@ export function PackagesSection({ packages, onRefresh, onInstall, onTrust, onSea
         />
       )}
     </div>
+  );
+}
+
+/** An always-on built-in extension: same card shape as a package, but no actions and a
+ *  disabled toggle pinned on. */
+function BuiltinCard({ extension }: { extension: (typeof BUILTIN_EXTENSIONS)[number] }) {
+  return (
+    <article className="package-card builtin-card">
+      <div className="package-card-head">
+        <span className="package-name builtin-name">{extension.name}</span>
+        <span className="package-meta">Always on</span>
+        <button
+          type="button"
+          role="switch"
+          aria-checked="true"
+          aria-label={extension.name}
+          className="toggle on"
+          disabled
+        >
+          <span />
+        </button>
+      </div>
+      <p className="builtin-desc">{extension.description}</p>
+      <section className="resource-group builtin-resources">
+        <h5>Tools</h5>
+        {extension.tools.map((tool) => (
+          <div className="resource-row" key={tool}>
+            <span className="resource-name">{tool}</span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked="true"
+              aria-label={tool}
+              className="toggle on"
+              disabled
+            >
+              <span />
+            </button>
+          </div>
+        ))}
+      </section>
+    </article>
   );
 }
 

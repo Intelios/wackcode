@@ -2,6 +2,41 @@ export type ApiFormat = "openai-completions" | "openai-responses";
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type TaskStatus = "idle" | "running" | "stopping" | "interrupted" | "error";
 
+/** The agent's working mode. "plan" is the read-only, plan-first mode. */
+export type TaskMode = "build" | "plan";
+
+/** Plan mode state published by the worker's built-in plan-mode extension. */
+export interface PlanState {
+  mode: TaskMode;
+  /** "ready" once the agent has submitted a complete plan; cleared by revision or leaving Plan mode. */
+  phase: "planning" | "ready";
+  /** The completed plan awaiting approval (phase === "ready"). */
+  plan?: string;
+}
+
+/** One option in an ask_user_question question. */
+export interface AskQuestionOption {
+  label: string;
+  description: string;
+}
+
+/** A structured question the ask_user_question tool puts to the user. */
+export interface AskQuestion {
+  id: string;
+  header: string;
+  question: string;
+  multiSelect?: boolean;
+  options: AskQuestionOption[];
+}
+
+/** One answered question, returned to the tool that asked it. */
+export interface QuestionAnswer {
+  questionId: string;
+  /** Labels of the chosen preset options (empty when the user wrote a custom answer). */
+  selected: string[];
+  custom?: string;
+}
+
 export interface ModelRecord {
   id: string;
   name: string;
@@ -46,6 +81,8 @@ export interface TaskRecord {
   thinkingLevel: ThinkingLevel;
   sessionFile: string | null;
   status: TaskStatus;
+  /** Mirrors the worker's `plan_state`; the durable hint the UI uses before a worker reports in. */
+  mode: TaskMode;
   archived: boolean;
   lastError: string | null;
   createdAt: string;
@@ -96,7 +133,8 @@ export interface PackageSearchResult {
 
 /** Where a tool came from, so Settings can group and attribute it. */
 export interface ToolSource {
-  kind: "builtin" | "package";
+  /** "wackcode" tools ship inside the app itself and can't be switched off. */
+  kind: "builtin" | "package" | "wackcode";
   packageId?: string;
   path?: string;
 }
@@ -167,6 +205,7 @@ export interface SessionSnapshot {
   model?: { provider: string; id: string; name?: string };
   tools: ToolCatalogEntry[];
   activeTools: string[];
+  planState?: PlanState;
 }
 
 /** A question an extension asked, mirrored from the worker protocol. */
@@ -175,6 +214,7 @@ export type ExtensionUIRequest = { taskId: string; requestId: string } & (
   | { method: "confirm"; title: string; message: string }
   | { method: "input"; title: string; placeholder?: string }
   | { method: "editor"; title: string; prefill?: string }
+  | { method: "questions"; title: string; questions: AskQuestion[] }
 );
 
 export interface ExtensionNotice {
@@ -191,7 +231,8 @@ export type WorkerEvent =
   | { type: "response"; taskId?: string; id: string; success: boolean; error?: string }
   | ({ type: "extension_ui_request" } & ExtensionUIRequest)
   | ({ type: "extension_notice"; taskId: string } & ExtensionNotice)
-  | { type: "extensions_loaded"; taskId: string; loaded: string[]; errors: { path: string; error: string }[] };
+  | { type: "extensions_loaded"; taskId: string; loaded: string[]; errors: { path: string; error: string }[] }
+  | ({ type: "plan_state"; taskId: string } & PlanState);
 
 export interface TaskRuntime {
   snapshot?: SessionSnapshot;
@@ -200,6 +241,8 @@ export interface TaskRuntime {
   error?: string;
   /** Extension output and load failures. Informational only — never blocks a chat. */
   notices?: ExtensionNotice[];
+  /** Latest Plan mode state from the worker; falls back to `TaskRecord.mode` before `ready`. */
+  planState?: PlanState;
 }
 
 export interface GitChangeFile {

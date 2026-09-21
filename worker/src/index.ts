@@ -3,12 +3,15 @@ import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { createBuiltinExtensions } from "./builtin/index.js";
+import type { BuiltinHost } from "./builtin/host.js";
 import { JsonLineDecoder } from "./framing.js";
 import {
   THINKING_LEVELS,
   type InitCommand,
   type NormalizedBlock,
   type NormalizedMessage,
+  type QuestionAnswer,
   type SessionSnapshot,
   type ThinkingLevel,
   type ExtensionUIRequest,
@@ -42,7 +45,26 @@ interface DialogResponse {
   value?: string;
   confirmed?: boolean;
   cancelled?: true;
+  answers?: QuestionAnswer[];
 }
+
+/**
+ * Built-in extensions reach the desktop through this bridge. Declared at module scope because
+ * the factories are handed to the resource loader during `initialize`; the closures only use
+ * `taskId`/`send` once commands run, so the ordering is safe.
+ */
+const builtinHost: BuiltinHost = {
+  askQuestions: (questions) =>
+    askHost<QuestionAnswer[] | undefined>(
+      { method: "questions", title: "Questions", questions },
+      (response) => response.answers,
+      undefined
+    ),
+  publishPlanState: (state) => {
+    if (taskId) send({ type: "plan_state", taskId, ...state });
+  }
+};
+const builtins = createBuiltinExtensions(builtinHost);
 
 // Pi registers a `powershell` base tool on every platform. WackCode is macOS-only, so keep it
 // out of the registry entirely rather than shipping a dead tool the user has to switch off.
@@ -189,12 +211,19 @@ function toolCatalog(): ToolCatalogEntry[] {
     const info = tool.sourceInfo as { source?: string; path?: string } | undefined;
     const origin = info?.source;
     const builtin = origin === "builtin" || origin === "sdk";
+    // Inline factories are WackCode's own built-in extensions, e.g. ask_user_question and
+    // plan_mode_complete. They are neither Pi builtins nor user-installed packages.
+    const wackcode = origin === "inline";
     const binary = TOOL_BINARIES[tool.name];
     const available = !binary || hasBinary(binary);
     return {
       name: tool.name,
       description: tool.description ?? "",
-      source: builtin ? { kind: "builtin" as const } : { kind: "package" as const, path: info?.path },
+      source: builtin
+        ? { kind: "builtin" as const }
+        : wackcode
+          ? { kind: "wackcode" as const }
+          : { kind: "package" as const, path: info?.path },
       available,
       unavailableReason: available ? undefined : `Requires ${binary}, which is not installed`
     };
@@ -202,11 +231,15 @@ function toolCatalog(): ToolCatalogEntry[] {
 }
 
 // Every tool in the registry is active unless the user switched it off. A denylist keeps
-// tools contributed by a newly installed package on by default.
+// tools contributed by a newly installed package on by default. Built-in extension tools are
+// exempt: the denylist is never offered for them and a disabled plan_mode_complete would
+// silently break Plan mode.
 function applyDisabledTools(): void {
   if (!session) return;
   session.setActiveToolsByName(
-    toolCatalog().filter((tool) => tool.available && !disabledTools.has(tool.name)).map((tool) => tool.name)
+    toolCatalog()
+      .filter((tool) => tool.available && (!disabledTools.has(tool.name) || tool.source.kind === "wackcode"))
+      .map((tool) => tool.name)
   );
 }
 
@@ -228,7 +261,8 @@ function getSnapshot(): SessionSnapshot {
     availableThinkingLevels: session.getAvailableThinkingLevels() as ThinkingLevel[],
     model: model ? { provider: model.provider, id: model.id, name: model.name } : undefined,
     tools: toolCatalog(),
-    activeTools: session.getActiveToolNames()
+    activeTools: session.getActiveToolNames(),
+    planState: builtins.planMode.getState()
   };
 }
 
@@ -423,7 +457,10 @@ async function initialize(command: InitCommand): Promise<void> {
     additionalExtensionPaths: resources?.extensions ?? [],
     additionalSkillPaths: resources?.skills ?? [],
     additionalPromptTemplatePaths: resources?.prompts ?? [],
-    additionalThemePaths: resources?.themes ?? []
+    additionalThemePaths: resources?.themes ?? [],
+    // WackCode's own extensions (ask_user_question, Plan mode). Factories are not paths, so
+    // they bypass the package trust machinery by construction and load even with noExtensions.
+    extensionFactories: builtins.factories
   });
   await resourceLoader.reload();
   const created = await pi.createAgentSession({
@@ -442,11 +479,14 @@ async function initialize(command: InitCommand): Promise<void> {
   applyDisabledTools();
 
   // A broken extension must never stop a chat from starting, so load failures are reported
-  // and the session continues without them.
+  // and the session continues without them. Built-in extensions (`<inline:…>`) always load;
+  // the notice stays about installed packages.
   send({
     type: "extensions_loaded",
     taskId: command.taskId,
-    loaded: created.extensionsResult.extensions.map((extension) => String(extension.path)),
+    loaded: created.extensionsResult.extensions
+      .map((extension) => String(extension.path))
+      .filter((path) => !path.startsWith("<inline:")),
     errors: created.extensionsResult.errors.map((entry) => ({ path: entry.path, error: safeError(entry.error) }))
   });
 
@@ -465,6 +505,17 @@ async function initialize(command: InitCommand): Promise<void> {
   // Re-apply: an extension may register tools during session_start, and Pi auto-activates
   // anything new in the registry, which would quietly undo the user's denylist.
   applyDisabledTools();
+
+  // The task record's mode wins over whatever the restored session says — it carries the
+  // user's latest explicit choice (e.g. toggled while no worker was running). The restored
+  // plan itself still comes from the session.
+  if (command.mode && builtins.planMode.getState().mode !== command.mode) {
+    try {
+      builtins.planMode.setMode(command.mode);
+    } catch (error) {
+      notice(`Plan mode state could not be applied: ${safeError(error)}`, "error");
+    }
+  }
 
   session.subscribe((event) => {
     const value = event as unknown as Record<string, unknown>;
@@ -526,6 +577,9 @@ async function handle(command: WorkerCommand): Promise<void> {
     } else if (!session || !taskId) {
       throw new Error("Worker is not initialized");
     } else if (command.type === "prompt") {
+      // A mode recorded on the task (or chosen for a draft) is applied before the prompt so
+      // the first message of a plan-mode task arrives with the contract already in place.
+      if (command.mode) builtins.planMode.setMode(command.mode);
       stopRequested = false;
       activeRunId = command.runId;
       send({ type: "run_state", taskId, runId: command.runId, state: "running" });
@@ -560,11 +614,16 @@ async function handle(command: WorkerCommand): Promise<void> {
       if (session.isStreaming) throw new Error("Wait for the current run before changing reasoning effort");
       session.setThinkingLevel(command.level);
       emitSnapshot();
+    } else if (command.type === "set_mode") {
+      if (session.isStreaming) throw new Error("Wait for the current run before changing mode");
+      builtins.planMode.setMode(command.mode);
+      emitSnapshot();
     } else if (command.type === "extension_ui_response") {
       pendingDialogs.get(command.requestId)?.({
         value: command.value,
         confirmed: command.confirmed,
-        cancelled: command.cancelled
+        cancelled: command.cancelled,
+        answers: command.answers
       });
     } else if (command.type === "set_tools") {
       disabledTools = new Set(command.disabledTools);

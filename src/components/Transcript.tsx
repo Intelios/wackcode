@@ -1,10 +1,10 @@
 import { memo, useMemo, type ReactNode } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import type { NormalizedBlock, NormalizedMessage } from "../types";
+import type { NormalizedBlock, NormalizedMessage, PlanState } from "../types";
 import { useFollowScroll } from "../hooks/useFollowScroll";
 import { useSmoothText } from "../hooks/useSmoothText";
 import { Icon } from "./Icons";
+import { Markdown } from "./Markdown";
+import { PlanCard, type PlanAction } from "./PlanCard";
 import { ThinkingRow } from "./ThinkingRow";
 import { OrphanResult, ToolRow } from "./ToolRow";
 
@@ -13,19 +13,9 @@ interface Props {
   partial?: NormalizedMessage;
   running: boolean;
   activity?: string;
-}
-
-function Markdown({ children }: { children: string }) {
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      skipHtml
-      components={{
-        img: ({ alt }) => <span className="blocked-image">[Remote image blocked{alt ? `: ${alt}` : ""}]</span>,
-        a: ({ href, children: linkChildren }) => <a href={href} target="_blank" rel="noreferrer">{linkChildren}</a>
-      }}
-    >{children}</ReactMarkdown>
-  );
+  /** Latest Plan mode state; PlanCards use it to know which proposal is awaiting a decision. */
+  planState?: PlanState;
+  onPlanAction?: (action: PlanAction) => void;
 }
 
 function StreamingText({ text }: { text: string }) {
@@ -33,12 +23,31 @@ function StreamingText({ text }: { text: string }) {
   return <div className="stream-text"><Markdown>{shown}</Markdown></div>;
 }
 
-function renderBlock(block: NormalizedBlock, results: Map<string, NormalizedBlock>, live: boolean, streaming?: boolean): ReactNode {
+/** The plan text a plan_mode_complete result carries, or undefined if it isn't one. */
+function completedPlan(result?: NormalizedBlock): string | undefined {
+  const details = result?.details as { plan?: unknown } | undefined;
+  return typeof details?.plan === "string" && details.plan.trim() ? details.plan : undefined;
+}
+
+function renderBlock(
+  block: NormalizedBlock,
+  results: Map<string, NormalizedBlock>,
+  live: boolean,
+  planState: PlanState | undefined,
+  onPlanAction: ((action: PlanAction) => void) | undefined,
+  running: boolean,
+  streaming?: boolean
+): ReactNode {
   if (block.type === "thinking") {
     return <ThinkingRow text={block.text ?? ""} streaming={streaming} />;
   }
   if (block.type === "tool-call") {
     const result = block.toolCallId ? results.get(block.toolCallId) : undefined;
+    const plan = block.toolName === "plan_mode_complete" ? completedPlan(result) : undefined;
+    if (plan !== undefined) {
+      const current = planState?.mode === "plan" && planState.phase === "ready" && planState.plan === plan;
+      return <PlanCard plan={plan} current={current} busy={running} onAction={onPlanAction} />;
+    }
     return <ToolRow call={block} result={result} running={live && !result} />;
   }
   if (block.type === "tool-result") {
@@ -62,10 +71,13 @@ interface MessageProps {
   message: NormalizedMessage;
   results: Map<string, NormalizedBlock>;
   live: boolean;
+  running: boolean;
+  planState?: PlanState;
+  onPlanAction?: (action: PlanAction) => void;
   sig: string;
 }
 
-const Message = memo(function Message({ message, results, live }: MessageProps) {
+const Message = memo(function Message({ message, results, live, running, planState, onPlanAction }: MessageProps) {
   if (message.role === "user") {
     return (
       <div className="msg user">
@@ -81,14 +93,16 @@ const Message = memo(function Message({ message, results, live }: MessageProps) 
     <div className="msg assistant">
       {message.blocks.map((block, index) => (
         <div key={block.toolCallId ?? index} className="block-slot">
-          {renderBlock(block, results, live)}
+          {renderBlock(block, results, live, planState, onPlanAction, running)}
         </div>
       ))}
       {message.stopReason === "error" && <div className="message-error">{message.errorMessage || "The provider rejected the request."}</div>}
       {message.stopReason === "aborted" && <span className="aborted-label">Stopped</span>}
     </div>
   );
-}, (prev, next) => prev.sig === next.sig && prev.live === next.live);
+}, (prev, next) =>
+  prev.sig === next.sig && prev.live === next.live && prev.running === next.running
+  && prev.planState === next.planState && prev.onPlanAction === next.onPlanAction);
 
 function activityLabel(activity?: string): string {
   if (!activity) return "Working…";
@@ -98,7 +112,7 @@ function activityLabel(activity?: string): string {
   return "Working…";
 }
 
-export function Transcript({ messages, partial, running, activity }: Props) {
+export function Transcript({ messages, partial, running, activity, planState, onPlanAction }: Props) {
   const { ref, onScroll, detached, jumpToLatest } = useFollowScroll();
 
   const { results, callIds } = useMemo(() => {
@@ -147,6 +161,9 @@ export function Transcript({ messages, partial, running, activity }: Props) {
                 message={message}
                 results={results}
                 live={running && message.id === lastAssistantId}
+                running={running}
+                planState={planState}
+                onPlanAction={onPlanAction}
                 sig={signature(message, results)}
               />
             );
@@ -155,7 +172,7 @@ export function Transcript({ messages, partial, running, activity }: Props) {
             <div className="msg assistant streaming">
               {partial.blocks.map((block, index) => (
                 <div key={block.toolCallId ?? index} className="block-slot">
-                  {renderBlock(block, results, true, true)}
+                  {renderBlock(block, results, true, planState, onPlanAction, running, true)}
                 </div>
               ))}
             </div>

@@ -6,7 +6,9 @@ import type {
   PackageSearchResult,
   ProjectRecord,
   ProviderRecord,
+  QuestionAnswer,
   SaveProviderInput,
+  TaskMode,
   TaskRecord,
   ThinkingLevel,
   ToolConfig
@@ -61,7 +63,12 @@ export const api = {
     providerId: string;
     modelId: string;
     thinkingLevel: ThinkingLevel;
+    /** The composer's mode; applied before the run. Required for a draft's first message. */
+    mode?: TaskMode;
   }) => invoke<string>("prompt", { input }),
+  setTaskMode: (taskId: string, mode: TaskMode) => invoke<TaskRecord>("set_task_mode", { input: { taskId, mode } }),
+  /** Save the proposed plan as PLAN.md in the task workspace. Returns the path. */
+  exportPlan: (taskId: string, content: string) => invoke<string>("export_plan", { input: { taskId, content } }),
   stopTask: (taskId: string) => invoke<void>("stop_task", { taskId }),
   archiveTask: (taskId: string) => invoke<TaskRecord>("archive_task", { taskId }),
   unarchiveTask: (taskId: string) => invoke<TaskRecord>("unarchive_task", { taskId }),
@@ -74,5 +81,6 @@ export const api = {
     value?: string;
     confirmed?: boolean;
     cancelled?: true;
+    answers?: QuestionAnswer[];
   }) => invoke<void>("respond_extension_ui", { input })
 };

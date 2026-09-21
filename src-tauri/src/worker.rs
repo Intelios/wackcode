@@ -1,4 +1,4 @@
-use crate::{models::{PackageRecord, ProviderRecord, TaskRecord, TaskStatus, ToolCatalogEntry}, storage::MetadataState};
+use crate::{models::{PackageRecord, ProviderRecord, TaskMode, TaskRecord, TaskStatus, ToolCatalogEntry}, storage::MetadataState};
 use nix::{sys::signal::{killpg, Signal}, unistd::Pid};
 use serde_json::{json, Value};
 use std::{collections::HashMap, path::PathBuf, process::Stdio, sync::{Arc, Mutex}};
@@ -230,6 +230,9 @@ pub async fn ensure_worker(
         "thinkingLevel": task.thinking_level,
         "disabledTools": disabled_tools,
         "resources": resources,
+        // The record's mode is the durable hint; the worker's plan-mode extension reconciles
+        // it with whatever the restored session says.
+        "mode": task.mode,
     });
     send(app, &task.id, &init).await
 }
@@ -504,6 +507,25 @@ fn handle_worker_line(app: &AppHandle, task_id: &str, line: &str) {
                 if let Some(task) = data.tasks.iter_mut().find(|task| task.id == task_id) {
                     task.last_error = Some(redact_and_limit(message));
                     should_save = true;
+                }
+            }
+        }
+    } else if event_type == "plan_state" {
+        // Mirror the worker's mode onto the record, the same way `session_file` is mirrored:
+        // the record is the durable hint the UI uses before a worker reports in.
+        let mode = match value.get("mode").and_then(Value::as_str) {
+            Some("plan") => Some(TaskMode::Plan),
+            Some("build") => Some(TaskMode::Build),
+            _ => None,
+        };
+        if let Some(mode) = mode {
+            if let Ok(mut data) = app.state::<MetadataState>().data.lock() {
+                if let Some(task) = data.tasks.iter_mut().find(|task| task.id == task_id) {
+                    if task.mode != mode {
+                        task.mode = mode;
+                        task.updated_at = chrono::Utc::now().to_rfc3339();
+                        should_save = true;
+                    }
                 }
             }
         }

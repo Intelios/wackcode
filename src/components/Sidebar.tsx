@@ -83,6 +83,7 @@ export function Sidebar({ projects, tasks, selectedTaskId, showArchived, onSelec
       >
         <span className={`task-status ${task.lastError ? "error" : task.status}`} />
         <span className="task-name">{task.name}</span>
+        {task.mode === "plan" && <span className="task-mode-chip">Plan</span>}
         {task.usesWorktree && <Icon name="branch" className="task-branch-icon" />}
         <span className="task-actions" onClick={(event) => event.stopPropagation()} onDoubleClick={(event) => event.stopPropagation()}>
           <MenuButton className="row-menu" label={`${task.name} menu`} items={() => taskMenu(task, project)} />

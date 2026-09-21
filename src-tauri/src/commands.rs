@@ -1,10 +1,11 @@
 use crate::{
     git,
     models::{
-        BootstrapPayload, CreateTaskInput, GitChanges, ModelRecord, ProjectRecord, PromptInput,
-        ExtensionUiResponseInput, InstallPackageInput, PackageRecord, PackageSearchResult,
-        ProviderRecord, SaveProviderInput, SearchPackagesInput,
-        SetPackageResourcesInput, SetToolConfigInput, TaskRecord, TaskStatus, ToolConfig,
+        BootstrapPayload, CreateTaskInput, ExportPlanInput, GitChanges, ModelRecord, ProjectRecord,
+        PromptInput, ExtensionUiResponseInput, InstallPackageInput, PackageRecord,
+        PackageSearchResult, ProviderRecord, SaveProviderInput, SearchPackagesInput,
+        SetPackageResourcesInput, SetTaskModeInput, SetToolConfigInput, TaskMode, TaskRecord,
+        TaskStatus, ToolConfig,
     },
     storage::MetadataState,
     worker::{self},
@@ -256,6 +257,9 @@ pub async fn respond_extension_ui(app: AppHandle, input: ExtensionUiResponseInpu
     if let Some(value) = input.value { payload["value"] = Value::String(value); }
     if let Some(confirmed) = input.confirmed { payload["confirmed"] = Value::Bool(confirmed); }
     if input.cancelled == Some(true) { payload["cancelled"] = Value::Bool(true); }
+    if let Some(answers) = input.answers {
+        payload["answers"] = serde_json::to_value(answers).map_err(|error| error.to_string())?;
+    }
     worker::send(&app, &input.task_id, &payload).await
 }
 
@@ -541,6 +545,7 @@ pub fn create_task(
         thinking_level: input.thinking_level,
         session_file: None,
         status: TaskStatus::Idle,
+        mode: TaskMode::Build,
         archived: false,
         last_error: None,
         created_at: now.clone(),
@@ -605,6 +610,21 @@ pub async fn prompt(app: AppHandle, state: State<'_, MetadataState>, input: Prom
         model_id: input.model_id,
         thinking_level: input.thinking_level,
     }).await?;
+    // A prompt carries the composer's mode (drafts have no worker yet, so this is also the
+    // only way a task's first message can start in Plan mode). The worker's `plan_state`
+    // keeps the record in sync afterwards.
+    let configured = match input.mode {
+        Some(mode) if mode != configured.mode => {
+            state.mutate(|data| {
+                let task = data.tasks.iter_mut().find(|task| task.id == configured.id)
+                    .ok_or_else(|| "Task not found".to_string())?;
+                task.mode = mode;
+                task.updated_at = Utc::now().to_rfc3339();
+                Ok(task.clone())
+            })?
+        }
+        _ => configured,
+    };
     let provider = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?
         .providers.iter().find(|provider| provider.id == configured.provider_id).cloned()
         .ok_or_else(|| "Connection not found".to_string())?;
@@ -612,9 +632,54 @@ pub async fn prompt(app: AppHandle, state: State<'_, MetadataState>, input: Prom
     worker::ensure_worker(&app, &configured, &provider, &api_key).await?;
     let run_id = Uuid::new_v4().to_string();
     worker::send(&app, &configured.id, &json!({
-        "id": Uuid::new_v4().to_string(), "type": "prompt", "runId": run_id, "message": message
+        "id": Uuid::new_v4().to_string(), "type": "prompt", "runId": run_id, "message": message,
+        "mode": configured.mode
     })).await?;
     Ok(run_id)
+}
+
+/// Switch a task between Build and Plan mode. Persisted immediately and pushed to the worker
+/// when one is running; otherwise the mode rides along on `init`/`prompt` next time.
+#[tauri::command]
+pub async fn set_task_mode(app: AppHandle, state: State<'_, MetadataState>, input: SetTaskModeInput) -> Result<TaskRecord, String> {
+    let task = state.mutate(|data| {
+        let task = data.tasks.iter_mut().find(|task| task.id == input.task_id)
+            .ok_or_else(|| "Task not found".to_string())?;
+        if matches!(task.status, TaskStatus::Running | TaskStatus::Stopping) {
+            return Err("Wait for this task to stop before changing modes".into());
+        }
+        task.mode = input.mode;
+        task.updated_at = Utc::now().to_rfc3339();
+        Ok(task.clone())
+    })?;
+    // No worker is fine — `init` and `prompt` both carry the record's mode.
+    let _ = worker::send(&app, &task.id, &json!({
+        "id": Uuid::new_v4().to_string(), "type": "set_mode", "mode": task.mode
+    })).await;
+    Ok(task)
+}
+
+/// Save the proposed plan as `PLAN.md` in the task workspace. Refuses to overwrite: the file
+/// may already contain something the user cares about.
+#[tauri::command]
+pub async fn export_plan(state: State<'_, MetadataState>, input: ExportPlanInput) -> Result<String, String> {
+    let content = required(&input.content, "Plan")?;
+    let workspace = {
+        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        data.tasks.iter().find(|task| task.id == input.task_id)
+            .map(|task| task.workspace_path.clone())
+            .ok_or_else(|| "Task not found".to_string())?
+    };
+    export_plan_to_workspace(&workspace, &content)
+}
+
+fn export_plan_to_workspace(workspace: &str, content: &str) -> Result<String, String> {
+    let path = std::path::Path::new(workspace).join("PLAN.md");
+    if path.exists() {
+        return Err("PLAN.md already exists in this workspace. Rename or remove it first.".into());
+    }
+    std::fs::write(&path, format!("{content}\n")).map_err(|error| format!("Could not write PLAN.md: {error}"))?;
+    Ok(path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -931,5 +996,29 @@ mod tests {
     #[test]
     fn task_branch_slug_is_safe() {
         assert_eq!(slug("Fix: Sidebar & Chat"), "fix-sidebar-chat");
+    }
+
+    #[test]
+    fn task_records_written_before_mode_existed_default_to_build() {
+        // Old wackcode.json files have no `mode`; the serde default keeps them loadable.
+        let json = r#"{"id":"t","projectId":null,"name":"n","workspacePath":"/tmp","worktreePath":null,"branch":null,"usesWorktree":false,"providerId":"p","modelId":"m","thinkingLevel":"off","sessionFile":null,"status":"idle","archived":false,"lastError":null,"createdAt":"c","updatedAt":"u"}"#;
+        let task: TaskRecord = serde_json::from_str(json).unwrap();
+        assert_eq!(task.mode, TaskMode::Build);
+        let planning = json.replace("\"archived\":false", "\"archived\":false,\"mode\":\"plan\"");
+        let task: TaskRecord = serde_json::from_str(&planning).unwrap();
+        assert_eq!(task.mode, TaskMode::Plan);
+    }
+
+    #[test]
+    fn export_plan_writes_plan_md_once_and_refuses_to_clobber() {
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = directory.path().to_string_lossy().to_string();
+        let written = export_plan_to_workspace(&workspace, "# Plan\n\n- step").unwrap();
+        assert!(written.ends_with("PLAN.md"));
+        assert_eq!(std::fs::read_to_string(&written).unwrap(), "# Plan\n\n- step\n");
+        let error = export_plan_to_workspace(&workspace, "different").unwrap_err();
+        assert!(error.contains("already exists"), "{error}");
+        // The refusal must not have touched the original.
+        assert_eq!(std::fs::read_to_string(&written).unwrap(), "# Plan\n\n- step\n");
     }
 }

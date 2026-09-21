@@ -152,6 +152,22 @@ impl Default for TaskStatus {
     }
 }
 
+/// The agent's working mode. `Plan` is the read-only, plan-first mode; the worker's built-in
+/// plan-mode extension enforces it. The record mirrors the worker's `plan_state` events and is
+/// the durable hint the UI uses before a worker reports in.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskMode {
+    Build,
+    Plan,
+}
+
+impl Default for TaskMode {
+    fn default() -> Self {
+        Self::Build
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskRecord {
@@ -168,6 +184,8 @@ pub struct TaskRecord {
     pub session_file: Option<String>,
     #[serde(default)]
     pub status: TaskStatus,
+    #[serde(default)]
+    pub mode: TaskMode,
     #[serde(default)]
     pub archived: bool,
     pub last_error: Option<String>,
@@ -240,6 +258,24 @@ pub struct PromptInput {
     pub provider_id: String,
     pub model_id: String,
     pub thinking_level: String,
+    /// The mode the composer was in when this prompt was sent; applied before the run.
+    #[serde(default)]
+    pub mode: Option<TaskMode>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetTaskModeInput {
+    pub task_id: String,
+    pub mode: TaskMode,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportPlanInput {
+    pub task_id: String,
+    /// The full plan text; the worker owns it, the desktop passes it back verbatim.
+    pub content: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -267,6 +303,17 @@ pub struct PackageSearchResult {
     pub declares: Vec<String>,
 }
 
+/// One answered question from a `questions` dialog. Mirrors `QuestionAnswer` in the worker
+/// protocol; Rust only forwards it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestionAnswer {
+    pub question_id: String,
+    #[serde(default)]
+    pub selected: Vec<String>,
+    pub custom: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtensionUiResponseInput {
@@ -278,6 +325,8 @@ pub struct ExtensionUiResponseInput {
     pub confirmed: Option<bool>,
     #[serde(default)]
     pub cancelled: Option<bool>,
+    #[serde(default)]
+    pub answers: Option<Vec<QuestionAnswer>>,
 }
 
 #[derive(Debug, Deserialize)]

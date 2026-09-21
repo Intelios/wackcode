@@ -15,7 +15,9 @@ import type {
   PackageResourceKind,
   ProjectRecord,
   ProviderRecord,
+  QuestionAnswer,
   SaveProviderInput,
+  TaskMode,
   TaskRecord,
   TaskRuntime,
   ThinkingLevel,
@@ -30,6 +32,8 @@ import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar, type ProjectAction, type TaskAction } from "./components/Sidebar";
 import { Transcript } from "./components/Transcript";
 import { ExtensionDialog } from "./components/ExtensionDialog";
+import { QuestionDialog } from "./components/QuestionDialog";
+import type { PlanAction } from "./components/PlanCard";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 
 const emptyData: AppData = { version: 1, providers: [], projects: [], tasks: [], toolConfig: { disabled: [] }, toolCatalog: [], packages: [] };
@@ -49,6 +53,8 @@ interface Draft {
   projectId: string | null;
   useWorktree: boolean;
   choice?: ModelChoice;
+  /** Composer mode chosen before the task exists; sent on the first prompt. */
+  mode?: TaskMode;
 }
 
 interface ConfirmState {
@@ -91,6 +97,9 @@ export default function App() {
   const selectedProject = data.projects.find((project) => project.id === selectedTask?.projectId);
   const runtime = selectedTaskId ? runtimes[selectedTaskId] : undefined;
   const sharedWorkers = selectedTask ? data.tasks.filter((task) => !task.archived && task.id !== selectedTask.id && task.workspacePath === selectedTask.workspacePath && task.status === "running") : [];
+  // The worker's latest plan_state is the freshest mode signal; the record (or the draft's
+  // choice before a task exists) is the durable fallback.
+  const currentMode: TaskMode = runtime?.planState?.mode ?? selectedTask?.mode ?? draft?.mode ?? "build";
 
   useEffect(() => { selectedTaskRef.current = selectedTaskId; }, [selectedTaskId]);
   useEffect(() => { localStorage.setItem(CHANGES_OPEN_KEY, JSON.stringify(changesOpen)); }, [changesOpen]);
@@ -147,7 +156,8 @@ export default function App() {
       const taskId = payload.taskId;
       if (!taskId) return;
       if (payload.type === "ready" || payload.type === "snapshot") {
-        patchRuntime(taskId, { snapshot: payload.snapshot, partial: undefined, error: undefined });
+        patchRuntime(taskId, { snapshot: payload.snapshot, planState: payload.snapshot.planState, partial: undefined, error: undefined });
+        if (payload.snapshot.planState) patchTask(taskId, { mode: payload.snapshot.planState.mode });
         if (payload.snapshot.sessionFile) patchTask(taskId, { sessionFile: payload.snapshot.sessionFile });
         const tools = payload.snapshot.tools;
         if (tools) {
@@ -164,6 +174,17 @@ export default function App() {
       } else if (payload.type === "worker_error") {
         patchRuntime(taskId, { error: payload.message });
         patchTask(taskId, { lastError: payload.message });
+      } else if (payload.type === "plan_state") {
+        // The worker is authoritative; the record mirrors it so the sidebar and a fresh
+        // composer can render the mode before a worker reports in.
+        patchRuntime(taskId, {
+          planState: {
+            mode: payload.mode,
+            phase: payload.phase,
+            ...(payload.plan !== undefined ? { plan: payload.plan } : {})
+          }
+        });
+        patchTask(taskId, { mode: payload.mode });
       } else if (payload.type === "extension_ui_request") {
         setExtensionRequests((current) => [...current, payload]);
       } else if (payload.type === "extension_notice") {
@@ -339,7 +360,7 @@ export default function App() {
     });
   }
 
-  async function sendPrompt(message: string): Promise<boolean> {
+  async function sendPrompt(message: string, modeOverride?: TaskMode): Promise<boolean> {
     if (!selectedTask) {
       const active = draft ?? { projectId: lastProjectId(), useWorktree: false };
       const choice = active.choice ?? defaultChoice(active.projectId);
@@ -361,8 +382,9 @@ export default function App() {
       }
       rememberModel(active.projectId, choice);
       localStorage.setItem(LAST_PROJECT_KEY, JSON.stringify(active.projectId));
+      const mode = modeOverride ?? active.mode ?? "build";
       setData((current) => ({ ...current, tasks: [...current.tasks, task] }));
-      patchTask(task.id, { status: "running", lastError: null });
+      patchTask(task.id, { status: "running", lastError: null, mode });
       patchRuntime(task.id, { error: undefined, activity: "starting" });
       try {
         await api.prompt({
@@ -370,7 +392,8 @@ export default function App() {
           message,
           providerId: task.providerId,
           modelId: task.modelId,
-          thinkingLevel: task.thinkingLevel
+          thinkingLevel: task.thinkingLevel,
+          mode
         });
       } catch (reason) {
         patchTask(task.id, { status: "idle" });
@@ -391,7 +414,10 @@ export default function App() {
         message,
         providerId: selectedTask.providerId,
         modelId: selectedTask.modelId,
-        thinkingLevel: selectedTask.thinkingLevel
+        thinkingLevel: selectedTask.thinkingLevel,
+        // modeOverride matters for "Approve & implement": the plan_state → record sync can
+        // still be in flight when the follow-up prompt goes out.
+        mode: modeOverride ?? currentMode
       });
       if (selectedTask.name === "New chat") {
         const title = titleFromPrompt(message);
@@ -403,6 +429,75 @@ export default function App() {
       patchTask(selectedTask.id, { status: "idle" });
       patchRuntime(selectedTask.id, { error: String(reason) });
       return false;
+    }
+  }
+
+  /**
+   * Switch Build ↔ Plan. For a draft the choice is just held locally; for a task it is
+   * persisted on the record and pushed to the worker (which refuses while a run is active).
+   */
+  async function setTaskMode(mode: TaskMode) {
+    if (mode === currentMode) return;
+    if (!selectedTask) {
+      setDraft((current) => ({
+        projectId: current?.projectId ?? lastProjectId(),
+        useWorktree: current?.useWorktree ?? false,
+        choice: current?.choice,
+        mode
+      }));
+      return;
+    }
+    if (selectedTask.status === "running" || selectedTask.status === "stopping") return;
+    const previous = selectedTask.mode;
+    patchTask(selectedTask.id, { mode });
+    patchRuntime(selectedTask.id, { planState: { mode, phase: "planning" } });
+    try {
+      const updated = await api.setTaskMode(selectedTask.id, mode);
+      patchTask(selectedTask.id, updated);
+    } catch (reason) {
+      patchTask(selectedTask.id, { mode: previous });
+      patchRuntime(selectedTask.id, { error: String(reason) });
+    }
+  }
+
+  /** The PlanCard action row: approve, copy, save to PLAN.md, or abandon the proposal. */
+  async function planAction(action: PlanAction) {
+    if (!selectedTask) return;
+    const plan = runtime?.planState?.plan;
+    if (!plan) return;
+    if (action === "implement") {
+      try {
+        const updated = await api.setTaskMode(selectedTask.id, "build");
+        patchTask(selectedTask.id, updated);
+        patchRuntime(selectedTask.id, { planState: { mode: "build", phase: "planning" } });
+      } catch (reason) {
+        patchRuntime(selectedTask.id, { error: String(reason) });
+        return;
+      }
+      await sendPrompt("Implement the plan.", "build");
+    } else if (action === "copy") {
+      await writeText(plan);
+      appendNotice(selectedTask.id, { message: "Plan copied to the clipboard.", level: "info" });
+    } else if (action === "save") {
+      try {
+        const path = await api.exportPlan(selectedTask.id, plan);
+        appendNotice(selectedTask.id, { message: `Plan saved to ${path}`, level: "info" });
+        void refreshChanges(selectedTask.id);
+      } catch (reason) {
+        patchRuntime(selectedTask.id, { error: String(reason) });
+      }
+    } else if (action === "discard") {
+      setConfirm({
+        title: "Discard this plan?",
+        body: "The task switches back to Build mode and the proposed plan is abandoned. The conversation is kept.",
+        confirmLabel: "Discard",
+        danger: true,
+        run: async () => {
+          const updated = await api.setTaskMode(selectedTask.id, "build");
+          patchTask(selectedTask.id, updated);
+          patchRuntime(selectedTask.id, { planState: { mode: "build", phase: "planning" } });
+        }
+      });
     }
   }
 
@@ -493,6 +588,15 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      // ⇧Tab cycles Build ↔ Plan, like Claude Code. A modal or an active run owns the key.
+      if (event.key === "Tab" && event.shiftKey) {
+        const busy = selectedTask && (selectedTask.status === "running" || selectedTask.status === "stopping");
+        if (!settingsOpen && !confirm && extensionRequests.length === 0 && !busy) {
+          event.preventDefault();
+          void setTaskMode(currentMode === "plan" ? "build" : "plan");
+        }
+        return;
+      }
       if (!(event.metaKey || event.ctrlKey)) return;
       const key = event.key.toLowerCase();
       if (key === "n" && !event.shiftKey) {
@@ -583,6 +687,8 @@ export default function App() {
                   />
                 }
                 placeholder="Describe a task or ask a question…"
+                mode={draft?.mode ?? "build"}
+                onModeChange={(mode) => void setTaskMode(mode)}
                 onConfigure={configureDraft}
                 onSend={sendPrompt}
                 onStop={() => undefined}
@@ -614,6 +720,8 @@ export default function App() {
               partial={runtime?.partial}
               running={selectedTask.status === "running" || selectedTask.status === "stopping"}
               activity={runtime?.activity}
+              planState={runtime?.planState}
+              onPlanAction={(action) => void planAction(action)}
             />
             <Composer
               status={selectedTask.status}
@@ -622,6 +730,8 @@ export default function App() {
               thinkingLevel={selectedTask.thinkingLevel}
               providers={configuredProviders}
               stats={runtime?.snapshot?.stats}
+              mode={currentMode}
+              onModeChange={(mode) => void setTaskMode(mode)}
               onConfigure={(patch) => void configure(patch)}
               onSend={sendPrompt}
               onStop={() => void stopTask()}
@@ -635,18 +745,17 @@ export default function App() {
         </>
       )}
 
-      {extensionRequests[0] && (
-        <ExtensionDialog
-          key={extensionRequests[0].requestId}
-          request={extensionRequests[0]}
-          onRespond={(response) => {
-            const request = extensionRequests[0];
-            setExtensionRequests((current) => current.filter((entry) => entry.requestId !== request.requestId));
-            void api.respondExtensionUi({ taskId: request.taskId, requestId: request.requestId, ...response })
-              .catch((reason) => setGlobalError(String(reason)));
-          }}
-        />
-      )}
+      {extensionRequests[0] && (() => {
+        const request = extensionRequests[0];
+        const onRespond = (response: { value?: string; confirmed?: boolean; cancelled?: true; answers?: QuestionAnswer[] }) => {
+          setExtensionRequests((current) => current.filter((entry) => entry.requestId !== request.requestId));
+          void api.respondExtensionUi({ taskId: request.taskId, requestId: request.requestId, ...response })
+            .catch((reason) => setGlobalError(String(reason)));
+        };
+        return request.method === "questions"
+          ? <QuestionDialog key={request.requestId} request={request} onRespond={onRespond} />
+          : <ExtensionDialog key={request.requestId} request={request} onRespond={onRespond} />;
+      })()}
       {confirm && <ConfirmDialog title={confirm.title} body={confirm.body} confirmLabel={confirm.confirmLabel} danger={confirm.danger} onConfirm={confirm.run} onCancel={() => setConfirm(undefined)} />}
       {globalError && <div className="global-toast"><span>{globalError}</span><button onClick={() => setGlobalError(undefined)}>×</button></div>}
     </div>

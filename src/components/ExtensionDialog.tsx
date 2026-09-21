@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import type { ExtensionUIRequest } from "../types";
 
 interface Props {
-  request: ExtensionUIRequest;
+  /** Structured `questions` requests have their own dialog (QuestionDialog). */
+  request: Exclude<ExtensionUIRequest, { method: "questions" }>;
   onRespond: (response: { value?: string; confirmed?: boolean; cancelled?: true }) => void;
 }
 

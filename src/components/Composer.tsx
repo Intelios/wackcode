@@ -1,9 +1,10 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import type { ProviderRecord, SessionSnapshot, TaskStatus, ThinkingLevel } from "../types";
+import type { ProviderRecord, SessionSnapshot, TaskMode, TaskStatus, ThinkingLevel } from "../types";
 import { formatTokens } from "../chat-utils";
 import { Icon } from "./Icons";
 import { ContextPanel } from "./ContextPanel";
 import { ModelPicker, ReasoningToggle } from "./ModelPicker";
+import { ModeToggle } from "./ModeToggle";
 import { Tooltip } from "./ui/Tooltip";
 
 interface ComposerProps {
@@ -16,13 +17,16 @@ interface ComposerProps {
   header?: ReactNode;
   placeholder?: string;
   popoverSide?: "top" | "bottom";
+  /** The Build/Plan toggle; omit onModeChange to hide it. */
+  mode?: TaskMode;
+  onModeChange?: (mode: TaskMode) => void;
   onConfigure: (patch: { providerId?: string; modelId?: string; thinkingLevel?: ThinkingLevel }) => void;
   onSend: (message: string) => Promise<boolean>;
   onStop: () => void;
   onOpenSettings: () => void;
 }
 
-export function Composer({ status, providerId, modelId, thinkingLevel, providers, stats, header, placeholder, popoverSide = "top", onConfigure, onSend, onStop, onOpenSettings }: ComposerProps) {
+export function Composer({ status, providerId, modelId, thinkingLevel, providers, stats, header, placeholder, popoverSide = "top", mode, onModeChange, onConfigure, onSend, onStop, onOpenSettings }: ComposerProps) {
   const [draft, setDraft] = useState("");
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const busy = status === "running" || status === "stopping";
@@ -62,7 +66,7 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
               void send();
             }
           }}
-          placeholder={placeholder ?? (providers.length === 0 ? "Connect a provider to start…" : busy ? "Pi is working — queue your next message…" : "Ask Pi to inspect, change, or run something…")}
+          placeholder={placeholder ?? (providers.length === 0 ? "Connect a provider to start…" : busy ? "Pi is working — queue your next message…" : mode === "plan" ? "Describe the work — in Plan mode Pi inspects and proposes a plan without changing files…" : "Ask Pi to inspect, change, or run something…")}
           disabled={providers.length === 0}
         />
         <div className="composer-toolbar">
@@ -90,6 +94,7 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
                   popoverSide={popoverSide}
                   onConfigure={onConfigure}
                 />
+                {onModeChange && <ModeToggle mode={mode ?? "build"} disabled={busy} onChange={onModeChange} />}
               </>
             )}
           </div>

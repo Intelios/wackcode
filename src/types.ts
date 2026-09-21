@@ -90,6 +90,10 @@ export interface SessionSnapshot {
     tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
     cost: number;
     contextUsage?: { tokens: number | null; contextWindow: number; percent: number | null };
+    contextBreakdown?: {
+      entries: { id: "system" | "user" | "assistant" | "tool"; tokens: number }[];
+      cacheHitRate: number | null;
+    };
   };
   thinkingLevel: ThinkingLevel;
   availableThinkingLevels: ThinkingLevel[];

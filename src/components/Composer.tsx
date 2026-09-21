@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import type { ProviderRecord, SessionSnapshot, TaskRecord, ThinkingLevel } from "../types";
 import { formatTokens } from "../chat-utils";
 import { Icon } from "./Icons";
+import { ContextPanel } from "./ContextPanel";
 import { ModelPicker } from "./ModelPicker";
 import { Tooltip } from "./ui/Tooltip";
 
@@ -75,7 +76,7 @@ export function Composer({ task, providers, stats, onConfigure, onSend, onStop, 
             )}
           </div>
           <div className="composer-right">
-            {statsLabel && <span className="composer-stats" title={statsLabel}>{statsLabel}</span>}
+            {statsLabel && stats && <ContextPanel stats={stats} label={statsLabel} />}
             {busy ? (
               <Tooltip label={task.status === "stopping" ? "Stopping…" : "Stop"}>
                 <button type="button" className="send-button stop" onClick={onStop} disabled={task.status === "stopping"} aria-label="Stop">

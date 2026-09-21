@@ -267,7 +267,26 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .composer-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px 8px 10px; gap: 8px; }
 .composer-left { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .composer-right { display: flex; align-items: center; gap: 10px; }
-.composer-stats { color: var(--text-faint); font-size: 10.5px; white-space: nowrap; cursor: default; }
+.composer-stats { color: var(--text-faint); font-size: 10.5px; white-space: nowrap; border: 0; background: transparent; padding: 3px 6px; border-radius: 5px; cursor: pointer; }
+.composer-stats:hover, .composer-stats.active { color: var(--text-soft); background: var(--surface); }
+
+/* context breakdown popover */
+.context-pop { padding: 0; }
+.context-panel { width: 300px; padding: 13px 14px 11px; }
+.context-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
+.context-head h3 { margin: 0; font-size: 12px; font-weight: 650; }
+.context-head > span { color: var(--text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+.context-bar { display: flex; height: 7px; border-radius: 999px; overflow: hidden; background: #242822; margin-bottom: 10px; }
+.context-bar span { display: block; height: 100%; }
+.context-legend { display: flex; flex-direction: column; gap: 4px; }
+.context-row { display: flex; align-items: center; gap: 8px; font-size: 11.5px; }
+.context-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; }
+.context-label { flex: 1; color: var(--text-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.context-value { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.context-pct { width: 44px; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+.context-foot .context-label { color: var(--text-dim); }
+.context-divider { height: 1px; background: var(--border); margin: 10px 0 9px; }
+.context-hint { margin-top: 9px; color: var(--text-faint); font-size: 9.5px; }
 .model-pill {
   display: inline-flex; align-items: center; gap: 6px; height: 28px; max-width: 300px;
   border: 0; border-radius: 7px; background: transparent; color: var(--text-soft);

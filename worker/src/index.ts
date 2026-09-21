@@ -26,6 +26,7 @@ type ModelRuntime = Awaited<ReturnType<PiModule["ModelRuntime"]["create"]>>;
 
 let taskId: string | undefined;
 let session: AgentSession | undefined;
+let piModule: PiModule | undefined;
 let modelRuntime: ModelRuntime | undefined;
 let activeRunId: string | undefined;
 let activeCredential: string | undefined;
@@ -108,6 +109,37 @@ function normalizeMessage(message: unknown, index: number): NormalizedMessage | 
   };
 }
 
+// Per-category token estimates. `system` is the remainder between the provider's
+// own context count and estimated message tokens — it covers the system prompt,
+// tool definitions, and any estimation error.
+function contextBreakdown(stats: ReturnType<AgentSession["getSessionStats"]>): SessionSnapshot["stats"]["contextBreakdown"] {
+  if (!session || !piModule || !stats.contextUsage || stats.contextUsage.tokens == null) return undefined;
+  const roles = { user: 0, assistant: 0, tool: 0 };
+  for (const message of session.messages) {
+    const role = message.role === "toolResult" ? "tool" : message.role;
+    if (role === "user" || role === "assistant" || role === "tool") {
+      roles[role] += piModule.estimateTokens(message);
+    }
+  }
+  const used = stats.contextUsage.tokens;
+  let entries = [
+    { id: "system" as const, tokens: Math.max(0, used - roles.user - roles.assistant - roles.tool) },
+    { id: "user" as const, tokens: roles.user },
+    { id: "assistant" as const, tokens: roles.assistant },
+    { id: "tool" as const, tokens: roles.tool }
+  ];
+  const total = entries.reduce((sum, entry) => sum + entry.tokens, 0);
+  if (total > used && total > 0) {
+    const factor = used / total;
+    entries = entries.map((entry) => ({ ...entry, tokens: Math.round(entry.tokens * factor) }));
+  }
+  const { input, cacheRead } = stats.tokens;
+  return {
+    entries,
+    cacheHitRate: input + cacheRead > 0 ? cacheRead / (input + cacheRead) : null
+  };
+}
+
 function getSnapshot(): SessionSnapshot {
   if (!session) throw new Error("Worker is not initialized");
   const stats = session.getSessionStats();
@@ -119,7 +151,8 @@ function getSnapshot(): SessionSnapshot {
     stats: {
       tokens: stats.tokens,
       cost: stats.cost,
-      contextUsage: stats.contextUsage
+      contextUsage: stats.contextUsage,
+      contextBreakdown: contextBreakdown(stats)
     },
     thinkingLevel: session.thinkingLevel as ThinkingLevel,
     availableThinkingLevels: session.getAvailableThinkingLevels() as ThinkingLevel[],
@@ -208,6 +241,7 @@ async function initialize(command: InitCommand): Promise<void> {
   await writeFile(modelsPath, `${JSON.stringify(modelsConfig, null, 2)}\n`, { mode: 0o600 });
 
   const pi = await import("@earendil-works/pi-coding-agent");
+  piModule = pi;
   modelRuntime = await pi.ModelRuntime.create({
     authPath: join(command.agentDir, "auth.json"),
     modelsPath,

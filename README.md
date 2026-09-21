@@ -1,6 +1,6 @@
 # WackCode
 
-WackCode is a local macOS desktop interface for the Pi coding agent. This proof of concept uses Tauri 2, React, TypeScript, Rust, and `@earendil-works/pi-coding-agent` 0.86.1.
+WackCode is a local macOS desktop interface for the Pi coding agent, built with Tauri 2, React, TypeScript, Rust, and `@earendil-works/pi-coding-agent` 0.86.1.
 
 It supports named OpenAI-compatible connections, explicit model limits and reasoning mappings, concurrent task workers, persistent Pi sessions, optional Git worktrees, and review of all staged, unstaged, and untracked changes. Chats open as drafts with a project selector and a Local/Worktree toggle, and can also run without a project in a per-chat scratch folder inside WackCode's application-data directory.
 

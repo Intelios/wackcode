@@ -41,6 +41,8 @@ pub struct ProjectRecord {
     pub path: String,
     pub git_root: Option<String>,
     pub git_has_head: bool,
+    #[serde(default, skip_deserializing)]
+    pub branch: Option<String>,
     pub created_at: String,
 }
 
@@ -64,7 +66,7 @@ impl Default for TaskStatus {
 #[serde(rename_all = "camelCase")]
 pub struct TaskRecord {
     pub id: String,
-    pub project_id: String,
+    pub project_id: Option<String>,
     pub name: String,
     pub workspace_path: String,
     pub worktree_path: Option<String>,
@@ -120,7 +122,8 @@ pub struct SaveProviderInput {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateTaskInput {
-    pub project_id: String,
+    #[serde(default)]
+    pub project_id: Option<String>,
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]

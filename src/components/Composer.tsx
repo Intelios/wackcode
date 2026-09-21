@@ -1,25 +1,31 @@
-import { useLayoutEffect, useRef, useState } from "react";
-import type { ProviderRecord, SessionSnapshot, TaskRecord, ThinkingLevel } from "../types";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import type { ProviderRecord, SessionSnapshot, TaskStatus, ThinkingLevel } from "../types";
 import { formatTokens } from "../chat-utils";
 import { Icon } from "./Icons";
 import { ContextPanel } from "./ContextPanel";
-import { ModelPicker } from "./ModelPicker";
+import { ModelPicker, ReasoningToggle } from "./ModelPicker";
 import { Tooltip } from "./ui/Tooltip";
 
 interface ComposerProps {
-  task: TaskRecord;
+  status: TaskStatus;
+  providerId?: string;
+  modelId?: string;
+  thinkingLevel?: ThinkingLevel;
   providers: ProviderRecord[];
   stats?: SessionSnapshot["stats"];
+  header?: ReactNode;
+  placeholder?: string;
+  popoverSide?: "top" | "bottom";
   onConfigure: (patch: { providerId?: string; modelId?: string; thinkingLevel?: ThinkingLevel }) => void;
   onSend: (message: string) => Promise<boolean>;
   onStop: () => void;
   onOpenSettings: () => void;
 }
 
-export function Composer({ task, providers, stats, onConfigure, onSend, onStop, onOpenSettings }: ComposerProps) {
+export function Composer({ status, providerId, modelId, thinkingLevel, providers, stats, header, placeholder, popoverSide = "top", onConfigure, onSend, onStop, onOpenSettings }: ComposerProps) {
   const [draft, setDraft] = useState("");
   const areaRef = useRef<HTMLTextAreaElement>(null);
-  const busy = task.status === "running" || task.status === "stopping";
+  const busy = status === "running" || status === "stopping";
 
   useLayoutEffect(() => {
     const area = areaRef.current;
@@ -43,6 +49,7 @@ export function Composer({ task, providers, stats, onConfigure, onSend, onStop, 
 
   return (
     <div className="composer-wrap">
+      {header && <div className="composer-header">{header}</div>}
       <div className="composer">
         <textarea
           ref={areaRef}
@@ -55,7 +62,7 @@ export function Composer({ task, providers, stats, onConfigure, onSend, onStop, 
               void send();
             }
           }}
-          placeholder={providers.length === 0 ? "Connect a provider to start…" : busy ? "Pi is working — queue your next message…" : "Ask Pi to inspect, change, or run something…"}
+          placeholder={placeholder ?? (providers.length === 0 ? "Connect a provider to start…" : busy ? "Pi is working — queue your next message…" : "Ask Pi to inspect, change, or run something…")}
           disabled={providers.length === 0}
         />
         <div className="composer-toolbar">
@@ -65,21 +72,32 @@ export function Composer({ task, providers, stats, onConfigure, onSend, onStop, 
                 <Icon name="key" /> Connect a provider
               </button>
             ) : (
-              <ModelPicker
-                providers={providers}
-                providerId={task.providerId}
-                modelId={task.modelId}
-                thinkingLevel={task.thinkingLevel}
-                disabled={busy}
-                onConfigure={onConfigure}
-              />
+              <>
+                <ModelPicker
+                  providers={providers}
+                  providerId={providerId}
+                  modelId={modelId}
+                  disabled={busy}
+                  popoverSide={popoverSide}
+                  onConfigure={onConfigure}
+                />
+                <ReasoningToggle
+                  providers={providers}
+                  providerId={providerId}
+                  modelId={modelId}
+                  thinkingLevel={thinkingLevel}
+                  disabled={busy}
+                  popoverSide={popoverSide}
+                  onConfigure={onConfigure}
+                />
+              </>
             )}
           </div>
           <div className="composer-right">
             {statsLabel && stats && <ContextPanel stats={stats} label={statsLabel} />}
             {busy ? (
-              <Tooltip label={task.status === "stopping" ? "Stopping…" : "Stop"}>
-                <button type="button" className="send-button stop" onClick={onStop} disabled={task.status === "stopping"} aria-label="Stop">
+              <Tooltip label={status === "stopping" ? "Stopping…" : "Stop"}>
+                <button type="button" className="send-button stop" onClick={onStop} disabled={status === "stopping"} aria-label="Stop">
                   <Icon name="stop" />
                 </button>
               </Tooltip>

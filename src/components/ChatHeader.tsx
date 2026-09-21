@@ -62,7 +62,7 @@ export function ChatHeader({ task, project, changesCount, changesOpen, onToggleC
         )}
         <div className="workspace-meta">
           <button type="button" title={task.workspacePath} onClick={() => onTaskAction(task, "reveal")}>
-            <Icon name="folder" /> {task.workspacePath.split("/").filter(Boolean).slice(-2).join("/") || task.workspacePath}
+            <Icon name="folder" /> {task.projectId === null ? "No project" : task.workspacePath.split("/").filter(Boolean).slice(-2).join("/") || task.workspacePath}
           </button>
           {task.branch && <span><Icon name="branch" /> {task.branch}</span>}
         </div>

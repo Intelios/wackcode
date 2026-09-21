@@ -1,6 +1,6 @@
 import type { SVGProps } from "react";
 
-type IconName = "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "copy" | "archive" | "send" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "terminal" | "file" | "pencil" | "external";
+type IconName = "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "copy" | "archive" | "send" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "terminal" | "file" | "pencil" | "external" | "brain";
 
 const paths: Record<IconName, React.ReactNode> = {
   plus: <><path d="M12 5v14M5 12h14" /></>,
@@ -24,7 +24,16 @@ const paths: Record<IconName, React.ReactNode> = {
   terminal: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3M12.5 15H17" /></>,
   file: <><path d="M6 2.5h8l4 4V21.5H6z" /><path d="M14 2.5V7h4" /></>,
   pencil: <><path d="M4 20l1-4L16.5 4.5a2.1 2.1 0 0 1 3 3L8 19z" /><path d="m14.5 6.5 3 3" /></>,
-  external: <><path d="M14 4h6v6" /><path d="M20 4 10.5 13.5" /><path d="M19 14v5.5h-14.5V9.5H10" /></>
+  external: <><path d="M14 4h6v6" /><path d="M20 4 10.5 13.5" /><path d="M19 14v5.5h-14.5V9.5H10" /></>,
+  brain: (
+    <g transform="translate(0, 1.5)">
+      <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" />
+      <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z" />
+      <path d="M12 5v13" />
+      <path d="M15.5 13a3.5 3.5 0 0 0-3.5 3.5" />
+      <path d="M8.5 13A3.5 3.5 0 0 1 12 16.5" />
+    </g>
+  )
 };
 
 export function Icon({ name, ...props }: SVGProps<SVGSVGElement> & { name: IconName }) {

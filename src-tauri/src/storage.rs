@@ -81,7 +81,7 @@ mod tests {
     fn startup_marks_active_tasks_interrupted_without_replaying_them() {
         let mut data = AppData {
             tasks: vec![TaskRecord {
-                id: "task".into(), project_id: "project".into(), name: "Running task".into(),
+                id: "task".into(), project_id: Some("project".into()), name: "Running task".into(),
                 workspace_path: "/tmp/project".into(), worktree_path: None, branch: None,
                 uses_worktree: false, provider_id: "provider".into(), model_id: "model".into(),
                 thinking_level: "off".into(), session_file: Some("session.jsonl".into()),
@@ -95,5 +95,26 @@ mod tests {
         assert_eq!(data.tasks[0].session_file.as_deref(), Some("session.jsonl"));
         assert!(data.tasks[0].last_error.as_deref().unwrap().contains("closed"));
         assert!(!recover_interrupted_tasks(&mut data));
+    }
+
+    #[test]
+    fn task_project_id_is_optional() {
+        let json = r#"{"id":"t","projectId":null,"name":"n","workspacePath":"/tmp","worktreePath":null,"branch":null,"usesWorktree":false,"providerId":"p","modelId":"m","thinkingLevel":"off","sessionFile":null,"status":"idle","archived":false,"lastError":null,"createdAt":"c","updatedAt":"u"}"#;
+        let task: TaskRecord = serde_json::from_str(json).unwrap();
+        assert_eq!(task.project_id, None);
+        let legacy = json.replace("\"projectId\":null", "\"projectId\":\"project-1\"");
+        let task: TaskRecord = serde_json::from_str(&legacy).unwrap();
+        assert_eq!(task.project_id.as_deref(), Some("project-1"));
+    }
+
+    #[test]
+    fn project_branch_is_runtime_only() {
+        use crate::models::ProjectRecord;
+        let json = r#"{"id":"p","name":"n","path":"/tmp/p","gitRoot":"/tmp/p","gitHasHead":true,"createdAt":"c"}"#;
+        let project: ProjectRecord = serde_json::from_str(json).unwrap();
+        assert_eq!(project.branch, None);
+        let with_branch = json.replace("\"createdAt\":\"c\"", "\"branch\":\"main\",\"createdAt\":\"c\"");
+        let project: ProjectRecord = serde_json::from_str(&with_branch).unwrap();
+        assert_eq!(project.branch, None);
     }
 }

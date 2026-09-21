@@ -29,12 +29,13 @@ export interface ProjectRecord {
   path: string;
   gitRoot: string | null;
   gitHasHead: boolean;
+  branch: string | null;
   createdAt: string;
 }
 
 export interface TaskRecord {
   id: string;
-  projectId: string;
+  projectId: string | null;
   name: string;
   workspacePath: string;
   worktreePath: string | null;

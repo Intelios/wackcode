@@ -14,7 +14,8 @@ interface SidebarProps {
   selectedTaskId?: string;
   showArchived: boolean;
   onSelectTask: (id: string) => void;
-  onNewChat: (project: ProjectRecord) => void;
+  onNewChat: (project: ProjectRecord | null) => void;
+  onNewDraft: () => void;
   onAddProject: () => void;
   onToggleArchived: () => void;
   onOpenSettings: () => void;
@@ -23,10 +24,11 @@ interface SidebarProps {
   onRenameTask: (taskId: string, name: string) => void;
 }
 
-export function Sidebar({ projects, tasks, selectedTaskId, showArchived, onSelectTask, onNewChat, onAddProject, onToggleArchived, onOpenSettings, onTaskAction, onProjectAction, onRenameTask }: SidebarProps) {
+export function Sidebar({ projects, tasks, selectedTaskId, showArchived, onSelectTask, onNewChat, onNewDraft, onAddProject, onToggleArchived, onOpenSettings, onTaskAction, onProjectAction, onRenameTask }: SidebarProps) {
   const [renamingId, setRenamingId] = useState<string>();
   const [renameValue, setRenameValue] = useState("");
   const hasArchived = tasks.some((task) => task.archived);
+  const looseTasks = tasks.filter((task) => task.projectId === null && (!task.archived || showArchived));
 
   function startRename(task: TaskRecord) {
     setRenamingId(task.id);
@@ -55,12 +57,56 @@ export function Sidebar({ projects, tasks, selectedTaskId, showArchived, onSelec
     ];
   }
 
+  function renderTask(task: TaskRecord, project?: ProjectRecord) {
+    return renamingId === task.id ? (
+      <div className="task-item renaming" key={task.id}>
+        <input
+          autoFocus
+          value={renameValue}
+          onChange={(event) => setRenameValue(event.target.value)}
+          onBlur={() => commitRename(task.id)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") commitRename(task.id);
+            if (event.key === "Escape") setRenamingId(undefined);
+          }}
+        />
+      </div>
+    ) : (
+      <div
+        key={task.id}
+        role="button"
+        tabIndex={0}
+        className={`task-item ${selectedTaskId === task.id ? "active" : ""} ${task.archived ? "archived" : ""}`}
+        onClick={() => onSelectTask(task.id)}
+        onKeyDown={(event) => { if (event.key === "Enter") onSelectTask(task.id); }}
+        onDoubleClick={() => startRename(task)}
+      >
+        <span className={`task-status ${task.lastError ? "error" : task.status}`} />
+        <span className="task-name">{task.name}</span>
+        {task.usesWorktree && <Icon name="branch" className="task-branch-icon" />}
+        <span className="task-actions" onClick={(event) => event.stopPropagation()} onDoubleClick={(event) => event.stopPropagation()}>
+          <MenuButton className="row-menu" label={`${task.name} menu`} items={() => taskMenu(task, project)} />
+          <Tooltip label="Delete chat">
+            <button type="button" className="ghost-button row-menu danger" onClick={() => onTaskAction(task, "delete")} aria-label={`Delete ${task.name}`}>
+              <Icon name="trash" />
+            </button>
+          </Tooltip>
+        </span>
+      </div>
+    );
+  }
+
   return (
     <aside className="sidebar">
       <div className="titlebar-drag" data-tauri-drag-region />
+      <div className="sidebar-top">
+        <button type="button" className="sidebar-action" onClick={onNewDraft}>
+          <Icon name="plus" /> New chat <kbd>⌘N</kbd>
+        </button>
+      </div>
       <nav className="project-list" aria-label="Projects and chats">
-        {projects.length === 0 && (
-          <div className="sidebar-empty">Add a project folder to start your first chat.</div>
+        {projects.length === 0 && looseTasks.length === 0 && (
+          <div className="sidebar-empty">Start a new chat — with a project folder or without one.</div>
         )}
         {projects.map((project) => {
           const projectTasks = tasks.filter((task) => task.projectId === project.id && (!task.archived || showArchived));
@@ -84,45 +130,23 @@ export function Sidebar({ projects, tasks, selectedTaskId, showArchived, onSelec
                   </button>
                 </Tooltip>
               </div>
-              {projectTasks.map((task) => renamingId === task.id ? (
-                <div className="task-item renaming" key={task.id}>
-                  <input
-                    autoFocus
-                    value={renameValue}
-                    onChange={(event) => setRenameValue(event.target.value)}
-                    onBlur={() => commitRename(task.id)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") commitRename(task.id);
-                      if (event.key === "Escape") setRenamingId(undefined);
-                    }}
-                  />
-                </div>
-              ) : (
-                <div
-                  key={task.id}
-                  role="button"
-                  tabIndex={0}
-                  className={`task-item ${selectedTaskId === task.id ? "active" : ""} ${task.archived ? "archived" : ""}`}
-                  onClick={() => onSelectTask(task.id)}
-                  onKeyDown={(event) => { if (event.key === "Enter") onSelectTask(task.id); }}
-                  onDoubleClick={() => startRename(task)}
-                >
-                  <span className={`task-status ${task.lastError ? "error" : task.status}`} />
-                  <span className="task-name">{task.name}</span>
-                  {task.usesWorktree && <Icon name="branch" className="task-branch-icon" />}
-                  <span className="task-actions" onClick={(event) => event.stopPropagation()} onDoubleClick={(event) => event.stopPropagation()}>
-                    <MenuButton className="row-menu" label={`${task.name} menu`} items={() => taskMenu(task, project)} />
-                    <Tooltip label="Delete chat">
-                      <button type="button" className="ghost-button row-menu danger" onClick={() => onTaskAction(task, "delete")} aria-label={`Delete ${task.name}`}>
-                        <Icon name="trash" />
-                      </button>
-                    </Tooltip>
-                  </span>
-                </div>
-              ))}
+              {projectTasks.map((task) => renderTask(task, project))}
             </section>
           );
         })}
+        {looseTasks.length > 0 && (
+          <section className="project-group">
+            <div className="project-heading">
+              <span>No project</span>
+              <Tooltip label="New chat with no project">
+                <button type="button" className="ghost-button" onClick={() => onNewChat(null)} aria-label="New chat with no project">
+                  <Icon name="plus" />
+                </button>
+              </Tooltip>
+            </div>
+            {looseTasks.map((task) => renderTask(task))}
+          </section>
+        )}
       </nav>
       <div className="sidebar-footer">
         <button type="button" className="sidebar-action" onClick={onAddProject}>

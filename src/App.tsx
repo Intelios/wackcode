@@ -20,6 +20,7 @@ import { ChangesPanel } from "./components/ChangesPanel";
 import { ChatHeader } from "./components/ChatHeader";
 import { Composer } from "./components/Composer";
 import { Icon } from "./components/Icons";
+import { ProjectBar } from "./components/ProjectBar";
 import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar, type ProjectAction, type TaskAction } from "./components/Sidebar";
 import { Transcript } from "./components/Transcript";
@@ -28,12 +29,20 @@ import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 const emptyData: AppData = { version: 1, providers: [], projects: [], tasks: [] };
 
 const LAST_MODEL_KEY = "wackcode:lastModel";
+const LAST_PROJECT_KEY = "wackcode:lastProject";
+const NO_PROJECT_KEY = "none";
 const CHANGES_OPEN_KEY = "wackcode:changesOpen";
 
 interface ModelChoice {
   providerId: string;
   modelId: string;
   thinkingLevel: ThinkingLevel;
+}
+
+interface Draft {
+  projectId: string | null;
+  useWorktree: boolean;
+  choice?: ModelChoice;
 }
 
 interface ConfirmState {
@@ -69,6 +78,7 @@ export default function App() {
   const [booting, setBooting] = useState(true);
   const [globalError, setGlobalError] = useState<string>();
   const [lastModels, setLastModels] = useState<Record<string, ModelChoice>>(() => loadJSON(LAST_MODEL_KEY, {}));
+  const [draft, setDraft] = useState<Draft>();
 
   const selectedTask = data.tasks.find((task) => task.id === selectedTaskId);
   const selectedProject = data.projects.find((project) => project.id === selectedTask?.projectId);
@@ -106,8 +116,11 @@ export default function App() {
       if (!active) return;
       setData(payload.data);
       setAppDataPath(payload.appDataPath);
-      const first = payload.data.tasks.find((task) => !task.archived) ?? payload.data.tasks[0];
-      setSelectedTaskId(first?.id);
+      const remembered = loadJSON<string | null>(LAST_PROJECT_KEY, null);
+      const projectId = payload.data.projects.some((project) => project.id === remembered)
+        ? remembered
+        : payload.data.projects[0]?.id ?? null;
+      setDraft({ projectId, useWorktree: false });
       if (payload.data.providers.length === 0) setSettingsOpen(true);
     }).catch((reason) => setGlobalError(String(reason))).finally(() => active && setBooting(false));
     return () => { active = false; };
@@ -156,16 +169,16 @@ export default function App() {
 
   const configuredProviders = useMemo(() => data.providers.filter((item) => item.hasApiKey && item.models.some(modelIsReady)), [data.providers]);
 
-  const rememberModel = useCallback((projectId: string, choice: ModelChoice) => {
+  const rememberModel = useCallback((projectId: string | null, choice: ModelChoice) => {
     setLastModels((current) => {
-      const next = { ...current, [projectId]: choice };
+      const next = { ...current, [projectId ?? NO_PROJECT_KEY]: choice };
       localStorage.setItem(LAST_MODEL_KEY, JSON.stringify(next));
       return next;
     });
   }, []);
 
-  const defaultChoice = useCallback((projectId: string): ModelChoice | undefined => {
-    const remembered = lastModels[projectId];
+  const defaultChoice = useCallback((projectId: string | null): ModelChoice | undefined => {
+    const remembered = lastModels[projectId ?? NO_PROJECT_KEY];
     const rememberedProvider = remembered && configuredProviders.find((item) => item.id === remembered.providerId);
     const rememberedModel = rememberedProvider?.models.find((model) => model.id === remembered.modelId && modelIsReady(model));
     if (rememberedProvider && rememberedModel) {
@@ -179,26 +192,37 @@ export default function App() {
     return { providerId: first.id, modelId: model.id, thinkingLevel: levels.includes("medium") ? "medium" : levels[0] };
   }, [configuredProviders, lastModels]);
 
+  const draftProject = data.projects.find((project) => project.id === draft?.projectId);
+  const draftChoice = draft ? draft.choice ?? defaultChoice(draft.projectId) : undefined;
+
+  function lastProjectId(projects = data.projects): string | null {
+    const remembered = loadJSON<string | null>(LAST_PROJECT_KEY, null);
+    return projects.some((project) => project.id === remembered) ? remembered : projects[0]?.id ?? null;
+  }
+
+  function openDraft(projectId?: string | null) {
+    const resolved = projectId === undefined ? lastProjectId() : projectId;
+    setSelectedTaskId(undefined);
+    setDraft({ projectId: resolved, useWorktree: false });
+  }
+
+  function setDraftProject(projectId: string | null) {
+    localStorage.setItem(LAST_PROJECT_KEY, JSON.stringify(projectId));
+    setDraft((current) => ({ projectId, useWorktree: false, choice: current?.choice }));
+  }
+
+  function setDraftWorktree(useWorktree: boolean) {
+    setDraft((current) => ({ projectId: current?.projectId ?? null, useWorktree, choice: current?.choice }));
+  }
+
   async function addProject() {
     const selected = await open({ directory: true, multiple: false, title: "Add a project folder" });
     if (!selected) return;
     try {
       const project = await api.addProject(selected);
       setData((current) => ({ ...current, projects: current.projects.some((item) => item.id === project.id) ? current.projects : [...current.projects, project] }));
-    } catch (reason) { setGlobalError(String(reason)); }
-  }
-
-  async function newChat(project: ProjectRecord) {
-    const choice = defaultChoice(project.id);
-    if (!choice) {
-      setSettingsOpen(true);
-      return;
-    }
-    try {
-      const task = await api.createTask({ projectId: project.id, ...choice });
-      rememberModel(project.id, choice);
-      setData((current) => ({ ...current, tasks: [...current.tasks, task] }));
-      setSelectedTaskId(task.id);
+      setDraft((current) => current ? { ...current, projectId: project.id } : current);
+      localStorage.setItem(LAST_PROJECT_KEY, JSON.stringify(project.id));
     } catch (reason) { setGlobalError(String(reason)); }
   }
 
@@ -237,8 +261,66 @@ export default function App() {
     }
   }
 
+  function configureDraft(patch: Partial<Pick<TaskRecord, "providerId" | "modelId" | "thinkingLevel">>) {
+    setDraft((current) => {
+      const base = current?.choice ?? defaultChoice(current?.projectId ?? null);
+      const providerId = patch.providerId ?? base?.providerId;
+      const provider = configuredProviders.find((item) => item.id === providerId);
+      const modelId = patch.modelId ?? (patch.providerId ? provider?.models.find(modelIsReady)?.id : base?.modelId);
+      const model = provider?.models.find((item) => item.id === modelId);
+      const levels: ThinkingLevel[] = model?.thinkingLevels.length ? model.thinkingLevels : ["off"];
+      const thinkingLevel = patch.thinkingLevel && levels.includes(patch.thinkingLevel)
+        ? patch.thinkingLevel
+        : base?.thinkingLevel && levels.includes(base.thinkingLevel) ? base.thinkingLevel : levels.includes("medium") ? "medium" : levels[0];
+      if (!providerId || !modelId || !thinkingLevel) return current;
+      return { projectId: current?.projectId ?? null, useWorktree: current?.useWorktree ?? false, choice: { providerId, modelId, thinkingLevel } };
+    });
+  }
+
   async function sendPrompt(message: string): Promise<boolean> {
-    if (!selectedTask || selectedTask.status === "running" || selectedTask.status === "stopping") return false;
+    if (!selectedTask) {
+      const active = draft ?? { projectId: lastProjectId(), useWorktree: false };
+      const choice = active.choice ?? defaultChoice(active.projectId);
+      if (!choice) {
+        setSettingsOpen(true);
+        return false;
+      }
+      let task: TaskRecord;
+      try {
+        task = await api.createTask({
+          projectId: active.projectId,
+          useWorktree: active.useWorktree && Boolean(draftProject?.gitHasHead),
+          name: titleFromPrompt(message),
+          ...choice
+        });
+      } catch (reason) {
+        setGlobalError(String(reason));
+        return false;
+      }
+      rememberModel(active.projectId, choice);
+      localStorage.setItem(LAST_PROJECT_KEY, JSON.stringify(active.projectId));
+      setData((current) => ({ ...current, tasks: [...current.tasks, task] }));
+      patchTask(task.id, { status: "running", lastError: null });
+      patchRuntime(task.id, { error: undefined, activity: "starting" });
+      try {
+        await api.prompt({
+          taskId: task.id,
+          message,
+          providerId: task.providerId,
+          modelId: task.modelId,
+          thinkingLevel: task.thinkingLevel
+        });
+      } catch (reason) {
+        patchTask(task.id, { status: "idle" });
+        patchRuntime(task.id, { error: String(reason) });
+      }
+      // Selection happens after api.prompt so open_task's ensure_worker finds the
+      // already-running worker instead of racing it to spawn a second process.
+      setSelectedTaskId(task.id);
+      setDraft(undefined);
+      return true;
+    }
+    if (selectedTask.status === "running" || selectedTask.status === "stopping") return false;
     patchTask(selectedTask.id, { status: "running", lastError: null });
     patchRuntime(selectedTask.id, { error: undefined, activity: "starting" });
     try {
@@ -278,9 +360,7 @@ export default function App() {
   }
 
   function selectAfterRemoval(removedId: string) {
-    setSelectedTaskId((current) => current === removedId
-      ? data.tasks.find((task) => !task.archived && task.id !== removedId)?.id
-      : current);
+    if (selectedTaskRef.current === removedId) openDraft();
   }
 
   async function taskAction(task: TaskRecord, action: TaskAction) {
@@ -342,9 +422,8 @@ export default function App() {
             projects: current.projects.filter((item) => item.id !== project.id),
             tasks: current.tasks.filter((task) => task.projectId !== project.id)
           }));
-          if (selectedTask?.projectId === project.id) {
-            setSelectedTaskId(data.tasks.find((task) => task.projectId !== project.id && !task.archived)?.id);
-          }
+          setDraft((current) => current && current.projectId === project.id ? { ...current, projectId: null, useWorktree: false } : current);
+          if (selectedTask?.projectId === project.id) openDraft();
         }
       });
     }
@@ -356,9 +435,7 @@ export default function App() {
       const key = event.key.toLowerCase();
       if (key === "n" && !event.shiftKey) {
         event.preventDefault();
-        const project = selectedProject ?? data.projects[0];
-        if (project) void newChat(project);
-        else void addProject();
+        openDraft(selectedTask ? selectedTask.projectId : draft?.projectId);
       } else if (key === "o" && !event.shiftKey) {
         event.preventDefault();
         void addProject();
@@ -393,8 +470,9 @@ export default function App() {
         tasks={data.tasks}
         selectedTaskId={selectedTaskId}
         showArchived={showArchived}
-        onSelectTask={setSelectedTaskId}
-        onNewChat={(project) => void newChat(project)}
+        onSelectTask={(id) => { setDraft(undefined); setSelectedTaskId(id); }}
+        onNewChat={(project) => openDraft(project?.id ?? null)}
+        onNewDraft={() => openDraft()}
         onAddProject={() => void addProject()}
         onToggleArchived={() => setShowArchived((value) => !value)}
         onOpenSettings={() => setSettingsOpen(true)}
@@ -405,26 +483,40 @@ export default function App() {
 
       <main className="workspace">
         {!selectedTask ? (
-          <div className="workspace-empty">
-            {configuredProviders.length === 0 ? (
-              <>
-                <h1>Connect a model provider</h1>
-                <p>Add an OpenAI-compatible endpoint and API key to start chatting.</p>
-                <button className="primary-button" onClick={() => setSettingsOpen(true)}><Icon name="key" /> Open settings</button>
-              </>
-            ) : data.projects.length === 0 ? (
-              <>
-                <h1>Add a project</h1>
-                <p>Chats run inside a project folder. Add one to start.</p>
-                <button className="primary-button" onClick={() => void addProject()}><Icon name="folder" /> Add project</button>
-              </>
-            ) : (
-              <>
-                <h1>Pick up where you left off</h1>
-                <p>Select a chat on the left, or start a new one with the + button on a project.</p>
-              </>
-            )}
-          </div>
+          configuredProviders.length === 0 ? (
+            <div className="workspace-empty">
+              <h1>Connect a model provider</h1>
+              <p>Add an OpenAI-compatible endpoint and API key to start chatting.</p>
+              <button className="primary-button" onClick={() => setSettingsOpen(true)}><Icon name="key" /> Open settings</button>
+            </div>
+          ) : (
+            <div className="draft-hero">
+              <h1 className="draft-title">{draftProject ? `What should we build in ${draftProject.name}?` : "What should we build?"}</h1>
+              <Composer
+                status="idle"
+                providerId={draftChoice?.providerId}
+                modelId={draftChoice?.modelId}
+                thinkingLevel={draftChoice?.thinkingLevel}
+                providers={configuredProviders}
+                popoverSide="bottom"
+                header={
+                  <ProjectBar
+                    projects={data.projects}
+                    projectId={draft?.projectId ?? null}
+                    useWorktree={draft?.useWorktree ?? false}
+                    onSelectProject={setDraftProject}
+                    onToggleWorktree={setDraftWorktree}
+                    onAddProject={() => void addProject()}
+                  />
+                }
+                placeholder="Describe a task or ask a question…"
+                onConfigure={configureDraft}
+                onSend={sendPrompt}
+                onStop={() => undefined}
+                onOpenSettings={() => setSettingsOpen(true)}
+              />
+            </div>
+          )
         ) : (
           <>
             <ChatHeader
@@ -445,7 +537,10 @@ export default function App() {
               activity={runtime?.activity}
             />
             <Composer
-              task={selectedTask}
+              status={selectedTask.status}
+              providerId={selectedTask.providerId}
+              modelId={selectedTask.modelId}
+              thinkingLevel={selectedTask.thinkingLevel}
               providers={configuredProviders}
               stats={runtime?.snapshot?.stats}
               onConfigure={(patch) => void configure(patch)}

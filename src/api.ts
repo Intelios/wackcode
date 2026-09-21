@@ -16,7 +16,7 @@ export const api = {
   discoverModels: (providerId: string) => invoke<string[]>("discover_models", { input: { providerId } }),
   addProject: (path: string) => invoke<ProjectRecord>("add_project", { path }),
   createTask: (input: {
-    projectId: string;
+    projectId?: string | null;
     name?: string;
     useWorktree?: boolean;
     providerId: string;

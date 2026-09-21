@@ -26,12 +26,33 @@ export function Popover({ anchor, open, onClose, side = "bottom", align = "start
       const rect = anchorEl.getBoundingClientRect();
       const panelRect = panel.getBoundingClientRect();
       const margin = 8;
-      let top = side === "bottom" ? rect.bottom + offset : rect.top - panelRect.height - offset;
-      if (top + panelRect.height > window.innerHeight - margin) top = rect.top - panelRect.height - offset;
-      if (top < margin) top = Math.max(margin, rect.bottom + offset);
+      const spaceBelow = window.innerHeight - (rect.bottom + offset) - margin;
+      const spaceAbove = rect.top - offset - margin;
+
+      let top: number;
+      let maxHeight: number | undefined;
+
+      if (side === "bottom") {
+        if (spaceBelow < 120 && spaceAbove > spaceBelow) {
+          top = Math.max(margin, rect.top - panelRect.height - offset);
+          maxHeight = Math.max(100, spaceAbove);
+        } else {
+          top = rect.bottom + offset;
+          maxHeight = Math.max(100, spaceBelow);
+        }
+      } else {
+        if (spaceAbove < 120 && spaceBelow > spaceAbove) {
+          top = rect.bottom + offset;
+          maxHeight = Math.max(100, spaceBelow);
+        } else {
+          top = Math.max(margin, rect.top - panelRect.height - offset);
+          maxHeight = Math.max(100, spaceAbove);
+        }
+      }
+
       let left = align === "end" ? rect.right - panelRect.width : align === "center" ? rect.left + rect.width / 2 - panelRect.width / 2 : rect.left;
       left = Math.max(margin, Math.min(left, window.innerWidth - panelRect.width - margin));
-      setStyle({ position: "fixed", top, left, minWidth: matchWidth ? rect.width : undefined, zIndex: 150 });
+      setStyle({ position: "fixed", top, left, maxHeight, minWidth: matchWidth ? rect.width : undefined, zIndex: 150 });
     };
     reposition();
     window.addEventListener("resize", reposition);

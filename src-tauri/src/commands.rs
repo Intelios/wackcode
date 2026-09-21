@@ -22,6 +22,9 @@ pub fn bootstrap(state: State<'_, MetadataState>) -> Result<BootstrapPayload, St
     for provider in &mut data.providers {
         provider.has_api_key = state.secrets.get(&provider.id).is_ok();
     }
+    for project in &mut data.projects {
+        project.branch = git::current_branch(Path::new(&project.path));
+    }
     Ok(BootstrapPayload {
         data,
         app_data_path: state.data_path.parent().unwrap_or(Path::new("")).to_string_lossy().into_owned(),
@@ -145,15 +148,18 @@ pub fn add_project(state: State<'_, MetadataState>, path: String) -> Result<Proj
     let canonical_string = canonical.to_string_lossy().into_owned();
     if let Some(existing) = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?
         .projects.iter().find(|project| project.path == canonical_string).cloned() {
+        let mut existing = existing;
+        existing.branch = git::current_branch(&canonical);
         return Ok(existing);
     }
     let git_info = git::inspect_project(&canonical);
     let record = ProjectRecord {
         id: Uuid::new_v4().to_string(),
         name: canonical.file_name().and_then(|name| name.to_str()).unwrap_or("Project").to_string(),
-        path: canonical_string,
+        path: canonical_string.clone(),
         git_root: git_info.root.map(|root| root.to_string_lossy().into_owned()),
         git_has_head: git_info.has_head,
+        branch: git::current_branch(&canonical),
         created_at: Utc::now().to_rfc3339(),
     };
     state.mutate(|data| { data.projects.push(record.clone()); Ok(()) })?;
@@ -170,31 +176,42 @@ pub fn create_task(
         .unwrap_or("New chat").to_string();
     let (project, provider) = {
         let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
-        let project = data.projects.iter().find(|project| project.id == input.project_id).cloned()
-            .ok_or_else(|| "Project not found".to_string())?;
+        let project = input.project_id.as_deref()
+            .map(|project_id| data.projects.iter().find(|project| project.id == project_id).cloned()
+                .ok_or_else(|| "Project not found".to_string()))
+            .transpose()?;
         let provider = data.providers.iter().find(|provider| provider.id == input.provider_id).cloned()
             .ok_or_else(|| "Connection not found".to_string())?;
         (project, provider)
     };
     validate_model_selection(&provider, &input.model_id, &input.thinking_level)?;
     let id = Uuid::new_v4().to_string();
-    let mut workspace_path = PathBuf::from(&project.path);
+    let mut workspace_path = project.as_ref().map(|project| PathBuf::from(&project.path));
     let mut worktree_path = None;
-    let mut branch = git::current_branch(Path::new(&project.path));
+    let mut branch = project.as_ref().and_then(|project| git::current_branch(Path::new(&project.path)));
     if input.use_worktree {
+        let project = project.as_ref().ok_or_else(|| "Worktrees require a project".to_string())?;
         if !project.git_has_head { return Err("Worktrees require a Git repository with at least one commit".into()); }
         let git_root = project.git_root.as_deref().ok_or_else(|| "This project is not inside a Git repository".to_string())?;
         let destination = app.path().app_data_dir().map_err(|error| error.to_string())?
             .join("worktrees").join(&id);
         let branch_name = format!("wackcode/{}-{}", slug(&name), &id[..8]);
-        workspace_path = git::create_worktree(Path::new(&project.path), Path::new(git_root), &destination, &branch_name)?;
+        workspace_path = Some(git::create_worktree(Path::new(&project.path), Path::new(git_root), &destination, &branch_name)?);
         worktree_path = Some(destination.to_string_lossy().into_owned());
         branch = Some(branch_name);
     }
+    let workspace_path = match workspace_path {
+        Some(path) => path,
+        None => {
+            let scratch = scratch_dir(&app, &id)?;
+            std::fs::create_dir_all(&scratch).map_err(|error| format!("Could not create scratch folder: {error}"))?;
+            scratch
+        }
+    };
     let now = Utc::now().to_rfc3339();
     let record = TaskRecord {
         id,
-        project_id: project.id,
+        project_id: project.as_ref().map(|project| project.id.clone()),
         name,
         workspace_path: workspace_path.to_string_lossy().into_owned(),
         worktree_path,
@@ -325,7 +342,8 @@ pub async fn delete_task(app: AppHandle, state: State<'_, MetadataState>, task_i
     let (task, git_root) = state.mutate(|data| {
         let index = data.tasks.iter().position(|task| task.id == task_id).ok_or_else(|| "Chat not found".to_string())?;
         let task = data.tasks.remove(index);
-        let git_root = data.projects.iter().find(|project| project.id == task.project_id)
+        let git_root = task.project_id.as_deref()
+            .and_then(|project_id| data.projects.iter().find(|project| project.id == project_id))
             .and_then(|project| project.git_root.clone());
         Ok((task, git_root))
     })?;
@@ -338,8 +356,9 @@ pub async fn convert_task_to_worktree(app: AppHandle, state: State<'_, MetadataS
     let (task, project) = {
         let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
         let task = data.tasks.iter().find(|task| task.id == task_id).cloned().ok_or_else(|| "Chat not found".to_string())?;
-        let project = data.projects.iter().find(|project| project.id == task.project_id).cloned()
-            .ok_or_else(|| "Project not found".to_string())?;
+        let project = task.project_id.as_deref()
+            .and_then(|project_id| data.projects.iter().find(|project| project.id == project_id)).cloned()
+            .ok_or_else(|| "This chat has no project".to_string())?;
         (task, project)
     };
     if task.uses_worktree { return Ok(task); }
@@ -374,13 +393,13 @@ pub async fn convert_task_to_worktree(app: AppHandle, state: State<'_, MetadataS
 pub async fn remove_project(app: AppHandle, state: State<'_, MetadataState>, project_id: String) -> Result<(), String> {
     let tasks: Vec<TaskRecord> = {
         let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
-        if data.tasks.iter().any(|task| task.project_id == project_id && !task.archived) {
+        if data.tasks.iter().any(|task| task.project_id.as_deref() == Some(project_id.as_str()) && !task.archived) {
             return Err("This project still has chats. Delete or archive them first.".into());
         }
         if !data.projects.iter().any(|project| project.id == project_id) {
             return Err("Project not found".into());
         }
-        data.tasks.iter().filter(|task| task.project_id == project_id).cloned().collect()
+        data.tasks.iter().filter(|task| task.project_id.as_deref() == Some(project_id.as_str())).cloned().collect()
     };
     for task in &tasks { worker::terminate_worker(&app, &task.id, true).await?; }
     let (git_root, removed) = {
@@ -398,10 +417,15 @@ pub async fn remove_project(app: AppHandle, state: State<'_, MetadataState>, pro
     Ok(())
 }
 
+fn scratch_dir(app: &AppHandle, task_id: &str) -> Result<PathBuf, String> {
+    Ok(app.path().app_data_dir().map_err(|error| error.to_string())?.join("scratch").join(task_id))
+}
+
 fn cleanup_task_files(app: &AppHandle, task: &TaskRecord, git_root: Option<&str>) {
     if let Ok(app_data) = app.path().app_data_dir() {
         let _ = std::fs::remove_dir_all(app_data.join("agent").join(&task.id));
         let _ = std::fs::remove_dir_all(app_data.join("sessions").join(&task.id));
+        let _ = std::fs::remove_dir_all(app_data.join("scratch").join(&task.id));
     }
     if let Some(worktree_path) = task.worktree_path.as_deref() {
         let repo = git_root.map(Path::new).unwrap_or_else(|| Path::new(&task.workspace_path));

@@ -66,13 +66,19 @@ export function PackageBrowser({ installed, busy, onSearch, onInstall }: Props) 
             return (
               <article className="search-result" key={result.name}>
                 <div className="search-result-head">
-                  <span className="search-result-name">{result.name}</span>
-                  <span className="package-meta">v{result.version}{result.publisher && ` · ${result.publisher}`}</span>
+                  <span className="search-result-name" title={result.name}>{result.name}</span>
                 </div>
-                {result.description && <p className="search-result-description">{result.description}</p>}
+                <div className="search-result-meta">
+                  v{result.version}{result.publisher && ` · ${result.publisher}`}
+                </div>
+                {result.description && (
+                  <p className="search-result-description" title={result.description}>
+                    {result.description}
+                  </p>
+                )}
                 <div className="search-result-actions">
                   {already ? (
-                    <span className="package-meta">Installed</span>
+                    <span className="package-meta installed-badge">Installed</span>
                   ) : (
                     <button type="button" className="secondary-button" disabled={busy} onClick={() => onInstall(source)}>
                       Install

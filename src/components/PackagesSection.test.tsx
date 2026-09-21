@@ -176,4 +176,29 @@ describe("PackagesSection browse tab", () => {
     expect(await screen.findByText(/Could not reach the npm registry/)).toBeInTheDocument();
     expect(screen.getByLabelText("Search packages")).toBeInTheDocument();
   });
+
+  it("renders search results in a grid container with metadata and actions", async () => {
+    const hits = [
+      hit,
+      {
+        name: "pi-subagents",
+        version: "0.12.0",
+        description: "Orchestrate subagent tasks",
+        publisher: "jsmith",
+        npmUrl: "https://www.npmjs.com/package/pi-subagents",
+        publishedAt: "2026-09-18T10:00:00.000Z",
+        declares: ["skills"]
+      }
+    ];
+    renderSection([], { onSearch: vi.fn().mockResolvedValue(hits) });
+    fireEvent.click(screen.getByRole("tab", { name: "Browse" }));
+
+    expect(await screen.findByText("pi-web-access")).toBeInTheDocument();
+    expect(screen.getByText("pi-subagents")).toBeInTheDocument();
+
+    const grid = document.querySelector(".search-results");
+    expect(grid).toBeInTheDocument();
+    expect(grid?.querySelectorAll(".search-result")).toHaveLength(2);
+  });
 });
+

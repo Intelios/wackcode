@@ -61,20 +61,48 @@ export function SettingsPage({
         <nav className="settings-nav" aria-label="Settings sections">
           {SECTIONS.map((item) => (
             <Fragment key={item.id}>
-              <button type="button" className={`settings-nav-item ${item.id === section ? "active" : ""}`} onClick={() => setSection(item.id)}>
+              <button
+                type="button"
+                className={`settings-nav-item ${item.id === section ? "active" : ""}`}
+                onClick={() => setSection(item.id)}
+                aria-expanded={item.id === "providers" ? section === "providers" : undefined}
+              >
                 <Icon name={item.icon} /> {item.label}
               </button>
-              {item.id === "providers" && section === "providers" && (
-                <div className="settings-subnav">
-                  {providers.map((provider) => (
-                    <button key={provider.id} type="button" className={`settings-subnav-item ${selectedProviderId === provider.id ? "active" : ""}`} onClick={() => setSelectedProviderId(provider.id)}>
-                      <span className={`credential-dot ${provider.hasApiKey ? "connected" : ""}`} />
-                      <span>{provider.name}</span>
-                    </button>
-                  ))}
-                  <button type="button" className={`settings-subnav-item ${selectedProviderId === "new" ? "active" : ""}`} onClick={() => setSelectedProviderId("new")}>
-                    <Icon name="plus" /> New connection
-                  </button>
+              {item.id === "providers" && (
+                <div
+                  className={`settings-subnav-wrapper ${section === "providers" ? "expanded" : ""}`}
+                  aria-hidden={section !== "providers"}
+                  inert={section !== "providers" ? true : undefined}
+                >
+                  <div className="settings-subnav-inner">
+                    <div className="settings-subnav">
+                      {providers.map((provider) => (
+                        <button
+                          key={provider.id}
+                          type="button"
+                          className={`settings-subnav-item ${selectedProviderId === provider.id ? "active" : ""}`}
+                          onClick={() => {
+                            setSelectedProviderId(provider.id);
+                            setSection("providers");
+                          }}
+                        >
+                          <span className={`credential-dot ${provider.hasApiKey ? "connected" : ""}`} />
+                          <span>{provider.name}</span>
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        className={`settings-subnav-item ${selectedProviderId === "new" ? "active" : ""}`}
+                        onClick={() => {
+                          setSelectedProviderId("new");
+                          setSection("providers");
+                        }}
+                      >
+                        <Icon name="plus" /> New connection
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
             </Fragment>

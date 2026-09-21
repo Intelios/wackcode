@@ -136,8 +136,8 @@ describe("SettingsPage sidebar navigation", () => {
     ]);
   });
 
-  it("hides provider subnav when switching to Packages or Tools", () => {
-    render(
+  it("toggles provider subnav animation state and aria attributes when switching sections", () => {
+    const { container } = render(
       <SettingsPage
         providers={testProviders}
         packages={[]}
@@ -158,13 +158,25 @@ describe("SettingsPage sidebar navigation", () => {
       />
     );
 
+    const providersBtn = screen.getByRole("button", { name: "Providers" });
+    const subnavWrapper = container.querySelector(".settings-subnav-wrapper");
+
+    expect(providersBtn).toHaveAttribute("aria-expanded", "true");
+    expect(subnavWrapper).toHaveClass("expanded");
+    expect(subnavWrapper).toHaveAttribute("aria-hidden", "false");
     expect(screen.getByRole("button", { name: /Entrim AI/ })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Packages" }));
+    expect(providersBtn).toHaveAttribute("aria-expanded", "false");
+    expect(subnavWrapper).not.toHaveClass("expanded");
+    expect(subnavWrapper).toHaveAttribute("aria-hidden", "true");
     expect(screen.queryByRole("button", { name: /Entrim AI/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /New connection/ })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Providers" }));
+    expect(providersBtn).toHaveAttribute("aria-expanded", "true");
+    expect(subnavWrapper).toHaveClass("expanded");
+    expect(subnavWrapper).toHaveAttribute("aria-hidden", "false");
     expect(screen.getByRole("button", { name: /Entrim AI/ })).toBeInTheDocument();
   });
 });

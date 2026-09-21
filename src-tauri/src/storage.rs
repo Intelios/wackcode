@@ -1,10 +1,11 @@
-use crate::models::{AppData, TaskStatus};
+use crate::{models::{AppData, TaskStatus}, secrets::SecretStore};
 use std::{fs, path::{Path, PathBuf}, sync::Mutex};
 use tauri::{AppHandle, Manager};
 
 pub struct MetadataState {
     pub data: Mutex<AppData>,
     pub data_path: PathBuf,
+    pub secrets: SecretStore,
 }
 
 impl MetadataState {
@@ -20,7 +21,7 @@ impl MetadataState {
             AppData::default()
         };
         let changed = recover_interrupted_tasks(&mut data);
-        let state = Self { data: Mutex::new(data), data_path };
+        let state = Self { data: Mutex::new(data), data_path, secrets: SecretStore::load(&directory)? };
         if changed { state.save()?; }
         Ok(state)
     }

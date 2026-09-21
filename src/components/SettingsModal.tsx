@@ -62,7 +62,7 @@ export function SettingsModal({ providers, appDataPath, onClose, onSave, onDelet
       const saved = await onSave({ ...draft, apiKey: draft.apiKey?.trim() || undefined });
       setSelectedId(saved.id);
       setDraft(fromProvider(saved));
-      setNotice("Connection saved. The API key is held in macOS Keychain.");
+      setNotice("Connection saved. The API key is stored on this device.");
       return saved;
     } catch (reason) {
       setError(String(reason));
@@ -118,7 +118,7 @@ export function SettingsModal({ providers, appDataPath, onClose, onSave, onDelet
   }
 
   async function removeProvider() {
-    if (!draft.id || !window.confirm(`Delete the “${draft.name}” connection and its Keychain credential?`)) return;
+    if (!draft.id || !window.confirm(`Delete the “${draft.name}” connection and its saved API key?`)) return;
     setBusy(true);
     setError(undefined);
     try {
@@ -179,7 +179,7 @@ export function SettingsModal({ providers, appDataPath, onClose, onSave, onDelet
                 <input value={draft.baseUrl} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" spellCheck={false} />
               </label>
               <label className="wide-field">
-                <span>API key <small>{draft.id && selected?.hasApiKey ? "Leave blank to keep the saved key" : "Stored in macOS Keychain"}</small></span>
+                <span>API key <small>{draft.id && selected?.hasApiKey ? "Leave blank to keep the saved key" : "Stored on this device"}</small></span>
                 <div className="input-with-icon">
                   <Icon name="key" />
                   <input type="password" autoComplete="off" value={draft.apiKey ?? ""} onChange={(event) => setDraft({ ...draft, apiKey: event.target.value })} placeholder={selected?.hasApiKey ? "••••••••••••••••" : "Enter API key"} />

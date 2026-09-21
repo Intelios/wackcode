@@ -8,21 +8,19 @@ use crate::{
     worker::{self},
 };
 use chrono::Utc;
-use keyring::Entry;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{collections::HashSet, path::{Path, PathBuf}, process::Command};
 use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
-const KEYCHAIN_SERVICE: &str = "com.wackcode.desktop.providers";
 const THINKING_LEVELS: &[&str] = &["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 #[tauri::command]
 pub fn bootstrap(state: State<'_, MetadataState>) -> Result<BootstrapPayload, String> {
     let mut data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?.clone();
     for provider in &mut data.providers {
-        provider.has_api_key = read_api_key(&provider.id).is_ok();
+        provider.has_api_key = state.secrets.get(&provider.id).is_ok();
     }
     Ok(BootstrapPayload {
         data,
@@ -56,9 +54,9 @@ pub async fn save_provider(
         if api_key.starts_with("http://") || api_key.starts_with("https://") {
             return Err("That looks like a URL, not an API key — paste the key your provider issued".into());
         }
-        keychain_entry(&id)?.set_password(api_key).map_err(keychain_error)?;
+        state.secrets.set(&id, api_key)?;
     }
-    let has_api_key = read_api_key(&id).is_ok();
+    let has_api_key = state.secrets.get(&id).is_ok();
     let record = ProviderRecord {
         id: id.clone(),
         name,
@@ -96,11 +94,7 @@ pub async fn delete_provider(
         return Err("This connection is still used by a saved task. Change those tasks to another connection before deleting it.".into());
     }
     worker::terminate_worker(&app, &provider_id, true).await.ok();
-    if let Ok(entry) = keychain_entry(&provider_id) {
-        if let Err(error) = entry.delete_credential() {
-            if !matches!(error, keyring::Error::NoEntry) { return Err(keychain_error(error)); }
-        }
-    }
+    state.secrets.remove(&provider_id)?;
     state.mutate(|data| {
         data.providers.retain(|provider| provider.id != provider_id);
         Ok(())
@@ -121,7 +115,7 @@ pub async fn discover_models(
     let provider = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?
         .providers.iter().find(|provider| provider.id == input.provider_id).cloned()
         .ok_or_else(|| "Connection not found".to_string())?;
-    let api_key = read_api_key(&provider.id)?;
+    let api_key = state.secrets.get(&provider.id)?;
     let url = format!("{}/models", provider.base_url.trim_end_matches('/'));
     let response = reqwest::Client::new()
         .get(url)
@@ -260,7 +254,7 @@ pub async fn configure_task(
 #[tauri::command]
 pub async fn open_task(app: AppHandle, state: State<'_, MetadataState>, task_id: String) -> Result<(), String> {
     let (task, provider) = task_and_provider(&state, &task_id)?;
-    let api_key = read_api_key(&provider.id)?;
+    let api_key = state.secrets.get(&provider.id)?;
     worker::ensure_worker(&app, &task, &provider, &api_key).await?;
     worker::send(&app, &task.id, &json!({ "id": Uuid::new_v4().to_string(), "type": "snapshot" })).await
 }
@@ -277,7 +271,7 @@ pub async fn prompt(app: AppHandle, state: State<'_, MetadataState>, input: Prom
     let provider = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?
         .providers.iter().find(|provider| provider.id == configured.provider_id).cloned()
         .ok_or_else(|| "Connection not found".to_string())?;
-    let api_key = read_api_key(&provider.id)?;
+    let api_key = state.secrets.get(&provider.id)?;
     worker::ensure_worker(&app, &configured, &provider, &api_key).await?;
     let run_id = Uuid::new_v4().to_string();
     worker::send(&app, &configured.id, &json!({
@@ -381,21 +375,6 @@ fn validate_base_url(value: &str) -> Result<String, String> {
 fn required(value: &str, label: &str) -> Result<String, String> {
     let value = value.trim();
     if value.is_empty() { Err(format!("{label} is required")) } else { Ok(value.to_string()) }
-}
-
-fn keychain_entry(provider_id: &str) -> Result<Entry, String> {
-    Entry::new(KEYCHAIN_SERVICE, provider_id).map_err(keychain_error)
-}
-
-fn read_api_key(provider_id: &str) -> Result<String, String> {
-    keychain_entry(provider_id)?.get_password().map_err(|error| match error {
-        keyring::Error::NoEntry => "Add an API key for this connection in Settings".into(),
-        other => keychain_error(other),
-    })
-}
-
-fn keychain_error(error: keyring::Error) -> String {
-    format!("macOS Keychain error: {error}")
 }
 
 fn slug(value: &str) -> String {

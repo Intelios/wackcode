@@ -1,6 +1,7 @@
 mod commands;
 mod git;
 mod models;
+mod secrets;
 mod storage;
 mod worker;
 

@@ -35,7 +35,7 @@ For a manual UI fixture, run `pnpm mock:provider` and configure `http://127.0.0.
 
 ## Local data and network boundaries
 
-WackCode has no account, backend, analytics, updater, or automatic model discovery. Provider requests contain the conversation and any project context Pi reads or creates through its tools. API keys are stored in macOS Keychain and delivered to a task worker only through its private stdin pipe. Settings, task metadata, and Pi sessions live in WackCode’s macOS application-data directory.
+WackCode has no account, backend, analytics, updater, or automatic model discovery. Provider requests contain the conversation and any project context Pi reads or creates through its tools. API keys are stored in a `secrets.json` file restricted to the current user inside WackCode’s macOS application-data directory, and delivered to a task worker only through its private stdin pipe. Settings, task metadata, and Pi sessions live in WackCode’s macOS application-data directory.
 
 Workers disable Pi telemetry, update checks, remote model-catalog refresh, cache warming, extensions, skills, prompt packages, themes, and project `.pi` configuration. Project instruction files such as `AGENTS.md` still load. The default `read`, `bash`, `edit`, and `write` tools execute with the current macOS account’s permissions; a selected folder or worktree is a working directory, not a sandbox.
 

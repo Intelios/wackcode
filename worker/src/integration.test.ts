@@ -115,6 +115,28 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
   response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
   const messages = Array.isArray(body.messages) ? body.messages as Array<{ role?: string }> : [];
   const hasToolResult = messages.some((message) => message.role === "tool");
+  if (authorization === "Bearer stream-secret") {
+    const chunks = ["Streaming ", "the answer ", "in pieces."];
+    let index = 0;
+    const timer = setInterval(() => {
+      if (index < chunks.length) {
+        response.write(`data: ${JSON.stringify({
+          id: `stream-${index}`, object: "chat.completion.chunk", created: index, model: "shared-model",
+          choices: [{ index: 0, delta: { role: "assistant", content: chunks[index] }, finish_reason: null }]
+        })}\n\n`);
+        index += 1;
+        return;
+      }
+      clearInterval(timer);
+      response.write(`data: ${JSON.stringify({
+        id: "stream-done", object: "chat.completion.chunk", created: 9, model: "shared-model",
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+        usage: { prompt_tokens: 4, completion_tokens: 6, total_tokens: 10 }
+      })}\n\n`);
+      response.end("data: [DONE]\n\n");
+    }, 60);
+    return;
+  }
   const suffix = authorization === "Bearer alpha-secret" ? "alpha" : "beta";
   const send = (value: unknown) => response.write(`data: ${JSON.stringify(value)}\n\n`);
   if (!hasToolResult) {
@@ -248,6 +270,25 @@ describe("Pi worker integration", () => {
     cleanup.push(() => reopened.worker.shutdown());
     expect(reopened.ready.snapshot?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha."))).toBe(true);
     expect(provider.requests).toHaveLength(requestCount);
+  });
+
+  it("streams partial assistant messages before the authoritative snapshot", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-stream-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(provider.baseUrl, "stream-secret", workspace, "stream-task");
+    cleanup.push(() => worker.shutdown());
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "stream-run", message: "Talk slowly." });
+
+    await worker.waitFor((output) => output.type === "partial", 8_000);
+    const firstPartial = worker.outputs.findIndex((output) => output.type === "partial");
+    const finalSnapshot = await worker.waitFor((output) =>
+      output.type === "snapshot" && output.snapshot?.messages.some((message) =>
+        message.blocks.some((block) => block.text === "Streaming the answer in pieces.")));
+    const finalIndex = worker.outputs.indexOf(finalSnapshot);
+    expect(firstPartial).toBeGreaterThan(-1);
+    expect(firstPartial).toBeLessThan(finalIndex);
   });
 
   it("cancels an in-flight provider stream without reporting cancellation as a worker failure", async () => {

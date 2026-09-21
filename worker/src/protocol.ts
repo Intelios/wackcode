@@ -51,6 +51,7 @@ export interface NormalizedBlock {
   toolCallId?: string;
   arguments?: unknown;
   isError?: boolean;
+  details?: unknown;
 }
 
 export interface NormalizedMessage {
@@ -81,6 +82,7 @@ export type WorkerOutput =
   | { type: "response"; taskId?: string; id: string; success: false; error: string }
   | { type: "ready"; taskId: string; snapshot: SessionSnapshot }
   | { type: "snapshot"; taskId: string; snapshot: SessionSnapshot }
+  | { type: "partial"; taskId: string; message: NormalizedMessage }
   | { type: "run_state"; taskId: string; runId?: string; state: "running" | "idle" | "stopping" | "interrupted" }
   | { type: "activity"; taskId: string; event: string; detail?: unknown }
   | { type: "worker_error"; taskId?: string; message: string };

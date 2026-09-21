@@ -32,6 +32,8 @@ let activeCredential: string | undefined;
 let stopRequested = false;
 let commandQueue = Promise.resolve();
 let snapshotTimer: NodeJS.Timeout | undefined;
+let partialTimer: NodeJS.Timeout | undefined;
+let pendingPartial: unknown;
 
 function send(output: WorkerOutput): void {
   process.stdout.write(`${JSON.stringify(output)}\n`);
@@ -92,6 +94,7 @@ function normalizeMessage(message: unknown, index: number): NormalizedMessage | 
       block.toolName = typeof raw.toolName === "string" ? raw.toolName : undefined;
       block.toolCallId = typeof raw.toolCallId === "string" ? raw.toolCallId : undefined;
       block.isError = raw.isError === true;
+      if (raw.details !== undefined) block.details = raw.details;
     }
   }
   const timestamp = typeof raw.timestamp === "number" ? raw.timestamp : undefined;
@@ -135,6 +138,34 @@ function scheduleSnapshot(): void {
     snapshotTimer = undefined;
     emitSnapshot();
   }, 32);
+}
+
+// Streaming text: forward the in-flight assistant message at ~60 fps instead of
+// reserializing the whole session. Full snapshots remain authoritative at message_end.
+function schedulePartial(message: unknown): void {
+  pendingPartial = message;
+  if (partialTimer) return;
+  partialTimer = setTimeout(() => {
+    partialTimer = undefined;
+    flushPartial();
+  }, 16);
+}
+
+function flushPartial(): void {
+  if (partialTimer) {
+    clearTimeout(partialTimer);
+    partialTimer = undefined;
+  }
+  if (!taskId || pendingPartial === undefined) return;
+  const message = normalizeMessage(pendingPartial, 0);
+  pendingPartial = undefined;
+  if (message) send({ type: "partial", taskId, message });
+}
+
+function dropPartial(): void {
+  if (partialTimer) clearTimeout(partialTimer);
+  partialTimer = undefined;
+  pendingPartial = undefined;
 }
 
 function modelDefinition(model: WorkerModel): Record<string, unknown> {
@@ -254,14 +285,20 @@ async function initialize(command: InitCommand): Promise<void> {
         send({ type: "worker_error", taskId: command.taskId, message: safeError(failed.errorMessage) });
       }
     }
-    if (
-      eventType === "message_update" ||
+    if (eventType === "message_update") {
+      schedulePartial(value.message);
+    } else if (
+      eventType === "message_start" ||
       eventType === "message_end" ||
       eventType === "tool_execution_end" ||
       eventType === "compaction_end"
-    ) scheduleSnapshot();
+    ) {
+      dropPartial();
+      scheduleSnapshot();
+    }
     if (eventType === "agent_settled") {
       activeRunId = undefined;
+      dropPartial();
       send({ type: "run_state", taskId: command.taskId, state: "idle" });
       emitSnapshot();
     }

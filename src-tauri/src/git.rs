@@ -59,6 +59,24 @@ pub fn create_worktree(
     Ok(destination.join(relative))
 }
 
+/// Best-effort removal of a worktree. A missing or detached worktree is not an error.
+pub fn remove_worktree(git_root: &Path, worktree_path: &Path) -> Result<(), String> {
+    let output = Command::new("git")
+        .args(["-C"])
+        .arg(git_root)
+        .args(["worktree", "remove", "--force"])
+        .arg(worktree_path)
+        .output()
+        .map_err(|error| format!("Could not start git: {error}"))?;
+    if output.status.success() { return Ok(()); }
+    let _ = Command::new("git").args(["-C"]).arg(git_root).args(["worktree", "prune"]).output();
+    if worktree_path.exists() {
+        fs::remove_dir_all(worktree_path).map_err(|error| format!("Could not remove worktree: {error}"))?;
+        let _ = Command::new("git").args(["-C"]).arg(git_root).args(["worktree", "prune"]).output();
+    }
+    Ok(())
+}
+
 pub fn changes(path: &Path) -> Result<GitChanges, String> {
     let info = inspect_project(path);
     let Some(root) = info.root else {

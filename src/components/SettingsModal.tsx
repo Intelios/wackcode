@@ -3,6 +3,8 @@ import { api } from "../api";
 import { mergeDiscoveredModels, modelIsReady } from "../model-utils";
 import type { ApiFormat, ModelRecord, ProviderRecord, SaveProviderInput, ThinkingLevel } from "../types";
 import { Icon } from "./Icons";
+import { ConfirmDialog } from "./ui/ConfirmDialog";
+import { Select } from "./ui/Select";
 
 const levels: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
@@ -44,6 +46,7 @@ export function SettingsModal({ providers, appDataPath, onClose, onSave, onDelet
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEffect(() => {
     const provider = providers.find((item) => item.id === selectedId);
@@ -118,7 +121,7 @@ export function SettingsModal({ providers, appDataPath, onClose, onSave, onDelet
   }
 
   async function removeProvider() {
-    if (!draft.id || !window.confirm(`Delete the “${draft.name}” connection and its saved API key?`)) return;
+    if (!draft.id) return;
     setBusy(true);
     setError(undefined);
     try {
@@ -145,11 +148,9 @@ export function SettingsModal({ providers, appDataPath, onClose, onSave, onDelet
           <button className={`settings-nav-item ${selectedId === "new" ? "active" : ""}`} onClick={() => setSelectedId("new")}>
             <Icon name="plus" /> New connection
           </button>
-          <div className="settings-privacy">
-            <strong>Local by design</strong>
-            <span>Settings live in</span>
-            <code title={appDataPath}>{appDataPath}</code>
-          </div>
+          <button className="settings-nav-item settings-nav-folder" title={appDataPath} onClick={() => void api.revealPath(appDataPath).catch(() => undefined)}>
+            <Icon name="folder" /> Data folder
+          </button>
         </aside>
 
         <div className="settings-content">
@@ -169,10 +170,17 @@ export function SettingsModal({ providers, appDataPath, onClose, onSave, onDelet
               </label>
               <label>
                 <span>API format</span>
-                <select value={draft.apiFormat} onChange={(event) => setDraft({ ...draft, apiFormat: event.target.value as ApiFormat })}>
-                  <option value="openai-completions">Chat Completions compatible</option>
-                  <option value="openai-responses">Responses compatible</option>
-                </select>
+                <Select
+                  className="settings-select"
+                  matchWidth
+                  value={draft.apiFormat}
+                  onChange={(value) => setDraft({ ...draft, apiFormat: value as ApiFormat })}
+                  options={[
+                    { value: "openai-completions", label: "Chat Completions compatible" },
+                    { value: "openai-responses", label: "Responses compatible" }
+                  ]}
+                  aria-label="API format"
+                />
               </label>
               <label className="wide-field">
                 <span>Base URL</span>
@@ -257,11 +265,21 @@ export function SettingsModal({ providers, appDataPath, onClose, onSave, onDelet
               {!error && notice && <span className="success-text">{notice}</span>}
               {!error && !notice && incomplete > 0 && <span>{incomplete} model{incomplete === 1 ? " needs" : "s need"} limits</span>}
             </div>
-            {draft.id && <button className="danger-button" disabled={busy} onClick={removeProvider}>Delete</button>}
+            {draft.id && <button className="danger-button" disabled={busy} onClick={() => setConfirmDelete(true)}>Delete</button>}
             <button className="primary-button" disabled={busy || !draft.name.trim() || !draft.baseUrl.trim()} onClick={save}>{busy ? "Working…" : "Save connection"}</button>
           </footer>
         </div>
       </section>
+      {confirmDelete && (
+        <ConfirmDialog
+          title={`Delete “${draft.name || "this connection"}”?`}
+          body="This removes the connection and its saved API key."
+          confirmLabel="Delete"
+          danger
+          onConfirm={removeProvider}
+          onCancel={() => setConfirmDelete(false)}
+        />
+      )}
     </div>
   );
 }

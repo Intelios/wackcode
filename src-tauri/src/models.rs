@@ -121,7 +121,9 @@ pub struct SaveProviderInput {
 #[serde(rename_all = "camelCase")]
 pub struct CreateTaskInput {
     pub project_id: String,
-    pub name: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
     pub use_worktree: bool,
     pub provider_id: String,
     pub model_id: String,

@@ -70,6 +70,7 @@ export interface NormalizedBlock {
   toolCallId?: string;
   arguments?: unknown;
   isError?: boolean;
+  details?: unknown;
 }
 
 export interface NormalizedMessage {
@@ -97,6 +98,7 @@ export interface SessionSnapshot {
 
 export type WorkerEvent =
   | { type: "ready" | "snapshot"; taskId: string; snapshot: SessionSnapshot }
+  | { type: "partial"; taskId: string; message: NormalizedMessage }
   | { type: "run_state"; taskId: string; runId?: string; state: TaskStatus }
   | { type: "activity"; taskId: string; event: string; detail?: Record<string, unknown> }
   | { type: "worker_error"; taskId?: string; message: string }
@@ -104,6 +106,7 @@ export type WorkerEvent =
 
 export interface TaskRuntime {
   snapshot?: SessionSnapshot;
+  partial?: NormalizedMessage;
   activity?: string;
   error?: string;
 }

@@ -166,7 +166,8 @@ pub fn create_task(
     state: State<'_, MetadataState>,
     input: CreateTaskInput,
 ) -> Result<TaskRecord, String> {
-    let name = required(&input.name, "Task name")?;
+    let name = input.name.as_deref().map(str::trim).filter(|value| !value.is_empty())
+        .unwrap_or("New chat").to_string();
     let (project, provider) = {
         let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
         let project = data.projects.iter().find(|project| project.id == input.project_id).cloned()
@@ -298,6 +299,107 @@ pub async fn archive_task(app: AppHandle, state: State<'_, MetadataState>, task_
 }
 
 #[tauri::command]
+pub fn rename_task(state: State<'_, MetadataState>, task_id: String, name: String) -> Result<TaskRecord, String> {
+    let name = required(&name, "Chat name")?;
+    state.mutate(|data| {
+        let task = data.tasks.iter_mut().find(|task| task.id == task_id).ok_or_else(|| "Chat not found".to_string())?;
+        task.name = name.clone();
+        task.updated_at = Utc::now().to_rfc3339();
+        Ok(task.clone())
+    })
+}
+
+#[tauri::command]
+pub async fn delete_task(app: AppHandle, state: State<'_, MetadataState>, task_id: String) -> Result<(), String> {
+    worker::terminate_worker(&app, &task_id, true).await?;
+    let (task, git_root) = state.mutate(|data| {
+        let index = data.tasks.iter().position(|task| task.id == task_id).ok_or_else(|| "Chat not found".to_string())?;
+        let task = data.tasks.remove(index);
+        let git_root = data.projects.iter().find(|project| project.id == task.project_id)
+            .and_then(|project| project.git_root.clone());
+        Ok((task, git_root))
+    })?;
+    cleanup_task_files(&app, &task, git_root.as_deref());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn convert_task_to_worktree(app: AppHandle, state: State<'_, MetadataState>, task_id: String) -> Result<TaskRecord, String> {
+    let (task, project) = {
+        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        let task = data.tasks.iter().find(|task| task.id == task_id).cloned().ok_or_else(|| "Chat not found".to_string())?;
+        let project = data.projects.iter().find(|project| project.id == task.project_id).cloned()
+            .ok_or_else(|| "Project not found".to_string())?;
+        (task, project)
+    };
+    if task.uses_worktree { return Ok(task); }
+    if task.session_file.is_some() {
+        return Err("Worktrees can only be enabled before the first message".into());
+    }
+    if matches!(task.status, TaskStatus::Running | TaskStatus::Stopping) {
+        return Err("Wait for this chat to stop before moving it".into());
+    }
+    if !project.git_has_head {
+        return Err("Worktrees require a Git repository with at least one commit".into());
+    }
+    let git_root = project.git_root.as_deref().ok_or_else(|| "This project is not inside a Git repository".to_string())?;
+    let destination = app.path().app_data_dir().map_err(|error| error.to_string())?
+        .join("worktrees").join(&task.id);
+    let branch_name = format!("wackcode/{}-{}", slug(&task.name), &task.id[..8]);
+    let workspace = git::create_worktree(Path::new(&project.path), Path::new(git_root), &destination, &branch_name)?;
+    let updated = state.mutate(|data| {
+        let record = data.tasks.iter_mut().find(|item| item.id == task_id).ok_or_else(|| "Chat not found".to_string())?;
+        record.workspace_path = workspace.to_string_lossy().into_owned();
+        record.worktree_path = Some(destination.to_string_lossy().into_owned());
+        record.branch = Some(branch_name.clone());
+        record.uses_worktree = true;
+        record.updated_at = Utc::now().to_rfc3339();
+        Ok(record.clone())
+    })?;
+    worker::terminate_worker(&app, &task_id, true).await?;
+    Ok(updated)
+}
+
+#[tauri::command]
+pub async fn remove_project(app: AppHandle, state: State<'_, MetadataState>, project_id: String) -> Result<(), String> {
+    let tasks: Vec<TaskRecord> = {
+        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        if data.tasks.iter().any(|task| task.project_id == project_id && !task.archived) {
+            return Err("This project still has chats. Delete or archive them first.".into());
+        }
+        if !data.projects.iter().any(|project| project.id == project_id) {
+            return Err("Project not found".into());
+        }
+        data.tasks.iter().filter(|task| task.project_id == project_id).cloned().collect()
+    };
+    for task in &tasks { worker::terminate_worker(&app, &task.id, true).await?; }
+    let (git_root, removed) = {
+        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        let git_root = data.projects.iter().find(|project| project.id == project_id)
+            .and_then(|project| project.git_root.clone());
+        (git_root, tasks.iter().map(|task| task.id.clone()).collect::<HashSet<_>>())
+    };
+    state.mutate(|data| {
+        data.projects.retain(|project| project.id != project_id);
+        data.tasks.retain(|task| !removed.contains(&task.id));
+        Ok(())
+    })?;
+    for task in &tasks { cleanup_task_files(&app, task, git_root.as_deref()); }
+    Ok(())
+}
+
+fn cleanup_task_files(app: &AppHandle, task: &TaskRecord, git_root: Option<&str>) {
+    if let Ok(app_data) = app.path().app_data_dir() {
+        let _ = std::fs::remove_dir_all(app_data.join("agent").join(&task.id));
+        let _ = std::fs::remove_dir_all(app_data.join("sessions").join(&task.id));
+    }
+    if let Some(worktree_path) = task.worktree_path.as_deref() {
+        let repo = git_root.map(Path::new).unwrap_or_else(|| Path::new(&task.workspace_path));
+        let _ = git::remove_worktree(repo, Path::new(worktree_path));
+    }
+}
+
+#[tauri::command]
 pub fn git_changes(state: State<'_, MetadataState>, task_id: String) -> Result<GitChanges, String> {
     let workspace = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?
         .tasks.iter().find(|task| task.id == task_id).map(|task| task.workspace_path.clone())
@@ -312,6 +414,12 @@ pub fn reveal_task(state: State<'_, MetadataState>, task_id: String) -> Result<(
         .ok_or_else(|| "Task not found".to_string())?;
     let status = Command::new("open").arg(&workspace).status().map_err(|error| error.to_string())?;
     if status.success() { Ok(()) } else { Err("macOS could not reveal this workspace".into()) }
+}
+
+#[tauri::command]
+pub fn reveal_path(path: String) -> Result<(), String> {
+    let status = Command::new("open").arg(&path).status().map_err(|error| error.to_string())?;
+    if status.success() { Ok(()) } else { Err("macOS could not reveal that path".into()) }
 }
 
 fn task_and_provider(state: &State<'_, MetadataState>, task_id: &str) -> Result<(TaskRecord, ProviderRecord), String> {

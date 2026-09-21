@@ -47,10 +47,9 @@ export function ChangesPanel({ changes, loading, width, onWidthChange, onClose, 
     <aside className="changes-panel" style={{ width }}>
       <div className="panel-resizer" onPointerDown={startResize} />
       <header className="changes-header">
-        <div><span className="eyebrow">Workspace</span><h3>Changes <span>{files.length}</span></h3></div>
+        <div><h3>Changes <span>{files.length}</span></h3></div>
         <div><button className="icon-button" onClick={onRefresh} aria-label="Refresh changes"><Icon name="refresh" className={loading ? "spinning" : ""} /></button><button className="icon-button" onClick={onClose} aria-label="Close changes panel">×</button></div>
       </header>
-      <div className="changes-scope">All current workspace changes</div>
       {!changes?.isGit ? (
         <div className="panel-empty"><Icon name="git" /><strong>No Git repository</strong><span>Chat and editing still work. Changes can’t be summarized here.</span></div>
       ) : files.length === 0 ? (

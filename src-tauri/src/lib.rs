@@ -32,8 +32,13 @@ pub fn run() {
             commands::prompt,
             commands::stop_task,
             commands::archive_task,
+            commands::rename_task,
+            commands::delete_task,
+            commands::convert_task_to_worktree,
+            commands::remove_project,
             commands::git_changes,
             commands::reveal_task,
+            commands::reveal_path,
         ])
         .build(tauri::generate_context!())
         .expect("error while building WackCode");

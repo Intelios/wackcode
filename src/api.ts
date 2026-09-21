@@ -17,12 +17,16 @@ export const api = {
   addProject: (path: string) => invoke<ProjectRecord>("add_project", { path }),
   createTask: (input: {
     projectId: string;
-    name: string;
-    useWorktree: boolean;
+    name?: string;
+    useWorktree?: boolean;
     providerId: string;
     modelId: string;
     thinkingLevel: ThinkingLevel;
   }) => invoke<TaskRecord>("create_task", { input }),
+  renameTask: (taskId: string, name: string) => invoke<TaskRecord>("rename_task", { taskId, name }),
+  deleteTask: (taskId: string) => invoke<void>("delete_task", { taskId }),
+  convertToWorktree: (taskId: string) => invoke<TaskRecord>("convert_task_to_worktree", { taskId }),
+  removeProject: (projectId: string) => invoke<void>("remove_project", { projectId }),
   configureTask: (input: {
     taskId: string;
     providerId: string;
@@ -40,5 +44,6 @@ export const api = {
   stopTask: (taskId: string) => invoke<void>("stop_task", { taskId }),
   archiveTask: (taskId: string) => invoke<TaskRecord>("archive_task", { taskId }),
   gitChanges: (taskId: string) => invoke<GitChanges>("git_changes", { taskId }),
-  revealTask: (taskId: string) => invoke<void>("reveal_task", { taskId })
+  revealTask: (taskId: string) => invoke<void>("reveal_task", { taskId }),
+  revealPath: (path: string) => invoke<void>("reveal_path", { path })
 };

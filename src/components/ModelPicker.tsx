@@ -13,12 +13,16 @@ interface ModelPickerProps {
   onConfigure: (patch: { providerId?: string; modelId?: string; thinkingLevel?: ThinkingLevel }) => void;
 }
 
+const LEVEL_ORDER: Record<ThinkingLevel, number> = { off: 0, minimal: 1, low: 2, medium: 3, high: 4, xhigh: 5, max: 6 };
+
 export function ModelPicker({ providers, providerId, modelId, thinkingLevel, disabled, onConfigure }: ModelPickerProps) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const provider = providers.find((item) => item.id === providerId);
   const model = provider?.models.find((item) => item.id === modelId);
-  const levels: ThinkingLevel[] = model?.thinkingLevels.length ? model.thinkingLevels : ["off"];
+  const levels: ThinkingLevel[] = (model?.thinkingLevels.length ? model.thinkingLevels : (["off"] as ThinkingLevel[]))
+    .slice()
+    .sort((a, b) => LEVEL_ORDER[a] - LEVEL_ORDER[b]);
   const label = model ? `${model.name || model.id}` : "Choose model";
   const showLevels = levels.length > 1;
 

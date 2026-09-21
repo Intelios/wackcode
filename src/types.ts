@@ -14,6 +14,26 @@ export interface PlanState {
   plan?: string;
 }
 
+/** One task in the built-in todo extension's task list. */
+export type TodoStatus = "pending" | "in_progress" | "completed" | "deleted";
+
+export interface TodoTask {
+  id: number;
+  subject: string;
+  description?: string;
+  /** Present-continuous label shown while status is in_progress. */
+  activeForm?: string;
+  status: TodoStatus;
+  /** Ids of tasks that must complete before this one can start. */
+  blockedBy?: number[];
+}
+
+/** Todo list state published by the worker's built-in todo extension. */
+export interface TodoState {
+  /** Carries tombstones too; hiding deleted tasks is the renderer's concern. */
+  tasks: TodoTask[];
+}
+
 /** One option in an ask_user_question question. */
 export interface AskQuestionOption {
   label: string;
@@ -206,6 +226,7 @@ export interface SessionSnapshot {
   tools: ToolCatalogEntry[];
   activeTools: string[];
   planState?: PlanState;
+  todoState?: TodoState;
 }
 
 /** A question an extension asked, mirrored from the worker protocol. */
@@ -232,7 +253,8 @@ export type WorkerEvent =
   | ({ type: "extension_ui_request" } & ExtensionUIRequest)
   | ({ type: "extension_notice"; taskId: string } & ExtensionNotice)
   | { type: "extensions_loaded"; taskId: string; loaded: string[]; errors: { path: string; error: string }[] }
-  | ({ type: "plan_state"; taskId: string } & PlanState);
+  | ({ type: "plan_state"; taskId: string } & PlanState)
+  | ({ type: "todo_state"; taskId: string } & TodoState);
 
 export interface TaskRuntime {
   snapshot?: SessionSnapshot;
@@ -243,6 +265,8 @@ export interface TaskRuntime {
   notices?: ExtensionNotice[];
   /** Latest Plan mode state from the worker; falls back to `TaskRecord.mode` before `ready`. */
   planState?: PlanState;
+  /** Latest todo list from the worker's built-in todo extension. */
+  todoState?: TodoState;
 }
 
 export interface GitChangeFile {

@@ -1,4 +1,4 @@
-import type { AskQuestion, PlanState, QuestionAnswer } from "../protocol.js";
+import type { AskQuestion, PlanState, QuestionAnswer, TodoState } from "../protocol.js";
 
 /**
  * The bridge built-in extensions use to reach the desktop UI. Implemented by the worker
@@ -16,4 +16,6 @@ export interface BuiltinHost {
   askQuestions(questions: AskQuestion[]): Promise<QuestionAnswer[] | undefined>;
   /** Publish Plan mode state so the desktop can render the toggle and review card. */
   publishPlanState(state: PlanState): void;
+  /** Publish the todo list so the desktop can render the panel above the composer. */
+  publishTodoState(state: TodoState): void;
 }

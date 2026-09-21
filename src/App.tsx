@@ -30,6 +30,7 @@ import { ProjectBar } from "./components/ProjectBar";
 import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar, type ProjectAction, type TaskAction } from "./components/Sidebar";
 import { Transcript } from "./components/Transcript";
+import { TodoPanel } from "./components/TodoPanel";
 import { InlineDialog, type ExtensionUIResponse } from "./components/InlineDialog";
 import type { PlanAction } from "./components/PlanCard";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
@@ -161,7 +162,7 @@ export default function App() {
       const taskId = payload.taskId;
       if (!taskId) return;
       if (payload.type === "ready" || payload.type === "snapshot") {
-        patchRuntime(taskId, { snapshot: payload.snapshot, planState: payload.snapshot.planState, partial: undefined, error: undefined });
+        patchRuntime(taskId, { snapshot: payload.snapshot, planState: payload.snapshot.planState, todoState: payload.snapshot.todoState, partial: undefined, error: undefined });
         if (payload.snapshot.planState) patchTask(taskId, { mode: payload.snapshot.planState.mode });
         if (payload.snapshot.sessionFile) patchTask(taskId, { sessionFile: payload.snapshot.sessionFile });
         const tools = payload.snapshot.tools;
@@ -190,6 +191,8 @@ export default function App() {
           }
         });
         patchTask(taskId, { mode: payload.mode });
+      } else if (payload.type === "todo_state") {
+        patchRuntime(taskId, { todoState: { tasks: payload.tasks } });
       } else if (payload.type === "extension_ui_request") {
         setExtensionRequests((current) => [...current, payload]);
       } else if (payload.type === "extension_notice") {
@@ -733,6 +736,11 @@ export default function App() {
               requests={extensionRequests}
               selectedTaskId={selectedTask.id}
               onRespond={handleExtensionRespond}
+            />
+            <TodoPanel
+              key={selectedTask.id}
+              tasks={runtime?.todoState?.tasks}
+              busy={selectedTask.status === "running" || selectedTask.status === "stopping"}
             />
             <Composer
               status={selectedTask.status}

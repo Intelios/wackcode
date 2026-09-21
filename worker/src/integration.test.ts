@@ -20,6 +20,7 @@ interface Output {
   phase?: string;
   plan?: string;
   questions?: Array<{ id: string; header: string; question: string; multiSelect?: boolean; options: Array<{ label: string; description: string }> }>;
+  tasks?: Array<{ id: number; subject: string; status: string; activeForm?: string; blockedBy?: number[] }>;
   errors?: Array<{ path: string; error: string }>;
   snapshot?: {
     sessionFile?: string;
@@ -27,6 +28,7 @@ interface Output {
     tools?: Array<{ name: string; description: string; source: { kind: string; packageId?: string }; available: boolean; unavailableReason?: string }>;
     activeTools?: string[];
     planState?: { mode: string; phase: string; plan?: string };
+    todoState?: { tasks: Array<{ id: number; subject: string; status: string }> };
   };
 }
 
@@ -182,7 +184,9 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
         })]
       : lastUserText.startsWith("finish plan")
         ? [toolCall("plan_mode_complete", { plan: "# The plan\n\n- Ship it" })]
-        : [toolCall("write", { path: `${suffix}.txt`, content: `changed by ${suffix}\n` })];
+        : lastUserText.startsWith("todo:")
+          ? [toolCall("todo", { action: "create", subject: "Ship the thing" })]
+          : [toolCall("write", { path: `${suffix}.txt`, content: `changed by ${suffix}\n` })];
     for (const [index, call] of calls.entries()) {
       send({
         id: `tool-${suffix}`,
@@ -399,9 +403,9 @@ describe("Pi worker integration", () => {
     cleanup.push(() => worker.shutdown());
 
     // Every tool Pi ships is in the registry, including the three the worker never used to
-    // enable, plus WackCode's two built-in extension tools.
+    // enable, plus WackCode's three built-in extension tools.
     const names = (ready.snapshot?.tools ?? []).map((tool) => tool.name).sort();
-    expect(names).toEqual(["ask_user_question", "bash", "edit", "find", "grep", "ls", "plan_mode_complete", "read", "write"]);
+    expect(names).toEqual(["ask_user_question", "bash", "edit", "find", "grep", "ls", "plan_mode_complete", "read", "todo", "write"]);
     expect(ready.snapshot?.tools?.every((tool) => tool.source.kind === "builtin" || tool.source.kind === "wackcode")).toBe(true);
     // The denylist from `init` is applied before the first turn, and tools whose external
     // binary is missing are never offered even though they stay listed in the catalogue.
@@ -422,16 +426,16 @@ describe("Pi worker integration", () => {
       (request.body.tools as Array<{ function: { name: string } }> ?? []).map((tool) => tool.function.name).sort();
     expect(offered(provider.requests[0])).toEqual(expectedActive);
 
-    // Toggling tools takes effect on the next turn with no worker restart. The two wackcode
-    // tools are exempt from the denylist, so five tools stay active.
+    // Toggling tools takes effect on the next turn with no worker restart. The wackcode
+    // tools are exempt from the denylist, so six tools stay active.
     worker.send({ id: crypto.randomUUID(), type: "set_tools", disabledTools: ["bash", "grep", "ls", "find"] });
-    await worker.waitFor((output) => output.type === "snapshot" && output.snapshot?.activeTools?.length === 5);
+    await worker.waitFor((output) => output.type === "snapshot" && output.snapshot?.activeTools?.length === 6);
     // `find`/`grep` availability varies by host, so assert the five that never depend on a binary.
     const beforeSecondRun = provider.requests.length;
     worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-2", message: "Again." });
     await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.snapshot === undefined && provider.requests.length > beforeSecondRun);
 
-    expect(offered(provider.requests[beforeSecondRun])).toEqual(["ask_user_question", "edit", "plan_mode_complete", "read", "write"]);
+    expect(offered(provider.requests[beforeSecondRun])).toEqual(["ask_user_question", "edit", "plan_mode_complete", "read", "todo", "write"]);
     expect(worker.child.exitCode).toBeNull();
   });
 
@@ -512,7 +516,7 @@ describe("Pi worker integration", () => {
 });
 
 describe("built-in extensions", () => {
-  it("registers ask_user_question and plan_mode_complete as wackcode tools that ignore the denylist", async () => {
+  it("registers the built-in tools as wackcode sources that ignore the denylist", async () => {
     const provider = await startMockProvider();
     cleanup.push(provider.close);
     const workspace = await mkdtemp(join(tmpdir(), "wackcode-builtin-"));
@@ -520,17 +524,20 @@ describe("built-in extensions", () => {
     // Even a denylist that names them cannot switch built-in tools off.
     const { worker, ready } = await initializeWorker(
       provider.baseUrl, "alpha-secret", workspace, "builtin-task", undefined,
-      ["ask_user_question", "plan_mode_complete"]
+      ["ask_user_question", "plan_mode_complete", "todo"]
     );
     cleanup.push(() => worker.shutdown());
 
     const catalog = ready.snapshot?.tools ?? [];
     const ask = catalog.find((tool) => tool.name === "ask_user_question");
     const complete = catalog.find((tool) => tool.name === "plan_mode_complete");
+    const todo = catalog.find((tool) => tool.name === "todo");
     expect(ask?.source.kind).toBe("wackcode");
     expect(complete?.source.kind).toBe("wackcode");
+    expect(todo?.source.kind).toBe("wackcode");
     expect(ready.snapshot?.activeTools).toContain("ask_user_question");
     expect(ready.snapshot?.activeTools).toContain("plan_mode_complete");
+    expect(ready.snapshot?.activeTools).toContain("todo");
     expect(ready.snapshot?.planState?.mode).toBe("build");
   });
 
@@ -582,6 +589,68 @@ describe("built-in extensions", () => {
       (message) => (message as { role?: string }).role === "tool"
     ) as { content?: string } | undefined;
     expect(toolResult?.content).toContain("dismissed");
+  });
+
+  it("publishes todo_state with a replay snapshot in every result, and restores across a restart", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-todo-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const first = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "todo-task");
+    cleanup.push(() => first.worker.shutdown());
+
+    first.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "todo: start the work" });
+    const published = await first.worker.waitFor((output) => output.type === "todo_state" && output.tasks?.length === 1);
+    expect(published.tasks?.[0]).toMatchObject({ id: 1, subject: "Ship the thing", status: "pending" });
+    await first.worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+
+    // The provider wire only sees the formatted text...
+    const wireResult = provider.requests[1].body.messages.find(
+      (message) => (message as { role?: string }).role === "tool"
+    ) as { content?: string } | undefined;
+    expect(wireResult?.content).toContain("Created #1: Ship the thing (pending)");
+
+    // ...while the session's tool result embeds the full list — that snapshot is the
+    // whole persistence layer.
+    const withTodo = await first.worker.waitFor((output) =>
+      output.type === "snapshot" &&
+      output.snapshot?.messages.some((message) => message.blocks.some((block) => block.toolName === "todo" && block.details !== undefined)) === true
+    );
+    const details = withTodo.snapshot?.messages
+      .flatMap((message) => message.blocks)
+      .find((block) => block.toolName === "todo" && block.details !== undefined)
+      ?.details as { version?: number; tasks?: unknown[]; nextId?: number } | undefined;
+    expect(details?.version).toBe(1);
+    expect(details?.nextId).toBe(2);
+    expect(details?.tasks).toHaveLength(1);
+    const sessionFile = first.ready.snapshot?.sessionFile;
+    expect(sessionFile).toBeTruthy();
+    await first.worker.shutdown();
+
+    // No disk writes: the list is replayed from the branch after the restart.
+    const second = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "todo-task", sessionFile);
+    cleanup.push(() => second.worker.shutdown());
+    expect(second.ready.snapshot?.todoState?.tasks).toMatchObject([
+      { id: 1, subject: "Ship the thing", status: "pending" }
+    ]);
+  });
+
+  it("stays usable in Plan mode — it mutates only its own list, never the workspace", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-todo-plan-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "todo-plan-task", undefined, undefined, undefined, "plan"
+    );
+    cleanup.push(() => worker.shutdown());
+    await worker.waitFor((output) => output.type === "plan_state" && output.mode === "plan");
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "todo: plan the work" });
+    const published = await worker.waitFor((output) => output.type === "todo_state" && output.tasks?.length === 1);
+    expect(published.tasks?.[0]?.subject).toBe("Ship the thing");
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    expect(worker.outputs.some((output) => output.type === "worker_error")).toBe(false);
   });
 });
 

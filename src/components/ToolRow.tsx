@@ -3,7 +3,7 @@ import type { NormalizedBlock } from "../types";
 import { summarizeTool } from "../tool-utils";
 import { Icon } from "./Icons";
 
-const TOOL_ICONS: Record<string, "file" | "pencil" | "terminal" | "search" | "question" | "brain"> = {
+const TOOL_ICONS: Record<string, "file" | "pencil" | "terminal" | "search" | "question" | "brain" | "checklist"> = {
   read: "file",
   edit: "pencil",
   write: "file",
@@ -12,7 +12,8 @@ const TOOL_ICONS: Record<string, "file" | "pencil" | "terminal" | "search" | "qu
   find: "search",
   ls: "search",
   ask_user_question: "question",
-  plan_mode_complete: "brain"
+  plan_mode_complete: "brain",
+  todo: "checklist"
 };
 
 function DiffLines({ diff }: { diff: string }) {

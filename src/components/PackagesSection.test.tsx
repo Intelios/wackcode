@@ -122,7 +122,7 @@ describe("PackagesSection built-ins", () => {
   it("lists the compiled-in extensions with pinned-on, disabled toggles even with no packages", () => {
     renderSection([]);
     expect(screen.getByRole("heading", { name: "Built-In" })).toBeInTheDocument();
-    for (const name of ["Plan Mode", "Ask User Questions", "plan_mode_complete", "ask_user_question"]) {
+    for (const name of ["Plan Mode", "Ask User Questions", "Todo List", "plan_mode_complete", "ask_user_question", "todo"]) {
       const toggle = screen.getByRole("switch", { name });
       expect(toggle).toBeDisabled();
       expect(toggle).toHaveAttribute("aria-checked", "true");

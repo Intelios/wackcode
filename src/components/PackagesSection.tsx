@@ -29,6 +29,12 @@ const BUILTIN_EXTENSIONS = [
     description:
       "Lets the agent ask structured multiple-choice questions in a native dialog instead of guessing. Available in every mode.",
     tools: ["ask_user_question"]
+  },
+  {
+    name: "Todo List",
+    description:
+      "A live task list the agent keeps up to date while it works, shown above the composer. Rebuilt from the conversation, so it survives restarts and compaction.",
+    tools: ["todo"]
   }
 ] as const;
 

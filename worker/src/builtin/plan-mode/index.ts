@@ -10,6 +10,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { PlanState, TaskMode } from "../../protocol.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../ask-user-question.js";
 import type { BuiltinHost } from "../host.js";
+import { TODO_TOOL_NAME } from "../todo/types.js";
 import {
   PLAN_MODE_COMPLETE_PARAMS,
   PLAN_MODE_COMPLETE_TOOL_NAME,
@@ -144,8 +145,13 @@ export function createPlanModeExtension(host: BuiltinHost) {
 
     // The runtime read-only policy. The prompt explains the rules; this enforces them.
     pi.on("tool_call", (event, ctx) => {
+      // Built-in helpers always pass while planning. `todo` mutates only its own in-memory
+      // list, never the workspace, so tracking a task list during planning stays on the
+      // right side of the read-only policy.
       const helper =
-        event.toolName === ASK_USER_QUESTION_TOOL_NAME || event.toolName === PLAN_MODE_COMPLETE_TOOL_NAME;
+        event.toolName === ASK_USER_QUESTION_TOOL_NAME ||
+        event.toolName === PLAN_MODE_COMPLETE_TOOL_NAME ||
+        event.toolName === TODO_TOOL_NAME;
       if (!enabled) {
         return event.toolName === PLAN_MODE_COMPLETE_TOOL_NAME
           ? { block: true, reason: "plan_mode_complete is only available while Plan mode is active." }

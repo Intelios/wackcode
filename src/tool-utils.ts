@@ -95,6 +95,8 @@ export function summarizeTool(call: NormalizedBlock, result?: NormalizedBlock): 
     }
     case "plan_mode_complete":
       return { kind: "other", activeVerb: "Submitting plan", doneVerb: "Plan submitted", subject: "" };
+    case "todo":
+      return { kind: "other", activeVerb: "Updating todos", doneVerb: "Todos updated", subject: str(toolArgs.subject) };
     default:
       return { kind: "other", activeVerb: name, doneVerb: name, subject: "" };
   }

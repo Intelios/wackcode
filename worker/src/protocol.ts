@@ -15,6 +15,28 @@ export interface PlanState {
   plan?: string;
 }
 
+/** One task in the built-in todo extension's task list. */
+export type TodoStatus = "pending" | "in_progress" | "completed" | "deleted";
+
+export interface TodoTask {
+  id: number;
+  /** Short imperative subject line. */
+  subject: string;
+  /** Long-form detail. */
+  description?: string;
+  /** Present-continuous label shown while status is in_progress. */
+  activeForm?: string;
+  status: TodoStatus;
+  /** Ids of tasks that must complete before this one can start. */
+  blockedBy?: number[];
+}
+
+/** Todo list state published by the built-in todo extension. */
+export interface TodoState {
+  /** Non-deleted filtering is the renderer's concern; the list carries tombstones too. */
+  tasks: TodoTask[];
+}
+
 /** One option in an ask_user_question question. */
 export interface AskQuestionOption {
   /** Short choice label (1-5 words). */
@@ -180,6 +202,7 @@ export interface SessionSnapshot {
   tools: ToolCatalogEntry[];
   activeTools: string[];
   planState?: PlanState;
+  todoState?: TodoState;
 }
 
 /** An extension asking the user something. Mirrors Pi's own RPC dialog surface. */
@@ -202,4 +225,5 @@ export type WorkerOutput =
   | ({ type: "extension_ui_request"; taskId: string; requestId: string } & ExtensionUIRequest)
   | { type: "extension_notice"; taskId: string; message: string; level: "info" | "warning" | "error" }
   | { type: "extensions_loaded"; taskId: string; loaded: string[]; errors: { path: string; error: string }[] }
-  | { type: "plan_state"; taskId: string } & PlanState;
+  | { type: "plan_state"; taskId: string } & PlanState
+  | ({ type: "todo_state"; taskId: string } & TodoState);

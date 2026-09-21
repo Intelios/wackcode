@@ -62,6 +62,9 @@ const builtinHost: BuiltinHost = {
     ),
   publishPlanState: (state) => {
     if (taskId) send({ type: "plan_state", taskId, ...state });
+  },
+  publishTodoState: (state) => {
+    if (taskId) send({ type: "todo_state", taskId, tasks: state.tasks });
   }
 };
 const builtins = createBuiltinExtensions(builtinHost);
@@ -211,8 +214,8 @@ function toolCatalog(): ToolCatalogEntry[] {
     const info = tool.sourceInfo as { source?: string; path?: string } | undefined;
     const origin = info?.source;
     const builtin = origin === "builtin" || origin === "sdk";
-    // Inline factories are WackCode's own built-in extensions, e.g. ask_user_question and
-    // plan_mode_complete. They are neither Pi builtins nor user-installed packages.
+    // Inline factories are WackCode's own built-in extensions, e.g. ask_user_question,
+    // plan_mode_complete, and todo. They are neither Pi builtins nor user-installed packages.
     const wackcode = origin === "inline";
     const binary = TOOL_BINARIES[tool.name];
     const available = !binary || hasBinary(binary);
@@ -262,7 +265,8 @@ function getSnapshot(): SessionSnapshot {
     model: model ? { provider: model.provider, id: model.id, name: model.name } : undefined,
     tools: toolCatalog(),
     activeTools: session.getActiveToolNames(),
-    planState: builtins.planMode.getState()
+    planState: builtins.planMode.getState(),
+    todoState: builtins.todo.getState()
   };
 }
 
@@ -458,7 +462,7 @@ async function initialize(command: InitCommand): Promise<void> {
     additionalSkillPaths: resources?.skills ?? [],
     additionalPromptTemplatePaths: resources?.prompts ?? [],
     additionalThemePaths: resources?.themes ?? [],
-    // WackCode's own extensions (ask_user_question, Plan mode). Factories are not paths, so
+    // WackCode's own extensions (ask_user_question, Plan mode, todo). Factories are not paths, so
     // they bypass the package trust machinery by construction and load even with noExtensions.
     extensionFactories: builtins.factories
   });

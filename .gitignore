@@ -14,3 +14,4 @@ src-tauri/resources/worker/
 # Test output
 coverage/
 .vitest/
+todo.md

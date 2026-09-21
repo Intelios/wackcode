@@ -15,7 +15,7 @@ interface PopoverProps {
 
 export function Popover({ anchor, open, onClose, side = "bottom", align = "start", offset = 6, matchWidth, className, children }: PopoverProps) {
   const panelRef = useRef<HTMLDivElement>(null);
-  const [style, setStyle] = useState<React.CSSProperties>({ visibility: "hidden" });
+  const [style, setStyle] = useState<React.CSSProperties>({ position: "fixed", top: 0, left: 0, visibility: "hidden" });
 
   useLayoutEffect(() => {
     if (!open) return;

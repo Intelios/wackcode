@@ -1,4 +1,4 @@
-import { useId, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ProviderRecord, ThinkingLevel } from "../types";
 import { modelIsReady } from "../model-utils";
 import { Icon } from "./Icons";
@@ -24,6 +24,21 @@ export interface ReasoningToggleProps {
 }
 
 const LEVEL_ORDER: Record<ThinkingLevel, number> = { off: 0, minimal: 1, low: 2, medium: 3, high: 4, xhigh: 5, max: 6 };
+
+const MAX_FX_DOTS = [
+  { left: "6%", top: "30%", size: 3, dur: "3.4s", delay: "-0.4s" },
+  { left: "13%", top: "64%", size: 2.4, dur: "2.6s", delay: "-1.8s" },
+  { left: "21%", top: "42%", size: 3.4, dur: "3.9s", delay: "-2.6s" },
+  { left: "30%", top: "58%", size: 2.2, dur: "2.9s", delay: "-0.9s" },
+  { left: "38%", top: "28%", size: 3, dur: "3.1s", delay: "-2.1s" },
+  { left: "47%", top: "66%", size: 2.6, dur: "2.4s", delay: "-1.2s" },
+  { left: "56%", top: "36%", size: 3.4, dur: "3.7s", delay: "-3s" },
+  { left: "64%", top: "56%", size: 2.2, dur: "2.7s", delay: "-0.2s" },
+  { left: "72%", top: "30%", size: 3, dur: "3.2s", delay: "-1.5s" },
+  { left: "81%", top: "62%", size: 2.6, dur: "2.5s", delay: "-2.3s" },
+  { left: "90%", top: "40%", size: 3.2, dur: "3.6s", delay: "-0.7s" },
+  { left: "96%", top: "55%", size: 2.4, dur: "2.8s", delay: "-1.9s" }
+];
 
 export function ModelPicker({
   providers,
@@ -172,7 +187,7 @@ export function ReasoningToggle({
 }: ReasoningToggleProps) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const sliderId = useId();
+  const thumbRef = useRef<HTMLDivElement>(null);
 
   const provider = providers.find((item) => item.id === providerId);
   const model = provider?.models.find((item) => item.id === modelId);
@@ -180,22 +195,40 @@ export function ReasoningToggle({
     .slice()
     .sort((a, b) => LEVEL_ORDER[a] - LEVEL_ORDER[b]);
 
+  const activeLevel: ThinkingLevel = levels.includes(thinkingLevel) ? thinkingLevel : levels[0] ?? "off";
+  const currentIndex = Math.max(0, levels.indexOf(activeLevel));
+
+  // Little "pop" on the thumb whenever the level changes (and when the popover opens)
+  useEffect(() => {
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) return;
+    thumbRef.current?.animate?.(
+      [{ transform: "scale(.72)" }, { transform: "scale(1.14)" }, { transform: "scale(1)" }],
+      { duration: 320, easing: "cubic-bezier(.34, 1.4, .64, 1)" }
+    );
+  }, [currentIndex, open]);
+
   // Only visible when the selected model supports reasoning (more than just "off")
   if (levels.length <= 1) {
     return null;
   }
 
-  const activeLevel: ThinkingLevel = levels.includes(thinkingLevel) ? thinkingLevel : levels[0] ?? "off";
-  const currentIndex = Math.max(0, levels.indexOf(activeLevel));
   const isReasoningOn = activeLevel !== "off";
-  const percent = levels.length > 1 ? (currentIndex / (levels.length - 1)) * 100 : 0;
+  const isTopLevel = currentIndex === levels.length - 1;
+  const position = currentIndex / (levels.length - 1);
+
+  function pick(idx: number) {
+    const nextLevel = levels[idx];
+    if (nextLevel) {
+      onConfigure({ thinkingLevel: nextLevel });
+    }
+  }
 
   return (
     <>
       <button
         ref={triggerRef}
         type="button"
-        className={`model-pill reasoning-toggle ${isReasoningOn ? "active" : ""}`}
+        className={`model-pill reasoning-toggle${isReasoningOn ? " active" : ""}${isTopLevel ? " at-max" : ""}`}
         disabled={disabled}
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -214,48 +247,65 @@ export function ReasoningToggle({
         align="start"
         className="reasoning-pop"
       >
-        <div className="reasoning-panel">
+        <div className={`reasoning-panel${isTopLevel ? " at-max" : ""}`}>
           <div className="reasoning-header">
-            <span className="reasoning-title">Reasoning effort</span>
-            <span className="reasoning-badge">{activeLevel}</span>
+            <Icon name="brain" className="reasoning-head-icon" />
+            <div className="reasoning-head-text">
+              <span key={activeLevel} className={`reasoning-level-name${isReasoningOn ? " on" : ""}`}>{activeLevel}</span>
+              <span className="reasoning-model-sub">{model?.name || model?.id}</span>
+            </div>
           </div>
-          <div className="reasoning-slider-wrap">
+          <div
+            className="reasoning-slider-wrap"
+            style={{ "--p": position } as CSSProperties}
+          >
+            <div className="reasoning-track" aria-hidden="true">
+              <div className="reasoning-fill">
+                {isTopLevel && (
+                  <div className="reasoning-max-fx">
+                    {MAX_FX_DOTS.map((dot, idx) => (
+                      <span
+                        key={idx}
+                        style={{
+                          left: dot.left, top: dot.top, width: dot.size, height: dot.size,
+                          animationDuration: dot.dur, animationDelay: dot.delay
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+              {levels.map((level, idx) => (
+                <span
+                  key={level}
+                  className={`reasoning-dot${idx <= currentIndex ? " on" : ""}`}
+                  style={{ "--p": idx / (levels.length - 1) } as CSSProperties}
+                />
+              ))}
+              <div className="reasoning-thumb" ref={thumbRef} />
+            </div>
             <input
-              id={sliderId}
               type="range"
-              className="reasoning-slider"
+              className="reasoning-slider-input"
               min={0}
               max={levels.length - 1}
               step={1}
               value={currentIndex}
-              style={{
-                background: `linear-gradient(to right, var(--wc-accent) 0%, var(--wc-accent) ${percent}%, #242a20 ${percent}%, #242a20 100%)`
-              }}
               aria-label="Reasoning effort"
-              onChange={(event) => {
-                const idx = Number(event.target.value);
-                const nextLevel = levels[idx];
-                if (nextLevel) {
-                  onConfigure({ thinkingLevel: nextLevel });
-                }
-              }}
+              onChange={(event) => pick(Number(event.target.value))}
             />
             <div className="reasoning-ticks">
-              {levels.map((level, idx) => {
-                const pct = levels.length > 1 ? (idx / (levels.length - 1)) * 100 : 0;
-                return (
-                  <button
-                    type="button"
-                    key={level}
-                    className={`reasoning-tick ${idx === currentIndex ? "selected" : ""}`}
-                    style={{ left: `${pct}%` }}
-                    onClick={() => onConfigure({ thinkingLevel: level })}
-                  >
-                    <span className="reasoning-tick-pip" />
-                    <span className="reasoning-tick-label">{level}</span>
-                  </button>
-                );
-              })}
+              {levels.map((level, idx) => (
+                <button
+                  type="button"
+                  key={level}
+                  className={`reasoning-tick${idx === currentIndex ? " selected" : ""}`}
+                  style={{ "--p": idx / (levels.length - 1) } as CSSProperties}
+                  onClick={() => pick(idx)}
+                >
+                  <span className="reasoning-tick-label">{level}</span>
+                </button>
+              ))}
             </div>
           </div>
         </div>

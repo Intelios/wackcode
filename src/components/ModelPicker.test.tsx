@@ -174,7 +174,9 @@ describe("ReasoningToggle", () => {
     // Click toggle to open popover
     fireEvent.click(screen.getByRole("button", { name: /medium/i }));
 
-    expect(screen.getByText("Reasoning effort")).toBeInTheDocument();
+    // Header shows the active level and the model name
+    expect(document.querySelector(".reasoning-level-name")).toHaveTextContent("medium");
+    expect(screen.getByText("Claude 3.5 Sonnet")).toBeInTheDocument();
 
     // Tick buttons should be visible
     expect(screen.getByRole("button", { name: "low" })).toBeInTheDocument();
@@ -188,5 +190,42 @@ describe("ReasoningToggle", () => {
     const slider = screen.getByLabelText("Reasoning effort");
     fireEvent.change(slider, { target: { value: "1" } }); // index 1 corresponds to "low"
     expect(onConfigure).toHaveBeenCalledWith({ thinkingLevel: "low" });
+  });
+
+  it("shows the max-level effect only at the topmost level", () => {
+    render(
+      <ReasoningToggle
+        providers={testProviders}
+        providerId="openrouter"
+        modelId="anthropic/claude-3.5-sonnet"
+        thinkingLevel="max"
+        onConfigure={() => undefined}
+      />
+    );
+
+    const toggle = screen.getByRole("button", { name: /max/i });
+    expect(toggle).toHaveClass("at-max");
+
+    fireEvent.click(toggle);
+
+    expect(document.querySelector(".reasoning-panel")).toHaveClass("at-max");
+    expect(document.querySelector(".reasoning-max-fx")).not.toBeNull();
+  });
+
+  it("does not show the max-level effect below the topmost level", () => {
+    render(
+      <ReasoningToggle
+        providers={testProviders}
+        providerId="openrouter"
+        modelId="anthropic/claude-3.5-sonnet"
+        thinkingLevel="high"
+        onConfigure={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /high/i }));
+
+    expect(document.querySelector(".reasoning-panel")).not.toHaveClass("at-max");
+    expect(document.querySelector(".reasoning-max-fx")).toBeNull();
   });
 });

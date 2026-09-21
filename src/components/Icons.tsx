@@ -1,6 +1,6 @@
 import type { SVGProps } from "react";
 
-type IconName = "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "copy" | "archive" | "send" | "stop" | "chevron" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "terminal" | "file" | "pencil" | "external";
+type IconName = "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "copy" | "archive" | "send" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "terminal" | "file" | "pencil" | "external";
 
 const paths: Record<IconName, React.ReactNode> = {
   plus: <><path d="M12 5v14M5 12h14" /></>,
@@ -14,6 +14,7 @@ const paths: Record<IconName, React.ReactNode> = {
   send: <><path d="m4 4 17 8-17 8 3-8z" /><path d="M7 12h14" /></>,
   stop: <rect x="6" y="6" width="12" height="12" rx="2" />,
   chevron: <path d="m9 18 6-6-6-6" />,
+  back: <path d="m15 18-6-6 6-6" />,
   key: <><circle cx="8" cy="15" r="4" /><path d="m11 12 9-9M15 8l3 3M17 6l2 2" /></>,
   trash: <><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13" /></>,
   spark: <><path d="m12 3 1.2 4.8L18 9l-4.8 1.2L12 15l-1.2-4.8L6 9l4.8-1.2z" /><path d="m18 15 .7 2.3L21 18l-2.3.7L18 21l-.7-2.3L15 18l2.3-.7z" /></>,

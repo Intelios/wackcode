@@ -20,7 +20,7 @@ import { ChangesPanel } from "./components/ChangesPanel";
 import { ChatHeader } from "./components/ChatHeader";
 import { Composer } from "./components/Composer";
 import { Icon } from "./components/Icons";
-import { SettingsModal } from "./components/SettingsModal";
+import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar, type ProjectAction, type TaskAction } from "./components/Sidebar";
 import { Transcript } from "./components/Transcript";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
@@ -359,7 +359,7 @@ export default function App() {
         void addProject();
       } else if (key === ",") {
         event.preventDefault();
-        setSettingsOpen(true);
+        setSettingsOpen((value) => !value);
       } else if (key === "c" && event.shiftKey) {
         event.preventDefault();
         setChangesOpen((value) => !value);
@@ -373,6 +373,16 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      {settingsOpen ? (
+        <SettingsPage
+          providers={data.providers}
+          appDataPath={appDataPath}
+          onClose={() => setSettingsOpen(false)}
+          onSave={saveProvider}
+          onDelete={deleteProvider}
+        />
+      ) : (
+        <>
       <Sidebar
         projects={data.projects}
         tasks={data.tasks}
@@ -443,8 +453,9 @@ export default function App() {
       </main>
 
       {selectedTask && changesOpen && <ChangesPanel changes={changes} loading={changesLoading} width={changesWidth} onWidthChange={setChangesWidth} onClose={() => setChangesOpen(false)} onRefresh={() => void refreshChanges(selectedTask.id)} />}
+        </>
+      )}
 
-      {settingsOpen && <SettingsModal providers={data.providers} appDataPath={appDataPath} onClose={() => setSettingsOpen(false)} onSave={saveProvider} onDelete={deleteProvider} />}
       {confirm && <ConfirmDialog title={confirm.title} body={confirm.body} confirmLabel={confirm.confirmLabel} danger={confirm.danger} onConfirm={confirm.run} onCancel={() => setConfirm(undefined)} />}
       {globalError && <div className="global-toast"><span>{globalError}</span><button onClick={() => setGlobalError(undefined)}>×</button></div>}
     </div>

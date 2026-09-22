@@ -29,7 +29,7 @@ it("shows subscription guidance before sign-in and reconnect", async () => {
   const { rerender } = render(<SettingsPage {...props} providers={[]} />);
   fireEvent.click(screen.getByRole("button", { name: "Sign in with a subscription" }));
   expect(await screen.findByText("Claude usage may be billed separately.")).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Sign in", exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
   expect(onConnectSubscription).toHaveBeenCalledWith("anthropic");
 
   const provider: ProviderRecord = {

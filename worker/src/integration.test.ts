@@ -12,6 +12,8 @@ interface Output {
   taskId?: string;
   state?: string;
   message?: string;
+  event?: string;
+  detail?: { toolCallId?: string; text?: string };
   requestId?: string;
   method?: string;
   title?: string;
@@ -185,8 +187,10 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
         })]
       : lastUserText.startsWith("finish plan")
         ? [toolCall("plan_mode_complete", { plan: "# The plan\n\n- Ship it" })]
-        : lastUserText.startsWith("todo:")
-          ? [toolCall("todo", { action: "create", subject: "Ship the thing" })]
+      : lastUserText.startsWith("todo:")
+        ? [toolCall("todo", { action: "create", subject: "Ship the thing" })]
+        : lastUserText.startsWith("stream tool")
+          ? [toolCall("bash", { command: "printf 'first line\\n'; sleep 0.3; printf 'second line\\n'" })]
           : [toolCall("write", { path: `${suffix}.txt`, content: `changed by ${suffix}\n` })];
     for (const [index, call] of calls.entries()) {
       send({
@@ -543,6 +547,30 @@ describe("Pi worker integration", () => {
     const finalIndex = worker.outputs.indexOf(finalSnapshot);
     expect(firstPartial).toBeGreaterThan(-1);
     expect(firstPartial).toBeLessThan(finalIndex);
+  });
+
+  it("forwards accumulated tool output before the final result", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-tool-stream-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(provider.baseUrl, "tool-stream-secret", workspace, "tool-stream-task");
+    cleanup.push(() => worker.shutdown());
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "tool-stream-run", message: "stream tool" });
+
+    const first = await worker.waitFor((output) =>
+      output.type === "activity" && output.event === "tool_execution_update" && output.detail?.text?.includes("first line") === true);
+    const second = await worker.waitFor((output) =>
+      output.type === "activity" && output.event === "tool_execution_update" && output.detail?.text?.includes("second line") === true);
+    const finished = await worker.waitFor((output) =>
+      output.type === "snapshot" && output.snapshot?.messages.some((message) =>
+        message.blocks.some((block) => block.type === "tool-result" && block.text?.includes("second line"))) === true);
+
+    expect(first.detail?.toolCallId).toBe("call-beta");
+    expect(second.detail?.toolCallId).toBe(first.detail?.toolCallId);
+    expect(second.detail?.text).toContain("first line");
+    expect(worker.outputs.indexOf(first)).toBeLessThan(worker.outputs.indexOf(finished));
+    expect(worker.outputs.indexOf(second)).toBeLessThan(worker.outputs.indexOf(finished));
   });
 
   it("cancels an in-flight provider stream without reporting cancellation as a worker failure", async () => {

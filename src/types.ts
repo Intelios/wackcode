@@ -279,6 +279,8 @@ export interface TaskRuntime {
   snapshot?: SessionSnapshot;
   partial?: NormalizedMessage;
   activity?: string;
+  /** Accumulated text from in-flight tools, keyed by Pi's tool call id. */
+  liveToolText?: Record<string, string>;
   error?: string;
   /** Extension output and load failures. Informational only — never blocks a chat. */
   notices?: ExtensionNotice[];

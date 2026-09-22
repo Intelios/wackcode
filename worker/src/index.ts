@@ -121,6 +121,17 @@ function textFromContent(content: unknown): string {
     .join("");
 }
 
+// Pi sends accumulated progress on every update. Keep activity frames small even when a tool
+// produces a long stream; the completed result still comes from the session snapshot.
+function toolUpdateText(partialResult: unknown): string {
+  if (!partialResult || typeof partialResult !== "object") return "";
+  const content = (partialResult as Record<string, unknown>).content;
+  const text = typeof content === "string" ? content : Array.isArray(content)
+    ? content.map((block) => block?.type === "text" && typeof block.text === "string" ? block.text : "").join("")
+    : "";
+  return text.slice(-64 * 1024);
+}
+
 // Snapshots carry a small preview of each image, never the original: a snapshot is re-sent on
 // every message boundary, and the originals can run to megabytes each.
 const THUMBNAIL_OPTIONS = { maxWidth: 512, maxHeight: 512, maxBytes: 128 * 1024 };
@@ -600,6 +611,7 @@ async function initialize(command: InitCommand): Promise<void> {
           toolName: value.toolName,
           toolCallId: value.toolCallId,
           args: eventType === "tool_execution_start" ? value.args : undefined,
+          text: eventType === "tool_execution_update" ? toolUpdateText(value.partialResult) : undefined,
           isError: value.isError
         }
       });

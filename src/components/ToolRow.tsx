@@ -69,15 +69,17 @@ function ToolDetail({ call, result }: { call: NormalizedBlock; result?: Normaliz
 interface ToolRowProps {
   call: NormalizedBlock;
   result?: NormalizedBlock;
+  liveText?: string;
   running?: boolean;
 }
 
-export function ToolRow({ call, result, running }: ToolRowProps) {
+export function ToolRow({ call, result, liveText, running }: ToolRowProps) {
   const [open, setOpen] = useState(false);
   const summary = summarizeTool(call, result);
   const failed = result?.isError === true;
   const pending = running && !result;
-  const expandable = Boolean(result?.text || (result?.details as Record<string, unknown> | undefined)?.diff || summary.kind === "write" || summary.kind === "other");
+  const shownResult = result ?? (pending && liveText ? { type: "tool-result" as const, text: liveText } : undefined);
+  const expandable = Boolean(shownResult?.text || (result?.details as Record<string, unknown> | undefined)?.diff || summary.kind === "write" || summary.kind === "other");
 
   return (
     <div className={`tool-row ${open ? "open" : ""} ${failed ? "error" : ""}`}>
@@ -93,10 +95,11 @@ export function ToolRow({ call, result, running }: ToolRowProps) {
         ) : null}
         {failed && <span className="tool-row-failed">failed</span>}
         <span className="tool-row-status">
-          {pending ? <span className="tool-spinner" aria-label="Running" /> : expandable ? <Icon name="chevron" className="tool-chevron" /> : null}
+          {pending && <span className="tool-spinner" aria-label="Running" />}
+          {expandable && <Icon name="chevron" className="tool-chevron" />}
         </span>
       </button>
-      {open && expandable && <ToolDetail call={call} result={result} />}
+      {open && expandable && <ToolDetail call={call} result={shownResult} />}
     </div>
   );
 }

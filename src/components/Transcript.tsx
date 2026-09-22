@@ -13,6 +13,7 @@ interface Props {
   partial?: NormalizedMessage;
   running: boolean;
   activity?: string;
+  liveToolText?: Record<string, string>;
   /** Latest Plan mode state; PlanCards use it to know which proposal is awaiting a decision. */
   planState?: PlanState;
   onPlanAction?: (action: PlanAction) => void;
@@ -32,6 +33,7 @@ function completedPlan(result?: NormalizedBlock): string | undefined {
 function renderBlock(
   block: NormalizedBlock,
   results: Map<string, NormalizedBlock>,
+  liveToolText: Record<string, string> | undefined,
   live: boolean,
   planState: PlanState | undefined,
   onPlanAction: ((action: PlanAction) => void) | undefined,
@@ -43,12 +45,13 @@ function renderBlock(
   }
   if (block.type === "tool-call") {
     const result = block.toolCallId ? results.get(block.toolCallId) : undefined;
+    const liveText = block.toolCallId ? liveToolText?.[block.toolCallId] : undefined;
     const plan = block.toolName === "plan_mode_complete" ? completedPlan(result) : undefined;
     if (plan !== undefined) {
       const current = planState?.mode === "plan" && planState.phase === "ready" && planState.plan === plan;
       return <PlanCard plan={plan} current={current} busy={running} onAction={onPlanAction} />;
     }
-    return <ToolRow call={block} result={result} running={live && !result} />;
+    return <ToolRow call={block} result={result} liveText={liveText} running={live && !result} />;
   }
   if (block.type === "tool-result") {
     return <OrphanResult block={block} />;
@@ -64,18 +67,21 @@ function signatureBlock(block: NormalizedBlock): unknown {
   return block.type === "image" ? { image: block.imageId, ready: Boolean(block.thumbnail) } : block;
 }
 
-function signature(message: NormalizedMessage, results: Map<string, NormalizedBlock>): string {
+function signature(message: NormalizedMessage, results: Map<string, NormalizedBlock>, liveToolText?: Record<string, string>): string {
   return JSON.stringify([
     message.blocks.map(signatureBlock),
     message.stopReason,
     message.errorMessage,
-    message.blocks.map((block) => block.type === "tool-call" ? (block.toolCallId ? results.get(block.toolCallId) ?? null : null) : null)
+    message.blocks.map((block) => block.type === "tool-call" && block.toolCallId
+      ? [results.get(block.toolCallId) ?? null, liveToolText?.[block.toolCallId] ?? null]
+      : null)
   ]);
 }
 
 interface MessageProps {
   message: NormalizedMessage;
   results: Map<string, NormalizedBlock>;
+  liveToolText?: Record<string, string>;
   live: boolean;
   running: boolean;
   planState?: PlanState;
@@ -83,7 +89,7 @@ interface MessageProps {
   sig: string;
 }
 
-const Message = memo(function Message({ message, results, live, running, planState, onPlanAction }: MessageProps) {
+const Message = memo(function Message({ message, results, liveToolText, live, running, planState, onPlanAction }: MessageProps) {
   if (message.role === "user") {
     const images = message.blocks.filter((block) => block.type === "image");
     const text = message.blocks.filter((block) => block.type === "text").map((block) => block.text ?? "").join("\n").trim();
@@ -109,7 +115,7 @@ const Message = memo(function Message({ message, results, live, running, planSta
     <div className="msg assistant">
       {message.blocks.map((block, index) => (
         <div key={block.toolCallId ?? index} className="block-slot">
-          {renderBlock(block, results, live, planState, onPlanAction, running)}
+          {renderBlock(block, results, liveToolText, live, planState, onPlanAction, running)}
         </div>
       ))}
       {message.stopReason === "error" && <div className="message-error">{message.errorMessage || "The provider rejected the request."}</div>}
@@ -128,7 +134,7 @@ function activityLabel(activity?: string): string {
   return "Working…";
 }
 
-export function Transcript({ messages, partial, running, activity, planState, onPlanAction }: Props) {
+export function Transcript({ messages, partial, running, activity, liveToolText, planState, onPlanAction }: Props) {
   const { ref, onScroll, detached, jumpToLatest } = useFollowScroll();
 
   const { results, callIds } = useMemo(() => {
@@ -176,11 +182,12 @@ export function Transcript({ messages, partial, running, activity, planState, on
                 key={message.id}
                 message={message}
                 results={results}
+                liveToolText={liveToolText}
                 live={running && message.id === lastAssistantId}
                 running={running}
                 planState={planState}
                 onPlanAction={onPlanAction}
-                sig={signature(message, results)}
+                sig={signature(message, results, liveToolText)}
               />
             );
           })}
@@ -188,7 +195,7 @@ export function Transcript({ messages, partial, running, activity, planState, on
             <div className="msg assistant streaming">
               {partial.blocks.map((block, index) => (
                 <div key={block.toolCallId ?? index} className="block-slot">
-                  {renderBlock(block, results, true, planState, onPlanAction, running, true)}
+                  {renderBlock(block, results, liveToolText, true, planState, onPlanAction, running, true)}
                 </div>
               ))}
             </div>

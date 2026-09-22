@@ -196,9 +196,30 @@ export default function App() {
         patchRuntime(taskId, { partial: payload.message });
       } else if (payload.type === "run_state") {
         patchTask(taskId, { status: payload.state, lastError: payload.state === "running" ? null : undefined });
-        if (payload.state === "idle") patchRuntime(taskId, { activity: undefined });
+        if (payload.state === "running" || payload.state === "idle" || payload.state === "interrupted") {
+          patchRuntime(taskId, { activity: undefined, liveToolText: {} });
+        }
       } else if (payload.type === "activity") {
         patchRuntime(taskId, { activity: payload.event });
+        const callId = payload.detail?.toolCallId;
+        const liveText = payload.detail?.text;
+        if (typeof callId === "string" && callId) {
+          if (payload.event === "tool_execution_update" && typeof liveText === "string") {
+            setRuntimes((current) => ({
+              ...current,
+              [taskId]: {
+                ...current[taskId],
+                liveToolText: { ...current[taskId]?.liveToolText, [callId]: liveText }
+              }
+            }));
+          } else if (payload.event === "tool_execution_end") {
+            setRuntimes((current) => {
+              const next = { ...current[taskId]?.liveToolText };
+              delete next[callId];
+              return { ...current, [taskId]: { ...current[taskId], liveToolText: next } };
+            });
+          }
+        }
         if (payload.event === "tool_execution_end") void refreshChanges(taskId);
       } else if (payload.type === "worker_error") {
         patchRuntime(taskId, { error: payload.message });
@@ -757,6 +778,7 @@ export default function App() {
               partial={runtime?.partial}
               running={selectedTask.status === "running" || selectedTask.status === "stopping"}
               activity={runtime?.activity}
+              liveToolText={runtime?.liveToolText}
               planState={runtime?.planState}
               onPlanAction={(action) => void planAction(action)}
             />

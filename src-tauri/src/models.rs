@@ -16,6 +16,10 @@ pub struct ModelRecord {
     pub thinking_levels: Vec<String>,
     #[serde(default)]
     pub thinking_level_map: BTreeMap<String, Option<String>>,
+    /// Accepts image input. Maps to Pi's `input: ["text", "image"]`; off means Pi swaps any image
+    /// for its own "image omitted" placeholder before the request leaves the worker.
+    #[serde(default)]
+    pub vision: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -261,6 +265,21 @@ pub struct PromptInput {
     /// The mode the composer was in when this prompt was sent; applied before the run.
     #[serde(default)]
     pub mode: Option<TaskMode>,
+    /// Images attached to this prompt, in Pi's own `ImageContent` shape. Forwarded verbatim.
+    #[serde(default)]
+    pub images: Vec<ImageContent>,
+}
+
+/// One image attached to a prompt. Mirrors Pi's `ImageContent` (`{ type: "image", data, mimeType }`),
+/// the shape Pi's RPC `prompt.images` takes, so it travels unchanged from React to the worker.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageContent {
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// Base64 without a `data:` prefix.
+    pub data: String,
+    pub mime_type: String,
 }
 
 #[derive(Debug, Deserialize)]

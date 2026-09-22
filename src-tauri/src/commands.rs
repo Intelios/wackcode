@@ -1,7 +1,7 @@
 use crate::{
     git,
     models::{
-        BootstrapPayload, CreateTaskInput, ExportPlanInput, GitChanges, ModelRecord, ProjectRecord,
+        BootstrapPayload, CreateTaskInput, ExportPlanInput, GitChanges, ImageContent, ModelRecord, ProjectRecord,
         PromptInput, ExtensionUiResponseInput, InstallPackageInput, PackageRecord,
         PackageSearchResult, ProviderRecord, SaveProviderInput, SearchPackagesInput,
         SetPackageResourcesInput, SetTaskModeInput, SetToolConfigInput, TaskMode, TaskRecord,
@@ -18,6 +18,10 @@ use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
 const THINKING_LEVELS: &[&str] = &["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+/// Image limits for one prompt. `src/attachment-utils.ts` enforces the same numbers in the composer.
+const MAX_PROMPT_IMAGES: usize = 8;
+const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+const IMAGE_MIME_TYPES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
 
 #[tauri::command]
 pub fn bootstrap(state: State<'_, MetadataState>) -> Result<BootstrapPayload, String> {
@@ -604,6 +608,7 @@ pub async fn open_task(app: AppHandle, state: State<'_, MetadataState>, task_id:
 #[tauri::command]
 pub async fn prompt(app: AppHandle, state: State<'_, MetadataState>, input: PromptInput) -> Result<String, String> {
     let message = required(&input.message, "Message")?;
+    validate_images(&input.images)?;
     let configured = configure_task(app.clone(), state.clone(), ConfigureTaskInput {
         task_id: input.task_id.clone(),
         provider_id: input.provider_id,
@@ -628,12 +633,13 @@ pub async fn prompt(app: AppHandle, state: State<'_, MetadataState>, input: Prom
     let provider = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?
         .providers.iter().find(|provider| provider.id == configured.provider_id).cloned()
         .ok_or_else(|| "Connection not found".to_string())?;
+    if !input.images.is_empty() { require_vision(&provider, &configured.model_id)?; }
     let api_key = state.secrets.get(&provider.id)?;
     worker::ensure_worker(&app, &configured, &provider, &api_key).await?;
     let run_id = Uuid::new_v4().to_string();
     worker::send(&app, &configured.id, &json!({
         "id": Uuid::new_v4().to_string(), "type": "prompt", "runId": run_id, "message": message,
-        "mode": configured.mode
+        "mode": configured.mode, "images": input.images
     })).await?;
     Ok(run_id)
 }
@@ -887,6 +893,38 @@ fn validate_model_selection(provider: &ProviderRecord, model_id: &str, thinking_
     Ok(())
 }
 
+/// Pi would quietly swap images for an "image omitted" placeholder on a text-only model, so an
+/// attachment the model can never see is refused up front instead.
+fn require_vision(provider: &ProviderRecord, model_id: &str) -> Result<(), String> {
+    let model = provider.models.iter().find(|model| model.id == model_id)
+        .ok_or_else(|| "The selected model is no longer configured".to_string())?;
+    if model.vision { Ok(()) } else {
+        Err("This model doesn't accept images. Turn on Vision for it in Settings, or remove the attachments.".into())
+    }
+}
+
+/// Checks attachments without decoding them: the worker resizes and re-encodes each one with
+/// Pi's own image pipeline, so this only has to keep oversized or non-image payloads out.
+fn validate_images(images: &[ImageContent]) -> Result<(), String> {
+    if images.len() > MAX_PROMPT_IMAGES {
+        return Err(format!("Attach at most {MAX_PROMPT_IMAGES} images to one message."));
+    }
+    for image in images {
+        if image.kind != "image" { return Err("An attachment is not an image.".into()); }
+        if !IMAGE_MIME_TYPES.contains(&image.mime_type.as_str()) {
+            return Err(format!("Images must be PNG, JPEG, GIF, or WebP (got {}).", limit(&image.mime_type, 40)));
+        }
+        let data = image.data.trim_end_matches('=');
+        if data.is_empty() || !data.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'+' || byte == b'/') {
+            return Err("An attached image could not be read.".into());
+        }
+        if data.len() / 4 * 3 > MAX_IMAGE_BYTES {
+            return Err(format!("Each image must be {} MB or smaller.", MAX_IMAGE_BYTES / 1024 / 1024));
+        }
+    }
+    Ok(())
+}
+
 /// Accepts the source forms `pi install` accepts. Traversal is rejected outright: a package
 /// source arrives from the UI, and a relative escape has no legitimate use here.
 fn validate_package_source(source: &str) -> Result<String, String> {
@@ -965,8 +1003,50 @@ mod tests {
             id: "same/model".into(), name: "Same model".into(), context_window: None,
             max_tokens: None, reasoning: false, thinking_levels: vec!["off".into()],
             thinking_level_map: std::collections::BTreeMap::from([("off".into(), None)]),
+            vision: false,
         }];
         assert!(validate_models(&models).is_ok());
+    }
+
+    fn image(mime_type: &str, data: &str) -> ImageContent {
+        ImageContent { kind: "image".into(), data: data.into(), mime_type: mime_type.into() }
+    }
+
+    #[test]
+    fn prompt_images_are_checked_for_count_type_encoding_and_size() {
+        assert!(validate_images(&[]).is_ok());
+        assert!(validate_images(&[image("image/png", "iVBORw0KGgo="), image("image/webp", "UklGRg==")]).is_ok());
+        assert!(validate_images(&vec![image("image/png", "AAAA"); MAX_PROMPT_IMAGES + 1]).is_err());
+        assert!(validate_images(&[image("image/svg+xml", "AAAA")]).is_err());
+        assert!(validate_images(&[image("image/png", "")]).is_err());
+        assert!(validate_images(&[image("image/png", "data:image/png;base64,AAAA")]).is_err());
+        let mut wrong_kind = image("image/png", "AAAA");
+        wrong_kind.kind = "text".into();
+        assert!(validate_images(&[wrong_kind]).is_err());
+        let oversized = "A".repeat(MAX_IMAGE_BYTES / 3 * 4 + 8);
+        assert!(validate_images(&[image("image/jpeg", &oversized)]).is_err());
+    }
+
+    #[test]
+    fn images_are_refused_for_a_model_without_vision() {
+        let model = |id: &str, vision: bool| ModelRecord {
+            id: id.into(), name: id.into(), context_window: Some(8_000), max_tokens: Some(1_000),
+            reasoning: false, thinking_levels: vec!["off".into()], thinking_level_map: Default::default(), vision,
+        };
+        let provider = ProviderRecord {
+            id: "p".into(), name: "P".into(), base_url: "https://example.test/v1".into(),
+            api_format: "openai-completions".into(), models: vec![model("sees", true), model("blind", false)],
+            created_at: "now".into(), updated_at: "now".into(), has_api_key: true,
+        };
+        assert!(require_vision(&provider, "sees").is_ok());
+        assert!(require_vision(&provider, "blind").unwrap_err().contains("Vision"));
+    }
+
+    #[test]
+    fn model_records_written_before_vision_existed_default_to_text_only() {
+        let json = r#"{"id":"m","name":"M","contextWindow":8000,"maxTokens":1000,"reasoning":false,"thinkingLevels":["off"],"thinkingLevelMap":{"off":null}}"#;
+        let model: ModelRecord = serde_json::from_str(json).unwrap();
+        assert!(!model.vision);
     }
 
     #[test]

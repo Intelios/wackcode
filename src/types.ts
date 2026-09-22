@@ -65,6 +65,19 @@ export interface ModelRecord {
   reasoning: boolean;
   thinkingLevels: ThinkingLevel[];
   thinkingLevelMap: Partial<Record<ThinkingLevel, string | null>>;
+  /** Accepts image input (Pi's `input: ["text", "image"]`). Off until the user confirms it. */
+  vision: boolean;
+}
+
+/**
+ * An image attached to a prompt, in Pi's own `ImageContent` shape. It travels unchanged through
+ * Rust and the worker into `session.prompt`, so it must match worker/src/protocol.ts and models.rs.
+ */
+export interface ImageContent {
+  type: "image";
+  /** Base64 without a `data:` prefix. */
+  data: string;
+  mimeType: string;
 }
 
 export interface ProviderRecord {
@@ -189,8 +202,14 @@ export interface BootstrapPayload {
 }
 
 export interface NormalizedBlock {
-  type: "text" | "thinking" | "tool-call" | "tool-result";
+  type: "text" | "thinking" | "tool-call" | "tool-result" | "image";
   text?: string;
+  /** Image blocks: the original's type. Snapshots never carry the full image. */
+  mimeType?: string;
+  /** Image blocks: stable for the life of the worker. */
+  imageId?: string;
+  /** Image blocks: a small `data:` URL preview, absent until the worker has generated it. */
+  thumbnail?: string;
   toolName?: string;
   toolCallId?: string;
   arguments?: unknown;

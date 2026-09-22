@@ -8,6 +8,7 @@ import type { BuiltinHost } from "./builtin/host.js";
 import { JsonLineDecoder } from "./framing.js";
 import {
   THINKING_LEVELS,
+  type ImageContent,
   type InitCommand,
   type NormalizedBlock,
   type NormalizedMessage,
@@ -120,6 +121,45 @@ function textFromContent(content: unknown): string {
     .join("");
 }
 
+// Snapshots carry a small preview of each image, never the original: a snapshot is re-sent on
+// every message boundary, and the originals can run to megabytes each.
+const THUMBNAIL_OPTIONS = { maxWidth: 512, maxHeight: 512, maxBytes: 128 * 1024 };
+
+interface ImagePreview {
+  id: string;
+  url?: string;
+}
+
+// Keyed by the image block itself. Pi keeps message objects stable across `session.messages`
+// reads (the array is copied, its entries are not), so each image is previewed once per worker.
+const imagePreviews = new WeakMap<object, ImagePreview>();
+let nextImageId = 0;
+// One preview at a time: each resize spawns a thread, and a restored session may hold dozens.
+let previewQueue = Promise.resolve();
+
+function imageBlock(block: Record<string, unknown>): NormalizedBlock {
+  const mimeType = typeof block.mimeType === "string" ? block.mimeType : "image/png";
+  let preview = imagePreviews.get(block);
+  if (!preview) {
+    const created: ImagePreview = { id: `image-${++nextImageId}` };
+    preview = created;
+    imagePreviews.set(block, created);
+    if (typeof block.data === "string" && block.data) {
+      const data = block.data;
+      previewQueue = previewQueue
+        .then(async () => {
+          if (!piModule) return;
+          const resized = await piModule.resizeImage(Buffer.from(data, "base64"), mimeType, THUMBNAIL_OPTIONS);
+          if (!resized) return;
+          created.url = `data:${resized.mimeType};base64,${resized.data}`;
+          scheduleSnapshot();
+        })
+        .catch(() => undefined);
+    }
+  }
+  return { type: "image", mimeType, imageId: preview.id, thumbnail: preview.url };
+}
+
 function normalizeBlocks(content: unknown, role: string): NormalizedBlock[] {
   if (typeof content === "string") {
     return [{ type: role === "toolResult" ? "tool-result" : "text", text: content }];
@@ -131,6 +171,10 @@ function normalizeBlocks(content: unknown, role: string): NormalizedBlock[] {
     if (!item || typeof item !== "object") return [];
     const block = item as Record<string, unknown>;
     if (block.type === "text") return [{ type: "text", text: String(block.text ?? "") }];
+    // A tool result's images (e.g. `read` on a PNG) still reach the model; the transcript shows
+    // only its text. Left in, each would become an empty result sharing the call's id and
+    // overwrite the real one.
+    if (block.type === "image") return role === "toolResult" ? [] : [imageBlock(block)];
     if (block.type === "thinking") return [{ type: "thinking", text: String(block.thinking ?? block.text ?? "") }];
     if (block.type === "toolCall") {
       return [{
@@ -152,6 +196,8 @@ function normalizeMessage(message: unknown, index: number): NormalizedMessage | 
   if (role !== "user" && role !== "assistant" && role !== "tool" && role !== "system") return undefined;
   const blocks = normalizeBlocks(raw.content, rawRole);
   if (rawRole === "toolResult") {
+    // An image-only result still has to mark its call as finished.
+    if (blocks.length === 0) blocks.push({ type: "tool-result", text: "" });
     for (const block of blocks) {
       block.type = "tool-result";
       block.toolName = typeof raw.toolName === "string" ? raw.toolName : undefined;
@@ -394,12 +440,33 @@ function modelDefinition(model: WorkerModel): Record<string, unknown> {
     id: model.id,
     name: model.name,
     reasoning: model.reasoning,
-    input: ["text"],
+    // Pi's own capability flag. Without "image", Pi replaces images with an "image omitted"
+    // placeholder before the request is built, and `read` stops returning image content.
+    input: model.vision ? ["text", "image"] : ["text"],
     contextWindow: model.contextWindow,
     maxTokens: model.maxTokens,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     ...(model.reasoning ? { thinkingLevelMap } : {})
   };
+}
+
+/**
+ * Pi's CLI runs attachments through `processImage` (resize to Pi's inline limits) before they
+ * reach a session, but `session.prompt` itself forwards images untouched. `processImage` is not
+ * exported, so this repeats it with the exported `resizeImage` and Pi's own defaults. The
+ * dimension note Pi adds for tool reads is left out: it is for coordinate mapping, and here it
+ * would show up in the user's own message.
+ */
+async function prepareImages(images: ImageContent[] | undefined): Promise<ImageContent[]> {
+  if (!images?.length) return [];
+  if (!piModule) throw new Error("Worker is not initialized");
+  const prepared: ImageContent[] = [];
+  for (const image of images) {
+    const resized = await piModule.resizeImage(Buffer.from(image.data, "base64"), image.mimeType);
+    if (!resized) throw new Error("An attached image could not be read, or could not be resized below the inline image size limit.");
+    prepared.push({ type: "image", data: resized.data, mimeType: resized.mimeType });
+  }
+  return prepared;
 }
 
 async function initialize(command: InitCommand): Promise<void> {
@@ -589,7 +656,8 @@ async function handle(command: WorkerCommand): Promise<void> {
       send({ type: "run_state", taskId, runId: command.runId, state: "running" });
       response(command.id, true);
       try {
-        await session.prompt(command.message);
+        const images = await prepareImages(command.images);
+        await session.prompt(command.message, images.length > 0 ? { images } : undefined);
       } catch (error) {
         activeRunId = undefined;
         if (!stopRequested) send({ type: "worker_error", taskId, message: safeError(error) });

@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   BootstrapPayload,
   GitChanges,
+  ImageContent,
   PackageRecord,
   PackageSearchResult,
   ProjectRecord,
@@ -65,6 +66,8 @@ export const api = {
     thinkingLevel: ThinkingLevel;
     /** The composer's mode; applied before the run. Required for a draft's first message. */
     mode?: TaskMode;
+    /** Refused by Rust unless the model has Vision turned on. */
+    images?: ImageContent[];
   }) => invoke<string>("prompt", { input }),
   setTaskMode: (taskId: string, mode: TaskMode) => invoke<TaskRecord>("set_task_mode", { input: { taskId, mode } }),
   /** Save the proposed plan as PLAN.md in the task workspace. Returns the path. */

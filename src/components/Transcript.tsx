@@ -58,9 +58,15 @@ function renderBlock(
   return <Markdown>{block.text}</Markdown>;
 }
 
+// Recomputed for every message on every streamed partial, so image blocks stand in as their id
+// and readiness rather than their preview data.
+function signatureBlock(block: NormalizedBlock): unknown {
+  return block.type === "image" ? { image: block.imageId, ready: Boolean(block.thumbnail) } : block;
+}
+
 function signature(message: NormalizedMessage, results: Map<string, NormalizedBlock>): string {
   return JSON.stringify([
-    message.blocks,
+    message.blocks.map(signatureBlock),
     message.stopReason,
     message.errorMessage,
     message.blocks.map((block) => block.type === "tool-call" ? (block.toolCallId ? results.get(block.toolCallId) ?? null : null) : null)
@@ -79,9 +85,19 @@ interface MessageProps {
 
 const Message = memo(function Message({ message, results, live, running, planState, onPlanAction }: MessageProps) {
   if (message.role === "user") {
+    const images = message.blocks.filter((block) => block.type === "image");
+    const text = message.blocks.filter((block) => block.type === "text").map((block) => block.text ?? "").join("\n").trim();
     return (
       <div className="msg user">
-        <div className="bubble">{message.blocks.map((block) => block.text ?? "").join("\n").trim()}</div>
+        {images.length > 0 && (
+          <div className="message-images">
+            {images.map((image, index) => image.thumbnail
+              ? <img key={image.imageId ?? index} src={image.thumbnail} alt={`Attached image ${index + 1}`} />
+              : <div key={image.imageId ?? index} className="image-pending" role="img" aria-label={`Attached image ${index + 1}`}><Icon name="image" /></div>
+            )}
+          </div>
+        )}
+        {text && <div className="bubble">{text}</div>}
       </div>
     );
   }

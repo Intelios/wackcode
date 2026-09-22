@@ -1,17 +1,22 @@
 export class JsonLineDecoder {
-  private pending: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+  // Chunks of the line still being received. Kept as a list so a multi-megabyte line (a prompt
+  // carrying images) is joined once, not re-copied on every chunk.
+  private pending: Buffer[] = [];
 
   push(chunk: Buffer): string[] {
-    this.pending = this.pending.length === 0 ? chunk : Buffer.concat([this.pending, chunk]);
     const lines: string[] = [];
-    let newline = this.pending.indexOf(0x0a);
+    let start = 0;
+    let newline = chunk.indexOf(0x0a);
     while (newline >= 0) {
-      const raw = this.pending.subarray(0, newline);
-      this.pending = this.pending.subarray(newline + 1);
+      this.pending.push(chunk.subarray(start, newline));
+      const raw = this.pending.length === 1 ? this.pending[0] : Buffer.concat(this.pending);
+      this.pending = [];
       const clean = raw.at(-1) === 0x0d ? raw.subarray(0, -1) : raw;
       if (clean.length > 0) lines.push(clean.toString("utf8"));
-      newline = this.pending.indexOf(0x0a);
+      start = newline + 1;
+      newline = chunk.indexOf(0x0a, start);
     }
+    if (start < chunk.length) this.pending.push(chunk.subarray(start));
     return lines;
   }
 }

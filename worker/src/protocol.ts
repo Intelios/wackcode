@@ -68,6 +68,17 @@ export interface QuestionAnswer {
   custom?: string;
 }
 
+/**
+ * An image attached to a prompt. Mirrors pi-ai's `ImageContent` exactly — the shape Pi's own RPC
+ * `prompt.images` takes and the one it stores in session files — so it crosses every layer unchanged.
+ */
+export interface ImageContent {
+  type: "image";
+  /** Base64 without a `data:` prefix. */
+  data: string;
+  mimeType: string;
+}
+
 export interface WorkerModel {
   id: string;
   name: string;
@@ -76,6 +87,8 @@ export interface WorkerModel {
   reasoning: boolean;
   thinkingLevels: ThinkingLevel[];
   thinkingLevelMap: Partial<Record<ThinkingLevel, string | null>>;
+  /** Accepts image input; becomes Pi's `input: ["text", "image"]`. */
+  vision?: boolean;
 }
 
 export interface WorkerProvider {
@@ -126,7 +139,7 @@ export interface WorkerResources {
 
 export type WorkerCommand =
   | InitCommand
-  | { id: string; type: "prompt"; runId: string; message: string; mode?: TaskMode }
+  | { id: string; type: "prompt"; runId: string; message: string; mode?: TaskMode; images?: ImageContent[] }
   | { id: string; type: "abort" }
   | { id: string; type: "snapshot" }
   | { id: string; type: "set_model"; modelId: string }
@@ -145,8 +158,14 @@ export type WorkerCommand =
   | { id: string; type: "shutdown" };
 
 export interface NormalizedBlock {
-  type: "text" | "thinking" | "tool-call" | "tool-result";
+  type: "text" | "thinking" | "tool-call" | "tool-result" | "image";
   text?: string;
+  /** Image blocks: the original's type. The full image never leaves the worker in a snapshot. */
+  mimeType?: string;
+  /** Image blocks: stable for the life of the worker, so the UI can key and memoize on it. */
+  imageId?: string;
+  /** Image blocks: a small `data:` URL preview, absent until it has been generated. */
+  thumbnail?: string;
   toolName?: string;
   toolCallId?: string;
   arguments?: unknown;

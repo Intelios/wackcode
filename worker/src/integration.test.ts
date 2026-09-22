@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { deflateSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -24,7 +25,7 @@ interface Output {
   errors?: Array<{ path: string; error: string }>;
   snapshot?: {
     sessionFile?: string;
-    messages: Array<{ blocks: Array<{ type: string; text?: string; toolName?: string; details?: unknown }> }>;
+    messages: Array<{ role?: string; blocks: Array<{ type: string; text?: string; toolName?: string; details?: unknown; imageId?: string; thumbnail?: string; mimeType?: string }> }>;
     tools?: Array<{ name: string; description: string; source: { kind: string; packageId?: string }; available: boolean; unavailableReason?: string }>;
     activeTools?: string[];
     planState?: { mode: string; phase: string; plan?: string };
@@ -232,7 +233,8 @@ async function initializeWorker(
   sessionFile?: string,
   disabledTools?: string[],
   resources?: { extensions: string[]; skills: string[]; prompts: string[]; themes: string[] },
-  mode?: "build" | "plan"
+  mode?: "build" | "plan",
+  vision?: boolean
 ): Promise<{ worker: WorkerHarness; ready: Output }> {
   const worker = new WorkerHarness(workspace);
   worker.send({
@@ -255,7 +257,8 @@ async function initializeWorker(
         maxTokens: 321,
         reasoning: true,
         thinkingLevels: ["off", "high"],
-        thinkingLevelMap: { off: null, high: "wire-high" }
+        thinkingLevelMap: { off: null, high: "wire-high" },
+        vision
       }]
     },
     modelId: "shared-model",
@@ -266,6 +269,49 @@ async function initializeWorker(
     mode
   });
   return { worker, ready: await worker.waitFor((output) => output.type === "ready") };
+}
+
+/** A solid-colour RGB PNG, built by hand so the tests need no image fixtures. */
+function solidPng(width: number, height: number): string {
+  const crcTable = Array.from({ length: 256 }, (_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  });
+  const crc32 = (bytes: Buffer) => {
+    let c = 0xffffffff;
+    for (const byte of bytes) c = crcTable[(c ^ byte) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type: string, data: Buffer) => {
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(body));
+    return Buffer.concat([length, body, crc]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header.set([8, 2, 0, 0, 0], 8);
+  const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(width * 3, 0x5a)]);
+  const pixels = deflateSync(Buffer.concat(Array.from({ length: height }, () => row)));
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", header),
+    chunk("IDAT", pixels),
+    chunk("IEND", Buffer.alloc(0))
+  ]).toString("base64");
+}
+
+type RequestPart = { type?: string; text?: string; image_url?: { url?: string } };
+
+function userParts(request: { body: Record<string, unknown> }): RequestPart[] {
+  const messages = (request.body.messages ?? []) as Array<{ role?: string; content?: unknown }>;
+  return messages
+    .filter((message) => message.role === "user" && Array.isArray(message.content))
+    .flatMap((message) => message.content as RequestPart[]);
 }
 
 const cleanup: Array<() => Promise<void>> = [];
@@ -733,5 +779,109 @@ describe("Plan mode", () => {
     );
     cleanup.push(() => third.worker.shutdown());
     await third.worker.waitFor((output) => output.type === "plan_state" && output.mode === "build");
+  });
+});
+
+describe("image attachments", () => {
+  it("resizes an attached image with Pi's pipeline, sends it to a vision model, and previews it", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-vision-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "vision-task", undefined, undefined, undefined, undefined, true
+    );
+    cleanup.push(() => worker.shutdown());
+    // Wider than Pi's 2000px inline limit, so the worker has to resize it.
+    const original = solidPng(2400, 16);
+    worker.send({
+      id: crypto.randomUUID(), type: "prompt", runId: "vision-run", message: "What is in this image?",
+      images: [{ type: "image", data: original, mimeType: "image/png" }]
+    });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+
+    const images = userParts(provider.requests[0]).filter((part) => part.type === "image_url");
+    expect(images).toHaveLength(1);
+    const sent = images[0].image_url?.url ?? "";
+    expect(sent).toMatch(/^data:image\/(png|jpeg);base64,/);
+    expect(sent.endsWith(original)).toBe(false);
+    expect(userParts(provider.requests[0]).some((part) => part.type === "text" && part.text === "What is in this image?")).toBe(true);
+
+    const previewed = await worker.waitFor((output) => output.type === "snapshot" && output.snapshot?.messages.some((message) =>
+      message.blocks.some((block) => block.type === "image" && block.thumbnail?.startsWith("data:image/"))) === true);
+    const user = previewed.snapshot?.messages.find((message) => message.role === "user");
+    const image = user?.blocks.find((block) => block.type === "image");
+    expect(image?.imageId).toBeTruthy();
+    // Snapshots carry the preview only, never the multi-kilobyte original.
+    expect(JSON.stringify(previewed)).not.toContain(original);
+    expect(user?.blocks.find((block) => block.type === "text")?.text).toBe("What is in this image?");
+  });
+
+  it("lets Pi swap the image for its placeholder when the model has no vision", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-blind-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "blind-task");
+    cleanup.push(() => worker.shutdown());
+    worker.send({
+      id: crypto.randomUUID(), type: "prompt", runId: "blind-run", message: "Look.",
+      images: [{ type: "image", data: solidPng(4, 4), mimeType: "image/png" }]
+    });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    const parts = userParts(provider.requests[0]);
+    expect(parts.some((part) => part.type === "image_url")).toBe(false);
+    expect(parts.some((part) => part.text === "(image omitted: model does not support images)")).toBe(true);
+  });
+
+  it("keeps attached images in the Pi session file across a restart", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-image-restore-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const first = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "image-restore", undefined, undefined, undefined, undefined, true
+    );
+    first.worker.send({
+      id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "Remember this.",
+      images: [{ type: "image", data: solidPng(8, 8), mimeType: "image/png" }]
+    });
+    await first.worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    const sessionFile = first.worker.outputs.findLast((output) => output.snapshot?.sessionFile)?.snapshot?.sessionFile;
+    expect(sessionFile).toBeTruthy();
+    // Stored in Pi's own format, so the session stays readable by Pi itself.
+    const stored = await readFile(sessionFile as string, "utf8");
+    expect(stored).toContain('"type":"image"');
+    expect(stored).toContain('"mimeType":"image/png"');
+    await first.worker.shutdown();
+
+    const second = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "image-restore", sessionFile, undefined, undefined, undefined, true
+    );
+    cleanup.push(() => second.worker.shutdown());
+    const restoredUser = second.ready.snapshot?.messages.find((message) => message.role === "user");
+    expect(restoredUser?.blocks.some((block) => block.type === "image" && block.imageId)).toBe(true);
+    second.worker.send({ id: crypto.randomUUID(), type: "snapshot" });
+    await second.worker.waitFor((output) => output.type === "snapshot" && output.snapshot?.messages.some((message) =>
+      message.blocks.some((block) => block.type === "image" && Boolean(block.thumbnail))) === true);
+  });
+
+  it("fails the run cleanly when an attachment cannot be decoded", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-bad-image-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "bad-image", undefined, undefined, undefined, undefined, true
+    );
+    cleanup.push(() => worker.shutdown());
+    worker.send({
+      id: crypto.randomUUID(), type: "prompt", runId: "bad-run", message: "Look.",
+      images: [{ type: "image", data: Buffer.from("not an image").toString("base64"), mimeType: "image/png" }]
+    });
+    const failure = await worker.waitFor((output) => output.type === "worker_error");
+    expect(failure.message).toContain("image");
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    expect(provider.requests).toHaveLength(0);
   });
 });

@@ -395,12 +395,12 @@ function ProvidersSection({ providers, selectedId, onSelect, onSave, onDelete }:
         <div className="section-heading-row">
           <div>
             <h3>Models</h3>
-            <p>Discovery adds IDs only. WackCode waits for you to confirm limits and reasoning support.</p>
+            <p>Discovery adds IDs only. WackCode waits for you to confirm limits, reasoning, and vision support.</p>
           </div>
           <div className="row-actions">
             <button className="secondary-button" disabled={busy} onClick={fetchModels}><Icon name="refresh" /> Fetch models</button>
             <button className="secondary-button" onClick={() => setDraft({ ...draft, models: [...draft.models, {
-              id: "", name: "", contextWindow: null, maxTokens: null, reasoning: false, thinkingLevels: ["off"], thinkingLevelMap: { off: null }
+              id: "", name: "", contextWindow: null, maxTokens: null, reasoning: false, thinkingLevels: ["off"], thinkingLevelMap: { off: null }, vision: false
             }] })}><Icon name="plus" /> Add manually</button>
           </div>
         </div>
@@ -425,6 +425,15 @@ function ProvidersSection({ providers, selectedId, onSelect, onSave, onDelete }:
                     thinkingLevels: !model.reasoning ? ["off", "low", "medium", "high"] : ["off"],
                     thinkingLevelMap: !model.reasoning ? { off: null, low: "low", medium: "medium", high: "high" } : { off: null }
                   })} type="button"><span /></button></label>
+                  <label className="capability-toggle"><span>Vision</span><button
+                    type="button"
+                    role="switch"
+                    aria-checked={model.vision}
+                    aria-label={`Vision for ${model.name || model.id || "this model"}`}
+                    title="Accepts image attachments"
+                    className={`toggle ${model.vision ? "on" : ""}`}
+                    onClick={() => updateModel(index, { vision: !model.vision })}
+                  ><span /></button></label>
                 </div>
                 {model.reasoning && (
                   <>

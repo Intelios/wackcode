@@ -56,7 +56,7 @@ src/            React frontend (Vite entry: ../index.html → src/main.tsx)
   App.tsx       Root orchestrator. Owns ALL state (~760 lines). The only file that listens to "worker-event".
   api.ts        The only bridge to Rust: a flat `api` object of typed one-line `invoke` wrappers.
   types.ts      Shared contract with Rust/worker. Must mirror models.rs and worker/src/protocol.ts.
-  model-utils.ts, chat-utils.ts, tool-utils.ts   Pure helpers; put testable logic here, not in components.
+  model-utils.ts, chat-utils.ts, tool-utils.ts, attachment-utils.ts   Pure helpers; put testable logic here, not in components.
   hooks/        useSmoothText, useFollowScroll (Transcript-only, no tests).
   components/   Presentational components. Only SettingsPage.tsx is allowed to import api directly.
   components/ui/  Reusable primitives: Popover, Menu, MenuButton, Select, Tooltip, ConfirmDialog.
@@ -68,7 +68,8 @@ worker/         Node child process wrapping @earendil-works/pi-coding-agent 0.86
   src/builtin/    Built-in extensions (inline factories, always on): ask_user_question, plan-mode, todo.
   src/manager.ts  Short-lived package-manager process wrapping Pi's DefaultPackageManager.
   src/manager-protocol.ts  Its protocol. Frames are \x1e-prefixed because npm shares stdout.
-  src/framing.ts  JsonLineDecoder. Splits on LF only; U+2028/U+2029 inside strings are safe.
+  src/framing.ts  JsonLineDecoder. Splits on LF only; U+2028/U+2029 inside strings are safe. Joins a line's
+                  chunks once, so multi-megabyte prompt lines (images) stay linear.
   dist/           tsc output. Build artifact, gitignored. Never edit by hand, never commit.
 src-tauri/
   src/main.rs     3-line entry calling wackcode_lib::run().
@@ -161,6 +162,14 @@ Rules that must not regress:
 
 The `no*` flags stay `true` even now that packages load. They switch off *discovery*, not loading: `DefaultResourceLoader` still honours `additionalExtensionPaths` / `additionalSkillPaths` / `additionalPromptTemplatePaths` / `additionalThemePaths` when they are set (`resource-loader.js`, the `noExtensions ? cliEnabledExtensions : merge(...)` branches). Rust fills those from `init.resources` with the enabled paths of trusted packages only. Nothing else can execute — a project's own `.pi/extensions` is unreachable regardless of trust settings.
 
+### Images
+Images are Pi's own `ImageContent` (`{ type: "image", data: <base64>, mimeType }`) at **every** layer: `src/types.ts`, `models.rs` (`ImageContent`, `PromptInput.images`), and `worker/src/protocol.ts` (`prompt.images`, the same field Pi's RPC `prompt` takes). Nothing converts them on the way, and Pi stores them in its session JSONL in that shape, so sessions stay readable by Pi itself.
+- **Vision is Pi's `input` flag.** `ModelRecord.vision` (default `false`, confirmed by the user in Settings like limits) becomes `input: ["text", "image"]` in the worker's `models.json`; off means `["text"]`, and Pi then swaps any image for its "image omitted" placeholder and stops `read` returning image content. Toggling it changes the provider record, so the worker fingerprint respawns affected workers. Rust also refuses a prompt with images for a non-vision model (`require_vision`), because Pi's silent downgrade would hide the problem.
+- **Limits live in two places and must match:** `src/attachment-utils.ts` and `validate_images` in `commands.rs` (8 images, 20 MB each, PNG/JPEG/GIF/WebP). A message is still required alongside images: Pi always sends a text part.
+- **Resizing happens in the worker**, not the UI: `prepareImages` repeats Pi's CLI `processImage` with the exported `resizeImage` and Pi's defaults (2000 px, 4.5 MB), because `session.prompt` forwards images untouched.
+- **Snapshots never carry originals.** User-message image blocks become `{ type: "image", mimeType, imageId, thumbnail? }`; the worker makes a ≤512 px `data:` preview one at a time, caches it in a `WeakMap` keyed by Pi's (stable) block object, and re-snapshots when it lands. `Transcript`'s memo signature uses `imageId`, never the preview data. Tool-result images (e.g. `read` on a PNG) still reach the model but are not rendered; they are dropped from normalization so they can't overwrite the call's text result.
+- Drag and drop uses HTML5 events, which is why `tauri.conf.json` sets `dragDropEnabled: false` (the native handler would otherwise swallow file drops). The CSP already allows `data:` images; do not add `blob:` or remote origins for this.
+
 ### Extension dialogs
 Extensions may call `ctx.ui.select/confirm/input/editor`. The worker implements a headless `ExtensionUIContext` modelled on Pi's RPC mode and bridges those four to React modals; ambient TUI affordances (`setStatus`, `setWidget`, `setFooter`, themes, custom components) are accepted and discarded. A fifth `method: "questions"` (structured questionnaires, `answers` on the response) exists for the built-in `ask_user_question` tool and is rendered by `QuestionDialog.tsx`, not `ExtensionDialog.tsx`.
 
@@ -206,13 +215,13 @@ The user's selection is a **denylist**, so a tool a newly installed package adds
 ## Testing guidance
 
 - **What to test where:** pure logic → colocated `*.test.ts` next to `model-utils.ts`/`chat-utils.ts`/`tool-utils.ts`; UI → Testing Library component tests (`ModelPicker.test.tsx`, `ProjectBar.test.tsx`, `ui/Select.test.tsx` show the style: `afterEach(cleanup)`, `screen.getByRole`, `fireEvent`, small controlled `Harness` wrappers); worker protocol → `worker/src/*.test.ts` (real spawned worker + inline mock provider on an ephemeral port); Rust → inline `#[cfg(test)] mod tests` using `tempfile`.
-- **What's currently untested (don't mimic a pattern that isn't there):** `App.tsx`, `Transcript.tsx`, `Composer.tsx`, both hooks, and `api.ts` have no tests. Add coverage deliberately if you touch them, but don't treat existing silence as license to ship regressions.
+- **What's currently untested (don't mimic a pattern that isn't there):** `App.tsx`, `Transcript.tsx`, both hooks, and `api.ts` have no tests. `Composer.tsx` is covered for attachments only. Add coverage deliberately if you touch them, but don't treat existing silence as license to ship regressions.
 - The worker integration suite exercises properties the UI cannot: concurrent sessions with overlapping model IDs, per-credential isolation, thinking-level wire mapping, cancellation mid-stream, and session restoration without replay. Run it after any protocol change.
 - For a manual end-to-end check: `pnpm mock:provider`, then add `http://127.0.0.1:43127/v1` as a Chat Completions connection in the app.
 
 ## Out of scope for this milestone (do not propose as "fixes")
 
-Subscription login, attachments, embedded editors and terminals, permission prompts, automatic merging, notarization, auto-updates, and any non-macOS platform. MCP is not a WackCode feature, but is reachable by installing a package such as `npm:pi-mcp-adapter`.
+Subscription login, non-image attachments, embedded editors and terminals, permission prompts, automatic merging, notarization, auto-updates, and any non-macOS platform. MCP is not a WackCode feature, but is reachable by installing a package such as `npm:pi-mcp-adapter`.
 
 **In scope but not built:** per-project package overrides (Pi's project scope lives in the user's own `.pi/`, which is untrusted here by design), skill authoring, and theme selection. `todo.md` (gitignored) tracks longer-term Pi-surface ideas; coordinate before picking those up.
 

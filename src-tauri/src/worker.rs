@@ -208,6 +208,7 @@ pub async fn ensure_worker(
             "reasoning": model.reasoning,
             "thinkingLevels": model.thinking_levels,
             "thinkingLevelMap": model.thinking_level_map,
+            "vision": model.vision,
         }))
     }).collect();
     let init = json!({

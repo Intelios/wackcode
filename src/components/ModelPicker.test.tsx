@@ -22,7 +22,8 @@ const testProviders: ProviderRecord[] = [
         maxTokens: 8192,
         reasoning: true,
         thinkingLevels: ["off", "low", "medium", "high", "max"],
-        thinkingLevelMap: { off: null, low: "low", medium: "medium", high: "high", max: "max" }
+        thinkingLevelMap: { off: null, low: "low", medium: "medium", high: "high", max: "max" },
+        vision: false
       },
       {
         id: "openai/gpt-4o",
@@ -31,7 +32,8 @@ const testProviders: ProviderRecord[] = [
         maxTokens: 4096,
         reasoning: false,
         thinkingLevels: ["off"],
-        thinkingLevelMap: { off: null }
+        thinkingLevelMap: { off: null },
+        vision: false
       }
     ]
   },
@@ -51,7 +53,8 @@ const testProviders: ProviderRecord[] = [
         maxTokens: 4096,
         reasoning: false,
         thinkingLevels: ["off"],
-        thinkingLevelMap: { off: null }
+        thinkingLevelMap: { off: null },
+        vision: false
       }
     ]
   }

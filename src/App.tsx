@@ -11,6 +11,7 @@ import type {
   ExtensionNotice,
   ExtensionUIRequest,
   GitChanges,
+  ImageContent,
   PackageRecord,
   PackageResourceKind,
   ProjectRecord,
@@ -390,7 +391,8 @@ export default function App() {
     });
   }
 
-  async function sendPrompt(message: string, modeOverride?: TaskMode): Promise<boolean> {
+  async function sendPrompt(message: string, options: { images?: ImageContent[]; mode?: TaskMode } = {}): Promise<boolean> {
+    const { images, mode: modeOverride } = options;
     if (!selectedTask) {
       const active = draft ?? { projectId: lastProjectId(), useWorktree: false };
       const choice = active.choice ?? defaultChoice(active.projectId);
@@ -423,7 +425,8 @@ export default function App() {
           providerId: task.providerId,
           modelId: task.modelId,
           thinkingLevel: task.thinkingLevel,
-          mode
+          mode,
+          images
         });
       } catch (reason) {
         patchTask(task.id, { status: "idle" });
@@ -447,7 +450,8 @@ export default function App() {
         thinkingLevel: selectedTask.thinkingLevel,
         // modeOverride matters for "Approve & implement": the plan_state → record sync can
         // still be in flight when the follow-up prompt goes out.
-        mode: modeOverride ?? currentMode
+        mode: modeOverride ?? currentMode,
+        images
       });
       if (selectedTask.name === "New chat") {
         const title = titleFromPrompt(message);
@@ -504,7 +508,7 @@ export default function App() {
         patchRuntime(selectedTask.id, { error: String(reason) });
         return;
       }
-      await sendPrompt("Implement the plan.", "build");
+      await sendPrompt("Implement the plan.", { mode: "build" });
     } else if (action === "copy") {
       await writeText(plan);
       appendNotice(selectedTask.id, { message: "Plan copied to the clipboard.", level: "info" });
@@ -723,7 +727,7 @@ export default function App() {
                 mode={draft?.mode ?? "build"}
                 onModeChange={(mode) => void setTaskMode(mode)}
                 onConfigure={configureDraft}
-                onSend={sendPrompt}
+                onSend={(message, images) => sendPrompt(message, { images })}
                 onStop={() => undefined}
                 onOpenSettings={() => setSettingsOpen(true)}
               />
@@ -777,7 +781,7 @@ export default function App() {
               disabled={pendingDialogTaskIds.has(selectedTask.id)}
               onModeChange={(mode) => void setTaskMode(mode)}
               onConfigure={(patch) => void configure(patch)}
-              onSend={sendPrompt}
+              onSend={(message, images) => sendPrompt(message, { images })}
               onStop={() => void stopTask()}
               onOpenSettings={() => setSettingsOpen(true)}
             />

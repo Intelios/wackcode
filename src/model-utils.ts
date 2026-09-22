@@ -11,7 +11,8 @@ export function mergeDiscoveredModels(existing: ModelRecord[], modelIds: string[
         maxTokens: null,
         reasoning: false,
         thinkingLevels: ["off"],
-        thinkingLevelMap: { off: null }
+        thinkingLevelMap: { off: null },
+        vision: false
       });
     }
   }

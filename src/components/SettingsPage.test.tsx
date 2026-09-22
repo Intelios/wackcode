@@ -211,3 +211,43 @@ describe("SettingsPage sidebar navigation", () => {
 });
 
 
+
+describe("SettingsPage model capabilities", () => {
+  it("starts Vision off and saves it once the user turns it on", async () => {
+    const provider: ProviderRecord = {
+      ...testProviders[0],
+      models: [{
+        id: "vision-model", name: "Vision model", contextWindow: 8000, maxTokens: 1000,
+        reasoning: false, thinkingLevels: ["off"], thinkingLevelMap: { off: null }, vision: false
+      }]
+    };
+    const onSave = vi.fn().mockImplementation(async (input) => ({ ...provider, models: input.models }));
+    render(
+      <SettingsPage
+        providers={[provider]}
+        packages={[]}
+        toolCatalog={catalog}
+        disabledTools={[]}
+        appDataPath="/tmp/wackcode"
+        onClose={vi.fn()}
+        onSave={onSave}
+        onDelete={vi.fn()}
+        onSetDisabledTools={vi.fn()}
+        onRefresh={vi.fn().mockResolvedValue(undefined)}
+        onInstall={vi.fn()}
+        onTrust={vi.fn()}
+        onSearch={vi.fn().mockResolvedValue([])}
+        onRemove={vi.fn()}
+        onUpdate={vi.fn()}
+        onSetResources={vi.fn()}
+      />
+    );
+    const toggle = screen.getByRole("switch", { name: "Vision for Vision model" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Save connection" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls[0][0].models[0].vision).toBe(true);
+  });
+});

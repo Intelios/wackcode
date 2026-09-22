@@ -44,6 +44,8 @@ let activeRun: {
   finalized: boolean;
 } | undefined;
 let activeCredential: string | undefined;
+let activeAuthPath: string | undefined;
+let activeProviderId: string | undefined;
 let stopRequested = false;
 let disabledTools = new Set<string>();
 const pendingDialogs = new Map<string, (response: DialogResponse) => void>();
@@ -517,6 +519,8 @@ async function initialize(command: InitCommand): Promise<void> {
   if (session) throw new Error("Worker is already initialized");
   taskId = command.taskId;
   activeCredential = command.apiKey;
+  activeAuthPath = command.authPath;
+  activeProviderId = command.provider.id;
   await mkdir(command.agentDir, { recursive: true });
   await mkdir(command.sessionDir, { recursive: true });
   const modelsPath = join(command.agentDir, "models.json");
@@ -530,19 +534,26 @@ async function initialize(command: InitCommand): Promise<void> {
       }
     }
   };
-  await writeFile(modelsPath, `${JSON.stringify(modelsConfig, null, 2)}\n`, { mode: 0o600 });
+  if (command.provider.kind === "custom") {
+    await writeFile(modelsPath, `${JSON.stringify(modelsConfig, null, 2)}\n`, { mode: 0o600 });
+  }
 
   const pi = await import("@earendil-works/pi-coding-agent");
   piModule = pi;
   modelRuntime = await pi.ModelRuntime.create({
-    authPath: join(command.agentDir, "auth.json"),
-    modelsPath,
+    authPath: command.provider.kind === "subscription" ? command.authPath : join(command.agentDir, "auth.json"),
+    modelsPath: command.provider.kind === "subscription" ? null : modelsPath,
     modelsStorePath: join(command.agentDir, "models-store.json"),
     allowModelNetwork: false,
     refreshOnCreate: false
   });
-  await modelRuntime.setRuntimeApiKey(command.provider.id, command.apiKey);
-  const selectedModel = modelRuntime.getModel(command.provider.id, command.modelId);
+  if (command.provider.kind === "custom") {
+    if (!command.apiKey) throw new Error("This connection has no API key");
+    await modelRuntime.setRuntimeApiKey(command.provider.id, command.apiKey);
+  }
+  const selectedModel = command.provider.kind === "subscription"
+    ? (await modelRuntime.getAvailable(command.provider.id)).find((model) => model.id === command.modelId)
+    : modelRuntime.getModel(command.provider.id, command.modelId);
   if (!selectedModel) throw new Error(`Configured model was not found: ${command.provider.name}/${command.modelId}`);
 
   const sessionManager = command.sessionFile && existsSync(command.sessionFile)
@@ -734,7 +745,9 @@ async function handle(command: WorkerCommand): Promise<void> {
       emitSnapshot();
     } else if (command.type === "set_model") {
       if (session.isStreaming) throw new Error("Wait for the current run before changing model");
-      const model = modelRuntime?.getModel(session.model?.provider ?? "", command.modelId);
+      const model = modelRuntime && activeAuthPath
+        ? (await modelRuntime.getAvailable(session.model?.provider ?? "")).find((item) => item.id === command.modelId)
+        : modelRuntime?.getModel(session.model?.provider ?? "", command.modelId);
       if (!model) throw new Error(`Configured model was not found: ${command.modelId}`);
       await session.setModel(model);
       emitSnapshot();
@@ -773,7 +786,17 @@ async function handle(command: WorkerCommand): Promise<void> {
 function safeError(error: unknown): string {
   let message = error instanceof Error ? error.message : String(error);
   if (activeCredential) message = message.split(activeCredential).join("[credential redacted]");
-  return message.replace(/(sk-[A-Za-z0-9_-]{8,}|Bearer\s+[A-Za-z0-9._-]+)/gi, "[credential redacted]");
+  if (activeAuthPath && activeProviderId && piModule) {
+    try {
+      const credential = piModule.readStoredCredential(activeProviderId, activeAuthPath);
+      if (credential?.type === "oauth") {
+        for (const value of Object.values(credential)) {
+          if (typeof value === "string" && value.length >= 8) message = message.split(value).join("[credential redacted]");
+        }
+      }
+    } catch { /* Never expose a credential-read failure in an error message. */ }
+  }
+  return message.replace(/(sk-[A-Za-z0-9_-]{8,}|Bearer\s+[A-Za-z0-9._-]+|(?:code|device_code|refresh_token|access_token)=[^\s&]+)/gi, "[credential redacted]");
 }
 
 const decoder = new JsonLineDecoder();

@@ -10,6 +10,7 @@ import type {
   ProviderRecord,
   QuestionAnswer,
   SaveProviderInput,
+  SubscriptionProviderInfo,
   TaskMode,
   TaskRecord,
   ThinkingLevel,
@@ -22,6 +23,13 @@ export const api = {
   deleteProvider: (providerId: string) => invoke<void>("delete_provider", { providerId }),
   discoverModels: (providerId: string) => invoke<string[]>("discover_models", { input: { providerId } }),
   listBuiltinModels: () => invoke<BuiltinModelSuggestion[]>("list_builtin_models"),
+  listSubscriptionProviders: () => invoke<SubscriptionProviderInfo[]>("list_subscription_providers"),
+  startSubscriptionLogin: (providerId: string) => invoke<{ loginId: string; provider: ProviderRecord }>("start_subscription_login", { providerId }),
+  respondSubscriptionLogin: (loginId: string, promptId: string, value?: string, cancelled = false) =>
+    invoke<void>("respond_subscription_login", { loginId, promptId, value, cancelled }),
+  cancelSubscriptionLogin: (loginId: string) => invoke<void>("cancel_subscription_login", { loginId }),
+  signOutSubscription: (providerId: string) => invoke<ProviderRecord>("sign_out_subscription", { providerId }),
+  openSubscriptionAuthUrl: (url: string) => invoke<void>("open_subscription_auth_url", { url }),
   setToolConfig: (disabled: string[]) => invoke<ToolConfig>("set_tool_config", { input: { disabled } }),
   listPackages: () => invoke<PackageRecord[]>("list_packages"),
   searchPackages: (query: string, from = 0) =>

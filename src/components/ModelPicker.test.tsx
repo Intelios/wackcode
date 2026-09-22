@@ -13,6 +13,8 @@ const testProviders: ProviderRecord[] = [
     apiFormat: "openai-completions",
     createdAt: "2024-01-01",
     updatedAt: "2024-01-01",
+    kind: "custom",
+    connected: true,
     hasApiKey: true,
     models: [
       {
@@ -44,6 +46,8 @@ const testProviders: ProviderRecord[] = [
     apiFormat: "openai-responses",
     createdAt: "2024-01-01",
     updatedAt: "2024-01-01",
+    kind: "custom",
+    connected: true,
     hasApiKey: true,
     models: [
       {

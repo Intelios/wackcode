@@ -43,6 +43,8 @@ pub struct BuiltinModelSuggestion {
 pub struct ProviderRecord {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub kind: ProviderKind,
     pub base_url: String,
     pub api_format: String,
     #[serde(default)]
@@ -51,6 +53,16 @@ pub struct ProviderRecord {
     pub updated_at: String,
     #[serde(default)]
     pub has_api_key: bool,
+    #[serde(default)]
+    pub connected: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProviderKind {
+    #[default]
+    Custom,
+    Subscription,
 }
 
 /// One resource file a package contributes, with whether the user's filters currently load it.

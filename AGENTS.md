@@ -8,7 +8,7 @@ Read `README.md` first for the user-facing feature set and security posture; thi
 
 - **Platform:** macOS on Apple Silicon only. `scripts/prepare-runtime.mjs` hard-fails elsewhere. Unix-only APIs (`nix::killpg`, `open(1)`) are used deliberately — do not file or "fix" these as cross-platform bugs.
 - **Package manager:** pnpm 11.5.0 (pinned in `package.json` → `packageManager`). Do not use npm/yarn; do not add a root `package-lock.json`.
-- **No telemetry, no account, no backend, no updater, no automatic model discovery.** Anything that "phones home" from the app itself is out of scope. Outbound traffic is limited to three user-initiated destinations: user-configured OpenAI-compatible provider endpoints; the public npm registry (`registry.npmjs.org`), only while the user browses or installs a package; and the package's own npm or git source during that install. Nothing contacts any of them on launch or on a timer.
+- **No telemetry, no WackCode account, no backend, no updater, no automatic model discovery.** Outbound traffic is limited to user-configured OpenAI-compatible provider endpoints; Pi’s built-in subscription authorization and inference endpoints after explicit sign-in or a user prompt; the public npm registry (`registry.npmjs.org`), only while the user browses or installs a package; and the package's own npm or git source during that install. Nothing contacts any of them on launch or on a timer. OAuth refresh can run as part of a user prompt.
 - **No AGENTS.md loading in the bundled worker** — Pi's project instruction files (like this one) still load in the *user's* projects, but this repo's guide is for you, the agent working on WackCode itself.
 
 ## Architecture
@@ -17,17 +17,19 @@ Three layers, one repo, exactly one bridge between each pair:
 
 ```
 React frontend (src/)                Tauri v2 bridge                Rust backend (src-tauri/)
-  api.ts  ──invoke(snake_case)──►   commands.rs (32 commands)  ──►  storage.rs / secrets.rs / git.rs
+  api.ts  ──invoke(snake_case)──►   commands.rs / subscriptions.rs  ──►  storage.rs / secrets.rs / git.rs
   App.tsx ◄──listen("worker-event")──  worker.rs (per-task Node child process)
                                                    │ stdin/stdout NDJSON
                                                    ▼
                                         worker/src/index.ts  (Pi SDK wrapper)
                                                    │ HTTPS
                                                    ▼
-                                  user-configured OpenAI-compatible endpoint
+                                  selected custom or native Pi provider
 ```
 
 A third, short-lived process handles packages. It is spawned per operation by `worker::run_manager`, runs `worker/src/manager.ts` on the same bundled Node, and wraps Pi's `DefaultPackageManager` against a shared store at `<app-data>/pi/`. It **never receives an API key**, the provider env keys are stripped before spawn, and unlike a task worker it does not set `PI_OFFLINE` — installing is the one thing it exists to do. Its protocol lines are prefixed with `\x1e` because Pi spawns npm with inherited stdio and npm's own output lands on the same stream.
+
+Subscription login uses another short-lived Node process, `worker/src/subscription-auth.ts`, started by `subscriptions.rs` only after the user clicks Sign in or Reconnect. It runs Pi's native OAuth flow, relays prompts and progress through `subscription-login-event`, and writes one private Pi auth file per provider. Task workers receive that file path for native models and refresh tokens during requests. The renderer never receives the credential.
 
 Data flow for one prompt: `App.tsx` → `api.prompt` → `commands::prompt` (validates, ensures worker, generates `runId`) → `worker.rs` writes an NDJSON `prompt` line to the worker's stdin → `worker/src/index.ts` drives the Pi session → Pi streams back → worker emits `partial` / `activity` / `snapshot` / `run_state` NDJSON lines on stdout → `worker.rs::handle_worker_line` parses, persists key fields to `wackcode.json`, and re-emits every line as the single Tauri event `"worker-event"` → `App.tsx` dispatches on `payload.type` into `patchRuntime` / `patchTask`.
 
@@ -152,7 +154,7 @@ Rules that must not regress:
 - **Crash handling:** any worker exit while still registered is unexpected — Rust marks the task `Interrupted` and emits a redacted, 1 000-char-capped stderr tail as `worker_error`.
 
 ### Secrets discipline (security-critical)
-- API keys live **only** in `secrets.json` (mode 0600) via `secrets.rs`, and are delivered to the worker **only** through the stdin `init` command. Never argv, never env vars.
+- Manually entered API keys live **only** in `secrets.json` (mode 0600) via `secrets.rs`, and are delivered to the worker **only** through the stdin `init` command. Never argv, never env vars. Pi OAuth credentials (including provider-minted keys) live in separate mode-0600 `subscriptions/<provider>/auth.json` files under app data; task workers receive the path to only their selected provider. Never serialize OAuth credentials into `wackcode.json` or Tauri events.
 - Rust strips all 15 known provider API-key env vars before spawning the worker (`worker.rs`).
 - Redaction happens twice: `safeError` in the worker, then `redact_and_limit` in Rust. Preserve both layers.
 - A dedicated test in `storage.rs` asserts `wackcode.json` contains no secrets. The earlier macOS-Keychain backend was deliberately removed (commit `ea25c08`) — do not reintroduce keyring unless that decision is explicitly revisited.
@@ -221,12 +223,12 @@ The user's selection is a **denylist**, so a tool a newly installed package adds
 
 ## Out of scope for this milestone (do not propose as "fixes")
 
-Subscription login, non-image attachments, embedded editors and terminals, permission prompts, automatic merging, notarization, auto-updates, and any non-macOS platform. MCP is not a WackCode feature, but is reachable by installing a package such as `npm:pi-mcp-adapter`.
+Non-image attachments, embedded editors and terminals, permission prompts, automatic merging, notarization, auto-updates, and any non-macOS platform. MCP is not a WackCode feature, but is reachable by installing a package such as `npm:pi-mcp-adapter`.
 
 **In scope but not built:** per-project package overrides (Pi's project scope lives in the user's own `.pi/`, which is untrusted here by design), skill authoring, and theme selection. `todo.md` (gitignored) tracks longer-term Pi-surface ideas; coordinate before picking those up.
 
 ## Security posture to preserve
 
-App-initiated network calls are limited to user-configured provider endpoints (`GET {baseUrl}/models` and chat completions) and, only on an explicit user action, the npm registry plus the chosen package's npm or git source. CSP is `default-src 'self'` with only `ipc:` connect-src and **must stay that way**: the renderer never fetches, so every remote call goes through Rust `reqwest` or the package-manager process. A new network origin still requires an explicit note in the PR. The worker environment is sanitized, credentials travel only over a private stdin pipe, and local state lives under the app's macOS application-data directory.
+App-initiated network calls are limited to user-configured provider endpoints (`GET {baseUrl}/models` and chat completions), Pi’s built-in subscription authorization endpoints after explicit sign-in and subscription inference/token refresh during user prompts, and, only on an explicit user action, the npm registry plus the chosen package's npm or git source. CSP is `default-src 'self'` with only `ipc:` connect-src and **must stay that way**: the renderer never fetches, so every remote call goes through Rust `reqwest` or the package-manager process. A new network origin still requires an explicit note in the PR. The worker environment is sanitized, credentials travel only over a private stdin pipe, and local state lives under the app's macOS application-data directory.
 
 **Installed packages are the largest trust boundary in the app.** An extension is ordinary local code running inside the task worker — the process holding the decrypted provider API key. The trust dialog is informed consent, not containment: it names the source and states the API-key exposure, and `trusted_at` gates whether a package's paths ever reach a worker (`worker::resource_paths`). Do not weaken that gate. **`trusted_at` is only ever set by an explicit `install_package` or `trust_package` the user confirmed** — `sync_packages` takes a `newly_trusted` argument precisely so that a package appearing in the shared store by any other route (a restored `wackcode.json`, or an already-installed extension editing `settings.json`) stays inert and is shown in Settings as "Not enabled" until reviewed. Never default it to the current time. Project-local `.pi/` remains unloadable by construction, not by a flag: the worker keeps every `no*` discovery option on and loads only the absolute paths Rust hands it.

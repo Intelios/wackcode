@@ -2,7 +2,7 @@ import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode }
 import { api } from "../api";
 import { applyBuiltinModelSuggestion, mergeDiscoveredModels, modelIsReady, searchBuiltinModels } from "../model-utils";
 import { groupTools } from "../tool-utils";
-import type { ApiFormat, BuiltinModelSuggestion, ModelRecord, PackageRecord, ProviderRecord, SaveProviderInput, ThinkingLevel, ToolCatalogEntry } from "../types";
+import type { ApiFormat, BuiltinModelSuggestion, CustomProviderRecord, ModelRecord, PackageRecord, ProviderRecord, SaveProviderInput, SubscriptionProviderInfo, ThinkingLevel, ToolCatalogEntry } from "../types";
 import { Icon, type IconName } from "./Icons";
 import { PackagesSection, type PackageActions } from "./PackagesSection";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
@@ -37,12 +37,15 @@ interface Props extends PackageActions {
   onClose: () => void;
   onSave: (input: SaveProviderInput) => Promise<ProviderRecord>;
   onDelete: (providerId: string) => Promise<void>;
+  onConnectSubscription: (providerId: string) => Promise<void>;
+  onSignOutSubscription: (providerId: string) => Promise<void>;
+  connectedSubscriptionId?: string;
   onSetDisabledTools: (disabled: string[]) => Promise<void>;
 }
 
 export function SettingsPage({
   providers, packages, toolCatalog, disabledTools, appDataPath,
-  onClose, onSave, onDelete, onSetDisabledTools,
+  onClose, onSave, onDelete, onConnectSubscription, onSignOutSubscription, connectedSubscriptionId, onSetDisabledTools,
   onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
 }: Props) {
   const [section, setSection] = useState<SectionId>("providers");
@@ -50,6 +53,9 @@ export function SettingsPage({
   const [builtinModels, setBuiltinModels] = useState<BuiltinModelSuggestion[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(true);
   const [catalogError, setCatalogError] = useState<string>();
+  const [subscriptionProviders, setSubscriptionProviders] = useState<SubscriptionProviderInfo[]>([]);
+  const [subscriptionError, setSubscriptionError] = useState<string>();
+  const [newMethod, setNewMethod] = useState<"apiKey" | "subscription">("apiKey");
   const selectedSection = SECTIONS.find((item) => item.id === section);
 
   useEffect(() => {
@@ -61,8 +67,15 @@ export function SettingsPage({
     }).finally(() => {
       if (active) setCatalogLoading(false);
     });
+    api.listSubscriptionProviders().then((providers) => {
+      if (active) setSubscriptionProviders(providers);
+    }).catch((reason) => { if (active) setSubscriptionError(String(reason)); });
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    if (connectedSubscriptionId) { setSelectedProviderId(connectedSubscriptionId); setSection("providers"); }
+  }, [connectedSubscriptionId]);
 
   return (
     <>
@@ -105,7 +118,7 @@ export function SettingsPage({
                             setSection("providers");
                           }}
                         >
-                          <span className={`credential-dot ${provider.hasApiKey ? "connected" : ""}`} />
+                          <span className={`credential-dot ${provider.connected ? "connected" : ""}`} />
                           <span>{provider.name}</span>
                         </button>
                       ))}
@@ -141,8 +154,22 @@ export function SettingsPage({
           </div>
           <button type="button" className="secondary-button" onClick={onClose}>Done</button>
         </header>
-        {section === "providers" && (
-          <ProvidersSection
+        {section === "providers" && selectedProviderId === "new" && <div className="connection-methods" role="group" aria-label="Connection method">
+          <button type="button" className={newMethod === "apiKey" ? "selected" : ""} onClick={() => setNewMethod("apiKey")}>API key</button>
+          <button type="button" className={newMethod === "subscription" ? "selected" : ""} onClick={() => setNewMethod("subscription")}>Sign in with a subscription</button>
+        </div>}
+        {section === "providers" && (providers.find((provider) => provider.id === selectedProviderId)?.kind === "subscription"
+          ? <SubscriptionSection
+              provider={providers.find((provider) => provider.id === selectedProviderId)!}
+              guidance={subscriptionProviders.find((provider) => provider.id === selectedProviderId)?.guidance}
+              onConnect={onConnectSubscription}
+              onSignOut={onSignOutSubscription}
+              onDelete={onDelete}
+              onSelect={setSelectedProviderId}
+            />
+          : selectedProviderId === "new" && newMethod === "subscription"
+          ? <SubscriptionCatalog providers={subscriptionProviders} error={subscriptionError} onConnect={onConnectSubscription} />
+          : <ProvidersSection
             providers={providers}
             selectedId={selectedProviderId}
             onSelect={setSelectedProviderId}
@@ -151,8 +178,7 @@ export function SettingsPage({
             builtinModels={builtinModels}
             catalogLoading={catalogLoading}
             catalogError={catalogError}
-          />
-        )}
+          />)}
         {section === "packages" && (
           <PackagesSection
             packages={packages}
@@ -261,7 +287,7 @@ function blankDraft(): Draft {
   return { name: "", baseUrl: "", apiFormat: "openai-completions", apiKey: "", models: [] };
 }
 
-function fromProvider(provider: ProviderRecord): Draft {
+function fromProvider(provider: CustomProviderRecord): Draft {
   return {
     id: provider.id,
     name: provider.name,
@@ -377,7 +403,8 @@ interface ProvidersSectionProps {
 }
 
 function ProvidersSection({ providers, selectedId, onSelect, onSave, onDelete, builtinModels, catalogLoading, catalogError }: ProvidersSectionProps) {
-  const selected = providers.find((provider) => provider.id === selectedId);
+  const candidate = providers.find((provider) => provider.id === selectedId);
+  const selected = candidate?.kind === "custom" ? candidate : undefined;
   const [draft, setDraft] = useState<Draft>(() => selected ? fromProvider(selected) : blankDraft());
   const [modelCardKeys, setModelCardKeys] = useState<number[]>(() => newModelCardKeys(selected?.models.length ?? 0));
   const [busy, setBusy] = useState(false);
@@ -386,7 +413,8 @@ function ProvidersSection({ providers, selectedId, onSelect, onSave, onDelete, b
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEffect(() => {
-    const provider = providers.find((item) => item.id === selectedId);
+    const candidate = providers.find((item) => item.id === selectedId);
+    const provider = candidate?.kind === "custom" ? candidate : undefined;
     setDraft(provider ? fromProvider(provider) : blankDraft());
     setModelCardKeys(newModelCardKeys(provider?.models.length ?? 0));
     setError(undefined);
@@ -402,7 +430,7 @@ function ProvidersSection({ providers, selectedId, onSelect, onSave, onDelete, b
     try {
       const saved = await onSave({ ...draft, apiKey: draft.apiKey?.trim() || undefined });
       onSelect(saved.id);
-      setDraft(fromProvider(saved));
+      setDraft(saved.kind === "custom" ? fromProvider(saved) : blankDraft());
       setModelCardKeys(newModelCardKeys(saved.models.length));
       setNotice("Connection saved. The API key is stored on this device.");
       return saved;
@@ -422,7 +450,7 @@ function ProvidersSection({ providers, selectedId, onSelect, onSave, onDelete, b
     try {
       const ids = await api.discoverModels(saved.id);
       const models = mergeDiscoveredModels(saved.models, ids);
-      setDraft({ ...fromProvider(saved), models });
+      setDraft({ ...(saved.kind === "custom" ? fromProvider(saved) : blankDraft()), models });
       setModelCardKeys(newModelCardKeys(models.length));
       setNotice(`Found ${ids.length} model${ids.length === 1 ? "" : "s"}. Confirm limits for new entries, then save.`);
     } catch (reason) {
@@ -625,4 +653,68 @@ function ProvidersSection({ providers, selectedId, onSelect, onSave, onDelete, b
       )}
     </>
   );
+}
+
+interface SubscriptionCatalogProps {
+  providers: SubscriptionProviderInfo[];
+  error?: string;
+  onConnect: (providerId: string) => Promise<void>;
+}
+
+function SubscriptionCatalog({ providers, error, onConnect }: SubscriptionCatalogProps) {
+  return <div className="settings-scroll subscription-catalog">
+    <h3>Sign in with a subscription</h3>
+    <p>WackCode uses Pi’s built-in sign-in for these providers. Your account remains separate from any Pi CLI installation.</p>
+    {error && <div className="error-banner">Could not load subscription providers: {error}</div>}
+    {providers.map((provider) => <article className="subscription-provider-card" key={provider.id}>
+      <div><strong>{provider.name}</strong><p>{provider.guidance}</p></div>
+      <button type="button" className="primary-button" onClick={() => void onConnect(provider.id)}>Sign in</button>
+    </article>)}
+    <p className="subscription-billing-note">Anthropic may charge usage credits for third-party app access. <button type="button" className="text-button" onClick={() => void api.openSubscriptionAuthUrl("https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account")}>Review Anthropic’s guidance</button></p>
+  </div>;
+}
+
+interface SubscriptionSectionProps {
+  provider: ProviderRecord;
+  guidance?: string;
+  onConnect: (providerId: string) => Promise<void>;
+  onSignOut: (providerId: string) => Promise<void>;
+  onDelete: (providerId: string) => Promise<void>;
+  onSelect: (id: string) => void;
+}
+
+function SubscriptionSection({ provider, guidance, onConnect, onSignOut, onDelete, onSelect }: SubscriptionSectionProps) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const [confirmSignOut, setConfirmSignOut] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  if (provider.kind !== "subscription") return null;
+
+  async function action(run: () => Promise<void>) {
+    setBusy(true);
+    setError(undefined);
+    try { await run(); }
+    catch (reason) { setError(String(reason)); throw reason; }
+    finally { setBusy(false); }
+  }
+
+  return <>
+    <div className="settings-scroll subscription-detail">
+      <p className="subscription-status"><span className={`credential-dot ${provider.connected ? "connected" : ""}`} /> {provider.connected ? "Signed in" : "Signed out"}</p>
+      {guidance && <p>{guidance}</p>}
+      {provider.id === "anthropic" && <button type="button" className="text-button" onClick={() => void api.openSubscriptionAuthUrl("https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account").catch((reason) => setError(String(reason)))}>Review Anthropic’s billing guidance</button>}
+      <p>Pi manages this provider’s models and refreshes its credential when you send a request. Sign in again if authentication fails.</p>
+      <button type="button" className="primary-button" disabled={busy} onClick={() => void onConnect(provider.id)}>{provider.connected ? "Reconnect" : "Sign in"}</button>
+      <h3>{provider.connected ? "Available models" : "Last known models"}</h3>
+      {provider.models.length ? <ul className="subscription-model-list">{provider.models.map((model) => <li key={model.id}><strong>{model.name}</strong><span>{model.id}</span></li>)}</ul>
+        : <p>{provider.connected ? "No models are available to this account." : "Sign in to load models available to this account."}</p>}
+    </div>
+    <footer className="settings-footer">
+      {error && <span className="error-text">{error}</span>}
+      <button type="button" className="danger-button" disabled={busy} onClick={() => setConfirmDelete(true)}>Delete</button>
+      {provider.connected && <button type="button" className="secondary-button" disabled={busy} onClick={() => setConfirmSignOut(true)}>Sign out</button>}
+    </footer>
+    {confirmSignOut && <ConfirmDialog title={`Sign out of ${provider.name}?`} body="Saved chats will remain, but they cannot use this connection until you sign in again." confirmLabel="Sign out" onConfirm={() => action(() => onSignOut(provider.id))} onCancel={() => setConfirmSignOut(false)} />}
+    {confirmDelete && <ConfirmDialog title={`Delete ${provider.name}?`} body="This removes its WackCode sign-in. Saved chats must use another connection before deletion." confirmLabel="Delete" danger onConfirm={() => action(async () => { await onDelete(provider.id); onSelect("new"); })} onCancel={() => setConfirmDelete(false)} />}
+  </>;
 }

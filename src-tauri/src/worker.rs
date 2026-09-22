@@ -1,4 +1,4 @@
-use crate::{models::{BuiltinModelSuggestion, PackageRecord, ProviderRecord, TaskMode, TaskRecord, TaskStatus, ToolCatalogEntry}, storage::MetadataState};
+use crate::{models::{BuiltinModelSuggestion, PackageRecord, ProviderKind, ProviderRecord, TaskMode, TaskRecord, TaskStatus, ToolCatalogEntry}, storage::MetadataState, subscriptions};
 use nix::{sys::signal::{killpg, Signal}, unistd::Pid};
 use serde_json::{json, Value};
 use std::{collections::HashMap, path::PathBuf, process::Stdio, sync::{Arc, Mutex}};
@@ -11,6 +11,10 @@ const PROVIDER_ENVIRONMENT_KEYS: &[&str] = &[
     "MISTRAL_API_KEY", "CEREBRAS_API_KEY", "TOGETHER_API_KEY", "FIREWORKS_API_KEY",
     "AZURE_OPENAI_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "HF_TOKEN"
 ];
+
+pub(crate) fn strip_provider_env(command: &mut Command) {
+    for key in PROVIDER_ENVIRONMENT_KEYS { command.env_remove(key); }
+}
 
 #[derive(Clone)]
 pub struct WorkerProcess {
@@ -93,7 +97,7 @@ pub async fn ensure_worker(
     app: &AppHandle,
     task: &TaskRecord,
     provider: &ProviderRecord,
-    api_key: &str,
+    api_key: Option<&str>,
 ) -> Result<(), String> {
     let worker_state = app.state::<WorkerState>();
     let wanted_fingerprint = {
@@ -125,7 +129,7 @@ pub async fn ensure_worker(
         .env("PI_TELEMETRY", "0")
         .env("PI_SKIP_VERSION_CHECK", "1")
         .env("PI_OFFLINE", "1");
-    for key in PROVIDER_ENVIRONMENT_KEYS { command.env_remove(key); }
+    strip_provider_env(&mut command);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -143,6 +147,7 @@ pub async fn ensure_worker(
     })?;
 
     let task_id = task.id.clone();
+    let subscription_worker = provider.kind == ProviderKind::Subscription;
     let app_for_process = app.clone();
     tauri::async_runtime::spawn(async move {
         let stdout_app = app_for_process.clone();
@@ -173,7 +178,9 @@ pub async fn ensure_worker(
         // including a nominal exit code caused by an external SIGTERM handler.
         let unexpected = app_for_process.state::<WorkerState>().remove_if_pid(&task_id, pid).unwrap_or(true);
         if unexpected {
-            let message = if stderr_message.is_empty() {
+            let message = if subscription_worker {
+                "The Pi worker stopped unexpectedly while using a subscription.".to_string()
+            } else if stderr_message.is_empty() {
                 "The Pi worker stopped unexpectedly.".to_string()
             } else {
                 format!("The Pi worker stopped unexpectedly: {}", redact_and_limit(&stderr_message))
@@ -211,6 +218,9 @@ pub async fn ensure_worker(
             "vision": model.vision,
         }))
     }).collect();
+    let auth_path = if provider.kind == ProviderKind::Subscription {
+        Some(subscriptions::auth_path(app, &provider.id)?)
+    } else { None };
     let init = json!({
         "id": uuid::Uuid::new_v4().to_string(),
         "type": "init",
@@ -222,12 +232,14 @@ pub async fn ensure_worker(
         "provider": {
             "id": provider.id,
             "name": provider.name,
+            "kind": provider.kind,
             "baseUrl": provider.base_url,
             "api": provider.api_format,
             "models": models,
         },
         "modelId": task.model_id,
         "apiKey": api_key,
+        "authPath": auth_path,
         "thinkingLevel": task.thinking_level,
         "disabledTools": disabled_tools,
         "resources": resources,
@@ -484,7 +496,7 @@ pub fn package_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-fn node_executable_path() -> Result<PathBuf, String> {
+pub(crate) fn node_executable_path() -> Result<PathBuf, String> {
     if cfg!(debug_assertions) {
         Ok(std::env::var_os("WACKCODE_NODE_PATH").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("node")))
     } else {
@@ -494,8 +506,13 @@ fn node_executable_path() -> Result<PathBuf, String> {
 }
 
 fn handle_worker_line(app: &AppHandle, task_id: &str, line: &str) {
-    let Ok(value) = serde_json::from_str::<Value>(line) else { return; };
-    let event_type = value.get("type").and_then(Value::as_str).unwrap_or("");
+    let Ok(mut value) = serde_json::from_str::<Value>(line) else { return; };
+    let event_type = value.get("type").and_then(Value::as_str).unwrap_or("").to_string();
+    if event_type == "worker_error" {
+        if let Some(message) = value.get("message").and_then(Value::as_str).map(redact_and_limit) {
+            value["message"] = Value::String(message);
+        }
+    }
     let mut should_save = false;
     if event_type == "ready" || event_type == "snapshot" {
         if let Ok(mut data) = app.state::<MetadataState>().data.lock() {
@@ -579,6 +596,13 @@ fn redact_and_limit(message: &str) -> String {
             safe.replace_range(start..end, "[credential redacted]");
         }
     }
+    for marker in ["access_token=", "refresh_token=", "device_code=", "code="] {
+        while let Some(start) = safe.to_ascii_lowercase().find(marker) {
+            let end = safe[start..].find(|character: char| character.is_whitespace() || character == '&' || character == '#')
+                .map(|index| start + index).unwrap_or(safe.len());
+            safe.replace_range(start..end, "[credential redacted]");
+        }
+    }
     safe.chars().take(1_000).collect()
 }
 
@@ -608,10 +632,20 @@ mod tests {
 
     fn provider() -> ProviderRecord {
         ProviderRecord {
-            id: "p".into(), name: "P".into(), base_url: "https://example.test/v1".into(),
+            id: "p".into(), name: "P".into(), kind: ProviderKind::Custom, base_url: "https://example.test/v1".into(),
             api_format: "openai-completions".into(), models: Vec::new(),
-            created_at: "now".into(), updated_at: "now".into(), has_api_key: true,
+            created_at: "now".into(), updated_at: "now".into(), has_api_key: true, connected: true,
         }
+    }
+
+    #[test]
+    fn oauth_codes_and_tokens_are_redacted_before_events_or_metadata() {
+        let message = "request failed: https://example.test/callback?code=private-code&state=ok access_token=private-token refresh_token=private-refresh";
+        let safe = redact_and_limit(message);
+        assert!(!safe.contains("private-code"));
+        assert!(!safe.contains("private-token"));
+        assert!(!safe.contains("private-refresh"));
+        assert!(safe.contains("state=ok"));
     }
 
     #[test]

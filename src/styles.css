@@ -597,6 +597,28 @@ button.reasoning-toggle.at-max .reasoning-toggle-label {
 
 /* ── Modals ────────────────────────────────────────── */
 .modal-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: rgb(3 4 3 / 68%); backdrop-filter: blur(8px); }
+.subscription-login-dialog { width: min(480px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 10px; }
+.subscription-login-dialog .subscription-prompt { display: flex; flex-direction: column; gap: 8px; }
+.subscription-login-dialog .subscription-prompt input, .subscription-login-dialog .subscription-prompt select { width: 100%; }
+.subscription-login-dialog .subscription-prompt .primary-button { align-self: flex-end; }
+.subscription-device-code { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
+.subscription-device-code > span { flex-basis: 100%; color: var(--text-soft); font-size: 12px; }
+.subscription-device-code strong { font-family: "SFMono-Regular", Consolas, monospace; letter-spacing: .12em; font-size: 18px; margin-right: auto; }
+.connection-methods { display: flex; gap: 6px; padding: 12px 24px 0; }
+.connection-methods button { border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--text-soft); padding: 7px 11px; cursor: pointer; }
+.connection-methods button.selected { border-color: var(--wc-accent); color: var(--text); }
+.subscription-catalog h3, .subscription-detail h3 { margin: 0 0 8px; }
+.subscription-catalog > p, .subscription-detail > p { color: var(--text-soft); line-height: 1.5; font-size: 13px; }
+.subscription-provider-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; border: 1px solid var(--border); border-radius: 9px; padding: 14px; margin-top: 10px; }
+.subscription-provider-card strong { font-size: 13px; }
+.subscription-provider-card p { color: var(--text-soft); font-size: 12px; margin: 5px 0 0; }
+.subscription-provider-card button { flex: 0 0 auto; }
+.subscription-billing-note { margin-top: 20px; }
+.text-button { background: none; border: 0; padding: 0; color: var(--wc-accent); text-decoration: underline; cursor: pointer; font: inherit; }
+.subscription-status { display: flex; align-items: center; gap: 8px; }
+.subscription-model-list { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 6px; }
+.subscription-model-list li { display: flex; justify-content: space-between; gap: 12px; padding: 8px 10px; background: var(--surface); border-radius: 6px; font-size: 12px; }
+.subscription-model-list span { color: var(--text-dim); overflow-wrap: anywhere; }
 .settings-head { height: 30px; margin: -8px 0 2px; padding: 0 4px; display: flex; align-items: center; }
 .settings-back-button {
   display: inline-flex;

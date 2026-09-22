@@ -88,16 +88,50 @@ export interface ImageContent {
   mimeType: string;
 }
 
-export interface ProviderRecord {
+interface ProviderBase {
   id: string;
   name: string;
-  baseUrl: string;
-  apiFormat: ApiFormat;
   models: ModelRecord[];
   createdAt: string;
   updatedAt: string;
-  hasApiKey: boolean;
 }
+
+export interface CustomProviderRecord extends ProviderBase {
+  kind: "custom";
+  baseUrl: string;
+  apiFormat: ApiFormat;
+  hasApiKey: boolean;
+  connected: boolean;
+}
+
+export interface SubscriptionProviderRecord extends ProviderBase {
+  kind: "subscription";
+  baseUrl: string;
+  apiFormat: string;
+  hasApiKey: false;
+  connected: boolean;
+}
+
+export type ProviderRecord = CustomProviderRecord | SubscriptionProviderRecord;
+
+export interface SubscriptionProviderInfo {
+  id: string;
+  name: string;
+  guidance: string;
+}
+
+export type SubscriptionLoginEvent = {
+  loginId: string;
+  providerId: string;
+} & (
+  | { type: "prompt"; promptId: string; prompt: { type: "text" | "secret" | "select" | "manual_code"; message: string; placeholder?: string; options?: { id: string; label: string; description?: string }[] } }
+  | { type: "auth_url"; url: string; instructions?: string }
+  | { type: "device_code"; userCode: string; verificationUri: string; expiresInSeconds?: number }
+  | { type: "info" | "progress"; message: string }
+  | { type: "complete"; provider: SubscriptionProviderRecord }
+  | { type: "error"; message: string }
+  | { type: "cancelled" }
+);
 
 export interface ProjectRecord {
   id: string;

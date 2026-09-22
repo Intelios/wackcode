@@ -12,6 +12,8 @@ const providers: ProviderRecord[] = [{
   apiFormat: "openai-completions",
   createdAt: "2026-01-01",
   updatedAt: "2026-01-01",
+  kind: "custom",
+  connected: true,
   hasApiKey: true,
   models: [
     { id: "sees", name: "Sees", contextWindow: 8000, maxTokens: 1000, reasoning: false, thinkingLevels: ["off"], thinkingLevelMap: { off: null }, vision: true },

@@ -3,6 +3,7 @@ mod git;
 mod models;
 mod secrets;
 mod storage;
+mod subscriptions;
 mod worker;
 
 use storage::MetadataState;
@@ -15,6 +16,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(WorkerState::default())
+        .manage(subscriptions::SubscriptionState::default())
         .manage(worker::ManagerState::default())
         .setup(|app| {
             let state = MetadataState::load(&app.handle())?;
@@ -27,6 +29,12 @@ pub fn run() {
             commands::delete_provider,
             commands::discover_models,
             commands::list_builtin_models,
+            subscriptions::list_subscription_providers,
+            subscriptions::start_subscription_login,
+            subscriptions::respond_subscription_login,
+            subscriptions::cancel_subscription_login,
+            subscriptions::sign_out_subscription,
+            subscriptions::open_subscription_auth_url,
             commands::set_tool_config,
             commands::list_packages,
             commands::refresh_packages,
@@ -62,6 +70,7 @@ pub fn run() {
     app.run(|app, event| {
         if matches!(event, tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }) {
             app.state::<WorkerState>().terminate_all();
+            app.state::<subscriptions::SubscriptionState>().terminate_all();
         }
     });
 }

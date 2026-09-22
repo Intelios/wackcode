@@ -3,12 +3,12 @@ use crate::{
     models::{
         BootstrapPayload, BuiltinModelSuggestion, CreateTaskInput, ExportPlanInput, GitChanges, ImageContent, ModelRecord, ProjectRecord,
         PromptInput, ExtensionUiResponseInput, InstallPackageInput, PackageRecord,
-        PackageSearchResult, ProviderRecord, SaveProviderInput, SearchPackagesInput,
+        PackageSearchResult, ProviderKind, ProviderRecord, SaveProviderInput, SearchPackagesInput,
         SetPackageResourcesInput, SetTaskModeInput, SetToolConfigInput, TaskMode, TaskRecord,
         TaskStatus, ToolConfig,
     },
     storage::MetadataState,
-    worker::{self},
+    worker::{self}, subscriptions,
 };
 use chrono::Utc;
 use serde::Deserialize;
@@ -24,10 +24,16 @@ const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
 const IMAGE_MIME_TYPES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
 
 #[tauri::command]
-pub fn bootstrap(state: State<'_, MetadataState>) -> Result<BootstrapPayload, String> {
+pub fn bootstrap(app: AppHandle, state: State<'_, MetadataState>) -> Result<BootstrapPayload, String> {
     let mut data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?.clone();
     for provider in &mut data.providers {
-        provider.has_api_key = state.secrets.get(&provider.id).is_ok();
+        if provider.kind == ProviderKind::Subscription {
+            provider.has_api_key = false;
+            provider.connected = subscriptions::has_credential(&app, &provider.id);
+        } else {
+            provider.has_api_key = state.secrets.get(&provider.id).is_ok();
+            provider.connected = provider.has_api_key;
+        }
     }
     for project in &mut data.projects {
         project.branch = git::current_branch(Path::new(&project.path));
@@ -60,6 +66,10 @@ pub async fn save_provider(
     let created_at = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?
         .providers.iter().find(|provider| provider.id == id).map(|provider| provider.created_at.clone())
         .unwrap_or_else(|| now.clone());
+    if state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?
+        .providers.iter().any(|provider| provider.id == id && provider.kind == ProviderKind::Subscription) {
+        return Err("Subscription connections are managed through sign-in".into());
+    }
     if let Some(api_key) = input.api_key.as_deref().map(str::trim).filter(|key| !key.is_empty()) {
         if api_key.starts_with("http://") || api_key.starts_with("https://") {
             return Err("That looks like a URL, not an API key — paste the key your provider issued".into());
@@ -70,12 +80,14 @@ pub async fn save_provider(
     let record = ProviderRecord {
         id: id.clone(),
         name,
+        kind: ProviderKind::Custom,
         base_url,
         api_format: input.api_format,
         models: input.models,
         created_at,
         updated_at: now,
         has_api_key,
+        connected: has_api_key,
     };
     state.mutate(|data| {
         if let Some(existing) = data.providers.iter_mut().find(|provider| provider.id == id) {
@@ -103,8 +115,11 @@ pub async fn delete_provider(
     if !task_ids.is_empty() {
         return Err("This connection is still used by a saved task. Change those tasks to another connection before deleting it.".into());
     }
-    worker::terminate_worker(&app, &provider_id, true).await.ok();
-    state.secrets.remove(&provider_id)?;
+    let kind = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?
+        .providers.iter().find(|provider| provider.id == provider_id).map(|provider| provider.kind)
+        .ok_or_else(|| "Connection not found".to_string())?;
+    if kind == ProviderKind::Subscription { subscriptions::remove_credential(&app, &provider_id)?; }
+    else { state.secrets.remove(&provider_id)?; }
     state.mutate(|data| {
         data.providers.retain(|provider| provider.id != provider_id);
         Ok(())
@@ -125,6 +140,7 @@ pub async fn discover_models(
     let provider = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?
         .providers.iter().find(|provider| provider.id == input.provider_id).cloned()
         .ok_or_else(|| "Connection not found".to_string())?;
+    if provider.kind == ProviderKind::Subscription { return Err("Subscription models are supplied by Pi".into()); }
     let api_key = state.secrets.get(&provider.id)?;
     let url = format!("{}/models", provider.base_url.trim_end_matches('/'));
     let response = reqwest::Client::new()
@@ -605,8 +621,8 @@ pub async fn configure_task(
 #[tauri::command]
 pub async fn open_task(app: AppHandle, state: State<'_, MetadataState>, task_id: String) -> Result<(), String> {
     let (task, provider) = task_and_provider(&state, &task_id)?;
-    let api_key = state.secrets.get(&provider.id)?;
-    worker::ensure_worker(&app, &task, &provider, &api_key).await?;
+    let api_key = credential_for(&app, &state, &provider)?;
+    worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
     worker::send(&app, &task.id, &json!({ "id": Uuid::new_v4().to_string(), "type": "snapshot" })).await
 }
 
@@ -639,8 +655,8 @@ pub async fn prompt(app: AppHandle, state: State<'_, MetadataState>, input: Prom
         .providers.iter().find(|provider| provider.id == configured.provider_id).cloned()
         .ok_or_else(|| "Connection not found".to_string())?;
     if !input.images.is_empty() { require_vision(&provider, &configured.model_id)?; }
-    let api_key = state.secrets.get(&provider.id)?;
-    worker::ensure_worker(&app, &configured, &provider, &api_key).await?;
+    let api_key = credential_for(&app, &state, &provider)?;
+    worker::ensure_worker(&app, &configured, &provider, api_key.as_deref()).await?;
     let run_id = Uuid::new_v4().to_string();
     let started_at = input.started_at.unwrap_or_else(|| Utc::now().timestamp_millis() as u64);
     worker::send(&app, &configured.id, &json!({
@@ -852,6 +868,17 @@ pub fn reveal_path(path: String) -> Result<(), String> {
     if status.success() { Ok(()) } else { Err("macOS could not reveal that path".into()) }
 }
 
+fn credential_for(app: &AppHandle, state: &State<'_, MetadataState>, provider: &ProviderRecord) -> Result<Option<String>, String> {
+    if provider.kind == ProviderKind::Subscription {
+        if !subscriptions::has_credential(app, &provider.id) {
+            return Err("Sign in to this subscription again in Settings".into());
+        }
+        Ok(None)
+    } else {
+        state.secrets.get(&provider.id).map(Some)
+    }
+}
+
 fn task_and_provider(state: &State<'_, MetadataState>, task_id: &str) -> Result<(TaskRecord, ProviderRecord), String> {
     let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
     let task = data.tasks.iter().find(|task| task.id == task_id).cloned().ok_or_else(|| "Task not found".to_string())?;
@@ -889,6 +916,9 @@ fn validate_selected_model(provider: &ProviderRecord, model_id: &str) -> Result<
 }
 
 fn validate_model_selection(provider: &ProviderRecord, model_id: &str, thinking_level: &str) -> Result<(), String> {
+    if provider.kind == ProviderKind::Subscription && !provider.connected {
+        return Err("Sign in to this subscription again in Settings".into());
+    }
     validate_thinking(thinking_level)?;
     validate_selected_model(provider, model_id)?;
     let model = provider.models.iter().find(|model| model.id == model_id)
@@ -1040,12 +1070,20 @@ mod tests {
             reasoning: false, thinking_levels: vec!["off".into()], thinking_level_map: Default::default(), vision,
         };
         let provider = ProviderRecord {
-            id: "p".into(), name: "P".into(), base_url: "https://example.test/v1".into(),
+            id: "p".into(), name: "P".into(), kind: ProviderKind::Custom, base_url: "https://example.test/v1".into(),
             api_format: "openai-completions".into(), models: vec![model("sees", true), model("blind", false)],
-            created_at: "now".into(), updated_at: "now".into(), has_api_key: true,
+            created_at: "now".into(), updated_at: "now".into(), has_api_key: true, connected: true,
         };
         assert!(require_vision(&provider, "sees").is_ok());
         assert!(require_vision(&provider, "blind").unwrap_err().contains("Vision"));
+    }
+
+    #[test]
+    fn old_connection_records_remain_custom_connections() {
+        let json = r#"{"id":"p","name":"P","baseUrl":"https://example.test/v1","apiFormat":"openai-completions","models":[],"createdAt":"now","updatedAt":"now","hasApiKey":true}"#;
+        let provider: ProviderRecord = serde_json::from_str(json).unwrap();
+        assert_eq!(provider.kind, ProviderKind::Custom);
+        assert_eq!(provider.api_format, "openai-completions");
     }
 
     #[test]

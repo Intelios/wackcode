@@ -94,6 +94,7 @@ export interface WorkerModel {
 export interface WorkerProvider {
   id: string;
   name: string;
+  kind: "custom" | "subscription";
   baseUrl: string;
   api: ApiFormat;
   models: WorkerModel[];
@@ -109,7 +110,8 @@ export interface InitCommand {
   sessionFile?: string;
   provider: WorkerProvider;
   modelId: string;
-  apiKey: string;
+  apiKey?: string;
+  authPath?: string;
   thinkingLevel: ThinkingLevel;
   /**
    * Tools the user has switched off, built-in or extension-contributed.

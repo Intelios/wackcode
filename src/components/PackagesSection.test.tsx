@@ -47,7 +47,7 @@ describe("PackagesSection", () => {
     const confirm = screen.getByRole("button", { name: "Trust and install" });
     expect(confirm).toBeDisabled();
     expect(screen.getByText("npm:pi-subagents")).toBeInTheDocument();
-    expect(screen.getByText(/read the API keys WackCode has stored/)).toBeInTheDocument();
+    expect(screen.getByText(/read WackCode’s API keys and subscription credentials/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("checkbox"));
     expect(confirm).toBeEnabled();
@@ -201,4 +201,3 @@ describe("PackagesSection browse tab", () => {
     expect(grid?.querySelectorAll(".search-result")).toHaveLength(2);
   });
 });
-

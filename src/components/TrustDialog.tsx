@@ -12,7 +12,7 @@ interface Props {
 
 /**
  * Shown before the first install of a package. Installing grants arbitrary local code execution
- * inside the process that holds the provider API key, so the consequences are stated plainly and
+ * inside the process that can read provider credentials, so the consequences are stated plainly and
  * the confirm button stays locked until the user acknowledges them.
  */
 export function TrustDialog({ source, mode, busy, error, onCancel, onConfirm }: Props) {
@@ -40,7 +40,7 @@ export function TrustDialog({ source, mode, busy, error, onCancel, onConfirm }: 
         <div className="trust-warning">
           Pi packages run as ordinary local code with your macOS account&rsquo;s permissions. This package
           will be able to read and write any file you can, run any command, make network requests, and
-          read the API keys WackCode has stored. Install it only if you trust its author.
+          read WackCode&rsquo;s API keys and subscription credentials. Install it only if you trust its author.
         </div>
         <label className="trust-ack">
           <input

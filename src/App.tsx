@@ -17,6 +17,7 @@ import type {
   ProjectRecord,
   ProviderRecord,
   SaveProviderInput,
+  SubscriptionLoginEvent,
   TaskMode,
   TaskRecord,
   TaskRuntime,
@@ -35,6 +36,7 @@ import { TodoPanel } from "./components/TodoPanel";
 import { InlineDialog, type ExtensionUIResponse } from "./components/InlineDialog";
 import type { PlanAction } from "./components/PlanCard";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
+import { SubscriptionLoginDialog } from "./components/SubscriptionLoginDialog";
 
 const emptyData: AppData = { version: 1, providers: [], projects: [], tasks: [], toolConfig: { disabled: [] }, toolCatalog: [], packages: [] };
 
@@ -66,6 +68,16 @@ interface ConfirmState {
   run: () => Promise<void>;
 }
 
+interface SubscriptionLoginState {
+  loginId: string;
+  providerId: string;
+  prompt?: Extract<SubscriptionLoginEvent, { type: "prompt" }>;
+  authUrl?: string;
+  deviceCode?: { userCode: string; verificationUri: string };
+  message?: string;
+  error?: string;
+}
+
 function loadJSON<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
@@ -92,6 +104,9 @@ export default function App() {
   const [extensionRequests, setExtensionRequests] = useState<ExtensionUIRequest[]>([]);
   const [booting, setBooting] = useState(true);
   const [globalError, setGlobalError] = useState<string>();
+  const [subscriptionLogin, setSubscriptionLogin] = useState<SubscriptionLoginState>();
+  const pendingSubscriptionCancel = useRef(false);
+  const [connectedSubscriptionId, setConnectedSubscriptionId] = useState<string>();
   const [lastModels, setLastModels] = useState<Record<string, ModelChoice>>(() => loadJSON(LAST_MODEL_KEY, {}));
   const [draft, setDraft] = useState<Draft>();
 
@@ -264,6 +279,40 @@ export default function App() {
   }, [patchTask, patchRuntime, refreshChanges, appendNotice]);
 
   useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<SubscriptionLoginEvent>("subscription-login-event", ({ payload }) => {
+      if (payload.type === "complete") {
+        setData((current) => ({ ...current, providers: current.providers.some((provider) => provider.id === payload.provider.id)
+          ? current.providers.map((provider) => provider.id === payload.provider.id ? payload.provider : provider)
+          : [...current.providers, payload.provider] }));
+        setConnectedSubscriptionId(payload.provider.id);
+        setSubscriptionLogin(undefined);
+      } else if (payload.type === "cancelled") {
+        setSubscriptionLogin(undefined);
+      } else if (payload.type === "auth_url" || payload.type === "device_code") {
+        const url = payload.type === "auth_url" ? payload.url : payload.verificationUri;
+        setSubscriptionLogin((current) => current && current.providerId === payload.providerId ? {
+          ...current, loginId: payload.loginId, prompt: undefined,
+          authUrl: url,
+          deviceCode: payload.type === "device_code" ? { userCode: payload.userCode, verificationUri: payload.verificationUri } : current.deviceCode,
+          message: payload.type === "auth_url" ? payload.instructions : current.message
+        } : current);
+        void api.openSubscriptionAuthUrl(url).catch((reason) => setSubscriptionLogin((current) => current ? { ...current, error: String(reason) } : current));
+      } else if (payload.type === "prompt") {
+        setSubscriptionLogin((current) => current && current.providerId === payload.providerId
+          ? { ...current, loginId: payload.loginId, prompt: payload, error: undefined } : current);
+      } else if (payload.type === "info" || payload.type === "progress") {
+        setSubscriptionLogin((current) => current && current.providerId === payload.providerId
+          ? { ...current, loginId: payload.loginId, message: payload.message } : current);
+      } else if (payload.type === "error") {
+        setSubscriptionLogin((current) => current && current.providerId === payload.providerId
+          ? { ...current, loginId: payload.loginId, error: payload.message, prompt: undefined } : current);
+      }
+    }).then((stop) => { unlisten = stop; });
+    return () => unlisten?.();
+  }, []);
+
+  useEffect(() => {
     setChanges(undefined);
     if (!selectedTaskId) return;
     void refreshChanges(selectedTaskId);
@@ -278,7 +327,30 @@ export default function App() {
     return () => window.removeEventListener("focus", refresh);
   }, [refreshChanges]);
 
-  const configuredProviders = useMemo(() => data.providers.filter((item) => item.hasApiKey && item.models.some(modelIsReady)), [data.providers]);
+  const configuredProviders = useMemo(() => data.providers.filter((item) => item.connected && item.models.some(modelIsReady)), [data.providers]);
+
+  async function connectSubscription(providerId: string) {
+    pendingSubscriptionCancel.current = false;
+    setSubscriptionLogin({ loginId: "", providerId, message: "Starting sign-in…" });
+    try {
+      const started = await api.startSubscriptionLogin(providerId);
+      setData((current) => ({ ...current, providers: current.providers.some((provider) => provider.id === providerId)
+        ? current.providers.map((provider) => provider.id === providerId && !provider.connected ? started.provider : provider)
+        : [...current.providers, started.provider] }));
+      if (pendingSubscriptionCancel.current) {
+        await api.cancelSubscriptionLogin(started.loginId);
+        return;
+      }
+      setSubscriptionLogin((current) => current && current.providerId === providerId ? { ...current, loginId: started.loginId } : current);
+    } catch (reason) {
+      setSubscriptionLogin((current) => current && current.providerId === providerId ? { ...current, error: String(reason) } : current);
+    }
+  }
+
+  async function signOutSubscription(providerId: string) {
+    const provider = await api.signOutSubscription(providerId);
+    setData((current) => ({ ...current, providers: current.providers.map((item) => item.id === providerId ? provider : item) }));
+  }
 
   const rememberModel = useCallback((projectId: string | null, choice: ModelChoice) => {
     setLastModels((current) => {
@@ -700,6 +772,9 @@ export default function App() {
           onClose={() => setSettingsOpen(false)}
           onSave={saveProvider}
           onDelete={deleteProvider}
+          onConnectSubscription={connectSubscription}
+          onSignOutSubscription={signOutSubscription}
+          connectedSubscriptionId={connectedSubscriptionId}
           onSetDisabledTools={setDisabledTools}
           onRefresh={refreshPackages}
           onInstall={installPackage}
@@ -735,7 +810,7 @@ export default function App() {
           configuredProviders.length === 0 ? (
             <div className="workspace-empty">
               <h1>Connect a model provider</h1>
-              <p>Add an OpenAI-compatible endpoint and API key to start chatting.</p>
+              <p>Sign in with a subscription or add an OpenAI-compatible endpoint and API key to start chatting.</p>
               <button className="primary-button" onClick={() => setSettingsOpen(true)}><Icon name="key" /> Open settings</button>
             </div>
           ) : (
@@ -832,6 +907,20 @@ export default function App() {
       )}
 
       {confirm && <ConfirmDialog title={confirm.title} body={confirm.body} confirmLabel={confirm.confirmLabel} danger={confirm.danger} onConfirm={confirm.run} onCancel={() => setConfirm(undefined)} />}
+      {subscriptionLogin && <SubscriptionLoginDialog
+        login={subscriptionLogin}
+        onOpenUrl={(url) => api.openSubscriptionAuthUrl(url)}
+        onCopyCode={(code) => writeText(code)}
+        onRespond={async (promptId, value) => {
+          await api.respondSubscriptionLogin(subscriptionLogin.loginId, promptId, value);
+          setSubscriptionLogin((current) => current ? { ...current, prompt: undefined, message: "Waiting for sign-in…" } : current);
+        }}
+        onCancel={() => {
+          if (subscriptionLogin.loginId) void api.cancelSubscriptionLogin(subscriptionLogin.loginId).catch((reason) => setGlobalError(String(reason)));
+          else pendingSubscriptionCancel.current = true;
+          setSubscriptionLogin(undefined);
+        }}
+      />}
       {globalError && <div className="global-toast"><span>{globalError}</span><button onClick={() => setGlobalError(undefined)}>×</button></div>}
     </div>
   );

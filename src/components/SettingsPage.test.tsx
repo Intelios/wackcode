@@ -6,12 +6,40 @@ import { SettingsPage } from "./SettingsPage";
 
 vi.mock("../api", () => ({ api: {
   revealPath: vi.fn().mockResolvedValue(undefined),
-  listBuiltinModels: vi.fn().mockResolvedValue([])
+  listBuiltinModels: vi.fn().mockResolvedValue([]),
+  listSubscriptionProviders: vi.fn().mockResolvedValue([])
 } }));
 
 afterEach(() => {
   cleanup();
   vi.mocked(api.listBuiltinModels).mockReset().mockResolvedValue([]);
+  vi.mocked(api.listSubscriptionProviders).mockReset().mockResolvedValue([]);
+});
+
+it("shows subscription guidance before sign-in and reconnect", async () => {
+  vi.mocked(api.listSubscriptionProviders).mockResolvedValue([{ id: "anthropic", name: "Anthropic", guidance: "Claude usage may be billed separately." }]);
+  const onConnectSubscription = vi.fn().mockResolvedValue(undefined);
+  const props = {
+    packages: [], toolCatalog: [], disabledTools: [], appDataPath: "/tmp/wackcode",
+    onClose: vi.fn(), onSave: vi.fn(), onDelete: vi.fn(), onConnectSubscription,
+    onSignOutSubscription: vi.fn(), onSetDisabledTools: vi.fn(),
+    onRefresh: vi.fn().mockResolvedValue(undefined), onInstall: vi.fn(), onTrust: vi.fn(),
+    onSearch: vi.fn().mockResolvedValue([]), onRemove: vi.fn(), onUpdate: vi.fn(), onSetResources: vi.fn()
+  };
+  const { rerender } = render(<SettingsPage {...props} providers={[]} />);
+  fireEvent.click(screen.getByRole("button", { name: "Sign in with a subscription" }));
+  expect(await screen.findByText("Claude usage may be billed separately.")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Sign in", exact: true }));
+  expect(onConnectSubscription).toHaveBeenCalledWith("anthropic");
+
+  const provider: ProviderRecord = {
+    id: "anthropic", name: "Anthropic", kind: "subscription", baseUrl: "", apiFormat: "",
+    models: [], createdAt: "now", updatedAt: "now", hasApiKey: false, connected: true
+  };
+  rerender(<SettingsPage {...props} providers={[provider]} connectedSubscriptionId="anthropic" />);
+  expect(screen.getByText("Claude usage may be billed separately.")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+  expect(onConnectSubscription).toHaveBeenLastCalledWith("anthropic");
 });
 
 const catalog: ToolCatalogEntry[] = [
@@ -33,6 +61,8 @@ function renderTools(overrides: { disabled?: string[]; onSetDisabledTools?: (nex
       onClose={vi.fn()}
       onSave={vi.fn()}
       onDelete={vi.fn()}
+      onConnectSubscription={vi.fn()}
+      onSignOutSubscription={vi.fn()}
       onSetDisabledTools={onSetDisabledTools}
       onRefresh={vi.fn().mockResolvedValue(undefined)}
       onInstall={vi.fn()}
@@ -92,6 +122,8 @@ const testProviders: ProviderRecord[] = [
     models: [],
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-01T00:00:00Z",
+    kind: "custom",
+    connected: true,
     hasApiKey: true
   },
   {
@@ -102,6 +134,8 @@ const testProviders: ProviderRecord[] = [
     models: [],
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-01T00:00:00Z",
+    kind: "custom",
+    connected: false,
     hasApiKey: false
   }
 ];
@@ -118,6 +152,8 @@ describe("SettingsPage sidebar navigation", () => {
         onClose={vi.fn()}
         onSave={vi.fn()}
         onDelete={vi.fn()}
+        onConnectSubscription={vi.fn()}
+        onSignOutSubscription={vi.fn()}
         onSetDisabledTools={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onInstall={vi.fn()}
@@ -154,6 +190,8 @@ describe("SettingsPage sidebar navigation", () => {
         onClose={vi.fn()}
         onSave={vi.fn()}
         onDelete={vi.fn()}
+        onConnectSubscription={vi.fn()}
+        onSignOutSubscription={vi.fn()}
         onSetDisabledTools={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onInstall={vi.fn()}
@@ -199,6 +237,8 @@ describe("SettingsPage sidebar navigation", () => {
         onClose={onClose}
         onSave={vi.fn()}
         onDelete={vi.fn()}
+        onConnectSubscription={vi.fn()}
+        onSignOutSubscription={vi.fn()}
         onSetDisabledTools={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onInstall={vi.fn()}
@@ -239,6 +279,8 @@ describe("SettingsPage model capabilities", () => {
         onClose={vi.fn()}
         onSave={onSave}
         onDelete={vi.fn()}
+        onConnectSubscription={vi.fn()}
+        onSignOutSubscription={vi.fn()}
         onSetDisabledTools={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onInstall={vi.fn()}
@@ -272,6 +314,7 @@ function renderModelSettings(provider: ProviderRecord = testProviders[0]) {
     <SettingsPage
       providers={[provider]} packages={[]} toolCatalog={catalog} disabledTools={[]}
       appDataPath="/tmp/wackcode" onClose={vi.fn()} onSave={onSave} onDelete={vi.fn()}
+      onConnectSubscription={vi.fn()} onSignOutSubscription={vi.fn()}
       onSetDisabledTools={vi.fn()} onRefresh={vi.fn()} onInstall={vi.fn()} onTrust={vi.fn()}
       onSearch={vi.fn()} onRemove={vi.fn()} onUpdate={vi.fn()} onSetResources={vi.fn()}
     />

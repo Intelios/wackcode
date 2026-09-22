@@ -256,6 +256,7 @@ async function initializeWorker(
     provider: {
       id: `provider-${taskId}`,
       name: `Provider ${taskId}`,
+      kind: "custom",
       baseUrl,
       api: "openai-completions",
       models: [{

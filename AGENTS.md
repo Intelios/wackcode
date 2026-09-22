@@ -40,7 +40,10 @@ Data flow for one prompt: `App.tsx` → `api.prompt` → `commands::prompt` (val
 | `pnpm install` | Install workspace deps (root app + `worker/`). | After clone, or when `pnpm-lock.yaml` changed. |
 | `pnpm prepare:runtime` | Download Node 24.18.0 (darwin-arm64) per `runtime-lock.json`, verify SHA-256, place the binary at `src-tauri/binaries/wackcode-node-aarch64-apple-darwin` and stage npm from the same tarball into `src-tauri/resources/npm/`. | Once per machine, and after `runtime-lock.json` changes. Required for `tauri dev` and `tauri build`, and for installing packages. |
 | `pnpm dev:desktop` | `tauri dev`: builds the worker, starts Vite on port 1420, launches the app. Dev worker = `worker/dist/index.js`, dev Node = `$WACKCODE_NODE_PATH` or `node` on PATH. | Day-to-day development. |
+| `pnpm dev:background` | Detached, idempotent `tauri dev`: leaves a healthy running instance alone, tears down stale leftovers, otherwise spawns `tauri dev` detached (log at `/tmp/wackcode-dev.log`) and waits until Vite and the app process are up before printing `Ready` and exiting. | Driving the live app; see "Testing the running app". |
+| `pnpm dev:stop` | Tear the dev instance down: the debug app binary, this repo's tauri CLI, and our Vite on port 1420. Never touches another project's processes. | After `dev:background`. |
 | `pnpm build:desktop` | `prepare:runtime` then `tauri build` → `src-tauri/target/release/bundle/macos/WackCode.app`. | Producing the self-contained app. Requires the pinned runtime downloaded above. |
+| `pnpm build:desktop:debug` | `prepare:runtime` then `tauri build --debug` → `src-tauri/target/debug/bundle/macos/WackCode.app`. | When automation needs a real `.app` bundle without paying for a release build. |
 | `pnpm build:web` | `tsc -b && vite build` → type-check the frontend and emit `dist/`. | Catching TS errors without launching the app; also what `beforeBuildCommand` runs. |
 | `pnpm build:worker` | `tsc` the worker → `worker/dist/`. | After editing `worker/src/` (also run by `dev:desktop` and the worker tests). |
 | `pnpm prepare:worker` | Stage a self-contained worker package into `src-tauri/resources/worker/` via `pnpm deploy`. | Only as part of release bundling (`beforeBuildCommand` already does this). |
@@ -92,7 +95,8 @@ src-tauri/
   capabilities/default.json   Tauri permissions (core:default, dialog:allow-open, clipboard write-text).
   binaries/       Bundled Node binary lands here (gitignored except .gitkeep).
   resources/worker/  Staged by pnpm deploy (gitignored).
-scripts/        prepare-runtime.mjs, prepare-worker.mjs, mock-provider.mjs. Plain Node ESM, no deps.
+scripts/        prepare-runtime.mjs, prepare-worker.mjs, mock-provider.mjs, dev-background.mjs, dev-stop.mjs.
+                Plain Node ESM, no deps.
 runtime-lock.json  Pins Node 24.18.0 + records the Pi version (informational; the enforced pin is worker/package.json).
 ```
 
@@ -241,6 +245,15 @@ Pi sessions are append-only trees; WackCode exposes them as retry, inline edit &
 - **What's currently untested (don't mimic a pattern that isn't there):** `App.tsx`, both hooks, and `api.ts` have no tests, nor do the Rust command wrappers around checkpoints and `worker::request` (the worker suite and `checkpoints.rs` tests cover what they call). `Transcript.tsx` is covered for tool output and message actions; `Composer.tsx` for attachments and its seed. Add coverage deliberately if you touch them, but don't treat existing silence as license to ship regressions.
 - The worker integration suite exercises properties the UI cannot: concurrent sessions with overlapping model IDs, per-credential isolation, thinking-level wire mapping, cancellation mid-stream, session restoration without replay, and the session tree (retry versions, rewinds surviving a restart, Plan-mode re-derivation, forks). Run it after any protocol change.
 - For a manual end-to-end check: `pnpm mock:provider`, then add `http://127.0.0.1:43127/v1` as a Chat Completions connection in the app.
+
+### Testing the running app
+
+`pnpm dev:desktop` is a blocking process with a minutes-long cold build and no readiness signal, and the dev app is a bare binary (`src-tauri/target/debug/wackcode`), not an `.app` bundle — macOS automation cannot identify it by bundle id, which is why computer use struggles against it. Never improvise a launch, and never build the release `.app` just to click through the UI. Instead:
+
+- **Start:** `pnpm dev:background`. Idempotent — a healthy running instance is left alone; stale leftovers (orphaned Vite, a dead app's tauri CLI) are torn down first; a fresh `tauri dev` is spawned detached with output appended to `/tmp/wackcode-dev.log`, and `Ready` is printed only once Vite is listening on 1420 *and* the app process exists. `WACKCODE_DEV_TIMEOUT_SEC` overrides the default 10-minute readiness budget.
+- **Stop:** `pnpm dev:stop`.
+- **Do not restart the dev instance between tests.** Frontend edits hot-reload through Vite; Rust edits make `tauri dev` recompile and relaunch the app on its own; worker edits need `pnpm build:worker` and then a new chat (workers spawn per task, so new ones pick up the new build) or a `dev:stop` / `dev:background` cycle.
+- **Targeting the window:** the dev process has no bundle identity, so activate and click the window titled `WackCode`. When a test genuinely needs a real `.app`, use `pnpm build:desktop:debug` and launch `src-tauri/target/debug/bundle/macos/WackCode.app` — same `com.wackcode.desktop` identity as release, far faster to produce because it skips release optimizations and shares debug artifacts with `tauri dev`.
 
 ## Out of scope for this milestone (do not propose as "fixes")
 

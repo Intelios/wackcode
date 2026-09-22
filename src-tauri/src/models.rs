@@ -300,6 +300,121 @@ pub struct PromptInput {
     pub images: Vec<ImageContent>,
 }
 
+/// A workspace checkpoint: a tree in the chat's shadow repository (see `checkpoints.rs`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckpointRef {
+    pub id: String,
+    /// The workspace repository's HEAD when the snapshot was taken, if it had one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
+}
+
+/// One file restoring a checkpoint would change. `status` is what the restore does to it:
+/// "revert", "delete", or "recreate".
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckpointChange {
+    pub path: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreResult {
+    pub restored: Vec<String>,
+    /// Paths left alone because they hold something the checkpoint store never had (ignored or
+    /// oversized files) or because a folder with other content is in the way.
+    pub skipped: Vec<String>,
+    /// The files just before the restore, itself a checkpoint.
+    pub undo: CheckpointRef,
+}
+
+/// A file restore requested alongside a conversation change.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreSelection {
+    pub checkpoint_id: String,
+    /// Only these files; all changed files when absent.
+    #[serde(default)]
+    pub paths: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreCheckpointInput {
+    pub task_id: String,
+    pub checkpoint_id: String,
+    #[serde(default)]
+    pub paths: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResendInput {
+    pub task_id: String,
+    /// The user message to send again as a new version.
+    pub entry_id: String,
+    /// New text for an edit; absent for a retry.
+    #[serde(default)]
+    pub message: Option<String>,
+    /// Indexes of the original message's images to leave out.
+    #[serde(default)]
+    pub remove_images: Vec<usize>,
+    #[serde(default)]
+    pub restore: Option<RestoreSelection>,
+    #[serde(default)]
+    pub started_at: Option<u64>,
+    pub provider_id: String,
+    pub model_id: String,
+    pub thinking_level: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NavigateTaskInput {
+    pub task_id: String,
+    pub entry_id: String,
+    /// "before" (rewind to just above a user message) or "latest" (the newest entry beneath).
+    pub target: String,
+    /// "rewind", "switch", or "undo".
+    pub kind: String,
+    #[serde(default)]
+    pub restore: Option<RestoreSelection>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct NavigateResult {
+    pub leaf_id: Option<String>,
+    #[serde(default)]
+    pub editor_text: Option<String>,
+    /// The files the branch now shown was left with.
+    #[serde(default)]
+    pub files: Option<CheckpointRef>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NavigateTaskResult {
+    pub navigate: NavigateResult,
+    pub restore: Option<RestoreResult>,
+    /// Set when the conversation moved but the requested file restore failed.
+    pub restore_error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkTaskInput {
+    pub task_id: String,
+    /// The last entry of the turn to fork at; the chat's current end when absent.
+    #[serde(default)]
+    pub entry_id: Option<String>,
+    /// The files as they were after that turn. Without it the fork copies the files as they are now.
+    #[serde(default)]
+    pub checkpoint: Option<CheckpointRef>,
+}
+
 /// One image attached to a prompt. Mirrors Pi's `ImageContent` (`{ type: "image", data, mimeType }`),
 /// the shape Pi's RPC `prompt.images` takes, so it travels unchanged from React to the worker.
 #[derive(Debug, Clone, Serialize, Deserialize)]

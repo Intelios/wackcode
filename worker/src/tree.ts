@@ -1,0 +1,235 @@
+/**
+ * Pure helpers over Pi's session tree: versions of a user message, the checkpoint recorded before
+ * it, turn boundaries, and the marker entries that keep navigation durable.
+ *
+ * Pi puts more than conversation messages between two user messages — plan-state and run-timing
+ * custom entries, the `system` declaration message, model and thinking changes, and our own
+ * markers — so an edit or a retry is rarely a *direct* sibling of the message it replaces.
+ * Versions are therefore grouped by the nearest user, assistant, or tool-result ancestor (the
+ * "logical parent"), which every version of a message shares.
+ */
+import type { CheckpointRef, MessageVersions, NavigationKind, TurnInfo } from "./protocol.js";
+import { RUN_TIMING_ENTRY_TYPE } from "./run-timing.js";
+
+/** Recorded just above every user message: the files before it was sent. */
+export const CHECKPOINT_ENTRY_TYPE = "wackcode-checkpoint";
+/** Recorded under the old leaf before every navigation: the files the branch was left with. */
+export const LEAVE_ENTRY_TYPE = "wackcode-leave";
+/**
+ * Recorded under the new leaf after every navigation. Pi reopens a session at its last line, so
+ * without it a rewind with nothing sent afterwards would be lost on the next worker restart.
+ */
+export const NAV_ENTRY_TYPE = "wackcode-nav";
+export const TREE_MARKER_VERSION = 1;
+
+export interface CheckpointEntryData {
+  version: typeof TREE_MARKER_VERSION;
+  /** Null records that no snapshot was possible, so an older checkpoint is never inherited. */
+  id: string | null;
+  head?: string;
+}
+
+export interface LeaveEntryData {
+  version: typeof TREE_MARKER_VERSION;
+  checkpoint: CheckpointRef | null;
+}
+
+export interface NavEntryData {
+  version: typeof TREE_MARKER_VERSION;
+  kind: NavigationKind | "resend";
+  /** The leaf before the navigation (the leave entry). */
+  from: string;
+}
+
+/** The subset of Pi's `SessionEntry` these helpers read. */
+export interface EntryLike {
+  type: string;
+  id: string;
+  parentId: string | null;
+  customType?: string;
+  data?: unknown;
+  message?: unknown;
+}
+
+const CONVERSATION_ROLES = new Set(["user", "assistant", "toolResult"]);
+
+function role(entry: EntryLike): string | undefined {
+  if (entry.type !== "message" || !entry.message || typeof entry.message !== "object") return undefined;
+  const value = (entry.message as { role?: unknown }).role;
+  return typeof value === "string" ? value : undefined;
+}
+
+export function isUserMessage(entry: EntryLike | undefined): boolean {
+  return entry !== undefined && role(entry) === "user";
+}
+
+/** A user, assistant, or tool-result message — the entries a turn is made of. */
+export function isConversationMessage(entry: EntryLike | undefined): boolean {
+  const value = entry && role(entry);
+  return value !== undefined && CONVERSATION_ROLES.has(value);
+}
+
+function isCustom(entry: EntryLike, customType: string): boolean {
+  return entry.type === "custom" && entry.customType === customType;
+}
+
+function checkpointRef(value: unknown): CheckpointRef | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const data = value as { id?: unknown; head?: unknown };
+  if (typeof data.id !== "string" || !data.id) return undefined;
+  return typeof data.head === "string" && data.head ? { id: data.id, head: data.head } : { id: data.id };
+}
+
+/**
+ * The checkpoint a marker entry carries. `null` means the marker exists but recorded no
+ * snapshot; `undefined` means the entry is not a checkpoint-carrying marker at all.
+ */
+export function markerCheckpoint(entry: EntryLike): CheckpointRef | null | undefined {
+  if (isCustom(entry, CHECKPOINT_ENTRY_TYPE)) return checkpointRef(entry.data) ?? null;
+  if (isCustom(entry, LEAVE_ENTRY_TYPE)) {
+    return checkpointRef((entry.data as { checkpoint?: unknown } | undefined)?.checkpoint) ?? null;
+  }
+  return undefined;
+}
+
+export function navData(entry: EntryLike | undefined): NavEntryData | undefined {
+  if (!entry || !isCustom(entry, NAV_ENTRY_TYPE) || !entry.data || typeof entry.data !== "object") return undefined;
+  const data = entry.data as Partial<NavEntryData>;
+  return typeof data.from === "string" && typeof data.kind === "string" ? data as NavEntryData : undefined;
+}
+
+export interface TreeIndex {
+  byId: Map<string, EntryLike>;
+  /** Nearest user/assistant/tool-result ancestor, per entry (`null`: none above it). */
+  logicalParent: Map<string, string | null>;
+  /** The most recently appended entry in each entry's subtree, the entry itself included. */
+  latestDescendant: Map<string, string>;
+  /** User message ids grouped by logical parent, oldest first. */
+  versionGroups: Map<string, string[]>;
+}
+
+const ROOT_GROUP = "root";
+
+/**
+ * One pass over the file-ordered entries. Pi appends a child only after its parent, so parents
+ * always come first and a reverse pass visits every child before its parent.
+ */
+export function buildTreeIndex(entries: EntryLike[]): TreeIndex {
+  const byId = new Map<string, EntryLike>();
+  const logicalParent = new Map<string, string | null>();
+  const versionGroups = new Map<string, string[]>();
+  for (const entry of entries) {
+    byId.set(entry.id, entry);
+    const parent = entry.parentId ? byId.get(entry.parentId) : undefined;
+    const logical = parent === undefined ? null : isConversationMessage(parent) ? parent.id : logicalParent.get(parent.id) ?? null;
+    logicalParent.set(entry.id, logical);
+    if (isUserMessage(entry)) {
+      const group = logical ?? ROOT_GROUP;
+      const members = versionGroups.get(group);
+      if (members) members.push(entry.id); else versionGroups.set(group, [entry.id]);
+    }
+  }
+  const latestDescendant = new Map<string, string>();
+  const order = new Map(entries.map((entry, index) => [entry.id, index]));
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    const latest = latestDescendant.get(entry.id) ?? entry.id;
+    latestDescendant.set(entry.id, latest);
+    if (!entry.parentId || !byId.has(entry.parentId)) continue;
+    const current = latestDescendant.get(entry.parentId);
+    if (current === undefined || (order.get(latest) ?? -1) > (order.get(current) ?? -1)) {
+      latestDescendant.set(entry.parentId, latest);
+    }
+  }
+  return { byId, logicalParent, latestDescendant, versionGroups };
+}
+
+export function versionsOf(index: TreeIndex, userEntryId: string): MessageVersions | undefined {
+  if (!index.byId.has(userEntryId)) return undefined;
+  const group = index.logicalParent.get(userEntryId) ?? ROOT_GROUP;
+  const members = index.versionGroups.get(group) ?? [userEntryId];
+  const position = members.indexOf(userEntryId);
+  if (position < 0) return undefined;
+  return {
+    index: position,
+    total: members.length,
+    previous: members[position - 1],
+    next: members[position + 1],
+    group: `versions:${group}`
+  };
+}
+
+/**
+ * The checkpoint recorded just above a user message: the nearest checkpoint marker between it and
+ * the conversation message before it. A marker that recorded no snapshot stops the walk, so a
+ * newer version never inherits the checkpoint of an older one.
+ */
+export function checkpointBefore(index: TreeIndex, userEntryId: string): CheckpointRef | undefined {
+  let current = index.byId.get(index.byId.get(userEntryId)?.parentId ?? "");
+  while (current && !isConversationMessage(current)) {
+    if (isCustom(current, CHECKPOINT_ENTRY_TYPE)) return checkpointRef(current.data);
+    current = current.parentId ? index.byId.get(current.parentId) : undefined;
+  }
+  return undefined;
+}
+
+export function latestInSubtree(index: TreeIndex, entryId: string): string {
+  return index.latestDescendant.get(entryId) ?? entryId;
+}
+
+/**
+ * Turn boundaries along the current root-to-leaf path, keyed by the user message that starts
+ * each turn. The end is the turn's last assistant or tool-result entry — or the run-timing entry
+ * written after it — so a fork keeps the whole turn. Taken from path entries rather than
+ * `session.messages`, which drops an auto-retried failure that the file keeps.
+ */
+export function turnsOnPath(path: EntryLike[]): Map<string, TurnInfo> {
+  const turns = new Map<string, TurnInfo>();
+  let current: TurnInfo | undefined;
+  let lookingForAfter = false;
+  for (const entry of path) {
+    if (isUserMessage(entry)) {
+      current = { userEntryId: entry.id, endEntryId: "" };
+      lookingForAfter = false;
+      continue;
+    }
+    if (!current) continue;
+    if (isConversationMessage(entry)) {
+      current.endEntryId = entry.id;
+      delete current.after;
+      lookingForAfter = true;
+      turns.set(current.userEntryId, current);
+      continue;
+    }
+    if (!lookingForAfter) continue;
+    if (isCustom(entry, RUN_TIMING_ENTRY_TYPE)) {
+      if (current.after === undefined) current.endEntryId = entry.id;
+      continue;
+    }
+    const checkpoint = markerCheckpoint(entry);
+    if (checkpoint !== undefined) {
+      if (checkpoint) current.after = checkpoint;
+      lookingForAfter = false;
+    }
+  }
+  return turns;
+}
+
+/**
+ * The files the branch ending at `path` was left with: the leave marker nearest the end, before
+ * any conversation message. Offered as a restore after switching to that branch.
+ */
+export function leftWith(path: EntryLike[]): CheckpointRef | undefined {
+  for (let index = path.length - 1; index >= 0; index -= 1) {
+    const entry = path[index];
+    if (isConversationMessage(entry)) return undefined;
+    if (isCustom(entry, LEAVE_ENTRY_TYPE)) return markerCheckpoint(entry) ?? undefined;
+  }
+  return undefined;
+}
+
+/** Where "Undo rewind" returns to, while the conversation still ends at a rewind. */
+export function undoTarget(leaf: EntryLike | undefined): string | undefined {
+  const nav = navData(leaf);
+  return nav?.kind === "rewind" ? nav.from : undefined;
+}

@@ -25,6 +25,19 @@ pub fn inspect_project(path: &Path) -> ProjectGitInfo {
     ProjectGitInfo { root, has_head }
 }
 
+/// The commit `HEAD` points at in the checkout or worktree at `path`.
+pub fn head_commit(path: &Path) -> Option<String> {
+    git_output(path, &["rev-parse", "--verify", "--quiet", "HEAD"]).ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// Whether `commit` names a commit the repository at `path` still has.
+pub fn has_commit(path: &Path, commit: &str) -> bool {
+    commit.bytes().all(|byte| byte.is_ascii_hexdigit())
+        && git_output(path, &["cat-file", "-e", &format!("{commit}^{{commit}}")]).is_ok()
+}
+
 pub fn current_branch(path: &Path) -> Option<String> {
     git_output(path, &["branch", "--show-current"])
         .ok()
@@ -32,11 +45,13 @@ pub fn current_branch(path: &Path) -> Option<String> {
         .filter(|branch| !branch.is_empty())
 }
 
+/// Add a worktree on a new `branch` starting at `base` (a commit, or `HEAD` of the checkout).
 pub fn create_worktree(
     project_path: &Path,
     git_root: &Path,
     destination: &Path,
     branch: &str,
+    base: &str,
 ) -> Result<PathBuf, String> {
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -46,7 +61,7 @@ pub fn create_worktree(
         .arg(git_root)
         .args(["worktree", "add", "-b", branch])
         .arg(destination)
-        .arg("HEAD")
+        .arg(base)
         .output()
         .map_err(|error| format!("Could not start git: {error}"))?;
     if !output.status.success() {
@@ -312,12 +327,36 @@ mod tests {
         fs::write(root.join("untracked.txt"), "only original\n").unwrap();
 
         let destination = directory.path().join("worktree");
-        let workspace = create_worktree(&root, &root, &destination, "wackcode/test-worktree").unwrap();
+        let workspace = create_worktree(&root, &root, &destination, "wackcode/test-worktree", "HEAD").unwrap();
         assert_eq!(workspace, destination);
         assert_eq!(fs::read_to_string(workspace.join("tracked.txt")).unwrap(), "committed\n");
         assert!(!workspace.join("untracked.txt").exists());
         assert_eq!(git_output(&workspace, &["rev-parse", "HEAD"]).unwrap(), expected_head);
         assert_eq!(current_branch(&workspace).as_deref(), Some("wackcode/test-worktree"));
         assert_eq!(fs::read_to_string(root.join("tracked.txt")).unwrap(), "dirty original\n");
+    }
+
+    #[test]
+    fn worktrees_can_start_at_an_earlier_commit() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("repo");
+        fs::create_dir(&root).unwrap();
+        git(&root, &[OsStr::new("init")]);
+        git(&root, &[OsStr::new("config"), OsStr::new("user.email"), OsStr::new("test@example.com")]);
+        git(&root, &[OsStr::new("config"), OsStr::new("user.name"), OsStr::new("Test")]);
+        fs::write(root.join("file.txt"), "first\n").unwrap();
+        git(&root, &[OsStr::new("add"), OsStr::new(".")]);
+        git(&root, &[OsStr::new("commit"), OsStr::new("-m"), OsStr::new("first")]);
+        let first = head_commit(&root).unwrap();
+        fs::write(root.join("file.txt"), "second\n").unwrap();
+        git(&root, &[OsStr::new("commit"), OsStr::new("-am"), OsStr::new("second")]);
+        assert!(has_commit(&root, &first));
+        assert!(!has_commit(&root, &"0".repeat(40)));
+        assert!(!has_commit(&root, "HEAD --output=x"));
+
+        let destination = directory.path().join("worktree");
+        create_worktree(&root, &root, &destination, "wackcode/earlier", &first).unwrap();
+        assert_eq!(fs::read_to_string(destination.join("file.txt")).unwrap(), "first\n");
+        assert_eq!(head_commit(&destination).as_deref(), Some(first.as_str()));
     }
 }

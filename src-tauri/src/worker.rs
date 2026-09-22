@@ -3,7 +3,7 @@ use nix::{sys::signal::{killpg, Signal}, unistd::Pid};
 use serde_json::{json, Value};
 use std::{collections::HashMap, path::PathBuf, process::Stdio, sync::{Arc, Mutex}};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, process::{ChildStdin, Command}, sync::Mutex as AsyncMutex};
+use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, process::{ChildStdin, Command}, sync::{oneshot, Mutex as AsyncMutex}};
 
 const PROVIDER_ENVIRONMENT_KEYS: &[&str] = &[
     "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY",
@@ -16,12 +16,28 @@ pub(crate) fn strip_provider_env(command: &mut Command) {
     for key in PROVIDER_ENVIRONMENT_KEYS { command.env_remove(key); }
 }
 
+/// Commands awaiting their `response` line, by command id. Owned by one worker process: its
+/// stdout reader resolves them and drops the rest when the process goes away.
+type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>>;
+
 #[derive(Clone)]
 pub struct WorkerProcess {
     pub pid: u32,
     pub fingerprint: String,
     stdin: Arc<AsyncMutex<ChildStdin>>,
+    pending: Pending,
 }
+
+/// How to start a worker beyond the task record itself.
+#[derive(Default)]
+pub struct WorkerOptions {
+    /// Build this task's first session as a fork of another chat's (`init.forkFrom`).
+    pub fork_from: Option<Value>,
+    /// Wait for `init` to finish, so errors reach the caller and `session_file` is recorded.
+    pub wait_ready: bool,
+}
+
+const INIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
 #[derive(Default)]
 pub struct WorkerState {
@@ -99,6 +115,16 @@ pub async fn ensure_worker(
     provider: &ProviderRecord,
     api_key: Option<&str>,
 ) -> Result<(), String> {
+    ensure_worker_with(app, task, provider, api_key, WorkerOptions::default()).await
+}
+
+pub async fn ensure_worker_with(
+    app: &AppHandle,
+    task: &TaskRecord,
+    provider: &ProviderRecord,
+    api_key: Option<&str>,
+    options: WorkerOptions,
+) -> Result<(), String> {
     let worker_state = app.state::<WorkerState>();
     let wanted_fingerprint = {
         let state = app.state::<MetadataState>();
@@ -140,10 +166,12 @@ pub async fn ensure_worker(
     let stdin = child.stdin.take().ok_or_else(|| "The Pi worker has no stdin".to_string())?;
     let stdout = child.stdout.take().ok_or_else(|| "The Pi worker has no stdout".to_string())?;
     let stderr = child.stderr.take().ok_or_else(|| "The Pi worker has no stderr".to_string())?;
+    let pending: Pending = Arc::default();
     worker_state.insert(task.id.clone(), WorkerProcess {
         pid,
         fingerprint: wanted_fingerprint,
         stdin: Arc::new(AsyncMutex::new(stdin)),
+        pending: pending.clone(),
     })?;
 
     let task_id = task.id.clone();
@@ -155,8 +183,10 @@ pub async fn ensure_worker(
         let stdout_reader = tauri::async_runtime::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                handle_worker_line(&stdout_app, &stdout_task_id, &line);
+                handle_worker_line(&stdout_app, &stdout_task_id, &line, &pending);
             }
+            // Dropping the senders tells every waiting request the worker is gone.
+            if let Ok(mut pending) = pending.lock() { pending.clear(); }
         });
         let stderr_tail = Arc::new(AsyncMutex::new(String::new()));
         let stderr_copy = stderr_tail.clone();
@@ -244,10 +274,46 @@ pub async fn ensure_worker(
         "disabledTools": disabled_tools,
         "resources": resources,
         // The record's mode is the durable hint; the worker's plan-mode extension reconciles
-        // it with whatever the restored session says.
-        "mode": task.mode,
+        // it with whatever the restored session says. A fork takes the mode its fork point had.
+        "mode": if options.fork_from.is_some() { Value::Null } else { json!(task.mode) },
+        "forkFrom": options.fork_from,
     });
-    send(app, &task.id, &init).await
+    if options.wait_ready {
+        request(app, &task.id, init, INIT_TIMEOUT).await.map(|_| ())
+    } else {
+        send(app, &task.id, &init).await
+    }
+}
+
+/// Send a command and wait for its `response`, returning the response's `result`.
+///
+/// Used for commands whose outcome the caller needs (moving in the session tree, resending) —
+/// most commands stay fire-and-forget, with the worker's events telling the UI what happened.
+pub async fn request(app: &AppHandle, task_id: &str, value: Value, timeout: std::time::Duration) -> Result<Value, String> {
+    let worker = app.state::<WorkerState>().get(task_id)?
+        .ok_or_else(|| "This task's Pi worker is not running".to_string())?;
+    let id = value.get("id").and_then(Value::as_str).ok_or_else(|| "A worker request needs an id".to_string())?.to_string();
+    let (sender, receiver) = oneshot::channel();
+    worker.pending.lock().map_err(|_| "Worker lock was poisoned".to_string())?.insert(id.clone(), sender);
+    if let Err(error) = write_line(&worker, &value).await {
+        if let Ok(mut pending) = worker.pending.lock() { pending.remove(&id); }
+        return Err(error);
+    }
+    match tokio::time::timeout(timeout, receiver).await {
+        Err(_) => {
+            if let Ok(mut pending) = worker.pending.lock() { pending.remove(&id); }
+            Err("Pi did not answer in time.".into())
+        }
+        Ok(Err(_)) => Err("The Pi worker stopped before it answered.".into()),
+        Ok(Ok(response)) => {
+            if response.get("success").and_then(Value::as_bool) == Some(true) {
+                Ok(response.get("result").cloned().unwrap_or(Value::Null))
+            } else {
+                Err(response.get("error").and_then(Value::as_str).map(redact_and_limit)
+                    .unwrap_or_else(|| "Pi could not do that.".into()))
+            }
+        }
+    }
 }
 
 /// Best-effort fan-out to every running worker. A worker that has already exited is skipped
@@ -263,6 +329,10 @@ pub async fn broadcast(app: &AppHandle, value: &Value) -> Result<(), String> {
 pub async fn send(app: &AppHandle, task_id: &str, value: &Value) -> Result<(), String> {
     let worker = app.state::<WorkerState>().get(task_id)?
         .ok_or_else(|| "This task's Pi worker is not running".to_string())?;
+    write_line(&worker, value).await
+}
+
+async fn write_line(worker: &WorkerProcess, value: &Value) -> Result<(), String> {
     let mut bytes = serde_json::to_vec(value).map_err(|error| error.to_string())?;
     bytes.push(b'\n');
     let mut stdin = worker.stdin.lock().await;
@@ -505,9 +575,18 @@ pub(crate) fn node_executable_path() -> Result<PathBuf, String> {
     }
 }
 
-fn handle_worker_line(app: &AppHandle, task_id: &str, line: &str) {
+fn handle_worker_line(app: &AppHandle, task_id: &str, line: &str, pending: &Pending) {
     let Ok(mut value) = serde_json::from_str::<Value>(line) else { return; };
     let event_type = value.get("type").and_then(Value::as_str).unwrap_or("").to_string();
+    if event_type == "response" {
+        let waiting = value.get("id").and_then(Value::as_str)
+            .and_then(|id| pending.lock().ok().and_then(|mut pending| pending.remove(id)));
+        // A caller is waiting for this one and reports it itself.
+        if let Some(sender) = waiting {
+            let _ = sender.send(value);
+            return;
+        }
+    }
     if event_type == "worker_error" {
         if let Some(message) = value.get("message").and_then(Value::as_str).map(redact_and_limit) {
             value["message"] = Value::String(message);

@@ -259,13 +259,79 @@ export interface NormalizedBlock {
   details?: unknown;
 }
 
+/**
+ * A workspace checkpoint: a tree in the chat's private shadow repository, taken before each
+ * prompt and when a branch of the conversation is left.
+ */
+export interface CheckpointRef {
+  id: string;
+  /** The workspace repository's HEAD when the snapshot was taken, if it had one. */
+  head?: string;
+}
+
+/** The other versions of a user message: edits and retries sent from the same point. */
+export interface MessageVersions {
+  /** Zero-based position among the versions, oldest first. */
+  index: number;
+  total: number;
+  previous?: string;
+  next?: string;
+  /** The same for every version of the message. */
+  group: string;
+}
+
+/** Where a turn (one user message and everything answering it) ends, for retry and fork. */
+export interface TurnInfo {
+  userEntryId: string;
+  endEntryId: string;
+  /** The files as they were after this turn, when a later checkpoint recorded them. */
+  after?: CheckpointRef;
+}
+
 export interface NormalizedMessage {
+  /** The Pi session entry id when known; otherwise a positional id. */
   id: string;
   role: "user" | "assistant" | "tool" | "system";
   timestamp?: number;
   blocks: NormalizedBlock[];
   stopReason?: string;
   errorMessage?: string;
+  /** Pi session entry id. Briefly absent while Pi saves a message that has just finished. */
+  entryId?: string;
+  versions?: MessageVersions;
+  /** User messages: the files just before the message was sent. */
+  checkpoint?: CheckpointRef;
+  /** The last assistant message of each turn. */
+  turn?: TurnInfo;
+}
+
+/** One file restoring a checkpoint would change, and what the restore does to it. */
+export interface CheckpointChange {
+  path: string;
+  status: "revert" | "delete" | "recreate";
+}
+
+export interface RestoreResult {
+  restored: string[];
+  /** Left alone: ignored or oversized files, or a folder with other content in the way. */
+  skipped: string[];
+  /** The files just before the restore, itself a checkpoint. */
+  undo: CheckpointRef;
+}
+
+export interface NavigateResult {
+  leafId: string | null;
+  /** The text of the user message a rewind removed. */
+  editorText?: string;
+  /** The files the branch now shown was left with. */
+  files?: CheckpointRef;
+}
+
+export interface NavigateTaskResult {
+  navigate: NavigateResult;
+  restore?: RestoreResult | null;
+  /** The conversation moved, but the requested file restore failed. */
+  restoreError?: string | null;
 }
 
 /** A completed prompt duration attached to the user message that started it. */
@@ -280,6 +346,12 @@ export interface SessionSnapshot {
   messages: NormalizedMessage[];
   runTimings: RunTiming[];
   activeRun?: { runId: string; startedAt: number };
+  /** Where the conversation currently ends in the session tree. */
+  tree?: {
+    leafId: string | null;
+    /** Set right after a rewind: the entry "Undo rewind" returns to. */
+    undo?: string;
+  };
   stats: {
     tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
     cost: number;
@@ -323,7 +395,9 @@ export type WorkerEvent =
   | ({ type: "extension_notice"; taskId: string } & ExtensionNotice)
   | { type: "extensions_loaded"; taskId: string; loaded: string[]; errors: { path: string; error: string }[] }
   | ({ type: "plan_state"; taskId: string } & PlanState)
-  | ({ type: "todo_state"; taskId: string } & TodoState);
+  | ({ type: "todo_state"; taskId: string } & TodoState)
+  /** From the host, once per chat per session: why file checkpoints are off for it. */
+  | { type: "checkpoint_unavailable"; taskId: string; message: string };
 
 export interface TaskRuntime {
   snapshot?: SessionSnapshot;
@@ -340,6 +414,8 @@ export interface TaskRuntime {
   planState?: PlanState;
   /** Latest todo list from the worker's built-in todo extension. */
   todoState?: TodoState;
+  /** The most recent file restore, offered for undo until dismissed. */
+  lastRestore?: { count: number; undo: CheckpointRef };
 }
 
 export interface GitChangeFile {

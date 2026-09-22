@@ -98,3 +98,27 @@ describe("Composer image attachments", () => {
     expect(screen.getByRole("status")).toHaveTextContent("remove the images");
   });
 });
+
+describe("Composer seed", () => {
+  it("replaces the draft only when a new seed arrives", () => {
+    const props = {
+      status: "idle" as const,
+      providers,
+      providerId: "p",
+      modelId: "sees",
+      thinkingLevel: "off" as const,
+      onConfigure: vi.fn(),
+      onSend: vi.fn().mockResolvedValue(true),
+      onStop: vi.fn(),
+      onOpenSettings: vi.fn()
+    };
+    const view = render(<Composer {...props} seed={{ text: "Rewound request", nonce: 1 }} />);
+    const area = screen.getByRole("textbox");
+    expect(area).toHaveValue("Rewound request");
+    fireEvent.change(area, { target: { value: "Rewound request, tweaked" } });
+    view.rerender(<Composer {...props} seed={{ text: "Rewound request", nonce: 1 }} />);
+    expect(area).toHaveValue("Rewound request, tweaked");
+    view.rerender(<Composer {...props} seed={{ text: "Another", nonce: 2 }} />);
+    expect(area).toHaveValue("Another");
+  });
+});

@@ -1,10 +1,13 @@
-import { Fragment, memo, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { NormalizedBlock, NormalizedMessage, PlanState, RunTiming } from "../types";
 import { useFollowScroll } from "../hooks/useFollowScroll";
 import { useSmoothText } from "../hooks/useSmoothText";
 import { formatRunDuration } from "../chat-utils";
+import { hasVisibleMessages, latestTurn, messageText } from "../tree-utils";
 import { Icon } from "./Icons";
 import { Markdown } from "./Markdown";
+import { MessageActions, type MessageActionItem } from "./MessageActions";
+import { MessageEditor } from "./MessageEditor";
 import { PlanCard, type PlanAction } from "./PlanCard";
 import { ThinkingRow } from "./ThinkingRow";
 import { OrphanResult, ToolRow } from "./ToolRow";
@@ -20,7 +23,30 @@ interface Props {
   /** Latest Plan mode state; PlanCards use it to know which proposal is awaiting a decision. */
   planState?: PlanState;
   onPlanAction?: (action: PlanAction) => void;
+  /** Retry, edit, rewind, version switching and fork are offered only while this is true. */
+  actionsEnabled?: boolean;
+  /** Whether the chat's model accepts images, for editing a message that has some. */
+  vision?: boolean;
+  modelName?: string;
+  /** Resolves true once an edit has been sent, which closes the editor. */
+  onMessageAction?: (action: MessageAction) => Promise<boolean> | void;
+  /** Offered right after a rewind. */
+  onUndoRewind?: () => void;
 }
+
+/** What the transcript asks the app to do with a message. */
+export type MessageAction =
+  | { type: "copy"; message: NormalizedMessage }
+  | { type: "edit"; message: NormalizedMessage; text: string; removeImages: number[] }
+  /** Send this user message again as a new version. */
+  | { type: "retry"; message: NormalizedMessage }
+  /** Take the conversation back to just before this user message. */
+  | { type: "rewind"; message: NormalizedMessage }
+  | { type: "switch"; entryId: string }
+  /** A new chat from the turn this assistant message ends. */
+  | { type: "fork"; message: NormalizedMessage };
+
+type LocalAction = MessageAction | { type: "start-edit"; id: string } | { type: "cancel-edit" };
 
 function StreamingText({ text }: { text: string }) {
   const shown = useSmoothText(text, true);
@@ -92,6 +118,10 @@ function signature(message: NormalizedMessage, results: Map<string, NormalizedBl
     message.blocks.map(signatureBlock),
     message.stopReason,
     message.errorMessage,
+    message.entryId,
+    message.versions,
+    message.checkpoint,
+    message.turn,
     message.blocks.map((block) => block.type === "tool-call" && block.toolCallId
       ? [results.get(block.toolCallId) ?? null, liveToolText?.[block.toolCallId] ?? null]
       : null)
@@ -107,12 +137,40 @@ interface MessageProps {
   planState?: PlanState;
   onPlanAction?: (action: PlanAction) => void;
   sig: string;
+  actionsEnabled: boolean;
+  /** Offer Retry on this message: it ends (or, unanswered, is) the latest turn. */
+  retry: boolean;
+  editing: boolean;
+  vision: boolean;
+  modelName?: string;
+  onAction: (action: LocalAction) => Promise<boolean> | void;
 }
 
-const Message = memo(function Message({ message, results, liveToolText, live, running, planState, onPlanAction }: MessageProps) {
+const Message = memo(function Message({ message, results, liveToolText, live, running, planState, onPlanAction, actionsEnabled, retry, editing, vision, modelName, onAction }: MessageProps) {
   if (message.role === "user") {
     const images = message.blocks.filter((block) => block.type === "image");
-    const text = message.blocks.filter((block) => block.type === "text").map((block) => block.text ?? "").join("\n").trim();
+    const text = messageText(message);
+    if (editing) {
+      return (
+        <div className="msg user editing">
+          <MessageEditor
+            text={text}
+            images={images}
+            vision={vision}
+            modelName={modelName}
+            onCancel={() => void onAction({ type: "cancel-edit" })}
+            onSend={async (edited, removeImages) => (await onAction({ type: "edit", message, text: edited, removeImages })) === true}
+          />
+        </div>
+      );
+    }
+    const items: MessageActionItem[] = [];
+    if (text) items.push({ id: "copy", label: "Copy", icon: "copy", onClick: () => void onAction({ type: "copy", message }) });
+    if (actionsEnabled && message.entryId) {
+      if (retry) items.push({ id: "retry", label: "Retry", icon: "refresh", onClick: () => void onAction({ type: "retry", message }) });
+      items.push({ id: "edit", label: "Edit", icon: "pencil", onClick: () => void onAction({ type: "start-edit", id: message.id }) });
+      items.push({ id: "rewind", label: "Rewind to here", icon: "rewind", onClick: () => void onAction({ type: "rewind", message }) });
+    }
     return (
       <div className="msg user">
         {images.length > 0 && (
@@ -124,6 +182,13 @@ const Message = memo(function Message({ message, results, liveToolText, live, ru
           </div>
         )}
         {text && <div className="bubble">{text}</div>}
+        <MessageActions
+          align="end"
+          items={items}
+          versions={message.versions}
+          switchDisabled={!actionsEnabled}
+          onSwitch={(entryId) => void onAction({ type: "switch", entryId })}
+        />
       </div>
     );
   }
@@ -140,11 +205,24 @@ const Message = memo(function Message({ message, results, liveToolText, live, ru
       ))}
       {message.stopReason === "error" && <div className="message-error">{message.errorMessage || "The provider rejected the request."}</div>}
       {message.stopReason === "aborted" && <span className="aborted-label">Stopped</span>}
+      {message.turn && <TurnActions message={message} actionsEnabled={actionsEnabled} retry={retry} onAction={onAction} />}
     </div>
   );
 }, (prev, next) =>
   prev.sig === next.sig && prev.live === next.live && prev.running === next.running
-  && prev.planState === next.planState && prev.onPlanAction === next.onPlanAction);
+  && prev.planState === next.planState && prev.onPlanAction === next.onPlanAction
+  && prev.actionsEnabled === next.actionsEnabled && prev.retry === next.retry && prev.editing === next.editing
+  && prev.vision === next.vision && prev.modelName === next.modelName && prev.onAction === next.onAction);
+
+function TurnActions({ message, actionsEnabled, retry, onAction }: Pick<MessageProps, "message" | "actionsEnabled" | "retry" | "onAction">) {
+  const items: MessageActionItem[] = [];
+  if (messageText(message)) items.push({ id: "copy", label: "Copy", icon: "copy", onClick: () => void onAction({ type: "copy", message }) });
+  if (actionsEnabled) {
+    if (retry) items.push({ id: "retry", label: "Retry", icon: "refresh", onClick: () => void onAction({ type: "retry", message }) });
+    items.push({ id: "fork", label: "Fork from here", icon: "branch", onClick: () => void onAction({ type: "fork", message }) });
+  }
+  return <MessageActions align="start" items={items} />;
+}
 
 function activityLabel(activity?: string): string {
   if (!activity) return "Working…";
@@ -154,8 +232,24 @@ function activityLabel(activity?: string): string {
   return "Working…";
 }
 
-export function Transcript({ messages, partial, running, activity, activeRun, runTimings = [], liveToolText, planState, onPlanAction }: Props) {
+export function Transcript({ messages, partial, running, activity, activeRun, runTimings = [], liveToolText, planState, onPlanAction, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind }: Props) {
   const { ref, onScroll, detached, jumpToLatest } = useFollowScroll();
+  const [editingId, setEditingId] = useState<string>();
+  const latest = useMemo(() => latestTurn(messages), [messages]);
+
+  // Stable for the memoized messages: `onMessageAction` is expected to be stable too.
+  const handleAction = useCallback(async (action: LocalAction): Promise<boolean> => {
+    if (action.type === "start-edit") { setEditingId(action.id); return true; }
+    if (action.type === "cancel-edit") { setEditingId(undefined); return true; }
+    const done = (await onMessageAction?.(action)) === true;
+    if (action.type === "edit" && done) setEditingId(undefined);
+    return done;
+  }, [onMessageAction]);
+
+  // An edit can't outlive the message it edits, or the chat becoming busy.
+  useEffect(() => {
+    if (editingId && (!actionsEnabled || !messages.some((message) => message.id === editingId))) setEditingId(undefined);
+  }, [actionsEnabled, editingId, messages]);
 
   const { results, callIds } = useMemo(() => {
     const resultMap = new Map<string, NormalizedBlock>();
@@ -179,13 +273,21 @@ export function Transcript({ messages, partial, running, activity, activeRun, ru
   const waiting = running && (!partial || partial.blocks.length === 0);
   const label = activityLabel(activity);
 
-  if (messages.length === 0 && !partial && !activeRun) {
+  const rewindBar = onUndoRewind && actionsEnabled ? (
+    <div className="rewind-bar" role="status">
+      <span>Rewound. The later messages are kept as another version.</span>
+      <button type="button" className="secondary-button" onClick={onUndoRewind}><Icon name="rewind" /> Undo rewind</button>
+    </div>
+  ) : null;
+
+  if (!hasVisibleMessages(messages) && !partial && !activeRun) {
     return (
       <div className="transcript-zone">
         <div className="conversation-scroll">
           <div className="conversation-empty">
             <h2>What should we build?</h2>
             <p>Describe the change, bug, or question — Pi can read this project, run commands, and edit files.</p>
+            {rewindBar}
           </div>
         </div>
       </div>
@@ -202,8 +304,11 @@ export function Transcript({ messages, partial, running, activity, activeRun, ru
               if (orphans.length === 0) return null;
               return <div key={message.id} className="orphan-group">{orphans.map((block, index) => <OrphanResult key={index} block={block} />)}</div>;
             }
+            // Every version of a user message shares one element, so the switcher keeps focus.
+            const key = message.role === "user" && message.versions ? message.versions.group : message.id;
+            const retry = message.id === (latest?.answer ?? latest?.user)?.id;
             return (
-              <Fragment key={message.id}>
+              <Fragment key={key}>
                 <Message
                   message={message}
                   results={results}
@@ -213,6 +318,12 @@ export function Transcript({ messages, partial, running, activity, activeRun, ru
                   planState={planState}
                   onPlanAction={onPlanAction}
                   sig={signature(message, results, liveToolText)}
+                  actionsEnabled={actionsEnabled}
+                  retry={retry}
+                  editing={editingId === message.id}
+                  vision={vision}
+                  modelName={modelName}
+                  onAction={handleAction}
                 />
                 {message.role === "user" && message.id === activeUserId && (
                   <RunDuration startedAt={activeRun?.startedAt} />
@@ -236,6 +347,7 @@ export function Transcript({ messages, partial, running, activity, activeRun, ru
           {waiting && label && (
             <div className="agent-working"><span className="thinking-shimmer">{label}</span></div>
           )}
+          {rewindBar}
         </div>
       </div>
       {detached && (

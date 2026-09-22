@@ -5,17 +5,22 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { api } from "./api";
 import { modelIsReady } from "./model-utils";
 import { titleFromPrompt } from "./chat-utils";
+import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix } from "./tree-utils";
 import { pruneDisabledTools, sameToolCatalog } from "./tool-utils";
 import type {
   AppData,
+  CheckpointChange,
+  CheckpointRef,
   ExtensionNotice,
   ExtensionUIRequest,
   GitChanges,
   ImageContent,
+  NormalizedMessage,
   PackageRecord,
   PackageResourceKind,
   ProjectRecord,
   ProviderRecord,
+  RestoreResult,
   SaveProviderInput,
   SubscriptionLoginEvent,
   TaskMode,
@@ -31,7 +36,8 @@ import { Icon } from "./components/Icons";
 import { ProjectBar } from "./components/ProjectBar";
 import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar, NO_PROJECT_KEY, type ProjectAction, type TaskAction } from "./components/Sidebar";
-import { Transcript } from "./components/Transcript";
+import { Transcript, type MessageAction } from "./components/Transcript";
+import { RestoreDialog, type RestoreChoice } from "./components/RestoreDialog";
 import { TodoPanel } from "./components/TodoPanel";
 import { InlineDialog, type ExtensionUIResponse } from "./components/InlineDialog";
 import type { PlanAction } from "./components/PlanCard";
@@ -68,6 +74,22 @@ interface ConfirmState {
   run: () => Promise<void>;
 }
 
+interface RestoreDialogState {
+  title: string;
+  body?: string;
+  changes: CheckpointChange[];
+  initialSelection: string[];
+  sharedWith?: string;
+  choices: RestoreChoice[];
+  run: (choice: string, paths: string[]) => Promise<void>;
+  /** Closed without a choice (or after one): settles whoever is waiting on the dialog. */
+  onClose: () => void;
+}
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
 interface SubscriptionLoginState {
   loginId: string;
   providerId: string;
@@ -101,6 +123,8 @@ export default function App() {
   const [showArchived, setShowArchived] = useState(false);
   const [collapsedProjects, setCollapsedProjects] = useState<ReadonlySet<string>>(() => new Set(loadJSON<string[]>(COLLAPSED_PROJECTS_KEY, [])));
   const [confirm, setConfirm] = useState<ConfirmState>();
+  const [restoreDialog, setRestoreDialog] = useState<RestoreDialogState>();
+  const [composerSeed, setComposerSeed] = useState<{ text: string; nonce: number }>();
   const [extensionRequests, setExtensionRequests] = useState<ExtensionUIRequest[]>([]);
   const [booting, setBooting] = useState(true);
   const [globalError, setGlobalError] = useState<string>();
@@ -118,6 +142,8 @@ export default function App() {
   // choice before a task exists) is the durable fallback.
   const currentMode: TaskMode = runtime?.planState?.mode ?? selectedTask?.mode ?? draft?.mode ?? "build";
   const pendingDialogTaskIds = useMemo(() => new Set(extensionRequests.map((r) => r.taskId)), [extensionRequests]);
+  const selectedBusy = selectedTask?.status === "running" || selectedTask?.status === "stopping";
+  const selectedModel = data.providers.find((provider) => provider.id === selectedTask?.providerId)?.models.find((model) => model.id === selectedTask?.modelId);
 
   const handleExtensionRespond = useCallback((request: ExtensionUIRequest, response: ExtensionUIResponse) => {
     setExtensionRequests((current) => current.filter((entry) => entry.requestId !== request.requestId));
@@ -271,6 +297,8 @@ export default function App() {
         for (const entry of payload.errors) {
           appendNotice(taskId, { message: `Extension failed to load (${entry.path}): ${entry.error}`, level: "warning" });
         }
+      } else if (payload.type === "checkpoint_unavailable") {
+        appendNotice(taskId, { message: `File checkpoints are off for this chat: ${payload.message}`, level: "warning" });
       } else if (payload.type === "response" && !payload.success && payload.error) {
         patchRuntime(taskId, { error: payload.error });
       }
@@ -642,6 +670,254 @@ export default function App() {
     }
   }
 
+  /** Open the restore dialog; resolves true once a choice has run, false when closed without one. */
+  function chooseFiles(state: Omit<RestoreDialogState, "onClose">): Promise<boolean> {
+    return new Promise((resolve) => {
+      let settled = false;
+      setRestoreDialog({
+        ...state,
+        run: async (choice, paths) => {
+          await state.run(choice, paths);
+          settled = true;
+          resolve(true);
+        },
+        onClose: () => { if (!settled) resolve(false); }
+      });
+    });
+  }
+
+  /**
+   * What a restore in this chat covers: its checkpoints span the worktree or the whole
+   * repository, but only files inside the chat's own folder are selected by default.
+   */
+  function restoreScope(task: TaskRecord): { prefix: string; sharedWith?: string } {
+    const project = data.projects.find((item) => item.id === task.projectId);
+    const root = task.worktreePath ?? project?.gitRoot ?? task.workspacePath;
+    const others = data.tasks.filter((other) => other.id !== task.id && !other.archived
+      && (other.worktreePath ?? data.projects.find((item) => item.id === other.projectId)?.gitRoot ?? other.workspacePath) === root);
+    return {
+      prefix: workspacePrefix(root, task.workspacePath),
+      sharedWith: others.length === 0 ? undefined : others.length === 1 ? `“${others[0].name}”` : `${plural(others.length, "other chat")}`
+    };
+  }
+
+  async function changesSince(task: TaskRecord, checkpoint?: CheckpointRef): Promise<CheckpointChange[]> {
+    if (!checkpoint) return [];
+    try {
+      return await api.checkpointChanges(task.id, checkpoint.id);
+    } catch {
+      // A checkpoint that can no longer be read only means there is nothing to offer.
+      return [];
+    }
+  }
+
+  function afterRestore(taskId: string, result?: RestoreResult | null, error?: string | null) {
+    if (error) patchRuntime(taskId, { error });
+    if (!result) return;
+    void refreshChanges(taskId);
+    patchRuntime(taskId, { lastRestore: result.restored.length > 0 ? { count: result.restored.length, undo: result.undo } : undefined });
+    if (result.skipped.length > 0) {
+      appendNotice(taskId, {
+        message: `${plural(result.skipped.length, "file")} left as they are, because something the checkpoint doesn't hold is in the way (ignored or very large files): ${result.skipped.slice(0, 3).join(", ")}${result.skipped.length > 3 ? "…" : ""}`,
+        level: "info"
+      });
+    }
+  }
+
+  /** Retry (unchanged) or edit: send a user message again as a new version of itself. */
+  async function resend(user: NormalizedMessage, edit?: { text: string; removeImages: number[] }): Promise<boolean> {
+    const task = selectedTask;
+    const entryId = user.entryId;
+    if (!task || !entryId) return false;
+    const send = async (restore?: { checkpointId: string; paths: string[] }) => {
+      const startedAt = Date.now();
+      patchTask(task.id, { status: "running", lastError: null });
+      patchRuntime(task.id, { error: undefined, activity: "starting", activeRun: { startedAt }, lastRestore: undefined });
+      try {
+        await api.resendMessage({
+          taskId: task.id,
+          entryId,
+          message: edit?.text,
+          removeImages: edit?.removeImages,
+          restore,
+          startedAt,
+          providerId: task.providerId,
+          modelId: task.modelId,
+          thinkingLevel: task.thinkingLevel
+        });
+        if (restore) void refreshChanges(task.id);
+      } catch (reason) {
+        patchTask(task.id, { status: "idle" });
+        patchRuntime(task.id, { activeRun: undefined, activity: undefined });
+        throw reason;
+      }
+    };
+    const changes = await changesSince(task, user.checkpoint);
+    if (changes.length === 0 || !user.checkpoint) {
+      try {
+        await send();
+        return true;
+      } catch (reason) {
+        patchRuntime(task.id, { error: String(reason) });
+        return false;
+      }
+    }
+    const checkpointId = user.checkpoint.id;
+    const scope = restoreScope(task);
+    return chooseFiles({
+      title: edit ? "Send the edited message" : "Retry this message",
+      body: `${plural(changes.length, "file")} changed since this message was sent. Put them back as they were, or keep them as they are now?`,
+      changes,
+      initialSelection: defaultSelection(changes, scope.prefix),
+      sharedWith: scope.sharedWith,
+      choices: [
+        { id: "keep", label: "Keep files" },
+        { id: "restore", label: "Restore & send", files: true, danger: true }
+      ],
+      run: (choice, paths) => send(choice === "restore" ? { checkpointId, paths } : undefined)
+    });
+  }
+
+  async function rewind(user: NormalizedMessage) {
+    const task = selectedTask;
+    const entryId = user.entryId;
+    if (!task || !entryId) return;
+    const changes = await changesSince(task, user.checkpoint);
+    const checkpointId = user.checkpoint?.id;
+    const scope = restoreScope(task);
+    const moveConversation = async (restore?: { checkpointId: string; paths: string[] }) => {
+      const result = await api.navigateTask({ taskId: task.id, entryId, target: "before", kind: "rewind", restore });
+      if (result.navigate.editorText) setComposerSeed({ text: result.navigate.editorText, nonce: Date.now() });
+      patchRuntime(task.id, { lastRestore: undefined });
+      afterRestore(task.id, result.restore, result.restoreError);
+    };
+    const withFiles = changes.length > 0 && checkpointId !== undefined;
+    void chooseFiles({
+      title: "Rewind to before this message?",
+      body: `The conversation goes back to just before this message, and its text returns to the composer. Later messages are kept as another version.${withFiles ? ` ${plural(changes.length, "file")} changed since it was sent.` : ""}`,
+      changes,
+      initialSelection: defaultSelection(changes, scope.prefix),
+      sharedWith: withFiles ? scope.sharedWith : undefined,
+      choices: withFiles
+        ? [
+            { id: "files", label: "Files only", files: true },
+            { id: "conversation", label: "Conversation only" },
+            { id: "both", label: "Conversation & files", files: true, danger: true }
+          ]
+        : [{ id: "conversation", label: "Rewind" }],
+      run: async (choice, paths) => {
+        if (choice === "files" && checkpointId) {
+          afterRestore(task.id, await api.restoreCheckpoint({ taskId: task.id, checkpointId, paths }));
+        } else {
+          await moveConversation(choice === "both" && checkpointId ? { checkpointId, paths } : undefined);
+        }
+      }
+    });
+  }
+
+  /** After moving to another branch: offer the files that branch was left with. */
+  async function offerBranchFiles(task: TaskRecord, files: CheckpointRef | undefined, title: string) {
+    const changes = await changesSince(task, files);
+    if (!files || changes.length === 0) return;
+    const scope = restoreScope(task);
+    void chooseFiles({
+      title,
+      body: `${plural(changes.length, "file")} differ from how this version of the conversation left them.`,
+      changes,
+      initialSelection: defaultSelection(changes, scope.prefix),
+      sharedWith: scope.sharedWith,
+      choices: [
+        { id: "keep", label: "Keep current files" },
+        { id: "restore", label: "Restore files", files: true, danger: true }
+      ],
+      run: async (choice, paths) => {
+        if (choice === "restore") afterRestore(task.id, await api.restoreCheckpoint({ taskId: task.id, checkpointId: files.id, paths }));
+      }
+    });
+  }
+
+  async function moveInTree(entryId: string, kind: "switch" | "undo") {
+    const task = selectedTask;
+    if (!task) return;
+    try {
+      const result = await api.navigateTask({ taskId: task.id, entryId, target: "latest", kind });
+      patchRuntime(task.id, { lastRestore: undefined });
+      await offerBranchFiles(task, result.navigate.files, kind === "undo" ? "Restore the files from before the rewind?" : "Use this version's files?");
+    } catch (reason) {
+      patchRuntime(task.id, { error: String(reason) });
+    }
+  }
+
+  function forkChat(task: TaskRecord, answer?: NormalizedMessage) {
+    const messages = runtimes[task.id]?.snapshot?.messages ?? [];
+    const latestAnswer = latestTurn(messages)?.answer;
+    const atEnd = !answer || answer.id === latestAnswer?.id;
+    const files = task.usesWorktree
+      ? "in its own worktree with a copy of the files. Ignored files such as .env or node_modules are not copied."
+      : !task.projectId
+        ? "in its own scratch folder with a copy of the files."
+        : "in the same folder. Both chats will share its files.";
+    setConfirm({
+      title: answer ? "Fork from here?" : `Fork “${task.name}”?`,
+      body: `A new chat continues from ${atEnd ? "the end of this conversation" : "this turn"}, ${files}`,
+      confirmLabel: "Fork",
+      run: async () => {
+        const forked = await api.forkTask({
+          taskId: task.id,
+          entryId: answer?.turn?.endEntryId,
+          checkpoint: atEnd ? undefined : answer?.turn?.after
+        });
+        setData((current) => ({ ...current, tasks: [...current.tasks.filter((item) => item.id !== forked.id), forked] }));
+        setDraft(undefined);
+        setSelectedTaskId(forked.id);
+      }
+    });
+  }
+
+  async function undoRestore() {
+    const task = selectedTask;
+    const last = task ? runtimes[task.id]?.lastRestore : undefined;
+    if (!task || !last) return;
+    try {
+      afterRestore(task.id, await api.restoreCheckpoint({ taskId: task.id, checkpointId: last.undo.id }));
+    } catch (reason) {
+      patchRuntime(task.id, { error: String(reason) });
+    }
+  }
+
+  async function messageAction(action: MessageAction): Promise<boolean> {
+    const messages = runtime?.snapshot?.messages ?? [];
+    if (action.type === "copy") {
+      await writeText(messageText(action.message));
+    } else if (action.type === "edit") {
+      return resend(action.message, { text: action.text, removeImages: action.removeImages });
+    } else if (action.type === "retry") {
+      const user = action.message.role === "user" ? action.message : userOfTurn(messages, action.message);
+      return user ? resend(user) : false;
+    } else if (action.type === "rewind") {
+      await rewind(action.message);
+    } else if (action.type === "switch") {
+      await moveInTree(action.entryId, "switch");
+    } else if (action.type === "fork" && selectedTask) {
+      forkChat(selectedTask, action.message);
+    }
+    return true;
+  }
+
+  // Stable identities for the memoized transcript: the latest handlers are read through refs.
+  const handlers = useRef({ messageAction, planAction, undoRewind: () => undefined as void });
+  handlers.current = {
+    messageAction,
+    planAction,
+    undoRewind: () => {
+      const undo = runtime?.snapshot?.tree?.undo;
+      if (undo) void moveInTree(undo, "undo");
+    }
+  };
+  const onMessageAction = useCallback((action: MessageAction) => handlers.current.messageAction(action), []);
+  const onPlanAction = useCallback((action: PlanAction) => void handlers.current.planAction(action), []);
+  const onUndoRewind = useCallback(() => handlers.current.undoRewind(), []);
+
   async function stopTask() {
     if (!selectedTask) return;
     patchTask(selectedTask.id, { status: "stopping" });
@@ -677,6 +953,8 @@ export default function App() {
         const restored = await api.unarchiveTask(task.id);
         setData((current) => ({ ...current, tasks: current.tasks.map((item) => item.id === restored.id ? restored : item) }));
       } catch (reason) { setGlobalError(String(reason)); }
+    } else if (action === "fork") {
+      forkChat(task);
     } else if (action === "worktree") {
       try {
         const updated = await api.convertToWorktree(task.id);
@@ -732,7 +1010,7 @@ export default function App() {
       // ⇧Tab cycles Build ↔ Plan, like Claude Code. A modal or an active run owns the key.
       if (event.key === "Tab" && event.shiftKey) {
         const busy = selectedTask && (selectedTask.status === "running" || selectedTask.status === "stopping");
-        if (!settingsOpen && !confirm && extensionRequests.length === 0 && !busy) {
+        if (!settingsOpen && !confirm && !restoreDialog && extensionRequests.length === 0 && !busy) {
           event.preventDefault();
           void setTaskMode(currentMode === "plan" ? "build" : "plan");
         }
@@ -862,6 +1140,13 @@ export default function App() {
                 <button onClick={() => patchRuntime(selectedTask.id, { notices: runtime.notices?.filter((_, position) => position !== index) })}>Dismiss</button>
               </div>
             ))}
+            {runtime?.lastRestore && (
+              <div className="extension-notice info restore-notice" role="status">
+                <span>Restored {plural(runtime.lastRestore.count, "file")}.</span>
+                <button onClick={() => void undoRestore()} disabled={selectedBusy}>Undo</button>
+                <button onClick={() => patchRuntime(selectedTask.id, { lastRestore: undefined })}>Dismiss</button>
+              </div>
+            )}
             <Transcript
               messages={runtime?.snapshot?.messages ?? []}
               partial={runtime?.partial}
@@ -871,7 +1156,12 @@ export default function App() {
               activity={runtime?.activity}
               liveToolText={runtime?.liveToolText}
               planState={runtime?.planState}
-              onPlanAction={(action) => void planAction(action)}
+              onPlanAction={onPlanAction}
+              actionsEnabled={!selectedBusy && !pendingDialogTaskIds.has(selectedTask.id)}
+              vision={selectedModel?.vision === true}
+              modelName={selectedModel?.name || selectedModel?.id}
+              onMessageAction={onMessageAction}
+              onUndoRewind={runtime?.snapshot?.tree?.undo ? onUndoRewind : undefined}
             />
             <InlineDialog
               requests={extensionRequests}
@@ -897,6 +1187,7 @@ export default function App() {
               onSend={(message, images) => sendPrompt(message, { images })}
               onStop={() => void stopTask()}
               onOpenSettings={() => setSettingsOpen(true)}
+              seed={composerSeed}
             />
           </>
         )}
@@ -906,6 +1197,18 @@ export default function App() {
         </>
       )}
 
+      {restoreDialog && (
+        <RestoreDialog
+          title={restoreDialog.title}
+          body={restoreDialog.body}
+          changes={restoreDialog.changes}
+          initialSelection={restoreDialog.initialSelection}
+          sharedWith={restoreDialog.sharedWith}
+          choices={restoreDialog.choices}
+          onChoose={restoreDialog.run}
+          onCancel={() => { restoreDialog.onClose(); setRestoreDialog(undefined); }}
+        />
+      )}
       {confirm && <ConfirmDialog title={confirm.title} body={confirm.body} confirmLabel={confirm.confirmLabel} danger={confirm.danger} onConfirm={confirm.run} onCancel={() => setConfirm(undefined)} />}
       {subscriptionLogin && <SubscriptionLoginDialog
         login={subscriptionLogin}

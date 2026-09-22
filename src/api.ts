@@ -2,13 +2,17 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   BootstrapPayload,
   BuiltinModelSuggestion,
+  CheckpointChange,
+  CheckpointRef,
   GitChanges,
   ImageContent,
+  NavigateTaskResult,
   PackageRecord,
   PackageSearchResult,
   ProjectRecord,
   ProviderRecord,
   QuestionAnswer,
+  RestoreResult,
   SaveProviderInput,
   SubscriptionProviderInfo,
   TaskMode,
@@ -80,6 +84,34 @@ export const api = {
     /** Refused by Rust unless the model has Vision turned on. */
     images?: ImageContent[];
   }) => invoke<string>("prompt", { input }),
+  /** Send a message again as a new version: unchanged (retry) or with new text (edit). */
+  resendMessage: (input: {
+    taskId: string;
+    entryId: string;
+    message?: string;
+    removeImages?: number[];
+    /** Put these files back first; restored again if the resend is refused. */
+    restore?: { checkpointId: string; paths?: string[] };
+    startedAt: number;
+    providerId: string;
+    modelId: string;
+    thinkingLevel: ThinkingLevel;
+  }) => invoke<string>("resend_message", { input }),
+  /** Rewind to before a message, switch to another version, or undo a rewind. */
+  navigateTask: (input: {
+    taskId: string;
+    entryId: string;
+    target: "before" | "latest";
+    kind: "rewind" | "switch" | "undo";
+    restore?: { checkpointId: string; paths?: string[] };
+  }) => invoke<NavigateTaskResult>("navigate_task", { input }),
+  restoreCheckpoint: (input: { taskId: string; checkpointId: string; paths?: string[] }) =>
+    invoke<RestoreResult>("restore_checkpoint", { input }),
+  checkpointChanges: (taskId: string, checkpointId: string) =>
+    invoke<CheckpointChange[]>("checkpoint_changes", { taskId, checkpointId }),
+  /** A new chat from a turn of this one (its end when `entryId` is omitted). */
+  forkTask: (input: { taskId: string; entryId?: string; checkpoint?: CheckpointRef }) =>
+    invoke<TaskRecord>("fork_task", { input }),
   setTaskMode: (taskId: string, mode: TaskMode) => invoke<TaskRecord>("set_task_mode", { input: { taskId, mode } }),
   /** Save the proposed plan as PLAN.md in the task workspace. Returns the path. */
   exportPlan: (taskId: string, content: string) => invoke<string>("export_plan", { input: { taskId, content } }),

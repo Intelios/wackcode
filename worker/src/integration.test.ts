@@ -7,8 +7,14 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it } from "vitest";
 
+interface Checkpoint { id: string; head?: string }
+
 interface Output {
   type: string;
+  id?: string;
+  success?: boolean;
+  error?: string;
+  result?: { leafId?: string | null; editorText?: string; files?: Checkpoint };
   taskId?: string;
   runId?: string;
   startedAt?: number;
@@ -29,7 +35,17 @@ interface Output {
   errors?: Array<{ path: string; error: string }>;
   snapshot?: {
     sessionFile?: string;
-    messages: Array<{ id?: string; role?: string; timestamp?: number; blocks: Array<{ type: string; text?: string; toolName?: string; details?: unknown; imageId?: string; thumbnail?: string; mimeType?: string }> }>;
+    messages: Array<{
+      id?: string;
+      role?: string;
+      timestamp?: number;
+      blocks: Array<{ type: string; text?: string; toolName?: string; details?: unknown; imageId?: string; thumbnail?: string; mimeType?: string }>;
+      entryId?: string;
+      versions?: { index: number; total: number; previous?: string; next?: string; group: string };
+      checkpoint?: Checkpoint;
+      turn?: { userEntryId: string; endEntryId: string; after?: Checkpoint };
+    }>;
+    tree?: { leafId: string | null; undo?: string };
     runTimings?: Array<{ userMessageId: string; durationMs: number }>;
     activeRun?: { runId: string; startedAt: number };
     tools?: Array<{ name: string; description: string; source: { kind: string; packageId?: string }; available: boolean; unavailableReason?: string }>;
@@ -242,7 +258,8 @@ async function initializeWorker(
   disabledTools?: string[],
   resources?: { extensions: string[]; skills: string[]; prompts: string[]; themes: string[] },
   mode?: "build" | "plan",
-  vision?: boolean
+  vision?: boolean,
+  extra: Record<string, unknown> = {}
 ): Promise<{ worker: WorkerHarness; ready: Output }> {
   const worker = new WorkerHarness(workspace);
   worker.send({
@@ -275,7 +292,8 @@ async function initializeWorker(
     thinkingLevel: "high",
     disabledTools,
     resources,
-    mode
+    mode,
+    ...extra
   });
   return { worker, ready: await worker.waitFor((output) => output.type === "ready") };
 }
@@ -955,6 +973,233 @@ describe("image attachments", () => {
     const failure = await worker.waitFor((output) => output.type === "worker_error");
     expect(failure.message).toContain("image");
     await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    expect(provider.requests).toHaveLength(0);
+  });
+});
+
+describe("session tree", () => {
+  const TREE_A = "a".repeat(40);
+  const TREE_B = "b".repeat(40);
+  const TREE_C = "c".repeat(40);
+
+  async function settle(worker: WorkerHarness, runId: string): Promise<NonNullable<Output["snapshot"]>> {
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === runId);
+    const snapshot = [...worker.outputs].reverse().find((output) => output.type === "snapshot")?.snapshot;
+    if (!snapshot) throw new Error("No snapshot after the run");
+    return snapshot;
+  }
+
+  async function request(worker: WorkerHarness, command: Record<string, unknown>): Promise<Output> {
+    const id = crypto.randomUUID();
+    worker.send({ id, ...command });
+    return worker.waitFor((output) => output.type === "response" && output.id === id);
+  }
+
+  function users(snapshot: NonNullable<Output["snapshot"]>) {
+    return snapshot.messages.filter((message) => message.role === "user");
+  }
+
+  function lastUserText(provider: MockProvider): string {
+    return userParts(provider.requests[provider.requests.length - 1]).filter((part) => part.type === "text").map((part) => part.text).join("");
+  }
+
+  it("retries a prompt as a new version, records checkpoints, and switches back to the first", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-retry-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "retry-task");
+    cleanup.push(() => worker.shutdown());
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "retry-1", message: "Make alpha.", checkpoint: { id: TREE_A, head: "f".repeat(40) } });
+    const first = await settle(worker, "retry-1");
+    const [original] = users(first);
+    expect(original.entryId).toBeTruthy();
+    expect(original.id).toBe(original.entryId);
+    expect(original.checkpoint).toEqual({ id: TREE_A, head: "f".repeat(40) });
+    expect(original.versions).toBeUndefined();
+    const answer = first.messages.filter((message) => message.role === "assistant").at(-1);
+    expect(answer?.turn?.userEntryId).toBe(original.entryId);
+    expect(provider.requests).toHaveLength(2);
+
+    const resent = await request(worker, {
+      type: "resend", runId: "retry-2", entryId: original.entryId,
+      leave: { id: TREE_B }, checkpoint: { id: TREE_C }
+    });
+    expect(resent.success).toBe(true);
+    const second = await settle(worker, "retry-2");
+    const [retried] = users(second);
+    expect(retried.entryId).not.toBe(original.entryId);
+    expect(retried.versions).toMatchObject({ index: 1, total: 2, previous: original.entryId });
+    expect(retried.checkpoint).toEqual({ id: TREE_C });
+    // The retry asked the model again, with the same prompt and without the first answer.
+    expect(provider.requests).toHaveLength(4);
+    expect(lastUserText(provider)).toBe("Make alpha.");
+    expect(second.messages.filter((message) => message.role === "user")).toHaveLength(1);
+
+    const switched = await request(worker, { type: "navigate", entryId: original.entryId, target: "latest", kind: "switch", leave: null });
+    expect(switched.success).toBe(true);
+    // The first version was left with TREE_B when it was retried.
+    expect(switched.result?.files).toEqual({ id: TREE_B });
+    const back = [...worker.outputs].reverse().find((output) => output.type === "snapshot")?.snapshot;
+    const [shown] = users(back!);
+    expect(shown.entryId).toBe(original.entryId);
+    expect(shown.versions).toMatchObject({ index: 0, total: 2, next: retried.entryId });
+    expect(back?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha."))).toBe(true);
+    expect(provider.requests).toHaveLength(4);
+  });
+
+  it("edits a message, rewinds it into the composer, and keeps the rewind across a restart", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-rewind-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const first = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "rewind-task");
+    cleanup.push(() => first.worker.shutdown());
+
+    first.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "rewind-1", message: "Original request." });
+    const [original] = users(await settle(first.worker, "rewind-1"));
+    const edited = await request(first.worker, { type: "resend", runId: "rewind-2", entryId: original.entryId, message: "Edited request." });
+    expect(edited.success).toBe(true);
+    const afterEdit = await settle(first.worker, "rewind-2");
+    expect(lastUserText(provider)).toBe("Edited request.");
+    const [editedMessage] = users(afterEdit);
+    expect(editedMessage.blocks.find((block) => block.type === "text")?.text).toBe("Edited request.");
+    expect(editedMessage.versions).toMatchObject({ index: 1, total: 2 });
+
+    const rewound = await request(first.worker, { type: "navigate", entryId: editedMessage.entryId, target: "before", kind: "rewind" });
+    expect(rewound.success).toBe(true);
+    expect(rewound.result?.editorText).toBe("Edited request.");
+    const empty = [...first.worker.outputs].reverse().find((output) => output.type === "snapshot")?.snapshot;
+    expect(users(empty!)).toHaveLength(0);
+    expect(empty?.tree?.undo).toBeTruthy();
+    const sessionFile = empty?.sessionFile as string;
+    const requestsBefore = provider.requests.length;
+    await first.worker.shutdown();
+
+    // Pi reopens a session at its last line; the navigation marker makes that the rewound point.
+    const restored = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "rewind-task", sessionFile);
+    cleanup.push(() => restored.worker.shutdown());
+    expect(users(restored.ready.snapshot!)).toHaveLength(0);
+    expect(restored.ready.snapshot?.tree?.undo).toBe(empty?.tree?.undo);
+    expect(provider.requests).toHaveLength(requestsBefore);
+
+    const undone = await request(restored.worker, { type: "navigate", entryId: empty?.tree?.undo, target: "latest", kind: "undo" });
+    expect(undone.success).toBe(true);
+    const back = [...restored.worker.outputs].reverse().find((output) => output.type === "snapshot")?.snapshot;
+    expect(users(back!).map((message) => message.entryId)).toEqual([editedMessage.entryId]);
+    expect(back?.tree?.undo).toBeUndefined();
+  });
+
+  it("re-derives Plan mode and keeps the tool denylist after moving in the tree", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-tree-plan-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "tree-plan-task", undefined, ["bash"]);
+    cleanup.push(() => worker.shutdown());
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "plan-1", message: "Build first.", mode: "build" });
+    const [first] = users(await settle(worker, "plan-1"));
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "plan-2", message: "Now plan.", mode: "plan" });
+    const planned = await settle(worker, "plan-2");
+    expect(planned.planState?.mode).toBe("plan");
+
+    const rewound = await request(worker, { type: "navigate", entryId: first.entryId, target: "before", kind: "rewind" });
+    expect(rewound.success).toBe(true);
+    const snapshot = [...worker.outputs].reverse().find((output) => output.type === "snapshot")?.snapshot;
+    expect(snapshot?.planState?.mode).toBe("build");
+    expect([...worker.outputs].reverse().find((output) => output.type === "plan_state")?.mode).toBe("build");
+    expect(snapshot?.activeTools).not.toContain("bash");
+    expect(snapshot?.activeTools).toContain("read");
+  });
+
+  it("refuses to navigate or resend unknown messages without raising a worker error", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-tree-refuse-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "tree-refuse-task");
+    cleanup.push(() => worker.shutdown());
+
+    const navigated = await request(worker, { type: "navigate", entryId: "missing", target: "latest", kind: "switch" });
+    expect(navigated.success).toBe(false);
+    const resent = await request(worker, { type: "resend", runId: "never", entryId: "missing" });
+    expect(resent.success).toBe(false);
+    expect(resent.error).toMatch(/no longer in this chat/);
+    expect(worker.outputs.some((output) => output.type === "worker_error")).toBe(false);
+  });
+
+  it("forks a chat at the end of a turn into a new session", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-fork-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const source = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "fork-source");
+    cleanup.push(() => source.worker.shutdown());
+    source.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "fork-1", message: "First turn." });
+    await settle(source.worker, "fork-1");
+    source.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "fork-2", message: "Second turn." });
+    const both = await settle(source.worker, "fork-2");
+    const firstTurn = both.messages.find((message) => message.turn?.userEntryId === users(both)[0].entryId)?.turn;
+    expect(firstTurn?.endEntryId).toBeTruthy();
+    const requestsBefore = provider.requests.length;
+
+    const fork = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "fork-copy", undefined, undefined, undefined, undefined, undefined, {
+      forkFrom: { sessionFile: both.sessionFile, entryId: firstTurn?.endEntryId }
+    });
+    cleanup.push(() => fork.worker.shutdown());
+    const forked = fork.ready.snapshot!;
+    expect(users(forked).map((message) => message.blocks[0]?.text)).toEqual(["First turn."]);
+    expect(forked.sessionFile).toContain(join(".sessions", "fork-copy"));
+    expect(forked.runTimings).toHaveLength(1);
+    const header = JSON.parse((await readFile(forked.sessionFile as string, "utf8")).split("\n")[0]) as { parentSession?: string };
+    expect(header.parentSession).toBe(both.sessionFile);
+    expect(provider.requests).toHaveLength(requestsBefore);
+  });
+
+  it("refuses to resend images to a model without vision, and resends without them", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-resend-images-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const vision = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "images-task", undefined, undefined, undefined, undefined, true);
+    cleanup.push(() => vision.worker.shutdown());
+    vision.worker.send({
+      id: crypto.randomUUID(), type: "prompt", runId: "images-1", message: "Look at this.",
+      images: [{ type: "image", data: solidPng(4, 4), mimeType: "image/png" }]
+    });
+    const snapshot = await settle(vision.worker, "images-1");
+    const [original] = users(snapshot);
+    await vision.worker.shutdown();
+
+    const textOnly = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "images-task", snapshot.sessionFile, undefined, undefined, undefined, false);
+    cleanup.push(() => textOnly.worker.shutdown());
+    const refused = await request(textOnly.worker, { type: "resend", runId: "images-2", entryId: original.entryId });
+    expect(refused.success).toBe(false);
+    expect(refused.error).toMatch(/doesn't accept images/);
+    expect(textOnly.worker.outputs.some((output) => output.type === "worker_error")).toBe(false);
+
+    const withoutImages = await request(textOnly.worker, { type: "resend", runId: "images-3", entryId: original.entryId, removeImages: [0] });
+    expect(withoutImages.success).toBe(true);
+    await settle(textOnly.worker, "images-3");
+    expect(userParts(provider.requests[provider.requests.length - 1]).some((part) => part.type === "image_url")).toBe(false);
+  });
+
+  it("reports a prompt an extension command handled as idle", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-command-idle-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const extension = join(workspace, "hello.ts");
+    await writeFile(extension, `export default function (pi: any) {
+      pi.registerCommand("hello", { description: "Say hello", handler: async () => undefined });
+    }\n`);
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "command-task", undefined, undefined,
+      { extensions: [extension], skills: [], prompts: [], themes: [] });
+    cleanup.push(() => worker.shutdown());
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "command-1", message: "/hello" });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === "command-1");
     expect(provider.requests).toHaveLength(0);
   });
 });

@@ -1,12 +1,13 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
 import type { ProjectRecord, TaskRecord } from "../types";
+import { canFork } from "../tree-utils";
 import { Icon } from "./Icons";
 import { MenuButton } from "./ui/MenuButton";
 import type { MenuEntry } from "./ui/Menu";
 import { Tooltip } from "./ui/Tooltip";
 
-export type TaskAction = "rename" | "worktree" | "reveal" | "copy" | "archive" | "unarchive" | "delete";
+export type TaskAction = "rename" | "worktree" | "fork" | "reveal" | "copy" | "archive" | "unarchive" | "delete";
 export type ProjectAction = "reveal" | "remove";
 
 /** Collapse-key for the "No project" group, which has no ProjectRecord id. */
@@ -55,6 +56,7 @@ export function Sidebar({ projects, tasks, selectedTaskId, showArchived, pending
     return [
       { label: "Rename", icon: <Icon name="pencil" />, onSelect: () => startRename(task) },
       { label: "Move to worktree", icon: <Icon name="branch" />, disabled: !canWorktree, onSelect: () => onTaskAction(task, "worktree") },
+      { label: "Fork chat", icon: <Icon name="branch" />, disabled: !canFork(task), onSelect: () => onTaskAction(task, "fork") },
       "separator",
       { label: "Reveal in Finder", icon: <Icon name="folder" />, onSelect: () => onTaskAction(task, "reveal") },
       { label: "Copy path", icon: <Icon name="copy" />, onSelect: () => onTaskAction(task, "copy") },

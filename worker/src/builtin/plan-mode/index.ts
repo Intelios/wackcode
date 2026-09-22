@@ -89,6 +89,7 @@ export function createPlanModeExtension(host: BuiltinHost) {
 
   const setMode = (mode: TaskMode): PlanState => {
     requirePi();
+    const before = { enabled, readyPlan };
     if (mode === "plan") {
       if (!enabled) {
         publishContract("plan");
@@ -100,7 +101,9 @@ export function createPlanModeExtension(host: BuiltinHost) {
       // Leaving Plan mode abandons the proposed plan, same as upstream's exit.
       readyPlan = undefined;
     }
-    persist();
+    // Every prompt carries the composer's mode. Writing an unchanged state before each user
+    // message would only bury the conversation's structure in duplicate entries.
+    if (before.enabled !== enabled || before.readyPlan !== readyPlan) persist();
     emit();
     return getState();
   };
@@ -132,8 +135,9 @@ export function createPlanModeExtension(host: BuiltinHost) {
       },
     });
 
-    pi.on("session_start", (_event, ctx) => {
-      const branch = ctx.sessionManager.getBranch();
+    // The branch is the store: a restart, a rewind, or a switch to another version of a message
+    // re-derives the mode and any proposed plan from the entries on the new path.
+    const restore = (branch: unknown[]) => {
       const restored = restorePlanState(branch);
       publishedContract = latestModeContract(branch)?.mode;
       contractsRelevant =
@@ -141,7 +145,9 @@ export function createPlanModeExtension(host: BuiltinHost) {
       enabled = restored.enabled;
       readyPlan = restored.plan;
       emit();
-    });
+    };
+    pi.on("session_start", (_event, ctx) => restore(ctx.sessionManager.getBranch()));
+    pi.on("session_tree", (_event, ctx) => restore(ctx.sessionManager.getBranch()));
 
     // The runtime read-only policy. The prompt explains the rules; this enforces them.
     pi.on("tool_call", (event, ctx) => {

@@ -58,7 +58,7 @@ src/            React frontend (Vite entry: ../index.html → src/main.tsx)
   App.tsx       Root orchestrator. Owns ALL state (~760 lines). The only file that listens to "worker-event".
   api.ts        The only bridge to Rust: a flat `api` object of typed one-line `invoke` wrappers.
   types.ts      Shared contract with Rust/worker. Must mirror models.rs and worker/src/protocol.ts.
-  model-utils.ts, chat-utils.ts, tool-utils.ts, attachment-utils.ts   Pure helpers; put testable logic here, not in components.
+  model-utils.ts, chat-utils.ts, tool-utils.ts, attachment-utils.ts, tree-utils.ts   Pure helpers; put testable logic here, not in components.
   hooks/        useSmoothText, useFollowScroll (Transcript-only, no tests).
   components/   Presentational components. Only SettingsPage.tsx is allowed to import api directly.
   components/ui/  Reusable primitives: Popover, Menu, MenuButton, Select, Tooltip, ConfirmDialog.
@@ -68,6 +68,8 @@ worker/         Node child process wrapping @earendil-works/pi-coding-agent 0.86
   src/index.ts    Main loop: init → session create/restore → prompt stream → abort/shutdown.
   src/protocol.ts Command/event types. Single source of truth for the task worker's stdin/stdout protocol.
   src/builtin/    Built-in extensions (inline factories, always on): ask_user_question, plan-mode, todo.
+  src/tree.ts     Pure session-tree helpers: versions of a message, checkpoint lookup, turn ends, marker entries.
+  src/run-timing.ts  "Worked for" durations, persisted as custom entries after each run.
   src/manager.ts  Short-lived package-manager process wrapping Pi's DefaultPackageManager.
   src/manager-protocol.ts  Its protocol. Frames are \x1e-prefixed because npm shares stdout.
   src/framing.ts  JsonLineDecoder. Splits on LF only; U+2028/U+2029 inside strings are safe. Joins a line's
@@ -75,9 +77,11 @@ worker/         Node child process wrapping @earendil-works/pi-coding-agent 0.86
   dist/           tsc output. Build artifact, gitignored. Never edit by hand, never commit.
 src-tauri/
   src/main.rs     3-line entry calling wackcode_lib::run().
-  src/lib.rs      Tauri builder, plugin init, .manage(WorkerState), generate_handler![...32 commands],
+  src/lib.rs      Tauri builder, plugin init, .manage(WorkerState / TaskLocks / …), generate_handler![...],
                   terminate_all on RunEvent::Exit.
-  src/commands.rs All 32 #[tauri::command] fns + validation helpers + tests. Error strings are user-facing.
+  src/commands.rs The #[tauri::command] fns (subscription sign-in lives in subscriptions.rs) + validation
+                  helpers + tests. Error strings are user-facing.
+  src/checkpoints.rs  Workspace checkpoints in a private shadow Git repo per chat (see "Session tree & checkpoints").
   src/models.rs   Serde records that must stay in sync with src/types.ts.
   src/worker.rs   Spawns per-task Node workers, NDJSON bridge, crash detection, stderr redaction.
   src/git.rs      Shells out to system git (no git2). Worktrees, porcelain parsing, diff previews.
@@ -110,7 +114,7 @@ Adding or changing a field on a task/provider/project means **four** files, in s
 4. `api.ts`: add one line — scalar args for simple inputs, a single `{ input: {...} }` object for multi-field inputs (matches existing style exactly).
 5. `App.tsx` (or the one component that needs it): call `api.*`, then update state immutably via `patchTask` / `patchRuntime` / `setData`. Never mutate `data` in place. Handle errors per the tiers below.
 
-### The 32 commands (full surface, mirrored in `api.ts`)
+### The commands (full surface, mirrored in `api.ts`)
 
 | Command | File:line | Summary |
 |---|---|---|
@@ -118,12 +122,18 @@ Adding or changing a field on a task/provider/project means **four** files, in s
 | `save_provider` | commands.rs:35 | Create/update a connection; restarts workers using it. |
 | `delete_provider` | commands.rs:89 | Refuses while tasks reference it. |
 | `discover_models` | commands.rs:114 | `GET {baseUrl}/models` (bearer, 20 s), sorted IDs. |
+| `list_builtin_models` | commands.rs | Read Pi's bundled model catalogue in a short-lived, offline process without credentials. |
+| `list_subscription_providers` … `open_subscription_auth_url` | subscriptions.rs | Subscription sign-in flow (six commands). |
 | `set_tool_config` | commands.rs:146 | Persist the tool denylist; pushes `set_tools` to every running worker without restarting them. |
 | `add_project` | commands.rs:144 | Canonicalize folder; idempotent; records git root/HEAD. |
 | `create_task` | commands.rs:170 | New chat; optional worktree else per-chat scratch folder. |
 | `configure_task` | commands.rs:244 | Change provider/model/thinking; refuses while running; restarts worker. |
 | `open_task` | commands.rs:273 | Ensure worker, then request `snapshot`. |
-| `prompt` | commands.rs:281 | Configure, ensure worker, send `prompt` with fresh `runId`. |
+| `prompt` | commands.rs:281 | Configure, ensure worker, mark the task running, take a checkpoint, send `prompt` with fresh `runId`. |
+| `resend_message` | commands.rs | Retry or edit: optionally restore files first, then `request(resend)`; restores them again if the worker refuses. |
+| `navigate_task` | commands.rs | Rewind / switch version / undo rewind via `request(navigate)`, then an optional file restore. |
+| `restore_checkpoint` / `checkpoint_changes` | commands.rs | Put a checkpoint's files back (optionally some) / list what that would change. |
+| `fork_task` | commands.rs | New chat from a turn: worker `forkFrom` session, own worktree or scratch copy of the files, copied checkpoint store; rolled back on failure. |
 | `stop_task` | commands.rs:302 | Send `abort`. |
 | `archive_task` / `unarchive_task` | commands.rs:307 / 319 | Terminate worker + flag; clear flag. |
 | `rename_task` | commands.rs:329 | Validated non-empty. |
@@ -152,6 +162,8 @@ Rules that must not regress:
 - **Abort bypasses the queue.** A prompt holds the worker's serial command queue until the agent settles; `abort` is handled immediately (`worker/src/index.ts`). Never route abort through the same queue as prompt.
 - **Throttling:** snapshots are coalesced with a 32 ms timer; partials are throttled to ~16 ms. Full snapshots at `message_end` are authoritative.
 - **Crash handling:** any worker exit while still registered is unexpected — Rust marks the task `Interrupted` and emits a redacted, 1 000-char-capped stderr tail as `worker_error`.
+- **Request-style commands.** Most commands are fire-and-forget. `navigate`, `resend` and a fork's `init` go through `worker::request`, which waits for the command's `response` (its `result` carries data) via a per-process pending map; consumed responses are not re-emitted to React, and the worker reports their refusals only in the response, never as `worker_error` (that would stick as `lastError`).
+- **Per-task lock.** `TaskLocks` (commands.rs) serializes everything that sends a chat work, moves its conversation, or touches its checkpoints. `prompt`/`resend_message` mark the record `Running` *before* writing to stdin, so a rewind can never queue up behind a prompt and run after it.
 
 ### Secrets discipline (security-critical)
 - Manually entered API keys live **only** in `secrets.json` (mode 0600) via `secrets.rs`, and are delivered to the worker **only** through the stdin `init` command. Never argv, never env vars. Pi OAuth credentials (including provider-minted keys) live in separate mode-0600 `subscriptions/<provider>/auth.json` files under app data; task workers receive the path to only their selected provider. Never serialize OAuth credentials into `wackcode.json` or Tauri events.
@@ -192,9 +204,18 @@ The user's selection is a **denylist**, so a tool a newly installed package adds
 
 `grep` and `find` shell out to `rg` and `fd`. Pi normally downloads those on demand, but `PI_OFFLINE=1` blocks that, so the worker probes for them (Pi's bin dir, then `PATH`) and reports missing ones as `available: false` with a reason rather than offering the model a tool that errors mid-task. A packaged `.app` launched from Finder gets a minimal `PATH`, so this is the common case, not the edge case — bundling those binaries is tracked with the npm bundling work.
 
+### Session tree & checkpoints
+Pi sessions are append-only trees; WackCode exposes them as retry, inline edit & resend, rewind, a ‹ n/m › version switcher, and fork. The rules:
+- **Versions are grouped by logical parent** (`worker/src/tree.ts`): the nearest user/assistant/toolResult ancestor. Plan-state, run-timing, checkpoint and marker entries, Pi's `system` declaration and model/thinking changes all sit between two user messages, so an edit is rarely a *direct* sibling of what it replaces.
+- **Navigation is made durable with marker entries**, not host state. Pi reopens a session at its *last line*, so every move appends `wackcode-leave` (under the old leaf, with the files it was left with) and `wackcode-nav` (under the new leaf, with `from` for "Undo rewind"). Never move the leaf without both. After `navigateTree`, re-apply the tool denylist (Pi restores the transcript's loadout) and emit a snapshot (Pi tells only extensions); Plan mode and todo re-derive themselves on `session_tree`.
+- **Resend applies no mode:** the restored branch's plan state wins.
+- **Snapshot messages carry `entryId`** (mapped by object identity from Pi's entries), `versions`, `checkpoint` (user messages) and `turn` (the last assistant message of each turn). A just-finished message can briefly lack an `entryId`; the UI hides its actions.
+- **Checkpoints** (`checkpoints.rs`): Rust snapshots the workspace before every prompt/resend and when a branch is left; the worker records the id as a `wackcode-checkpoint` entry directly above the user message — **always**, with `id: null` when no snapshot was possible, so a new version never inherits another's checkpoint. The store is a private shadow repo at `<app-data>/checkpoints/<taskId>`, deleted with the chat, covering the worktree root, the project's git root, or the chat's own folder (never walking up from scratch). It borrows the project's objects through `objects/info/alternates` and **never creates, changes or deletes objects or refs in the project's repository**. Snapshots are tree objects with refs (no commits); shadow git runs with system/global config off and `info/attributes` disabling every conversion, so round trips are byte-exact.
+- **Restores only touch diff-derived paths** and never write over something the current snapshot doesn't hold (ignored, oversized >25 MB, or untracked files) — those are reported as `skipped`. The state just before every restore is itself a checkpoint (`undo`). Checkpoints are refused for `$HOME` or folders containing app data, and skipped when a snapshot would add >20k new files; the chat keeps working without them (`checkpoint_unavailable` notice, once per session).
+
 ### Git integration
 - Uses the **system `git` CLI** via `std::process::Command` — there is intentionally no `git2` crate.
-- Worktrees: branch `wackcode/<slug>-<taskId[..8]>`, destination `<app-data>/worktrees/<taskId>`. Require at least one commit (`git_has_head`) and can only be chosen before the first message (Rust refuses once `session_file` is set).
+- Worktrees: branch `wackcode/<slug>-<taskId[..8]>`, destination `<app-data>/worktrees/<taskId>`. Require at least one commit (`git_has_head`) and can only be chosen before the first message (Rust refuses once `session_file` is set). A fork's worktree starts at the commit its checkpoint recorded (`create_worktree`'s `base`).
 - `git_changes` parses `status --porcelain=v1 -z` (rename records are two NUL-separated entries) and concatenates staged + unstaged diffs with `# Staged changes` / `# Working tree changes` headers; previews are capped at 240 KB with a `truncated` flag; binaries are detected by NUL bytes in the first 8 KB and rendered as `Binary file · N bytes`.
 
 ### Frontend rules
@@ -217,8 +238,8 @@ The user's selection is a **denylist**, so a tool a newly installed package adds
 ## Testing guidance
 
 - **What to test where:** pure logic → colocated `*.test.ts` next to `model-utils.ts`/`chat-utils.ts`/`tool-utils.ts`; UI → Testing Library component tests (`ModelPicker.test.tsx`, `ProjectBar.test.tsx`, `ui/Select.test.tsx` show the style: `afterEach(cleanup)`, `screen.getByRole`, `fireEvent`, small controlled `Harness` wrappers); worker protocol → `worker/src/*.test.ts` (real spawned worker + inline mock provider on an ephemeral port); Rust → inline `#[cfg(test)] mod tests` using `tempfile`.
-- **What's currently untested (don't mimic a pattern that isn't there):** `App.tsx`, `Transcript.tsx`, both hooks, and `api.ts` have no tests. `Composer.tsx` is covered for attachments only. Add coverage deliberately if you touch them, but don't treat existing silence as license to ship regressions.
-- The worker integration suite exercises properties the UI cannot: concurrent sessions with overlapping model IDs, per-credential isolation, thinking-level wire mapping, cancellation mid-stream, and session restoration without replay. Run it after any protocol change.
+- **What's currently untested (don't mimic a pattern that isn't there):** `App.tsx`, both hooks, and `api.ts` have no tests, nor do the Rust command wrappers around checkpoints and `worker::request` (the worker suite and `checkpoints.rs` tests cover what they call). `Transcript.tsx` is covered for tool output and message actions; `Composer.tsx` for attachments and its seed. Add coverage deliberately if you touch them, but don't treat existing silence as license to ship regressions.
+- The worker integration suite exercises properties the UI cannot: concurrent sessions with overlapping model IDs, per-credential isolation, thinking-level wire mapping, cancellation mid-stream, session restoration without replay, and the session tree (retry versions, rewinds surviving a restart, Plan-mode re-derivation, forks). Run it after any protocol change.
 - For a manual end-to-end check: `pnpm mock:provider`, then add `http://127.0.0.1:43127/v1` as a Chat Completions connection in the app.
 
 ## Out of scope for this milestone (do not propose as "fixes")

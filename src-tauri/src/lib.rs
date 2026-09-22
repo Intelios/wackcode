@@ -1,3 +1,4 @@
+mod checkpoints;
 mod commands;
 mod git;
 mod models;
@@ -16,6 +17,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(WorkerState::default())
+        .manage(commands::TaskLocks::default())
         .manage(subscriptions::SubscriptionState::default())
         .manage(worker::ManagerState::default())
         .setup(|app| {
@@ -51,6 +53,11 @@ pub fn run() {
             commands::configure_task,
             commands::open_task,
             commands::prompt,
+            commands::resend_message,
+            commands::navigate_task,
+            commands::restore_checkpoint,
+            commands::checkpoint_changes,
+            commands::fork_task,
             commands::set_task_mode,
             commands::export_plan,
             commands::stop_task,

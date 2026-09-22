@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import type { ImageContent, ProviderRecord, SessionSnapshot, TaskMode, TaskStatus, ThinkingLevel } from "../types";
 import { ACCEPTED_IMAGE_TYPES, attachImages, imageDataUrl, imageFilesFrom } from "../attachment-utils";
 import { formatTokens } from "../chat-utils";
@@ -28,9 +28,11 @@ interface ComposerProps {
   onOpenSettings: () => void;
   /** When true the composer is visually dimmed and non-interactive (e.g. a dialog needs attention). */
   disabled?: boolean;
+  /** Replaces the draft whenever `nonce` changes, e.g. with the text of a rewound message. */
+  seed?: { text: string; nonce: number };
 }
 
-export function Composer({ status, providerId, modelId, thinkingLevel, providers, stats, header, placeholder, popoverSide = "top", mode, onModeChange, onConfigure, onSend, onStop, onOpenSettings, disabled }: ComposerProps) {
+export function Composer({ status, providerId, modelId, thinkingLevel, providers, stats, header, placeholder, popoverSide = "top", mode, onModeChange, onConfigure, onSend, onStop, onOpenSettings, disabled, seed }: ComposerProps) {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<ImageContent[]>([]);
   const [attachNotice, setAttachNotice] = useState<string>();
@@ -50,6 +52,16 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
     area.style.height = "auto";
     area.style.height = `${Math.min(area.scrollHeight, 200)}px`;
   }, [draft]);
+
+  // Only a new nonce reseeds, so a re-render never clobbers what the user has typed since.
+  const seedText = useRef(seed?.text);
+  seedText.current = seed?.text;
+  const seedNonce = seed?.nonce;
+  useEffect(() => {
+    if (seedNonce === undefined || seedText.current === undefined) return;
+    setDraft(seedText.current);
+    areaRef.current?.focus();
+  }, [seedNonce]);
 
   async function send() {
     const message = draft.trim();

@@ -83,3 +83,87 @@ describe("Transcript run durations", () => {
     expect(screen.queryByText(/Working for/)).not.toBeInTheDocument();
   });
 });
+
+describe("Transcript message actions", () => {
+  const user: NormalizedMessage = {
+    id: "u2", entryId: "u2", role: "user", blocks: [{ type: "text", text: "Make it blue" }],
+    versions: { index: 1, total: 2, previous: "u1", group: "versions:root" },
+    checkpoint: { id: "a".repeat(40) }
+  };
+  const answer: NormalizedMessage = {
+    id: "a2", entryId: "a2", role: "assistant", blocks: [{ type: "text", text: "Done." }],
+    turn: { userEntryId: "u2", endEntryId: "a2" }
+  };
+
+  it("offers retry, edit, rewind, version switching and fork only while idle", () => {
+    const onMessageAction = vi.fn();
+    const view = render(<Transcript messages={[user, answer]} running={false} actionsEnabled onMessageAction={onMessageAction} />);
+    expect(screen.getByText("2/2")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Previous version" }));
+    expect(onMessageAction).toHaveBeenLastCalledWith({ type: "switch", entryId: "u1" });
+    expect(screen.getByRole("button", { name: "Next version" })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onMessageAction).toHaveBeenLastCalledWith({ type: "retry", message: answer });
+    fireEvent.click(screen.getByRole("button", { name: "Rewind to here" }));
+    expect(onMessageAction).toHaveBeenLastCalledWith({ type: "rewind", message: user });
+    fireEvent.click(screen.getByRole("button", { name: "Fork from here" }));
+    expect(onMessageAction).toHaveBeenLastCalledWith({ type: "fork", message: answer });
+
+    view.rerender(<Transcript messages={[user, answer]} running actionsEnabled={false} onMessageAction={onMessageAction} />);
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Fork from here" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Previous version" })).toBeDisabled();
+    expect(screen.getAllByRole("button", { name: "Copy" })).toHaveLength(2);
+  });
+
+  it("edits a message in place and closes the editor once the edit is sent", async () => {
+    const onMessageAction = vi.fn().mockResolvedValue(true);
+    render(<Transcript messages={[user, answer]} running={false} actionsEnabled onMessageAction={onMessageAction} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const editor = screen.getByRole("textbox", { name: "Edit message" });
+    expect(editor).toHaveValue("Make it blue");
+    fireEvent.change(editor, { target: { value: "Make it green" } });
+    await act(async () => { fireEvent.keyDown(editor, { key: "Enter" }); });
+    expect(onMessageAction).toHaveBeenCalledWith({ type: "edit", message: user, text: "Make it green", removeImages: [] });
+    expect(screen.queryByRole("textbox", { name: "Edit message" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the editor open when the edit was not sent, and Escape cancels it", async () => {
+    const onMessageAction = vi.fn().mockResolvedValue(false);
+    render(<Transcript messages={[user, answer]} running={false} actionsEnabled onMessageAction={onMessageAction} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const editor = screen.getByRole("textbox", { name: "Edit message" });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Send" })); });
+    expect(screen.getByRole("textbox", { name: "Edit message" })).toBeInTheDocument();
+    fireEvent.keyDown(editor, { key: "Escape" });
+    expect(screen.queryByRole("textbox", { name: "Edit message" })).not.toBeInTheDocument();
+    expect(screen.getByText("Make it blue")).toBeInTheDocument();
+  });
+
+  it("refuses to send kept images to a model without vision until they are removed", async () => {
+    const withImage: NormalizedMessage = { ...user, versions: undefined, blocks: [...user.blocks, { type: "image", imageId: "image-1", mimeType: "image/png" }] };
+    const onMessageAction = vi.fn().mockResolvedValue(true);
+    render(<Transcript messages={[withImage]} running={false} actionsEnabled vision={false} modelName="Text Model" onMessageAction={onMessageAction} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Text Model doesn't accept images");
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Remove image 1" }));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Send" })); });
+    expect(onMessageAction).toHaveBeenCalledWith({ type: "edit", message: withImage, text: "Make it blue", removeImages: [0] });
+  });
+
+  it("offers retry on an unanswered latest message and shows the empty state after rewinding the first one", () => {
+    const onUndoRewind = vi.fn();
+    const unanswered: NormalizedMessage = { ...user, versions: undefined };
+    const view = render(<Transcript messages={[unanswered]} running={false} actionsEnabled onMessageAction={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+
+    const system: NormalizedMessage = { id: "s", role: "system", blocks: [{ type: "text", text: "" }] };
+    view.rerender(<Transcript messages={[system]} running={false} actionsEnabled onUndoRewind={onUndoRewind} />);
+    expect(screen.getByText("What should we build?")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Undo rewind/ }));
+    expect(onUndoRewind).toHaveBeenCalled();
+  });
+});

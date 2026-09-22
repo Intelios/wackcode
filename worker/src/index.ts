@@ -8,9 +8,28 @@ import type { BuiltinHost } from "./builtin/host.js";
 import { JsonLineDecoder } from "./framing.js";
 import { RUN_TIMING_ENTRY_TYPE, RUN_TIMING_VERSION, resolveRunTimings } from "./run-timing.js";
 import {
+  CHECKPOINT_ENTRY_TYPE,
+  LEAVE_ENTRY_TYPE,
+  NAV_ENTRY_TYPE,
+  TREE_MARKER_VERSION,
+  buildTreeIndex,
+  checkpointBefore,
+  isUserMessage,
+  latestInSubtree,
+  leftWith,
+  turnsOnPath,
+  undoTarget,
+  versionsOf,
+  type EntryLike,
+  type TreeIndex
+} from "./tree.js";
+import {
   THINKING_LEVELS,
+  type CheckpointRef,
   type ImageContent,
   type InitCommand,
+  type NavigateResult,
+  type NavigationKind,
   type NormalizedBlock,
   type NormalizedMessage,
   type QuestionAnswer,
@@ -114,6 +133,10 @@ function send(output: WorkerOutput): void {
 function response(id: string, success: boolean, error?: string): void {
   if (success) send({ type: "response", taskId, id, success: true });
   else send({ type: "response", taskId, id, success: false, error: error ?? "Unknown worker error" });
+}
+
+function respond(id: string, result: unknown): void {
+  send({ type: "response", taskId, id, success: true, result });
 }
 
 function textFromContent(content: unknown): string {
@@ -311,22 +334,72 @@ function applyDisabledTools(): void {
   );
 }
 
+// Rebuilt only when the session gains entries: snapshots are sent at every message boundary.
+let treeCache: { count: number; index: TreeIndex } | undefined;
+
+function treeIndex(entries: EntryLike[]): TreeIndex {
+  if (treeCache?.count !== entries.length) treeCache = { count: entries.length, index: buildTreeIndex(entries) };
+  return treeCache.index;
+}
+
+/**
+ * The transcript is `session.messages` (what the model sees). Pi stores those same message
+ * objects on its session entries, so each one maps to its entry by identity, the same way image
+ * previews are keyed. A message that has just finished can be in state a moment before Pi saves
+ * it; it goes without an entry id until the next snapshot.
+ */
+function transcriptMessages(path: EntryLike[], index: TreeIndex): NormalizedMessage[] {
+  if (!session) return [];
+  const entryIds = new Map<unknown, string>();
+  for (const entry of path) if (entry.type === "message") entryIds.set(entry.message, entry.id);
+  const turns = turnsOnPath(path);
+  const messages: NormalizedMessage[] = [];
+  const lastAssistantOfTurn = new Map<string, NormalizedMessage>();
+  let currentUser: string | undefined;
+  session.messages.forEach((raw, position) => {
+    const message = normalizeMessage(raw, position);
+    if (!message) return;
+    const entryId = entryIds.get(raw);
+    if (entryId) {
+      message.entryId = entryId;
+      message.id = entryId;
+    }
+    if (message.role === "user") {
+      currentUser = entryId;
+      if (entryId) {
+        const versions = versionsOf(index, entryId);
+        if (versions && versions.total > 1) message.versions = versions;
+        const checkpoint = checkpointBefore(index, entryId);
+        if (checkpoint) message.checkpoint = checkpoint;
+      }
+    } else if (message.role === "assistant" && currentUser) {
+      lastAssistantOfTurn.set(currentUser, message);
+    }
+    messages.push(message);
+  });
+  for (const [userEntryId, message] of lastAssistantOfTurn) {
+    const turn = turns.get(userEntryId);
+    if (turn) message.turn = turn;
+  }
+  return messages;
+}
+
 function getSnapshot(): SessionSnapshot {
   if (!session) throw new Error("Worker is not initialized");
   const stats = session.getSessionStats();
   const model = session.model;
-  const messages = session.messages.map(normalizeMessage).filter((message): message is NormalizedMessage => Boolean(message));
-  const contextEntries = session.sessionManager.buildContextEntries();
-  const visibleUserEntryIds = contextEntries
-    .filter((entry) => entry.type === "message" && entry.message.role === "user")
-    .map((entry) => entry.id);
-  const visibleUserMessageIds = messages.filter((message) => message.role === "user").map((message) => message.id);
+  const path = session.sessionManager.getBranch() as EntryLike[];
+  const index = treeIndex(session.sessionManager.getEntries() as EntryLike[]);
+  const messages = transcriptMessages(path, index);
+  const visibleUsers = messages.filter((message) => message.role === "user" && message.entryId);
+  const leaf = session.sessionManager.getLeafEntry() as EntryLike | undefined;
   return {
     sessionId: session.sessionId,
     sessionFile: session.sessionFile,
     messages,
-    runTimings: resolveRunTimings(session.sessionManager.getBranch(), visibleUserEntryIds, visibleUserMessageIds),
+    runTimings: resolveRunTimings(path, visibleUsers.map((message) => message.entryId as string), visibleUsers.map((message) => message.id)),
     activeRun: activeRun ? { runId: activeRun.runId, startedAt: activeRun.startedAt } : undefined,
+    tree: { leafId: leaf?.id ?? null, undo: undoTarget(leaf) },
     stats: {
       tokens: stats.tokens,
       cost: stats.cost,
@@ -556,9 +629,22 @@ async function initialize(command: InitCommand): Promise<void> {
     : modelRuntime.getModel(command.provider.id, command.modelId);
   if (!selectedModel) throw new Error(`Configured model was not found: ${command.provider.name}/${command.modelId}`);
 
-  const sessionManager = command.sessionFile && existsSync(command.sessionFile)
-    ? pi.SessionManager.open(command.sessionFile, command.sessionDir, command.cwd)
-    : pi.SessionManager.create(command.cwd, command.sessionDir);
+  let sessionStartEvent: { type: "session_start"; reason: "fork"; previousSessionFile: string } | undefined;
+  let sessionManager: ReturnType<PiModule["SessionManager"]["create"]>;
+  if (command.sessionFile && existsSync(command.sessionFile)) {
+    sessionManager = pi.SessionManager.open(command.sessionFile, command.sessionDir, command.cwd);
+  } else if (command.forkFrom) {
+    // Pi's own fork: the path from the root to the fork point, written as a new session in this
+    // task's session directory, with the source recorded as its parent.
+    if (!existsSync(command.forkFrom.sessionFile)) throw new Error("The chat being forked has no saved session yet.");
+    sessionManager = pi.SessionManager.open(command.forkFrom.sessionFile, command.sessionDir, command.cwd);
+    const leaf = command.forkFrom.entryId ?? sessionManager.getLeafId();
+    if (!leaf) throw new Error("The chat being forked has nothing to fork yet.");
+    sessionManager.createBranchedSession(leaf);
+    sessionStartEvent = { type: "session_start", reason: "fork", previousSessionFile: command.forkFrom.sessionFile };
+  } else {
+    sessionManager = pi.SessionManager.create(command.cwd, command.sessionDir);
+  }
   const settingsManager = pi.SettingsManager.inMemory({
     enableInstallTelemetry: false,
     enableAnalytics: false,
@@ -598,7 +684,8 @@ async function initialize(command: InitCommand): Promise<void> {
     excludeTools: UNSUPPORTED_TOOLS,
     sessionManager,
     settingsManager,
-    resourceLoader
+    resourceLoader,
+    ...(sessionStartEvent ? { sessionStartEvent } : {})
   });
   session = created.session;
   disabledTools = new Set(command.disabledTools ?? []);
@@ -699,6 +786,122 @@ async function initialize(command: InitCommand): Promise<void> {
   send({ type: "ready", taskId: command.taskId, snapshot: getSnapshot() });
 }
 
+function runStartedAt(requested: number | undefined): number {
+  return requested !== undefined && Number.isSafeInteger(requested) && requested >= 0 && requested <= Date.now() + 60_000
+    ? requested
+    : Date.now();
+}
+
+function requireSettled(): void {
+  if (!session) throw new Error("Worker is not initialized");
+  if (session.isStreaming || session.isCompacting) throw new Error("Wait for the current run to finish first.");
+}
+
+function appendMarker(customType: string, data: unknown): void {
+  session?.sessionManager.appendCustomEntry(customType, data);
+}
+
+/**
+ * Always written just above the user message, with `id: null` when the host had no snapshot:
+ * otherwise a new version would find the checkpoint of the version it replaced.
+ */
+function recordCheckpoint(checkpoint: CheckpointRef | null | undefined): void {
+  appendMarker(CHECKPOINT_ENTRY_TYPE, {
+    version: TREE_MARKER_VERSION,
+    id: checkpoint?.id ?? null,
+    ...(checkpoint?.head ? { head: checkpoint.head } : {})
+  });
+}
+
+/**
+ * One prompt, shared by `prompt` and `resend`. The response goes out once the run is marked
+ * running, so a request never waits for the run itself.
+ */
+async function runPrompt(
+  commandId: string,
+  runId: string,
+  startedAt: number,
+  text: string,
+  images: ImageContent[] | undefined,
+  checkpoint: CheckpointRef | null | undefined
+): Promise<void> {
+  if (!session || !taskId) throw new Error("Worker is not initialized");
+  stopRequested = false;
+  const previousUserEntryIds = new Set(session.sessionManager.getBranch()
+    .filter((entry) => entry.type === "message" && entry.message.role === "user")
+    .map((entry) => entry.id));
+  activeRun = { runId, startedAt, previousUserEntryIds, finalized: false };
+  send({ type: "run_state", taskId, runId, startedAt, state: "running" });
+  response(commandId, true);
+  try {
+    const prepared = await prepareImages(images);
+    recordCheckpoint(checkpoint);
+    await session.prompt(text, prepared.length > 0 ? { images: prepared } : undefined);
+    // Pi settles a run before `prompt` resolves. Still active here means no run started at all
+    // (an extension command handled the text), and nothing else would report the chat idle.
+    if (activeRun?.runId === runId) {
+      finalizeActiveRun();
+      activeRun = undefined;
+      send({ type: "run_state", taskId, runId, state: "idle" });
+    }
+  } catch (error) {
+    finalizeActiveRun();
+    activeRun = undefined;
+    if (!stopRequested) send({ type: "worker_error", taskId, message: safeError(error) });
+    send({ type: "run_state", taskId, runId, state: "idle" });
+  }
+  stopRequested = false;
+  emitSnapshot();
+}
+
+/**
+ * Move the conversation to another point in the session tree. Both ends are marked so the move
+ * survives a restart (Pi reopens a session at its last line) and "Undo rewind" knows where it
+ * came from.
+ */
+async function navigate(entryId: string, target: "before" | "latest", kind: NavigationKind | "resend", leave: CheckpointRef | null | undefined): Promise<NavigateResult> {
+  if (!session) throw new Error("Worker is not initialized");
+  const manager = session.sessionManager;
+  const entry = manager.getEntry(entryId) as EntryLike | undefined;
+  if (!entry) throw new Error("That message is no longer in this chat.");
+  if (target === "before" && !isUserMessage(entry)) throw new Error("Only a message you sent can be rewound to.");
+  appendMarker(LEAVE_ENTRY_TYPE, { version: TREE_MARKER_VERSION, checkpoint: leave ?? null });
+  const from = manager.getLeafId() as string;
+  const destination = target === "before" ? entryId : latestInSubtree(treeIndex(manager.getEntries() as EntryLike[]), entryId);
+  const result = await session.navigateTree(destination);
+  if (result.cancelled) throw new Error("An extension cancelled moving to that point in the conversation.");
+  const files = leftWith(manager.getBranch() as EntryLike[]);
+  appendMarker(NAV_ENTRY_TYPE, { version: TREE_MARKER_VERSION, kind, from });
+  // navigateTree restores the tool loadout the transcript declared, which drops the denylist.
+  applyDisabledTools();
+  return { leafId: manager.getLeafId(), editorText: result.editorText, files };
+}
+
+/** Send a user message again as a new version: unchanged (retry) or with new text (edit). */
+async function resend(command: Extract<WorkerCommand, { type: "resend" }>): Promise<void> {
+  if (!session) throw new Error("Worker is not initialized");
+  requireSettled();
+  const entry = session.sessionManager.getEntry(command.entryId);
+  if (!entry || entry.type !== "message" || entry.message.role !== "user") {
+    throw new Error("That message is no longer in this chat.");
+  }
+  const content = entry.message.content;
+  const blocks = Array.isArray(content) ? content : [{ type: "text" as const, text: String(content ?? "") }];
+  const original = blocks.map((block) => block.type === "text" ? block.text : "").join("");
+  const removed = new Set(command.removeImages ?? []);
+  const images = blocks
+    .filter((block): block is ImageContent => block.type === "image")
+    .filter((_, position) => !removed.has(position));
+  const text = command.message ?? original;
+  if (!text.trim()) throw new Error("Message is required");
+  if (images.length > 0 && !(session.model?.input as string[] | undefined)?.includes("image")) {
+    throw new Error(`${session.model?.name ?? session.model?.id ?? "This model"} doesn't accept images. Turn on Vision for it in Settings, or remove the images.`);
+  }
+  // The restored branch's plan state wins: no mode is applied here.
+  await navigate(command.entryId, "before", "resend", command.leave);
+  await runPrompt(command.id, command.runId, runStartedAt(command.startedAt), text, images, command.checkpoint);
+}
+
 async function handle(command: WorkerCommand): Promise<void> {
   try {
     if (command.type === "init") {
@@ -709,27 +912,16 @@ async function handle(command: WorkerCommand): Promise<void> {
       // A mode recorded on the task (or chosen for a draft) is applied before the prompt so
       // the first message of a plan-mode task arrives with the contract already in place.
       if (command.mode) builtins.planMode.setMode(command.mode);
-      stopRequested = false;
-      const startedAt = Number.isSafeInteger(command.startedAt) && command.startedAt! >= 0 && command.startedAt! <= Date.now() + 60_000
-        ? command.startedAt!
-        : Date.now();
-      const previousUserEntryIds = new Set(session.sessionManager.getBranch()
-        .filter((entry) => entry.type === "message" && entry.message.role === "user")
-        .map((entry) => entry.id));
-      activeRun = { runId: command.runId, startedAt, previousUserEntryIds, finalized: false };
-      send({ type: "run_state", taskId, runId: command.runId, startedAt, state: "running" });
-      response(command.id, true);
-      try {
-        const images = await prepareImages(command.images);
-        await session.prompt(command.message, images.length > 0 ? { images } : undefined);
-      } catch (error) {
-        finalizeActiveRun();
-        activeRun = undefined;
-        if (!stopRequested) send({ type: "worker_error", taskId, message: safeError(error) });
-        send({ type: "run_state", taskId, runId: command.runId, state: "idle" });
-      }
-      stopRequested = false;
+      await runPrompt(command.id, command.runId, runStartedAt(command.startedAt), command.message, command.images, command.checkpoint);
+      return;
+    } else if (command.type === "resend") {
+      await resend(command);
+      return;
+    } else if (command.type === "navigate") {
+      requireSettled();
+      const result = await navigate(command.entryId, command.target, command.kind, command.leave);
       emitSnapshot();
+      respond(command.id, result);
       return;
     } else if (command.type === "abort") {
       stopRequested = true;
@@ -779,9 +971,19 @@ async function handle(command: WorkerCommand): Promise<void> {
     response(command.id, true);
   } catch (error) {
     response(command.id, false, safeError(error));
-    send({ type: "worker_error", taskId, message: safeError(error) });
+    // The host awaits these and shows the refusal where the user acted; a worker_error would
+    // also be saved as the chat's lastError and linger as a banner.
+    if (!REQUEST_COMMANDS.has(command.type)) send({ type: "worker_error", taskId, message: safeError(error) });
+    // The host marks a chat running before it sends a prompt; one refused before it started
+    // must say it is idle again. (A run that did start reports its own end.)
+    if (taskId && (command.type === "prompt" || command.type === "resend") && activeRun?.runId !== command.runId) {
+      send({ type: "run_state", taskId, runId: command.runId, state: "idle" });
+    }
   }
 }
+
+/** Commands the host sends with `worker::request` and whose failures it reports itself. */
+const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend"]);
 
 function safeError(error: unknown): string {
   let message = error instanceof Error ? error.message : String(error);

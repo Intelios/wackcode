@@ -130,6 +130,11 @@ export interface InitCommand {
    * nothing from a project's own `.pi/` is ever loaded.
    */
   resources?: WorkerResources;
+  /**
+   * Fork: when the task has no session file of its own yet, build it from this chat's session
+   * as the path from the root to `entryId` (default: that session's leaf), like Pi's `/fork`.
+   */
+  forkFrom?: { sessionFile: string; entryId?: string };
 }
 
 export interface WorkerResources {
@@ -139,9 +144,67 @@ export interface WorkerResources {
   themes: string[];
 }
 
+/**
+ * A workspace checkpoint: a tree in the chat's private shadow repository, taken by the host
+ * before a prompt or when a branch is left. Recorded in the session so it follows the tree.
+ */
+export interface CheckpointRef {
+  /** Tree id in the shadow repository. */
+  id: string;
+  /** The workspace repository's HEAD commit when the snapshot was taken, if it had one. */
+  head?: string;
+}
+
+/** Why the session tree moved. "rewind" is the only kind "Undo rewind" is offered for. */
+export type NavigationKind = "rewind" | "switch" | "undo";
+
+/** The `navigate` command's result, carried on its `response`. */
+export interface NavigateResult {
+  leafId: string | null;
+  /** The text of the user message a rewind removed, for the composer. */
+  editorText?: string;
+  /** The files the branch now shown was left with, when a checkpoint recorded them. */
+  files?: CheckpointRef;
+}
+
 export type WorkerCommand =
   | InitCommand
-  | { id: string; type: "prompt"; runId: string; startedAt?: number; message: string; mode?: TaskMode; images?: ImageContent[] }
+  | {
+      id: string;
+      type: "prompt";
+      runId: string;
+      startedAt?: number;
+      message: string;
+      mode?: TaskMode;
+      images?: ImageContent[];
+      /** Recorded just above the user message; `null` records that no snapshot was possible. */
+      checkpoint?: CheckpointRef | null;
+    }
+  | {
+      id: string;
+      type: "resend";
+      runId: string;
+      startedAt?: number;
+      /** The user message to send again as a new version. */
+      entryId: string;
+      /** Replacement text (edit); the original text when absent (retry). */
+      message?: string;
+      /** Indexes of the original message's images to leave out. */
+      removeImages?: number[];
+      checkpoint?: CheckpointRef | null;
+      /** The files as the current branch is left. */
+      leave?: CheckpointRef | null;
+    }
+  | {
+      id: string;
+      type: "navigate";
+      /** "before": a user message, the conversation then ends just above it (rewind).
+       *  "latest": any entry, the conversation then ends at the newest entry beneath it. */
+      entryId: string;
+      target: "before" | "latest";
+      kind: NavigationKind;
+      leave?: CheckpointRef | null;
+    }
   | { id: string; type: "abort" }
   | { id: string; type: "snapshot" }
   | { id: string; type: "set_model"; modelId: string }
@@ -175,13 +238,42 @@ export interface NormalizedBlock {
   details?: unknown;
 }
 
+/** The other versions of a user message: edits and retries sent from the same point. */
+export interface MessageVersions {
+  /** Zero-based position among the versions, oldest first. */
+  index: number;
+  total: number;
+  previous?: string;
+  next?: string;
+  /** Stable across versions of the same message, so the UI can keep one element for all of them. */
+  group: string;
+}
+
+/** Where a turn (one user message and everything answering it) ends, for retry and fork. */
+export interface TurnInfo {
+  userEntryId: string;
+  /** The last entry of the turn: where a fork of this turn ends. */
+  endEntryId: string;
+  /** The files as they were after this turn, when a later checkpoint recorded them. */
+  after?: CheckpointRef;
+}
+
 export interface NormalizedMessage {
+  /** The Pi session entry id when known; otherwise a positional id. */
   id: string;
   role: "user" | "assistant" | "tool" | "system";
   timestamp?: number;
   blocks: NormalizedBlock[];
   stopReason?: string;
   errorMessage?: string;
+  /** Pi session entry id. Briefly absent while Pi saves a message that has just finished. */
+  entryId?: string;
+  /** User messages with other versions. */
+  versions?: MessageVersions;
+  /** User messages: the files as they were just before this message was sent. */
+  checkpoint?: CheckpointRef;
+  /** The last assistant message of each turn. */
+  turn?: TurnInfo;
 }
 
 /** A completed prompt duration attached to the user message that started it. */
@@ -216,6 +308,12 @@ export interface SessionSnapshot {
   messages: NormalizedMessage[];
   runTimings: RunTiming[];
   activeRun?: { runId: string; startedAt: number };
+  /** Where the conversation currently ends in the session tree. */
+  tree: {
+    leafId: string | null;
+    /** Set right after a rewind: the entry "Undo rewind" returns to. */
+    undo?: string;
+  };
   stats: {
     tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
     cost: number;
@@ -243,7 +341,7 @@ export type ExtensionUIRequest =
   | { method: "questions"; title: string; questions: AskQuestion[] };
 
 export type WorkerOutput =
-  | { type: "response"; taskId?: string; id: string; success: true }
+  | { type: "response"; taskId?: string; id: string; success: true; result?: unknown }
   | { type: "response"; taskId?: string; id: string; success: false; error: string }
   | { type: "ready"; taskId: string; snapshot: SessionSnapshot }
   | { type: "snapshot"; taskId: string; snapshot: SessionSnapshot }

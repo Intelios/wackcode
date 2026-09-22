@@ -1,21 +1,49 @@
 use crate::{
-    git,
+    checkpoints, git,
     models::{
-        BootstrapPayload, BuiltinModelSuggestion, CreateTaskInput, ExportPlanInput, GitChanges, ImageContent, ModelRecord, ProjectRecord,
-        PromptInput, ExtensionUiResponseInput, InstallPackageInput, PackageRecord,
-        PackageSearchResult, ProviderKind, ProviderRecord, SaveProviderInput, SearchPackagesInput,
-        SetPackageResourcesInput, SetTaskModeInput, SetToolConfigInput, TaskMode, TaskRecord,
-        TaskStatus, ToolConfig,
+        BootstrapPayload, BuiltinModelSuggestion, CheckpointChange, CheckpointRef, CreateTaskInput, ExportPlanInput,
+        ForkTaskInput, GitChanges, ImageContent, ModelRecord, NavigateResult, NavigateTaskInput, NavigateTaskResult,
+        ProjectRecord, PromptInput, ExtensionUiResponseInput, InstallPackageInput, PackageRecord,
+        PackageSearchResult, ProviderKind, ProviderRecord, ResendInput, RestoreCheckpointInput, RestoreResult,
+        SaveProviderInput, SearchPackagesInput, SetPackageResourcesInput, SetTaskModeInput, SetToolConfigInput,
+        TaskMode, TaskRecord, TaskStatus, ToolConfig,
     },
     storage::MetadataState,
-    worker::{self}, subscriptions,
+    worker::{self, WorkerOptions}, subscriptions,
 };
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{collections::HashSet, path::{Path, PathBuf}, process::Command};
-use tauri::{AppHandle, Manager, State};
+use std::{
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
+    process::Command,
+    sync::{Arc, Mutex, OnceLock},
+    time::Duration,
+};
+use tauri::{AppHandle, Emitter, Manager, State};
+use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
+
+/// One lock per chat, held by every command that sends it work, moves its conversation, or
+/// touches its checkpoints. Keeps a rewind from slipping in behind a prompt that is still being
+/// sent, and keeps two Git operations off the same checkpoint store.
+#[derive(Default)]
+pub struct TaskLocks(Mutex<HashMap<String, Arc<AsyncMutex<()>>>>);
+
+impl TaskLocks {
+    fn for_task(&self, task_id: &str) -> Arc<AsyncMutex<()>> {
+        let mut locks = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        locks.entry(task_id.to_string()).or_default().clone()
+    }
+}
+
+fn task_lock(app: &AppHandle, task_id: &str) -> Arc<AsyncMutex<()>> {
+    app.state::<TaskLocks>().for_task(task_id)
+}
+
+/// Moving in the session tree waits behind a worker that may still be starting up.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(90);
 
 const THINKING_LEVELS: &[&str] = &["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 /// Image limits for one prompt. `src/attachment-utils.ts` enforces the same numbers in the composer.
@@ -544,7 +572,7 @@ pub fn create_task(
         let destination = app.path().app_data_dir().map_err(|error| error.to_string())?
             .join("worktrees").join(&id);
         let branch_name = format!("wackcode/{}-{}", slug(&name), &id[..8]);
-        workspace_path = Some(git::create_worktree(Path::new(&project.path), Path::new(git_root), &destination, &branch_name)?);
+        workspace_path = Some(git::create_worktree(Path::new(&project.path), Path::new(git_root), &destination, &branch_name, "HEAD")?);
         worktree_path = Some(destination.to_string_lossy().into_owned());
         branch = Some(branch_name);
     }
@@ -622,7 +650,11 @@ pub async fn configure_task(
 pub async fn open_task(app: AppHandle, state: State<'_, MetadataState>, task_id: String) -> Result<(), String> {
     let (task, provider) = task_and_provider(&state, &task_id)?;
     let api_key = credential_for(&app, &state, &provider)?;
-    worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
+    {
+        let lock = task_lock(&app, &task_id);
+        let _guard = lock.lock().await;
+        worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
+    }
     worker::send(&app, &task.id, &json!({ "id": Uuid::new_v4().to_string(), "type": "snapshot" })).await
 }
 
@@ -630,6 +662,8 @@ pub async fn open_task(app: AppHandle, state: State<'_, MetadataState>, task_id:
 pub async fn prompt(app: AppHandle, state: State<'_, MetadataState>, input: PromptInput) -> Result<String, String> {
     let message = required(&input.message, "Message")?;
     validate_images(&input.images)?;
+    let lock = task_lock(&app, &input.task_id);
+    let _guard = lock.lock().await;
     let configured = configure_task(app.clone(), state.clone(), ConfigureTaskInput {
         task_id: input.task_id.clone(),
         provider_id: input.provider_id,
@@ -657,13 +691,232 @@ pub async fn prompt(app: AppHandle, state: State<'_, MetadataState>, input: Prom
     if !input.images.is_empty() { require_vision(&provider, &configured.model_id)?; }
     let api_key = credential_for(&app, &state, &provider)?;
     worker::ensure_worker(&app, &configured, &provider, api_key.as_deref()).await?;
+    // Running from here on, so nothing that moves the conversation can queue up behind this
+    // prompt and run after it. The worker's `run_state` takes over once it starts.
+    set_status(&state, &configured.id, TaskStatus::Running)?;
+    let checkpoint = match checkpoint_location(&app, &state, &configured) {
+        Ok(location) => snapshot_quietly(&app, &configured.id, &location).await,
+        Err(_) => None,
+    };
     let run_id = Uuid::new_v4().to_string();
     let started_at = input.started_at.unwrap_or_else(|| Utc::now().timestamp_millis() as u64);
-    worker::send(&app, &configured.id, &json!({
+    let sent = worker::send(&app, &configured.id, &json!({
         "id": Uuid::new_v4().to_string(), "type": "prompt", "runId": run_id, "message": message,
-        "startedAt": started_at, "mode": configured.mode, "images": input.images
-    })).await?;
+        "startedAt": started_at, "mode": configured.mode, "images": input.images, "checkpoint": checkpoint
+    })).await;
+    if let Err(error) = sent {
+        let _ = set_status(&state, &configured.id, TaskStatus::Idle);
+        return Err(error);
+    }
     Ok(run_id)
+}
+
+/// Send a message again as a new version of itself: unchanged (retry) or with new text (edit).
+/// Files can first be put back to how they were before the message; if the worker then refuses,
+/// they are put back again.
+#[tauri::command]
+pub async fn resend_message(app: AppHandle, state: State<'_, MetadataState>, input: ResendInput) -> Result<String, String> {
+    validate_entry_id(&input.entry_id)?;
+    let message = input.message.as_deref().map(|message| required(message, "Message")).transpose()?;
+    if let Some(selection) = &input.restore { validate_checkpoint_id(&selection.checkpoint_id)?; }
+    let lock = task_lock(&app, &input.task_id);
+    let _guard = lock.lock().await;
+    let configured = configure_task(app.clone(), state.clone(), ConfigureTaskInput {
+        task_id: input.task_id.clone(),
+        provider_id: input.provider_id.clone(),
+        model_id: input.model_id.clone(),
+        thinking_level: input.thinking_level.clone(),
+    }).await?;
+    let provider = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?
+        .providers.iter().find(|provider| provider.id == configured.provider_id).cloned()
+        .ok_or_else(|| "Connection not found".to_string())?;
+    let api_key = credential_for(&app, &state, &provider)?;
+    worker::ensure_worker(&app, &configured, &provider, api_key.as_deref()).await?;
+    set_status(&state, &configured.id, TaskStatus::Running)?;
+    let location = checkpoint_location(&app, &state, &configured).ok();
+    let leave = match &location { Some(location) => snapshot_quietly(&app, &configured.id, location).await, None => None };
+    let mut undo = None;
+    let outcome = async {
+        let checkpoint = match (&input.restore, &location) {
+            (Some(selection), Some(location)) => {
+                let result = restore_files(location, &selection.checkpoint_id, selection.paths.clone()).await?;
+                undo = Some(result.undo);
+                // A fresh snapshot, not the restored id: a partial restore leaves other changes.
+                snapshot_quietly(&app, &configured.id, location).await
+            }
+            (Some(_), None) => return Err("Checkpoints are not available for this chat.".to_string()),
+            _ => leave.clone(),
+        };
+        let run_id = Uuid::new_v4().to_string();
+        let started_at = input.started_at.unwrap_or_else(|| Utc::now().timestamp_millis() as u64);
+        worker::request(&app, &configured.id, json!({
+            "id": Uuid::new_v4().to_string(), "type": "resend", "runId": run_id, "startedAt": started_at,
+            "entryId": input.entry_id, "message": message, "removeImages": input.remove_images,
+            "checkpoint": checkpoint, "leave": leave
+        }), REQUEST_TIMEOUT).await?;
+        Ok(run_id)
+    }.await;
+    if outcome.is_err() {
+        if let (Some(undo), Some(location)) = (&undo, &location) {
+            let _ = restore_files(location, &undo.id, None).await;
+        }
+        let _ = set_status(&state, &configured.id, TaskStatus::Idle);
+    }
+    outcome
+}
+
+/// Move the conversation to another point in its session tree: rewind to before a message,
+/// switch to another version, or undo a rewind. Files are restored afterwards when asked; if
+/// that fails the conversation still moved, and the result says so.
+#[tauri::command]
+pub async fn navigate_task(app: AppHandle, state: State<'_, MetadataState>, input: NavigateTaskInput) -> Result<NavigateTaskResult, String> {
+    validate_entry_id(&input.entry_id)?;
+    if !matches!(input.target.as_str(), "before" | "latest") { return Err("Unknown place to move the conversation to.".into()); }
+    if !matches!(input.kind.as_str(), "rewind" | "switch" | "undo") { return Err("Unknown way to move the conversation.".into()); }
+    if let Some(selection) = &input.restore { validate_checkpoint_id(&selection.checkpoint_id)?; }
+    let lock = task_lock(&app, &input.task_id);
+    let _guard = lock.lock().await;
+    let (task, provider) = task_and_provider(&state, &input.task_id)?;
+    refuse_busy(&task)?;
+    let api_key = credential_for(&app, &state, &provider)?;
+    worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
+    let location = checkpoint_location(&app, &state, &task).ok();
+    let leave = match &location { Some(location) => snapshot_quietly(&app, &task.id, location).await, None => None };
+    let result = worker::request(&app, &task.id, json!({
+        "id": Uuid::new_v4().to_string(), "type": "navigate", "entryId": input.entry_id,
+        "target": input.target, "kind": input.kind, "leave": leave
+    }), REQUEST_TIMEOUT).await?;
+    let navigate: NavigateResult = serde_json::from_value(result).unwrap_or_default();
+    let (restore, restore_error) = match (&input.restore, &location) {
+        (Some(selection), Some(location)) => match restore_files(location, &selection.checkpoint_id, selection.paths.clone()).await {
+            Ok(result) => (Some(result), None),
+            Err(error) => (None, Some(error)),
+        },
+        (Some(_), None) => (None, Some("Checkpoints are not available for this chat.".to_string())),
+        _ => (None, None),
+    };
+    Ok(NavigateTaskResult { navigate, restore, restore_error })
+}
+
+/// Put the chat's files back to a checkpoint, optionally only some of them.
+#[tauri::command]
+pub async fn restore_checkpoint(app: AppHandle, state: State<'_, MetadataState>, input: RestoreCheckpointInput) -> Result<RestoreResult, String> {
+    validate_checkpoint_id(&input.checkpoint_id)?;
+    let lock = task_lock(&app, &input.task_id);
+    let _guard = lock.lock().await;
+    let task = find_task(&state, &input.task_id)?;
+    refuse_busy(&task)?;
+    let location = checkpoint_location(&app, &state, &task)?;
+    refuse_shared_run(&app, &state, &task, &location.root)?;
+    restore_files(&location, &input.checkpoint_id, input.paths).await
+}
+
+/// The files restoring a checkpoint would change, for the user to review first.
+#[tauri::command]
+pub async fn checkpoint_changes(app: AppHandle, state: State<'_, MetadataState>, task_id: String, checkpoint_id: String) -> Result<Vec<CheckpointChange>, String> {
+    validate_checkpoint_id(&checkpoint_id)?;
+    let lock = task_lock(&app, &task_id);
+    let _guard = lock.lock().await;
+    let task = find_task(&state, &task_id)?;
+    let location = checkpoint_location(&app, &state, &task)?;
+    blocking(move || checkpoints::changes(&location.shadow, &location.root, &location.app_data, &checkpoint_id)).await
+}
+
+/// Start a new chat from a point in this one. The new chat's session is the path to that point
+/// (Pi's fork); its files depend on where the source works: a Local chat shares its folder, a
+/// worktree or scratch chat gets its own copy of the files as they were after that turn.
+#[tauri::command]
+pub async fn fork_task(app: AppHandle, state: State<'_, MetadataState>, input: ForkTaskInput) -> Result<TaskRecord, String> {
+    if let Some(entry_id) = &input.entry_id { validate_entry_id(entry_id)?; }
+    if let Some(checkpoint) = &input.checkpoint { validate_checkpoint_id(&checkpoint.id)?; }
+    let lock = task_lock(&app, &input.task_id);
+    let _guard = lock.lock().await;
+    let (source, provider) = task_and_provider(&state, &input.task_id)?;
+    refuse_busy(&source)?;
+    let session_file = source.session_file.clone().filter(|file| Path::new(file).exists())
+        .ok_or_else(|| "Wait for the first reply before forking this chat.".to_string())?;
+    let project = {
+        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        source.project_id.as_deref().and_then(|id| data.projects.iter().find(|project| project.id == id).cloned())
+    };
+    let api_key = credential_for(&app, &state, &provider)?;
+    let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let source_location = checkpoint_location(&app, &state, &source).ok();
+    let id = Uuid::new_v4().to_string();
+    let name = limit(&format!("{} (fork)", source.name), 120);
+    let now = Utc::now().to_rfc3339();
+    let mut record = TaskRecord {
+        id: id.clone(),
+        project_id: source.project_id.clone(),
+        name: name.clone(),
+        workspace_path: source.workspace_path.clone(),
+        worktree_path: None,
+        branch: source.branch.clone(),
+        uses_worktree: source.uses_worktree,
+        provider_id: source.provider_id.clone(),
+        model_id: source.model_id.clone(),
+        thinking_level: source.thinking_level.clone(),
+        session_file: None,
+        status: TaskStatus::Idle,
+        mode: source.mode,
+        archived: false,
+        last_error: None,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    let git_root = project.as_ref().and_then(|project| project.git_root.clone());
+    let outcome = async {
+        // The files to copy: as they were after that turn, or as they are now at the tip.
+        let tree = match (&input.checkpoint, &source_location) {
+            (Some(checkpoint), _) => Some(checkpoint.id.clone()),
+            (None, Some(location)) if source.project_id.is_none() || source.uses_worktree => {
+                snapshot_quietly(&app, &source.id, location).await.map(|checkpoint| checkpoint.id)
+            }
+            _ => None,
+        };
+        let fork_store = checkpoints::shadow_dir(&app_data, &id);
+        if let Some(location) = &source_location {
+            let (from, to) = (location.shadow.clone(), fork_store.clone());
+            blocking(move || checkpoints::copy_shadow(&from, &to)).await?;
+        }
+        let mut materialize_into = None;
+        if source.uses_worktree {
+            let project = project.as_ref().ok_or_else(|| "This chat's project no longer exists".to_string())?;
+            let git_root = project.git_root.as_deref().ok_or_else(|| "This project is not inside a Git repository".to_string())?;
+            let destination = app_data.join("worktrees").join(&id);
+            let branch_name = format!("wackcode/{}-{}", slug(&name), &id[..8]);
+            let base = input.checkpoint.as_ref().and_then(|checkpoint| checkpoint.head.clone())
+                .filter(|head| git::has_commit(Path::new(git_root), head))
+                .or_else(|| source.worktree_path.as_deref().and_then(|path| git::head_commit(Path::new(path))))
+                .unwrap_or_else(|| "HEAD".into());
+            record.worktree_path = Some(destination.to_string_lossy().into_owned());
+            let workspace = git::create_worktree(Path::new(&project.path), Path::new(git_root), &destination, &branch_name, &base)?;
+            record.workspace_path = workspace.to_string_lossy().into_owned();
+            record.branch = Some(branch_name);
+            materialize_into = Some(destination);
+        } else if source.project_id.is_none() {
+            let scratch = scratch_dir(&app, &id)?;
+            std::fs::create_dir_all(&scratch).map_err(|error| format!("Could not create scratch folder: {error}"))?;
+            record.workspace_path = scratch.to_string_lossy().into_owned();
+            materialize_into = Some(scratch);
+        }
+        if let (Some(target), Some(tree)) = (materialize_into, tree) {
+            let store = fork_store.clone();
+            blocking(move || checkpoints::materialize(&store, &tree, &target).map(|_| ())).await?;
+        }
+        state.mutate(|data| { data.tasks.push(record.clone()); Ok(()) })?;
+        worker::ensure_worker_with(&app, &record, &provider, api_key.as_deref(), WorkerOptions {
+            fork_from: Some(json!({ "sessionFile": session_file, "entryId": input.entry_id })),
+            wait_ready: true,
+        }).await?;
+        find_task(&state, &id)
+    }.await;
+    if outcome.is_err() {
+        let _ = worker::terminate_worker(&app, &id, false).await;
+        let _ = state.mutate(|data| { data.tasks.retain(|task| task.id != id); Ok(()) });
+        cleanup_task_files(&app, &record, git_root.as_deref());
+    }
+    outcome
 }
 
 /// Switch a task between Build and Plan mode. Persisted immediately and pushed to the worker
@@ -750,6 +1003,8 @@ pub fn rename_task(state: State<'_, MetadataState>, task_id: String, name: Strin
 
 #[tauri::command]
 pub async fn delete_task(app: AppHandle, state: State<'_, MetadataState>, task_id: String) -> Result<(), String> {
+    let lock = task_lock(&app, &task_id);
+    let _guard = lock.lock().await;
     worker::terminate_worker(&app, &task_id, true).await?;
     let (task, git_root) = state.mutate(|data| {
         let index = data.tasks.iter().position(|task| task.id == task_id).ok_or_else(|| "Chat not found".to_string())?;
@@ -787,7 +1042,7 @@ pub async fn convert_task_to_worktree(app: AppHandle, state: State<'_, MetadataS
     let destination = app.path().app_data_dir().map_err(|error| error.to_string())?
         .join("worktrees").join(&task.id);
     let branch_name = format!("wackcode/{}-{}", slug(&task.name), &task.id[..8]);
-    let workspace = git::create_worktree(Path::new(&project.path), Path::new(git_root), &destination, &branch_name)?;
+    let workspace = git::create_worktree(Path::new(&project.path), Path::new(git_root), &destination, &branch_name, "HEAD")?;
     let updated = state.mutate(|data| {
         let record = data.tasks.iter_mut().find(|item| item.id == task_id).ok_or_else(|| "Chat not found".to_string())?;
         record.workspace_path = workspace.to_string_lossy().into_owned();
@@ -838,6 +1093,7 @@ fn cleanup_task_files(app: &AppHandle, task: &TaskRecord, git_root: Option<&str>
         let _ = std::fs::remove_dir_all(app_data.join("agent").join(&task.id));
         let _ = std::fs::remove_dir_all(app_data.join("sessions").join(&task.id));
         let _ = std::fs::remove_dir_all(app_data.join("scratch").join(&task.id));
+        let _ = std::fs::remove_dir_all(checkpoints::shadow_dir(&app_data, &task.id));
     }
     if let Some(worktree_path) = task.worktree_path.as_deref() {
         let repo = git_root.map(Path::new).unwrap_or_else(|| Path::new(&task.workspace_path));
@@ -877,6 +1133,112 @@ fn credential_for(app: &AppHandle, state: &State<'_, MetadataState>, provider: &
     } else {
         state.secrets.get(&provider.id).map(Some)
     }
+}
+
+fn find_task(state: &State<'_, MetadataState>, task_id: &str) -> Result<TaskRecord, String> {
+    state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?
+        .tasks.iter().find(|task| task.id == task_id).cloned()
+        .ok_or_else(|| "Chat not found".to_string())
+}
+
+fn set_status(state: &State<'_, MetadataState>, task_id: &str, status: TaskStatus) -> Result<(), String> {
+    state.mutate(|data| {
+        let task = data.tasks.iter_mut().find(|task| task.id == task_id).ok_or_else(|| "Chat not found".to_string())?;
+        if status == TaskStatus::Running { task.last_error = None; }
+        task.status = status;
+        task.updated_at = Utc::now().to_rfc3339();
+        Ok(())
+    })
+}
+
+fn refuse_busy(task: &TaskRecord) -> Result<(), String> {
+    if matches!(task.status, TaskStatus::Running | TaskStatus::Stopping) {
+        return Err("Wait for this chat to finish first.".into());
+    }
+    Ok(())
+}
+
+/// Where a chat's checkpoints live and which folder they cover.
+#[derive(Clone)]
+struct CheckpointLocation {
+    shadow: PathBuf,
+    root: PathBuf,
+    app_data: PathBuf,
+}
+
+/// A worktree's root, the project's repository root (so its `.gitignore` applies as it does
+/// in Git), or the chat's own folder. Scratch and non-Git folders never walk up to a parent.
+fn checkpoint_root(task: &TaskRecord, project: Option<&ProjectRecord>) -> PathBuf {
+    if let Some(worktree) = task.worktree_path.as_deref() { return PathBuf::from(worktree); }
+    if let Some(root) = project.and_then(|project| project.git_root.as_deref()) { return PathBuf::from(root); }
+    PathBuf::from(&task.workspace_path)
+}
+
+fn checkpoint_location(app: &AppHandle, state: &State<'_, MetadataState>, task: &TaskRecord) -> Result<CheckpointLocation, String> {
+    let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let project = {
+        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        task.project_id.as_deref().and_then(|id| data.projects.iter().find(|project| project.id == id).cloned())
+    };
+    Ok(CheckpointLocation {
+        shadow: checkpoints::shadow_dir(&app_data, &task.id),
+        root: checkpoint_root(task, project.as_ref()),
+        app_data,
+    })
+}
+
+async fn blocking<T: Send + 'static>(work: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(work).await.map_err(|error| error.to_string())?
+}
+
+/// Take a checkpoint, or say once per chat per session why none can be taken. A chat always
+/// keeps working without checkpoints; only its "restore files" options go away.
+async fn snapshot_quietly(app: &AppHandle, task_id: &str, location: &CheckpointLocation) -> Option<CheckpointRef> {
+    let location = location.clone();
+    match blocking(move || checkpoints::snapshot(&location.shadow, &location.root, &location.app_data)).await {
+        Ok(checkpoint) => Some(checkpoint),
+        Err(message) => {
+            static NOTIFIED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+            let first = NOTIFIED.get_or_init(Mutex::default).lock()
+                .map(|mut notified| notified.insert(task_id.to_string())).unwrap_or(false);
+            if first {
+                let _ = app.emit("worker-event", json!({ "type": "checkpoint_unavailable", "taskId": task_id, "message": message }));
+            }
+            None
+        }
+    }
+}
+
+async fn restore_files(location: &CheckpointLocation, checkpoint_id: &str, paths: Option<Vec<String>>) -> Result<RestoreResult, String> {
+    let location = location.clone();
+    let checkpoint_id = checkpoint_id.to_string();
+    blocking(move || checkpoints::restore(&location.shadow, &location.root, &location.app_data, &checkpoint_id, paths.as_deref())).await
+}
+
+/// A restore rewrites the whole folder the checkpoints cover, so it waits for any other chat
+/// working there.
+fn refuse_shared_run(app: &AppHandle, state: &State<'_, MetadataState>, task: &TaskRecord, root: &Path) -> Result<(), String> {
+    let others: Vec<TaskRecord> = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?
+        .tasks.iter()
+        .filter(|other| other.id != task.id && !other.archived && matches!(other.status, TaskStatus::Running | TaskStatus::Stopping))
+        .cloned().collect();
+    for other in others {
+        if checkpoint_location(app, state, &other).is_ok_and(|location| location.root == root) {
+            return Err(format!("“{}” is working in this folder. Wait for it to finish before restoring files.", other.name));
+        }
+    }
+    Ok(())
+}
+
+fn validate_entry_id(entry_id: &str) -> Result<(), String> {
+    if entry_id.is_empty() || entry_id.len() > 64 || !entry_id.chars().all(|character| character.is_ascii_alphanumeric() || character == '-' || character == '_') {
+        return Err("That message could not be found in this chat.".into());
+    }
+    Ok(())
+}
+
+fn validate_checkpoint_id(checkpoint_id: &str) -> Result<(), String> {
+    if checkpoints::valid_checkpoint_id(checkpoint_id) { Ok(()) } else { Err("That checkpoint id is not valid.".into()) }
 }
 
 fn task_and_provider(state: &State<'_, MetadataState>, task_id: &str) -> Result<(TaskRecord, ProviderRecord), String> {

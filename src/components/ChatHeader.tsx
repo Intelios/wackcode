@@ -4,6 +4,7 @@ import { Icon } from "./Icons";
 import { MenuButton } from "./ui/MenuButton";
 import type { MenuEntry } from "./ui/Menu";
 import type { TaskAction } from "./Sidebar";
+import { canFork } from "../tree-utils";
 
 interface ChatHeaderProps {
   task: TaskRecord;
@@ -34,6 +35,7 @@ export function ChatHeader({ task, project, changesCount, changesOpen, onToggleC
       disabled: Boolean(task.usesWorktree || task.sessionFile || !project?.gitHasHead),
       onSelect: () => onTaskAction(task, "worktree")
     },
+    { label: "Fork chat", icon: <Icon name="branch" />, disabled: !canFork(task), onSelect: () => onTaskAction(task, "fork") },
     "separator",
     { label: "Reveal in Finder", icon: <Icon name="folder" />, onSelect: () => onTaskAction(task, "reveal") },
     { label: "Copy path", icon: <Icon name="copy" />, onSelect: () => onTaskAction(task, "copy") },

@@ -593,9 +593,14 @@ fn handle_worker_line(app: &AppHandle, task_id: &str, line: &str, pending: &Pend
         }
     }
     let mut should_save = false;
-    if event_type == "ready" || event_type == "snapshot" {
+    if event_type == "ready" || event_type == "snapshot" || event_type == "snapshot_delta" {
         if let Ok(mut data) = app.state::<MetadataState>().data.lock() {
-            if let Some(session_file) = value.pointer("/snapshot/sessionFile").and_then(Value::as_str) {
+            // Deltas carry the session file only when it changed; full snapshots always have it.
+            let session_file = value
+                .pointer("/snapshot/sessionFile")
+                .or_else(|| value.pointer("/delta/sessionFile"))
+                .and_then(Value::as_str);
+            if let Some(session_file) = session_file {
                 if let Some(task) = data.tasks.iter_mut().find(|task| task.id == task_id) {
                     if task.session_file.as_deref() != Some(session_file) {
                         task.session_file = Some(session_file.to_string());
@@ -604,7 +609,8 @@ fn handle_worker_line(app: &AppHandle, task_id: &str, line: &str, pending: &Pend
                 }
             }
             // The catalogue only exists on a live session, so cache the latest one for the
-            // Tools panel to render when no chat is open.
+            // Tools panel to render when no chat is open. Deltas never carry tools — they ride
+            // full snapshots, which is where tool-changing commands force one.
             if let Some(tools) = value.pointer("/snapshot/tools") {
                 if let Ok(catalog) = serde_json::from_value::<Vec<ToolCatalogEntry>>(tools.clone()) {
                     if data.tool_catalog != catalog {

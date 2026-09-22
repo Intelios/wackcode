@@ -5,6 +5,17 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { createBuiltinExtensions } from "./builtin/index.js";
 import type { BuiltinHost } from "./builtin/host.js";
+import {
+  diffMessages,
+  sameCheckpoint,
+  samePlanState,
+  sameRunTimings,
+  sameStats,
+  sameTodoState,
+  sameTree,
+  sameTurn,
+  sameVersions
+} from "./delta.js";
 import { JsonLineDecoder } from "./framing.js";
 import { RUN_TIMING_ENTRY_TYPE, RUN_TIMING_VERSION, resolveRunTimings } from "./run-timing.js";
 import {
@@ -28,13 +39,18 @@ import {
   type CheckpointRef,
   type ImageContent,
   type InitCommand,
+  type MessageVersions,
   type NavigateResult,
   type NavigationKind,
   type NormalizedBlock,
   type NormalizedMessage,
+  type PlanState,
   type QuestionAnswer,
+  type RunTiming,
   type SessionSnapshot,
   type ThinkingLevel,
+  type TodoState,
+  type TurnInfo,
   type ExtensionUIRequest,
   type ToolCatalogEntry,
   type WorkerCommand,
@@ -126,6 +142,30 @@ let snapshotTimer: NodeJS.Timeout | undefined;
 let partialTimer: NodeJS.Timeout | undefined;
 let pendingPartial: unknown;
 
+// The message Pi is currently streaming into. It mutates in place on every message_update, so
+// it is never served from the normalization cache; cleared at each boundary in dropPartial().
+let streamingMessage: unknown;
+
+// Normalized transcript messages keyed by Pi's own message objects, which stay identical from
+// message_end onward (Pi stores the same objects on its session entries, and identity survives
+// navigation and compaction). An unchanged message reuses its object, which is what lets the
+// snapshot diff run on identity and cost O(changes) instead of O(session).
+interface CachedMessage {
+  message: NormalizedMessage;
+  /** The entry id the message was normalized under; a change forces a rebuild. */
+  entryId: string | undefined;
+  /** Positions back the positional id used while the entry id is still unknown. */
+  position: number;
+  versions: MessageVersions | undefined;
+  checkpoint: CheckpointRef | undefined;
+  turn: TurnInfo | undefined;
+}
+const normalizedCache = new WeakMap<object, CachedMessage>();
+
+// imageId -> the raw message whose block awaits a thumbnail, so a finished preview can
+// invalidate just that message instead of the whole transcript.
+const imageOwners = new Map<string, object>();
+
 function send(output: WorkerOutput): void {
   process.stdout.write(`${JSON.stringify(output)}\n`);
 }
@@ -194,6 +234,13 @@ function imageBlock(block: Record<string, unknown>): NormalizedBlock {
           const resized = await piModule.resizeImage(Buffer.from(data, "base64"), mimeType, THUMBNAIL_OPTIONS);
           if (!resized) return;
           created.url = `data:${resized.mimeType};base64,${resized.data}`;
+          // The owning message's cached normalization still has no thumbnail; drop only that
+          // entry so the next emission re-normalizes (and re-sends) just this message.
+          const owner = imageOwners.get(created.id);
+          if (owner) {
+            imageOwners.delete(created.id);
+            normalizedCache.delete(owner);
+          }
           scheduleSnapshot();
         })
         .catch(() => undefined);
@@ -249,7 +296,7 @@ function normalizeMessage(message: unknown, index: number): NormalizedMessage | 
     }
   }
   const timestamp = typeof raw.timestamp === "number" ? raw.timestamp : undefined;
-  return {
+  const normalized: NormalizedMessage = {
     id: `${role}-${timestamp ?? "na"}-${index}`,
     role,
     timestamp,
@@ -257,18 +304,34 @@ function normalizeMessage(message: unknown, index: number): NormalizedMessage | 
     stopReason: typeof raw.stopReason === "string" ? raw.stopReason : undefined,
     errorMessage: typeof raw.errorMessage === "string" ? raw.errorMessage : undefined
   };
+  // Thumbnails land after the message is normalized; keying the raw object lets the preview
+  // invalidate exactly this message's cache entry when it does.
+  for (const block of blocks) {
+    if (block.type === "image" && block.imageId) imageOwners.set(block.imageId, message);
+  }
+  return normalized;
 }
 
 // Per-category token estimates. `system` is the remainder between the provider's
 // own context count and estimated message tokens — it covers the system prompt,
 // tool definitions, and any estimation error.
+// Estimates are cached per message object: after message_end the content is final, and
+// estimateTokens walks (and stringifies) every block. The streaming message is exempt.
+const tokenEstimates = new WeakMap<object, number>();
+
 function contextBreakdown(stats: ReturnType<AgentSession["getSessionStats"]>): SessionSnapshot["stats"]["contextBreakdown"] {
   if (!session || !piModule || !stats.contextUsage || stats.contextUsage.tokens == null) return undefined;
   const roles = { user: 0, assistant: 0, tool: 0 };
   for (const message of session.messages) {
     const role = message.role === "toolResult" ? "tool" : message.role;
     if (role === "user" || role === "assistant" || role === "tool") {
-      roles[role] += piModule.estimateTokens(message);
+      const cacheable = message !== streamingMessage;
+      let tokens = cacheable ? tokenEstimates.get(message) : undefined;
+      if (tokens === undefined) {
+        tokens = piModule.estimateTokens(message);
+        if (cacheable) tokenEstimates.set(message, tokens);
+      }
+      roles[role] += tokens;
     }
   }
   const used = stats.contextUsage.tokens;
@@ -336,10 +399,21 @@ function applyDisabledTools(): void {
 
 // Rebuilt only when the session gains entries: snapshots are sent at every message boundary.
 let treeCache: { count: number; index: TreeIndex } | undefined;
+// Run timings only change when the session gains entries (a run-end marker, or navigation's
+// leave/nav markers), which is exactly when the tree index rebuilds.
+let runTimingsCache: { count: number; value: RunTiming[] } | undefined;
 
 function treeIndex(entries: EntryLike[]): TreeIndex {
   if (treeCache?.count !== entries.length) treeCache = { count: entries.length, index: buildTreeIndex(entries) };
   return treeCache.index;
+}
+
+/** The roles that reach the transcript; mirrors the gate at the top of normalizeMessage. */
+function visibleRole(raw: unknown): NormalizedMessage["role"] | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const rawRole = String((raw as Record<string, unknown>).role ?? "system");
+  const role = rawRole === "toolResult" ? "tool" : rawRole;
+  return role === "user" || role === "assistant" || role === "tool" || role === "system" ? role : undefined;
 }
 
 /**
@@ -347,44 +421,94 @@ function treeIndex(entries: EntryLike[]): TreeIndex {
  * objects on its session entries, so each one maps to its entry by identity, the same way image
  * previews are keyed. A message that has just finished can be in state a moment before Pi saves
  * it; it goes without an entry id until the next snapshot.
+ *
+ * Each message's normalized form is cached by its raw object and reused verbatim while the
+ * entry id, position, and derived tree annotations hold steady, so unchanged messages keep
+ * their object identity across emissions and the diff against the last sent state is
+ * O(changes). Cached objects are never mutated; any change rebuilds from scratch.
  */
 function transcriptMessages(path: EntryLike[], index: TreeIndex): NormalizedMessage[] {
   if (!session) return [];
   const entryIds = new Map<unknown, string>();
   for (const entry of path) if (entry.type === "message") entryIds.set(entry.message, entry.id);
   const turns = turnsOnPath(path);
-  const messages: NormalizedMessage[] = [];
-  const lastAssistantOfTurn = new Map<string, NormalizedMessage>();
+
+  interface Row {
+    raw: unknown;
+    position: number;
+    entryId: string | undefined;
+    role: NormalizedMessage["role"];
+    /** Assistant messages: the user entry id their turn answers to. */
+    userEntryId: string | undefined;
+    versions: MessageVersions | undefined;
+    checkpoint: CheckpointRef | undefined;
+    turn: TurnInfo | undefined;
+  }
+  const rows: Row[] = [];
   let currentUser: string | undefined;
   session.messages.forEach((raw, position) => {
-    const message = normalizeMessage(raw, position);
-    if (!message) return;
+    const role = visibleRole(raw);
+    if (!role) return;
     const entryId = entryIds.get(raw);
-    if (entryId) {
-      message.entryId = entryId;
-      message.id = entryId;
-    }
-    if (message.role === "user") {
+    const row: Row = { raw, position, entryId, role, userEntryId: undefined, versions: undefined, checkpoint: undefined, turn: undefined };
+    if (role === "user") {
       currentUser = entryId;
       if (entryId) {
         const versions = versionsOf(index, entryId);
-        if (versions && versions.total > 1) message.versions = versions;
+        if (versions && versions.total > 1) row.versions = versions;
         const checkpoint = checkpointBefore(index, entryId);
-        if (checkpoint) message.checkpoint = checkpoint;
+        if (checkpoint) row.checkpoint = checkpoint;
       }
-    } else if (message.role === "assistant" && currentUser) {
-      lastAssistantOfTurn.set(currentUser, message);
+    } else if (role === "assistant") {
+      row.userEntryId = currentUser;
     }
-    messages.push(message);
+    rows.push(row);
   });
-  for (const [userEntryId, message] of lastAssistantOfTurn) {
-    const turn = turns.get(userEntryId);
-    if (turn) message.turn = turn;
+  // Only the last assistant message of a turn carries the turn, and a newer answer strips it
+  // from the previous one, so this is decided per emission rather than cached per message.
+  const seenTurns = new Set<string>();
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i];
+    if (row.role === "assistant" && row.userEntryId && !seenTurns.has(row.userEntryId)) {
+      seenTurns.add(row.userEntryId);
+      row.turn = turns.get(row.userEntryId);
+    }
   }
-  return messages;
+
+  return rows.map((row): NormalizedMessage | null => {
+    const cached = row.raw === streamingMessage ? undefined : normalizedCache.get(row.raw as object);
+    if (
+      cached
+      && cached.entryId === row.entryId
+      && (row.entryId !== undefined || cached.position === row.position)
+      && sameVersions(cached.versions, row.versions)
+      && sameCheckpoint(cached.checkpoint, row.checkpoint)
+      && sameTurn(cached.turn, row.turn)
+    ) {
+      return cached.message;
+    }
+    const message = normalizeMessage(row.raw, row.position);
+    if (!message) return null;
+    if (row.entryId) {
+      message.entryId = row.entryId;
+      message.id = row.entryId;
+    }
+    if (row.versions) message.versions = row.versions;
+    if (row.checkpoint) message.checkpoint = row.checkpoint;
+    if (row.turn) message.turn = row.turn;
+    normalizedCache.set(row.raw as object, {
+      message,
+      entryId: row.entryId,
+      position: row.position,
+      versions: row.versions,
+      checkpoint: row.checkpoint,
+      turn: row.turn
+    });
+    return message;
+  }).filter((message): message is NormalizedMessage => message !== null);
 }
 
-function getSnapshot(): SessionSnapshot {
+function getSnapshot(rev: number): SessionSnapshot {
   if (!session) throw new Error("Worker is not initialized");
   const stats = session.getSessionStats();
   const model = session.model;
@@ -393,11 +517,18 @@ function getSnapshot(): SessionSnapshot {
   const messages = transcriptMessages(path, index);
   const visibleUsers = messages.filter((message) => message.role === "user" && message.entryId);
   const leaf = session.sessionManager.getLeafEntry() as EntryLike | undefined;
+  if (!runTimingsCache || runTimingsCache.count !== treeCache?.count) {
+    runTimingsCache = {
+      count: treeCache?.count ?? 0,
+      value: resolveRunTimings(path, visibleUsers.map((message) => message.entryId as string), visibleUsers.map((message) => message.id))
+    };
+  }
   return {
+    rev,
     sessionId: session.sessionId,
     sessionFile: session.sessionFile,
     messages,
-    runTimings: resolveRunTimings(path, visibleUsers.map((message) => message.entryId as string), visibleUsers.map((message) => message.id)),
+    runTimings: runTimingsCache.value,
     activeRun: activeRun ? { runId: activeRun.runId, startedAt: activeRun.startedAt } : undefined,
     tree: { leafId: leaf?.id ?? null, undo: undoTarget(leaf) },
     stats: {
@@ -435,16 +566,100 @@ function finalizeActiveRun(): void {
   });
 }
 
-function emitSnapshot(): void {
+/** The last state the host was told about; boundary emissions diff against it. */
+interface EmittedState {
+  messages: NormalizedMessage[];
+  sessionFile?: string;
+  runTimings: RunTiming[];
+  activeRun?: { runId: string; startedAt: number };
+  planState?: PlanState;
+  todoState?: TodoState;
+  stats: SessionSnapshot["stats"];
+  tree: SessionSnapshot["tree"];
+}
+let emitted: EmittedState | undefined;
+let snapshotRev = 0;
+// Set when the next emission must be a full snapshot regardless of the diff (compaction).
+let forceFullSnapshot = false;
+
+function recordEmitted(snapshot: SessionSnapshot): void {
+  emitted = {
+    messages: snapshot.messages,
+    sessionFile: snapshot.sessionFile,
+    runTimings: snapshot.runTimings,
+    activeRun: snapshot.activeRun,
+    planState: snapshot.planState,
+    todoState: snapshot.todoState,
+    stats: snapshot.stats,
+    tree: snapshot.tree
+  };
+}
+
+function emitSnapshot(as: "snapshot" | "ready" = "snapshot"): void {
   if (!taskId || !session) return;
-  send({ type: "snapshot", taskId, snapshot: getSnapshot() });
+  const snapshot = getSnapshot(++snapshotRev);
+  recordEmitted(snapshot);
+  send({ type: as, taskId, snapshot });
+}
+
+/**
+ * A boundary emission: the session is re-derived from the normalization cache and diffed
+ * against what the host last received. Only changed messages and scalars go out as a
+ * `snapshot_delta`; a diff the protocol cannot express falls back to a full snapshot, and an
+ * entirely empty diff sends nothing.
+ */
+function emitBoundary(): void {
+  if (!taskId || !session) return;
+  if (!emitted || forceFullSnapshot) {
+    forceFullSnapshot = false;
+    emitSnapshot();
+    return;
+  }
+  const snapshot = getSnapshot(snapshotRev);
+  const diff = diffMessages(emitted.messages, snapshot.messages);
+  if (!diff) {
+    emitSnapshot();
+    return;
+  }
+  const planState = samePlanState(emitted.planState, snapshot.planState) ? undefined : snapshot.planState;
+  const todoState = sameTodoState(emitted.todoState, snapshot.todoState) ? undefined : snapshot.todoState;
+  const runTimings = sameRunTimings(emitted.runTimings, snapshot.runTimings) ? undefined : snapshot.runTimings;
+  const sessionFile = emitted.sessionFile === snapshot.sessionFile ? undefined : snapshot.sessionFile;
+  const activeRun = emitted.activeRun?.runId === snapshot.activeRun?.runId
+    && emitted.activeRun?.startedAt === snapshot.activeRun?.startedAt
+    ? undefined
+    : snapshot.activeRun ?? null;
+  if (
+    diff.upserts.length === 0 && diff.removed.length === 0
+    && planState === undefined && todoState === undefined && runTimings === undefined
+    && sessionFile === undefined && activeRun === undefined
+    && sameStats(emitted.stats, snapshot.stats) && sameTree(emitted.tree, snapshot.tree)
+  ) return;
+  snapshotRev += 1;
+  recordEmitted(snapshot);
+  send({
+    type: "snapshot_delta",
+    taskId,
+    delta: {
+      rev: snapshotRev,
+      upserts: diff.upserts,
+      removed: diff.removed,
+      ...(runTimings !== undefined ? { runTimings } : {}),
+      ...(activeRun !== undefined ? { activeRun } : {}),
+      tree: snapshot.tree,
+      stats: snapshot.stats,
+      ...(sessionFile !== undefined ? { sessionFile } : {}),
+      ...(planState !== undefined ? { planState } : {}),
+      ...(todoState !== undefined ? { todoState } : {})
+    }
+  });
 }
 
 function scheduleSnapshot(): void {
   if (snapshotTimer) return;
   snapshotTimer = setTimeout(() => {
     snapshotTimer = undefined;
-    emitSnapshot();
+    emitBoundary();
   }, 32);
 }
 
@@ -474,6 +689,7 @@ function dropPartial(): void {
   if (partialTimer) clearTimeout(partialTimer);
   partialTimer = undefined;
   pendingPartial = undefined;
+  streamingMessage = undefined;
 }
 
 /**
@@ -764,6 +980,9 @@ async function initialize(command: InitCommand): Promise<void> {
       }
     }
     if (eventType === "message_update") {
+      // The streaming message mutates in place, so it must never be served from the cache.
+      streamingMessage = value.message;
+      if (value.message && typeof value.message === "object") normalizedCache.delete(value.message as object);
       schedulePartial(value.message);
     } else if (
       eventType === "message_start" ||
@@ -772,6 +991,13 @@ async function initialize(command: InitCommand): Promise<void> {
       eventType === "compaction_end"
     ) {
       dropPartial();
+      if (eventType === "message_start" && value.message && typeof value.message === "object") {
+        streamingMessage = value.message;
+        normalizedCache.delete(value.message as object);
+      }
+      // Compaction rewrites the context wholesale; the next emission cannot assume the
+      // message list is diffable, so it goes out whole.
+      if (eventType === "compaction_end") forceFullSnapshot = true;
       scheduleSnapshot();
     }
     if (eventType === "agent_settled") {
@@ -779,11 +1005,15 @@ async function initialize(command: InitCommand): Promise<void> {
       finalizeActiveRun();
       activeRun = undefined;
       dropPartial();
-      emitSnapshot();
+      emitBoundary();
       send({ type: "run_state", taskId: command.taskId, runId: settledRunId, state: "idle" });
+      // Pi persists a just-settled message right around the settle event, so its entry id can
+      // arrive one emission late. A trailing re-check picks it up — and sends nothing at all
+      // when nothing came of it.
+      scheduleSnapshot();
     }
   });
-  send({ type: "ready", taskId: command.taskId, snapshot: getSnapshot() });
+  emitSnapshot("ready");
 }
 
 function runStartedAt(requested: number | undefined): number {
@@ -851,7 +1081,7 @@ async function runPrompt(
     send({ type: "run_state", taskId, runId, state: "idle" });
   }
   stopRequested = false;
-  emitSnapshot();
+  emitBoundary();
 }
 
 /**

@@ -9,6 +9,27 @@ import { afterEach, describe, expect, it } from "vitest";
 
 interface Checkpoint { id: string; head?: string }
 
+type SnapshotView = {
+  sessionFile?: string;
+  messages: Array<{
+    id?: string;
+    role?: string;
+    timestamp?: number;
+    blocks: Array<{ type: string; text?: string; toolName?: string; details?: unknown; imageId?: string; thumbnail?: string; mimeType?: string }>;
+    entryId?: string;
+    versions?: { index: number; total: number; previous?: string; next?: string; group: string };
+    checkpoint?: Checkpoint;
+    turn?: { userEntryId: string; endEntryId: string; after?: Checkpoint };
+  }>;
+  tree?: { leafId: string | null; undo?: string };
+  runTimings?: Array<{ userMessageId: string; durationMs: number }>;
+  activeRun?: { runId: string; startedAt: number };
+  tools?: Array<{ name: string; description: string; source: { kind: string; packageId?: string }; available: boolean; unavailableReason?: string }>;
+  activeTools?: string[];
+  planState?: { mode: string; phase: string; plan?: string };
+  todoState?: { tasks: Array<{ id: number; subject: string; status: string }> };
+};
+
 interface Output {
   type: string;
   id?: string;
@@ -33,31 +54,32 @@ interface Output {
   questions?: Array<{ id: string; header: string; question: string; multiSelect?: boolean; options: Array<{ label: string; description: string }> }>;
   tasks?: Array<{ id: number; subject: string; status: string; activeForm?: string; blockedBy?: number[] }>;
   errors?: Array<{ path: string; error: string }>;
-  snapshot?: {
+  snapshot?: SnapshotView;
+  /** Harness-attached: the merged transcript state as of this output (not from the worker). */
+  view?: SnapshotView;
+  delta?: {
+    rev: number;
+    upserts: SnapshotView["messages"];
+    removed: string[];
+    runTimings?: SnapshotView["runTimings"];
+    activeRun?: { runId: string; startedAt: number } | null;
+    tree?: SnapshotView["tree"];
     sessionFile?: string;
-    messages: Array<{
-      id?: string;
-      role?: string;
-      timestamp?: number;
-      blocks: Array<{ type: string; text?: string; toolName?: string; details?: unknown; imageId?: string; thumbnail?: string; mimeType?: string }>;
-      entryId?: string;
-      versions?: { index: number; total: number; previous?: string; next?: string; group: string };
-      checkpoint?: Checkpoint;
-      turn?: { userEntryId: string; endEntryId: string; after?: Checkpoint };
-    }>;
-    tree?: { leafId: string | null; undo?: string };
-    runTimings?: Array<{ userMessageId: string; durationMs: number }>;
-    activeRun?: { runId: string; startedAt: number };
-    tools?: Array<{ name: string; description: string; source: { kind: string; packageId?: string }; available: boolean; unavailableReason?: string }>;
-    activeTools?: string[];
-    planState?: { mode: string; phase: string; plan?: string };
-    todoState?: { tasks: Array<{ id: number; subject: string; status: string }> };
+    planState?: SnapshotView["planState"];
+    todoState?: SnapshotView["todoState"];
   };
+}
+
+/** Boundary emissions arrive as full snapshots or as deltas; `worker.view` holds the merged state. */
+function emitted(output: Output): boolean {
+  return output.type === "snapshot" || output.type === "snapshot_delta";
 }
 
 class WorkerHarness {
   readonly child: ChildProcessWithoutNullStreams;
   readonly outputs: Output[] = [];
+  /** The transcript state after applying every snapshot and delta seen so far. */
+  view: SnapshotView | undefined;
   stderr = "";
   private waiters: Array<() => void> = [];
 
@@ -68,10 +90,40 @@ class WorkerHarness {
       stdio: ["pipe", "pipe", "pipe"]
     });
     createInterface({ input: this.child.stdout }).on("line", (line) => {
-      this.outputs.push(JSON.parse(line) as Output);
+      const output = JSON.parse(line) as Output;
+      this.outputs.push(output);
+      this.applyOutput(output);
+      // Predicates must see the state as of the output they are matched against, not the
+      // newest state, or an early output can satisfy a condition produced by a later one.
+      output.view = this.view;
       for (const notify of this.waiters.splice(0)) notify();
     });
     this.child.stderr.on("data", (chunk: Buffer) => { this.stderr += chunk.toString("utf8"); });
+  }
+
+  /** Mirrors the renderer's delta application, so assertions can treat both kinds alike. */
+  private applyOutput(output: Output): void {
+    if (output.type === "ready" || output.type === "snapshot") {
+      this.view = output.snapshot;
+    } else if (output.type === "snapshot_delta" && output.delta && this.view) {
+      const removed = new Set(output.delta.removed);
+      const messages = this.view.messages.filter((entry) => !removed.has(entry.id));
+      for (const upsert of output.delta.upserts) {
+        const index = messages.findIndex((entry) => entry.id === upsert.id);
+        if (index >= 0) messages[index] = upsert;
+        else messages.push(upsert);
+      }
+      this.view = {
+        ...this.view,
+        messages,
+        runTimings: output.delta.runTimings ?? this.view.runTimings,
+        activeRun: output.delta.activeRun === undefined ? this.view.activeRun : output.delta.activeRun ?? undefined,
+        tree: output.delta.tree ?? this.view.tree,
+        sessionFile: output.delta.sessionFile ?? this.view.sessionFile,
+        planState: output.delta.planState ?? this.view.planState,
+        todoState: output.delta.todoState ?? this.view.todoState
+      };
+    }
   }
 
   send(value: unknown): void {
@@ -390,7 +442,7 @@ describe("Pi worker integration", () => {
     expect(answered.level).toBe("info");
 
     // And the prompt still finishes normally.
-    await worker.waitFor((output) => output.type === "snapshot" && output.snapshot?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha.")) === true);
+    await worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha.")) === true);
     expect(worker.child.exitCode).toBeNull();
   });
 
@@ -422,7 +474,7 @@ describe("Pi worker integration", () => {
     expect(ready.snapshot?.activeTools).not.toContain("late_tool");
 
     worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "Go." });
-    await worker.waitFor((output) => output.type === "snapshot" && output.snapshot?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha.")) === true);
+    await worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha.")) === true);
     const offered = (provider.requests[0].body.tools as Array<{ function: { name: string } }> ?? []).map((tool) => tool.function.name);
     expect(offered).not.toContain("late_tool");
   });
@@ -459,7 +511,7 @@ describe("Pi worker integration", () => {
     expect(catalog.some((tool) => tool.name === "untrusted_tool")).toBe(false);
 
     worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "Go." });
-    await worker.waitFor((output) => output.type === "snapshot" && output.snapshot?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha.")) === true);
+    await worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha.")) === true);
 
     const offered = (provider.requests[0].body.tools as Array<{ function: { name: string } }> ?? []).map((tool) => tool.function.name);
     // The regression that matters: a hard `tools` allowlist used to erase this from the registry.
@@ -493,7 +545,7 @@ describe("Pi worker integration", () => {
     }
 
     worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "Create the fixture." });
-    await worker.waitFor((output) => output.type === "snapshot" && output.snapshot?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha.")) === true);
+    await worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha.")) === true);
 
     const offered = (request: (typeof provider.requests)[number]) =>
       (request.body.tools as Array<{ function: { name: string } }> ?? []).map((tool) => tool.function.name).sort();
@@ -502,7 +554,7 @@ describe("Pi worker integration", () => {
     // Toggling tools takes effect on the next turn with no worker restart. The wackcode
     // tools are exempt from the denylist, so six tools stay active.
     worker.send({ id: crypto.randomUUID(), type: "set_tools", disabledTools: ["bash", "grep", "ls", "find"] });
-    await worker.waitFor((output) => output.type === "snapshot" && output.snapshot?.activeTools?.length === 6);
+    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.length === 6);
     // `find`/`grep` availability varies by host, so assert the five that never depend on a binary.
     const beforeSecondRun = provider.requests.length;
     worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-2", message: "Again." });
@@ -527,8 +579,8 @@ describe("Pi worker integration", () => {
     alpha.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "alpha-run", message: "Create the fixture." });
     beta.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "beta-run", message: "Create the fixture." });
     await Promise.all([
-      alpha.worker.waitFor((output) => output.type === "snapshot" && output.snapshot?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha.")) === true),
-      beta.worker.waitFor((output) => output.type === "snapshot" && output.snapshot?.messages.some((message) => message.blocks.some((block) => block.text === "Finished beta.")) === true)
+      alpha.worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha.")) === true),
+      beta.worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) => message.blocks.some((block) => block.text === "Finished beta.")) === true)
     ]);
 
     expect(await readFile(join(alphaRoot, "alpha.txt"), "utf8")).toBe("changed by alpha\n");
@@ -543,7 +595,7 @@ describe("Pi worker integration", () => {
     expect(JSON.stringify(alpha.worker.outputs) + alpha.worker.stderr).not.toContain("alpha-secret");
     expect(JSON.stringify(beta.worker.outputs) + beta.worker.stderr).not.toContain("beta-secret");
 
-    const savedSession = alpha.worker.outputs.findLast((output) => output.snapshot?.sessionFile)?.snapshot?.sessionFile;
+    const savedSession = alpha.worker.view?.sessionFile;
     expect(savedSession).toBeTruthy();
     await alpha.worker.shutdown();
     const requestCount = provider.requests.length;
@@ -564,12 +616,50 @@ describe("Pi worker integration", () => {
 
     await worker.waitFor((output) => output.type === "partial", 8_000);
     const firstPartial = worker.outputs.findIndex((output) => output.type === "partial");
-    const finalSnapshot = await worker.waitFor((output) =>
-      output.type === "snapshot" && output.snapshot?.messages.some((message) =>
+    const finalSettled = await worker.waitFor((output) =>
+      emitted(output) && output.view?.messages.some((message) =>
         message.blocks.some((block) => block.text === "Streaming the answer in pieces.")));
-    const finalIndex = worker.outputs.indexOf(finalSnapshot);
+    const finalIndex = worker.outputs.indexOf(finalSettled);
     expect(firstPartial).toBeGreaterThan(-1);
     expect(firstPartial).toBeLessThan(finalIndex);
+  });
+
+  it("sends message boundaries as deltas chained by revision, not whole-session snapshots", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-deltas-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker, ready } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "deltas-task");
+    cleanup.push(() => worker.shutdown());
+    const readyRev = ready.snapshot?.rev ?? 0;
+    expect(readyRev).toBeGreaterThan(0);
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "delta-run", message: "Create the fixture." });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === "delta-run");
+
+    // The whole run streamed as deltas: no boundary re-sent the transcript whole.
+    const runStart = worker.outputs.findIndex((output) => output.type === "run_state" && output.state === "running" && output.runId === "delta-run");
+    const runEnd = worker.outputs.findIndex((output) => output.type === "run_state" && output.state === "idle" && output.runId === "delta-run");
+    const duringRun = worker.outputs.slice(runStart, runEnd);
+    expect(duringRun.some((output) => output.type === "snapshot_delta")).toBe(true);
+    expect(duringRun.some((output) => output.type === "snapshot")).toBe(false);
+
+    // Every emission chains onto the previous by exactly one revision.
+    let lastRev = readyRev;
+    for (const output of worker.outputs) {
+      if (!emitted(output)) continue;
+      const rev = output.snapshot?.rev ?? output.delta?.rev ?? 0;
+      expect(rev).toBe(lastRev + 1);
+      lastRev = rev;
+    }
+
+    // Applying the chain reproduces exactly what a fresh full snapshot says.
+    worker.send({ id: crypto.randomUUID(), type: "snapshot" });
+    const full = await worker.waitFor((output) => output.type === "snapshot" && (output.snapshot?.rev ?? 0) > lastRev);
+    expect(worker.view?.messages.map((message) => message.id)).toEqual(full.snapshot?.messages.map((message) => message.id));
+    expect(worker.view?.runTimings).toEqual(full.snapshot?.runTimings);
+    expect(worker.view?.tree).toEqual(full.snapshot?.tree);
+    expect(worker.view?.planState).toEqual(full.snapshot?.planState);
   });
 
   it("forwards accumulated tool output before the final result", async () => {
@@ -586,7 +676,7 @@ describe("Pi worker integration", () => {
     const second = await worker.waitFor((output) =>
       output.type === "activity" && output.event === "tool_execution_update" && output.detail?.text?.includes("second line") === true);
     const finished = await worker.waitFor((output) =>
-      output.type === "snapshot" && output.snapshot?.messages.some((message) =>
+      emitted(output) && output.view?.messages.some((message) =>
         message.blocks.some((block) => block.type === "tool-result" && block.text?.includes("second line"))) === true);
 
     expect(first.detail?.toolCallId).toBe("call-beta");
@@ -609,10 +699,10 @@ describe("Pi worker integration", () => {
     await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
     expect(worker.outputs.some((output) => output.type === "run_state" && output.state === "stopping")).toBe(true);
     expect(worker.outputs.some((output) => output.type === "worker_error")).toBe(false);
-    const stopped = worker.outputs.findLast((output) => output.type === "snapshot" && output.snapshot?.runTimings?.length === 1);
-    expect(stopped?.snapshot?.runTimings).toHaveLength(1);
-    const user = stopped?.snapshot?.messages.find((message) => message.role === "user");
-    expect(stopped?.snapshot?.runTimings?.[0]?.userMessageId).toBe(user?.id);
+    const stopped = worker.view;
+    expect(stopped?.runTimings).toHaveLength(1);
+    const user = stopped?.messages.find((message) => message.role === "user");
+    expect(stopped?.runTimings?.[0]?.userMessageId).toBe(user?.id);
   });
 });
 
@@ -627,20 +717,22 @@ describe("built-in extensions", () => {
 
     const firstStartedAt = Date.now() - 5_000;
     first.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "timing-run-1", startedAt: firstStartedAt, message: "First turn." });
-    const firstDone = await first.worker.waitFor((output) => output.type === "snapshot" && output.snapshot?.runTimings?.length === 1);
+    await first.worker.waitFor((output) => emitted(output) && output.view?.runTimings?.length === 1);
     await first.worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === "timing-run-1");
-    const firstUser = firstDone.snapshot?.messages.find((message) => message.role === "user");
-    expect(firstDone.snapshot?.runTimings?.[0]?.userMessageId).toBe(firstUser?.id);
-    expect(firstDone.snapshot?.runTimings?.[0]?.durationMs).toBeGreaterThanOrEqual(5_000);
-    expect(firstDone.snapshot?.activeRun).toBeUndefined();
+    const firstDone = first.worker.view;
+    const firstUser = firstDone?.messages.find((message) => message.role === "user");
+    expect(firstDone?.runTimings?.[0]?.userMessageId).toBe(firstUser?.id);
+    expect(firstDone?.runTimings?.[0]?.durationMs).toBeGreaterThanOrEqual(5_000);
+    expect(firstDone?.activeRun).toBeUndefined();
 
     first.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "timing-run-2", startedAt: Date.now() - 2_000, message: "Second turn." });
-    const bothDone = await first.worker.waitFor((output) => output.type === "snapshot" && output.snapshot?.runTimings?.length === 2);
+    await first.worker.waitFor((output) => emitted(output) && output.view?.runTimings?.length === 2);
     await first.worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === "timing-run-2");
-    const userIds = bothDone.snapshot?.messages.filter((message) => message.role === "user").map((message) => message.id);
-    expect(bothDone.snapshot?.runTimings?.map((timing) => timing.userMessageId)).toEqual(userIds);
+    const bothDone = first.worker.view;
+    const userIds = bothDone?.messages.filter((message) => message.role === "user").map((message) => message.id);
+    expect(bothDone?.runTimings?.map((timing) => timing.userMessageId)).toEqual(userIds);
 
-    const sessionFile = bothDone.snapshot?.sessionFile;
+    const sessionFile = bothDone?.sessionFile;
     expect(sessionFile).toBeTruthy();
     const savedSession = await readFile(sessionFile as string, "utf8");
     expect(savedSession.match(/wackcode-run-timing/g)).toHaveLength(2);
@@ -749,11 +841,11 @@ describe("built-in extensions", () => {
 
     // ...while the session's tool result embeds the full list — that snapshot is the
     // whole persistence layer.
-    const withTodo = await first.worker.waitFor((output) =>
-      output.type === "snapshot" &&
-      output.snapshot?.messages.some((message) => message.blocks.some((block) => block.toolName === "todo" && block.details !== undefined)) === true
+    await first.worker.waitFor((output) =>
+      emitted(output) &&
+      output.view?.messages.some((message) => message.blocks.some((block) => block.toolName === "todo" && block.details !== undefined)) === true
     );
-    const details = withTodo.snapshot?.messages
+    const details = first.worker.view?.messages
       .flatMap((message) => message.blocks)
       .find((block) => block.toolName === "todo" && block.details !== undefined)
       ?.details as { version?: number; tasks?: unknown[]; nextId?: number } | undefined;
@@ -898,13 +990,18 @@ describe("image attachments", () => {
     expect(sent.endsWith(original)).toBe(false);
     expect(userParts(provider.requests[0]).some((part) => part.type === "text" && part.text === "What is in this image?")).toBe(true);
 
-    const previewed = await worker.waitFor((output) => output.type === "snapshot" && output.snapshot?.messages.some((message) =>
+    await worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) =>
       message.blocks.some((block) => block.type === "image" && block.thumbnail?.startsWith("data:image/"))) === true);
-    const user = previewed.snapshot?.messages.find((message) => message.role === "user");
+    const user = worker.view?.messages.find((message) => message.role === "user");
     const image = user?.blocks.find((block) => block.type === "image");
     expect(image?.imageId).toBeTruthy();
+    // The preview lands as one targeted upsert, not another whole-session snapshot.
+    const thumbnailDelta = worker.outputs.find((output) =>
+      output.type === "snapshot_delta" && output.delta?.upserts.some((upsert) =>
+        upsert.blocks.some((block) => block.type === "image" && Boolean(block.thumbnail))));
+    expect(thumbnailDelta?.delta?.upserts).toHaveLength(1);
     // Snapshots carry the preview only, never the multi-kilobyte original.
-    expect(JSON.stringify(previewed)).not.toContain(original);
+    expect(JSON.stringify(worker.view)).not.toContain(original);
     expect(user?.blocks.find((block) => block.type === "text")?.text).toBe("What is in this image?");
   });
 
@@ -938,7 +1035,7 @@ describe("image attachments", () => {
       images: [{ type: "image", data: solidPng(8, 8), mimeType: "image/png" }]
     });
     await first.worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
-    const sessionFile = first.worker.outputs.findLast((output) => output.snapshot?.sessionFile)?.snapshot?.sessionFile;
+    const sessionFile = first.worker.view?.sessionFile;
     expect(sessionFile).toBeTruthy();
     // Stored in Pi's own format, so the session stays readable by Pi itself.
     const stored = await readFile(sessionFile as string, "utf8");
@@ -953,7 +1050,7 @@ describe("image attachments", () => {
     const restoredUser = second.ready.snapshot?.messages.find((message) => message.role === "user");
     expect(restoredUser?.blocks.some((block) => block.type === "image" && block.imageId)).toBe(true);
     second.worker.send({ id: crypto.randomUUID(), type: "snapshot" });
-    await second.worker.waitFor((output) => output.type === "snapshot" && output.snapshot?.messages.some((message) =>
+    await second.worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) =>
       message.blocks.some((block) => block.type === "image" && Boolean(block.thumbnail))) === true);
   });
 
@@ -982,11 +1079,10 @@ describe("session tree", () => {
   const TREE_B = "b".repeat(40);
   const TREE_C = "c".repeat(40);
 
-  async function settle(worker: WorkerHarness, runId: string): Promise<NonNullable<Output["snapshot"]>> {
+  async function settle(worker: WorkerHarness, runId: string): Promise<SnapshotView> {
     await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === runId);
-    const snapshot = [...worker.outputs].reverse().find((output) => output.type === "snapshot")?.snapshot;
-    if (!snapshot) throw new Error("No snapshot after the run");
-    return snapshot;
+    if (!worker.view) throw new Error("No snapshot after the run");
+    return worker.view;
   }
 
   async function request(worker: WorkerHarness, command: Record<string, unknown>): Promise<Output> {
@@ -995,8 +1091,8 @@ describe("session tree", () => {
     return worker.waitFor((output) => output.type === "response" && output.id === id);
   }
 
-  function users(snapshot: NonNullable<Output["snapshot"]>) {
-    return snapshot.messages.filter((message) => message.role === "user");
+  function users(snapshot: SnapshotView | undefined) {
+    return (snapshot?.messages ?? []).filter((message) => message.role === "user");
   }
 
   function lastUserText(provider: MockProvider): string {
@@ -1041,8 +1137,8 @@ describe("session tree", () => {
     expect(switched.success).toBe(true);
     // The first version was left with TREE_B when it was retried.
     expect(switched.result?.files).toEqual({ id: TREE_B });
-    const back = [...worker.outputs].reverse().find((output) => output.type === "snapshot")?.snapshot;
-    const [shown] = users(back!);
+    const back = worker.view;
+    const [shown] = users(back);
     expect(shown.entryId).toBe(original.entryId);
     expect(shown.versions).toMatchObject({ index: 0, total: 2, next: retried.entryId });
     expect(back?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha."))).toBe(true);
@@ -1070,8 +1166,9 @@ describe("session tree", () => {
     const rewound = await request(first.worker, { type: "navigate", entryId: editedMessage.entryId, target: "before", kind: "rewind" });
     expect(rewound.success).toBe(true);
     expect(rewound.result?.editorText).toBe("Edited request.");
-    const empty = [...first.worker.outputs].reverse().find((output) => output.type === "snapshot")?.snapshot;
-    expect(users(empty!)).toHaveLength(0);
+    const empty = first.worker.view;
+    expect(empty).toBeDefined();
+    expect(users(empty)).toHaveLength(0);
     expect(empty?.tree?.undo).toBeTruthy();
     const sessionFile = empty?.sessionFile as string;
     const requestsBefore = provider.requests.length;
@@ -1086,8 +1183,8 @@ describe("session tree", () => {
 
     const undone = await request(restored.worker, { type: "navigate", entryId: empty?.tree?.undo, target: "latest", kind: "undo" });
     expect(undone.success).toBe(true);
-    const back = [...restored.worker.outputs].reverse().find((output) => output.type === "snapshot")?.snapshot;
-    expect(users(back!).map((message) => message.entryId)).toEqual([editedMessage.entryId]);
+    const back = restored.worker.view;
+    expect(users(back).map((message) => message.entryId)).toEqual([editedMessage.entryId]);
     expect(back?.tree?.undo).toBeUndefined();
   });
 
@@ -1107,7 +1204,7 @@ describe("session tree", () => {
 
     const rewound = await request(worker, { type: "navigate", entryId: first.entryId, target: "before", kind: "rewind" });
     expect(rewound.success).toBe(true);
-    const snapshot = [...worker.outputs].reverse().find((output) => output.type === "snapshot")?.snapshot;
+    const snapshot = worker.view;
     expect(snapshot?.planState?.mode).toBe("build");
     expect([...worker.outputs].reverse().find((output) => output.type === "plan_state")?.mode).toBe("build");
     expect(snapshot?.activeTools).not.toContain("bash");

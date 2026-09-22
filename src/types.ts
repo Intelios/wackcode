@@ -341,6 +341,8 @@ export interface RunTiming {
 }
 
 export interface SessionSnapshot {
+  /** Bumped by every full snapshot and delta; lets the renderer chain deltas to a snapshot. */
+  rev: number;
   sessionId: string;
   sessionFile?: string;
   messages: NormalizedMessage[];
@@ -370,6 +372,31 @@ export interface SessionSnapshot {
   todoState?: TodoState;
 }
 
+/**
+ * An incremental snapshot: applies on top of the snapshot or delta carrying `rev - 1`. Removed
+ * ids go first, then each upsert replaces its message by id or appends when the id is new.
+ * Model, thinking level and tool fields only ride full snapshots.
+ */
+export interface SnapshotDelta {
+  rev: number;
+  /** New or changed messages, keyed by id. */
+  upserts: NormalizedMessage[];
+  /** Ids that left the transcript, applied before the upserts. */
+  removed: string[];
+  /** Present only when the field changed since the last emission; absent means unchanged. */
+  runTimings?: RunTiming[];
+  /** null clears the active run; absent leaves it unchanged. */
+  activeRun?: { runId: string; startedAt: number } | null;
+  tree: {
+    leafId: string | null;
+    undo?: string;
+  };
+  stats: SessionSnapshot["stats"];
+  sessionFile?: string;
+  planState?: PlanState;
+  todoState?: TodoState;
+}
+
 /** A question an extension asked, mirrored from the worker protocol. */
 export type ExtensionUIRequest = { taskId: string; requestId: string } & (
   | { method: "select"; title: string; options: string[] }
@@ -386,6 +413,7 @@ export interface ExtensionNotice {
 
 export type WorkerEvent =
   | { type: "ready" | "snapshot"; taskId: string; snapshot: SessionSnapshot }
+  | { type: "snapshot_delta"; taskId: string; delta: SnapshotDelta }
   | { type: "partial"; taskId: string; message: NormalizedMessage }
   | { type: "run_state"; taskId: string; runId?: string; startedAt?: number; state: TaskStatus }
   | { type: "activity"; taskId: string; event: string; detail?: Record<string, unknown> }

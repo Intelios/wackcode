@@ -4,7 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { api } from "./api";
 import { modelIsReady } from "./model-utils";
-import { titleFromPrompt } from "./chat-utils";
+import { titleFromPrompt, samePlanState, sameTodoState, applySnapshotDelta } from "./chat-utils";
 import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix } from "./tree-utils";
 import { pruneDisabledTools, sameToolCatalog } from "./tool-utils";
 import type {
@@ -176,7 +176,15 @@ export default function App() {
   }, [selectedGroupKey]);
 
   const patchTask = useCallback((taskId: string, patch: Partial<TaskRecord>) => {
-    setData((current) => ({ ...current, tasks: current.tasks.map((task) => task.id === taskId ? { ...task, ...patch } : task) }));
+    // Snapshots and run-state events patch tasks at a high cadence; an unchanged record keeps
+    // its object so Sidebar and ChatHeader skip re-rendering.
+    setData((current) => {
+      const target = current.tasks.find((task) => task.id === taskId);
+      if (!target) return current;
+      const changed = Object.keys(patch).some((key) => target[key as keyof TaskRecord] !== (patch as Record<string, unknown>)[key]);
+      if (!changed) return current;
+      return { ...current, tasks: current.tasks.map((task) => task.id === taskId ? { ...task, ...patch } : task) };
+    });
   }, []);
 
   const appendNotice = useCallback((taskId: string, entry: ExtensionNotice) => {
@@ -226,13 +234,41 @@ export default function App() {
       const taskId = payload.taskId;
       if (!taskId) return;
       if (payload.type === "ready" || payload.type === "snapshot") {
-        patchRuntime(taskId, { snapshot: payload.snapshot, activeRun: payload.snapshot.activeRun, planState: payload.snapshot.planState, todoState: payload.snapshot.todoState, partial: undefined, error: undefined });
-        if (payload.snapshot.planState) patchTask(taskId, { mode: payload.snapshot.planState.mode });
-        if (payload.snapshot.sessionFile) patchTask(taskId, { sessionFile: payload.snapshot.sessionFile });
-        const tools = payload.snapshot.tools;
+        const snapshot = payload.snapshot;
+        // Keep the previous plan/todo objects when they are unchanged: the transcript's message
+        // memos compare them by identity, and a fresh object per snapshot would re-render the
+        // whole transcript on every event.
+        setRuntimes((current) => {
+          const runtime = current[taskId];
+          const planState = samePlanState(runtime?.planState, snapshot.planState) ? runtime?.planState : snapshot.planState;
+          const todoState = sameTodoState(runtime?.todoState, snapshot.todoState) ? runtime?.todoState : snapshot.todoState;
+          return {
+            ...current,
+            [taskId]: { ...runtime, snapshot, activeRun: snapshot.activeRun, planState, todoState, partial: undefined, error: undefined }
+          };
+        });
+        if (snapshot.planState) patchTask(taskId, { mode: snapshot.planState.mode });
+        if (snapshot.sessionFile) patchTask(taskId, { sessionFile: snapshot.sessionFile });
+        const tools = snapshot.tools;
         if (tools) {
           setData((current) => sameToolCatalog(current.toolCatalog, tools) ? current : { ...current, toolCatalog: tools });
         }
+      } else if (payload.type === "snapshot_delta") {
+        setRuntimes((current) => {
+          const runtime = current[taskId];
+          const previous = runtime?.snapshot;
+          // Deltas chain onto the last full snapshot or delta; a gap means a frame went
+          // missing, so this one is dropped and the next full snapshot resynchronizes.
+          if (!previous || previous.rev + 1 !== payload.delta.rev) return current;
+          const snapshot = applySnapshotDelta(previous, payload.delta);
+          return {
+            ...current,
+            [taskId]: { ...runtime, snapshot, activeRun: snapshot.activeRun, planState: snapshot.planState, todoState: snapshot.todoState, partial: undefined, error: undefined }
+          };
+        });
+        const delta = payload.delta;
+        if (delta.planState) patchTask(taskId, { mode: delta.planState.mode });
+        if (delta.sessionFile) patchTask(taskId, { sessionFile: delta.sessionFile });
       } else if (payload.type === "partial") {
         patchRuntime(taskId, { partial: payload.message });
       } else if (payload.type === "run_state") {

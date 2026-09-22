@@ -128,6 +128,32 @@ function signature(message: NormalizedMessage, results: Map<string, NormalizedBl
   ]);
 }
 
+/**
+ * `signature` stringifies the whole message, which is O(transcript) when done for every
+ * message on every event. A message object's own content is immutable once the app holds it
+ * (the worker re-normalizes instead of mutating, and the delta merge reuses unchanged
+ * objects), so the signature is cached by message identity and only recomputed when one of
+ * its external inputs moves: the result block answering one of its tool calls, or that call's
+ * live stream text.
+ */
+const signatureCache = new WeakMap<NormalizedMessage, { deps: unknown[]; sig: string }>();
+
+function cachedSignature(message: NormalizedMessage, results: Map<string, NormalizedBlock>, liveToolText?: Record<string, string>): string {
+  const deps: unknown[] = [];
+  for (const block of message.blocks) {
+    if (block.type === "tool-call" && block.toolCallId) {
+      deps.push(results.get(block.toolCallId) ?? null, liveToolText?.[block.toolCallId] ?? null);
+    }
+  }
+  const cached = signatureCache.get(message);
+  if (cached && cached.deps.length === deps.length && cached.deps.every((dep, index) => dep === deps[index])) {
+    return cached.sig;
+  }
+  const sig = signature(message, results, liveToolText);
+  signatureCache.set(message, { deps, sig });
+  return sig;
+}
+
 interface MessageProps {
   message: NormalizedMessage;
   results: Map<string, NormalizedBlock>;
@@ -317,7 +343,7 @@ export function Transcript({ messages, partial, running, activity, activeRun, ru
                   running={running}
                   planState={planState}
                   onPlanAction={onPlanAction}
-                  sig={signature(message, results, liveToolText)}
+                  sig={cachedSignature(message, results, liveToolText)}
                   actionsEnabled={actionsEnabled}
                   retry={retry}
                   editing={editingId === message.id}

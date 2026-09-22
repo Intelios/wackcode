@@ -1,7 +1,7 @@
 use crate::{
     git,
     models::{
-        BootstrapPayload, CreateTaskInput, ExportPlanInput, GitChanges, ImageContent, ModelRecord, ProjectRecord,
+        BootstrapPayload, BuiltinModelSuggestion, CreateTaskInput, ExportPlanInput, GitChanges, ImageContent, ModelRecord, ProjectRecord,
         PromptInput, ExtensionUiResponseInput, InstallPackageInput, PackageRecord,
         PackageSearchResult, ProviderRecord, SaveProviderInput, SearchPackagesInput,
         SetPackageResourcesInput, SetTaskModeInput, SetToolConfigInput, TaskMode, TaskRecord,
@@ -145,6 +145,11 @@ pub async fn discover_models(
     ids.dedup();
     if ids.is_empty() { return Err("The endpoint returned no model IDs. You can still add one manually.".into()); }
     Ok(ids)
+}
+
+#[tauri::command]
+pub async fn list_builtin_models(app: AppHandle) -> Result<Vec<BuiltinModelSuggestion>, String> {
+    worker::list_builtin_models(&app).await
 }
 
 const NPM_REGISTRY: &str = "https://registry.npmjs.org";

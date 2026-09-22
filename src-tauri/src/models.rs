@@ -22,6 +22,22 @@ pub struct ModelRecord {
     pub vision: bool,
 }
 
+/// Local Pi catalogue metadata offered in Settings; never persisted with a connection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuiltinModelSuggestion {
+    pub source_provider: String,
+    pub source_api: String,
+    pub id: String,
+    pub name: String,
+    pub context_window: u64,
+    pub max_tokens: u64,
+    pub reasoning: bool,
+    pub thinking_levels: Vec<String>,
+    pub thinking_level_map: BTreeMap<String, Option<String>>,
+    pub vision: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderRecord {

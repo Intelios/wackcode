@@ -26,6 +26,7 @@ pub fn run() {
             commands::save_provider,
             commands::delete_provider,
             commands::discover_models,
+            commands::list_builtin_models,
             commands::set_tool_config,
             commands::list_packages,
             commands::refresh_packages,

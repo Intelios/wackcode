@@ -1,4 +1,4 @@
-use crate::{models::{PackageRecord, ProviderRecord, TaskMode, TaskRecord, TaskStatus, ToolCatalogEntry}, storage::MetadataState};
+use crate::{models::{BuiltinModelSuggestion, PackageRecord, ProviderRecord, TaskMode, TaskRecord, TaskStatus, ToolCatalogEntry}, storage::MetadataState};
 use nix::{sys::signal::{killpg, Signal}, unistd::Pid};
 use serde_json::{json, Value};
 use std::{collections::HashMap, path::PathBuf, process::Stdio, sync::{Arc, Mutex}};
@@ -288,6 +288,42 @@ fn manager_entry_path(app: &AppHandle) -> Result<PathBuf, String> {
     } else {
         Ok(app.path().resource_dir().map_err(|error| error.to_string())?.join("resources/worker/dist/manager.js"))
     }
+}
+
+fn catalog_entry_path(app: &AppHandle) -> Result<PathBuf, String> {
+    if cfg!(debug_assertions) {
+        Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist/catalog.js"))
+    } else {
+        Ok(app.path().resource_dir().map_err(|error| error.to_string())?.join("resources/worker/dist/catalog.js"))
+    }
+}
+
+/// Read only the static Pi catalogue in a short-lived, offline process without credentials.
+pub async fn list_builtin_models(app: &AppHandle) -> Result<Vec<BuiltinModelSuggestion>, String> {
+    let mut command = Command::new(node_executable_path()?);
+    command
+        .arg(catalog_entry_path(app)?)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .env("PI_TELEMETRY", "0")
+        .env("PI_SKIP_VERSION_CHECK", "1")
+        .env("PI_OFFLINE", "1");
+    for key in PROVIDER_ENVIRONMENT_KEYS { command.env_remove(key); }
+    let output = tokio::time::timeout(std::time::Duration::from_secs(15), command.output())
+        .await
+        .map_err(|_| "Reading the bundled Pi model catalogue timed out.".to_string())?
+        .map_err(|error| format!("Could not read the bundled Pi model catalogue: {error}"))?;
+    if !output.status.success() {
+        return Err(format!("Could not read the bundled Pi model catalogue: {}",
+            redact_and_limit(&String::from_utf8_lossy(&output.stderr))));
+    }
+    if output.stdout.len() > 2_000_000 {
+        return Err("The bundled Pi model catalogue is unexpectedly large.".into());
+    }
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Could not parse the bundled Pi model catalogue: {error}"))
 }
 
 /// The npm staged out of the pinned Node tarball by `scripts/prepare-runtime.mjs`. A packaged

@@ -1,11 +1,18 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ProviderRecord, ToolCatalogEntry } from "../types";
+import { api } from "../api";
+import type { BuiltinModelSuggestion, ProviderRecord, ToolCatalogEntry } from "../types";
 import { SettingsPage } from "./SettingsPage";
 
-vi.mock("../api", () => ({ api: { revealPath: vi.fn().mockResolvedValue(undefined) } }));
+vi.mock("../api", () => ({ api: {
+  revealPath: vi.fn().mockResolvedValue(undefined),
+  listBuiltinModels: vi.fn().mockResolvedValue([])
+} }));
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.mocked(api.listBuiltinModels).mockReset().mockResolvedValue([]);
+});
 
 const catalog: ToolCatalogEntry[] = [
   { name: "read", description: "Read a file", source: { kind: "builtin" }, available: true },
@@ -249,5 +256,93 @@ describe("SettingsPage model capabilities", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save connection" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(onSave.mock.calls[0][0].models[0].vision).toBe(true);
+  });
+});
+
+const flashSuggestion: BuiltinModelSuggestion = {
+  sourceProvider: "deepseek", sourceApi: "openai-completions", id: "deepseek-flash", name: "DeepSeek V4.1 Flash",
+  contextWindow: 1_000_000, maxTokens: 384_000, reasoning: true,
+  thinkingLevels: ["off", "low", "high", "max"],
+  thinkingLevelMap: { off: null, low: "low", high: "high", max: "max" }, vision: true
+};
+
+function renderModelSettings(provider: ProviderRecord = testProviders[0]) {
+  const onSave = vi.fn().mockImplementation(async (input) => ({ ...provider, models: input.models }));
+  const view = render(
+    <SettingsPage
+      providers={[provider]} packages={[]} toolCatalog={catalog} disabledTools={[]}
+      appDataPath="/tmp/wackcode" onClose={vi.fn()} onSave={onSave} onDelete={vi.fn()}
+      onSetDisabledTools={vi.fn()} onRefresh={vi.fn()} onInstall={vi.fn()} onTrust={vi.fn()}
+      onSearch={vi.fn()} onRemove={vi.fn()} onUpdate={vi.fn()} onSetResources={vi.fn()}
+    />
+  );
+  return { ...view, onSave };
+}
+
+describe("SettingsPage Pi catalogue suggestions", () => {
+  it("shows sourced matches and fills a blank manual model only after selection", async () => {
+    vi.mocked(api.listBuiltinModels).mockResolvedValue([
+      flashSuggestion,
+      { ...flashSuggestion, sourceProvider: "openrouter", id: "deepseek/deepseek-flash" }
+    ]);
+    const { onSave } = renderModelSettings();
+    fireEvent.click(screen.getByRole("button", { name: "Add manually" }));
+    const search = screen.getByRole("combobox", { name: /Find in Pi catalogue/ });
+    fireEvent.change(search, { target: { value: "Deepseek V4 Flash" } });
+    const options = await screen.findAllByRole("option");
+    expect(options).toHaveLength(2);
+    expect(options[0]).toHaveTextContent("deepseek · openai-completions · deepseek-flash");
+    expect(options[1]).toHaveTextContent("openrouter");
+    expect(screen.getByRole("textbox", { name: "Model ID" })).toHaveValue("");
+    expect(screen.getByRole("spinbutton", { name: "Context tokens" })).toHaveValue(null);
+    expect(onSave).not.toHaveBeenCalled();
+
+    fireEvent.click(options[0]);
+    expect(screen.getByRole("textbox", { name: "Model ID" })).toHaveValue("deepseek-flash");
+    expect(screen.getByRole("textbox", { name: "Display name" })).toHaveValue("DeepSeek V4.1 Flash");
+    expect(screen.getByRole("spinbutton", { name: "Context tokens" })).toHaveValue(1_000_000);
+    expect(screen.getByRole("spinbutton", { name: "Max output tokens" })).toHaveValue(384_000);
+    expect(screen.getByRole("switch", { name: /Vision for DeepSeek/ })).toHaveAttribute("aria-checked", "true");
+    expect(onSave).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save connection" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls[0][0].models[0].thinkingLevels).toEqual(["off", "low", "high", "max"]);
+  });
+
+  it("preserves a discovered provider ID and supports keyboard selection", async () => {
+    vi.mocked(api.listBuiltinModels).mockResolvedValue([flashSuggestion]);
+    const provider: ProviderRecord = {
+      ...testProviders[0], models: [{ id: "gateway/deepseek-flash", name: "gateway/deepseek-flash",
+        contextWindow: null, maxTokens: null, reasoning: false, thinkingLevels: ["off"],
+        thinkingLevelMap: { off: null }, vision: false }]
+    };
+    renderModelSettings(provider);
+    const search = screen.getByRole("combobox", { name: /Find in Pi catalogue/ });
+    fireEvent.change(search, { target: { value: "Deepseek V4 Flash" } });
+    await screen.findByRole("option");
+    fireEvent.keyDown(search, { key: "Escape" });
+    expect(screen.queryByRole("option")).not.toBeInTheDocument();
+    expect(screen.getByRole("spinbutton", { name: "Context tokens" })).toHaveValue(null);
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    expect(screen.getByRole("combobox", { name: /Find in Pi catalogue/ })).toHaveAttribute("aria-expanded", "true");
+    fireEvent.keyDown(search, { key: "Enter" });
+    expect(screen.getByRole("textbox", { name: "Model ID" })).toHaveValue("gateway/deepseek-flash");
+    expect(screen.getByRole("spinbutton", { name: "Context tokens" })).toHaveValue(1_000_000);
+  });
+
+  it("keeps manual entry available when there is no match or the catalogue fails", async () => {
+    const { unmount } = renderModelSettings();
+    fireEvent.click(screen.getByRole("button", { name: "Add manually" }));
+    fireEvent.change(screen.getByRole("combobox", { name: /Find in Pi catalogue/ }), { target: { value: "unknown" } });
+    expect(await screen.findByText(/No Pi catalogue matches/)).toBeInTheDocument();
+    unmount();
+
+    vi.mocked(api.listBuiltinModels).mockRejectedValue(new Error("Catalogue unavailable"));
+    renderModelSettings();
+    fireEvent.click(screen.getByRole("button", { name: "Add manually" }));
+    expect(await screen.findByText(/Could not load Pi catalogue: Error: Catalogue unavailable/)).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "Model ID" }), { target: { value: "my-model" } });
+    expect(screen.getByRole("textbox", { name: "Model ID" })).toHaveValue("my-model");
   });
 });

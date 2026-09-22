@@ -1,15 +1,18 @@
-import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { api } from "../api";
-import { mergeDiscoveredModels, modelIsReady } from "../model-utils";
+import { applyBuiltinModelSuggestion, mergeDiscoveredModels, modelIsReady, searchBuiltinModels } from "../model-utils";
 import { groupTools } from "../tool-utils";
-import type { ApiFormat, ModelRecord, PackageRecord, ProviderRecord, SaveProviderInput, ThinkingLevel, ToolCatalogEntry } from "../types";
+import type { ApiFormat, BuiltinModelSuggestion, ModelRecord, PackageRecord, ProviderRecord, SaveProviderInput, ThinkingLevel, ToolCatalogEntry } from "../types";
 import { Icon, type IconName } from "./Icons";
 import { PackagesSection, type PackageActions } from "./PackagesSection";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
+import { Popover } from "./ui/Popover";
 import { Select } from "./ui/Select";
 import { Tooltip } from "./ui/Tooltip";
 
 const levels: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+let nextModelCardKey = 0;
+const newModelCardKeys = (count: number) => Array.from({ length: count }, () => ++nextModelCardKey);
 
 type SectionId = "providers" | "packages" | "tools";
 
@@ -44,7 +47,22 @@ export function SettingsPage({
 }: Props) {
   const [section, setSection] = useState<SectionId>("providers");
   const [selectedProviderId, setSelectedProviderId] = useState(providers[0]?.id ?? "new");
+  const [builtinModels, setBuiltinModels] = useState<BuiltinModelSuggestion[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(true);
+  const [catalogError, setCatalogError] = useState<string>();
   const selectedSection = SECTIONS.find((item) => item.id === section);
+
+  useEffect(() => {
+    let active = true;
+    api.listBuiltinModels().then((models) => {
+      if (active) setBuiltinModels(models);
+    }).catch((reason) => {
+      if (active) setCatalogError(String(reason));
+    }).finally(() => {
+      if (active) setCatalogLoading(false);
+    });
+    return () => { active = false; };
+  }, []);
 
   return (
     <>
@@ -130,6 +148,9 @@ export function SettingsPage({
             onSelect={setSelectedProviderId}
             onSave={onSave}
             onDelete={onDelete}
+            builtinModels={builtinModels}
+            catalogLoading={catalogLoading}
+            catalogError={catalogError}
           />
         )}
         {section === "packages" && (
@@ -255,17 +276,110 @@ function fromProvider(provider: ProviderRecord): Draft {
   };
 }
 
+interface ModelSuggestionSearchProps {
+  modelLabel: string;
+  catalog: BuiltinModelSuggestion[];
+  loading: boolean;
+  error?: string;
+  onSelect: (suggestion: BuiltinModelSuggestion) => void;
+}
+
+function ModelSuggestionSearch({ modelLabel, catalog, loading, error, onSelect }: ModelSuggestionSearchProps) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(-1);
+  const [applied, setApplied] = useState<BuiltinModelSuggestion>();
+  const anchor = useRef<HTMLDivElement>(null);
+  const listId = useId();
+  const matches = useMemo(() => searchBuiltinModels(catalog, query), [catalog, query]);
+  const visible = open && matches.length > 0 && !error;
+
+  function choose(suggestion: BuiltinModelSuggestion) {
+    onSelect(suggestion);
+    setApplied(suggestion);
+    setQuery("");
+    setOpen(false);
+    setActive(-1);
+  }
+
+  return (
+    <div className="model-catalog-search" ref={anchor}>
+      <label>
+        <span>Find in Pi catalogue</span>
+        <input
+          role="combobox"
+          aria-label={`Find in Pi catalogue for ${modelLabel}`}
+          aria-autocomplete="list"
+          aria-expanded={visible}
+          aria-controls={visible ? listId : undefined}
+          aria-activedescendant={visible && active >= 0 ? `${listId}-${active}` : undefined}
+          value={query}
+          onChange={(event) => { setQuery(event.target.value); setOpen(true); setActive(-1); }}
+          onFocus={() => { if (query.trim()) setOpen(true); }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") { setOpen(false); setActive(-1); }
+            else if (event.key === "Tab") setOpen(false);
+            else if (event.key === "ArrowDown" && matches.length) {
+              event.preventDefault();
+              setOpen(true);
+              setActive((value) => (value + 1) % matches.length);
+            } else if (event.key === "ArrowUp" && matches.length) {
+              event.preventDefault();
+              setOpen(true);
+              setActive((value) => value < 0 ? matches.length - 1 : (value - 1 + matches.length) % matches.length);
+            } else if (event.key === "Enter" && visible) {
+              event.preventDefault();
+              choose(matches[active < 0 ? 0 : active]);
+            }
+          }}
+          placeholder="Search by model name or ID"
+          autoComplete="off"
+          spellCheck={false}
+        />
+      </label>
+      {loading && <small role="status">Loading bundled Pi catalogue…</small>}
+      {error && <small role="status">Could not load Pi catalogue: {error} Manual entry is still available.</small>}
+      {!loading && !error && query.trim() && matches.length === 0 && <small role="status">No Pi catalogue matches. You can enter settings manually.</small>}
+      {applied && <small>Filled from Pi’s {applied.sourceProvider} catalogue entry. Review these settings before saving.</small>}
+      <Popover anchor={anchor} open={visible} onClose={() => { setOpen(false); setActive(-1); }} matchWidth className="model-catalog-popover">
+        <div id={listId} role="listbox" aria-label="Pi model suggestions" className="model-catalog-options">
+          {matches.map((suggestion, index) => (
+            <button
+              id={`${listId}-${index}`}
+              key={`${suggestion.sourceProvider}:${suggestion.id}`}
+              type="button"
+              role="option"
+              aria-selected={index === active}
+              className={index === active ? "active" : ""}
+              onMouseDown={(event) => event.preventDefault()}
+              onMouseEnter={() => setActive(index)}
+              onClick={() => choose(suggestion)}
+            >
+              <strong>{suggestion.name}</strong>
+              <span>{suggestion.sourceProvider} · {suggestion.sourceApi} · {suggestion.id}</span>
+            </button>
+          ))}
+        </div>
+      </Popover>
+    </div>
+  );
+}
+
 interface ProvidersSectionProps {
   providers: ProviderRecord[];
   selectedId: string;
   onSelect: (id: string) => void;
   onSave: (input: SaveProviderInput) => Promise<ProviderRecord>;
   onDelete: (providerId: string) => Promise<void>;
+  builtinModels: BuiltinModelSuggestion[];
+  catalogLoading: boolean;
+  catalogError?: string;
 }
 
-function ProvidersSection({ providers, selectedId, onSelect, onSave, onDelete }: ProvidersSectionProps) {
+function ProvidersSection({ providers, selectedId, onSelect, onSave, onDelete, builtinModels, catalogLoading, catalogError }: ProvidersSectionProps) {
   const selected = providers.find((provider) => provider.id === selectedId);
   const [draft, setDraft] = useState<Draft>(() => selected ? fromProvider(selected) : blankDraft());
+  const [modelCardKeys, setModelCardKeys] = useState<number[]>(() => newModelCardKeys(selected?.models.length ?? 0));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
@@ -274,6 +388,7 @@ function ProvidersSection({ providers, selectedId, onSelect, onSave, onDelete }:
   useEffect(() => {
     const provider = providers.find((item) => item.id === selectedId);
     setDraft(provider ? fromProvider(provider) : blankDraft());
+    setModelCardKeys(newModelCardKeys(provider?.models.length ?? 0));
     setError(undefined);
     setNotice(undefined);
   }, [selectedId, providers]);
@@ -288,6 +403,7 @@ function ProvidersSection({ providers, selectedId, onSelect, onSave, onDelete }:
       const saved = await onSave({ ...draft, apiKey: draft.apiKey?.trim() || undefined });
       onSelect(saved.id);
       setDraft(fromProvider(saved));
+      setModelCardKeys(newModelCardKeys(saved.models.length));
       setNotice("Connection saved. The API key is stored on this device.");
       return saved;
     } catch (reason) {
@@ -307,6 +423,7 @@ function ProvidersSection({ providers, selectedId, onSelect, onSave, onDelete }:
       const ids = await api.discoverModels(saved.id);
       const models = mergeDiscoveredModels(saved.models, ids);
       setDraft({ ...fromProvider(saved), models });
+      setModelCardKeys(newModelCardKeys(models.length));
       setNotice(`Found ${ids.length} model${ids.length === 1 ? "" : "s"}. Confirm limits for new entries, then save.`);
     } catch (reason) {
       setError(`${String(reason)} Manual model entry is still available below.`);
@@ -319,6 +436,14 @@ function ProvidersSection({ providers, selectedId, onSelect, onSave, onDelete }:
     setDraft((current) => ({
       ...current,
       models: current.models.map((model, modelIndex) => modelIndex === index ? { ...model, ...patch } : model)
+    }));
+  }
+
+  function applySuggestion(index: number, suggestion: BuiltinModelSuggestion) {
+    setDraft((current) => ({
+      ...current,
+      models: current.models.map((model, modelIndex) => modelIndex === index
+        ? applyBuiltinModelSuggestion(model, suggestion) : model)
     }));
   }
 
@@ -395,13 +520,16 @@ function ProvidersSection({ providers, selectedId, onSelect, onSave, onDelete }:
         <div className="section-heading-row">
           <div>
             <h3>Models</h3>
-            <p>Discovery adds IDs only. WackCode waits for you to confirm limits, reasoning, and vision support.</p>
+            <p>Discovery adds IDs only. Search Pi’s bundled catalogue for suggested settings, then review them before saving.</p>
           </div>
           <div className="row-actions">
             <button className="secondary-button" disabled={busy} onClick={fetchModels}><Icon name="refresh" /> Fetch models</button>
-            <button className="secondary-button" onClick={() => setDraft({ ...draft, models: [...draft.models, {
-              id: "", name: "", contextWindow: null, maxTokens: null, reasoning: false, thinkingLevels: ["off"], thinkingLevelMap: { off: null }, vision: false
-            }] })}><Icon name="plus" /> Add manually</button>
+            <button className="secondary-button" onClick={() => {
+              setDraft((current) => ({ ...current, models: [...current.models, {
+                id: "", name: "", contextWindow: null, maxTokens: null, reasoning: false, thinkingLevels: ["off"], thinkingLevelMap: { off: null }, vision: false
+              }] }));
+              setModelCardKeys((keys) => [...keys, ++nextModelCardKey]);
+            }}><Icon name="plus" /> Add manually</button>
           </div>
         </div>
 
@@ -410,13 +538,23 @@ function ProvidersSection({ providers, selectedId, onSelect, onSave, onDelete }:
         ) : (
           <div className="model-list">
             {draft.models.map((model, index) => (
-              <article className={`model-card ${modelIsReady(model) ? "" : "incomplete"}`} key={`${model.id}-${index}`}>
+              <article className={`model-card ${modelIsReady(model) ? "" : "incomplete"}`} key={modelCardKeys[index]}>
                 <div className="model-card-top">
                   <div className="model-index">{String(index + 1).padStart(2, "0")}</div>
                   <label><span>Model ID</span><input value={model.id} onChange={(event) => updateModel(index, { id: event.target.value })} placeholder="provider/model-id" spellCheck={false} /></label>
                   <label><span>Display name</span><input value={model.name} onChange={(event) => updateModel(index, { name: event.target.value })} placeholder={model.id || "Model name"} /></label>
-                  <button className="icon-button" aria-label="Remove model" onClick={() => setDraft({ ...draft, models: draft.models.filter((_, modelIndex) => modelIndex !== index) })}><Icon name="trash" /></button>
+                  <button className="icon-button" aria-label="Remove model" onClick={() => {
+                    setDraft((current) => ({ ...current, models: current.models.filter((_, modelIndex) => modelIndex !== index) }));
+                    setModelCardKeys((keys) => keys.filter((_, modelIndex) => modelIndex !== index));
+                  }}><Icon name="trash" /></button>
                 </div>
+                <ModelSuggestionSearch
+                  modelLabel={model.name || model.id || `model ${index + 1}`}
+                  catalog={builtinModels}
+                  loading={catalogLoading}
+                  error={catalogError}
+                  onSelect={(suggestion) => applySuggestion(index, suggestion)}
+                />
                 <div className="model-limits">
                   <label><span>Context tokens</span><input type="number" min="1" value={model.contextWindow ?? ""} onChange={(event) => updateModel(index, { contextWindow: event.target.value ? Number(event.target.value) : null })} placeholder="Required" /></label>
                   <label><span>Max output tokens</span><input type="number" min="1" value={model.maxTokens ?? ""} onChange={(event) => updateModel(index, { maxTokens: event.target.value ? Number(event.target.value) : null })} placeholder="Required" /></label>

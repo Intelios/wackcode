@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   BootstrapPayload,
+  BuiltinModelSuggestion,
   GitChanges,
   ImageContent,
   PackageRecord,
@@ -20,6 +21,7 @@ export const api = {
   saveProvider: (input: SaveProviderInput) => invoke<ProviderRecord>("save_provider", { input }),
   deleteProvider: (providerId: string) => invoke<void>("delete_provider", { providerId }),
   discoverModels: (providerId: string) => invoke<string[]>("discover_models", { input: { providerId } }),
+  listBuiltinModels: () => invoke<BuiltinModelSuggestion[]>("list_builtin_models"),
   setToolConfig: (disabled: string[]) => invoke<ToolConfig>("set_tool_config", { input: { disabled } }),
   listPackages: () => invoke<PackageRecord[]>("list_packages"),
   searchPackages: (query: string, from = 0) =>

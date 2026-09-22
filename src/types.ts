@@ -69,6 +69,14 @@ export interface ModelRecord {
   vision: boolean;
 }
 
+/** Settings-only metadata from the Pi version bundled with WackCode. */
+export interface BuiltinModelSuggestion extends ModelRecord {
+  sourceProvider: string;
+  sourceApi: string;
+  contextWindow: number;
+  maxTokens: number;
+}
+
 /**
  * An image attached to a prompt, in Pi's own `ImageContent` shape. It travels unchanged through
  * Rust and the worker into `session.prompt`, so it must match worker/src/protocol.ts and models.rs.

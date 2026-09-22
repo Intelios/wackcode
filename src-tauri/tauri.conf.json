@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.wackcode.desktop",
   "build": {
-    "beforeDevCommand": "pnpm build:worker && pnpm dev",
+    "beforeDevCommand": "pnpm build:worker && vite",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "pnpm build:web && pnpm prepare:worker",
     "frontendDist": "../dist"

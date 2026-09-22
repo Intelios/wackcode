@@ -63,6 +63,7 @@ export const api = {
   prompt: (input: {
     taskId: string;
     message: string;
+    startedAt: number;
     providerId: string;
     modelId: string;
     thinkingLevel: ThinkingLevel;

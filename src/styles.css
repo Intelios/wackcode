@@ -250,6 +250,10 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .orphan-group { margin: 3px 0; }
 
 .agent-working { display: flex; align-items: center; color: var(--text-dim); font-size: 12.5px; margin-top: 4px; }
+.run-duration {
+  margin: -10px 0 18px; padding: 0 0 9px; border-bottom: 1px solid var(--border);
+  color: var(--text-dim); font-size: 12.5px; line-height: 1.4;
+}
 .aborted-label { display: inline-flex; margin-top: 6px; color: var(--warning); font-size: 11px; }
 .message-error { margin-top: 10px; border: 1px solid #5b3030; background: var(--danger-bg); color: #ebb1b1; border-radius: 7px; padding: 9px 11px; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 

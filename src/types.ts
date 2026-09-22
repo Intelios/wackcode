@@ -234,10 +234,18 @@ export interface NormalizedMessage {
   errorMessage?: string;
 }
 
+/** A completed prompt duration attached to the user message that started it. */
+export interface RunTiming {
+  userMessageId: string;
+  durationMs: number;
+}
+
 export interface SessionSnapshot {
   sessionId: string;
   sessionFile?: string;
   messages: NormalizedMessage[];
+  runTimings: RunTiming[];
+  activeRun?: { runId: string; startedAt: number };
   stats: {
     tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
     cost: number;
@@ -273,7 +281,7 @@ export interface ExtensionNotice {
 export type WorkerEvent =
   | { type: "ready" | "snapshot"; taskId: string; snapshot: SessionSnapshot }
   | { type: "partial"; taskId: string; message: NormalizedMessage }
-  | { type: "run_state"; taskId: string; runId?: string; state: TaskStatus }
+  | { type: "run_state"; taskId: string; runId?: string; startedAt?: number; state: TaskStatus }
   | { type: "activity"; taskId: string; event: string; detail?: Record<string, unknown> }
   | { type: "worker_error"; taskId?: string; message: string }
   | { type: "response"; taskId?: string; id: string; success: boolean; error?: string }
@@ -286,6 +294,8 @@ export type WorkerEvent =
 export interface TaskRuntime {
   snapshot?: SessionSnapshot;
   partial?: NormalizedMessage;
+  /** Active prompt clock. The worker event supplies the run id after accepting the prompt. */
+  activeRun?: { runId?: string; startedAt: number };
   activity?: string;
   /** Accumulated text from in-flight tools, keyed by Pi's tool call id. */
   liveToolText?: Record<string, string>;

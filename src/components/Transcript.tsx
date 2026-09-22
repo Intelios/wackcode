@@ -1,7 +1,8 @@
-import { memo, useMemo, type ReactNode } from "react";
-import type { NormalizedBlock, NormalizedMessage, PlanState } from "../types";
+import { Fragment, memo, useEffect, useMemo, useState, type ReactNode } from "react";
+import type { NormalizedBlock, NormalizedMessage, PlanState, RunTiming } from "../types";
 import { useFollowScroll } from "../hooks/useFollowScroll";
 import { useSmoothText } from "../hooks/useSmoothText";
+import { formatRunDuration } from "../chat-utils";
 import { Icon } from "./Icons";
 import { Markdown } from "./Markdown";
 import { PlanCard, type PlanAction } from "./PlanCard";
@@ -13,6 +14,8 @@ interface Props {
   partial?: NormalizedMessage;
   running: boolean;
   activity?: string;
+  activeRun?: { runId?: string; startedAt: number };
+  runTimings?: RunTiming[];
   liveToolText?: Record<string, string>;
   /** Latest Plan mode state; PlanCards use it to know which proposal is awaiting a decision. */
   planState?: PlanState;
@@ -22,6 +25,23 @@ interface Props {
 function StreamingText({ text }: { text: string }) {
   const shown = useSmoothText(text, true);
   return <div className="stream-text"><Markdown>{shown}</Markdown></div>;
+}
+
+function RunDuration({ startedAt, durationMs }: { startedAt?: number; durationMs?: number }) {
+  const [now, setNow] = useState(Date.now);
+
+  useEffect(() => {
+    if (startedAt === undefined) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [startedAt]);
+
+  const live = startedAt !== undefined;
+  const elapsed = durationMs ?? Math.max(0, now - (startedAt ?? now));
+  const label = live ? "Working for" : "Worked for";
+
+  return <div className="run-duration">{label} {formatRunDuration(elapsed)}</div>;
 }
 
 /** The plan text a plan_mode_complete result carries, or undefined if it isn't one. */
@@ -134,7 +154,7 @@ function activityLabel(activity?: string): string {
   return "Working…";
 }
 
-export function Transcript({ messages, partial, running, activity, liveToolText, planState, onPlanAction }: Props) {
+export function Transcript({ messages, partial, running, activity, activeRun, runTimings = [], liveToolText, planState, onPlanAction }: Props) {
   const { ref, onScroll, detached, jumpToLatest } = useFollowScroll();
 
   const { results, callIds } = useMemo(() => {
@@ -151,10 +171,15 @@ export function Transcript({ messages, partial, running, activity, liveToolText,
 
   const lastAssistantId = useMemo(() => [...messages].reverse().find((message) => message.role === "assistant")?.id, [messages]);
 
+  const activeUserId = useMemo(() => activeRun
+    ? [...messages].reverse().find((message) => message.role === "user" && message.timestamp !== undefined && message.timestamp >= activeRun.startedAt)?.id
+    : undefined, [messages, activeRun]);
+  const timingsByMessage = useMemo(() => new Map(runTimings.map((timing) => [timing.userMessageId, timing.durationMs])), [runTimings]);
+
   const waiting = running && (!partial || partial.blocks.length === 0);
   const label = activityLabel(activity);
 
-  if (messages.length === 0 && !partial) {
+  if (messages.length === 0 && !partial && !activeRun) {
     return (
       <div className="transcript-zone">
         <div className="conversation-scroll">
@@ -178,19 +203,27 @@ export function Transcript({ messages, partial, running, activity, liveToolText,
               return <div key={message.id} className="orphan-group">{orphans.map((block, index) => <OrphanResult key={index} block={block} />)}</div>;
             }
             return (
-              <Message
-                key={message.id}
-                message={message}
-                results={results}
-                liveToolText={liveToolText}
-                live={running && message.id === lastAssistantId}
-                running={running}
-                planState={planState}
-                onPlanAction={onPlanAction}
-                sig={signature(message, results, liveToolText)}
-              />
+              <Fragment key={message.id}>
+                <Message
+                  message={message}
+                  results={results}
+                  liveToolText={liveToolText}
+                  live={running && message.id === lastAssistantId}
+                  running={running}
+                  planState={planState}
+                  onPlanAction={onPlanAction}
+                  sig={signature(message, results, liveToolText)}
+                />
+                {message.role === "user" && message.id === activeUserId && (
+                  <RunDuration startedAt={activeRun?.startedAt} />
+                )}
+                {message.role === "user" && message.id !== activeUserId && timingsByMessage.has(message.id) && (
+                  <RunDuration durationMs={timingsByMessage.get(message.id)} />
+                )}
+              </Fragment>
             );
           })}
+          {activeRun && !activeUserId && <RunDuration startedAt={activeRun.startedAt} />}
           {partial && (
             <div className="msg assistant streaming">
               {partial.blocks.map((block, index) => (

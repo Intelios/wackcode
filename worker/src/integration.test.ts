@@ -10,6 +10,8 @@ import { afterEach, describe, expect, it } from "vitest";
 interface Output {
   type: string;
   taskId?: string;
+  runId?: string;
+  startedAt?: number;
   state?: string;
   message?: string;
   event?: string;
@@ -27,7 +29,9 @@ interface Output {
   errors?: Array<{ path: string; error: string }>;
   snapshot?: {
     sessionFile?: string;
-    messages: Array<{ role?: string; blocks: Array<{ type: string; text?: string; toolName?: string; details?: unknown; imageId?: string; thumbnail?: string; mimeType?: string }> }>;
+    messages: Array<{ id?: string; role?: string; timestamp?: number; blocks: Array<{ type: string; text?: string; toolName?: string; details?: unknown; imageId?: string; thumbnail?: string; mimeType?: string }> }>;
+    runTimings?: Array<{ userMessageId: string; durationMs: number }>;
+    activeRun?: { runId: string; startedAt: number };
     tools?: Array<{ name: string; description: string; source: { kind: string; packageId?: string }; available: boolean; unavailableReason?: string }>;
     activeTools?: string[];
     planState?: { mode: string; phase: string; plan?: string };
@@ -586,10 +590,50 @@ describe("Pi worker integration", () => {
     await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
     expect(worker.outputs.some((output) => output.type === "run_state" && output.state === "stopping")).toBe(true);
     expect(worker.outputs.some((output) => output.type === "worker_error")).toBe(false);
+    const stopped = worker.outputs.findLast((output) => output.type === "snapshot" && output.snapshot?.runTimings?.length === 1);
+    expect(stopped?.snapshot?.runTimings).toHaveLength(1);
+    const user = stopped?.snapshot?.messages.find((message) => message.role === "user");
+    expect(stopped?.snapshot?.runTimings?.[0]?.userMessageId).toBe(user?.id);
   });
 });
 
 describe("built-in extensions", () => {
+  it("persists one duration per user prompt and restores the timings from Pi's session", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-timing-restore-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const first = await initializeWorker(provider.baseUrl, "timing-secret", workspace, "timing-task");
+    cleanup.push(() => first.worker.shutdown());
+
+    const firstStartedAt = Date.now() - 5_000;
+    first.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "timing-run-1", startedAt: firstStartedAt, message: "First turn." });
+    const firstDone = await first.worker.waitFor((output) => output.type === "snapshot" && output.snapshot?.runTimings?.length === 1);
+    await first.worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === "timing-run-1");
+    const firstUser = firstDone.snapshot?.messages.find((message) => message.role === "user");
+    expect(firstDone.snapshot?.runTimings?.[0]?.userMessageId).toBe(firstUser?.id);
+    expect(firstDone.snapshot?.runTimings?.[0]?.durationMs).toBeGreaterThanOrEqual(5_000);
+    expect(firstDone.snapshot?.activeRun).toBeUndefined();
+
+    first.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "timing-run-2", startedAt: Date.now() - 2_000, message: "Second turn." });
+    const bothDone = await first.worker.waitFor((output) => output.type === "snapshot" && output.snapshot?.runTimings?.length === 2);
+    await first.worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === "timing-run-2");
+    const userIds = bothDone.snapshot?.messages.filter((message) => message.role === "user").map((message) => message.id);
+    expect(bothDone.snapshot?.runTimings?.map((timing) => timing.userMessageId)).toEqual(userIds);
+
+    const sessionFile = bothDone.snapshot?.sessionFile;
+    expect(sessionFile).toBeTruthy();
+    const savedSession = await readFile(sessionFile as string, "utf8");
+    expect(savedSession.match(/wackcode-run-timing/g)).toHaveLength(2);
+    await first.worker.shutdown();
+
+    const restored = await initializeWorker(provider.baseUrl, "timing-secret", workspace, "timing-task", sessionFile);
+    cleanup.push(() => restored.worker.shutdown());
+    expect(restored.ready.snapshot?.runTimings).toHaveLength(2);
+    const restoredUserIds = restored.ready.snapshot?.messages.filter((message) => message.role === "user").map((message) => message.id);
+    expect(restored.ready.snapshot?.runTimings.map((timing) => timing.userMessageId)).toEqual(restoredUserIds);
+  });
+
   it("registers the built-in tools as wackcode sources that ignore the denylist", async () => {
     const provider = await startMockProvider();
     cleanup.push(provider.close);

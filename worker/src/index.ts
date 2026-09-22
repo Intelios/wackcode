@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createBuiltinExtensions } from "./builtin/index.js";
 import type { BuiltinHost } from "./builtin/host.js";
 import { JsonLineDecoder } from "./framing.js";
+import { RUN_TIMING_ENTRY_TYPE, RUN_TIMING_VERSION, resolveRunTimings } from "./run-timing.js";
 import {
   THINKING_LEVELS,
   type ImageContent,
@@ -36,7 +37,12 @@ let taskId: string | undefined;
 let session: AgentSession | undefined;
 let piModule: PiModule | undefined;
 let modelRuntime: ModelRuntime | undefined;
-let activeRunId: string | undefined;
+let activeRun: {
+  runId: string;
+  startedAt: number;
+  previousUserEntryIds: Set<string>;
+  finalized: boolean;
+} | undefined;
 let activeCredential: string | undefined;
 let stopRequested = false;
 let disabledTools = new Set<string>();
@@ -307,10 +313,18 @@ function getSnapshot(): SessionSnapshot {
   if (!session) throw new Error("Worker is not initialized");
   const stats = session.getSessionStats();
   const model = session.model;
+  const messages = session.messages.map(normalizeMessage).filter((message): message is NormalizedMessage => Boolean(message));
+  const contextEntries = session.sessionManager.buildContextEntries();
+  const visibleUserEntryIds = contextEntries
+    .filter((entry) => entry.type === "message" && entry.message.role === "user")
+    .map((entry) => entry.id);
+  const visibleUserMessageIds = messages.filter((message) => message.role === "user").map((message) => message.id);
   return {
     sessionId: session.sessionId,
     sessionFile: session.sessionFile,
-    messages: session.messages.map(normalizeMessage).filter((message): message is NormalizedMessage => Boolean(message)),
+    messages,
+    runTimings: resolveRunTimings(session.sessionManager.getBranch(), visibleUserEntryIds, visibleUserMessageIds),
+    activeRun: activeRun ? { runId: activeRun.runId, startedAt: activeRun.startedAt } : undefined,
     stats: {
       tokens: stats.tokens,
       cost: stats.cost,
@@ -325,6 +339,25 @@ function getSnapshot(): SessionSnapshot {
     planState: builtins.planMode.getState(),
     todoState: builtins.todo.getState()
   };
+}
+
+function finalizeActiveRun(): void {
+  if (!session || !activeRun || activeRun.finalized) return;
+  const run = activeRun;
+  run.finalized = true;
+  const userEntry = session.sessionManager.getBranch().slice().reverse().find((entry) =>
+    entry.type === "message" && entry.message.role === "user" && !run.previousUserEntryIds.has(entry.id)
+  );
+  if (!userEntry || userEntry.type !== "message") return;
+  const endedAt = Math.max(Date.now(), run.startedAt);
+  session.sessionManager.appendCustomEntry(RUN_TIMING_ENTRY_TYPE, {
+    version: RUN_TIMING_VERSION,
+    runId: run.runId,
+    userMessageEntryId: userEntry.id,
+    startedAt: run.startedAt,
+    endedAt,
+    durationMs: endedAt - run.startedAt
+  });
 }
 
 function emitSnapshot(): void {
@@ -644,10 +677,12 @@ async function initialize(command: InitCommand): Promise<void> {
       scheduleSnapshot();
     }
     if (eventType === "agent_settled") {
-      activeRunId = undefined;
+      const settledRunId = activeRun?.runId;
+      finalizeActiveRun();
+      activeRun = undefined;
       dropPartial();
-      send({ type: "run_state", taskId: command.taskId, state: "idle" });
       emitSnapshot();
+      send({ type: "run_state", taskId: command.taskId, runId: settledRunId, state: "idle" });
     }
   });
   send({ type: "ready", taskId: command.taskId, snapshot: getSnapshot() });
@@ -664,14 +699,21 @@ async function handle(command: WorkerCommand): Promise<void> {
       // the first message of a plan-mode task arrives with the contract already in place.
       if (command.mode) builtins.planMode.setMode(command.mode);
       stopRequested = false;
-      activeRunId = command.runId;
-      send({ type: "run_state", taskId, runId: command.runId, state: "running" });
+      const startedAt = Number.isSafeInteger(command.startedAt) && command.startedAt! >= 0 && command.startedAt! <= Date.now() + 60_000
+        ? command.startedAt!
+        : Date.now();
+      const previousUserEntryIds = new Set(session.sessionManager.getBranch()
+        .filter((entry) => entry.type === "message" && entry.message.role === "user")
+        .map((entry) => entry.id));
+      activeRun = { runId: command.runId, startedAt, previousUserEntryIds, finalized: false };
+      send({ type: "run_state", taskId, runId: command.runId, startedAt, state: "running" });
       response(command.id, true);
       try {
         const images = await prepareImages(command.images);
         await session.prompt(command.message, images.length > 0 ? { images } : undefined);
       } catch (error) {
-        activeRunId = undefined;
+        finalizeActiveRun();
+        activeRun = undefined;
         if (!stopRequested) send({ type: "worker_error", taskId, message: safeError(error) });
         send({ type: "run_state", taskId, runId: command.runId, state: "idle" });
       }
@@ -681,10 +723,12 @@ async function handle(command: WorkerCommand): Promise<void> {
     } else if (command.type === "abort") {
       stopRequested = true;
       cancelPendingDialogs();
-      send({ type: "run_state", taskId, runId: activeRunId, state: "stopping" });
+      const stoppedRunId = activeRun?.runId;
+      send({ type: "run_state", taskId, runId: stoppedRunId, startedAt: activeRun?.startedAt, state: "stopping" });
       await session.abort();
-      activeRunId = undefined;
-      send({ type: "run_state", taskId, state: "idle" });
+      finalizeActiveRun();
+      activeRun = undefined;
+      send({ type: "run_state", taskId, runId: stoppedRunId, state: "idle" });
       emitSnapshot();
     } else if (command.type === "snapshot") {
       emitSnapshot();

@@ -275,6 +275,8 @@ pub struct CreateTaskInput {
 pub struct PromptInput {
     pub task_id: String,
     pub message: String,
+    #[serde(default)]
+    pub started_at: Option<u64>,
     pub provider_id: String,
     pub model_id: String,
     pub thinking_level: String,

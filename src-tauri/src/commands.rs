@@ -642,9 +642,10 @@ pub async fn prompt(app: AppHandle, state: State<'_, MetadataState>, input: Prom
     let api_key = state.secrets.get(&provider.id)?;
     worker::ensure_worker(&app, &configured, &provider, &api_key).await?;
     let run_id = Uuid::new_v4().to_string();
+    let started_at = input.started_at.unwrap_or_else(|| Utc::now().timestamp_millis() as u64);
     worker::send(&app, &configured.id, &json!({
         "id": Uuid::new_v4().to_string(), "type": "prompt", "runId": run_id, "message": message,
-        "mode": configured.mode, "images": input.images
+        "startedAt": started_at, "mode": configured.mode, "images": input.images
     })).await?;
     Ok(run_id)
 }

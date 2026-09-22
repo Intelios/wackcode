@@ -185,7 +185,7 @@ export default function App() {
       const taskId = payload.taskId;
       if (!taskId) return;
       if (payload.type === "ready" || payload.type === "snapshot") {
-        patchRuntime(taskId, { snapshot: payload.snapshot, planState: payload.snapshot.planState, todoState: payload.snapshot.todoState, partial: undefined, error: undefined });
+        patchRuntime(taskId, { snapshot: payload.snapshot, activeRun: payload.snapshot.activeRun, planState: payload.snapshot.planState, todoState: payload.snapshot.todoState, partial: undefined, error: undefined });
         if (payload.snapshot.planState) patchTask(taskId, { mode: payload.snapshot.planState.mode });
         if (payload.snapshot.sessionFile) patchTask(taskId, { sessionFile: payload.snapshot.sessionFile });
         const tools = payload.snapshot.tools;
@@ -196,8 +196,18 @@ export default function App() {
         patchRuntime(taskId, { partial: payload.message });
       } else if (payload.type === "run_state") {
         patchTask(taskId, { status: payload.state, lastError: payload.state === "running" ? null : undefined });
-        if (payload.state === "running" || payload.state === "idle" || payload.state === "interrupted") {
-          patchRuntime(taskId, { activity: undefined, liveToolText: {} });
+        if (payload.state === "running") {
+          setRuntimes((current) => ({
+            ...current,
+            [taskId]: {
+              ...current[taskId],
+              activeRun: { runId: payload.runId, startedAt: payload.startedAt ?? current[taskId]?.activeRun?.startedAt ?? Date.now() },
+              activity: undefined,
+              liveToolText: {}
+            }
+          }));
+        } else if (payload.state === "idle" || payload.state === "interrupted") {
+          patchRuntime(taskId, { activeRun: undefined, activity: undefined, liveToolText: {} });
         }
       } else if (payload.type === "activity") {
         patchRuntime(taskId, { activity: payload.event });
@@ -421,6 +431,7 @@ export default function App() {
         setSettingsOpen(true);
         return false;
       }
+      const startedAt = Date.now();
       let task: TaskRecord;
       try {
         task = await api.createTask({
@@ -438,11 +449,12 @@ export default function App() {
       const mode = modeOverride ?? active.mode ?? "build";
       setData((current) => ({ ...current, tasks: [...current.tasks, task] }));
       patchTask(task.id, { status: "running", lastError: null, mode });
-      patchRuntime(task.id, { error: undefined, activity: "starting" });
+      patchRuntime(task.id, { error: undefined, activity: "starting", activeRun: { startedAt } });
       try {
         await api.prompt({
           taskId: task.id,
           message,
+          startedAt,
           providerId: task.providerId,
           modelId: task.modelId,
           thinkingLevel: task.thinkingLevel,
@@ -451,7 +463,7 @@ export default function App() {
         });
       } catch (reason) {
         patchTask(task.id, { status: "idle" });
-        patchRuntime(task.id, { error: String(reason) });
+        patchRuntime(task.id, { error: String(reason), activeRun: undefined });
       }
       // Selection happens after api.prompt so open_task's ensure_worker finds the
       // already-running worker instead of racing it to spawn a second process.
@@ -460,12 +472,14 @@ export default function App() {
       return true;
     }
     if (selectedTask.status === "running" || selectedTask.status === "stopping") return false;
+    const startedAt = Date.now();
     patchTask(selectedTask.id, { status: "running", lastError: null });
-    patchRuntime(selectedTask.id, { error: undefined, activity: "starting" });
+    patchRuntime(selectedTask.id, { error: undefined, activity: "starting", activeRun: { startedAt } });
     try {
       await api.prompt({
         taskId: selectedTask.id,
         message,
+        startedAt,
         providerId: selectedTask.providerId,
         modelId: selectedTask.modelId,
         thinkingLevel: selectedTask.thinkingLevel,
@@ -482,7 +496,7 @@ export default function App() {
       return true;
     } catch (reason) {
       patchTask(selectedTask.id, { status: "idle" });
-      patchRuntime(selectedTask.id, { error: String(reason) });
+      patchRuntime(selectedTask.id, { error: String(reason), activeRun: undefined });
       return false;
     }
   }
@@ -777,6 +791,8 @@ export default function App() {
               messages={runtime?.snapshot?.messages ?? []}
               partial={runtime?.partial}
               running={selectedTask.status === "running" || selectedTask.status === "stopping"}
+              activeRun={runtime?.activeRun}
+              runTimings={runtime?.snapshot?.runTimings}
               activity={runtime?.activity}
               liveToolText={runtime?.liveToolText}
               planState={runtime?.planState}

@@ -139,7 +139,7 @@ export interface WorkerResources {
 
 export type WorkerCommand =
   | InitCommand
-  | { id: string; type: "prompt"; runId: string; message: string; mode?: TaskMode; images?: ImageContent[] }
+  | { id: string; type: "prompt"; runId: string; startedAt?: number; message: string; mode?: TaskMode; images?: ImageContent[] }
   | { id: string; type: "abort" }
   | { id: string; type: "snapshot" }
   | { id: string; type: "set_model"; modelId: string }
@@ -182,6 +182,12 @@ export interface NormalizedMessage {
   errorMessage?: string;
 }
 
+/** A completed prompt duration attached to the user message that started it. */
+export interface RunTiming {
+  userMessageId: string;
+  durationMs: number;
+}
+
 /** Where a tool came from, so the UI can group and attribute it. */
 export interface ToolSource {
   /** "wackcode" tools ship inside the app itself (built-in extensions) and can't be switched off. */
@@ -206,6 +212,8 @@ export interface SessionSnapshot {
   sessionId: string;
   sessionFile?: string;
   messages: NormalizedMessage[];
+  runTimings: RunTiming[];
+  activeRun?: { runId: string; startedAt: number };
   stats: {
     tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
     cost: number;
@@ -238,7 +246,7 @@ export type WorkerOutput =
   | { type: "ready"; taskId: string; snapshot: SessionSnapshot }
   | { type: "snapshot"; taskId: string; snapshot: SessionSnapshot }
   | { type: "partial"; taskId: string; message: NormalizedMessage }
-  | { type: "run_state"; taskId: string; runId?: string; state: "running" | "idle" | "stopping" | "interrupted" }
+  | { type: "run_state"; taskId: string; runId?: string; startedAt?: number; state: "running" | "idle" | "stopping" | "interrupted" }
   | { type: "activity"; taskId: string; event: string; detail?: unknown }
   | { type: "worker_error"; taskId?: string; message: string }
   | ({ type: "extension_ui_request"; taskId: string; requestId: string } & ExtensionUIRequest)

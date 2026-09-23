@@ -77,6 +77,7 @@ export const api = {
   openTask: (taskId: string) => invoke<void>("open_task", { taskId }),
   listCommands: (taskId: string) => invoke<SlashCommand[]>("list_commands", { taskId }),
   executeCommand: (input: { taskId: string; commandId: string; args: string; startedAt: number; images?: ImageContent[] }) => invoke<string>("execute_command", { input }),
+  initAgents: (taskId: string, startedAt: number) => invoke<string>("init_agents", { taskId, startedAt }),
   compactTask: (taskId: string, instructions: string, startedAt: number) => invoke<string>("compact_task", { taskId, instructions, startedAt }),
   prompt: (input: {
     taskId: string;

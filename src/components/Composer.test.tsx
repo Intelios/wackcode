@@ -182,4 +182,21 @@ describe("Composer slash commands", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("Enter a name after /name.");
     expect(area).toHaveValue("/name ");
   });
+
+  it("shows /init but refuses image attachments for it", async () => {
+    const onCommand = vi.fn().mockResolvedValue(true);
+    setup({
+      commands: [{ id: "app:init", name: "init", description: "Create AGENTS.md", source: "app", sourceLabel: "WackCode" }],
+      onCommand
+    });
+    const area = screen.getByRole("textbox");
+    fireEvent.change(area, { target: { value: "/ini", selectionStart: 4 } });
+    expect(screen.getByRole("option", { name: /init/ })).toBeInTheDocument();
+    attach(png());
+    await screen.findByAltText("Attached image 1");
+    fireEvent.change(area, { target: { value: "/init", selectionStart: 5 } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Remove images before running this command.");
+    expect(onCommand).not.toHaveBeenCalled();
+  });
 });

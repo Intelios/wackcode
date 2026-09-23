@@ -103,7 +103,7 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
       const match = /^\/([^\s]+)(?:\s+([\s\S]*))?$/.exec(message);
       const name = match?.[1] ?? "";
       const args = match?.[2] ?? "";
-      const known = ["compact", "new", "name", "copy", ...commands.map((command) => command.name)].includes(name);
+      const known = ["compact", "init", "new", "name", "copy", ...commands.map((command) => command.name)].includes(name);
       if (!known) {
         setSlashNotice(`Unknown command /${name}. You can send it as a message.`);
         setSlashOpen(false);

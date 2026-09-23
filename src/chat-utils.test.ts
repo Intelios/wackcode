@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applySnapshotDelta, displayPath, formatRunDuration, formatTokens, samePlanState, sameTodoState, titleFromPrompt } from "./chat-utils";
+import { applySnapshotDelta, displayPath, formatRunDuration, formatTokens, samePlanState, sameTodoState, titleFromPrompt, validateInitCommand } from "./chat-utils";
 import type { NormalizedMessage, SessionSnapshot, SnapshotDelta } from "./types";
 
 describe("titleFromPrompt", () => {
@@ -19,6 +19,15 @@ describe("titleFromPrompt", () => {
 
   it("falls back to a default", () => {
     expect(titleFromPrompt("   \n")).toBe("New chat");
+  });
+});
+
+describe("/init validation", () => {
+  it("requires no arguments, a project, and Build mode", () => {
+    expect(() => validateInitCommand("", "project", "build")).not.toThrow();
+    expect(() => validateInitCommand("extra", "project", "build")).toThrow("does not accept arguments");
+    expect(() => validateInitCommand("", null, "build")).toThrow("needs a project");
+    expect(() => validateInitCommand("", "project", "plan")).toThrow("Build mode");
   });
 });
 

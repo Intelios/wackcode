@@ -256,12 +256,26 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
   // of parts, not a bare string. A sub-agent's last user message is its task, so "child-"
   // tasks script what the child does.
   const lastUserText = userTextOf(body);
+  if (lastUserText.startsWith("Initialize project instructions") && JSON.stringify(messages).includes("ALREADY_USEFUL_RULE")) {
+    send({
+      id: "init-unchanged", object: "chat.completion.chunk", created: 1, model: "shared-model",
+      choices: [{ index: 0, delta: { role: "assistant", content: "The existing AGENTS.md is already sufficient." }, finish_reason: null }]
+    });
+    send({
+      id: "init-unchanged", object: "chat.completion.chunk", created: 1, model: "shared-model",
+      choices: [{ index: 0, delta: {}, finish_reason: "stop" }]
+    });
+    response.end("data: [DONE]\n\n");
+    return;
+  }
   if (!hasToolResult) {
     const toolCall = (name: string, args: Record<string, unknown>) => ({
       index: 0, id: `call-${suffix}`, type: "function",
       function: { name, arguments: JSON.stringify(args) }
     });
-    const calls = lastUserText.startsWith("ask:")
+    const calls = lastUserText.startsWith("Initialize project instructions")
+      ? [toolCall("write", { path: "AGENTS.md", content: "# Fixture guidance\n\nRun `pnpm test`.\n" })]
+      : lastUserText.startsWith("ask:")
       ? [toolCall("ask_user_question", {
           questions: [{
             id: "approach", header: "Approach", question: "Which storage engine?",
@@ -1126,6 +1140,80 @@ describe("image attachments", () => {
   });
 });
 
+describe("/init", () => {
+  it("writes workspace instructions and reloads them for the next prompt", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-init-context-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    await writeFile(join(workspace, "package.json"), '{"scripts":{"test":"vitest run"}}\n');
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "init-context-task");
+    cleanup.push(() => worker.shutdown());
+
+    const id = crypto.randomUUID();
+    worker.send({ id, type: "init_agents", runId: "init-run", checkpoint: null });
+    expect((await worker.waitFor((output) => output.type === "response" && output.id === id)).success).toBe(true);
+    await worker.waitFor((output) => output.type === "extension_notice" && output.message?.startsWith("Created AGENTS.md") === true);
+    expect(await readFile(join(workspace, "AGENTS.md"), "utf8")).toContain("Run `pnpm test`");
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "after-init", message: "Next task" });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === "after-init");
+    const nextRequest = provider.requests.find((request) => request.text === "Next task");
+    expect(JSON.stringify(nextRequest?.body.messages)).toContain("# Fixture guidance");
+  });
+
+  it("leaves sufficient existing instructions untouched", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-init-existing-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const content = "# ALREADY_USEFUL_RULE\n\nRun `pnpm test`.\n";
+    await writeFile(join(workspace, "AGENTS.md"), content);
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "init-existing-task");
+    cleanup.push(() => worker.shutdown());
+
+    const id = crypto.randomUUID();
+    worker.send({ id, type: "init_agents", runId: "init-existing" });
+    expect((await worker.waitFor((output) => output.type === "response" && output.id === id)).success).toBe(true);
+    await worker.waitFor((output) => output.type === "extension_notice" && output.message?.startsWith("Left unchanged AGENTS.md") === true);
+    expect(await readFile(join(workspace, "AGENTS.md"), "utf8")).toBe(content);
+  });
+
+  it("refuses a root override before contacting the model", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-init-override-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    await writeFile(join(workspace, "AGENTS.override.md"), "# Keep the override\n");
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "init-override-task");
+    cleanup.push(() => worker.shutdown());
+
+    const id = crypto.randomUUID();
+    worker.send({ id, type: "init_agents", runId: "init-refused" });
+    const response = await worker.waitFor((output) => output.type === "response" && output.id === id);
+    expect(response.success).toBe(false);
+    expect(response.error).toContain("Pi would ignore AGENTS.md");
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "init-refused" && output.state === "idle");
+    expect(provider.requests).toHaveLength(0);
+  });
+
+  it("refuses to write while Plan mode is active", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-init-plan-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "init-plan-task", undefined, undefined, undefined, "plan");
+    cleanup.push(() => worker.shutdown());
+
+    const id = crypto.randomUUID();
+    worker.send({ id, type: "init_agents", runId: "init-plan" });
+    const response = await worker.waitFor((output) => output.type === "response" && output.id === id);
+    expect(response.success).toBe(false);
+    expect(response.error).toContain("Build mode");
+    expect(provider.requests).toHaveLength(0);
+  });
+});
+
 describe("session tree", () => {
   const TREE_A = "a".repeat(40);
   const TREE_B = "b".repeat(40);
@@ -1344,6 +1432,7 @@ describe("session tree", () => {
     await writeFile(extension, `export default function (pi: any) {
       pi.registerCommand("hello", { description: "Say hello", handler: async () => undefined });
       pi.registerCommand("new", { description: "Package new", handler: async () => undefined });
+      pi.registerCommand("init", { description: "Package init", handler: async () => undefined });
       pi.registerCommand("review", { description: "Extension review", handler: async () => undefined });
       pi.registerCommand("try-new-session", { description: "Unsupported session action", handler: async (_args: string, ctx: any) => { await ctx.newSession(); } });
       pi.registerCommand("ask-command", { description: "Ask through desktop UI", handler: async (_args: string, ctx: any) => { const answer = await ctx.ui.select("Choose", ["a", "b"]); ctx.ui.notify("picked:" + answer); } });
@@ -1365,6 +1454,7 @@ describe("session tree", () => {
     expect(commands).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "hello", source: "extension" }),
       expect.objectContaining({ name: "extension:new", source: "extension" }),
+      expect.objectContaining({ name: "extension:init", source: "extension" }),
       expect.objectContaining({ name: "prompt:review", source: "prompt" }),
       expect.objectContaining({ name: "skill:fixture", source: "skill" })
     ]));

@@ -266,6 +266,7 @@ export type WorkerCommand =
   | InitCommand
   | { id: string; type: "list_commands" }
   | { id: string; type: "execute_command"; commandId: string; args: string; runId: string; startedAt?: number; checkpoint?: CheckpointRef | null; images?: ImageContent[] }
+  | { id: string; type: "init_agents"; runId: string; startedAt?: number; checkpoint?: CheckpointRef | null }
   | { id: string; type: "compact"; runId: string; startedAt?: number; instructions?: string }
   | {
       id: string;

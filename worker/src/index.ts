@@ -20,6 +20,7 @@ import {
   sameVersions
 } from "./delta.js";
 import { JsonLineDecoder } from "./framing.js";
+import { inspectInitAgentsResult, prepareInitAgents } from "./init-agents.js";
 import { RUN_TIMING_ENTRY_TYPE, RUN_TIMING_VERSION, resolveRunTimings } from "./run-timing.js";
 import { expandTemplate } from "./slash.js";
 import {
@@ -73,6 +74,7 @@ type AgentSession = Awaited<ReturnType<PiModule["createAgentSession"]>>["session
 type ModelRuntime = Awaited<ReturnType<PiModule["ModelRuntime"]["create"]>>;
 
 let taskId: string | undefined;
+let workspacePath: string | undefined;
 let session: AgentSession | undefined;
 let piModule: PiModule | undefined;
 let modelRuntime: ModelRuntime | undefined;
@@ -208,7 +210,7 @@ function respond(id: string, result: unknown): void {
 
 function refreshCommandCatalog(): SlashCommand[] {
   if (!session) throw new Error("Worker is not initialized");
-  const taken = new Set(["compact", "new", "name", "copy"]);
+  const taken = new Set(["compact", "init", "new", "name", "copy"]);
   const entries: Array<{ source: SlashCommand["source"]; invocation: string; description?: string; label: string; templateContent?: string; skillFile?: string; skillBaseDir?: string }> = [
     ...session.extensionRunner.getRegisteredCommands()
       .filter((entry) => !entry.sourceInfo.path.startsWith("<inline:"))
@@ -839,6 +841,7 @@ async function prepareImages(images: ImageContent[] | undefined): Promise<ImageC
 async function initialize(command: InitCommand): Promise<void> {
   if (session) throw new Error("Worker is already initialized");
   taskId = command.taskId;
+  workspacePath = command.cwd;
   activeCredential = command.apiKey;
   activeAuthPath = command.authPath;
   activeProviderId = command.provider.id;
@@ -1076,6 +1079,8 @@ function recordCheckpoint(checkpoint: CheckpointRef | null | undefined): void {
  * One prompt, shared by `prompt` and `resend`. The response goes out once the run is marked
  * running, so a request never waits for the run itself.
  */
+type PromptOutcome = "completed" | "stopped" | "failed";
+
 async function runPrompt(
   commandId: string,
   runId: string,
@@ -1084,9 +1089,10 @@ async function runPrompt(
   images: ImageContent[] | undefined,
   checkpoint: CheckpointRef | null | undefined,
   literal = false
-): Promise<void> {
+): Promise<PromptOutcome> {
   if (!session || !taskId) throw new Error("Worker is not initialized");
   stopRequested = false;
+  let outcome: PromptOutcome = "failed";
   const previousUserEntryIds = new Set(session.sessionManager.getBranch()
     .filter((entry) => entry.type === "message" && entry.message.role === "user")
     .map((entry) => entry.id));
@@ -1097,6 +1103,8 @@ async function runPrompt(
     const prepared = await prepareImages(images);
     recordCheckpoint(checkpoint);
     await session.prompt(text, { ...(prepared.length > 0 ? { images: prepared } : {}), expandPromptTemplates: !literal });
+    const lastAssistant = [...session.messages].reverse().find((message) => message.role === "assistant");
+    outcome = stopRequested ? "stopped" : lastAssistant?.stopReason === "error" || lastAssistant?.stopReason === "aborted" ? "failed" : "completed";
     // Pi settles a run before `prompt` resolves. Still active here means no run started at all
     // (an extension command handled the text), and nothing else would report the chat idle.
     if (activeRun?.runId === runId) {
@@ -1105,6 +1113,7 @@ async function runPrompt(
       send({ type: "run_state", taskId, runId, state: "idle" });
     }
   } catch (error) {
+    outcome = stopRequested ? "stopped" : "failed";
     finalizeActiveRun();
     activeRun = undefined;
     if (!stopRequested) send({ type: "worker_error", taskId, message: safeError(error) });
@@ -1112,6 +1121,7 @@ async function runPrompt(
   }
   stopRequested = false;
   emitBoundary();
+  return outcome;
 }
 
 /**
@@ -1183,6 +1193,33 @@ async function handle(command: WorkerCommand): Promise<void> {
         line = `<skill name="${entry.invocation.slice(6)}" location="${entry.skillFile}">\nReferences are relative to ${entry.skillBaseDir}.\n\n${body}\n</skill>${command.args.trim() ? `\n\n${command.args.trim()}` : ""}`;
       }
       await runPrompt(command.id, command.runId, runStartedAt(command.startedAt), line, command.images, command.checkpoint, entry.item.source !== "extension");
+      return;
+    } else if (command.type === "init_agents") {
+      if (builtins.planMode.getState().mode === "plan") throw new Error("Switch to Build mode before running /init.");
+      if (!workspacePath) throw new Error("The workspace is not available for /init.");
+      const target = await prepareInitAgents(workspacePath);
+      const outcome = await runPrompt(command.id, command.runId, runStartedAt(command.startedAt), target.prompt, undefined, command.checkpoint, true);
+      if (outcome === "failed") return;
+      try {
+        const result = await inspectInitAgentsResult(target);
+        if (result === "created" || result === "updated") {
+          // Even a stopped run may have changed the file before cancellation. Keep the next
+          // prompt's context aligned with what is now on disk.
+          await session.reload();
+          applyDisabledTools();
+          forceFullSnapshot = true;
+          emitSnapshot();
+        }
+        if (outcome === "stopped") return;
+        if (result === "absent") {
+          notice("No AGENTS.md was created. Review the run for missing project guidance or a failed write.", "warning");
+        } else {
+          const verb = result === "created" ? "Created" : result === "updated" ? "Updated" : "Left unchanged";
+          notice(`${verb} AGENTS.md in this workspace.`, "info");
+        }
+      } catch (error) {
+        send({ type: "worker_error", taskId, message: safeError(error) });
+      }
       return;
     } else if (command.type === "compact") {
       if (session.sessionManager.getBranch().filter((entry) => entry.type === "message" && entry.message.role === "user").length < 2) {
@@ -1285,14 +1322,14 @@ async function handle(command: WorkerCommand): Promise<void> {
     if (!REQUEST_COMMANDS.has(command.type)) send({ type: "worker_error", taskId, message: safeError(error) });
     // The host marks a chat running before it sends a prompt; one refused before it started
     // must say it is idle again. (A run that did start reports its own end.)
-    if (taskId && (command.type === "prompt" || command.type === "resend" || command.type === "execute_command" || command.type === "compact") && activeRun?.runId !== command.runId) {
+    if (taskId && (command.type === "prompt" || command.type === "resend" || command.type === "execute_command" || command.type === "init_agents" || command.type === "compact") && activeRun?.runId !== command.runId) {
       send({ type: "run_state", taskId, runId: command.runId, state: "idle" });
     }
   }
 }
 
 /** Commands the host sends with `worker::request` and whose failures it reports itself. */
-const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "list_commands", "execute_command", "compact"]);
+const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "list_commands", "execute_command", "init_agents", "compact"]);
 
 /**
  * Remove every credential this worker holds from `text`: the chat's own key or sign-in, and

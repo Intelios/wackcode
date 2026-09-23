@@ -1,4 +1,10 @@
-import type { PlanState, SessionSnapshot, SnapshotDelta, TodoState } from "./types";
+import type { PlanState, SessionSnapshot, SnapshotDelta, TaskMode, TodoState } from "./types";
+
+export function validateInitCommand(args: string, projectId: string | null, mode: TaskMode): void {
+  if (args.trim()) throw new Error("/init does not accept arguments.");
+  if (!projectId) throw new Error("/init needs a project chat. Start a new chat and select a project folder.");
+  if (mode === "plan") throw new Error("Switch to Build mode before running /init.");
+}
 
 export function titleFromPrompt(message: string, max = 48): string {
   const line = message

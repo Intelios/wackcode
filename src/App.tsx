@@ -4,7 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { api } from "./api";
 import { modelIsReady, pickThinkingLevel } from "./model-utils";
-import { titleFromPrompt, samePlanState, sameTodoState, applySnapshotDelta } from "./chat-utils";
+import { titleFromPrompt, samePlanState, sameTodoState, applySnapshotDelta, validateInitCommand } from "./chat-utils";
 import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix } from "./tree-utils";
 import { pruneDisabledTools, sameToolCatalog } from "./tool-utils";
 import type {
@@ -64,6 +64,7 @@ const CHANGES_OPEN_KEY = "wackcode:changesOpen";
 const COLLAPSED_PROJECTS_KEY = "wackcode:collapsedProjects";
 const APP_SLASH_COMMANDS: SlashCommand[] = [
   { id: "app:compact", name: "compact", description: "Summarize older conversation context", source: "app", sourceLabel: "WackCode" },
+  { id: "app:init", name: "init", description: "Create or refine project AGENTS.md", source: "app", sourceLabel: "WackCode" },
   { id: "app:new", name: "new", description: "Open a new chat", source: "app", sourceLabel: "WackCode" },
   { id: "app:name", name: "name", description: "Rename this chat", source: "app", sourceLabel: "WackCode" },
   { id: "app:copy", name: "copy", description: "Copy the latest assistant message", source: "app", sourceLabel: "WackCode" }
@@ -505,12 +506,16 @@ export default function App() {
     if (!choice) { setSettingsOpen(true); return Promise.resolve(undefined); }
     const epoch = draftEpoch.current;
     const pending = (async () => { try {
-      const task = await api.createTask({
+      let task = await api.createTask({
         projectId: active.projectId,
         useWorktree: active.useWorktree && Boolean(draftProject?.gitHasHead),
         name: "New chat",
         ...choice
       });
+      if (active.mode === "plan") {
+        try { task = await api.setTaskMode(task.id, "plan"); }
+        catch (reason) { await api.deleteTask(task.id); throw reason; }
+      }
       if (epoch !== draftEpoch.current || selectedTaskRef.current) {
         await api.deleteTask(task.id);
         return undefined;
@@ -546,6 +551,7 @@ export default function App() {
       throw new Error(`/${name} does not accept arguments.`);
     }
     if (name === "name" && !args.trim()) throw new Error("Enter a name after /name.");
+    if (name === "init") validateInitCommand(args, task.projectId, currentMode);
     try {
       if (name === "new") { openDraft(task.projectId); return true; }
       if (name === "name") {
@@ -568,6 +574,7 @@ export default function App() {
       patchTask(id, { status: "running", lastError: null });
       patchRuntime(id, { error: undefined, activity: "starting", activeRun: { startedAt }, slashCommandsError: undefined });
       if (name === "compact") await api.compactTask(id, args, startedAt);
+      else if (name === "init") await api.initAgents(id, startedAt);
       else {
         const command = runtime?.slashCommands?.find((entry) => entry.name === name);
         if (!command) throw new Error("That command changed. Open the command list and try again.");

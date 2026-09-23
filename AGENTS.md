@@ -141,6 +141,7 @@ Adding or changing a field on a task/provider/project means **four** files, in s
 | `create_task` | commands.rs:170 | New chat; optional worktree else per-chat scratch folder. |
 | `configure_task` | commands.rs:244 | Change provider/model/thinking; refuses while running; restarts worker. |
 | `open_task` | commands.rs:273 | Ensure worker, then request `snapshot`. |
+| `init_agents` | commands.rs | Build-mode project chat only; checkpoint and prompt the worker to create/refine workspace-root `AGENTS.md`, then reload Pi's context. |
 | `prompt` | commands.rs:281 | Configure, ensure worker, mark the task running, take a checkpoint, send `prompt` with fresh `runId`. |
 | `resend_message` | commands.rs | Retry or edit: optionally restore files first, then `request(resend)`; restores them again if the worker refuses. |
 | `navigate_task` | commands.rs | Rewind / switch version / undo rewind via `request(navigate)`, then an optional file restore. |

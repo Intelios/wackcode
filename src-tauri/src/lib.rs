@@ -56,6 +56,7 @@ pub fn run() {
             commands::open_task,
             commands::list_commands,
             commands::execute_command,
+            commands::init_agents,
             commands::compact_task,
             commands::prompt,
             commands::resend_message,

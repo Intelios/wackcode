@@ -743,6 +743,34 @@ pub async fn execute_command(app: AppHandle, state: State<'_, MetadataState>, in
 }
 
 #[tauri::command]
+pub async fn init_agents(app: AppHandle, state: State<'_, MetadataState>, task_id: String, started_at: u64) -> Result<String, String> {
+    let lock = task_lock(&app, &task_id);
+    let _guard = lock.lock().await;
+    let (task, provider) = task_and_provider(&state, &task_id)?;
+    if matches!(task.status, TaskStatus::Running | TaskStatus::Stopping) {
+        return Err("Wait for this chat to finish before running /init.".into());
+    }
+    validate_init_agents_task(task.project_id.as_deref(), task.mode)?;
+    let api_key = credential_for(&app, &state, &provider)?;
+    worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
+    set_status(&state, &task.id, TaskStatus::Running)?;
+    let checkpoint = match checkpoint_location(&app, &state, &task) {
+        Ok(location) => snapshot_quietly(&app, &task.id, &location).await,
+        Err(_) => None,
+    };
+    let run_id = Uuid::new_v4().to_string();
+    let result = worker::request(&app, &task.id, json!({
+        "id": Uuid::new_v4().to_string(), "type": "init_agents",
+        "startedAt": started_at, "runId": run_id, "checkpoint": checkpoint
+    }), REQUEST_TIMEOUT).await;
+    if let Err(error) = result {
+        let _ = set_status(&state, &task.id, TaskStatus::Idle);
+        return Err(error);
+    }
+    Ok(run_id)
+}
+
+#[tauri::command]
 pub async fn compact_task(app: AppHandle, state: State<'_, MetadataState>, task_id: String, instructions: String, started_at: u64) -> Result<String, String> {
     if instructions.len() > 100_000 { return Err("Compaction instructions are too long.".into()); }
     let lock = task_lock(&app, &task_id);
@@ -1348,6 +1376,12 @@ fn validate_checkpoint_id(checkpoint_id: &str) -> Result<(), String> {
     if checkpoints::valid_checkpoint_id(checkpoint_id) { Ok(()) } else { Err("That checkpoint id is not valid.".into()) }
 }
 
+fn validate_init_agents_task(project_id: Option<&str>, mode: TaskMode) -> Result<(), String> {
+    if project_id.is_none() { return Err("/init needs a project chat. Start a new chat and select a project folder.".into()); }
+    if mode == TaskMode::Plan { return Err("Switch to Build mode before running /init.".into()); }
+    Ok(())
+}
+
 fn task_and_provider(state: &State<'_, MetadataState>, task_id: &str) -> Result<(TaskRecord, ProviderRecord), String> {
     let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
     let task = data.tasks.iter().find(|task| task.id == task_id).cloned().ok_or_else(|| "Task not found".to_string())?;
@@ -1501,6 +1535,13 @@ fn limit(value: &str, count: usize) -> String { value.chars().take(count).collec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn init_requires_a_project_and_build_mode() {
+        assert!(validate_init_agents_task(Some("project"), TaskMode::Build).is_ok());
+        assert!(validate_init_agents_task(None, TaskMode::Build).unwrap_err().contains("project"));
+        assert!(validate_init_agents_task(Some("project"), TaskMode::Plan).unwrap_err().contains("Build mode"));
+    }
 
     #[test]
     fn provider_validation_allows_discovered_models_with_unknown_limits() {

@@ -8,7 +8,7 @@ Conversations are Pi session trees, so nothing is lost when you change course: r
 
 Sub-agents are an optional built-in, off until you switch them on in Settings › Packages. When they're on, the agent can hand a self-contained task to a sub-agent that has its own context window, or run several at once. WackCode ships three roles: Scout (read-only reconnaissance), Reviewer (read-only code review) and Worker (edits files). You can add your own. Each one uses the chat's model unless you give it its own on the Sub-agents settings page. By default the agent only delegates when you ask, because every sub-agent is extra model usage. Read-only sub-agents run in parallel; ones that edit files take turns. In Plan mode, only read-only sub-agents run. Each call appears in the chat as a card showing each sub-agent's progress, answer and token use.
 
-Type `/` in the composer to browse commands from enabled packages, prompt templates, and skills. WackCode also provides `/compact [instructions]`, `/new`, `/name <name>`, and `/copy`. Selecting a suggestion inserts it so you can add arguments before sending. A new draft initializes its chat when you type `/`, without sending a model prompt.
+Type `/` in the composer to browse commands from enabled packages, prompt templates, and skills. WackCode also provides `/init`, `/compact [instructions]`, `/new`, `/name <name>`, and `/copy`. `/init` takes no arguments and creates or carefully improves a concise `AGENTS.md` in a Build-mode project chat's current workspace; its change appears in the normal file diff. Selecting a suggestion inserts it so you can add arguments before sending. A new draft initializes its chat when you type `/`, without sending a model prompt.
 
 ## Run from source
 

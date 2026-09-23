@@ -78,6 +78,8 @@ worker/         Node child process wrapping @earendil-works/pi-coding-agent 0.86
   src/model-runtime.ts    Builds a Pi ModelRuntime for one connection (models.json, key, auth file). Used by init and sub-agents.
   src/tree.ts     Pure session-tree helpers: versions of a message, checkpoint lookup, turn ends, marker entries.
   src/run-timing.ts  "Worked for" durations, persisted as custom entries after each run.
+  src/thinking-timing.ts  "Thought for" durations: each thinking block clocked from Pi's thinking_start/_end
+                  stream events, sent as the block's `durationMs`, saved on the run's timing entry by entry id.
   src/manager.ts  Short-lived package-manager process wrapping Pi's DefaultPackageManager.
   src/manager-protocol.ts  Its protocol. Frames are \x1e-prefixed because npm shares stdout.
   src/framing.ts  JsonLineDecoder. Splits on LF only; U+2028/U+2029 inside strings are safe. Joins a line's

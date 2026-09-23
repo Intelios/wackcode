@@ -328,6 +328,8 @@ export interface NormalizedBlock {
   imageId?: string;
   /** Image blocks: a small `data:` URL preview, absent until the worker has generated it. */
   thumbnail?: string;
+  /** Thinking blocks: how long the model reasoned. Absent while it still is, and when never clocked. */
+  durationMs?: number;
   toolName?: string;
   toolCallId?: string;
   arguments?: unknown;

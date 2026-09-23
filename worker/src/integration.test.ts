@@ -16,7 +16,7 @@ type SnapshotView = {
     id?: string;
     role?: string;
     timestamp?: number;
-    blocks: Array<{ type: string; text?: string; toolName?: string; details?: unknown; imageId?: string; thumbnail?: string; mimeType?: string }>;
+    blocks: Array<{ type: string; text?: string; toolName?: string; details?: unknown; imageId?: string; thumbnail?: string; mimeType?: string; durationMs?: number }>;
     entryId?: string;
     versions?: { index: number; total: number; previous?: string; next?: string; group: string };
     checkpoint?: Checkpoint;
@@ -249,6 +249,32 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
       })}\n\n`);
       response.end("data: [DONE]\n\n");
     }, 60);
+    return;
+  }
+  if (authorization === "Bearer think-secret") {
+    // Reasons for ~400 ms, then answers: long enough for the thinking clock to be measurable.
+    const deltas = [
+      ...["Let me ", "work ", "this ", "out."].map((reasoning_content) => ({ reasoning_content })),
+      ...["Thought ", "it through."].map((content) => ({ content }))
+    ];
+    let index = 0;
+    const timer = setInterval(() => {
+      if (index < deltas.length) {
+        response.write(`data: ${JSON.stringify({
+          id: `think-${index}`, object: "chat.completion.chunk", created: index, model: "shared-model",
+          choices: [{ index: 0, delta: { role: "assistant", ...deltas[index] }, finish_reason: null }]
+        })}\n\n`);
+        index += 1;
+        return;
+      }
+      clearInterval(timer);
+      response.write(`data: ${JSON.stringify({
+        id: "think-done", object: "chat.completion.chunk", created: 9, model: "shared-model",
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+        usage: { prompt_tokens: 4, completion_tokens: 6, total_tokens: 10 }
+      })}\n\n`);
+      response.end("data: [DONE]\n\n");
+    }, 130);
     return;
   }
   const suffix = authorization === "Bearer alpha-secret" ? "alpha" : "beta";
@@ -811,6 +837,43 @@ describe("built-in extensions", () => {
     expect(restored.ready.snapshot?.runTimings).toHaveLength(2);
     const restoredUserIds = restored.ready.snapshot?.messages.filter((message) => message.role === "user").map((message) => message.id);
     expect(restored.ready.snapshot?.runTimings.map((timing) => timing.userMessageId)).toEqual(restoredUserIds);
+  });
+
+  it("clocks a thinking block while it streams and keeps its duration across a restart", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-thinking-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const first = await initializeWorker(provider.baseUrl, "think-secret", workspace, "think-task");
+    cleanup.push(() => first.worker.shutdown());
+    first.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "think-run", message: "Think first." });
+    await first.worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === "think-run");
+
+    type Message = SnapshotView["messages"][number];
+    const thinkingOf = (message: Message | undefined) => message?.blocks.find((block) => block.type === "thinking");
+    const partials = first.worker.outputs
+      .filter((output) => output.type === "partial")
+      .map((output) => (output as unknown as { message: Message }).message);
+    // While the model reasons, the block has no duration yet.
+    expect(partials.some((message) => thinkingOf(message) && !message.blocks.some((block) => block.type === "text") && thinkingOf(message)?.durationMs === undefined)).toBe(true);
+    // Once the answer starts, the streamed block already carries how long the reasoning took.
+    const answering = partials.find((message) => message.blocks.some((block) => block.type === "text" && block.text));
+    const streamedDuration = thinkingOf(answering)?.durationMs;
+    expect(streamedDuration).toBeGreaterThanOrEqual(300);
+
+    // The saved message keeps the same duration, and the timestamp that ties it to its partial.
+    const saved = first.worker.view?.messages.find((message) => message.role === "assistant");
+    expect(thinkingOf(saved)?.durationMs).toBe(streamedDuration);
+    expect(saved?.timestamp).toBe(answering?.timestamp);
+
+    const sessionFile = first.worker.view?.sessionFile;
+    expect(sessionFile).toBeTruthy();
+    await first.worker.shutdown();
+    const restored = await initializeWorker(provider.baseUrl, "think-secret", workspace, "think-task", sessionFile);
+    cleanup.push(() => restored.worker.shutdown());
+    const reopened = restored.ready.snapshot?.messages.find((message) => message.role === "assistant");
+    expect(thinkingOf(reopened)?.text).toBe("Let me work this out.");
+    expect(thinkingOf(reopened)?.durationMs).toBe(streamedDuration);
   });
 
   it("registers the built-in tools as wackcode sources that ignore the denylist", async () => {

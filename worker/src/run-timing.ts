@@ -3,6 +3,9 @@ import type { RunTiming } from "./protocol.js";
 export const RUN_TIMING_ENTRY_TYPE = "wackcode-run-timing";
 export const RUN_TIMING_VERSION = 1;
 
+/** Each thinking block's duration in content order; null where a block was never clocked. */
+export type ThinkingDurations = Array<number | null>;
+
 export interface PersistedRunTiming {
   version: typeof RUN_TIMING_VERSION;
   runId: string;
@@ -10,6 +13,8 @@ export interface PersistedRunTiming {
   startedAt: number;
   endedAt: number;
   durationMs: number;
+  /** How long the run's assistant messages reasoned, by entry id. Absent when none did. */
+  thinking?: Record<string, ThinkingDurations>;
 }
 
 interface SessionEntryLike {

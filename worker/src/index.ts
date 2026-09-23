@@ -21,7 +21,8 @@ import {
 } from "./delta.js";
 import { JsonLineDecoder } from "./framing.js";
 import { inspectInitAgentsResult, prepareInitAgents } from "./init-agents.js";
-import { RUN_TIMING_ENTRY_TYPE, RUN_TIMING_VERSION, resolveRunTimings } from "./run-timing.js";
+import { RUN_TIMING_ENTRY_TYPE, RUN_TIMING_VERSION, resolveRunTimings, type ThinkingDurations } from "./run-timing.js";
+import { ThinkingClock, resolveThinkingDurations } from "./thinking-timing.js";
 import { expandTemplate } from "./slash.js";
 import {
   CHECKPOINT_ENTRY_TYPE,
@@ -175,6 +176,7 @@ let pendingPartial: unknown;
 // The message Pi is currently streaming into. It mutates in place on every message_update, so
 // it is never served from the normalization cache; cleared at each boundary in dropPartial().
 let streamingMessage: unknown;
+const thinkingClock = new ThinkingClock();
 
 // Normalized transcript messages keyed by Pi's own message objects, which stay identical from
 // message_end onward (Pi stores the same objects on its session entries, and identity survives
@@ -303,12 +305,13 @@ function imageBlock(block: Record<string, unknown>): NormalizedBlock {
   return { type: "image", mimeType, imageId: preview.id, thumbnail: preview.url };
 }
 
-function normalizeBlocks(content: unknown, role: string): NormalizedBlock[] {
+function normalizeBlocks(content: unknown, role: string, thinking?: ThinkingDurations): NormalizedBlock[] {
   if (typeof content === "string") {
     return [{ type: role === "toolResult" ? "tool-result" : "text", text: content }];
   }
   if (!Array.isArray(content)) return [];
 
+  let thought = 0;
   return content.flatMap((item): NormalizedBlock[] => {
     if (typeof item === "string") return [{ type: "text", text: item }];
     if (!item || typeof item !== "object") return [];
@@ -318,7 +321,10 @@ function normalizeBlocks(content: unknown, role: string): NormalizedBlock[] {
     // only its text. Left in, each would become an empty result sharing the call's id and
     // overwrite the real one.
     if (block.type === "image") return role === "toolResult" ? [] : [imageBlock(block)];
-    if (block.type === "thinking") return [{ type: "thinking", text: String(block.thinking ?? block.text ?? "") }];
+    if (block.type === "thinking") {
+      const durationMs = thinking?.[thought++];
+      return [{ type: "thinking", text: String(block.thinking ?? block.text ?? ""), ...(typeof durationMs === "number" ? { durationMs } : {}) }];
+    }
     if (block.type === "toolCall") {
       return [{
         type: "tool-call",
@@ -331,13 +337,13 @@ function normalizeBlocks(content: unknown, role: string): NormalizedBlock[] {
   });
 }
 
-function normalizeMessage(message: unknown, index: number): NormalizedMessage | undefined {
+function normalizeMessage(message: unknown, index: number, thinking?: ThinkingDurations): NormalizedMessage | undefined {
   if (!message || typeof message !== "object") return undefined;
   const raw = message as Record<string, unknown>;
   const rawRole = String(raw.role ?? "system");
   const role = rawRole === "toolResult" ? "tool" : rawRole;
   if (role !== "user" && role !== "assistant" && role !== "tool" && role !== "system") return undefined;
-  const blocks = normalizeBlocks(raw.content, rawRole);
+  const blocks = normalizeBlocks(raw.content, rawRole, thinking);
   if (rawRole === "toolResult") {
     // An image-only result still has to mark its call as finished.
     if (blocks.length === 0) blocks.push({ type: "tool-result", text: "" });
@@ -459,6 +465,16 @@ let treeCache: { count: number; index: TreeIndex } | undefined;
 // Run timings only change when the session gains entries (a run-end marker, or navigation's
 // leave/nav markers), which is exactly when the tree index rebuilds.
 let runTimingsCache: { count: number; value: RunTiming[] } | undefined;
+// Saved thinking durations by assistant entry id. They ride run-timing entries, so they too
+// change only when the session gains entries.
+let savedThinkingCache: { count: number; value: Map<string, ThinkingDurations> } | undefined;
+
+function savedThinking(entries: EntryLike[]): Map<string, ThinkingDurations> {
+  if (savedThinkingCache?.count !== entries.length) {
+    savedThinkingCache = { count: entries.length, value: resolveThinkingDurations(entries) };
+  }
+  return savedThinkingCache.value;
+}
 
 function treeIndex(entries: EntryLike[]): TreeIndex {
   if (treeCache?.count !== entries.length) treeCache = { count: entries.length, index: buildTreeIndex(entries) };
@@ -484,7 +500,7 @@ function visibleRole(raw: unknown): NormalizedMessage["role"] | undefined {
  * their object identity across emissions and the diff against the last sent state is
  * O(changes). Cached objects are never mutated; any change rebuilds from scratch.
  */
-function transcriptMessages(path: EntryLike[], index: TreeIndex): NormalizedMessage[] {
+function transcriptMessages(path: EntryLike[], index: TreeIndex, thinking: Map<string, ThinkingDurations>): NormalizedMessage[] {
   if (!session) return [];
   const entryIds = new Map<unknown, string>();
   for (const entry of path) if (entry.type === "message") entryIds.set(entry.message, entry.id);
@@ -544,7 +560,9 @@ function transcriptMessages(path: EntryLike[], index: TreeIndex): NormalizedMess
     ) {
       return cached.message;
     }
-    const message = normalizeMessage(row.raw, row.position);
+    // Clocked by this worker, or saved with an earlier run.
+    const durations = thinkingClock.durations(row.raw) ?? (row.entryId ? thinking.get(row.entryId) : undefined);
+    const message = normalizeMessage(row.raw, row.position, durations);
     if (!message) return null;
     if (row.entryId) {
       message.entryId = row.entryId;
@@ -570,8 +588,9 @@ function getSnapshot(rev: number): SessionSnapshot {
   const stats = session.getSessionStats();
   const model = session.model;
   const path = session.sessionManager.getBranch() as EntryLike[];
-  const index = treeIndex(session.sessionManager.getEntries() as EntryLike[]);
-  const messages = transcriptMessages(path, index);
+  const entries = session.sessionManager.getEntries() as EntryLike[];
+  const index = treeIndex(entries);
+  const messages = transcriptMessages(path, index, savedThinking(entries));
   const visibleUsers = messages.filter((message) => message.role === "user" && message.entryId);
   const leaf = session.sessionManager.getLeafEntry() as EntryLike | undefined;
   if (!runTimingsCache || runTimingsCache.count !== treeCache?.count) {
@@ -608,10 +627,19 @@ function finalizeActiveRun(): void {
   if (!session || !activeRun || activeRun.finalized) return;
   const run = activeRun;
   run.finalized = true;
-  const userEntry = session.sessionManager.getBranch().slice().reverse().find((entry) =>
+  const reasoned = thinkingClock.takeUnsaved();
+  const branch = session.sessionManager.getBranch();
+  const userEntry = branch.slice().reverse().find((entry) =>
     entry.type === "message" && entry.message.role === "user" && !run.previousUserEntryIds.has(entry.id)
   );
   if (!userEntry || userEntry.type !== "message") return;
+  // Pi has saved every message of the run by the time it settles, on entries holding the very
+  // objects the clock timed.
+  const thinking: Record<string, ThinkingDurations> = {};
+  for (const entry of branch) {
+    const durations = entry.type === "message" ? reasoned.get(entry.message) : undefined;
+    if (durations) thinking[entry.id] = durations;
+  }
   const endedAt = Math.max(Date.now(), run.startedAt);
   session.sessionManager.appendCustomEntry(RUN_TIMING_ENTRY_TYPE, {
     version: RUN_TIMING_VERSION,
@@ -619,7 +647,8 @@ function finalizeActiveRun(): void {
     userMessageEntryId: userEntry.id,
     startedAt: run.startedAt,
     endedAt,
-    durationMs: endedAt - run.startedAt
+    durationMs: endedAt - run.startedAt,
+    ...(Object.keys(thinking).length > 0 ? { thinking } : {})
   });
 }
 
@@ -737,7 +766,7 @@ function flushPartial(): void {
     partialTimer = undefined;
   }
   if (!taskId || pendingPartial === undefined) return;
-  const message = normalizeMessage(pendingPartial, 0);
+  const message = normalizeMessage(pendingPartial, 0, thinkingClock.live(pendingPartial));
   pendingPartial = undefined;
   if (message) send({ type: "partial", taskId, message });
 }
@@ -1011,6 +1040,11 @@ async function initialize(command: InitCommand): Promise<void> {
       if (typeof failed?.errorMessage === "string" && failed.errorMessage) {
         send({ type: "worker_error", taskId: command.taskId, message: safeError(failed.errorMessage) });
       }
+    }
+    if ((value.message as { role?: unknown } | undefined)?.role === "assistant") {
+      if (eventType === "message_start") thinkingClock.begin();
+      else if (eventType === "message_update") thinkingClock.update(value.assistantMessageEvent);
+      else if (eventType === "message_end") thinkingClock.end(value.message);
     }
     if (eventType === "message_update") {
       // The streaming message mutates in place, so it must never be served from the cache.

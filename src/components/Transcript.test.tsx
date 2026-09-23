@@ -38,6 +38,41 @@ describe("Transcript tool output", () => {
   });
 });
 
+describe("Transcript thinking", () => {
+  const user: NormalizedMessage = { id: "user-1", role: "user", timestamp: 1_000, blocks: [{ type: "text", text: "Why?" }] };
+  const streamed = (blocks: NormalizedMessage["blocks"]): NormalizedMessage => ({ id: "assistant-2000-0", role: "assistant", timestamp: 2_000, blocks });
+
+  it("can be expanded while the model reasons, and stays open with its measured time once answered and saved", () => {
+    const view = render(<Transcript messages={[user]} running partial={streamed([{ type: "thinking", text: "Weighing the options" }])} />);
+    const row = screen.getByRole("button", { name: "Thinking…" });
+    expect(row).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(row);
+    expect(screen.getByText("Weighing the options")).toBeInTheDocument();
+
+    // The answer has started: the worker has clocked the reasoning, though the message still streams.
+    const answering = streamed([{ type: "thinking", text: "Weighing the options", durationMs: 4_200 }, { type: "text", text: "Because" }]);
+    view.rerender(<Transcript messages={[user]} running partial={answering} />);
+    expect(screen.getByRole("button", { name: "Thought for 4s" })).toHaveAttribute("aria-expanded", "true");
+
+    // The saved message replaces the streamed one as a separate element, and keeps the row open.
+    const saved: NormalizedMessage = { ...answering, id: "entry-assistant", blocks: [answering.blocks[0], { type: "text", text: "Because." }] };
+    view.rerender(<Transcript messages={[user, saved]} running={false} />);
+    expect(screen.getByRole("button", { name: "Thought for 4s" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Weighing the options")).toBeInTheDocument();
+  });
+
+  it("labels saved reasoning with its duration, and without one when it was never clocked", () => {
+    const message = (id: string, timestamp: number, durationMs?: number): NormalizedMessage => ({
+      id, role: "assistant", timestamp, blocks: [{ type: "thinking", text: "Hmm", ...(durationMs === undefined ? {} : { durationMs }) }, { type: "text", text: "Done" }]
+    });
+    render(<Transcript messages={[user, message("a", 2_000, 400), message("b", 3_000, 75_000), message("c", 4_000)]} running={false} />);
+    expect(screen.getByRole("button", { name: "Thought for <1s" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Thought for 1m 15s" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reasoning" })).toBeInTheDocument();
+    expect(screen.queryByText("Thinking…")).not.toBeInTheDocument();
+  });
+});
+
 describe("Transcript sub-agent calls", () => {
   const call: NormalizedMessage = {
     id: "assistant-1",

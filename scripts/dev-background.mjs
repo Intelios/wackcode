@@ -19,6 +19,8 @@ import { fileURLToPath } from "node:url";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = 1420;
+// Where scripts/dev-app.mjs puts the dev binary. The debug and release bundles live elsewhere.
+const DEV_APP = "target/debug/dev-app/WackCode.app/Contents/MacOS/wackcode";
 const LOG_FILE = "/tmp/wackcode-dev.log";
 const POLL_MS = 400;
 const SETTLE_MS = 2000;
@@ -56,9 +58,9 @@ function alive(pid) {
   }
 }
 
-// The dev app runs as the bare cargo binary, which is exactly why macOS
-// automation struggles to identify it — and why we can spot it here: the
-// bundled release binary lives at .../MacOS/WackCode and never matches.
+// The dev app runs from the minimal bundle scripts/dev-app.mjs makes (or, under
+// a plain `tauri dev`, as the bare cargo binary). The debug and release bundles'
+// binaries live under .../bundle/macos/ and never match.
 async function findDevApp() {
   const { ok, stdout } = await run("ps", ["-axo", "pid=,comm="]);
   if (!ok) fail("Could not list processes with `ps`. Is this macOS?");
@@ -67,7 +69,7 @@ async function findDevApp() {
     const match = line.trim().match(/^(\d+)\s+(.*)$/);
     if (!match) continue;
     const comm = match[2].trim();
-    if (comm.endsWith("target/debug/wackcode") || comm === "wackcode") {
+    if (comm.endsWith(DEV_APP) || comm.endsWith("target/debug/wackcode") || comm === "wackcode") {
       found.push({ pid: Number(match[1]), command: comm });
     }
   }
@@ -166,11 +168,9 @@ function printReady(pid) {
   console.log("");
   console.log(`Ready. The WackCode dev app is running (pid ${pid}).`);
   console.log(
-    "The dev app is a bare binary with no .app bundle, so automation should"
+    "It runs from a minimal WackCode.app, so automation can target it by its"
   );
-  console.log(
-    'target its window by the title "WackCode" rather than by app identity.'
-  );
+  console.log("bundle id, com.wackcode.desktop.");
   console.log(`Log: ${LOG_FILE}`);
   console.log("Stop with: pnpm dev:stop");
 }

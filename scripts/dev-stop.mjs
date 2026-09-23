@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Tears down whatever a `pnpm dev:background` (or a stray foreground
-// `pnpm dev:desktop`) left behind: the bare debug app binary, this repo's
+// `pnpm dev:desktop`) left behind: the dev app binary, this repo's
 // tauri CLI, and Vite listening on port 1420. Safe to run when nothing is up,
 // and it never touches another project's processes or a foreign program that
 // happens to hold the port.
@@ -11,6 +11,8 @@ import { fileURLToPath } from "node:url";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = 1420;
+// Where scripts/dev-app.mjs puts the dev binary. The debug and release bundles live elsewhere.
+const DEV_APP = "target/debug/dev-app/WackCode.app/Contents/MacOS/wackcode";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -43,7 +45,7 @@ async function findDevApp() {
     const match = line.trim().match(/^(\d+)\s+(.*)$/);
     if (!match) continue;
     const comm = match[2].trim();
-    if (comm.endsWith("target/debug/wackcode") || comm === "wackcode") {
+    if (comm.endsWith(DEV_APP) || comm.endsWith("target/debug/wackcode") || comm === "wackcode") {
       found.push({ pid: Number(match[1]), command: comm });
     }
   }

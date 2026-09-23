@@ -10,7 +10,7 @@
     "prepare:worker": "node scripts/prepare-worker.mjs",
     "prepare:runtime": "node scripts/prepare-runtime.mjs",
     "mock:provider": "node scripts/mock-provider.mjs",
-    "dev:desktop": "tauri dev",
+    "dev:desktop": "tauri dev --runner \"$PWD/scripts/dev-runner.sh\"",
     "dev:background": "node scripts/dev-background.mjs",
     "dev:stop": "node scripts/dev-stop.mjs",
     "build:desktop": "pnpm prepare:runtime && tauri build",

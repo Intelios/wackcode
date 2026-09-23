@@ -14,6 +14,7 @@ import type {
   QuestionAnswer,
   RestoreResult,
   SaveProviderInput,
+  SlashCommand,
   SubagentConfig,
   SubscriptionProviderInfo,
   TaskMode,
@@ -74,6 +75,9 @@ export const api = {
     thinkingLevel: ThinkingLevel;
   }) => invoke<TaskRecord>("configure_task", { input }),
   openTask: (taskId: string) => invoke<void>("open_task", { taskId }),
+  listCommands: (taskId: string) => invoke<SlashCommand[]>("list_commands", { taskId }),
+  executeCommand: (input: { taskId: string; commandId: string; args: string; startedAt: number; images?: ImageContent[] }) => invoke<string>("execute_command", { input }),
+  compactTask: (taskId: string, instructions: string, startedAt: number) => invoke<string>("compact_task", { taskId, instructions, startedAt }),
   prompt: (input: {
     taskId: string;
     message: string;
@@ -85,6 +89,7 @@ export const api = {
     mode?: TaskMode;
     /** Refused by Rust unless the model has Vision turned on. */
     images?: ImageContent[];
+    literal?: boolean;
   }) => invoke<string>("prompt", { input }),
   /** Send a message again as a new version: unchanged (retry) or with new text (edit). */
   resendMessage: (input: {

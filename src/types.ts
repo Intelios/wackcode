@@ -88,6 +88,14 @@ export interface ImageContent {
   mimeType: string;
 }
 
+export interface SlashCommand {
+  id: string;
+  name: string;
+  description?: string;
+  source: "app" | "extension" | "prompt" | "skill";
+  sourceLabel: string;
+}
+
 interface ProviderBase {
   id: string;
   name: string;
@@ -493,6 +501,9 @@ export type WorkerEvent =
   | { type: "checkpoint_unavailable"; taskId: string; message: string };
 
 export interface TaskRuntime {
+  slashCommands?: SlashCommand[];
+  slashCommandsLoading?: boolean;
+  slashCommandsError?: string;
   snapshot?: SessionSnapshot;
   partial?: NormalizedMessage;
   /** Active prompt clock. The worker event supplies the run id after accepting the prompt. */

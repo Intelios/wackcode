@@ -231,6 +231,14 @@ export interface WorkerResources {
   themes: string[];
 }
 
+export interface SlashCommand {
+  id: string;
+  name: string;
+  description?: string;
+  source: "app" | "extension" | "prompt" | "skill";
+  sourceLabel: string;
+}
+
 /**
  * A workspace checkpoint: a tree in the chat's private shadow repository, taken by the host
  * before a prompt or when a branch is left. Recorded in the session so it follows the tree.
@@ -256,12 +264,16 @@ export interface NavigateResult {
 
 export type WorkerCommand =
   | InitCommand
+  | { id: string; type: "list_commands" }
+  | { id: string; type: "execute_command"; commandId: string; args: string; runId: string; startedAt?: number; checkpoint?: CheckpointRef | null; images?: ImageContent[] }
+  | { id: string; type: "compact"; runId: string; startedAt?: number; instructions?: string }
   | {
       id: string;
       type: "prompt";
       runId: string;
       startedAt?: number;
       message: string;
+      literal?: boolean;
       mode?: TaskMode;
       images?: ImageContent[];
       /** Recorded just above the user message; `null` records that no snapshot was possible. */

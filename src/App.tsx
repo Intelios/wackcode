@@ -22,6 +22,7 @@ import type {
   ProviderRecord,
   RestoreResult,
   SaveProviderInput,
+  SlashCommand,
   SubagentConfig,
   SubscriptionLoginEvent,
   TaskMode,
@@ -61,6 +62,12 @@ const LAST_PROJECT_KEY = "wackcode:lastProject";
 const NO_PROJECT_MODEL_KEY = "none";
 const CHANGES_OPEN_KEY = "wackcode:changesOpen";
 const COLLAPSED_PROJECTS_KEY = "wackcode:collapsedProjects";
+const APP_SLASH_COMMANDS: SlashCommand[] = [
+  { id: "app:compact", name: "compact", description: "Summarize older conversation context", source: "app", sourceLabel: "WackCode" },
+  { id: "app:new", name: "new", description: "Open a new chat", source: "app", sourceLabel: "WackCode" },
+  { id: "app:name", name: "name", description: "Rename this chat", source: "app", sourceLabel: "WackCode" },
+  { id: "app:copy", name: "copy", description: "Copy the latest assistant message", source: "app", sourceLabel: "WackCode" }
+];
 
 interface ModelChoice {
   providerId: string;
@@ -135,6 +142,10 @@ export default function App() {
   const [confirm, setConfirm] = useState<ConfirmState>();
   const [restoreDialog, setRestoreDialog] = useState<RestoreDialogState>();
   const [composerSeed, setComposerSeed] = useState<{ text: string; nonce: number }>();
+  const [composerTransfer, setComposerTransfer] = useState<{ taskId: string; text: string; images: ImageContent[]; nonce: number }>();
+  const draftComposer = useRef<{ text: string; images: ImageContent[] }>({ text: "", images: [] });
+  const slashDraftPromise = useRef<Promise<TaskRecord | undefined> | undefined>(undefined);
+  const draftEpoch = useRef(0);
   const [extensionRequests, setExtensionRequests] = useState<ExtensionUIRequest[]>([]);
   const [booting, setBooting] = useState(true);
   const [globalError, setGlobalError] = useState<string>();
@@ -254,7 +265,8 @@ export default function App() {
           const todoState = sameTodoState(runtime?.todoState, snapshot.todoState) ? runtime?.todoState : snapshot.todoState;
           return {
             ...current,
-            [taskId]: { ...runtime, snapshot, activeRun: snapshot.activeRun, planState, todoState, partial: undefined, error: undefined }
+            [taskId]: { ...runtime, snapshot, activeRun: snapshot.activeRun, planState, todoState, partial: undefined, error: undefined,
+              ...(payload.type === "ready" ? { slashCommands: undefined, slashCommandsError: undefined } : {}) }
           };
         });
         if (snapshot.planState) patchTask(taskId, { mode: snapshot.planState.mode });
@@ -465,9 +477,109 @@ export default function App() {
   }
 
   function openDraft(projectId?: string | null) {
+    draftEpoch.current += 1;
+    slashDraftPromise.current = undefined;
+    draftComposer.current = { text: "", images: [] };
+    setComposerTransfer(undefined);
     const resolved = projectId === undefined ? lastProjectId() : projectId;
+    selectedTaskRef.current = undefined;
     setSelectedTaskId(undefined);
     setDraft({ projectId: resolved, useWorktree: false });
+  }
+
+  async function loadSlashCommands(taskId: string) {
+    patchRuntime(taskId, { slashCommandsLoading: true, slashCommandsError: undefined });
+    try {
+      const commands = await api.listCommands(taskId);
+      patchRuntime(taskId, { slashCommands: commands, slashCommandsLoading: false });
+    } catch (reason) {
+      patchRuntime(taskId, { slashCommandsLoading: false, slashCommandsError: String(reason) });
+    }
+  }
+
+  function prepareSlashDraft(): Promise<TaskRecord | undefined> {
+    if (slashDraftPromise.current) return slashDraftPromise.current;
+    if (selectedTask) return Promise.resolve(selectedTask);
+    const active = draft ?? { projectId: lastProjectId(), useWorktree: false };
+    const choice = active.choice ?? defaultChoice(active.projectId);
+    if (!choice) { setSettingsOpen(true); return Promise.resolve(undefined); }
+    const epoch = draftEpoch.current;
+    const pending = (async () => { try {
+      const task = await api.createTask({
+        projectId: active.projectId,
+        useWorktree: active.useWorktree && Boolean(draftProject?.gitHasHead),
+        name: "New chat",
+        ...choice
+      });
+      if (epoch !== draftEpoch.current || selectedTaskRef.current) {
+        await api.deleteTask(task.id);
+        return undefined;
+      }
+      setData((current) => ({ ...current, tasks: [...current.tasks, task] }));
+      setComposerTransfer({ taskId: task.id, ...draftComposer.current, nonce: Date.now() });
+      setSelectedTaskId(task.id);
+      setDraft(undefined);
+      void loadSlashCommands(task.id);
+      return task;
+    } catch (reason) {
+      setGlobalError(String(reason));
+      slashDraftPromise.current = undefined;
+      return undefined;
+    } })();
+    slashDraftPromise.current = pending;
+    return pending;
+  }
+
+  function requestSlashCommands() {
+    if (selectedTask) void loadSlashCommands(selectedTask.id);
+    else void prepareSlashDraft();
+  }
+
+  async function sendSlash(name: string, args: string, images: ImageContent[]): Promise<boolean> {
+    const task = selectedTask ?? await slashDraftPromise.current;
+    if (!task || selectedBusy) throw new Error("Wait for this chat to be ready before running a command.");
+    const id = task.id;
+    const clearPreparedDraft = () => {
+      if (!selectedTask) setComposerTransfer({ taskId: id, text: "", images: [], nonce: Date.now() + 1 });
+    };
+    if ((name === "new" || name === "copy") && args.trim()) {
+      throw new Error(`/${name} does not accept arguments.`);
+    }
+    if (name === "name" && !args.trim()) throw new Error("Enter a name after /name.");
+    try {
+      if (name === "new") { openDraft(task.projectId); return true; }
+      if (name === "name") {
+        const updated = await api.renameTask(id, args.trim());
+        patchTask(id, updated);
+        appendNotice(id, { message: "Chat renamed.", level: "info" });
+        clearPreparedDraft();
+        return true;
+      }
+      if (name === "copy") {
+        const assistant = [...(runtime?.snapshot?.messages ?? [])].reverse().find((message) => message.role === "assistant");
+        const content = assistant?.blocks.filter((block) => block.type === "text").map((block) => block.text ?? "").join("\n").trim();
+        if (!content) throw new Error("There is no assistant message to copy.");
+        await writeText(content);
+        appendNotice(id, { message: "Assistant message copied.", level: "info" });
+        clearPreparedDraft();
+        return true;
+      }
+      const startedAt = Date.now();
+      patchTask(id, { status: "running", lastError: null });
+      patchRuntime(id, { error: undefined, activity: "starting", activeRun: { startedAt }, slashCommandsError: undefined });
+      if (name === "compact") await api.compactTask(id, args, startedAt);
+      else {
+        const command = runtime?.slashCommands?.find((entry) => entry.name === name);
+        if (!command) throw new Error("That command changed. Open the command list and try again.");
+        await api.executeCommand({ taskId: id, commandId: command.id, args, startedAt, images });
+      }
+      clearPreparedDraft();
+      return true;
+    } catch (reason) {
+      patchTask(id, { status: "idle" });
+      patchRuntime(id, { activeRun: undefined, slashCommandsError: String(reason) });
+      throw reason;
+    }
   }
 
   function setDraftProject(projectId: string | null) {
@@ -581,8 +693,8 @@ export default function App() {
     });
   }
 
-  async function sendPrompt(message: string, options: { images?: ImageContent[]; mode?: TaskMode } = {}): Promise<boolean> {
-    const { images, mode: modeOverride } = options;
+  async function sendPrompt(message: string, options: { images?: ImageContent[]; mode?: TaskMode; literal?: boolean } = {}): Promise<boolean> {
+    const { images, mode: modeOverride, literal } = options;
     if (!selectedTask) {
       const active = draft ?? { projectId: lastProjectId(), useWorktree: false };
       const choice = active.choice ?? defaultChoice(active.projectId);
@@ -592,13 +704,20 @@ export default function App() {
       }
       const startedAt = Date.now();
       let task: TaskRecord;
+      const pendingSlash = slashDraftPromise.current;
       try {
-        task = await api.createTask({
-          projectId: active.projectId,
-          useWorktree: active.useWorktree && Boolean(draftProject?.gitHasHead),
-          name: titleFromPrompt(message),
-          ...choice
-        });
+        if (pendingSlash) {
+          const prepared = await pendingSlash;
+          if (!prepared) return false;
+          task = prepared;
+        } else {
+          task = await api.createTask({
+            projectId: active.projectId,
+            useWorktree: active.useWorktree && Boolean(draftProject?.gitHasHead),
+            name: titleFromPrompt(message),
+            ...choice
+          });
+        }
       } catch (reason) {
         setGlobalError(String(reason));
         return false;
@@ -606,7 +725,7 @@ export default function App() {
       rememberModel(active.projectId, choice);
       localStorage.setItem(LAST_PROJECT_KEY, JSON.stringify(active.projectId));
       const mode = modeOverride ?? active.mode ?? "build";
-      setData((current) => ({ ...current, tasks: [...current.tasks, task] }));
+      if (!pendingSlash) setData((current) => ({ ...current, tasks: [...current.tasks, task] }));
       patchTask(task.id, { status: "running", lastError: null, mode });
       patchRuntime(task.id, { error: undefined, activity: "starting", activeRun: { startedAt } });
       try {
@@ -618,7 +737,8 @@ export default function App() {
           modelId: task.modelId,
           thinkingLevel: task.thinkingLevel,
           mode,
-          images
+          images,
+          literal
         });
       } catch (reason) {
         patchTask(task.id, { status: "idle" });
@@ -628,6 +748,7 @@ export default function App() {
       // already-running worker instead of racing it to spawn a second process.
       setSelectedTaskId(task.id);
       setDraft(undefined);
+      if (pendingSlash) setComposerTransfer({ taskId: task.id, text: "", images: [], nonce: Date.now() + 1 });
       return true;
     }
     if (selectedTask.status === "running" || selectedTask.status === "stopping") return false;
@@ -645,7 +766,8 @@ export default function App() {
         // modeOverride matters for "Approve & implement": the plan_state → record sync can
         // still be in flight when the follow-up prompt goes out.
         mode: modeOverride ?? currentMode,
-        images
+        images,
+        literal
       });
       if (selectedTask.name === "New chat") {
         const title = titleFromPrompt(message);
@@ -1132,7 +1254,7 @@ export default function App() {
         showArchived={showArchived}
         pendingDialogTaskIds={pendingDialogTaskIds}
         collapsedProjectIds={collapsedProjects}
-        onSelectTask={(id) => { setDraft(undefined); setSelectedTaskId(id); }}
+        onSelectTask={(id) => { draftEpoch.current += 1; slashDraftPromise.current = undefined; selectedTaskRef.current = id; setDraft(undefined); setComposerTransfer(undefined); setSelectedTaskId(id); }}
         onNewChat={(project) => openDraft(project?.id ?? null)}
         onNewDraft={() => openDraft()}
         onAddProject={() => void addProject()}
@@ -1177,6 +1299,11 @@ export default function App() {
                 onModeChange={(mode) => void setTaskMode(mode)}
                 onConfigure={configureDraft}
                 onSend={(message, images) => sendPrompt(message, { images })}
+                onLiteral={(message, images) => sendPrompt(message, { images, literal: true })}
+                commands={APP_SLASH_COMMANDS}
+                commandsReady={true}
+                onCommand={sendSlash}
+                onDraftChange={(text, images) => { draftComposer.current = { text, images }; }}
                 onStop={() => undefined}
                 onOpenSettings={() => setSettingsOpen(true)}
               />
@@ -1247,6 +1374,14 @@ export default function App() {
               onModeChange={(mode) => void setTaskMode(mode)}
               onConfigure={(patch) => void configure(patch)}
               onSend={(message, images) => sendPrompt(message, { images })}
+              onLiteral={(message, images) => sendPrompt(message, { images, literal: true })}
+              commands={[...APP_SLASH_COMMANDS, ...(runtime?.slashCommands ?? [])]}
+              commandsReady={runtime?.slashCommands !== undefined}
+              commandsLoading={runtime?.slashCommandsLoading}
+              commandsError={runtime?.slashCommandsError}
+              onRequestCommands={requestSlashCommands}
+              onCommand={sendSlash}
+              transfer={composerTransfer?.taskId === selectedTask.id ? composerTransfer : undefined}
               onStop={() => void stopTask()}
               onOpenSettings={() => setSettingsOpen(true)}
               seed={composerSeed}

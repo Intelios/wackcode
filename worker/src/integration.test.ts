@@ -1343,13 +1343,61 @@ describe("session tree", () => {
     const extension = join(workspace, "hello.ts");
     await writeFile(extension, `export default function (pi: any) {
       pi.registerCommand("hello", { description: "Say hello", handler: async () => undefined });
+      pi.registerCommand("new", { description: "Package new", handler: async () => undefined });
+      pi.registerCommand("review", { description: "Extension review", handler: async () => undefined });
+      pi.registerCommand("try-new-session", { description: "Unsupported session action", handler: async (_args: string, ctx: any) => { await ctx.newSession(); } });
+      pi.registerCommand("ask-command", { description: "Ask through desktop UI", handler: async (_args: string, ctx: any) => { const answer = await ctx.ui.select("Choose", ["a", "b"]); ctx.ui.notify("picked:" + answer); } });
     }\n`);
+    const prompt = join(workspace, "review.md");
+    await writeFile(prompt, "---\ndescription: Review this work\n---\nReview $ARGUMENTS\n");
+    const skill = join(workspace, "skill");
+    await mkdir(skill);
+    await writeFile(join(skill, "SKILL.md"), "---\nname: fixture\ndescription: Fixture skill\n---\nRead the fixture.\n");
     const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "command-task", undefined, undefined,
-      { extensions: [extension], skills: [], prompts: [], themes: [] });
+      { extensions: [extension], skills: [skill], prompts: [prompt], themes: [] });
     cleanup.push(() => worker.shutdown());
-    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "command-1", message: "/hello" });
+    const tooSmall = await request(worker, { type: "compact", runId: "compact-small", instructions: "" });
+    expect(tooSmall.success).toBe(false);
+    expect(tooSmall.error).toContain("not enough conversation");
+    const listed = await request(worker, { type: "list_commands" });
+    expect(listed.success).toBe(true);
+    const commands = listed.result as unknown as Array<{ id: string; name: string; source: string }>;
+    expect(commands).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "hello", source: "extension" }),
+      expect.objectContaining({ name: "extension:new", source: "extension" }),
+      expect.objectContaining({ name: "prompt:review", source: "prompt" }),
+      expect.objectContaining({ name: "skill:fixture", source: "skill" })
+    ]));
+    const stale = await request(worker, { type: "execute_command", commandId: "missing", args: "", runId: "stale" });
+    expect(stale.success).toBe(false);
+    const hello = commands.find((entry) => entry.name === "hello")!;
+    const accepted = await request(worker, { type: "execute_command", commandId: hello.id, args: "", runId: "command-1" });
+    expect(accepted.success).toBe(true);
     await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === "command-1");
     expect(provider.requests).toHaveLength(0);
+    const unsupported = commands.find((entry) => entry.name === "try-new-session")!;
+    expect((await request(worker, { type: "execute_command", commandId: unsupported.id, args: "", runId: "session-action" })).success).toBe(true);
+    await worker.waitFor((output) => output.type === "extension_notice" && output.message?.includes("cannot create") === true);
+    await settle(worker, "session-action");
+    expect(provider.requests).toHaveLength(0);
+    const asking = commands.find((entry) => entry.name === "ask-command")!;
+    expect((await request(worker, { type: "execute_command", commandId: asking.id, args: "", runId: "dialog-command" })).success).toBe(true);
+    const dialog = await worker.waitFor((output) => output.type === "extension_ui_request" && output.method === "select" && output.title === "Choose");
+    worker.send({ id: crypto.randomUUID(), type: "extension_ui_response", requestId: dialog.requestId, value: "b" });
+    await worker.waitFor((output) => output.type === "extension_notice" && output.message === "picked:b");
+    await settle(worker, "dialog-command");
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "literal-1", message: "/not-a-command", literal: true });
+    await settle(worker, "literal-1");
+    expect(provider.requests.length).toBeGreaterThan(0);
+    expect(lastUserText(provider)).toContain("/not-a-command");
+    const template = commands.find((entry) => entry.name === "prompt:review")!;
+    expect((await request(worker, { type: "execute_command", commandId: template.id, args: '"changed files"', runId: "template-1" })).success).toBe(true);
+    await settle(worker, "template-1");
+    expect(lastUserText(provider)).toContain("Review changed files");
+    const selectedSkill = commands.find((entry) => entry.name === "skill:fixture")!;
+    expect((await request(worker, { type: "execute_command", commandId: selectedSkill.id, args: "details", runId: "skill-1" })).success).toBe(true);
+    await settle(worker, "skill-1");
+    expect(lastUserText(provider)).toContain("<skill name=\"fixture\"");
   });
 });
 
@@ -1550,4 +1598,3 @@ describe("sub-agents", () => {
     expect(worker.child.exitCode).toBeNull();
   });
 });
-

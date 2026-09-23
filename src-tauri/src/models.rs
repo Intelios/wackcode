@@ -377,7 +377,23 @@ pub struct PromptInput {
     /// Images attached to this prompt, in Pi's own `ImageContent` shape. Forwarded verbatim.
     #[serde(default)]
     pub images: Vec<ImageContent>,
+    #[serde(default)]
+    pub literal: bool,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlashCommand {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub source: SlashCommandSource,
+    pub source_label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SlashCommandSource { App, Extension, Prompt, Skill }
 
 /// A workspace checkpoint: a tree in the chat's shadow repository (see `checkpoints.rs`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
-import type { ImageContent, ProviderRecord, SessionSnapshot, TaskMode, TaskStatus, ThinkingLevel } from "../types";
+import type { ImageContent, ProviderRecord, SessionSnapshot, SlashCommand, TaskMode, TaskStatus, ThinkingLevel } from "../types";
 import { ACCEPTED_IMAGE_TYPES, attachImages, imageDataUrl, imageFilesFrom } from "../attachment-utils";
 import { formatTokens } from "../chat-utils";
 import { Icon } from "./Icons";
@@ -24,6 +24,15 @@ interface ComposerProps {
   onConfigure: (patch: { providerId?: string; modelId?: string; thinkingLevel?: ThinkingLevel }) => void;
   /** Resolves false when the send failed; the composer then restores the draft and images. */
   onSend: (message: string, images: ImageContent[]) => Promise<boolean>;
+  commands?: SlashCommand[];
+  commandsReady?: boolean;
+  commandsLoading?: boolean;
+  commandsError?: string;
+  onRequestCommands?: () => void;
+  onCommand?: (name: string, args: string, images: ImageContent[]) => Promise<boolean>;
+  onLiteral?: (message: string, images: ImageContent[]) => Promise<boolean>;
+  onDraftChange?: (text: string, images: ImageContent[]) => void;
+  transfer?: { text: string; images: ImageContent[]; nonce: number };
   onStop: () => void;
   onOpenSettings: () => void;
   /** When true the composer is visually dimmed and non-interactive (e.g. a dialog needs attention). */
@@ -32,12 +41,17 @@ interface ComposerProps {
   seed?: { text: string; nonce: number };
 }
 
-export function Composer({ status, providerId, modelId, thinkingLevel, providers, stats, header, placeholder, popoverSide = "top", mode, onModeChange, onConfigure, onSend, onStop, onOpenSettings, disabled, seed }: ComposerProps) {
-  const [draft, setDraft] = useState("");
-  const [attachments, setAttachments] = useState<ImageContent[]>([]);
+export function Composer({ status, providerId, modelId, thinkingLevel, providers, stats, header, placeholder, popoverSide = "top", mode, onModeChange, onConfigure, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, onDraftChange, transfer, onStop, onOpenSettings, disabled, seed }: ComposerProps) {
+  const [draft, setDraft] = useState(transfer?.text ?? "");
+  const [attachments, setAttachments] = useState<ImageContent[]>(transfer?.images ?? []);
   const [attachNotice, setAttachNotice] = useState<string>();
+  const [slashNotice, setSlashNotice] = useState<string>();
+  const [slashOpen, setSlashOpen] = useState(transfer?.text.startsWith("/") ?? false);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [caret, setCaret] = useState(transfer?.text.length ?? 0);
   const [dragging, setDragging] = useState(false);
   const areaRef = useRef<HTMLTextAreaElement>(null);
+  const transferNonce = useRef(transfer?.nonce);
   const fileRef = useRef<HTMLInputElement>(null);
   const busy = status === "running" || status === "stopping";
   const model = providers.find((provider) => provider.id === providerId)?.models.find((item) => item.id === modelId);
@@ -45,6 +59,24 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
   const noVisionMessage = `${model?.name || model?.id || "This model"} doesn't accept images. Turn on Vision for it in Settings.`;
   // Images picked for a vision model, then the model was switched to one without it.
   const blockedByModel = attachments.length > 0 && !vision;
+  const tokenEnd = draft.search(/\s/);
+  const commandEnd = tokenEnd < 0 ? draft.length : tokenEnd;
+  const commandToken = draft.startsWith("/") ? draft.slice(1, commandEnd) : "";
+  const suggestions = commands.filter((command) => command.name.toLowerCase().includes(commandToken.toLowerCase()));
+  const showCommands = slashOpen && draft.startsWith("/") && caret <= commandEnd && !disabled;
+  useEffect(() => {
+    if (showCommands && commandsReady === false && !commandsLoading && !commandsError) onRequestCommands?.();
+  }, [showCommands, commandsReady, commandsLoading, commandsError]);
+
+  useEffect(() => { onDraftChange?.(draft, attachments); }, [draft, attachments, onDraftChange]);
+  useEffect(() => {
+    if (!transfer || transferNonce.current === transfer.nonce) return;
+    transferNonce.current = transfer.nonce;
+    setDraft(transfer.text);
+    setAttachments(transfer.images);
+    setSlashOpen(transfer.text.startsWith("/"));
+  }, [transfer?.nonce]);
+  useEffect(() => { if (commandsError && draft.startsWith("/") && !commandsLoading) setSlashNotice(commandsError); }, [commandsError, commandsLoading]);
 
   useLayoutEffect(() => {
     const area = areaRef.current;
@@ -67,6 +99,28 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
     const message = draft.trim();
     if (!message || busy || blockedByModel) return;
     const images = attachments;
+    if (message.startsWith("/") && onCommand) {
+      const match = /^\/([^\s]+)(?:\s+([\s\S]*))?$/.exec(message);
+      const name = match?.[1] ?? "";
+      const args = match?.[2] ?? "";
+      const known = ["compact", "new", "name", "copy", ...commands.map((command) => command.name)].includes(name);
+      if (!known) {
+        setSlashNotice(`Unknown command /${name}. You can send it as a message.`);
+        setSlashOpen(false);
+        return;
+      }
+      const selected = commands.find((command) => command.name === name);
+      if (images.length && (!selected || selected.source === "extension" || selected.source === "app")) {
+        setSlashNotice("Remove images before running this command.");
+        return;
+      }
+      try {
+        const ok = await onCommand(name, args, images);
+        if (ok) { setDraft(""); setAttachments([]); setSlashNotice(undefined); setSlashOpen(false); }
+        else setSlashNotice("That command could not run. Try again.");
+      } catch (reason) { setSlashNotice(String(reason)); }
+      return;
+    }
     setDraft("");
     setAttachments([]);
     setAttachNotice(undefined);
@@ -77,6 +131,21 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
     }
   }
 
+  function insertCommand(name: string) {
+    const suffix = draft.slice(commandEnd).trimStart();
+    const next = `/${name} ${suffix}`;
+    setDraft(next);
+    setSlashOpen(false);
+    setSlashNotice(undefined);
+    requestAnimationFrame(() => { areaRef.current?.focus(); areaRef.current?.setSelectionRange(name.length + 2, name.length + 2); });
+  }
+
+  async function sendLiteral() {
+    if (!onLiteral || busy) return;
+    const ok = await onLiteral(draft.trim(), attachments);
+    if (ok) { setDraft(""); setAttachments([]); setSlashNotice(undefined); }
+  }
+
   async function addFiles(files: File[]) {
     if (files.length === 0) return;
     if (!vision) {
@@ -85,11 +154,14 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
     }
     const result = await attachImages(attachments, files);
     setAttachments(result.images);
+    onDraftChange?.(draft, result.images);
     setAttachNotice(result.error);
   }
 
   function removeAttachment(index: number) {
-    setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index));
+    const next = attachments.filter((_, itemIndex) => itemIndex !== index);
+    setAttachments(next);
+    onDraftChange?.(draft, next);
     setAttachNotice(undefined);
   }
 
@@ -121,6 +193,12 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
     >
       {header && <div className="composer-header">{header}</div>}
       <div className="composer" aria-disabled={disabled || undefined}>
+        {showCommands && <div id="slash-command-list" className="slash-picker" role="listbox" aria-label="Slash commands">
+          {commandsLoading ? <div className="slash-picker-status">Loading commands…</div> : commandsError ? <div className="slash-picker-status">{commandsError} <button type="button" onClick={onRequestCommands}>Retry</button></div> : suggestions.length ? suggestions.map((command, index) =>
+            <button id={`slash-option-${index}`} type="button" role="option" aria-selected={index === slashIndex} className={`slash-option ${index === slashIndex ? "selected" : ""}`} key={command.id} onMouseDown={(event) => event.preventDefault()} onClick={() => insertCommand(command.name)}>
+              <strong>/{command.name}</strong><span>{command.description}</span><small>{command.sourceLabel}</small>
+            </button>) : <div className="slash-picker-status">No matching commands</div>}
+        </div>}
         {attachments.length > 0 && (
           <div className="composer-attachments">
             {attachments.map((image, index) => (
@@ -136,11 +214,26 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
         {(attachNotice || blockedByModel) && (
           <div className="attachment-notice" role="status">{blockedByModel ? `${noVisionMessage} Or remove the images to send.` : attachNotice}</div>
         )}
+        {slashNotice && <div className="attachment-notice" role="status">{slashNotice} <button type="button" onClick={() => void sendLiteral()}>Send as message</button></div>}
         <textarea
           ref={areaRef}
+          aria-controls={showCommands ? "slash-command-list" : undefined}
+          aria-expanded={showCommands}
+          aria-activedescendant={showCommands && suggestions.length ? `slash-option-${Math.min(slashIndex, suggestions.length - 1)}` : undefined}
           value={draft}
           rows={1}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => {
+            const value = event.target.value;
+            setDraft(value);
+            onDraftChange?.(value, attachments);
+            setCaret(event.target.selectionStart);
+            setSlashIndex(0);
+            setSlashNotice(undefined);
+            setSlashOpen(value.startsWith("/"));
+            if (value.startsWith("/") && !draft.startsWith("/")) onRequestCommands?.();
+          }}
+          onClick={(event) => setCaret(event.currentTarget.selectionStart)}
+          onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
           onPaste={(event) => {
             // Rich-text apps put an image rendition next to copied text; that is a text paste.
             if (event.clipboardData.types.includes("text/plain")) return;
@@ -150,6 +243,12 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
             void addFiles(files);
           }}
           onKeyDown={(event) => {
+            if (showCommands && !event.nativeEvent.isComposing) {
+              if (event.key === "ArrowDown" && suggestions.length) { event.preventDefault(); setSlashIndex((index) => (index + 1) % suggestions.length); return; }
+              if (event.key === "ArrowUp" && suggestions.length) { event.preventDefault(); setSlashIndex((index) => (index - 1 + suggestions.length) % suggestions.length); return; }
+              if ((event.key === "Tab" || event.key === "Enter") && suggestions.length && !event.shiftKey) { event.preventDefault(); insertCommand(suggestions[Math.min(slashIndex, suggestions.length - 1)].name); return; }
+              if (event.key === "Escape") { event.preventDefault(); setSlashOpen(false); return; }
+            }
             if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault();
               void send();

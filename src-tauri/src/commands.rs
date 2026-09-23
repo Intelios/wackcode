@@ -6,7 +6,7 @@ use crate::{
         ProjectRecord, PromptInput, ExtensionUiResponseInput, InstallPackageInput, PackageRecord,
         PackageSearchResult, ProviderKind, ProviderRecord, ResendInput, RestoreCheckpointInput, RestoreResult,
         SaveProviderInput, SearchPackagesInput, SetPackageResourcesInput, SetTaskModeInput, SetToolConfigInput,
-        SubagentConfig, TaskMode, TaskRecord, TaskStatus, ToolConfig,
+        SlashCommand, SubagentConfig, TaskMode, TaskRecord, TaskStatus, ToolConfig,
     },
     storage::MetadataState,
     worker::{self, WorkerOptions}, subagents, subscriptions,
@@ -687,6 +687,83 @@ pub async fn open_task(app: AppHandle, state: State<'_, MetadataState>, task_id:
     worker::send(&app, &task.id, &json!({ "id": Uuid::new_v4().to_string(), "type": "snapshot" })).await
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecuteCommandInput {
+    task_id: String,
+    command_id: String,
+    args: String,
+    started_at: u64,
+    #[serde(default)]
+    images: Vec<crate::models::ImageContent>,
+}
+
+#[tauri::command]
+pub async fn list_commands(app: AppHandle, state: State<'_, MetadataState>, task_id: String) -> Result<Vec<SlashCommand>, String> {
+    let lock = task_lock(&app, &task_id);
+    let _guard = lock.lock().await;
+    let (task, provider) = task_and_provider(&state, &task_id)?;
+    if matches!(task.status, TaskStatus::Running | TaskStatus::Stopping) {
+        return Err("Wait for this chat to finish before loading commands.".into());
+    }
+    let api_key = credential_for(&app, &state, &provider)?;
+    worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
+    let value = worker::request(&app, &task_id, json!({ "id": Uuid::new_v4().to_string(), "type": "list_commands" }), REQUEST_TIMEOUT).await?;
+    serde_json::from_value(value).map_err(|_| "Pi returned an invalid command list.".to_string())
+}
+
+#[tauri::command]
+pub async fn execute_command(app: AppHandle, state: State<'_, MetadataState>, input: ExecuteCommandInput) -> Result<String, String> {
+    let command_id = required(&input.command_id, "Command")?;
+    if input.args.len() > 100_000 { return Err("Command arguments are too long.".into()); }
+    validate_images(&input.images)?;
+    let lock = task_lock(&app, &input.task_id);
+    let _guard = lock.lock().await;
+    let (task, provider) = task_and_provider(&state, &input.task_id)?;
+    if matches!(task.status, TaskStatus::Running | TaskStatus::Stopping) { return Err("Wait for this chat to finish before running a command.".into()); }
+    if !input.images.is_empty() { require_vision(&provider, &task.model_id)?; }
+    let api_key = credential_for(&app, &state, &provider)?;
+    worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
+    set_status(&state, &task.id, TaskStatus::Running)?;
+    let checkpoint = match checkpoint_location(&app, &state, &task) {
+        Ok(location) => snapshot_quietly(&app, &task.id, &location).await,
+        Err(_) => None,
+    };
+    let run_id = Uuid::new_v4().to_string();
+    let result = worker::request(&app, &task.id, json!({
+        "id": Uuid::new_v4().to_string(), "type": "execute_command", "commandId": command_id,
+        "args": input.args, "startedAt": input.started_at, "runId": run_id,
+        "images": input.images, "checkpoint": checkpoint
+    }), REQUEST_TIMEOUT).await;
+    if let Err(error) = result {
+        let _ = set_status(&state, &task.id, TaskStatus::Idle);
+        return Err(error);
+    }
+    Ok(run_id)
+}
+
+#[tauri::command]
+pub async fn compact_task(app: AppHandle, state: State<'_, MetadataState>, task_id: String, instructions: String, started_at: u64) -> Result<String, String> {
+    if instructions.len() > 100_000 { return Err("Compaction instructions are too long.".into()); }
+    let lock = task_lock(&app, &task_id);
+    let _guard = lock.lock().await;
+    let (task, provider) = task_and_provider(&state, &task_id)?;
+    if matches!(task.status, TaskStatus::Running | TaskStatus::Stopping) { return Err("Wait for this chat to finish before compacting.".into()); }
+    let api_key = credential_for(&app, &state, &provider)?;
+    worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
+    set_status(&state, &task.id, TaskStatus::Running)?;
+    let run_id = Uuid::new_v4().to_string();
+    let result = worker::request(&app, &task.id, json!({
+        "id": Uuid::new_v4().to_string(), "type": "compact", "instructions": instructions,
+        "startedAt": started_at, "runId": run_id
+    }), REQUEST_TIMEOUT).await;
+    if let Err(error) = result {
+        let _ = set_status(&state, &task.id, TaskStatus::Idle);
+        return Err(error);
+    }
+    Ok(run_id)
+}
+
 #[tauri::command]
 pub async fn prompt(app: AppHandle, state: State<'_, MetadataState>, input: PromptInput) -> Result<String, String> {
     let message = required(&input.message, "Message")?;
@@ -731,7 +808,8 @@ pub async fn prompt(app: AppHandle, state: State<'_, MetadataState>, input: Prom
     let started_at = input.started_at.unwrap_or_else(|| Utc::now().timestamp_millis() as u64);
     let sent = worker::send(&app, &configured.id, &json!({
         "id": Uuid::new_v4().to_string(), "type": "prompt", "runId": run_id, "message": message,
-        "startedAt": started_at, "mode": configured.mode, "images": input.images, "checkpoint": checkpoint
+        "startedAt": started_at, "mode": configured.mode, "images": input.images, "checkpoint": checkpoint,
+        "literal": input.literal
     })).await;
     if let Err(error) = sent {
         let _ = set_status(&state, &configured.id, TaskStatus::Idle);

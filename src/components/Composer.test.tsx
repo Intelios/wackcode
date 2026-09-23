@@ -122,3 +122,64 @@ describe("Composer seed", () => {
     expect(area).toHaveValue("Another");
   });
 });
+
+describe("Composer slash commands", () => {
+  const command = { id: "extension:hello", name: "hello", description: "Say hello", source: "extension" as const, sourceLabel: "Fixture" };
+  function setup(extra: Partial<React.ComponentProps<typeof Composer>> = {}) {
+    const onCommand = vi.fn().mockResolvedValue(true);
+    const onLiteral = vi.fn().mockResolvedValue(true);
+    const onRequestCommands = vi.fn();
+    render(<Composer status="idle" providers={providers} providerId="p" modelId="sees" thinkingLevel="off"
+      onConfigure={vi.fn()} onSend={vi.fn().mockResolvedValue(true)} onStop={vi.fn()} onOpenSettings={vi.fn()}
+      commands={[command]} onCommand={onCommand} onLiteral={onLiteral} onRequestCommands={onRequestCommands} {...extra} />);
+    return { onCommand, onLiteral, onRequestCommands };
+  }
+
+  it("filters, selects, and runs a command with arguments", async () => {
+    const { onCommand, onRequestCommands } = setup();
+    const area = screen.getByRole("textbox");
+    fireEvent.change(area, { target: { value: "/he", selectionStart: 3 } });
+    expect(onRequestCommands).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("listbox", { name: "Slash commands" })).toBeInTheDocument();
+    fireEvent.keyDown(area, { key: "Tab" });
+    expect(area).toHaveValue("/hello ");
+    fireEvent.change(area, { target: { value: "/he world", selectionStart: 3 } });
+    fireEvent.click(screen.getByRole("option", { name: /hello/ }));
+    expect(area).toHaveValue("/hello world");
+    fireEvent.change(area, { target: { value: "/hello world", selectionStart: 12 } });
+    fireEvent.keyDown(area, { key: "Enter" });
+    await waitFor(() => expect(onCommand).toHaveBeenCalledWith("hello", "world", []));
+  });
+
+  it("keeps unknown slash text until Send as message is chosen", async () => {
+    const { onLiteral, onCommand } = setup();
+    const area = screen.getByRole("textbox");
+    fireEvent.change(area, { target: { value: "/unknown", selectionStart: 8 } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    expect(area).toHaveValue("/unknown");
+    expect(onCommand).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Send as message" }));
+    await waitFor(() => expect(onLiteral).toHaveBeenCalledWith("/unknown", []));
+  });
+
+  it("carries a new draft into the initialized chat and clears it after a send", () => {
+    const props = {
+      status: "idle" as const, providers, providerId: "p", modelId: "sees", thinkingLevel: "off" as const,
+      onConfigure: vi.fn(), onSend: vi.fn().mockResolvedValue(true), onStop: vi.fn(), onOpenSettings: vi.fn()
+    };
+    const view = render(<Composer {...props} transfer={{ text: "/hello draft", images: [], nonce: 1 }} />);
+    expect(screen.getByRole("textbox")).toHaveValue("/hello draft");
+    view.rerender(<Composer {...props} transfer={{ text: "", images: [], nonce: 2 }} />);
+    expect(screen.getByRole("textbox")).toHaveValue("");
+  });
+
+  it("keeps a command and its attachments after validation fails", async () => {
+    const onCommand = vi.fn().mockRejectedValue(new Error("Enter a name after /name."));
+    setup({ onCommand });
+    const area = screen.getByRole("textbox");
+    fireEvent.change(area, { target: { value: "/name ", selectionStart: 6 } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Enter a name after /name.");
+    expect(area).toHaveValue("/name ");
+  });
+});

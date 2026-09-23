@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createBuiltinExtensions } from "./builtin/index.js";
@@ -21,6 +21,7 @@ import {
 } from "./delta.js";
 import { JsonLineDecoder } from "./framing.js";
 import { RUN_TIMING_ENTRY_TYPE, RUN_TIMING_VERSION, resolveRunTimings } from "./run-timing.js";
+import { expandTemplate } from "./slash.js";
 import {
   CHECKPOINT_ENTRY_TYPE,
   LEAVE_ENTRY_TYPE,
@@ -50,6 +51,7 @@ import {
   type QuestionAnswer,
   type RunTiming,
   type SessionSnapshot,
+  type SlashCommand,
   type SubagentRuntimeConfig,
   type ThinkingLevel,
   type TodoState,
@@ -84,6 +86,8 @@ let activeCredential: string | undefined;
 let activeAuthPath: string | undefined;
 let activeProviderId: string | undefined;
 let stopRequested = false;
+let compacting = false;
+let commandCatalog: Array<{ item: SlashCommand; invocation: string; templateContent?: string; skillFile?: string; skillBaseDir?: string }> = [];
 let disabledTools = new Set<string>();
 let subagentRunner: SubagentRunner | undefined;
 const pendingDialogs = new Map<string, (response: DialogResponse) => void>();
@@ -200,6 +204,30 @@ function response(id: string, success: boolean, error?: string): void {
 
 function respond(id: string, result: unknown): void {
   send({ type: "response", taskId, id, success: true, result });
+}
+
+function refreshCommandCatalog(): SlashCommand[] {
+  if (!session) throw new Error("Worker is not initialized");
+  const taken = new Set(["compact", "new", "name", "copy"]);
+  const entries: Array<{ source: SlashCommand["source"]; invocation: string; description?: string; label: string; templateContent?: string; skillFile?: string; skillBaseDir?: string }> = [
+    ...session.extensionRunner.getRegisteredCommands()
+      .filter((entry) => !entry.sourceInfo.path.startsWith("<inline:"))
+      .map((entry) => ({ source: "extension" as const, invocation: entry.invocationName, description: entry.description, label: entry.sourceInfo.source })),
+    ...session.promptTemplates.map((entry) => ({ source: "prompt" as const, invocation: entry.name, description: entry.description, label: entry.sourceInfo.source, templateContent: entry.content })),
+    ...session.resourceLoader.getSkills().skills.map((entry) => ({ source: "skill" as const, invocation: `skill:${entry.name}`, description: entry.description, label: entry.sourceInfo.source, skillFile: entry.filePath, skillBaseDir: entry.baseDir }))
+  ];
+  commandCatalog = entries.map((entry, index) => {
+    let name = entry.invocation;
+    if (taken.has(name)) {
+      const base = `${entry.source}:${entry.invocation}`;
+      name = base;
+      let suffix = 2;
+      while (taken.has(name)) name = `${base}:${suffix++}`;
+    }
+    taken.add(name);
+    return { item: { id: `${entry.source}:${index}:${entry.invocation}`, name, description: entry.description, source: entry.source, sourceLabel: entry.label }, invocation: entry.invocation, templateContent: entry.templateContent, skillFile: entry.skillFile, skillBaseDir: entry.skillBaseDir };
+  });
+  return commandCatalog.map(({ item }) => item);
 }
 
 function textFromContent(content: unknown): string {
@@ -910,7 +938,18 @@ async function initialize(command: InitCommand): Promise<void> {
       uiContext: createExtensionUIContext() as never,
       mode: "rpc",
       abortHandler: () => { stopRequested = true; void session?.abort(); },
-      onError: (error: unknown) => notice(safeError(error), "error")
+      commandContextActions: {
+        waitForIdle: async () => { if (!session?.isIdle) throw new Error("Wait for the current run to finish."); },
+        newSession: async () => { throw new Error("An extension cannot create a WackCode chat."); },
+        fork: async () => { throw new Error("An extension cannot fork a WackCode chat."); },
+        navigateTree: async () => { throw new Error("An extension cannot navigate a WackCode chat."); },
+        switchSession: async () => { throw new Error("An extension cannot switch a WackCode chat."); },
+        reload: async () => { throw new Error("Reload packages from WackCode Settings."); }
+      },
+      onError: (error: unknown) => {
+        const detail = error && typeof error === "object" && "error" in error ? (error as { error: unknown }).error : error;
+        notice(safeError(detail), "error");
+      }
     } as never);
   } catch (error) {
     notice(`An extension failed to start: ${safeError(error)}`, "error");
@@ -1043,7 +1082,8 @@ async function runPrompt(
   startedAt: number,
   text: string,
   images: ImageContent[] | undefined,
-  checkpoint: CheckpointRef | null | undefined
+  checkpoint: CheckpointRef | null | undefined,
+  literal = false
 ): Promise<void> {
   if (!session || !taskId) throw new Error("Worker is not initialized");
   stopRequested = false;
@@ -1056,7 +1096,7 @@ async function runPrompt(
   try {
     const prepared = await prepareImages(images);
     recordCheckpoint(checkpoint);
-    await session.prompt(text, prepared.length > 0 ? { images: prepared } : undefined);
+    await session.prompt(text, { ...(prepared.length > 0 ? { images: prepared } : {}), expandPromptTemplates: !literal });
     // Pi settles a run before `prompt` resolves. Still active here means no run started at all
     // (an extension command handled the text), and nothing else would report the chat idle.
     if (activeRun?.runId === runId) {
@@ -1128,11 +1168,48 @@ async function handle(command: WorkerCommand): Promise<void> {
       await initialize(command);
     } else if (!session || !taskId) {
       throw new Error("Worker is not initialized");
+    } else if (command.type === "list_commands") {
+      respond(command.id, refreshCommandCatalog());
+      return;
+    } else if (command.type === "execute_command") {
+      const entry = commandCatalog.find((candidate) => candidate.item.id === command.commandId);
+      if (!entry) throw new Error("That command changed. Open the command list and try again.");
+      if (entry.item.source === "extension" && command.images?.length) throw new Error("Extension commands cannot include images.");
+      let line = `/${entry.invocation}${command.args ? ` ${command.args}` : ""}`;
+      if (entry.item.source === "prompt") line = expandTemplate(entry.templateContent ?? "", command.args);
+      else if (entry.item.source === "skill") {
+        if (!entry.skillFile || !piModule) throw new Error("That skill is no longer available.");
+        const body = piModule.stripFrontmatter(await readFile(entry.skillFile, "utf8")).trim();
+        line = `<skill name="${entry.invocation.slice(6)}" location="${entry.skillFile}">\nReferences are relative to ${entry.skillBaseDir}.\n\n${body}\n</skill>${command.args.trim() ? `\n\n${command.args.trim()}` : ""}`;
+      }
+      await runPrompt(command.id, command.runId, runStartedAt(command.startedAt), line, command.images, command.checkpoint, entry.item.source !== "extension");
+      return;
+    } else if (command.type === "compact") {
+      if (session.sessionManager.getBranch().filter((entry) => entry.type === "message" && entry.message.role === "user").length < 2) {
+        throw new Error("There is not enough conversation to compact yet.");
+      }
+      compacting = true;
+      stopRequested = false;
+      send({ type: "run_state", taskId, runId: command.runId, startedAt: runStartedAt(command.startedAt), state: "running" });
+      response(command.id, true);
+      try {
+        await session.compact(command.instructions || undefined);
+        if (!stopRequested) notice("Conversation compacted.", "info");
+      } catch (error) {
+        if (!stopRequested) send({ type: "worker_error", taskId, message: safeError(error) });
+      } finally {
+        compacting = false;
+        stopRequested = false;
+        forceFullSnapshot = true;
+        emitSnapshot();
+        send({ type: "run_state", taskId, runId: command.runId, state: "idle" });
+      }
+      return;
     } else if (command.type === "prompt") {
       // A mode recorded on the task (or chosen for a draft) is applied before the prompt so
       // the first message of a plan-mode task arrives with the contract already in place.
       if (command.mode) builtins.planMode.setMode(command.mode);
-      await runPrompt(command.id, command.runId, runStartedAt(command.startedAt), command.message, command.images, command.checkpoint);
+      await runPrompt(command.id, command.runId, runStartedAt(command.startedAt), command.message, command.images, command.checkpoint, command.literal);
       return;
     } else if (command.type === "resend") {
       await resend(command);
@@ -1146,6 +1223,11 @@ async function handle(command: WorkerCommand): Promise<void> {
     } else if (command.type === "abort") {
       stopRequested = true;
       cancelPendingDialogs();
+      if (compacting) {
+        session.abortCompaction();
+        send({ type: "run_state", taskId, state: "stopping" });
+        return;
+      }
       const stoppedRunId = activeRun?.runId;
       send({ type: "run_state", taskId, runId: stoppedRunId, startedAt: activeRun?.startedAt, state: "stopping" });
       await session.abort();
@@ -1203,14 +1285,14 @@ async function handle(command: WorkerCommand): Promise<void> {
     if (!REQUEST_COMMANDS.has(command.type)) send({ type: "worker_error", taskId, message: safeError(error) });
     // The host marks a chat running before it sends a prompt; one refused before it started
     // must say it is idle again. (A run that did start reports its own end.)
-    if (taskId && (command.type === "prompt" || command.type === "resend") && activeRun?.runId !== command.runId) {
+    if (taskId && (command.type === "prompt" || command.type === "resend" || command.type === "execute_command" || command.type === "compact") && activeRun?.runId !== command.runId) {
       send({ type: "run_state", taskId, runId: command.runId, state: "idle" });
     }
   }
 }
 
 /** Commands the host sends with `worker::request` and whose failures it reports itself. */
-const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend"]);
+const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "list_commands", "execute_command", "compact"]);
 
 /**
  * Remove every credential this worker holds from `text`: the chat's own key or sign-in, and

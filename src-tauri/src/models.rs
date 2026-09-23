@@ -155,6 +155,82 @@ pub struct ToolConfig {
     pub disabled: Vec<String>,
 }
 
+/// When the chat's agent should reach for sub-agents. Only changes the tool's guidance text.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentTrigger {
+    /// Only when the user asks for sub-agents or names one: cost stays predictable.
+    #[default]
+    OnRequest,
+    /// Whenever the agent judges delegation useful.
+    Auto,
+}
+
+/// A sub-agent's own model. Without one, an agent runs on the chat's model and thinking level.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentModel {
+    pub provider_id: String,
+    pub model_id: String,
+    pub thinking_level: String,
+}
+
+/// One agent the `subagent` tool can launch. Built-in records are refreshed from the shipped
+/// definitions on every load (see `subagents.rs`); only `enabled` and `model` are the user's.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentRecord {
+    pub id: String,
+    #[serde(default)]
+    pub builtin: bool,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub prompt: String,
+    #[serde(default)]
+    pub tools: Vec<String>,
+    /// No edit/write, bash limited to inspection, and allowed in Plan mode.
+    #[serde(default)]
+    pub read_only: bool,
+    #[serde(default)]
+    pub model: Option<SubagentModel>,
+}
+
+/// The sub-agents built-in extension. Off by default: every child is extra model usage.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub trigger: SubagentTrigger,
+    /// Children one call runs at the same time; those that can edit files still take turns.
+    #[serde(default = "default_subagent_concurrency")]
+    pub max_concurrency: u32,
+    #[serde(default)]
+    pub agents: Vec<SubagentRecord>,
+}
+
+pub const DEFAULT_SUBAGENT_CONCURRENCY: u32 = 4;
+
+fn default_subagent_concurrency() -> u32 {
+    DEFAULT_SUBAGENT_CONCURRENCY
+}
+
+impl Default for SubagentConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            trigger: SubagentTrigger::OnRequest,
+            max_concurrency: DEFAULT_SUBAGENT_CONCURRENCY,
+            agents: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectRecord {
@@ -241,6 +317,8 @@ pub struct AppData {
     pub tool_catalog: Vec<ToolCatalogEntry>,
     #[serde(default)]
     pub packages: Vec<PackageRecord>,
+    #[serde(default)]
+    pub subagents: SubagentConfig,
 }
 
 impl Default for AppData {
@@ -253,6 +331,7 @@ impl Default for AppData {
             tool_config: ToolConfig::default(),
             tool_catalog: Vec::new(),
             packages: Vec::new(),
+            subagents: SubagentConfig::default(),
         }
     }
 }

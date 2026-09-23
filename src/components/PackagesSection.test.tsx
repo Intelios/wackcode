@@ -129,6 +129,28 @@ describe("PackagesSection built-ins", () => {
     }
   });
 
+  it("lets sub-agents be switched on, and links to its settings only while on", async () => {
+    const onToggleSubagents = vi.fn().mockResolvedValue(undefined);
+    const onConfigureSubagents = vi.fn();
+    renderSection([], { onToggleSubagents, onConfigureSubagents });
+    const toggle = screen.getByRole("switch", { name: "Sub-agents" });
+    expect(toggle).toBeEnabled();
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByRole("switch", { name: "subagent" })).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText(/every sub-agent is extra model usage/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Configure/ })).not.toBeInTheDocument();
+    fireEvent.click(toggle);
+    await waitFor(() => expect(onToggleSubagents).toHaveBeenCalledWith(true));
+
+    cleanup();
+    renderSection([], { subagentsEnabled: true, onToggleSubagents, onConfigureSubagents });
+    expect(screen.getByRole("switch", { name: "Sub-agents" })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+    expect(onConfigureSubagents).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("switch", { name: "Sub-agents" }));
+    await waitFor(() => expect(onToggleSubagents).toHaveBeenLastCalledWith(false));
+  });
+
   it("still shows them alongside installed packages", () => {
     renderSection([installed]);
     expect(screen.getByRole("button", { name: "pi-web-access" })).toBeInTheDocument();

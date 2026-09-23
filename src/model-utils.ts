@@ -1,4 +1,4 @@
-import type { BuiltinModelSuggestion, ModelRecord } from "./types";
+import type { BuiltinModelSuggestion, ModelRecord, ProviderRecord, SubagentModel, ThinkingLevel } from "./types";
 
 function words(value: string): string[] {
   return value.toLowerCase().normalize("NFKD").match(/[\p{L}\p{N}]+/gu) ?? [];
@@ -68,4 +68,27 @@ export function mergeDiscoveredModels(existing: ModelRecord[], modelIds: string[
 
 export function modelIsReady(model: ModelRecord): boolean {
   return Boolean(model.id.trim() && model.contextWindow && model.maxTokens);
+}
+
+/**
+ * The reasoning level to use after a model change: the requested one if the model has it, else
+ * the current one, else "medium", else the model's first level.
+ */
+export function pickThinkingLevel(model: ModelRecord | undefined, requested?: ThinkingLevel, current?: ThinkingLevel): ThinkingLevel {
+  const levels: ThinkingLevel[] = model?.thinkingLevels.length ? model.thinkingLevels : ["off"];
+  if (requested && levels.includes(requested)) return requested;
+  if (current && levels.includes(current)) return current;
+  return levels.includes("medium") ? "medium" : levels[0];
+}
+
+/** Why a sub-agent's own model can't run right now, or undefined when it can (or it has none). */
+export function subagentModelIssue(choice: SubagentModel | null | undefined, providers: ProviderRecord[]): string | undefined {
+  if (!choice) return undefined;
+  const provider = providers.find((item) => item.id === choice.providerId);
+  if (!provider) return "Its connection no longer exists.";
+  if (!provider.connected) return provider.kind === "subscription" ? `${provider.name} is signed out.` : `${provider.name} has no API key.`;
+  const model = provider.models.find((item) => item.id === choice.modelId);
+  if (!model || !modelIsReady(model)) return "Its model is no longer configured.";
+  if (!model.thinkingLevels.includes(choice.thinkingLevel)) return `${model.name} doesn't support ${choice.thinkingLevel} reasoning.`;
+  return undefined;
 }

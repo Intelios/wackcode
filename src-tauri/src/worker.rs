@@ -236,18 +236,6 @@ pub async fn ensure_worker_with(
         (data.tool_config.disabled.clone(), resource_paths(&data.packages))
     };
 
-    let models: Vec<Value> = provider.models.iter().filter_map(|model| {
-        Some(json!({
-            "id": model.id,
-            "name": model.name,
-            "contextWindow": model.context_window?,
-            "maxTokens": model.max_tokens?,
-            "reasoning": model.reasoning,
-            "thinkingLevels": model.thinking_levels,
-            "thinkingLevelMap": model.thinking_level_map,
-            "vision": model.vision,
-        }))
-    }).collect();
     let auth_path = if provider.kind == ProviderKind::Subscription {
         Some(subscriptions::auth_path(app, &provider.id)?)
     } else { None };
@@ -259,14 +247,7 @@ pub async fn ensure_worker_with(
         "agentDir": agent_dir,
         "sessionDir": session_dir,
         "sessionFile": task.session_file,
-        "provider": {
-            "id": provider.id,
-            "name": provider.name,
-            "kind": provider.kind,
-            "baseUrl": provider.base_url,
-            "api": provider.api_format,
-            "models": models,
-        },
+        "provider": worker_provider_json(provider),
         "modelId": task.model_id,
         "apiKey": api_key,
         "authPath": auth_path,
@@ -277,6 +258,7 @@ pub async fn ensure_worker_with(
         // it with whatever the restored session says. A fork takes the mode its fork point had.
         "mode": if options.fork_from.is_some() { Value::Null } else { json!(task.mode) },
         "forkFrom": options.fork_from,
+        "subagents": subagent_payload(app)?,
     });
     if options.wait_ready {
         request(app, &task.id, init, INIT_TIMEOUT).await.map(|_| ())
@@ -324,6 +306,59 @@ pub async fn broadcast(app: &AppHandle, value: &Value) -> Result<(), String> {
         let _ = send(app, &task_id, value).await;
     }
     Ok(())
+}
+
+/// A connection as the worker's protocol describes it. Only models with confirmed limits are
+/// sent: Pi cannot run a model without them.
+pub fn worker_provider_json(provider: &ProviderRecord) -> Value {
+    let models: Vec<Value> = provider.models.iter().filter_map(|model| {
+        Some(json!({
+            "id": model.id,
+            "name": model.name,
+            "contextWindow": model.context_window?,
+            "maxTokens": model.max_tokens?,
+            "reasoning": model.reasoning,
+            "thinkingLevels": model.thinking_levels,
+            "thinkingLevelMap": model.thinking_level_map,
+            "vision": model.vision,
+        }))
+    }).collect();
+    json!({
+        "id": provider.id,
+        "name": provider.name,
+        "kind": provider.kind,
+        "baseUrl": provider.base_url,
+        "api": provider.api_format,
+        "models": models,
+    })
+}
+
+/// The `subagents` value for `init` and `set_subagents`: null while sub-agents are off, and
+/// otherwise the roster plus the credentials of the connections agents' own models use. Like
+/// `init`'s own key, those credentials only ever travel over the worker's stdin.
+pub fn subagent_payload(app: &AppHandle) -> Result<Value, String> {
+    let state = app.state::<MetadataState>();
+    let (config, providers) = {
+        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        (data.subagents.clone(), data.providers.clone())
+    };
+    Ok(crate::subagents::runtime_payload(&config, &providers, |provider| {
+        if provider.kind == ProviderKind::Subscription {
+            if !subscriptions::has_credential(app, &provider.id) { return None; }
+            let path = subscriptions::auth_path(app, &provider.id).ok()?;
+            Some(crate::subagents::ProviderCredential { api_key: None, auth_path: Some(path.to_string_lossy().into_owned()) })
+        } else {
+            let key = state.secrets.get(&provider.id).ok()?;
+            Some(crate::subagents::ProviderCredential { api_key: Some(key), auth_path: None })
+        }
+    }))
+}
+
+/// Push the current sub-agent settings to every running worker. Applied live on the worker's
+/// next turn — never a restart, so a running chat is never interrupted by a settings change.
+pub async fn broadcast_subagents(app: &AppHandle) -> Result<(), String> {
+    let payload = subagent_payload(app)?;
+    broadcast(app, &json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "set_subagents", "subagents": payload })).await
 }
 
 pub async fn send(app: &AppHandle, task_id: &str, value: &Value) -> Result<(), String> {

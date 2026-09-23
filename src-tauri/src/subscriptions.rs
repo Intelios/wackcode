@@ -224,7 +224,12 @@ fn handle_line(app: &AppHandle, id: &str, line: &str) -> bool {
                 Ok(provider.clone())
             });
             match result {
-                Ok(provider) => emit(app, id, &provider_id, json!({ "type": "complete", "provider": provider })),
+                Ok(provider) => {
+                    // Sub-agents on this subscription can run again, with its fresh model list.
+                    let broadcast_app = app.clone();
+                    tauri::async_runtime::spawn(async move { let _ = worker::broadcast_subagents(&broadcast_app).await; });
+                    emit(app, id, &provider_id, json!({ "type": "complete", "provider": provider }))
+                }
                 Err(_) => emit(app, id, &provider_id, json!({ "type": "error", "message": "Sign-in succeeded, but WackCode could not save the connection." })),
             }
             true
@@ -280,12 +285,15 @@ pub async fn sign_out_subscription(app: AppHandle, state: State<'_, MetadataStat
     };
     for task_id in task_ids { worker::terminate_worker(&app, &task_id, true).await?; }
     remove_credential(&app, &provider_id)?;
-    state.mutate(|data| {
+    let record = state.mutate(|data| {
         let provider = data.providers.iter_mut().find(|provider| provider.id == provider_id).ok_or_else(|| "Subscription connection not found".to_string())?;
         provider.connected = false;
         provider.updated_at = Utc::now().to_rfc3339();
         Ok(provider.clone())
-    })
+    })?;
+    // Withdraw the auth file from sub-agents in other chats; theirs now reports signed out.
+    worker::broadcast_subagents(&app).await?;
+    Ok(record)
 }
 
 #[tauri::command]

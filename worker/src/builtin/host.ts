@@ -1,4 +1,38 @@
-import type { AskQuestion, PlanState, QuestionAnswer, TodoState } from "../protocol.js";
+import type { Usage } from "@earendil-works/pi-ai";
+import type { InlineExtension } from "@earendil-works/pi-coding-agent";
+import type { AskQuestion, PlanState, QuestionAnswer, SubagentSpec, TodoState } from "../protocol.js";
+
+/** What a running child reports while it works. */
+export interface SubagentObserver {
+  /** The child's session exists; `model` is its "Provider · Model" label. */
+  started(model: string): void;
+  /** The child called a tool. */
+  tool(name: string, args: unknown): void;
+  /** Running totals over the child's assistant messages so far. */
+  usage(total: Usage, turns: number): void;
+}
+
+export interface SubagentRunRequest {
+  spec: SubagentSpec;
+  task: string;
+  /** The final tool list: role allowlist, filtered for availability and the user's denylist. */
+  tools: string[];
+  /** Child-only extensions, e.g. the read-only guard. Nothing else ever loads in a child. */
+  extensions: InlineExtension[];
+  /** The parent run's abort signal. */
+  signal: AbortSignal | undefined;
+  observer: SubagentObserver;
+}
+
+export interface SubagentOutcome {
+  status: "done" | "failed" | "aborted";
+  /** The child's final answer (partial when it failed or was stopped). */
+  output: string;
+  /** Already redacted. */
+  error?: string;
+  usage: Usage;
+  turns: number;
+}
 
 /**
  * The bridge built-in extensions use to reach the desktop UI. Implemented by the worker
@@ -18,4 +52,13 @@ export interface BuiltinHost {
   publishPlanState(state: PlanState): void;
   /** Publish the todo list so the desktop can render the panel above the composer. */
   publishTodoState(state: TodoState): void;
+  /** Pi's own tools that are available here and that the user has not switched off. */
+  childToolNames(): string[];
+  /**
+   * Run one sub-agent to completion in its own in-process session. Never rejects once the
+   * child has started: failures and aborts come back as an outcome so their usage still counts.
+   */
+  runSubagent(request: SubagentRunRequest): Promise<SubagentOutcome>;
+  /** Remove any credential the worker holds from text a child produced. */
+  redact(text: string): string;
 }

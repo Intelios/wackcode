@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diffStats, editStats, groupTools, pruneDisabledTools, sameToolCatalog, summarizeTool } from "./tool-utils";
+import { diffStats, editStats, groupTools, parseSubagentDetails, pendingSubagentDetails, pruneDisabledTools, sameToolCatalog, summarizeTool } from "./tool-utils";
 import type { NormalizedBlock, ToolCatalogEntry } from "./types";
 
 function call(toolName: string, args: unknown): NormalizedBlock {
@@ -94,5 +94,31 @@ describe("tool catalogue", () => {
     expect(sameToolCatalog([builtin("grep")], [builtin("grep")])).toBe(true);
     expect(sameToolCatalog([builtin("grep")], [builtin("grep", false)])).toBe(false);
     expect(sameToolCatalog([builtin("grep")], [])).toBe(false);
+  });
+});
+
+describe("sub-agent details", () => {
+  const result = { agent: "scout", task: "t", readOnly: true, status: "done", activity: [{ tool: "ls", subject: "." }, { nope: true }], usage: { input: 3 } };
+
+  it("reads the versioned shape the worker stores, filling gaps and dropping junk", () => {
+    const parsed = parseSubagentDetails({ v: 1, mode: "parallel", results: [result] });
+    expect(parsed?.mode).toBe("parallel");
+    expect(parsed?.results[0].activity).toEqual([{ tool: "ls", subject: "." }]);
+    expect(parsed?.results[0].usage).toEqual({ input: 3, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 });
+  });
+
+  it("treats other versions and malformed results as absent", () => {
+    expect(parseSubagentDetails(undefined)).toBeUndefined();
+    expect(parseSubagentDetails({})).toBeUndefined();
+    expect(parseSubagentDetails({ v: 2, mode: "single", results: [result] })).toBeUndefined();
+    expect(parseSubagentDetails({ v: 1, mode: "single", results: [] })).toBeUndefined();
+    expect(parseSubagentDetails({ v: 1, mode: "single", results: [{ ...result, status: "exploded" }] })).toBeUndefined();
+  });
+
+  it("builds a queued card from a call's arguments, even while they stream", () => {
+    expect(pendingSubagentDetails(call("subagent", { agent: "scout", task: "look" }))?.results[0]).toMatchObject({ agent: "scout", status: "queued" });
+    expect(pendingSubagentDetails(call("subagent", { tasks: [{ agent: "a", task: "1" }, { agent: "b", task: "2" }] }))?.mode).toBe("parallel");
+    expect(pendingSubagentDetails(call("subagent", '{"agent":"sco'))).toBeUndefined();
+    expect(summarizeTool(call("subagent", { tasks: [{}, {}] })).activeVerb).toBe("Running 2 sub-agents");
   });
 });

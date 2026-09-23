@@ -28,6 +28,7 @@ type SnapshotView = {
   activeTools?: string[];
   planState?: { mode: string; phase: string; plan?: string };
   todoState?: { tasks: Array<{ id: number; subject: string; status: string }> };
+  stats?: { tokens: { input: number; output: number; total: number }; cost: number };
 };
 
 interface Output {
@@ -42,7 +43,7 @@ interface Output {
   state?: string;
   message?: string;
   event?: string;
-  detail?: { toolCallId?: string; text?: string };
+  detail?: { toolCallId?: string; toolName?: string; text?: string; details?: unknown };
   requestId?: string;
   method?: string;
   title?: string;
@@ -67,6 +68,7 @@ interface Output {
     sessionFile?: string;
     planState?: SnapshotView["planState"];
     todoState?: SnapshotView["todoState"];
+    stats?: SnapshotView["stats"];
   };
 }
 
@@ -121,7 +123,8 @@ class WorkerHarness {
         tree: output.delta.tree ?? this.view.tree,
         sessionFile: output.delta.sessionFile ?? this.view.sessionFile,
         planState: output.delta.planState ?? this.view.planState,
-        todoState: output.delta.todoState ?? this.view.todoState
+        todoState: output.delta.todoState ?? this.view.todoState,
+        stats: output.delta.stats ?? this.view.stats
       };
     }
   }
@@ -158,7 +161,8 @@ class WorkerHarness {
 
 interface MockProvider {
   baseUrl: string;
-  requests: Array<{ authorization: string; body: Record<string, unknown> }>;
+  /** `text` is the last user message: the prompt, or a sub-agent's task. */
+  requests: Array<{ authorization: string; body: Record<string, unknown>; at: number; text: string }>;
   close: () => Promise<void>;
   waitForSlowRequest: () => Promise<void>;
 }
@@ -172,13 +176,16 @@ async function startMockProvider(): Promise<MockProvider> {
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
     const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
     const authorization = String(request.headers.authorization ?? "");
-    requests.push({ authorization, body });
-    if (authorization === "Bearer cancel-secret") {
+    const text = userTextOf(body);
+    requests.push({ authorization, body, at: Date.now(), text });
+    if (authorization === "Bearer cancel-secret" || text.startsWith("child-wait")) {
       response.writeHead(200, { "content-type": "text/event-stream", connection: "keep-alive" });
       response.write(": waiting\n\n");
       slowRequestResolve?.();
       return;
     }
+    // Keeps parallel read-only children in flight together long enough to observe overlap.
+    if (text.startsWith("child-ls") && !hasToolMessage(body)) await new Promise((wake) => setTimeout(wake, 150));
     streamAgentResponse(response, authorization, body);
   });
   await new Promise<void>((resolvePromise, reject) => {
@@ -199,6 +206,21 @@ async function startMockProvider(): Promise<MockProvider> {
       server.close((error) => error ? reject(error) : resolvePromise());
     })
   };
+}
+
+function userTextOf(body: Record<string, unknown>): string {
+  const messages = Array.isArray(body.messages) ? body.messages as Array<{ role?: string; content?: unknown }> : [];
+  const lastUser = [...messages].reverse().find((message) => message.role === "user");
+  if (typeof lastUser?.content === "string") return lastUser.content;
+  if (!Array.isArray(lastUser?.content)) return "";
+  return (lastUser.content as Array<{ type?: string; text?: string }>)
+    .filter((part) => part.type === "text")
+    .map((part) => part.text ?? "")
+    .join("");
+}
+
+function hasToolMessage(body: Record<string, unknown>): boolean {
+  return Array.isArray(body.messages) && (body.messages as Array<{ role?: string }>).some((message) => message.role === "tool");
 }
 
 function streamAgentResponse(response: ServerResponse<IncomingMessage>, authorization: string, body: Record<string, unknown>): void {
@@ -231,17 +253,9 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
   const send = (value: unknown) => response.write(`data: ${JSON.stringify(value)}\n\n`);
   // The last user message steers which tool the fake model "decides" to call, so tests can
   // exercise specific tool paths through the real agent loop. Content arrives as an array
-  // of parts, not a bare string.
-  const lastUser = [...messages].reverse().find((message) => message.role === "user") as
-    { content?: unknown } | undefined;
-  const lastUserText = typeof lastUser?.content === "string"
-    ? lastUser.content
-    : Array.isArray(lastUser?.content)
-      ? (lastUser.content as Array<{ type?: string; text?: string }>)
-          .filter((part) => part.type === "text")
-          .map((part) => part.text ?? "")
-          .join("")
-      : "";
+  // of parts, not a bare string. A sub-agent's last user message is its task, so "child-"
+  // tasks script what the child does.
+  const lastUserText = userTextOf(body);
   if (!hasToolResult) {
     const toolCall = (name: string, args: Record<string, unknown>) => ({
       index: 0, id: `call-${suffix}`, type: "function",
@@ -263,6 +277,27 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
         ? [toolCall("todo", { action: "create", subject: "Ship the thing" })]
         : lastUserText.startsWith("stream tool")
           ? [toolCall("bash", { command: "printf 'first line\\n'; sleep 0.3; printf 'second line\\n'" })]
+        : lastUserText.startsWith("subagent single")
+          ? [toolCall("subagent", { agent: "scout", task: "child-ls: look around" })]
+        : lastUserText.startsWith("subagent parallel")
+          ? [toolCall("subagent", { tasks: [
+              { agent: "scout", task: "child-ls: first" },
+              { agent: "worker", task: "child-write: one" },
+              { agent: "scout", task: "child-ls: second" },
+              { agent: "worker", task: "child-write: two" }
+            ] })]
+        : lastUserText.startsWith("subagent guard")
+          ? [toolCall("subagent", { agent: "scout", task: "child-rm: tidy up" })]
+        : lastUserText.startsWith("subagent plan")
+          ? [toolCall("subagent", { agent: "worker", task: "child-write: planned" })]
+        : lastUserText.startsWith("subagent wait")
+          ? [toolCall("subagent", { agent: "scout", task: "child-wait: until stopped" })]
+        : lastUserText.startsWith("child-ls")
+          ? [toolCall("ls", { path: "." })]
+        : lastUserText.startsWith("child-rm")
+          ? [toolCall("bash", { command: "rm -f keep.txt" })]
+        : lastUserText.startsWith("child-write: ")
+          ? [toolCall("write", { path: `${lastUserText.slice("child-write: ".length)}.txt`, content: "from a sub-agent\n" })]
           : [toolCall("write", { path: `${suffix}.txt`, content: `changed by ${suffix}\n` })];
     for (const [index, call] of calls.entries()) {
       send({
@@ -287,7 +322,7 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
       object: "chat.completion.chunk",
       created: 2,
       model: "shared-model",
-      choices: [{ index: 0, delta: { role: "assistant", content: `Finished ${suffix}.` }, finish_reason: null }]
+      choices: [{ index: 0, delta: { role: "assistant", content: lastUserText.startsWith("child-") ? `Child done: ${lastUserText}` : `Finished ${suffix}.` }, finish_reason: null }]
     });
     send({
       id: `done-${suffix}`,
@@ -528,15 +563,16 @@ describe("Pi worker integration", () => {
     cleanup.push(() => worker.shutdown());
 
     // Every tool Pi ships is in the registry, including the three the worker never used to
-    // enable, plus WackCode's three built-in extension tools.
+    // enable, plus WackCode's four built-in extension tools.
     const names = (ready.snapshot?.tools ?? []).map((tool) => tool.name).sort();
-    expect(names).toEqual(["ask_user_question", "bash", "edit", "find", "grep", "ls", "plan_mode_complete", "read", "todo", "write"]);
+    expect(names).toEqual(["ask_user_question", "bash", "edit", "find", "grep", "ls", "plan_mode_complete", "read", "subagent", "todo", "write"]);
     expect(ready.snapshot?.tools?.every((tool) => tool.source.kind === "builtin" || tool.source.kind === "wackcode")).toBe(true);
     // The denylist from `init` is applied before the first turn, and tools whose external
     // binary is missing are never offered even though they stay listed in the catalogue.
     const catalog = ready.snapshot?.tools ?? [];
+    // Sub-agents is the one built-in that is off until the user switches it on.
     const expectedActive = catalog
-      .filter((tool) => tool.available && tool.name !== "find")
+      .filter((tool) => tool.available && tool.name !== "find" && tool.name !== "subagent")
       .map((tool) => tool.name)
       .sort();
     expect(ready.snapshot?.activeTools?.sort()).toEqual(expectedActive);
@@ -703,6 +739,22 @@ describe("Pi worker integration", () => {
     expect(stopped?.runTimings).toHaveLength(1);
     const user = stopped?.messages.find((message) => message.role === "user");
     expect(stopped?.runTimings?.[0]?.userMessageId).toBe(user?.id);
+  });
+
+  it("does not report a stop during a tool call as a failure", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-tool-stop-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(provider.baseUrl, "tool-stop-secret", workspace, "tool-stop-task");
+    cleanup.push(() => worker.shutdown());
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "tool-stop-run", message: "stream tool" });
+    await worker.waitFor((output) => output.type === "activity" && output.event === "tool_execution_update");
+    // Pi still starts the next model request after the tool, and it fails on the aborted signal.
+    worker.send({ id: crypto.randomUUID(), type: "abort" });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    await worker.waitFor((output) => emitted(output) && output.view?.activeRun === undefined);
+    expect(worker.outputs.filter((output) => output.type === "worker_error").map((output) => output.message)).toEqual([]);
   });
 });
 
@@ -1300,3 +1352,202 @@ describe("session tree", () => {
     expect(provider.requests).toHaveLength(0);
   });
 });
+
+describe("sub-agents", () => {
+  const scout = {
+    name: "scout",
+    description: "Looks around without changing anything",
+    prompt: "SCOUT-PROMPT-MARKER. Report what you find.",
+    tools: ["read", "grep", "find", "ls", "bash"],
+    readOnly: true
+  };
+  const editor = {
+    name: "worker",
+    description: "Implements a scoped task",
+    prompt: "WORKER-PROMPT-MARKER. Make the change.",
+    tools: ["read", "ls", "bash", "edit", "write"],
+    readOnly: false
+  };
+  const config = (overrides: Record<string, unknown> = {}) => ({
+    trigger: "on_request",
+    maxConcurrency: 4,
+    agents: [scout, editor],
+    providers: [],
+    ...overrides
+  });
+
+  type ToolResultBlock = { type: string; toolName?: string; text?: string; details?: unknown; isError?: boolean };
+  type Details = {
+    v: number;
+    mode: string;
+    results: Array<{ agent: string; task: string; status: string; model?: string; output?: string; error?: string; activity: Array<{ tool: string; subject: string }>; usage: { input: number; output: number; turns: number } }>;
+  };
+
+  function subagentResult(worker: WorkerHarness): (ToolResultBlock & { details: Details }) | undefined {
+    const block = worker.view?.messages
+      .flatMap((message) => message.blocks as ToolResultBlock[])
+      .find((candidate) => candidate.type === "tool-result" && candidate.toolName === "subagent");
+    return block as (ToolResultBlock & { details: Details }) | undefined;
+  }
+
+  const childRequests = (provider: MockProvider, marker: string) =>
+    provider.requests.filter((request) => JSON.stringify(request.body.messages).includes(marker));
+  const offered = (request: { body: Record<string, unknown> }) =>
+    (request.body.tools as Array<{ function: { name: string } }> ?? []).map((tool) => tool.function.name).sort();
+
+  async function start(taskId: string, extra: Record<string, unknown>, mode?: "build" | "plan", apiKey = "alpha-secret") {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), `wackcode-${taskId}-`));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker, ready } = await initializeWorker(provider.baseUrl, apiKey, workspace, taskId, undefined, undefined, undefined, mode, undefined, extra);
+    cleanup.push(() => worker.shutdown());
+    return { provider, workspace, worker, ready };
+  }
+
+  it("keeps the tool off until switched on, and applies settings live without a restart", async () => {
+    const { worker, ready } = await start("subagents-toggle", {});
+    expect(ready.snapshot?.tools?.find((tool) => tool.name === "subagent")?.source.kind).toBe("wackcode");
+    expect(ready.snapshot?.activeTools).not.toContain("subagent");
+
+    worker.send({ id: crypto.randomUUID(), type: "set_subagents", subagents: config() });
+    const on = await worker.waitFor((output) => output.type === "snapshot" && output.snapshot?.activeTools?.includes("subagent") === true);
+    const description = on.snapshot?.tools?.find((tool) => tool.name === "subagent")?.description ?? "";
+    expect(description).toContain("scout (read-only)");
+    expect(description).toContain("worker (can edit files)");
+
+    worker.send({ id: crypto.randomUUID(), type: "set_subagents", subagents: null });
+    await worker.waitFor((output) => output.type === "snapshot" && output !== on && output.snapshot?.activeTools?.includes("subagent") === false);
+    expect(worker.child.exitCode).toBeNull();
+  });
+
+  it("runs a sub-agent in its own in-process session and records its card and usage", async () => {
+    const { provider, worker, ready } = await start("subagents-single", { subagents: config() });
+    expect(ready.snapshot?.activeTools).toContain("subagent");
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "subagent single" });
+    await worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha.")) === true);
+
+    // The live card arrived as structured progress before the final result.
+    const live = worker.outputs.find((output) => output.type === "activity" && output.event === "tool_execution_update"
+      && (output.detail?.details as Details | undefined)?.v === 1);
+    expect(live).toBeDefined();
+
+    const result = subagentResult(worker);
+    expect(result?.isError).toBeFalsy();
+    const child = result?.details.results[0];
+    expect(child?.status).toBe("done");
+    expect(child?.model).toBe("Provider subagents-single · Shared model");
+    expect(child?.output).toBe("Child done: child-ls: look around");
+    expect(child?.activity).toEqual([{ tool: "ls", subject: "." }]);
+    expect(child?.usage.turns).toBe(2);
+    expect(result?.text).toBe("Child done: child-ls: look around");
+
+    // The child ran with its own prompt and only its role's tools, never the parent's built-ins.
+    const requests = childRequests(provider, "SCOUT-PROMPT-MARKER");
+    expect(requests).toHaveLength(2);
+    for (const request of requests) {
+      expect(request.authorization).toBe("Bearer alpha-secret");
+      const tools = offered(request);
+      expect(tools).toContain("ls");
+      for (const hidden of ["edit", "write", "subagent", "todo", "ask_user_question", "plan_mode_complete"]) {
+        expect(tools).not.toContain(hidden);
+      }
+    }
+    expect(provider.requests.filter((request) => request.text === "subagent single")).toHaveLength(2);
+
+    // The children's usage is part of the chat's totals: two parent requests and two child ones.
+    expect(worker.view?.stats?.tokens.input).toBeGreaterThanOrEqual(96);
+  });
+
+  it("runs read-only sub-agents in parallel while those that edit take turns", async () => {
+    const { provider, workspace, worker } = await start("subagents-parallel", { subagents: config() });
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "subagent parallel" });
+    await worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha.")) === true, 20_000);
+
+    const result = subagentResult(worker);
+    expect(result?.details.mode).toBe("parallel");
+    expect(result?.details.results.map((child) => [child.agent, child.status])).toEqual([
+      ["scout", "done"], ["worker", "done"], ["scout", "done"], ["worker", "done"]
+    ]);
+    expect(result?.text).toContain("4/4 sub-agents completed.");
+    expect(result?.text).toContain("### [worker] completed");
+    expect(await readFile(join(workspace, "one.txt"), "utf8")).toBe("from a sub-agent\n");
+    expect(await readFile(join(workspace, "two.txt"), "utf8")).toBe("from a sub-agent\n");
+
+    const window = (text: string) => {
+      const times = provider.requests.filter((request) => request.text === text).map((request) => request.at);
+      return { first: Math.min(...times), last: Math.max(...times) };
+    };
+    // Both scouts were in flight together.
+    const first = window("child-ls: first");
+    const second = window("child-ls: second");
+    expect(second.first).toBeLessThan(first.last);
+    expect(first.first).toBeLessThan(second.last);
+    // The two editors never overlapped.
+    const one = window("child-write: one");
+    const two = window("child-write: two");
+    expect(one.last <= two.first || two.last <= one.first).toBe(true);
+  });
+
+  it("blocks a read-only sub-agent's mutating command, and refuses editing agents in Plan mode", async () => {
+    const { provider, workspace, worker } = await start("subagents-guard", { subagents: config() });
+    await writeFile(join(workspace, "keep.txt"), "still here\n");
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "subagent guard" });
+    await worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha.")) === true);
+    expect(await readFile(join(workspace, "keep.txt"), "utf8")).toBe("still here\n");
+    const answered = childRequests(provider, "SCOUT-PROMPT-MARKER").at(-1);
+    expect(JSON.stringify(answered?.body.messages)).toContain("This sub-agent is read-only");
+    await worker.shutdown();
+
+    const planned = await start("subagents-plan", { subagents: config() }, "plan");
+    planned.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "subagent plan" });
+    await planned.worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha.")) === true);
+    const refused = subagentResult(planned.worker);
+    expect(refused?.isError).toBe(true);
+    // Refused by the tool itself, not by Plan mode's package-tool rule: the helper exemption held.
+    expect(refused?.text).toContain("Plan mode only runs read-only sub-agents, and worker can edit files");
+    expect(childRequests(planned.provider, "WORKER-PROMPT-MARKER")).toHaveLength(0);
+  });
+
+  it("uses a sub-agent's own connection and key when its model lives elsewhere", async () => {
+    const second = await startMockProvider();
+    cleanup.push(second.close);
+    const other = {
+      provider: {
+        id: "second-connection",
+        name: "Second connection",
+        kind: "custom",
+        baseUrl: second.baseUrl,
+        api: "openai-completions",
+        models: [{ id: "small-model", name: "Small model", contextWindow: 8_192, maxTokens: 256, reasoning: false, thinkingLevels: ["off"], thinkingLevelMap: { off: null } }]
+      },
+      apiKey: "second-secret"
+    };
+    const agents = [{ ...scout, model: { providerId: "second-connection", modelId: "small-model", thinkingLevel: "off" } }];
+    const { provider, worker } = await start("subagents-connection", { subagents: config({ agents, providers: [other] }) });
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "subagent single" });
+    await worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha.")) === true);
+
+    expect(childRequests(provider, "SCOUT-PROMPT-MARKER")).toHaveLength(0);
+    const requests = childRequests(second, "SCOUT-PROMPT-MARKER");
+    expect(requests).toHaveLength(2);
+    expect(requests.every((request) => request.authorization === "Bearer second-secret" && request.body.model === "small-model")).toBe(true);
+    expect(subagentResult(worker)?.details.results[0].model).toBe("Second connection · Small model");
+  });
+
+  it("stops running sub-agents with the chat, and still records what they did", async () => {
+    const { provider, worker } = await start("subagents-abort", { subagents: config() });
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "subagent wait" });
+    await provider.waitForSlowRequest();
+    const stoppedAt = Date.now();
+    worker.send({ id: crypto.randomUUID(), type: "abort" });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    expect(Date.now() - stoppedAt).toBeLessThan(5_000);
+    expect(worker.outputs.filter((output) => output.type === "worker_error").map((output) => output.message)).toEqual([]);
+    await worker.waitFor((output) => emitted(output) && subagentResult(worker) !== undefined);
+    expect(subagentResult(worker)?.details.results[0].status).toBe("aborted");
+    expect(worker.child.exitCode).toBeNull();
+  });
+});
+

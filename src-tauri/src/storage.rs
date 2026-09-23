@@ -20,7 +20,10 @@ impl MetadataState {
         } else {
             AppData::default()
         };
-        let changed = recover_interrupted_tasks(&mut data);
+        let recovered = recover_interrupted_tasks(&mut data);
+        // Built-in sub-agent definitions ship with the app; refresh them on every start.
+        let refreshed = crate::subagents::normalize(&mut data.subagents);
+        let changed = recovered || refreshed;
         let state = Self { data: Mutex::new(data), data_path, secrets: SecretStore::load(&directory)? };
         if changed { state.save()?; }
         Ok(state)
@@ -70,11 +73,19 @@ mod tests {
     fn metadata_round_trip_has_no_secrets() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("wackcode.json");
-        let data = AppData::default();
+        let mut data = AppData::default();
+        // Sub-agent settings name the connection an agent uses, never its credential.
+        data.subagents.enabled = true;
+        crate::subagents::normalize(&mut data.subagents);
+        data.subagents.agents[0].model = Some(crate::models::SubagentModel {
+            provider_id: "custom-1".into(), model_id: "small".into(), thinking_level: "off".into(),
+        });
         save_to_path(&path, &data).unwrap();
         let content = fs::read_to_string(path).unwrap();
         assert!(content.contains("providers"));
+        assert!(content.contains("subagents"));
         assert!(!content.contains("apiKey"));
+        assert!(!content.contains("authPath"));
     }
 
     #[test]

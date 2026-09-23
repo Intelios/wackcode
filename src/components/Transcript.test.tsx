@@ -38,6 +38,44 @@ describe("Transcript tool output", () => {
   });
 });
 
+describe("Transcript sub-agent calls", () => {
+  const call: NormalizedMessage = {
+    id: "assistant-1",
+    role: "assistant",
+    blocks: [{ type: "tool-call", toolName: "subagent", toolCallId: "call-1", arguments: { agent: "scout", task: "Map the worker" } }]
+  };
+  const usage = { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 1 };
+
+  it("shows the card from the call's arguments, then live progress, then the final result", () => {
+    const view = render(<Transcript messages={[call]} running />);
+    expect(screen.getByText("Map the worker")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Queued" })).toBeInTheDocument();
+
+    const live = { v: 1, mode: "single", results: [{ agent: "scout", task: "Map the worker", readOnly: true, status: "running", activity: [{ tool: "read", subject: "worker/src/index.ts" }], usage }] };
+    view.rerender(<Transcript messages={[call]} running liveToolDetails={{ "call-1": live }} />);
+    expect(screen.getByText("worker/src/index.ts")).toBeInTheDocument();
+
+    const result: NormalizedMessage = {
+      id: "tool-2",
+      role: "tool",
+      blocks: [{ type: "tool-result", toolName: "subagent", toolCallId: "call-1", text: "Mapped.", details: { ...live, results: [{ ...live.results[0], status: "done", output: "Mapped." }] } }]
+    };
+    view.rerender(<Transcript messages={[call, result]} running={false} />);
+    expect(screen.getByRole("img", { name: "Done" })).toBeInTheDocument();
+  });
+
+  it("falls back to a plain row when the call was refused before any sub-agent ran", () => {
+    const refused: NormalizedMessage = {
+      id: "tool-2",
+      role: "tool",
+      blocks: [{ type: "tool-result", toolName: "subagent", toolCallId: "call-1", text: "Sub-agents are switched off in Settings.", isError: true, details: {} }]
+    };
+    render(<Transcript messages={[call, refused]} running={false} />);
+    expect(screen.getByRole("button", { name: /Ran sub-agent/ })).toBeInTheDocument();
+    expect(screen.getByText("failed")).toBeInTheDocument();
+  });
+});
+
 describe("Transcript run durations", () => {
   it("places saved durations between each user prompt and assistant reply", () => {
     const messages: NormalizedMessage[] = [

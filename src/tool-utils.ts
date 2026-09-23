@@ -1,5 +1,8 @@
-import type { NormalizedBlock, ToolCatalogEntry } from "./types";
+import type { NormalizedBlock, SubagentDetails, SubagentResult, SubagentStatus, ToolCatalogEntry } from "./types";
 import { displayPath } from "./chat-utils";
+
+/** The built-in sub-agents tool. Its calls render as a card rather than a tool row. */
+export const SUBAGENT_TOOL_NAME = "subagent";
 
 export interface ToolSummary {
   /** Label while the tool is executing, e.g. "Editing". */
@@ -97,6 +100,15 @@ export function summarizeTool(call: NormalizedBlock, result?: NormalizedBlock): 
       return { kind: "other", activeVerb: "Submitting plan", doneVerb: "Plan submitted", subject: "" };
     case "todo":
       return { kind: "other", activeVerb: "Updating todos", doneVerb: "Todos updated", subject: str(toolArgs.subject) };
+    case SUBAGENT_TOOL_NAME: {
+      const tasks = Array.isArray(toolArgs.tasks) ? toolArgs.tasks.length : 0;
+      return {
+        kind: "other",
+        activeVerb: tasks ? `Running ${tasks} sub-agents` : "Running sub-agent",
+        doneVerb: tasks ? `Ran ${tasks} sub-agents` : "Ran sub-agent",
+        subject: tasks ? "" : str(toolArgs.agent)
+      };
+    }
     default:
       return { kind: "other", activeVerb: name, doneVerb: name, subject: "" };
   }
@@ -163,4 +175,80 @@ export function sameToolCatalog(left: ToolCatalogEntry[], right: ToolCatalogEntr
       && tool.source.kind === other.source.kind
       && tool.source.packageId === other.source.packageId;
   });
+}
+
+
+const SUBAGENT_STATUSES: SubagentStatus[] = ["queued", "running", "done", "failed", "aborted"];
+
+function num(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function subagentResult(value: unknown): SubagentResult | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const entry = value as Record<string, unknown>;
+  if (typeof entry.agent !== "string" || typeof entry.task !== "string") return undefined;
+  const status = SUBAGENT_STATUSES.includes(entry.status as SubagentStatus) ? entry.status as SubagentStatus : undefined;
+  if (!status) return undefined;
+  const usage = (entry.usage && typeof entry.usage === "object" ? entry.usage : {}) as Record<string, unknown>;
+  const activity = Array.isArray(entry.activity)
+    ? entry.activity.flatMap((item) => {
+        const call = item as Record<string, unknown> | null;
+        return call && typeof call.tool === "string" ? [{ tool: call.tool, subject: str(call.subject) }] : [];
+      })
+    : [];
+  return {
+    agent: entry.agent,
+    task: entry.task,
+    readOnly: entry.readOnly === true,
+    model: typeof entry.model === "string" ? entry.model : undefined,
+    status,
+    activity,
+    output: typeof entry.output === "string" ? entry.output : undefined,
+    outputTruncated: entry.outputTruncated === true,
+    error: typeof entry.error === "string" ? entry.error : undefined,
+    usage: {
+      input: num(usage.input),
+      output: num(usage.output),
+      cacheRead: num(usage.cacheRead),
+      cacheWrite: num(usage.cacheWrite),
+      cost: num(usage.cost),
+      turns: num(usage.turns)
+    },
+    startedAt: typeof entry.startedAt === "number" ? entry.startedAt : undefined,
+    endedAt: typeof entry.endedAt === "number" ? entry.endedAt : undefined
+  };
+}
+
+/**
+ * The card's data from a `subagent` result or live update. Details are stored in session
+ * files, so anything that isn't a version this app understands is treated as absent and the
+ * call falls back to a plain tool row.
+ */
+export function parseSubagentDetails(value: unknown): SubagentDetails | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const details = value as Record<string, unknown>;
+  if (details.v !== 1 || !Array.isArray(details.results) || details.results.length === 0) return undefined;
+  const results = details.results.map(subagentResult);
+  if (results.some((result) => !result)) return undefined;
+  return { v: 1, mode: details.mode === "parallel" ? "parallel" : "single", results: results as SubagentResult[] };
+}
+
+/** A card for a call that has not reported progress yet, built from its arguments. */
+export function pendingSubagentDetails(call: NormalizedBlock): SubagentDetails | undefined {
+  const toolArgs = args(call);
+  const queued = (agent: unknown, task: unknown): SubagentResult | undefined =>
+    typeof agent === "string" && agent && typeof task === "string"
+      ? { agent, task, readOnly: false, status: "queued", activity: [], usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 } }
+      : undefined;
+  if (Array.isArray(toolArgs.tasks)) {
+    const results = toolArgs.tasks.map((item) => {
+      const task = item as Record<string, unknown> | null;
+      return queued(task?.agent, task?.task);
+    });
+    if (!results.length || results.some((result) => !result)) return undefined;
+    return { v: 1, mode: "parallel", results: results as SubagentResult[] };
+  }
+  const single = queued(toolArgs.agent, toolArgs.task);
+  return single ? { v: 1, mode: "single", results: [single] } : undefined;
 }

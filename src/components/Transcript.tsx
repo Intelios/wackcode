@@ -3,12 +3,14 @@ import type { NormalizedBlock, NormalizedMessage, PlanState, RunTiming } from ".
 import { useFollowScroll } from "../hooks/useFollowScroll";
 import { useSmoothText } from "../hooks/useSmoothText";
 import { formatRunDuration } from "../chat-utils";
+import { SUBAGENT_TOOL_NAME, parseSubagentDetails, pendingSubagentDetails } from "../tool-utils";
 import { hasVisibleMessages, latestTurn, messageText } from "../tree-utils";
 import { Icon } from "./Icons";
 import { Markdown } from "./Markdown";
 import { MessageActions, type MessageActionItem } from "./MessageActions";
 import { MessageEditor } from "./MessageEditor";
 import { PlanCard, type PlanAction } from "./PlanCard";
+import { SubagentCard } from "./SubagentCard";
 import { ThinkingRow } from "./ThinkingRow";
 import { OrphanResult, ToolRow } from "./ToolRow";
 
@@ -20,6 +22,8 @@ interface Props {
   activeRun?: { runId?: string; startedAt: number };
   runTimings?: RunTiming[];
   liveToolText?: Record<string, string>;
+  /** Structured progress of in-flight tools that report it (the sub-agent card). */
+  liveToolDetails?: Record<string, unknown>;
   /** Latest Plan mode state; PlanCards use it to know which proposal is awaiting a decision. */
   planState?: PlanState;
   onPlanAction?: (action: PlanAction) => void;
@@ -80,6 +84,7 @@ function renderBlock(
   block: NormalizedBlock,
   results: Map<string, NormalizedBlock>,
   liveToolText: Record<string, string> | undefined,
+  liveToolDetails: Record<string, unknown> | undefined,
   live: boolean,
   planState: PlanState | undefined,
   onPlanAction: ((action: PlanAction) => void) | undefined,
@@ -97,6 +102,16 @@ function renderBlock(
       const current = planState?.mode === "plan" && planState.phase === "ready" && planState.plan === plan;
       return <PlanCard plan={plan} current={current} busy={running} onAction={onPlanAction} />;
     }
+    if (block.toolName === SUBAGENT_TOOL_NAME) {
+      // The final result is authoritative; while running, the latest live update, or the
+      // call's own arguments until the first update arrives. A call refused before any child
+      // started has no details and falls through to the plain row with its error.
+      const liveDetails = block.toolCallId ? liveToolDetails?.[block.toolCallId] : undefined;
+      const details = result
+        ? parseSubagentDetails(result.details)
+        : live ? parseSubagentDetails(liveDetails) ?? pendingSubagentDetails(block) : undefined;
+      if (details) return <SubagentCard details={details} running={live && !result} />;
+    }
     return <ToolRow call={block} result={result} liveText={liveText} running={live && !result} />;
   }
   if (block.type === "tool-result") {
@@ -113,7 +128,12 @@ function signatureBlock(block: NormalizedBlock): unknown {
   return block.type === "image" ? { image: block.imageId, ready: Boolean(block.thumbnail) } : block;
 }
 
-function signature(message: NormalizedMessage, results: Map<string, NormalizedBlock>, liveToolText?: Record<string, string>): string {
+function signature(
+  message: NormalizedMessage,
+  results: Map<string, NormalizedBlock>,
+  liveToolText?: Record<string, string>,
+  liveToolDetails?: Record<string, unknown>
+): string {
   return JSON.stringify([
     message.blocks.map(signatureBlock),
     message.stopReason,
@@ -123,7 +143,7 @@ function signature(message: NormalizedMessage, results: Map<string, NormalizedBl
     message.checkpoint,
     message.turn,
     message.blocks.map((block) => block.type === "tool-call" && block.toolCallId
-      ? [results.get(block.toolCallId) ?? null, liveToolText?.[block.toolCallId] ?? null]
+      ? [results.get(block.toolCallId) ?? null, liveToolText?.[block.toolCallId] ?? null, liveToolDetails?.[block.toolCallId] ?? null]
       : null)
   ]);
 }
@@ -138,18 +158,27 @@ function signature(message: NormalizedMessage, results: Map<string, NormalizedBl
  */
 const signatureCache = new WeakMap<NormalizedMessage, { deps: unknown[]; sig: string }>();
 
-function cachedSignature(message: NormalizedMessage, results: Map<string, NormalizedBlock>, liveToolText?: Record<string, string>): string {
+function cachedSignature(
+  message: NormalizedMessage,
+  results: Map<string, NormalizedBlock>,
+  liveToolText?: Record<string, string>,
+  liveToolDetails?: Record<string, unknown>
+): string {
   const deps: unknown[] = [];
   for (const block of message.blocks) {
     if (block.type === "tool-call" && block.toolCallId) {
-      deps.push(results.get(block.toolCallId) ?? null, liveToolText?.[block.toolCallId] ?? null);
+      deps.push(
+        results.get(block.toolCallId) ?? null,
+        liveToolText?.[block.toolCallId] ?? null,
+        liveToolDetails?.[block.toolCallId] ?? null
+      );
     }
   }
   const cached = signatureCache.get(message);
   if (cached && cached.deps.length === deps.length && cached.deps.every((dep, index) => dep === deps[index])) {
     return cached.sig;
   }
-  const sig = signature(message, results, liveToolText);
+  const sig = signature(message, results, liveToolText, liveToolDetails);
   signatureCache.set(message, { deps, sig });
   return sig;
 }
@@ -158,6 +187,7 @@ interface MessageProps {
   message: NormalizedMessage;
   results: Map<string, NormalizedBlock>;
   liveToolText?: Record<string, string>;
+  liveToolDetails?: Record<string, unknown>;
   live: boolean;
   running: boolean;
   planState?: PlanState;
@@ -172,7 +202,7 @@ interface MessageProps {
   onAction: (action: LocalAction) => Promise<boolean> | void;
 }
 
-const Message = memo(function Message({ message, results, liveToolText, live, running, planState, onPlanAction, actionsEnabled, retry, editing, vision, modelName, onAction }: MessageProps) {
+const Message = memo(function Message({ message, results, liveToolText, liveToolDetails, live, running, planState, onPlanAction, actionsEnabled, retry, editing, vision, modelName, onAction }: MessageProps) {
   if (message.role === "user") {
     const images = message.blocks.filter((block) => block.type === "image");
     const text = messageText(message);
@@ -226,7 +256,7 @@ const Message = memo(function Message({ message, results, liveToolText, live, ru
     <div className="msg assistant">
       {message.blocks.map((block, index) => (
         <div key={block.toolCallId ?? index} className="block-slot">
-          {renderBlock(block, results, liveToolText, live, planState, onPlanAction, running)}
+          {renderBlock(block, results, liveToolText, liveToolDetails, live, planState, onPlanAction, running)}
         </div>
       ))}
       {message.stopReason === "error" && <div className="message-error">{message.errorMessage || "The provider rejected the request."}</div>}
@@ -258,7 +288,7 @@ function activityLabel(activity?: string): string {
   return "Working…";
 }
 
-export function Transcript({ messages, partial, running, activity, activeRun, runTimings = [], liveToolText, planState, onPlanAction, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind }: Props) {
+export function Transcript({ messages, partial, running, activity, activeRun, runTimings = [], liveToolText, liveToolDetails, planState, onPlanAction, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind }: Props) {
   const { ref, onScroll, detached, jumpToLatest } = useFollowScroll();
   const [editingId, setEditingId] = useState<string>();
   const latest = useMemo(() => latestTurn(messages), [messages]);
@@ -339,11 +369,12 @@ export function Transcript({ messages, partial, running, activity, activeRun, ru
                   message={message}
                   results={results}
                   liveToolText={liveToolText}
+                  liveToolDetails={liveToolDetails}
                   live={running && message.id === lastAssistantId}
                   running={running}
                   planState={planState}
                   onPlanAction={onPlanAction}
-                  sig={cachedSignature(message, results, liveToolText)}
+                  sig={cachedSignature(message, results, liveToolText, liveToolDetails)}
                   actionsEnabled={actionsEnabled}
                   retry={retry}
                   editing={editingId === message.id}
@@ -365,7 +396,7 @@ export function Transcript({ messages, partial, running, activity, activeRun, ru
             <div className="msg assistant streaming">
               {partial.blocks.map((block, index) => (
                 <div key={block.toolCallId ?? index} className="block-slot">
-                  {renderBlock(block, results, liveToolText, true, planState, onPlanAction, running, true)}
+                  {renderBlock(block, results, liveToolText, liveToolDetails, true, planState, onPlanAction, running, true)}
                 </div>
               ))}
             </div>

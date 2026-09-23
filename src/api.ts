@@ -14,6 +14,7 @@ import type {
   QuestionAnswer,
   RestoreResult,
   SaveProviderInput,
+  SubagentConfig,
   SubscriptionProviderInfo,
   TaskMode,
   TaskRecord,
@@ -35,6 +36,7 @@ export const api = {
   signOutSubscription: (providerId: string) => invoke<ProviderRecord>("sign_out_subscription", { providerId }),
   openSubscriptionAuthUrl: (url: string) => invoke<void>("open_subscription_auth_url", { url }),
   setToolConfig: (disabled: string[]) => invoke<ToolConfig>("set_tool_config", { input: { disabled } }),
+  setSubagentConfig: (input: SubagentConfig) => invoke<SubagentConfig>("set_subagent_config", { input }),
   listPackages: () => invoke<PackageRecord[]>("list_packages"),
   searchPackages: (query: string, from = 0) =>
     invoke<PackageSearchResult[]>("search_packages", { input: { query, from } }),

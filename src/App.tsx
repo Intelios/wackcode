@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { api } from "./api";
-import { modelIsReady } from "./model-utils";
+import { modelIsReady, pickThinkingLevel } from "./model-utils";
 import { titleFromPrompt, samePlanState, sameTodoState, applySnapshotDelta } from "./chat-utils";
 import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix } from "./tree-utils";
 import { pruneDisabledTools, sameToolCatalog } from "./tool-utils";
@@ -22,6 +22,7 @@ import type {
   ProviderRecord,
   RestoreResult,
   SaveProviderInput,
+  SubagentConfig,
   SubscriptionLoginEvent,
   TaskMode,
   TaskRecord,
@@ -44,7 +45,16 @@ import type { PlanAction } from "./components/PlanCard";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { SubscriptionLoginDialog } from "./components/SubscriptionLoginDialog";
 
-const emptyData: AppData = { version: 1, providers: [], projects: [], tasks: [], toolConfig: { disabled: [] }, toolCatalog: [], packages: [] };
+const emptyData: AppData = {
+  version: 1,
+  providers: [],
+  projects: [],
+  tasks: [],
+  toolConfig: { disabled: [] },
+  toolCatalog: [],
+  packages: [],
+  subagents: { enabled: false, trigger: "on_request", maxConcurrency: 4, agents: [] }
+};
 
 const LAST_MODEL_KEY = "wackcode:lastModel";
 const LAST_PROJECT_KEY = "wackcode:lastProject";
@@ -280,23 +290,30 @@ export default function App() {
               ...current[taskId],
               activeRun: { runId: payload.runId, startedAt: payload.startedAt ?? current[taskId]?.activeRun?.startedAt ?? Date.now() },
               activity: undefined,
-              liveToolText: {}
+              liveToolText: {},
+              liveToolDetails: {}
             }
           }));
         } else if (payload.state === "idle" || payload.state === "interrupted") {
-          patchRuntime(taskId, { activeRun: undefined, activity: undefined, liveToolText: {} });
+          patchRuntime(taskId, { activeRun: undefined, activity: undefined, liveToolText: {}, liveToolDetails: {} });
         }
       } else if (payload.type === "activity") {
         patchRuntime(taskId, { activity: payload.event });
         const callId = payload.detail?.toolCallId;
         const liveText = payload.detail?.text;
+        const liveDetails = payload.detail?.details;
         if (typeof callId === "string" && callId) {
           if (payload.event === "tool_execution_update" && typeof liveText === "string") {
             setRuntimes((current) => ({
               ...current,
               [taskId]: {
                 ...current[taskId],
-                liveToolText: { ...current[taskId]?.liveToolText, [callId]: liveText }
+                liveToolText: { ...current[taskId]?.liveToolText, [callId]: liveText },
+                // Kept until the run ends rather than dropped at tool_execution_end: the final
+                // result reaches the transcript a snapshot later, and the card must not blink.
+                ...(liveDetails !== undefined
+                  ? { liveToolDetails: { ...current[taskId]?.liveToolDetails, [callId]: liveDetails } }
+                  : {})
               }
             }));
           } else if (payload.event === "tool_execution_end") {
@@ -484,6 +501,18 @@ export default function App() {
     return saved;
   }
 
+  async function setSubagents(config: SubagentConfig) {
+    const previous = data.subagents;
+    setData((current) => ({ ...current, subagents: config }));
+    try {
+      const saved = await api.setSubagentConfig(config);
+      setData((current) => ({ ...current, subagents: saved }));
+    } catch (reason) {
+      setData((current) => ({ ...current, subagents: previous }));
+      throw reason;
+    }
+  }
+
   async function setDisabledTools(disabled: string[]) {
     const pruned = pruneDisabledTools(disabled, data.toolCatalog);
     const previous = data.toolConfig;
@@ -529,10 +558,7 @@ export default function App() {
     const nextProvider = data.providers.find((item) => item.id === providerId);
     const modelId = patch.modelId ?? (patch.providerId ? nextProvider?.models.find(modelIsReady)?.id : selectedTask.modelId) ?? "";
     const nextModel = nextProvider?.models.find((item) => item.id === modelId);
-    const available = nextModel?.thinkingLevels.length ? nextModel.thinkingLevels : (["off"] as ThinkingLevel[]);
-    const thinkingLevel = patch.thinkingLevel && available.includes(patch.thinkingLevel)
-      ? patch.thinkingLevel
-      : available.includes(selectedTask.thinkingLevel) ? selectedTask.thinkingLevel : available.includes("medium") ? "medium" : available[0];
+    const thinkingLevel = pickThinkingLevel(nextModel, patch.thinkingLevel, selectedTask.thinkingLevel);
     try {
       const updated = await api.configureTask({ taskId: selectedTask.id, providerId, modelId, thinkingLevel });
       setData((current) => ({ ...current, tasks: current.tasks.map((task) => task.id === updated.id ? updated : task) }));
@@ -549,10 +575,7 @@ export default function App() {
       const provider = configuredProviders.find((item) => item.id === providerId);
       const modelId = patch.modelId ?? (patch.providerId ? provider?.models.find(modelIsReady)?.id : base?.modelId);
       const model = provider?.models.find((item) => item.id === modelId);
-      const levels: ThinkingLevel[] = model?.thinkingLevels.length ? model.thinkingLevels : ["off"];
-      const thinkingLevel = patch.thinkingLevel && levels.includes(patch.thinkingLevel)
-        ? patch.thinkingLevel
-        : base?.thinkingLevel && levels.includes(base.thinkingLevel) ? base.thinkingLevel : levels.includes("medium") ? "medium" : levels[0];
+      const thinkingLevel = pickThinkingLevel(model, patch.thinkingLevel, base?.thinkingLevel);
       if (!providerId || !modelId || !thinkingLevel) return current;
       return { projectId: current?.projectId ?? null, useWorktree: current?.useWorktree ?? false, choice: { providerId, modelId, thinkingLevel } };
     });
@@ -1090,6 +1113,8 @@ export default function App() {
           onSignOutSubscription={signOutSubscription}
           connectedSubscriptionId={connectedSubscriptionId}
           onSetDisabledTools={setDisabledTools}
+          subagents={data.subagents}
+          onSetSubagents={setSubagents}
           onRefresh={refreshPackages}
           onInstall={installPackage}
           onTrust={trustPackage}
@@ -1191,6 +1216,7 @@ export default function App() {
               runTimings={runtime?.snapshot?.runTimings}
               activity={runtime?.activity}
               liveToolText={runtime?.liveToolText}
+              liveToolDetails={runtime?.liveToolDetails}
               planState={runtime?.planState}
               onPlanAction={onPlanAction}
               actionsEnabled={!selectedBusy && !pendingDialogTaskIds.has(selectedTask.id)}

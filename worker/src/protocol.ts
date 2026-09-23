@@ -100,6 +100,91 @@ export interface WorkerProvider {
   models: WorkerModel[];
 }
 
+/** When the main agent should reach for sub-agents. Only changes the tool's guidance text. */
+export type SubagentTrigger = "on_request" | "auto";
+
+export interface SubagentModelChoice {
+  providerId: string;
+  modelId: string;
+  thinkingLevel: ThinkingLevel;
+}
+
+/** One agent the `subagent` tool can launch, resolved by the host from Settings. */
+export interface SubagentSpec {
+  /** The name the model calls it by, e.g. "scout". */
+  name: string;
+  description: string;
+  /** Appended to Pi's system prompt for the child. */
+  prompt: string;
+  /** Pi built-in tools the agent may use, before availability and the user's denylist apply. */
+  tools: string[];
+  /** Read-only agents never get edit/write, their bash is limited, and they may run in Plan mode. */
+  readOnly: boolean;
+  /** A model of its own; absent means the chat's model and thinking level. */
+  model?: SubagentModelChoice;
+  /** Set when the chosen model can't be used (signed out, model removed); reported per call. */
+  unavailable?: string;
+}
+
+/** A connection a sub-agent's model lives on, with the credential it needs. */
+export interface SubagentProvider {
+  provider: WorkerProvider;
+  apiKey?: string;
+  authPath?: string;
+}
+
+export interface SubagentRuntimeConfig {
+  trigger: SubagentTrigger;
+  /** Children one call runs at the same time. Children that can edit files still take turns. */
+  maxConcurrency: number;
+  /** Enabled agents only. */
+  agents: SubagentSpec[];
+  /** Connections referenced by agents' own models. Credentials travel only over stdin. */
+  providers: SubagentProvider[];
+}
+
+export type SubagentStatus = "queued" | "running" | "done" | "failed" | "aborted";
+
+/** One tool call a child made, summarized for the card. */
+export interface SubagentActivity {
+  tool: string;
+  subject: string;
+}
+
+export interface SubagentUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+  turns: number;
+}
+
+export interface SubagentResult {
+  agent: string;
+  task: string;
+  readOnly: boolean;
+  /** "Provider · Model", once the child has started. */
+  model?: string;
+  status: SubagentStatus;
+  /** The most recent tool calls, oldest first. */
+  activity: SubagentActivity[];
+  /** The child's final answer, capped for the card (the model receives more). */
+  output?: string;
+  outputTruncated?: boolean;
+  error?: string;
+  usage: SubagentUsage;
+  startedAt?: number;
+  endedAt?: number;
+}
+
+/** The `subagent` tool's result details: what the transcript card renders, live and after a reload. */
+export interface SubagentDetails {
+  v: 1;
+  mode: "single" | "parallel";
+  results: SubagentResult[];
+}
+
 export interface InitCommand {
   id: string;
   type: "init";
@@ -135,6 +220,8 @@ export interface InitCommand {
    * as the path from the root to `entryId` (default: that session's leaf), like Pi's `/fork`.
    */
   forkFrom?: { sessionFile: string; entryId?: string };
+  /** Sub-agents, when the user has turned them on. Absent or null: the `subagent` tool stays off. */
+  subagents?: SubagentRuntimeConfig | null;
 }
 
 export interface WorkerResources {
@@ -211,6 +298,7 @@ export type WorkerCommand =
   | { id: string; type: "set_thinking"; level: ThinkingLevel }
   | { id: string; type: "set_mode"; mode: TaskMode }
   | { id: string; type: "set_tools"; disabledTools: string[] }
+  | { id: string; type: "set_subagents"; subagents: SubagentRuntimeConfig | null }
   | {
       id: string;
       type: "extension_ui_response";

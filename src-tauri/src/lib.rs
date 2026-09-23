@@ -4,6 +4,7 @@ mod git;
 mod models;
 mod secrets;
 mod storage;
+mod subagents;
 mod subscriptions;
 mod worker;
 
@@ -38,6 +39,7 @@ pub fn run() {
             subscriptions::sign_out_subscription,
             subscriptions::open_subscription_auth_url,
             commands::set_tool_config,
+            commands::set_subagent_config,
             commands::list_packages,
             commands::refresh_packages,
             commands::install_package,

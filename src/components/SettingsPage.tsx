@@ -2,9 +2,10 @@ import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode }
 import { api } from "../api";
 import { applyBuiltinModelSuggestion, mergeDiscoveredModels, modelIsReady, searchBuiltinModels } from "../model-utils";
 import { groupTools } from "../tool-utils";
-import type { ApiFormat, BuiltinModelSuggestion, CustomProviderRecord, ModelRecord, PackageRecord, ProviderRecord, SaveProviderInput, SubscriptionProviderInfo, ThinkingLevel, ToolCatalogEntry } from "../types";
+import type { ApiFormat, BuiltinModelSuggestion, CustomProviderRecord, ModelRecord, PackageRecord, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ThinkingLevel, ToolCatalogEntry } from "../types";
 import { Icon, type IconName } from "./Icons";
 import { PackagesSection, type PackageActions } from "./PackagesSection";
+import { SubagentsSection } from "./SubagentsSection";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 import { Popover } from "./ui/Popover";
 import { Select } from "./ui/Select";
@@ -14,7 +15,7 @@ const levels: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhi
 let nextModelCardKey = 0;
 const newModelCardKeys = (count: number) => Array.from({ length: count }, () => ++nextModelCardKey);
 
-type SectionId = "providers" | "packages" | "tools";
+type SectionId = "providers" | "packages" | "tools" | "subagents";
 
 interface Section {
   id: SectionId;
@@ -25,7 +26,9 @@ interface Section {
 const SECTIONS: Section[] = [
   { id: "providers", label: "Providers", icon: "key" },
   { id: "packages", label: "Packages", icon: "spark" },
-  { id: "tools", label: "Tools", icon: "wrench" }
+  { id: "tools", label: "Tools", icon: "wrench" },
+  // Only listed while the built-in is switched on (Settings → Packages).
+  { id: "subagents", label: "Sub-agents", icon: "agents" }
 ];
 
 interface Props extends PackageActions {
@@ -41,14 +44,19 @@ interface Props extends PackageActions {
   onSignOutSubscription: (providerId: string) => Promise<void>;
   connectedSubscriptionId?: string;
   onSetDisabledTools: (disabled: string[]) => Promise<void>;
+  subagents: SubagentConfig;
+  onSetSubagents: (config: SubagentConfig) => Promise<void>;
 }
 
 export function SettingsPage({
   providers, packages, toolCatalog, disabledTools, appDataPath,
   onClose, onSave, onDelete, onConnectSubscription, onSignOutSubscription, connectedSubscriptionId, onSetDisabledTools,
-  onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
+  subagents, onSetSubagents, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
 }: Props) {
-  const [section, setSection] = useState<SectionId>("providers");
+  const [chosenSection, setSection] = useState<SectionId>("providers");
+  // Switching sub-agents off while its page is open lands on Packages, where the switch is.
+  const section: SectionId = chosenSection === "subagents" && !subagents.enabled ? "packages" : chosenSection;
+  const sections = SECTIONS.filter((item) => item.id !== "subagents" || subagents.enabled);
   const [selectedProviderId, setSelectedProviderId] = useState(providers[0]?.id ?? "new");
   const [builtinModels, setBuiltinModels] = useState<BuiltinModelSuggestion[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(true);
@@ -90,7 +98,7 @@ export function SettingsPage({
           </Tooltip>
         </div>
         <nav className="settings-nav" aria-label="Settings sections">
-          {SECTIONS.map((item) => (
+          {sections.map((item) => (
             <Fragment key={item.id}>
               <button
                 type="button"
@@ -182,6 +190,9 @@ export function SettingsPage({
         {section === "packages" && (
           <PackagesSection
             packages={packages}
+            subagentsEnabled={subagents.enabled}
+            onToggleSubagents={(enabled) => onSetSubagents({ ...subagents, enabled })}
+            onConfigureSubagents={() => setSection("subagents")}
             onRefresh={onRefresh}
             onInstall={onInstall}
             onTrust={onTrust}
@@ -193,6 +204,9 @@ export function SettingsPage({
         )}
         {section === "tools" && (
           <ToolsSection catalog={toolCatalog} disabled={disabledTools} onSetDisabled={onSetDisabledTools} />
+        )}
+        {section === "subagents" && (
+          <SubagentsSection config={subagents} providers={providers} onChange={onSetSubagents} />
         )}
       </main>
     </>

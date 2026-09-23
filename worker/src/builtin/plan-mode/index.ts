@@ -24,9 +24,9 @@ import {
   latestModeContract,
   reconcileModeContract,
 } from "./contract.js";
+import { SUBAGENT_TOOL_NAME } from "../subagents/types.js";
 import {
-  SAFE_GH_SUBCOMMAND_PATHS,
-  type SafeSubcommands,
+  DEFAULT_SAFE_SUBCOMMANDS as SAFE_SUBCOMMANDS,
   classifyPlanTool,
   findBlockedCommandSegment,
   readCommand,
@@ -43,13 +43,6 @@ export interface PlanModeController {
    */
   setMode(mode: TaskMode): PlanState;
 }
-
-// The upstream review-approved read-only gh queries. Upstream hides them behind a settings
-// toggle; WackCode has no settings UI yet, so they are on by default. Other commands stay
-// fail-closed — there is no way to widen this list without a code change.
-const SAFE_SUBCOMMANDS: SafeSubcommands = {
-  gh: [...SAFE_GH_SUBCOMMAND_PATHS],
-};
 
 export function createPlanModeExtension(host: BuiltinHost) {
   let pi: ExtensionAPI | undefined;
@@ -153,11 +146,13 @@ export function createPlanModeExtension(host: BuiltinHost) {
     pi.on("tool_call", (event, ctx) => {
       // Built-in helpers always pass while planning. `todo` mutates only its own in-memory
       // list, never the workspace, so tracking a task list during planning stays on the
-      // right side of the read-only policy.
+      // right side of the read-only policy. `subagent` refuses any agent that can edit files
+      // while Plan mode is on, and read-only children run under this same shell policy.
       const helper =
         event.toolName === ASK_USER_QUESTION_TOOL_NAME ||
         event.toolName === PLAN_MODE_COMPLETE_TOOL_NAME ||
-        event.toolName === TODO_TOOL_NAME;
+        event.toolName === TODO_TOOL_NAME ||
+        event.toolName === SUBAGENT_TOOL_NAME;
       if (!enabled) {
         return event.toolName === PLAN_MODE_COMPLETE_TOOL_NAME
           ? { block: true, reason: "plan_mode_complete is only available while Plan mode is active." }

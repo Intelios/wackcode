@@ -228,6 +228,70 @@ export interface ToolConfig {
   disabled: string[];
 }
 
+/** When the chat's agent should reach for sub-agents. Only changes the tool's guidance. */
+export type SubagentTrigger = "on_request" | "auto";
+
+/** Pi's own tools a sub-agent can be given. Mirrors `CHILD_TOOLS` in subagents.rs. */
+export const SUBAGENT_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write"] as const;
+export type SubagentTool = (typeof SUBAGENT_TOOLS)[number];
+/** What a read-only sub-agent may have. */
+export const READ_ONLY_SUBAGENT_TOOLS: readonly string[] = ["read", "grep", "find", "ls", "bash"];
+export const MAX_SUBAGENT_CONCURRENCY = 8;
+
+/** A sub-agent's own model; without one it runs on the chat's model. */
+export interface SubagentModel {
+  providerId: string;
+  modelId: string;
+  thinkingLevel: ThinkingLevel;
+}
+
+/** One agent the `subagent` tool can launch. Built-ins: only `enabled` and `model` are editable. */
+export interface SubagentRecord {
+  id: string;
+  builtin: boolean;
+  enabled: boolean;
+  name: string;
+  description: string;
+  prompt: string;
+  tools: string[];
+  /** No edit/write, bash limited to inspection, and allowed in Plan mode. */
+  readOnly: boolean;
+  model: SubagentModel | null;
+}
+
+/** The sub-agents built-in extension. Off by default: every child is extra model usage. */
+export interface SubagentConfig {
+  enabled: boolean;
+  trigger: SubagentTrigger;
+  maxConcurrency: number;
+  agents: SubagentRecord[];
+}
+
+export type SubagentStatus = "queued" | "running" | "done" | "failed" | "aborted";
+
+/** One sub-agent in a `subagent` call, as the card renders it. Mirrors worker/src/protocol.ts. */
+export interface SubagentResult {
+  agent: string;
+  task: string;
+  readOnly: boolean;
+  model?: string;
+  status: SubagentStatus;
+  activity: { tool: string; subject: string }[];
+  output?: string;
+  outputTruncated?: boolean;
+  error?: string;
+  usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; turns: number };
+  startedAt?: number;
+  endedAt?: number;
+}
+
+/** The `subagent` tool's result details, live and after a reload. */
+export interface SubagentDetails {
+  v: 1;
+  mode: "single" | "parallel";
+  results: SubagentResult[];
+}
+
 export interface AppData {
   version: number;
   providers: ProviderRecord[];
@@ -236,6 +300,7 @@ export interface AppData {
   toolConfig: ToolConfig;
   toolCatalog: ToolCatalogEntry[];
   packages: PackageRecord[];
+  subagents: SubagentConfig;
 }
 
 export interface BootstrapPayload {
@@ -435,6 +500,8 @@ export interface TaskRuntime {
   activity?: string;
   /** Accumulated text from in-flight tools, keyed by Pi's tool call id. */
   liveToolText?: Record<string, string>;
+  /** Structured progress from in-flight tools that report it (sub-agents), keyed like liveToolText. */
+  liveToolDetails?: Record<string, unknown>;
   error?: string;
   /** Extension output and load failures. Informational only — never blocks a chat. */
   notices?: ExtensionNotice[];

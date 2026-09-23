@@ -1,10 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createBuiltinExtensions } from "./builtin/index.js";
 import type { BuiltinHost } from "./builtin/host.js";
+import { SUBAGENT_TOOL_NAME } from "./builtin/subagents/types.js";
+import { createModelRuntime, findModel, workerSettings } from "./model-runtime.js";
+import { SubagentRunner } from "./subagent-runner.js";
 import {
   diffMessages,
   sameCheckpoint,
@@ -35,7 +38,6 @@ import {
   type TreeIndex
 } from "./tree.js";
 import {
-  THINKING_LEVELS,
   type CheckpointRef,
   type ImageContent,
   type InitCommand,
@@ -48,13 +50,13 @@ import {
   type QuestionAnswer,
   type RunTiming,
   type SessionSnapshot,
+  type SubagentRuntimeConfig,
   type ThinkingLevel,
   type TodoState,
   type TurnInfo,
   type ExtensionUIRequest,
   type ToolCatalogEntry,
   type WorkerCommand,
-  type WorkerModel,
   type WorkerOutput
 } from "./protocol.js";
 
@@ -83,6 +85,7 @@ let activeAuthPath: string | undefined;
 let activeProviderId: string | undefined;
 let stopRequested = false;
 let disabledTools = new Set<string>();
+let subagentRunner: SubagentRunner | undefined;
 const pendingDialogs = new Map<string, (response: DialogResponse) => void>();
 
 interface DialogResponse {
@@ -109,9 +112,29 @@ const builtinHost: BuiltinHost = {
   },
   publishTodoState: (state) => {
     if (taskId) send({ type: "todo_state", taskId, tasks: state.tasks });
-  }
+  },
+  childToolNames: () =>
+    toolCatalog()
+      .filter((tool) => tool.source.kind === "builtin" && tool.available && !disabledTools.has(tool.name))
+      .map((tool) => tool.name),
+  runSubagent: (request) => {
+    if (!subagentRunner) return Promise.reject(new Error("Worker is not initialized"));
+    return subagentRunner.run(request).catch((error: unknown) => {
+      throw new Error(safeError(error));
+    });
+  },
+  redact: (text) => redactCredentials(text)
 };
 const builtins = createBuiltinExtensions(builtinHost);
+
+/**
+ * Apply the user's sub-agent settings. Credentials stay with the runner; the extension only
+ * sees the roster it renders into the tool and the settings it schedules with.
+ */
+function applySubagents(config: SubagentRuntimeConfig | null): void {
+  subagentRunner?.setProviders(config?.providers ?? []);
+  builtins.subagents.configure(config ? { ...config, providers: [] } : null);
+}
 
 // Pi registers a `powershell` base tool on every platform. WackCode is macOS-only, so keep it
 // out of the registry entirely rather than shipping a dead tool the user has to switch off.
@@ -387,12 +410,15 @@ function toolCatalog(): ToolCatalogEntry[] {
 // Every tool in the registry is active unless the user switched it off. A denylist keeps
 // tools contributed by a newly installed package on by default. Built-in extension tools are
 // exempt: the denylist is never offered for them and a disabled plan_mode_complete would
-// silently break Plan mode.
+// silently break Plan mode. The one built-in with its own switch — sub-agents — says which of
+// its tools must stay out while it is off.
 function applyDisabledTools(): void {
   if (!session) return;
+  const inactive = new Set(builtins.subagents.inactiveTools());
   session.setActiveToolsByName(
     toolCatalog()
-      .filter((tool) => tool.available && (!disabledTools.has(tool.name) || tool.source.kind === "wackcode"))
+      .filter((tool) => tool.available && !inactive.has(tool.name))
+      .filter((tool) => !disabledTools.has(tool.name) || tool.source.kind === "wackcode")
       .map((tool) => tool.name)
   );
 }
@@ -763,28 +789,6 @@ function createExtensionUIContext(): Record<string, unknown> {
   };
 }
 
-function modelDefinition(model: WorkerModel): Record<string, unknown> {
-  const thinkingLevelMap = Object.fromEntries(
-    THINKING_LEVELS.map((level) => {
-      if (!model.thinkingLevels.includes(level)) return [level, null];
-      const mapped = model.thinkingLevelMap[level];
-      return [level, mapped === undefined ? (level === "off" ? null : level) : mapped];
-    })
-  );
-  return {
-    id: model.id,
-    name: model.name,
-    reasoning: model.reasoning,
-    // Pi's own capability flag. Without "image", Pi replaces images with an "image omitted"
-    // placeholder before the request is built, and `read` stops returning image content.
-    input: model.vision ? ["text", "image"] : ["text"],
-    contextWindow: model.contextWindow,
-    maxTokens: model.maxTokens,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    ...(model.reasoning ? { thinkingLevelMap } : {})
-  };
-}
-
 /**
  * Pi's CLI runs attachments through `processImage` (resize to Pi's inline limits) before they
  * reach a session, but `session.prompt` itself forwards images untouched. `processImage` is not
@@ -810,40 +814,27 @@ async function initialize(command: InitCommand): Promise<void> {
   activeCredential = command.apiKey;
   activeAuthPath = command.authPath;
   activeProviderId = command.provider.id;
-  await mkdir(command.agentDir, { recursive: true });
   await mkdir(command.sessionDir, { recursive: true });
-  const modelsPath = join(command.agentDir, "models.json");
-  const modelsConfig = {
-    providers: {
-      [command.provider.id]: {
-        name: command.provider.name,
-        baseUrl: command.provider.baseUrl,
-        api: command.provider.api,
-        models: command.provider.models.map(modelDefinition)
-      }
-    }
-  };
-  if (command.provider.kind === "custom") {
-    await writeFile(modelsPath, `${JSON.stringify(modelsConfig, null, 2)}\n`, { mode: 0o600 });
-  }
 
   const pi = await import("@earendil-works/pi-coding-agent");
   piModule = pi;
-  modelRuntime = await pi.ModelRuntime.create({
-    authPath: command.provider.kind === "subscription" ? command.authPath : join(command.agentDir, "auth.json"),
-    modelsPath: command.provider.kind === "subscription" ? null : modelsPath,
-    modelsStorePath: join(command.agentDir, "models-store.json"),
-    allowModelNetwork: false,
-    refreshOnCreate: false
+  modelRuntime = await createModelRuntime(pi, command.provider, command.agentDir, {
+    apiKey: command.apiKey,
+    authPath: command.authPath
   });
-  if (command.provider.kind === "custom") {
-    if (!command.apiKey) throw new Error("This connection has no API key");
-    await modelRuntime.setRuntimeApiKey(command.provider.id, command.apiKey);
-  }
-  const selectedModel = command.provider.kind === "subscription"
-    ? (await modelRuntime.getAvailable(command.provider.id)).find((model) => model.id === command.modelId)
-    : modelRuntime.getModel(command.provider.id, command.modelId);
+  const selectedModel = await findModel(modelRuntime, command.provider, command.modelId);
   if (!selectedModel) throw new Error(`Configured model was not found: ${command.provider.name}/${command.modelId}`);
+  subagentRunner = new SubagentRunner({
+    pi,
+    cwd: command.cwd,
+    agentDir: command.agentDir,
+    parentProvider: command.provider,
+    parentRuntime: modelRuntime,
+    parentModel: () => session?.model,
+    parentThinkingLevel: () => (session?.thinkingLevel ?? command.thinkingLevel) as ThinkingLevel,
+    safeError
+  });
+  applySubagents(command.subagents ?? null);
 
   let sessionStartEvent: { type: "session_start"; reason: "fork"; previousSessionFile: string } | undefined;
   let sessionManager: ReturnType<PiModule["SessionManager"]["create"]>;
@@ -861,14 +852,7 @@ async function initialize(command: InitCommand): Promise<void> {
   } else {
     sessionManager = pi.SessionManager.create(command.cwd, command.sessionDir);
   }
-  const settingsManager = pi.SettingsManager.inMemory({
-    enableInstallTelemetry: false,
-    enableAnalytics: false,
-    cacheWarming: "off",
-    defaultProjectTrust: "never",
-    compaction: { enabled: true },
-    retry: { enabled: true }
-  }, { projectTrusted: false });
+  const settingsManager = workerSettings(pi);
   // Every no* flag stays true: nothing is ever auto-discovered from settings or a project's
   // own .pi/ directory. The additional*Paths below are the sole load route, and the host only
   // puts paths there for packages the user installed and trusted.
@@ -959,6 +943,10 @@ async function initialize(command: InitCommand): Promise<void> {
           toolCallId: value.toolCallId,
           args: eventType === "tool_execution_start" ? value.args : undefined,
           text: eventType === "tool_execution_update" ? toolUpdateText(value.partialResult) : undefined,
+          // Sub-agent progress is structured (the live card), and capped by the extension.
+          details: eventType === "tool_execution_update" && value.toolName === SUBAGENT_TOOL_NAME
+            ? (value.partialResult as Record<string, unknown> | undefined)?.details
+            : undefined,
           isError: value.isError
         }
       });
@@ -969,7 +957,9 @@ async function initialize(command: InitCommand): Promise<void> {
     ) {
       send({ type: "activity", taskId: command.taskId, event: eventType, detail: value });
     }
-    if (eventType === "agent_end" && value.willRetry !== true) {
+    // A Stop during a tool call still lets Pi start the next model request, which fails at once
+    // on the aborted signal ("This operation was aborted"). That is the stop, not a failure.
+    if (eventType === "agent_end" && value.willRetry !== true && !stopRequested) {
       const messages = Array.isArray(value.messages) ? value.messages : [];
       const failed = [...messages].reverse().find((message) => {
         const entry = message as Record<string, unknown> | undefined;
@@ -1192,7 +1182,14 @@ async function handle(command: WorkerCommand): Promise<void> {
       disabledTools = new Set(command.disabledTools);
       applyDisabledTools();
       emitSnapshot();
+    } else if (command.type === "set_subagents") {
+      // Queued like any command, so the roster never changes under a running call. A changed
+      // roster re-registers the tool, which leaves the active set alone: re-apply it.
+      applySubagents(command.subagents);
+      applyDisabledTools();
+      emitSnapshot();
     } else if (command.type === "shutdown") {
+      await subagentRunner?.abortAll();
       if (!session.isIdle) await session.abort();
       session.dispose();
       response(command.id, true);
@@ -1215,19 +1212,37 @@ async function handle(command: WorkerCommand): Promise<void> {
 /** Commands the host sends with `worker::request` and whose failures it reports itself. */
 const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend"]);
 
-function safeError(error: unknown): string {
-  let message = error instanceof Error ? error.message : String(error);
-  if (activeCredential) message = message.split(activeCredential).join("[credential redacted]");
-  if (activeAuthPath && activeProviderId && piModule) {
-    try {
-      const credential = piModule.readStoredCredential(activeProviderId, activeAuthPath);
-      if (credential?.type === "oauth") {
-        for (const value of Object.values(credential)) {
-          if (typeof value === "string" && value.length >= 8) message = message.split(value).join("[credential redacted]");
-        }
-      }
-    } catch { /* Never expose a credential-read failure in an error message. */ }
+/**
+ * Remove every credential this worker holds from `text`: the chat's own key or sign-in, and
+ * those of any connection a sub-agent uses. Exact values only, so ordinary text is untouched.
+ */
+function redactCredentials(text: string): string {
+  const secrets: string[] = activeCredential ? [activeCredential] : [];
+  const stored = activeAuthPath && activeProviderId ? [{ providerId: activeProviderId, authPath: activeAuthPath }] : [];
+  const extra = subagentRunner?.credentials();
+  if (extra) {
+    secrets.push(...extra.apiKeys);
+    stored.push(...extra.stored);
   }
+  if (piModule) {
+    for (const { providerId, authPath } of stored) {
+      try {
+        const credential = piModule.readStoredCredential(providerId, authPath);
+        if (credential?.type === "oauth") {
+          for (const value of Object.values(credential)) {
+            if (typeof value === "string" && value.length >= 8) secrets.push(value);
+          }
+        }
+      } catch { /* Never expose a credential-read failure in an error message. */ }
+    }
+  }
+  let message = text;
+  for (const secret of secrets) if (secret) message = message.split(secret).join("[credential redacted]");
+  return message;
+}
+
+function safeError(error: unknown): string {
+  const message = redactCredentials(error instanceof Error ? error.message : String(error));
   return message.replace(/(sk-[A-Za-z0-9_-]{8,}|Bearer\s+[A-Za-z0-9._-]+|(?:code|device_code|refresh_token|access_token)=[^\s&]+)/gi, "[credential redacted]");
 }
 
@@ -1260,6 +1275,7 @@ process.stdin.resume();
 process.on("SIGTERM", () => {
   void (async () => {
     try {
+      await subagentRunner?.abortAll();
       if (session && !session.isIdle) await session.abort();
       session?.dispose();
     } finally {

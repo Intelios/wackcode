@@ -12,12 +12,21 @@ const KIND_LABELS: Record<PackageResourceKind, string> = {
   themes: "Themes"
 };
 
+interface BuiltinExtension {
+  name: string;
+  description: string;
+  tools: readonly string[];
+  /** Has its own off switch (sub-agents). Everything else is always on. */
+  toggleable?: boolean;
+}
+
 /**
  * The extensions compiled into WackCode itself (worker/src/builtin/index.ts). They are shown
  * here so nobody installs a package duplicating something that already ships with the app.
- * They have no trust gate and no off switch — keep this list in sync with the worker.
+ * They have no trust gate, and only sub-agents has an off switch — keep this list in sync
+ * with the worker.
  */
-const BUILTIN_EXTENSIONS = [
+const BUILTIN_EXTENSIONS: readonly BuiltinExtension[] = [
   {
     name: "Plan Mode",
     description:
@@ -35,8 +44,15 @@ const BUILTIN_EXTENSIONS = [
     description:
       "A live task list the agent keeps up to date while it works, shown above the composer. Rebuilt from the conversation, so it survives restarts and compaction.",
     tools: ["todo"]
+  },
+  {
+    name: "Sub-agents",
+    description:
+      "Lets the agent hand self-contained tasks to sub-agents with their own context window, one at a time or several in parallel. Off by default: every sub-agent is extra model usage.",
+    tools: ["subagent"],
+    toggleable: true
   }
-] as const;
+];
 
 export interface PackageActions {
   /** Re-reads the shared package store. The cached list can be stale if `pi` was used elsewhere. */
@@ -52,11 +68,19 @@ export interface PackageActions {
 
 interface Props extends PackageActions {
   packages: PackageRecord[];
+  /** The one built-in with an off switch. */
+  subagentsEnabled?: boolean;
+  onToggleSubagents?: (enabled: boolean) => Promise<void>;
+  /** Opens Settings → Sub-agents. */
+  onConfigureSubagents?: () => void;
 }
 
 type Tab = "installed" | "browse";
 
-export function PackagesSection({ packages, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources }: Props) {
+export function PackagesSection({
+  packages, subagentsEnabled = false, onToggleSubagents, onConfigureSubagents,
+  onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
+}: Props) {
   const [tab, setTab] = useState<Tab>("installed");
   const [source, setSource] = useState("");
   const [pendingTrust, setPendingTrust] = useState<{ source: string; mode: "install" | "enable" }>();
@@ -178,11 +202,20 @@ export function PackagesSection({ packages, onRefresh, onInstall, onTrust, onSea
       <div className="section-heading-row builtin-heading">
         <div>
           <h3>Built-In</h3>
-          <p>Compiled into WackCode and always on — you don&rsquo;t need a package for these.</p>
+          <p>Compiled into WackCode — you don&rsquo;t need a package for these. All are always on except Sub-agents.</p>
         </div>
       </div>
       {BUILTIN_EXTENSIONS.map((extension) => (
-        <BuiltinCard key={extension.name} extension={extension} />
+        <BuiltinCard
+          key={extension.name}
+          extension={extension}
+          enabled={extension.toggleable ? subagentsEnabled : true}
+          busy={busy}
+          onToggle={extension.toggleable && onToggleSubagents
+            ? (enabled) => void run(() => onToggleSubagents(enabled)).catch(() => undefined)
+            : undefined}
+          onConfigure={extension.toggleable ? onConfigureSubagents : undefined}
+        />
       ))}
       </>
       )}
@@ -211,21 +244,36 @@ export function PackagesSection({ packages, onRefresh, onInstall, onTrust, onSea
   );
 }
 
-/** An always-on built-in extension: same card shape as a package, but no actions and a
- *  disabled toggle pinned on. */
-function BuiltinCard({ extension }: { extension: (typeof BUILTIN_EXTENSIONS)[number] }) {
+interface BuiltinCardProps {
+  extension: BuiltinExtension;
+  enabled: boolean;
+  busy: boolean;
+  /** Present only for a built-in with an off switch. */
+  onToggle?: (enabled: boolean) => void;
+  onConfigure?: () => void;
+}
+
+/** A built-in extension: same card shape as a package. Always-on ones show a disabled toggle
+ *  pinned on; sub-agents has a live one, and a way to its settings page while on. */
+function BuiltinCard({ extension, enabled, busy, onToggle, onConfigure }: BuiltinCardProps) {
   return (
     <article className="package-card builtin-card">
       <div className="package-card-head">
         <span className="package-name builtin-name">{extension.name}</span>
-        <span className="package-meta">Always on</span>
+        {onToggle && enabled && onConfigure && (
+          <button type="button" className="ghost-button builtin-configure" onClick={onConfigure}>
+            Configure <Icon name="chevron" />
+          </button>
+        )}
+        <span className="package-meta">{onToggle ? (enabled ? "On" : "Off") : "Always on"}</span>
         <button
           type="button"
           role="switch"
-          aria-checked="true"
+          aria-checked={enabled}
           aria-label={extension.name}
-          className="toggle on"
-          disabled
+          className={`toggle ${enabled ? "on" : ""}`}
+          disabled={!onToggle || busy}
+          onClick={() => onToggle?.(!enabled)}
         >
           <span />
         </button>
@@ -239,9 +287,9 @@ function BuiltinCard({ extension }: { extension: (typeof BUILTIN_EXTENSIONS)[num
             <button
               type="button"
               role="switch"
-              aria-checked="true"
+              aria-checked={enabled}
               aria-label={tool}
-              className="toggle on"
+              className={`toggle ${enabled ? "on" : ""}`}
               disabled
             >
               <span />

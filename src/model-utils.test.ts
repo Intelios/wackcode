@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { applyBuiltinModelSuggestion, mergeDiscoveredModels, searchBuiltinModels } from "./model-utils";
-import type { BuiltinModelSuggestion } from "./types";
+import { applyBuiltinModelSuggestion, mergeDiscoveredModels, pickThinkingLevel, searchBuiltinModels, subagentModelIssue } from "./model-utils";
+import type { BuiltinModelSuggestion, ModelRecord, ProviderRecord } from "./types";
 
 const flash: BuiltinModelSuggestion = {
   sourceProvider: "deepseek", sourceApi: "openai-completions", id: "deepseek-flash", name: "DeepSeek V4.1 Flash",
@@ -49,5 +49,36 @@ describe("Pi catalogue suggestions", () => {
     });
     expect(applyBuiltinModelSuggestion({ ...model, id: "" }, flash).id).toBe("deepseek-flash");
     expect(model.contextWindow).toBeNull();
+  });
+});
+
+describe("pickThinkingLevel", () => {
+  const model = (thinkingLevels: ModelRecord["thinkingLevels"]): ModelRecord => ({
+    id: "m", name: "M", contextWindow: 1, maxTokens: 1, reasoning: true, thinkingLevels, thinkingLevelMap: {}, vision: false
+  });
+
+  it("keeps the requested level, then the current one, then medium, then the first", () => {
+    expect(pickThinkingLevel(model(["off", "low", "high"]), "high", "low")).toBe("high");
+    expect(pickThinkingLevel(model(["off", "low", "high"]), "max", "low")).toBe("low");
+    expect(pickThinkingLevel(model(["off", "medium"]), undefined, "max")).toBe("medium");
+    expect(pickThinkingLevel(model(["low", "high"]))).toBe("low");
+    expect(pickThinkingLevel(undefined, "high")).toBe("off");
+  });
+});
+
+describe("subagentModelIssue", () => {
+  const provider: ProviderRecord = {
+    id: "p", name: "Cheap", kind: "subscription", baseUrl: "", apiFormat: "", createdAt: "", updatedAt: "", hasApiKey: false, connected: true,
+    models: [{ id: "m", name: "Mini", contextWindow: 10, maxTokens: 5, reasoning: true, thinkingLevels: ["off", "low"], thinkingLevelMap: {}, vision: false }]
+  };
+  const choice = { providerId: "p", modelId: "m", thinkingLevel: "low" as const };
+
+  it("explains why an agent's own model can't run, and is silent for the chat's model", () => {
+    expect(subagentModelIssue(null, [provider])).toBeUndefined();
+    expect(subagentModelIssue(choice, [provider])).toBeUndefined();
+    expect(subagentModelIssue(choice, [])).toBe("Its connection no longer exists.");
+    expect(subagentModelIssue(choice, [{ ...provider, connected: false }])).toBe("Cheap is signed out.");
+    expect(subagentModelIssue({ ...choice, modelId: "gone" }, [provider])).toBe("Its model is no longer configured.");
+    expect(subagentModelIssue({ ...choice, thinkingLevel: "high" }, [provider])).toBe("Mini doesn't support high reasoning.");
   });
 });

@@ -6,10 +6,10 @@ use crate::{
         ProjectRecord, PromptInput, ExtensionUiResponseInput, InstallPackageInput, PackageRecord,
         PackageSearchResult, ProviderKind, ProviderRecord, ResendInput, RestoreCheckpointInput, RestoreResult,
         SaveProviderInput, SearchPackagesInput, SetPackageResourcesInput, SetTaskModeInput, SetToolConfigInput,
-        TaskMode, TaskRecord, TaskStatus, ToolConfig,
+        SubagentConfig, TaskMode, TaskRecord, TaskStatus, ToolConfig,
     },
     storage::MetadataState,
-    worker::{self, WorkerOptions}, subscriptions,
+    worker::{self, WorkerOptions}, subagents, subscriptions,
 };
 use chrono::Utc;
 use serde::Deserialize;
@@ -129,6 +129,8 @@ pub async fn save_provider(
     let task_ids: Vec<String> = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?
         .tasks.iter().filter(|task| task.provider_id == id).map(|task| task.id.clone()).collect();
     for task_id in task_ids { worker::terminate_worker(&app, &task_id, true).await?; }
+    // Other chats' sub-agents may use this connection with its old key or models.
+    worker::broadcast_subagents(&app).await?;
     Ok(record)
 }
 
@@ -142,6 +144,13 @@ pub async fn delete_provider(
         .tasks.iter().filter(|task| task.provider_id == provider_id).map(|task| task.id.clone()).collect();
     if !task_ids.is_empty() {
         return Err("This connection is still used by a saved task. Change those tasks to another connection before deleting it.".into());
+    }
+    let agents = subagents::agents_using(&state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?.subagents, &provider_id);
+    if !agents.is_empty() {
+        return Err(format!(
+            "The sub-agent {} uses this connection. Pick another model for it in Settings → Sub-agents before deleting it.",
+            agents.join(", ")
+        ));
     }
     let kind = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?
         .providers.iter().find(|provider| provider.id == provider_id).map(|provider| provider.kind)
@@ -513,6 +522,26 @@ pub async fn set_tool_config(
     worker::broadcast(&app, &json!({
         "id": Uuid::new_v4().to_string(), "type": "set_tools", "disabledTools": disabled
     })).await?;
+    Ok(config)
+}
+
+/// Sub-agent settings apply to running chats on their next turn, like tool changes: nothing
+/// restarts. Turning the feature off also withdraws every sub-agent credential from workers.
+#[tauri::command]
+pub async fn set_subagent_config(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    input: SubagentConfig,
+) -> Result<SubagentConfig, String> {
+    let config = {
+        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        subagents::validate(&input, &data.providers)?
+    };
+    state.mutate(|data| {
+        data.subagents = config.clone();
+        Ok(())
+    })?;
+    worker::broadcast_subagents(&app).await?;
     Ok(config)
 }
 

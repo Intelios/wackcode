@@ -42,6 +42,14 @@ export interface SafeSubcommands {
   [command: string]: string[] | undefined;
 }
 
+// The upstream review-approved read-only gh queries. Upstream hides them behind a settings
+// toggle; WackCode has no settings UI for them, so they are on by default. Other commands stay
+// fail-closed — there is no way to widen this list without a code change. Shared by Plan mode
+// and read-only sub-agents.
+export const DEFAULT_SAFE_SUBCOMMANDS: SafeSubcommands = {
+  gh: [...SAFE_GH_SUBCOMMAND_PATHS],
+};
+
 /** Built-in tools allowed during planning, besides `bash` which is limited separately. */
 export const SAFE_BUILTIN_PLAN_TOOLS = new Set(["read", "grep", "find", "ls"]);
 /** Built-in tools that can never run during planning. */

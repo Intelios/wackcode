@@ -1,7 +1,7 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
-import type { BuiltinModelSuggestion, ProviderRecord, ToolCatalogEntry } from "../types";
+import type { BuiltinModelSuggestion, ProviderRecord, SubagentConfig, ToolCatalogEntry } from "../types";
 import { SettingsPage } from "./SettingsPage";
 
 vi.mock("../api", () => ({ api: {
@@ -9,6 +9,8 @@ vi.mock("../api", () => ({ api: {
   listBuiltinModels: vi.fn().mockResolvedValue([]),
   listSubscriptionProviders: vi.fn().mockResolvedValue([])
 } }));
+
+const noSubagents: SubagentConfig = { enabled: false, trigger: "on_request", maxConcurrency: 4, agents: [] };
 
 afterEach(() => {
   cleanup();
@@ -22,7 +24,7 @@ it("shows subscription guidance before sign-in and reconnect", async () => {
   const props = {
     packages: [], toolCatalog: [], disabledTools: [], appDataPath: "/tmp/wackcode",
     onClose: vi.fn(), onSave: vi.fn(), onDelete: vi.fn(), onConnectSubscription,
-    onSignOutSubscription: vi.fn(), onSetDisabledTools: vi.fn(),
+    onSignOutSubscription: vi.fn(), onSetDisabledTools: vi.fn(), subagents: noSubagents, onSetSubagents: vi.fn(),
     onRefresh: vi.fn().mockResolvedValue(undefined), onInstall: vi.fn(), onTrust: vi.fn(),
     onSearch: vi.fn().mockResolvedValue([]), onRemove: vi.fn(), onUpdate: vi.fn(), onSetResources: vi.fn()
   };
@@ -63,7 +65,7 @@ function renderTools(overrides: { disabled?: string[]; onSetDisabledTools?: (nex
       onDelete={vi.fn()}
       onConnectSubscription={vi.fn()}
       onSignOutSubscription={vi.fn()}
-      onSetDisabledTools={onSetDisabledTools}
+      onSetDisabledTools={onSetDisabledTools} subagents={noSubagents} onSetSubagents={vi.fn()}
       onRefresh={vi.fn().mockResolvedValue(undefined)}
       onInstall={vi.fn()}
       onTrust={vi.fn()}
@@ -154,7 +156,7 @@ describe("SettingsPage sidebar navigation", () => {
         onDelete={vi.fn()}
         onConnectSubscription={vi.fn()}
         onSignOutSubscription={vi.fn()}
-        onSetDisabledTools={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onInstall={vi.fn()}
         onTrust={vi.fn()}
@@ -192,7 +194,7 @@ describe("SettingsPage sidebar navigation", () => {
         onDelete={vi.fn()}
         onConnectSubscription={vi.fn()}
         onSignOutSubscription={vi.fn()}
-        onSetDisabledTools={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onInstall={vi.fn()}
         onTrust={vi.fn()}
@@ -239,7 +241,7 @@ describe("SettingsPage sidebar navigation", () => {
         onDelete={vi.fn()}
         onConnectSubscription={vi.fn()}
         onSignOutSubscription={vi.fn()}
-        onSetDisabledTools={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onInstall={vi.fn()}
         onTrust={vi.fn()}
@@ -281,7 +283,7 @@ describe("SettingsPage model capabilities", () => {
         onDelete={vi.fn()}
         onConnectSubscription={vi.fn()}
         onSignOutSubscription={vi.fn()}
-        onSetDisabledTools={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onInstall={vi.fn()}
         onTrust={vi.fn()}
@@ -315,7 +317,7 @@ function renderModelSettings(provider: ProviderRecord = testProviders[0]) {
       providers={[provider]} packages={[]} toolCatalog={catalog} disabledTools={[]}
       appDataPath="/tmp/wackcode" onClose={vi.fn()} onSave={onSave} onDelete={vi.fn()}
       onConnectSubscription={vi.fn()} onSignOutSubscription={vi.fn()}
-      onSetDisabledTools={vi.fn()} onRefresh={vi.fn()} onInstall={vi.fn()} onTrust={vi.fn()}
+      onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} onRefresh={vi.fn()} onInstall={vi.fn()} onTrust={vi.fn()}
       onSearch={vi.fn()} onRemove={vi.fn()} onUpdate={vi.fn()} onSetResources={vi.fn()}
     />
   );
@@ -387,5 +389,39 @@ describe("SettingsPage Pi catalogue suggestions", () => {
     expect(await screen.findByText(/Could not load Pi catalogue: Error: Catalogue unavailable/)).toBeInTheDocument();
     fireEvent.change(screen.getByRole("textbox", { name: "Model ID" }), { target: { value: "my-model" } });
     expect(screen.getByRole("textbox", { name: "Model ID" })).toHaveValue("my-model");
+  });
+});
+
+describe("SettingsPage sub-agents", () => {
+  function renderPage(enabled: boolean) {
+    const props = {
+      providers: [], packages: [], toolCatalog: [], disabledTools: [], appDataPath: "/tmp/wackcode",
+      onClose: vi.fn(), onSave: vi.fn(), onDelete: vi.fn(), onConnectSubscription: vi.fn(),
+      onSignOutSubscription: vi.fn(), onSetDisabledTools: vi.fn(), onSetSubagents: vi.fn().mockResolvedValue(undefined),
+      onRefresh: vi.fn().mockResolvedValue(undefined), onInstall: vi.fn(), onTrust: vi.fn(),
+      onSearch: vi.fn().mockResolvedValue([]), onRemove: vi.fn(), onUpdate: vi.fn(), onSetResources: vi.fn()
+    };
+    const subagents: SubagentConfig = { ...noSubagents, enabled };
+    const view = render(<SettingsPage {...props} subagents={subagents} />);
+    return { ...view, props, subagents };
+  }
+
+  it("lists the Sub-agents page only while the built-in is on, and switches it on from Packages", async () => {
+    const { rerender, props, subagents } = renderPage(false);
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    expect(within(nav).queryByRole("button", { name: /Sub-agents/ })).not.toBeInTheDocument();
+    fireEvent.click(within(nav).getByRole("button", { name: /Packages/ }));
+    fireEvent.click(await screen.findByRole("switch", { name: "Sub-agents" }));
+    await waitFor(() => expect(props.onSetSubagents).toHaveBeenCalledWith({ ...subagents, enabled: true }));
+
+    rerender(<SettingsPage {...props} subagents={{ ...subagents, enabled: true }} />);
+    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+    expect(screen.getByRole("heading", { name: "How the agent uses sub-agents" })).toBeInTheDocument();
+    expect(within(nav).getByRole("button", { name: /Sub-agents/ })).toHaveClass("active");
+
+    // Switched off elsewhere while its page is open: back to Packages, where the switch lives.
+    rerender(<SettingsPage {...props} subagents={subagents} />);
+    expect(screen.queryByRole("heading", { name: "How the agent uses sub-agents" })).not.toBeInTheDocument();
+    expect(within(nav).getByRole("button", { name: /Packages/ })).toHaveClass("active");
   });
 });

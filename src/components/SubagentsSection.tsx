@@ -1,0 +1,472 @@
+import { useMemo, useState } from "react";
+import { modelIsReady, pickThinkingLevel, subagentModelIssue } from "../model-utils";
+import {
+  MAX_SUBAGENT_CONCURRENCY,
+  READ_ONLY_SUBAGENT_TOOLS,
+  SUBAGENT_TOOLS,
+  type ProviderRecord,
+  type SubagentConfig,
+  type SubagentModel,
+  type SubagentRecord,
+  type ThinkingLevel
+} from "../types";
+import { Icon } from "./Icons";
+import { ModelPicker, ReasoningToggle } from "./ModelPicker";
+import { ConfirmDialog } from "./ui/ConfirmDialog";
+import { Select } from "./ui/Select";
+
+interface Props {
+  config: SubagentConfig;
+  providers: ProviderRecord[];
+  /** Saves the whole configuration; rejects with a user-facing message. */
+  onChange: (config: SubagentConfig) => Promise<void>;
+}
+
+const TRIGGER_OPTIONS = [
+  { value: "on_request", label: "Only when I ask", hint: "Predictable cost" },
+  { value: "auto", label: "Whenever useful", hint: "Agent decides" }
+];
+
+const CONCURRENCY_OPTIONS = Array.from({ length: MAX_SUBAGENT_CONCURRENCY }, (_, index) => ({
+  value: String(index + 1),
+  label: String(index + 1)
+}));
+
+/** A custom agent being created or edited, before it is saved. */
+interface AgentDraft {
+  /** Empty for a new agent: the host assigns one. */
+  id: string;
+  name: string;
+  description: string;
+  prompt: string;
+  tools: string[];
+  readOnly: boolean;
+  model: SubagentModel | null;
+}
+
+function draftFrom(agent: SubagentRecord): AgentDraft {
+  return {
+    id: agent.id,
+    name: agent.name,
+    description: agent.description,
+    prompt: agent.prompt,
+    tools: [...agent.tools],
+    readOnly: agent.readOnly,
+    model: agent.model
+  };
+}
+
+function uniqueName(base: string, agents: SubagentRecord[]): string {
+  const taken = new Set(agents.map((agent) => agent.name));
+  const stem = base.slice(0, 26) || "agent";
+  if (!taken.has(stem)) return stem;
+  for (let suffix = 2; ; suffix += 1) {
+    const candidate = `${stem}-${suffix}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
+function modelSummary(model: SubagentModel | null, providers: ProviderRecord[]): string {
+  if (!model) return "Chat's model";
+  const provider = providers.find((item) => item.id === model.providerId);
+  const record = provider?.models.find((item) => item.id === model.modelId);
+  const name = record?.name || model.modelId;
+  const level = model.thinkingLevel === "off" ? "" : ` · ${model.thinkingLevel}`;
+  return `${provider?.name ?? "Missing connection"} · ${name}${level}`;
+}
+
+interface ModelFieldProps {
+  agentName: string;
+  model: SubagentModel | null;
+  providers: ProviderRecord[];
+  disabled: boolean;
+  onChange: (model: SubagentModel | null) => void;
+}
+
+/** "Chat's model", or a model of the agent's own from any connected provider. */
+function ModelField({ agentName, model, providers, disabled, onChange }: ModelFieldProps) {
+  const usable = useMemo(() => providers.filter((provider) => provider.connected && provider.models.some(modelIsReady)), [providers]);
+
+  function choose(patch: { providerId?: string; modelId?: string; thinkingLevel?: ThinkingLevel }) {
+    const providerId = patch.providerId ?? model?.providerId ?? usable[0]?.id;
+    const provider = usable.find((item) => item.id === providerId);
+    const modelId = patch.modelId ?? (patch.providerId || !model ? provider?.models.find(modelIsReady)?.id : model.modelId);
+    const record = provider?.models.find((item) => item.id === modelId);
+    if (!providerId || !modelId) return;
+    onChange({ providerId, modelId, thinkingLevel: pickThinkingLevel(record, patch.thinkingLevel, model?.thinkingLevel) });
+  }
+
+  return (
+    <div className="subagent-model-field">
+      <span className="subagent-field-label">Model</span>
+      <div className="subagent-model-row">
+        <div className="mode-toggle" role="radiogroup" aria-label={`${agentName} model`}>
+          <button type="button" role="radio" aria-checked={!model} className={`mode-option ${model ? "" : "active"}`} disabled={disabled} onClick={() => onChange(null)}>
+            Chat's model
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={Boolean(model)}
+            className={`mode-option ${model ? "active" : ""}`}
+            disabled={disabled || usable.length === 0}
+            onClick={() => { if (!model) choose({}); }}
+          >
+            Specific model
+          </button>
+        </div>
+        {model && (
+          <>
+            <ModelPicker providers={usable} providerId={model.providerId} modelId={model.modelId} disabled={disabled} popoverSide="bottom" onConfigure={choose} />
+            <ReasoningToggle
+              providers={usable}
+              providerId={model.providerId}
+              modelId={model.modelId}
+              thinkingLevel={model.thinkingLevel}
+              disabled={disabled}
+              popoverSide="bottom"
+              onConfigure={choose}
+            />
+          </>
+        )}
+      </div>
+      <small className="subagent-hint">
+        {model ? "Used whenever this agent runs, whatever model the chat is on." : "Runs on whatever model and reasoning level the chat uses."}
+      </small>
+    </div>
+  );
+}
+
+interface EditorProps {
+  draft: AgentDraft;
+  providers: ProviderRecord[];
+  busy: boolean;
+  isNew: boolean;
+  onChange: (draft: AgentDraft) => void;
+  onSave: () => void;
+  onCancel: () => void;
+  onDelete?: () => void;
+}
+
+/** Name, description, instructions, tools and model of a custom agent. */
+function AgentEditor({ draft, providers, busy, isNew, onChange, onSave, onCancel, onDelete }: EditorProps) {
+  const toggleTool = (tool: string) =>
+    onChange({ ...draft, tools: draft.tools.includes(tool) ? draft.tools.filter((item) => item !== tool) : [...draft.tools, tool] });
+  const setReadOnly = (readOnly: boolean) =>
+    onChange({ ...draft, readOnly, tools: readOnly ? draft.tools.filter((tool) => READ_ONLY_SUBAGENT_TOOLS.includes(tool)) : draft.tools });
+
+  return (
+    <div className="subagent-editor">
+      <div className="form-grid">
+        <label>
+          <span>Name <small>Lowercase letters, digits and hyphens</small></span>
+          <input value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value.toLowerCase() })} placeholder="docs-checker" spellCheck={false} maxLength={32} />
+        </label>
+        <label>
+          <span>Description <small>Tells the agent when to use it</small></span>
+          <input value={draft.description} onChange={(event) => onChange({ ...draft, description: event.target.value })} placeholder="Checks the docs match the code" maxLength={400} />
+        </label>
+        <label className="wide-field">
+          <span>Instructions <small>Added to the sub-agent's system prompt</small></span>
+          <textarea
+            className="subagent-prompt-input"
+            value={draft.prompt}
+            onChange={(event) => onChange({ ...draft, prompt: event.target.value })}
+            placeholder="You are a sub-agent that…"
+            rows={8}
+          />
+        </label>
+      </div>
+      <div className="subagent-tools-field">
+        <span className="subagent-field-label">Tools</span>
+        <div className="subagent-tool-chips" role="group" aria-label="Tools">
+          {SUBAGENT_TOOLS.map((tool) => {
+            const locked = draft.readOnly && !READ_ONLY_SUBAGENT_TOOLS.includes(tool);
+            return (
+              <button
+                key={tool}
+                type="button"
+                aria-pressed={draft.tools.includes(tool)}
+                className={draft.tools.includes(tool) ? "selected" : ""}
+                disabled={busy || locked}
+                title={locked ? "Allow editing files to give this agent edit and write" : undefined}
+                onClick={() => toggleTool(tool)}
+              >
+                {tool}
+              </button>
+            );
+          })}
+        </div>
+        <label className="subagent-inline-switch">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={!draft.readOnly}
+            aria-label="Can edit files"
+            className={`toggle ${draft.readOnly ? "" : "on"}`}
+            disabled={busy}
+            onClick={() => setReadOnly(!draft.readOnly)}
+          >
+            <span />
+          </button>
+          <span>Can edit files <small>{draft.readOnly ? "Read-only: allowed in Plan mode, and runs in parallel" : "Takes turns with other agents that edit, and can't run in Plan mode"}</small></span>
+        </label>
+      </div>
+      <ModelField agentName={draft.name || "New agent"} model={draft.model} providers={providers} disabled={busy} onChange={(model) => onChange({ ...draft, model })} />
+      <div className="subagent-editor-actions">
+        {onDelete && <button type="button" className="danger-button" disabled={busy} onClick={onDelete}>Delete</button>}
+        <span className="subagent-editor-spacer" />
+        <button type="button" className="secondary-button" disabled={busy} onClick={onCancel}>Cancel</button>
+        <button
+          type="button"
+          className="primary-button"
+          disabled={busy || !draft.name.trim() || !draft.description.trim() || !draft.prompt.trim()}
+          onClick={onSave}
+        >
+          {isNew ? "Add agent" : "Save"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Settings → Sub-agents. Only shown while the built-in is switched on (from Settings →
+ * Packages). Switches and model choices save at once; a custom agent's text is edited as a
+ * draft and saved explicitly.
+ */
+export function SubagentsSection({ config, providers, onChange }: Props) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const [expanded, setExpanded] = useState<string>();
+  /** The custom agent being edited (by id), or "new" for one not yet saved. */
+  const [editing, setEditing] = useState<{ key: string; draft: AgentDraft }>();
+  const [deleting, setDeleting] = useState<SubagentRecord>();
+
+  async function commit(next: SubagentConfig): Promise<boolean> {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await onChange(next);
+      return true;
+    } catch (reason) {
+      setError(String(reason));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const updateAgent = (id: string, patch: Partial<SubagentRecord>) =>
+    void commit({ ...config, agents: config.agents.map((agent) => agent.id === id ? { ...agent, ...patch } : agent) });
+
+  function startNew() {
+    setEditing({
+      key: "new",
+      draft: {
+        id: "",
+        name: uniqueName("agent", config.agents),
+        description: "",
+        prompt: "",
+        tools: ["read", "grep", "find", "ls", "bash"],
+        readOnly: true,
+        model: null
+      }
+    });
+    setExpanded(undefined);
+  }
+
+  function duplicate(agent: SubagentRecord) {
+    setEditing({ key: "new", draft: { ...draftFrom(agent), id: "", name: uniqueName(`${agent.name}-custom`, config.agents) } });
+    setExpanded(undefined);
+  }
+
+  async function saveDraft() {
+    if (!editing) return;
+    const { draft } = editing;
+    const record: SubagentRecord = { ...draft, builtin: false, enabled: true, name: draft.name.trim() };
+    const agents = editing.key === "new"
+      ? [...config.agents, record]
+      : config.agents.map((agent) => agent.id === editing.key ? { ...record, enabled: agent.enabled } : agent);
+    if (await commit({ ...config, agents })) {
+      setEditing(undefined);
+      if (editing.key !== "new") setExpanded(editing.key);
+    }
+  }
+
+  const builtins = config.agents.filter((agent) => agent.builtin);
+  const customs = config.agents.filter((agent) => !agent.builtin);
+
+  function renderAgent(agent: SubagentRecord) {
+    const open = expanded === agent.id;
+    const issue = subagentModelIssue(agent.model, providers);
+    if (editing?.key === agent.id) {
+      return (
+        <article className="subagent-setting open" key={agent.id}>
+          <AgentEditor
+            draft={editing.draft}
+            providers={providers}
+            busy={busy}
+            isNew={false}
+            onChange={(draft) => setEditing({ key: agent.id, draft })}
+            onSave={() => void saveDraft()}
+            onCancel={() => setEditing(undefined)}
+            onDelete={() => setDeleting(agent)}
+          />
+        </article>
+      );
+    }
+    return (
+      <article className={`subagent-setting ${open ? "open" : ""} ${agent.enabled ? "" : "off"}`} key={agent.id}>
+        <div className="subagent-setting-head">
+          <button type="button" className={`package-disclosure ${open ? "open" : ""}`} aria-expanded={open} onClick={() => setExpanded(open ? undefined : agent.id)}>
+            <Icon name="chevron" />
+            <span className="subagent-setting-name">{agent.name}</span>
+            <span className="subagent-badge">{agent.builtin ? "Built-in" : "Custom"}</span>
+            <span className={`subagent-badge ${agent.readOnly ? "" : "edits"}`}>{agent.readOnly ? "Read-only" : "Edits files"}</span>
+          </button>
+          <span className={`subagent-model-summary ${issue ? "warning" : ""}`} title={issue}>
+            {modelSummary(agent.model, providers)}
+          </span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={agent.enabled}
+            aria-label={`Use ${agent.name}`}
+            className={`toggle ${agent.enabled ? "on" : ""}`}
+            disabled={busy}
+            onClick={() => updateAgent(agent.id, { enabled: !agent.enabled })}
+          >
+            <span />
+          </button>
+        </div>
+        <p className="subagent-setting-description">{agent.description}</p>
+        {issue && <p className="subagent-issue">{issue} It will refuse to run until you pick another model.</p>}
+        {open && (
+          <div className="subagent-setting-body">
+            <ModelField agentName={agent.name} model={agent.model} providers={providers} disabled={busy} onChange={(model) => updateAgent(agent.id, { model })} />
+            <div className="subagent-tools-field">
+              <span className="subagent-field-label">Tools</span>
+              <div className="subagent-tool-list">{agent.tools.join(", ") || "None"}</div>
+            </div>
+            <div className="subagent-prompt-field">
+              <span className="subagent-field-label">Instructions</span>
+              <pre className="subagent-prompt-view">{agent.prompt}</pre>
+            </div>
+            <div className="subagent-editor-actions">
+              {agent.builtin ? (
+                <>
+                  <small className="subagent-hint">Built-in agents are updated with the app. Duplicate one to change its instructions or tools.</small>
+                  <span className="subagent-editor-spacer" />
+                  <button type="button" className="secondary-button" disabled={busy} onClick={() => duplicate(agent)}><Icon name="copy" /> Duplicate as custom</button>
+                </>
+              ) : (
+                <>
+                  <button type="button" className="danger-button" disabled={busy} onClick={() => setDeleting(agent)}>Delete</button>
+                  <span className="subagent-editor-spacer" />
+                  <button type="button" className="secondary-button" disabled={busy} onClick={() => duplicate(agent)}><Icon name="copy" /> Duplicate</button>
+                  <button type="button" className="secondary-button" disabled={busy} onClick={() => setEditing({ key: agent.id, draft: draftFrom(agent) })}><Icon name="pencil" /> Edit</button>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+      </article>
+    );
+  }
+
+  return (
+    <div className="settings-scroll subagents-settings">
+      <div className="section-heading-row">
+        <div>
+          <h3>How the agent uses sub-agents</h3>
+          <p>
+            A sub-agent works on one self-contained task in its own context window and hands back its answer. Every sub-agent is extra
+            model usage, billed like any other request. Changes apply to running chats on their next turn.
+          </p>
+        </div>
+      </div>
+      <div className="form-grid">
+        <label>
+          <span>When to use them</span>
+          <Select
+            className="settings-select"
+            matchWidth
+            value={config.trigger}
+            disabled={busy}
+            options={TRIGGER_OPTIONS}
+            onChange={(value) => void commit({ ...config, trigger: value === "auto" ? "auto" : "on_request" })}
+            aria-label="When to use sub-agents"
+          />
+          <small className="subagent-hint">
+            {config.trigger === "auto"
+              ? "The agent delegates on its own when a task clearly benefits, such as broad exploration or an independent review."
+              : "The agent only delegates when you ask for sub-agents, or name one."}
+          </small>
+        </label>
+        <label>
+          <span>Run at the same time</span>
+          <Select
+            className="settings-select"
+            matchWidth
+            value={String(config.maxConcurrency)}
+            disabled={busy}
+            options={CONCURRENCY_OPTIONS}
+            onChange={(value) => void commit({ ...config, maxConcurrency: Number(value) })}
+            aria-label="Sub-agents running at the same time"
+          />
+          <small className="subagent-hint">Per request. Agents that edit files always take turns.</small>
+        </label>
+      </div>
+
+      <div className="section-heading-row">
+        <div>
+          <h3>Agents</h3>
+          <p>Switched-off agents are not offered to the model. Each one uses the chat's model unless you give it its own.</p>
+        </div>
+        <div className="row-actions">
+          <button type="button" className="secondary-button" disabled={busy || editing?.key === "new"} onClick={startNew}><Icon name="plus" /> New agent</button>
+        </div>
+      </div>
+      {error && <div className="error-banner subagents-error" role="alert">{error}</div>}
+      {editing?.key === "new" && (
+        <article className="subagent-setting open new">
+          <AgentEditor
+            draft={editing.draft}
+            providers={providers}
+            busy={busy}
+            isNew
+            onChange={(draft) => setEditing({ key: "new", draft })}
+            onSave={() => void saveDraft()}
+            onCancel={() => { setEditing(undefined); setError(undefined); }}
+          />
+        </article>
+      )}
+      <section className="subagent-group" aria-label="Built-in agents">
+        <h4>Built-in</h4>
+        {builtins.map(renderAgent)}
+      </section>
+      {customs.length > 0 && (
+        <section className="subagent-group" aria-label="Custom agents">
+          <h4>Custom</h4>
+          {customs.map(renderAgent)}
+        </section>
+      )}
+
+      {deleting && (
+        <ConfirmDialog
+          title={`Delete ${deleting.name}?`}
+          body="The agent will no longer be offered to the model. Chats that already used it keep their results."
+          confirmLabel="Delete"
+          danger
+          onConfirm={async () => {
+            await onChange({ ...config, agents: config.agents.filter((agent) => agent.id !== deleting.id) });
+            if (editing?.key === deleting.id) setEditing(undefined);
+            setDeleting(undefined);
+          }}
+          onCancel={() => setDeleting(undefined)}
+        />
+      )}
+    </div>
+  );
+}

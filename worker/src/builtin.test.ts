@@ -25,6 +25,20 @@ import { applyTaskMutation } from "./builtin/todo/reducer.js";
 import { EMPTY_STATE, type TaskState, replayFromBranch } from "./builtin/todo/state.js";
 import { deriveBlocks, detectCycle } from "./builtin/todo/task-graph.js";
 import { TODO_DETAILS_VERSION, normalizeTodoParams } from "./builtin/todo/types.js";
+import {
+  addUsage,
+  createDetails,
+  emptyUsage,
+  modelContent,
+  recordActivity,
+  summarizeActivity,
+  truncate,
+} from "./builtin/subagents/details.js";
+import { readOnlyDecision } from "./builtin/subagents/guard.js";
+import { subagentGuidelines } from "./builtin/subagents/prompt.js";
+import { runScheduled } from "./builtin/subagents/scheduler.js";
+import { normalizeSubagentParams, subagentParams } from "./builtin/subagents/schema.js";
+import { resolveChildTools } from "./builtin/subagents/types.js";
 import type { TodoTask } from "./protocol.js";
 
 describe("plan-mode tool policy", () => {
@@ -366,5 +380,141 @@ describe("todo state replay", () => {
       toolResult(snapshot([{ id: 1, subject: "Fine", status: "pending" }, { id: "x" }, null], 2))
     ];
     expect(replayFromBranch(branch).tasks).toEqual([{ id: 1, subject: "Fine", status: "pending" }]);
+  });
+});
+
+describe("sub-agent parameters", () => {
+  it("accepts exactly one mode and trims the inputs", () => {
+    expect(normalizeSubagentParams({ agent: " scout ", task: " look " })).toEqual({ ok: true, mode: "single", tasks: [{ agent: "scout", task: "look" }] });
+    expect(normalizeSubagentParams({ tasks: [{ agent: "scout", task: "a" }, { agent: "reviewer", task: "b" }] })).toEqual({
+      ok: true, mode: "parallel", tasks: [{ agent: "scout", task: "a" }, { agent: "reviewer", task: "b" }],
+    });
+    expect(normalizeSubagentParams({ agent: "scout", task: "a", tasks: [{ agent: "scout", task: "b" }] }).ok).toBe(false);
+    expect(normalizeSubagentParams({ agent: "scout" }).ok).toBe(false);
+    expect(normalizeSubagentParams({ tasks: [] }).ok).toBe(false);
+    expect(normalizeSubagentParams({ tasks: [{ agent: "scout" }] }).ok).toBe(false);
+    expect(normalizeSubagentParams({ tasks: Array.from({ length: 9 }, () => ({ agent: "scout", task: "x" })) }).ok).toBe(false);
+    expect(normalizeSubagentParams("scout").ok).toBe(false);
+  });
+
+  it("offers only switched-on agents by name", () => {
+    const params = subagentParams(["scout", "worker"]) as { properties: { agent: { enum?: string[] }; tasks: { items: { properties: { agent: { enum?: string[] } } } } } };
+    expect(params.properties.agent.enum).toEqual(["scout", "worker"]);
+    expect(params.properties.tasks.items.properties.agent.enum).toEqual(["scout", "worker"]);
+    expect((subagentParams([]) as { properties: { agent: { enum?: string[] } } }).properties.agent.enum).toBeUndefined();
+  });
+
+  it("names the tool in every guideline and only delegates on request by default", () => {
+    for (const trigger of ["on_request", "auto"] as const) {
+      for (const line of subagentGuidelines(trigger)) expect(line).toContain("subagent");
+    }
+    expect(subagentGuidelines("on_request")[0]).toContain("Only call subagent when the user explicitly asks");
+    expect(subagentGuidelines("auto")[0]).toContain("clearly benefits from delegation");
+  });
+});
+
+describe("sub-agent tools and policy", () => {
+  it("gives a child its role's Pi tools, minus unavailable, switched-off and (when read-only) mutating ones", () => {
+    const available = ["read", "grep", "ls", "bash", "edit", "write"];
+    expect(resolveChildTools(["read", "grep", "find", "ls", "bash"], true, available)).toEqual(["read", "grep", "ls", "bash"]);
+    expect(resolveChildTools(["read", "edit", "write", "todo", "subagent"], false, available)).toEqual(["read", "edit", "write"]);
+    expect(resolveChildTools(["read", "edit", "write"], true, available)).toEqual(["read"]);
+    expect(resolveChildTools(["read", "read"], false, ["ls"])).toEqual([]);
+  });
+
+  it("keeps a read-only child on inspection, with Plan mode's shell policy", () => {
+    expect(readOnlyDecision("read", { path: "a.ts" }, "/repo")).toBeUndefined();
+    expect(readOnlyDecision("bash", { command: "git status && rg TODO" }, "/repo")).toBeUndefined();
+    expect(readOnlyDecision("bash", { command: "rm -rf build" }, "/repo")?.reason).toContain("Blocked command: rm -rf build");
+    expect(readOnlyDecision("bash", { command: "cat x > y" }, "/repo")?.block).toBe(true);
+    expect(readOnlyDecision("write", { path: "a.ts" }, "/repo")?.reason).toContain("cannot use 'write'");
+    expect(readOnlyDecision("edit", {}, "/repo")?.block).toBe(true);
+  });
+});
+
+describe("sub-agent scheduling", () => {
+  const tick = () => new Promise((wake) => setTimeout(wake, 5));
+
+  it("caps how many run at once, lets only one writer in at a time, and keeps input order", async () => {
+    let running = 0;
+    let peak = 0;
+    let writers = 0;
+    let peakWriters = 0;
+    const order: string[] = [];
+    const items = [
+      { id: "w1", writer: true }, { id: "w2", writer: true }, { id: "r1", writer: false },
+      { id: "r2", writer: false }, { id: "r3", writer: false }, { id: "w3", writer: true },
+    ];
+    const results = await runScheduled(items, 3, (item) => item.writer, async (item) => {
+      running += 1;
+      peak = Math.max(peak, running);
+      if (item.writer) { writers += 1; peakWriters = Math.max(peakWriters, writers); }
+      order.push(item.id);
+      await tick();
+      running -= 1;
+      if (item.writer) writers -= 1;
+      return item.id.toUpperCase();
+    });
+    expect(results).toEqual(["W1", "W2", "R1", "R2", "R3", "W3"]);
+    expect(peak).toBe(3);
+    expect(peakWriters).toBe(1);
+    // Read-only tasks queued behind the waiting writer started without waiting for it.
+    expect(order.slice(0, 3)).toEqual(["w1", "r1", "r2"]);
+  });
+
+  it("finishes every task before reporting a failure, and handles an empty call", async () => {
+    const finished: number[] = [];
+    await expect(runScheduled([1, 2, 3], 2, () => false, async (item) => {
+      await tick();
+      finished.push(item);
+      if (item === 1) throw new Error("boom");
+      return item;
+    })).rejects.toThrow("boom");
+    expect(finished.sort()).toEqual([1, 2, 3]);
+    await expect(runScheduled([], 4, () => false, async () => 1)).resolves.toEqual([]);
+  });
+});
+
+describe("sub-agent results", () => {
+  it("summarizes tool calls for the card and keeps only the latest", () => {
+    expect(summarizeActivity("bash", { command: "npm   test\n--run" })).toEqual({ tool: "bash", subject: "npm test --run" });
+    expect(summarizeActivity("grep", { pattern: "TODO" })).toEqual({ tool: "grep", subject: "TODO" });
+    expect(summarizeActivity("ls", {})).toEqual({ tool: "ls", subject: "." });
+    expect(summarizeActivity("read", { path: "src/a.ts" })).toEqual({ tool: "read", subject: "src/a.ts" });
+    expect(summarizeActivity("bash", { command: "x".repeat(400) }).subject.length).toBe(160);
+    const [result] = createDetails("single", [{ input: { agent: "scout", task: "t" }, readOnly: true }]).results;
+    for (let index = 0; index < 20; index += 1) recordActivity(result, { tool: "read", subject: String(index) });
+    expect(result.activity).toHaveLength(12);
+    expect(result.activity[0].subject).toBe("8");
+  });
+
+  it("adds usage into the shape Pi totals tool results with", () => {
+    const total = addUsage(emptyUsage(), { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, totalTokens: 18, cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0, total: 0.3 } });
+    addUsage(total, { input: 1, output: 1, cost: { total: 0.1 } } as never);
+    addUsage(total, undefined);
+    expect(total.input).toBe(11);
+    expect(total.output).toBe(6);
+    expect(total.cost.total).toBeCloseTo(0.4);
+  });
+
+  it("gives the model one answer, or a section per child when parallel", () => {
+    const single = createDetails("single", [{ input: { agent: "scout", task: "t" }, readOnly: true }]);
+    single.results[0].status = "done";
+    expect(modelContent(single, ["Found it."])).toBe("Found it.");
+    single.results[0].status = "failed";
+    single.results[0].error = "The model request failed.";
+    expect(modelContent(single, [""])).toBe("scout failed: The model request failed.");
+
+    const parallel = createDetails("parallel", [
+      { input: { agent: "scout", task: "a" }, readOnly: true },
+      { input: { agent: "worker", task: "b" }, readOnly: false },
+    ]);
+    parallel.results[0].status = "done";
+    parallel.results[1].status = "aborted";
+    const text = modelContent(parallel, ["A report", "half"]);
+    expect(text).toContain("1/2 sub-agents completed.");
+    expect(text).toContain("### [scout] completed\nA report");
+    expect(text).toContain("### [worker] stopped\nworker was stopped before it finished.\n\nPartial output:\nhalf");
+    expect(truncate("abcdef", 3)).toEqual({ text: "abc\n\n[… 3 more characters]", truncated: true });
   });
 });

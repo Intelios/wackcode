@@ -42,6 +42,7 @@ export interface SubagentOutcome {
  * inside a prompt can never deadlock.
  */
 export interface BuiltinHost {
+  publishTitleResult(attemptId: string, title?: string): void;
   /**
    * Ask the user a structured questionnaire. Resolves to one answer per question, or
    * `undefined` when the user dismisses the dialog or the run is aborted — callers report

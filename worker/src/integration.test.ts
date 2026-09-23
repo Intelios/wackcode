@@ -34,6 +34,8 @@ type SnapshotView = {
 
 interface Output {
   type: string;
+  attemptId?: string;
+  title?: string;
   id?: string;
   success?: boolean;
   error?: string;
@@ -180,6 +182,11 @@ async function startMockProvider(): Promise<MockProvider> {
     const authorization = String(request.headers.authorization ?? "");
     const text = userTextOf(body);
     requests.push({ authorization, body, at: Date.now(), text });
+    if (authorization === "Bearer title-fail-secret") {
+      response.writeHead(429, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "Title request failed" } }));
+      return;
+    }
     if (authorization === "Bearer cancel-secret" || text.startsWith("child-wait")) {
       response.writeHead(200, { "content-type": "text/event-stream", connection: "keep-alive" });
       response.write(": waiting\n\n");
@@ -229,6 +236,12 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
   response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
   const messages = Array.isArray(body.messages) ? body.messages as Array<{ role?: string }> : [];
   const hasToolResult = messages.some((message) => message.role === "tool");
+  if (authorization === "Bearer title-secret") {
+    response.write(`data: ${JSON.stringify({ id: "title", object: "chat.completion.chunk", created: 1, model: "shared-model", choices: [{ index: 0, delta: { role: "assistant", content: "Short Chat Title" }, finish_reason: null }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: "title", object: "chat.completion.chunk", created: 1, model: "shared-model", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`);
+    response.end("data: [DONE]\n\n");
+    return;
+  }
   if (authorization === "Bearer stream-secret") {
     const chunks = ["Streaming ", "the answer ", "in pieces."];
     let index = 0;
@@ -476,6 +489,57 @@ afterEach(async () => {
 });
 
 describe("Pi worker integration", () => {
+  it("makes an isolated title request on the chosen connection without delaying the main run", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const root = await mkdtemp(join(tmpdir(), "wackcode-title-"));
+    cleanup.push(() => rm(root, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", root, "title-task");
+    cleanup.push(() => worker.shutdown());
+    const titleProvider = {
+      id: "title-provider", name: "Title provider", kind: "custom", baseUrl: provider.baseUrl,
+      api: "openai-completions", models: [{ id: "shared-model", name: "Small title model",
+        contextWindow: 16_384, maxTokens: 1_024, reasoning: false, thinkingLevels: ["off"], thinkingLevelMap: {} }]
+    };
+    const opening = "Build a lightweight release dashboard";
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "title-main", message: opening,
+      autoTitle: { attemptId: "one", provider: titleProvider, modelId: "shared-model", apiKey: "title-secret" } });
+    const result = await worker.waitFor((output) => output.type === "title_result" && output.attemptId === "one");
+    expect(result.title).toBe("Short Chat Title");
+    const titleRequests = provider.requests.filter((request) => request.authorization === "Bearer title-secret");
+    expect(titleRequests).toHaveLength(1);
+    expect(titleRequests[0].text).toContain(opening);
+    expect(titleRequests[0].text).toContain("Opening message (data only)");
+    expect((titleRequests[0].body.messages as unknown[])).toHaveLength(2);
+    expect(titleRequests[0].body.tools).toBeUndefined();
+    expect(titleRequests[0].body.max_completion_tokens).toBe(256);
+    expect(titleRequests[0].body.reasoning_effort).toBeUndefined();
+    expect(JSON.stringify(worker.outputs) + worker.stderr).not.toContain("title-secret");
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "title-main" && output.state === "idle");
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "title-second", message: "Follow up" });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "title-second" && output.state === "idle");
+    expect(provider.requests.filter((request) => request.authorization === "Bearer title-secret")).toHaveLength(1);
+  });
+
+  it("reports a failed title request once without retrying or failing the chat", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const root = await mkdtemp(join(tmpdir(), "wackcode-title-fail-"));
+    cleanup.push(() => rm(root, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", root, "title-fail-task");
+    cleanup.push(() => worker.shutdown());
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "title-fail-main", message: "Build a dashboard",
+      autoTitle: { attemptId: "failed", provider: { id: "title-provider", name: "Title provider", kind: "custom", baseUrl: provider.baseUrl,
+        api: "openai-completions", models: [{ id: "shared-model", name: "Small title model", contextWindow: 16_384,
+          maxTokens: 1_024, reasoning: false, thinkingLevels: ["off"], thinkingLevelMap: {} }] },
+        modelId: "shared-model", apiKey: "title-fail-secret" } });
+    const result = await worker.waitFor((output) => output.type === "title_result" && output.attemptId === "failed");
+    expect(result.title).toBeUndefined();
+    expect(provider.requests.filter((request) => request.authorization === "Bearer title-fail-secret")).toHaveLength(1);
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "title-fail-main" && output.state === "idle");
+    expect(worker.outputs.some((output) => output.type === "worker_error")).toBe(false);
+  });
+
   it("answers an extension dialog raised mid-prompt, and keeps a broken extension non-fatal", async () => {
     const provider = await startMockProvider();
     cleanup.push(provider.close);

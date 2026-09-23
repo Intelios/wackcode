@@ -262,6 +262,18 @@ impl Default for SubagentConfig {
     }
 }
 
+/// One extra model request on a new chat's opening prompt. Never enabled by default.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoTitleConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub model_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectRecord {
@@ -315,6 +327,11 @@ pub struct TaskRecord {
     pub id: String,
     pub project_id: Option<String>,
     pub name: String,
+    /// Legacy chats and forks deserialize as ineligible. Consumed before the first prompt.
+    #[serde(default)]
+    pub auto_title_eligible: bool,
+    #[serde(default)]
+    pub auto_title_attempt_id: Option<String>,
     pub workspace_path: String,
     pub worktree_path: Option<String>,
     pub branch: Option<String>,
@@ -353,6 +370,8 @@ pub struct AppData {
     #[serde(default)]
     pub subagents: SubagentConfig,
     #[serde(default)]
+    pub auto_title: AutoTitleConfig,
+    #[serde(default)]
     pub appearance: AppearanceConfig,
     #[serde(default)]
     pub prompts: PromptConfig,
@@ -369,6 +388,7 @@ impl Default for AppData {
             tool_catalog: Vec::new(),
             packages: Vec::new(),
             subagents: SubagentConfig::default(),
+            auto_title: AutoTitleConfig::default(),
             appearance: AppearanceConfig::default(),
             prompts: PromptConfig::default(),
         }

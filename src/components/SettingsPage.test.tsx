@@ -26,7 +26,7 @@ it("shows subscription guidance before sign-in and reconnect", async () => {
   const props = {
     packages: [], toolCatalog: [], disabledTools: [], appDataPath: "/tmp/wackcode",
     onClose: vi.fn(), onSave: vi.fn(), onDelete: vi.fn(), onConnectSubscription,
-    onSignOutSubscription: vi.fn(), onSetDisabledTools: vi.fn(), subagents: noSubagents, onSetSubagents: vi.fn(), appearance: defaultAppearance, onSetAppearance: vi.fn(), prompts: defaultPrompts, onSetPrompts: vi.fn(),
+    onSignOutSubscription: vi.fn(), onSetDisabledTools: vi.fn(), subagents: noSubagents, onSetSubagents: vi.fn(), autoTitle: { enabled: false, providerId: null, modelId: null }, onSetAutoTitle: vi.fn(), appearance: defaultAppearance, onSetAppearance: vi.fn(), prompts: defaultPrompts, onSetPrompts: vi.fn(),
     onRefresh: vi.fn().mockResolvedValue(undefined), onInstall: vi.fn(), onTrust: vi.fn(),
     onSearch: vi.fn().mockResolvedValue([]), onRemove: vi.fn(), onUpdate: vi.fn(), onSetResources: vi.fn()
   };
@@ -67,7 +67,7 @@ function renderTools(overrides: { disabled?: string[]; onSetDisabledTools?: (nex
       onDelete={vi.fn()}
       onConnectSubscription={vi.fn()}
       onSignOutSubscription={vi.fn()}
-      onSetDisabledTools={onSetDisabledTools} subagents={noSubagents} onSetSubagents={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()}
+      onSetDisabledTools={onSetDisabledTools} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()}
       onRefresh={vi.fn().mockResolvedValue(undefined)}
       onInstall={vi.fn()}
       onTrust={vi.fn()}
@@ -158,7 +158,7 @@ describe("SettingsPage sidebar navigation", () => {
         onDelete={vi.fn()}
         onConnectSubscription={vi.fn()}
         onSignOutSubscription={vi.fn()}
-        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onInstall={vi.fn()}
         onTrust={vi.fn()}
@@ -180,6 +180,7 @@ describe("SettingsPage sidebar navigation", () => {
       "New connection",
       "Packages",
       "Tools",
+      "Auto titles",
       "Appearance",
       "Prompts"
     ]);
@@ -198,7 +199,7 @@ describe("SettingsPage sidebar navigation", () => {
         onDelete={vi.fn()}
         onConnectSubscription={vi.fn()}
         onSignOutSubscription={vi.fn()}
-        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onInstall={vi.fn()}
         onTrust={vi.fn()}
@@ -245,7 +246,7 @@ describe("SettingsPage sidebar navigation", () => {
         onDelete={vi.fn()}
         onConnectSubscription={vi.fn()}
         onSignOutSubscription={vi.fn()}
-        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onInstall={vi.fn()}
         onTrust={vi.fn()}
@@ -287,7 +288,7 @@ describe("SettingsPage model capabilities", () => {
         onDelete={vi.fn()}
         onConnectSubscription={vi.fn()}
         onSignOutSubscription={vi.fn()}
-        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onInstall={vi.fn()}
         onTrust={vi.fn()}
@@ -321,7 +322,7 @@ function renderModelSettings(provider: ProviderRecord = testProviders[0]) {
       providers={[provider]} packages={[]} toolCatalog={catalog} disabledTools={[]}
       appDataPath="/tmp/wackcode" onClose={vi.fn()} onSave={onSave} onDelete={vi.fn()}
       onConnectSubscription={vi.fn()} onSignOutSubscription={vi.fn()}
-      onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onRefresh={vi.fn()} onInstall={vi.fn()} onTrust={vi.fn()}
+      onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onRefresh={vi.fn()} onInstall={vi.fn()} onTrust={vi.fn()}
       onSearch={vi.fn()} onRemove={vi.fn()} onUpdate={vi.fn()} onSetResources={vi.fn()}
     />
   );
@@ -402,6 +403,7 @@ describe("SettingsPage sub-agents", () => {
       providers: [], packages: [], toolCatalog: [], disabledTools: [], appDataPath: "/tmp/wackcode",
       onClose: vi.fn(), onSave: vi.fn(), onDelete: vi.fn(), onConnectSubscription: vi.fn(),
       onSignOutSubscription: vi.fn(), onSetDisabledTools: vi.fn(), onSetSubagents: vi.fn().mockResolvedValue(undefined),
+      autoTitle: { enabled: false, providerId: null, modelId: null }, onSetAutoTitle: vi.fn(),
       appearance: defaultAppearance, onSetAppearance: vi.fn(), prompts: defaultPrompts, onSetPrompts: vi.fn(),
       onRefresh: vi.fn().mockResolvedValue(undefined), onInstall: vi.fn(), onTrust: vi.fn(),
       onSearch: vi.fn().mockResolvedValue([]), onRemove: vi.fn(), onUpdate: vi.fn(), onSetResources: vi.fn()
@@ -420,7 +422,7 @@ describe("SettingsPage sub-agents", () => {
     await waitFor(() => expect(props.onSetSubagents).toHaveBeenCalledWith({ ...subagents, enabled: true }));
 
     rerender(<SettingsPage {...props} subagents={{ ...subagents, enabled: true }} />);
-    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+    fireEvent.click(within(screen.getByRole("switch", { name: "Sub-agents" }).closest("article")!).getByRole("button", { name: /Configure/ }));
     expect(screen.getByRole("heading", { name: "How the agent uses sub-agents" })).toBeInTheDocument();
     expect(within(nav).getByRole("button", { name: /Sub-agents/ })).toHaveClass("active");
 
@@ -437,7 +439,7 @@ describe("SettingsPage appearance section", () => {
       <SettingsPage
         providers={[]} packages={[]} toolCatalog={[]} disabledTools={[]} appDataPath="/tmp/wackcode"
         onClose={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onConnectSubscription={vi.fn()} onSignOutSubscription={vi.fn()}
-        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()}
         appearance={appearance} onSetAppearance={onSetAppearance} prompts={defaultPrompts} onSetPrompts={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)} onInstall={vi.fn()} onTrust={vi.fn()}
         onSearch={vi.fn().mockResolvedValue([])} onRemove={vi.fn()} onUpdate={vi.fn()} onSetResources={vi.fn()}

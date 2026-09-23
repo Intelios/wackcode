@@ -616,6 +616,26 @@ pub(crate) fn node_executable_path() -> Result<PathBuf, String> {
 fn handle_worker_line(app: &AppHandle, task_id: &str, line: &str, pending: &Pending) {
     let Ok(mut value) = serde_json::from_str::<Value>(line) else { return; };
     let event_type = value.get("type").and_then(Value::as_str).unwrap_or("").to_string();
+    if event_type == "title_result" {
+        let attempt_id = value.get("attemptId").and_then(Value::as_str).unwrap_or("");
+        let title = value.get("title").and_then(Value::as_str).and_then(normalize_auto_title);
+        let accepted = app.state::<MetadataState>().mutate(|data| {
+            let Some(task) = data.tasks.iter_mut().find(|task| task.id == task_id) else { return Ok(false); };
+            if task.auto_title_attempt_id.as_deref() != Some(attempt_id) { return Ok(false); }
+            task.auto_title_attempt_id = None;
+            if let Some(title) = &title { task.name = title.clone(); }
+            task.updated_at = chrono::Utc::now().to_rfc3339();
+            Ok(true)
+        }).unwrap_or(false);
+        if !accepted { return; }
+        if let Some(title) = title {
+            let _ = app.emit("worker-event", json!({ "type": "title_changed", "taskId": task_id, "name": title }));
+        } else {
+            let _ = app.emit("worker-event", json!({ "type": "extension_notice", "taskId": task_id,
+                "message": "Automatic title could not be generated. The current title was kept.", "level": "warning" }));
+        }
+        return;
+    }
     if event_type == "response" {
         let waiting = value.get("id").and_then(Value::as_str)
             .and_then(|id| pending.lock().ok().and_then(|mut pending| pending.remove(id)));
@@ -705,6 +725,29 @@ fn handle_worker_line(app: &AppHandle, task_id: &str, line: &str, pending: &Pend
     }
     if should_save { let _ = app.state::<MetadataState>().save(); }
     let _ = app.emit("worker-event", value);
+}
+
+fn normalize_auto_title(raw: &str) -> Option<String> {
+    let compact = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = compact.trim_matches(|c: char| c == '"' || c == '\'' || c == '“' || c == '”' || c == '‘' || c == '’').trim();
+    let title: String = trimmed.chars().take(80).collect();
+    let one_word_ascii = title.is_ascii() && title.split_whitespace().count() < 3;
+    let has_emoji = title.chars().any(|c| matches!(c as u32, 0x1F000..=0x1FAFF | 0x2600..=0x27BF));
+    if title.is_empty() || one_word_ascii || has_emoji { None } else { Some(title) }
+}
+
+#[cfg(test)]
+mod auto_title_tests {
+    use super::normalize_auto_title;
+
+    #[test]
+    fn trims_model_wrapping_and_rejects_blank_output() {
+        assert_eq!(normalize_auto_title("  “  Short   chat title  ” "), Some("Short chat title".into()));
+        assert_eq!(normalize_auto_title(" \n '  '  "), None);
+        assert_eq!(normalize_auto_title("OK."), None);
+        assert_eq!(normalize_auto_title("Emoji title here 😀"), None);
+        assert_eq!(normalize_auto_title(&format!("Long title {}", "x".repeat(90))).unwrap().chars().count(), 80);
+    }
 }
 
 fn redact_and_limit(message: &str) -> String {

@@ -10,6 +10,7 @@ import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix 
 import { pruneDisabledTools, sameToolCatalog } from "./tool-utils";
 import type {
   AppData,
+  AutoTitleConfig,
   AppearanceConfig,
   PromptConfig,
   CheckpointChange,
@@ -59,6 +60,7 @@ const emptyData: AppData = {
   toolCatalog: [],
   packages: [],
   subagents: { enabled: false, trigger: "on_request", maxConcurrency: 4, agents: [] },
+  autoTitle: { enabled: false, providerId: null, modelId: null },
   appearance: { thinkingPreview: true },
   prompts: {}
 };
@@ -271,6 +273,10 @@ export default function App() {
     void listen<WorkerEvent>("worker-event", ({ payload }) => {
       const taskId = payload.taskId;
       if (!taskId) return;
+      if (payload.type === "title_changed") {
+        patchTask(taskId, { name: payload.name });
+        return;
+      }
       if (payload.type === "ready" || payload.type === "snapshot") {
         const snapshot = payload.snapshot;
         // Keep the previous plan/todo objects when they are unchanged: the transcript's message
@@ -692,6 +698,11 @@ export default function App() {
     }
   }
 
+  async function setAutoTitle(config: AutoTitleConfig) {
+    const saved = await api.setAutoTitleConfig(config);
+    setData((current) => ({ ...current, autoTitle: saved }));
+  }
+
   async function setAppearance(config: AppearanceConfig) {
     const previous = data.appearance;
     setData((current) => ({ ...current, appearance: config }));
@@ -871,11 +882,6 @@ export default function App() {
         images,
         literal
       });
-      if (selectedTask.name === "New chat") {
-        const title = titleFromPrompt(message);
-        patchTask(selectedTask.id, { name: title });
-        void api.renameTask(selectedTask.id, title).catch(() => undefined);
-      }
       return true;
     } catch (reason) {
       patchTask(selectedTask.id, { status: "idle" });
@@ -1346,6 +1352,8 @@ export default function App() {
           onSetDisabledTools={setDisabledTools}
           subagents={data.subagents}
           onSetSubagents={setSubagents}
+          autoTitle={data.autoTitle}
+          onSetAutoTitle={setAutoTitle}
           appearance={data.appearance}
           onSetAppearance={setAppearance}
           prompts={data.prompts}

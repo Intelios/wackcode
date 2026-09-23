@@ -16,14 +16,13 @@ interface BuiltinExtension {
   name: string;
   description: string;
   tools: readonly string[];
-  /** Has its own off switch (sub-agents). Everything else is always on. */
-  toggleable?: boolean;
+  kind?: "subagents" | "auto_titles";
 }
 
 /**
  * The extensions compiled into WackCode itself (worker/src/builtin/index.ts). They are shown
  * here so nobody installs a package duplicating something that already ships with the app.
- * They have no trust gate, and only sub-agents has an off switch — keep this list in sync
+ * They have no trust gate; optional built-ins have their own settings — keep this list in sync
  * with the worker.
  */
 const BUILTIN_EXTENSIONS: readonly BuiltinExtension[] = [
@@ -50,7 +49,13 @@ const BUILTIN_EXTENSIONS: readonly BuiltinExtension[] = [
     description:
       "Lets the agent hand self-contained tasks to sub-agents with their own context window, one at a time or several in parallel. Off by default: every sub-agent is extra model usage.",
     tools: ["subagent"],
-    toggleable: true
+    kind: "subagents"
+  },
+  {
+    name: "Auto chat titles",
+    description: "Give new chats a short title from their first message. Uses one extra model request per chat; you choose the model.",
+    tools: [],
+    kind: "auto_titles"
   }
 ];
 
@@ -68,9 +73,12 @@ export interface PackageActions {
 
 interface Props extends PackageActions {
   packages: PackageRecord[];
-  /** The one built-in with an off switch. */
   subagentsEnabled?: boolean;
+  autoTitlesEnabled?: boolean;
+  autoTitlesConfigured?: boolean;
   onToggleSubagents?: (enabled: boolean) => Promise<void>;
+  onToggleAutoTitles?: (enabled: boolean) => Promise<void>;
+  onConfigureAutoTitles?: () => void;
   /** Opens Settings → Sub-agents. */
   onConfigureSubagents?: () => void;
 }
@@ -78,7 +86,7 @@ interface Props extends PackageActions {
 type Tab = "installed" | "browse";
 
 export function PackagesSection({
-  packages, subagentsEnabled = false, onToggleSubagents, onConfigureSubagents,
+  packages, subagentsEnabled = false, autoTitlesEnabled = false, autoTitlesConfigured = false, onToggleSubagents, onToggleAutoTitles, onConfigureSubagents, onConfigureAutoTitles,
   onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
 }: Props) {
   const [tab, setTab] = useState<Tab>("installed");
@@ -202,19 +210,22 @@ export function PackagesSection({
       <div className="section-heading-row builtin-heading">
         <div>
           <h3>Built-In</h3>
-          <p>Compiled into WackCode — you don&rsquo;t need a package for these. All are always on except Sub-agents.</p>
+          <p>Compiled into WackCode — you don&rsquo;t need a package for these. Sub-agents and Auto chat titles are optional.</p>
         </div>
       </div>
       {BUILTIN_EXTENSIONS.map((extension) => (
         <BuiltinCard
           key={extension.name}
           extension={extension}
-          enabled={extension.toggleable ? subagentsEnabled : true}
+          enabled={extension.kind === "subagents" ? subagentsEnabled : extension.kind === "auto_titles" ? autoTitlesEnabled : true}
           busy={busy}
-          onToggle={extension.toggleable && onToggleSubagents
+          onToggle={extension.kind === "subagents" && onToggleSubagents
             ? (enabled) => void run(() => onToggleSubagents(enabled)).catch(() => undefined)
+            : extension.kind === "auto_titles" && onToggleAutoTitles
+            ? (enabled) => void run(() => onToggleAutoTitles(enabled)).catch(() => undefined)
             : undefined}
-          onConfigure={extension.toggleable ? onConfigureSubagents : undefined}
+          onConfigure={extension.kind === "subagents" ? onConfigureSubagents : extension.kind === "auto_titles" ? onConfigureAutoTitles : undefined}
+          toggleDisabled={extension.kind === "auto_titles" && !autoTitlesConfigured && !autoTitlesEnabled}
         />
       ))}
       </>
@@ -248,38 +259,46 @@ interface BuiltinCardProps {
   extension: BuiltinExtension;
   enabled: boolean;
   busy: boolean;
+  toggleDisabled?: boolean;
   /** Present only for a built-in with an off switch. */
   onToggle?: (enabled: boolean) => void;
   onConfigure?: () => void;
 }
 
-/** A built-in extension: same card shape as a package. Always-on ones show a disabled toggle
- *  pinned on; sub-agents has a live one, and a way to its settings page while on. */
-function BuiltinCard({ extension, enabled, busy, onToggle, onConfigure }: BuiltinCardProps) {
+/** A built-in extension: same card shape as a package. Always-on ones show a disabled toggle;
+ *  sub-agents has a live one, while auto titles routes to its combined setup page. */
+function BuiltinCard({ extension, enabled, busy, toggleDisabled = false, onToggle, onConfigure }: BuiltinCardProps) {
+  const autoTitles = extension.kind === "auto_titles";
   return (
-    <article className="package-card builtin-card">
+    <article className={`package-card builtin-card ${autoTitles ? "auto-title-package-card" : ""}`}>
       <div className="package-card-head">
         <span className="package-name builtin-name">{extension.name}</span>
-        {onToggle && enabled && onConfigure && (
+        {!autoTitles && onToggle && onConfigure && enabled && (
           <button type="button" className="ghost-button builtin-configure" onClick={onConfigure}>
             Configure <Icon name="chevron" />
           </button>
         )}
-        <span className="package-meta">{onToggle ? (enabled ? "On" : "Off") : "Always on"}</span>
+        <span className="package-meta">{autoTitles || onToggle ? (enabled ? "On" : "Off") : "Always on"}</span>
+        {autoTitles && (
+          <button type="button" className="ghost-button builtin-configure" onClick={onConfigure}>
+            {toggleDisabled ? "Set up" : "Configure"} <Icon name="chevron" />
+          </button>
+        )}
         <button
           type="button"
           role="switch"
           aria-checked={enabled}
           aria-label={extension.name}
           className={`toggle ${enabled ? "on" : ""}`}
-          disabled={!onToggle || busy}
+          disabled={!onToggle || busy || toggleDisabled}
+          title={toggleDisabled ? "Choose a title model in Set up first" : undefined}
           onClick={() => onToggle?.(!enabled)}
         >
           <span />
         </button>
       </div>
       <p className="builtin-desc">{extension.description}</p>
-      <section className="resource-group builtin-resources">
+      {extension.tools.length > 0 && <section className="resource-group builtin-resources">
         <h5>Tools</h5>
         {extension.tools.map((tool) => (
           <div className="resource-row" key={tool}>
@@ -296,7 +315,7 @@ function BuiltinCard({ extension, enabled, busy, onToggle, onConfigure }: Builti
             </button>
           </div>
         ))}
-      </section>
+      </section>}
     </article>
   );
 }

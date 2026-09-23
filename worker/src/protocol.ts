@@ -103,6 +103,15 @@ export interface WorkerProvider {
   models: WorkerModel[];
 }
 
+/** Credentials for the one title request, supplied only on the first prompt over stdin. */
+export interface AutoTitleRequest {
+  attemptId: string;
+  provider: WorkerProvider;
+  modelId: string;
+  apiKey?: string;
+  authPath?: string;
+}
+
 /** When the main agent should reach for sub-agents. Only changes the tool's guidance text. */
 export type SubagentTrigger = "on_request" | "auto";
 
@@ -290,6 +299,7 @@ export type WorkerCommand =
   | {
       id: string;
       type: "prompt";
+      autoTitle?: AutoTitleRequest | null;
       runId: string;
       startedAt?: number;
       message: string;
@@ -499,6 +509,7 @@ export type ExtensionUIRequest =
     };
 
 export type WorkerOutput =
+  | { type: "title_result"; taskId: string; attemptId: string; title?: string }
   | { type: "response"; taskId?: string; id: string; success: true; result?: unknown }
   | { type: "response"; taskId?: string; id: string; success: false; error: string }
   | { type: "ready"; taskId: string; snapshot: SessionSnapshot }

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AutoTitleConfig,
   AppearanceConfig,
   BootstrapPayload,
   BuiltinModelSuggestion,
@@ -42,6 +43,7 @@ export const api = {
   setToolConfig: (disabled: string[]) => invoke<ToolConfig>("set_tool_config", { input: { disabled } }),
   setAppearanceConfig: (input: AppearanceConfig) => invoke<AppearanceConfig>("set_appearance_config", { input }),
   setSubagentConfig: (input: SubagentConfig) => invoke<SubagentConfig>("set_subagent_config", { input }),
+  setAutoTitleConfig: (input: AutoTitleConfig) => invoke<AutoTitleConfig>("set_auto_title_config", { input }),
   setPromptConfig: (input: PromptConfig) => invoke<PromptConfig>("set_prompt_config", { input }),
   listPackages: () => invoke<PackageRecord[]>("list_packages"),
   searchPackages: (query: string, from = 0) =>

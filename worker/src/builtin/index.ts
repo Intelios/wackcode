@@ -6,6 +6,7 @@
  */
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import { createAskUserQuestionExtension } from "./ask-user-question.js";
+import { createAutoTitleExtension, type AutoTitleController } from "./auto-title.js";
 import type { BuiltinHost } from "./host.js";
 import { type PlanModeController, createPlanModeExtension } from "./plan-mode/index.js";
 import { type SubagentsController, createSubagentsExtension } from "./subagents/index.js";
@@ -20,12 +21,14 @@ export interface BuiltinExtensions {
   todo: TodoHandle;
   /** Applies the user's sub-agent settings and says when its tool must stay off. */
   subagents: SubagentsController;
+  autoTitle: AutoTitleController;
 }
 
 export function createBuiltinExtensions(host: BuiltinHost): BuiltinExtensions {
   const planMode = createPlanModeExtension(host);
   const todo = createTodoExtension(host);
   const subagents = createSubagentsExtension(host, () => planMode.controller.getState().mode);
+  const autoTitle = createAutoTitleExtension(host);
   return {
     factories: [
       {
@@ -37,9 +40,11 @@ export function createBuiltinExtensions(host: BuiltinHost): BuiltinExtensions {
       { name: "wackcode-plan-mode", factory: planMode.factory, hidden: true },
       { name: "wackcode-todo", factory: todo.factory, hidden: true },
       { name: "wackcode-subagents", factory: subagents.factory, hidden: true },
+      { name: "wackcode-auto-title", factory: autoTitle.factory, hidden: true },
     ],
     planMode: planMode.controller,
     todo: todo.handle,
     subagents: subagents.controller,
+    autoTitle: autoTitle.controller,
   };
 }

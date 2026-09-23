@@ -6,7 +6,7 @@ use crate::{
         ProjectRecord, PromptConfig, PromptInput, ExtensionUiResponseInput, InstallPackageInput, PackageRecord,
         PackageSearchResult, ProviderKind, ProviderRecord, ResendInput, RestoreCheckpointInput, RestoreResult,
         SaveProviderInput, SearchPackagesInput, SetPackageResourcesInput, SetTaskModeInput, SetToolConfigInput,
-        SlashCommand, SubagentConfig, TaskMode, TaskRecord, TaskStatus, ToolConfig, WorkspaceFiles,
+        SlashCommand, SubagentConfig, AutoTitleConfig, TaskMode, TaskRecord, TaskStatus, ToolConfig, WorkspaceFiles,
     },
     storage::MetadataState,
     worker::{self, WorkerOptions}, subagents, subscriptions,
@@ -579,6 +579,18 @@ pub async fn set_subagent_config(
 }
 
 #[tauri::command]
+pub fn set_auto_title_config(state: State<'_, MetadataState>, input: AutoTitleConfig) -> Result<AutoTitleConfig, String> {
+    if input.enabled {
+        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        let provider = data.providers.iter().find(|item| Some(item.id.as_str()) == input.provider_id.as_deref())
+            .ok_or_else(|| "Choose a connection for automatic titles".to_string())?;
+        validate_selected_model(provider, input.model_id.as_deref().unwrap_or(""))?;
+        if !provider.connected { return Err("Connect the title model before enabling automatic titles".into()); }
+    }
+    state.mutate(|data| { data.auto_title = input.clone(); Ok(input) })
+}
+
+#[tauri::command]
 pub fn add_project(state: State<'_, MetadataState>, path: String) -> Result<ProjectRecord, String> {
     let path = PathBuf::from(path);
     if !path.is_dir() { return Err("Choose an existing folder".into()); }
@@ -651,6 +663,8 @@ pub fn create_task(
         id,
         project_id: project.as_ref().map(|project| project.id.clone()),
         name,
+        auto_title_eligible: true,
+        auto_title_attempt_id: None,
         workspace_path: workspace_path.to_string_lossy().into_owned(),
         worktree_path,
         branch,
@@ -831,6 +845,22 @@ pub async fn prompt(app: AppHandle, state: State<'_, MetadataState>, input: Prom
     validate_images(&input.images)?;
     let lock = task_lock(&app, &input.task_id);
     let _guard = lock.lock().await;
+    // A chat gets one chance, consumed durably even when the extension is off or dispatch fails.
+    // This also moves the free fallback rename out of the renderer's asynchronous path.
+    let (title_attempt, title_config, fallback_name) = state.mutate(|data| {
+        let config = data.auto_title.clone();
+        let task = data.tasks.iter_mut().find(|task| task.id == input.task_id)
+            .ok_or_else(|| "Chat not found".to_string())?;
+        let first = task.auto_title_eligible;
+        if first && task.name == "New chat" {
+            task.name = limit(&message.split_whitespace().collect::<Vec<_>>().join(" "), 48);
+        }
+        let attempt = consume_auto_title_eligibility(task, config.enabled);
+        Ok((attempt, config, if first { Some(task.name.clone()) } else { None }))
+    })?;
+    if let Some(name) = fallback_name {
+        let _ = app.emit("worker-event", json!({ "type": "title_changed", "taskId": input.task_id, "name": name }));
+    }
     let configured = configure_task(app.clone(), state.clone(), ConfigureTaskInput {
         task_id: input.task_id.clone(),
         provider_id: input.provider_id,
@@ -867,16 +897,48 @@ pub async fn prompt(app: AppHandle, state: State<'_, MetadataState>, input: Prom
     };
     let run_id = Uuid::new_v4().to_string();
     let started_at = input.started_at.unwrap_or_else(|| Utc::now().timestamp_millis() as u64);
+    let had_title_attempt = title_attempt.is_some();
+    let auto_title = title_attempt.and_then(|attempt_id| {
+        let data = state.data.lock().ok()?;
+        let provider = data.providers.iter().find(|item| Some(item.id.as_str()) == title_config.provider_id.as_deref())?;
+        let model_id = title_config.model_id.as_deref()?;
+        if !provider.connected || validate_selected_model(provider, model_id).is_err() { return None; }
+        let credential = credential_for(&app, &state, provider).ok()?;
+        let auth_path = if provider.kind == ProviderKind::Subscription {
+            Some(subscriptions::auth_path(&app, &provider.id).ok()?.to_string_lossy().into_owned())
+        } else { None };
+        Some(json!({ "attemptId": attempt_id, "provider": worker::worker_provider_json(provider),
+            "modelId": model_id, "apiKey": credential, "authPath": auth_path }))
+    });
+    if had_title_attempt && auto_title.is_none() {
+        let _ = state.mutate(|data| {
+            if let Some(task) = data.tasks.iter_mut().find(|task| task.id == input.task_id) {
+                task.auto_title_attempt_id = None;
+            }
+            Ok(())
+        });
+        let _ = app.emit("worker-event", json!({ "type": "extension_notice", "taskId": input.task_id,
+            "message": "Automatic title could not be generated. Check its model connection in Settings.", "level": "warning" }));
+    }
     let sent = worker::send(&app, &configured.id, &json!({
         "id": Uuid::new_v4().to_string(), "type": "prompt", "runId": run_id, "message": message,
         "startedAt": started_at, "mode": configured.mode, "images": input.images, "checkpoint": checkpoint,
-        "literal": input.literal
+        "literal": input.literal, "autoTitle": auto_title
     })).await;
     if let Err(error) = sent {
         let _ = set_status(&state, &configured.id, TaskStatus::Idle);
         return Err(error);
     }
     Ok(run_id)
+}
+
+fn consume_auto_title_eligibility(task: &mut TaskRecord, enabled: bool) -> Option<String> {
+    if !task.auto_title_eligible { return None; }
+    task.auto_title_eligible = false;
+    if !enabled { return None; }
+    let id = Uuid::new_v4().to_string();
+    task.auto_title_attempt_id = Some(id.clone());
+    Some(id)
 }
 
 /// Send a message again as a new version of itself: unchanged (retry) or with new text (edit).
@@ -1017,6 +1079,8 @@ pub async fn fork_task(app: AppHandle, state: State<'_, MetadataState>, input: F
         id: id.clone(),
         project_id: source.project_id.clone(),
         name: name.clone(),
+        auto_title_eligible: false,
+        auto_title_attempt_id: None,
         workspace_path: source.workspace_path.clone(),
         worktree_path: None,
         branch: source.branch.clone(),
@@ -1164,6 +1228,7 @@ pub fn rename_task(state: State<'_, MetadataState>, task_id: String, name: Strin
     state.mutate(|data| {
         let task = data.tasks.iter_mut().find(|task| task.id == task_id).ok_or_else(|| "Chat not found".to_string())?;
         task.name = name.clone();
+        task.auto_title_attempt_id = None;
         task.updated_at = Utc::now().to_rfc3339();
         Ok(task.clone())
     })
@@ -1608,6 +1673,22 @@ fn limit(value: &str, count: usize) -> String { value.chars().take(count).collec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn title_eligibility_is_consumed_once_even_while_disabled() {
+        let json = r#"{"id":"t","projectId":null,"name":"New chat","workspacePath":"/tmp","worktreePath":null,"branch":null,"usesWorktree":false,"providerId":"p","modelId":"m","thinkingLevel":"off","sessionFile":null,"status":"idle","archived":false,"lastError":null,"createdAt":"c","updatedAt":"u"}"#;
+        let mut legacy: TaskRecord = serde_json::from_str(json).unwrap();
+        assert!(consume_auto_title_eligibility(&mut legacy, true).is_none());
+        let mut task = legacy.clone();
+        task.auto_title_eligible = true;
+        assert!(consume_auto_title_eligibility(&mut task, false).is_none());
+        assert!(!task.auto_title_eligible);
+        assert!(consume_auto_title_eligibility(&mut task, true).is_none());
+        task.auto_title_eligible = true;
+        let attempt = consume_auto_title_eligibility(&mut task, true).unwrap();
+        assert_eq!(task.auto_title_attempt_id.as_deref(), Some(attempt.as_str()));
+        assert!(consume_auto_title_eligibility(&mut task, true).is_none());
+    }
 
     #[test]
     fn init_requires_a_project_and_build_mode() {

@@ -119,6 +119,23 @@ describe("PackagesSection", () => {
 });
 
 describe("PackagesSection built-ins", () => {
+  it("requires model setup before the automatic titles switch can be used", async () => {
+    const onConfigureAutoTitles = vi.fn();
+    const onToggleAutoTitles = vi.fn().mockResolvedValue(undefined);
+    renderSection([], { onConfigureAutoTitles, onToggleAutoTitles });
+    expect(screen.getByRole("switch", { name: "Sub-agents" })).toHaveAttribute("aria-checked", "false");
+    const card = screen.getByText("Auto chat titles").closest("article")!;
+    expect(within(card).getByText("Off")).toBeInTheDocument();
+    expect(within(card).getByRole("switch", { name: "Auto chat titles" })).toBeDisabled();
+    fireEvent.click(within(card).getByRole("button", { name: /Set up/ }));
+    expect(onConfigureAutoTitles).toHaveBeenCalledOnce();
+
+    cleanup();
+    renderSection([], { autoTitlesConfigured: true, onToggleAutoTitles });
+    fireEvent.click(screen.getByRole("switch", { name: "Auto chat titles" }));
+    await waitFor(() => expect(onToggleAutoTitles).toHaveBeenCalledWith(true));
+  });
+
   it("lists the compiled-in extensions with pinned-on, disabled toggles even with no packages", () => {
     renderSection([]);
     expect(screen.getByRole("heading", { name: "Built-In" })).toBeInTheDocument();
@@ -138,14 +155,15 @@ describe("PackagesSection built-ins", () => {
     expect(toggle).toHaveAttribute("aria-checked", "false");
     expect(screen.getByRole("switch", { name: "subagent" })).toHaveAttribute("aria-checked", "false");
     expect(screen.getByText(/every sub-agent is extra model usage/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Configure/ })).not.toBeInTheDocument();
+    const subagentCard = screen.getByRole("switch", { name: "Sub-agents" }).closest("article")!;
+    expect(within(subagentCard).queryByRole("button", { name: /Configure/ })).not.toBeInTheDocument();
     fireEvent.click(toggle);
     await waitFor(() => expect(onToggleSubagents).toHaveBeenCalledWith(true));
 
     cleanup();
     renderSection([], { subagentsEnabled: true, onToggleSubagents, onConfigureSubagents });
     expect(screen.getByRole("switch", { name: "Sub-agents" })).toHaveAttribute("aria-checked", "true");
-    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+    fireEvent.click(within(screen.getByRole("switch", { name: "Sub-agents" }).closest("article")!).getByRole("button", { name: /Configure/ }));
     expect(onConfigureSubagents).toHaveBeenCalled();
     fireEvent.click(screen.getByRole("switch", { name: "Sub-agents" }));
     await waitFor(() => expect(onToggleSubagents).toHaveBeenLastCalledWith(false));

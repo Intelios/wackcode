@@ -91,6 +91,9 @@ let activeRun: {
 let activeCredential: string | undefined;
 let activeAuthPath: string | undefined;
 let activeProviderId: string | undefined;
+let workerAgentDir: string | undefined;
+let activeTitleCredential: string | undefined;
+let activeTitleAuth: { providerId: string; authPath: string } | undefined;
 let stopRequested = false;
 let compacting = false;
 let commandCatalog: Array<{ item: SlashCommand; invocation: string; templateContent?: string; skillFile?: string; skillBaseDir?: string }> = [];
@@ -112,6 +115,11 @@ interface DialogResponse {
  * `taskId`/`send` once commands run, so the ordering is safe.
  */
 const builtinHost: BuiltinHost = {
+  publishTitleResult: (attemptId, title) => {
+    if (taskId) send({ type: "title_result", taskId, attemptId, title });
+    activeTitleCredential = undefined;
+    activeTitleAuth = undefined;
+  },
   askQuestions: (questions, options) =>
     askHost<QuestionAnswer[] | "wrap_up" | undefined>(
       { method: "questions", title: "Questions", questions, ...(options?.offerWrapUp ? { offerWrapUp: true as const } : {}) },
@@ -894,6 +902,7 @@ function withCustomPersona(loader: ResourceLoader): ResourceLoader {
 }
 
 async function initialize(command: InitCommand): Promise<void> {
+  workerAgentDir = command.agentDir;
   if (session) throw new Error("Worker is already initialized");
   taskId = command.taskId;
   workspacePath = command.cwd;
@@ -1309,6 +1318,11 @@ async function handle(command: WorkerCommand): Promise<void> {
       // A mode recorded on the task (or chosen for a draft) is applied before the prompt so
       // the first message of a plan-mode task arrives with the contract already in place.
       if (command.mode) builtins.planMode.setMode(command.mode);
+      if (command.autoTitle && piModule && workerAgentDir && modelRuntime) {
+        activeTitleCredential = command.autoTitle.apiKey;
+        activeTitleAuth = command.autoTitle.authPath ? { providerId: command.autoTitle.provider.id, authPath: command.autoTitle.authPath } : undefined;
+        builtins.autoTitle.start(command.autoTitle, command.message, piModule, workerAgentDir, activeProviderId ?? "", modelRuntime);
+      }
       await runPrompt(command.id, command.runId, runStartedAt(command.startedAt), command.message, command.images, command.checkpoint, command.literal);
       return;
     } else if (command.type === "resend") {
@@ -1321,6 +1335,9 @@ async function handle(command: WorkerCommand): Promise<void> {
       respond(command.id, result);
       return;
     } else if (command.type === "abort") {
+      builtins.autoTitle.abort();
+      activeTitleCredential = undefined;
+      activeTitleAuth = undefined;
       stopRequested = true;
       cancelPendingDialogs();
       if (compacting) {
@@ -1407,7 +1424,9 @@ const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "
  */
 function redactCredentials(text: string): string {
   const secrets: string[] = activeCredential ? [activeCredential] : [];
+  if (activeTitleCredential) secrets.push(activeTitleCredential);
   const stored = activeAuthPath && activeProviderId ? [{ providerId: activeProviderId, authPath: activeAuthPath }] : [];
+  if (activeTitleAuth) stored.push(activeTitleAuth);
   const extra = subagentRunner?.credentials();
   if (extra) {
     secrets.push(...extra.apiKeys);
@@ -1464,6 +1483,7 @@ process.stdin.resume();
 process.on("SIGTERM", () => {
   void (async () => {
     try {
+      builtins.autoTitle.abort();
       await subagentRunner?.abortAll();
       if (session && !session.isIdle) await session.abort();
       session?.dispose();

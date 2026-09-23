@@ -12,7 +12,7 @@ const projects: ProjectRecord[] = [
 
 function task(id: string, projectId: string | null, name: string): TaskRecord {
   return {
-    id, projectId, name, workspacePath: "/tmp", worktreePath: null, branch: null, usesWorktree: false,
+    id, projectId, name, autoTitleEligible: false, autoTitleAttemptId: null, workspacePath: "/tmp", worktreePath: null, branch: null, usesWorktree: false,
     providerId: "prov", modelId: "m", thinkingLevel: "off", sessionFile: null, status: "idle",
     mode: "build", archived: false, lastError: null, createdAt: "now", updatedAt: "now"
   };

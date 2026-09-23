@@ -128,6 +128,7 @@ mod tests {
         let mut data = AppData {
             tasks: vec![TaskRecord {
                 id: "task".into(), project_id: Some("project".into()), name: "Running task".into(),
+                auto_title_eligible: false, auto_title_attempt_id: None,
                 workspace_path: "/tmp/project".into(), worktree_path: None, branch: None,
                 uses_worktree: false, provider_id: "provider".into(), model_id: "model".into(),
                 thinking_level: "off".into(), session_file: Some("session.jsonl".into()),
@@ -148,6 +149,8 @@ mod tests {
         let json = r#"{"id":"t","projectId":null,"name":"n","workspacePath":"/tmp","worktreePath":null,"branch":null,"usesWorktree":false,"providerId":"p","modelId":"m","thinkingLevel":"off","sessionFile":null,"status":"idle","archived":false,"lastError":null,"createdAt":"c","updatedAt":"u"}"#;
         let task: TaskRecord = serde_json::from_str(json).unwrap();
         assert_eq!(task.project_id, None);
+        assert!(!task.auto_title_eligible);
+        assert!(task.auto_title_attempt_id.is_none());
         let legacy = json.replace("\"projectId\":null", "\"projectId\":\"project-1\"");
         let task: TaskRecord = serde_json::from_str(&legacy).unwrap();
         assert_eq!(task.project_id.as_deref(), Some("project-1"));

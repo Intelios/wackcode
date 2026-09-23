@@ -158,6 +158,8 @@ export interface TaskRecord {
   id: string;
   projectId: string | null;
   name: string;
+  autoTitleEligible: boolean;
+  autoTitleAttemptId: string | null;
   workspacePath: string;
   worktreePath: string | null;
   branch: string | null;
@@ -298,6 +300,12 @@ export interface SubagentConfig {
   agents: SubagentRecord[];
 }
 
+export interface AutoTitleConfig {
+  enabled: boolean;
+  providerId: string | null;
+  modelId: string | null;
+}
+
 export type SubagentStatus = "queued" | "running" | "done" | "failed" | "aborted";
 
 /** One sub-agent in a `subagent` call, as the card renders it. Mirrors worker/src/protocol.ts. */
@@ -332,6 +340,7 @@ export interface AppData {
   toolCatalog: ToolCatalogEntry[];
   packages: PackageRecord[];
   subagents: SubagentConfig;
+  autoTitle: AutoTitleConfig;
   appearance: AppearanceConfig;
   prompts: PromptConfig;
 }
@@ -518,6 +527,7 @@ export interface ExtensionNotice {
 }
 
 export type WorkerEvent =
+  | { type: "title_changed"; taskId: string; name: string }
   | { type: "ready" | "snapshot"; taskId: string; snapshot: SessionSnapshot }
   | { type: "snapshot_delta"; taskId: string; delta: SnapshotDelta }
   | { type: "partial"; taskId: string; message: NormalizedMessage }

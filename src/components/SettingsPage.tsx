@@ -2,11 +2,12 @@ import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode }
 import { api } from "../api";
 import { applyBuiltinModelSuggestion, mergeDiscoveredModels, modelIsReady, searchBuiltinModels } from "../model-utils";
 import { groupTools } from "../tool-utils";
-import type { ApiFormat, AppearanceConfig, BuiltinModelSuggestion, CustomProviderRecord, ModelRecord, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ThinkingLevel, ToolCatalogEntry } from "../types";
+import type { ApiFormat, AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CustomProviderRecord, ModelRecord, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ThinkingLevel, ToolCatalogEntry } from "../types";
 import { Icon, type IconName } from "./Icons";
 import { PackagesSection, type PackageActions } from "./PackagesSection";
 import { PromptsSection } from "./PromptsSection";
 import { SubagentsSection } from "./SubagentsSection";
+import { AutoTitlesSection } from "./AutoTitlesSection";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 import { Popover } from "./ui/Popover";
 import { Select } from "./ui/Select";
@@ -16,7 +17,7 @@ const levels: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhi
 let nextModelCardKey = 0;
 const newModelCardKeys = (count: number) => Array.from({ length: count }, () => ++nextModelCardKey);
 
-type SectionId = "providers" | "packages" | "tools" | "appearance" | "prompts" | "subagents";
+type SectionId = "providers" | "packages" | "tools" | "appearance" | "prompts" | "subagents" | "auto_titles";
 
 interface Section {
   id: SectionId;
@@ -30,6 +31,7 @@ const SECTIONS: Section[] = [
   { id: "tools", label: "Tools", icon: "wrench" },
   // Only listed while the built-in is switched on (Settings → Packages).
   { id: "subagents", label: "Sub-agents", icon: "agents" },
+  { id: "auto_titles", label: "Auto titles", icon: "spark" },
   { id: "appearance", label: "Appearance", icon: "palette" },
   { id: "prompts", label: "Prompts", icon: "pencil" }
 ];
@@ -49,6 +51,8 @@ interface Props extends PackageActions {
   onSetDisabledTools: (disabled: string[]) => Promise<void>;
   subagents: SubagentConfig;
   onSetSubagents: (config: SubagentConfig) => Promise<void>;
+  autoTitle: AutoTitleConfig;
+  onSetAutoTitle: (config: AutoTitleConfig) => Promise<void>;
   appearance: AppearanceConfig;
   onSetAppearance: (config: AppearanceConfig) => Promise<void>;
   prompts: PromptConfig;
@@ -58,7 +62,7 @@ interface Props extends PackageActions {
 export function SettingsPage({
   providers, packages, toolCatalog, disabledTools, appDataPath,
   onClose, onSave, onDelete, onConnectSubscription, onSignOutSubscription, connectedSubscriptionId, onSetDisabledTools,
-  subagents, onSetSubagents, appearance, onSetAppearance, prompts, onSetPrompts, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
+  subagents, onSetSubagents, autoTitle, onSetAutoTitle, appearance, onSetAppearance, prompts, onSetPrompts, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
 }: Props) {
   const [chosenSection, setSection] = useState<SectionId>("providers");
   // Switching sub-agents off while its page is open lands on Packages, where the switch is.
@@ -198,7 +202,11 @@ export function SettingsPage({
           <PackagesSection
             packages={packages}
             subagentsEnabled={subagents.enabled}
+            autoTitlesEnabled={autoTitle.enabled}
+            autoTitlesConfigured={providers.some((provider) => provider.id === autoTitle.providerId && provider.connected && provider.models.some((model) => model.id === autoTitle.modelId && modelIsReady(model)))}
             onToggleSubagents={(enabled) => onSetSubagents({ ...subagents, enabled })}
+            onToggleAutoTitles={(enabled) => onSetAutoTitle({ ...autoTitle, enabled })}
+            onConfigureAutoTitles={() => setSection("auto_titles")}
             onConfigureSubagents={() => setSection("subagents")}
             onRefresh={onRefresh}
             onInstall={onInstall}
@@ -217,6 +225,7 @@ export function SettingsPage({
         {section === "subagents" && (
           <SubagentsSection config={subagents} providers={providers} onChange={onSetSubagents} />
         )}
+        {section === "auto_titles" && <AutoTitlesSection config={autoTitle} providers={providers} onChange={onSetAutoTitle} onOpenProviders={() => { setSelectedProviderId("new"); setSection("providers"); }} />}
       </main>
     </>
   );

@@ -42,6 +42,7 @@ pub fn run() {
             commands::set_tool_config,
             commands::set_appearance_config,
             commands::set_subagent_config,
+            commands::set_auto_title_config,
             commands::set_prompt_config,
             commands::list_packages,
             commands::refresh_packages,

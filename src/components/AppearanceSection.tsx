@@ -1,15 +1,34 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { DEFAULT_ACCENT, DEFAULT_BACKGROUND, THEME_PRESETS, clampBackground, resolveTheme } from "../theme";
-import type { AppearanceConfig } from "../types";
+import type { AppearanceConfig, BackdropMode, GlassStyle } from "../types";
 import { Icon } from "./Icons";
+import { Tooltip } from "./ui/Tooltip";
 
 interface AppearanceSectionProps {
   config: AppearanceConfig;
+  /** macOS 26+: `NSGlassEffectView` exists. */
+  glassSupported: boolean;
+  /** The stored background image, if any. */
+  backgroundImageUrl?: string;
   /** Persist a change. */
   onChange: (config: AppearanceConfig) => Promise<void>;
   /** Show a change live without saving it: a colour picker or slider mid-drag. */
   onPreview: (config: AppearanceConfig) => void;
+  /** Rust opens the picker, stores a copy and switches the backdrop to it. */
+  onChooseImage: () => Promise<void>;
+  onRemoveImage: () => Promise<void>;
 }
+
+const BACKDROPS: { value: BackdropMode; label: string }[] = [
+  { value: "solid", label: "Solid" },
+  { value: "image", label: "Image" },
+  { value: "glass", label: "Liquid Glass" }
+];
+
+const GLASS_STYLES: { value: GlassStyle; label: string }[] = [
+  { value: "frosted", label: "Frosted" },
+  { value: "clear", label: "Clear" }
+];
 
 const CHAT_OPTIONS: { key: "thinkingPreview"; label: string; description: string }[] = [
   {
@@ -27,7 +46,7 @@ function storedBackground(picked: string): string | null {
   return same(shown, DEFAULT_BACKGROUND) ? null : shown;
 }
 
-export function AppearanceSection({ config, onChange, onPreview }: AppearanceSectionProps) {
+export function AppearanceSection({ config, glassSupported, backgroundImageUrl, onChange, onPreview, onChooseImage, onRemoveImage }: AppearanceSectionProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   /** The last picked background was too light and got darkened; cleared by the next pick. */
@@ -36,16 +55,23 @@ export function AppearanceSection({ config, onChange, onPreview }: AppearanceSec
   const accent = config.accent ?? DEFAULT_ACCENT;
   const background = config.background ?? DEFAULT_BACKGROUND;
 
-  async function save(next: AppearanceConfig): Promise<void> {
+  async function run(action: () => Promise<void>): Promise<void> {
     setBusy(true);
     setError(undefined);
     try {
-      await onChange(next);
+      await action();
     } catch (reason) {
       setError(String(reason));
     } finally {
       setBusy(false);
     }
+  }
+  const save = (next: AppearanceConfig) => run(() => onChange(next));
+
+  function pickBackdrop(backdrop: BackdropMode): void {
+    // Image with nothing stored yet goes straight to the picker, which switches on success.
+    if (backdrop === "image" && !config.backgroundImage) void run(onChooseImage);
+    else void save({ ...config, backdrop });
   }
 
   function withBackground(picked: string): AppearanceConfig {
@@ -119,6 +145,107 @@ export function AppearanceSection({ config, onChange, onPreview }: AppearanceSec
           onPreview={(value) => onPreview({ ...config, background: clampBackground(value) })}
           onReset={() => { setDarkened(false); void save({ ...config, background: null }); }}
         />
+      </section>
+
+      <section className="tool-setting-group">
+        <h4>Backdrop</h4>
+        <div className="tool-setting appearance-setting">
+          <div className="tool-setting-text">
+            <span className="tool-setting-name">Behind the app</span>
+            <span className="tool-setting-description">A solid colour, an image of your own, or Liquid Glass that lets the desktop show through. Chat bubbles and the composer stay solid.</span>
+          </div>
+          <div className="segmented" role="radiogroup" aria-label="Backdrop">
+            {BACKDROPS.map((option) => {
+              const unavailable = option.value === "glass" && !glassSupported;
+              const button = (
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={config.backdrop === option.value}
+                  key={option.value}
+                  className={`segmented-option ${config.backdrop === option.value ? "selected" : ""}`}
+                  disabled={busy || unavailable}
+                  onClick={() => pickBackdrop(option.value)}
+                >
+                  {option.label}
+                </button>
+              );
+              return unavailable ? <Tooltip key={option.value} label="Liquid Glass needs macOS 26 or later">{button}</Tooltip> : button;
+            })}
+          </div>
+        </div>
+
+        {config.backdrop === "image" && (
+          <>
+            <div className="tool-setting appearance-setting background-image-setting">
+              {backgroundImageUrl && <img className="background-thumb" src={backgroundImageUrl} alt="Current background" />}
+              <div className="tool-setting-text">
+                <span className="tool-setting-name">Your image</span>
+                <span className="tool-setting-description">Shown clearly on the new-chat screen and dimmed and blurred behind chats. WackCode keeps its own copy; your original is never changed.</span>
+              </div>
+              <div className="row-actions">
+                <button type="button" className="secondary-button" disabled={busy} onClick={() => void run(onChooseImage)}><Icon name="image" /> Replace…</button>
+                <button type="button" className="secondary-button" disabled={busy} onClick={() => void run(onRemoveImage)}>Remove</button>
+              </div>
+            </div>
+            <SliderRow
+              label="Dim"
+              description="How much of the background colour covers the image behind a chat."
+              value={config.imageDim}
+              max={90}
+              unit="%"
+              disabled={busy}
+              onPreview={(imageDim) => onPreview({ ...config, imageDim })}
+              onCommit={(imageDim) => void save({ ...config, imageDim })}
+            />
+            <SliderRow
+              label="Blur"
+              description="Softens the image behind a chat so text stays easy to read."
+              value={config.imageBlur}
+              max={40}
+              unit=" px"
+              disabled={busy}
+              onPreview={(imageBlur) => onPreview({ ...config, imageBlur })}
+              onCommit={(imageBlur) => void save({ ...config, imageBlur })}
+            />
+          </>
+        )}
+
+        {config.backdrop === "glass" && (
+          <>
+            <div className="tool-setting appearance-setting">
+              <div className="tool-setting-text">
+                <span className="tool-setting-name">Glass style</span>
+                <span className="tool-setting-description">Frosted blurs the desktop more; Clear shows more of it. While another app is focused the window turns solid.</span>
+              </div>
+              <div className="segmented" role="radiogroup" aria-label="Glass style">
+                {GLASS_STYLES.map((option) => (
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={config.glassStyle === option.value}
+                    key={option.value}
+                    className={`segmented-option ${config.glassStyle === option.value ? "selected" : ""}`}
+                    disabled={busy}
+                    onClick={() => void save({ ...config, glassStyle: option.value })}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <SliderRow
+              label="Tint"
+              description="How much of the background colour tints the glass. More tint keeps text readable over busy desktops."
+              value={config.glassTint}
+              max={90}
+              unit="%"
+              disabled={busy}
+              onPreview={(glassTint) => onPreview({ ...config, glassTint })}
+              onCommit={(glassTint) => void save({ ...config, glassTint })}
+            />
+          </>
+        )}
       </section>
 
       <section className="tool-setting-group">
@@ -209,6 +336,56 @@ function ColourRow({ label, description, value, choices, isDefault, disabled, on
         <button type="button" className="ghost-button swatch-reset" aria-label={`Reset ${label.toLowerCase()}`} title="Reset to default" disabled={disabled || isDefault} onClick={onReset}>
           <Icon name="refresh" />
         </button>
+      </div>
+    </div>
+  );
+}
+
+interface SliderRowProps {
+  label: string;
+  description: string;
+  value: number;
+  max: number;
+  unit: string;
+  disabled: boolean;
+  onPreview: (value: number) => void;
+  onCommit: (value: number) => void;
+}
+
+/** A settings row with a range slider: previews while dragging, saves on release. */
+function SliderRow({ label, description, value, max, unit, disabled, onPreview, onCommit }: SliderRowProps) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const commit = useRef(onCommit);
+  commit.current = onCommit;
+  // The native change event fires on release (or a keyboard step), not on every drag step.
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    const listener = () => commit.current(Number(input.value));
+    input.addEventListener("change", listener);
+    return () => input.removeEventListener("change", listener);
+  }, []);
+
+  return (
+    <div className="tool-setting appearance-setting">
+      <div className="tool-setting-text">
+        <span className="tool-setting-name">{label}</span>
+        <span className="tool-setting-description">{description}</span>
+      </div>
+      <div className="appearance-slider">
+        <input
+          ref={inputRef}
+          type="range"
+          min={0}
+          max={max}
+          step={1}
+          value={value}
+          aria-label={label}
+          disabled={disabled}
+          style={{ "--fill": `${(value / max) * 100}%` } as CSSProperties}
+          onChange={(event) => onPreview(Number(event.target.value))}
+        />
+        <output>{value}{unit}</output>
       </div>
     </div>
   );

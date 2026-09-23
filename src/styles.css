@@ -23,7 +23,10 @@
   --wc-input-focus: #5f6d4e;
   --wc-on-accent: #172000;
   --bg: #111310;
+  /* Shell surfaces: see-through over an image or Liquid Glass (theme.ts shellVariables). */
+  --wc-shell: #111310;
   --wc-header: rgb(17 19 16 / 92%);
+  --wc-composer-fade: #111310;
   --wc-sidebar: #0d0f0c;
   --wc-well: #0c0e0b;
   --wc-panel: #10120f;
@@ -66,7 +69,7 @@
 
 * { box-sizing: border-box; }
 html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
-body { background: var(--bg); color: var(--text); font-size: 14px; -webkit-font-smoothing: antialiased; }
+body { background: var(--wc-shell); color: var(--text); font-size: 14px; -webkit-font-smoothing: antialiased; }
 button, input, select, textarea { font: inherit; }
 button { color: inherit; }
 button:focus-visible, input:focus-visible, textarea:focus-visible, [role="menu"]:focus-visible, [role="button"]:focus-visible {
@@ -77,7 +80,26 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left: auto; }
 
 /* ── Shell ─────────────────────────────────────────── */
-.app-shell { display: flex; width: 100%; height: 100%; background: var(--bg); }
+/* isolation: the backdrop sits at z-index -1 inside the shell, behind every panel. */
+.app-shell { position: relative; isolation: isolate; display: flex; width: 100%; height: 100%; background: var(--wc-shell); }
+
+/* Image backdrop (Backdrop.tsx). Two stacked copies crossfade on opacity only, which is cheap:
+   a vivid hero copy that fades out above the composer on the new-chat screen, and a blurred,
+   dimmed copy behind chats and Settings. Animating the blur itself would re-rasterize. */
+.backdrop { position: absolute; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; background: var(--bg); }
+.backdrop-layer { position: absolute; inset: 0; opacity: 0; transition: opacity .45s var(--ease); }
+.backdrop-layer::before { content: ""; position: absolute; inset: 0; background: var(--backdrop-image) center / cover no-repeat; }
+.backdrop-layer::after { content: ""; position: absolute; inset: 0; background: var(--bg); }
+.backdrop-hero::before {
+  -webkit-mask-image: linear-gradient(to bottom, black 0%, black 26%, transparent 74%);
+  mask-image: linear-gradient(to bottom, black 0%, black 26%, transparent 74%);
+}
+.backdrop-hero::after { opacity: calc(var(--backdrop-dim) * .35); }
+/* Scaled so the blur's soft edge falls outside the window. */
+.backdrop-chat::before { filter: blur(var(--backdrop-blur)); transform: scale(1.08); }
+.backdrop-chat::after { opacity: var(--backdrop-dim); }
+.backdrop.ready[data-scene="hero"] .backdrop-hero, .backdrop.ready[data-scene="chat"] .backdrop-chat { opacity: 1; }
+[data-backdrop="image"] .draft-title { text-shadow: 0 1px 14px rgb(0 0 0 / 55%); }
 .titlebar-drag { height: 48px; flex: 0 0 48px; }
 
 /* ── Sidebar ───────────────────────────────────────── */
@@ -369,7 +391,7 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 @keyframes slide-in-dialog { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
 
 /* ── Composer ──────────────────────────────────────── */
-.composer-wrap { flex: 0 0 auto; padding: 4px 24px 16px; background: linear-gradient(0deg, var(--bg) 78%, transparent); }
+.composer-wrap { flex: 0 0 auto; padding: 4px 24px 16px; background: linear-gradient(0deg, var(--wc-composer-fade) 78%, transparent); }
 .composer-wrap.disabled .composer { opacity: 0.45; pointer-events: none; }
 .composer {
   position: relative;
@@ -1342,6 +1364,22 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .swatch-custom:focus-within { outline: 2px solid color-mix(in srgb, var(--wc-accent) 75%, transparent); outline-offset: 2px; }
 .swatch-reset { margin-left: 2px; }
 .swatch-reset:disabled { opacity: .3; cursor: default; background: none; color: var(--text-soft); }
+.background-image-setting .row-actions { flex: 0 0 auto; }
+.background-image-setting .secondary-button { height: 30px; font-size: 11.5px; }
+.background-thumb { width: 72px; height: 44px; flex: 0 0 auto; object-fit: cover; border-radius: 6px; border: 1px solid var(--border-bright); }
+.appearance-slider { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+.appearance-slider output { width: 44px; text-align: right; color: var(--text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+/* Undoes the global text-input styling; --fill is the thumb's position, set inline. */
+.appearance-slider input[type="range"] {
+  -webkit-appearance: none; appearance: none; width: 180px; height: 4px; padding: 0; border: 0; border-radius: 999px; cursor: pointer;
+  background: linear-gradient(to right, var(--wc-accent) var(--fill), var(--wc-track) var(--fill));
+}
+.appearance-slider input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%; background: white;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 50%), 0 0 0 1px rgb(0 0 0 / 15%); transition: transform .12s var(--ease);
+}
+.appearance-slider input[type="range"]:hover::-webkit-slider-thumb { transform: scale(1.12); }
+.appearance-slider input[type="range"]:disabled { opacity: .5; cursor: default; }
 
 /* ── Sub-agents settings ───────────────────────────── */
 .builtin-configure { width: auto; height: 24px; padding: 0 6px 0 8px; display: inline-flex; gap: 3px; font-size: 11px; font-weight: 600; color: var(--wc-accent); flex: 0 0 auto; }

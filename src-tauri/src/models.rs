@@ -207,7 +207,7 @@ pub enum GlassStyleSetting {
 }
 
 fn default_image_dim() -> u8 {
-    55
+    65
 }
 
 fn default_image_blur() -> u8 {

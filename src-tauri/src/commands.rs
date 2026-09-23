@@ -1,5 +1,5 @@
 use crate::{
-    checkpoints, files, git, glass,
+    backgrounds, checkpoints, files, git, glass,
     models::{
         AppearanceConfig, BackdropMode, BootstrapPayload, BuiltinModelSuggestion, CheckpointChange, CheckpointRef, CreateTaskInput, ExportPlanInput,
         ForkTaskInput, GitChanges, ImageContent, ModelRecord, NavigateResult, NavigateTaskInput, NavigateTaskResult,
@@ -520,6 +520,42 @@ pub async fn set_appearance_config(
         data.appearance = config.clone();
         Ok(config)
     })?;
+    glass::sync(&app, &config)?;
+    Ok(config)
+}
+
+/// Opens the native picker (so the renderer never supplies a path), stores a validated copy of
+/// the chosen image and switches the backdrop to it. `None` when the user cancels.
+#[tauri::command]
+pub async fn choose_background_image(app: AppHandle, state: State<'_, MetadataState>) -> Result<Option<AppearanceConfig>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let Some(picked) = app.dialog().file().set_title("Choose a background image").add_filter("Images", &["png", "jpg", "jpeg", "webp"]).blocking_pick_file() else {
+        return Ok(None);
+    };
+    let source = picked.into_path().map_err(|_| "That image could not be read.".to_string())?;
+    let folder = backgrounds::directory(&app.path().app_data_dir().map_err(|error| error.to_string())?);
+    let name = backgrounds::import(&source, &folder)?;
+    let config = state.mutate(|data| {
+        data.appearance.background_image = Some(name.clone());
+        data.appearance.backdrop = BackdropMode::Image;
+        Ok(data.appearance.clone())
+    })?;
+    backgrounds::prune(&folder, Some(&name));
+    glass::sync(&app, &config)?;
+    Ok(Some(config))
+}
+
+/// Forgets the background image and deletes WackCode's copy (never the user's original).
+#[tauri::command]
+pub async fn remove_background_image(app: AppHandle, state: State<'_, MetadataState>) -> Result<AppearanceConfig, String> {
+    let config = state.mutate(|data| {
+        data.appearance.background_image = None;
+        if data.appearance.backdrop == BackdropMode::Image {
+            data.appearance.backdrop = BackdropMode::Solid;
+        }
+        Ok(data.appearance.clone())
+    })?;
+    backgrounds::prune(&backgrounds::directory(&app.path().app_data_dir().map_err(|error| error.to_string())?), None);
     glass::sync(&app, &config)?;
     Ok(config)
 }

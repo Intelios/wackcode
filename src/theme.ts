@@ -11,7 +11,7 @@
  * accent recolours interaction, never meaning.
  */
 
-import type { AppearanceConfig } from "./types";
+import type { AppearanceConfig, BackdropMode } from "./types";
 
 export const DEFAULT_ACCENT = "#c2ee4a";
 /** Also `DEFAULT_BACKGROUND` in `src-tauri/src/glass.rs`, which paints the native window. */
@@ -21,7 +21,7 @@ export const DEFAULT_BACKGROUND = "#111310";
 export const DEFAULT_APPEARANCE: AppearanceConfig = {
   thinkingPreview: true,
   backdrop: "solid",
-  imageDim: 55,
+  imageDim: 65,
   imageBlur: 12,
   glassStyle: "frosted",
   glassTint: 40
@@ -258,10 +258,12 @@ export function readableAccent(hex: string, background: string): string {
   return candidate;
 }
 
-/** What `themeVariables` needs; a subset of `AppearanceConfig`. */
+/** What `resolveTheme` needs; a subset of `AppearanceConfig`. */
 export interface ThemeInput {
   accent?: string | null;
   background?: string | null;
+  backdrop?: BackdropMode;
+  glassTint?: number;
 }
 
 export interface ResolvedTheme {
@@ -290,8 +292,7 @@ export function resolveTheme(input: ThemeInput): ResolvedTheme {
   variables["--bg"] = background;
   // Mid-tone accents may not reach 4.5:1 with either; take whichever reads better.
   if (contrast(NEAR_WHITE, accent) > contrast(variables["--wc-on-accent"], accent)) variables["--wc-on-accent"] = NEAR_WHITE;
-  const [red, green, blue] = parseHex(background)!;
-  variables["--wc-header"] = `rgb(${red} ${green} ${blue} / 92%)`;
+  Object.assign(variables, shellVariables(input.backdrop ?? "solid", variables, input.glassTint ?? DEFAULT_APPEARANCE.glassTint));
 
   return {
     accent,
@@ -302,10 +303,48 @@ export function resolveTheme(input: ThemeInput): ResolvedTheme {
   };
 }
 
+/**
+ * The shell (window background, sidebar, header, side panels) is what turns see-through over an
+ * image or Liquid Glass. Content (bubbles, composer, cards, popovers, inputs) stays solid, so
+ * chats stay legible whatever is behind them.
+ */
+function shellVariables(backdrop: BackdropMode, solid: Record<string, string>, glassTint: number): Record<string, string> {
+  const alpha = (name: string, amount: number) => {
+    const [red, green, blue] = parseHex(solid[name])!;
+    return `rgb(${red} ${green} ${blue} / ${Math.round(Math.min(1, Math.max(0, amount)) * 100)}%)`;
+  };
+  if (backdrop === "image") {
+    // The image is already dimmed by the backdrop layer; these only separate the panels.
+    return {
+      "--wc-shell": "transparent",
+      "--wc-sidebar": alpha("--wc-sidebar", 0.5),
+      "--wc-header": alpha("--bg", 0.3),
+      "--wc-panel": alpha("--wc-panel", 0.72),
+      "--wc-composer-fade": "transparent"
+    };
+  }
+  if (backdrop === "glass") {
+    const tint = glassTint / 100;
+    return {
+      "--wc-shell": alpha("--bg", tint),
+      "--wc-sidebar": alpha("--wc-sidebar", tint + 0.15),
+      "--wc-header": "transparent",
+      "--wc-panel": alpha("--wc-panel", tint + 0.2),
+      "--wc-composer-fade": "transparent"
+    };
+  }
+  return {
+    "--wc-shell": solid["--bg"],
+    "--wc-header": alpha("--bg", 0.92),
+    "--wc-composer-fade": solid["--bg"]
+  };
+}
+
 /** Writes the theme onto `root` (the document element) as inline custom properties. */
 export function applyTheme(input: ThemeInput, root: HTMLElement = document.documentElement): ResolvedTheme {
   const theme = resolveTheme(input);
   for (const [name, value] of Object.entries(theme.variables)) root.style.setProperty(name, value);
+  root.dataset.backdrop = input.backdrop ?? "solid";
   return theme;
 }
 
@@ -317,7 +356,8 @@ const THEME_CACHE_KEY = "wackcode:theme";
  */
 export function cacheTheme(input: ThemeInput): void {
   try {
-    localStorage.setItem(THEME_CACHE_KEY, JSON.stringify({ accent: input.accent ?? null, background: input.background ?? null }));
+    const cached: ThemeInput = { accent: input.accent ?? null, background: input.background ?? null, backdrop: input.backdrop, glassTint: input.glassTint };
+    localStorage.setItem(THEME_CACHE_KEY, JSON.stringify(cached));
   } catch {
     // Storage can be unavailable; the first frame then shows the default theme.
   }

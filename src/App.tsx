@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -9,6 +10,7 @@ import { titleFromPrompt, samePlanState, sameTodoState, applySnapshotDelta, vali
 import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix } from "./tree-utils";
 import { pruneDisabledTools, sameToolCatalog } from "./tool-utils";
 import { DEFAULT_APPEARANCE, applyTheme, cacheTheme } from "./theme";
+import { Backdrop } from "./components/Backdrop";
 import type {
   AppData,
   AutoTitleConfig,
@@ -712,8 +714,10 @@ export default function App() {
   // the cached theme, and the placeholder defaults would flash over it.
   useEffect(() => {
     if (booting) return;
-    applyTheme(data.appearance);
-    cacheTheme(data.appearance);
+    // Image mode without a stored image (it failed to import) looks like Solid, not a hole.
+    const appearance = data.appearance.backdrop === "image" && !data.appearance.backgroundImage ? { ...data.appearance, backdrop: "solid" as const } : data.appearance;
+    applyTheme(appearance);
+    cacheTheme(appearance);
   }, [booting, data.appearance]);
 
   /** Live preview while a colour picker or slider is being dragged; nothing is saved. */
@@ -732,6 +736,20 @@ export default function App() {
       setData((current) => ({ ...current, appearance: savedAppearance.current }));
       throw reason;
     }
+  }
+
+  /** Rust opens the picker and stores the copy; a cancelled picker changes nothing. */
+  async function chooseBackgroundImage() {
+    const saved = await api.chooseBackgroundImage();
+    if (!saved) return;
+    savedAppearance.current = saved;
+    setData((current) => ({ ...current, appearance: saved }));
+  }
+
+  async function removeBackgroundImage() {
+    const saved = await api.removeBackgroundImage();
+    savedAppearance.current = saved;
+    setData((current) => ({ ...current, appearance: saved }));
   }
 
   async function setPrompts(config: PromptConfig) {
@@ -1348,6 +1366,11 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   });
 
+  // Served by the asset protocol, which may read only <app data>/backgrounds/ (tauri.conf.json).
+  const backgroundImageUrl = data.appearance.backgroundImage && appDataPath
+    ? convertFileSrc(`${appDataPath}/backgrounds/${data.appearance.backgroundImage}`)
+    : undefined;
+
   if (booting) return <div className="boot-screen"><div className="brand-mark">W</div><span>Starting WackCode</span></div>;
 
   // A list fetched for another chat or project never shows here.
@@ -1355,6 +1378,14 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      {data.appearance.backdrop === "image" && (
+        <Backdrop
+          imageUrl={backgroundImageUrl}
+          scene={settingsOpen || selectedTask ? "chat" : "hero"}
+          dim={data.appearance.imageDim}
+          blur={data.appearance.imageBlur}
+        />
+      )}
       {settingsOpen ? (
         <SettingsPage
           providers={data.providers}
@@ -1377,6 +1408,9 @@ export default function App() {
           glassSupported={glassSupported}
           onSetAppearance={setAppearance}
           onPreviewAppearance={previewAppearance}
+          backgroundImageUrl={backgroundImageUrl}
+          onChooseBackgroundImage={chooseBackgroundImage}
+          onRemoveBackgroundImage={removeBackgroundImage}
           prompts={data.prompts}
           onSetPrompts={setPrompts}
           onRefresh={refreshPackages}

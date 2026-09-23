@@ -114,7 +114,7 @@ mod tests {
         let data: AppData = serde_json::from_str(r#"{"version":1,"appearance":{"thinkingPreview":false}}"#).unwrap();
         assert_eq!(data.appearance, AppearanceConfig { thinking_preview: false, ..AppearanceConfig::default() });
         assert_eq!(data.appearance.backdrop, BackdropMode::Solid);
-        assert_eq!((data.appearance.image_dim, data.appearance.image_blur, data.appearance.glass_tint), (55, 12, 40));
+        assert_eq!((data.appearance.image_dim, data.appearance.image_blur, data.appearance.glass_tint), (65, 12, 40));
         // Unpicked colours stay absent, so a future default still reaches this user.
         let saved = serde_json::to_string(&data.appearance).unwrap();
         assert!(!saved.contains("accent") && !saved.contains("backgroundImage"), "{saved}");

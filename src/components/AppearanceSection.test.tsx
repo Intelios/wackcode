@@ -6,11 +6,23 @@ import { AppearanceSection } from "./AppearanceSection";
 
 afterEach(cleanup);
 
-function renderSection(config: Partial<AppearanceConfig> = {}) {
+function renderSection(config: Partial<AppearanceConfig> = {}, { glassSupported = true, backgroundImageUrl = undefined as string | undefined } = {}) {
   const onChange = vi.fn().mockResolvedValue(undefined);
   const onPreview = vi.fn();
-  render(<AppearanceSection config={{ ...DEFAULT_APPEARANCE, ...config }} onChange={onChange} onPreview={onPreview} />);
-  return { onChange, onPreview };
+  const onChooseImage = vi.fn().mockResolvedValue(undefined);
+  const onRemoveImage = vi.fn().mockResolvedValue(undefined);
+  render(
+    <AppearanceSection
+      config={{ ...DEFAULT_APPEARANCE, ...config }}
+      glassSupported={glassSupported}
+      backgroundImageUrl={backgroundImageUrl}
+      onChange={onChange}
+      onPreview={onPreview}
+      onChooseImage={onChooseImage}
+      onRemoveImage={onRemoveImage}
+    />
+  );
+  return { onChange, onPreview, onChooseImage, onRemoveImage };
 }
 
 describe("AppearanceSection theme", () => {
@@ -64,5 +76,52 @@ describe("AppearanceSection theme", () => {
     expect(screen.getByRole("button", { name: "Reset background colour" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Reset accent colour" }));
     await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ accent: null })));
+  });
+});
+
+describe("AppearanceSection backdrop", () => {
+  it("goes straight to the image picker when Image has nothing stored yet", async () => {
+    const { onChange, onChooseImage } = renderSection();
+    fireEvent.click(screen.getByRole("radio", { name: "Image" }));
+    await waitFor(() => expect(onChooseImage).toHaveBeenCalled());
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("switches back to a stored image without asking again", async () => {
+    const { onChange, onChooseImage } = renderSection({ backgroundImage: "a.png" });
+    fireEvent.click(screen.getByRole("radio", { name: "Image" }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ backdrop: "image" })));
+    expect(onChooseImage).not.toHaveBeenCalled();
+  });
+
+  it("shows image controls only in Image mode, and removes the image", async () => {
+    const { onRemoveImage } = renderSection({ backdrop: "image", backgroundImage: "a.png" }, { backgroundImageUrl: "asset://localhost/a.png" });
+    expect(screen.getByRole("img", { name: "Current background" })).toHaveAttribute("src", "asset://localhost/a.png");
+    expect(screen.getByRole("slider", { name: "Dim" })).toBeInTheDocument();
+    expect(screen.queryByRole("slider", { name: "Tint" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(onRemoveImage).toHaveBeenCalled());
+  });
+
+  it("previews a slider while dragging and saves it on release", async () => {
+    const { onChange, onPreview } = renderSection({ backdrop: "image", backgroundImage: "a.png" });
+    const dim = screen.getByRole("slider", { name: "Dim" });
+    fireEvent.input(dim, { target: { value: "30" } });
+    expect(onPreview).toHaveBeenCalledWith(expect.objectContaining({ imageDim: 30 }));
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.change(dim, { target: { value: "30" } });
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ imageDim: 30 })));
+  });
+
+  it("offers Liquid Glass styles and tint once chosen", async () => {
+    const { onChange } = renderSection({ backdrop: "glass" });
+    expect(screen.getByRole("slider", { name: "Tint" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: "Clear" }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ backdrop: "glass", glassStyle: "clear" })));
+  });
+
+  it("disables Liquid Glass before macOS 26", () => {
+    renderSection({}, { glassSupported: false });
+    expect(screen.getByRole("radio", { name: "Liquid Glass" })).toBeDisabled();
   });
 });

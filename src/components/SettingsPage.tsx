@@ -59,6 +59,9 @@ interface Props extends PackageActions {
   glassSupported: boolean;
   onSetAppearance: (config: AppearanceConfig) => Promise<void>;
   onPreviewAppearance: (config: AppearanceConfig) => void;
+  backgroundImageUrl?: string;
+  onChooseBackgroundImage: () => Promise<void>;
+  onRemoveBackgroundImage: () => Promise<void>;
   prompts: PromptConfig;
   onSetPrompts: (config: PromptConfig) => Promise<void>;
 }
@@ -66,7 +69,7 @@ interface Props extends PackageActions {
 export function SettingsPage({
   providers, packages, toolCatalog, disabledTools, appDataPath,
   onClose, onSave, onDelete, onConnectSubscription, onSignOutSubscription, connectedSubscriptionId, onSetDisabledTools,
-  subagents, onSetSubagents, autoTitle, onSetAutoTitle, appearance, onSetAppearance, onPreviewAppearance, prompts, onSetPrompts, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
+  subagents, onSetSubagents, autoTitle, onSetAutoTitle, appearance, glassSupported, onSetAppearance, onPreviewAppearance, backgroundImageUrl, onChooseBackgroundImage, onRemoveBackgroundImage, prompts, onSetPrompts, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
 }: Props) {
   const [chosenSection, setSection] = useState<SectionId>("providers");
   // Switching sub-agents off while its page is open lands on Packages, where the switch is.
@@ -224,7 +227,17 @@ export function SettingsPage({
         {section === "tools" && (
           <ToolsSection catalog={toolCatalog} disabled={disabledTools} onSetDisabled={onSetDisabledTools} />
         )}
-        {section === "appearance" && <AppearanceSection config={appearance} onChange={onSetAppearance} onPreview={onPreviewAppearance} />}
+        {section === "appearance" && (
+          <AppearanceSection
+            config={appearance}
+            glassSupported={glassSupported}
+            backgroundImageUrl={backgroundImageUrl}
+            onChange={onSetAppearance}
+            onPreview={onPreviewAppearance}
+            onChooseImage={onChooseBackgroundImage}
+            onRemoveImage={onRemoveBackgroundImage}
+          />
+        )}
         {section === "prompts" && <PromptsSection config={prompts} onChange={onSetPrompts} />}
         {section === "subagents" && (
           <SubagentsSection config={subagents} providers={providers} onChange={onSetSubagents} />

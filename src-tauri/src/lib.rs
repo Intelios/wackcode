@@ -1,3 +1,4 @@
+mod backgrounds;
 mod checkpoints;
 mod commands;
 mod files;
@@ -58,6 +59,8 @@ pub fn run() {
             subscriptions::open_subscription_auth_url,
             commands::set_tool_config,
             commands::set_appearance_config,
+            commands::choose_background_image,
+            commands::remove_background_image,
             commands::set_subagent_config,
             commands::set_auto_title_config,
             commands::set_prompt_config,

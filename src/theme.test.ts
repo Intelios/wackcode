@@ -95,10 +95,28 @@ describe("theme tokens", () => {
     expect(lightness("--surface-hover")).toBeGreaterThan(lightness("--surface") + 20);
   });
 
+  it("turns only the shell see-through over an image or Liquid Glass", () => {
+    const solid = resolveTheme({}).variables;
+    const image = resolveTheme({ backdrop: "image" }).variables;
+    const glass = resolveTheme({ backdrop: "glass", glassTint: 30 }).variables;
+    expect(solid["--wc-shell"]).toBe(DEFAULT_BACKGROUND);
+    expect(image["--wc-shell"]).toBe("transparent");
+    expect(glass["--wc-shell"]).toBe("rgb(17 19 16 / 30%)");
+    expect(image["--wc-sidebar"]).toMatch(/^rgb\(.+ \/ \d+%\)$/);
+    // Content surfaces stay solid, so chats stay legible over any backdrop.
+    for (const name of ["--surface", "--surface-raised", "--wc-composer", "--wc-elevated", "--wc-input", "--wc-well"]) {
+      expect(image[name], name).toBe(solid[name]);
+      expect(glass[name], name).toBe(solid[name]);
+    }
+  });
+
   it("writes every variable onto the root element", () => {
     const root = document.createElement("div");
     const theme = applyTheme({ accent: "#6cc4ff", background: "#0f1218" }, root);
     expect(root.style.getPropertyValue("--wc-accent")).toBe("#6cc4ff");
     expect(root.style.getPropertyValue("--surface")).toBe(theme.variables["--surface"]);
+    expect(root.dataset.backdrop).toBe("solid");
+    applyTheme({ backdrop: "glass" }, root);
+    expect(root.dataset.backdrop).toBe("glass");
   });
 });

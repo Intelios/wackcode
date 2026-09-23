@@ -10,7 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "macOSPrivateApi": false,
+    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "WackCode",
@@ -24,7 +24,8 @@
         "hiddenTitle": true,
         "trafficLightPosition": { "x": 17, "y": 18 },
         "dragDropEnabled": false,
-        "backgroundColor": "#111310"
+        "transparent": true,
+        "visible": false
       }
     ],
     "security": {

@@ -7,7 +7,8 @@ type Stats = SessionSnapshot["stats"];
 
 const CATEGORY_META: Record<string, { label: string; color: string }> = {
   system: { label: "System prompt & tools", color: "#8a93a5" },
-  user: { label: "User messages", color: "#c2ee4a" },
+  // The accent token, so the chart follows Settings › Appearance.
+  user: { label: "User messages", color: "var(--wc-accent)" },
   assistant: { label: "Assistant replies", color: "#7fb8e0" },
   tool: { label: "Tool results", color: "#e6ba69" }
 };

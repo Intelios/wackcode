@@ -2,6 +2,7 @@ mod checkpoints;
 mod commands;
 mod files;
 mod git;
+mod glass;
 mod models;
 mod secrets;
 mod storage;
@@ -25,6 +26,11 @@ pub fn run() {
         .setup(|app| {
             let state = MetadataState::load(&app.handle())?;
             app.manage(state);
+            // The window is created hidden and transparent: paint it before it first appears.
+            glass::apply(app.handle(), glass::NativeBackdrop { glass: None, background: (17, 19, 16) }, true)?;
+            if let Some(window) = app.get_webview_window("main") {
+                window.show()?;
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

@@ -1,7 +1,7 @@
 use crate::{
     checkpoints, git,
     models::{
-        BootstrapPayload, BuiltinModelSuggestion, CheckpointChange, CheckpointRef, CreateTaskInput, ExportPlanInput,
+        AppearanceConfig, BootstrapPayload, BuiltinModelSuggestion, CheckpointChange, CheckpointRef, CreateTaskInput, ExportPlanInput,
         ForkTaskInput, GitChanges, ImageContent, ModelRecord, NavigateResult, NavigateTaskInput, NavigateTaskResult,
         ProjectRecord, PromptInput, ExtensionUiResponseInput, InstallPackageInput, PackageRecord,
         PackageSearchResult, ProviderKind, ProviderRecord, ResendInput, RestoreCheckpointInput, RestoreResult,
@@ -504,6 +504,19 @@ pub async fn trust_package(
         worker::terminate_worker(&app, &task_id, true).await?;
     }
     list_packages(state)
+}
+
+/// Appearance settings are purely cosmetic: they are read by the renderer only, so no worker hears about them.
+#[tauri::command]
+pub async fn set_appearance_config(
+    state: State<'_, MetadataState>,
+    input: AppearanceConfig,
+) -> Result<AppearanceConfig, String> {
+    state.mutate(|data| {
+        data.appearance = input.clone();
+        Ok(())
+    })?;
+    Ok(input)
 }
 
 /// Tool changes take effect on the next agent turn, so running workers are updated in place

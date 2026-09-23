@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applySnapshotDelta, displayPath, formatRunDuration, formatTokens, isPlanMode, nextMode, planButtonTarget, samePlanState, sameTodoState, titleFromPrompt, validateInitCommand } from "./chat-utils";
+import { applySnapshotDelta, displayPath, formatRunDuration, formatTokens, isPlanMode, nextMode, planButtonTarget, samePlanState, sameTodoState, thinkingPreview, titleFromPrompt, validateInitCommand } from "./chat-utils";
 import type { NormalizedMessage, SessionSnapshot, SnapshotDelta } from "./types";
 
 describe("titleFromPrompt", () => {
@@ -208,5 +208,38 @@ describe("applySnapshotDelta", () => {
     expect(next.planState).toBe(base.planState);
     const changed = applySnapshotDelta(base, delta({ rev: 2, planState: { mode: "plan", phase: "planning" } }));
     expect(changed.planState).toEqual({ mode: "plan", phase: "planning" });
+  });
+});
+
+describe("thinkingPreview", () => {
+  it("shows nothing until a sentence is finished", () => {
+    expect(thinkingPreview("")).toBeUndefined();
+    expect(thinkingPreview("The user wants a new settings pa")).toBeUndefined();
+  });
+
+  it("uses the latest finished sentence and ignores the unfinished tail", () => {
+    expect(thinkingPreview("First I read the file. Then I check the tests. Now the st")).toBe("Then I check the tests.");
+    expect(thinkingPreview("One thought.\nA whole line without a stop\nstill writ")).toBe("A whole line without a stop");
+  });
+
+  it("does not split on dots inside words", () => {
+    expect(thinkingPreview("Open src/App.tsx and read it. Nex")).toBe("Open src/App.tsx and read it.");
+  });
+
+  it("prefers the latest heading over sentences", () => {
+    const text = "**Exploring the code**\n\nI read App.tsx.\n\n**Planning the settings page**\n\nIt needs a toggle. Also";
+    expect(thinkingPreview(text)).toBe("Planning the settings page");
+    expect(thinkingPreview("## Checking tests\nThey pass. ")).toBe("Checking tests");
+    expect(thinkingPreview("Done. \n## Checking te")).toBe("Done.");
+  });
+
+  it("strips markdown and collapses whitespace", () => {
+    expect(thinkingPreview("- Use `thinkingPreview`   in **ThinkingRow**. Then")).toBe("Use thinkingPreview in ThinkingRow.");
+  });
+
+  it("caps long lines", () => {
+    const preview = thinkingPreview(`${"word ".repeat(80)}end. `);
+    expect(preview).toHaveLength(200);
+    expect(preview?.endsWith("…")).toBe(true);
   });
 });

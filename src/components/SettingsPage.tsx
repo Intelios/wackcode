@@ -2,7 +2,7 @@ import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode }
 import { api } from "../api";
 import { applyBuiltinModelSuggestion, mergeDiscoveredModels, modelIsReady, searchBuiltinModels } from "../model-utils";
 import { groupTools } from "../tool-utils";
-import type { ApiFormat, BuiltinModelSuggestion, CustomProviderRecord, ModelRecord, PackageRecord, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ThinkingLevel, ToolCatalogEntry } from "../types";
+import type { ApiFormat, AppearanceConfig, BuiltinModelSuggestion, CustomProviderRecord, ModelRecord, PackageRecord, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ThinkingLevel, ToolCatalogEntry } from "../types";
 import { Icon, type IconName } from "./Icons";
 import { PackagesSection, type PackageActions } from "./PackagesSection";
 import { SubagentsSection } from "./SubagentsSection";
@@ -15,7 +15,7 @@ const levels: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhi
 let nextModelCardKey = 0;
 const newModelCardKeys = (count: number) => Array.from({ length: count }, () => ++nextModelCardKey);
 
-type SectionId = "providers" | "packages" | "tools" | "subagents";
+type SectionId = "providers" | "packages" | "tools" | "appearance" | "subagents";
 
 interface Section {
   id: SectionId;
@@ -28,7 +28,8 @@ const SECTIONS: Section[] = [
   { id: "packages", label: "Packages", icon: "spark" },
   { id: "tools", label: "Tools", icon: "wrench" },
   // Only listed while the built-in is switched on (Settings → Packages).
-  { id: "subagents", label: "Sub-agents", icon: "agents" }
+  { id: "subagents", label: "Sub-agents", icon: "agents" },
+  { id: "appearance", label: "Appearance", icon: "palette" }
 ];
 
 interface Props extends PackageActions {
@@ -46,12 +47,14 @@ interface Props extends PackageActions {
   onSetDisabledTools: (disabled: string[]) => Promise<void>;
   subagents: SubagentConfig;
   onSetSubagents: (config: SubagentConfig) => Promise<void>;
+  appearance: AppearanceConfig;
+  onSetAppearance: (config: AppearanceConfig) => Promise<void>;
 }
 
 export function SettingsPage({
   providers, packages, toolCatalog, disabledTools, appDataPath,
   onClose, onSave, onDelete, onConnectSubscription, onSignOutSubscription, connectedSubscriptionId, onSetDisabledTools,
-  subagents, onSetSubagents, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
+  subagents, onSetSubagents, appearance, onSetAppearance, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
 }: Props) {
   const [chosenSection, setSection] = useState<SectionId>("providers");
   // Switching sub-agents off while its page is open lands on Packages, where the switch is.
@@ -205,6 +208,7 @@ export function SettingsPage({
         {section === "tools" && (
           <ToolsSection catalog={toolCatalog} disabled={disabledTools} onSetDisabled={onSetDisabledTools} />
         )}
+        {section === "appearance" && <AppearanceSection config={appearance} onChange={onSetAppearance} />}
         {section === "subagents" && (
           <SubagentsSection config={subagents} providers={providers} onChange={onSetSubagents} />
         )}
@@ -283,6 +287,70 @@ function ToolsSection({ catalog, disabled, onSetDisabled }: ToolsSectionProps) {
           })}
         </section>
       ))}
+      {error && <div className="error-banner">{error}</div>}
+    </div>
+  );
+}
+
+interface AppearanceSectionProps {
+  config: AppearanceConfig;
+  onChange: (config: AppearanceConfig) => Promise<void>;
+}
+
+const APPEARANCE_OPTIONS: { key: keyof AppearanceConfig; label: string; description: string }[] = [
+  {
+    key: "thinkingPreview",
+    label: "Thinking preview",
+    description: "Show a one-line gist of the model's reasoning beside \u201cThinking\u2026\u201d. Only models that stream their reasoning show one."
+  }
+];
+
+function AppearanceSection({ config, onChange }: AppearanceSectionProps) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+
+  async function toggle(key: keyof AppearanceConfig): Promise<void> {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await onChange({ ...config, [key]: !config[key] });
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="settings-scroll">
+      <div className="section-heading-row">
+        <div>
+          <h3>Look and feel</h3>
+          <p>Cosmetic preferences. They change how chats look, never what the model does.</p>
+        </div>
+      </div>
+      <section className="tool-setting-group">
+        <h4>Chat</h4>
+        {APPEARANCE_OPTIONS.map((option) => (
+          <div className="tool-setting appearance-setting" key={option.key}>
+            <div className="tool-setting-text">
+              <span className="tool-setting-name">{option.label}</span>
+              <span className="tool-setting-description">{option.description}</span>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={config[option.key]}
+              aria-label={option.label}
+              className={`toggle ${config[option.key] ? "on" : ""}`}
+              disabled={busy}
+              onClick={() => void toggle(option.key)}
+            >
+              <span />
+            </button>
+          </div>
+        ))}
+      </section>
       {error && <div className="error-banner">{error}</div>}
     </div>
   );

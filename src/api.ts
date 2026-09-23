@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AppearanceConfig,
   BootstrapPayload,
   BuiltinModelSuggestion,
   CheckpointChange,
@@ -37,6 +38,7 @@ export const api = {
   signOutSubscription: (providerId: string) => invoke<ProviderRecord>("sign_out_subscription", { providerId }),
   openSubscriptionAuthUrl: (url: string) => invoke<void>("open_subscription_auth_url", { url }),
   setToolConfig: (disabled: string[]) => invoke<ToolConfig>("set_tool_config", { input: { disabled } }),
+  setAppearanceConfig: (input: AppearanceConfig) => invoke<AppearanceConfig>("set_appearance_config", { input }),
   setSubagentConfig: (input: SubagentConfig) => invoke<SubagentConfig>("set_subagent_config", { input }),
   listPackages: () => invoke<PackageRecord[]>("list_packages"),
   searchPackages: (query: string, from = 0) =>

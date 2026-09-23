@@ -239,6 +239,12 @@ export interface ToolConfig {
   disabled: string[];
 }
 
+/** Cosmetic, renderer-only preferences (Settings → Appearance). Mirrors `AppearanceConfig` in models.rs. */
+export interface AppearanceConfig {
+  /** One-line gist of the reasoning beside a live "Thinking…" row. */
+  thinkingPreview: boolean;
+}
+
 /** When the chat's agent should reach for sub-agents. Only changes the tool's guidance. */
 export type SubagentTrigger = "on_request" | "auto";
 
@@ -312,6 +318,7 @@ export interface AppData {
   toolCatalog: ToolCatalogEntry[];
   packages: PackageRecord[];
   subagents: SubagentConfig;
+  appearance: AppearanceConfig;
 }
 
 export interface BootstrapPayload {

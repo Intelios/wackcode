@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedMessage } from "../types";
+import { ThinkingPreviewEnabled } from "./ThinkingRow";
 import { Transcript } from "./Transcript";
 
 afterEach(() => {
@@ -70,6 +71,39 @@ describe("Transcript thinking", () => {
     expect(screen.getByRole("button", { name: "Thought for 1m 15s" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reasoning" })).toBeInTheDocument();
     expect(screen.queryByText("Thinking…")).not.toBeInTheDocument();
+  });
+});
+
+describe("Transcript thinking preview", () => {
+  const user: NormalizedMessage = { id: "user-1", role: "user", timestamp: 1_000, blocks: [{ type: "text", text: "Why?" }] };
+  const thinking = (text: string, durationMs?: number): NormalizedMessage => ({
+    id: "assistant-2000-0", role: "assistant", timestamp: 2_000,
+    blocks: [{ type: "thinking", text, ...(durationMs === undefined ? {} : { durationMs }) }]
+  });
+  const reasoning = "I read the config. Now I check the tes";
+
+  it("shows the latest finished sentence beside a live row", () => {
+    render(<Transcript messages={[user]} running partial={thinking(reasoning)} />);
+    expect(screen.getByText("I read the config.")).toBeInTheDocument();
+    expect(screen.queryByText(/check the tes/)).not.toBeInTheDocument();
+  });
+
+  it("hides it once the reasoning is clocked, while expanded, and when switched off", () => {
+    const view = render(<Transcript messages={[user]} running partial={thinking(reasoning)} />);
+    fireEvent.click(screen.getByRole("button", { name: /Thinking…/ }));
+    expect(screen.queryByText("I read the config.")).not.toBeInTheDocument();
+
+    view.rerender(<Transcript messages={[user]} running partial={thinking(reasoning, 3_000)} />);
+    expect(screen.getByRole("button", { name: "Thought for 3s" })).toBeInTheDocument();
+    cleanup();
+
+    render(
+      <ThinkingPreviewEnabled.Provider value={false}>
+        <Transcript messages={[user]} running partial={thinking(reasoning)} />
+      </ThinkingPreviewEnabled.Provider>
+    );
+    expect(screen.getByRole("button", { name: "Thinking…" })).toBeInTheDocument();
+    expect(screen.queryByText("I read the config.")).not.toBeInTheDocument();
   });
 });
 

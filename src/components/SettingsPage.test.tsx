@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
-import type { BuiltinModelSuggestion, ProviderRecord, SubagentConfig, ToolCatalogEntry } from "../types";
+import type { AppearanceConfig, BuiltinModelSuggestion, ProviderRecord, SubagentConfig, ToolCatalogEntry } from "../types";
 import { SettingsPage } from "./SettingsPage";
 
 vi.mock("../api", () => ({ api: {
@@ -11,6 +11,7 @@ vi.mock("../api", () => ({ api: {
 } }));
 
 const noSubagents: SubagentConfig = { enabled: false, trigger: "on_request", maxConcurrency: 4, agents: [] };
+const defaultAppearance: AppearanceConfig = { thinkingPreview: true };
 
 afterEach(() => {
   cleanup();
@@ -24,7 +25,7 @@ it("shows subscription guidance before sign-in and reconnect", async () => {
   const props = {
     packages: [], toolCatalog: [], disabledTools: [], appDataPath: "/tmp/wackcode",
     onClose: vi.fn(), onSave: vi.fn(), onDelete: vi.fn(), onConnectSubscription,
-    onSignOutSubscription: vi.fn(), onSetDisabledTools: vi.fn(), subagents: noSubagents, onSetSubagents: vi.fn(),
+    onSignOutSubscription: vi.fn(), onSetDisabledTools: vi.fn(), subagents: noSubagents, onSetSubagents: vi.fn(), appearance: defaultAppearance, onSetAppearance: vi.fn(),
     onRefresh: vi.fn().mockResolvedValue(undefined), onInstall: vi.fn(), onTrust: vi.fn(),
     onSearch: vi.fn().mockResolvedValue([]), onRemove: vi.fn(), onUpdate: vi.fn(), onSetResources: vi.fn()
   };
@@ -65,7 +66,7 @@ function renderTools(overrides: { disabled?: string[]; onSetDisabledTools?: (nex
       onDelete={vi.fn()}
       onConnectSubscription={vi.fn()}
       onSignOutSubscription={vi.fn()}
-      onSetDisabledTools={onSetDisabledTools} subagents={noSubagents} onSetSubagents={vi.fn()}
+      onSetDisabledTools={onSetDisabledTools} subagents={noSubagents} onSetSubagents={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()}
       onRefresh={vi.fn().mockResolvedValue(undefined)}
       onInstall={vi.fn()}
       onTrust={vi.fn()}
@@ -156,7 +157,7 @@ describe("SettingsPage sidebar navigation", () => {
         onDelete={vi.fn()}
         onConnectSubscription={vi.fn()}
         onSignOutSubscription={vi.fn()}
-        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onInstall={vi.fn()}
         onTrust={vi.fn()}
@@ -170,14 +171,15 @@ describe("SettingsPage sidebar navigation", () => {
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
     const buttons = Array.from(nav.querySelectorAll("button")).map((btn) => btn.textContent?.trim());
 
-    // Expected order: Providers -> Entrim AI -> Test -> New connection -> Packages -> Tools
+    // Expected order: Providers -> Entrim AI -> Test -> New connection -> Packages -> Tools -> Appearance
     expect(buttons).toEqual([
       "Providers",
       "Entrim AI",
       "Test",
       "New connection",
       "Packages",
-      "Tools"
+      "Tools",
+      "Appearance"
     ]);
   });
 
@@ -194,7 +196,7 @@ describe("SettingsPage sidebar navigation", () => {
         onDelete={vi.fn()}
         onConnectSubscription={vi.fn()}
         onSignOutSubscription={vi.fn()}
-        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onInstall={vi.fn()}
         onTrust={vi.fn()}
@@ -241,7 +243,7 @@ describe("SettingsPage sidebar navigation", () => {
         onDelete={vi.fn()}
         onConnectSubscription={vi.fn()}
         onSignOutSubscription={vi.fn()}
-        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onInstall={vi.fn()}
         onTrust={vi.fn()}
@@ -283,7 +285,7 @@ describe("SettingsPage model capabilities", () => {
         onDelete={vi.fn()}
         onConnectSubscription={vi.fn()}
         onSignOutSubscription={vi.fn()}
-        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onInstall={vi.fn()}
         onTrust={vi.fn()}
@@ -317,7 +319,7 @@ function renderModelSettings(provider: ProviderRecord = testProviders[0]) {
       providers={[provider]} packages={[]} toolCatalog={catalog} disabledTools={[]}
       appDataPath="/tmp/wackcode" onClose={vi.fn()} onSave={onSave} onDelete={vi.fn()}
       onConnectSubscription={vi.fn()} onSignOutSubscription={vi.fn()}
-      onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} onRefresh={vi.fn()} onInstall={vi.fn()} onTrust={vi.fn()}
+      onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()} onRefresh={vi.fn()} onInstall={vi.fn()} onTrust={vi.fn()}
       onSearch={vi.fn()} onRemove={vi.fn()} onUpdate={vi.fn()} onSetResources={vi.fn()}
     />
   );
@@ -398,6 +400,7 @@ describe("SettingsPage sub-agents", () => {
       providers: [], packages: [], toolCatalog: [], disabledTools: [], appDataPath: "/tmp/wackcode",
       onClose: vi.fn(), onSave: vi.fn(), onDelete: vi.fn(), onConnectSubscription: vi.fn(),
       onSignOutSubscription: vi.fn(), onSetDisabledTools: vi.fn(), onSetSubagents: vi.fn().mockResolvedValue(undefined),
+      appearance: defaultAppearance, onSetAppearance: vi.fn(),
       onRefresh: vi.fn().mockResolvedValue(undefined), onInstall: vi.fn(), onTrust: vi.fn(),
       onSearch: vi.fn().mockResolvedValue([]), onRemove: vi.fn(), onUpdate: vi.fn(), onSetResources: vi.fn()
     };
@@ -423,5 +426,41 @@ describe("SettingsPage sub-agents", () => {
     rerender(<SettingsPage {...props} subagents={subagents} />);
     expect(screen.queryByRole("heading", { name: "How the agent uses sub-agents" })).not.toBeInTheDocument();
     expect(within(nav).getByRole("button", { name: /Packages/ })).toHaveClass("active");
+  });
+});
+
+describe("SettingsPage appearance section", () => {
+  function renderAppearance(appearance: AppearanceConfig, onSetAppearance = vi.fn().mockResolvedValue(undefined)) {
+    render(
+      <SettingsPage
+        providers={[]} packages={[]} toolCatalog={[]} disabledTools={[]} appDataPath="/tmp/wackcode"
+        onClose={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onConnectSubscription={vi.fn()} onSignOutSubscription={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()}
+        appearance={appearance} onSetAppearance={onSetAppearance}
+        onRefresh={vi.fn().mockResolvedValue(undefined)} onInstall={vi.fn()} onTrust={vi.fn()}
+        onSearch={vi.fn().mockResolvedValue([])} onRemove={vi.fn()} onUpdate={vi.fn()} onSetResources={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Appearance" }));
+    return { onSetAppearance };
+  }
+
+  it("switches the thinking preview off and back on", async () => {
+    const { onSetAppearance } = renderAppearance({ thinkingPreview: true });
+    const toggle = screen.getByRole("switch", { name: "Thinking preview" });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(toggle);
+    await waitFor(() => expect(onSetAppearance).toHaveBeenCalledWith({ thinkingPreview: false }));
+    cleanup();
+
+    const again = renderAppearance({ thinkingPreview: false });
+    fireEvent.click(screen.getByRole("switch", { name: "Thinking preview" }));
+    await waitFor(() => expect(again.onSetAppearance).toHaveBeenCalledWith({ thinkingPreview: true }));
+  });
+
+  it("surfaces a failed save", async () => {
+    renderAppearance({ thinkingPreview: true }, vi.fn().mockRejectedValue("Could not save settings."));
+    fireEvent.click(screen.getByRole("switch", { name: "Thinking preview" }));
+    expect(await screen.findByText("Could not save settings.")).toBeInTheDocument();
   });
 });

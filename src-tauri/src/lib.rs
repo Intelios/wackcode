@@ -39,6 +39,7 @@ pub fn run() {
             subscriptions::sign_out_subscription,
             subscriptions::open_subscription_auth_url,
             commands::set_tool_config,
+            commands::set_appearance_config,
             commands::set_subagent_config,
             commands::list_packages,
             commands::refresh_packages,

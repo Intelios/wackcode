@@ -96,6 +96,16 @@ mod tests {
         let data: AppData = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert!(data.tool_config.disabled.is_empty());
         assert!(data.tool_catalog.is_empty());
+        assert!(data.appearance.thinking_preview);
+    }
+
+    #[test]
+    fn appearance_settings_default_on_and_round_trip() {
+        let data: AppData = serde_json::from_str(r#"{"version":1,"appearance":{}}"#).unwrap();
+        assert!(data.appearance.thinking_preview);
+        let data: AppData = serde_json::from_str(r#"{"version":1,"appearance":{"thinkingPreview":false}}"#).unwrap();
+        assert!(!data.appearance.thinking_preview);
+        assert!(serde_json::to_string(&data).unwrap().contains(r#""thinkingPreview":false"#));
     }
 
     #[test]

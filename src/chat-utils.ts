@@ -56,6 +56,57 @@ export function formatRunDuration(durationMs: number): string {
   return `${remainder}s`;
 }
 
+const THINKING_PREVIEW_MAX = 200;
+const BOLD_HEADING = /^\s*(?:\*\*|__)(.+?)(?:\*\*|__)[\s:.]*$/;
+const HASH_HEADING = /^\s*#{1,6}\s+(.+)$/;
+
+function plainPreviewText(text: string): string {
+  return text
+    .replace(/^\s*(?:#{1,6}|[-*+]|>|\d+\.)\s+/, "")
+    .replace(/\*\*|__|`/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function capPreview(text: string): string {
+  return text.length > THINKING_PREVIEW_MAX ? `${text.slice(0, THINKING_PREVIEW_MAX - 1).trimEnd()}…` : text;
+}
+
+/**
+ * A one-line gist of streaming reasoning: the latest heading when the model writes them (Claude
+ * and OpenAI reasoning summaries open each section with one), otherwise the latest finished
+ * sentence. The unfinished tail is ignored so the line only changes when a thought completes.
+ */
+export function thinkingPreview(text: string): string | undefined {
+  const lines = text.split("\n");
+  // The last line is still being written unless the text ends with a newline.
+  const lastComplete = text.endsWith("\n") ? lines.length - 1 : lines.length - 2;
+  let heading: string | undefined;
+  let sentence: string | undefined;
+  lines.forEach((line, index) => {
+    const complete = index <= lastComplete;
+    const bold = BOLD_HEADING.exec(line);
+    const hash = complete ? HASH_HEADING.exec(line) : null;
+    const title = bold?.[1] ?? hash?.[1];
+    if (title && plainPreviewText(title)) {
+      heading = plainPreviewText(title);
+      return;
+    }
+    const boundary = /[.!?:]+\s+/g;
+    let start = 0;
+    for (let match = boundary.exec(line); match; match = boundary.exec(line)) {
+      const end = match.index + match[0].length;
+      const candidate = plainPreviewText(line.slice(start, end));
+      if (candidate) sentence = candidate;
+      start = end;
+    }
+    const rest = plainPreviewText(line.slice(start));
+    if (complete && rest) sentence = rest;
+  });
+  const preview = heading ?? sentence;
+  return preview ? capPreview(preview) : undefined;
+}
+
 function sameNumberList(a: number[] | undefined, b: number[] | undefined): boolean {
   if (a === b) return true;
   if (!a || !b || a.length !== b.length) return false;

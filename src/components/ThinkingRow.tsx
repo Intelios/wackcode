@@ -1,7 +1,7 @@
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { formatRunDuration } from "../chat-utils";
+import { formatRunDuration, thinkingPreview } from "../chat-utils";
 import { useSmoothText } from "../hooks/useSmoothText";
 import { Icon } from "./Icons";
 
@@ -10,6 +10,9 @@ import { Icon } from "./Icons";
  * that replaces it are separate elements, so the choice has to outlive the first.
  */
 export const ThinkingExpansion = createContext<Set<string> | undefined>(undefined);
+
+/** Settings → Appearance → Thinking preview. On unless a provider says otherwise. */
+export const ThinkingPreviewEnabled = createContext(true);
 
 interface ThinkingRowProps {
   text: string;
@@ -37,6 +40,9 @@ function ThinkingBody({ text, live }: { text: string; live: boolean }) {
 export function ThinkingRow({ text, durationMs, live = false, expansionKey }: ThinkingRowProps) {
   const expanded = useContext(ThinkingExpansion);
   const [open, setOpen] = useState(() => expansionKey !== undefined && expanded?.has(expansionKey) === true);
+  const previewEnabled = useContext(ThinkingPreviewEnabled);
+  const showPreview = live && previewEnabled && !open;
+  const preview = useMemo(() => (showPreview ? thinkingPreview(text) : undefined), [showPreview, text]);
 
   const toggle = () => {
     const next = !open;
@@ -53,6 +59,8 @@ export function ThinkingRow({ text, durationMs, live = false, expansionKey }: Th
         {live
           ? <span className="thinking-shimmer">Thinking…</span>
           : <span>{durationMs !== undefined ? `Thought for ${formatDuration(durationMs)}` : "Reasoning"}</span>}
+        {/* Keyed so each new line fades in rather than swapping in place. */}
+        {preview && <span className="thinking-preview" key={preview}><span aria-hidden="true">·</span> {preview}</span>}
         <Icon name="chevron" className="tool-chevron" />
       </button>
       {open && text && <ThinkingBody text={text} live={live} />}

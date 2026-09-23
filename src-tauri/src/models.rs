@@ -155,6 +155,21 @@ pub struct ToolConfig {
     pub disabled: Vec<String>,
 }
 
+/// Cosmetic, renderer-only preferences (Settings → Appearance). Nothing here reaches a worker.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppearanceConfig {
+    /// One-line gist of the reasoning beside a live "Thinking…" row.
+    #[serde(default = "default_true")]
+    pub thinking_preview: bool,
+}
+
+impl Default for AppearanceConfig {
+    fn default() -> Self {
+        Self { thinking_preview: true }
+    }
+}
+
 /// When the chat's agent should reach for sub-agents. Only changes the tool's guidance text.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -321,6 +336,8 @@ pub struct AppData {
     pub packages: Vec<PackageRecord>,
     #[serde(default)]
     pub subagents: SubagentConfig,
+    #[serde(default)]
+    pub appearance: AppearanceConfig,
 }
 
 impl Default for AppData {
@@ -334,6 +351,7 @@ impl Default for AppData {
             tool_catalog: Vec::new(),
             packages: Vec::new(),
             subagents: SubagentConfig::default(),
+            appearance: AppearanceConfig::default(),
         }
     }
 }

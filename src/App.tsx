@@ -10,6 +10,7 @@ import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix 
 import { pruneDisabledTools, sameToolCatalog } from "./tool-utils";
 import type {
   AppData,
+  AppearanceConfig,
   CheckpointChange,
   CheckpointRef,
   ExtensionNotice,
@@ -46,6 +47,7 @@ import { InlineDialog, type ExtensionUIResponse } from "./components/InlineDialo
 import type { PlanAction } from "./components/PlanCard";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { SubscriptionLoginDialog } from "./components/SubscriptionLoginDialog";
+import { ThinkingPreviewEnabled } from "./components/ThinkingRow";
 
 const emptyData: AppData = {
   version: 1,
@@ -55,7 +57,8 @@ const emptyData: AppData = {
   toolConfig: { disabled: [] },
   toolCatalog: [],
   packages: [],
-  subagents: { enabled: false, trigger: "on_request", maxConcurrency: 4, agents: [] }
+  subagents: { enabled: false, trigger: "on_request", maxConcurrency: 4, agents: [] },
+  appearance: { thinkingPreview: true }
 };
 
 /** Matches `--ease` in styles.css. */
@@ -657,6 +660,18 @@ export default function App() {
       setData((current) => ({ ...current, subagents: saved }));
     } catch (reason) {
       setData((current) => ({ ...current, subagents: previous }));
+      throw reason;
+    }
+  }
+
+  async function setAppearance(config: AppearanceConfig) {
+    const previous = data.appearance;
+    setData((current) => ({ ...current, appearance: config }));
+    try {
+      const saved = await api.setAppearanceConfig(config);
+      setData((current) => ({ ...current, appearance: saved }));
+    } catch (reason) {
+      setData((current) => ({ ...current, appearance: previous }));
       throw reason;
     }
   }
@@ -1288,6 +1303,8 @@ export default function App() {
           onSetDisabledTools={setDisabledTools}
           subagents={data.subagents}
           onSetSubagents={setSubagents}
+          appearance={data.appearance}
+          onSetAppearance={setAppearance}
           onRefresh={refreshPackages}
           onInstall={installPackage}
           onTrust={trustPackage}
@@ -1348,6 +1365,7 @@ export default function App() {
               </div>
             )}
             <motion.div className="chat-transcript" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.1, ease: EASE }}>
+            <ThinkingPreviewEnabled.Provider value={data.appearance.thinkingPreview}>
             <Transcript
               messages={runtime?.snapshot?.messages ?? []}
               partial={runtime?.partial}
@@ -1365,6 +1383,7 @@ export default function App() {
               onMessageAction={onMessageAction}
               onUndoRewind={runtime?.snapshot?.tree?.undo ? onUndoRewind : undefined}
             />
+            </ThinkingPreviewEnabled.Provider>
             </motion.div>
             <InlineDialog
               requests={extensionRequests}

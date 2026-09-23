@@ -3,10 +3,13 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+// Type-only: erased at build time, so Pi still loads solely through the dynamic import in initialize().
+import type { ResourceLoader } from "@earendil-works/pi-coding-agent";
 import { createBuiltinExtensions } from "./builtin/index.js";
 import type { BuiltinHost } from "./builtin/host.js";
 import { SUBAGENT_TOOL_NAME } from "./builtin/subagents/types.js";
 import { createModelRuntime, findModel, workerSettings } from "./model-runtime.js";
+import { promptOverrides, setPromptOverrides } from "./prompt-overrides.js";
 import { SubagentRunner } from "./subagent-runner.js";
 import {
   diffMessages,
@@ -868,6 +871,28 @@ async function prepareImages(images: ImageContent[] | undefined): Promise<ImageC
   return prepared;
 }
 
+/**
+ * Serve the user's custom persona (Settings → Prompts) in place of the loader's system prompt.
+ * The wrapper is read on every system-prompt rebuild, so `set_prompts` applies on the next turn
+ * without a respawn. The text deliberately never enters `DefaultResourceLoaderOptions.systemPrompt`:
+ * the loader resolves that option as a file path when one exists on disk.
+ */
+function withCustomPersona(loader: ResourceLoader): ResourceLoader {
+  return {
+    getExtensions: () => loader.getExtensions(),
+    getSkills: () => loader.getSkills(),
+    getPrompts: () => loader.getPrompts(),
+    getThemes: () => loader.getThemes(),
+    getAgentsFiles: () => loader.getAgentsFiles(),
+    getSystemPrompt: () => promptOverrides().systemPrompt ?? loader.getSystemPrompt(),
+    getSystemPromptSource: () => loader.getSystemPromptSource(),
+    getAppendSystemPrompt: () => loader.getAppendSystemPrompt(),
+    getAppendSystemPromptSources: () => loader.getAppendSystemPromptSources(),
+    extendResources: (paths) => loader.extendResources(paths),
+    reload: (options) => loader.reload(options)
+  };
+}
+
 async function initialize(command: InitCommand): Promise<void> {
   if (session) throw new Error("Worker is already initialized");
   taskId = command.taskId;
@@ -896,6 +921,9 @@ async function initialize(command: InitCommand): Promise<void> {
     safeError
   });
   applySubagents(command.subagents ?? null);
+  // Before any contract can be published: the plan-mode extension composes each contract from
+  // the current overrides, and the restored session's reconcile runs right after creation.
+  setPromptOverrides(command.prompts);
 
   let sessionStartEvent: { type: "session_start"; reason: "fork"; previousSessionFile: string } | undefined;
   let sessionManager: ReturnType<PiModule["SessionManager"]["create"]>;
@@ -945,7 +973,7 @@ async function initialize(command: InitCommand): Promise<void> {
     excludeTools: UNSUPPORTED_TOOLS,
     sessionManager,
     settingsManager,
-    resourceLoader,
+    resourceLoader: withCustomPersona(resourceLoader),
     ...(sessionStartEvent ? { sessionStartEvent } : {})
   });
   session = created.session;
@@ -1343,6 +1371,12 @@ async function handle(command: WorkerCommand): Promise<void> {
       applySubagents(command.subagents);
       applyDisabledTools();
       emitSnapshot();
+    } else if (command.type === "set_prompts") {
+      // Queued so a prompt's text never changes under the run that quoted it. Re-applying the
+      // active tools forces Pi's per-request system-prompt rebuild, which re-reads the persona
+      // wrapper; the plan-mode contract picks the new body up on its next reconcile.
+      setPromptOverrides(command.prompts);
+      applyDisabledTools();
     } else if (command.type === "shutdown") {
       await subagentRunner?.abortAll();
       if (!session.isIdle) await session.abort();

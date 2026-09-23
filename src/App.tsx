@@ -11,6 +11,7 @@ import { pruneDisabledTools, sameToolCatalog } from "./tool-utils";
 import type {
   AppData,
   AppearanceConfig,
+  PromptConfig,
   CheckpointChange,
   CheckpointRef,
   ExtensionNotice,
@@ -58,7 +59,8 @@ const emptyData: AppData = {
   toolCatalog: [],
   packages: [],
   subagents: { enabled: false, trigger: "on_request", maxConcurrency: 4, agents: [] },
-  appearance: { thinkingPreview: true }
+  appearance: { thinkingPreview: true },
+  prompts: {}
 };
 
 /** Matches `--ease` in styles.css. */
@@ -702,6 +704,18 @@ export default function App() {
     }
   }
 
+  async function setPrompts(config: PromptConfig) {
+    const previous = data.prompts;
+    setData((current) => ({ ...current, prompts: config }));
+    try {
+      const saved = await api.setPromptConfig(config);
+      setData((current) => ({ ...current, prompts: saved }));
+    } catch (reason) {
+      setData((current) => ({ ...current, prompts: previous }));
+      throw reason;
+    }
+  }
+
   async function setDisabledTools(disabled: string[]) {
     const pruned = pruneDisabledTools(disabled, data.toolCatalog);
     const previous = data.toolConfig;
@@ -1334,6 +1348,8 @@ export default function App() {
           onSetSubagents={setSubagents}
           appearance={data.appearance}
           onSetAppearance={setAppearance}
+          prompts={data.prompts}
+          onSetPrompts={setPrompts}
           onRefresh={refreshPackages}
           onInstall={installPackage}
           onTrust={trustPackage}

@@ -170,6 +170,22 @@ impl Default for AppearanceConfig {
     }
 }
 
+/// User-customized built-in prompt texts (Settings → Prompts). An absent field means the
+/// shipped default is in force. Plain text in `wackcode.json`: none of it is a credential.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptConfig {
+    /// Replaces Pi's default system-prompt persona; the assembled sections still follow it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+    /// Replaces the Plan-mode contract body (the marker line stays the app's own).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_prompt: Option<String>,
+    /// Replaces the Ultra Plan contract body (the marker line stays the app's own).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ultra_plan_prompt: Option<String>,
+}
+
 /// When the chat's agent should reach for sub-agents. Only changes the tool's guidance text.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -338,6 +354,8 @@ pub struct AppData {
     pub subagents: SubagentConfig,
     #[serde(default)]
     pub appearance: AppearanceConfig,
+    #[serde(default)]
+    pub prompts: PromptConfig,
 }
 
 impl Default for AppData {
@@ -352,6 +370,7 @@ impl Default for AppData {
             packages: Vec::new(),
             subagents: SubagentConfig::default(),
             appearance: AppearanceConfig::default(),
+            prompts: PromptConfig::default(),
         }
     }
 }

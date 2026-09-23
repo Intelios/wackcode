@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
-import type { AppearanceConfig, BuiltinModelSuggestion, ProviderRecord, SubagentConfig, ToolCatalogEntry } from "../types";
+import type { AppearanceConfig, BuiltinModelSuggestion, PromptConfig, ProviderRecord, SubagentConfig, ToolCatalogEntry } from "../types";
 import { SettingsPage } from "./SettingsPage";
 
 vi.mock("../api", () => ({ api: {
@@ -12,6 +12,7 @@ vi.mock("../api", () => ({ api: {
 
 const noSubagents: SubagentConfig = { enabled: false, trigger: "on_request", maxConcurrency: 4, agents: [] };
 const defaultAppearance: AppearanceConfig = { thinkingPreview: true };
+const defaultPrompts: PromptConfig = {};
 
 afterEach(() => {
   cleanup();
@@ -25,7 +26,7 @@ it("shows subscription guidance before sign-in and reconnect", async () => {
   const props = {
     packages: [], toolCatalog: [], disabledTools: [], appDataPath: "/tmp/wackcode",
     onClose: vi.fn(), onSave: vi.fn(), onDelete: vi.fn(), onConnectSubscription,
-    onSignOutSubscription: vi.fn(), onSetDisabledTools: vi.fn(), subagents: noSubagents, onSetSubagents: vi.fn(), appearance: defaultAppearance, onSetAppearance: vi.fn(),
+    onSignOutSubscription: vi.fn(), onSetDisabledTools: vi.fn(), subagents: noSubagents, onSetSubagents: vi.fn(), appearance: defaultAppearance, onSetAppearance: vi.fn(), prompts: defaultPrompts, onSetPrompts: vi.fn(),
     onRefresh: vi.fn().mockResolvedValue(undefined), onInstall: vi.fn(), onTrust: vi.fn(),
     onSearch: vi.fn().mockResolvedValue([]), onRemove: vi.fn(), onUpdate: vi.fn(), onSetResources: vi.fn()
   };
@@ -66,7 +67,7 @@ function renderTools(overrides: { disabled?: string[]; onSetDisabledTools?: (nex
       onDelete={vi.fn()}
       onConnectSubscription={vi.fn()}
       onSignOutSubscription={vi.fn()}
-      onSetDisabledTools={onSetDisabledTools} subagents={noSubagents} onSetSubagents={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()}
+      onSetDisabledTools={onSetDisabledTools} subagents={noSubagents} onSetSubagents={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()}
       onRefresh={vi.fn().mockResolvedValue(undefined)}
       onInstall={vi.fn()}
       onTrust={vi.fn()}
@@ -157,7 +158,7 @@ describe("SettingsPage sidebar navigation", () => {
         onDelete={vi.fn()}
         onConnectSubscription={vi.fn()}
         onSignOutSubscription={vi.fn()}
-        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onInstall={vi.fn()}
         onTrust={vi.fn()}
@@ -171,7 +172,7 @@ describe("SettingsPage sidebar navigation", () => {
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
     const buttons = Array.from(nav.querySelectorAll("button")).map((btn) => btn.textContent?.trim());
 
-    // Expected order: Providers -> Entrim AI -> Test -> New connection -> Packages -> Tools -> Appearance
+    // Expected order: Providers -> Entrim AI -> Test -> New connection -> Packages -> Tools -> Appearance -> Prompts
     expect(buttons).toEqual([
       "Providers",
       "Entrim AI",
@@ -179,7 +180,8 @@ describe("SettingsPage sidebar navigation", () => {
       "New connection",
       "Packages",
       "Tools",
-      "Appearance"
+      "Appearance",
+      "Prompts"
     ]);
   });
 
@@ -196,7 +198,7 @@ describe("SettingsPage sidebar navigation", () => {
         onDelete={vi.fn()}
         onConnectSubscription={vi.fn()}
         onSignOutSubscription={vi.fn()}
-        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onInstall={vi.fn()}
         onTrust={vi.fn()}
@@ -243,7 +245,7 @@ describe("SettingsPage sidebar navigation", () => {
         onDelete={vi.fn()}
         onConnectSubscription={vi.fn()}
         onSignOutSubscription={vi.fn()}
-        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onInstall={vi.fn()}
         onTrust={vi.fn()}
@@ -285,7 +287,7 @@ describe("SettingsPage model capabilities", () => {
         onDelete={vi.fn()}
         onConnectSubscription={vi.fn()}
         onSignOutSubscription={vi.fn()}
-        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onInstall={vi.fn()}
         onTrust={vi.fn()}
@@ -319,7 +321,7 @@ function renderModelSettings(provider: ProviderRecord = testProviders[0]) {
       providers={[provider]} packages={[]} toolCatalog={catalog} disabledTools={[]}
       appDataPath="/tmp/wackcode" onClose={vi.fn()} onSave={onSave} onDelete={vi.fn()}
       onConnectSubscription={vi.fn()} onSignOutSubscription={vi.fn()}
-      onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()} onRefresh={vi.fn()} onInstall={vi.fn()} onTrust={vi.fn()}
+      onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} appearance={defaultAppearance} onSetAppearance={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onRefresh={vi.fn()} onInstall={vi.fn()} onTrust={vi.fn()}
       onSearch={vi.fn()} onRemove={vi.fn()} onUpdate={vi.fn()} onSetResources={vi.fn()}
     />
   );
@@ -400,7 +402,7 @@ describe("SettingsPage sub-agents", () => {
       providers: [], packages: [], toolCatalog: [], disabledTools: [], appDataPath: "/tmp/wackcode",
       onClose: vi.fn(), onSave: vi.fn(), onDelete: vi.fn(), onConnectSubscription: vi.fn(),
       onSignOutSubscription: vi.fn(), onSetDisabledTools: vi.fn(), onSetSubagents: vi.fn().mockResolvedValue(undefined),
-      appearance: defaultAppearance, onSetAppearance: vi.fn(),
+      appearance: defaultAppearance, onSetAppearance: vi.fn(), prompts: defaultPrompts, onSetPrompts: vi.fn(),
       onRefresh: vi.fn().mockResolvedValue(undefined), onInstall: vi.fn(), onTrust: vi.fn(),
       onSearch: vi.fn().mockResolvedValue([]), onRemove: vi.fn(), onUpdate: vi.fn(), onSetResources: vi.fn()
     };
@@ -436,7 +438,7 @@ describe("SettingsPage appearance section", () => {
         providers={[]} packages={[]} toolCatalog={[]} disabledTools={[]} appDataPath="/tmp/wackcode"
         onClose={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onConnectSubscription={vi.fn()} onSignOutSubscription={vi.fn()}
         onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()}
-        appearance={appearance} onSetAppearance={onSetAppearance}
+        appearance={appearance} onSetAppearance={onSetAppearance} prompts={defaultPrompts} onSetPrompts={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)} onInstall={vi.fn()} onTrust={vi.fn()}
         onSearch={vi.fn().mockResolvedValue([])} onRemove={vi.fn()} onUpdate={vi.fn()} onSetResources={vi.fn()}
       />

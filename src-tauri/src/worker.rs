@@ -230,10 +230,10 @@ pub async fn ensure_worker_with(
         }
     });
 
-    let (disabled_tools, resources) = {
+    let (disabled_tools, resources, prompts) = {
         let state = app.state::<MetadataState>();
         let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
-        (data.tool_config.disabled.clone(), resource_paths(&data.packages))
+        (data.tool_config.disabled.clone(), resource_paths(&data.packages), data.prompts.clone())
     };
 
     let auth_path = if provider.kind == ProviderKind::Subscription {
@@ -259,6 +259,9 @@ pub async fn ensure_worker_with(
         "mode": if options.fork_from.is_some() { Value::Null } else { json!(task.mode) },
         "forkFrom": options.fork_from,
         "subagents": subagent_payload(app)?,
+        // Custom built-in prompts (Settings → Prompts); `{}` when every prompt is at its default.
+        // Deliberately not part of the fingerprint: changes reach workers live via set_prompts.
+        "prompts": prompts,
     });
     if options.wait_ready {
         request(app, &task.id, init, INIT_TIMEOUT).await.map(|_| ())

@@ -1182,6 +1182,90 @@ describe("Plan mode", () => {
   });
 });
 
+describe("custom prompts (Settings → Prompts)", () => {
+  const messagesOf = (source: MockProvider, index: number) =>
+    (source.requests[index].body.messages ?? []) as { role?: string; content?: unknown }[];
+  // The leading prompt message: Pi maps it to "developer" for the completions API.
+  const systemPromptOf = (source: MockProvider) => {
+    const message = messagesOf(source, 0).find((entry) => entry.role === "system" || entry.role === "developer");
+    return typeof message?.content === "string" ? message.content : "";
+  };
+  // Content parts of every message, joined, so contract text can be matched with real newlines.
+  const messageTextOf = (source: MockProvider, index: number) =>
+    messagesOf(source, index)
+      .map((message) => message.content)
+      .flatMap((content) => (Array.isArray(content) ? content : []))
+      .map((part) => (part as { text?: string })?.text ?? "")
+      .join("\n");
+
+  it("replaces only the system prompt's persona from init, keeping the assembled sections", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-persona-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "persona-task", undefined, undefined, undefined, undefined, undefined,
+      { prompts: { systemPrompt: "You are WackTester, a bespoke persona." } }
+    );
+    cleanup.push(() => worker.shutdown());
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "Create the fixture." });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    const prompt = systemPromptOf(provider);
+    expect(prompt).toContain("You are WackTester, a bespoke persona.");
+    expect(prompt).not.toContain("expert coding assistant");
+    // Only the persona prefix was replaced: the assembled prompt still carries the rest.
+    expect(prompt).toContain(workspace);
+  });
+
+  it("sends exactly the persona Settings → Prompts shows as the default", async () => {
+    // Pin for the display copy: Pi owns this text, so when this fails after a Pi upgrade,
+    // update src/promptDefaults.ts to match what the provider actually receives.
+    const { DEFAULT_SYSTEM_PROMPT } = await import("../../src/promptDefaults.js");
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-persona-default-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "persona-default-task");
+    cleanup.push(() => worker.shutdown());
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "Create the fixture." });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    // The persona is the preamble: rendered first, then the assembled sections follow.
+    expect(systemPromptOf(provider).startsWith(`${DEFAULT_SYSTEM_PROMPT}\n\n`)).toBe(true);
+  });
+
+  it("uses a custom Plan contract body, and a live edit reaches the next message without a restart", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-custom-plan-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "custom-plan-task", undefined, undefined, undefined, "plan", undefined,
+      { prompts: { planPrompt: "Custom plan rules, first take." } }
+    );
+    cleanup.push(() => worker.shutdown());
+    await worker.waitFor((output) => output.type === "plan_state" && output.mode === "plan");
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "Create the fixture." });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    expect(messageTextOf(provider, 0)).toContain("[WACKCODE PLAN MODE CONTRACT v1: PLAN]\nCustom plan rules, first take.");
+    expect(messageTextOf(provider, 0)).not.toContain("## Mode rules");
+
+    // Settings change mid-session: queued like set_tools, applied by the next turn. The stale
+    // contract stays in the transcript and the updated one is appended after it.
+    const editId = crypto.randomUUID();
+    worker.send({ id: editId, type: "set_prompts", prompts: { planPrompt: "Custom plan rules, second take." } });
+    await worker.waitFor((output) => output.type === "response" && output.id === editId && output.success);
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-2", message: "Another pass." });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "run-2" && output.state === "idle");
+    const after = messageTextOf(provider, provider.requests.length - 1);
+    expect(after).toContain("Custom plan rules, second take.");
+    expect(after.lastIndexOf("second take.")).toBeGreaterThan(after.lastIndexOf("first take."));
+  });
+});
+
 describe("image attachments", () => {
   it("resizes an attached image with Pi's pipeline, sends it to a vision model, and previews it", async () => {
     const provider = await startMockProvider();

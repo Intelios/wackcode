@@ -245,6 +245,20 @@ export interface AppearanceConfig {
   thinkingPreview: boolean;
 }
 
+/**
+ * User-customized built-in prompt texts (Settings → Prompts). Mirrors `PromptConfig` in
+ * models.rs and `PromptOverrides` in worker/src/protocol.ts. An absent field means the
+ * shipped default is in force.
+ */
+export interface PromptConfig {
+  /** Replaces Pi's default system-prompt persona; the assembled sections still follow it. */
+  systemPrompt?: string | null;
+  /** Replaces the Plan-mode contract body (the marker line stays the app's own). */
+  planPrompt?: string | null;
+  /** Replaces the Ultra Plan contract body (the marker line stays the app's own). */
+  ultraPlanPrompt?: string | null;
+}
+
 /** When the chat's agent should reach for sub-agents. Only changes the tool's guidance. */
 export type SubagentTrigger = "on_request" | "auto";
 
@@ -319,6 +333,7 @@ export interface AppData {
   packages: PackageRecord[];
   subagents: SubagentConfig;
   appearance: AppearanceConfig;
+  prompts: PromptConfig;
 }
 
 export interface BootstrapPayload {

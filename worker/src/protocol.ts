@@ -188,6 +188,20 @@ export interface SubagentDetails {
   results: SubagentResult[];
 }
 
+/**
+ * User-customized built-in prompt texts from Settings, applied on top of the shipped defaults.
+ * Like `set_tools` these live outside the worker fingerprint: they arrive in `init` and can be
+ * replaced mid-session with `set_prompts`, and every consumer reads them per use.
+ */
+export interface PromptOverrides {
+  /** Replaces Pi's default system-prompt persona; the tool/rules/context sections still follow. */
+  systemPrompt?: string;
+  /** Replaces the Plan-mode contract body (the marker line is always the app's own). */
+  planPrompt?: string;
+  /** Replaces the Ultra Plan contract body (the marker line is always the app's own). */
+  ultraPlanPrompt?: string;
+}
+
 export interface InitCommand {
   id: string;
   type: "init";
@@ -225,6 +239,8 @@ export interface InitCommand {
   forkFrom?: { sessionFile: string; entryId?: string };
   /** Sub-agents, when the user has turned them on. Absent or null: the `subagent` tool stays off. */
   subagents?: SubagentRuntimeConfig | null;
+  /** Custom built-in prompt texts from Settings; absent means every prompt stays at its default. */
+  prompts?: PromptOverrides;
 }
 
 export interface WorkerResources {
@@ -315,6 +331,7 @@ export type WorkerCommand =
   | { id: string; type: "set_mode"; mode: TaskMode }
   | { id: string; type: "set_tools"; disabledTools: string[] }
   | { id: string; type: "set_subagents"; subagents: SubagentRuntimeConfig | null }
+  | { id: string; type: "set_prompts"; prompts: PromptOverrides }
   | {
       id: string;
       type: "extension_ui_response";

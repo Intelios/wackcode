@@ -2,9 +2,10 @@ import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode }
 import { api } from "../api";
 import { applyBuiltinModelSuggestion, mergeDiscoveredModels, modelIsReady, searchBuiltinModels } from "../model-utils";
 import { groupTools } from "../tool-utils";
-import type { ApiFormat, AppearanceConfig, BuiltinModelSuggestion, CustomProviderRecord, ModelRecord, PackageRecord, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ThinkingLevel, ToolCatalogEntry } from "../types";
+import type { ApiFormat, AppearanceConfig, BuiltinModelSuggestion, CustomProviderRecord, ModelRecord, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ThinkingLevel, ToolCatalogEntry } from "../types";
 import { Icon, type IconName } from "./Icons";
 import { PackagesSection, type PackageActions } from "./PackagesSection";
+import { PromptsSection } from "./PromptsSection";
 import { SubagentsSection } from "./SubagentsSection";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 import { Popover } from "./ui/Popover";
@@ -15,7 +16,7 @@ const levels: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhi
 let nextModelCardKey = 0;
 const newModelCardKeys = (count: number) => Array.from({ length: count }, () => ++nextModelCardKey);
 
-type SectionId = "providers" | "packages" | "tools" | "appearance" | "subagents";
+type SectionId = "providers" | "packages" | "tools" | "appearance" | "prompts" | "subagents";
 
 interface Section {
   id: SectionId;
@@ -29,7 +30,8 @@ const SECTIONS: Section[] = [
   { id: "tools", label: "Tools", icon: "wrench" },
   // Only listed while the built-in is switched on (Settings → Packages).
   { id: "subagents", label: "Sub-agents", icon: "agents" },
-  { id: "appearance", label: "Appearance", icon: "palette" }
+  { id: "appearance", label: "Appearance", icon: "palette" },
+  { id: "prompts", label: "Prompts", icon: "pencil" }
 ];
 
 interface Props extends PackageActions {
@@ -49,12 +51,14 @@ interface Props extends PackageActions {
   onSetSubagents: (config: SubagentConfig) => Promise<void>;
   appearance: AppearanceConfig;
   onSetAppearance: (config: AppearanceConfig) => Promise<void>;
+  prompts: PromptConfig;
+  onSetPrompts: (config: PromptConfig) => Promise<void>;
 }
 
 export function SettingsPage({
   providers, packages, toolCatalog, disabledTools, appDataPath,
   onClose, onSave, onDelete, onConnectSubscription, onSignOutSubscription, connectedSubscriptionId, onSetDisabledTools,
-  subagents, onSetSubagents, appearance, onSetAppearance, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
+  subagents, onSetSubagents, appearance, onSetAppearance, prompts, onSetPrompts, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
 }: Props) {
   const [chosenSection, setSection] = useState<SectionId>("providers");
   // Switching sub-agents off while its page is open lands on Packages, where the switch is.
@@ -209,6 +213,7 @@ export function SettingsPage({
           <ToolsSection catalog={toolCatalog} disabled={disabledTools} onSetDisabled={onSetDisabledTools} />
         )}
         {section === "appearance" && <AppearanceSection config={appearance} onChange={onSetAppearance} />}
+        {section === "prompts" && <PromptsSection config={prompts} onChange={onSetPrompts} />}
         {section === "subagents" && (
           <SubagentsSection config={subagents} providers={providers} onChange={onSetSubagents} />
         )}

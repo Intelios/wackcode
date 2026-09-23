@@ -109,6 +109,21 @@ mod tests {
     }
 
     #[test]
+    fn prompt_overrides_default_empty_and_round_trip() {
+        // Old files predate the field entirely; cleared fields never appear in the file.
+        let data: AppData = serde_json::from_str(r#"{"version":1}"#).unwrap();
+        assert_eq!(data.prompts, crate::models::PromptConfig::default());
+        let data: AppData = serde_json::from_str(
+            r#"{"version":1,"prompts":{"planPrompt":"My plan rules."}}"#,
+        ).unwrap();
+        assert_eq!(data.prompts.plan_prompt.as_deref(), Some("My plan rules."));
+        assert_eq!(data.prompts.system_prompt, None);
+        let written = serde_json::to_string(&data).unwrap();
+        assert!(written.contains(r#""planPrompt":"My plan rules.""#));
+        assert!(!written.contains("systemPrompt"));
+    }
+
+    #[test]
     fn startup_marks_active_tasks_interrupted_without_replaying_them() {
         let mut data = AppData {
             tasks: vec![TaskRecord {

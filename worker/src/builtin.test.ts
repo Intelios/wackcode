@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createAskUserQuestionExtension, normalizeAskQuestionsParams } from "./builtin/ask-user-question.js";
 import type { BuiltinHost } from "./builtin/host.js";
+import { setPromptOverrides } from "./prompt-overrides.js";
 import type { QuestionAnswer } from "./protocol.js";
 import {
   normalizePlanModeCompletion,
@@ -267,6 +268,46 @@ describe("mode contract reconciliation", () => {
     expect(latestModeContract(reconciled)?.mode).toBe("normal");
     // A matching latest contract is a no-op — the context stays cache-stable.
     expect(reconcileModeContract(reconciled, "normal")).toBe(reconciled);
+  });
+});
+
+describe("custom prompt overrides (Settings → Prompts)", () => {
+  afterEach(() => setPromptOverrides(null));
+
+  it("replaces the contract body but keeps the app's marker line", () => {
+    setPromptOverrides({ planPrompt: "My own plan rules.", ultraPlanPrompt: "My own interview." });
+    const plan = modeContractContent("plan");
+    expect(plan).toBe(`[WACKCODE PLAN MODE CONTRACT v1: PLAN]\nMy own plan rules.`);
+    const ultra = modeContractContent("ultraplan");
+    expect(ultra).toBe(`[WACKCODE PLAN MODE CONTRACT v1: ULTRAPLAN]\nMy own interview.`);
+    // The normal contract is never customizable.
+    expect(modeContractContent("normal")).not.toContain("My own");
+  });
+
+  it("recognises a custom contract as its mode, and re-appends when the body changes", () => {
+    setPromptOverrides({ planPrompt: "First draft." });
+    const custom = createModeContractMessage("plan");
+    expect(modeContractFromMessage(custom)).toBe("plan");
+    expect(modeContractFromMessage(createModeContractMessage("ultraplan"))).toBe("ultraplan");
+
+    // An edited body makes the saved artifact stale: reconcile inserts the new text after it,
+    // which is how a prompt edit reaches existing plan chats on their next message.
+    setPromptOverrides({ planPrompt: "Second draft." });
+    const history = [{ role: "user", content: "hi" }, custom, { role: "assistant", content: "ok" }];
+    const reconciled = reconcileModeContract(history, "plan");
+    expect(reconciled.length).toBe(history.length + 1);
+    expect(modeContractFromMessage(reconciled[2])).toBe("plan");
+    expect(String(reconciled[2].content)).toContain("Second draft.");
+    // Cache-stable again once the latest artifact matches.
+    expect(reconcileModeContract(reconciled, "plan")).toBe(reconciled);
+  });
+
+  it("leaves the shipped defaults byte-identical when no override is set", () => {
+    setPromptOverrides({ systemPrompt: "persona is separate from contracts" });
+    const plan = modeContractContent("plan");
+    expect(createHash("sha256").update(plan).digest("hex")).toBe(
+      "f131dbbb06b575ad01fddbda9c8ccf87d3f0973967f15ea02d70ab05fc59e22b",
+    );
   });
 });
 

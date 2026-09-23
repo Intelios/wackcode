@@ -5,6 +5,7 @@
  * conversation stays append-only; no system prompt is rewritten.
  */
 import { buildPlanModePrompt } from "./prompt.js";
+import { promptOverrides } from "../../prompt-overrides.js";
 
 export const MODE_CONTRACT_MESSAGE_TYPE = "wackcode-mode-contract";
 export const MODE_CONTRACT_VERSION = 1;
@@ -27,8 +28,10 @@ interface ContractMessage {
 }
 
 export function modeContractContent(mode: PlanModeContract) {
-  if (mode === "plan") return `${PLAN_CONTRACT_MARKER}\n${buildPlanModePrompt()}`;
-  if (mode === "ultraplan") return `${ULTRA_PLAN_CONTRACT_MARKER}\n${buildPlanModePrompt("ultraplan")}`;
+  // A user-customized body replaces the built-in text but never the marker line: the marker is
+  // the app's own, so a custom contract is still recognizably a contract of its mode.
+  if (mode === "plan") return `${PLAN_CONTRACT_MARKER}\n${promptOverrides().planPrompt ?? buildPlanModePrompt()}`;
+  if (mode === "ultraplan") return `${ULTRA_PLAN_CONTRACT_MARKER}\n${promptOverrides().ultraPlanPrompt ?? buildPlanModePrompt("ultraplan")}`;
   return NORMAL_CONTRACT;
 }
 

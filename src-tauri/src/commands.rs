@@ -3,7 +3,7 @@ use crate::{
     models::{
         AppearanceConfig, BootstrapPayload, BuiltinModelSuggestion, CheckpointChange, CheckpointRef, CreateTaskInput, ExportPlanInput,
         ForkTaskInput, GitChanges, ImageContent, ModelRecord, NavigateResult, NavigateTaskInput, NavigateTaskResult,
-        ProjectRecord, PromptInput, ExtensionUiResponseInput, InstallPackageInput, PackageRecord,
+        ProjectRecord, PromptConfig, PromptInput, ExtensionUiResponseInput, InstallPackageInput, PackageRecord,
         PackageSearchResult, ProviderKind, ProviderRecord, ResendInput, RestoreCheckpointInput, RestoreResult,
         SaveProviderInput, SearchPackagesInput, SetPackageResourcesInput, SetTaskModeInput, SetToolConfigInput,
         SlashCommand, SubagentConfig, TaskMode, TaskRecord, TaskStatus, ToolConfig, WorkspaceFiles,
@@ -517,6 +517,25 @@ pub async fn set_appearance_config(
         Ok(())
     })?;
     Ok(input)
+}
+
+/// Custom prompts apply to running chats on their next turn, like tool changes: workers are
+/// updated in place, never restarted (the overrides deliberately stay out of the fingerprint).
+#[tauri::command]
+pub async fn set_prompt_config(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    input: PromptConfig,
+) -> Result<PromptConfig, String> {
+    let config = validate_prompt_config(input)?;
+    state.mutate(|data| {
+        data.prompts = config.clone();
+        Ok(())
+    })?;
+    worker::broadcast(&app, &json!({
+        "id": Uuid::new_v4().to_string(), "type": "set_prompts", "prompts": config
+    })).await?;
+    Ok(config)
 }
 
 /// Tool changes take effect on the next agent turn, so running workers are updated in place
@@ -1540,6 +1559,28 @@ fn validate_tool_names(names: &[String]) -> Result<Vec<String>, String> {
 
 fn validate_thinking(level: &str) -> Result<(), String> {
     if THINKING_LEVELS.contains(&level) { Ok(()) } else { Err(format!("Unsupported reasoning effort: {level}")) }
+}
+
+/// Same size budget as a sub-agent's instructions: generous for a prompt, small for `wackcode.json`.
+const MAX_PROMPT_OVERRIDE_CHARS: usize = 20_000;
+
+/// Trim one override; blank means "back to the shipped default" and is stored as absent.
+fn normalize_override(label: &str, value: Option<String>) -> Result<Option<String>, String> {
+    let value = value.map(|text| text.trim().to_string()).filter(|text| !text.is_empty());
+    if let Some(text) = &value {
+        if text.chars().count() > MAX_PROMPT_OVERRIDE_CHARS {
+            return Err(format!("Keep the {label} under {MAX_PROMPT_OVERRIDE_CHARS} characters."));
+        }
+    }
+    Ok(value)
+}
+
+fn validate_prompt_config(input: PromptConfig) -> Result<PromptConfig, String> {
+    Ok(PromptConfig {
+        system_prompt: normalize_override("default system prompt", input.system_prompt)?,
+        plan_prompt: normalize_override("Plan mode prompt", input.plan_prompt)?,
+        ultra_plan_prompt: normalize_override("Ultra Plan prompt", input.ultra_plan_prompt)?,
+    })
 }
 
 fn validate_base_url(value: &str) -> Result<String, String> {

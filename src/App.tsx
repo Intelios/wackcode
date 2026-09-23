@@ -8,6 +8,7 @@ import { modelIsReady, pickThinkingLevel } from "./model-utils";
 import { titleFromPrompt, samePlanState, sameTodoState, applySnapshotDelta, validateInitCommand, nextMode } from "./chat-utils";
 import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix } from "./tree-utils";
 import { pruneDisabledTools, sameToolCatalog } from "./tool-utils";
+import { DEFAULT_APPEARANCE, applyTheme, cacheTheme } from "./theme";
 import type {
   AppData,
   AutoTitleConfig,
@@ -61,7 +62,7 @@ const emptyData: AppData = {
   packages: [],
   subagents: { enabled: false, trigger: "on_request", maxConcurrency: 4, agents: [] },
   autoTitle: { enabled: false, providerId: null, modelId: null },
-  appearance: { thinkingPreview: true },
+  appearance: DEFAULT_APPEARANCE,
   prompts: {}
 };
 
@@ -141,6 +142,8 @@ function loadJSON<T>(key: string, fallback: T): T {
 export default function App() {
   const [data, setData] = useState<AppData>(emptyData);
   const [appDataPath, setAppDataPath] = useState("");
+  const [glassSupported, setGlassSupported] = useState(false);
+  const savedAppearance = useRef<AppearanceConfig>(DEFAULT_APPEARANCE);
   const [selectedTaskId, setSelectedTaskId] = useState<string>();
   const selectedTaskRef = useRef<string | undefined>(undefined);
   const [runtimes, setRuntimes] = useState<Record<string, TaskRuntime>>({});
@@ -258,6 +261,8 @@ export default function App() {
       if (!active) return;
       setData(payload.data);
       setAppDataPath(payload.appDataPath);
+      setGlassSupported(payload.glassSupported);
+      savedAppearance.current = payload.data.appearance;
       const remembered = loadJSON<string | null>(LAST_PROJECT_KEY, null);
       const projectId = payload.data.projects.some((project) => project.id === remembered)
         ? remembered
@@ -703,14 +708,28 @@ export default function App() {
     setData((current) => ({ ...current, autoTitle: saved }));
   }
 
+  // The theme is applied to <html>, outside React. Not while booting: main.tsx already painted
+  // the cached theme, and the placeholder defaults would flash over it.
+  useEffect(() => {
+    if (booting) return;
+    applyTheme(data.appearance);
+    cacheTheme(data.appearance);
+  }, [booting, data.appearance]);
+
+  /** Live preview while a colour picker or slider is being dragged; nothing is saved. */
+  function previewAppearance(config: AppearanceConfig) {
+    setData((current) => ({ ...current, appearance: config }));
+  }
+
   async function setAppearance(config: AppearanceConfig) {
-    const previous = data.appearance;
     setData((current) => ({ ...current, appearance: config }));
     try {
       const saved = await api.setAppearanceConfig(config);
+      savedAppearance.current = saved;
       setData((current) => ({ ...current, appearance: saved }));
     } catch (reason) {
-      setData((current) => ({ ...current, appearance: previous }));
+      // Back to what is stored, not to an unsaved preview.
+      setData((current) => ({ ...current, appearance: savedAppearance.current }));
       throw reason;
     }
   }
@@ -1355,7 +1374,9 @@ export default function App() {
           autoTitle={data.autoTitle}
           onSetAutoTitle={setAutoTitle}
           appearance={data.appearance}
+          glassSupported={glassSupported}
           onSetAppearance={setAppearance}
+          onPreviewAppearance={previewAppearance}
           prompts={data.prompts}
           onSetPrompts={setPrompts}
           onRefresh={refreshPackages}

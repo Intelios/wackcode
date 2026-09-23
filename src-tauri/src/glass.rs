@@ -13,6 +13,11 @@ use objc2_app_kit::{
 };
 use tauri::{AppHandle, Manager};
 
+use crate::models::{AppearanceConfig, BackdropMode, GlassStyleSetting};
+
+/// `DEFAULT_BACKGROUND` in `src/theme.ts`.
+const DEFAULT_BACKGROUND: (u8, u8, u8) = (0x11, 0x13, 0x10);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GlassStyle {
     Frosted,
@@ -36,6 +41,35 @@ pub struct NativeBackdrop {
     pub glass: Option<GlassStyle>,
     /// sRGB fill for the opaque window: the user's background colour.
     pub background: (u8, u8, u8),
+}
+
+impl NativeBackdrop {
+    /// The renderer stores the background it displays (already darkened for readability), so
+    /// the native fill matches the page painted over it.
+    pub fn from_config(config: &AppearanceConfig) -> Self {
+        let glass = (config.backdrop == BackdropMode::Glass).then_some(match config.glass_style {
+            GlassStyleSetting::Frosted => GlassStyle::Frosted,
+            GlassStyleSetting::Clear => GlassStyle::Clear,
+        });
+        let background = config.background.as_deref().and_then(parse_hex).unwrap_or(DEFAULT_BACKGROUND);
+        Self { glass, background }
+    }
+}
+
+/// `#rrggbb` to channels.
+pub fn parse_hex(value: &str) -> Option<(u8, u8, u8)> {
+    let digits = value.strip_prefix('#')?;
+    if digits.len() != 6 || !digits.chars().all(|character| character.is_ascii_hexdigit()) {
+        return None;
+    }
+    let channel = |index: usize| u8::from_str_radix(&digits[index..index + 2], 16).ok();
+    Some((channel(0)?, channel(2)?, channel(4)?))
+}
+
+/// Applies `config` to the main window, asking it whether it has focus.
+pub fn sync(app: &AppHandle, config: &AppearanceConfig) -> Result<(), String> {
+    let focused = app.get_webview_window("main").and_then(|window| window.is_focused().ok()).unwrap_or(true);
+    apply(app, NativeBackdrop::from_config(config), focused)
 }
 
 pub fn is_supported() -> bool {

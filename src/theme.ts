@@ -11,8 +11,21 @@
  * accent recolours interaction, never meaning.
  */
 
+import type { AppearanceConfig } from "./types";
+
 export const DEFAULT_ACCENT = "#c2ee4a";
+/** Also `DEFAULT_BACKGROUND` in `src-tauri/src/glass.rs`, which paints the native window. */
 export const DEFAULT_BACKGROUND = "#111310";
+
+/** Mirrors `AppearanceConfig::default()` in models.rs. */
+export const DEFAULT_APPEARANCE: AppearanceConfig = {
+  thinkingPreview: true,
+  backdrop: "solid",
+  imageDim: 55,
+  imageBlur: 12,
+  glassStyle: "frosted",
+  glassTint: 40
+};
 
 /** One-click accent + background pairs (Settings › Appearance). The first is the default. */
 export const THEME_PRESETS: { id: string; name: string; accent: string; background: string }[] = [
@@ -294,4 +307,28 @@ export function applyTheme(input: ThemeInput, root: HTMLElement = document.docum
   const theme = resolveTheme(input);
   for (const [name, value] of Object.entries(theme.variables)) root.style.setProperty(name, value);
   return theme;
+}
+
+const THEME_CACHE_KEY = "wackcode:theme";
+
+/**
+ * Remembers the last applied theme so the next launch paints it before bootstrap answers. A
+ * per-device hint only: `wackcode.json` stays the source of truth and overwrites it.
+ */
+export function cacheTheme(input: ThemeInput): void {
+  try {
+    localStorage.setItem(THEME_CACHE_KEY, JSON.stringify({ accent: input.accent ?? null, background: input.background ?? null }));
+  } catch {
+    // Storage can be unavailable; the first frame then shows the default theme.
+  }
+}
+
+/** Applies the cached theme, if any; called once before the first render. */
+export function applyCachedTheme(): void {
+  try {
+    const cached = JSON.parse(localStorage.getItem(THEME_CACHE_KEY) ?? "null") as ThemeInput | null;
+    if (cached) applyTheme(cached);
+  } catch {
+    // A missing or corrupt cache just means the defaults in styles.css paint first.
+  }
 }

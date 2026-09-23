@@ -1,7 +1,7 @@
 use crate::{
-    checkpoints, files, git,
+    checkpoints, files, git, glass,
     models::{
-        AppearanceConfig, BootstrapPayload, BuiltinModelSuggestion, CheckpointChange, CheckpointRef, CreateTaskInput, ExportPlanInput,
+        AppearanceConfig, BackdropMode, BootstrapPayload, BuiltinModelSuggestion, CheckpointChange, CheckpointRef, CreateTaskInput, ExportPlanInput,
         ForkTaskInput, GitChanges, ImageContent, ModelRecord, NavigateResult, NavigateTaskInput, NavigateTaskResult,
         ProjectRecord, PromptConfig, PromptInput, ExtensionUiResponseInput, InstallPackageInput, PackageRecord,
         PackageSearchResult, ProviderKind, ProviderRecord, ResendInput, RestoreCheckpointInput, RestoreResult,
@@ -69,6 +69,7 @@ pub fn bootstrap(app: AppHandle, state: State<'_, MetadataState>) -> Result<Boot
     Ok(BootstrapPayload {
         data,
         app_data_path: state.data_path.parent().unwrap_or(Path::new("")).to_string_lossy().into_owned(),
+        glass_supported: glass::is_supported(),
     })
 }
 
@@ -506,17 +507,21 @@ pub async fn trust_package(
     list_packages(state)
 }
 
-/// Appearance settings are purely cosmetic: they are read by the renderer only, so no worker hears about them.
+/// Appearance settings are purely cosmetic: the renderer themes itself and the native window
+/// follows the backdrop, so no worker hears about them.
 #[tauri::command]
 pub async fn set_appearance_config(
+    app: AppHandle,
     state: State<'_, MetadataState>,
     input: AppearanceConfig,
 ) -> Result<AppearanceConfig, String> {
-    state.mutate(|data| {
-        data.appearance = input.clone();
-        Ok(())
+    let config = state.mutate(|data| {
+        let config = validate_appearance_config(input, &data.appearance, glass::is_supported())?;
+        data.appearance = config.clone();
+        Ok(config)
     })?;
-    Ok(input)
+    glass::sync(&app, &config)?;
+    Ok(config)
 }
 
 /// Custom prompts apply to running chats on their next turn, like tool changes: workers are
@@ -1648,6 +1653,40 @@ fn validate_prompt_config(input: PromptConfig) -> Result<PromptConfig, String> {
     })
 }
 
+/// The background image is not the renderer's to set: it keeps the stored file, which only
+/// `choose_background_image` and `remove_background_image` change.
+fn validate_appearance_config(input: AppearanceConfig, current: &AppearanceConfig, glass_supported: bool) -> Result<AppearanceConfig, String> {
+    let colour = |label: &str, value: Option<String>| -> Result<Option<String>, String> {
+        match value {
+            None => Ok(None),
+            Some(value) => glass::parse_hex(&value.to_ascii_lowercase())
+                .map(|_| Some(value.to_ascii_lowercase()))
+                .ok_or_else(|| format!("The {label} colour must look like #1a2b3c.")),
+        }
+    };
+    let percent = |label: &str, value: u8| -> Result<u8, String> {
+        if value <= 90 { Ok(value) } else { Err(format!("{label} must be between 0 and 90%.")) }
+    };
+    let config = AppearanceConfig {
+        thinking_preview: input.thinking_preview,
+        accent: colour("accent", input.accent)?,
+        background: colour("background", input.background)?,
+        backdrop: input.backdrop,
+        background_image: current.background_image.clone(),
+        image_dim: percent("Image dimming", input.image_dim)?,
+        image_blur: if input.image_blur <= 40 { input.image_blur } else { return Err("Image blur must be between 0 and 40 px.".into()) },
+        glass_style: input.glass_style,
+        glass_tint: percent("Glass tint", input.glass_tint)?,
+    };
+    if config.backdrop == BackdropMode::Glass && !glass_supported {
+        return Err("Liquid Glass needs macOS 26 or later.".into());
+    }
+    if config.backdrop == BackdropMode::Image && config.background_image.is_none() {
+        return Err("Choose an image first.".into());
+    }
+    Ok(config)
+}
+
 fn validate_base_url(value: &str) -> Result<String, String> {
     let value = required(value, "Base URL")?.trim_end_matches('/').to_string();
     let parsed = reqwest::Url::parse(&value).map_err(|_| "Enter a valid base URL".to_string())?;
@@ -1688,6 +1727,48 @@ mod tests {
         let attempt = consume_auto_title_eligibility(&mut task, true).unwrap();
         assert_eq!(task.auto_title_attempt_id.as_deref(), Some(attempt.as_str()));
         assert!(consume_auto_title_eligibility(&mut task, true).is_none());
+    }
+
+    #[test]
+    fn appearance_colours_are_normalised_and_checked() {
+        let current = AppearanceConfig::default();
+        let input = AppearanceConfig { accent: Some("#6CC4FF".into()), background: Some("#0F1218".into()), ..current.clone() };
+        let config = validate_appearance_config(input, &current, true).unwrap();
+        assert_eq!((config.accent.as_deref(), config.background.as_deref()), (Some("#6cc4ff"), Some("#0f1218")));
+        for bad in ["6cc4ff", "#6cc4f", "#6cc4ffaa", "blue", "#gggggg"] {
+            let input = AppearanceConfig { accent: Some(bad.into()), ..current.clone() };
+            assert!(validate_appearance_config(input, &current, true).unwrap_err().contains("#1a2b3c"), "{bad}");
+        }
+    }
+
+    #[test]
+    fn appearance_sliders_are_range_checked() {
+        let current = AppearanceConfig::default();
+        assert!(validate_appearance_config(AppearanceConfig { image_dim: 91, ..current.clone() }, &current, true).is_err());
+        assert!(validate_appearance_config(AppearanceConfig { glass_tint: 200, ..current.clone() }, &current, true).is_err());
+        assert!(validate_appearance_config(AppearanceConfig { image_blur: 41, ..current.clone() }, &current, true).is_err());
+        assert!(validate_appearance_config(AppearanceConfig { image_dim: 90, image_blur: 40, glass_tint: 0, ..current.clone() }, &current, true).is_ok());
+    }
+
+    #[test]
+    fn the_renderer_cannot_point_the_background_at_another_file() {
+        let current = AppearanceConfig { background_image: Some("kept.png".into()), ..AppearanceConfig::default() };
+        let input = AppearanceConfig { background_image: Some("../../secrets.json".into()), ..current.clone() };
+        assert_eq!(validate_appearance_config(input, &current, true).unwrap().background_image.as_deref(), Some("kept.png"));
+        let input = AppearanceConfig { background_image: None, ..current.clone() };
+        assert_eq!(validate_appearance_config(input, &current, true).unwrap().background_image.as_deref(), Some("kept.png"));
+    }
+
+    #[test]
+    fn backdrops_need_their_prerequisites() {
+        let current = AppearanceConfig::default();
+        let glass = AppearanceConfig { backdrop: BackdropMode::Glass, ..current.clone() };
+        assert!(validate_appearance_config(glass.clone(), &current, false).unwrap_err().contains("macOS 26"));
+        assert!(validate_appearance_config(glass, &current, true).is_ok());
+        let image = AppearanceConfig { backdrop: BackdropMode::Image, ..current.clone() };
+        assert!(validate_appearance_config(image.clone(), &current, true).unwrap_err().contains("Choose an image"));
+        let with_image = AppearanceConfig { background_image: Some("a.png".into()), ..current };
+        assert!(validate_appearance_config(image, &with_image, true).is_ok());
     }
 
     #[test]

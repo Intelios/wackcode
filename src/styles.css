@@ -1310,6 +1310,38 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 /* ── Appearance settings ───────────────────────────── */
 /* Reuses the tool-setting rows; option names are prose, not identifiers. */
 .appearance-setting .tool-setting-name { font-family: inherit; font-size: 12.5px; font-weight: 500; }
+.theme-presets { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; margin-bottom: 10px; }
+.theme-preset {
+  display: flex; flex-direction: column; gap: 7px; padding: 7px 7px 8px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); color: var(--text-soft); font-size: 11.5px; text-align: left; cursor: pointer;
+  transition: border-color .12s var(--ease), color .12s var(--ease);
+}
+.theme-preset:hover { border-color: var(--border-bright); color: var(--text); }
+.theme-preset[aria-checked="true"] { border-color: var(--wc-accent); color: var(--text); box-shadow: 0 0 0 1px var(--wc-accent); }
+.theme-preset-name { padding: 0 2px; font-weight: 550; }
+/* A miniature window: sidebar, two text lines and a composer with its send button. */
+.theme-preset-preview { display: flex; height: 58px; border-radius: 6px; overflow: hidden; box-shadow: inset 0 0 0 1px rgb(255 255 255 / 6%); }
+.theme-preset-sidebar { width: 28%; border-right: 1px solid; }
+.theme-preset-main { flex: 1; display: flex; flex-direction: column; gap: 5px; padding: 9px 8px 7px; }
+.theme-preset-line { height: 3px; width: 70%; border-radius: 2px; }
+.theme-preset-line.short { width: 45%; }
+.theme-preset-composer { margin-top: auto; height: 15px; border: 1px solid; border-radius: 5px; display: flex; justify-content: flex-end; align-items: center; padding: 0 3px; }
+.theme-preset-send { width: 8px; height: 8px; border-radius: 3px; }
+.colour-setting { align-items: center; }
+.swatch-row { display: flex; align-items: center; gap: 7px; flex: 0 0 auto; }
+.swatch {
+  position: relative; width: 20px; height: 20px; flex: 0 0 auto; padding: 0; border: 0; border-radius: 50%; cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 24%); transition: box-shadow .12s var(--ease), transform .12s var(--ease);
+}
+.swatch:hover:not(:disabled) { transform: scale(1.08); }
+.swatch[aria-checked="true"], .swatch-custom.selected { box-shadow: inset 0 0 0 1px rgb(255 255 255 / 24%), 0 0 0 2px var(--surface), 0 0 0 3.5px var(--text); }
+/* The custom swatch shows a colour wheel until a custom colour is picked; the native input
+   covers it invisibly, so a click opens the system colour panel. */
+.swatch-custom { display: block; background: conic-gradient(hsl(0 85% 62%), hsl(60 85% 60%), hsl(120 70% 55%), hsl(180 75% 55%), hsl(240 80% 66%), hsl(300 75% 62%), hsl(360 85% 62%)); }
+.swatch-custom input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; opacity: 0; cursor: pointer; }
+.swatch-custom:focus-within { outline: 2px solid color-mix(in srgb, var(--wc-accent) 75%, transparent); outline-offset: 2px; }
+.swatch-reset { margin-left: 2px; }
+.swatch-reset:disabled { opacity: .3; cursor: default; background: none; color: var(--text-soft); }
 
 /* ── Sub-agents settings ───────────────────────────── */
 .builtin-configure { width: auto; height: 24px; padding: 0 6px 0 8px; display: inline-flex; gap: 3px; font-size: 11px; font-weight: 600; color: var(--wc-accent); flex: 0 0 auto; }

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
-import { motion } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
 import type { ImageContent, ProviderRecord, SessionSnapshot, SlashCommand, TaskMode, TaskStatus, ThinkingLevel } from "../types";
 import { ACCEPTED_IMAGE_TYPES, attachImages, imageDataUrl, imageFilesFrom } from "../attachment-utils";
 import { formatTokens } from "../chat-utils";
@@ -49,11 +49,9 @@ interface ComposerProps {
   comet?: boolean;
   /** Shows this text read-only instead of the draft while the hero composer hands off to the docked one. */
   frozen?: string;
-  /** Shared-layout id so the composer glides between the hero and docked positions. */
-  layoutId?: string;
 }
 
-export function Composer({ status, providerId, modelId, thinkingLevel, providers, stats, header, placeholder, popoverSide = "top", mode, onModeChange, onConfigure, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, onDraftChange, transfer, onStop, onOpenSettings, disabled, seed, comet, frozen, layoutId }: ComposerProps) {
+export function Composer({ status, providerId, modelId, thinkingLevel, providers, stats, header, placeholder, popoverSide = "top", mode, onModeChange, onConfigure, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, onDraftChange, transfer, onStop, onOpenSettings, disabled, seed, comet, frozen }: ComposerProps) {
   const [draft, setDraft] = useState(transfer?.text ?? "");
   const [attachments, setAttachments] = useState<ImageContent[]>(transfer?.images ?? []);
   const [attachNotice, setAttachNotice] = useState<string>();
@@ -63,6 +61,7 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
   const [caret, setCaret] = useState(transfer?.text.length ?? 0);
   const [dragging, setDragging] = useState(false);
   const areaRef = useRef<HTMLTextAreaElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
   const transferNonce = useRef(transfer?.nonce);
   const fileRef = useRef<HTMLInputElement>(null);
   const busy = status === "running" || status === "stopping";
@@ -96,6 +95,19 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
     area.style.height = "auto";
     area.style.height = `${Math.min(area.scrollHeight, 200)}px`;
   }, [draft, frozen]);
+
+  // The composer lives in an overlay layer; the chat view reserves space for it
+  // through --composer-h on .workspace.
+  useLayoutEffect(() => {
+    const wrap = wrapRef.current;
+    const workspace = wrap?.closest(".workspace");
+    if (!wrap || !(workspace instanceof HTMLElement)) return;
+    const update = () => workspace.style.setProperty("--composer-h", `${wrap.offsetHeight}px`);
+    update();
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(update);
+    observer?.observe(wrap);
+    return () => { observer?.disconnect(); workspace.style.removeProperty("--composer-h"); };
+  }, []);
 
   // Only a new nonce reseeds, so a re-render never clobbers what the user has typed since.
   const seedText = useRef(seed?.text);
@@ -187,6 +199,7 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
 
   return (
     <div
+      ref={wrapRef}
       className={`composer-wrap ${disabled ? "disabled" : ""} ${dragging ? "dropping" : ""}`}
       onDragOver={(event) => {
         if (!acceptsDrop(event)) return;
@@ -204,14 +217,14 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
         void addFiles(imageFilesFrom(event.dataTransfer));
       }}
     >
-      {header && <motion.div className="composer-header" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, y: -12, transition: { duration: 0.18, ease: EASE } }} transition={{ duration: 0.25, ease: EASE }}>{header}</motion.div>}
+      <AnimatePresence initial={false} mode="popLayout">
+        {header && <motion.div key="composer-header" className="composer-header" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, y: -12, transition: { duration: 0.18, ease: EASE } }} transition={{ duration: 0.25, ease: EASE }}>{header}</motion.div>}
+      </AnimatePresence>
       <motion.div
         className={`composer${comet ? " comet" : ""}${frozen !== undefined ? " frozen" : ""}`}
         aria-disabled={disabled || undefined}
-        layoutId={layoutId}
-        layoutCrossfade={false}
-        transition={layoutId ? { duration: 0.55, ease: GLIDE_EASE } : undefined}
-        exit={{ opacity: 0, y: 24, transition: { duration: 0.22, ease: EASE } }}
+        layout="position"
+        transition={{ duration: 0.55, ease: GLIDE_EASE }}
       >
         {showCommands && <div id="slash-command-list" className="slash-picker" role="listbox" aria-label="Slash commands">
           {commandsLoading ? <div className="slash-picker-status">Loading commands…</div> : commandsError ? <div className="slash-picker-status">{commandsError} <button type="button" onClick={onRequestCommands}>Retry</button></div> : suggestions.length ? suggestions.map((command, index) =>

@@ -101,7 +101,7 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .workspace { min-width: 0; flex: 1; display: flex; flex-direction: column; position: relative; }
 /* Draft hero and chat view overlay each other during the welcome→chat transition
    so the exiting hero can fade while the chat (and the gliding composer) mounts. */
-.chat-view { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.chat-view { position: absolute; inset: 0; display: flex; flex-direction: column; padding-bottom: var(--composer-h, 0px); }
 .chat-transcript { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .workspace-header {
   min-height: 56px; padding: 12px 14px 9px 20px; display: flex; align-items: center; gap: 12px;
@@ -334,7 +334,7 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .slash-option small { color: var(--text-faint); }
 .slash-picker-status { padding: 10px; color: var(--text-soft); }
 .composer:focus-within { border-color: #596649; box-shadow: 0 10px 36px rgb(0 0 0 / 28%), 0 0 0 1px rgb(194 238 74 / 8%); }
-/* Comet: a thin accent line tracing the border of the draft-hero composer. The
+/* Comet: a thin accent line tracing the border of the draft hero composer. The
    conic gradient lives on a pseudo-element masked down to a 1.5px ring. */
 @property --comet-angle { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
 @keyframes comet-spin { to { --comet-angle: 360deg; } }
@@ -388,9 +388,15 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .attach-button.unavailable:hover { background: transparent; color: var(--text-dim); }
 
 /* draft hero + project bar */
-.draft-hero { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; padding-bottom: 8%; }
 .draft-title { margin: 0 auto 22px; max-width: 760px; width: 100%; padding: 0 24px; font-size: 24px; letter-spacing: -.5px; font-weight: 650; text-align: center; }
-.draft-hero .composer-wrap { background: none; padding-top: 0; }
+/* Overlay layer for the persistent composer: it travels between the centered
+   hero slot and the docked chat slot via a motion layout animation, so it can
+   never unmount mid-transition. pointer-events pass through except the composer. */
+.composer-layer { position: absolute; inset: 0; display: flex; flex-direction: column; pointer-events: none; }
+.composer-layer.hero { justify-content: center; padding-bottom: 8%; }
+.composer-layer.dock { justify-content: flex-end; }
+.composer-layer .composer-wrap { pointer-events: auto; }
+.composer-layer.hero .composer-wrap { background: none; padding-top: 0; }
 .project-bar { display: flex; align-items: center; gap: 6px; }
 .project-bar .model-pill { border: 1px solid var(--border); background: var(--surface); }
 .project-bar .model-pill svg:first-child { width: 13px; height: 13px; flex: 0 0 auto; }

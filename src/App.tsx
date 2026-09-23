@@ -161,6 +161,8 @@ export default function App() {
   const [draft, setDraft] = useState<Draft>();
   /** Mid first-send choreography: the hero is exiting while this message rides the composer down. */
   const [transitioning, setTransitioning] = useState<{ message: string; taskId?: string }>();
+  /** Bumped when returning to the draft hero from a task; reseeds the shared composer to a clean draft. */
+  const [draftSeedNonce, setDraftSeedNonce] = useState(0);
 
   const selectedTask = data.tasks.find((task) => task.id === selectedTaskId);
   const selectedProject = data.projects.find((project) => project.id === selectedTask?.projectId);
@@ -507,6 +509,8 @@ export default function App() {
     slashDraftPromise.current = undefined;
     draftComposer.current = { text: "", images: [] };
     setComposerTransfer(undefined);
+    // The composer is shared across views; entering the hero from a task clears its draft.
+    if (selectedTaskRef.current) setDraftSeedNonce((n) => n + 1);
     const resolved = projectId === undefined ? lastProjectId() : projectId;
     selectedTaskRef.current = undefined;
     setSelectedTaskId(undefined);
@@ -1311,59 +1315,7 @@ export default function App() {
 
       <main className="workspace">
         <AnimatePresence initial={false}>
-        {!selectedTask ? (
-          configuredProviders.length === 0 ? (
-            <div key="empty" className="workspace-empty">
-              <h1>Connect a model provider</h1>
-              <p>Sign in with a subscription or add an OpenAI-compatible endpoint and API key to start chatting.</p>
-              <button className="primary-button" onClick={() => setSettingsOpen(true)}><Icon name="key" /> Open settings</button>
-            </div>
-          ) : (
-            <motion.div key="draft" className="draft-hero">
-              <motion.h1
-                className="draft-title"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1, transition: { duration: 0.25, ease: EASE } }}
-                exit={{ opacity: 0, y: -56, transition: { duration: 0.22, ease: EASE } }}
-              >
-                {draftProject ? `What should we build in ${draftProject.name}?` : "What should we build?"}
-              </motion.h1>
-              <Composer
-                comet
-                layoutId="main-composer"
-                frozen={transitioning?.message}
-                status="idle"
-                providerId={draftChoice?.providerId}
-                modelId={draftChoice?.modelId}
-                thinkingLevel={draftChoice?.thinkingLevel}
-                providers={configuredProviders}
-                popoverSide="bottom"
-                header={
-                  <ProjectBar
-                    projects={data.projects}
-                    projectId={draft?.projectId ?? null}
-                    useWorktree={draft?.useWorktree ?? false}
-                    onSelectProject={setDraftProject}
-                    onToggleWorktree={setDraftWorktree}
-                    onAddProject={() => void addProject()}
-                  />
-                }
-                placeholder="Describe a task or ask a question…"
-                mode={draft?.mode ?? "build"}
-                onModeChange={(mode) => void setTaskMode(mode)}
-                onConfigure={configureDraft}
-                onSend={(message, images) => sendPrompt(message, { images })}
-                onLiteral={(message, images) => sendPrompt(message, { images, literal: true })}
-                commands={APP_SLASH_COMMANDS}
-                commandsReady={true}
-                onCommand={sendSlash}
-                onDraftChange={(text, images) => { draftComposer.current = { text, images }; }}
-                onStop={() => undefined}
-                onOpenSettings={() => setSettingsOpen(true)}
-              />
-            </motion.div>
-          )
-        ) : (
+        {selectedTask ? (
           <motion.div key="chat" className="chat-view" initial={false} exit={{ opacity: 0, transition: { duration: 0.18, ease: EASE } }}>
             <motion.div initial={{ opacity: 0, y: -36 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.45, ease: EASE }}>
               <ChatHeader
@@ -1420,35 +1372,74 @@ export default function App() {
               tasks={runtime?.todoState?.tasks}
               busy={selectedTask.status === "running" || selectedTask.status === "stopping"}
             />
+          </motion.div>
+        ) : configuredProviders.length === 0 ? (
+          <div key="empty" className="workspace-empty">
+            <h1>Connect a model provider</h1>
+            <p>Sign in with a subscription or add an OpenAI-compatible endpoint and API key to start chatting.</p>
+            <button className="primary-button" onClick={() => setSettingsOpen(true)}><Icon name="key" /> Open settings</button>
+          </div>
+        ) : null}
+        </AnimatePresence>
+
+        {configuredProviders.length > 0 && (
+          <div className={`composer-layer ${selectedTask ? "dock" : "hero"}`}>
+            <AnimatePresence initial={false} mode="popLayout">
+              {!selectedTask && (
+                <motion.h1
+                  key="draft-title"
+                  className="draft-title"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1, transition: { duration: 0.25, ease: EASE } }}
+                  exit={{ opacity: 0, y: -56, transition: { duration: 0.22, ease: EASE } }}
+                >
+                  {draftProject ? `What should we build in ${draftProject.name}?` : "What should we build?"}
+                </motion.h1>
+              )}
+            </AnimatePresence>
+            {/* One persistent composer: it layout-animates between the centered hero slot and
+                the docked chat slot, so it can never vanish mid-transition. */}
             <Composer
-              layoutId="main-composer"
-              frozen={transitioning?.taskId === selectedTask.id ? transitioning.message : undefined}
-              status={selectedTask.status}
-              providerId={selectedTask.providerId}
-              modelId={selectedTask.modelId}
-              thinkingLevel={selectedTask.thinkingLevel}
+              comet={!selectedTask || transitioning !== undefined}
+              frozen={transitioning?.message}
+              status={selectedTask?.status ?? "idle"}
+              providerId={selectedTask?.providerId ?? draftChoice?.providerId}
+              modelId={selectedTask?.modelId ?? draftChoice?.modelId}
+              thinkingLevel={selectedTask?.thinkingLevel ?? draftChoice?.thinkingLevel}
               providers={configuredProviders}
-              stats={runtime?.snapshot?.stats}
+              stats={selectedTask ? runtime?.snapshot?.stats : undefined}
+              popoverSide={selectedTask ? "top" : "bottom"}
+              header={!selectedTask ? (
+                <ProjectBar
+                  projects={data.projects}
+                  projectId={draft?.projectId ?? null}
+                  useWorktree={draft?.useWorktree ?? false}
+                  onSelectProject={setDraftProject}
+                  onToggleWorktree={setDraftWorktree}
+                  onAddProject={() => void addProject()}
+                />
+              ) : undefined}
+              placeholder={!selectedTask ? "Describe a task or ask a question…" : undefined}
               mode={currentMode}
-              disabled={pendingDialogTaskIds.has(selectedTask.id)}
+              disabled={selectedTask ? pendingDialogTaskIds.has(selectedTask.id) : false}
               onModeChange={(mode) => void setTaskMode(mode)}
-              onConfigure={(patch) => void configure(patch)}
+              onConfigure={selectedTask ? (patch) => void configure(patch) : configureDraft}
               onSend={(message, images) => sendPrompt(message, { images })}
               onLiteral={(message, images) => sendPrompt(message, { images, literal: true })}
-              commands={[...APP_SLASH_COMMANDS, ...(runtime?.slashCommands ?? [])]}
-              commandsReady={runtime?.slashCommands !== undefined}
-              commandsLoading={runtime?.slashCommandsLoading}
-              commandsError={runtime?.slashCommandsError}
+              commands={selectedTask ? [...APP_SLASH_COMMANDS, ...(runtime?.slashCommands ?? [])] : APP_SLASH_COMMANDS}
+              commandsReady={!selectedTask || runtime?.slashCommands !== undefined}
+              commandsLoading={selectedTask ? runtime?.slashCommandsLoading : undefined}
+              commandsError={selectedTask ? runtime?.slashCommandsError : undefined}
               onRequestCommands={requestSlashCommands}
               onCommand={sendSlash}
-              transfer={composerTransfer?.taskId === selectedTask.id ? composerTransfer : undefined}
+              transfer={selectedTask && composerTransfer?.taskId === selectedTask.id ? composerTransfer : undefined}
+              seed={selectedTask ? composerSeed : draftSeedNonce ? { text: "", nonce: draftSeedNonce } : undefined}
+              onDraftChange={!selectedTask ? (text, images) => { draftComposer.current = { text, images }; } : undefined}
               onStop={() => void stopTask()}
               onOpenSettings={() => setSettingsOpen(true)}
-              seed={composerSeed}
             />
-          </motion.div>
+          </div>
         )}
-        </AnimatePresence>
       </main>
 
       {selectedTask && changesOpen && <ChangesPanel changes={changes} loading={changesLoading} width={changesWidth} onWidthChange={setChangesWidth} onClose={() => setChangesOpen(false)} onRefresh={() => void refreshChanges(selectedTask.id)} />}

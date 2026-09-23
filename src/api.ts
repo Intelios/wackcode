@@ -136,5 +136,6 @@ export const api = {
     confirmed?: boolean;
     cancelled?: true;
     answers?: QuestionAnswer[];
+    wrapUp?: true;
   }) => invoke<void>("respond_extension_ui", { input })
 };

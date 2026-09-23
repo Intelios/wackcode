@@ -94,4 +94,17 @@ describe("QuestionCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onRespond).toHaveBeenCalledWith({ cancelled: true });
   });
+
+  it("offers \"Write the plan now\" only for Ultra Plan's interview", () => {
+    const onRespond = vi.fn();
+    render(<QuestionCard request={request} onRespond={onRespond} />);
+    expect(screen.queryByRole("button", { name: "Write the plan now" })).toBeNull();
+    expect(screen.getByText("Question")).toBeInTheDocument();
+    cleanup();
+
+    render(<QuestionCard request={{ ...request, offerWrapUp: true }} onRespond={onRespond} />);
+    expect(screen.getByText("Ultra Plan · Question")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Write the plan now" }));
+    expect(onRespond).toHaveBeenCalledWith({ wrapUp: true });
+  });
 });

@@ -96,6 +96,7 @@ export function Sidebar({ projects, tasks, selectedTaskId, showArchived, pending
         <span className="task-name">{task.name}</span>
         {pendingDialogTaskIds.has(task.id) && <span className="sidebar-question-dot" title="Waiting for your answer" />}
         {task.mode === "plan" && <span className="task-mode-chip">Plan</span>}
+        {task.mode === "ultraplan" && <span className="task-mode-chip ultra">Ultra Plan</span>}
         {task.usesWorktree && <Icon name="branch" className="task-branch-icon" />}
         <span className="task-actions" onClick={(event) => event.stopPropagation()} onDoubleClick={(event) => event.stopPropagation()}>
           <MenuButton className="row-menu" label={`${task.name} menu`} items={() => taskMenu(task, project)} />

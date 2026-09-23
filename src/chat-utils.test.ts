@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applySnapshotDelta, displayPath, formatRunDuration, formatTokens, samePlanState, sameTodoState, titleFromPrompt, validateInitCommand } from "./chat-utils";
+import { applySnapshotDelta, displayPath, formatRunDuration, formatTokens, isPlanMode, nextMode, planButtonTarget, samePlanState, sameTodoState, titleFromPrompt, validateInitCommand } from "./chat-utils";
 import type { NormalizedMessage, SessionSnapshot, SnapshotDelta } from "./types";
 
 describe("titleFromPrompt", () => {
@@ -28,6 +28,28 @@ describe("/init validation", () => {
     expect(() => validateInitCommand("extra", "project", "build")).toThrow("does not accept arguments");
     expect(() => validateInitCommand("", null, "build")).toThrow("needs a project");
     expect(() => validateInitCommand("", "project", "plan")).toThrow("Build mode");
+    expect(() => validateInitCommand("", "project", "ultraplan")).toThrow("Build mode");
+  });
+});
+
+describe("modes", () => {
+  it("treats Plan and Ultra Plan as planning", () => {
+    expect(isPlanMode("plan")).toBe(true);
+    expect(isPlanMode("ultraplan")).toBe(true);
+    expect(isPlanMode("build")).toBe(false);
+    expect(isPlanMode(undefined)).toBe(false);
+  });
+
+  it("cycles Build → Plan → Ultra Plan → Build on ⇧Tab", () => {
+    expect(nextMode("build")).toBe("plan");
+    expect(nextMode("plan")).toBe("ultraplan");
+    expect(nextMode("ultraplan")).toBe("build");
+  });
+
+  it("enters Plan from Build, then toggles Plan ↔ Ultra Plan from the Plan button", () => {
+    expect(planButtonTarget("build")).toBe("plan");
+    expect(planButtonTarget("plan")).toBe("ultraplan");
+    expect(planButtonTarget("ultraplan")).toBe("plan");
   });
 });
 

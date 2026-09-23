@@ -260,14 +260,16 @@ impl Default for TaskStatus {
     }
 }
 
-/// The agent's working mode. `Plan` is the read-only, plan-first mode; the worker's built-in
-/// plan-mode extension enforces it. The record mirrors the worker's `plan_state` events and is
-/// the durable hint the UI uses before a worker reports in.
+/// The agent's working mode. `Plan` is the read-only, plan-first mode and `UltraPlan`
+/// (`"ultraplan"`) the same mode with an exhaustive interview; the worker's built-in plan-mode
+/// extension enforces both. The record mirrors the worker's `plan_state` events and is the
+/// durable hint the UI uses before a worker reports in.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskMode {
     Build,
     Plan,
+    UltraPlan,
 }
 
 impl Default for TaskMode {
@@ -586,6 +588,9 @@ pub struct ExtensionUiResponseInput {
     pub cancelled: Option<bool>,
     #[serde(default)]
     pub answers: Option<Vec<QuestionAnswer>>,
+    /// "Write the plan now" on an Ultra Plan questionnaire.
+    #[serde(default)]
+    pub wrap_up: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -3,7 +3,22 @@ import type { PlanState, SessionSnapshot, SnapshotDelta, TaskMode, TodoState } f
 export function validateInitCommand(args: string, projectId: string | null, mode: TaskMode): void {
   if (args.trim()) throw new Error("/init does not accept arguments.");
   if (!projectId) throw new Error("/init needs a project chat. Start a new chat and select a project folder.");
-  if (mode === "plan") throw new Error("Switch to Build mode before running /init.");
+  if (isPlanMode(mode)) throw new Error("Switch to Build mode before running /init.");
+}
+
+/** Plan and Ultra Plan are both the read-only planning mode. */
+export function isPlanMode(mode: TaskMode | undefined): boolean {
+  return mode === "plan" || mode === "ultraplan";
+}
+
+/** ⇧Tab cycles Build → Plan → Ultra Plan → Build. */
+export function nextMode(mode: TaskMode): TaskMode {
+  return mode === "build" ? "plan" : mode === "plan" ? "ultraplan" : "build";
+}
+
+/** The Plan button enters Plan from Build, then toggles Plan ↔ Ultra Plan. */
+export function planButtonTarget(mode: TaskMode): TaskMode {
+  return mode === "plan" ? "ultraplan" : "plan";
 }
 
 export function titleFromPrompt(message: string, max = 48): string {

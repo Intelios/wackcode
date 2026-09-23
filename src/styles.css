@@ -4,6 +4,10 @@
   font-synthesis: none;
   --wc-accent: #c2ee4a;
   --wc-accent-hover: #d0f664;
+  /* Ultra Plan: a warm accent, so the interview mode never reads as ordinary Plan. */
+  --wc-ultra: #ffb45a;
+  --wc-ultra-hot: #ff7b47;
+  --wc-ultra-glow: #fff1d6;
   --bg: #111310;
   --surface: #161914;
   --surface-raised: #1b1f19;
@@ -932,10 +936,43 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .mode-option.plan.active { color: var(--wc-accent); }
 .mode-option:disabled { cursor: default; opacity: .55; }
 .mode-icon { width: 11px; height: 11px; }
+/* Ultra Plan: scoped under .ultra — SubagentsSection reuses .mode-toggle/.mode-option. */
+.mode-option.plan.ultra.active {
+  color: var(--wc-ultra);
+  background: color-mix(in srgb, var(--wc-ultra) 11%, var(--surface-hover));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wc-ultra) 30%, transparent), 0 0 12px -3px color-mix(in srgb, var(--wc-ultra-hot) 55%, transparent);
+}
+.mode-option.ultra.active .mode-icon { color: var(--wc-ultra-hot); animation: ultra-icon-glint 3.6s var(--ease) infinite; }
+.mode-option.ultra.active .mode-label {
+  background: linear-gradient(90deg, var(--wc-ultra) 38%, var(--wc-ultra-glow) 50%, var(--wc-ultra) 62%);
+  background-size: 260% 100%;
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: ultra-sheen 3.6s var(--ease) infinite;
+}
+@keyframes ultra-sheen {
+  0% { background-position: 110% 0; }
+  45%, 100% { background-position: -8% 0; }
+}
+@keyframes ultra-icon-glint {
+  0%, 3% { filter: brightness(1); }
+  9% { filter: brightness(1.45) drop-shadow(0 0 3px rgb(255 150 90 / .85)); }
+  18%, 100% { filter: brightness(1); }
+}
+/* After the rules above (the global reduced-motion block precedes this section): hold the
+   gradient still instead of flickering at the global .01ms duration. */
+@media (prefers-reduced-motion: reduce) {
+  .mode-option.ultra.active .mode-icon { animation: none; }
+  .mode-option.ultra.active .mode-label { animation: none; background-position: 50% 0; }
+}
 
 .task-mode-chip {
   flex: 0 0 auto; font-size: 9.5px; font-weight: 700; letter-spacing: .04em; line-height: 1;
   color: var(--wc-accent); border: 1px solid #43511f; background: #1b2114; border-radius: 4px; padding: 2.5px 5px;
+}
+.task-mode-chip.ultra {
+  color: var(--wc-ultra);
+  border-color: color-mix(in srgb, var(--wc-ultra) 38%, var(--border));
+  background: color-mix(in srgb, var(--wc-ultra) 10%, var(--bg));
 }
 
 .plan-card { margin: 6px 0; border: 1px solid #43511f; background: #151a10; border-radius: 10px; overflow: hidden; }
@@ -1074,6 +1111,8 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .question-option-label { font-size: 12.5px; font-weight: 600; }
 .question-option-desc { font-size: 11.5px; color: var(--text-dim); line-height: 1.45; }
 .question-option.other { align-items: flex-start; cursor: default; }
+.question-wrap-up { margin-right: auto; color: var(--wc-ultra); border-color: color-mix(in srgb, var(--wc-ultra) 32%, var(--border)); }
+.question-wrap-up:hover { color: var(--wc-ultra-glow); border-color: color-mix(in srgb, var(--wc-ultra) 55%, var(--border)); background: color-mix(in srgb, var(--wc-ultra) 9%, var(--surface-hover)); }
 .question-option.other:hover { background: transparent; }
 .question-option.other.selected { border-color: #58752d; }
 .question-other {

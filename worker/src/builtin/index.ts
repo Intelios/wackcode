@@ -14,7 +14,7 @@ import { type TodoHandle, createTodoExtension } from "./todo/index.js";
 export interface BuiltinExtensions {
   /** Factories handed to `DefaultResourceLoader.extensionFactories`. */
   factories: InlineExtension[];
-  /** Switches the plan-mode extension between Build and Plan. */
+  /** Switches the plan-mode extension between Build, Plan and Ultra Plan. */
   planMode: PlanModeController;
   /** Read access to the todo list so snapshots can seed the panel. */
   todo: TodoHandle;
@@ -28,7 +28,12 @@ export function createBuiltinExtensions(host: BuiltinHost): BuiltinExtensions {
   const subagents = createSubagentsExtension(host, () => planMode.controller.getState().mode);
   return {
     factories: [
-      { name: "wackcode-ask", factory: createAskUserQuestionExtension(host), hidden: true },
+      {
+        name: "wackcode-ask",
+        // Ultra Plan's questionnaires offer "Write the plan now".
+        factory: createAskUserQuestionExtension(host, () => planMode.controller.getState().mode === "ultraplan"),
+        hidden: true,
+      },
       { name: "wackcode-plan-mode", factory: planMode.factory, hidden: true },
       { name: "wackcode-todo", factory: todo.factory, hidden: true },
       { name: "wackcode-subagents", factory: subagents.factory, hidden: true },

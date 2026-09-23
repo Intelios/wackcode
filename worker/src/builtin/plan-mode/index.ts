@@ -5,6 +5,9 @@
  * completed plan is reviewed in the desktop UI rather than Pi's TUI. The shell/tool policy,
  * mode contract, completion tool and session restore are ports of the upstream modules in
  * this directory.
+ *
+ * Ultra Plan is the same mode with a different contract: an exhaustive, grill-me style
+ * interview instead of a few questions. Policy, completion and review are shared.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { PlanState, TaskMode } from "../../protocol.js";
@@ -31,6 +34,7 @@ import {
   findBlockedCommandSegment,
   readCommand,
 } from "./policy.js";
+import type { PlanVariant } from "./prompt.js";
 import { invalidPlanMessage, latestAssistantText, parseProposedPlan } from "./proposed-plan.js";
 import { PLAN_STATE_ENTRY_TYPE, PLAN_STATE_VERSION, restorePlanState, type PersistedPlanState } from "./state.js";
 
@@ -46,14 +50,15 @@ export interface PlanModeController {
 
 export function createPlanModeExtension(host: BuiltinHost) {
   let pi: ExtensionAPI | undefined;
-  let enabled = false;
+  /** The planning variant in force, or undefined in Build mode. */
+  let active: PlanVariant | undefined;
   let readyPlan: string | undefined;
   /** Whether contract messages exist (or could exist) on the branch — keeps reconcile active. */
   let contractsRelevant = false;
   let publishedContract: PlanModeContract | undefined;
 
   const getState = (): PlanState => ({
-    mode: enabled ? "plan" : "build",
+    mode: active ?? "build",
     phase: readyPlan !== undefined ? "ready" : "planning",
     ...(readyPlan !== undefined ? { plan: readyPlan } : {}),
   });
@@ -68,7 +73,8 @@ export function createPlanModeExtension(host: BuiltinHost) {
   const persist = () =>
     requirePi().appendEntry<PersistedPlanState>(PLAN_STATE_ENTRY_TYPE, {
       version: PLAN_STATE_VERSION,
-      enabled,
+      enabled: active !== undefined,
+      ...(active === "ultraplan" ? { ultra: true as const } : {}),
       plan: readyPlan,
     });
 
@@ -82,21 +88,21 @@ export function createPlanModeExtension(host: BuiltinHost) {
 
   const setMode = (mode: TaskMode): PlanState => {
     requirePi();
-    const before = { enabled, readyPlan };
-    if (mode === "plan") {
-      if (!enabled) {
-        publishContract("plan");
-        enabled = true;
-      }
-    } else {
-      if (enabled || contractsRelevant) publishContract("normal");
-      enabled = false;
+    const before = { active, readyPlan };
+    if (mode === "build") {
+      if (active || contractsRelevant) publishContract("normal");
+      active = undefined;
       // Leaving Plan mode abandons the proposed plan, same as upstream's exit.
       readyPlan = undefined;
+    } else if (active !== mode) {
+      // Plan ↔ Ultra Plan only changes how hard the agent interviews; a plan awaiting review
+      // stays reviewable until the next prompt revises it.
+      publishContract(mode);
+      active = mode;
     }
     // Every prompt carries the composer's mode. Writing an unchanged state before each user
     // message would only bury the conversation's structure in duplicate entries.
-    if (before.enabled !== enabled || before.readyPlan !== readyPlan) persist();
+    if (before.active !== active || before.readyPlan !== readyPlan) persist();
     emit();
     return getState();
   };
@@ -118,7 +124,7 @@ export function createPlanModeExtension(host: BuiltinHost) {
         "Submit a decision-ready plan only while Plan mode is active, and call it alone as the final action. Never call for ordinary planning requests, roadmaps, checklists, or plan-file work.",
       parameters: PLAN_MODE_COMPLETE_PARAMS,
       async execute(_toolCallId, params: unknown) {
-        if (!enabled) {
+        if (!active) {
           throw new Error("plan_mode_complete is only available while Plan mode is active.");
         }
         const parsed = normalizePlanModeCompletion(params);
@@ -134,8 +140,8 @@ export function createPlanModeExtension(host: BuiltinHost) {
       const restored = restorePlanState(branch);
       publishedContract = latestModeContract(branch)?.mode;
       contractsRelevant =
-        restored.enabled || restored.plan !== undefined || hasModeContractArtifact(branch);
-      enabled = restored.enabled;
+        restored.active !== undefined || restored.plan !== undefined || hasModeContractArtifact(branch);
+      active = restored.active;
       readyPlan = restored.plan;
       emit();
     };
@@ -153,7 +159,7 @@ export function createPlanModeExtension(host: BuiltinHost) {
         event.toolName === PLAN_MODE_COMPLETE_TOOL_NAME ||
         event.toolName === TODO_TOOL_NAME ||
         event.toolName === SUBAGENT_TOOL_NAME;
-      if (!enabled) {
+      if (!active) {
         return event.toolName === PLAN_MODE_COMPLETE_TOOL_NAME
           ? { block: true, reason: "plan_mode_complete is only available while Plan mode is active." }
           : undefined;
@@ -198,7 +204,7 @@ export function createPlanModeExtension(host: BuiltinHost) {
     // A fresh prompt while a plan awaits review is revision feedback: it can no longer be
     // implemented until the agent resubmits a complete (possibly unchanged) plan.
     pi.on("before_agent_start", () => {
-      if (enabled && readyPlan !== undefined) {
+      if (active && readyPlan !== undefined) {
         readyPlan = undefined;
         persist();
         emit();
@@ -206,14 +212,14 @@ export function createPlanModeExtension(host: BuiltinHost) {
     });
 
     pi.on("context", (event) => {
-      if (!enabled && !contractsRelevant) return undefined;
-      return { messages: reconcileModeContract(event.messages, enabled ? "plan" : "normal") };
+      if (!active && !contractsRelevant) return undefined;
+      return { messages: reconcileModeContract(event.messages, active ?? "normal") };
     });
 
     // Weaker models sometimes answer with a prose <proposed_plan> block instead of the tool.
     // A single well-formed block counts as a completion, exactly like upstream.
     pi.on("agent_end", (event, ctx) => {
-      if (!enabled) return;
+      if (!active) return;
       const parsed = parseProposedPlan(latestAssistantText(event.messages));
       if (parsed.kind === "valid") {
         acceptPlan(parsed.plan);

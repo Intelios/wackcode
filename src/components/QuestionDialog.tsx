@@ -6,7 +6,7 @@ type QuestionsRequest = Extract<ExtensionUIRequest, { method: "questions" }>;
 
 interface Props {
   request: QuestionsRequest;
-  onRespond: (response: { answers?: QuestionAnswer[]; cancelled?: true }) => void;
+  onRespond: (response: { answers?: QuestionAnswer[]; cancelled?: true; wrapUp?: true }) => void;
 }
 
 interface Draft {
@@ -24,7 +24,8 @@ function isAnswered(draft: Draft | undefined): boolean {
  * The questionnaire raised by the built-in ask_user_question tool: one card per question,
  * preset options with descriptions, and a free-form "Other". Rendered inline above the
  * composer — the extension is blocked inside the run awaiting a reply, so cancelling always
- * sends an explicit `cancelled`.
+ * sends an explicit `cancelled`. In Ultra Plan (`offerWrapUp`) it also offers "Write the plan
+ * now", which ends the interview and has the agent submit its plan.
  */
 export function QuestionCard({ request, onRespond }: Props) {
   const questions = request.questions;
@@ -70,7 +71,7 @@ export function QuestionCard({ request, onRespond }: Props) {
 
   return (
     <div className="inline-dialog-card question-card" role="region" aria-label="Questions">
-      <span className="eyebrow">Question</span>
+      <span className="eyebrow">{request.offerWrapUp ? "Ultra Plan · Question" : "Question"}</span>
 
       {questions.length > 1 && (
         <div className="question-tabs" role="tablist">
@@ -125,6 +126,16 @@ export function QuestionCard({ request, onRespond }: Props) {
       </div>
 
       <div className="confirm-actions">
+        {request.offerWrapUp && (
+          <button
+            type="button"
+            className="secondary-button question-wrap-up"
+            title="Stop the interview — the agent submits its plan using its recommended answers"
+            onClick={() => onRespond({ wrapUp: true })}
+          >
+            Write the plan now
+          </button>
+        )}
         <button type="button" className="secondary-button" onClick={() => onRespond({ cancelled: true })}>Cancel</button>
         {tab > 0 && (
           <button type="button" className="secondary-button" onClick={() => setTab(tab - 1)}>Back</button>

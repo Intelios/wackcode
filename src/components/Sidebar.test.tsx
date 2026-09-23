@@ -105,6 +105,15 @@ describe("Sidebar collapsible projects", () => {
     expect(screen.getByTitle("A chat in this group is waiting for your answer")).toBeInTheDocument();
   });
 
+  it("labels Plan and Ultra Plan chats with their own chips", () => {
+    const planned = { ...task("t1", "p1", "Refactor parser"), mode: "plan" as const };
+    const grilled = { ...task("t2", "p1", "Rework auth"), mode: "ultraplan" as const };
+    render(<Harness tasks={[planned, grilled, task("t3", "p1", "Fix typo")]} />);
+    expect(screen.getByText("Plan")).toHaveClass("task-mode-chip");
+    expect(screen.getByText("Ultra Plan")).toHaveClass("task-mode-chip", "ultra");
+    expect(screen.getAllByText(/^(Ultra )?Plan$/)).toHaveLength(2);
+  });
+
   it("collapses the No project group under its own key", () => {
     const toggled: string[] = [];
     function LooseHarness() {

@@ -4,6 +4,7 @@
  * implementation bookkeeping.
  */
 import { PLAN_MODE_COMPLETE_TOOL_NAME, normalizePlanModeCompletion, planFromCompletionDetails } from "./completion.js";
+import type { PlanVariant } from "./prompt.js";
 
 export const PLAN_STATE_ENTRY_TYPE = "wackcode-plan-state";
 export const PLAN_STATE_VERSION = 1;
@@ -11,12 +12,15 @@ export const PLAN_STATE_VERSION = 1;
 export interface PersistedPlanState {
   version: typeof PLAN_STATE_VERSION;
   enabled: boolean;
+  /** Ultra Plan rather than Plan. Absent on entries written before Ultra Plan existed. */
+  ultra?: true;
   /** Completed plan awaiting user action (the "ready" phase). */
   plan?: string;
 }
 
 export interface RestoredPlanState {
-  enabled: boolean;
+  /** The active planning variant, or undefined in Build mode. */
+  active?: PlanVariant;
   plan?: string;
 }
 
@@ -31,7 +35,7 @@ type SessionEntry = {
   };
 };
 
-/** Restore mode + ready plan from the session branch's latest state entry. */
+/** Restore the planning variant + ready plan from the session branch's latest state entry. */
 export function restorePlanState(branch: unknown[]): RestoredPlanState {
   const entries = branch as SessionEntry[];
   let stateIndex = -1;
@@ -43,14 +47,13 @@ export function restorePlanState(branch: unknown[]): RestoredPlanState {
     }
   }
   const entry = entries[stateIndex];
-  if (!isRecord(entry?.data)) return { enabled: false };
+  if (!isRecord(entry?.data) || entry.data.enabled !== true) return {};
 
-  const enabled = entry.data.enabled === true;
-  const persistedPlan = enabled ? normalizePersistedPlan(entry.data.plan) : undefined;
+  const active: PlanVariant = entry.data.ultra === true ? "ultraplan" : "plan";
   // A crash between completion and state write loses `plan`; the completion's own tool
   // result is still on the branch, so recover from it like upstream does.
-  const plan = persistedPlan ?? (enabled ? latestCompletionPlan(entries.slice(stateIndex + 1)) : undefined);
-  return { enabled, plan };
+  const plan = normalizePersistedPlan(entry.data.plan) ?? latestCompletionPlan(entries.slice(stateIndex + 1));
+  return plan === undefined ? { active } : { active, plan };
 }
 
 function normalizePersistedPlan(value: unknown) {

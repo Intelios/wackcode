@@ -1,5 +1,5 @@
 /**
- * Cache-stable Plan/Normal mode contract messages. Ported from `@narumitw/pi-plan-mode`
+ * Cache-stable Plan/Ultra Plan/Normal mode contract messages. Ported from `@narumitw/pi-plan-mode`
  * v0.58.3 (MIT) `mode-contract.ts`: one hidden custom message is appended on each transition,
  * and the `context` hook reconciles the latest contract after compaction or restore. The
  * conversation stays append-only; no system prompt is rewritten.
@@ -8,9 +8,10 @@ import { buildPlanModePrompt } from "./prompt.js";
 
 export const MODE_CONTRACT_MESSAGE_TYPE = "wackcode-mode-contract";
 export const MODE_CONTRACT_VERSION = 1;
-export type PlanModeContract = "plan" | "normal";
+export type PlanModeContract = "plan" | "ultraplan" | "normal";
 
 const PLAN_CONTRACT_MARKER = `[WACKCODE PLAN MODE CONTRACT v${MODE_CONTRACT_VERSION}: PLAN]`;
+const ULTRA_PLAN_CONTRACT_MARKER = `[WACKCODE PLAN MODE CONTRACT v${MODE_CONTRACT_VERSION}: ULTRAPLAN]`;
 const NORMAL_CONTRACT_MARKER = `[WACKCODE PLAN MODE CONTRACT v${MODE_CONTRACT_VERSION}: NORMAL]`;
 const NORMAL_CONTRACT = `${NORMAL_CONTRACT_MARKER}
 Plan Mode is no longer active.
@@ -26,8 +27,12 @@ interface ContractMessage {
 }
 
 export function modeContractContent(mode: PlanModeContract) {
-  return mode === "plan" ? `${PLAN_CONTRACT_MARKER}\n${buildPlanModePrompt()}` : NORMAL_CONTRACT;
+  if (mode === "plan") return `${PLAN_CONTRACT_MARKER}\n${buildPlanModePrompt()}`;
+  if (mode === "ultraplan") return `${ULTRA_PLAN_CONTRACT_MARKER}\n${buildPlanModePrompt("ultraplan")}`;
+  return NORMAL_CONTRACT;
 }
+
+const CONTRACT_MODES: readonly PlanModeContract[] = ["plan", "ultraplan", "normal"];
 
 export function createModeContractMessage(mode: PlanModeContract, timestamp = Date.now()) {
   return {
@@ -43,9 +48,7 @@ export function createModeContractMessage(mode: PlanModeContract, timestamp = Da
 export function modeContractFromMessage(message: unknown): PlanModeContract | undefined {
   const candidate = unwrapMessage(message);
   if (candidate.customType !== MODE_CONTRACT_MESSAGE_TYPE) return undefined;
-  if (candidate.content === modeContractContent("plan")) return "plan";
-  if (candidate.content === modeContractContent("normal")) return "normal";
-  return undefined;
+  return CONTRACT_MODES.find((mode) => candidate.content === modeContractContent(mode));
 }
 
 export function hasModeContractArtifact(messages: readonly unknown[]) {

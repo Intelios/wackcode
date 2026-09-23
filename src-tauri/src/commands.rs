@@ -322,6 +322,7 @@ pub async fn respond_extension_ui(app: AppHandle, input: ExtensionUiResponseInpu
     if let Some(answers) = input.answers {
         payload["answers"] = serde_json::to_value(answers).map_err(|error| error.to_string())?;
     }
+    if input.wrap_up == Some(true) { payload["wrapUp"] = Value::Bool(true); }
     worker::send(&app, &input.task_id, &payload).await
 }
 
@@ -1378,7 +1379,7 @@ fn validate_checkpoint_id(checkpoint_id: &str) -> Result<(), String> {
 
 fn validate_init_agents_task(project_id: Option<&str>, mode: TaskMode) -> Result<(), String> {
     if project_id.is_none() { return Err("/init needs a project chat. Start a new chat and select a project folder.".into()); }
-    if mode == TaskMode::Plan { return Err("Switch to Build mode before running /init.".into()); }
+    if mode != TaskMode::Build { return Err("Switch to Build mode before running /init.".into()); }
     Ok(())
 }
 
@@ -1541,6 +1542,7 @@ mod tests {
         assert!(validate_init_agents_task(Some("project"), TaskMode::Build).is_ok());
         assert!(validate_init_agents_task(None, TaskMode::Build).unwrap_err().contains("project"));
         assert!(validate_init_agents_task(Some("project"), TaskMode::Plan).unwrap_err().contains("Build mode"));
+        assert!(validate_init_agents_task(Some("project"), TaskMode::UltraPlan).unwrap_err().contains("Build mode"));
     }
 
     #[test]
@@ -1641,6 +1643,11 @@ mod tests {
         let planning = json.replace("\"archived\":false", "\"archived\":false,\"mode\":\"plan\"");
         let task: TaskRecord = serde_json::from_str(&planning).unwrap();
         assert_eq!(task.mode, TaskMode::Plan);
+        let ultra = json.replace("\"archived\":false", "\"archived\":false,\"mode\":\"ultraplan\"");
+        let task: TaskRecord = serde_json::from_str(&ultra).unwrap();
+        assert_eq!(task.mode, TaskMode::UltraPlan);
+        // The worker's `plan_state` and the frontend both spell it "ultraplan".
+        assert_eq!(serde_json::to_value(TaskMode::UltraPlan).unwrap(), json!("ultraplan"));
     }
 
     #[test]

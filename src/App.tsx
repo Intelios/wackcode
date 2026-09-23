@@ -5,7 +5,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { api } from "./api";
 import { modelIsReady, pickThinkingLevel } from "./model-utils";
-import { titleFromPrompt, samePlanState, sameTodoState, applySnapshotDelta, validateInitCommand } from "./chat-utils";
+import { titleFromPrompt, samePlanState, sameTodoState, applySnapshotDelta, validateInitCommand, nextMode } from "./chat-utils";
 import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix } from "./tree-utils";
 import { pruneDisabledTools, sameToolCatalog } from "./tool-utils";
 import type {
@@ -541,8 +541,8 @@ export default function App() {
         name: "New chat",
         ...choice
       });
-      if (active.mode === "plan") {
-        try { task = await api.setTaskMode(task.id, "plan"); }
+      if (active.mode && active.mode !== "build") {
+        try { task = await api.setTaskMode(task.id, active.mode); }
         catch (reason) { await api.deleteTask(task.id); throw reason; }
       }
       if (epoch !== draftEpoch.current || selectedTaskRef.current) {
@@ -620,11 +620,11 @@ export default function App() {
 
   function setDraftProject(projectId: string | null) {
     localStorage.setItem(LAST_PROJECT_KEY, JSON.stringify(projectId));
-    setDraft((current) => ({ projectId, useWorktree: false, choice: current?.choice }));
+    setDraft((current) => ({ projectId, useWorktree: false, choice: current?.choice, mode: current?.mode }));
   }
 
   function setDraftWorktree(useWorktree: boolean) {
-    setDraft((current) => ({ projectId: current?.projectId ?? null, useWorktree, choice: current?.choice }));
+    setDraft((current) => ({ projectId: current?.projectId ?? null, useWorktree, choice: current?.choice, mode: current?.mode }));
   }
 
   async function addProject() {
@@ -725,7 +725,7 @@ export default function App() {
       const model = provider?.models.find((item) => item.id === modelId);
       const thinkingLevel = pickThinkingLevel(model, patch.thinkingLevel, base?.thinkingLevel);
       if (!providerId || !modelId || !thinkingLevel) return current;
-      return { projectId: current?.projectId ?? null, useWorktree: current?.useWorktree ?? false, choice: { providerId, modelId, thinkingLevel } };
+      return { projectId: current?.projectId ?? null, useWorktree: current?.useWorktree ?? false, choice: { providerId, modelId, thinkingLevel }, mode: current?.mode };
     });
   }
 
@@ -830,8 +830,8 @@ export default function App() {
   }
 
   /**
-   * Switch Build ↔ Plan. For a draft the choice is just held locally; for a task it is
-   * persisted on the record and pushed to the worker (which refuses while a run is active).
+   * Switch Build / Plan / Ultra Plan. For a draft the choice is just held locally; for a task it
+   * is persisted on the record and pushed to the worker (which refuses while a run is active).
    */
   async function setTaskMode(mode: TaskMode) {
     if (mode === currentMode) return;
@@ -846,14 +846,18 @@ export default function App() {
     }
     if (selectedTask.status === "running" || selectedTask.status === "stopping") return;
     const previous = selectedTask.mode;
+    const previousPlanState = runtime?.planState;
     patchTask(selectedTask.id, { mode });
-    patchRuntime(selectedTask.id, { planState: { mode, phase: "planning" } });
+    // Plan ↔ Ultra Plan keeps a plan awaiting review; the worker's plan_state confirms it.
+    const keepsPlan = previousPlanState && previousPlanState.mode !== "build" && mode !== "build";
+    patchRuntime(selectedTask.id, { planState: keepsPlan ? { ...previousPlanState, mode } : { mode, phase: "planning" } });
     try {
       const updated = await api.setTaskMode(selectedTask.id, mode);
       patchTask(selectedTask.id, updated);
     } catch (reason) {
+      // `currentMode` reads the runtime first, so the optimistic plan state must go too.
       patchTask(selectedTask.id, { mode: previous });
-      patchRuntime(selectedTask.id, { error: String(reason) });
+      patchRuntime(selectedTask.id, { planState: previousPlanState, error: String(reason) });
     }
   }
 
@@ -1235,12 +1239,12 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      // ⇧Tab cycles Build ↔ Plan, like Claude Code. A modal or an active run owns the key.
+      // ⇧Tab cycles Build → Plan → Ultra Plan, like Claude Code. A modal or an active run owns the key.
       if (event.key === "Tab" && event.shiftKey) {
         const busy = selectedTask && (selectedTask.status === "running" || selectedTask.status === "stopping");
         if (!settingsOpen && !confirm && !restoreDialog && extensionRequests.length === 0 && !busy) {
           event.preventDefault();
-          void setTaskMode(currentMode === "plan" ? "build" : "plan");
+          void setTaskMode(nextMode(currentMode));
         }
         return;
       }

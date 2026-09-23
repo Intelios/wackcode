@@ -30,7 +30,7 @@ const BUILTIN_EXTENSIONS: readonly BuiltinExtension[] = [
   {
     name: "Plan Mode",
     description:
-      "A read-only planning mode. Toggle Build/Plan in the composer or press ⇧Tab — the agent inspects the workspace and proposes a plan before changing anything.",
+      "A read-only planning mode. Toggle Build/Plan in the composer or press ⇧Tab — the agent inspects the workspace and proposes a plan before changing anything. Click Plan again for Ultra Plan: the agent interviews you one question at a time, with no limit, before it plans. Expect more usage.",
     tools: ["plan_mode_complete"]
   },
   {

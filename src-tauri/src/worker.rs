@@ -687,11 +687,7 @@ fn handle_worker_line(app: &AppHandle, task_id: &str, line: &str, pending: &Pend
     } else if event_type == "plan_state" {
         // Mirror the worker's mode onto the record, the same way `session_file` is mirrored:
         // the record is the durable hint the UI uses before a worker reports in.
-        let mode = match value.get("mode").and_then(Value::as_str) {
-            Some("plan") => Some(TaskMode::Plan),
-            Some("build") => Some(TaskMode::Build),
-            _ => None,
-        };
+        let mode = value.get("mode").cloned().and_then(|mode| serde_json::from_value::<TaskMode>(mode).ok());
         if let Some(mode) = mode {
             if let Ok(mut data) = app.state::<MetadataState>().data.lock() {
                 if let Some(task) = data.tasks.iter_mut().find(|task| task.id == task_id) {

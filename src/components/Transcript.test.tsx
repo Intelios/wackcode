@@ -76,6 +76,23 @@ describe("Transcript sub-agent calls", () => {
   });
 });
 
+describe("Transcript plan cards", () => {
+  const plan = "# The plan\n\n- Ship it";
+  const messages: NormalizedMessage[] = [
+    { id: "assistant-1", role: "assistant", blocks: [{ type: "tool-call", toolName: "plan_mode_complete", toolCallId: "call-1", arguments: { plan } }] },
+    { id: "tool-2", role: "tool", blocks: [{ type: "tool-result", toolName: "plan_mode_complete", toolCallId: "call-1", text: plan, details: { version: 1, source: "plan_mode_complete", plan } }] }
+  ];
+
+  it("keeps the review actions on the awaiting plan in Plan and Ultra Plan, not in Build", () => {
+    const view = render(<Transcript messages={messages} running={false} planState={{ mode: "ultraplan", phase: "ready", plan }} onPlanAction={() => undefined} />);
+    expect(screen.getByRole("button", { name: "Approve & implement" })).toBeInTheDocument();
+    view.rerender(<Transcript messages={messages} running={false} planState={{ mode: "plan", phase: "ready", plan }} onPlanAction={() => undefined} />);
+    expect(screen.getByRole("button", { name: "Approve & implement" })).toBeInTheDocument();
+    view.rerender(<Transcript messages={messages} running={false} planState={{ mode: "build", phase: "planning" }} onPlanAction={() => undefined} />);
+    expect(screen.queryByRole("button", { name: "Approve & implement" })).not.toBeInTheDocument();
+  });
+});
+
 describe("Transcript run durations", () => {
   it("places saved durations between each user prompt and assistant reply", () => {
     const messages: NormalizedMessage[] = [

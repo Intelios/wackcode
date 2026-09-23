@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it } from "vitest";
+import type { TaskMode } from "./protocol.js";
 
 interface Checkpoint { id: string; head?: string }
 
@@ -53,6 +54,7 @@ interface Output {
   phase?: string;
   plan?: string;
   questions?: Array<{ id: string; header: string; question: string; multiSelect?: boolean; options: Array<{ label: string; description: string }> }>;
+  offerWrapUp?: boolean;
   tasks?: Array<{ id: number; subject: string; status: string; activeForm?: string; blockedBy?: number[] }>;
   errors?: Array<{ path: string; error: string }>;
   snapshot?: SnapshotView;
@@ -358,7 +360,7 @@ async function initializeWorker(
   sessionFile?: string,
   disabledTools?: string[],
   resources?: { extensions: string[]; skills: string[]; prompts: string[]; themes: string[] },
-  mode?: "build" | "plan",
+  mode?: TaskMode,
   vision?: boolean,
   extra: Record<string, unknown> = {}
 ): Promise<{ worker: WorkerHarness; ready: Output }> {
@@ -848,6 +850,8 @@ describe("built-in extensions", () => {
     const request = await worker.waitFor((output) => output.type === "extension_ui_request" && output.method === "questions");
     expect(request.questions?.[0]?.id).toBe("approach");
     expect(request.questions?.[0]?.options.map((option) => option.label)).toEqual(["SQLite", "Postgres"]);
+    // Only Ultra Plan's interview offers "Write the plan now".
+    expect(request.offerWrapUp).toBeUndefined();
 
     // The tool is awaiting this inside the in-flight prompt, so the response must bypass
     // the queue — if it didn't, this test would simply time out.
@@ -1029,6 +1033,90 @@ describe("Plan mode", () => {
     cleanup.push(() => third.worker.shutdown());
     await third.worker.waitFor((output) => output.type === "plan_state" && output.mode === "build");
   });
+
+  it("keeps Ultra Plan read-only, under its own contract", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-ultra-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "ultra-task", undefined, undefined, undefined, "ultraplan"
+    );
+    cleanup.push(() => worker.shutdown());
+    await worker.waitFor((output) => output.type === "plan_state" && output.mode === "ultraplan");
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "Create the fixture." });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    const context = JSON.stringify(provider.requests[0].body.messages);
+    expect(context).toContain("[WACKCODE PLAN MODE CONTRACT v1: ULTRAPLAN]");
+    expect(context).not.toContain("[WACKCODE PLAN MODE CONTRACT v1: PLAN]");
+    // The same read-only policy as Plan mode.
+    const toolResult = provider.requests[1].body.messages.find(
+      (message) => (message as { role?: string }).role === "tool"
+    ) as { content?: string } | undefined;
+    expect(toolResult?.content).toContain("Plan mode");
+    await expect(readFile(join(workspace, "alpha.txt"), "utf8")).rejects.toThrow();
+  });
+
+  it("restores Ultra Plan and its plan across a restart, and switching to Plan keeps the plan", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-ultra-restore-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+
+    const first = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "ultra-restore-task", undefined, undefined, undefined, "ultraplan"
+    );
+    first.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "finish plan" });
+    const submitted = await first.worker.waitFor((output) => output.type === "plan_state" && output.phase === "ready");
+    expect(submitted.mode).toBe("ultraplan");
+    const sessionFile = first.ready.snapshot?.sessionFile;
+    expect(sessionFile).toBeTruthy();
+    await first.worker.shutdown();
+
+    const second = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "ultra-restore-task", sessionFile);
+    cleanup.push(() => second.worker.shutdown());
+    const restored = await second.worker.waitFor((output) => output.type === "plan_state" && output.phase === "ready");
+    expect(restored.mode).toBe("ultraplan");
+    expect(restored.plan).toBe("# The plan\n\n- Ship it");
+
+    // Plan ↔ Ultra Plan only changes the interview: the plan stays reviewable.
+    second.worker.send({ id: crypto.randomUUID(), type: "set_mode", mode: "plan" });
+    const switched = await second.worker.waitFor((output) => output.type === "plan_state" && output.mode === "plan");
+    expect(switched.phase).toBe("ready");
+    expect(switched.plan).toBe("# The plan\n\n- Ship it");
+
+    // …and the next request carries Plan's contract as the latest one.
+    const before = provider.requests.length;
+    second.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-2", message: "One more pass." });
+    await second.worker.waitFor((output) => output.type === "run_state" && output.runId === "run-2" && output.state === "idle");
+    const latest = JSON.stringify(provider.requests[before].body.messages);
+    expect(latest.lastIndexOf("CONTRACT v1: ULTRAPLAN]")).toBeGreaterThan(-1);
+    expect(latest.lastIndexOf("CONTRACT v1: PLAN]")).toBeGreaterThan(latest.lastIndexOf("CONTRACT v1: ULTRAPLAN]"));
+  });
+
+  it("offers wrap-up on Ultra Plan questions, and pressing it steers the model to submit the plan", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-ultra-ask-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "ultra-ask-task", undefined, undefined, undefined, "ultraplan"
+    );
+    cleanup.push(() => worker.shutdown());
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "ask: which engine?" });
+    const request = await worker.waitFor((output) => output.type === "extension_ui_request" && output.method === "questions");
+    expect(request.offerWrapUp).toBe(true);
+    worker.send({ id: crypto.randomUUID(), type: "extension_ui_response", requestId: request.requestId, wrapUp: true });
+
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    const toolResult = provider.requests[1].body.messages.find(
+      (message) => (message as { role?: string }).role === "tool"
+    ) as { content?: string } | undefined;
+    expect(toolResult?.content).toContain("stop answering questions");
+    expect(toolResult?.content).toContain("plan_mode_complete");
+  });
 });
 
 describe("image attachments", () => {
@@ -1197,12 +1285,12 @@ describe("/init", () => {
     expect(provider.requests).toHaveLength(0);
   });
 
-  it("refuses to write while Plan mode is active", async () => {
+  it.each(["plan", "ultraplan"] as const)("refuses to write while %s mode is active", async (mode) => {
     const provider = await startMockProvider();
     cleanup.push(provider.close);
     const workspace = await mkdtemp(join(tmpdir(), "wackcode-init-plan-"));
     cleanup.push(() => rm(workspace, { recursive: true, force: true }));
-    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "init-plan-task", undefined, undefined, undefined, "plan");
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, `init-${mode}-task`, undefined, undefined, undefined, mode);
     cleanup.push(() => worker.shutdown());
 
     const id = crypto.randomUUID();
@@ -1533,7 +1621,7 @@ describe("sub-agents", () => {
   const offered = (request: { body: Record<string, unknown> }) =>
     (request.body.tools as Array<{ function: { name: string } }> ?? []).map((tool) => tool.function.name).sort();
 
-  async function start(taskId: string, extra: Record<string, unknown>, mode?: "build" | "plan", apiKey = "alpha-secret") {
+  async function start(taskId: string, extra: Record<string, unknown>, mode?: TaskMode, apiKey = "alpha-secret") {
     const provider = await startMockProvider();
     cleanup.push(provider.close);
     const workspace = await mkdtemp(join(tmpdir(), `wackcode-${taskId}-`));
@@ -1646,6 +1734,14 @@ describe("sub-agents", () => {
     // Refused by the tool itself, not by Plan mode's package-tool rule: the helper exemption held.
     expect(refused?.text).toContain("Plan mode only runs read-only sub-agents, and worker can edit files");
     expect(childRequests(planned.provider, "WORKER-PROMPT-MARKER")).toHaveLength(0);
+    await planned.worker.shutdown();
+
+    // Ultra Plan is Plan mode too.
+    const ultra = await start("subagents-ultra", { subagents: config() }, "ultraplan");
+    ultra.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "subagent plan" });
+    await ultra.worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha.")) === true);
+    expect(subagentResult(ultra.worker)?.text).toContain("Plan mode only runs read-only sub-agents, and worker can edit files");
+    expect(childRequests(ultra.provider, "WORKER-PROMPT-MARKER")).toHaveLength(0);
   });
 
   it("uses a sub-agent's own connection and key when its model lives elsewhere", async () => {

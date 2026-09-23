@@ -9,6 +9,8 @@ export type ExtensionUIResponse = {
   confirmed?: boolean;
   cancelled?: true;
   answers?: QuestionAnswer[];
+  /** "Write the plan now" on an Ultra Plan questionnaire. */
+  wrapUp?: true;
 };
 
 interface InlineDialogProps {

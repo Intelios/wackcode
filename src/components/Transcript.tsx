@@ -2,7 +2,7 @@ import { Fragment, memo, useCallback, useEffect, useMemo, useState, type ReactNo
 import type { NormalizedBlock, NormalizedMessage, PlanState, RunTiming } from "../types";
 import { useFollowScroll } from "../hooks/useFollowScroll";
 import { useSmoothText } from "../hooks/useSmoothText";
-import { formatRunDuration } from "../chat-utils";
+import { formatRunDuration, isPlanMode } from "../chat-utils";
 import { SUBAGENT_TOOL_NAME, parseSubagentDetails, pendingSubagentDetails } from "../tool-utils";
 import { hasVisibleMessages, latestTurn, messageText } from "../tree-utils";
 import { Icon } from "./Icons";
@@ -99,7 +99,7 @@ function renderBlock(
     const liveText = block.toolCallId ? liveToolText?.[block.toolCallId] : undefined;
     const plan = block.toolName === "plan_mode_complete" ? completedPlan(result) : undefined;
     if (plan !== undefined) {
-      const current = planState?.mode === "plan" && planState.phase === "ready" && planState.plan === plan;
+      const current = isPlanMode(planState?.mode) && planState?.phase === "ready" && planState.plan === plan;
       return <PlanCard plan={plan} current={current} busy={running} onAction={onPlanAction} />;
     }
     if (block.toolName === SUBAGENT_TOOL_NAME) {

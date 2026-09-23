@@ -3,6 +3,10 @@
  * mid-task, rendered natively by the desktop. Adapted from the question tool in
  * `@narumitw/pi-plan-mode` v0.58.3 (MIT), generalized to be available in every mode and to
  * render through WackCode's UI bridge instead of the terminal.
+ *
+ * In Ultra Plan the card also offers "Write the plan now". Once the user presses it, the rest
+ * of that run gets the same instruction back without a dialog, so an eager model can't keep
+ * interviewing; the next user message lifts it.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AskQuestion, AskQuestionOption, QuestionAnswer } from "../protocol.js";
@@ -114,7 +118,7 @@ export function normalizeAskQuestionsParams(input: unknown): NormalizeResult {
 
 interface QuestionResultDetails {
   cancelled: boolean;
-  reason?: "cancelled" | "ui_unavailable" | "invalid_input";
+  reason?: "cancelled" | "ui_unavailable" | "invalid_input" | "wrap_up";
   questions: AskQuestion[];
   answers?: QuestionAnswer[];
 }
@@ -130,6 +134,18 @@ function questionsCancelled(reason: QuestionResultDetails["reason"], message: st
   return {
     content: [{ type: "text" as const, text: `${message} Ask concisely in plain text or proceed only with a clearly stated low-risk assumption.` }],
     details: { cancelled: true, reason, questions: [] } satisfies QuestionResultDetails,
+  };
+}
+
+const WRAP_UP_INSTRUCTION =
+  "The user wants to stop answering questions and review the plan now. Do not call ask_user_question again this turn. " +
+  "Submit the complete plan with plan_mode_complete, resolving every open decision (including any you just asked about) " +
+  "with your recommended answer and listing those as explicit assumptions.";
+
+function questionsWrappedUp() {
+  return {
+    content: [{ type: "text" as const, text: WRAP_UP_INSTRUCTION }],
+    details: { cancelled: true, reason: "wrap_up", questions: [] } satisfies QuestionResultDetails,
   };
 }
 
@@ -153,9 +169,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** The `ask_user_question` tool, registered as a built-in extension. */
-export function createAskUserQuestionExtension(host: BuiltinHost) {
+/**
+ * The `ask_user_question` tool, registered as a built-in extension. `interviewing` says whether
+ * Ultra Plan is on, which offers the wrap-up button.
+ */
+export function createAskUserQuestionExtension(host: BuiltinHost, interviewing: () => boolean = () => false) {
   return function askUserQuestion(pi: ExtensionAPI) {
+    /** "Write the plan now" was pressed during the current run. */
+    let wrapUpRequested = false;
+    const resetWrapUp = () => {
+      wrapUpRequested = false;
+    };
+    pi.on("before_agent_start", resetWrapUp);
+    pi.on("session_start", resetWrapUp);
+    pi.on("session_tree", resetWrapUp);
+
     pi.registerTool({
       name: ASK_USER_QUESTION_TOOL_NAME,
       label: "Ask user",
@@ -172,10 +200,16 @@ export function createAskUserQuestionExtension(host: BuiltinHost) {
         if (!parsed.ok) {
           return questionsCancelled("invalid_input", `Error: ${parsed.error}.`);
         }
+        const offerWrapUp = interviewing();
+        if (offerWrapUp && wrapUpRequested) return questionsWrappedUp();
         if (!ctx.hasUI) {
           return questionsCancelled("ui_unavailable", "Interactive UI is not available, so the questions could not be shown.");
         }
-        const answers = await host.askQuestions(parsed.questions);
+        const answers = await host.askQuestions(parsed.questions, { offerWrapUp });
+        if (answers === "wrap_up") {
+          wrapUpRequested = true;
+          return questionsWrappedUp();
+        }
         if (!answers) {
           return questionsCancelled("cancelled", "The user dismissed the questions without answering.");
         }

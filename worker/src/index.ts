@@ -99,6 +99,7 @@ interface DialogResponse {
   confirmed?: boolean;
   cancelled?: true;
   answers?: QuestionAnswer[];
+  wrapUp?: true;
 }
 
 /**
@@ -107,10 +108,10 @@ interface DialogResponse {
  * `taskId`/`send` once commands run, so the ordering is safe.
  */
 const builtinHost: BuiltinHost = {
-  askQuestions: (questions) =>
-    askHost<QuestionAnswer[] | undefined>(
-      { method: "questions", title: "Questions", questions },
-      (response) => response.answers,
+  askQuestions: (questions, options) =>
+    askHost<QuestionAnswer[] | "wrap_up" | undefined>(
+      { method: "questions", title: "Questions", questions, ...(options?.offerWrapUp ? { offerWrapUp: true as const } : {}) },
+      (response) => (response.wrapUp ? "wrap_up" : response.answers),
       undefined
     ),
   publishPlanState: (state) => {
@@ -1195,7 +1196,7 @@ async function handle(command: WorkerCommand): Promise<void> {
       await runPrompt(command.id, command.runId, runStartedAt(command.startedAt), line, command.images, command.checkpoint, entry.item.source !== "extension");
       return;
     } else if (command.type === "init_agents") {
-      if (builtins.planMode.getState().mode === "plan") throw new Error("Switch to Build mode before running /init.");
+      if (builtins.planMode.getState().mode !== "build") throw new Error("Switch to Build mode before running /init.");
       if (!workspacePath) throw new Error("The workspace is not available for /init.");
       const target = await prepareInitAgents(workspacePath);
       const outcome = await runPrompt(command.id, command.runId, runStartedAt(command.startedAt), target.prompt, undefined, command.checkpoint, true);
@@ -1295,7 +1296,8 @@ async function handle(command: WorkerCommand): Promise<void> {
         value: command.value,
         confirmed: command.confirmed,
         cancelled: command.cancelled,
-        answers: command.answers
+        answers: command.answers,
+        wrapUp: command.wrapUp
       });
     } else if (command.type === "set_tools") {
       disabledTools = new Set(command.disabledTools);

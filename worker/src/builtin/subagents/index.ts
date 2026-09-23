@@ -72,7 +72,8 @@ export function createSubagentsExtension(host: BuiltinHost, currentMode: () => T
     const parsed = normalizeSubagentParams(params);
     if (!parsed.ok) throw new Error(parsed.error);
     const specs = specsFor(current, parsed.tasks.map((task) => task.agent));
-    if (currentMode() === "plan") {
+    // Ultra Plan is Plan mode too: both keep the workspace read-only.
+    if (currentMode() !== "build") {
       const editors = [...new Set(specs.filter((spec) => !spec.readOnly).map((spec) => spec.name))];
       if (editors.length > 0) {
         throw new Error(

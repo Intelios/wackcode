@@ -2,8 +2,11 @@ export type ApiFormat = "openai-completions" | "openai-responses";
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type TaskStatus = "idle" | "running" | "stopping" | "interrupted" | "error";
 
-/** The agent's working mode. "plan" is the read-only, plan-first mode. */
-export type TaskMode = "build" | "plan";
+/**
+ * The agent's working mode. "plan" is the read-only, plan-first mode; "ultraplan" is the same
+ * read-only mode with an exhaustive, one-question-at-a-time interview before the plan.
+ */
+export type TaskMode = "build" | "plan" | "ultraplan";
 
 /** Plan mode state published by the worker's built-in plan-mode extension. */
 export interface PlanState {
@@ -476,7 +479,13 @@ export type ExtensionUIRequest = { taskId: string; requestId: string } & (
   | { method: "confirm"; title: string; message: string }
   | { method: "input"; title: string; placeholder?: string }
   | { method: "editor"; title: string; prefill?: string }
-  | { method: "questions"; title: string; questions: AskQuestion[] }
+  | {
+      method: "questions";
+      title: string;
+      questions: AskQuestion[];
+      /** Ultra Plan: offer "Write the plan now", answered with `wrapUp` instead of answers. */
+      offerWrapUp?: true;
+    }
 );
 
 export interface ExtensionNotice {

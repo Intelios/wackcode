@@ -45,9 +45,14 @@ export interface BuiltinHost {
   /**
    * Ask the user a structured questionnaire. Resolves to one answer per question, or
    * `undefined` when the user dismisses the dialog or the run is aborted — callers report
-   * that as a cancelled result rather than an error, matching the upstream contract.
+   * that as a cancelled result rather than an error, matching the upstream contract. With
+   * `offerWrapUp` (Ultra Plan) the card also offers "Write the plan now", which resolves to
+   * `"wrap_up"` instead of answers.
    */
-  askQuestions(questions: AskQuestion[]): Promise<QuestionAnswer[] | undefined>;
+  askQuestions(
+    questions: AskQuestion[],
+    options?: { offerWrapUp?: boolean },
+  ): Promise<QuestionAnswer[] | "wrap_up" | undefined>;
   /** Publish Plan mode state so the desktop can render the toggle and review card. */
   publishPlanState(state: PlanState): void;
   /** Publish the todo list so the desktop can render the panel above the composer. */

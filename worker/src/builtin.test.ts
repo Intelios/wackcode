@@ -1,5 +1,8 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { normalizeAskQuestionsParams } from "./builtin/ask-user-question.js";
+import { createAskUserQuestionExtension, normalizeAskQuestionsParams } from "./builtin/ask-user-question.js";
+import type { BuiltinHost } from "./builtin/host.js";
+import type { QuestionAnswer } from "./protocol.js";
 import {
   normalizePlanModeCompletion,
   planFromCompletionDetails,
@@ -9,6 +12,7 @@ import {
   createModeContractMessage,
   hasModeContractArtifact,
   latestModeContract,
+  modeContractContent,
   modeContractFromMessage,
   reconcileModeContract,
 } from "./builtin/plan-mode/contract.js";
@@ -143,6 +147,64 @@ describe("ask_user_question normalization", () => {
   });
 });
 
+describe("ask_user_question wrap-up (Ultra Plan)", () => {
+  type Reply = QuestionAnswer[] | "wrap_up" | undefined;
+  type ToolResult = { content: Array<{ text: string }>; details: { reason?: string } };
+
+  function harness(interviewing: () => boolean, reply: Reply) {
+    const offers: Array<boolean | undefined> = [];
+    const handlers = new Map<string, Array<() => void>>();
+    let execute: ((...args: unknown[]) => Promise<ToolResult>) | undefined;
+    const host = {
+      askQuestions: async (_questions: unknown, options?: { offerWrapUp?: boolean }) => {
+        offers.push(options?.offerWrapUp);
+        return reply;
+      },
+    } as unknown as BuiltinHost;
+    const pi = {
+      registerTool: (definition: { execute: typeof execute }) => { execute = definition.execute; },
+      on: (event: string, handler: () => void) => handlers.set(event, [...(handlers.get(event) ?? []), handler]),
+    };
+    createAskUserQuestionExtension(host, interviewing)(pi as never);
+    const params = {
+      questions: [{ id: "db", header: "Database", question: "Which one?", options: [
+        { label: "SQLite (Recommended)", description: "Local and simple." },
+        { label: "Postgres", description: "Shared and scalable." },
+      ] }],
+    };
+    return {
+      offers,
+      ask: () => execute!("call", params, undefined, undefined, { hasUI: true }),
+      fire: (event: string) => handlers.get(event)?.forEach((handler) => handler()),
+    };
+  }
+
+  it("offers the wrap-up button only while Ultra Plan is on", async () => {
+    let ultra = false;
+    const answers: QuestionAnswer[] = [{ questionId: "db", selected: ["SQLite (Recommended)"] }];
+    const { offers, ask } = harness(() => ultra, answers);
+    expect((await ask()).content[0]?.text).toContain("SQLite");
+    ultra = true;
+    await ask();
+    expect(offers).toEqual([false, true]);
+  });
+
+  it("tells the model to submit the plan, and keeps refusing questions for the rest of the run", async () => {
+    const { offers, ask, fire } = harness(() => true, "wrap_up");
+    const first = await ask();
+    expect(first.details.reason).toBe("wrap_up");
+    expect(first.content[0]?.text).toContain("plan_mode_complete");
+    // The model asks again anyway: no dialog, the same instruction.
+    const second = await ask();
+    expect(second.details.reason).toBe("wrap_up");
+    expect(offers).toHaveLength(1);
+    // A new user message ("keep grilling me on X") lifts it.
+    fire("before_agent_start");
+    await ask();
+    expect(offers).toHaveLength(2);
+  });
+});
+
 describe("plan_mode_complete parsing", () => {
   it("accepts a non-empty plan within bounds and rejects the rest", () => {
     expect(normalizePlanModeCompletion({ plan: " Do the thing " })).toEqual({ ok: true, plan: "Do the thing" });
@@ -168,6 +230,31 @@ describe("mode contract reconciliation", () => {
     expect(latestModeContract([plan, createModeContractMessage("normal")])?.mode).toBe("normal");
   });
 
+  it("recognises the Ultra Plan contract as its own mode", () => {
+    const ultra = createModeContractMessage("ultraplan");
+    expect(modeContractFromMessage(ultra)).toBe("ultraplan");
+    expect(latestModeContract([createModeContractMessage("plan"), ultra])?.mode).toBe("ultraplan");
+    const content = modeContractContent("ultraplan");
+    expect(content).toContain("[WACKCODE PLAN MODE CONTRACT v1: ULTRAPLAN]");
+    expect(content).toContain("Ask one question at a time");
+    expect(content).toContain("(Recommended)");
+    expect(content).toContain("A Decisions section");
+    // It keeps Plan mode's read-only rules and completion contract.
+    expect(content).toContain("## Mode rules");
+    expect(content).toContain("call plan_mode_complete alone as your final action");
+    expect(content).not.toContain("Ask 1-3 concise questions");
+  });
+
+  it("keeps the Plan contract byte-identical so saved sessions still match it", () => {
+    // Contracts are recognised by exact text. Changing this hash means every existing Plan
+    // chat re-appends its contract — only do that deliberately.
+    const plan = modeContractContent("plan");
+    expect(plan).not.toContain("Ultra");
+    expect(createHash("sha256").update(plan).digest("hex")).toBe(
+      "f131dbbb06b575ad01fddbda9c8ccf87d3f0973967f15ea02d70ab05fc59e22b",
+    );
+  });
+
   it("re-appends the current contract when the latest artifact disagrees (e.g. after restore)", () => {
     const history = [
       { role: "system", content: "sys" },
@@ -184,17 +271,23 @@ describe("mode contract reconciliation", () => {
 });
 
 describe("plan state restore", () => {
-  const stateEntry = (enabled: boolean, plan?: string) => ({
+  const stateEntry = (enabled: boolean, plan?: string, ultra?: true) => ({
     type: "custom",
     customType: PLAN_STATE_ENTRY_TYPE,
-    data: { version: 1, enabled, plan },
+    data: { version: 1, enabled, plan, ...(ultra ? { ultra } : {}) },
   });
 
   it("restores the latest persisted state, including a ready plan", () => {
-    expect(restorePlanState([stateEntry(true, "the plan")])).toEqual({ enabled: true, plan: "the plan" });
-    expect(restorePlanState([stateEntry(true), stateEntry(false)])).toEqual({ enabled: false });
-    expect(restorePlanState([])).toEqual({ enabled: false });
-    expect(restorePlanState([stateEntry(false, "stale")])).toEqual({ enabled: false });
+    expect(restorePlanState([stateEntry(true, "the plan")])).toEqual({ active: "plan", plan: "the plan" });
+    expect(restorePlanState([stateEntry(true), stateEntry(false)])).toEqual({});
+    expect(restorePlanState([])).toEqual({});
+    expect(restorePlanState([stateEntry(false, "stale")])).toEqual({});
+  });
+
+  it("restores Ultra Plan, and reads entries from before it existed as Plan", () => {
+    expect(restorePlanState([stateEntry(true, "the plan", true)])).toEqual({ active: "ultraplan", plan: "the plan" });
+    expect(restorePlanState([stateEntry(true, undefined, true), stateEntry(true)])).toEqual({ active: "plan" });
+    expect(restorePlanState([stateEntry(false, undefined, true)])).toEqual({});
   });
 
   it("recovers a plan from the completion tool result when the state write was lost", () => {
@@ -208,7 +301,7 @@ describe("plan state restore", () => {
         },
       },
     ];
-    expect(restorePlanState(branch)).toEqual({ enabled: true, plan: "recovered" });
+    expect(restorePlanState(branch)).toEqual({ active: "plan", plan: "recovered" });
   });
 });
 

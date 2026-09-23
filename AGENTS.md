@@ -1,298 +1,69 @@
-# AGENTS.md — WackCode contributor guide for coding agents
+# AGENTS.md
 
-WackCode is a local macOS desktop interface for the [Pi coding agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent), built on Tauri 2, React 19, TypeScript, and Rust. This file tells you how the repo fits together and which conventions you must follow when changing it.
+WackCode is a local macOS desktop app for the [Pi coding agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent), built with Tauri 2, React 19 + TypeScript, and Rust. Pi is pinned in `worker/package.json`. `README.md` describes user-facing behavior; update it when that behavior changes.
 
-Read `README.md` first for the user-facing feature set and security posture; this file is the engineering-side contract.
+**Keep this file short:** it is sent with every agent request. Explain features in comments next to their code, which is how this codebase already documents its invariants. Add a line here only for a rule that spans files and that an agent would break without being told.
 
-## Hard facts
+## Ground rules
 
-- **Platform:** macOS on Apple Silicon only. `scripts/prepare-runtime.mjs` hard-fails elsewhere. Unix-only APIs (`nix::killpg`, `open(1)`) are used deliberately — do not file or "fix" these as cross-platform bugs.
-- **Package manager:** pnpm 11.5.0 (pinned in `package.json` → `packageManager`). Do not use npm/yarn; do not add a root `package-lock.json`.
-- **No telemetry, no WackCode account, no backend, no updater, no automatic model discovery.** Outbound traffic is limited to user-configured OpenAI-compatible provider endpoints; Pi’s built-in subscription authorization and inference endpoints after explicit sign-in or a user prompt; the public npm registry (`registry.npmjs.org`), only while the user browses or installs a package; and the package's own npm or git source during that install. Nothing contacts any of them on launch or on a timer. OAuth refresh can run as part of a user prompt.
-- **No AGENTS.md loading in the bundled worker** — Pi's project instruction files (like this one) still load in the *user's* projects, but this repo's guide is for you, the agent working on WackCode itself.
+- macOS on Apple Silicon only. Unix-only APIs (`killpg`, `open(1)`) are deliberate; don't "fix" them for other platforms.
+- pnpm only (version pinned in `package.json`). No npm/yarn, no `package-lock.json`.
 
 ## Architecture
 
-Three layers, one repo, exactly one bridge between each pair:
+- **`src/`**: React renderer. `App.tsx` owns all cross-cutting state and is the only place that listens to Tauri events. `api.ts` is the only bridge to Rust (one typed `invoke` wrapper per command). Components are presentational; `SettingsPage.tsx` is the one exception that calls `api` directly.
+- **`src-tauri/src/`**: Rust. `commands.rs` holds the Tauri commands (subscription sign-in: `subscriptions.rs`), `worker.rs` runs one Node worker per chat, `storage.rs` writes `wackcode.json`, `secrets.rs` writes API keys.
+- **`worker/src/`**: the Node worker wrapping Pi. `protocol.ts` defines its NDJSON stdin/stdout protocol; built-in extensions (Plan mode, todo, `ask_user_question`, sub-agents) live in `builtin/`.
+- **One prompt:** `App.tsx` → `api.prompt` → `commands::prompt` → NDJSON on the worker's stdin → Pi → NDJSON events on stdout → `worker.rs::handle_worker_line` (persists, re-emits as the Tauri event `worker-event`) → `App.tsx`.
+- **Other processes:** `manager.ts` installs packages and never receives an API key; `subscription-auth.ts` runs OAuth sign-in, only after the user clicks Sign in. Sub-agents are not processes but in-process child sessions inside the chat's worker.
 
-```
-React frontend (src/)                Tauri v2 bridge                Rust backend (src-tauri/)
-  api.ts  ──invoke(snake_case)──►   commands.rs / subscriptions.rs  ──►  storage.rs / secrets.rs / git.rs
-  App.tsx ◄──listen("worker-event")──  worker.rs (per-task Node child process)
-                                                   │ stdin/stdout NDJSON
-                                                   ▼
-                                        worker/src/index.ts  (Pi SDK wrapper)
-                                                   │ HTTPS
-                                                   ▼
-                                  selected custom or native Pi provider
-```
+## Cross-file rules
 
-A third, short-lived process handles packages. It is spawned per operation by `worker::run_manager`, runs `worker/src/manager.ts` on the same bundled Node, and wraps Pi's `DefaultPackageManager` against a shared store at `<app-data>/pi/`. It **never receives an API key**, the provider env keys are stripped before spawn, and unlike a task worker it does not set `PI_OFFLINE` — installing is the one thing it exists to do. Its protocol lines are prefixed with `\x1e` because Pi spawns npm with inherited stdio and npm's own output lands on the same stream.
+- **Shared types:** a type that crosses layers changes in `models.rs`, `types.ts`, and (if the worker sees it) `protocol.ts` together. New optional Rust fields need `#[serde(default)]` so existing `wackcode.json` files load; runtime-only fields (like `ProjectRecord.branch`) also need `skip_deserializing`.
+- **New Tauri command:** function in `commands.rs` (validation helpers are at the bottom), registered in `lib.rs` `generate_handler![…]`, wrapper in `api.ts`. A new plugin permission also goes in `capabilities/default.json`.
+- **Worker protocol change:** `protocol.ts` → Rust (`worker.rs` payloads and `handle_worker_line`, call sites in `commands.rs`) → `WorkerEvent` in `types.ts` → the `worker-event` switch in `App.tsx`. Run `pnpm test:worker` afterwards.
+- **Command queue:** a running prompt holds the worker's serial command queue until it settles. `abort` and `extension_ui_response` bypass it; anything else that must reach a run in progress has to as well, or the run deadlocks.
+- **Incremental snapshots:** a new snapshot field that can change mid-run must also be added to `SnapshotDelta` and merged in `applySnapshotDelta` (`chat-utils.ts`), or the UI only sees it on full snapshots. Keep `delta.ts`'s full-snapshot fallback, and keep unchanged messages as the same objects (the transcript's memoization depends on it).
+- **Worker restarts:** a changed fingerprint in `worker.rs` (provider, model, package resources) kills and respawns the worker, even mid-run. Settings applied live (`set_tools`, `set_subagents`, `set_mode`) must stay out of it.
+- **Per-chat lock:** any command that sends a chat work, moves its conversation, or touches its checkpoints holds that chat's `TaskLocks` entry.
+- **Tools:** never pass `tools:` to the chat's `createAgentSession`. In Pi 0.86.1 it is a hard registry filter that erases extension tools, so they can't even appear as switched off in Settings. The user's choice is a denylist applied with `setActiveToolsByName`; built-in tools are exempt from it.
+- **Planning modes:** Plan and Ultra Plan both count as planning, so test `mode !== "build"` (`isPlanMode` in the frontend), never `=== "plan"`. The Plan contract text must stay byte-identical: `builtin.test.ts` pins its hash, and any change re-appends the contract to every saved Plan chat, so don't just update the hash.
+- **Built-ins:** adding or renaming one in `worker/src/builtin/` means updating `BUILTIN_EXTENSIONS` in `PackagesSection.tsx` too.
+- **Session tree and checkpoints:** read the invariants at the top of `worker/src/tree.ts` and `src-tauri/src/checkpoints.rs` before changing either. Checkpoints must never write to the project's own Git repository.
+- **Drag and drop:** `dragDropEnabled: false` in `tauri.conf.json` is deliberate. The native handler would otherwise swallow the HTML5 drops the composer uses for images.
 
-Subscription login uses another short-lived Node process, `worker/src/subscription-auth.ts`, started by `subscriptions.rs` only after the user clicks Sign in or Reconnect. It runs Pi's native OAuth flow, relays prompts and progress through `subscription-login-event`, and writes one private Pi auth file per provider. Task workers receive that file path for native models and refresh tokens during requests. The renderer never receives the credential.
+## Security (don't weaken)
 
-Sub-agents do not add a process. When the optional built-in is on, each child is another Pi `AgentSession` created in-process inside the chat's task worker (`worker/src/subagent-runner.ts`): in-memory session, no packages, explicit tool allowlist. It shares the worker's credentials and is aborted by the parent run's signal.
+- **Network:** no telemetry, account, backend, updater, automatic model discovery, or traffic on launch or on a timer. The app contacts only user-configured provider endpoints, Pi's subscription endpoints (after an explicit sign-in; token refresh during prompts), and the npm registry plus a package's own source while the user browses or installs one. Never add a network origin silently; call it out explicitly.
+- **CSP** stays `default-src 'self'` with IPC-only `connect-src`. The renderer never fetches; remote calls go through Rust or the package-manager process.
+- **Credentials:** API keys persist only in `secrets.json` (0600); OAuth credentials only in per-provider 0600 `auth.json` files. A worker receives keys only over its stdin (`init`, `set_subagents`) and only the auth paths it needs. Credentials never go in argv, env vars, `wackcode.json`, Tauri events, or the renderer. Keep the provider env-key stripping in `worker.rs` and both redaction layers (`safeError` in the worker, `redact_and_limit` in Rust). The macOS Keychain backend was removed on purpose; don't bring it back.
+- **Pi lockdown:** the worker keeps Pi's telemetry, version check, network model refresh, and all auto-discovery disabled (every `no*` flag stays `true`). Packages load only from explicit paths Rust passes for trusted packages, so a project's own `.pi/` never runs. Project context files such as `AGENTS.md` load on purpose.
+- **Package trust:** an installed extension is unsandboxed code inside the worker that holds the API key. `trusted_at` is set only by a user-confirmed `install_package` or `trust_package`. Never default it, and keep `sync_packages` from trusting packages that arrive by any other route.
 
-Data flow for one prompt: `App.tsx` → `api.prompt` → `commands::prompt` (validates, ensures worker, generates `runId`) → `worker.rs` writes an NDJSON `prompt` line to the worker's stdin → `worker/src/index.ts` drives the Pi session → Pi streams back → worker emits `partial` / `activity` / `snapshot` / `snapshot_delta` / `run_state` NDJSON lines on stdout → `worker.rs::handle_worker_line` parses, persists key fields to `wackcode.json`, and re-emits every line as the single Tauri event `"worker-event"` → `App.tsx` dispatches on `payload.type` into `patchRuntime` / `patchTask`.
+## Conventions
+
+- **Rust:** fallible functions return `Result<T, String>` whose error is a user-facing sentence; no `anyhow`/`thiserror`. Every `wackcode.json` write goes through `MetadataState::mutate`. Git goes through the system `git` CLI (no `git2`).
+- **React:** update state immutably via `patchTask` / `patchRuntime` / `setData`. Reuse the primitives in `src/components/ui/` (Popover, Menu, MenuButton, Select, Tooltip, ConfirmDialog). Destructive actions go through `ConfirmDialog` with `danger`.
+- **CSS:** one stylesheet, `src/styles.css`: add rules to the matching section, use `--wc-*` variables and the existing button classes, no Tailwind or other CSS system. Keep the `data-tauri-drag-region` strips working (overlay title bar), `aria-label` on icon-only buttons, and the `prefers-reduced-motion` block.
+- **Tests:** pure logic in colocated `*.test.ts`; components with Testing Library role-based queries; worker behavior in `worker/src/*.test.ts` (a real worker against an inline mock provider); Rust in inline `#[cfg(test)]` modules with `tempfile`.
 
 ## Commands
 
-| Command | What it does | When to use it |
-|---|---|---|
-| `pnpm install` | Install workspace deps (root app + `worker/`). | After clone, or when `pnpm-lock.yaml` changed. |
-| `pnpm prepare:runtime` | Download Node 24.18.0 (darwin-arm64) per `runtime-lock.json`, verify SHA-256, place the binary at `src-tauri/binaries/wackcode-node-aarch64-apple-darwin` and stage npm from the same tarball into `src-tauri/resources/npm/`. | Once per machine, and after `runtime-lock.json` changes. Required for `tauri dev` and `tauri build`, and for installing packages. |
-| `pnpm dev:desktop` | `tauri dev` with `scripts/dev-runner.sh` as its cargo runner: builds the worker, starts Vite on port 1420, launches the app from a minimal `WackCode.app` wrapper so it has the `com.wackcode.desktop` bundle identity. Dev worker = `worker/dist/index.js`, dev Node = `$WACKCODE_NODE_PATH` or `node` on PATH. | Day-to-day development. |
-| `pnpm dev:background` | Detached, idempotent `tauri dev`: leaves a healthy running instance alone, tears down stale leftovers, otherwise spawns `tauri dev` detached (log at `/tmp/wackcode-dev.log`) and waits until Vite and the app process are up before printing `Ready` and exiting. | Driving the live app; see "Testing the running app". |
-| `pnpm dev:stop` | Tear the dev instance down: the dev app, this repo's tauri CLI, and our Vite on port 1420. Never touches another project's processes. | After `dev:background`. |
-| `pnpm build:desktop` | `prepare:runtime` then `tauri build` → `src-tauri/target/release/bundle/macos/WackCode.app`. | Producing the self-contained app. Requires the pinned runtime downloaded above. |
-| `pnpm build:desktop:debug` | `prepare:runtime` then `tauri build --debug` → `src-tauri/target/debug/bundle/macos/WackCode.app`. | When a test needs the bundled worker and resources without paying for a release build. |
-| `pnpm build:web` | `tsc -b && vite build` → type-check the frontend and emit `dist/`. | Catching TS errors without launching the app; also what `beforeBuildCommand` runs. |
-| `pnpm build:worker` | `tsc` the worker → `worker/dist/`. | After editing `worker/src/` (also run by `dev:desktop` and the worker tests). |
-| `pnpm prepare:worker` | Stage a self-contained worker package into `src-tauri/resources/worker/` via `pnpm deploy`. | Only as part of release bundling (`beforeBuildCommand` already does this). |
-| `pnpm test` | `test:web` → `test:worker` → `test:rust` in sequence. | Before any PR. |
-| `pnpm test:web` | `vitest run` on `src/**/*.test.{ts,tsx}` (jsdom). | Frontend unit/component changes. |
-| `pnpm test:worker` | Builds then runs `worker/src/*.test.ts` against an inline mock OpenAI server, plus `manager.test.ts` against a local fixture package (no network). | Worker, manager, or protocol changes. |
-| `pnpm test:rust` | `cargo test --manifest-path src-tauri/Cargo.toml`. | Rust changes. |
-| `pnpm check` | `build:web` + `build:worker` + `cargo check`. | Fast "does everything still compile" pass. |
-| `pnpm mock:provider` | Standalone mock endpoint on `http://127.0.0.1:43127/v1` (streams a fixed write-tool round trip; hangs on "wait until stopped" for cancellation testing). | Manual UI testing without a real provider. Configure as a Chat Completions connection. |
+| Command | When |
+|---|---|
+| `pnpm check` | Fast compile check: frontend, worker, `cargo check`. |
+| `pnpm test` | All suites; or `test:web`, `test:worker`, `test:rust` individually. |
+| `pnpm build:worker` | After editing `worker/src/` (the dev app runs `worker/dist/`). |
+| `pnpm prepare:runtime` | Once per machine: fetches the pinned Node that `tauri dev`/`build` need. |
+| `pnpm dev:background` / `pnpm dev:stop` | Start / stop the live dev app (below). |
+| `pnpm mock:provider` | Deterministic mock provider at `http://127.0.0.1:43127/v1` (Chat Completions). |
 
-## Repository layout
+## Testing the running app
 
-```
-src/            React frontend (Vite entry: ../index.html → src/main.tsx)
-  App.tsx       Root orchestrator. Owns ALL state (~760 lines). The only file that listens to "worker-event".
-  api.ts        The only bridge to Rust: a flat `api` object of typed one-line `invoke` wrappers.
-  types.ts      Shared contract with Rust/worker. Must mirror models.rs and worker/src/protocol.ts.
-  model-utils.ts, chat-utils.ts, tool-utils.ts, attachment-utils.ts, tree-utils.ts   Pure helpers; put testable logic here, not in components.
-  hooks/        useSmoothText, useFollowScroll (Transcript-only, no tests).
-  components/   Presentational components. Only SettingsPage.tsx is allowed to import api directly.
-  components/ui/  Reusable primitives: Popover, Menu, MenuButton, Select, Tooltip, ConfirmDialog.
-  styles.css    Single global stylesheet, CSS variables on :root, section banner comments. No Tailwind.
-  test/setup.ts Vitest setup (jest-dom).
-worker/         Node child process wrapping @earendil-works/pi-coding-agent 0.86.1 (pinned).
-  src/index.ts    Main loop: init → session create/restore → prompt stream → abort/shutdown.
-  src/protocol.ts Command/event types. Single source of truth for the task worker's stdin/stdout protocol.
-  src/builtin/    Built-in extensions (inline factories): ask_user_question, plan-mode, todo (always on) and
-                  subagents (off until switched on in Settings).
-  src/subagent-runner.ts  Runs sub-agents as in-process child sessions; the only sub-agent code touching Pi or credentials.
-  src/model-runtime.ts    Builds a Pi ModelRuntime for one connection (models.json, key, auth file). Used by init and sub-agents.
-  src/tree.ts     Pure session-tree helpers: versions of a message, checkpoint lookup, turn ends, marker entries.
-  src/run-timing.ts  "Worked for" durations, persisted as custom entries after each run.
-  src/thinking-timing.ts  "Thought for" durations: each thinking block clocked from Pi's thinking_start/_end
-                  stream events, sent as the block's `durationMs`, saved on the run's timing entry by entry id.
-  src/manager.ts  Short-lived package-manager process wrapping Pi's DefaultPackageManager.
-  src/manager-protocol.ts  Its protocol. Frames are \x1e-prefixed because npm shares stdout.
-  src/framing.ts  JsonLineDecoder. Splits on LF only; U+2028/U+2029 inside strings are safe. Joins a line's
-                  chunks once, so multi-megabyte prompt lines (images) stay linear.
-  dist/           tsc output. Build artifact, gitignored. Never edit by hand, never commit.
-src-tauri/
-  src/main.rs     3-line entry calling wackcode_lib::run().
-  src/lib.rs      Tauri builder, plugin init, .manage(WorkerState / TaskLocks / …), generate_handler![...],
-                  terminate_all on RunEvent::Exit.
-  src/commands.rs The #[tauri::command] fns (subscription sign-in lives in subscriptions.rs) + validation
-                  helpers + tests. Error strings are user-facing.
-  src/checkpoints.rs  Workspace checkpoints in a private shadow Git repo per chat (see "Session tree & checkpoints").
-  src/subagents.rs    Sub-agent settings: shipped roles (subagents/*.md via include_str!), normalize, validate, and
-                      the worker payload (roster + credentials of connections agents' own models use).
-  src/models.rs   Serde records that must stay in sync with src/types.ts.
-  src/worker.rs   Spawns per-task Node workers, NDJSON bridge, crash detection, stderr redaction.
-  src/git.rs      Shells out to system git (no git2). Worktrees, porcelain parsing, diff previews.
-  src/storage.rs  MetadataState: atomic JSON writes of wackcode.json, interrupted-task recovery.
-  src/secrets.rs  SecretStore: secrets.json with 0600 perms. The ONLY place API keys are persisted.
-  tauri.conf.json identifier com.wackcode.desktop, CSP default-src 'self', externalBin wackcode-node,
-                  bundle resources/worker, macOS ad-hoc signing.
-  capabilities/default.json   Tauri permissions (core:default, dialog:allow-open, clipboard write-text).
-  binaries/       Bundled Node binary lands here (gitignored except .gitkeep).
-  resources/worker/  Staged by pnpm deploy (gitignored).
-scripts/        prepare-runtime.mjs, prepare-worker.mjs, mock-provider.mjs, dev-background.mjs, dev-stop.mjs,
-                dev-app.mjs. Plain Node ESM, no deps. The one shell script, dev-runner.sh, is `tauri dev`'s cargo
-                runner: Tauri kills the runner to restart the app, so the app must replace it with `exec`.
-                dev-app.mjs builds and wraps the binary in `target/debug/dev-app/WackCode.app`.
-runtime-lock.json  Pins Node 24.18.0 + records the Pi version (informational; the enforced pin is worker/package.json).
-```
+- **Start** with `pnpm dev:background`: idempotent, prints `Ready` once the app is up, logs to `/tmp/wackcode-dev.log`. **Stop** with `pnpm dev:stop`. Don't launch the app any other way, and don't restart it between tests: frontend edits hot-reload, Rust edits rebuild and relaunch the app automatically, and worker edits need `pnpm build:worker` plus a new chat.
+- **Drive** the window by its bundle id, `com.wackcode.desktop`. Only when a test needs the bundled worker and resources, use `pnpm build:desktop:debug` and its `.app`, never while the dev app is running.
+- **Real LLMs:** use the connection named **Testing (AI Agents may use this too)** (under Providers in the composer's model picker). It costs the repo owner nothing and exists for agents' testing. Use it through the app; never read its key from `secrets.json`. Don't send prompts through any other connection or subscription sign-in, as those may cost the owner money. For deterministic output, such as testing cancellation, use `pnpm mock:provider`: it hangs on "wait until stopped".
 
-## Conventions that bite
+## Out of scope
 
-### Type contract across three layers
-Adding or changing a field on a task/provider/project means **four** files, in sync:
-1. `src-tauri/src/models.rs` — the serde struct (`#[serde(rename_all = "camelCase")]`, `#[serde(default)]` on any new optional field so old `wackcode.json` files keep loading, `skip_deserializing` for runtime-only fields like `ProjectRecord.branch`).
-2. `src/types.ts` — the TS mirror.
-3. `src-tauri/src/commands.rs` — any command that constructs/returns it.
-4. `src/App.tsx` — state handling.
-
-`TaskStatus` is the one exception: it serializes `snake_case` (`idle`, `running`, `stopping`, `interrupted`, `error`).
-
-### Adding a new Tauri command (exact order)
-1. `models.rs`: declare request/response structs if needed.
-2. `commands.rs`: write `#[tauri::command] async fn snake_case_name(state: State<'_, MetadataState>, ...) -> Result<T, String>`. Validation goes in the helper cluster at the bottom of the file (`required`, `validate_base_url`, `validate_models`, `validate_thinking`…), not inline. Error strings are complete sentences shown to users.
-3. `lib.rs`: add to `generate_handler![...]`.
-4. `api.ts`: add one line — scalar args for simple inputs, a single `{ input: {...} }` object for multi-field inputs (matches existing style exactly).
-5. `App.tsx` (or the one component that needs it): call `api.*`, then update state immutably via `patchTask` / `patchRuntime` / `setData`. Never mutate `data` in place. Handle errors per the tiers below.
-
-### The commands (full surface, mirrored in `api.ts`)
-
-| Command | File:line | Summary |
-|---|---|---|
-| `bootstrap` | commands.rs:20 | Full `AppData` + `app_data_path`; refreshes `has_api_key` and live branch names. |
-| `save_provider` | commands.rs:35 | Create/update a connection; restarts workers using it. |
-| `delete_provider` | commands.rs:89 | Refuses while tasks reference it. |
-| `discover_models` | commands.rs:114 | `GET {baseUrl}/models` (bearer, 20 s), sorted IDs. |
-| `list_builtin_models` | commands.rs | Read Pi's bundled model catalogue in a short-lived, offline process without credentials. |
-| `list_subscription_providers` … `open_subscription_auth_url` | subscriptions.rs | Subscription sign-in flow (six commands). |
-| `set_tool_config` | commands.rs:146 | Persist the tool denylist; pushes `set_tools` to every running worker without restarting them. |
-| `set_subagent_config` | commands.rs | Validate and persist sub-agent settings; pushes `set_subagents` to every running worker without restarting them. |
-| `add_project` | commands.rs:144 | Canonicalize folder; idempotent; records git root/HEAD. |
-| `create_task` | commands.rs:170 | New chat; optional worktree else per-chat scratch folder. |
-| `configure_task` | commands.rs:244 | Change provider/model/thinking; refuses while running; restarts worker. |
-| `open_task` | commands.rs:273 | Ensure worker, then request `snapshot`. |
-| `init_agents` | commands.rs | Build-mode project chat only; checkpoint and prompt the worker to create/refine workspace-root `AGENTS.md`, then reload Pi's context. |
-| `prompt` | commands.rs:281 | Configure, ensure worker, mark the task running, take a checkpoint, send `prompt` with fresh `runId`. |
-| `resend_message` | commands.rs | Retry or edit: optionally restore files first, then `request(resend)`; restores them again if the worker refuses. |
-| `navigate_task` | commands.rs | Rewind / switch version / undo rewind via `request(navigate)`, then an optional file restore. |
-| `restore_checkpoint` / `checkpoint_changes` | commands.rs | Put a checkpoint's files back (optionally some) / list what that would change. |
-| `fork_task` | commands.rs | New chat from a turn: worker `forkFrom` session, own worktree or scratch copy of the files, copied checkpoint store; rolled back on failure. |
-| `stop_task` | commands.rs:302 | Send `abort`. |
-| `archive_task` / `unarchive_task` | commands.rs:307 / 319 | Terminate worker + flag; clear flag. |
-| `rename_task` | commands.rs:329 | Validated non-empty. |
-| `delete_task` | commands.rs:340 | Terminate worker, drop record, remove agent/session/scratch dirs + worktree. |
-| `convert_task_to_worktree` | commands.rs:355 | Only before the first message / before `session_file` is set. |
-| `remove_project` | commands.rs:393 | Refuses while non-archived chats exist; deletes its tasks. |
-| `git_changes` | commands.rs:437 | Staged + unstaged + untracked diffs for the task workspace. |
-| `list_workspace_files` | commands.rs | Files for `@` mentions (`files.rs`): `git ls-files` (tracked + untracked, not ignored) or a bounded walk, capped at 20k; resolved from a task or draft project record, never a renderer path. |
-| `reveal_task` / `reveal_path` | commands.rs:445 / 454 | macOS `open` on the workspace / an arbitrary path. |
-| `list_packages` / `refresh_packages` | commands.rs | Cached package list / re-read the shared store via the manager process. |
-| `install_package` / `trust_package` | commands.rs | Install (refuses without `trusted`) / grant trust to a package already on disk. |
-| `remove_package` / `update_packages` | commands.rs | Remove, update. Both restart every worker. |
-| `set_package_resources` | commands.rs | Per-resource toggles, persisted as Pi's `PackageSource` object form. |
-| `search_packages` / `package_details` | commands.rs | npm registry search for `keywords:pi-package` / one package's manifest. |
-| `respond_extension_ui` | commands.rs | Answer a dialog an extension raised (plain value or structured `answers`). |
-| `set_task_mode` | commands.rs:1061 | Persist Build/Plan/Ultra Plan on the task record and push `set_mode` to a live worker. |
-| `export_plan` | commands.rs:1082 | Write the ready plan to `PLAN.md` in the workspace; refuses to overwrite. |
-
-New plugin commands also need an entry in `src-tauri/capabilities/default.json`.
-
-### Worker protocol changes (three files deep, always together)
-1. `worker/src/protocol.ts` — extend `WorkerCommand` / `WorkerOutput` unions.
-2. Rust side — `worker.rs` for payload construction (`init` shape at the top of the worker-facing code) and `commands.rs` for the call sites that send the command; update `handle_worker_line` for new event types.
-3. Frontend — `src/types.ts` `WorkerEvent` union + the single `listen("worker-event")` switch in `App.tsx`.
-
-Rules that must not regress:
-- **Abort bypasses the queue.** A prompt holds the worker's serial command queue until the agent settles; `abort` is handled immediately (`worker/src/index.ts`). Never route abort through the same queue as prompt.
-- **Throttling:** boundary emissions are coalesced with a 32 ms timer; partials are throttled to ~16 ms.
-- **Snapshots are incremental (`snapshot_delta`).** Re-serializing the whole session at every message/tool boundary made long sessions quadratic. The worker caches each message's normalized form keyed by Pi's (identity-stable) message objects, so unchanged messages reuse their objects and a boundary emits only changed messages (`upserts` by id, `removed` ids) plus scalars; `diffMessages` (`worker/src/delta.ts`) self-checks that applying the delta reproduces the new list and **falls back to a full snapshot** when it cannot — never weaken that fallback. Full snapshots (`snapshot` / `ready`, both carrying a monotonic `rev` the deltas chain onto by `rev - 1`) remain authoritative at `ready`, the explicit `snapshot` command, after `navigate`, on `compaction_end`, and on `set_model`/`set_thinking`/`set_mode`/`set_tools`; `model`/`thinkingLevel`/`tools` ride full snapshots only. `App.tsx` merges deltas via `applySnapshotDelta` (`chat-utils.ts`), which preserves untouched message objects — the transcript's memo signatures and derived maps depend on that identity. The streaming message is exempt from the normalization cache (it mutates in place); image thumbnails land as one targeted upsert via the `imageOwners` index.
-- **Crash handling:** any worker exit while still registered is unexpected — Rust marks the task `Interrupted` and emits a redacted, 1 000-char-capped stderr tail as `worker_error`.
-- **Request-style commands.** Most commands are fire-and-forget. `navigate`, `resend` and a fork's `init` go through `worker::request`, which waits for the command's `response` (its `result` carries data) via a per-process pending map; consumed responses are not re-emitted to React, and the worker reports their refusals only in the response, never as `worker_error` (that would stick as `lastError`).
-- **Sub-agent settings are live, never a restart.** `set_subagents` (payload built by `worker::subagent_payload`) is broadcast after `set_subagent_config`, `save_provider`, subscription sign-in and sign-out, and also rides `init`. It goes through the normal queue, so the roster never changes under a running call. Don't move sub-agent settings into the worker fingerprint: `open_task` → `ensure_worker_with` terminates a worker on a fingerprint change even mid-run.
-- **Per-task lock.** `TaskLocks` (commands.rs) serializes everything that sends a chat work, moves its conversation, or touches its checkpoints. `prompt`/`resend_message` mark the record `Running` *before* writing to stdin, so a rewind can never queue up behind a prompt and run after it.
-
-### Secrets discipline (security-critical)
-- Manually entered API keys live **only** in `secrets.json` (mode 0600) via `secrets.rs`, and are delivered to the worker **only** over its stdin: the `init` command, and `set_subagents` for connections a sub-agent's own model uses (sent only while sub-agents are on; `null` withdraws them). Never argv, never env vars. Pi OAuth credentials (including provider-minted keys) live in separate mode-0600 `subscriptions/<provider>/auth.json` files under app data; task workers receive the path to only their selected provider, plus those of connections their sub-agents' own models use. Never serialize OAuth credentials into `wackcode.json` or Tauri events.
-- Rust strips all 15 known provider API-key env vars before spawning the worker (`worker.rs`).
-- Redaction happens twice: `safeError` in the worker, then `redact_and_limit` in Rust. Preserve both layers.
-- A dedicated test in `storage.rs` asserts `wackcode.json` contains no secrets. The earlier macOS-Keychain backend was deliberately removed (commit `ea25c08`) — do not reintroduce keyring unless that decision is explicitly revisited.
-
-### Pi feature surface the worker hard-disables
-`worker/src/index.ts` sets `PI_TELEMETRY=0`, `PI_SKIP_VERSION_CHECK=1`, `PI_OFFLINE=1`, `allowModelNetwork: false`, `refreshOnCreate: false`, `cacheWarming: "off"`, `noExtensions`, `noSkills`, `noPromptTemplates`, `noThemes`, `defaultProjectTrust: "never"`, and Rust strips provider env keys. **Kept on purpose:** project instruction/context files (`noContextFiles: false` — so an `AGENTS.md` in the user's project still loads), compaction, and auto-retry.
-
-The `no*` flags stay `true` even now that packages load. They switch off *discovery*, not loading: `DefaultResourceLoader` still honours `additionalExtensionPaths` / `additionalSkillPaths` / `additionalPromptTemplatePaths` / `additionalThemePaths` when they are set (`resource-loader.js`, the `noExtensions ? cliEnabledExtensions : merge(...)` branches). Rust fills those from `init.resources` with the enabled paths of trusted packages only. Nothing else can execute — a project's own `.pi/extensions` is unreachable regardless of trust settings.
-
-### Images
-Images are Pi's own `ImageContent` (`{ type: "image", data: <base64>, mimeType }`) at **every** layer: `src/types.ts`, `models.rs` (`ImageContent`, `PromptInput.images`), and `worker/src/protocol.ts` (`prompt.images`, the same field Pi's RPC `prompt` takes). Nothing converts them on the way, and Pi stores them in its session JSONL in that shape, so sessions stay readable by Pi itself.
-- **Vision is Pi's `input` flag.** `ModelRecord.vision` (default `false`, confirmed by the user in Settings like limits) becomes `input: ["text", "image"]` in the worker's `models.json`; off means `["text"]`, and Pi then swaps any image for its "image omitted" placeholder and stops `read` returning image content. Toggling it changes the provider record, so the worker fingerprint respawns affected workers. Rust also refuses a prompt with images for a non-vision model (`require_vision`), because Pi's silent downgrade would hide the problem.
-- **Limits live in two places and must match:** `src/attachment-utils.ts` and `validate_images` in `commands.rs` (8 images, 20 MB each, PNG/JPEG/GIF/WebP). A message is still required alongside images: Pi always sends a text part.
-- **Resizing happens in the worker**, not the UI: `prepareImages` repeats Pi's CLI `processImage` with the exported `resizeImage` and Pi's defaults (2000 px, 4.5 MB), because `session.prompt` forwards images untouched.
-- **Snapshots never carry originals.** User-message image blocks become `{ type: "image", mimeType, imageId, thumbnail? }`; the worker makes a ≤512 px `data:` preview one at a time, caches it in a `WeakMap` keyed by Pi's (stable) block object, and when it lands re-sends only the owning message as a delta. `Transcript`'s memo signature uses `imageId`, never the preview data. Tool-result images (e.g. `read` on a PNG) still reach the model but are not rendered; they are dropped from normalization so they can't overwrite the call's text result.
-- Drag and drop uses HTML5 events, which is why `tauri.conf.json` sets `dragDropEnabled: false` (the native handler would otherwise swallow file drops). The CSP already allows `data:` images; do not add `blob:` or remote origins for this.
-
-### File mentions
-Typing `@` in the composer opens a file picker (`mention-utils.ts`, ranked like Pi's TUI autocomplete; the list comes from `list_workspace_files`). A mention is **plain text**: the message keeps `@path` or `@"path with spaces"`, exactly as Pi's interactive mode sends it, and the model reads the file with its own tools. Neither Rust nor the worker ever expands a mention into file contents. `Transcript` highlights path-like mentions in sent messages without changing the stored text.
-
-### Extension dialogs
-Extensions may call `ctx.ui.select/confirm/input/editor`. The worker implements a headless `ExtensionUIContext` modelled on Pi's RPC mode and bridges those four to React modals; ambient TUI affordances (`setStatus`, `setWidget`, `setFooter`, themes, custom components) are accepted and discarded. A fifth `method: "questions"` (structured questionnaires, `answers` on the response) exists for the built-in `ask_user_question` tool and is rendered by `QuestionDialog.tsx`, not `ExtensionDialog.tsx`.
-
-**`extension_ui_response` must bypass the worker's command queue, exactly like `abort`.** An extension awaiting a dialog is usually doing so inside a `tool_call` handler, which runs inside `session.prompt()`, which owns the serial queue — queueing the answer behind it deadlocks the run outright. There is a regression test for this (`integration.test.ts`, "answers an extension dialog raised mid-prompt"); removing the bypass makes it time out.
-
-### Built-in extensions
-`worker/src/builtin/` ships extensions compiled into the worker itself. They are passed to `DefaultResourceLoader` as `extensionFactories`, so they load even with `noExtensions: true`, appear in the tool catalogue as `source: "wackcode"`, are hidden from the Settings toggles, and are **immune to the tool denylist** — a disabled `plan_mode_complete` would silently break Plan mode. The one exception is sub-agents: the first built-in with its own off switch. Its factory always loads, and `SubagentsController.inactiveTools()` keeps `subagent` out of `applyDisabledTools` while it is off, so switching it never restarts a worker. They talk to React through a small `BuiltinHost` bridge (`askQuestions`, `publishPlanState`, `publishTodoState`, and `runSubagent`/`childToolNames`/`redact` for sub-agents) over the normal `extension_ui_*` channel; they never touch `ctx.ui` dialogs directly. Settings → Packages lists them under "Built-In" for visibility (`BUILTIN_EXTENSIONS` in `PackagesSection.tsx` — keep it in sync when a built-in is added or renamed).
-
-Four are registered in `builtin/index.ts`:
-- **`ask-user-question`** — `ask_user_question` tool (1–3 questions, 2–4 options each, optional `multiSelect`, free-form "Other"). Available in every mode.
-- **`plan-mode`** — ported from `@narumitw/pi-plan-mode` 0.58.3 (MIT). Enforces a read-only policy while Plan mode is active (mutating tools and package tools blocked; bash limited to a fail-closed allowlist; `gh`/`git` validated per segment — upstream's whole-command prefix shortcut was removed because it let `--web` and command substitutions bypass validation). `plan_mode_complete` publishes `plan_state` and persists it via `pi.appendEntry`, so it survives worker restarts; a `<proposed_plan>` block is the fallback when the model skips the tool. Mode switches are model-visible via a hidden `custom` contract message, not a system-prompt rewrite. `TaskRecord.mode` is the durable hint; on init mismatch the record wins.
-  - **Ultra Plan** (`TaskMode` `"ultraplan"`, Rust `TaskMode::UltraPlan`) is the same extension with a different contract: a grill-me style interview (after Matt Pocock's `grill-me`, MIT) — no question limit, one `ask_user_question` per round, recommended answer first, a Decisions section in the plan. Policy, `plan_mode_complete`, PlanCard and restore are shared; anything that means "planning" must test `mode !== "build"`, never `=== "plan"`. It persists as `ultra: true` on the version-1 plan-state entry (absent = Plan). Reached by clicking Plan again (the button toggles Plan ↔ Ultra Plan); ⇧Tab cycles Build → Plan → Ultra Plan.
-  - **The Plan contract text must stay byte-identical.** Contracts are recognised by exact content, so any edit to `buildPlanModePrompt()`'s Plan output makes every saved Plan chat re-append its contract; `builtin.test.ts` pins its hash.
-  - **"Write the plan now"**: in Ultra Plan `ask_user_question` sends its questionnaire with `offerWrapUp`; the card answers with `wrapUp` (UI → `respond_extension_ui` → `extension_ui_response`, which already bypasses the queue). The tool then tells the model to submit the plan, and short-circuits any further question for the rest of that run (reset on `before_agent_start`).
-- **`todo`** — ported from `@juicesharp/rpiv-todo` 2.11.0 (MIT). A `todo` tool (create/update/list/get/delete/clear; `pending → in_progress → completed` plus a `deleted` tombstone; `blockedBy` dependencies with additive merge and cycle rejection) rendered as a live panel above the composer (`TodoPanel.tsx`). No disk writes, like upstream: every tool result embeds the full list in `details` (versioned `TodoDetails`) and `replayFromBranch` rebuilds state on `session_start`/`session_compact`/`session_tree`, so the list survives worker restarts and compaction; `todo_state` events plus `getSnapshot().todoState` feed the UI. Allowed in Plan mode — it mutates only its own list, never the workspace. Adaptations from upstream: the TUI overlay and `/todos` command are gone (the panel is the view), i18n is dropped, `owner`/`metadata` are trimmed from the schema, and the sid-keyed multi-session store collapses to one closure (one session per worker). The panel fades completed tasks behind "+N done" at each run boundary.
-- **`subagents`** — modelled on Pi's `examples/extensions/subagent` (MIT; single/parallel modes, output sections, caps) and the in-process foreground model of `pi-subagents` (MIT). **Off by default** (every child is extra usage), switched on from its Built-In card in Settings → Packages, which reveals Settings → Sub-agents. The `subagent` tool takes `{agent, task}` or `tasks` (≤ 8). Children are in-process sessions (`subagent-runner.ts`), never spawned `pi` processes: the worker has no `pi` binary, `argv[1]` is the worker itself, and provider env keys are stripped. Rules:
-  - **Roles come from Rust** (`subagents.rs`): shipped Scout/Reviewer/Worker prompts (adapted from Pi's example) are refreshed on every load; users own only their switch and model, and duplicate one to customise it. Custom agents are stored whole.
-  - **Model:** the chat's own model and thinking level unless the agent has its own; the chat's connection reuses the worker's runtime (never two OAuth refreshers on one file), others get a lazily built runtime from `set_subagents` credentials.
-  - **Children load nothing:** every `no*` flag on (project context files still load), `extensionFactories` holds only the read-only guard, and `tools:` is an allowlist (see Tool selection) of the role's Pi tools ∩ available ∖ the user's denylist. So no package code, no nesting, no dialogs. The role prompt goes through `appendSystemPromptOverride` — `appendSystemPrompt` would read a file if the text were a path.
-  - **Read-only agents** get no edit/write, and `guard.ts` checks their bash with Plan mode's own policy (`findBlockedCommandSegment`, `DEFAULT_SAFE_SUBCOMMANDS`). In Plan mode (and Ultra Plan) only read-only agents may run (the tool refuses others; `subagent` is a Plan-mode helper).
-  - **Scheduling:** `executionMode: "sequential"`, so a call never overlaps the parent's own tools; within a call at most `maxConcurrency` children run, and agents that edit share one writer slot.
-  - **Never throw once children have started.** A thrown error replaces the result with `details: {}` and no usage. Return normally (including on abort) and flip `isError` from the extension's own `tool_result` handler. The result's `usage` sums the children's, so the chat's token/cost totals include them.
-  - **The card:** `details` is versioned `SubagentDetails` (capped: 12 activities and 16 KB of output per child); live updates ride `activity.detail.details` for `subagent` only, stored in `TaskRuntime.liveToolDetails` until the run ends, rendered by `SubagentCard.tsx` via `parseSubagentDetails`.
-
-### Tool selection (read this before touching tools)
-**Never pass `tools:` to the chat's `createAgentSession`.** (Sub-agent child sessions are the deliberate exception: they have no toggles to preserve, and nothing outside their role's list should exist for them.) In Pi 0.86.1 it sets `allowedToolNames`, a hard *registry* filter (`agent-session.js` `isAllowedTool`) — not just an initial active set. Anything not listed is erased from the registry, so extension-contributed tools disappear from `getAllTools()` entirely and can never be shown as an off toggle. `excludeTools:` erases in the same way; it is reserved for tools that must not exist at all, currently just `powershell` (registered on every platform, meaningless on macOS-only WackCode).
-
-The user's selection is a **denylist**, so a tool a newly installed package adds is on by default. It arrives as `init.disabledTools`, is applied with `session.setActiveToolsByName(...)` right after session creation, and is changed live by the `set_tools` command — `setActiveToolsByName` takes effect on the next agent turn, so tool changes **never restart a worker** (unlike provider/model, which are in the `worker.rs` fingerprint).
-
-`grep` and `find` shell out to `rg` and `fd`. Pi normally downloads those on demand, but `PI_OFFLINE=1` blocks that, so the worker probes for them (Pi's bin dir, then `PATH`) and reports missing ones as `available: false` with a reason rather than offering the model a tool that errors mid-task. A packaged `.app` launched from Finder gets a minimal `PATH`, so this is the common case, not the edge case — bundling those binaries is tracked with the npm bundling work.
-
-### Session tree & checkpoints
-Pi sessions are append-only trees; WackCode exposes them as retry, inline edit & resend, rewind, a ‹ n/m › version switcher, and fork. The rules:
-- **Versions are grouped by logical parent** (`worker/src/tree.ts`): the nearest user/assistant/toolResult ancestor. Plan-state, run-timing, checkpoint and marker entries, Pi's `system` declaration and model/thinking changes all sit between two user messages, so an edit is rarely a *direct* sibling of what it replaces.
-- **Navigation is made durable with marker entries**, not host state. Pi reopens a session at its *last line*, so every move appends `wackcode-leave` (under the old leaf, with the files it was left with) and `wackcode-nav` (under the new leaf, with `from` for "Undo rewind"). Never move the leaf without both. After `navigateTree`, re-apply the tool denylist (Pi restores the transcript's loadout) and emit a snapshot (Pi tells only extensions); Plan mode and todo re-derive themselves on `session_tree`.
-- **Resend applies no mode:** the restored branch's plan state wins.
-- **Snapshot messages carry `entryId`** (mapped by object identity from Pi's entries), `versions`, `checkpoint` (user messages) and `turn` (the last assistant message of each turn). A just-finished message can briefly lack an `entryId`; the UI hides its actions.
-- **Checkpoints** (`checkpoints.rs`): Rust snapshots the workspace before every prompt/resend and when a branch is left; the worker records the id as a `wackcode-checkpoint` entry directly above the user message — **always**, with `id: null` when no snapshot was possible, so a new version never inherits another's checkpoint. The store is a private shadow repo at `<app-data>/checkpoints/<taskId>`, deleted with the chat, covering the worktree root, the project's git root, or the chat's own folder (never walking up from scratch). It borrows the project's objects through `objects/info/alternates` and **never creates, changes or deletes objects or refs in the project's repository**. Snapshots are tree objects with refs (no commits); shadow git runs with system/global config off and `info/attributes` disabling every conversion, so round trips are byte-exact.
-- **Restores only touch diff-derived paths** and never write over something the current snapshot doesn't hold (ignored, oversized >25 MB, or untracked files) — those are reported as `skipped`. The state just before every restore is itself a checkpoint (`undo`). Checkpoints are refused for `$HOME` or folders containing app data, and skipped when a snapshot would add >20k new files; the chat keeps working without them (`checkpoint_unavailable` notice, once per session).
-
-### Git integration
-- Uses the **system `git` CLI** via `std::process::Command` — there is intentionally no `git2` crate.
-- Worktrees: branch `wackcode/<slug>-<taskId[..8]>`, destination `<app-data>/worktrees/<taskId>`. Require at least one commit (`git_has_head`) and can only be chosen before the first message (Rust refuses once `session_file` is set). A fork's worktree starts at the commit its checkpoint recorded (`create_worktree`'s `base`).
-- `git_changes` parses `status --porcelain=v1 -z` (rename records are two NUL-separated entries) and concatenates staged + unstaged diffs with `# Staged changes` / `# Working tree changes` headers; previews are capped at 240 KB with a `truncated` flag; binaries are detected by NUL bytes in the first 8 KB and rendered as `Binary file · N bytes`.
-
-### Frontend rules
-- Only `App.tsx` holds cross-cutting state and only `App.tsx` subscribes to Tauri events. Components are presentational: named `export function`, in-file `interface Props`, `onX` callback props, `import type` for types.
-- `SettingsPage.tsx` is the sole component that imports `api` directly — treat this as a pragmatic exception, not a new pattern.
-- Error surfaces, pick by scope: `globalError` toast (app-wide), per-task `runtime.error`/`task.lastError` banner, or local form `error`/`notice` state. All use `String(reason)`; optimistic updates are rolled back in `catch`.
-- Destructive actions go through `ConfirmDialog` with a `danger` variant, driven from a single `ConfirmState` in `App.tsx`.
-- Styling: add rules to the matching banner section of `src/styles.css`; reuse `--wc-*` variables and existing button classes (`primary-button`, `secondary-button`, `danger-button`, `icon-button`, `ghost-button`) instead of inventing new ones. Respect keyboard shortcuts already on ⌘N / ⌘O / ⌘, / ⇧⌘C / ⇧Tab (mode cycle) and the `data-tauri-drag-region` strips for the overlay titlebar.
-- Accessibility: role/name-based queries in tests, `aria-label` on icon-only buttons, `:focus-visible` uses `color-mix`, and a `prefers-reduced-motion` block exists — don't break it with new animations.
-
-### Rust rules
-- No `anyhow`/`thiserror`; every fallible function returns `Result<T, String>` with a **user-facing sentence** as the error. Mutex poison maps to `"<Thing> lock was poisoned"`.
-- All metadata writes go through `MetadataState::mutate(...)` → atomic `.tmp` + `rename`. Never hand-roll a partial write.
-- IDs are `Uuid::new_v4()` strings; timestamps `chrono::Utc::now().to_rfc3339()`.
-- Managed state via `.manage(...)`; access with `State<'_, MetadataState>` / `State<'_, WorkerState>`. `WorkerState` is a `std::sync::Mutex<HashMap<task_id, WorkerProcess>>`; `WorkerProcess.stdin` is a `tokio::sync::Mutex` because it's held across `.await`. One worker per task; changing provider or model kills and respawns it (fingerprint match in `worker.rs`).
-
-### Build artifacts — never commit
-`worker/dist/`, `src-tauri/resources/worker/`, `src-tauri/binaries/*` (except `.gitkeep`), `dist/`, `*.tsbuildinfo`, `src-tauri/target/`. `todo.md` is also gitignored on purpose.
-
-## Testing guidance
-
-- **What to test where:** pure logic → colocated `*.test.ts` next to `model-utils.ts`/`chat-utils.ts`/`tool-utils.ts`; UI → Testing Library component tests (`ModelPicker.test.tsx`, `ProjectBar.test.tsx`, `ui/Select.test.tsx` show the style: `afterEach(cleanup)`, `screen.getByRole`, `fireEvent`, small controlled `Harness` wrappers); worker protocol → `worker/src/*.test.ts` (real spawned worker + inline mock provider on an ephemeral port); Rust → inline `#[cfg(test)] mod tests` using `tempfile`.
-- **What's currently untested (don't mimic a pattern that isn't there):** `App.tsx`, both hooks, and `api.ts` have no tests, nor do the Rust command wrappers around checkpoints and `worker::request` (the worker suite and `checkpoints.rs` tests cover what they call). `Transcript.tsx` is covered for tool output and message actions; `Composer.tsx` for attachments and its seed. Add coverage deliberately if you touch them, but don't treat existing silence as license to ship regressions.
-- The worker integration suite exercises properties the UI cannot: concurrent sessions with overlapping model IDs, per-credential isolation, thinking-level wire mapping, cancellation mid-stream, session restoration without replay, and the session tree (retry versions, rewinds surviving a restart, Plan-mode re-derivation, forks). Run it after any protocol change.
-- For a manual end-to-end check: `pnpm mock:provider`, then add `http://127.0.0.1:43127/v1` as a Chat Completions connection in the app.
-
-### Testing the running app
-
-`pnpm dev:desktop` is a blocking process with a minutes-long cold build and no readiness signal. macOS only gives a process a bundle identity when its executable sits inside an `.app` (an Info.plist embedded in a bare binary is ignored when it checks in as an app), so the dev runner starts the cargo binary from a minimal wrapper at `src-tauri/target/debug/dev-app/WackCode.app`. It is the same debug binary, cloned there after each build; debug builds find the worker, Node and the frontend from the source tree, so nothing else changes. Never improvise a launch, and never build a `.app` just to click through the UI. Instead:
-
-- **Start:** `pnpm dev:background`. Idempotent — a healthy running instance is left alone; stale leftovers (orphaned Vite, a dead app's tauri CLI) are torn down first; a fresh `tauri dev` is spawned detached with output appended to `/tmp/wackcode-dev.log`, and `Ready` is printed only once Vite is listening on 1420 *and* the app process exists. `WACKCODE_DEV_TIMEOUT_SEC` overrides the default 10-minute readiness budget.
-- **Stop:** `pnpm dev:stop`.
-- **Do not restart the dev instance between tests.** Frontend edits hot-reload through Vite; Rust edits make `tauri dev` recompile and relaunch the app on its own; worker edits need `pnpm build:worker` and then a new chat (workers spawn per task, so new ones pick up the new build) or a `dev:stop` / `dev:background` cycle.
-- **Targeting the window:** the dev app has the release app's bundle id, `com.wackcode.desktop`, so request access to and drive it by that id. Only when a test genuinely needs the bundled worker and resources, use `pnpm build:desktop:debug` and launch `src-tauri/target/debug/bundle/macos/WackCode.app` — far faster to produce than a release build because it skips release optimizations and shares debug artifacts with `tauri dev`. Never run it alongside the dev app: both use the same app data.
-
-## Out of scope for this milestone (do not propose as "fixes")
-
-Non-image attachments, embedded editors and terminals, permission prompts, automatic merging, notarization, auto-updates, and any non-macOS platform. MCP is not a WackCode feature, but is reachable by installing a package such as `npm:pi-mcp-adapter`.
-
-**In scope but not built:** per-project package overrides (Pi's project scope lives in the user's own `.pi/`, which is untrusted here by design), skill authoring, and theme selection. `todo.md` (gitignored) tracks longer-term Pi-surface ideas; coordinate before picking those up.
-
-## Security posture to preserve
-
-App-initiated network calls are limited to user-configured provider endpoints (`GET {baseUrl}/models` and chat completions), Pi’s built-in subscription authorization endpoints after explicit sign-in and subscription inference/token refresh during user prompts, and, only on an explicit user action, the npm registry plus the chosen package's npm or git source. CSP is `default-src 'self'` with only `ipc:` connect-src and **must stay that way**: the renderer never fetches, so every remote call goes through Rust `reqwest` or the package-manager process. A new network origin still requires an explicit note in the PR. The worker environment is sanitized, credentials travel only over a private stdin pipe, and local state lives under the app's macOS application-data directory.
-
-**Installed packages are the largest trust boundary in the app.** An extension is ordinary local code running inside the task worker — the process holding the decrypted provider API key (and, with sub-agents on, the credentials of connections their own models use). The trust dialog is informed consent, not containment: it names the source and states the API-key exposure, and `trusted_at` gates whether a package's paths ever reach a worker (`worker::resource_paths`). Do not weaken that gate. **`trusted_at` is only ever set by an explicit `install_package` or `trust_package` the user confirmed** — `sync_packages` takes a `newly_trusted` argument precisely so that a package appearing in the shared store by any other route (a restored `wackcode.json`, or an already-installed extension editing `settings.json`) stays inert and is shown in Settings as "Not enabled" until reviewed. Never default it to the current time. Project-local `.pi/` remains unloadable by construction, not by a flag: the worker keeps every `no*` discovery option on and loads only the absolute paths Rust hands it.
+Don't propose these as fixes: non-image attachments, embedded editors or terminals, permission prompts, automatic merging, notarization, auto-updates, other platforms. MCP isn't built in; a package such as `pi-mcp-adapter` provides it. `todo.md` (gitignored) is the owner's idea list: ask before starting anything from it.

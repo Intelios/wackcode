@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { motion } from "motion/react";
 import type { ImageContent, ProviderRecord, SessionSnapshot, SlashCommand, TaskMode, TaskStatus, ThinkingLevel } from "../types";
 import { ACCEPTED_IMAGE_TYPES, attachImages, imageDataUrl, imageFilesFrom } from "../attachment-utils";
 import { formatTokens } from "../chat-utils";
@@ -7,6 +8,11 @@ import { ContextPanel } from "./ContextPanel";
 import { ModelPicker, ReasoningToggle } from "./ModelPicker";
 import { ModeToggle } from "./ModeToggle";
 import { Tooltip } from "./ui/Tooltip";
+
+/** Matches `--ease` in styles.css. */
+const EASE: [number, number, number, number] = [0.33, 1, 0.68, 1];
+/** Springy settle (same bezier as `.segmented`) — makes the hero→dock glide land with a hint of overshoot. */
+const GLIDE_EASE: [number, number, number, number] = [0.34, 1.3, 0.64, 1];
 
 interface ComposerProps {
   status: TaskStatus;
@@ -39,9 +45,15 @@ interface ComposerProps {
   disabled?: boolean;
   /** Replaces the draft whenever `nonce` changes, e.g. with the text of a rewound message. */
   seed?: { text: string; nonce: number };
+  /** Traces an ambient accent line around the border; used on the draft hero only. */
+  comet?: boolean;
+  /** Shows this text read-only instead of the draft while the hero composer hands off to the docked one. */
+  frozen?: string;
+  /** Shared-layout id so the composer glides between the hero and docked positions. */
+  layoutId?: string;
 }
 
-export function Composer({ status, providerId, modelId, thinkingLevel, providers, stats, header, placeholder, popoverSide = "top", mode, onModeChange, onConfigure, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, onDraftChange, transfer, onStop, onOpenSettings, disabled, seed }: ComposerProps) {
+export function Composer({ status, providerId, modelId, thinkingLevel, providers, stats, header, placeholder, popoverSide = "top", mode, onModeChange, onConfigure, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, onDraftChange, transfer, onStop, onOpenSettings, disabled, seed, comet, frozen, layoutId }: ComposerProps) {
   const [draft, setDraft] = useState(transfer?.text ?? "");
   const [attachments, setAttachments] = useState<ImageContent[]>(transfer?.images ?? []);
   const [attachNotice, setAttachNotice] = useState<string>();
@@ -83,7 +95,7 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
     if (!area) return;
     area.style.height = "auto";
     area.style.height = `${Math.min(area.scrollHeight, 200)}px`;
-  }, [draft]);
+  }, [draft, frozen]);
 
   // Only a new nonce reseeds, so a re-render never clobbers what the user has typed since.
   const seedText = useRef(seed?.text);
@@ -96,6 +108,7 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
   }, [seedNonce]);
 
   async function send() {
+    if (frozen !== undefined) return;
     const message = draft.trim();
     if (!message || busy || blockedByModel) return;
     const images = attachments;
@@ -191,8 +204,15 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
         void addFiles(imageFilesFrom(event.dataTransfer));
       }}
     >
-      {header && <div className="composer-header">{header}</div>}
-      <div className="composer" aria-disabled={disabled || undefined}>
+      {header && <motion.div className="composer-header" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, y: -12, transition: { duration: 0.18, ease: EASE } }} transition={{ duration: 0.25, ease: EASE }}>{header}</motion.div>}
+      <motion.div
+        className={`composer${comet ? " comet" : ""}${frozen !== undefined ? " frozen" : ""}`}
+        aria-disabled={disabled || undefined}
+        layoutId={layoutId}
+        layoutCrossfade={false}
+        transition={layoutId ? { duration: 0.55, ease: GLIDE_EASE } : undefined}
+        exit={{ opacity: 0, y: 24, transition: { duration: 0.22, ease: EASE } }}
+      >
         {showCommands && <div id="slash-command-list" className="slash-picker" role="listbox" aria-label="Slash commands">
           {commandsLoading ? <div className="slash-picker-status">Loading commands…</div> : commandsError ? <div className="slash-picker-status">{commandsError} <button type="button" onClick={onRequestCommands}>Retry</button></div> : suggestions.length ? suggestions.map((command, index) =>
             <button id={`slash-option-${index}`} type="button" role="option" aria-selected={index === slashIndex} className={`slash-option ${index === slashIndex ? "selected" : ""}`} key={command.id} onMouseDown={(event) => event.preventDefault()} onClick={() => insertCommand(command.name)}>
@@ -220,9 +240,11 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
           aria-controls={showCommands ? "slash-command-list" : undefined}
           aria-expanded={showCommands}
           aria-activedescendant={showCommands && suggestions.length ? `slash-option-${Math.min(slashIndex, suggestions.length - 1)}` : undefined}
-          value={draft}
+          value={frozen ?? draft}
           rows={1}
+          readOnly={frozen !== undefined}
           onChange={(event) => {
+            if (frozen !== undefined) return;
             const value = event.target.value;
             setDraft(value);
             onDraftChange?.(value, attachments);
@@ -328,7 +350,7 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
             )}
           </div>
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 }

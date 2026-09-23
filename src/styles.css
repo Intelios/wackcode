@@ -99,6 +99,10 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 
 /* ── Workspace header ──────────────────────────────── */
 .workspace { min-width: 0; flex: 1; display: flex; flex-direction: column; position: relative; }
+/* Draft hero and chat view overlay each other during the welcome→chat transition
+   so the exiting hero can fade while the chat (and the gliding composer) mounts. */
+.chat-view { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.chat-transcript { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .workspace-header {
   min-height: 56px; padding: 12px 14px 9px 20px; display: flex; align-items: center; gap: 12px;
   border-bottom: 1px solid var(--border); background: rgb(17 19 16 / 92%);
@@ -330,6 +334,29 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .slash-option small { color: var(--text-faint); }
 .slash-picker-status { padding: 10px; color: var(--text-soft); }
 .composer:focus-within { border-color: #596649; box-shadow: 0 10px 36px rgb(0 0 0 / 28%), 0 0 0 1px rgb(194 238 74 / 8%); }
+/* Comet: a thin accent line tracing the border of the draft-hero composer. The
+   conic gradient lives on a pseudo-element masked down to a 1.5px ring. */
+@property --comet-angle { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+@keyframes comet-spin { to { --comet-angle: 360deg; } }
+.composer.comet::before {
+  content: "";
+  position: absolute;
+  inset: -1.5px;
+  padding: 1.5px;
+  border-radius: 15px;
+  background: conic-gradient(from var(--comet-angle), transparent 70%, var(--wc-accent) 88%, transparent 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: comet-spin 2.5s linear infinite;
+  pointer-events: none;
+  transition: opacity .3s var(--ease);
+}
+.composer.comet:focus-within::before { opacity: 0; }
+/* On send the comet charges around the ring before the composer glides away. */
+.composer.comet.frozen::before { animation-duration: .7s; }
+.composer.frozen { pointer-events: none; }
 .composer textarea {
   width: 100%; min-height: 42px; max-height: 200px; resize: none; border: 0; outline: 0;
   background: transparent; color: var(--text); padding: 13px 15px 6px; line-height: 1.5; font-size: 13.5px;
@@ -361,7 +388,7 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .attach-button.unavailable:hover { background: transparent; color: var(--text-dim); }
 
 /* draft hero + project bar */
-.draft-hero { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center; padding-bottom: 8%; }
+.draft-hero { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; padding-bottom: 8%; }
 .draft-title { margin: 0 auto 22px; max-width: 760px; width: 100%; padding: 0 24px; font-size: 24px; letter-spacing: -.5px; font-weight: 650; text-align: center; }
 .draft-hero .composer-wrap { background: none; padding-top: 0; }
 .project-bar { display: flex; align-items: center; gap: 6px; }
@@ -875,6 +902,8 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   .settings-subnav { transform: none !important; }
   .settings-back-button svg { transform: none !important; }
   * { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+  /* The welcome comet is a deliberate ambient exception and keeps its full speed. */
+  .composer.comet::before { animation-duration: 2.5s !important; }
 }
 
 /* ── Extension dialogs and notices ─────────────────── */

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -56,6 +57,9 @@ const emptyData: AppData = {
   packages: [],
   subagents: { enabled: false, trigger: "on_request", maxConcurrency: 4, agents: [] }
 };
+
+/** Matches `--ease` in styles.css. */
+const EASE: [number, number, number, number] = [0.33, 1, 0.68, 1];
 
 const LAST_MODEL_KEY = "wackcode:lastModel";
 const LAST_PROJECT_KEY = "wackcode:lastProject";
@@ -155,6 +159,8 @@ export default function App() {
   const [connectedSubscriptionId, setConnectedSubscriptionId] = useState<string>();
   const [lastModels, setLastModels] = useState<Record<string, ModelChoice>>(() => loadJSON(LAST_MODEL_KEY, {}));
   const [draft, setDraft] = useState<Draft>();
+  /** Mid first-send choreography: the hero is exiting while this message rides the composer down. */
+  const [transitioning, setTransitioning] = useState<{ message: string; taskId?: string }>();
 
   const selectedTask = data.tasks.find((task) => task.id === selectedTaskId);
   const selectedProject = data.projects.find((project) => project.id === selectedTask?.projectId);
@@ -414,6 +420,25 @@ export default function App() {
       patchRuntime(selectedTaskId, { error: String(reason) });
     });
   }, [selectedTaskId, refreshChanges, patchRuntime]);
+
+  // Clears the first-send handoff: the frozen text leaves the docked composer once the
+  // message exists in the transcript, or once the entrance has certainly finished.
+  useEffect(() => {
+    const taskId = transitioning?.taskId;
+    if (!transitioning) return;
+    if (taskId && selectedTaskId !== taskId) {
+      setTransitioning(undefined);
+      return;
+    }
+    if (!taskId || selectedTaskId !== taskId) return;
+    const arrived = (runtimes[taskId]?.snapshot?.messages ?? []).some((message) => message.role === "user");
+    if (arrived) {
+      setTransitioning(undefined);
+      return;
+    }
+    const timeout = setTimeout(() => setTransitioning(undefined), 900);
+    return () => clearTimeout(timeout);
+  }, [transitioning, selectedTaskId, runtimes]);
 
   useEffect(() => {
     const refresh = () => void refreshChanges();
@@ -710,12 +735,18 @@ export default function App() {
         return false;
       }
       const startedAt = Date.now();
+      // Freezing the composer with the sent text before the task exists keeps the hero
+      // from flashing an empty draft while createTask is in flight.
+      setTransitioning({ message });
       let task: TaskRecord;
       const pendingSlash = slashDraftPromise.current;
       try {
         if (pendingSlash) {
           const prepared = await pendingSlash;
-          if (!prepared) return false;
+          if (!prepared) {
+            setTransitioning(undefined);
+            return false;
+          }
           task = prepared;
         } else {
           task = await api.createTask({
@@ -726,9 +757,11 @@ export default function App() {
           });
         }
       } catch (reason) {
+        setTransitioning(undefined);
         setGlobalError(String(reason));
         return false;
       }
+      setTransitioning({ message, taskId: task.id });
       rememberModel(active.projectId, choice);
       localStorage.setItem(LAST_PROJECT_KEY, JSON.stringify(active.projectId));
       const mode = modeOverride ?? active.mode ?? "build";
@@ -748,8 +781,11 @@ export default function App() {
           literal
         });
       } catch (reason) {
+        // Stay on the hero; returning false restores the draft in the composer.
+        setTransitioning(undefined);
         patchTask(task.id, { status: "idle" });
         patchRuntime(task.id, { error: String(reason), activeRun: undefined });
+        return false;
       }
       // Selection happens after api.prompt so open_task's ensure_worker finds the
       // already-running worker instead of racing it to spawn a second process.
@@ -1274,17 +1310,28 @@ export default function App() {
       />
 
       <main className="workspace">
+        <AnimatePresence initial={false}>
         {!selectedTask ? (
           configuredProviders.length === 0 ? (
-            <div className="workspace-empty">
+            <div key="empty" className="workspace-empty">
               <h1>Connect a model provider</h1>
               <p>Sign in with a subscription or add an OpenAI-compatible endpoint and API key to start chatting.</p>
               <button className="primary-button" onClick={() => setSettingsOpen(true)}><Icon name="key" /> Open settings</button>
             </div>
           ) : (
-            <div className="draft-hero">
-              <h1 className="draft-title">{draftProject ? `What should we build in ${draftProject.name}?` : "What should we build?"}</h1>
+            <motion.div key="draft" className="draft-hero">
+              <motion.h1
+                className="draft-title"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1, transition: { duration: 0.25, ease: EASE } }}
+                exit={{ opacity: 0, y: -56, transition: { duration: 0.22, ease: EASE } }}
+              >
+                {draftProject ? `What should we build in ${draftProject.name}?` : "What should we build?"}
+              </motion.h1>
               <Composer
+                comet
+                layoutId="main-composer"
+                frozen={transitioning?.message}
                 status="idle"
                 providerId={draftChoice?.providerId}
                 modelId={draftChoice?.modelId}
@@ -1314,11 +1361,12 @@ export default function App() {
                 onStop={() => undefined}
                 onOpenSettings={() => setSettingsOpen(true)}
               />
-            </div>
+            </motion.div>
           )
         ) : (
-          <>
-            <ChatHeader
+          <motion.div key="chat" className="chat-view" initial={false} exit={{ opacity: 0, transition: { duration: 0.18, ease: EASE } }}>
+            <motion.div initial={{ opacity: 0, y: -36 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.45, ease: EASE }}>
+              <ChatHeader
               task={selectedTask}
               project={selectedProject}
               changesCount={changes?.files.length}
@@ -1326,7 +1374,8 @@ export default function App() {
               onToggleChanges={() => setChangesOpen((value) => !value)}
               onRename={(name) => void renameTask(selectedTask.id, name)}
               onTaskAction={(task, action) => void taskAction(task, action)}
-            />
+              />
+            </motion.div>
             {sharedWorkers.length > 0 && <div className="shared-notice"><span>!</span><strong>{sharedWorkers[0].name}</strong> is also running in this folder. File edits are shared.</div>}
             {(runtime?.error || selectedTask.lastError) && <div className="error-banner workspace-error"><span>{runtime?.error || selectedTask.lastError}</span><button onClick={() => patchRuntime(selectedTask.id, { error: undefined })}>Dismiss</button></div>}
             {runtime?.notices?.map((entry, index) => (
@@ -1342,6 +1391,7 @@ export default function App() {
                 <button onClick={() => patchRuntime(selectedTask.id, { lastRestore: undefined })}>Dismiss</button>
               </div>
             )}
+            <motion.div className="chat-transcript" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.1, ease: EASE }}>
             <Transcript
               messages={runtime?.snapshot?.messages ?? []}
               partial={runtime?.partial}
@@ -1359,6 +1409,7 @@ export default function App() {
               onMessageAction={onMessageAction}
               onUndoRewind={runtime?.snapshot?.tree?.undo ? onUndoRewind : undefined}
             />
+            </motion.div>
             <InlineDialog
               requests={extensionRequests}
               selectedTaskId={selectedTask.id}
@@ -1370,6 +1421,8 @@ export default function App() {
               busy={selectedTask.status === "running" || selectedTask.status === "stopping"}
             />
             <Composer
+              layoutId="main-composer"
+              frozen={transitioning?.taskId === selectedTask.id ? transitioning.message : undefined}
               status={selectedTask.status}
               providerId={selectedTask.providerId}
               modelId={selectedTask.modelId}
@@ -1393,8 +1446,9 @@ export default function App() {
               onOpenSettings={() => setSettingsOpen(true)}
               seed={composerSeed}
             />
-          </>
+          </motion.div>
         )}
+        </AnimatePresence>
       </main>
 
       {selectedTask && changesOpen && <ChangesPanel changes={changes} loading={changesLoading} width={changesWidth} onWidthChange={setChangesWidth} onClose={() => setChangesOpen(false)} onRefresh={() => void refreshChanges(selectedTask.id)} />}

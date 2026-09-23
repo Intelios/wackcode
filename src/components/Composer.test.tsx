@@ -123,6 +123,36 @@ describe("Composer seed", () => {
   });
 });
 
+describe("Composer comet and frozen", () => {
+  const base = {
+    status: "idle" as const,
+    providers,
+    providerId: "p",
+    modelId: "sees",
+    thinkingLevel: "off" as const,
+    onConfigure: vi.fn(),
+    onSend: vi.fn().mockResolvedValue(true),
+    onStop: vi.fn(),
+    onOpenSettings: vi.fn()
+  };
+
+  it("adds the comet class when comet is set", () => {
+    const { container } = render(<Composer {...base} comet />);
+    expect(container.querySelector(".composer")).toHaveClass("comet");
+    const plain = render(<Composer {...base} />);
+    expect(plain.container.querySelector(".composer")).not.toHaveClass("comet");
+  });
+
+  it("shows the frozen text read-only instead of the draft", () => {
+    render(<Composer {...base} frozen="Off it goes" />);
+    const area = screen.getByRole("textbox");
+    expect(area).toHaveValue("Off it goes");
+    expect(area).toHaveAttribute("readonly");
+    fireEvent.change(area, { target: { value: "Edited" } });
+    expect(area).toHaveValue("Off it goes");
+  });
+});
+
 describe("Composer slash commands", () => {
   const command = { id: "extension:hello", name: "hello", description: "Say hello", source: "extension" as const, sourceLabel: "Fixture" };
   function setup(extra: Partial<React.ComponentProps<typeof Composer>> = {}) {

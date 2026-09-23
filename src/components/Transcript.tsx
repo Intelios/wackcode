@@ -3,6 +3,7 @@ import type { NormalizedBlock, NormalizedMessage, PlanState, RunTiming } from ".
 import { useFollowScroll } from "../hooks/useFollowScroll";
 import { useSmoothText } from "../hooks/useSmoothText";
 import { formatRunDuration, isPlanMode } from "../chat-utils";
+import { splitMentions } from "../mention-utils";
 import { SUBAGENT_TOOL_NAME, parseSubagentDetails, pendingSubagentDetails } from "../tool-utils";
 import { hasVisibleMessages, latestTurn, messageText } from "../tree-utils";
 import { Icon } from "./Icons";
@@ -244,7 +245,7 @@ const Message = memo(function Message({ message, results, liveToolText, liveTool
             )}
           </div>
         )}
-        {text && <div className="bubble">{text}</div>}
+        {text && <div className="bubble">{splitMentions(text).map((segment, index) => segment.mention ? <span key={index} className="mention">{segment.text}</span> : segment.text)}</div>}
         <MessageActions
           align="end"
           items={items}

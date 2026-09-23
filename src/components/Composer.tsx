@@ -1,8 +1,9 @@
-import { useEffect, useLayoutEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import type { ImageContent, ProviderRecord, SessionSnapshot, SlashCommand, TaskMode, TaskStatus, ThinkingLevel } from "../types";
 import { ACCEPTED_IMAGE_TYPES, attachImages, imageDataUrl, imageFilesFrom } from "../attachment-utils";
 import { formatTokens } from "../chat-utils";
+import { activeMention, mentionValue, rankMentions, type MentionSuggestion } from "../mention-utils";
 import { Icon } from "./Icons";
 import { ContextPanel } from "./ContextPanel";
 import { ModelPicker, ReasoningToggle } from "./ModelPicker";
@@ -38,6 +39,13 @@ interface ComposerProps {
   onCommand?: (name: string, args: string, images: ImageContent[]) => Promise<boolean>;
   onLiteral?: (message: string, images: ImageContent[]) => Promise<boolean>;
   onDraftChange?: (text: string, images: ImageContent[]) => void;
+  /** Workspace files for `@` mentions, relative to it; undefined until loaded. */
+  mentionFiles?: string[];
+  mentionsLoading?: boolean;
+  mentionsError?: string;
+  mentionsTruncated?: boolean;
+  /** Called whenever a new `@` token opens, so the list is fresh. Omit to turn mentions off. */
+  onRequestMentions?: () => void;
   transfer?: { text: string; images: ImageContent[]; nonce: number };
   onStop: () => void;
   onOpenSettings: () => void;
@@ -51,7 +59,7 @@ interface ComposerProps {
   frozen?: string;
 }
 
-export function Composer({ status, providerId, modelId, thinkingLevel, providers, stats, header, placeholder, popoverSide = "top", mode, onModeChange, onConfigure, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, onDraftChange, transfer, onStop, onOpenSettings, disabled, seed, comet, frozen }: ComposerProps) {
+export function Composer({ status, providerId, modelId, thinkingLevel, providers, stats, header, placeholder, popoverSide = "top", mode, onModeChange, onConfigure, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, onDraftChange, mentionFiles, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, transfer, onStop, onOpenSettings, disabled, seed, comet, frozen }: ComposerProps) {
   const [draft, setDraft] = useState(transfer?.text ?? "");
   const [attachments, setAttachments] = useState<ImageContent[]>(transfer?.images ?? []);
   const [attachNotice, setAttachNotice] = useState<string>();
@@ -59,6 +67,9 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
   const [slashOpen, setSlashOpen] = useState(transfer?.text.startsWith("/") ?? false);
   const [slashIndex, setSlashIndex] = useState(0);
   const [caret, setCaret] = useState(transfer?.text.length ?? 0);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  /** Where the `@` token Escape closed starts; it stays closed until that `@` goes away. */
+  const [mentionDismissedAt, setMentionDismissedAt] = useState<number>();
   const [dragging, setDragging] = useState(false);
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -75,6 +86,15 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
   const commandToken = draft.startsWith("/") ? draft.slice(1, commandEnd) : "";
   const suggestions = commands.filter((command) => command.name.toLowerCase().includes(commandToken.toLowerCase()));
   const showCommands = slashOpen && draft.startsWith("/") && caret <= commandEnd && !disabled;
+  const mention = onRequestMentions && !showCommands && !disabled && frozen === undefined ? activeMention(draft, caret) : null;
+  const showMentions = mention !== null && mention.start !== mentionDismissedAt;
+  const mentionQuery = showMentions ? mention.query : undefined;
+  const mentionSuggestions = useMemo(
+    () => mentionQuery !== undefined && mentionFiles ? rankMentions(mentionFiles, mentionQuery) : [],
+    [mentionFiles, mentionQuery]
+  );
+  const mentionStart = showMentions ? mention.start : undefined;
+  useEffect(() => { if (mentionStart !== undefined) onRequestMentions?.(); }, [mentionStart]);
   useEffect(() => {
     if (showCommands && commandsReady === false && !commandsLoading && !commandsError) onRequestCommands?.();
   }, [showCommands, commandsReady, commandsLoading, commandsError]);
@@ -165,6 +185,20 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
     requestAnimationFrame(() => { areaRef.current?.focus(); areaRef.current?.setSelectionRange(name.length + 2, name.length + 2); });
   }
 
+  function insertMention(entry: MentionSuggestion) {
+    if (!mention) return;
+    const value = mentionValue(entry.path, entry.directory);
+    const rest = draft.slice(mention.end);
+    // A file ends the token; a folder stays open so its contents are suggested next.
+    const gap = entry.directory || /^\s/.test(rest) ? "" : " ";
+    const next = draft.slice(0, mention.start) + value + gap + rest;
+    const position = mention.start + value.length + (entry.directory ? 0 : 1);
+    setDraft(next);
+    setCaret(position);
+    setMentionIndex(0);
+    requestAnimationFrame(() => { areaRef.current?.focus(); areaRef.current?.setSelectionRange(position, position); });
+  }
+
   async function sendLiteral() {
     if (!onLiteral || busy) return;
     const ok = await onLiteral(draft.trim(), attachments);
@@ -232,6 +266,18 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
               <strong>/{command.name}</strong><span>{command.description}</span><small>{command.sourceLabel}</small>
             </button>) : <div className="slash-picker-status">No matching commands</div>}
         </div>}
+        {showMentions && <div id="mention-list" className="slash-picker mention-picker" role="listbox" aria-label="Files">
+          {mentionsError ? <div className="slash-picker-status">{mentionsError} <button type="button" onClick={onRequestMentions}>Retry</button></div>
+            : !mentionFiles ? <div className="slash-picker-status">{mentionsLoading ? "Loading files…" : "No files"}</div>
+            : mentionSuggestions.length ? mentionSuggestions.map((entry, index) => {
+              const bare = entry.path.replace(/\/$/, "");
+              const cut = bare.lastIndexOf("/") + 1;
+              return <button id={`mention-option-${index}`} type="button" role="option" aria-selected={index === mentionIndex} className={`slash-option mention-option ${index === mentionIndex ? "selected" : ""}`} key={entry.path} onMouseDown={(event) => event.preventDefault()} onClick={() => insertMention(entry)}>
+                <Icon name={entry.directory ? "folder" : "file"} /><strong>{entry.path.slice(cut)}</strong><span>{bare.slice(0, cut)}</span>
+              </button>;
+            }) : <div className="slash-picker-status">No matching files</div>}
+          {mentionFiles && mentionsTruncated && <div className="slash-picker-status">Only the first 20,000 files are listed.</div>}
+        </div>}
         {attachments.length > 0 && (
           <div className="composer-attachments">
             {attachments.map((image, index) => (
@@ -250,9 +296,10 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
         {slashNotice && <div className="attachment-notice" role="status">{slashNotice} <button type="button" onClick={() => void sendLiteral()}>Send as message</button></div>}
         <textarea
           ref={areaRef}
-          aria-controls={showCommands ? "slash-command-list" : undefined}
-          aria-expanded={showCommands}
-          aria-activedescendant={showCommands && suggestions.length ? `slash-option-${Math.min(slashIndex, suggestions.length - 1)}` : undefined}
+          aria-controls={showCommands ? "slash-command-list" : showMentions ? "mention-list" : undefined}
+          aria-expanded={showCommands || showMentions}
+          aria-activedescendant={showCommands && suggestions.length ? `slash-option-${Math.min(slashIndex, suggestions.length - 1)}`
+            : showMentions && mentionSuggestions.length ? `mention-option-${Math.min(mentionIndex, mentionSuggestions.length - 1)}` : undefined}
           value={frozen ?? draft}
           rows={1}
           readOnly={frozen !== undefined}
@@ -263,6 +310,8 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
             onDraftChange?.(value, attachments);
             setCaret(event.target.selectionStart);
             setSlashIndex(0);
+            setMentionIndex(0);
+            setMentionDismissedAt((at) => at !== undefined && value[at] === "@" ? at : undefined);
             setSlashNotice(undefined);
             setSlashOpen(value.startsWith("/"));
             if (value.startsWith("/") && !draft.startsWith("/")) onRequestCommands?.();
@@ -283,6 +332,13 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
               if (event.key === "ArrowUp" && suggestions.length) { event.preventDefault(); setSlashIndex((index) => (index - 1 + suggestions.length) % suggestions.length); return; }
               if ((event.key === "Tab" || event.key === "Enter") && suggestions.length && !event.shiftKey) { event.preventDefault(); insertCommand(suggestions[Math.min(slashIndex, suggestions.length - 1)].name); return; }
               if (event.key === "Escape") { event.preventDefault(); setSlashOpen(false); return; }
+            }
+            if (showMentions && !event.nativeEvent.isComposing) {
+              const count = mentionSuggestions.length;
+              if (event.key === "ArrowDown" && count) { event.preventDefault(); setMentionIndex((index) => (index + 1) % count); return; }
+              if (event.key === "ArrowUp" && count) { event.preventDefault(); setMentionIndex((index) => (index - 1 + count) % count); return; }
+              if ((event.key === "Tab" || event.key === "Enter") && count && !event.shiftKey) { event.preventDefault(); insertMention(mentionSuggestions[Math.min(mentionIndex, count - 1)]); return; }
+              if (event.key === "Escape") { event.preventDefault(); setMentionDismissedAt(mention.start); return; }
             }
             if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault();

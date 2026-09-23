@@ -158,6 +158,7 @@ Adding or changing a field on a task/provider/project means **four** files, in s
 | `convert_task_to_worktree` | commands.rs:355 | Only before the first message / before `session_file` is set. |
 | `remove_project` | commands.rs:393 | Refuses while non-archived chats exist; deletes its tasks. |
 | `git_changes` | commands.rs:437 | Staged + unstaged + untracked diffs for the task workspace. |
+| `list_workspace_files` | commands.rs | Files for `@` mentions (`files.rs`): `git ls-files` (tracked + untracked, not ignored) or a bounded walk, capped at 20k; resolved from a task or draft project record, never a renderer path. |
 | `reveal_task` / `reveal_path` | commands.rs:445 / 454 | macOS `open` on the workspace / an arbitrary path. |
 | `list_packages` / `refresh_packages` | commands.rs | Cached package list / re-read the shared store via the manager process. |
 | `install_package` / `trust_package` | commands.rs | Install (refuses without `trusted`) / grant trust to a package already on disk. |
@@ -202,6 +203,9 @@ Images are Pi's own `ImageContent` (`{ type: "image", data: <base64>, mimeType }
 - **Resizing happens in the worker**, not the UI: `prepareImages` repeats Pi's CLI `processImage` with the exported `resizeImage` and Pi's defaults (2000 px, 4.5 MB), because `session.prompt` forwards images untouched.
 - **Snapshots never carry originals.** User-message image blocks become `{ type: "image", mimeType, imageId, thumbnail? }`; the worker makes a ≤512 px `data:` preview one at a time, caches it in a `WeakMap` keyed by Pi's (stable) block object, and when it lands re-sends only the owning message as a delta. `Transcript`'s memo signature uses `imageId`, never the preview data. Tool-result images (e.g. `read` on a PNG) still reach the model but are not rendered; they are dropped from normalization so they can't overwrite the call's text result.
 - Drag and drop uses HTML5 events, which is why `tauri.conf.json` sets `dragDropEnabled: false` (the native handler would otherwise swallow file drops). The CSP already allows `data:` images; do not add `blob:` or remote origins for this.
+
+### File mentions
+Typing `@` in the composer opens a file picker (`mention-utils.ts`, ranked like Pi's TUI autocomplete; the list comes from `list_workspace_files`). A mention is **plain text**: the message keeps `@path` or `@"path with spaces"`, exactly as Pi's interactive mode sends it, and the model reads the file with its own tools. Neither Rust nor the worker ever expands a mention into file contents. `Transcript` highlights path-like mentions in sent messages without changing the stored text.
 
 ### Extension dialogs
 Extensions may call `ctx.ui.select/confirm/input/editor`. The worker implements a headless `ExtensionUIContext` modelled on Pi's RPC mode and bridges those four to React modals; ambient TUI affordances (`setStatus`, `setWidget`, `setFooter`, themes, custom components) are accepted and discarded. A fifth `method: "questions"` (structured questionnaires, `answers` on the response) exists for the built-in `ask_user_question` tool and is rendered by `QuestionDialog.tsx`, not `ExtensionDialog.tsx`.

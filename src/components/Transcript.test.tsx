@@ -291,3 +291,13 @@ describe("Transcript message actions", () => {
     expect(onUndoRewind).toHaveBeenCalled();
   });
 });
+
+describe("Transcript file mentions", () => {
+  it("highlights path-like mentions in sent messages", () => {
+    const user: NormalizedMessage = { id: "user-1", role: "user", blocks: [{ type: "text", text: "Fix @src/App.tsx for @someone." }] };
+    const { container } = render(<Transcript messages={[user]} running={false} />);
+    const mentions = [...container.querySelectorAll(".bubble .mention")].map((node) => node.textContent);
+    expect(mentions).toEqual(["@src/App.tsx"]);
+    expect(container.querySelector(".bubble")).toHaveTextContent("Fix @src/App.tsx for @someone.");
+  });
+});

@@ -1,5 +1,6 @@
 mod checkpoints;
 mod commands;
+mod files;
 mod git;
 mod models;
 mod secrets;
@@ -75,6 +76,7 @@ pub fn run() {
             commands::convert_task_to_worktree,
             commands::remove_project,
             commands::git_changes,
+            commands::list_workspace_files,
             commands::reveal_task,
             commands::reveal_path,
         ])

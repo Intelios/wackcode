@@ -21,7 +21,8 @@ import type {
   TaskMode,
   TaskRecord,
   ThinkingLevel,
-  ToolConfig
+  ToolConfig,
+  WorkspaceFiles
 } from "./types";
 
 export const api = {
@@ -129,6 +130,7 @@ export const api = {
   archiveTask: (taskId: string) => invoke<TaskRecord>("archive_task", { taskId }),
   unarchiveTask: (taskId: string) => invoke<TaskRecord>("unarchive_task", { taskId }),
   gitChanges: (taskId: string) => invoke<GitChanges>("git_changes", { taskId }),
+  listWorkspaceFiles: (taskId?: string, projectId?: string) => invoke<WorkspaceFiles>("list_workspace_files", { taskId, projectId }),
   revealTask: (taskId: string) => invoke<void>("reveal_task", { taskId }),
   revealPath: (path: string) => invoke<void>("reveal_path", { path }),
   respondExtensionUi: (input: {

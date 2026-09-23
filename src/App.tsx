@@ -162,6 +162,9 @@ export default function App() {
   const [connectedSubscriptionId, setConnectedSubscriptionId] = useState<string>();
   const [lastModels, setLastModels] = useState<Record<string, ModelChoice>>(() => loadJSON(LAST_MODEL_KEY, {}));
   const [draft, setDraft] = useState<Draft>();
+  /** The file list behind `@` mentions, for one chat (`task:<id>`) or draft project (`project:<id>`). */
+  const [mentions, setMentions] = useState<{ source: string; files?: string[]; truncated?: boolean; loading: boolean; error?: string }>();
+  const mentionRequest = useRef(0);
   /** Mid first-send choreography: the hero is exiting while this message rides the composer down. */
   const [transitioning, setTransitioning] = useState<{ message: string; taskId?: string }>();
   /** Bumped when returning to the draft hero from a task; reseeds the shared composer to a clean draft. */
@@ -565,6 +568,29 @@ export default function App() {
     } })();
     slashDraftPromise.current = pending;
     return pending;
+  }
+
+  function mentionSource(): { source?: string; taskId?: string; projectId?: string } {
+    if (selectedTask) return { source: `task:${selectedTask.id}`, taskId: selectedTask.id };
+    const projectId = (draft ?? { projectId: lastProjectId() }).projectId;
+    return projectId ? { source: `project:${projectId}`, projectId } : {};
+  }
+
+  async function requestMentions() {
+    const { source, taskId, projectId } = mentionSource();
+    const request = ++mentionRequest.current;
+    if (!source) {
+      setMentions({ source: "", loading: false, error: "Pick a project to mention its files." });
+      return;
+    }
+    // Keep the last list for this source on screen while it refreshes.
+    setMentions((current) => current?.source === source && current.files ? { ...current, loading: true, error: undefined } : { source, loading: true });
+    try {
+      const result = await api.listWorkspaceFiles(taskId, projectId);
+      if (request === mentionRequest.current) setMentions({ source, files: result.files, truncated: result.truncated, loading: false });
+    } catch (reason) {
+      if (request === mentionRequest.current) setMentions({ source, loading: false, error: String(reason) });
+    }
   }
 
   function requestSlashCommands() {
@@ -1285,6 +1311,9 @@ export default function App() {
 
   if (booting) return <div className="boot-screen"><div className="brand-mark">W</div><span>Starting WackCode</span></div>;
 
+  // A list fetched for another chat or project never shows here.
+  const composerMentions = mentions?.source === (mentionSource().source ?? "") ? mentions : undefined;
+
   return (
     <div className="app-shell">
       {settingsOpen ? (
@@ -1454,6 +1483,11 @@ export default function App() {
               commandsLoading={selectedTask ? runtime?.slashCommandsLoading : undefined}
               commandsError={selectedTask ? runtime?.slashCommandsError : undefined}
               onRequestCommands={requestSlashCommands}
+              mentionFiles={composerMentions?.files}
+              mentionsLoading={composerMentions?.loading}
+              mentionsError={composerMentions?.error}
+              mentionsTruncated={composerMentions?.truncated}
+              onRequestMentions={() => void requestMentions()}
               onCommand={sendSlash}
               transfer={selectedTask && composerTransfer?.taskId === selectedTask.id ? composerTransfer : undefined}
               seed={selectedTask ? composerSeed : draftSeedNonce ? { text: "", nonce: draftSeedNonce } : undefined}

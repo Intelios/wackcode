@@ -1,12 +1,12 @@
 use crate::{
-    checkpoints, git,
+    checkpoints, files, git,
     models::{
         AppearanceConfig, BootstrapPayload, BuiltinModelSuggestion, CheckpointChange, CheckpointRef, CreateTaskInput, ExportPlanInput,
         ForkTaskInput, GitChanges, ImageContent, ModelRecord, NavigateResult, NavigateTaskInput, NavigateTaskResult,
         ProjectRecord, PromptInput, ExtensionUiResponseInput, InstallPackageInput, PackageRecord,
         PackageSearchResult, ProviderKind, ProviderRecord, ResendInput, RestoreCheckpointInput, RestoreResult,
         SaveProviderInput, SearchPackagesInput, SetPackageResourcesInput, SetTaskModeInput, SetToolConfigInput,
-        SlashCommand, SubagentConfig, TaskMode, TaskRecord, TaskStatus, ToolConfig,
+        SlashCommand, SubagentConfig, TaskMode, TaskRecord, TaskStatus, ToolConfig, WorkspaceFiles,
     },
     storage::MetadataState,
     worker::{self, WorkerOptions}, subagents, subscriptions,
@@ -1256,6 +1256,24 @@ pub fn git_changes(state: State<'_, MetadataState>, task_id: String) -> Result<G
         .tasks.iter().find(|task| task.id == task_id).map(|task| task.workspace_path.clone())
         .ok_or_else(|| "Task not found".to_string())?;
     git::changes(Path::new(&workspace))
+}
+
+/// The files `@` mentions can pick from: a chat's workspace, or a draft's project folder.
+#[tauri::command]
+pub async fn list_workspace_files(state: State<'_, MetadataState>, task_id: Option<String>, project_id: Option<String>) -> Result<WorkspaceFiles, String> {
+    let root = {
+        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        if let Some(task_id) = task_id {
+            data.tasks.iter().find(|task| task.id == task_id).map(|task| task.workspace_path.clone())
+                .ok_or_else(|| "Chat not found".to_string())?
+        } else if let Some(project_id) = project_id {
+            data.projects.iter().find(|project| project.id == project_id).map(|project| project.path.clone())
+                .ok_or_else(|| "Project not found".to_string())?
+        } else {
+            return Err("Pick a project to mention its files.".into());
+        }
+    };
+    tauri::async_runtime::spawn_blocking(move || files::list(Path::new(&root))).await.map_err(|error| error.to_string())?
 }
 
 #[tauri::command]

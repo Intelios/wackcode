@@ -12,6 +12,8 @@ Sub-agents are an optional built-in, off until you switch them on in Settings â€
 
 Type `/` in the composer to browse commands from enabled packages, prompt templates, and skills. WackCode also provides `/init`, `/compact [instructions]`, `/new`, `/name <name>`, and `/copy`. `/init` takes no arguments and creates or carefully improves a concise `AGENTS.md` in a Build-mode project chat's current workspace; its change appears in the normal file diff. Selecting a suggestion inserts it so you can add arguments before sending. A new draft initializes its chat when you type `/`, without sending a model prompt.
 
+Type `@` to mention a file or folder in the chat's workspace (in a Git repository, every file that isn't ignored). Pick one from the list and the message keeps its path, such as `@src/App.tsx`, the way Pi's own terminal does; the model reads the file itself when it needs it. Paths with spaces are quoted, and choosing a folder lists what's inside it.
+
 ## Run from source
 
 The build currently targets macOS on Apple Silicon.

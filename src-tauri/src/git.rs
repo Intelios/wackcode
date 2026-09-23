@@ -228,6 +228,12 @@ fn status_label(x: u8, y: u8) -> &'static str {
     "modified"
 }
 
+/// Tracked and untracked, non-ignored files under `path`, relative to it. Fails outside a repository.
+pub fn ls_files(path: &Path) -> Result<Vec<String>, String> {
+    let bytes = git_bytes(path, &["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--deduplicate"])?;
+    Ok(bytes.split(|byte| *byte == 0).filter(|entry| !entry.is_empty()).map(|entry| String::from_utf8_lossy(entry).into_owned()).collect())
+}
+
 fn git_output(path: &Path, args: &[&str]) -> Result<String, String> {
     let output = git_bytes(path, args)?;
     Ok(String::from_utf8_lossy(&output).into_owned())

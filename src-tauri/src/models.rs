@@ -664,6 +664,13 @@ pub struct GitChangeFile {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WorkspaceFiles {
+    pub files: Vec<String>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GitChanges {
     pub is_git: bool,
     pub root: Option<String>,

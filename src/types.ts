@@ -553,6 +553,12 @@ export interface GitChangeFile {
   diff: string;
 }
 
+/** Files `@` mentions can pick from, relative to the workspace. */
+export interface WorkspaceFiles {
+  files: string[];
+  truncated: boolean;
+}
+
 export interface GitChanges {
   isGit: boolean;
   root: string | null;

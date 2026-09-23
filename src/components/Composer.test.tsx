@@ -230,3 +230,69 @@ describe("Composer slash commands", () => {
     expect(onCommand).not.toHaveBeenCalled();
   });
 });
+
+describe("Composer @ file mentions", () => {
+  const files = ["README.md", "src/App.tsx", "src/components/Composer.tsx", "my notes.txt"];
+
+  function setup(extra: Partial<React.ComponentProps<typeof Composer>> = {}) {
+    const onSend = vi.fn().mockResolvedValue(true);
+    const onRequestMentions = vi.fn();
+    render(<Composer status="idle" providers={providers} providerId="p" modelId="sees" thinkingLevel="off"
+      onConfigure={vi.fn()} onSend={onSend} onStop={vi.fn()} onOpenSettings={vi.fn()}
+      mentionFiles={files} onRequestMentions={onRequestMentions} {...extra} />);
+    return { onSend, onRequestMentions, area: screen.getByRole("textbox") };
+  }
+
+  it("suggests matching files and inserts the chosen one", () => {
+    const { onRequestMentions, onSend, area } = setup();
+    fireEvent.change(area, { target: { value: "look at @rea", selectionStart: 12 } });
+    expect(onRequestMentions).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("listbox", { name: "Files" })).toBeInTheDocument();
+    expect(screen.getAllByRole("option")[0]).toHaveTextContent("README.md");
+    fireEvent.keyDown(area, { key: "Enter" });
+    expect(area).toHaveValue("look at @README.md ");
+    expect(onSend).not.toHaveBeenCalled();
+    expect(screen.queryByRole("listbox", { name: "Files" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the picker open inside a chosen folder", () => {
+    const { area } = setup();
+    fireEvent.change(area, { target: { value: "@comp", selectionStart: 5 } });
+    const folder = screen.getAllByRole("option")[0];
+    expect(folder).toHaveTextContent("components/src/");
+    fireEvent.click(folder);
+    expect(area).toHaveValue("@src/components/");
+    fireEvent.select(area, { target: { selectionStart: 16 } });
+    expect(screen.getAllByRole("option")[0]).toHaveTextContent("Composer.tsx");
+  });
+
+  it("quotes paths with spaces", () => {
+    const { area } = setup();
+    fireEvent.change(area, { target: { value: "@notes", selectionStart: 6 } });
+    fireEvent.keyDown(area, { key: "Tab" });
+    expect(area).toHaveValue("@\"my notes.txt\" ");
+  });
+
+  it("closes on Escape so Enter sends", () => {
+    const { onSend, area } = setup();
+    fireEvent.change(area, { target: { value: "see @src", selectionStart: 8 } });
+    fireEvent.keyDown(area, { key: "Escape" });
+    expect(screen.queryByRole("listbox", { name: "Files" })).not.toBeInTheDocument();
+    fireEvent.keyDown(area, { key: "Enter" });
+    expect(onSend).toHaveBeenCalledWith("see @src", []);
+  });
+
+  it("shows loading and errors, and ignores emails", () => {
+    const onRequestMentions = vi.fn();
+    const { area } = setup({ mentionFiles: undefined, mentionsLoading: true, onRequestMentions });
+    fireEvent.change(area, { target: { value: "mail a@b", selectionStart: 8 } });
+    expect(screen.queryByRole("listbox", { name: "Files" })).not.toBeInTheDocument();
+    fireEvent.change(area, { target: { value: "@", selectionStart: 1 } });
+    expect(screen.getByRole("listbox", { name: "Files" })).toHaveTextContent("Loading files…");
+    cleanup();
+    const failed = setup({ mentionFiles: undefined, mentionsError: "Pick a project to mention its files." });
+    fireEvent.change(failed.area, { target: { value: "@", selectionStart: 1 } });
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(failed.onRequestMentions).toHaveBeenCalledTimes(2);
+  });
+});

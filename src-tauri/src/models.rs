@@ -155,18 +155,82 @@ pub struct ToolConfig {
     pub disabled: Vec<String>,
 }
 
-/// Cosmetic, renderer-only preferences (Settings → Appearance). Nothing here reaches a worker.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Cosmetic preferences (Settings → Appearance). Nothing here reaches a worker: the renderer
+/// themes itself (`src/theme.ts`) and `glass.rs` applies the backdrop to the native window.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppearanceConfig {
     /// One-line gist of the reasoning beside a live "Thinking…" row.
     #[serde(default = "default_true")]
     pub thinking_preview: bool,
+    /// `#rrggbb`; `None` is WackCode green, so a future default reaches users who never picked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accent: Option<String>,
+    /// `#rrggbb`; `None` is the default dark background.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    #[serde(default)]
+    pub backdrop: BackdropMode,
+    /// A file name inside `<app data>/backgrounds/`, set only by `choose_background_image`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_image: Option<String>,
+    /// How much the background colour covers the image behind a chat, 0–90 %.
+    #[serde(default = "default_image_dim")]
+    pub image_dim: u8,
+    /// Blur of the image behind a chat, 0–40 px.
+    #[serde(default = "default_image_blur")]
+    pub image_blur: u8,
+    #[serde(default)]
+    pub glass_style: GlassStyleSetting,
+    /// How much the background colour tints the glass, 0–90 %.
+    #[serde(default = "default_glass_tint")]
+    pub glass_tint: u8,
+}
+
+/// What sits behind the app's panels. The modes are exclusive: glass shows the desktop, which
+/// an image would cover.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BackdropMode {
+    #[default]
+    Solid,
+    Image,
+    Glass,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GlassStyleSetting {
+    #[default]
+    Frosted,
+    Clear,
+}
+
+fn default_image_dim() -> u8 {
+    65
+}
+
+fn default_image_blur() -> u8 {
+    12
+}
+
+fn default_glass_tint() -> u8 {
+    40
 }
 
 impl Default for AppearanceConfig {
     fn default() -> Self {
-        Self { thinking_preview: true }
+        Self {
+            thinking_preview: true,
+            accent: None,
+            background: None,
+            backdrop: BackdropMode::Solid,
+            background_image: None,
+            image_dim: default_image_dim(),
+            image_blur: default_image_blur(),
+            glass_style: GlassStyleSetting::Frosted,
+            glass_tint: default_glass_tint(),
+        }
     }
 }
 
@@ -686,6 +750,8 @@ pub struct SetToolConfigInput {
 pub struct BootstrapPayload {
     pub data: AppData,
     pub app_data_path: String,
+    /// Liquid Glass needs `NSGlassEffectView` (macOS 26+). Runtime-only, never stored.
+    pub glass_supported: bool,
 }
 
 #[derive(Debug, Serialize)]

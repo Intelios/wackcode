@@ -8,6 +8,7 @@ import { PackagesSection, type PackageActions } from "./PackagesSection";
 import { PromptsSection } from "./PromptsSection";
 import { SubagentsSection } from "./SubagentsSection";
 import { AutoTitlesSection } from "./AutoTitlesSection";
+import { AppearanceSection } from "./AppearanceSection";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 import { Popover } from "./ui/Popover";
 import { Select } from "./ui/Select";
@@ -54,7 +55,13 @@ interface Props extends PackageActions {
   autoTitle: AutoTitleConfig;
   onSetAutoTitle: (config: AutoTitleConfig) => Promise<void>;
   appearance: AppearanceConfig;
+  /** macOS 26+: the Liquid Glass backdrop is available. */
+  glassSupported: boolean;
   onSetAppearance: (config: AppearanceConfig) => Promise<void>;
+  onPreviewAppearance: (config: AppearanceConfig) => void;
+  backgroundImageUrl?: string;
+  onChooseBackgroundImage: () => Promise<void>;
+  onRemoveBackgroundImage: () => Promise<void>;
   prompts: PromptConfig;
   onSetPrompts: (config: PromptConfig) => Promise<void>;
 }
@@ -62,7 +69,7 @@ interface Props extends PackageActions {
 export function SettingsPage({
   providers, packages, toolCatalog, disabledTools, appDataPath,
   onClose, onSave, onDelete, onConnectSubscription, onSignOutSubscription, connectedSubscriptionId, onSetDisabledTools,
-  subagents, onSetSubagents, autoTitle, onSetAutoTitle, appearance, onSetAppearance, prompts, onSetPrompts, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
+  subagents, onSetSubagents, autoTitle, onSetAutoTitle, appearance, glassSupported, onSetAppearance, onPreviewAppearance, backgroundImageUrl, onChooseBackgroundImage, onRemoveBackgroundImage, prompts, onSetPrompts, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
 }: Props) {
   const [chosenSection, setSection] = useState<SectionId>("providers");
   // Switching sub-agents off while its page is open lands on Packages, where the switch is.
@@ -220,7 +227,17 @@ export function SettingsPage({
         {section === "tools" && (
           <ToolsSection catalog={toolCatalog} disabled={disabledTools} onSetDisabled={onSetDisabledTools} />
         )}
-        {section === "appearance" && <AppearanceSection config={appearance} onChange={onSetAppearance} />}
+        {section === "appearance" && (
+          <AppearanceSection
+            config={appearance}
+            glassSupported={glassSupported}
+            backgroundImageUrl={backgroundImageUrl}
+            onChange={onSetAppearance}
+            onPreview={onPreviewAppearance}
+            onChooseImage={onChooseBackgroundImage}
+            onRemoveImage={onRemoveBackgroundImage}
+          />
+        )}
         {section === "prompts" && <PromptsSection config={prompts} onChange={onSetPrompts} />}
         {section === "subagents" && (
           <SubagentsSection config={subagents} providers={providers} onChange={onSetSubagents} />
@@ -301,70 +318,6 @@ function ToolsSection({ catalog, disabled, onSetDisabled }: ToolsSectionProps) {
           })}
         </section>
       ))}
-      {error && <div className="error-banner">{error}</div>}
-    </div>
-  );
-}
-
-interface AppearanceSectionProps {
-  config: AppearanceConfig;
-  onChange: (config: AppearanceConfig) => Promise<void>;
-}
-
-const APPEARANCE_OPTIONS: { key: keyof AppearanceConfig; label: string; description: string }[] = [
-  {
-    key: "thinkingPreview",
-    label: "Thinking preview",
-    description: "Show a one-line gist of the model's reasoning beside \u201cThinking\u2026\u201d. Only models that stream their reasoning show one."
-  }
-];
-
-function AppearanceSection({ config, onChange }: AppearanceSectionProps) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-
-  async function toggle(key: keyof AppearanceConfig): Promise<void> {
-    setBusy(true);
-    setError(undefined);
-    try {
-      await onChange({ ...config, [key]: !config[key] });
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="settings-scroll">
-      <div className="section-heading-row">
-        <div>
-          <h3>Look and feel</h3>
-          <p>Cosmetic preferences. They change how chats look, never what the model does.</p>
-        </div>
-      </div>
-      <section className="tool-setting-group">
-        <h4>Chat</h4>
-        {APPEARANCE_OPTIONS.map((option) => (
-          <div className="tool-setting appearance-setting" key={option.key}>
-            <div className="tool-setting-text">
-              <span className="tool-setting-name">{option.label}</span>
-              <span className="tool-setting-description">{option.description}</span>
-            </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={config[option.key]}
-              aria-label={option.label}
-              className={`toggle ${config[option.key] ? "on" : ""}`}
-              disabled={busy}
-              onClick={() => void toggle(option.key)}
-            >
-              <span />
-            </button>
-          </div>
-        ))}
-      </section>
       {error && <div className="error-banner">{error}</div>}
     </div>
   );

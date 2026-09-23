@@ -42,6 +42,9 @@ export const api = {
   openSubscriptionAuthUrl: (url: string) => invoke<void>("open_subscription_auth_url", { url }),
   setToolConfig: (disabled: string[]) => invoke<ToolConfig>("set_tool_config", { input: { disabled } }),
   setAppearanceConfig: (input: AppearanceConfig) => invoke<AppearanceConfig>("set_appearance_config", { input }),
+  /** Opens the native picker in Rust; null when the user cancels. */
+  chooseBackgroundImage: () => invoke<AppearanceConfig | null>("choose_background_image"),
+  removeBackgroundImage: () => invoke<AppearanceConfig>("remove_background_image"),
   setSubagentConfig: (input: SubagentConfig) => invoke<SubagentConfig>("set_subagent_config", { input }),
   setAutoTitleConfig: (input: AutoTitleConfig) => invoke<AutoTitleConfig>("set_auto_title_config", { input }),
   setPromptConfig: (input: PromptConfig) => invoke<PromptConfig>("set_prompt_config", { input }),

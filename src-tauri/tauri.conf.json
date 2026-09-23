@@ -10,7 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "macOSPrivateApi": false,
+    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "WackCode",
@@ -22,14 +22,19 @@
         "fullscreen": false,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "trafficLightPosition": { "x": 17, "y": 18 },
+        "trafficLightPosition": { "x": 17, "y": 26 },
         "dragDropEnabled": false,
-        "backgroundColor": "#111310"
+        "transparent": true,
+        "visible": false
       }
     ],
     "security": {
       "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: data:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'",
-      "capabilities": ["default"]
+      "capabilities": ["default"],
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/backgrounds/*"]
+      }
     }
   },
   "bundle": {

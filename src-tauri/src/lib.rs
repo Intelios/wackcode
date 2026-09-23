@@ -1,7 +1,9 @@
+mod backgrounds;
 mod checkpoints;
 mod commands;
 mod files;
 mod git;
+mod glass;
 mod models;
 mod secrets;
 mod storage;
@@ -24,8 +26,24 @@ pub fn run() {
         .manage(worker::ManagerState::default())
         .setup(|app| {
             let state = MetadataState::load(&app.handle())?;
+            let appearance = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?.appearance.clone();
             app.manage(state);
+            // The window is created hidden and transparent: paint it before it first appears.
+            glass::apply(app.handle(), glass::NativeBackdrop::from_config(&appearance), true)?;
+            if let Some(window) = app.get_webview_window("main") {
+                window.show()?;
+            }
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Liquid Glass shows only while focused; unfocused, the window is painted opaque.
+            if let tauri::WindowEvent::Focused(focused) = event {
+                let app = window.app_handle();
+                let Ok(data) = app.state::<MetadataState>().data.lock().map(|data| data.appearance.clone()) else { return };
+                if data.backdrop == models::BackdropMode::Glass {
+                    let _ = glass::apply(app, glass::NativeBackdrop::from_config(&data), *focused);
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap,
@@ -41,6 +59,8 @@ pub fn run() {
             subscriptions::open_subscription_auth_url,
             commands::set_tool_config,
             commands::set_appearance_config,
+            commands::choose_background_image,
+            commands::remove_background_image,
             commands::set_subagent_config,
             commands::set_auto_title_config,
             commands::set_prompt_config,

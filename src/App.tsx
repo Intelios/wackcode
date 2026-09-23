@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -8,6 +9,8 @@ import { modelIsReady, pickThinkingLevel } from "./model-utils";
 import { titleFromPrompt, samePlanState, sameTodoState, applySnapshotDelta, validateInitCommand, nextMode } from "./chat-utils";
 import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix } from "./tree-utils";
 import { pruneDisabledTools, sameToolCatalog } from "./tool-utils";
+import { DEFAULT_APPEARANCE, applyTheme, cacheTheme } from "./theme";
+import { Backdrop } from "./components/Backdrop";
 import type {
   AppData,
   AutoTitleConfig,
@@ -61,7 +64,7 @@ const emptyData: AppData = {
   packages: [],
   subagents: { enabled: false, trigger: "on_request", maxConcurrency: 4, agents: [] },
   autoTitle: { enabled: false, providerId: null, modelId: null },
-  appearance: { thinkingPreview: true },
+  appearance: DEFAULT_APPEARANCE,
   prompts: {}
 };
 
@@ -141,6 +144,8 @@ function loadJSON<T>(key: string, fallback: T): T {
 export default function App() {
   const [data, setData] = useState<AppData>(emptyData);
   const [appDataPath, setAppDataPath] = useState("");
+  const [glassSupported, setGlassSupported] = useState(false);
+  const savedAppearance = useRef<AppearanceConfig>(DEFAULT_APPEARANCE);
   const [selectedTaskId, setSelectedTaskId] = useState<string>();
   const selectedTaskRef = useRef<string | undefined>(undefined);
   const [runtimes, setRuntimes] = useState<Record<string, TaskRuntime>>({});
@@ -258,6 +263,8 @@ export default function App() {
       if (!active) return;
       setData(payload.data);
       setAppDataPath(payload.appDataPath);
+      setGlassSupported(payload.glassSupported);
+      savedAppearance.current = payload.data.appearance;
       const remembered = loadJSON<string | null>(LAST_PROJECT_KEY, null);
       const projectId = payload.data.projects.some((project) => project.id === remembered)
         ? remembered
@@ -703,16 +710,46 @@ export default function App() {
     setData((current) => ({ ...current, autoTitle: saved }));
   }
 
+  // The theme is applied to <html>, outside React. Not while booting: main.tsx already painted
+  // the cached theme, and the placeholder defaults would flash over it.
+  useEffect(() => {
+    if (booting) return;
+    // Image mode without a stored image (it failed to import) looks like Solid, not a hole.
+    const appearance = data.appearance.backdrop === "image" && !data.appearance.backgroundImage ? { ...data.appearance, backdrop: "solid" as const } : data.appearance;
+    applyTheme(appearance);
+    cacheTheme(appearance);
+  }, [booting, data.appearance]);
+
+  /** Live preview while a colour picker or slider is being dragged; nothing is saved. */
+  function previewAppearance(config: AppearanceConfig) {
+    setData((current) => ({ ...current, appearance: config }));
+  }
+
   async function setAppearance(config: AppearanceConfig) {
-    const previous = data.appearance;
     setData((current) => ({ ...current, appearance: config }));
     try {
       const saved = await api.setAppearanceConfig(config);
+      savedAppearance.current = saved;
       setData((current) => ({ ...current, appearance: saved }));
     } catch (reason) {
-      setData((current) => ({ ...current, appearance: previous }));
+      // Back to what is stored, not to an unsaved preview.
+      setData((current) => ({ ...current, appearance: savedAppearance.current }));
       throw reason;
     }
+  }
+
+  /** Rust opens the picker and stores the copy; a cancelled picker changes nothing. */
+  async function chooseBackgroundImage() {
+    const saved = await api.chooseBackgroundImage();
+    if (!saved) return;
+    savedAppearance.current = saved;
+    setData((current) => ({ ...current, appearance: saved }));
+  }
+
+  async function removeBackgroundImage() {
+    const saved = await api.removeBackgroundImage();
+    savedAppearance.current = saved;
+    setData((current) => ({ ...current, appearance: saved }));
   }
 
   async function setPrompts(config: PromptConfig) {
@@ -1329,6 +1366,11 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   });
 
+  // Served by the asset protocol, which may read only <app data>/backgrounds/ (tauri.conf.json).
+  const backgroundImageUrl = data.appearance.backgroundImage && appDataPath
+    ? convertFileSrc(`${appDataPath}/backgrounds/${data.appearance.backgroundImage}`)
+    : undefined;
+
   if (booting) return <div className="boot-screen"><div className="brand-mark">W</div><span>Starting WackCode</span></div>;
 
   // A list fetched for another chat or project never shows here.
@@ -1336,6 +1378,14 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      {data.appearance.backdrop === "image" && (
+        <Backdrop
+          imageUrl={backgroundImageUrl}
+          scene={settingsOpen || selectedTask ? "chat" : "hero"}
+          dim={data.appearance.imageDim}
+          blur={data.appearance.imageBlur}
+        />
+      )}
       {settingsOpen ? (
         <SettingsPage
           providers={data.providers}
@@ -1355,7 +1405,12 @@ export default function App() {
           autoTitle={data.autoTitle}
           onSetAutoTitle={setAutoTitle}
           appearance={data.appearance}
+          glassSupported={glassSupported}
           onSetAppearance={setAppearance}
+          onPreviewAppearance={previewAppearance}
+          backgroundImageUrl={backgroundImageUrl}
+          onChooseBackgroundImage={chooseBackgroundImage}
+          onRemoveBackgroundImage={removeBackgroundImage}
           prompts={data.prompts}
           onSetPrompts={setPrompts}
           onRefresh={refreshPackages}

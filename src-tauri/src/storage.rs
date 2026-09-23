@@ -109,6 +109,18 @@ mod tests {
     }
 
     #[test]
+    fn appearance_files_from_before_theming_load_with_the_default_look() {
+        use crate::models::{AppearanceConfig, BackdropMode};
+        let data: AppData = serde_json::from_str(r#"{"version":1,"appearance":{"thinkingPreview":false}}"#).unwrap();
+        assert_eq!(data.appearance, AppearanceConfig { thinking_preview: false, ..AppearanceConfig::default() });
+        assert_eq!(data.appearance.backdrop, BackdropMode::Solid);
+        assert_eq!((data.appearance.image_dim, data.appearance.image_blur, data.appearance.glass_tint), (65, 12, 40));
+        // Unpicked colours stay absent, so a future default still reaches this user.
+        let saved = serde_json::to_string(&data.appearance).unwrap();
+        assert!(!saved.contains("accent") && !saved.contains("backgroundImage"), "{saved}");
+    }
+
+    #[test]
     fn prompt_overrides_default_empty_and_round_trip() {
         // Old files predate the field entirely; cleared fields never appear in the file.
         let data: AppData = serde_json::from_str(r#"{"version":1}"#).unwrap();

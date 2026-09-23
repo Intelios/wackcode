@@ -241,11 +241,32 @@ export interface ToolConfig {
   disabled: string[];
 }
 
-/** Cosmetic, renderer-only preferences (Settings → Appearance). Mirrors `AppearanceConfig` in models.rs. */
+/**
+ * Cosmetic preferences (Settings → Appearance). Mirrors `AppearanceConfig` in models.rs. The
+ * renderer themes itself from these (`theme.ts`); Rust applies the backdrop to the window.
+ */
 export interface AppearanceConfig {
   /** One-line gist of the reasoning beside a live "Thinking…" row. */
   thinkingPreview: boolean;
+  /** `#rrggbb`; absent is WackCode green. */
+  accent?: string | null;
+  /** `#rrggbb` as displayed (already darkened for readability); absent is the default. */
+  background?: string | null;
+  backdrop: BackdropMode;
+  /** File name in `<app data>/backgrounds/`; only the image commands change it. */
+  backgroundImage?: string | null;
+  /** How much the background colour covers the image behind a chat, 0–90 %. */
+  imageDim: number;
+  /** Blur of the image behind a chat, 0–40 px. */
+  imageBlur: number;
+  glassStyle: GlassStyle;
+  /** How much the background colour tints the glass, 0–90 %. */
+  glassTint: number;
 }
+
+/** What sits behind the app's panels. Exclusive: glass shows the desktop an image would cover. */
+export type BackdropMode = "solid" | "image" | "glass";
+export type GlassStyle = "frosted" | "clear";
 
 /**
  * User-customized built-in prompt texts (Settings → Prompts). Mirrors `PromptConfig` in
@@ -348,6 +369,8 @@ export interface AppData {
 export interface BootstrapPayload {
   data: AppData;
   appDataPath: string;
+  /** Liquid Glass needs macOS 26+ (`NSGlassEffectView`). */
+  glassSupported: boolean;
 }
 
 export interface NormalizedBlock {

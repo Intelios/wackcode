@@ -131,18 +131,32 @@ describe("PackagesSection built-ins", () => {
   it("requires model setup before the automatic titles switch can be used", async () => {
     const onConfigureAutoTitles = vi.fn();
     const onToggleAutoTitles = vi.fn().mockResolvedValue(undefined);
+    // Its settings live on the Sub-agents page, so setup and enabling stay blocked while that is off.
     renderSection([], { onConfigureAutoTitles, onToggleAutoTitles });
-    expect(screen.getByRole("switch", { name: "Sub-agents" })).toHaveAttribute("aria-checked", "false");
-    const card = screen.getByText("Auto chat titles").closest("article")!;
+    let card = screen.getByText("Auto chat titles").closest("article")!;
     expect(within(card).getByText("Off")).toBeInTheDocument();
+    expect(within(card).getByRole("switch", { name: "Auto chat titles" })).toBeDisabled();
+    expect(within(card).getByRole("button", { name: /Set up/ })).toBeDisabled();
+    expect(onConfigureAutoTitles).not.toHaveBeenCalled();
+
+    cleanup();
+    renderSection([], { subagentsEnabled: true, onConfigureAutoTitles, onToggleAutoTitles });
+    card = screen.getByText("Auto chat titles").closest("article")!;
     expect(within(card).getByRole("switch", { name: "Auto chat titles" })).toBeDisabled();
     fireEvent.click(within(card).getByRole("button", { name: /Set up/ }));
     expect(onConfigureAutoTitles).toHaveBeenCalledOnce();
 
     cleanup();
-    renderSection([], { autoTitlesConfigured: true, onToggleAutoTitles });
+    renderSection([], { subagentsEnabled: true, autoTitlesConfigured: true, onToggleAutoTitles });
     fireEvent.click(screen.getByRole("switch", { name: "Auto chat titles" }));
     await waitFor(() => expect(onToggleAutoTitles).toHaveBeenCalledWith(true));
+  });
+
+  it("lets an enabled auto titles be switched off while Sub-agents is off", async () => {
+    const onToggleAutoTitles = vi.fn().mockResolvedValue(undefined);
+    renderSection([], { autoTitlesEnabled: true, autoTitlesConfigured: true, onToggleAutoTitles });
+    fireEvent.click(screen.getByRole("switch", { name: "Auto chat titles" }));
+    await waitFor(() => expect(onToggleAutoTitles).toHaveBeenCalledWith(false));
   });
 
   it("lists the compiled-in extensions with pinned-on, disabled toggles even with no packages", () => {

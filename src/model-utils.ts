@@ -1,4 +1,4 @@
-import type { BuiltinModelSuggestion, ModelRecord, ProviderRecord, SubagentModel, ThinkingLevel } from "./types";
+import type { AutoTitleConfig, BuiltinModelSuggestion, ModelRecord, ProviderRecord, SubagentModel, ThinkingLevel } from "./types";
 
 function words(value: string): string[] {
   return value.toLowerCase().normalize("NFKD").match(/[\p{L}\p{N}]+/gu) ?? [];
@@ -90,5 +90,19 @@ export function subagentModelIssue(choice: SubagentModel | null | undefined, pro
   const model = provider.models.find((item) => item.id === choice.modelId);
   if (!model || !modelIsReady(model)) return "Its model is no longer configured.";
   if (!model.thinkingLevels.includes(choice.thinkingLevel)) return `${model.name} doesn't support ${choice.thinkingLevel} reasoning.`;
+  return undefined;
+}
+
+/**
+ * Why the auto-titles model can't run right now, or undefined when it can — including while
+ * nothing is chosen yet, which is just unset rather than broken.
+ */
+export function autoTitleModelIssue(config: AutoTitleConfig, providers: ProviderRecord[]): string | undefined {
+  if (!config.providerId || !config.modelId) return undefined;
+  const provider = providers.find((item) => item.id === config.providerId);
+  if (!provider) return "Its connection no longer exists.";
+  if (!provider.connected) return provider.kind === "subscription" ? `${provider.name} is signed out.` : `${provider.name} has no API key.`;
+  const model = provider.models.find((item) => item.id === config.modelId);
+  if (!model || !modelIsReady(model)) return "Its model is no longer configured.";
   return undefined;
 }

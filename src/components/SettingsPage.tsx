@@ -8,7 +8,6 @@ import { McpSection, type McpActions } from "./McpSection";
 import { PackagesSection, type PackageActions } from "./PackagesSection";
 import { PromptsSection } from "./PromptsSection";
 import { SubagentsSection } from "./SubagentsSection";
-import { AutoTitlesSection } from "./AutoTitlesSection";
 import { AppearanceSection } from "./AppearanceSection";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 import { Popover } from "./ui/Popover";
@@ -19,7 +18,7 @@ const levels: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhi
 let nextModelCardKey = 0;
 const newModelCardKeys = (count: number) => Array.from({ length: count }, () => ++nextModelCardKey);
 
-type SectionId = "providers" | "packages" | "tools" | "mcp" | "appearance" | "prompts" | "subagents" | "auto_titles";
+type SectionId = "providers" | "packages" | "tools" | "mcp" | "appearance" | "prompts" | "subagents";
 
 interface Section {
   id: SectionId;
@@ -32,9 +31,9 @@ const SECTIONS: Section[] = [
   { id: "packages", label: "Packages", icon: "spark" },
   { id: "tools", label: "Tools", icon: "wrench" },
   { id: "mcp", label: "MCP servers", icon: "plug" },
-  // Only listed while the built-in is switched on (Settings → Packages).
+  // Only listed while the built-in is switched on (Settings → Packages). Auto titles lives
+  // on the same page, as an agent WackCode runs itself rather than one the model can call.
   { id: "subagents", label: "Sub-agents", icon: "agents" },
-  { id: "auto_titles", label: "Auto titles", icon: "spark" },
   { id: "appearance", label: "Appearance", icon: "palette" },
   { id: "prompts", label: "Prompts", icon: "pencil" }
 ];
@@ -225,7 +224,7 @@ export function SettingsPage({
                 : [...disabledTools.filter((name) => name !== WEB_FETCH_TOOL_NAME), WEB_FETCH_TOOL_NAME]
             )}
             onToggleAutoTitles={(enabled) => onSetAutoTitle({ ...autoTitle, enabled })}
-            onConfigureAutoTitles={() => setSection("auto_titles")}
+            onConfigureAutoTitles={() => setSection("subagents")}
             onConfigureSubagents={() => setSection("subagents")}
             onConfigureMcp={mcpActions ? () => setSection("mcp") : undefined}
             onRefresh={onRefresh}
@@ -254,9 +253,16 @@ export function SettingsPage({
         {section === "prompts" && <PromptsSection config={prompts} onChange={onSetPrompts} />}
         {section === "mcp" && mcpActions && <McpSection servers={mcp?.servers ?? []} {...mcpActions} />}
         {section === "subagents" && (
-          <SubagentsSection config={subagents} providers={providers} onChange={onSetSubagents} webFetchEnabled={!disabledTools.includes(WEB_FETCH_TOOL_NAME)} />
+          <SubagentsSection
+            config={subagents}
+            providers={providers}
+            onChange={onSetSubagents}
+            webFetchEnabled={!disabledTools.includes(WEB_FETCH_TOOL_NAME)}
+            autoTitle={autoTitle}
+            onSetAutoTitle={onSetAutoTitle}
+            onOpenProviders={() => { setSelectedProviderId("new"); setSection("providers"); }}
+          />
         )}
-        {section === "auto_titles" && <AutoTitlesSection config={autoTitle} providers={providers} onChange={onSetAutoTitle} onOpenProviders={() => { setSelectedProviderId("new"); setSection("providers"); }} />}
       </main>
     </>
   );

@@ -1011,13 +1011,14 @@ pub async fn prompt(app: AppHandle, state: State<'_, MetadataState>, input: Prom
     // This also moves the free fallback rename out of the renderer's asynchronous path.
     let (title_attempt, title_config, fallback_name) = state.mutate(|data| {
         let config = data.auto_title.clone();
+        let titles_active = auto_titles_active(&config, &data.subagents);
         let task = data.tasks.iter_mut().find(|task| task.id == input.task_id)
             .ok_or_else(|| "Chat not found".to_string())?;
         let first = task.auto_title_eligible;
         if first && task.name == "New chat" {
             task.name = limit(&message.split_whitespace().collect::<Vec<_>>().join(" "), 48);
         }
-        let attempt = consume_auto_title_eligibility(task, config.enabled);
+        let attempt = consume_auto_title_eligibility(task, titles_active);
         Ok((attempt, config, if first { Some(task.name.clone()) } else { None }))
     })?;
     if let Some(name) = fallback_name {
@@ -1092,6 +1093,12 @@ pub async fn prompt(app: AppHandle, state: State<'_, MetadataState>, input: Prom
         return Err(error);
     }
     Ok(run_id)
+}
+
+/// Auto titles live on the Sub-agents page as an agent WackCode runs itself, so they ride
+/// the same switch: while the sub-agents built-in is off no titles run either.
+fn auto_titles_active(config: &AutoTitleConfig, subagents: &SubagentConfig) -> bool {
+    config.enabled && subagents.enabled
 }
 
 fn consume_auto_title_eligibility(task: &mut TaskRecord, enabled: bool) -> Option<String> {
@@ -2089,6 +2096,16 @@ mod tests {
         assert!(captured.contains("--base\nmain\n--head\nfeature\n--title\nReview me\n--body\nLine one\nLine two\n"));
         assert!(!captured.contains("--draft"));
         assert!(pr_create_args(&info, "main".into(), "Draft".into(), "".into(), true).contains(&"--draft".into()));
+    }
+
+    #[test]
+    fn auto_titles_pause_while_subagents_are_off() {
+        let titles = AutoTitleConfig { enabled: true, provider_id: Some("p".into()), model_id: Some("m".into()) };
+        let mut subagents = SubagentConfig::default();
+        assert!(!auto_titles_active(&titles, &subagents));
+        subagents.enabled = true;
+        assert!(auto_titles_active(&titles, &subagents));
+        assert!(!auto_titles_active(&AutoTitleConfig::default(), &subagents));
     }
 
     #[test]

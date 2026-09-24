@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
-import { modelIsReady, pickThinkingLevel, subagentModelIssue } from "../model-utils";
+import { autoTitleModelIssue, modelIsReady, pickThinkingLevel, subagentModelIssue } from "../model-utils";
 import {
   MAX_SUBAGENT_CONCURRENCY,
   READ_ONLY_SUBAGENT_TOOLS,
   SUBAGENT_TOOLS,
+  type AutoTitleConfig,
   type ProviderRecord,
   type SubagentConfig,
   type SubagentModel,
@@ -22,6 +23,11 @@ interface Props {
   onChange: (config: SubagentConfig) => Promise<void>;
   /** False while Web Fetch is switched off in Packages, which keeps web_fetch from every agent. */
   webFetchEnabled?: boolean;
+  /** Automatic titles, shown as an agent WackCode runs itself — it is never offered to the model. */
+  autoTitle: AutoTitleConfig;
+  onSetAutoTitle: (config: AutoTitleConfig) => Promise<void>;
+  /** Opens Settings → Providers on a blank connection, for when nothing usable is connected. */
+  onOpenProviders: () => void;
 }
 
 /** Shown under an agent's tools when it lists web_fetch but Web Fetch is switched off. */
@@ -240,12 +246,103 @@ function AgentEditor({ draft, providers, busy, isNew, onChange, onSave, onCancel
   );
 }
 
+interface AutoTitleCardProps {
+  config: AutoTitleConfig;
+  providers: ProviderRecord[];
+  busy: boolean;
+  open: boolean;
+  onToggleOpen: () => void;
+  onSave: (config: AutoTitleConfig) => Promise<void>;
+  onOpenProviders: () => void;
+}
+
+/**
+ * Automatic titles as an agent card: WackCode runs it on a new chat's first prompt rather
+ * than the model calling it, so it needs its own model and has no tools or instructions.
+ */
+function AutoTitleCard({ config, providers, busy, open, onToggleOpen, onSave, onOpenProviders }: AutoTitleCardProps) {
+  const available = providers.filter((provider) => provider.connected && provider.models.some(modelIsReady));
+  const provider = providers.find((item) => item.id === config.providerId);
+  const record = provider?.models.find((item) => item.id === config.modelId);
+  const issue = autoTitleModelIssue(config, providers);
+  const ready = Boolean(provider?.connected && record && modelIsReady(record));
+  const summary = config.providerId && config.modelId
+    ? `${provider?.name ?? "Missing connection"} · ${record?.name || config.modelId}`
+    : "No model chosen";
+
+  function choose(patch: { providerId?: string; modelId?: string }) {
+    const providerId = patch.providerId ?? config.providerId;
+    const modelId = patch.modelId ?? (patch.providerId ? available.find((item) => item.id === providerId)?.models.find(modelIsReady)?.id : config.modelId);
+    if (!providerId || !modelId) return;
+    void onSave({ ...config, providerId, modelId });
+  }
+
+  return (
+    <article className={`subagent-setting ${open ? "open" : ""} ${config.enabled ? "" : "off"}`}>
+      <div className="subagent-setting-head">
+        <button type="button" className={`package-disclosure ${open ? "open" : ""}`} aria-expanded={open} onClick={onToggleOpen}>
+          <Icon name="chevron" />
+          <span className="subagent-setting-name">auto-titles</span>
+          <span className="subagent-badge">Built-in</span>
+          <span className="subagent-badge">Not callable</span>
+        </button>
+        <span className={`subagent-model-summary ${issue ? "warning" : ""}`} title={issue}>
+          {summary}
+        </span>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={config.enabled}
+          aria-label="Automatic titles"
+          className={`toggle ${config.enabled ? "on" : ""}`}
+          disabled={busy || (!ready && !config.enabled)}
+          title={!ready && !config.enabled ? "Choose a title model first" : undefined}
+          onClick={() => void onSave({ ...config, enabled: !config.enabled })}
+        >
+          <span />
+        </button>
+      </div>
+      <p className="subagent-setting-description">
+        Names each new chat from its first message — one extra request on its own model, while the chat responds.
+      </p>
+      {issue && <p className="subagent-issue">{issue} Automatic titles can't run until you pick another model.</p>}
+      {open && (
+        <div className="subagent-setting-body">
+          <div className="subagent-model-field">
+            <span className="subagent-field-label">Model</span>
+            <div className="subagent-model-row">
+              {available.length > 0 ? (
+                <ModelPicker providers={available} providerId={config.providerId ?? ""} modelId={config.modelId ?? ""} disabled={busy} popoverSide="bottom" onConfigure={choose} />
+              ) : (
+                <button type="button" className="secondary-button" onClick={onOpenProviders}>Add a connection</button>
+              )}
+            </div>
+            <small className="subagent-hint">
+              {available.length > 0
+                ? "It always needs a model of its own — a small, inexpensive one is enough."
+                : "Automatic titles needs a connected provider and model."}
+            </small>
+          </div>
+          <div>
+            <span className="subagent-field-label">How it runs</span>
+            <small className="subagent-hint">
+              On a new chat's first prompt only that prompt's text goes to the title model, in one extra request.
+              Each chat gets one attempt, even if it fails — until a title lands the free title from the opening
+              prompt stays, and a name you typed always wins.
+            </small>
+          </div>
+        </div>
+      )}
+    </article>
+  );
+}
+
 /**
  * Settings → Sub-agents. Only shown while the built-in is switched on (from Settings →
  * Packages). Switches and model choices save at once; a custom agent's text is edited as a
  * draft and saved explicitly.
  */
-export function SubagentsSection({ config, providers, onChange, webFetchEnabled = true }: Props) {
+export function SubagentsSection({ config, providers, onChange, webFetchEnabled = true, autoTitle, onSetAutoTitle, onOpenProviders }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [expanded, setExpanded] = useState<string>();
@@ -269,6 +366,18 @@ export function SubagentsSection({ config, providers, onChange, webFetchEnabled 
 
   const updateAgent = (id: string, patch: Partial<SubagentRecord>) =>
     void commit({ ...config, agents: config.agents.map((agent) => agent.id === id ? { ...agent, ...patch } : agent) });
+
+  async function commitTitle(next: AutoTitleConfig): Promise<void> {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await onSetAutoTitle(next);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   function startNew() {
     setEditing({
@@ -465,6 +574,22 @@ export function SubagentsSection({ config, providers, onChange, webFetchEnabled 
           {customs.map(renderAgent)}
         </section>
       )}
+
+      <div className="section-heading-row">
+        <div>
+          <h3>Automatic</h3>
+          <p>WackCode runs this one itself — it is never offered to the model, so nothing can call it.</p>
+        </div>
+      </div>
+      <AutoTitleCard
+        config={autoTitle}
+        providers={providers}
+        busy={busy}
+        open={expanded === "auto-titles"}
+        onToggleOpen={() => setExpanded(expanded === "auto-titles" ? undefined : "auto-titles")}
+        onSave={commitTitle}
+        onOpenProviders={onOpenProviders}
+      />
 
       {deleting && (
         <ConfirmDialog

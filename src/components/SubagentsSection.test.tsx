@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ProviderRecord, SubagentConfig, SubagentRecord } from "../types";
+import type { AutoTitleConfig, ProviderRecord, SubagentConfig, SubagentRecord } from "../types";
 import { SubagentsSection } from "./SubagentsSection";
 
 afterEach(cleanup);
@@ -22,10 +22,29 @@ const provider: ProviderRecord = {
   createdAt: "now", updatedAt: "now", hasApiKey: true, connected: true
 };
 
-function renderSection(overrides: Partial<SubagentConfig> = {}, providers: ProviderRecord[] = [provider], webFetchEnabled = true) {
+const noAutoTitle: AutoTitleConfig = { enabled: false, providerId: null, modelId: null };
+
+function renderSection(
+  overrides: Partial<SubagentConfig> = {},
+  providers: ProviderRecord[] = [provider],
+  webFetchEnabled = true,
+  autoTitle: AutoTitleConfig = noAutoTitle
+) {
   const onChange = vi.fn().mockResolvedValue(undefined);
-  render(<SubagentsSection config={{ ...config, ...overrides }} providers={providers} onChange={onChange} webFetchEnabled={webFetchEnabled} />);
-  return { onChange };
+  const onSetAutoTitle = vi.fn().mockResolvedValue(undefined);
+  const onOpenProviders = vi.fn();
+  render(
+    <SubagentsSection
+      config={{ ...config, ...overrides }}
+      providers={providers}
+      onChange={onChange}
+      webFetchEnabled={webFetchEnabled}
+      autoTitle={autoTitle}
+      onSetAutoTitle={onSetAutoTitle}
+      onOpenProviders={onOpenProviders}
+    />
+  );
+  return { onChange, onSetAutoTitle, onOpenProviders };
 }
 
 describe("SubagentsSection", () => {
@@ -110,8 +129,59 @@ describe("SubagentsSection", () => {
     expect(onChange.mock.calls[0][0].agents.map((agent: SubagentRecord) => agent.name)).toEqual(["scout"]);
 
     cleanup();
-    render(<SubagentsSection config={config} providers={[provider]} onChange={vi.fn().mockRejectedValue("There is already a sub-agent called scout.")} />);
+    render(<SubagentsSection config={config} providers={[provider]} onChange={vi.fn().mockRejectedValue("There is already a sub-agent called scout.")} autoTitle={noAutoTitle} onSetAutoTitle={vi.fn()} onOpenProviders={vi.fn()} />);
     fireEvent.click(screen.getByRole("switch", { name: "Use docs" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("There is already a sub-agent called scout.");
+  });
+});
+
+describe("SubagentsSection auto titles", () => {
+  const titleModelProvider: ProviderRecord = {
+    id: "p", name: "Test connection", kind: "custom", connected: true, hasApiKey: true,
+    baseUrl: "https://example.test/v1", apiFormat: "openai-completions", createdAt: "now", updatedAt: "now",
+    models: [{ id: "small", name: "Small model", contextWindow: 16_000, maxTokens: 2_000,
+      reasoning: false, thinkingLevels: ["off"], thinkingLevelMap: {}, vision: false }]
+  };
+
+  it("requires an explicit model before enabling and saves the choice first", async () => {
+    const { onSetAutoTitle } = renderSection({}, [titleModelProvider]);
+    expect(screen.getByRole("switch", { name: "Automatic titles" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: /auto-titles/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose model" }));
+    fireEvent.click(screen.getByRole("button", { name: /Test connection/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Small model" }));
+    await waitFor(() => expect(onSetAutoTitle).toHaveBeenCalledWith({ enabled: false, providerId: "p", modelId: "small" }));
+
+    cleanup();
+    const again = renderSection({}, [titleModelProvider], true, { enabled: false, providerId: "p", modelId: "small" });
+    fireEvent.click(screen.getByRole("switch", { name: "Automatic titles" }));
+    await waitFor(() => expect(again.onSetAutoTitle).toHaveBeenLastCalledWith({ enabled: true, providerId: "p", modelId: "small" }));
+  });
+
+  it("offers connection setup when no model is available", () => {
+    const { onOpenProviders } = renderSection({}, []);
+    expect(screen.getByRole("switch", { name: "Automatic titles" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: /auto-titles/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Add a connection" }));
+    expect(onOpenProviders).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the existing setting when a save fails and shows the error", async () => {
+    const onSetAutoTitle = vi.fn().mockRejectedValue(new Error("Could not save"));
+    render(
+      <SubagentsSection
+        config={config} providers={[titleModelProvider]} onChange={vi.fn()}
+        autoTitle={{ enabled: false, providerId: "p", modelId: "small" }}
+        onSetAutoTitle={onSetAutoTitle} onOpenProviders={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole("switch", { name: "Automatic titles" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not save");
+    expect(screen.getByRole("switch", { name: "Automatic titles" })).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("warns when the chosen title model can no longer run", () => {
+    renderSection({}, [{ ...titleModelProvider, connected: false }], true, { enabled: false, providerId: "p", modelId: "small" });
+    expect(screen.getByText(/Test connection has no API key\. Automatic titles can't run/)).toBeInTheDocument();
   });
 });

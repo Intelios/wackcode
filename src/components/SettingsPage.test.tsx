@@ -181,7 +181,6 @@ describe("SettingsPage sidebar navigation", () => {
       "New connection",
       "Packages",
       "Tools",
-      "Auto titles",
       "Appearance",
       "Prompts"
     ]);

@@ -67,7 +67,7 @@ const BUILTIN_EXTENSIONS: readonly BuiltinExtension[] = [
   },
   {
     name: "Auto chat titles",
-    description: "Give new chats a short title from their first message. Uses one extra model request per chat; you choose the model.",
+    description: "Give new chats a short title from their first message — one extra model request per chat on a model you pick. It lives on the Sub-agents page, and pauses while Sub-agents is off.",
     tools: [],
     kind: "auto_titles"
   }
@@ -247,7 +247,8 @@ export function PackagesSection({
             ? (enabled) => void run(() => onToggleAutoTitles(enabled)).catch(() => undefined)
             : undefined}
           onConfigure={extension.kind === "subagents" ? onConfigureSubagents : extension.kind === "auto_titles" ? onConfigureAutoTitles : extension.kind === "mcp" ? onConfigureMcp : undefined}
-          toggleDisabled={extension.kind === "auto_titles" && !autoTitlesConfigured && !autoTitlesEnabled}
+          toggleDisabled={extension.kind === "auto_titles" && !autoTitlesEnabled && (!autoTitlesConfigured || !subagentsEnabled)}
+          subagentsOff={extension.kind === "auto_titles" && !subagentsEnabled}
         />
       ))}
       </>
@@ -282,15 +283,18 @@ interface BuiltinCardProps {
   enabled: boolean;
   busy: boolean;
   toggleDisabled?: boolean;
+  /** Auto titles only: the Sub-agents built-in it rides is off, so setup and enabling are blocked. */
+  subagentsOff?: boolean;
   /** Present only for a built-in with an off switch. */
   onToggle?: (enabled: boolean) => void;
   onConfigure?: () => void;
 }
 
 /** A built-in extension: same card shape as a package. Always-on ones show a disabled toggle;
- *  sub-agents and web fetch have a live one, while auto titles routes to its combined setup page.
- *  MCP is always on and has its own page, where each server has a switch. */
-function BuiltinCard({ extension, enabled, busy, toggleDisabled = false, onToggle, onConfigure }: BuiltinCardProps) {
+ *  sub-agents and web fetch have a live one. Auto titles lives on the Sub-agents page, so its
+ *  Set up is blocked while that built-in is off. MCP is always on and has its own page, where
+ *  each server has a switch. */
+function BuiltinCard({ extension, enabled, busy, toggleDisabled = false, subagentsOff = false, onToggle, onConfigure }: BuiltinCardProps) {
   const autoTitles = extension.kind === "auto_titles";
   return (
     <article className={`package-card builtin-card ${autoTitles ? "auto-title-package-card" : ""}`}>
@@ -303,7 +307,13 @@ function BuiltinCard({ extension, enabled, busy, toggleDisabled = false, onToggl
         )}
         <span className="package-meta">{autoTitles || onToggle ? (enabled ? "On" : "Off") : "Always on"}</span>
         {autoTitles && (
-          <button type="button" className="ghost-button builtin-configure" onClick={onConfigure}>
+          <button
+            type="button"
+            className="ghost-button builtin-configure"
+            disabled={subagentsOff}
+            title={subagentsOff ? "Switch on Sub-agents to set up auto titles" : undefined}
+            onClick={onConfigure}
+          >
             {toggleDisabled ? "Set up" : "Configure"} <Icon name="chevron" />
           </button>
         )}
@@ -314,7 +324,7 @@ function BuiltinCard({ extension, enabled, busy, toggleDisabled = false, onToggl
           aria-label={extension.name}
           className={`toggle ${enabled ? "on" : ""}`}
           disabled={!onToggle || busy || toggleDisabled}
-          title={toggleDisabled ? "Choose a title model in Set up first" : undefined}
+          title={toggleDisabled ? (subagentsOff ? "Switch on Sub-agents to use auto titles" : "Choose a title model in Set up first") : undefined}
           onClick={() => onToggle?.(!enabled)}
         >
           <span />

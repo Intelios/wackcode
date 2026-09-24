@@ -162,10 +162,15 @@ describe("PackagesSection built-ins", () => {
   it("lists the compiled-in extensions with pinned-on, disabled toggles even with no packages", () => {
     renderSection([]);
     expect(screen.getByRole("heading", { name: "Built-In" })).toBeInTheDocument();
-    for (const name of ["Plan Mode", "Ask User Questions", "Todo List", "plan_mode_complete", "ask_user_question", "todo"]) {
+    for (const name of ["Plan Mode", "Ask User Questions", "Todo List"]) {
       const toggle = screen.getByRole("switch", { name });
       expect(toggle).toBeDisabled();
       expect(toggle).toHaveAttribute("aria-checked", "true");
+    }
+    // Their tools can never be switched individually, so they carry a mark, not a dead switch.
+    for (const tool of ["plan_mode_complete", "ask_user_question", "todo"]) {
+      expect(screen.getByText(tool)).toBeInTheDocument();
+      expect(screen.queryByRole("switch", { name: tool })).toBeNull();
     }
   });
 

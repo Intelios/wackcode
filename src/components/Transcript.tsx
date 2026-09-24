@@ -1,11 +1,13 @@
-import { Fragment, memo, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, memo, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { NormalizedBlock, NormalizedMessage, PlanState, RunTiming } from "../types";
 import { useFollowScroll } from "../hooks/useFollowScroll";
 import { useSmoothText } from "../hooks/useSmoothText";
 import { formatRunDuration, isPlanMode } from "../chat-utils";
+import { blockKey, layoutTranscript, type TranscriptSlot } from "../explore-utils";
 import { splitMentions } from "../mention-utils";
 import { SUBAGENT_TOOL_NAME, parseSubagentDetails, pendingSubagentDetails } from "../tool-utils";
 import { hasVisibleMessages, latestTurn, messageText } from "../tree-utils";
+import { ExploreExpansion, ExploreGroup, ExploreGroupingEnabled } from "./ExploreGroup";
 import { Icon } from "./Icons";
 import { Markdown } from "./Markdown";
 import { MessageActions, type MessageActionItem } from "./MessageActions";
@@ -51,6 +53,8 @@ export type MessageAction =
   /** A new chat from the turn this assistant message ends. */
   | { type: "fork"; message: NormalizedMessage };
 
+const NO_SLOTS: TranscriptSlot[] = [];
+
 type LocalAction = MessageAction | { type: "start-edit"; id: string } | { type: "cancel-edit" };
 
 function StreamingText({ text }: { text: string }) {
@@ -79,11 +83,6 @@ function RunDuration({ startedAt, durationMs }: { startedAt?: number; durationMs
 function completedPlan(result?: NormalizedBlock): string | undefined {
   const details = result?.details as { plan?: unknown } | undefined;
   return typeof details?.plan === "string" && details.plan.trim() ? details.plan : undefined;
-}
-
-/** Stable across the streamed and the saved copy of a message, which share Pi's timestamp. */
-function blockKey(message: NormalizedMessage, index: number): string {
-  return `${message.timestamp ?? message.id}:${index}`;
 }
 
 function renderBlock(
@@ -132,14 +131,56 @@ function renderBlock(
   return <div className="assistant-text"><Markdown>{block.text}</Markdown></div>;
 }
 
+function renderSlots(
+  message: NormalizedMessage,
+  slots: TranscriptSlot[],
+  results: Map<string, NormalizedBlock>,
+  liveToolText: Record<string, string> | undefined,
+  liveToolDetails: Record<string, unknown> | undefined,
+  live: boolean,
+  planState: PlanState | undefined,
+  onPlanAction: ((action: PlanAction) => void) | undefined,
+  running: boolean,
+  streaming?: boolean
+): ReactNode {
+  return slots.map((slot) => {
+    if (slot.type === "explore") {
+      return (
+        <div key={`explore:${slot.group.key}`} className="block-slot">
+          <ExploreGroup group={slot.group} results={results} liveToolText={liveToolText} />
+        </div>
+      );
+    }
+    const block = message.blocks[slot.index];
+    return (
+      <div key={block.toolCallId ?? slot.index} className="block-slot">
+        {renderBlock(block, blockKey(message, slot.index), results, liveToolText, liveToolDetails, live, planState, onPlanAction, running, streaming)}
+      </div>
+    );
+  });
+}
+
 // Recomputed for every message on every streamed partial, so image blocks stand in as their id
 // and readiness rather than their preview data.
 function signatureBlock(block: NormalizedBlock): unknown {
   return block.type === "image" ? { image: block.imageId, ready: Boolean(block.thumbnail) } : block;
 }
 
+/** A tool call's inputs from outside its message: its result and live progress. */
+function callInputs(
+  block: NormalizedBlock,
+  results: Map<string, NormalizedBlock>,
+  liveToolText?: Record<string, string>,
+  liveToolDetails?: Record<string, unknown>
+): unknown[] | null {
+  return block.type === "tool-call" && block.toolCallId
+    ? [results.get(block.toolCallId) ?? null, liveToolText?.[block.toolCallId] ?? null, liveToolDetails?.[block.toolCallId] ?? null]
+    : null;
+}
+
 function signature(
   message: NormalizedMessage,
+  slots: TranscriptSlot[],
   results: Map<string, NormalizedBlock>,
   liveToolText?: Record<string, string>,
   liveToolDetails?: Record<string, unknown>
@@ -152,9 +193,12 @@ function signature(
     message.versions,
     message.checkpoint,
     message.turn,
-    message.blocks.map((block) => block.type === "tool-call" && block.toolCallId
-      ? [results.get(block.toolCallId) ?? null, liveToolText?.[block.toolCallId] ?? null, liveToolDetails?.[block.toolCallId] ?? null]
-      : null)
+    message.blocks.map((block) => callInputs(block, results, liveToolText, liveToolDetails)),
+    // An exploration group also renders blocks from the later messages its run spans.
+    slots.map((slot) => slot.type === "block" ? slot.index : [
+      slot.group.key,
+      slot.group.items.map((item) => [item.key, item.live, item.streaming, signatureBlock(item.block), callInputs(item.block, results, liveToolText, liveToolDetails)])
+    ])
   ]);
 }
 
@@ -164,37 +208,44 @@ function signature(
  * (the worker re-normalizes instead of mutating, and the delta merge reuses unchanged
  * objects), so the signature is cached by message identity and only recomputed when one of
  * its external inputs moves: the result block answering one of its tool calls, or that call's
- * live stream text.
+ * live stream text, or what its exploration groups hold.
  */
 const signatureCache = new WeakMap<NormalizedMessage, { deps: unknown[]; sig: string }>();
 
 function cachedSignature(
   message: NormalizedMessage,
+  slots: TranscriptSlot[],
   results: Map<string, NormalizedBlock>,
   liveToolText?: Record<string, string>,
   liveToolDetails?: Record<string, unknown>
 ): string {
   const deps: unknown[] = [];
-  for (const block of message.blocks) {
-    if (block.type === "tool-call" && block.toolCallId) {
-      deps.push(
-        results.get(block.toolCallId) ?? null,
-        liveToolText?.[block.toolCallId] ?? null,
-        liveToolDetails?.[block.toolCallId] ?? null
-      );
+  const pushInputs = (block: NormalizedBlock) => {
+    const inputs = callInputs(block, results, liveToolText, liveToolDetails);
+    if (inputs) deps.push(...inputs);
+  };
+  message.blocks.forEach(pushInputs);
+  deps.push(slots.map((slot) => slot.type === "block" ? slot.index : `group:${slot.group.key}`).join(","));
+  for (const slot of slots) {
+    if (slot.type !== "explore") continue;
+    for (const item of slot.group.items) {
+      deps.push(item.block, item.live, item.streaming);
+      pushInputs(item.block);
     }
   }
   const cached = signatureCache.get(message);
   if (cached && cached.deps.length === deps.length && cached.deps.every((dep, index) => dep === deps[index])) {
     return cached.sig;
   }
-  const sig = signature(message, results, liveToolText, liveToolDetails);
+  const sig = signature(message, slots, results, liveToolText, liveToolDetails);
   signatureCache.set(message, { deps, sig });
   return sig;
 }
 
 interface MessageProps {
   message: NormalizedMessage;
+  /** What the message renders: its blocks, minus those an exploration group folded away. */
+  slots: TranscriptSlot[];
   results: Map<string, NormalizedBlock>;
   liveToolText?: Record<string, string>;
   liveToolDetails?: Record<string, unknown>;
@@ -212,7 +263,7 @@ interface MessageProps {
   onAction: (action: LocalAction) => Promise<boolean> | void;
 }
 
-const Message = memo(function Message({ message, results, liveToolText, liveToolDetails, live, running, planState, onPlanAction, actionsEnabled, retry, editing, vision, modelName, onAction }: MessageProps) {
+const Message = memo(function Message({ message, slots, results, liveToolText, liveToolDetails, live, running, planState, onPlanAction, actionsEnabled, retry, editing, vision, modelName, onAction }: MessageProps) {
   if (message.role === "user") {
     const images = message.blocks.filter((block) => block.type === "image");
     const text = messageText(message);
@@ -262,13 +313,12 @@ const Message = memo(function Message({ message, results, liveToolText, liveTool
     const text = message.blocks.map((block) => block.text ?? "").join("\n").trim();
     return text ? <div className="msg system">{text}</div> : null;
   }
+  const failed = message.stopReason === "error" || message.stopReason === "aborted";
+  // Everything it had belongs to an exploration group an earlier message shows.
+  if (slots.length === 0 && !failed && !message.turn) return null;
   return (
     <div className="msg assistant">
-      {message.blocks.map((block, index) => (
-        <div key={block.toolCallId ?? index} className="block-slot">
-          {renderBlock(block, blockKey(message, index), results, liveToolText, liveToolDetails, live, planState, onPlanAction, running)}
-        </div>
-      ))}
+      {renderSlots(message, slots, results, liveToolText, liveToolDetails, live, planState, onPlanAction, running)}
       {message.stopReason === "error" && <div className="message-error">{message.errorMessage || "The provider rejected the request."}</div>}
       {message.stopReason === "aborted" && <span className="aborted-label">Stopped</span>}
       {message.turn && <TurnActions message={message} actionsEnabled={actionsEnabled} retry={retry} onAction={onAction} />}
@@ -333,6 +383,13 @@ export function Transcript({ messages, partial, running, activity, activeRun, ru
 
   const lastAssistantId = useMemo(() => [...messages].reverse().find((message) => message.role === "assistant")?.id, [messages]);
 
+  const grouping = useContext(ExploreGroupingEnabled);
+  const [expandedGroups] = useState(() => new Set<string>());
+  const layout = useMemo(
+    () => layoutTranscript(messages, partial, { grouping, liveMessageId: running ? lastAssistantId : undefined }),
+    [messages, partial, grouping, running, lastAssistantId]
+  );
+
   const activeUserId = useMemo(() => activeRun
     ? [...messages].reverse().find((message) => message.role === "user" && message.timestamp !== undefined && message.timestamp >= activeRun.startedAt)?.id
     : undefined, [messages, activeRun]);
@@ -366,59 +423,59 @@ export function Transcript({ messages, partial, running, activity, activeRun, ru
     <div className="transcript-zone">
       <div className="conversation-scroll" ref={ref} onScroll={onScroll}>
         <ThinkingExpansion.Provider value={expandedThinking}>
-          <div className="transcript">
-            {messages.map((message) => {
-              if (message.role === "tool") {
-                const orphans = message.blocks.filter((block) => !block.toolCallId || !callIds.has(block.toolCallId));
-                if (orphans.length === 0) return null;
-                return <div key={message.id} className="orphan-group">{orphans.map((block, index) => <OrphanResult key={index} block={block} />)}</div>;
-              }
-              // Every version of a user message shares one element, so the switcher keeps focus.
-              const key = message.role === "user" && message.versions ? message.versions.group : message.id;
-              const retry = message.id === (latest?.answer ?? latest?.user)?.id;
-              return (
-                <Fragment key={key}>
-                  <Message
-                    message={message}
-                    results={results}
-                    liveToolText={liveToolText}
-                    liveToolDetails={liveToolDetails}
-                    live={running && message.id === lastAssistantId}
-                    running={running}
-                    planState={planState}
-                    onPlanAction={onPlanAction}
-                    sig={cachedSignature(message, results, liveToolText, liveToolDetails)}
-                    actionsEnabled={actionsEnabled}
-                    retry={retry}
-                    editing={editingId === message.id}
-                    vision={vision}
-                    modelName={modelName}
-                    onAction={handleAction}
-                  />
-                  {message.role === "user" && message.id === activeUserId && (
-                    <RunDuration startedAt={activeRun?.startedAt} />
-                  )}
-                  {message.role === "user" && message.id !== activeUserId && timingsByMessage.has(message.id) && (
-                    <RunDuration durationMs={timingsByMessage.get(message.id)} />
-                  )}
-                </Fragment>
-              );
-            })}
-            {activeRun && !activeUserId && <RunDuration startedAt={activeRun.startedAt} />}
-            {partial && (
-              <div className="msg assistant streaming">
-                {partial.blocks.map((block, index) => (
-                  <div key={block.toolCallId ?? index} className="block-slot">
-                    {renderBlock(block, blockKey(partial, index), results, liveToolText, liveToolDetails, true, planState, onPlanAction, running, true)}
-                  </div>
-                ))}
-              </div>
-            )}
-            {waiting && label && (
-              <div className="agent-working"><span className="thinking-shimmer">{label}</span></div>
-            )}
-            {rewindBar}
-          </div>
+          <ExploreExpansion.Provider value={expandedGroups}>
+            <div className="transcript">
+              {messages.map((message) => {
+                if (message.role === "tool") {
+                  const orphans = message.blocks.filter((block) => !block.toolCallId || !callIds.has(block.toolCallId));
+                  if (orphans.length === 0) return null;
+                  return <div key={message.id} className="orphan-group">{orphans.map((block, index) => <OrphanResult key={index} block={block} />)}</div>;
+                }
+                // Every version of a user message shares one element, so the switcher keeps focus.
+                const key = message.role === "user" && message.versions ? message.versions.group : message.id;
+                const slots = layout.messages.get(message.id) ?? NO_SLOTS;
+                const retry = message.id === (latest?.answer ?? latest?.user)?.id;
+                return (
+                  <Fragment key={key}>
+                    <Message
+                      message={message}
+                      slots={slots}
+                      results={results}
+                      liveToolText={liveToolText}
+                      liveToolDetails={liveToolDetails}
+                      live={running && message.id === lastAssistantId}
+                      running={running}
+                      planState={planState}
+                      onPlanAction={onPlanAction}
+                      sig={cachedSignature(message, slots, results, liveToolText, liveToolDetails)}
+                      actionsEnabled={actionsEnabled}
+                      retry={retry}
+                      editing={editingId === message.id}
+                      vision={vision}
+                      modelName={modelName}
+                      onAction={handleAction}
+                    />
+                    {message.role === "user" && message.id === activeUserId && (
+                      <RunDuration startedAt={activeRun?.startedAt} />
+                    )}
+                    {message.role === "user" && message.id !== activeUserId && timingsByMessage.has(message.id) && (
+                      <RunDuration durationMs={timingsByMessage.get(message.id)} />
+                    )}
+                  </Fragment>
+                );
+              })}
+              {activeRun && !activeUserId && <RunDuration startedAt={activeRun.startedAt} />}
+              {partial && layout.partial?.length ? (
+                <div className="msg assistant streaming">
+                  {renderSlots(partial, layout.partial, results, liveToolText, liveToolDetails, true, planState, onPlanAction, running, true)}
+                </div>
+              ) : null}
+              {waiting && label && (
+                <div className="agent-working"><span className="thinking-shimmer">{label}</span></div>
+              )}
+              {rewindBar}
+            </div>
+          </ExploreExpansion.Provider>
         </ThinkingExpansion.Provider>
       </div>
       {detached && (

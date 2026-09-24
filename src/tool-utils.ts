@@ -137,6 +137,238 @@ export function summarizeTool(call: NormalizedBlock, result?: NormalizedBlock): 
   }
 }
 
+/**
+ * What a read-only tool call looked at, for the transcript's collapsed "Explored" groups
+ * (`explore-utils.ts`). Undefined means the call isn't exploration and stays a row of its own.
+ */
+export type ExploreKind = "file" | "search" | "list" | "command";
+
+export function exploreKind(call: NormalizedBlock): ExploreKind | undefined {
+  switch (call.toolName) {
+    case "read":
+      return "file";
+    case "grep":
+    case "find":
+      return "search";
+    case "ls":
+      return "list";
+    case "bash":
+      return bashExploreKind(str(args(call).command));
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * The exploration kind of a shell command, or undefined unless every part of it is known to
+ * only read. This decides what the transcript folds away, never what may run, so it errs
+ * towards leaving a command visible: a command that might write stays a row of its own.
+ */
+export function bashExploreKind(command: string): ExploreKind | undefined {
+  const commands = splitShell(command);
+  if (!commands?.length) return undefined;
+  let kind: ExploreKind | undefined;
+  for (const words of commands) {
+    const own = simpleCommandKind(words);
+    if (own === undefined) return undefined;
+    kind ??= own ?? undefined;
+  }
+  return kind;
+}
+
+/**
+ * A shell command split into its simple commands (at `|`, `&&`, `||`, `;` and newlines), each
+ * a list of words with quoting removed. Undefined for anything not modelled exactly: command
+ * substitution, subshells, backgrounding, input redirection and heredocs, and any output
+ * redirection except discarding it (`2>/dev/null`, `2>&1`).
+ */
+function splitShell(command: string): string[][] | undefined {
+  const commands: string[][] = [];
+  let words: string[] = [];
+  let word = "";
+  let inWord = false;
+  // Just after `|`, `&&` or `||`: another command must follow, possibly on the next line.
+  let afterOperator = false;
+  const append = (text: string) => { word += text; inWord = true; afterOperator = false; };
+  const endWord = () => { if (inWord) words.push(word); word = ""; inWord = false; };
+  const endCommand = (): boolean => {
+    endWord();
+    if (!words.length) return false;
+    commands.push(words);
+    words = [];
+    return true;
+  };
+
+  let index = 0;
+  while (index < command.length) {
+    const char = command[index];
+    const next = command[index + 1];
+    if (char === "'") {
+      const close = command.indexOf("'", index + 1);
+      if (close < 0) return undefined;
+      append(command.slice(index + 1, close));
+      index = close + 1;
+    } else if (char === "\"") {
+      let text = "";
+      let cursor = index + 1;
+      while (cursor < command.length && command[cursor] !== "\"") {
+        const inner = command[cursor];
+        if (inner === "`" || (inner === "$" && command[cursor + 1] === "(")) return undefined;
+        if (inner === "\\" && cursor + 1 < command.length) {
+          const escaped = command[cursor + 1];
+          text += "\"\\$`".includes(escaped) ? escaped : `\\${escaped}`;
+          cursor += 2;
+        } else {
+          text += inner;
+          cursor += 1;
+        }
+      }
+      if (cursor >= command.length) return undefined;
+      append(text);
+      index = cursor + 1;
+    } else if (char === "\\") {
+      // A backslash-newline continues the line; any other escaped character is literal.
+      if (next !== "\n") append(next ?? "");
+      index += 2;
+    } else if (char === " " || char === "\t") {
+      endWord();
+      index += 1;
+    } else if (char === "#" && !inWord) {
+      const end = command.indexOf("\n", index);
+      index = end < 0 ? command.length : end;
+    } else if (char === "\n") {
+      if (!afterOperator) endCommand();
+      index += 1;
+    } else if (char === ";") {
+      if (afterOperator) return undefined;
+      endCommand();
+      index += 1;
+    } else if ((char === "|" && next === "|") || (char === "&" && next === "&")) {
+      if (!endCommand()) return undefined;
+      afterOperator = true;
+      index += 2;
+    } else if (char === "|") {
+      if (next === "&" || !endCommand()) return undefined;
+      afterOperator = true;
+      index += 1;
+    } else if (char === ">" || (char === "&" && next === ">")) {
+      // Only discarding output is allowed. A file descriptor number belongs to the redirection.
+      if (char === ">" && inWord && /^\d$/.test(word)) { word = ""; inWord = false; }
+      let cursor = index + (char === "&" ? 2 : 1);
+      if (command[cursor] === ">") return undefined;
+      if (command[cursor] === "&" && /[012]/.test(command[cursor + 1] ?? "")) {
+        cursor += 2;
+      } else {
+        while (command[cursor] === " " || command[cursor] === "\t") cursor += 1;
+        if (!command.startsWith("/dev/null", cursor)) return undefined;
+        cursor += "/dev/null".length;
+      }
+      if (cursor < command.length && !/[\s;|&]/.test(command[cursor])) return undefined;
+      endWord();
+      index = cursor;
+    } else if (char === "<" || char === "&" || char === "(" || char === ")" || char === "`" || (char === "$" && next === "(")) {
+      return undefined;
+    } else {
+      append(char);
+      index += 1;
+    }
+  }
+  if (afterOperator) return undefined;
+  endCommand();
+  return commands;
+}
+
+const GIT_READ_COMMANDS: Record<string, ExploreKind> = {
+  status: "command",
+  log: "command",
+  show: "command",
+  diff: "command",
+  blame: "command",
+  "ls-files": "list",
+  grep: "search"
+};
+
+/**
+ * One simple command's kind: null for a read-only command that isn't itself exploration
+ * (`cd`, `echo`, a filter like `sort`), undefined when it might write or run something else.
+ */
+function simpleCommandKind(words: string[]): ExploreKind | null | undefined {
+  const [name, ...rest] = words;
+  const has = (...options: string[]) => rest.some((word) => options.some((option) => word === option || word.startsWith(`${option}=`)));
+  // A cluster of single-letter options, such as `-rn`, that includes `letter`.
+  const cluster = (letter: string) => rest.some((word) => /^-[A-Za-z]+$/.test(word) && word.includes(letter));
+  switch (name) {
+    case "cd":
+    case "echo":
+    case "true":
+    case "cut":
+    case "tr":
+      return null;
+    case "sort":
+      return has("--output") || cluster("o") ? undefined : null;
+    case "uniq":
+      // `uniq input output` writes its second operand.
+      return rest.filter((word) => !word.startsWith("-")).length <= 1 ? null : undefined;
+    case "pwd":
+    case "ls":
+    case "tree":
+      return "list";
+    case "cat":
+    case "head":
+    case "tail":
+    case "nl":
+    case "wc":
+      return "file";
+    case "grep":
+    case "egrep":
+    case "fgrep":
+      return "search";
+    case "rg":
+      return has("--pre") ? undefined : "search";
+    case "find":
+      return has("-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls") ? undefined : "search";
+    case "fd":
+      return has("-x", "--exec", "-X", "--exec-batch") || cluster("x") || cluster("X") ? undefined : "search";
+    case "sed":
+      return sedPrintsOnly(rest) ? "file" : undefined;
+    case "git": {
+      const kind = GIT_READ_COMMANDS[rest[0] ?? ""];
+      return kind && !has("--output", "-O", "--open-files-in-pager") ? kind : undefined;
+    }
+    default:
+      return undefined;
+  }
+}
+
+/** `sed -n` whose scripts only print line ranges, such as `sed -n '10,40p' file`. */
+function sedPrintsOnly(words: string[]): boolean {
+  const scripts: string[] = [];
+  let quiet = false;
+  let explicit = false;
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index];
+    if (word === "-e" || word === "--expression") {
+      explicit = true;
+      scripts.push(words[index + 1] ?? "");
+      index += 1;
+    } else if (word.startsWith("--expression=")) {
+      explicit = true;
+      scripts.push(word.slice("--expression=".length));
+    } else if (word === "--quiet" || word === "--silent") {
+      quiet = true;
+    } else if (/^-[A-Za-z]+$/.test(word)) {
+      // In-place editing and script files are out; `-n` may share a cluster with `-E` or `-s`.
+      if (/[ifw]/.test(word)) return false;
+      if (word.includes("n")) quiet = true;
+    } else if (word.startsWith("-")) {
+      return false;
+    } else if (!explicit && scripts.length === 0) {
+      scripts.push(word);
+    }
+  }
+  return quiet && scripts.length > 0 && scripts.every((script) => /^[\d\s,$;p]+$/.test(script) && script.includes("p"));
+}
+
 export interface ToolGroup {
   /** Stable key: "builtin" for Pi's own tools, otherwise the package source string. */
   id: string;

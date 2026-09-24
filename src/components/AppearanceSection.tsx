@@ -30,9 +30,9 @@ const GLASS_STYLES: { value: GlassStyle; label: string; note: string }[] = [
   { value: "clear", label: "Clear", note: "More desktop" }
 ];
 
-/** The two chat switches each show a miniature of what they change, so the effect is visible
+/** The chat switches each show a miniature of what they change, so the effect is visible
  *  before it is switched on. */
-const CHAT_OPTIONS: { key: "thinkingPreview" | "messageBubbles"; label: string; description: string; preview: "bubble" | "thinking" }[] = [
+const CHAT_OPTIONS: { key: "thinkingPreview" | "messageBubbles" | "groupExploration"; label: string; description: string; preview: "bubble" | "thinking" | "explore" }[] = [
   {
     key: "messageBubbles",
     label: "Message bubbles",
@@ -44,7 +44,20 @@ const CHAT_OPTIONS: { key: "thinkingPreview" | "messageBubbles"; label: string; 
     label: "Thinking preview",
     description: "Show a one-line gist of the model's reasoning beside “Thinking…”. Only models that stream their reasoning show one.",
     preview: "thinking"
+  },
+  {
+    key: "groupExploration",
+    label: "Group exploration",
+    description: "Fold runs of file reads, searches and listings into one “Explored” row you can expand.",
+    preview: "explore"
   }
+];
+
+/** The miniature exploration: one folded row when grouped, each call on its own row when not. */
+const MINI_EXPLORATION: { icon: "file" | "search"; verb: string; subject: string }[] = [
+  { icon: "file", verb: "Read", subject: "App.tsx" },
+  { icon: "search", verb: "Searched", subject: "useTheme" },
+  { icon: "search", verb: "Listed", subject: "src" }
 ];
 
 const same = (first: string | null | undefined, second: string) => (first ?? "").toLowerCase() === second.toLowerCase();
@@ -286,6 +299,24 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrl, 
                         <span className="mini-msg mini-user">Looks good, ship it</span>
                         {/* Assistant prose: bubbled when the switch is on, flat when it is off. */}
                         <span className={`mini-msg mini-assistant ${on ? "bubbled" : "flat"}`}>Done — the tests pass.</span>
+                      </>
+                    ) : option.preview === "explore" ? (
+                      <>
+                        {on ? (
+                          <span className="mini-tool">
+                            <Icon name="search" className="mini-tool-icon" />
+                            <span className="mini-tool-verb">Explored</span>
+                            <span className="mini-tool-subject">· 1 file, 1 search, 1 list</span>
+                            <Icon name="chevron" className="mini-tool-chevron" />
+                          </span>
+                        ) : MINI_EXPLORATION.map((row) => (
+                          <span className="mini-tool" key={row.verb}>
+                            <Icon name={row.icon} className="mini-tool-icon" />
+                            <span className="mini-tool-verb">{row.verb}</span>
+                            <span className="mini-tool-subject">{row.subject}</span>
+                          </span>
+                        ))}
+                        <span className="mini-msg mini-assistant flat">Done — the tests pass.</span>
                       </>
                     ) : (
                       <>

@@ -318,6 +318,8 @@ export interface AppearanceConfig {
   thinkingPreview: boolean;
   /** Assistant prose in a bubble like the user's; the user's bubble always shows. */
   messageBubbles: boolean;
+  /** Fold runs of read-only tool calls into one "Explored" row in the transcript. */
+  groupExploration: boolean;
   /** `#rrggbb`; absent is WackCode green. */
   accent?: string | null;
   /** `#rrggbb` as displayed (already darkened for readability); absent is the default. */

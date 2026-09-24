@@ -275,6 +275,9 @@ pub struct AppearanceConfig {
     /// Assistant prose in a bubble like the user's; the user's bubble always shows.
     #[serde(default)]
     pub message_bubbles: bool,
+    /// Fold runs of read-only tool calls into one "Explored" row in the transcript.
+    #[serde(default = "default_true")]
+    pub group_exploration: bool,
     /// `#rrggbb`; `None` is WackCode green, so a future default reaches users who never picked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accent: Option<String>,
@@ -335,6 +338,7 @@ impl Default for AppearanceConfig {
         Self {
             thinking_preview: true,
             message_bubbles: false,
+            group_exploration: true,
             accent: None,
             background: None,
             backdrop: BackdropMode::Solid,

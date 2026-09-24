@@ -316,6 +316,8 @@ export interface McpTestResult {
 export interface AppearanceConfig {
   /** One-line gist of the reasoning beside a live "Thinking…" row. */
   thinkingPreview: boolean;
+  /** Assistant prose in a bubble like the user's; the user's bubble always shows. */
+  messageBubbles: boolean;
   /** `#rrggbb`; absent is WackCode green. */
   accent?: string | null;
   /** `#rrggbb` as displayed (already darkened for readability); absent is the default. */

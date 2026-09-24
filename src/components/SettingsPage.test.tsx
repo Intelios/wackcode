@@ -506,6 +506,19 @@ describe("SettingsPage appearance section", () => {
     await waitFor(() => expect(again.onSetAppearance).toHaveBeenCalledWith({ ...DEFAULT_APPEARANCE, thinkingPreview: true }));
   });
 
+  it("switches message bubbles on and back off", async () => {
+    const { onSetAppearance } = renderAppearance({ ...DEFAULT_APPEARANCE, messageBubbles: false });
+    const toggle = screen.getByRole("switch", { name: "Message bubbles" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(toggle);
+    await waitFor(() => expect(onSetAppearance).toHaveBeenCalledWith({ ...DEFAULT_APPEARANCE, messageBubbles: true }));
+    cleanup();
+
+    const again = renderAppearance({ ...DEFAULT_APPEARANCE, messageBubbles: true });
+    fireEvent.click(screen.getByRole("switch", { name: "Message bubbles" }));
+    await waitFor(() => expect(again.onSetAppearance).toHaveBeenCalledWith({ ...DEFAULT_APPEARANCE, messageBubbles: false }));
+  });
+
   it("surfaces a failed save", async () => {
     renderAppearance({ ...DEFAULT_APPEARANCE, thinkingPreview: true }, vi.fn().mockRejectedValue("Could not save settings."));
     fireEvent.click(screen.getByRole("switch", { name: "Thinking preview" }));

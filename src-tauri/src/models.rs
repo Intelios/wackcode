@@ -272,6 +272,9 @@ pub struct AppearanceConfig {
     /// One-line gist of the reasoning beside a live "Thinking…" row.
     #[serde(default = "default_true")]
     pub thinking_preview: bool,
+    /// Assistant prose in a bubble like the user's; the user's bubble always shows.
+    #[serde(default)]
+    pub message_bubbles: bool,
     /// `#rrggbb`; `None` is WackCode green, so a future default reaches users who never picked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accent: Option<String>,
@@ -331,6 +334,7 @@ impl Default for AppearanceConfig {
     fn default() -> Self {
         Self {
             thinking_preview: true,
+            message_bubbles: false,
             accent: None,
             background: None,
             backdrop: BackdropMode::Solid,

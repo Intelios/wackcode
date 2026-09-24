@@ -103,9 +103,13 @@ mod tests {
     fn appearance_settings_default_on_and_round_trip() {
         let data: AppData = serde_json::from_str(r#"{"version":1,"appearance":{}}"#).unwrap();
         assert!(data.appearance.thinking_preview);
-        let data: AppData = serde_json::from_str(r#"{"version":1,"appearance":{"thinkingPreview":false}}"#).unwrap();
+        assert!(!data.appearance.message_bubbles);
+        let data: AppData = serde_json::from_str(r#"{"version":1,"appearance":{"thinkingPreview":false,"messageBubbles":true}}"#).unwrap();
         assert!(!data.appearance.thinking_preview);
-        assert!(serde_json::to_string(&data).unwrap().contains(r#""thinkingPreview":false"#));
+        assert!(data.appearance.message_bubbles);
+        let saved = serde_json::to_string(&data).unwrap();
+        assert!(saved.contains(r#""thinkingPreview":false"#));
+        assert!(saved.contains(r#""messageBubbles":true"#));
     }
 
     #[test]

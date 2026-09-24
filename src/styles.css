@@ -249,6 +249,18 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .msg.assistant a:hover, .stream-text a:hover { text-decoration: underline; }
 .blocked-image { display: inline-block; color: var(--text-dim); font-size: 12px; border: 1px dashed var(--border); padding: 4px 8px; border-radius: 5px; }
 
+/* Settings › Appearance › Message bubbles: assistant prose in a bubble like the user's,
+   mirrored left. Tool rows, thinking rows and cards stay outside it; off leaves today's
+   flat layout untouched, so these rules only exist under the attribute. */
+[data-message-bubbles="on"] .msg.assistant .assistant-text {
+  width: fit-content; max-width: 92%; margin: 2px 0 12px; padding: 10px 14px;
+  background: color-mix(in srgb, var(--wc-accent) 5%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--wc-accent) 22%, var(--border));
+  border-radius: 12px; border-bottom-left-radius: 4px;
+}
+[data-message-bubbles="on"] .msg.assistant .assistant-text > :first-child { margin-top: 0; }
+[data-message-bubbles="on"] .msg.assistant .assistant-text > :last-child { margin-bottom: 0; }
+
 /* streaming caret */
 .stream-text > :last-child::after {
   content: ""; display: inline-block; width: 7px; height: 15px; margin-left: 3px;

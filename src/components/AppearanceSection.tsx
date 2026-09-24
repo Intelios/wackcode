@@ -30,7 +30,12 @@ const GLASS_STYLES: { value: GlassStyle; label: string }[] = [
   { value: "clear", label: "Clear" }
 ];
 
-const CHAT_OPTIONS: { key: "thinkingPreview"; label: string; description: string }[] = [
+const CHAT_OPTIONS: { key: "thinkingPreview" | "messageBubbles"; label: string; description: string }[] = [
+  {
+    key: "messageBubbles",
+    label: "Message bubbles",
+    description: "Give the assistant's replies a bubble like yours. Tool rows, thinking and plan cards stay outside it."
+  },
   {
     key: "thinkingPreview",
     label: "Thinking preview",

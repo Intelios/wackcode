@@ -292,6 +292,29 @@ describe("Transcript message actions", () => {
   });
 });
 
+describe("Transcript assistant prose", () => {
+  it("wraps a saved reply in .assistant-text but leaves tool rows outside it", () => {
+    const assistant: NormalizedMessage = {
+      id: "assistant-1",
+      role: "assistant",
+      blocks: [
+        { type: "tool-call", toolName: "read", toolCallId: "call-1", arguments: { path: "x.ts" } },
+        { type: "text", text: "Here is the answer." }
+      ]
+    };
+    const { container } = render(<Transcript messages={[assistant]} running={false} />);
+    expect(container.querySelectorAll(".assistant-text")).toHaveLength(1);
+    expect(container.querySelector(".assistant-text")).toHaveTextContent("Here is the answer.");
+    expect(container.querySelector(".tool-row")!.closest(".assistant-text")).toBeNull();
+  });
+
+  it("wraps streamed text the same way", () => {
+    const partial: NormalizedMessage = { id: "assistant-2", role: "assistant", timestamp: 2_000, blocks: [{ type: "text", text: "Streaming" }] };
+    const { container } = render(<Transcript messages={[]} running partial={partial} />);
+    expect(container.querySelector(".stream-text.assistant-text")).toHaveTextContent("Streaming");
+  });
+});
+
 describe("Transcript file mentions", () => {
   it("highlights path-like mentions in sent messages", () => {
     const user: NormalizedMessage = { id: "user-1", role: "user", blocks: [{ type: "text", text: "Fix @src/App.tsx for @someone." }] };

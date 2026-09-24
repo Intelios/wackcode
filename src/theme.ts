@@ -20,6 +20,7 @@ export const DEFAULT_BACKGROUND = "#111310";
 /** Mirrors `AppearanceConfig::default()` in models.rs. */
 export const DEFAULT_APPEARANCE: AppearanceConfig = {
   thinkingPreview: true,
+  messageBubbles: false,
   backdrop: "solid",
   imageDim: 65,
   imageBlur: 12,
@@ -264,6 +265,8 @@ export interface ThemeInput {
   background?: string | null;
   backdrop?: BackdropMode;
   glassTint?: number;
+  /** Drives `data-message-bubbles` on the root; the transcript styles from it. */
+  messageBubbles?: boolean;
 }
 
 export interface ResolvedTheme {
@@ -345,6 +348,8 @@ export function applyTheme(input: ThemeInput, root: HTMLElement = document.docum
   const theme = resolveTheme(input);
   for (const [name, value] of Object.entries(theme.variables)) root.style.setProperty(name, value);
   root.dataset.backdrop = input.backdrop ?? "solid";
+  // CSS-only switch, like the backdrop: the transcript styles from it without a re-render.
+  root.dataset.messageBubbles = input.messageBubbles === true ? "on" : "off";
   return theme;
 }
 

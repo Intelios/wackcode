@@ -55,7 +55,7 @@ type LocalAction = MessageAction | { type: "start-edit"; id: string } | { type: 
 
 function StreamingText({ text }: { text: string }) {
   const shown = useSmoothText(text, true);
-  return <div className="stream-text"><Markdown>{shown}</Markdown></div>;
+  return <div className="stream-text assistant-text"><Markdown>{shown}</Markdown></div>;
 }
 
 function RunDuration({ startedAt, durationMs }: { startedAt?: number; durationMs?: number }) {
@@ -127,7 +127,9 @@ function renderBlock(
   }
   if (!block.text) return null;
   if (streaming) return <StreamingText text={block.text} />;
-  return <Markdown>{block.text}</Markdown>;
+  // `.assistant-text` is the bubble when Settings › Appearance › Message bubbles is on;
+  // off it styles nothing and the prose lays out as it always has.
+  return <div className="assistant-text"><Markdown>{block.text}</Markdown></div>;
 }
 
 // Recomputed for every message on every streamed partial, so image blocks stand in as their id

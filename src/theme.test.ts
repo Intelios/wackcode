@@ -116,7 +116,9 @@ describe("theme tokens", () => {
     expect(root.style.getPropertyValue("--wc-accent")).toBe("#6cc4ff");
     expect(root.style.getPropertyValue("--surface")).toBe(theme.variables["--surface"]);
     expect(root.dataset.backdrop).toBe("solid");
-    applyTheme({ backdrop: "glass" }, root);
+    expect(root.dataset.messageBubbles).toBe("off");
+    applyTheme({ backdrop: "glass", messageBubbles: true }, root);
     expect(root.dataset.backdrop).toBe("glass");
+    expect(root.dataset.messageBubbles).toBe("on");
   });
 });

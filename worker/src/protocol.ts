@@ -377,6 +377,7 @@ export type WorkerCommand =
     }
   | { id: string; type: "abort" }
   | { id: string; type: "snapshot" }
+  | { id: string; type: "generate_commit_message"; diff: string; truncated: boolean }
   | { id: string; type: "set_model"; modelId: string }
   | { id: string; type: "set_thinking"; level: ThinkingLevel }
   | { id: string; type: "set_mode"; mode: TaskMode }

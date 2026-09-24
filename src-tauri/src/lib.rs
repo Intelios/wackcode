@@ -24,6 +24,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(WorkerState::default())
         .manage(commands::TaskLocks::default())
+        .manage(commands::GitLocks::default())
         .manage(subscriptions::SubscriptionState::default())
         .manage(worker::ManagerState::default())
         .setup(|app| {
@@ -107,6 +108,14 @@ pub fn run() {
             commands::convert_task_to_worktree,
             commands::remove_project,
             commands::git_changes,
+            commands::git_change_action,
+            commands::git_commit,
+            commands::set_diff_comments,
+            commands::git_publish_info,
+            commands::git_push,
+            commands::git_pr_prepare,
+            commands::git_pr_create,
+            commands::git_generate_message,
             commands::list_workspace_files,
             commands::reveal_task,
             commands::reveal_path,

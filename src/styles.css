@@ -753,6 +753,27 @@ button.reasoning-toggle.at-max .reasoning-toggle-label {
 .diff-view .deletion { color: #e3a2a2; background: rgb(139 55 55 / 16%); }
 .diff-view .hunk { color: #9aaed2; background: rgb(55 73 111 / 13%); }
 .diff-view .heading { color: var(--wc-code-heading); font-weight: 650; }
+.changes-panel { overflow-y: auto; }
+.changes-toolbar, .changes-form { padding: 10px 12px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 7px; }
+.changes-toolbar { flex-direction: row; align-items: center; }
+.changes-form textarea { min-height: 55px; resize: vertical; }
+.changes-form input:not([type="checkbox"]), .changes-form textarea, .changes-form select { width: 100%; box-sizing: border-box; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 5px; padding: 6px; font: inherit; }
+.changes-form > div:last-child, .pending-comment > div { display: flex; gap: 6px; }
+.changes-form small, .pending-comment small { color: var(--text-dim); }
+.pending-comment { display: flex; flex-direction: column; gap: 5px; border-top: 1px solid var(--border); padding-top: 7px; }
+.changed-files h4 { margin: 7px; color: var(--text-dim); font-size: 10px; }
+.diff-file-header button, .diff-hunk button { flex: none; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text-soft); font-size: 10px; cursor: pointer; }
+.diff-file-header button:disabled, .diff-hunk button:disabled { opacity: .45; cursor: default; }
+.diff-view { flex: 1 0 160px; overflow: auto; }
+.diff-view .diff-hunk { display: flex; gap: 5px; align-items: center; padding: 3px 8px; background: var(--surface); }
+.diff-view .diff-hunk > span { flex: 1; padding: 0; min-width: 0; }
+.diff-view .diff-line { display: flex; white-space: pre; min-width: max-content; }
+.diff-view .diff-line span { padding: 0; min-width: 0; }
+.diff-view .diff-line-number { width: 30px; text-align: right; color: var(--text-dim); margin-right: 7px; }
+.diff-view .diff-line code { font: inherit; padding-right: 12px; }
+.diff-view .diff-comment-button { border: 0; background: transparent; color: var(--text-dim); opacity: 0; cursor: pointer; width: 19px; padding: 0; }
+.diff-view .diff-line:hover .diff-comment-button, .diff-view .diff-comment-button:focus-visible { opacity: 1; }
+.diff-view .diff-comment-button:disabled { cursor: default; }
 .panel-empty { margin: auto; width: 210px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 7px; color: var(--text-dim); line-height: 1.45; font-size: 12px; }
 .panel-empty svg { width: 27px; height: 27px; margin-bottom: 5px; }
 .panel-empty strong { color: var(--text-soft); font-size: 13px; }

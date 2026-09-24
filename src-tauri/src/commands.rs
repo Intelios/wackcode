@@ -2,7 +2,7 @@ use crate::{
     backgrounds, checkpoints, files, git, glass, mcp,
     models::{
         AppearanceConfig, BackdropMode, BootstrapPayload, BuiltinModelSuggestion, CheckpointChange, CheckpointRef, CreateTaskInput, ExportPlanInput,
-        ForkTaskInput, GitChanges, ImageContent, ModelRecord, NavigateResult, NavigateTaskInput, NavigateTaskResult,
+        ForkTaskInput, GitChanges, GitPublishInfo, GitPrInfo, GitGeneratedMessage, DiffComment, ImageContent, ModelRecord, NavigateResult, NavigateTaskInput, NavigateTaskResult,
         ProjectRecord, PromptConfig, PromptInput, ExtensionUiResponseInput, InstallPackageInput, PackageRecord,
         PackageSearchResult, ProviderKind, ProviderRecord, ResendInput, RestoreCheckpointInput, RestoreResult,
         SaveProviderInput, SearchPackagesInput, SetPackageResourcesInput, SetTaskModeInput, SetToolConfigInput,
@@ -32,6 +32,16 @@ use uuid::Uuid;
 #[derive(Default)]
 pub struct TaskLocks(Mutex<HashMap<String, Arc<AsyncMutex<()>>>>);
 
+#[derive(Default)]
+pub struct GitLocks(Mutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>>);
+
+impl GitLocks {
+    fn for_root(&self, root: PathBuf) -> Arc<AsyncMutex<()>> {
+        let mut locks = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        locks.entry(root).or_default().clone()
+    }
+}
+
 impl TaskLocks {
     fn for_task(&self, task_id: &str) -> Arc<AsyncMutex<()>> {
         let mut locks = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -41,6 +51,12 @@ impl TaskLocks {
 
 fn task_lock(app: &AppHandle, task_id: &str) -> Arc<AsyncMutex<()>> {
     app.state::<TaskLocks>().for_task(task_id)
+}
+
+async fn checkout_dispatch_guard(app: &AppHandle, state: &MetadataState, task_id: &str) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+    let workspace = state.data.lock().ok()?.tasks.iter().find(|task| task.id == task_id)?.workspace_path.clone();
+    let root = git::inspect_project(Path::new(&workspace)).root?.canonicalize().ok()?;
+    Some(app.state::<GitLocks>().for_root(root).lock_owned().await)
 }
 
 /// Moving in the session tree waits behind a worker that may still be starting up.
@@ -908,6 +924,7 @@ pub async fn execute_command(app: AppHandle, state: State<'_, MetadataState>, in
     validate_images(&input.images)?;
     let lock = task_lock(&app, &input.task_id);
     let _guard = lock.lock().await;
+    let _checkout = checkout_dispatch_guard(&app, &state, &input.task_id).await;
     let (task, provider) = task_and_provider(&state, &input.task_id)?;
     if matches!(task.status, TaskStatus::Running | TaskStatus::Stopping) { return Err("Wait for this chat to finish before running a command.".into()); }
     if !input.images.is_empty() { require_vision(&provider, &task.model_id)?; }
@@ -935,6 +952,7 @@ pub async fn execute_command(app: AppHandle, state: State<'_, MetadataState>, in
 pub async fn init_agents(app: AppHandle, state: State<'_, MetadataState>, task_id: String, started_at: u64) -> Result<String, String> {
     let lock = task_lock(&app, &task_id);
     let _guard = lock.lock().await;
+    let _checkout = checkout_dispatch_guard(&app, &state, &task_id).await;
     let (task, provider) = task_and_provider(&state, &task_id)?;
     if matches!(task.status, TaskStatus::Running | TaskStatus::Stopping) {
         return Err("Wait for this chat to finish before running /init.".into());
@@ -964,6 +982,7 @@ pub async fn compact_task(app: AppHandle, state: State<'_, MetadataState>, task_
     if instructions.len() > 100_000 { return Err("Compaction instructions are too long.".into()); }
     let lock = task_lock(&app, &task_id);
     let _guard = lock.lock().await;
+    let _checkout = checkout_dispatch_guard(&app, &state, &task_id).await;
     let (task, provider) = task_and_provider(&state, &task_id)?;
     if matches!(task.status, TaskStatus::Running | TaskStatus::Stopping) { return Err("Wait for this chat to finish before compacting.".into()); }
     let api_key = credential_for(&app, &state, &provider)?;
@@ -987,6 +1006,7 @@ pub async fn prompt(app: AppHandle, state: State<'_, MetadataState>, input: Prom
     validate_images(&input.images)?;
     let lock = task_lock(&app, &input.task_id);
     let _guard = lock.lock().await;
+    let _checkout = checkout_dispatch_guard(&app, &state, &input.task_id).await;
     // A chat gets one chance, consumed durably even when the extension is off or dispatch fails.
     // This also moves the free fallback rename out of the renderer's asynchronous path.
     let (title_attempt, title_config, fallback_name) = state.mutate(|data| {
@@ -1093,6 +1113,7 @@ pub async fn resend_message(app: AppHandle, state: State<'_, MetadataState>, inp
     if let Some(selection) = &input.restore { validate_checkpoint_id(&selection.checkpoint_id)?; }
     let lock = task_lock(&app, &input.task_id);
     let _guard = lock.lock().await;
+    let _checkout = checkout_dispatch_guard(&app, &state, &input.task_id).await;
     let configured = configure_task(app.clone(), state.clone(), ConfigureTaskInput {
         task_id: input.task_id.clone(),
         provider_id: input.provider_id.clone(),
@@ -1384,6 +1405,7 @@ pub async fn delete_task(app: AppHandle, state: State<'_, MetadataState>, task_i
     let (task, git_root) = state.mutate(|data| {
         let index = data.tasks.iter().position(|task| task.id == task_id).ok_or_else(|| "Chat not found".to_string())?;
         let task = data.tasks.remove(index);
+        data.diff_comments.remove(&task_id);
         let git_root = task.project_id.as_deref()
             .and_then(|project_id| data.projects.iter().find(|project| project.id == project_id))
             .and_then(|project| project.git_root.clone());
@@ -1453,6 +1475,7 @@ pub async fn remove_project(app: AppHandle, state: State<'_, MetadataState>, pro
     state.mutate(|data| {
         data.projects.retain(|project| project.id != project_id);
         data.tasks.retain(|task| !removed.contains(&task.id));
+        data.diff_comments.retain(|task_id, _| !removed.contains(task_id));
         Ok(())
     })?;
     for task in &tasks { cleanup_task_files(&app, task, git_root.as_deref()); }
@@ -1477,11 +1500,201 @@ fn cleanup_task_files(app: &AppHandle, task: &TaskRecord, git_root: Option<&str>
 }
 
 #[tauri::command]
-pub fn git_changes(state: State<'_, MetadataState>, task_id: String) -> Result<GitChanges, String> {
-    let workspace = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?
-        .tasks.iter().find(|task| task.id == task_id).map(|task| task.workspace_path.clone())
-        .ok_or_else(|| "Task not found".to_string())?;
-    git::changes(Path::new(&workspace))
+pub async fn git_changes(state: State<'_, MetadataState>, task_id: String) -> Result<GitChanges, String> {
+    let workspace = task_workspace(&state, &task_id)?;
+    blocking(move || git::changes(&workspace)).await
+}
+
+fn git_workspace(state: &MetadataState, task_id: &str) -> Result<PathBuf, String> {
+    let (workspace, active) = {
+        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        let task = data.tasks.iter().find(|task| task.id == task_id).ok_or("Chat not found")?;
+        let active = data.tasks.iter().filter(|task| matches!(task.status, TaskStatus::Running | TaskStatus::Stopping))
+            .map(|task| task.workspace_path.clone()).collect::<Vec<_>>();
+        (PathBuf::from(&task.workspace_path), active)
+    };
+    let root = git::inspect_project(&workspace).root.ok_or("No Git repository")?;
+    for other in active {
+        if git::inspect_project(Path::new(&other)).root.as_deref() == Some(root.as_path()) {
+            return Err("Wait for chats in this checkout to finish before changing Git files".into());
+        }
+    }
+    Ok(workspace)
+}
+
+fn task_workspace(state: &MetadataState, task_id: &str) -> Result<PathBuf, String> {
+    let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+    data.tasks.iter().find(|task| task.id == task_id).map(|task| PathBuf::from(&task.workspace_path)).ok_or("Chat not found".into())
+}
+
+#[tauri::command]
+pub async fn git_change_action(app: AppHandle, state: State<'_, MetadataState>, task_id: String, file: String, layer: String, action: String, hunk_id: Option<usize>, expected: String) -> Result<GitChanges, String> {
+    let _task = task_lock(&app, &task_id).lock_owned().await;
+    let workspace = git_workspace(&state, &task_id)?;
+    let root = git::inspect_project(&workspace).root.ok_or("No Git repository")?.canonicalize().map_err(|error| error.to_string())?;
+    let _git = app.state::<GitLocks>().for_root(root).lock_owned().await;
+    git_workspace(&state, &task_id)?;
+    blocking(move || git::change_action(&workspace, &file, &layer, &action, hunk_id, &expected)
+        .map_err(|error| worker::redact_and_limit(&error))).await
+}
+
+#[tauri::command]
+pub async fn git_commit(app: AppHandle, state: State<'_, MetadataState>, task_id: String, message: String, expected: String) -> Result<GitChanges, String> {
+    let _task = task_lock(&app, &task_id).lock_owned().await;
+    let workspace = git_workspace(&state, &task_id)?;
+    let root = git::inspect_project(&workspace).root.ok_or("No Git repository")?.canonicalize().map_err(|error| error.to_string())?;
+    let _git = app.state::<GitLocks>().for_root(root).lock_owned().await;
+    git_workspace(&state, &task_id)?;
+    blocking(move || git::commit(&workspace, &message, &expected)
+        .map_err(|error| worker::redact_and_limit(&error))).await
+}
+
+#[tauri::command]
+pub fn set_diff_comments(state: State<'_, MetadataState>, task_id: String, comments: Vec<DiffComment>) -> Result<Vec<DiffComment>, String> {
+    if comments.len() > 100 || comments.iter().any(|comment| comment.text.trim().is_empty() || comment.text.len() > 4000 || comment.path.len() > 4096 || comment.excerpt.len() > 1000) {
+        return Err("Too many comments or a comment is too long".into());
+    }
+    state.mutate(|data| {
+        if !data.tasks.iter().any(|task| task.id == task_id) { return Err("Chat not found".into()); }
+        if comments.is_empty() { data.diff_comments.remove(&task_id); }
+        else { data.diff_comments.insert(task_id.clone(), comments.clone()); }
+        Ok(comments)
+    })
+}
+
+async fn git_cli(root: &Path, program: &str, args: &[String]) -> Result<String, String> {
+    let mut command = tokio::process::Command::new(program);
+    crate::shell_env::apply(&mut command).await;
+    worker::strip_provider_env(&mut command);
+    command.current_dir(root).args(args).kill_on_drop(true)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GH_PROMPT_DISABLED", "1")
+        .env("GH_NO_UPDATE_NOTIFIER", "1")
+        .env("GH_NO_EXTENSION_UPDATE_NOTIFIER", "1")
+        .env("GH_DISABLE_TELEMETRY", "1")
+        .env("GH_PAGER", "cat");
+    let child = command.spawn().map_err(|error| format!("Could not start {program}: {error}"))?;
+    let output = tokio::time::timeout(Duration::from_secs(90), child.wait_with_output()).await
+        .map_err(|_| format!("{program} did not finish in time"))?
+        .map_err(|error| format!("{program} failed: {error}"))?;
+    if !output.status.success() {
+        return Err(worker::redact_and_limit(String::from_utf8_lossy(&output.stderr).trim()));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn validated_pr_url(repo: &str, value: &str) -> Result<String, String> {
+    let url = reqwest::Url::parse(value).map_err(|_| "GitHub returned an invalid PR URL")?;
+    let (host, path) = repo.split_once('/').ok_or("Invalid GitHub repository")?;
+    let prefix = format!("/{path}/pull/");
+    if url.scheme() != "https" || url.host_str() != Some(host) || !url.path().starts_with(&prefix)
+        || !url.path()[prefix.len()..].chars().all(|character| character.is_ascii_digit()) {
+        return Err("GitHub returned a PR URL outside the selected repository".into());
+    }
+    Ok(value.to_string())
+}
+
+fn pr_create_args(info: &GitPrInfo, base: String, title: String, body: String, draft: bool) -> Vec<String> {
+    let mut args = vec!["pr".into(), "create".into(), "--repo".into(), info.repo.clone(), "--base".into(), base,
+        "--head".into(), info.head.clone(), "--title".into(), title, "--body".into(), body];
+    if draft { args.push("--draft".into()); }
+    args
+}
+
+#[tauri::command]
+pub async fn git_publish_info(state: State<'_, MetadataState>, task_id: String) -> Result<GitPublishInfo, String> {
+    let workspace = task_workspace(&state, &task_id)?;
+    blocking(move || git::publish_info(&workspace)).await
+}
+
+#[tauri::command]
+pub async fn git_push(app: AppHandle, state: State<'_, MetadataState>, task_id: String, remote: Option<String>) -> Result<GitPublishInfo, String> {
+    let _task = task_lock(&app, &task_id).lock_owned().await;
+    let workspace = git_workspace(&state, &task_id)?;
+    let root = git::inspect_project(&workspace).root.ok_or("No Git repository")?.canonicalize().map_err(|error| error.to_string())?;
+    let _git = app.state::<GitLocks>().for_root(root.clone()).lock_owned().await;
+    git_workspace(&state, &task_id)?;
+    let info = git::publish_info(&root)?;
+    let args = git::push_args(info, remote)?;
+    git_cli(&root, "git", &args).await?;
+    git::publish_info(&workspace)
+}
+
+#[tauri::command]
+pub async fn git_pr_prepare(state: State<'_, MetadataState>, task_id: String, remote: String) -> Result<GitPrInfo, String> {
+    let workspace = git_workspace(&state, &task_id)?;
+    let root = git::inspect_project(&workspace).root.ok_or("No Git repository")?;
+    let info = git::publish_info(&root)?;
+    let head = info.branch.ok_or("Check out a branch before creating a PR")?;
+    let upstream = info.upstream.ok_or("Push this branch before creating a PR")?;
+    if !upstream.starts_with(&format!("{remote}/")) { return Err("Choose the remote this branch was pushed to".into()); }
+    let local = git_cli(&root, "git", &["rev-parse".into(), "HEAD".into()]).await?;
+    let pushed = git_cli(&root, "git", &["rev-parse".into(), upstream]).await?;
+    if local != pushed { return Err("Push the latest commits before creating a PR".into()); }
+    let repo = git::remote_repo(&root, &remote)?;
+    let metadata = git_cli(&root, "gh", &["repo".into(), "view".into(), repo.clone(), "--json".into(), "defaultBranchRef".into()]).await?;
+    let parsed: Value = serde_json::from_str(&metadata).map_err(|_| "GitHub returned invalid repository details")?;
+    let base = parsed.pointer("/defaultBranchRef/name").and_then(Value::as_str).ok_or("Could not find the default branch")?.to_string();
+    let range = format!("{remote}/{base}..HEAD");
+    let subjects = match git_cli(&root, "git", &["log".into(), "--pretty=%s".into(), range]).await {
+        Ok(value) => value,
+        Err(_) => git_cli(&root, "git", &["log".into(), "-3".into(), "--pretty=%s".into()]).await?,
+    };
+    let title = subjects.lines().last().unwrap_or("Changes").to_string();
+    let body = subjects.lines().map(|subject| format!("- {subject}")).collect::<Vec<_>>().join("\n");
+    let existing = git_cli(&root, "gh", &["pr".into(), "list".into(), "--repo".into(), repo.clone(), "--head".into(), head.clone(), "--state".into(), "open".into(), "--json".into(), "url".into()]).await?;
+    let existing_url = serde_json::from_str::<Value>(&existing).ok().and_then(|value| value.get(0).and_then(|item| item.get("url")).and_then(Value::as_str).map(str::to_string))
+        .map(|url| validated_pr_url(&repo, &url)).transpose()?;
+    Ok(GitPrInfo { repo, base, head, title, body, existing_url })
+}
+
+#[tauri::command]
+pub async fn git_pr_create(app: AppHandle, state: State<'_, MetadataState>, task_id: String, remote: String, base: String, title: String, body: String, draft: bool) -> Result<String, String> {
+    if base.trim().is_empty() || title.trim().is_empty() || title.len() > 500 || body.len() > 20_000 {
+        return Err("Enter a base branch and a PR title".into());
+    }
+    let _task = task_lock(&app, &task_id).lock_owned().await;
+    let workspace = git_workspace(&state, &task_id)?;
+    let root = git::inspect_project(&workspace).root.ok_or("No Git repository")?;
+    let _git = app.state::<GitLocks>().for_root(root.canonicalize().map_err(|error| error.to_string())?).lock_owned().await;
+    git_workspace(&state, &task_id)?;
+    let prepared = git_pr_prepare(state, task_id, remote).await?;
+    if let Some(url) = prepared.existing_url { return Ok(url); }
+    let args = pr_create_args(&prepared, base, title, body, draft);
+    let url = git_cli(&root, "gh", &args).await?;
+    validated_pr_url(&prepared.repo, &url)
+}
+
+#[tauri::command]
+pub async fn git_generate_message(app: AppHandle, state: State<'_, MetadataState>, task_id: String) -> Result<GitGeneratedMessage, String> {
+    let _task = task_lock(&app, &task_id).lock_owned().await;
+    let workspace = git_workspace(&state, &task_id)?;
+    let snapshot = blocking(move || git::changes(&workspace)).await?;
+    let mut diff = String::new();
+    let mut truncated = false;
+    for file in &snapshot.files {
+        for section in file.sections.iter().filter(|section| section.layer == "staged") {
+            let remaining = 20_000usize.saturating_sub(diff.len());
+            if remaining == 0 { truncated = true; break; }
+            let cut = section.diff.char_indices().map(|(index, _)| index).chain(std::iter::once(section.diff.len())).take_while(|index| *index <= remaining).last().unwrap_or(0);
+            diff.push_str(&section.diff[..cut]);
+            if cut < section.diff.len() || section.truncated { truncated = true; }
+        }
+    }
+    if diff.is_empty() { return Err("Stage changes before generating a commit message".into()); }
+    let (task, provider) = {
+        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        let task = data.tasks.iter().find(|task| task.id == task_id).ok_or("Chat not found")?.clone();
+        let provider = data.providers.iter().find(|provider| provider.id == task.provider_id).ok_or("Connection not found")?.clone();
+        (task, provider)
+    };
+    let credential = credential_for(&app, &state, &provider)?;
+    worker::ensure_worker(&app, &task, &provider, credential.as_deref()).await?;
+    let result = worker::request(&app, &task_id, json!({ "id": Uuid::new_v4().to_string(), "type": "generate_commit_message", "diff": diff, "truncated": truncated }), Duration::from_secs(40)).await?;
+    let message = result.as_str().ok_or("The model did not return a commit message")?.trim().to_string();
+    Ok(GitGeneratedMessage { message, revision: snapshot.staged_revision })
 }
 
 /// The files `@` mentions can pick from: a chat's workspace, or a draft's project folder.
@@ -1849,6 +2062,33 @@ fn limit(value: &str, count: usize) -> String { value.chars().take(count).collec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn pr_urls_stay_in_the_selected_repository() {
+        assert_eq!(validated_pr_url("github.com/owner/repo", "https://github.com/owner/repo/pull/42").unwrap(), "https://github.com/owner/repo/pull/42");
+        assert!(validated_pr_url("github.com/owner/repo", "https://other.example/owner/repo/pull/42").is_err());
+        assert!(validated_pr_url("github.com/owner/repo", "https://github.com/owner/other/pull/42").is_err());
+        assert!(validated_pr_url("github.com/owner/repo", "https://github.com/owner/repo/issues/42").is_err());
+    }
+
+    #[test]
+    fn gh_create_receives_explicit_fields_without_a_prompt() {
+        let directory = tempfile::tempdir().unwrap();
+        let mock = directory.path().join("gh");
+        std::fs::write(&mock, "#!/bin/sh\nprintf '%s\\n' \"$GH_PROMPT_DISABLED\" \"$@\" > args.txt\nprintf 'https://github.com/owner/repo/pull/42\\n'\n").unwrap();
+        std::fs::set_permissions(&mock, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let info = GitPrInfo { repo: "github.com/owner/repo".into(), base: "main".into(), head: "feature".into(), title: "Title".into(), body: "Body".into(), existing_url: None };
+        let args = pr_create_args(&info, "main".into(), "Review me".into(), "Line one\nLine two".into(), false);
+        let output = tauri::async_runtime::block_on(git_cli(directory.path(), mock.to_str().unwrap(), &args)).unwrap();
+        assert_eq!(validated_pr_url(&info.repo, &output).unwrap(), output);
+        let captured = std::fs::read_to_string(directory.path().join("args.txt")).unwrap();
+        assert!(captured.starts_with("1\npr\ncreate\n--repo\ngithub.com/owner/repo\n"));
+        assert!(captured.contains("--base\nmain\n--head\nfeature\n--title\nReview me\n--body\nLine one\nLine two\n"));
+        assert!(!captured.contains("--draft"));
+        assert!(pr_create_args(&info, "main".into(), "Draft".into(), "".into(), true).contains(&"--draft".into()));
+    }
 
     #[test]
     fn title_eligibility_is_consumed_once_even_while_disabled() {

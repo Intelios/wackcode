@@ -535,6 +535,8 @@ pub struct AppData {
     #[serde(default)]
     pub tasks: Vec<TaskRecord>,
     #[serde(default)]
+    pub diff_comments: std::collections::HashMap<String, Vec<DiffComment>>,
+    #[serde(default)]
     pub tool_config: ToolConfig,
     #[serde(default)]
     pub tool_catalog: Vec<ToolCatalogEntry>,
@@ -559,6 +561,7 @@ impl Default for AppData {
             providers: Vec::new(),
             projects: Vec::new(),
             tasks: Vec::new(),
+            diff_comments: std::collections::HashMap::new(),
             tool_config: ToolConfig::default(),
             tool_catalog: Vec::new(),
             packages: Vec::new(),
@@ -569,6 +572,19 @@ impl Default for AppData {
             mcp: McpConfig::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffComment {
+    pub id: String,
+    pub path: String,
+    pub layer: String,
+    pub side: String,
+    pub line: usize,
+    pub excerpt: String,
+    pub revision: String,
+    pub text: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -870,13 +886,45 @@ pub struct BootstrapPayload {
 #[serde(rename_all = "camelCase")]
 pub struct GitChangeFile {
     pub path: String,
+    pub old_path: Option<String>,
     pub status: String,
     pub staged: bool,
     pub unstaged: bool,
     pub untracked: bool,
     pub binary: bool,
+    pub hunkable: bool,
     pub truncated: bool,
     pub diff: String,
+    pub sections: Vec<GitDiffSection>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiffSection {
+    pub layer: String,
+    pub revision: String,
+    pub diff: String,
+    pub hunks: Vec<GitDiffHunk>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiffHunk {
+    pub id: usize,
+    pub header: String,
+    pub old_start: usize,
+    pub new_start: usize,
+    pub lines: Vec<GitDiffLine>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiffLine {
+    pub kind: String,
+    pub text: String,
+    pub old_line: Option<usize>,
+    pub new_line: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -893,4 +941,31 @@ pub struct GitChanges {
     pub root: Option<String>,
     pub branch: Option<String>,
     pub files: Vec<GitChangeFile>,
+    pub staged_revision: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitPublishInfo {
+    pub branch: Option<String>,
+    pub upstream: Option<String>,
+    pub remotes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitPrInfo {
+    pub repo: String,
+    pub base: String,
+    pub head: String,
+    pub title: String,
+    pub body: String,
+    pub existing_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitGeneratedMessage {
+    pub message: String,
+    pub revision: String,
 }

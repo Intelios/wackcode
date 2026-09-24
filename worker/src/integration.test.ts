@@ -290,6 +290,12 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
     }, 130);
     return;
   }
+  if (userTextOf(body).startsWith("Staged diff")) {
+    response.write(`data: ${JSON.stringify({ id: "commit-message", object: "chat.completion.chunk", created: 1, model: "shared-model", choices: [{ index: 0, delta: { role: "assistant", content: "Summarize staged changes" }, finish_reason: null }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: "commit-message", object: "chat.completion.chunk", created: 1, model: "shared-model", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`);
+    response.end("data: [DONE]\n\n");
+    return;
+  }
   const suffix = authorization === "Bearer alpha-secret" ? "alpha" : "beta";
   const send = (value: unknown) => response.write(`data: ${JSON.stringify(value)}\n\n`);
   // The last user message steers which tool the fake model "decides" to call, so tests can
@@ -500,6 +506,24 @@ afterEach(async () => {
 });
 
 describe("Pi worker integration", () => {
+  it("generates a commit message from staged data without tools or a chat turn", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-commit-message-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "commit-message-task");
+    cleanup.push(() => worker.shutdown());
+    const id = crypto.randomUUID();
+    worker.send({ id, type: "generate_commit_message", diff: "diff --git a/file b/file\n+new text", truncated: false });
+    const result = await worker.waitFor((output) => output.type === "response" && output.id === id);
+    expect(result.success).toBe(true);
+    expect(result.result).toBe("Summarize staged changes");
+    expect(provider.requests).toHaveLength(1);
+    expect(provider.requests[0].body.tools).toBeUndefined();
+    expect(provider.requests[0].text).toContain("+new text");
+    expect(worker.view?.messages ?? []).toHaveLength(0);
+    expect(JSON.stringify(worker.outputs) + worker.stderr).not.toContain("alpha-secret");
+  });
   it("makes an isolated title request on the chosen connection without delaying the main run", async () => {
     const provider = await startMockProvider();
     cleanup.push(provider.close);

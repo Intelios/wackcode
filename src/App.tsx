@@ -20,7 +20,10 @@ import type {
   CheckpointRef,
   ExtensionNotice,
   ExtensionUIRequest,
+  DiffComment,
+  GitChangeFile,
   GitChanges,
+  GitDiffSection,
   ImageContent,
   McpServerRecord,
   NormalizedMessage,
@@ -61,6 +64,7 @@ const emptyData: AppData = {
   providers: [],
   projects: [],
   tasks: [],
+  diffComments: {},
   toolConfig: { disabled: [] },
   toolCatalog: [],
   packages: [],
@@ -154,6 +158,7 @@ export default function App() {
   const [runtimes, setRuntimes] = useState<Record<string, TaskRuntime>>({});
   const [changes, setChanges] = useState<GitChanges>();
   const [changesLoading, setChangesLoading] = useState(false);
+  const changesRequest = useRef(0);
   const [changesOpen, setChangesOpen] = useState(() => loadJSON(CHANGES_OPEN_KEY, false));
   const [changesWidth, setChangesWidth] = useState(() => loadJSON("wackcode:changesWidth", 430));
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -249,14 +254,15 @@ export default function App() {
 
   const refreshChanges = useCallback(async (taskId = selectedTaskRef.current) => {
     if (!taskId) return;
+    const request = ++changesRequest.current;
     setChangesLoading(true);
     try {
       const next = await api.gitChanges(taskId);
-      if (selectedTaskRef.current === taskId) setChanges(next);
+      if (selectedTaskRef.current === taskId && changesRequest.current === request) setChanges(next);
     } catch (reason) {
-      if (selectedTaskRef.current === taskId) setGlobalError(String(reason));
+      if (selectedTaskRef.current === taskId && changesRequest.current === request) setGlobalError(String(reason));
     } finally {
-      if (selectedTaskRef.current === taskId) setChangesLoading(false);
+      if (selectedTaskRef.current === taskId && changesRequest.current === request) setChangesLoading(false);
     }
   }, []);
 
@@ -975,6 +981,55 @@ export default function App() {
     }
   }
 
+  async function changeAction(file: GitChangeFile, section: GitDiffSection, action: "stage" | "unstage" | "discard", hunkId?: number): Promise<void> {
+    if (!selectedTask) return;
+    const taskId = selectedTask.id;
+    const perform = async () => {
+      try {
+        const next = await api.gitChangeAction({ taskId, file: file.path, layer: section.layer, action, hunkId, expected: section.revision });
+        ++changesRequest.current;
+        if (selectedTaskRef.current === taskId) setChanges(next);
+      } catch (reason) {
+        void refreshChanges(taskId);
+        throw reason;
+      }
+    };
+    if (action === "discard") {
+      setConfirm({
+        title: hunkId === undefined ? "Discard file changes?" : "Discard hunk changes?",
+        body: `This removes the selected working-tree changes in ${file.path}. Staged changes stay in place.`,
+        confirmLabel: "Discard changes", danger: true, run: perform
+      });
+      return;
+    }
+    await perform();
+  }
+
+  async function saveDiffComments(comments: DiffComment[]): Promise<void> {
+    if (!selectedTask) return;
+    const taskId = selectedTask.id;
+    const saved = await api.setDiffComments(taskId, comments);
+    setData((current) => ({ ...current, diffComments: { ...current.diffComments, [taskId]: saved } }));
+  }
+
+  async function addressDiffComments(comments: DiffComment[]): Promise<boolean> {
+    if (!selectedTask) return false;
+    const taskId = selectedTask.id;
+    const list = comments.map((comment) => `${comment.path}:${comment.line} (${comment.layer}, ${comment.side}; ${comment.revision}): ${comment.text}\nSource: ${comment.excerpt}`).join("\n\n");
+    const instruction = currentMode === "build" ? "Address these diff comments in the workspace, then explain what changed." : "Plan how to address these diff comments. Keep the workspace read-only.";
+    const sent = await sendPrompt(`${instruction}\n\n${list}`, { literal: true });
+    if (!sent) throw new Error("Could not send the comments. They remain pending.");
+    const saved = await api.setDiffComments(taskId, []);
+    setData((current) => ({ ...current, diffComments: { ...current.diffComments, [taskId]: saved } }));
+    return true;
+  }
+
+  async function reviewChanges(): Promise<boolean> {
+    const sent = await sendPrompt("Review all current uncommitted changes, including staged, unstaged, and untracked files. Delegate the review to the Reviewer sub-agent. Report its findings with file and line references. Do not make fixes or edit files.", { literal: true });
+    if (!sent) throw new Error("Could not start review");
+    return true;
+  }
+
   /**
    * Switch Build / Plan / Ultra Plan. For a draft the choice is just held locally; for a task it
    * is persisted on the record and pushed to the worker (which refuses while a run is active).
@@ -1628,7 +1683,42 @@ export default function App() {
         )}
       </main>
 
-      {selectedTask && changesOpen && <ChangesPanel changes={changes} loading={changesLoading} width={changesWidth} onWidthChange={setChangesWidth} onClose={() => setChangesOpen(false)} onRefresh={() => void refreshChanges(selectedTask.id)} />}
+      {selectedTask && changesOpen && <ChangesPanel
+        key={selectedTask.id}
+        changes={changes}
+        loading={changesLoading}
+        busy={selectedTask.status === "running" || selectedTask.status === "stopping"}
+        width={changesWidth}
+        mode={currentMode}
+        canReview={data.subagents.enabled && data.subagents.agents.some((agent) => agent.id === "builtin:reviewer" && agent.enabled)}
+        reviewReason={!data.subagents.enabled ? "Enable sub-agents in Settings" : !data.subagents.agents.some((agent) => agent.id === "builtin:reviewer" && agent.enabled) ? "Enable Reviewer in Settings" : undefined}
+        comments={data.diffComments[selectedTask.id] ?? []}
+        onWidthChange={setChangesWidth}
+        onClose={() => setChangesOpen(false)}
+        onRefresh={() => void refreshChanges(selectedTask.id)}
+        onSettings={() => setSettingsOpen(true)}
+        onReview={reviewChanges}
+        onAction={changeAction}
+        onCommit={async (message, revision) => {
+          try {
+            const next = await api.gitCommit(selectedTask.id, message, revision);
+            ++changesRequest.current;
+            if (selectedTaskRef.current === selectedTask.id) setChanges(next);
+          } catch (reason) { void refreshChanges(selectedTask.id); throw reason; }
+        }}
+        onGenerate={() => api.gitGenerateMessage(selectedTask.id)}
+        onPublishInfo={() => api.gitPublishInfo(selectedTask.id)}
+        onPush={async (remote) => { await api.gitPush(selectedTask.id, remote); void refreshChanges(selectedTask.id); }}
+        onPreparePr={(remote) => api.gitPrPrepare(selectedTask.id, remote)}
+        onCreatePr={async (remote, base, title, body, draft) => {
+          const url = await api.gitPrCreate(selectedTask.id, remote, base, title, body, draft);
+          void api.revealPath(url).catch((reason) => setGlobalError(String(reason)));
+          return url;
+        }}
+        onOpenPr={(url) => { void api.revealPath(url).catch((reason) => setGlobalError(String(reason))); }}
+        onComments={saveDiffComments}
+        onAddressComments={addressDiffComments}
+      />}
         </>
       )}
 

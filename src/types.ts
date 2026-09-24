@@ -425,6 +425,7 @@ export interface AppData {
   providers: ProviderRecord[];
   projects: ProjectRecord[];
   tasks: TaskRecord[];
+  diffComments: Record<string, DiffComment[]>;
   toolConfig: ToolConfig;
   toolCatalog: ToolCatalogEntry[];
   packages: PackageRecord[];
@@ -661,13 +662,43 @@ export interface TaskRuntime {
 
 export interface GitChangeFile {
   path: string;
+  oldPath: string | null;
   status: string;
   staged: boolean;
   unstaged: boolean;
   untracked: boolean;
   binary: boolean;
+  hunkable: boolean;
   truncated: boolean;
   diff: string;
+  sections: GitDiffSection[];
+}
+
+export interface GitDiffSection {
+  layer: "staged" | "working";
+  revision: string;
+  diff: string;
+  hunks: GitDiffHunk[];
+  truncated: boolean;
+}
+
+export interface GitDiffHunk {
+  id: number;
+  header: string;
+  oldStart: number;
+  newStart: number;
+  lines: { kind: string; text: string; oldLine: number | null; newLine: number | null }[];
+}
+
+export interface DiffComment {
+  id: string;
+  path: string;
+  layer: "staged" | "working";
+  side: "old" | "new";
+  line: number;
+  excerpt: string;
+  revision: string;
+  text: string;
 }
 
 /** Files `@` mentions can pick from, relative to the workspace. */
@@ -681,6 +712,27 @@ export interface GitChanges {
   root: string | null;
   branch: string | null;
   files: GitChangeFile[];
+  stagedRevision: string;
+}
+
+export interface GitPublishInfo {
+  branch: string | null;
+  upstream: string | null;
+  remotes: string[];
+}
+
+export interface GitPrInfo {
+  repo: string;
+  base: string;
+  head: string;
+  title: string;
+  body: string;
+  existingUrl: string | null;
+}
+
+export interface GitGeneratedMessage {
+  message: string;
+  revision: string;
 }
 
 export interface SaveProviderInput {

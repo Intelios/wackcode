@@ -24,6 +24,8 @@ Type `/` in the composer to browse commands from enabled packages, prompt templa
 
 Type `@` to mention a file or folder in the chat's workspace (in a Git repository, every file that isn't ignored). Pick one from the list and the message keeps its path, such as `@src/App.tsx`, the way Pi's own terminal does; the model reads the file itself when it needs it. Paths with spaces are quoted, and choosing a folder lists what's inside it.
 
+When the agent looks around before making a change, its file reads, searches and listings fold into one "Explored" row, such as "Explored · 3 files, 2 searches", instead of a row per call. Click it to see each call. While it runs, the row shows the call in progress. Shell commands that only read, such as `ls`, `grep`, `cat`, `sed -n` or `git log`, fold in too; any command that might change something keeps its own row, as do edits and every other tool. Switch this off in Settings › Appearance › Group exploration.
+
 Settings › Appearance changes how WackCode looks, never what the model does. Pick a preset theme (WackCode, Midnight, Grape, Rosé, Ember, Mono) or your own accent and background colours; a background too light for the app's text is darkened, and an accent too dark to read is lightened. Behind the app you can keep a solid colour, use an image of your own, or use Liquid Glass. An image shows clearly on the new-chat screen and dimmed and blurred behind chats, with sliders for both. Liquid Glass (macOS 26 or later) lets the desktop show through, Frosted or Clear and tinted by your background colour; while another app has focus the window turns solid. Either way, chat bubbles, the composer and cards stay solid so text stays readable.
 
 ## Run from source

@@ -518,6 +518,19 @@ describe("SettingsPage appearance section", () => {
     await waitFor(() => expect(again.onSetAppearance).toHaveBeenCalledWith({ ...DEFAULT_APPEARANCE, messageBubbles: false }));
   });
 
+  it("switches exploration grouping off and back on", async () => {
+    const { onSetAppearance } = renderAppearance({ ...DEFAULT_APPEARANCE, groupExploration: true });
+    const toggle = screen.getByRole("switch", { name: "Group exploration" });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(toggle);
+    await waitFor(() => expect(onSetAppearance).toHaveBeenCalledWith({ ...DEFAULT_APPEARANCE, groupExploration: false }));
+    cleanup();
+
+    const again = renderAppearance({ ...DEFAULT_APPEARANCE, groupExploration: false });
+    fireEvent.click(screen.getByRole("switch", { name: "Group exploration" }));
+    await waitFor(() => expect(again.onSetAppearance).toHaveBeenCalledWith({ ...DEFAULT_APPEARANCE, groupExploration: true }));
+  });
+
   it("surfaces a failed save", async () => {
     renderAppearance({ ...DEFAULT_APPEARANCE, thinkingPreview: true }, vi.fn().mockRejectedValue("Could not save settings."));
     fireEvent.click(screen.getByRole("switch", { name: "Thinking preview" }));

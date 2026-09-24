@@ -57,6 +57,7 @@ import { InlineDialog, type ExtensionUIResponse } from "./components/InlineDialo
 import type { PlanAction } from "./components/PlanCard";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { SubscriptionLoginDialog } from "./components/SubscriptionLoginDialog";
+import { ExploreGroupingEnabled } from "./components/ExploreGroup";
 import { ThinkingPreviewEnabled } from "./components/ThinkingRow";
 
 const emptyData: AppData = {
@@ -1579,6 +1580,7 @@ export default function App() {
             )}
             <motion.div className="chat-transcript" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.1, ease: EASE }}>
             <ThinkingPreviewEnabled.Provider value={data.appearance.thinkingPreview}>
+            <ExploreGroupingEnabled.Provider value={data.appearance.groupExploration}>
             <Transcript
               messages={runtime?.snapshot?.messages ?? []}
               partial={runtime?.partial}
@@ -1596,6 +1598,7 @@ export default function App() {
               onMessageAction={onMessageAction}
               onUndoRewind={runtime?.snapshot?.tree?.undo ? onUndoRewind : undefined}
             />
+            </ExploreGroupingEnabled.Provider>
             </ThinkingPreviewEnabled.Provider>
             </motion.div>
             <InlineDialog

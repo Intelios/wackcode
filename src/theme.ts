@@ -21,6 +21,7 @@ export const DEFAULT_BACKGROUND = "#111310";
 export const DEFAULT_APPEARANCE: AppearanceConfig = {
   thinkingPreview: true,
   messageBubbles: false,
+  groupExploration: true,
   backdrop: "solid",
   imageDim: 65,
   imageBlur: 12,

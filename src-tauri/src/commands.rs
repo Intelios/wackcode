@@ -2027,6 +2027,7 @@ fn validate_appearance_config(input: AppearanceConfig, current: &AppearanceConfi
     let config = AppearanceConfig {
         thinking_preview: input.thinking_preview,
         message_bubbles: input.message_bubbles,
+        group_exploration: input.group_exploration,
         accent: colour("accent", input.accent)?,
         background: colour("background", input.background)?,
         backdrop: input.backdrop,

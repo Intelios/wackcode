@@ -104,12 +104,15 @@ mod tests {
         let data: AppData = serde_json::from_str(r#"{"version":1,"appearance":{}}"#).unwrap();
         assert!(data.appearance.thinking_preview);
         assert!(!data.appearance.message_bubbles);
-        let data: AppData = serde_json::from_str(r#"{"version":1,"appearance":{"thinkingPreview":false,"messageBubbles":true}}"#).unwrap();
+        assert!(data.appearance.group_exploration);
+        let data: AppData = serde_json::from_str(r#"{"version":1,"appearance":{"thinkingPreview":false,"messageBubbles":true,"groupExploration":false}}"#).unwrap();
         assert!(!data.appearance.thinking_preview);
         assert!(data.appearance.message_bubbles);
+        assert!(!data.appearance.group_exploration);
         let saved = serde_json::to_string(&data).unwrap();
         assert!(saved.contains(r#""thinkingPreview":false"#));
         assert!(saved.contains(r#""messageBubbles":true"#));
+        assert!(saved.contains(r#""groupExploration":false"#));
     }
 
     #[test]

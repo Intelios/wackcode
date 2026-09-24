@@ -524,6 +524,19 @@ pub struct TaskRecord {
     pub updated_at: String,
 }
 
+/// The main window's last normal-mode geometry in logical points, recorded from resize and
+/// move events and restored on launch (`window_state.rs`). Absent until the first event.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowState {
+    pub width: f64,
+    pub height: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<i32>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppData {
@@ -552,6 +565,8 @@ pub struct AppData {
     pub prompts: PromptConfig,
     #[serde(default)]
     pub mcp: McpConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<WindowState>,
 }
 
 impl Default for AppData {
@@ -570,6 +585,7 @@ impl Default for AppData {
             appearance: AppearanceConfig::default(),
             prompts: PromptConfig::default(),
             mcp: McpConfig::default(),
+            window: None,
         }
     }
 }

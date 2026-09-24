@@ -11,6 +11,7 @@ mod shell_env;
 mod storage;
 mod subagents;
 mod subscriptions;
+mod window_state;
 mod worker;
 
 use storage::MetadataState;
@@ -29,11 +30,18 @@ pub fn run() {
         .manage(worker::ManagerState::default())
         .setup(|app| {
             let state = MetadataState::load(&app.handle())?;
-            let appearance = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?.appearance.clone();
+            let (appearance, saved_window) = state
+                .data
+                .lock()
+                .map_err(|_| "Metadata lock was poisoned".to_string())
+                .map(|data| (data.appearance.clone(), data.window))?;
             app.manage(state);
             // The window is created hidden and transparent: paint it before it first appears.
             glass::apply(app.handle(), glass::NativeBackdrop::from_config(&appearance), true)?;
             if let Some(window) = app.get_webview_window("main") {
+                if let Some(saved_window) = saved_window {
+                    window_state::restore(&window, saved_window);
+                }
                 window.show()?;
             }
             // Read the login-shell environment in the background, so the first chat doesn't wait.
@@ -41,6 +49,7 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            window_state::record(window, event);
             // Liquid Glass shows only while focused; unfocused, the window is painted opaque.
             if let tauri::WindowEvent::Focused(focused) = event {
                 let app = window.app_handle();
@@ -125,6 +134,8 @@ pub fn run() {
 
     app.run(|app, event| {
         if matches!(event, tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }) {
+            // Flushes the window geometry `window_state::record` only kept in memory.
+            let _ = app.state::<MetadataState>().save();
             app.state::<WorkerState>().terminate_all();
             app.state::<subscriptions::SubscriptionState>().terminate_all();
         }

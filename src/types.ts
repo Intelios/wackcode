@@ -420,6 +420,14 @@ export interface SubagentDetails {
   results: SubagentResult[];
 }
 
+/** The main window's last normal-mode geometry in logical points. Mirrors `WindowState` in models.rs. */
+export interface WindowState {
+  width: number;
+  height: number;
+  x?: number | null;
+  y?: number | null;
+}
+
 export interface AppData {
   version: number;
   providers: ProviderRecord[];
@@ -434,6 +442,7 @@ export interface AppData {
   appearance: AppearanceConfig;
   prompts: PromptConfig;
   mcp: McpConfig;
+  window?: WindowState | null;
 }
 
 export interface BootstrapPayload {

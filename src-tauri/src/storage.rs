@@ -121,6 +121,20 @@ mod tests {
     }
 
     #[test]
+    fn window_geometry_is_absent_until_recorded() {
+        let data: AppData = serde_json::from_str(r#"{"version":1}"#).unwrap();
+        assert!(data.window.is_none());
+        assert!(!serde_json::to_string(&data).unwrap().contains("\"window\""));
+        let data: AppData = serde_json::from_str(
+            r#"{"version":1,"window":{"width":1200.0,"height":800.0,"x":40,"y":60}}"#,
+        )
+        .unwrap();
+        let window = data.window.unwrap();
+        assert_eq!((window.width, window.height), (1200.0, 800.0));
+        assert_eq!((window.x, window.y), (Some(40), Some(60)));
+    }
+
+    #[test]
     fn prompt_overrides_default_empty_and_round_trip() {
         // Old files predate the field entirely; cleared fields never appear in the file.
         let data: AppData = serde_json::from_str(r#"{"version":1}"#).unwrap();

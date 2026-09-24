@@ -87,7 +87,11 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
    a vivid hero copy that fades out above the composer on the new-chat screen, and a blurred,
    dimmed copy behind chats and Settings. Animating the blur itself would re-rasterize. */
 .backdrop { position: absolute; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; background: var(--bg); }
-.backdrop-layer { position: absolute; inset: 0; opacity: 0; transition: opacity .45s var(--ease); }
+/* will-change keeps each copy on its own GPU layer for good, not only while it fades. Without it
+   WebKit folds the blurred copy back into the window's layer after the fade, and any repaint of the
+   see-through shell above it (the Settings nav reflowing, a page switch) re-runs the blur clipped to
+   the dirty rect: a dark box with shadowy edges that lingers until the next full repaint. */
+.backdrop-layer { position: absolute; inset: 0; opacity: 0; transition: opacity .45s var(--ease); will-change: opacity; }
 .backdrop-layer::before { content: ""; position: absolute; inset: 0; background: var(--backdrop-image) center / cover no-repeat; }
 .backdrop-layer::after { content: ""; position: absolute; inset: 0; background: var(--bg); }
 .backdrop-hero::before {

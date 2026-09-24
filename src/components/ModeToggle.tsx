@@ -43,11 +43,12 @@ export function ModeToggle({ mode, disabled, onChange }: ModeToggleProps) {
     // The first measurement would otherwise animate in from the left edge on mount.
     const raf = requestAnimationFrame(() => setSettled(true));
     // Ultra Plan's label swap reflows the button a frame later, so track its size too.
-    const observer = new ResizeObserver(measure);
-    observer.observe(active);
+    // Absent in jsdom, where the one measurement above is all there is to do.
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(active);
     return () => {
       cancelAnimationFrame(raf);
-      observer.disconnect();
+      observer?.disconnect();
     };
   }, [active]);
 
@@ -81,7 +82,18 @@ export function ModeToggle({ mode, disabled, onChange }: ModeToggleProps) {
           disabled={disabled}
           onClick={() => onChange(planButtonTarget(mode))}
         >
-          <Icon name={ultra ? "flame" : "brain"} className="mode-icon" />
+          {ultra ? (
+            <span className="mode-flame">
+              <Icon name="flame" className="mode-icon" />
+              {/* Embers drift off the flame; the wrapper carries the bloom and they ride above it.
+                  Three, on staggered delays, so the fire keeps a pulse instead of pulsing twice. */}
+              <span className="flame-ember" aria-hidden="true" />
+              <span className="flame-ember" aria-hidden="true" />
+              <span className="flame-ember" aria-hidden="true" />
+            </span>
+          ) : (
+            <Icon name="brain" className="mode-icon" />
+          )}
           <span className="mode-label">{ultra ? "Ultra Plan" : "Plan"}</span>
         </button>
       </div>

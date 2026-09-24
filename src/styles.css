@@ -1066,29 +1066,108 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 /* In .sliding the pill is the background, so the option itself paints none. Must follow the
    two rules above, which SubagentsSection's plain toggle still relies on. */
 .mode-toggle.sliding .mode-option.active { background: transparent; box-shadow: none; }
-.mode-toggle.sliding .mode-pill.disabled { opacity: .55; }
-.mode-option.ultra.active .mode-icon { color: var(--wc-ultra-hot); animation: ultra-icon-glint 3.6s var(--ease) infinite; }
-.mode-option.ultra.active .mode-label {
-  background: linear-gradient(90deg, var(--wc-ultra) 38%, var(--wc-ultra-glow) 50%, var(--wc-ultra) 62%);
-  background-size: 260% 100%;
-  -webkit-background-clip: text; background-clip: text; color: transparent;
-  animation: ultra-sheen 3.6s var(--ease) infinite;
+.mode-toggle.sliding .mode-pill.disabled { opacity: .55; animation: none; }
+
+/* ── Ultra Plan fire ─────────────────────────────────
+   The flame is the animation: it flickers, a heat bloom breathes behind it, and three embers
+   race off its top. Ember periods (1.5s/1.3s/1.7s) are deliberately near each other so the fire
+   keeps a steady pulse, while the flame (2.3s), bloom (3.1s) and pill heat (5.4s) are chosen not
+   to divide them — the slower layers never land on the same beat twice, which is what stops the
+   whole thing reading as a cheap synchronized loop.
+
+   The flicker is scale only, anchored at the flame's base (transform-origin 50% 90%): never a
+   translateY, which lifts the whole icon and reads as bouncing, and never a rotate, which tips
+   it over. A flame stays planted and changes height. The label is left static and solid; only
+   the fire moves. */
+.mode-flame { position: relative; display: inline-grid; place-items: center; }
+/* z-index -1 keeps the bloom behind the flame: an absolutely-positioned ::before would otherwise
+   paint over the statically-positioned svg. .mode-option (position: relative, z-index: 1) is the
+   stacking context, so the bloom lands above the pill and below the icon. */
+.mode-flame::before {
+  content: ""; position: absolute; inset: -5px; border-radius: 50%; z-index: -1;
+  background: radial-gradient(circle, color-mix(in srgb, var(--wc-ultra-hot) 55%, transparent) 0%, transparent 68%);
+  animation: ultra-heat-bloom 3.1s ease-in-out infinite;
 }
-@keyframes ultra-sheen {
-  0% { background-position: 110% 0; }
-  45%, 100% { background-position: -8% 0; }
+.mode-option.ultra.active .mode-flame svg {
+  stroke-width: 1.1; transform-origin: 50% 90%; animation: ultra-flame-flicker 2.3s linear infinite;
 }
-@keyframes ultra-icon-glint {
-  0%, 3% { filter: brightness(1); }
-  9% { filter: brightness(1.45) drop-shadow(0 0 3px rgb(255 150 90 / .85)); }
-  18%, 100% { filter: brightness(1); }
+/* Fill and rim: a bright gold body with a hotter edge, so the 11px flame still reads at a glance. */
+.mode-option.ultra.active .mode-flame svg path { fill: color-mix(in srgb, var(--wc-ultra) 34%, var(--wc-ultra-glow)); }
+.mode-option.ultra.active .mode-flame svg { color: var(--wc-ultra-hot); }
+/* Embers are born at the flame's tip (bottom: 9px — the tip is the path's topmost point
+   (12,3) of the icon's 24-unit viewBox, ~1.4px below the top of the 11px box) and climb
+   15–18px: most of the flight is visibly above the toggle, which nothing clips (neither
+   .mode-toggle nor .composer has overflow), into the composer's empty footer space. The
+   fade is back-loaded — an ember is still ~87% bright as it clears the box, so the escape
+   itself reads as a rising spark instead of a dot dissolving on the spot; only the last
+   tenth thins out. Each is a hot core with a warm halo: at this size a flat dot reads as a
+   dead pixel. Cycles stay fast (1.3–1.7s): embers drift up, they do not float. */
+.flame-ember {
+  position: absolute; left: 52%; bottom: 9px; width: 3.5px; height: 3.5px; margin-left: -1.75px;
+  border-radius: 50%; background: var(--wc-ultra-glow); opacity: 0; pointer-events: none;
+  box-shadow:
+    0 0 5px 1.5px color-mix(in srgb, var(--wc-ultra-hot) 90%, transparent),
+    0 0 10px 4px color-mix(in srgb, var(--wc-ultra-hot) 32%, transparent);
+  --drift: -2px; --rise: 15px; animation: ultra-ember 1.5s ease-out 0s infinite;
 }
+.flame-ember + .flame-ember {
+  left: 40%; bottom: 9px; width: 3px; height: 3px; margin-left: -1.5px;
+  --drift: -3.5px; --rise: 17px; animation: ultra-ember 1.3s ease-out .5s infinite;
+}
+.flame-ember + .flame-ember + .flame-ember {
+  left: 60%; bottom: 9px; width: 2.5px; height: 2.5px; margin-left: -1.25px;
+  --drift: 3px; --rise: 16px; animation: ultra-ember 1.7s ease-out 1s infinite;
+}
+/* Scale only, anchored at the base — the flame stretches and settles without leaving the spot. */
+@keyframes ultra-flame-flicker {
+  0%, 100% { transform: scaleX(1) scaleY(1); filter: brightness(1); }
+  6% { transform: scaleX(.96) scaleY(1.12); filter: brightness(1.26); }
+  12% { transform: scaleX(1.03) scaleY(.94); filter: brightness(.94); }
+  20% { transform: scaleX(.95) scaleY(1.16); filter: brightness(1.32); }
+  31% { transform: scaleX(1.02) scaleY(1); filter: brightness(1.06); }
+  45% { transform: scaleX(.97) scaleY(1.09); filter: brightness(1.2); }
+  60% { transform: scaleX(1.03) scaleY(.96); filter: brightness(.92); }
+  74% { transform: scaleX(.96) scaleY(1.13); filter: brightness(1.28); }
+  88% { transform: scaleX(1.01) scaleY(1.02); filter: brightness(1.04); }
+}
+@keyframes ultra-heat-bloom {
+  0%, 100% { opacity: .28; transform: scale(.88); }
+  45% { opacity: .52; transform: scale(1.12); }
+  70% { opacity: .34; transform: scale(.96); }
+}
+/* Pops out of the flame at full brightness, then holds that brightness for most of the climb —
+   the ember is still ~87% at the toggle's top edge and only thins over the last stretch above
+   the box. It grows on the way out (scale .5 → 1) rather than shrinking from the start, so it
+   reads as being thrown off the fire instead of as a dot that was always there and faded. */
+@keyframes ultra-ember {
+  0% { opacity: 0; transform: translate(0, 0) scale(.5); }
+  7% { opacity: 1; transform: translate(calc(var(--drift) * .1), calc(var(--rise) * -.09)) scale(1); }
+  45% { opacity: 1; transform: translate(calc(var(--drift) * .45), calc(var(--rise) * -.45)) scale(.94); }
+  72% { opacity: .85; transform: translate(calc(var(--drift) * .72), calc(var(--rise) * -.73)) scale(.8); }
+  91% { opacity: .45; transform: translate(calc(var(--drift) * .92), calc(var(--rise) * -.92)) scale(.62); }
+  100% { opacity: 0; transform: translate(var(--drift), calc(var(--rise) * -1)) scale(.5); }
+}
+/* Slow heat radiating off the pill, well behind the flame's rhythm. */
+.mode-pill.ultra { animation: ultra-heat 5.4s ease-in-out infinite; }
+@keyframes ultra-heat {
+  0%, 100% {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wc-ultra) 30%, transparent), 0 0 12px -3px color-mix(in srgb, var(--wc-ultra-hot) 55%, transparent);
+  }
+  50% {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wc-ultra) 44%, transparent), 0 0 18px -2px color-mix(in srgb, var(--wc-ultra-hot) 72%, transparent);
+  }
+}
+/* A run owns the mode: hold the fire still rather than animating a control the user can't use. */
+.mode-option.ultra.active:disabled .mode-flame svg, .mode-option.ultra.active:disabled .mode-flame::before { animation: none; }
+.mode-option.ultra.active:disabled .flame-ember { animation: none; }
 /* After the rules above (the global reduced-motion block precedes this section): hold the
    gradient still instead of flickering at the global .01ms duration. */
 @media (prefers-reduced-motion: reduce) {
   .mode-pill.settled { transition: none; }
-  .mode-option.ultra.active .mode-icon { animation: none; }
-  .mode-option.ultra.active .mode-label { animation: none; background-position: 50% 0; }
+  .mode-pill.ultra { animation: none; }
+  .mode-option.ultra.active .mode-flame svg { animation: none; }
+  .mode-option.ultra.active .mode-flame::before { animation: none; opacity: .34; }
+  .flame-ember { animation: none; }
 }
 
 .task-mode-chip {

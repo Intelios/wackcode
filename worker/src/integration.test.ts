@@ -347,10 +347,14 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
           ? [toolCall("subagent", { agent: "scout", task: "child-rm: tidy up" })]
         : lastUserText.startsWith("subagent plan")
           ? [toolCall("subagent", { agent: "worker", task: "child-write: planned" })]
+        : lastUserText.startsWith("subagent fetch")
+          ? [toolCall("subagent", { agent: "scout", task: "child-fetch: http://localhost/docs" })]
         : lastUserText.startsWith("subagent wait")
           ? [toolCall("subagent", { agent: "scout", task: "child-wait: until stopped" })]
         : lastUserText.startsWith("child-ls")
           ? [toolCall("ls", { path: "." })]
+        : lastUserText.startsWith("child-fetch: ")
+          ? [toolCall("web_fetch", { url: lastUserText.slice("child-fetch: ".length) })]
         : lastUserText.startsWith("child-rm")
           ? [toolCall("bash", { command: "rm -f keep.txt" })]
         : lastUserText.startsWith("child-write: ")
@@ -1904,6 +1908,45 @@ describe("sub-agents", () => {
     worker.send({ id: crypto.randomUUID(), type: "set_subagents", subagents: null });
     await worker.waitFor((output) => output.type === "snapshot" && output !== on && output.snapshot?.activeTools?.includes("subagent") === false);
     expect(worker.child.exitCode).toBeNull();
+  });
+
+  it("gives a read-only child web_fetch while Web Fetch is on, under the same address policy", async () => {
+    const webScout = { ...scout, tools: [...scout.tools, "web_fetch"] };
+    const { provider, worker } = await start("subagents-fetch", { subagents: config({ agents: [webScout, editor] }) });
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "subagent fetch" });
+    await worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha.")) === true);
+    const child = subagentResult(worker)?.details.results[0];
+    expect(child?.status).toBe("done");
+    expect(child?.activity).toEqual([{ tool: "web_fetch", subject: "http://localhost/docs" }]);
+
+    // The child was offered the tool, the read-only guard let it run, and the fetch itself
+    // refused the private address.
+    const requests = childRequests(provider, "SCOUT-PROMPT-MARKER");
+    expect(offered(requests[0])).toContain("web_fetch");
+    const toolResult = requests[1].body.messages.find(
+      (message) => (message as { role?: string }).role === "tool"
+    ) as { content?: string } | undefined;
+    expect(toolResult?.content).toContain("local or private network address");
+  });
+
+  it("keeps web_fetch from children while Web Fetch is switched off", async () => {
+    const webScout = { ...scout, tools: [...scout.tools, "web_fetch"] };
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-subagents-no-fetch-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "subagents-no-fetch", undefined, ["web_fetch"], undefined, undefined, undefined,
+      { subagents: config({ agents: [webScout, editor] }) }
+    );
+    cleanup.push(() => worker.shutdown());
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "subagent fetch" });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && childRequests(provider, "SCOUT-PROMPT-MARKER").length > 0);
+    const requests = childRequests(provider, "SCOUT-PROMPT-MARKER");
+    expect(offered(requests[0])).toContain("read");
+    expect(offered(requests[0])).not.toContain("web_fetch");
   });
 
   it("runs a sub-agent in its own in-process session and records its card and usage", async () => {

@@ -134,7 +134,7 @@ const builtinHost: BuiltinHost = {
   },
   childToolNames: () =>
     toolCatalog()
-      .filter((tool) => tool.source.kind === "builtin" && tool.available && !disabledTools.has(tool.name))
+      .filter((tool) => (tool.source.kind === "builtin" || SWITCHABLE_BUILTIN_TOOLS.has(tool.name)) && tool.available && !disabledTools.has(tool.name))
       .map((tool) => tool.name),
   runSubagent: (request) => {
     if (!subagentRunner) return Promise.reject(new Error("Worker is not initialized"));

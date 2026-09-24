@@ -247,7 +247,7 @@ export function SettingsPage({
         )}
         {section === "prompts" && <PromptsSection config={prompts} onChange={onSetPrompts} />}
         {section === "subagents" && (
-          <SubagentsSection config={subagents} providers={providers} onChange={onSetSubagents} />
+          <SubagentsSection config={subagents} providers={providers} onChange={onSetSubagents} webFetchEnabled={!disabledTools.includes(WEB_FETCH_TOOL_NAME)} />
         )}
         {section === "auto_titles" && <AutoTitlesSection config={autoTitle} providers={providers} onChange={onSetAutoTitle} onOpenProviders={() => { setSelectedProviderId("new"); setSection("providers"); }} />}
       </main>

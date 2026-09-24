@@ -35,7 +35,9 @@ export interface BuiltinExtensions {
 export function createBuiltinExtensions(host: BuiltinHost): BuiltinExtensions {
   const planMode = createPlanModeExtension(host);
   const todo = createTodoExtension(host);
-  const subagents = createSubagentsExtension(host, () => planMode.controller.getState().mode);
+  // One instance for the chat and its sub-agents, so they share its page cache.
+  const webFetch: InlineExtension = { name: "wackcode-web-fetch", factory: createWebFetchExtension(), hidden: true };
+  const subagents = createSubagentsExtension(host, () => planMode.controller.getState().mode, webFetch);
   const autoTitle = createAutoTitleExtension(host);
   return {
     factories: [
@@ -49,7 +51,7 @@ export function createBuiltinExtensions(host: BuiltinHost): BuiltinExtensions {
       { name: "wackcode-todo", factory: todo.factory, hidden: true },
       { name: "wackcode-subagents", factory: subagents.factory, hidden: true },
       { name: "wackcode-auto-title", factory: autoTitle.factory, hidden: true },
-      { name: "wackcode-web-fetch", factory: createWebFetchExtension(), hidden: true },
+      webFetch,
     ],
     planMode: planMode.controller,
     todo: todo.handle,

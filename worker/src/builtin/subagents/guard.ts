@@ -1,10 +1,12 @@
 /**
  * The read-only policy for a child session. A read-only agent is only ever given
- * read/grep/find/ls/bash; this enforces the rest at call time with the same fail-closed shell
- * policy Plan mode uses, so "read-only" means the same thing for a planning parent and a scout.
+ * read/grep/find/ls/bash/web_fetch; this enforces the rest at call time with the same
+ * fail-closed shell policy Plan mode uses, so "read-only" means the same thing for a planning
+ * parent and a scout.
  *
- * Loaded as the child's only extension. Pi installs `tool_call` hooks in the session
- * constructor, so it takes effect without binding a UI; a handler that throws blocks the call.
+ * Loaded into the child alongside, at most, Web Fetch. Pi installs `tool_call` hooks in the
+ * session constructor, so it takes effect without binding a UI; a handler that throws blocks
+ * the call.
  */
 import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_SAFE_SUBCOMMANDS, findBlockedCommandSegment, readCommand } from "../plan-mode/policy.js";

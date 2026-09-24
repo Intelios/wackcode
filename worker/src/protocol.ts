@@ -128,7 +128,7 @@ export interface SubagentSpec {
   description: string;
   /** Appended to Pi's system prompt for the child. */
   prompt: string;
-  /** Pi built-in tools the agent may use, before availability and the user's denylist apply. */
+  /** Tools the agent may use (Pi's own, plus `web_fetch`), before availability and the user's denylist apply. */
   tools: string[];
   /** Read-only agents never get edit/write, their bash is limited, and they may run in Plan mode. */
   readOnly: boolean;

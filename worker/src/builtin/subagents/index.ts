@@ -10,7 +10,7 @@
  * child is extra model usage. The factory always loads; while switched off its tool is simply
  * kept out of the active set (`inactiveTools`), so turning it on or off never restarts a chat.
  */
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { SubagentRuntimeConfig, SubagentSpec, TaskMode } from "../../protocol.js";
 import type { BuiltinHost, SubagentOutcome } from "../host.js";
 import {
@@ -31,6 +31,7 @@ import { readOnlyGuard } from "./guard.js";
 import { SUBAGENT_PROMPT_SNIPPET, subagentDescription, subagentGuidelines } from "./prompt.js";
 import { runScheduled } from "./scheduler.js";
 import { normalizeSubagentParams, subagentParams } from "./schema.js";
+import { WEB_FETCH_TOOL_NAME } from "../web-fetch/index.js";
 import { SUBAGENT_TOOL_LABEL, SUBAGENT_TOOL_NAME, resolveChildTools } from "./types.js";
 
 export interface SubagentsController {
@@ -44,7 +45,11 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function createSubagentsExtension(host: BuiltinHost, currentMode: () => TaskMode) {
+/**
+ * `webFetch` is the parent's own Web Fetch extension. A child whose tools include `web_fetch`
+ * loads it too, so both share one page cache and one address policy.
+ */
+export function createSubagentsExtension(host: BuiltinHost, currentMode: () => TaskMode, webFetch: InlineExtension) {
   let config: SubagentRuntimeConfig | null = null;
   let pi: ExtensionAPI | undefined;
   /** The rendered definition last registered. Re-registering changes the system prompt, which
@@ -108,13 +113,17 @@ export function createSubagentsExtension(host: BuiltinHost, currentMode: () => T
       result.startedAt = Date.now();
       updates.schedule();
 
+      const tools = resolveChildTools(spec.tools, spec.readOnly, available);
       let outcome: SubagentOutcome;
       try {
         outcome = await host.runSubagent({
           spec,
           task: input.task,
-          tools: resolveChildTools(spec.tools, spec.readOnly, available),
-          extensions: spec.readOnly ? [readOnlyGuard()] : [],
+          tools,
+          extensions: [
+            ...(spec.readOnly ? [readOnlyGuard()] : []),
+            ...(tools.includes(WEB_FETCH_TOOL_NAME) ? [webFetch] : []),
+          ],
           signal,
           observer: {
             started: (model) => {

@@ -13,10 +13,11 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 use uuid::Uuid;
 
-/// Pi's own tools a sub-agent may be given. Package tools never reach a child.
-pub const CHILD_TOOLS: &[&str] = &["read", "grep", "find", "ls", "bash", "edit", "write"];
+/// The tools a sub-agent may be given: Pi's own, plus the built-in `web_fetch` (which the worker
+/// withholds while the user has switched Web Fetch off). Package tools never reach a child.
+pub const CHILD_TOOLS: &[&str] = &["read", "grep", "find", "ls", "bash", "edit", "write", "web_fetch"];
 /// Everything a read-only agent may use; its bash is further limited by the Plan-mode policy.
-const READ_ONLY_TOOLS: &[&str] = &["read", "grep", "find", "ls", "bash"];
+const READ_ONLY_TOOLS: &[&str] = &["read", "grep", "find", "ls", "bash", "web_fetch"];
 pub const MAX_CONCURRENCY: u32 = 8;
 const MAX_AGENTS: usize = 32;
 const MAX_NAME_CHARS: usize = 32;
@@ -36,7 +37,7 @@ const BUILTINS: &[BuiltinAgent] = &[
     BuiltinAgent {
         id: "builtin:scout",
         name: "scout",
-        description: "Fast read-only codebase reconnaissance. Returns compressed findings (files, line ranges, key code, architecture) that another agent can act on without re-reading everything.",
+        description: "Fast read-only codebase reconnaissance. Returns compressed findings (files, line ranges, key code, architecture) that another agent can act on without re-reading everything. Can also read public web pages by URL, such as a library's docs or an issue, but can't search the web.",
         prompt: include_str!("subagents/scout.md"),
         tools: READ_ONLY_TOOLS,
         read_only: true,
@@ -317,6 +318,16 @@ mod tests {
     }
 
     #[test]
+    fn every_builtin_agent_can_read_the_web() {
+        let mut config = SubagentConfig::default();
+        normalize(&mut config);
+        for agent in &config.agents {
+            assert!(agent.tools.contains(&"web_fetch".to_string()), "{} lacks web_fetch", agent.name);
+        }
+        assert!(config.agents[0].description.contains("web pages"));
+    }
+
+    #[test]
     fn old_metadata_without_subagents_loads_switched_off() {
         let data: crate::models::AppData = serde_json::from_str(r#"{"version":1}"#).unwrap();
         assert!(!data.subagents.enabled);
@@ -338,6 +349,15 @@ mod tests {
         assert_eq!(docs.name, "docs");
         assert!(!docs.id.is_empty());
         assert_eq!(docs.tools, ["read", "grep"]);
+
+        // A read-only custom agent may read the web; its tools keep CHILD_TOOLS order.
+        let mut input = SubagentConfig { enabled: true, ..SubagentConfig::default() };
+        normalize(&mut input);
+        let mut researcher = custom("researcher");
+        researcher.tools = vec!["web_fetch".into(), "read".into()];
+        input.agents.push(researcher);
+        let config = validate(&input, &[]).unwrap();
+        assert_eq!(config.agents.last().unwrap().tools, ["read", "web_fetch"]);
     }
 
     #[test]

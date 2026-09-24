@@ -554,6 +554,11 @@ describe("sub-agent tools and policy", () => {
     expect(resolveChildTools(["read", "edit", "write", "todo", "subagent"], false, available)).toEqual(["read", "edit", "write"]);
     expect(resolveChildTools(["read", "edit", "write"], true, available)).toEqual(["read"]);
     expect(resolveChildTools(["read", "read"], false, ["ls"])).toEqual([]);
+    // web_fetch is the one built-in extension tool a child can have, read-only or not, and only
+    // while the user's Web Fetch switch leaves it in `available`.
+    expect(resolveChildTools(["read", "web_fetch"], true, [...available, "web_fetch"])).toEqual(["read", "web_fetch"]);
+    expect(resolveChildTools(["edit", "web_fetch"], false, [...available, "web_fetch"])).toEqual(["edit", "web_fetch"]);
+    expect(resolveChildTools(["read", "web_fetch"], true, available)).toEqual(["read"]);
   });
 
   it("keeps a read-only child on inspection, with Plan mode's shell policy", () => {
@@ -563,6 +568,7 @@ describe("sub-agent tools and policy", () => {
     expect(readOnlyDecision("bash", { command: "cat x > y" }, "/repo")?.block).toBe(true);
     expect(readOnlyDecision("write", { path: "a.ts" }, "/repo")?.reason).toContain("cannot use 'write'");
     expect(readOnlyDecision("edit", {}, "/repo")?.block).toBe(true);
+    expect(readOnlyDecision("web_fetch", { url: "https://example.com" }, "/repo")).toBeUndefined();
   });
 });
 
@@ -615,6 +621,7 @@ describe("sub-agent results", () => {
     expect(summarizeActivity("grep", { pattern: "TODO" })).toEqual({ tool: "grep", subject: "TODO" });
     expect(summarizeActivity("ls", {})).toEqual({ tool: "ls", subject: "." });
     expect(summarizeActivity("read", { path: "src/a.ts" })).toEqual({ tool: "read", subject: "src/a.ts" });
+    expect(summarizeActivity("web_fetch", { url: "https://example.com/docs" })).toEqual({ tool: "web_fetch", subject: "https://example.com/docs" });
     expect(summarizeActivity("bash", { command: "x".repeat(400) }).subject.length).toBe(160);
     const [result] = createDetails("single", [{ input: { agent: "scout", task: "t" }, readOnly: true }]).results;
     for (let index = 0; index < 20; index += 1) recordActivity(result, { tool: "read", subject: String(index) });

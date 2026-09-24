@@ -285,11 +285,11 @@ export interface PromptConfig {
 /** When the chat's agent should reach for sub-agents. Only changes the tool's guidance. */
 export type SubagentTrigger = "on_request" | "auto";
 
-/** Pi's own tools a sub-agent can be given. Mirrors `CHILD_TOOLS` in subagents.rs. */
-export const SUBAGENT_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write"] as const;
+/** Tools a sub-agent can be given: Pi's own, plus the built-in web_fetch. Mirrors `CHILD_TOOLS` in subagents.rs. */
+export const SUBAGENT_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write", "web_fetch"] as const;
 export type SubagentTool = (typeof SUBAGENT_TOOLS)[number];
 /** What a read-only sub-agent may have. */
-export const READ_ONLY_SUBAGENT_TOOLS: readonly string[] = ["read", "grep", "find", "ls", "bash"];
+export const READ_ONLY_SUBAGENT_TOOLS: readonly string[] = ["read", "grep", "find", "ls", "bash", "web_fetch"];
 export const MAX_SUBAGENT_CONCURRENCY = 8;
 
 /** A sub-agent's own model; without one it runs on the chat's model. */

@@ -1455,7 +1455,8 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .subagent-field-label { display: block; margin-bottom: 6px; color: var(--text-soft); font-size: 11px; font-weight: 600; }
 .subagent-model-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .subagent-model-row .model-pill { border: 1px solid var(--border); background: var(--surface-raised); }
-.subagent-model-field .subagent-hint { display: block; margin-top: 6px; }
+.subagent-model-field .subagent-hint,
+.subagent-tools-field .subagent-hint { display: block; margin-top: 6px; }
 .subagent-tool-list { color: var(--text-soft); font: 11px "SFMono-Regular", Consolas, monospace; }
 .subagent-prompt-view {
   margin: 0; max-height: 220px; overflow: auto; border: 1px solid var(--border); background: var(--wc-well); border-radius: 7px;

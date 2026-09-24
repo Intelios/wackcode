@@ -1032,8 +1032,23 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .extension-option input { accent-color: var(--wc-accent); cursor: pointer; }
 
 /* ── Built-in mode toggle and Plan mode ────────────── */
-.mode-toggle { display: inline-flex; align-items: center; gap: 2px; border: 1px solid var(--border); background: var(--surface); border-radius: 8px; padding: 2px; }
+/* The pill is the active-option background: it is positioned from the button's own measured
+   box (see ModeToggle.tsx) and slides between options. `settled` gates the transition so the
+   first measurement does not animate in from the left edge on mount. Only ModeToggle adds
+   .sliding; SubagentsSection's reuses of .mode-toggle keep the plain active background. */
+.mode-toggle { position: relative; display: inline-flex; align-items: center; gap: 2px; border: 1px solid var(--border); background: var(--surface); border-radius: 8px; padding: 2px; }
+.mode-pill {
+  position: absolute; top: 2px; bottom: 2px; left: 0; width: 0; border-radius: 6px;
+  background: var(--surface-hover); pointer-events: none;
+}
+.mode-pill.settled { transition: left .22s var(--ease), width .22s var(--ease), background .18s var(--ease); }
+.mode-pill.plan { background: color-mix(in srgb, var(--wc-accent) 14%, var(--surface-hover)); }
+.mode-pill.ultra {
+  background: color-mix(in srgb, var(--wc-ultra) 11%, var(--surface-hover));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wc-ultra) 30%, transparent), 0 0 12px -3px color-mix(in srgb, var(--wc-ultra-hot) 55%, transparent);
+}
 .mode-option {
+  position: relative; z-index: 1;
   display: inline-flex; align-items: center; gap: 4px; border: 0; border-radius: 6px; background: transparent;
   color: var(--text-dim); font-size: 11px; font-weight: 600; padding: 4px 9px; cursor: pointer; line-height: 1;
 }
@@ -1048,6 +1063,10 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   background: color-mix(in srgb, var(--wc-ultra) 11%, var(--surface-hover));
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wc-ultra) 30%, transparent), 0 0 12px -3px color-mix(in srgb, var(--wc-ultra-hot) 55%, transparent);
 }
+/* In .sliding the pill is the background, so the option itself paints none. Must follow the
+   two rules above, which SubagentsSection's plain toggle still relies on. */
+.mode-toggle.sliding .mode-option.active { background: transparent; box-shadow: none; }
+.mode-toggle.sliding .mode-pill.disabled { opacity: .55; }
 .mode-option.ultra.active .mode-icon { color: var(--wc-ultra-hot); animation: ultra-icon-glint 3.6s var(--ease) infinite; }
 .mode-option.ultra.active .mode-label {
   background: linear-gradient(90deg, var(--wc-ultra) 38%, var(--wc-ultra-glow) 50%, var(--wc-ultra) 62%);
@@ -1067,6 +1086,7 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 /* After the rules above (the global reduced-motion block precedes this section): hold the
    gradient still instead of flickering at the global .01ms duration. */
 @media (prefers-reduced-motion: reduce) {
+  .mode-pill.settled { transition: none; }
   .mode-option.ultra.active .mode-icon { animation: none; }
   .mode-option.ultra.active .mode-label { animation: none; background-position: 50% 0; }
 }

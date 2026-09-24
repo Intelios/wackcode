@@ -330,6 +330,8 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
         ? [toolCall("plan_mode_complete", { plan: "# The plan\n\n- Ship it" })]
       : lastUserText.startsWith("todo:")
         ? [toolCall("todo", { action: "create", subject: "Ship the thing" })]
+      : lastUserText.startsWith("fetch:")
+        ? [toolCall("web_fetch", { url: lastUserText.slice("fetch:".length).trim() })]
         : lastUserText.startsWith("stream tool")
           ? [toolCall("bash", { command: "printf 'first line\\n'; sleep 0.3; printf 'second line\\n'" })]
         : lastUserText.startsWith("subagent single")
@@ -345,10 +347,14 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
           ? [toolCall("subagent", { agent: "scout", task: "child-rm: tidy up" })]
         : lastUserText.startsWith("subagent plan")
           ? [toolCall("subagent", { agent: "worker", task: "child-write: planned" })]
+        : lastUserText.startsWith("subagent fetch")
+          ? [toolCall("subagent", { agent: "scout", task: "child-fetch: http://localhost/docs" })]
         : lastUserText.startsWith("subagent wait")
           ? [toolCall("subagent", { agent: "scout", task: "child-wait: until stopped" })]
         : lastUserText.startsWith("child-ls")
           ? [toolCall("ls", { path: "." })]
+        : lastUserText.startsWith("child-fetch: ")
+          ? [toolCall("web_fetch", { url: lastUserText.slice("child-fetch: ".length) })]
         : lastUserText.startsWith("child-rm")
           ? [toolCall("bash", { command: "rm -f keep.txt" })]
         : lastUserText.startsWith("child-write: ")
@@ -669,9 +675,9 @@ describe("Pi worker integration", () => {
     cleanup.push(() => worker.shutdown());
 
     // Every tool Pi ships is in the registry, including the three the worker never used to
-    // enable, plus WackCode's four built-in extension tools.
+    // enable, plus WackCode's five built-in extension tools.
     const names = (ready.snapshot?.tools ?? []).map((tool) => tool.name).sort();
-    expect(names).toEqual(["ask_user_question", "bash", "edit", "find", "grep", "ls", "plan_mode_complete", "read", "subagent", "todo", "write"]);
+    expect(names).toEqual(["ask_user_question", "bash", "edit", "find", "grep", "ls", "plan_mode_complete", "read", "subagent", "todo", "web_fetch", "write"]);
     expect(ready.snapshot?.tools?.every((tool) => tool.source.kind === "builtin" || tool.source.kind === "wackcode")).toBe(true);
     // The denylist from `init` is applied before the first turn, and tools whose external
     // binary is missing are never offered even though they stay listed in the catalogue.
@@ -694,8 +700,8 @@ describe("Pi worker integration", () => {
     expect(offered(provider.requests[0])).toEqual(expectedActive);
 
     // Toggling tools takes effect on the next turn with no worker restart. The wackcode
-    // tools are exempt from the denylist, so six tools stay active.
-    worker.send({ id: crypto.randomUUID(), type: "set_tools", disabledTools: ["bash", "grep", "ls", "find"] });
+    // tools are exempt from the denylist except web_fetch, so six tools stay active.
+    worker.send({ id: crypto.randomUUID(), type: "set_tools", disabledTools: ["bash", "grep", "ls", "find", "web_fetch"] });
     await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.length === 6);
     // `find`/`grep` availability varies by host, so assert the five that never depend on a binary.
     const beforeSecondRun = provider.requests.length;
@@ -959,10 +965,34 @@ describe("built-in extensions", () => {
     expect(ask?.source.kind).toBe("wackcode");
     expect(complete?.source.kind).toBe("wackcode");
     expect(todo?.source.kind).toBe("wackcode");
+    expect(catalog.find((tool) => tool.name === "web_fetch")?.source.kind).toBe("wackcode");
     expect(ready.snapshot?.activeTools).toContain("ask_user_question");
     expect(ready.snapshot?.activeTools).toContain("plan_mode_complete");
     expect(ready.snapshot?.activeTools).toContain("todo");
     expect(ready.snapshot?.planState?.mode).toBe("build");
+  });
+
+  it("offers web_fetch by default, lets the denylist switch it off, and refuses private addresses", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-web-fetch-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker, ready } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "web-fetch-task");
+    cleanup.push(() => worker.shutdown());
+    expect(ready.snapshot?.activeTools).toContain("web_fetch");
+
+    // The mock provider itself is on loopback: the tool must refuse it without connecting.
+    const before = provider.requests.length;
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: `fetch: ${provider.baseUrl}/models` });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && provider.requests.length > before + 1);
+    const toolResult = provider.requests[before + 1].body.messages.find(
+      (message) => (message as { role?: string }).role === "tool"
+    ) as { content?: string } | undefined;
+    expect(toolResult?.content).toContain("local or private network address");
+
+    worker.send({ id: crypto.randomUUID(), type: "set_tools", disabledTools: ["web_fetch"] });
+    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.includes("web_fetch") === false);
+    expect(worker.child.exitCode).toBeNull();
   });
 
   it("round-trips an ask_user_question dialog while the prompt holds the queue", async () => {
@@ -1077,6 +1107,28 @@ describe("built-in extensions", () => {
     expect(published.tasks?.[0]?.subject).toBe("Ship the thing");
     await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
     expect(worker.outputs.some((output) => output.type === "worker_error")).toBe(false);
+  });
+
+  it("lets web_fetch run in Plan mode — it only reads", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-web-fetch-plan-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "web-fetch-plan-task", undefined, undefined, undefined, "plan"
+    );
+    cleanup.push(() => worker.shutdown());
+    await worker.waitFor((output) => output.type === "plan_state" && output.mode === "plan");
+
+    // A private address keeps the test offline; what matters is that the tool itself answered
+    // rather than the Plan mode policy.
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "fetch: http://localhost/" });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && provider.requests.length > 1);
+    const toolResult = provider.requests[1].body.messages.find(
+      (message) => (message as { role?: string }).role === "tool"
+    ) as { content?: string } | undefined;
+    expect(toolResult?.content).toContain("local or private network address");
+    expect(toolResult?.content).not.toContain("Plan mode");
   });
 });
 
@@ -1856,6 +1908,45 @@ describe("sub-agents", () => {
     worker.send({ id: crypto.randomUUID(), type: "set_subagents", subagents: null });
     await worker.waitFor((output) => output.type === "snapshot" && output !== on && output.snapshot?.activeTools?.includes("subagent") === false);
     expect(worker.child.exitCode).toBeNull();
+  });
+
+  it("gives a read-only child web_fetch while Web Fetch is on, under the same address policy", async () => {
+    const webScout = { ...scout, tools: [...scout.tools, "web_fetch"] };
+    const { provider, worker } = await start("subagents-fetch", { subagents: config({ agents: [webScout, editor] }) });
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "subagent fetch" });
+    await worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha.")) === true);
+    const child = subagentResult(worker)?.details.results[0];
+    expect(child?.status).toBe("done");
+    expect(child?.activity).toEqual([{ tool: "web_fetch", subject: "http://localhost/docs" }]);
+
+    // The child was offered the tool, the read-only guard let it run, and the fetch itself
+    // refused the private address.
+    const requests = childRequests(provider, "SCOUT-PROMPT-MARKER");
+    expect(offered(requests[0])).toContain("web_fetch");
+    const toolResult = requests[1].body.messages.find(
+      (message) => (message as { role?: string }).role === "tool"
+    ) as { content?: string } | undefined;
+    expect(toolResult?.content).toContain("local or private network address");
+  });
+
+  it("keeps web_fetch from children while Web Fetch is switched off", async () => {
+    const webScout = { ...scout, tools: [...scout.tools, "web_fetch"] };
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-subagents-no-fetch-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "subagents-no-fetch", undefined, ["web_fetch"], undefined, undefined, undefined,
+      { subagents: config({ agents: [webScout, editor] }) }
+    );
+    cleanup.push(() => worker.shutdown());
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "subagent fetch" });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && childRequests(provider, "SCOUT-PROMPT-MARKER").length > 0);
+    const requests = childRequests(provider, "SCOUT-PROMPT-MARKER");
+    expect(offered(requests[0])).toContain("read");
+    expect(offered(requests[0])).not.toContain("web_fetch");
   });
 
   it("runs a sub-agent in its own in-process session and records its card and usage", async () => {

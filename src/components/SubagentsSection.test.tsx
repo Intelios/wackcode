@@ -22,13 +22,32 @@ const provider: ProviderRecord = {
   createdAt: "now", updatedAt: "now", hasApiKey: true, connected: true
 };
 
-function renderSection(overrides: Partial<SubagentConfig> = {}, providers: ProviderRecord[] = [provider]) {
+function renderSection(overrides: Partial<SubagentConfig> = {}, providers: ProviderRecord[] = [provider], webFetchEnabled = true) {
   const onChange = vi.fn().mockResolvedValue(undefined);
-  render(<SubagentsSection config={{ ...config, ...overrides }} providers={providers} onChange={onChange} />);
+  render(<SubagentsSection config={{ ...config, ...overrides }} providers={providers} onChange={onChange} webFetchEnabled={webFetchEnabled} />);
   return { onChange };
 }
 
 describe("SubagentsSection", () => {
+  it("offers web_fetch to read-only agents, and says when Web Fetch is switched off", () => {
+    const webScout = { ...scout, tools: [...scout.tools, "web_fetch"] };
+    renderSection({ agents: [webScout, docs] });
+    fireEvent.click(screen.getByRole("button", { name: /scout/ }));
+    expect(screen.getByText("read, grep, find, ls, bash, web_fetch")).toBeInTheDocument();
+    expect(screen.queryByText(/Web Fetch is off/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /New agent/ }));
+    const chip = screen.getByRole("button", { name: "web_fetch" });
+    expect(chip).toBeEnabled();
+    fireEvent.click(chip);
+    expect(chip).toHaveAttribute("aria-pressed", "true");
+
+    cleanup();
+    renderSection({ agents: [webScout, docs] }, [provider], false);
+    fireEvent.click(screen.getByRole("button", { name: /scout/ }));
+    expect(screen.getByText(/Web Fetch is off in Settings › Packages/)).toBeInTheDocument();
+  });
+
   it("switches an agent off and saves the change at once", async () => {
     const { onChange } = renderSection();
     fireEvent.click(screen.getByRole("switch", { name: "Use scout" }));

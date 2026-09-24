@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 // Type-only: erased at build time, so Pi still loads solely through the dynamic import in initialize().
 import type { ResourceLoader } from "@earendil-works/pi-coding-agent";
-import { createBuiltinExtensions } from "./builtin/index.js";
+import { SWITCHABLE_BUILTIN_TOOLS, createBuiltinExtensions } from "./builtin/index.js";
 import type { BuiltinHost } from "./builtin/host.js";
 import { SUBAGENT_TOOL_NAME } from "./builtin/subagents/types.js";
 import { createModelRuntime, findModel, workerSettings } from "./model-runtime.js";
@@ -134,7 +134,7 @@ const builtinHost: BuiltinHost = {
   },
   childToolNames: () =>
     toolCatalog()
-      .filter((tool) => tool.source.kind === "builtin" && tool.available && !disabledTools.has(tool.name))
+      .filter((tool) => (tool.source.kind === "builtin" || SWITCHABLE_BUILTIN_TOOLS.has(tool.name)) && tool.available && !disabledTools.has(tool.name))
       .map((tool) => tool.name),
   runSubagent: (request) => {
     if (!subagentRunner) return Promise.reject(new Error("Worker is not initialized"));
@@ -458,15 +458,16 @@ function toolCatalog(): ToolCatalogEntry[] {
 // Every tool in the registry is active unless the user switched it off. A denylist keeps
 // tools contributed by a newly installed package on by default. Built-in extension tools are
 // exempt: the denylist is never offered for them and a disabled plan_mode_complete would
-// silently break Plan mode. The one built-in with its own switch — sub-agents — says which of
-// its tools must stay out while it is off.
+// silently break Plan mode. Two exceptions: web_fetch is switched off through this same
+// denylist (`SWITCHABLE_BUILTIN_TOOLS`, from its Built-ins card), and sub-agents, which has its
+// own setting, says which of its tools must stay out while it is off.
 function applyDisabledTools(): void {
   if (!session) return;
   const inactive = new Set(builtins.subagents.inactiveTools());
   session.setActiveToolsByName(
     toolCatalog()
       .filter((tool) => tool.available && !inactive.has(tool.name))
-      .filter((tool) => !disabledTools.has(tool.name) || tool.source.kind === "wackcode")
+      .filter((tool) => !disabledTools.has(tool.name) || (tool.source.kind === "wackcode" && !SWITCHABLE_BUILTIN_TOOLS.has(tool.name)))
       .map((tool) => tool.name)
   );
 }

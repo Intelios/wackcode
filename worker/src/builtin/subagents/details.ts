@@ -88,6 +88,8 @@ export function summarizeActivity(tool: string, args: unknown): SubagentActivity
       return { tool, subject: oneLine(input.pattern) };
     case "ls":
       return { tool, subject: oneLine(input.path) || "." };
+    case "web_fetch":
+      return { tool, subject: oneLine(input.url) };
     default:
       return { tool, subject: oneLine(input.path) };
   }

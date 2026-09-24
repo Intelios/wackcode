@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { api } from "../api";
 import { applyBuiltinModelSuggestion, mergeDiscoveredModels, modelIsReady, searchBuiltinModels } from "../model-utils";
-import { groupTools } from "../tool-utils";
+import { WEB_FETCH_TOOL_NAME, groupTools } from "../tool-utils";
 import type { ApiFormat, AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CustomProviderRecord, ModelRecord, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ThinkingLevel, ToolCatalogEntry } from "../types";
 import { Icon, type IconName } from "./Icons";
 import { PackagesSection, type PackageActions } from "./PackagesSection";
@@ -209,9 +209,16 @@ export function SettingsPage({
           <PackagesSection
             packages={packages}
             subagentsEnabled={subagents.enabled}
+            webFetchEnabled={!disabledTools.includes(WEB_FETCH_TOOL_NAME)}
             autoTitlesEnabled={autoTitle.enabled}
             autoTitlesConfigured={providers.some((provider) => provider.id === autoTitle.providerId && provider.connected && provider.models.some((model) => model.id === autoTitle.modelId && modelIsReady(model)))}
             onToggleSubagents={(enabled) => onSetSubagents({ ...subagents, enabled })}
+            // Web fetch rides the Tools denylist, so switching it applies live with no restart.
+            onToggleWebFetch={(enabled) => onSetDisabledTools(
+              enabled
+                ? disabledTools.filter((name) => name !== WEB_FETCH_TOOL_NAME)
+                : [...disabledTools.filter((name) => name !== WEB_FETCH_TOOL_NAME), WEB_FETCH_TOOL_NAME]
+            )}
             onToggleAutoTitles={(enabled) => onSetAutoTitle({ ...autoTitle, enabled })}
             onConfigureAutoTitles={() => setSection("auto_titles")}
             onConfigureSubagents={() => setSection("subagents")}
@@ -240,7 +247,7 @@ export function SettingsPage({
         )}
         {section === "prompts" && <PromptsSection config={prompts} onChange={onSetPrompts} />}
         {section === "subagents" && (
-          <SubagentsSection config={subagents} providers={providers} onChange={onSetSubagents} />
+          <SubagentsSection config={subagents} providers={providers} onChange={onSetSubagents} webFetchEnabled={!disabledTools.includes(WEB_FETCH_TOOL_NAME)} />
         )}
         {section === "auto_titles" && <AutoTitlesSection config={autoTitle} providers={providers} onChange={onSetAutoTitle} onOpenProviders={() => { setSelectedProviderId("new"); setSection("providers"); }} />}
       </main>

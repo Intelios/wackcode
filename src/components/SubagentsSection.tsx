@@ -20,6 +20,14 @@ interface Props {
   providers: ProviderRecord[];
   /** Saves the whole configuration; rejects with a user-facing message. */
   onChange: (config: SubagentConfig) => Promise<void>;
+  /** False while Web Fetch is switched off in Packages, which keeps web_fetch from every agent. */
+  webFetchEnabled?: boolean;
+}
+
+/** Shown under an agent's tools when it lists web_fetch but Web Fetch is switched off. */
+function WebFetchOffHint({ tools, webFetchEnabled }: { tools: string[]; webFetchEnabled: boolean }) {
+  if (webFetchEnabled || !tools.includes("web_fetch")) return null;
+  return <small className="subagent-hint">Web Fetch is off in Settings › Packages, so no sub-agent gets web_fetch.</small>;
 }
 
 const TRIGGER_OPTIONS = [
@@ -146,10 +154,11 @@ interface EditorProps {
   onSave: () => void;
   onCancel: () => void;
   onDelete?: () => void;
+  webFetchEnabled: boolean;
 }
 
 /** Name, description, instructions, tools and model of a custom agent. */
-function AgentEditor({ draft, providers, busy, isNew, onChange, onSave, onCancel, onDelete }: EditorProps) {
+function AgentEditor({ draft, providers, busy, isNew, onChange, onSave, onCancel, onDelete, webFetchEnabled }: EditorProps) {
   const toggleTool = (tool: string) =>
     onChange({ ...draft, tools: draft.tools.includes(tool) ? draft.tools.filter((item) => item !== tool) : [...draft.tools, tool] });
   const setReadOnly = (readOnly: boolean) =>
@@ -197,6 +206,7 @@ function AgentEditor({ draft, providers, busy, isNew, onChange, onSave, onCancel
             );
           })}
         </div>
+        <WebFetchOffHint tools={draft.tools} webFetchEnabled={webFetchEnabled} />
         <label className="subagent-inline-switch">
           <button
             type="button"
@@ -235,7 +245,7 @@ function AgentEditor({ draft, providers, busy, isNew, onChange, onSave, onCancel
  * Packages). Switches and model choices save at once; a custom agent's text is edited as a
  * draft and saved explicitly.
  */
-export function SubagentsSection({ config, providers, onChange }: Props) {
+export function SubagentsSection({ config, providers, onChange, webFetchEnabled = true }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [expanded, setExpanded] = useState<string>();
@@ -308,6 +318,7 @@ export function SubagentsSection({ config, providers, onChange }: Props) {
             providers={providers}
             busy={busy}
             isNew={false}
+            webFetchEnabled={webFetchEnabled}
             onChange={(draft) => setEditing({ key: agent.id, draft })}
             onSave={() => void saveDraft()}
             onCancel={() => setEditing(undefined)}
@@ -348,6 +359,7 @@ export function SubagentsSection({ config, providers, onChange }: Props) {
             <div className="subagent-tools-field">
               <span className="subagent-field-label">Tools</span>
               <div className="subagent-tool-list">{agent.tools.join(", ") || "None"}</div>
+              <WebFetchOffHint tools={agent.tools} webFetchEnabled={webFetchEnabled} />
             </div>
             <div className="subagent-prompt-field">
               <span className="subagent-field-label">Instructions</span>
@@ -436,6 +448,7 @@ export function SubagentsSection({ config, providers, onChange }: Props) {
             providers={providers}
             busy={busy}
             isNew
+            webFetchEnabled={webFetchEnabled}
             onChange={(draft) => setEditing({ key: "new", draft })}
             onSave={() => void saveDraft()}
             onCancel={() => { setEditing(undefined); setError(undefined); }}

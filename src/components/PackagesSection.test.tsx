@@ -169,6 +169,26 @@ describe("PackagesSection built-ins", () => {
     await waitFor(() => expect(onToggleSubagents).toHaveBeenLastCalledWith(false));
   });
 
+  it("shows Web Fetch on by default and lets it be switched off", async () => {
+    const onToggleWebFetch = vi.fn().mockResolvedValue(undefined);
+    renderSection([], { onToggleWebFetch });
+    const card = screen.getByText("Web Fetch").closest("article")!;
+    const toggle = within(card).getByRole("switch", { name: "Web Fetch" });
+    expect(toggle).toBeEnabled();
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    expect(within(card).getByText("On")).toBeInTheDocument();
+    expect(within(card).getByRole("switch", { name: "web_fetch" })).toHaveAttribute("aria-checked", "true");
+    expect(within(card).queryByRole("button", { name: /Configure/ })).not.toBeInTheDocument();
+    fireEvent.click(toggle);
+    await waitFor(() => expect(onToggleWebFetch).toHaveBeenCalledWith(false));
+
+    cleanup();
+    renderSection([], { webFetchEnabled: false, onToggleWebFetch });
+    expect(screen.getByRole("switch", { name: "Web Fetch" })).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(screen.getByRole("switch", { name: "Web Fetch" }));
+    await waitFor(() => expect(onToggleWebFetch).toHaveBeenLastCalledWith(true));
+  });
+
   it("still shows them alongside installed packages", () => {
     renderSection([installed]);
     expect(screen.getByRole("button", { name: "pi-web-access" })).toBeInTheDocument();

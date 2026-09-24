@@ -58,7 +58,8 @@ export interface BuiltinHost {
   publishPlanState(state: PlanState): void;
   /** Publish the todo list so the desktop can render the panel above the composer. */
   publishTodoState(state: TodoState): void;
-  /** Pi's own tools that are available here and that the user has not switched off. */
+  /** Tools a sub-agent could be given (Pi's own, plus `web_fetch`) that are available here and
+   *  that the user has not switched off. */
   childToolNames(): string[];
   /**
    * Run one sub-agent to completion in its own in-process session. Never rejects once the

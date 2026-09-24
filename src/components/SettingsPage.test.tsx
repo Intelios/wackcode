@@ -432,6 +432,20 @@ describe("SettingsPage sub-agents", () => {
     expect(screen.queryByRole("heading", { name: "How the agent uses sub-agents" })).not.toBeInTheDocument();
     expect(within(nav).getByRole("button", { name: /Packages/ })).toHaveClass("active");
   });
+
+  it("switches Web Fetch through the tool denylist, keeping the rest of it", async () => {
+    const { rerender, props, subagents } = renderPage(false);
+    props.onSetDisabledTools.mockResolvedValue(undefined);
+    rerender(<SettingsPage {...props} subagents={subagents} disabledTools={["bash"]} />);
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Settings sections" })).getByRole("button", { name: /Packages/ }));
+    fireEvent.click(await screen.findByRole("switch", { name: "Web Fetch" }));
+    await waitFor(() => expect(props.onSetDisabledTools).toHaveBeenCalledWith(["bash", "web_fetch"]));
+
+    rerender(<SettingsPage {...props} subagents={subagents} disabledTools={["bash", "web_fetch"]} />);
+    expect(screen.getByRole("switch", { name: "Web Fetch" })).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(screen.getByRole("switch", { name: "Web Fetch" }));
+    await waitFor(() => expect(props.onSetDisabledTools).toHaveBeenLastCalledWith(["bash"]));
+  });
 });
 
 describe("SettingsPage appearance section", () => {

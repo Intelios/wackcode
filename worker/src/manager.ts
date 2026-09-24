@@ -176,6 +176,9 @@ async function handle(command: ManagerCommand): Promise<void> {
       send({ type: "catalog", packages: await buildCatalog() });
     } else if (command.type === "install") {
       await packageManager.installAndPersist(command.source);
+      // Filtered before the catalogue is built, so no worker ever starts with the package's
+      // extensions switched on.
+      if (command.onlySkills) applyResourceFilters(command.source, { extensions: [], prompts: [], themes: [] });
       await settingsManager.flush();
       send({ type: "catalog", packages: await buildCatalog() });
     } else if (command.type === "remove") {

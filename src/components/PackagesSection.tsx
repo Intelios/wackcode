@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { PACKAGE_RESOURCE_KINDS, type PackageRecord, type PackageResourceKind, type PackageSearchResult } from "../types";
 import { Icon, type IconName } from "./Icons";
-import { PackageBrowser } from "./PackageBrowser";
+import { PackageBrowser, type BrowsePage } from "./PackageBrowser";
 import { TrustDialog } from "./TrustDialog";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 
@@ -99,7 +99,8 @@ const BUILTIN_EXTENSIONS: readonly BuiltinExtension[] = [
 export interface PackageActions {
   /** Re-reads the shared package store. The cached list can be stale if `pi` was used elsewhere. */
   onRefresh: () => Promise<void>;
-  onInstall: (source: string) => Promise<void>;
+  /** `skillsOnly`: Settings › Skills installs switch on only the package's skills. */
+  onInstall: (source: string, options?: { skillsOnly?: boolean }) => Promise<void>;
   /** Grant trust to a package already in the store that was never confirmed here. */
   onTrust: (source: string) => Promise<void>;
   onSearch: (query: string) => Promise<PackageSearchResult[]>;
@@ -139,6 +140,11 @@ export function PackagesSection({
   const [error, setError] = useState<string>();
   const [removing, setRemoving] = useState<PackageRecord>();
   const [loading, setLoading] = useState(true);
+  // npm's registry search answers one page, so there is never a "more".
+  const searchPage = useCallback(
+    (query: string): Promise<BrowsePage> => onSearch(query).then((results) => ({ results, hasMore: false })),
+    [onSearch]
+  );
 
   // The cached list is only as fresh as the last mutation, so reconcile with disk on open.
   // A failure here is reported but never blocks the rest of Settings.
@@ -196,7 +202,7 @@ export function PackagesSection({
         <PackageBrowser
           installed={new Set(packages.map((entry) => entry.source))}
           busy={busy}
-          onSearch={onSearch}
+          onSearch={searchPage}
           onInstall={(next) => setPendingTrust({ source: next, mode: "install" })}
         />
       ) : (

@@ -210,6 +210,163 @@ fn default_mcp_timeout() -> u64 {
     crate::mcp::DEFAULT_TIMEOUT_MS
 }
 
+/// Settings › Skills. The user's own skills are files in `~/.agents/skills`; this records only
+/// what the user switched: which other folders load, and which skills are off.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillsConfig {
+    /// Other tools' folders the user switched on, and folders the user added.
+    #[serde(default)]
+    pub folders: Vec<SkillFolderRecord>,
+    /// Skill files switched off, spelled exactly as a scan reports them.
+    #[serde(default)]
+    pub disabled: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillFolderRecord {
+    /// A known folder's id (`claude`, `codex`, `pi`, `opencode`) or `custom:<uuid>`.
+    pub id: String,
+    /// Added folders only: the absolute path the user picked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SkillFolderKind {
+    /// `~/.agents/skills`: always loads, and the only folder WackCode writes to.
+    Library,
+    /// Another tool's user-level folder, off until switched on.
+    Tool,
+    /// A folder the user added.
+    Custom,
+}
+
+/// Settings' list of every skill folder and every trusted package's skills. Runtime only.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillsOverview {
+    pub library_path: String,
+    pub folders: Vec<SkillFolderView>,
+    pub packages: Vec<SkillPackageView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillFolderView {
+    pub id: String,
+    pub label: String,
+    pub path: String,
+    /// `path` with the home folder written as `~`.
+    pub display_path: String,
+    pub kind: SkillFolderKind,
+    pub exists: bool,
+    pub enabled: bool,
+    pub skills: Vec<SkillEntry>,
+    pub diagnostics: Vec<SkillDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillPackageView {
+    pub source: String,
+    pub label: String,
+    pub skills: Vec<SkillEntry>,
+    pub diagnostics: Vec<SkillDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillEntry {
+    pub name: String,
+    pub description: String,
+    pub file_path: String,
+    pub base_dir: String,
+    /// `disable-model-invocation: true`: only `/skill:name` uses it.
+    pub manual: bool,
+    /// The skill's own switch (for a package skill, its resource's).
+    pub enabled: bool,
+    /// Inside `~/.agents/skills`, so WackCode may edit and delete it.
+    pub editable: bool,
+    /// Switched on, but a skill of the same name wins: that skill's folder or package.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shadowed_by: Option<String>,
+    /// Package skills: the resource the skill's switch toggles.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillDiagnostic {
+    /// `warning` or `error`, as Pi reports it.
+    pub kind: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+/// What the skill editor needs beyond the list: the instructions and the folder's other files.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillDocument {
+    pub body: String,
+    /// Paths relative to the skill's folder, `SKILL.md` itself left out.
+    pub files: Vec<String>,
+    pub files_truncated: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveSkillInput {
+    /// The skill's file when editing; absent to create one in `~/.agents/skills`.
+    #[serde(default)]
+    pub path: Option<String>,
+    pub name: String,
+    pub description: String,
+    #[serde(default)]
+    pub manual: bool,
+    #[serde(default)]
+    pub body: String,
+}
+
+/// The result of a change in Settings › Skills: the fresh list, and a note when part of the
+/// change was skipped (an import that found a name already taken, say).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillsChange {
+    pub overview: SkillsOverview,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchSkillPackagesInput {
+    #[serde(default)]
+    pub query: Option<String>,
+    /// `downloads`, `recent` or `name`.
+    #[serde(default)]
+    pub sort: Option<String>,
+    /// 1-based.
+    #[serde(default)]
+    pub page: Option<u32>,
+}
+
+/// One page of Settings › Skills › Browse.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillSearchPage {
+    pub results: Vec<PackageSearchResult>,
+    /// `pidev`, or `npm` when pi.dev could not be read and keyword search stood in.
+    pub source: String,
+    pub has_more: bool,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct McpConfig {
@@ -573,6 +730,8 @@ pub struct AppData {
     pub prompts: PromptConfig,
     #[serde(default)]
     pub mcp: McpConfig,
+    #[serde(default)]
+    pub skills: SkillsConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<WindowState>,
 }
@@ -593,6 +752,7 @@ impl Default for AppData {
             appearance: AppearanceConfig::default(),
             prompts: PromptConfig::default(),
             mcp: McpConfig::default(),
+            skills: SkillsConfig::default(),
             window: None,
         }
     }
@@ -835,6 +995,12 @@ pub struct PackageSearchResult {
     pub published_at: String,
     /// Which resource kinds the package declares, so the user knows what installing adds.
     pub declares: Vec<String>,
+    /// pi.dev results: the resource types its catalogue lists (`extension`, `skill`, …).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub types: Vec<String>,
+    /// pi.dev results: downloads in the last month.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub downloads: Option<u64>,
 }
 
 /// One answered question from a `questions` dialog. Mirrors `QuestionAnswer` in the worker
@@ -873,6 +1039,9 @@ pub struct InstallPackageInput {
     /// The user accepted the install warning. Without it the command refuses.
     #[serde(default)]
     pub trusted: bool,
+    /// Settings › Skills: switch on only the package's skills.
+    #[serde(default)]
+    pub skills_only: bool,
 }
 
 #[derive(Debug, Deserialize)]

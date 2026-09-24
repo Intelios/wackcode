@@ -1,6 +1,6 @@
 import type { SVGProps } from "react";
 
-export type IconName = "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "copy" | "archive" | "send" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "checklist" | "terminal" | "file" | "pencil" | "external" | "brain" | "search" | "wrench" | "question" | "image" | "close" | "rewind" | "agents" | "flame" | "palette" | "plug";
+export type IconName = "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "copy" | "archive" | "send" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "checklist" | "terminal" | "file" | "pencil" | "external" | "brain" | "search" | "wrench" | "question" | "image" | "close" | "rewind" | "agents" | "flame" | "palette" | "plug" | "book";
 
 const paths: Record<IconName, React.ReactNode> = {
   plus: <><path d="M12 5v14M5 12h14" /></>,
@@ -44,6 +44,7 @@ const paths: Record<IconName, React.ReactNode> = {
   question: <><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3" /><path d="M12 17h.01" /></>,
   palette: <><path d="M12 3a9 9 0 0 0 0 18c1.1 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-.9.8-1.7 1.8-1.7H17a4 4 0 0 0 4-4C21 6.6 17 3 12 3Z" /><circle cx="7.5" cy="11" r="1.2" /><circle cx="10" cy="7" r="1.2" /><circle cx="15" cy="7" r="1.2" /></>,
   plug: <><path d="M9 3v5M15 3v5" /><path d="M6 8h12v3a6 6 0 0 1-12 0z" /><path d="M12 17v4" /></>,
+  book: <><path d="M5 5a2 2 0 0 1 2-2h12v14H7a2 2 0 0 0-2 2z" /><path d="M5 19a2 2 0 0 0 2 2h12v-4" /><path d="M9 7.5h6" /></>,
   flame: <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5z" />
 };
 

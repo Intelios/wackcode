@@ -27,6 +27,7 @@ import { inspectInitAgentsResult, prepareInitAgents } from "./init-agents.js";
 import { RUN_TIMING_ENTRY_TYPE, RUN_TIMING_VERSION, resolveRunTimings, type ThinkingDurations } from "./run-timing.js";
 import { ThinkingClock, resolveThinkingDurations } from "./thinking-timing.js";
 import { expandTemplate } from "./slash.js";
+import { NO_USER_SKILLS, loadUserSkills, mergeSkills, skillsSignature } from "./user-skills.js";
 import {
   CHECKPOINT_ENTRY_TYPE,
   LEAVE_ENTRY_TYPE,
@@ -61,6 +62,7 @@ import {
   type ThinkingLevel,
   type TodoState,
   type TurnInfo,
+  type UserSkillsPayload,
   type ExtensionUIRequest,
   type ToolCatalogEntry,
   type WorkerCommand,
@@ -101,6 +103,10 @@ let disabledTools = new Set<string>();
 let subagentRunner: SubagentRunner | undefined;
 /** Aborts the wait for MCP servers at the start of a run, when the user presses Stop. */
 let mcpWait: AbortController | undefined;
+/** The user's own skill folders (Settings › Skills) and what they held at the last scan. */
+let userSkillsPayload: UserSkillsPayload | undefined;
+let userSkills = NO_USER_SKILLS;
+let userSkillsKey = skillsSignature(NO_USER_SKILLS);
 const pendingDialogs = new Map<string, (response: DialogResponse) => void>();
 
 interface DialogResponse {
@@ -890,15 +896,20 @@ async function prepareImages(images: ImageContent[] | undefined): Promise<ImageC
 }
 
 /**
- * Serve the user's custom persona (Settings → Prompts) in place of the loader's system prompt.
- * The wrapper is read on every system-prompt rebuild, so `set_prompts` applies on the next turn
- * without a respawn. The text deliberately never enters `DefaultResourceLoaderOptions.systemPrompt`:
- * the loader resolves that option as a file path when one exists on disk.
+ * Layer the app's live settings over the loader:
+ *
+ * - The user's custom persona (Settings → Prompts) replaces the loader's system prompt. The text
+ *   deliberately never enters `DefaultResourceLoaderOptions.systemPrompt`: the loader resolves
+ *   that option as a file path when one exists on disk.
+ * - The user's own skill folders (Settings › Skills) sit ahead of the package skills.
+ *
+ * Pi reads the wrapper on every system-prompt rebuild and for `/skill:name`, so `set_prompts` and
+ * `set_skills` apply on the next turn without a respawn.
  */
-function withCustomPersona(loader: ResourceLoader): ResourceLoader {
+function withAppLayers(loader: ResourceLoader): ResourceLoader {
   return {
     getExtensions: () => loader.getExtensions(),
-    getSkills: () => loader.getSkills(),
+    getSkills: () => mergeSkills(userSkills, loader.getSkills()),
     getPrompts: () => loader.getPrompts(),
     getThemes: () => loader.getThemes(),
     getAgentsFiles: () => loader.getAgentsFiles(),
@@ -909,6 +920,19 @@ function withCustomPersona(loader: ResourceLoader): ResourceLoader {
     extendResources: (paths) => loader.extendResources(paths),
     reload: (options) => loader.reload(options)
   };
+}
+
+/**
+ * Re-read the user's skill folders. True when what the model sees changed, so the caller
+ * rebuilds the system prompt; a skill's body is read on demand and never needs one.
+ */
+function refreshUserSkills(): boolean {
+  if (!piModule) return false;
+  userSkills = loadUserSkills(piModule, userSkillsPayload);
+  const key = skillsSignature(userSkills);
+  if (key === userSkillsKey) return false;
+  userSkillsKey = key;
+  return true;
 }
 
 async function initialize(command: InitCommand): Promise<void> {
@@ -944,6 +968,9 @@ async function initialize(command: InitCommand): Promise<void> {
   // Before any contract can be published: the plan-mode extension composes each contract from
   // the current overrides, and the restored session's reconcile runs right after creation.
   setPromptOverrides(command.prompts);
+  // Before the session exists, so its first system prompt already lists them.
+  userSkillsPayload = command.skills;
+  refreshUserSkills();
 
   let sessionStartEvent: { type: "session_start"; reason: "fork"; previousSessionFile: string } | undefined;
   let sessionManager: ReturnType<PiModule["SessionManager"]["create"]>;
@@ -993,7 +1020,7 @@ async function initialize(command: InitCommand): Promise<void> {
     excludeTools: UNSUPPORTED_TOOLS,
     sessionManager,
     settingsManager,
-    resourceLoader: withCustomPersona(resourceLoader),
+    resourceLoader: withAppLayers(resourceLoader),
     ...(sessionStartEvent ? { sessionStartEvent } : {})
   });
   session = created.session;
@@ -1188,6 +1215,8 @@ async function runPrompt(
     // Stopped while MCP servers were starting: the abort already reported the run idle, and
     // nothing of this prompt has been recorded.
     if (!stopRequested) {
+      // Skills added, edited or removed on disk since the last run apply from this message.
+      if (refreshUserSkills()) applyDisabledTools();
       recordCheckpoint(checkpoint);
       await session.prompt(text, { ...(prepared.length > 0 ? { images: prepared } : {}), expandPromptTemplates: !literal });
     }
@@ -1453,6 +1482,10 @@ async function handle(command: WorkerCommand): Promise<void> {
       builtins.mcp.configure(command.servers);
       applyDisabledTools();
       emitSnapshot();
+    } else if (command.type === "set_skills") {
+      // Queued like set_prompts, so a run never sees its skills change under it.
+      userSkillsPayload = command.skills;
+      if (refreshUserSkills()) applyDisabledTools();
     } else if (command.type === "shutdown") {
       await subagentRunner?.abortAll();
       if (!session.isIdle) await session.abort();

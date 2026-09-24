@@ -17,6 +17,13 @@ tauri-build = { version = "2", features = [] }
 chrono = { version = "0.4", features = ["serde"] }
 nix = { version = "0.30", features = ["signal", "process"] }
 objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSError",
+    "NSFileManager",
+    "NSString",
+    "NSURL",
+] }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSColor",
     "NSGlassEffectView",

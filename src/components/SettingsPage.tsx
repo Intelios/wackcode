@@ -7,6 +7,7 @@ import { Icon, type IconName } from "./Icons";
 import { McpSection, type McpActions } from "./McpSection";
 import { PackagesSection, type PackageActions } from "./PackagesSection";
 import { PromptsSection } from "./PromptsSection";
+import { SkillsSection, type SkillActions } from "./SkillsSection";
 import { SubagentsSection } from "./SubagentsSection";
 import { AppearanceSection } from "./AppearanceSection";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
@@ -15,10 +16,27 @@ import { Select } from "./ui/Select";
 import { Tooltip } from "./ui/Tooltip";
 
 const levels: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/** Settings › Skills talks to Rust directly, like the rest of this page; `api`'s functions are stable. */
+const SKILL_ACTIONS: SkillActions = {
+  onList: api.listSkills,
+  onRead: api.readSkill,
+  onSave: api.saveSkill,
+  onDelete: api.deleteSkill,
+  onSetEnabled: api.setSkillEnabled,
+  onSetFolderEnabled: api.setSkillFolderEnabled,
+  onAddFolder: api.addSkillFolder,
+  onRemoveFolder: api.removeSkillFolder,
+  onImport: api.importSkill,
+  onCopyToLibrary: api.copySkillToLibrary,
+  onReveal: api.revealPath,
+  onSearch: api.searchSkillPackages,
+  onDetails: api.packageDetails
+};
 let nextModelCardKey = 0;
 const newModelCardKeys = (count: number) => Array.from({ length: count }, () => ++nextModelCardKey);
 
-type SectionId = "providers" | "packages" | "tools" | "mcp" | "appearance" | "prompts" | "subagents";
+type SectionId = "providers" | "packages" | "skills" | "tools" | "mcp" | "appearance" | "prompts" | "subagents";
 
 interface Section {
   id: SectionId;
@@ -29,6 +47,7 @@ interface Section {
 const SECTIONS: Section[] = [
   { id: "providers", label: "Providers", icon: "key" },
   { id: "packages", label: "Packages", icon: "spark" },
+  { id: "skills", label: "Skills", icon: "book" },
   { id: "tools", label: "Tools", icon: "wrench" },
   { id: "mcp", label: "MCP servers", icon: "plug" },
   // Only listed while the built-in is switched on (Settings → Packages). Auto titles lives
@@ -234,6 +253,15 @@ export function SettingsPage({
             onRemove={onRemove}
             onUpdate={onUpdate}
             onSetResources={onSetResources}
+          />
+        )}
+        {section === "skills" && (
+          <SkillsSection
+            {...SKILL_ACTIONS}
+            packages={packages}
+            onInstallSkills={(source) => onInstall(source, { skillsOnly: true })}
+            onSetPackageSkills={(source, enabled) => onSetResources(source, "skills", enabled)}
+            onOpenPackages={() => setSection("packages")}
           />
         )}
         {section === "tools" && (

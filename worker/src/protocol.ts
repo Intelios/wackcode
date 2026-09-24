@@ -250,6 +250,64 @@ export interface McpToolInfo {
 /** Settings' "Test connection": `mcp-probe.js` reads `{ server }` and prints one of these. */
 export type McpProbeResult = { ok: true; tools: McpToolInfo[] } | { ok: false; error: string };
 
+/** One user skill folder (Settings › Skills), as an absolute path the host resolved. */
+export interface UserSkillRoot {
+  path: string;
+  /** The skill's source in the `/` menu, e.g. "Your skills" or "Claude Code". */
+  label: string;
+}
+
+/**
+ * The user's own skill folders: `~/.agents/skills` first, then each other folder the user
+ * switched on, in the order that decides a name clash. A project's own skill folders are never
+ * among them. Like the prompt overrides these stay out of the worker fingerprint: they arrive in
+ * `init` and are replaced live with `set_skills`.
+ */
+export interface UserSkillsPayload {
+  roots: UserSkillRoot[];
+  /** Skill files the user switched off, spelled exactly as a scan reports their `filePath`. */
+  disabled: string[];
+}
+
+/** Settings' skill list: `skills-scan.js` reads one of these and prints a `SkillScanResult`. */
+export interface SkillScanRequest {
+  /** Every folder Settings lists, switched on or not, in the worker's priority order. */
+  folders: Array<UserSkillRoot & { id: string; enabled: boolean }>;
+  /** Trusted packages' skill resources, in the order the worker's resource loader takes them. */
+  packages: Array<{ source: string; label: string; resources: Array<{ path: string; name: string; enabled: boolean }> }>;
+  disabled: string[];
+}
+
+export interface ScannedSkill {
+  name: string;
+  description: string;
+  filePath: string;
+  baseDir: string;
+  /** `disable-model-invocation: true`: only `/skill:name` uses it. */
+  manual: boolean;
+  /** Package skills: the package resource the skill came from, which its switch toggles. */
+  resourceName?: string;
+  /** Switched on, but a skill of the same name wins: that skill's folder or package label. */
+  shadowedBy?: string;
+}
+
+export interface ScannedDiagnostic {
+  type: "warning" | "error" | "collision";
+  message: string;
+  path?: string;
+}
+
+/** One folder's (by id) or one package's (by source) skills. */
+export interface ScannedGroup {
+  id: string;
+  skills: ScannedSkill[];
+  diagnostics: ScannedDiagnostic[];
+}
+
+export type SkillScanResult =
+  | { ok: true; folders: ScannedGroup[]; packages: ScannedGroup[] }
+  | { ok: false; error: string };
+
 export interface InitCommand {
   id: string;
   type: "init";
@@ -291,6 +349,8 @@ export interface InitCommand {
   prompts?: PromptOverrides;
   /** Enabled MCP servers. Nothing connects until the chat's first run. */
   mcp?: McpServerSpec[];
+  /** The user's own skill folders. Absent: none, only package skills load. */
+  skills?: UserSkillsPayload;
 }
 
 export interface WorkerResources {
@@ -385,6 +445,7 @@ export type WorkerCommand =
   | { id: string; type: "set_subagents"; subagents: SubagentRuntimeConfig | null }
   | { id: string; type: "set_prompts"; prompts: PromptOverrides }
   | { id: string; type: "set_mcp"; servers: McpServerSpec[] }
+  | { id: string; type: "set_skills"; skills: UserSkillsPayload }
   | {
       id: string;
       type: "extension_ui_response";

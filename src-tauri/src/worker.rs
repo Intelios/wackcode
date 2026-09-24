@@ -268,6 +268,8 @@ pub async fn ensure_worker_with(
         "prompts": prompts,
         // Enabled MCP servers with their header/env values. Live too, via set_mcp.
         "mcp": mcp_payload(app)?,
+        // The user's own skill folders (Settings › Skills). Live too, via set_skills.
+        "skills": skills_payload(app)?,
     });
     if options.wait_ready {
         request(app, &task.id, init, INIT_TIMEOUT).await.map(|_| ())
@@ -384,6 +386,21 @@ pub async fn broadcast_mcp(app: &AppHandle) -> Result<(), String> {
     broadcast(app, &json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "set_mcp", "servers": payload })).await
 }
 
+/// The `skills` value for `init` and `set_skills`: `~/.agents/skills` and the other folders the
+/// user switched on, as absolute paths, plus the skills switched off.
+pub fn skills_payload(app: &AppHandle) -> Result<Value, String> {
+    let home = crate::skills::home_dir(app)?;
+    let state = app.state::<MetadataState>();
+    let config = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?.skills.clone();
+    Ok(crate::skills::payload(&config, &home))
+}
+
+/// Push the skill folders to every running worker. Applied on the next turn; nothing restarts.
+pub async fn broadcast_skills(app: &AppHandle) -> Result<(), String> {
+    let payload = skills_payload(app)?;
+    broadcast(app, &json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "set_skills", "skills": payload })).await
+}
+
 pub async fn send(app: &AppHandle, task_id: &str, value: &Value) -> Result<(), String> {
     let worker = app.state::<WorkerState>().get(task_id)?
         .ok_or_else(|| "This task's Pi worker is not running".to_string())?;
@@ -435,6 +452,14 @@ pub(crate) fn mcp_probe_entry_path(app: &AppHandle) -> Result<PathBuf, String> {
         Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist/mcp-probe.js"))
     } else {
         Ok(app.path().resource_dir().map_err(|error| error.to_string())?.join("resources/worker/dist/mcp-probe.js"))
+    }
+}
+
+pub(crate) fn skills_scan_entry_path(app: &AppHandle) -> Result<PathBuf, String> {
+    if cfg!(debug_assertions) {
+        Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist/skills-scan.js"))
+    } else {
+        Ok(app.path().resource_dir().map_err(|error| error.to_string())?.join("resources/worker/dist/skills-scan.js"))
     }
 }
 
@@ -881,6 +906,20 @@ mod tests {
             fingerprint(&provider, "m", &before).unwrap(),
             fingerprint(&provider, "m", &before).unwrap()
         );
+    }
+
+    #[test]
+    fn skill_folders_reach_workers_live_and_never_restart_them() {
+        // The fingerprint has no room for the skill folders: switching one must not respawn a
+        // chat mid-run. They travel in `init` and `set_skills` instead.
+        let resources = resource_paths(&[]);
+        let fingerprint = fingerprint(&provider(), "m", &resources).unwrap();
+        let mut config = crate::models::SkillsConfig::default();
+        let before = crate::skills::payload(&config, std::path::Path::new("/Users/test"));
+        config.folders.push(crate::models::SkillFolderRecord { id: "claude".into(), path: None, enabled: true });
+        let after = crate::skills::payload(&config, std::path::Path::new("/Users/test"));
+        assert_ne!(before, after);
+        assert_eq!(fingerprint, super::fingerprint(&provider(), "m", &resources).unwrap());
     }
 
     #[test]

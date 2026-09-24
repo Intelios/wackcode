@@ -7,10 +7,11 @@ use crate::{
         PackageSearchResult, ProviderKind, ProviderRecord, ResendInput, RestoreCheckpointInput, RestoreResult,
         SaveProviderInput, SearchPackagesInput, SetPackageResourcesInput, SetTaskModeInput, SetToolConfigInput,
         SlashCommand, SubagentConfig, AutoTitleConfig, TaskMode, TaskRecord, TaskStatus, ToolConfig, WorkspaceFiles,
-        McpServerRecord, McpTestResult, SaveMcpServerInput,
+        McpServerRecord, McpTestResult, SaveMcpServerInput, SaveSkillInput, SearchSkillPackagesInput, SkillDocument,
+        SkillFolderKind, SkillFolderRecord, SkillSearchPage, SkillsChange, SkillsOverview,
     },
     storage::MetadataState,
-    worker::{self, WorkerOptions}, subagents, subscriptions,
+    worker::{self, WorkerOptions}, skills, subagents, subscriptions,
 };
 use chrono::Utc;
 use serde::Deserialize;
@@ -238,10 +239,13 @@ pub async fn search_packages(input: SearchPackagesInput) -> Result<Vec<PackageSe
         Some(query) => format!("keywords:pi-package {query}"),
         None => "keywords:pi-package".to_string(),
     };
+    npm_search(&text, input.from.unwrap_or(0)).await
+}
+
+async fn npm_search(text: &str, from: u32) -> Result<Vec<PackageSearchResult>, String> {
     let url = format!(
-        "{NPM_REGISTRY}/-/v1/search?text={}&size={SEARCH_PAGE_SIZE}&from={}",
-        urlencoding(&text),
-        input.from.unwrap_or(0)
+        "{NPM_REGISTRY}/-/v1/search?text={}&size={SEARCH_PAGE_SIZE}&from={from}",
+        urlencoding(text)
     );
     let response = reqwest::Client::new()
         .get(url)
@@ -271,8 +275,65 @@ fn search_result(package: &Value) -> Option<PackageSearchResult> {
         publisher: package.pointer("/publisher/username").and_then(Value::as_str).unwrap_or("").to_string(),
         published_at: package.get("date").and_then(Value::as_str).unwrap_or("").to_string(),
         declares: Vec::new(),
+        types: Vec::new(),
+        downloads: None,
         name,
     })
+}
+
+const PIDEV: &str = "https://pi.dev";
+const MAX_PIDEV_PAGE_BYTES: usize = 5_000_000;
+
+/// Settings › Skills › Browse: pi.dev's own skill filter, which knows each package's resource
+/// types. pi.dev has no API, so this reads its catalogue page (see `skills::parse_pidev`). It is
+/// contacted only while the user browses skills, and redirects are followed only within pi.dev.
+/// If the page can't be read, npm's keyword search stands in, and the result says so.
+#[tauri::command]
+pub async fn search_skill_packages(input: SearchSkillPackagesInput) -> Result<SkillSearchPage, String> {
+    let query = input.query.as_deref().map(str::trim).filter(|value| !value.is_empty()).map(|value| limit(value, 100));
+    let sort = match input.sort.as_deref() {
+        None | Some("downloads") => "downloads",
+        Some("recent") => "recent",
+        Some("name") => "name",
+        Some(_) => return Err("Unknown sort order.".into()),
+    };
+    let page = input.page.unwrap_or(1).clamp(1, 500);
+    let name = query.as_deref().map(|query| format!("&name={}", urlencoding(query))).unwrap_or_default();
+    let url = format!("{PIDEV}/packages?type=skill&sort={sort}&page={page}{name}");
+    match fetch_pidev(&url).await.and_then(|html| skills::parse_pidev(&html)) {
+        Ok(results) => Ok(SkillSearchPage { has_more: results.len() >= skills::PIDEV_PAGE_SIZE, results, source: "pidev".into() }),
+        Err(_) => {
+            let text = match query.as_deref() {
+                Some(query) => format!("keywords:pi-package keywords:skills {query}"),
+                None => "keywords:pi-package keywords:skills".to_string(),
+            };
+            let results = npm_search(&text, (page - 1) * SEARCH_PAGE_SIZE).await?;
+            Ok(SkillSearchPage { has_more: results.len() >= SEARCH_PAGE_SIZE as usize, results, source: "npm".into() })
+        }
+    }
+}
+
+async fn fetch_pidev(url: &str) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() < 5 && attempt.url().host_str() == Some("pi.dev") && attempt.url().scheme() == "https" {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
+        }))
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let response = client.get(url).send().await.map_err(|error| format!("Could not reach pi.dev: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("pi.dev answered {}.", response.status()));
+    }
+    let bytes = response.bytes().await.map_err(|error| format!("Could not read pi.dev: {error}"))?;
+    if bytes.len() > MAX_PIDEV_PAGE_BYTES {
+        return Err("pi.dev's page was unexpectedly large.".into());
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// Fetch one package's manifest so the user can see what installing it actually adds before
@@ -434,7 +495,7 @@ pub async fn install_package(
         return Err("Accept the installation warning before installing this package.".into());
     }
     refuse_while_busy(&state)?;
-    let catalog = worker::run_manager(&app, json!({ "type": "install", "source": source })).await?;
+    let catalog = worker::run_manager(&app, json!({ "type": "install", "source": source, "onlySkills": input.skills_only })).await?;
     sync_packages(&app, &state, catalog, Some(&source)).await
 }
 
@@ -694,6 +755,211 @@ fn update_mcp_server(state: &MetadataState, server_id: &str, change: impl FnOnce
         change(server);
         Ok(server.clone())
     })
+}
+
+// ---------------------------------------------------------------------------------------------
+// Skills (Settings › Skills). Every change reaches running chats through `set_skills` on their
+// next turn, and nothing restarts. Each answer is a fresh scan, so Settings shows what a chat
+// will load, warnings included.
+
+async fn skills_changed(app: &AppHandle, note: Option<String>) -> Result<SkillsChange, String> {
+    worker::broadcast_skills(app).await?;
+    Ok(SkillsChange { overview: skills::overview(app).await?, note })
+}
+
+#[tauri::command]
+pub async fn list_skills(app: AppHandle) -> Result<SkillsOverview, String> {
+    skills::overview(&app).await
+}
+
+/// A skill's instructions and files, from a listed folder or a trusted package only.
+#[tauri::command]
+pub async fn read_skill(app: AppHandle, state: State<'_, MetadataState>, path: String) -> Result<SkillDocument, String> {
+    let home = skills::home_dir(&app)?;
+    let roots: Vec<PathBuf> = {
+        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        skills::folders(&data.skills, &home).into_iter().map(|folder| folder.path)
+            .chain(data.packages.iter()
+                .filter(|package| !package.trusted_at.is_empty())
+                .filter_map(|package| package.installed_path.as_deref().map(PathBuf::from)))
+            .collect()
+    };
+    let file = skills::readable_skill(&path, &roots)?;
+    skills::read_document(&file)
+}
+
+/// Create a skill in `~/.agents/skills`, or rewrite one already there.
+#[tauri::command]
+pub async fn save_skill(app: AppHandle, state: State<'_, MetadataState>, input: SaveSkillInput) -> Result<SkillsChange, String> {
+    let name = skills::validate_name(&input.name)?;
+    let description = skills::validate_description(&input.description)?;
+    let body = skills::validate_body(&input.body)?;
+    let home = skills::home_dir(&app)?;
+    match input.path.as_deref() {
+        None => {
+            skills::create_skill(&home, &name, &description, input.manual, &body)?;
+        }
+        Some(path) => {
+            let saved = skills::update_skill(&home, path, &name, &description, input.manual, &body)?.display().to_string();
+            if saved != path {
+                // A renamed skill keeps its switch.
+                state.mutate(|data| {
+                    for entry in data.skills.disabled.iter_mut().filter(|entry| entry.as_str() == path) {
+                        *entry = saved.clone();
+                    }
+                    Ok(())
+                })?;
+            }
+        }
+    }
+    skills_changed(&app, None).await
+}
+
+/// Move a skill in `~/.agents/skills` to the Trash.
+#[tauri::command]
+pub async fn delete_skill(app: AppHandle, state: State<'_, MetadataState>, path: String) -> Result<SkillsChange, String> {
+    skills::delete_skill(&skills::home_dir(&app)?, &path)?;
+    state.mutate(|data| {
+        data.skills.disabled.retain(|entry| entry != &path);
+        Ok(())
+    })?;
+    skills_changed(&app, None).await
+}
+
+/// Switch one skill in a listed folder on or off. A package skill's switch is its resource's.
+#[tauri::command]
+pub async fn set_skill_enabled(app: AppHandle, state: State<'_, MetadataState>, path: String, enabled: bool) -> Result<SkillsChange, String> {
+    let file = skills::validate_skill_path(&path)?;
+    let home = skills::home_dir(&app)?;
+    state.mutate(|data| {
+        if !skills::folders(&data.skills, &home).iter().any(|folder| file.starts_with(&folder.path)) {
+            return Err("That skill isn't in one of your skill folders.".into());
+        }
+        skills::set_disabled(&mut data.skills, &path, enabled)
+    })?;
+    skills_changed(&app, None).await
+}
+
+#[tauri::command]
+pub async fn set_skill_folder_enabled(app: AppHandle, state: State<'_, MetadataState>, id: String, enabled: bool) -> Result<SkillsChange, String> {
+    state.mutate(|data| {
+        if skills::is_known_tool_folder(&id) {
+            match data.skills.folders.iter_mut().find(|record| record.id == id) {
+                Some(record) => record.enabled = enabled,
+                None => data.skills.folders.push(SkillFolderRecord { id: id.clone(), path: None, enabled }),
+            }
+            return Ok(());
+        }
+        let record = data.skills.folders.iter_mut()
+            .find(|record| record.id == id && record.path.is_some())
+            .ok_or_else(|| "That folder is no longer listed.".to_string())?;
+        record.enabled = enabled;
+        Ok(())
+    })?;
+    skills_changed(&app, None).await
+}
+
+/// Add a folder of skills the user picks in a native panel; it loads straight away. `None` when
+/// the panel was cancelled.
+#[tauri::command]
+pub async fn add_skill_folder(app: AppHandle, state: State<'_, MetadataState>) -> Result<Option<SkillsChange>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let Some(picked) = app.dialog().file().set_title("Choose a folder of skills").blocking_pick_folder() else {
+        return Ok(None);
+    };
+    let path = picked.into_path().map_err(|_| "That folder could not be read.".to_string())?;
+    let home = skills::home_dir(&app)?;
+    state.mutate(|data| {
+        skills::can_add_custom_folder(&data.skills)?;
+        skills::check_new_folder(&path, &data.skills, &home)?;
+        data.skills.folders.push(SkillFolderRecord { id: skills::custom_folder_id(), path: Some(path.display().to_string()), enabled: true });
+        Ok(())
+    })?;
+    Ok(Some(skills_changed(&app, None).await?))
+}
+
+/// Stop listing a folder the user added. Its files are left alone.
+#[tauri::command]
+pub async fn remove_skill_folder(app: AppHandle, state: State<'_, MetadataState>, id: String) -> Result<SkillsChange, String> {
+    state.mutate(|data| {
+        let index = data.skills.folders.iter()
+            .position(|record| record.id == id && record.path.is_some())
+            .ok_or_else(|| "That folder is no longer listed.".to_string())?;
+        let removed = data.skills.folders.remove(index);
+        if let Some(path) = removed.path {
+            data.skills.disabled.retain(|entry| !Path::new(entry).starts_with(&path));
+        }
+        Ok(())
+    })?;
+    skills_changed(&app, None).await
+}
+
+/// Copy skills the user picks (a folder of them, one skill's folder, or a `.md` file) into
+/// `~/.agents/skills`. The picked originals are never changed. `None` when cancelled.
+#[tauri::command]
+pub async fn import_skill(app: AppHandle, kind: String) -> Result<Option<SkillsChange>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let dialog = app.dialog().file().set_title("Import skills");
+    let picked = match kind.as_str() {
+        "folder" => dialog.blocking_pick_folder(),
+        "file" => dialog.add_filter("Markdown", &["md"]).blocking_pick_file(),
+        _ => return Err("Unknown import kind.".into()),
+    };
+    let Some(picked) = picked else { return Ok(None) };
+    let picked = picked.into_path().map_err(|_| "That could not be read.".to_string())?;
+    let home = skills::home_dir(&app)?;
+    // A SKILL.md stands for its whole folder; any other file is one skill on its own.
+    let (scan_path, only) = if picked.is_file() && picked.file_name().is_some_and(|name| name != "SKILL.md") {
+        (picked.clone(), Some(picked.clone()))
+    } else if picked.is_file() {
+        (picked.parent().map(Path::to_path_buf).unwrap_or_else(|| picked.clone()), None)
+    } else {
+        (picked.clone(), None)
+    };
+    let library = skills::library_dir(&home);
+    if skills::inside(&scan_path, &library).is_some() || scan_path.canonicalize().ok() == library.canonicalize().ok() {
+        return Err("That is already in Your skills.".into());
+    }
+    if scan_path == home || scan_path == Path::new("/") {
+        return Err("Pick the folder that holds your skills, not your whole home folder.".into());
+    }
+    let found: Vec<_> = skills::scan_for_import(&app, &scan_path).await?.into_iter()
+        .filter(|skill| only.as_deref().is_none_or(|file| Path::new(&skill.file_path) == file))
+        .collect();
+    if found.is_empty() {
+        return Err("No skills were found there. A skill is a folder with a SKILL.md file that has a name and a description.".into());
+    }
+    let mut skipped = Vec::new();
+    for skill in &found {
+        if let Err(error) = skills::copy_into_library(&home, &skill.name, Path::new(&skill.file_path), Path::new(&skill.base_dir)) {
+            skipped.push(error);
+        }
+    }
+    if skipped.len() == found.len() {
+        return Err(skipped.into_iter().take(3).collect::<Vec<_>>().join(" "));
+    }
+    let note = (!skipped.is_empty()).then(|| format!(
+        "Imported {} of {} skills. {}",
+        found.len() - skipped.len(),
+        found.len(),
+        skipped.into_iter().take(3).collect::<Vec<_>>().join(" ")
+    ));
+    Ok(Some(skills_changed(&app, note).await?))
+}
+
+/// Copy a skill from another folder or a package into `~/.agents/skills` to customise it. The
+/// copy has the same name, so it loads instead of the original.
+#[tauri::command]
+pub async fn copy_skill_to_library(app: AppHandle, path: String) -> Result<SkillsChange, String> {
+    let overview = skills::overview(&app).await?;
+    let skill = overview.folders.iter()
+        .filter(|folder| folder.kind != SkillFolderKind::Library)
+        .flat_map(|folder| folder.skills.iter())
+        .chain(overview.packages.iter().flat_map(|package| package.skills.iter()))
+        .find(|skill| skill.file_path == path)
+        .ok_or_else(|| "That skill is no longer there.".to_string())?;
+    skills::copy_into_library(&skills::home_dir(&app)?, &skill.name, Path::new(&skill.file_path), Path::new(&skill.base_dir))?;
+    skills_changed(&app, None).await
 }
 
 /// Tool changes take effect on the next agent turn, so running workers are updated in place

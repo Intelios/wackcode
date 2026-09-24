@@ -51,7 +51,13 @@ export interface ManagerInit {
 export type ManagerCommand =
   | ManagerInit
   | { id: string; type: "list" }
-  | { id: string; type: "install"; source: string }
+  | {
+      id: string;
+      type: "install";
+      source: string;
+      /** Settings › Skills: switch on only the package's skills; its code and the rest start off. */
+      onlySkills?: boolean;
+    }
   | { id: string; type: "remove"; source: string }
   | { id: string; type: "update"; source?: string }
   | {

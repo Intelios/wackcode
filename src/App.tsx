@@ -842,7 +842,10 @@ export default function App() {
     setData((current) => ({ ...current, packages }));
   }, []);
 
-  const installPackage = useCallback((source: string) => runPackageAction(() => api.installPackage(source, true)), [runPackageAction]);
+  const installPackage = useCallback(
+    (source: string, options?: { skillsOnly?: boolean }) => runPackageAction(() => api.installPackage(source, true, options?.skillsOnly ?? false)),
+    [runPackageAction]
+  );
   const trustPackage = useCallback((source: string) => runPackageAction(() => api.trustPackage(source)), [runPackageAction]);
   const removePackage = useCallback((source: string) => runPackageAction(() => api.removePackage(source)), [runPackageAction]);
   const updatePackage = useCallback((source: string) => runPackageAction(() => api.updatePackages(source)), [runPackageAction]);

@@ -1871,6 +1871,124 @@ describe("session tree", () => {
   });
 });
 
+describe("skills (Settings › Skills)", () => {
+  async function request(worker: WorkerHarness, command: Record<string, unknown>): Promise<Output> {
+    const id = crypto.randomUUID();
+    worker.send({ id, ...command });
+    return worker.waitFor((output) => output.type === "response" && output.id === id);
+  }
+
+  async function skills(worker: WorkerHarness): Promise<Array<{ name: string; sourceLabel: string }>> {
+    const listed = await request(worker, { type: "list_commands" });
+    return (listed.result as unknown as Array<{ name: string; source: string; sourceLabel: string }>)
+      .filter((entry) => entry.source === "skill")
+      .map(({ name, sourceLabel }) => ({ name, sourceLabel }));
+  }
+
+  async function run(worker: WorkerHarness, runId: string, message = "Go."): Promise<void> {
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId, message });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === runId);
+  }
+
+  // Every system and developer message in a request, joined: a mid-chat change arrives as a
+  // later system message patching the sections, after the original prompt.
+  const systemTextOf = (source: MockProvider, index: number) =>
+    ((source.requests[index].body.messages ?? []) as { role?: string; content?: unknown }[])
+      .filter((message) => message.role === "system" || message.role === "developer")
+      .map((message) => typeof message.content === "string"
+        ? message.content
+        : Array.isArray(message.content) ? message.content.map((part) => (part as { text?: string }).text ?? "").join("") : "")
+      .join("\n---\n");
+
+  async function writeSkill(root: string, name: string, description: string): Promise<string> {
+    await mkdir(join(root, name), { recursive: true });
+    const file = join(root, name, "SKILL.md");
+    await writeFile(file, `---\nname: ${name}\ndescription: ${description}\n---\nFollow ${name}.\n`);
+    return file;
+  }
+
+  it("loads the user's folders in order, labels them, and applies set_skills live", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-skills-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const home = await mkdtemp(join(tmpdir(), "wackcode-skills-home-"));
+    cleanup.push(() => rm(home, { recursive: true, force: true }));
+    const library = join(home, ".agents", "skills");
+    const claude = join(home, ".claude", "skills");
+    const mine = await writeSkill(library, "alpha", "MINE-ALPHA-DESCRIPTION");
+    await writeSkill(claude, "alpha", "CLAUDE-ALPHA-DESCRIPTION");
+    await writeSkill(claude, "beta", "CLAUDE-BETA-DESCRIPTION");
+    const roots = [{ path: library, label: "Your skills" }, { path: claude, label: "Claude Code" }];
+    const { worker } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "skills-task", undefined, undefined, undefined, undefined, undefined,
+      { skills: { roots, disabled: [] } }
+    );
+    cleanup.push(() => worker.shutdown());
+
+    expect(await skills(worker)).toEqual([{ name: "skill:alpha", sourceLabel: "Your skills" }, { name: "skill:beta", sourceLabel: "Claude Code" }]);
+    await run(worker, "run-1");
+    const first = systemTextOf(provider, 0);
+    expect(first).toContain("MINE-ALPHA-DESCRIPTION");
+    expect(first).toContain("CLAUDE-BETA-DESCRIPTION");
+    expect(first).not.toContain("CLAUDE-ALPHA-DESCRIPTION");
+
+    // Switching the user's alpha off lets Claude Code's alpha load instead, on the next turn.
+    expect((await request(worker, { type: "set_skills", skills: { roots, disabled: [mine] } })).success).toBe(true);
+    expect(await skills(worker)).toEqual([{ name: "skill:alpha", sourceLabel: "Claude Code" }, { name: "skill:beta", sourceLabel: "Claude Code" }]);
+    await run(worker, "run-2");
+    const after = systemTextOf(provider, provider.requests.length - 1);
+    expect(after.lastIndexOf("CLAUDE-ALPHA-DESCRIPTION")).toBeGreaterThan(after.lastIndexOf("MINE-ALPHA-DESCRIPTION"));
+
+    // Switching Claude Code's folder off takes all of its skills away.
+    expect((await request(worker, { type: "set_skills", skills: { roots: roots.slice(0, 1), disabled: [] } })).success).toBe(true);
+    expect(await skills(worker)).toEqual([{ name: "skill:alpha", sourceLabel: "Your skills" }]);
+  });
+
+  it("picks up a skill added on disk at the next run", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-skills-disk-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const library = join(workspace, "home-skills");
+    const { worker } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "skills-disk-task", undefined, undefined, undefined, undefined, undefined,
+      { skills: { roots: [{ path: library, label: "Your skills" }], disabled: [] } }
+    );
+    cleanup.push(() => worker.shutdown());
+    await run(worker, "run-1");
+    expect(systemTextOf(provider, 0)).not.toContain("LATE-SKILL-DESCRIPTION");
+
+    await writeSkill(library, "late", "LATE-SKILL-DESCRIPTION");
+    await run(worker, "run-2");
+    expect(systemTextOf(provider, provider.requests.length - 1)).toContain("LATE-SKILL-DESCRIPTION");
+    expect(await skills(worker)).toEqual([{ name: "skill:late", sourceLabel: "Your skills" }]);
+  });
+
+  it("never loads a project's own skill folders", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-skills-project-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    await writeSkill(join(workspace, ".agents", "skills"), "project-agents", "PROJECT-AGENTS-DESCRIPTION");
+    await writeSkill(join(workspace, ".pi", "skills"), "project-pi", "PROJECT-PI-DESCRIPTION");
+    await writeSkill(join(workspace, ".claude", "skills"), "project-claude", "PROJECT-CLAUDE-DESCRIPTION");
+    const library = join(workspace, "..", `${workspace.split("/").pop()}-library`);
+    cleanup.push(() => rm(library, { recursive: true, force: true }));
+    await writeSkill(library, "mine", "MINE-DESCRIPTION");
+    const { worker } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "skills-project-task", undefined, undefined, undefined, undefined, undefined,
+      { skills: { roots: [{ path: library, label: "Your skills" }], disabled: [] } }
+    );
+    cleanup.push(() => worker.shutdown());
+    expect(await skills(worker)).toEqual([{ name: "skill:mine", sourceLabel: "Your skills" }]);
+    await run(worker, "run-1");
+    const prompt = systemTextOf(provider, 0);
+    expect(prompt).toContain("MINE-DESCRIPTION");
+    expect(prompt).not.toContain("PROJECT-");
+  });
+});
+
 describe("sub-agents", () => {
   const scout = {
     name: "scout",

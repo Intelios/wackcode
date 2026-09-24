@@ -217,7 +217,21 @@ export interface PackageSearchResult {
   publishedAt: string;
   /** Resource kinds the package's `pi` manifest declares. Empty until details are fetched. */
   declares: string[];
+  /** pi.dev results: the resource types its catalogue lists ("extension", "skill", …). */
+  types?: string[];
+  /** pi.dev results: downloads in the last month. */
+  downloads?: number;
 }
+
+/** One page of Settings › Skills › Browse. */
+export interface SkillSearchPage {
+  results: PackageSearchResult[];
+  /** "npm" when pi.dev could not be read and npm's keyword search stood in. */
+  source: "pidev" | "npm";
+  hasMore: boolean;
+}
+
+export type SkillSearchSort = "downloads" | "recent" | "name";
 
 /** Where a tool came from, so Settings can group and attribute it. */
 export interface ToolSource {
@@ -282,6 +296,95 @@ export interface McpServerRecord {
 
 export interface McpConfig {
   servers: McpServerRecord[];
+}
+
+/**
+ * Settings › Skills, as saved. The user's own skills are files in `~/.agents/skills`; this keeps
+ * only which other folders load and which skills are switched off. Mirrors models.rs.
+ */
+export interface SkillsConfig {
+  folders: SkillFolderRecord[];
+  disabled: string[];
+}
+
+export interface SkillFolderRecord {
+  /** A known folder's id (`claude`, `codex`, `pi`, `opencode`) or `custom:<uuid>`. */
+  id: string;
+  path?: string;
+  enabled: boolean;
+}
+
+/** "library" is `~/.agents/skills`: always on, and the only folder WackCode writes to. */
+export type SkillFolderKind = "library" | "tool" | "custom";
+
+export interface SkillEntry {
+  name: string;
+  description: string;
+  filePath: string;
+  baseDir: string;
+  /** `disable-model-invocation: true`: only `/skill:name` uses it. */
+  manual: boolean;
+  enabled: boolean;
+  /** In `~/.agents/skills`, so it can be edited and deleted here. */
+  editable: boolean;
+  /** Switched on, but a skill of the same name wins: that skill's folder or package. */
+  shadowedBy?: string;
+  /** Package skills: the resource its switch toggles. */
+  resourceName?: string;
+}
+
+export interface SkillDiagnostic {
+  kind: "warning" | "error";
+  message: string;
+  path?: string;
+}
+
+export interface SkillFolderView {
+  id: string;
+  label: string;
+  path: string;
+  displayPath: string;
+  kind: SkillFolderKind;
+  exists: boolean;
+  enabled: boolean;
+  skills: SkillEntry[];
+  diagnostics: SkillDiagnostic[];
+}
+
+export interface SkillPackageView {
+  source: string;
+  label: string;
+  skills: SkillEntry[];
+  diagnostics: SkillDiagnostic[];
+}
+
+/** Every skill folder and every trusted package's skills, from a fresh scan. Runtime only. */
+export interface SkillsOverview {
+  libraryPath: string;
+  folders: SkillFolderView[];
+  packages: SkillPackageView[];
+}
+
+/** A change's result: the fresh list, and a note when part of it was skipped. */
+export interface SkillsChange {
+  overview: SkillsOverview;
+  note?: string;
+}
+
+export interface SkillDocument {
+  body: string;
+  /** Relative to the skill's folder, `SKILL.md` left out. */
+  files: string[];
+  filesTruncated: boolean;
+}
+
+export interface SaveSkillInput {
+  /** The skill's file when editing; absent to create one. */
+  path?: string;
+  name: string;
+  description: string;
+  manual: boolean;
+  body: string;
 }
 
 /** A header or environment variable as the editor sends it. A blank value keeps the saved one. */
@@ -446,6 +549,7 @@ export interface AppData {
   appearance: AppearanceConfig;
   prompts: PromptConfig;
   mcp: McpConfig;
+  skills?: SkillsConfig;
   window?: WindowState | null;
 }
 

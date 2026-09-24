@@ -173,13 +173,14 @@ describe("SettingsPage sidebar navigation", () => {
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
     const buttons = Array.from(nav.querySelectorAll("button")).map((btn) => btn.textContent?.trim());
 
-    // Expected order: Providers -> Entrim AI -> Test -> New connection -> Packages -> Tools -> Appearance -> Prompts
+    // Expected order: Providers -> Entrim AI -> Test -> New connection -> Packages -> Skills -> Tools -> Appearance -> Prompts
     expect(buttons).toEqual([
       "Providers",
       "Entrim AI",
       "Test",
       "New connection",
       "Packages",
+      "Skills",
       "Tools",
       "Appearance",
       "Prompts"

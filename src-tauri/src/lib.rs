@@ -8,6 +8,7 @@ mod mcp;
 mod models;
 mod secrets;
 mod shell_env;
+mod skills;
 mod storage;
 mod subagents;
 mod subscriptions;
@@ -83,6 +84,17 @@ pub fn run() {
             commands::set_mcp_server_enabled,
             commands::set_mcp_server_tools,
             commands::test_mcp_server,
+            commands::list_skills,
+            commands::read_skill,
+            commands::save_skill,
+            commands::delete_skill,
+            commands::set_skill_enabled,
+            commands::set_skill_folder_enabled,
+            commands::add_skill_folder,
+            commands::remove_skill_folder,
+            commands::import_skill,
+            commands::copy_skill_to_library,
+            commands::search_skill_packages,
             commands::list_packages,
             commands::refresh_packages,
             commands::install_package,

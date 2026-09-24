@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -87,6 +87,21 @@ afterEach(async () => {
 });
 
 describe("Pi package manager process", () => {
+  it("installs only a package's skills when Settings › Skills asks, leaving its code off", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wackcode-manager-skills-"));
+    cleanup.push(() => rm(root, { recursive: true, force: true }));
+    const piDir = join(root, "pi");
+    await mkdir(piDir, { recursive: true });
+    const fixture = await writeFixture(root);
+
+    const manager = new ManagerHarness();
+    cleanup.push(() => manager.shutdown());
+    await manager.run({ type: "init", piDir });
+    const installed = await manager.run({ type: "install", source: fixture, onlySkills: true });
+    expect(installed[0].extensions.map((resource) => resource.enabled)).toEqual([false, false]);
+    expect(installed[0].skills.map((resource) => [resource.name, resource.enabled])).toEqual([["skills/review.md", true]]);
+  });
+
   it("installs a local package, reports its resources, and applies per-resource toggles", async () => {
     const root = await mkdtemp(join(tmpdir(), "wackcode-manager-"));
     const piDir = join(root, "pi");

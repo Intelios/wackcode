@@ -2,8 +2,9 @@ import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode }
 import { api } from "../api";
 import { applyBuiltinModelSuggestion, mergeDiscoveredModels, modelIsReady, searchBuiltinModels } from "../model-utils";
 import { WEB_FETCH_TOOL_NAME, groupTools } from "../tool-utils";
-import type { ApiFormat, AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CustomProviderRecord, ModelRecord, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ThinkingLevel, ToolCatalogEntry } from "../types";
+import type { ApiFormat, AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CustomProviderRecord, McpConfig, ModelRecord, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ThinkingLevel, ToolCatalogEntry } from "../types";
 import { Icon, type IconName } from "./Icons";
+import { McpSection, type McpActions } from "./McpSection";
 import { PackagesSection, type PackageActions } from "./PackagesSection";
 import { PromptsSection } from "./PromptsSection";
 import { SubagentsSection } from "./SubagentsSection";
@@ -18,7 +19,7 @@ const levels: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhi
 let nextModelCardKey = 0;
 const newModelCardKeys = (count: number) => Array.from({ length: count }, () => ++nextModelCardKey);
 
-type SectionId = "providers" | "packages" | "tools" | "appearance" | "prompts" | "subagents" | "auto_titles";
+type SectionId = "providers" | "packages" | "tools" | "mcp" | "appearance" | "prompts" | "subagents" | "auto_titles";
 
 interface Section {
   id: SectionId;
@@ -30,6 +31,7 @@ const SECTIONS: Section[] = [
   { id: "providers", label: "Providers", icon: "key" },
   { id: "packages", label: "Packages", icon: "spark" },
   { id: "tools", label: "Tools", icon: "wrench" },
+  { id: "mcp", label: "MCP servers", icon: "plug" },
   // Only listed while the built-in is switched on (Settings → Packages).
   { id: "subagents", label: "Sub-agents", icon: "agents" },
   { id: "auto_titles", label: "Auto titles", icon: "spark" },
@@ -64,17 +66,20 @@ interface Props extends PackageActions {
   onRemoveBackgroundImage: () => Promise<void>;
   prompts: PromptConfig;
   onSetPrompts: (config: PromptConfig) => Promise<void>;
+  mcp?: McpConfig;
+  /** Settings › MCP servers is listed once these are wired. */
+  mcpActions?: McpActions;
 }
 
 export function SettingsPage({
   providers, packages, toolCatalog, disabledTools, appDataPath,
   onClose, onSave, onDelete, onConnectSubscription, onSignOutSubscription, connectedSubscriptionId, onSetDisabledTools,
-  subagents, onSetSubagents, autoTitle, onSetAutoTitle, appearance, glassSupported, onSetAppearance, onPreviewAppearance, backgroundImageUrl, onChooseBackgroundImage, onRemoveBackgroundImage, prompts, onSetPrompts, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
+  subagents, onSetSubagents, autoTitle, onSetAutoTitle, appearance, glassSupported, onSetAppearance, onPreviewAppearance, backgroundImageUrl, onChooseBackgroundImage, onRemoveBackgroundImage, prompts, onSetPrompts, mcp, mcpActions, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
 }: Props) {
   const [chosenSection, setSection] = useState<SectionId>("providers");
   // Switching sub-agents off while its page is open lands on Packages, where the switch is.
   const section: SectionId = chosenSection === "subagents" && !subagents.enabled ? "packages" : chosenSection;
-  const sections = SECTIONS.filter((item) => item.id !== "subagents" || subagents.enabled);
+  const sections = SECTIONS.filter((item) => (item.id !== "subagents" || subagents.enabled) && (item.id !== "mcp" || mcpActions));
   const [selectedProviderId, setSelectedProviderId] = useState(providers[0]?.id ?? "new");
   const [builtinModels, setBuiltinModels] = useState<BuiltinModelSuggestion[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(true);
@@ -222,6 +227,7 @@ export function SettingsPage({
             onToggleAutoTitles={(enabled) => onSetAutoTitle({ ...autoTitle, enabled })}
             onConfigureAutoTitles={() => setSection("auto_titles")}
             onConfigureSubagents={() => setSection("subagents")}
+            onConfigureMcp={mcpActions ? () => setSection("mcp") : undefined}
             onRefresh={onRefresh}
             onInstall={onInstall}
             onTrust={onTrust}
@@ -246,6 +252,7 @@ export function SettingsPage({
           />
         )}
         {section === "prompts" && <PromptsSection config={prompts} onChange={onSetPrompts} />}
+        {section === "mcp" && mcpActions && <McpSection servers={mcp?.servers ?? []} {...mcpActions} />}
         {section === "subagents" && (
           <SubagentsSection config={subagents} providers={providers} onChange={onSetSubagents} webFetchEnabled={!disabledTools.includes(WEB_FETCH_TOOL_NAME)} />
         )}

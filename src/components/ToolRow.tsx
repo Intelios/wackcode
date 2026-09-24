@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { NormalizedBlock } from "../types";
-import { summarizeTool } from "../tool-utils";
+import { mcpToolParts, summarizeTool } from "../tool-utils";
 import { Icon } from "./Icons";
 
 const TOOL_ICONS: Record<string, "file" | "pencil" | "terminal" | "search" | "question" | "brain" | "checklist" | "agents"> = {
@@ -85,7 +85,7 @@ export function ToolRow({ call, result, liveText, running }: ToolRowProps) {
   return (
     <div className={`tool-row ${open ? "open" : ""} ${failed ? "error" : ""}`}>
       <button type="button" className="tool-row-head" onClick={() => expandable && setOpen((value) => !value)} disabled={!expandable} aria-expanded={open}>
-        <Icon name={TOOL_ICONS[call.toolName ?? ""] ?? "terminal"} className="tool-row-icon" />
+        <Icon name={TOOL_ICONS[call.toolName ?? ""] ?? (mcpToolParts(call.toolName ?? "") ? "plug" : "terminal")} className="tool-row-icon" />
         <span className="tool-row-verb">{pending ? summary.activeVerb : summary.doneVerb}</span>
         {summary.subject && <code className="tool-row-subject" title={summary.subject}>{summary.subject}</code>}
         {(summary.additions || summary.deletions) ? (

@@ -49,7 +49,13 @@ export interface PlanModeController {
   setMode(mode: TaskMode): PlanState;
 }
 
-export function createPlanModeExtension(host: BuiltinHost) {
+/** How Plan mode tells MCP tools apart: they may run while planning only when marked read-only. */
+export interface PlanModeMcpTools {
+  owns(toolName: string): boolean;
+  isReadOnly(toolName: string): boolean;
+}
+
+export function createPlanModeExtension(host: BuiltinHost, mcpTools?: PlanModeMcpTools) {
   let pi: ExtensionAPI | undefined;
   /** The planning variant in force, or undefined in Build mode. */
   let active: PlanVariant | undefined;
@@ -168,6 +174,14 @@ export function createPlanModeExtension(host: BuiltinHost) {
           : undefined;
       }
       if (helper) return undefined;
+
+      // MCP tools come from servers the user added. One the server marks read-only
+      // (`readOnlyHint`) may help with planning; any other could change something.
+      if (mcpTools?.owns(event.toolName)) {
+        return mcpTools.isReadOnly(event.toolName)
+          ? undefined
+          : { block: true, reason: `Plan mode blocks '${event.toolName}': its MCP server doesn't mark it read-only.` };
+      }
 
       const tool = pi!.getAllTools().find((candidate) => candidate.name === event.toolName);
       if (!tool) {

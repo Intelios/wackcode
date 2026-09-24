@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { deflateSync } from "node:zlib";
 import { tmpdir } from "node:os";
@@ -309,7 +309,9 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
     response.end("data: [DONE]\n\n");
     return;
   }
-  if (!hasToolResult) {
+  // "mcp:" prompts call their tool once per prompt, so one chat can make several calls.
+  const answeredSinceUser = messages.slice(messages.map((message) => message.role).lastIndexOf("user") + 1).some((message) => message.role === "tool");
+  if (lastUserText.startsWith("mcp: ") ? !answeredSinceUser : !hasToolResult) {
     const toolCall = (name: string, args: Record<string, unknown>) => ({
       index: 0, id: `call-${suffix}`, type: "function",
       function: { name, arguments: JSON.stringify(args) }
@@ -332,6 +334,9 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
         ? [toolCall("todo", { action: "create", subject: "Ship the thing" })]
       : lastUserText.startsWith("fetch:")
         ? [toolCall("web_fetch", { url: lastUserText.slice("fetch:".length).trim() })]
+      // "mcp: <tool name> <JSON arguments>"
+      : lastUserText.startsWith("mcp: ")
+        ? [toolCall(lastUserText.slice(5).split(" ")[0], JSON.parse(lastUserText.slice(5).split(" ").slice(1).join(" ") || "{}"))]
         : lastUserText.startsWith("stream tool")
           ? [toolCall("bash", { command: "printf 'first line\\n'; sleep 0.3; printf 'second line\\n'" })]
         : lastUserText.startsWith("subagent single")
@@ -2084,5 +2089,155 @@ describe("sub-agents", () => {
     await worker.waitFor((output) => emitted(output) && subagentResult(worker) !== undefined);
     expect(subagentResult(worker)?.details.results[0].status).toBe("aborted");
     expect(worker.child.exitCode).toBeNull();
+  });
+});
+
+describe("MCP servers", () => {
+  const MOCK_MCP_SERVER = resolve("../scripts/mock-mcp-server.mjs");
+  const ENV_SECRET = "mcp-env-secret-1234";
+
+  function stdioServer(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "mcp-mock", name: "Mock", slug: "mock", transport: "stdio", timeoutMs: 10_000,
+      command: process.execPath, args: [MOCK_MCP_SERVER], env: { MOCK_MCP_SECRET: ENV_SECRET }, disabledTools: [],
+      ...overrides
+    };
+  }
+
+  async function startHttpServer(token: string): Promise<string> {
+    const child = spawn(process.execPath, [MOCK_MCP_SERVER, "--http", "0", "--require-auth", token], { stdio: ["ignore", "pipe", "pipe"] });
+    cleanup.push(async () => { child.kill(); });
+    const line = await new Promise<string>((resolveLine) => createInterface({ input: child.stdout }).once("line", resolveLine));
+    return /(http:\/\/\S+\/mcp)/.exec(line)![1];
+  }
+
+  function offeredTools(request: { body: Record<string, unknown> }): string[] {
+    return ((request.body.tools ?? []) as Array<{ function: { name: string } }>).map((tool) => tool.function.name);
+  }
+
+  function toolResult(request: { body: Record<string, unknown> }): string {
+    const message = (request.body.messages as Array<{ role?: string; content?: unknown }>).findLast((entry) => entry.role === "tool");
+    return typeof message?.content === "string" ? message.content : JSON.stringify(message?.content);
+  }
+
+  /** Send a prompt and wait for its run to end; returns the index of its first provider request. */
+  async function runPrompt(worker: WorkerHarness, provider: MockProvider, message: string, requests = 2): Promise<number> {
+    const before = provider.requests.length;
+    const runId = crypto.randomUUID();
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId, message });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === runId && output.state === "idle" && provider.requests.length >= before + requests);
+    return before;
+  }
+
+  async function start(taskId: string, servers: unknown[], mode?: TaskMode) {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), `wackcode-${taskId}-`));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker, ready } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, taskId, undefined, undefined, undefined, mode, undefined, { mcp: servers }
+    );
+    cleanup.push(() => worker.shutdown());
+    return { provider, workspace, worker, ready };
+  }
+
+  it("starts a stdio server at the first run, offers its tools, and gives it its environment in the workspace", async () => {
+    const { provider, workspace, worker, ready } = await start("mcp-stdio", [stdioServer()]);
+    // Opening a chat starts nothing.
+    expect(ready.snapshot?.tools?.some((tool) => tool.name.startsWith("mcp__"))).toBe(false);
+
+    const first = await runPrompt(worker, provider, "mcp: mcp__mock__whoami {}");
+    expect(offeredTools(provider.requests[first])).toEqual(expect.arrayContaining(["mcp__mock__echo", "mcp__mock__peek", "mcp__mock__whoami"]));
+    expect(JSON.parse(toolResult(provider.requests[first + 1]))).toEqual({ authorization: null, secret: ENV_SECRET, cwd: await realpath(workspace) });
+    expect(worker.outputs.some((output) => output.type === "activity" && output.event === "mcp_connect_start")).toBe(true);
+    expect(worker.outputs.some((output) => output.type === "activity" && output.event === "mcp_connect_end")).toBe(true);
+    const tool = worker.view?.tools?.find((entry) => entry.name === "mcp__mock__echo");
+    expect(tool?.source).toMatchObject({ kind: "mcp", serverId: "mcp-mock" });
+    expect(tool?.description).toContain("(MCP server \"Mock\")");
+
+    // An error result reaches the model as a failed tool call, and the next run reuses the connection.
+    const second = await runPrompt(worker, provider, "mcp: mcp__mock__fail {}");
+    expect(toolResult(provider.requests[second + 1])).toContain("The mock tool failed on purpose.");
+    expect(worker.outputs.filter((output) => output.type === "activity" && output.event === "mcp_connect_start")).toHaveLength(1);
+    expect(worker.outputs.some((output) => output.type === "worker_error")).toBe(false);
+  });
+
+  it("switches a single tool, then the whole server, off live", async () => {
+    const { provider, worker } = await start("mcp-live", [stdioServer()]);
+    await runPrompt(worker, provider, "mcp: mcp__mock__peek {}");
+
+    const after = (mark: number) => (output: Output) => worker.outputs.indexOf(output) >= mark && output.type === "snapshot";
+    let mark = worker.outputs.length;
+    worker.send({ id: crypto.randomUUID(), type: "set_mcp", servers: [stdioServer({ disabledTools: ["echo"] })] });
+    const switched = await worker.waitFor(after(mark));
+    expect(switched.view?.activeTools).toContain("mcp__mock__peek");
+    expect(switched.view?.activeTools).not.toContain("mcp__mock__echo");
+    const refused = await runPrompt(worker, provider, "mcp: mcp__mock__echo {\"text\":\"hi\"}");
+    expect(offeredTools(provider.requests[refused])).not.toContain("mcp__mock__echo");
+
+    mark = worker.outputs.length;
+    worker.send({ id: crypto.randomUUID(), type: "set_mcp", servers: [] });
+    const removed = await worker.waitFor(after(mark));
+    expect(removed.view?.activeTools?.some((name) => name.startsWith("mcp__"))).toBe(false);
+    const plain = await runPrompt(worker, provider, "Plain message.", 1);
+    expect(offeredTools(provider.requests[plain]).some((name) => name.startsWith("mcp__"))).toBe(false);
+  });
+
+  it("sends an HTTP server its headers, and a Streamable HTTP and an SSE server both work", async () => {
+    const url = await startHttpServer("http-token-5678");
+    const headers = { Authorization: "Bearer http-token-5678" };
+    const { provider, worker } = await start("mcp-http", [
+      { id: "mcp-http", name: "Remote", slug: "remote", transport: "http", timeoutMs: 10_000, url, headers, disabledTools: [] },
+      { id: "mcp-sse", name: "Legacy", slug: "legacy", transport: "sse", timeoutMs: 10_000, url: url.replace(/\/mcp$/, "/sse"), headers, disabledTools: [] }
+    ]);
+    const first = await runPrompt(worker, provider, "mcp: mcp__remote__whoami {}");
+    expect(JSON.parse(toolResult(provider.requests[first + 1])).authorization).toBe("Bearer http-token-5678");
+    const second = await runPrompt(worker, provider, "mcp: mcp__legacy__echo {\"text\":\"over sse\"}");
+    expect(toolResult(provider.requests[second + 1])).toContain("over sse");
+  });
+
+  it("times out a tool that never answers, and Plan mode allows only tools the server marks read-only", async () => {
+    const { provider, worker } = await start("mcp-plan", [stdioServer({ timeoutMs: 1_000 })]);
+    const hung = await runPrompt(worker, provider, "mcp: mcp__mock__hang {}");
+    expect(toolResult(provider.requests[hung + 1])).toContain("did not respond within 1000 ms");
+
+    worker.send({ id: crypto.randomUUID(), type: "set_mode", mode: "plan" });
+    await worker.waitFor((output) => output.type === "plan_state" && output.mode === "plan");
+    const peek = await runPrompt(worker, provider, "mcp: mcp__mock__peek {}");
+    expect(toolResult(provider.requests[peek + 1])).toContain("peeked");
+    const echo = await runPrompt(worker, provider, "mcp: mcp__mock__echo {\"text\":\"hi\"}");
+    expect(toolResult(provider.requests[echo + 1])).toContain("its MCP server doesn't mark it read-only");
+  });
+
+  it("reports a server that can't start once, without holding up later runs or leaking its secrets", async () => {
+    const { provider, worker } = await start("mcp-broken", [
+      stdioServer({ command: "wackcode-no-such-command", env: { TOKEN: "broken-secret-9876" } }),
+      { id: "mcp-refused", name: "Refused", slug: "refused", transport: "http", timeoutMs: 5_000, url: await startHttpServer("right-token"), headers: { Authorization: "Bearer wrong-token-4321" }, disabledTools: [] }
+    ]);
+    await runPrompt(worker, provider, "Hello.", 1);
+    const notices = () => worker.outputs.filter((output) => output.type === "extension_notice" && output.level === "warning");
+    await worker.waitFor(() => notices().length === 2);
+    const text = notices().map((output) => output.message).join("\n");
+    expect(text).toContain("MCP server \"Mock\" isn't available: Command not found: wackcode-no-such-command.");
+    expect(text).toContain("MCP server \"Refused\" isn't available: The server refused the request (HTTP 401).");
+    expect(text).not.toContain("wrong-token-4321");
+
+    const started = Date.now();
+    await runPrompt(worker, provider, "Hello again.", 1);
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(notices()).toHaveLength(2);
+  });
+
+  it("stops the run cleanly while a server is still starting", async () => {
+    const silent = stdioServer({ args: ["-e", "setInterval(() => {}, 1000)"], timeoutMs: 60_000 });
+    const { provider, worker } = await start("mcp-stop", [silent]);
+    const runId = crypto.randomUUID();
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId, message: "Hello." });
+    await worker.waitFor((output) => output.type === "activity" && output.event === "mcp_connect_start");
+    worker.send({ id: crypto.randomUUID(), type: "abort" });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === runId && output.state === "idle", 5_000);
+    await worker.waitFor((output) => output.type === "activity" && output.event === "mcp_connect_end", 5_000);
+    expect(provider.requests).toHaveLength(0);
+    expect(worker.outputs.some((output) => output.type === "worker_error" || output.type === "extension_notice")).toBe(false);
   });
 });

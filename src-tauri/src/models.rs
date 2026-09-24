@@ -125,6 +125,9 @@ pub struct ToolSource {
     pub package_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// The MCP server's id when `kind` is "mcp".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_id: Option<String>,
 }
 
 /// One tool the agent can be offered. Cached from the last worker snapshot so the Tools
@@ -144,6 +147,112 @@ pub struct ToolCatalogEntry {
 
 fn default_true() -> bool {
     true
+}
+
+/// How WackCode reaches an MCP server.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum McpTransport {
+    #[default]
+    Stdio,
+    Http,
+    Sse,
+}
+
+/// One tool an MCP server offers, as its last "Test connection" found it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct McpToolInfo {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// The server marks it read-only (`readOnlyHint`), so Plan mode lets it through.
+    #[serde(default)]
+    pub read_only: bool,
+}
+
+/// One MCP server from Settings › MCP servers. Header and environment variable values are not
+/// here: only their names. The values (often tokens) live in `secrets.json` (`mcp::secret_key`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerRecord {
+    pub id: String,
+    pub name: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub transport: McpTransport,
+    #[serde(default = "default_mcp_timeout")]
+    pub timeout_ms: u64,
+    /// stdio: the program and its arguments.
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// http and sse: the endpoint.
+    #[serde(default)]
+    pub url: String,
+    /// Names of the headers sent to an http or sse server.
+    #[serde(default)]
+    pub headers: Vec<String>,
+    /// Names of the environment variables a stdio server gets.
+    #[serde(default)]
+    pub env: Vec<String>,
+    /// The server's own tool names the user switched off.
+    #[serde(default)]
+    pub disabled_tools: Vec<String>,
+    /// The server's tools as of the last successful "Test connection".
+    #[serde(default)]
+    pub tools: Vec<McpToolInfo>,
+}
+
+fn default_mcp_timeout() -> u64 {
+    crate::mcp::DEFAULT_TIMEOUT_MS
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct McpConfig {
+    #[serde(default)]
+    pub servers: Vec<McpServerRecord>,
+}
+
+/// A header or environment variable as the editor sends it. A blank value keeps the saved one.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpSecretInput {
+    pub name: String,
+    #[serde(default)]
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveMcpServerInput {
+    pub id: Option<String>,
+    pub name: String,
+    pub transport: McpTransport,
+    pub timeout_ms: u64,
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub headers: Vec<McpSecretInput>,
+    #[serde(default)]
+    pub env: Vec<McpSecretInput>,
+}
+
+/// What "Test connection" found, with the server as saved afterwards.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpTestResult {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub server: McpServerRecord,
 }
 
 /// Tools the user has switched off. A denylist, so a tool contributed by a newly
@@ -439,6 +548,8 @@ pub struct AppData {
     pub appearance: AppearanceConfig,
     #[serde(default)]
     pub prompts: PromptConfig,
+    #[serde(default)]
+    pub mcp: McpConfig,
 }
 
 impl Default for AppData {
@@ -455,6 +566,7 @@ impl Default for AppData {
             auto_title: AutoTitleConfig::default(),
             appearance: AppearanceConfig::default(),
             prompts: PromptConfig::default(),
+            mcp: McpConfig::default(),
         }
     }
 }

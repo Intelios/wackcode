@@ -99,6 +99,8 @@ let compacting = false;
 let commandCatalog: Array<{ item: SlashCommand; invocation: string; templateContent?: string; skillFile?: string; skillBaseDir?: string }> = [];
 let disabledTools = new Set<string>();
 let subagentRunner: SubagentRunner | undefined;
+/** Aborts the wait for MCP servers at the start of a run, when the user presses Stop. */
+let mcpWait: AbortController | undefined;
 const pendingDialogs = new Map<string, (response: DialogResponse) => void>();
 
 interface DialogResponse {
@@ -142,7 +144,9 @@ const builtinHost: BuiltinHost = {
       throw new Error(safeError(error));
     });
   },
-  redact: (text) => redactCredentials(text)
+  redact: (text) => redactCredentials(text),
+  notice: (message, level) => notice(safeError(message), level),
+  workspace: () => workspacePath
 };
 const builtins = createBuiltinExtensions(builtinHost);
 
@@ -439,6 +443,8 @@ function toolCatalog(): ToolCatalogEntry[] {
     // Inline factories are WackCode's own built-in extensions, e.g. ask_user_question,
     // plan_mode_complete, and todo. They are neither Pi builtins nor user-installed packages.
     const wackcode = origin === "inline";
+    // MCP tools are registered by the inline MCP built-in, but belong to the user's servers.
+    const mcpServer = wackcode ? builtins.mcp.serverOf(tool.name) : undefined;
     const binary = TOOL_BINARIES[tool.name];
     const available = !binary || hasBinary(binary);
     return {
@@ -446,9 +452,11 @@ function toolCatalog(): ToolCatalogEntry[] {
       description: tool.description ?? "",
       source: builtin
         ? { kind: "builtin" as const }
-        : wackcode
-          ? { kind: "wackcode" as const }
-          : { kind: "package" as const, path: info?.path },
+        : mcpServer
+          ? { kind: "mcp" as const, serverId: mcpServer }
+          : wackcode
+            ? { kind: "wackcode" as const }
+            : { kind: "package" as const, path: info?.path },
       available,
       unavailableReason: available ? undefined : `Requires ${binary}, which is not installed`
     };
@@ -460,14 +468,15 @@ function toolCatalog(): ToolCatalogEntry[] {
 // exempt: the denylist is never offered for them and a disabled plan_mode_complete would
 // silently break Plan mode. Two exceptions: web_fetch is switched off through this same
 // denylist (`SWITCHABLE_BUILTIN_TOOLS`, from its Built-ins card), and sub-agents, which has its
-// own setting, says which of its tools must stay out while it is off.
+// own setting, says which of its tools must stay out while it is off. MCP tools have their own
+// switches too (Settings › MCP servers), and stay out while their server is off or unreachable.
 function applyDisabledTools(): void {
   if (!session) return;
-  const inactive = new Set(builtins.subagents.inactiveTools());
+  const inactive = new Set([...builtins.subagents.inactiveTools(), ...builtins.mcp.inactiveTools()]);
   session.setActiveToolsByName(
     toolCatalog()
       .filter((tool) => tool.available && !inactive.has(tool.name))
-      .filter((tool) => !disabledTools.has(tool.name) || (tool.source.kind === "wackcode" && !SWITCHABLE_BUILTIN_TOOLS.has(tool.name)))
+      .filter((tool) => !disabledTools.has(tool.name) || tool.source.kind === "mcp" || (tool.source.kind === "wackcode" && !SWITCHABLE_BUILTIN_TOOLS.has(tool.name)))
       .map((tool) => tool.name)
   );
 }
@@ -931,6 +940,7 @@ async function initialize(command: InitCommand): Promise<void> {
     safeError
   });
   applySubagents(command.subagents ?? null);
+  builtins.mcp.configure(command.mcp ?? []);
   // Before any contract can be published: the plan-mode extension composes each contract from
   // the current overrides, and the restored session's reconcile runs right after creation.
   setPromptOverrides(command.prompts);
@@ -1174,8 +1184,13 @@ async function runPrompt(
   response(commandId, true);
   try {
     const prepared = await prepareImages(images);
-    recordCheckpoint(checkpoint);
-    await session.prompt(text, { ...(prepared.length > 0 ? { images: prepared } : {}), expandPromptTemplates: !literal });
+    await prepareMcpServers();
+    // Stopped while MCP servers were starting: the abort already reported the run idle, and
+    // nothing of this prompt has been recorded.
+    if (!stopRequested) {
+      recordCheckpoint(checkpoint);
+      await session.prompt(text, { ...(prepared.length > 0 ? { images: prepared } : {}), expandPromptTemplates: !literal });
+    }
     const lastAssistant = [...session.messages].reverse().find((message) => message.role === "assistant");
     outcome = stopRequested ? "stopped" : lastAssistant?.stopReason === "error" || lastAssistant?.stopReason === "aborted" ? "failed" : "completed";
     // Pi settles a run before `prompt` resolves. Still active here means no run started at all
@@ -1195,6 +1210,31 @@ async function runPrompt(
   stopRequested = false;
   emitBoundary();
   return outcome;
+}
+
+/**
+ * Connect the chat's MCP servers before the model is asked anything, so their tools are in the
+ * very first request. Runs inside the command queue, so tools never change mid-run. The chat
+ * shows "Starting MCP servers…" while anything connects; Stop ends the wait.
+ */
+async function prepareMcpServers(): Promise<void> {
+  if (!taskId || stopRequested) return;
+  const id = taskId;
+  mcpWait = new AbortController();
+  let connecting = false;
+  try {
+    const changed = await builtins.mcp.prepare(mcpWait.signal, () => {
+      connecting = true;
+      send({ type: "activity", taskId: id, event: "mcp_connect_start" });
+    });
+    if (changed) {
+      applyDisabledTools();
+      emitSnapshot();
+    }
+  } finally {
+    mcpWait = undefined;
+    if (connecting) send({ type: "activity", taskId: id, event: "mcp_connect_end" });
+  }
 }
 
 /**
@@ -1341,6 +1381,7 @@ async function handle(command: WorkerCommand): Promise<void> {
       activeTitleAuth = undefined;
       stopRequested = true;
       cancelPendingDialogs();
+      mcpWait?.abort();
       if (compacting) {
         session.abortCompaction();
         send({ type: "run_state", taskId, state: "stopping" });
@@ -1395,10 +1436,17 @@ async function handle(command: WorkerCommand): Promise<void> {
       // wrapper; the plan-mode contract picks the new body up on its next reconcile.
       setPromptOverrides(command.prompts);
       applyDisabledTools();
+    } else if (command.type === "set_mcp") {
+      // Queued, so a server never disappears under a running call. Servers that were removed,
+      // switched off or changed disconnect now; anything new connects at the next run.
+      builtins.mcp.configure(command.servers);
+      applyDisabledTools();
+      emitSnapshot();
     } else if (command.type === "shutdown") {
       await subagentRunner?.abortAll();
       if (!session.isIdle) await session.abort();
       session.dispose();
+      await closeMcpServers();
       response(command.id, true);
       process.exit(0);
     }
@@ -1414,6 +1462,14 @@ async function handle(command: WorkerCommand): Promise<void> {
       send({ type: "run_state", taskId, runId: command.runId, state: "idle" });
     }
   }
+}
+
+/**
+ * Let stdio MCP servers exit cleanly before the worker does. Bounded: the host's `killpg` ends
+ * anything still running in the worker's process group anyway.
+ */
+function closeMcpServers(): Promise<void> {
+  return Promise.race([builtins.mcp.closeAll(), new Promise<void>((resolve) => setTimeout(resolve, 2_000))]);
 }
 
 /** Commands the host sends with `worker::request` and whose failures it reports itself. */
@@ -1433,6 +1489,7 @@ function redactCredentials(text: string): string {
     secrets.push(...extra.apiKeys);
     stored.push(...extra.stored);
   }
+  secrets.push(...builtins.mcp.credentials());
   if (piModule) {
     for (const { providerId, authPath } of stored) {
       try {
@@ -1488,6 +1545,7 @@ process.on("SIGTERM", () => {
       await subagentRunner?.abortAll();
       if (session && !session.isIdle) await session.abort();
       session?.dispose();
+      await closeMcpServers();
     } finally {
       process.exit(0);
     }

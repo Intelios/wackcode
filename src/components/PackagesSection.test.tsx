@@ -119,6 +119,15 @@ describe("PackagesSection", () => {
 });
 
 describe("PackagesSection built-ins", () => {
+  it("lists MCP as always on, with a way to its servers", () => {
+    const onConfigureMcp = vi.fn();
+    renderSection([], { onConfigureMcp });
+    const card = screen.getByRole("switch", { name: "MCP servers" }).closest("article")!;
+    expect(within(card).getByText("Always on")).toBeInTheDocument();
+    fireEvent.click(within(card).getByRole("button", { name: /Configure/ }));
+    expect(onConfigureMcp).toHaveBeenCalledOnce();
+  });
+
   it("requires model setup before the automatic titles switch can be used", async () => {
     const onConfigureAutoTitles = vi.fn();
     const onToggleAutoTitles = vi.fn().mockResolvedValue(undefined);

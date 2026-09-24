@@ -8,6 +8,8 @@ import type {
   CheckpointRef,
   GitChanges,
   ImageContent,
+  McpServerRecord,
+  McpTestResult,
   NavigateTaskResult,
   PackageRecord,
   PackageSearchResult,
@@ -16,6 +18,7 @@ import type {
   ProviderRecord,
   QuestionAnswer,
   RestoreResult,
+  SaveMcpServerInput,
   SaveProviderInput,
   SlashCommand,
   SubagentConfig,
@@ -48,6 +51,13 @@ export const api = {
   setSubagentConfig: (input: SubagentConfig) => invoke<SubagentConfig>("set_subagent_config", { input }),
   setAutoTitleConfig: (input: AutoTitleConfig) => invoke<AutoTitleConfig>("set_auto_title_config", { input }),
   setPromptConfig: (input: PromptConfig) => invoke<PromptConfig>("set_prompt_config", { input }),
+  saveMcpServer: (input: SaveMcpServerInput) => invoke<McpServerRecord>("save_mcp_server", { input }),
+  deleteMcpServer: (serverId: string) => invoke<void>("delete_mcp_server", { serverId }),
+  setMcpServerEnabled: (serverId: string, enabled: boolean) =>
+    invoke<McpServerRecord>("set_mcp_server_enabled", { serverId, enabled }),
+  setMcpServerTools: (serverId: string, disabledTools: string[]) =>
+    invoke<McpServerRecord>("set_mcp_server_tools", { serverId, disabledTools }),
+  testMcpServer: (serverId: string) => invoke<McpTestResult>("test_mcp_server", { serverId }),
   listPackages: () => invoke<PackageRecord[]>("list_packages"),
   searchPackages: (query: string, from = 0) =>
     invoke<PackageSearchResult[]>("search_packages", { input: { query, from } }),

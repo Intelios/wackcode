@@ -19,21 +19,26 @@ impl SecretStore {
         Ok(Self { path, keys: Mutex::new(keys) })
     }
 
+    /// A connection's API key. Its error is the sentence the user sees when a chat needs the key.
     pub fn get(&self, provider_id: &str) -> Result<String, String> {
-        self.keys.lock().map_err(|_| "Credential lock was poisoned".to_string())?
-            .get(provider_id).cloned()
+        self.get_optional(provider_id)?
             .ok_or_else(|| "Add an API key for this connection in Settings".to_string())
     }
 
-    pub fn set(&self, provider_id: &str, api_key: &str) -> Result<(), String> {
+    /// Any stored value by id: a connection's API key, or an MCP server's `mcp:<id>` entry.
+    pub fn get_optional(&self, id: &str) -> Result<Option<String>, String> {
+        Ok(self.keys.lock().map_err(|_| "Credential lock was poisoned".to_string())?.get(id).cloned())
+    }
+
+    pub fn set(&self, id: &str, value: &str) -> Result<(), String> {
         let mut keys = self.keys.lock().map_err(|_| "Credential lock was poisoned".to_string())?;
-        keys.insert(provider_id.to_string(), api_key.to_string());
+        keys.insert(id.to_string(), value.to_string());
         self.save(&keys)
     }
 
-    pub fn remove(&self, provider_id: &str) -> Result<(), String> {
+    pub fn remove(&self, id: &str) -> Result<(), String> {
         let mut keys = self.keys.lock().map_err(|_| "Credential lock was poisoned".to_string())?;
-        if keys.remove(provider_id).is_some() { self.save(&keys)?; }
+        if keys.remove(id).is_some() { self.save(&keys)?; }
         Ok(())
     }
 

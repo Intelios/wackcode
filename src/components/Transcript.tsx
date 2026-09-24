@@ -292,6 +292,7 @@ function activityLabel(activity?: string): string {
   if (!activity) return "Working…";
   if (activity.startsWith("tool_execution")) return "";
   if (activity.startsWith("compaction")) return "Compacting context…";
+  if (activity === "mcp_connect_start") return "Starting MCP servers…";
   if (activity.startsWith("auto_retry") || activity.startsWith("summarization_retry")) return "Retrying…";
   return "Working…";
 }

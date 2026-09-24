@@ -68,4 +68,8 @@ export interface BuiltinHost {
   runSubagent(request: SubagentRunRequest): Promise<SubagentOutcome>;
   /** Remove any credential the worker holds from text a child produced. */
   redact(text: string): string;
+  /** Show a short message in the chat (redacted by the worker). */
+  notice(message: string, level: "info" | "warning" | "error"): void;
+  /** The chat's workspace folder, once the worker is initialized. */
+  workspace(): string | undefined;
 }

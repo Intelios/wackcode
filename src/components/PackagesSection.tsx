@@ -16,7 +16,7 @@ interface BuiltinExtension {
   name: string;
   description: string;
   tools: readonly string[];
-  kind?: "subagents" | "auto_titles" | "web_fetch";
+  kind?: "subagents" | "auto_titles" | "web_fetch" | "mcp";
 }
 
 /**
@@ -59,6 +59,13 @@ const BUILTIN_EXTENSIONS: readonly BuiltinExtension[] = [
     kind: "web_fetch"
   },
   {
+    name: "MCP servers",
+    description:
+      "Gives the agent the tools of the MCP servers you add: local commands (stdio) or remote servers over HTTP or SSE, each with its own switch. Servers start when a chat sends its first message.",
+    tools: [],
+    kind: "mcp"
+  },
+  {
     name: "Auto chat titles",
     description: "Give new chats a short title from their first message. Uses one extra model request per chat; you choose the model.",
     tools: [],
@@ -91,13 +98,15 @@ interface Props extends PackageActions {
   onConfigureAutoTitles?: () => void;
   /** Opens Settings → Sub-agents. */
   onConfigureSubagents?: () => void;
+  /** Opens Settings → MCP servers. */
+  onConfigureMcp?: () => void;
 }
 
 type Tab = "installed" | "browse";
 
 export function PackagesSection({
   packages, subagentsEnabled = false, webFetchEnabled = true, autoTitlesEnabled = false, autoTitlesConfigured = false,
-  onToggleSubagents, onToggleWebFetch, onToggleAutoTitles, onConfigureSubagents, onConfigureAutoTitles,
+  onToggleSubagents, onToggleWebFetch, onToggleAutoTitles, onConfigureSubagents, onConfigureAutoTitles, onConfigureMcp,
   onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
 }: Props) {
   const [tab, setTab] = useState<Tab>("installed");
@@ -221,7 +230,7 @@ export function PackagesSection({
       <div className="section-heading-row builtin-heading">
         <div>
           <h3>Built-In</h3>
-          <p>Compiled into WackCode — you don&rsquo;t need a package for these. Sub-agents, Web Fetch and Auto chat titles are optional.</p>
+          <p>Compiled into WackCode — you don&rsquo;t need a package for these. Sub-agents, Web Fetch and Auto chat titles are optional, and MCP does nothing until you add a server.</p>
         </div>
       </div>
       {BUILTIN_EXTENSIONS.map((extension) => (
@@ -237,7 +246,7 @@ export function PackagesSection({
             : extension.kind === "auto_titles" && onToggleAutoTitles
             ? (enabled) => void run(() => onToggleAutoTitles(enabled)).catch(() => undefined)
             : undefined}
-          onConfigure={extension.kind === "subagents" ? onConfigureSubagents : extension.kind === "auto_titles" ? onConfigureAutoTitles : undefined}
+          onConfigure={extension.kind === "subagents" ? onConfigureSubagents : extension.kind === "auto_titles" ? onConfigureAutoTitles : extension.kind === "mcp" ? onConfigureMcp : undefined}
           toggleDisabled={extension.kind === "auto_titles" && !autoTitlesConfigured && !autoTitlesEnabled}
         />
       ))}
@@ -279,14 +288,15 @@ interface BuiltinCardProps {
 }
 
 /** A built-in extension: same card shape as a package. Always-on ones show a disabled toggle;
- *  sub-agents and web fetch have a live one, while auto titles routes to its combined setup page. */
+ *  sub-agents and web fetch have a live one, while auto titles routes to its combined setup page.
+ *  MCP is always on and has its own page, where each server has a switch. */
 function BuiltinCard({ extension, enabled, busy, toggleDisabled = false, onToggle, onConfigure }: BuiltinCardProps) {
   const autoTitles = extension.kind === "auto_titles";
   return (
     <article className={`package-card builtin-card ${autoTitles ? "auto-title-package-card" : ""}`}>
       <div className="package-card-head">
         <span className="package-name builtin-name">{extension.name}</span>
-        {!autoTitles && onToggle && onConfigure && enabled && (
+        {!autoTitles && onConfigure && ((onToggle && enabled) || extension.kind === "mcp") && (
           <button type="button" className="ghost-button builtin-configure" onClick={onConfigure}>
             Configure <Icon name="chevron" />
           </button>

@@ -80,6 +80,12 @@ export function displayUrl(value: string): string {
   }
 }
 
+/** An MCP tool's name, `mcp__<server slug>__<tool>`, split into its parts (see the worker's `mcpToolName`). */
+export function mcpToolParts(name: string): { server: string; tool: string } | undefined {
+  const match = /^mcp__([a-z0-9_]+?)__(.+)$/.exec(name);
+  return match ? { server: match[1], tool: match[2] } : undefined;
+}
+
 export function summarizeTool(call: NormalizedBlock, result?: NormalizedBlock): ToolSummary {
   const toolArgs = args(call);
   const name = call.toolName ?? "tool";
@@ -123,8 +129,11 @@ export function summarizeTool(call: NormalizedBlock, result?: NormalizedBlock): 
         subject: tasks ? "" : str(toolArgs.agent)
       };
     }
-    default:
+    default: {
+      const mcp = mcpToolParts(name);
+      if (mcp) return { kind: "other", activeVerb: "Calling", doneVerb: "Called", subject: `${mcp.tool} (${mcp.server})` };
       return { kind: "other", activeVerb: name, doneVerb: name, subject: "" };
+    }
   }
 }
 
@@ -140,6 +149,7 @@ export interface ToolGroup {
  * in stable alphabetical order. A package tool with no source string falls into "Other" rather
  * than disappearing. WackCode's built-in extension tools are never listed — they are part of
  * the app itself. The one that can be switched off, web_fetch, has its switch on its Built-ins card.
+ * MCP tools aren't listed either: their switches are in Settings › MCP servers.
  */
 export function groupTools(catalog: ToolCatalogEntry[]): ToolGroup[] {
   const builtin: ToolCatalogEntry[] = [];
@@ -149,7 +159,7 @@ export function groupTools(catalog: ToolCatalogEntry[]): ToolGroup[] {
       builtin.push(tool);
       continue;
     }
-    if (tool.source.kind === "wackcode") {
+    if (tool.source.kind === "wackcode" || tool.source.kind === "mcp") {
       continue;
     }
     const id = tool.source.packageId ?? "other";

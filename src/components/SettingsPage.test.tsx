@@ -448,6 +448,35 @@ describe("SettingsPage sub-agents", () => {
   });
 });
 
+describe("SettingsPage MCP servers", () => {
+  it("lists MCP servers after Tools and opens its page from the nav and from Packages", () => {
+    const mcpActions = {
+      onSaveMcpServer: vi.fn(), onDeleteMcpServer: vi.fn(), onSetMcpServerEnabled: vi.fn(),
+      onSetMcpServerTools: vi.fn(), onTestMcpServer: vi.fn()
+    };
+    render(
+      <SettingsPage
+        providers={[]} packages={[]} toolCatalog={[]} disabledTools={[]} appDataPath="/tmp/wackcode"
+        onClose={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onConnectSubscription={vi.fn()} onSignOutSubscription={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()}
+        mcp={{ servers: [] }} mcpActions={mcpActions}
+        onRefresh={vi.fn().mockResolvedValue(undefined)} onInstall={vi.fn()} onTrust={vi.fn()} onSearch={vi.fn().mockResolvedValue([])} onRemove={vi.fn()} onUpdate={vi.fn()} onSetResources={vi.fn()}
+      />
+    );
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    const labels = Array.from(nav.querySelectorAll("button")).map((button) => button.textContent?.trim());
+    expect(labels.slice(labels.indexOf("Tools"), labels.indexOf("Tools") + 2)).toEqual(["Tools", "MCP servers"]);
+
+    fireEvent.click(within(nav).getByRole("button", { name: "MCP servers" }));
+    expect(screen.getByRole("heading", { level: 2, name: "MCP servers" })).toBeInTheDocument();
+    expect(screen.getByText(/No MCP servers yet/)).toBeInTheDocument();
+
+    fireEvent.click(within(nav).getByRole("button", { name: "Packages" }));
+    fireEvent.click(within(screen.getByRole("switch", { name: "MCP servers" }).closest("article")!).getByRole("button", { name: /Configure/ }));
+    expect(screen.getByRole("heading", { level: 2, name: "MCP servers" })).toBeInTheDocument();
+  });
+});
+
 describe("SettingsPage appearance section", () => {
   function renderAppearance(appearance: AppearanceConfig, onSetAppearance = vi.fn().mockResolvedValue(undefined)) {
     render(

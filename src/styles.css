@@ -1483,6 +1483,32 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .subagent-editor-spacer { flex: 1; }
 .subagent-editor-actions .primary-button, .subagent-editor-actions .secondary-button, .subagent-editor-actions .danger-button { height: 30px; font-size: 11.5px; }
 
+/* ── MCP settings ──────────────────────────────── */
+.mcp-settings .row-actions .secondary-button { white-space: nowrap; }
+.mcp-mono { font-family: "SFMono-Regular", Consolas, monospace; font-size: 11.5px; }
+.mcp-summary { font-family: "SFMono-Regular", Consolas, monospace; font-size: 10.5px; max-width: 45%; }
+.mcp-status { margin: 5px 0 0 19px; color: var(--text-dim); font-size: 10.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.mcp-status.ok { color: var(--wc-accent-text); }
+.mcp-status.failed { color: var(--warning); }
+label > span small.mcp-invalid { color: var(--warning); }
+.mcp-transport-field { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.mcp-transport-field .subagent-field-label { margin-bottom: 0; }
+.mcp-args-input { min-height: 68px; }
+.mcp-entries { display: flex; flex-direction: column; gap: 6px; }
+.mcp-entries .subagent-field-label { margin-bottom: 0; }
+.mcp-entries .subagent-field-label small { margin-left: 6px; }
+.mcp-entry-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) auto; gap: 6px; align-items: center; }
+.mcp-entry-row input { height: 32px; font: 11.5px "SFMono-Regular", Consolas, monospace; }
+.mcp-add-entry.secondary-button { align-self: flex-start; height: 28px; font-size: 11px; }
+.mcp-details { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 14px; margin: 0; font-size: 11px; }
+.mcp-details dt { color: var(--text-dim); }
+.mcp-details dd { margin: 0; color: var(--text-soft); overflow-wrap: anywhere; }
+.mcp-tools.resource-group { margin: 0; max-height: 360px; overflow: auto; }
+.mcp-tool-row.resource-row { align-items: flex-start; }
+.mcp-tool-text { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+.mcp-tool-text .resource-name { flex: 0 1 auto; }
+.mcp-tool-description { flex-basis: 100%; color: var(--text-dim); font-size: 10.5px; line-height: 1.45; }
+
 /* ── Prompts settings ──────────────────────────────── */
 .prompts-settings .section-heading-row { margin-bottom: 16px; }
 .prompt-card { border: 1px solid var(--border); border-radius: 9px; background: var(--surface); padding: 12px 14px; }

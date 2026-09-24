@@ -145,6 +145,10 @@ pub async fn ensure_worker_with(
     let worker_path = worker_entry_path(app)?;
     let node_path = node_executable_path()?;
     let mut command = Command::new(node_path);
+    // The user's login-shell environment first, so the agent's tools and stdio MCP servers find
+    // Homebrew, nvm and friends even when the app was opened from Finder. Provider keys are
+    // stripped from it below.
+    crate::shell_env::apply(&mut command).await;
     command
         .arg(worker_path)
         .current_dir(&task.workspace_path)
@@ -262,6 +266,8 @@ pub async fn ensure_worker_with(
         // Custom built-in prompts (Settings → Prompts); `{}` when every prompt is at its default.
         // Deliberately not part of the fingerprint: changes reach workers live via set_prompts.
         "prompts": prompts,
+        // Enabled MCP servers with their header/env values. Live too, via set_mcp.
+        "mcp": mcp_payload(app)?,
     });
     if options.wait_ready {
         request(app, &task.id, init, INIT_TIMEOUT).await.map(|_| ())
@@ -364,6 +370,20 @@ pub async fn broadcast_subagents(app: &AppHandle) -> Result<(), String> {
     broadcast(app, &json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "set_subagents", "subagents": payload })).await
 }
 
+/// The `mcp` value for `init` and `set_mcp`: every enabled MCP server with its header and
+/// environment values from `secrets.json`. Like `init`'s own key, they only travel over stdin.
+pub fn mcp_payload(app: &AppHandle) -> Result<Value, String> {
+    let state = app.state::<MetadataState>();
+    let servers = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?.mcp.servers.clone();
+    Ok(crate::mcp::runtime_payload(&servers, |id| crate::mcp::load_secrets(&state.secrets, id)))
+}
+
+/// Push the MCP servers to every running worker. Applied between runs; nothing restarts.
+pub async fn broadcast_mcp(app: &AppHandle) -> Result<(), String> {
+    let payload = mcp_payload(app)?;
+    broadcast(app, &json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "set_mcp", "servers": payload })).await
+}
+
 pub async fn send(app: &AppHandle, task_id: &str, value: &Value) -> Result<(), String> {
     let worker = app.state::<WorkerState>().get(task_id)?
         .ok_or_else(|| "This task's Pi worker is not running".to_string())?;
@@ -407,6 +427,14 @@ fn manager_entry_path(app: &AppHandle) -> Result<PathBuf, String> {
         Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist/manager.js"))
     } else {
         Ok(app.path().resource_dir().map_err(|error| error.to_string())?.join("resources/worker/dist/manager.js"))
+    }
+}
+
+pub(crate) fn mcp_probe_entry_path(app: &AppHandle) -> Result<PathBuf, String> {
+    if cfg!(debug_assertions) {
+        Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist/mcp-probe.js"))
+    } else {
+        Ok(app.path().resource_dir().map_err(|error| error.to_string())?.join("resources/worker/dist/mcp-probe.js"))
     }
 }
 
@@ -750,7 +778,7 @@ mod auto_title_tests {
     }
 }
 
-fn redact_and_limit(message: &str) -> String {
+pub(crate) fn redact_and_limit(message: &str) -> String {
     let mut safe = message.to_string();
     for marker in ["sk-", "Bearer "] {
         while let Some(start) = safe.find(marker) {

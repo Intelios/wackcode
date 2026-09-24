@@ -211,6 +211,45 @@ export interface PromptOverrides {
   ultraPlanPrompt?: string;
 }
 
+/** How WackCode reaches an MCP server. */
+export type McpTransport = "stdio" | "http" | "sse";
+
+/**
+ * One MCP server as the worker receives it, in `init` and `set_mcp`: enabled servers only, with
+ * the header and environment values the host resolved from `secrets.json`. Like every other
+ * credential, those values travel only over stdin.
+ */
+export interface McpServerSpec {
+  id: string;
+  /** The user's name for the server, shown in tool descriptions and errors. */
+  name: string;
+  /** Lowercase `[a-z0-9_]`, unique across servers: the middle of the server's tool names. */
+  slug: string;
+  transport: McpTransport;
+  /** Bounds connecting (start, handshake and tool list) and each tool call. */
+  timeoutMs: number;
+  /** stdio: the program to run, its arguments, and extra environment variables for it alone. */
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  /** http and sse: the endpoint and the headers sent with every request to it. */
+  url?: string;
+  headers?: Record<string, string>;
+  /** The server's own tool names the user switched off. */
+  disabledTools: string[];
+}
+
+/** One tool a server offers, as Settings lists it. */
+export interface McpToolInfo {
+  name: string;
+  description: string;
+  /** The server marks the tool read-only (`readOnlyHint`), so Plan mode lets it through. */
+  readOnly: boolean;
+}
+
+/** Settings' "Test connection": `mcp-probe.js` reads `{ server }` and prints one of these. */
+export type McpProbeResult = { ok: true; tools: McpToolInfo[] } | { ok: false; error: string };
+
 export interface InitCommand {
   id: string;
   type: "init";
@@ -250,6 +289,8 @@ export interface InitCommand {
   subagents?: SubagentRuntimeConfig | null;
   /** Custom built-in prompt texts from Settings; absent means every prompt stays at its default. */
   prompts?: PromptOverrides;
+  /** Enabled MCP servers. Nothing connects until the chat's first run. */
+  mcp?: McpServerSpec[];
 }
 
 export interface WorkerResources {
@@ -342,6 +383,7 @@ export type WorkerCommand =
   | { id: string; type: "set_tools"; disabledTools: string[] }
   | { id: string; type: "set_subagents"; subagents: SubagentRuntimeConfig | null }
   | { id: string; type: "set_prompts"; prompts: PromptOverrides }
+  | { id: string; type: "set_mcp"; servers: McpServerSpec[] }
   | {
       id: string;
       type: "extension_ui_response";
@@ -419,10 +461,13 @@ export interface RunTiming {
 
 /** Where a tool came from, so the UI can group and attribute it. */
 export interface ToolSource {
-  /** "wackcode" tools ship inside the app itself (built-in extensions) and can't be switched off. */
-  kind: "builtin" | "package" | "wackcode";
+  /** "wackcode" tools ship inside the app itself (built-in extensions) and can't be switched off.
+   *  "mcp" tools come from the user's MCP servers; their switches are in Settings › MCP servers. */
+  kind: "builtin" | "package" | "wackcode" | "mcp";
   /** Package source string (e.g. "npm:pi-web-access") when kind is "package". */
   packageId?: string;
+  /** The MCP server's id when kind is "mcp". */
+  serverId?: string;
   /** Absolute path of the file that registered the tool. */
   path?: string;
 }

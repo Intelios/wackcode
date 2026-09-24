@@ -22,6 +22,7 @@ import type {
   ExtensionUIRequest,
   GitChanges,
   ImageContent,
+  McpServerRecord,
   NormalizedMessage,
   PackageRecord,
   PackageResourceKind,
@@ -43,6 +44,7 @@ import { ChatHeader } from "./components/ChatHeader";
 import { Composer } from "./components/Composer";
 import { Icon } from "./components/Icons";
 import { ProjectBar } from "./components/ProjectBar";
+import type { McpActions } from "./components/McpSection";
 import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar, NO_PROJECT_KEY, type ProjectAction, type TaskAction } from "./components/Sidebar";
 import { Transcript, type MessageAction } from "./components/Transcript";
@@ -65,7 +67,8 @@ const emptyData: AppData = {
   subagents: { enabled: false, trigger: "on_request", maxConcurrency: 4, agents: [] },
   autoTitle: { enabled: false, providerId: null, modelId: null },
   appearance: DEFAULT_APPEARANCE,
-  prompts: {}
+  prompts: {},
+  mcp: { servers: [] }
 };
 
 /** Matches `--ease` in styles.css. */
@@ -704,6 +707,51 @@ export default function App() {
       throw reason;
     }
   }
+
+  /** Replace (or add) one MCP server as the host saved it. */
+  function putMcpServer(server: McpServerRecord) {
+    setData((current) => ({
+      ...current,
+      mcp: {
+        servers: current.mcp.servers.some((item) => item.id === server.id)
+          ? current.mcp.servers.map((item) => item.id === server.id ? server : item)
+          : [...current.mcp.servers, server]
+      }
+    }));
+  }
+
+  /** Apply a switch at once, and put the server back if the host refuses. */
+  async function patchMcpServer(serverId: string, patch: Partial<McpServerRecord>, save: () => Promise<McpServerRecord>) {
+    const previous = data.mcp.servers.find((server) => server.id === serverId);
+    if (previous) putMcpServer({ ...previous, ...patch });
+    try {
+      putMcpServer(await save());
+    } catch (reason) {
+      if (previous) putMcpServer(previous);
+      throw reason;
+    }
+  }
+
+  const mcpActions: McpActions = {
+    onSaveMcpServer: async (input) => {
+      const saved = await api.saveMcpServer(input);
+      putMcpServer(saved);
+      return saved;
+    },
+    onDeleteMcpServer: async (serverId) => {
+      await api.deleteMcpServer(serverId);
+      setData((current) => ({ ...current, mcp: { servers: current.mcp.servers.filter((server) => server.id !== serverId) } }));
+    },
+    onSetMcpServerEnabled: (serverId, enabled) =>
+      patchMcpServer(serverId, { enabled }, () => api.setMcpServerEnabled(serverId, enabled)),
+    onSetMcpServerTools: (serverId, disabledTools) =>
+      patchMcpServer(serverId, { disabledTools }, () => api.setMcpServerTools(serverId, disabledTools)),
+    onTestMcpServer: async (serverId) => {
+      const result = await api.testMcpServer(serverId);
+      putMcpServer(result.server);
+      return result;
+    }
+  };
 
   async function setAutoTitle(config: AutoTitleConfig) {
     const saved = await api.setAutoTitleConfig(config);
@@ -1413,6 +1461,8 @@ export default function App() {
           onRemoveBackgroundImage={removeBackgroundImage}
           prompts={data.prompts}
           onSetPrompts={setPrompts}
+          mcp={data.mcp}
+          mcpActions={mcpActions}
           onRefresh={refreshPackages}
           onInstall={installPackage}
           onTrust={trustPackage}

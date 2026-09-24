@@ -7,6 +7,12 @@ function call(toolName: string, args: unknown): NormalizedBlock {
 }
 
 describe("summarizeTool", () => {
+  it("names an MCP tool and its server", () => {
+    const summary = summarizeTool(call("mcp__github__search_issues", { q: "bug" }));
+    expect(summary).toMatchObject({ activeVerb: "Calling", doneVerb: "Called", subject: "search_issues (github)" });
+    expect(summarizeTool(call("mcp_not_really", {})).doneVerb).toBe("mcp_not_really");
+  });
+
   it("summarizes read calls", () => {
     const summary = summarizeTool(call("read", { path: "/Users/jack/app/src/main.ts" }));
     expect(summary.doneVerb).toBe("Read");
@@ -91,6 +97,15 @@ describe("tool catalogue", () => {
     expect(groups.map((group) => group.id)).toEqual(["builtin", "npm:pi-subagents", "npm:pi-web-access", "other"]);
     expect(groups[0].tools.map((tool) => tool.name)).toEqual(["bash", "read"]);
     expect(groups[3].label).toBe("Other");
+  });
+
+  it("leaves MCP and WackCode tools out: their switches live elsewhere", () => {
+    const groups = groupTools([
+      builtin("read"),
+      { name: "mcp__github__search", description: "", source: { kind: "mcp", serverId: "mcp-1" }, available: true },
+      { name: "todo", description: "", source: { kind: "wackcode" }, available: true }
+    ]);
+    expect(groups.map((group) => group.id)).toEqual(["builtin"]);
   });
 
   it("drops disabled names whose tool no longer exists, but keeps them when the catalogue is empty", () => {

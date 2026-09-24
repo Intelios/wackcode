@@ -4,8 +4,10 @@ mod commands;
 mod files;
 mod git;
 mod glass;
+mod mcp;
 mod models;
 mod secrets;
+mod shell_env;
 mod storage;
 mod subagents;
 mod subscriptions;
@@ -33,6 +35,8 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 window.show()?;
             }
+            // Read the login-shell environment in the background, so the first chat doesn't wait.
+            tauri::async_runtime::spawn(shell_env::warm());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -64,6 +68,11 @@ pub fn run() {
             commands::set_subagent_config,
             commands::set_auto_title_config,
             commands::set_prompt_config,
+            commands::save_mcp_server,
+            commands::delete_mcp_server,
+            commands::set_mcp_server_enabled,
+            commands::set_mcp_server_tools,
+            commands::test_mcp_server,
             commands::list_packages,
             commands::refresh_packages,
             commands::install_package,

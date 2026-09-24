@@ -221,10 +221,13 @@ export interface PackageSearchResult {
 
 /** Where a tool came from, so Settings can group and attribute it. */
 export interface ToolSource {
-  /** "wackcode" tools ship inside the app itself and can't be switched off. */
-  kind: "builtin" | "package" | "wackcode";
+  /** "wackcode" tools ship inside the app itself and can't be switched off. "mcp" tools come
+   *  from the user's MCP servers; their switches are in Settings › MCP servers. */
+  kind: "builtin" | "package" | "wackcode" | "mcp";
   packageId?: string;
   path?: string;
+  /** The MCP server's id when kind is "mcp". */
+  serverId?: string;
 }
 
 export interface ToolCatalogEntry {
@@ -239,6 +242,71 @@ export interface ToolCatalogEntry {
 /** Tools the user switched off. A denylist, so a newly added tool is on by default. */
 export interface ToolConfig {
   disabled: string[];
+}
+
+/** How WackCode reaches an MCP server. Mirrors `McpTransport` in models.rs. */
+export type McpTransport = "stdio" | "http" | "sse";
+
+/** Mirrors `mcp.rs`: the default, and the range the host accepts. */
+export const MCP_DEFAULT_TIMEOUT_MS = 120_000;
+export const MCP_MIN_TIMEOUT_MS = 1_000;
+export const MCP_MAX_TIMEOUT_MS = 3_600_000;
+
+export interface McpToolInfo {
+  name: string;
+  description: string;
+  /** The server marks it read-only, so Plan mode lets it through. */
+  readOnly: boolean;
+}
+
+/**
+ * One MCP server (Settings › MCP servers). Header and environment variable values never reach
+ * the renderer: only their names, and the values stay in `secrets.json`.
+ */
+export interface McpServerRecord {
+  id: string;
+  name: string;
+  enabled: boolean;
+  transport: McpTransport;
+  timeoutMs: number;
+  command: string;
+  args: string[];
+  url: string;
+  headers: string[];
+  env: string[];
+  /** The server's own tool names the user switched off. */
+  disabledTools: string[];
+  /** The server's tools as of the last successful "Test connection". */
+  tools: McpToolInfo[];
+}
+
+export interface McpConfig {
+  servers: McpServerRecord[];
+}
+
+/** A header or environment variable as the editor sends it. A blank value keeps the saved one. */
+export interface McpSecretInput {
+  name: string;
+  value?: string;
+}
+
+export interface SaveMcpServerInput {
+  id?: string;
+  name: string;
+  transport: McpTransport;
+  timeoutMs: number;
+  command: string;
+  args: string[];
+  url: string;
+  headers: McpSecretInput[];
+  env: McpSecretInput[];
+}
+
+export interface McpTestResult {
+  ok: boolean;
+  error?: string;
+  /** The server as saved after the test (with the tools it listed). */
+  server: McpServerRecord;
 }
 
 /**
@@ -364,6 +432,7 @@ export interface AppData {
   autoTitle: AutoTitleConfig;
   appearance: AppearanceConfig;
   prompts: PromptConfig;
+  mcp: McpConfig;
 }
 
 export interface BootstrapPayload {

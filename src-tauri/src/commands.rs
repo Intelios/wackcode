@@ -1,5 +1,5 @@
 use crate::{
-    backgrounds, checkpoints, files, git, glass,
+    backgrounds, checkpoints, files, git, glass, mcp,
     models::{
         AppearanceConfig, BackdropMode, BootstrapPayload, BuiltinModelSuggestion, CheckpointChange, CheckpointRef, CreateTaskInput, ExportPlanInput,
         ForkTaskInput, GitChanges, ImageContent, ModelRecord, NavigateResult, NavigateTaskInput, NavigateTaskResult,
@@ -7,6 +7,7 @@ use crate::{
         PackageSearchResult, ProviderKind, ProviderRecord, ResendInput, RestoreCheckpointInput, RestoreResult,
         SaveProviderInput, SearchPackagesInput, SetPackageResourcesInput, SetTaskModeInput, SetToolConfigInput,
         SlashCommand, SubagentConfig, AutoTitleConfig, TaskMode, TaskRecord, TaskStatus, ToolConfig, WorkspaceFiles,
+        McpServerRecord, McpTestResult, SaveMcpServerInput,
     },
     storage::MetadataState,
     worker::{self, WorkerOptions}, subagents, subscriptions,
@@ -577,6 +578,106 @@ pub async fn set_prompt_config(
         "id": Uuid::new_v4().to_string(), "type": "set_prompts", "prompts": config
     })).await?;
     Ok(config)
+}
+
+/// Add or edit an MCP server (Settings › MCP servers). Header and environment values go to
+/// `secrets.json`; the record keeps only their names. Like every MCP change, it reaches running
+/// chats between runs through `set_mcp`, and nothing restarts.
+#[tauri::command]
+pub async fn save_mcp_server(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    input: SaveMcpServerInput,
+) -> Result<McpServerRecord, String> {
+    let record = state.mutate(|data| {
+        let saved = input.id.as_deref().map(|id| mcp::load_secrets(&state.secrets, id)).unwrap_or_default();
+        let (mut record, secrets) = mcp::validate(&input, &data.mcp.servers, &saved)?;
+        // Secrets first: a stored record must always find the values it names.
+        mcp::store_secrets(&state.secrets, &record.id, &secrets)?;
+        match data.mcp.servers.iter_mut().find(|server| server.id == record.id) {
+            Some(existing) => {
+                // A server reached another way may offer other tools; the next test lists them.
+                if !mcp::same_connection(existing, &record) { record.tools.clear(); }
+                *existing = record.clone();
+            }
+            None => data.mcp.servers.push(record.clone()),
+        }
+        Ok(record)
+    })?;
+    worker::broadcast_mcp(&app).await?;
+    Ok(record)
+}
+
+#[tauri::command]
+pub async fn delete_mcp_server(app: AppHandle, state: State<'_, MetadataState>, server_id: String) -> Result<(), String> {
+    state.mutate(|data| {
+        let before = data.mcp.servers.len();
+        data.mcp.servers.retain(|server| server.id != server_id);
+        if data.mcp.servers.len() == before { return Err("That MCP server no longer exists.".into()); }
+        Ok(())
+    })?;
+    state.secrets.remove(&mcp::secret_key(&server_id))?;
+    worker::broadcast_mcp(&app).await
+}
+
+#[tauri::command]
+pub async fn set_mcp_server_enabled(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    server_id: String,
+    enabled: bool,
+) -> Result<McpServerRecord, String> {
+    let record = update_mcp_server(&state, &server_id, |server| server.enabled = enabled)?;
+    worker::broadcast_mcp(&app).await?;
+    Ok(record)
+}
+
+/// The server's own tool names the user switched off.
+#[tauri::command]
+pub async fn set_mcp_server_tools(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    server_id: String,
+    disabled_tools: Vec<String>,
+) -> Result<McpServerRecord, String> {
+    let disabled = mcp::validate_disabled_tools(&disabled_tools)?;
+    let record = update_mcp_server(&state, &server_id, |server| server.disabled_tools = disabled)?;
+    worker::broadcast_mcp(&app).await?;
+    Ok(record)
+}
+
+/// Connect to a saved server once, in a short-lived process, and remember the tools it lists
+/// (they are what Settings shows per-tool switches for). Nothing is sent to running chats.
+#[tauri::command]
+pub async fn test_mcp_server(app: AppHandle, state: State<'_, MetadataState>, server_id: String) -> Result<McpTestResult, String> {
+    let server = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?
+        .mcp.servers.iter().find(|server| server.id == server_id).cloned()
+        .ok_or_else(|| "That MCP server no longer exists.".to_string())?;
+    let secrets = mcp::load_secrets(&state.secrets, &server_id);
+    match mcp::probe(&app, &server, &secrets).await {
+        Ok(tools) => {
+            // Unless the server was edited to reach something else in the meantime.
+            let saved = update_mcp_server(&state, &server_id, |current| {
+                if mcp::same_connection(current, &server) { current.tools = tools; }
+            })?;
+            Ok(McpTestResult { ok: true, error: None, server: saved })
+        }
+        Err(error) => {
+            let current = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?
+                .mcp.servers.iter().find(|server| server.id == server_id).cloned()
+                .ok_or_else(|| "That MCP server no longer exists.".to_string())?;
+            Ok(McpTestResult { ok: false, error: Some(error), server: current })
+        }
+    }
+}
+
+fn update_mcp_server(state: &MetadataState, server_id: &str, change: impl FnOnce(&mut McpServerRecord)) -> Result<McpServerRecord, String> {
+    state.mutate(|data| {
+        let server = data.mcp.servers.iter_mut().find(|server| server.id == server_id)
+            .ok_or_else(|| "That MCP server no longer exists.".to_string())?;
+        change(server);
+        Ok(server.clone())
+    })
 }
 
 /// Tool changes take effect on the next agent turn, so running workers are updated in place

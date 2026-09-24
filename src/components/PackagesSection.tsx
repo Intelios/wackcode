@@ -16,7 +16,7 @@ interface BuiltinExtension {
   name: string;
   description: string;
   tools: readonly string[];
-  kind?: "subagents" | "auto_titles";
+  kind?: "subagents" | "auto_titles" | "web_fetch";
 }
 
 /**
@@ -52,6 +52,13 @@ const BUILTIN_EXTENSIONS: readonly BuiltinExtension[] = [
     kind: "subagents"
   },
   {
+    name: "Web Fetch",
+    description:
+      "Lets the agent read a web page by URL, returned as Markdown. Public addresses only: it can't reach localhost or your local network, and it doesn't search. The only built-in that contacts sites you didn't configure.",
+    tools: ["web_fetch"],
+    kind: "web_fetch"
+  },
+  {
     name: "Auto chat titles",
     description: "Give new chats a short title from their first message. Uses one extra model request per chat; you choose the model.",
     tools: [],
@@ -74,9 +81,12 @@ export interface PackageActions {
 interface Props extends PackageActions {
   packages: PackageRecord[];
   subagentsEnabled?: boolean;
+  /** On unless `web_fetch` is in the tool denylist. */
+  webFetchEnabled?: boolean;
   autoTitlesEnabled?: boolean;
   autoTitlesConfigured?: boolean;
   onToggleSubagents?: (enabled: boolean) => Promise<void>;
+  onToggleWebFetch?: (enabled: boolean) => Promise<void>;
   onToggleAutoTitles?: (enabled: boolean) => Promise<void>;
   onConfigureAutoTitles?: () => void;
   /** Opens Settings → Sub-agents. */
@@ -86,7 +96,8 @@ interface Props extends PackageActions {
 type Tab = "installed" | "browse";
 
 export function PackagesSection({
-  packages, subagentsEnabled = false, autoTitlesEnabled = false, autoTitlesConfigured = false, onToggleSubagents, onToggleAutoTitles, onConfigureSubagents, onConfigureAutoTitles,
+  packages, subagentsEnabled = false, webFetchEnabled = true, autoTitlesEnabled = false, autoTitlesConfigured = false,
+  onToggleSubagents, onToggleWebFetch, onToggleAutoTitles, onConfigureSubagents, onConfigureAutoTitles,
   onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
 }: Props) {
   const [tab, setTab] = useState<Tab>("installed");
@@ -210,17 +221,19 @@ export function PackagesSection({
       <div className="section-heading-row builtin-heading">
         <div>
           <h3>Built-In</h3>
-          <p>Compiled into WackCode — you don&rsquo;t need a package for these. Sub-agents and Auto chat titles are optional.</p>
+          <p>Compiled into WackCode — you don&rsquo;t need a package for these. Sub-agents, Web Fetch and Auto chat titles are optional.</p>
         </div>
       </div>
       {BUILTIN_EXTENSIONS.map((extension) => (
         <BuiltinCard
           key={extension.name}
           extension={extension}
-          enabled={extension.kind === "subagents" ? subagentsEnabled : extension.kind === "auto_titles" ? autoTitlesEnabled : true}
+          enabled={extension.kind === "subagents" ? subagentsEnabled : extension.kind === "web_fetch" ? webFetchEnabled : extension.kind === "auto_titles" ? autoTitlesEnabled : true}
           busy={busy}
           onToggle={extension.kind === "subagents" && onToggleSubagents
             ? (enabled) => void run(() => onToggleSubagents(enabled)).catch(() => undefined)
+            : extension.kind === "web_fetch" && onToggleWebFetch
+            ? (enabled) => void run(() => onToggleWebFetch(enabled)).catch(() => undefined)
             : extension.kind === "auto_titles" && onToggleAutoTitles
             ? (enabled) => void run(() => onToggleAutoTitles(enabled)).catch(() => undefined)
             : undefined}
@@ -266,7 +279,7 @@ interface BuiltinCardProps {
 }
 
 /** A built-in extension: same card shape as a package. Always-on ones show a disabled toggle;
- *  sub-agents has a live one, while auto titles routes to its combined setup page. */
+ *  sub-agents and web fetch have a live one, while auto titles routes to its combined setup page. */
 function BuiltinCard({ extension, enabled, busy, toggleDisabled = false, onToggle, onConfigure }: BuiltinCardProps) {
   const autoTitles = extension.kind === "auto_titles";
   return (

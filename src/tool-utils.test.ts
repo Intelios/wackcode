@@ -13,6 +13,16 @@ describe("summarizeTool", () => {
     expect(summary.subject).toBe("…/src/main.ts");
   });
 
+  it("summarizes web_fetch calls with a short URL", () => {
+    const summary = summarizeTool(call("web_fetch", { url: "https://www.example.com/docs/intro?ref=x" }));
+    expect(summary.activeVerb).toBe("Fetching");
+    expect(summary.doneVerb).toBe("Fetched");
+    expect(summary.subject).toBe("example.com/docs/intro");
+    expect(summarizeTool(call("web_fetch", { url: "https://example.com/" })).subject).toBe("example.com");
+    expect(summarizeTool(call("web_fetch", { url: "http://localhost:43127/v1/models" })).subject).toBe("localhost:43127/v1/models");
+    expect(summarizeTool(call("web_fetch", { url: "not a url" })).subject).toBe("not a url");
+  });
+
   it("summarizes bash calls with the command", () => {
     const summary = summarizeTool(call("bash", { command: "pnpm test" }));
     expect(summary.doneVerb).toBe("Ran");

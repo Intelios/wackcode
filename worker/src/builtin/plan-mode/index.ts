@@ -14,6 +14,7 @@ import type { PlanState, TaskMode } from "../../protocol.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../ask-user-question.js";
 import type { BuiltinHost } from "../host.js";
 import { TODO_TOOL_NAME } from "../todo/types.js";
+import { WEB_FETCH_TOOL_NAME } from "../web-fetch/index.js";
 import {
   PLAN_MODE_COMPLETE_PARAMS,
   PLAN_MODE_COMPLETE_TOOL_NAME,
@@ -154,11 +155,13 @@ export function createPlanModeExtension(host: BuiltinHost) {
       // list, never the workspace, so tracking a task list during planning stays on the
       // right side of the read-only policy. `subagent` refuses any agent that can edit files
       // while Plan mode is on, and read-only children run under this same shell policy.
+      // `web_fetch` only reads a public page.
       const helper =
         event.toolName === ASK_USER_QUESTION_TOOL_NAME ||
         event.toolName === PLAN_MODE_COMPLETE_TOOL_NAME ||
         event.toolName === TODO_TOOL_NAME ||
-        event.toolName === SUBAGENT_TOOL_NAME;
+        event.toolName === SUBAGENT_TOOL_NAME ||
+        event.toolName === WEB_FETCH_TOOL_NAME;
       if (!active) {
         return event.toolName === PLAN_MODE_COMPLETE_TOOL_NAME
           ? { block: true, reason: "plan_mode_complete is only available while Plan mode is active." }

@@ -2,7 +2,8 @@
  * WackCode's built-in extensions: compiled into the worker, loaded through Pi's inline-factory
  * mechanism rather than the trusted-package path. They are ordinary code in this repo — no
  * trust gate applies because nothing external can reach this list. All are always on except
- * sub-agents, which the user switches on in Settings (its tool stays inactive until then).
+ * sub-agents, which the user switches on in Settings (its tool stays inactive until then), and
+ * web fetch, which is on until the user switches it off (see `SWITCHABLE_BUILTIN_TOOLS`).
  */
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import { createAskUserQuestionExtension } from "./ask-user-question.js";
@@ -11,6 +12,13 @@ import type { BuiltinHost } from "./host.js";
 import { type PlanModeController, createPlanModeExtension } from "./plan-mode/index.js";
 import { type SubagentsController, createSubagentsExtension } from "./subagents/index.js";
 import { type TodoHandle, createTodoExtension } from "./todo/index.js";
+import { WEB_FETCH_TOOL_NAME, createWebFetchExtension } from "./web-fetch/index.js";
+
+/**
+ * Built-in tools the user's Settings denylist applies to. Every other built-in tool is part of
+ * how the app works (a disabled plan_mode_complete would break Plan mode) and ignores it.
+ */
+export const SWITCHABLE_BUILTIN_TOOLS: ReadonlySet<string> = new Set([WEB_FETCH_TOOL_NAME]);
 
 export interface BuiltinExtensions {
   /** Factories handed to `DefaultResourceLoader.extensionFactories`. */
@@ -41,6 +49,7 @@ export function createBuiltinExtensions(host: BuiltinHost): BuiltinExtensions {
       { name: "wackcode-todo", factory: todo.factory, hidden: true },
       { name: "wackcode-subagents", factory: subagents.factory, hidden: true },
       { name: "wackcode-auto-title", factory: autoTitle.factory, hidden: true },
+      { name: "wackcode-web-fetch", factory: createWebFetchExtension(), hidden: true },
     ],
     planMode: planMode.controller,
     todo: todo.handle,

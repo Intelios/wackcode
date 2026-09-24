@@ -3,6 +3,8 @@ import { displayPath } from "./chat-utils";
 
 /** The built-in sub-agents tool. Its calls render as a card rather than a tool row. */
 export const SUBAGENT_TOOL_NAME = "subagent";
+/** The one WackCode built-in tool the user can switch off, through the tool denylist. */
+export const WEB_FETCH_TOOL_NAME = "web_fetch";
 
 export interface ToolSummary {
   /** Label while the tool is executing, e.g. "Editing". */
@@ -68,6 +70,16 @@ export function editStats(call: NormalizedBlock, result?: NormalizedBlock): { ad
   return additions || deletions ? { additions, deletions } : undefined;
 }
 
+/** A fetched URL as a row subject: host (with any port) and path, without the scheme, "www." or the query. */
+export function displayUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    return `${url.host.replace(/^www\./, "")}${url.pathname === "/" ? "" : url.pathname}`;
+  } catch {
+    return value;
+  }
+}
+
 export function summarizeTool(call: NormalizedBlock, result?: NormalizedBlock): ToolSummary {
   const toolArgs = args(call);
   const name = call.toolName ?? "tool";
@@ -100,6 +112,8 @@ export function summarizeTool(call: NormalizedBlock, result?: NormalizedBlock): 
       return { kind: "other", activeVerb: "Submitting plan", doneVerb: "Plan submitted", subject: "" };
     case "todo":
       return { kind: "other", activeVerb: "Updating todos", doneVerb: "Todos updated", subject: str(toolArgs.subject) };
+    case WEB_FETCH_TOOL_NAME:
+      return { kind: "other", activeVerb: "Fetching", doneVerb: "Fetched", subject: displayUrl(str(toolArgs.url)) };
     case SUBAGENT_TOOL_NAME: {
       const tasks = Array.isArray(toolArgs.tasks) ? toolArgs.tasks.length : 0;
       return {
@@ -125,7 +139,7 @@ export interface ToolGroup {
  * Group the catalogue for the Tools panel: Pi's own tools first, then one group per package
  * in stable alphabetical order. A package tool with no source string falls into "Other" rather
  * than disappearing. WackCode's built-in extension tools are never listed — they are part of
- * the app itself and can't be switched off.
+ * the app itself. The one that can be switched off, web_fetch, has its switch on its Built-ins card.
  */
 export function groupTools(catalog: ToolCatalogEntry[]): ToolGroup[] {
   const builtin: ToolCatalogEntry[] = [];

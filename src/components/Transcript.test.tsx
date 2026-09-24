@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedMessage } from "../types";
+import { ExploreGroupingEnabled } from "./ExploreGroup";
 import { ThinkingPreviewEnabled } from "./ThinkingRow";
 import { Transcript } from "./Transcript";
 
@@ -289,6 +290,65 @@ describe("Transcript message actions", () => {
     expect(screen.getByText("What should we build?")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Undo rewind/ }));
     expect(onUndoRewind).toHaveBeenCalled();
+  });
+});
+
+describe("Transcript exploration groups", () => {
+  const user: NormalizedMessage = { id: "user-1", role: "user", timestamp: 1_000, blocks: [{ type: "text", text: "Look around" }] };
+  const read = (id: string, path: string) => ({ type: "tool-call" as const, toolName: "read", toolCallId: id, arguments: { path } });
+  const result = (id: string, text = "contents"): NormalizedMessage => ({ id: `tool-${id}`, role: "tool", blocks: [{ type: "tool-result", toolCallId: id, text }] });
+  const first: NormalizedMessage = { id: "a-2000", role: "assistant", timestamp: 2_000, blocks: [{ type: "text", text: "Reading first." }, read("r1", "src/one.ts")] };
+  const second: NormalizedMessage = { id: "a-3000", role: "assistant", timestamp: 3_000, blocks: [{ type: "tool-call", toolName: "grep", toolCallId: "g1", arguments: { pattern: "needle" } }] };
+  const answer: NormalizedMessage = { id: "a-4000", role: "assistant", timestamp: 4_000, blocks: [{ type: "text", text: "All done." }] };
+
+  it("folds a run across messages into one collapsed row that expands to the calls", () => {
+    const view = render(<Transcript messages={[user, first, result("r1")]} running={false} />);
+    // A single call keeps its own row.
+    expect(screen.getByRole("button", { name: /Read.*one\.ts/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Explored/ })).not.toBeInTheDocument();
+
+    // A later message extends the run, so the earlier message has to re-render with the group.
+    view.rerender(<Transcript messages={[user, first, result("r1"), second, result("g1"), answer]} running={false} />);
+    const head = screen.getByRole("button", { name: "Explored 1 file, 1 search" });
+    expect(head).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: /one\.ts/ })).not.toBeInTheDocument();
+    expect(screen.getByText("Reading first.")).toBeInTheDocument();
+    expect(screen.getByText("All done.")).toBeInTheDocument();
+    // The message that only held the grep renders nothing of its own.
+    expect(view.container.querySelectorAll(".msg.assistant")).toHaveLength(2);
+
+    fireEvent.click(head);
+    expect(head).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: /Read.*one\.ts/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Searched.*needle/ }));
+    expect(screen.getByText("contents")).toBeInTheDocument();
+  });
+
+  it("names the call in flight while exploring, keeps its open state once saved, then shows counts", () => {
+    const streaming: NormalizedMessage = { ...second, id: "streaming-3000" };
+    const view = render(<Transcript messages={[user, first, result("r1")]} running partial={streaming} />);
+    const head = screen.getByRole("button", { name: /^Exploring Searching needle/ });
+    expect(screen.getByLabelText("Running")).toBeInTheDocument();
+    fireEvent.click(head);
+
+    // Pi saves the streamed message and starts the tool: the group stays open and live.
+    view.rerender(<Transcript messages={[user, first, result("r1"), second]} running />);
+    expect(screen.getByRole("button", { name: /^Exploring Searching needle/ })).toHaveAttribute("aria-expanded", "true");
+
+    view.rerender(<Transcript messages={[user, first, result("r1"), second, { ...result("g1"), blocks: [{ type: "tool-result", toolCallId: "g1", isError: true, text: "bad" }] }]} running={false} />);
+    expect(screen.getByRole("button", { name: "Explored 1 file, 1 search 1 failed" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByLabelText("Running")).not.toBeInTheDocument();
+  });
+
+  it("keeps every call on its own row when switched off", () => {
+    render(
+      <ExploreGroupingEnabled.Provider value={false}>
+        <Transcript messages={[user, first, result("r1"), second, result("g1")]} running={false} />
+      </ExploreGroupingEnabled.Provider>
+    );
+    expect(screen.queryByRole("button", { name: /Explored/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Read.*one\.ts/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Searched.*needle/ })).toBeInTheDocument();
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diffStats, editStats, groupTools, parseSubagentDetails, pendingSubagentDetails, pruneDisabledTools, sameToolCatalog, summarizeTool } from "./tool-utils";
+import { bashExploreKind, diffStats, editStats, exploreKind, groupTools, parseSubagentDetails, pendingSubagentDetails, pruneDisabledTools, sameToolCatalog, summarizeTool } from "./tool-utils";
 import type { NormalizedBlock, ToolCatalogEntry } from "./types";
 
 function call(toolName: string, args: unknown): NormalizedBlock {
@@ -145,5 +145,86 @@ describe("sub-agent details", () => {
     expect(pendingSubagentDetails(call("subagent", { tasks: [{ agent: "a", task: "1" }, { agent: "b", task: "2" }] }))?.mode).toBe("parallel");
     expect(pendingSubagentDetails(call("subagent", '{"agent":"sco'))).toBeUndefined();
     expect(summarizeTool(call("subagent", { tasks: [{}, {}] })).activeVerb).toBe("Running 2 sub-agents");
+  });
+});
+
+describe("exploreKind", () => {
+  it("sorts Pi's read-only tools and leaves every other tool out", () => {
+    expect(exploreKind(call("read", { path: "a.ts" }))).toBe("file");
+    expect(exploreKind(call("grep", { pattern: "x" }))).toBe("search");
+    expect(exploreKind(call("find", { pattern: "*.ts" }))).toBe("search");
+    expect(exploreKind(call("ls", { path: "src" }))).toBe("list");
+    for (const name of ["edit", "write", "subagent", "todo", "web_fetch", "plan_mode_complete", "mcp__github__search"]) {
+      expect(exploreKind(call(name, {}))).toBeUndefined();
+    }
+    expect(exploreKind(call("bash", { command: "ls src" }))).toBe("list");
+    expect(exploreKind(call("bash", { command: "pnpm test" }))).toBeUndefined();
+    expect(exploreKind(call("bash", "{\"command\": \"ls"))).toBeUndefined();
+  });
+});
+
+describe("bashExploreKind", () => {
+  it("classifies read-only commands, pipelines and chains by their first explorer", () => {
+    const cases: [string, ReturnType<typeof bashExploreKind>][] = [
+      ["ls /Users/jack/wackcode/src/components/", "list"],
+      ["grep -rn \"PackagesSection\" src --include=*.tsx --include=*.ts | head -30", "search"],
+      ["rg -n 'a | b' src", "search"],
+      ["cat package.json | head -40", "file"],
+      ["sed -n 1,120p src/App.tsx", "file"],
+      ["sed -n '200,235p' src/styles.css; sed -nE '1p' x", "file"],
+      ["cd /repo && git status --short", "command"],
+      ["git log --oneline -3", "command"],
+      ["git ls-files | wc -l", "list"],
+      ["find src -name '*.test.ts' 2>/dev/null | sort | uniq", "search"],
+      ["ls src 2>&1 | head", "list"],
+      ["ls missing || echo none", "list"],
+      ["wc -l src/*.ts\n", "file"],
+      ["pwd", "list"],
+      ["ls \\\n  src", "list"],
+      ["# look around\nls", "list"],
+      ["grep -n \"end$\" file", "search"]
+    ];
+    for (const [command, kind] of cases) expect(bashExploreKind(command), command).toBe(kind);
+  });
+
+  it("leaves anything that might write or run something else visible", () => {
+    const cases = [
+      "",
+      "cd src",
+      "echo hi",
+      "pnpm test",
+      "rm -rf dist",
+      "ls > files.txt",
+      "cat a >> b",
+      "cat <<EOF\nhi\nEOF",
+      "grep x < file",
+      "ls $(pwd)",
+      "ls `pwd`",
+      "echo \"$(rm -rf /)\"",
+      "ls & rm x",
+      "(cd src && ls)",
+      "sed -i 's/a/b/' file",
+      "sed -n 's/a/b/w out' file",
+      "sed -n -f script.sed file",
+      "sed '1,10p' file",
+      "find . -name '*.tmp' -delete",
+      "find . -exec rm {} \\;",
+      "fd -x rm",
+      "rg --pre ./script x",
+      "sort -o out.txt in.txt",
+      "sort -ro out.txt in.txt",
+      "uniq in.txt out.txt",
+      "git diff --output=patch.diff",
+      "git checkout main",
+      "git -C repo status",
+      "ls | xargs rm",
+      "ls | tee out.txt",
+      "ls &&",
+      "ls |",
+      "cat 'unterminated",
+      "FOO=1 ls",
+      "ls |& cat"
+    ];
+    for (const command of cases) expect(bashExploreKind(command), command).toBeUndefined();
   });
 });

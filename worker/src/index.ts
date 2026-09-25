@@ -1103,6 +1103,15 @@ async function initialize(command: InitCommand): Promise<void> {
       eventType.startsWith("summarization_retry_")
     ) {
       send({ type: "activity", taskId: command.taskId, event: eventType, detail: value });
+    } else if (eventType === "queue_update") {
+      // Pi's pending steering/follow-up lists, for the composer's queue row. The lists are
+      // the worker's own UI view: entries leave them the moment the loop delivers them.
+      send({
+        type: "queue_state",
+        taskId: command.taskId,
+        steering: [...(value.steering as readonly string[] ?? [])],
+        followUp: [...(value.followUp as readonly string[] ?? [])]
+      });
     }
     // A Stop during a tool call still lets Pi start the next model request, which fails at once
     // on the aborted signal ("This operation was aborted"). That is the stop, not a failure.
@@ -1423,6 +1432,49 @@ async function handle(command: WorkerCommand): Promise<void> {
       activeRun = undefined;
       send({ type: "run_state", taskId, runId: stoppedRunId, state: "idle" });
       emitSnapshot();
+    } else if (command.type === "queue_message") {
+      // Reached with the command queue held by a running prompt, so this must never await it.
+      if (!command.message.trim()) throw new Error("Message is required");
+      if (session.isStreaming) {
+        const prepared = await prepareImages(command.images);
+        if (command.literal) {
+          // "Send as message": queue the text raw, without command, skill or template expansion.
+          await session.sendUserMessage(
+            [{ type: "text", text: command.message }, ...prepared],
+            { deliverAs: command.behavior === "follow_up" ? "followUp" : "steer" }
+          );
+        } else if (command.behavior === "follow_up") {
+          // Expands skills and templates; throws on extension commands, which cannot be queued.
+          await session.followUp(command.message, prepared.length > 0 ? prepared : undefined);
+        } else {
+          await session.steer(command.message, prepared.length > 0 ? prepared : undefined);
+        }
+        // The queue's new contents ride the session's queue_update event.
+      } else {
+        // The run settled (or never started) between the host's check and now: a steered
+        // message with no run to ride would sit in the queue until some later run delivered
+        // it mid-flight, so run it as a fresh prompt on the serial queue instead. The prompt
+        // answers this same id once the run starts, so nothing responds here.
+        const images = command.images;
+        commandQueue = commandQueue.then(() => handle({
+          id: command.id,
+          type: "prompt",
+          runId: crypto.randomUUID(),
+          startedAt: runStartedAt(undefined),
+          message: command.message,
+          ...(command.literal ? { literal: true } : {}),
+          ...(images && images.length > 0 ? { images } : {})
+        })).catch((error) => {
+          send({ type: "worker_error", taskId, message: safeError(error) });
+        });
+        return;
+      }
+    } else if (command.type === "dequeue") {
+      // Clearing only empties Pi's pending lists, so it is safe mid-run; the host restores the
+      // texts to the composer. Images are not returned by Pi and drop out of the restored draft.
+      const cleared = session.clearQueue();
+      respond(command.id, cleared);
+      return;
     } else if (command.type === "snapshot") {
       emitSnapshot();
     } else if (command.type === "generate_commit_message") {
@@ -1517,7 +1569,7 @@ function closeMcpServers(): Promise<void> {
 }
 
 /** Commands the host sends with `worker::request` and whose failures it reports itself. */
-const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "list_commands", "execute_command", "init_agents", "compact"]);
+const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "list_commands", "execute_command", "init_agents", "compact", "dequeue", "queue_message"]);
 
 /**
  * Remove every credential this worker holds from `text`: the chat's own key or sign-in, and
@@ -1566,10 +1618,10 @@ process.stdin.on("data", (chunk: Buffer) => {
       send({ type: "worker_error", taskId, message: "The desktop bridge sent invalid JSON" });
       continue;
     }
-    // Cancellation and dialog answers must bypass the prompt queue: a prompt holds the queue
-    // until the agent settles. An extension awaiting ctx.ui.confirm() is doing so *inside* that
-    // prompt, so queueing its answer behind the prompt would deadlock the run outright.
-    if (command.type === "abort" || command.type === "extension_ui_response") {
+    // Cancellation, dialog answers, message queueing and dequeueing must bypass the prompt
+    // queue: a prompt holds the queue until the agent settles, so anything that has to reach
+    // the running run (an abort, a steer) or the user's pending messages deadlocks behind it.
+    if (command.type === "abort" || command.type === "extension_ui_response" || command.type === "queue_message" || command.type === "dequeue") {
       void handle(command).catch((error) => {
         send({ type: "worker_error", taskId, message: safeError(error) });
       });

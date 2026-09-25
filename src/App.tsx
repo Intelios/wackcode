@@ -306,6 +306,8 @@ export default function App() {
           return {
             ...current,
             [taskId]: { ...runtime, snapshot, activeRun: snapshot.activeRun, planState, todoState, partial: undefined, error: undefined,
+              // A fresh worker never has anything queued; queue_state events are authoritative after this.
+              queued: undefined,
               ...(payload.type === "ready" ? { slashCommands: undefined, slashCommandsError: undefined } : {}) }
           };
         });
@@ -333,6 +335,8 @@ export default function App() {
         if (delta.sessionFile) patchTask(taskId, { sessionFile: delta.sessionFile });
       } else if (payload.type === "partial") {
         patchRuntime(taskId, { partial: payload.message });
+      } else if (payload.type === "queue_state") {
+        patchRuntime(taskId, { queued: { steer: [...payload.steering], followUp: [...payload.followUp] } });
       } else if (payload.type === "run_state") {
         patchTask(taskId, { status: payload.state, lastError: payload.state === "running" ? null : undefined });
         if (payload.state === "running") {
@@ -890,8 +894,8 @@ export default function App() {
     });
   }
 
-  async function sendPrompt(message: string, options: { images?: ImageContent[]; mode?: TaskMode; literal?: boolean } = {}): Promise<boolean> {
-    const { images, mode: modeOverride, literal } = options;
+  async function sendPrompt(message: string, options: { images?: ImageContent[]; mode?: TaskMode; literal?: boolean; queue?: "steer" | "follow_up" } = {}): Promise<boolean> {
+    const { images, mode: modeOverride, literal, queue } = options;
     if (!selectedTask) {
       const active = draft ?? { projectId: lastProjectId(), useWorktree: false };
       const choice = active.choice ?? defaultChoice(active.projectId);
@@ -959,7 +963,21 @@ export default function App() {
       if (pendingSlash) setComposerTransfer({ taskId: task.id, text: "", images: [], nonce: Date.now() + 1 });
       return true;
     }
-    if (selectedTask.status === "running" || selectedTask.status === "stopping") return false;
+    if (selectedTask.status === "stopping") return false;
+    if (selectedTask.status === "running") {
+      // While Pi works, a message queues onto the run: steering delivers it at the run's next
+      // boundary, a follow-up waits for the run to finish. Sends that cannot queue — the
+      // programmatic ones (plan approval, reviews) and a stopped run — still refuse.
+      const behavior = queue ?? (literal ? "steer" : undefined);
+      if (!behavior) return false;
+      try {
+        await api.queueMessage({ taskId: selectedTask.id, behavior, message, images, ...(literal ? { literal: true } : {}) });
+        return true;
+      } catch (reason) {
+        patchRuntime(selectedTask.id, { error: String(reason) });
+        return false;
+      }
+    }
     const startedAt = Date.now();
     patchTask(selectedTask.id, { status: "running", lastError: null });
     patchRuntime(selectedTask.id, { error: undefined, activity: "starting", activeRun: { startedAt } });
@@ -1362,6 +1380,19 @@ export default function App() {
     catch (reason) { patchRuntime(selectedTask.id, { error: String(reason) }); }
   }
 
+  /** Take the queued messages back out of Pi and hand their texts to the composer. */
+  async function dequeueMessages(): Promise<string[] | undefined> {
+    if (!selectedTask) return undefined;
+    try {
+      const cleared = await api.dequeueMessages(selectedTask.id);
+      const texts = [...cleared.steering, ...cleared.followUp];
+      return texts.length > 0 ? texts : undefined;
+    } catch (reason) {
+      patchRuntime(selectedTask.id, { error: String(reason) });
+      return undefined;
+    }
+  }
+
   async function renameTask(taskId: string, name: string) {
     patchTask(taskId, { name });
     try {
@@ -1666,7 +1697,7 @@ export default function App() {
               disabled={selectedTask ? pendingDialogTaskIds.has(selectedTask.id) : false}
               onModeChange={(mode) => void setTaskMode(mode)}
               onConfigure={selectedTask ? (patch) => void configure(patch) : configureDraft}
-              onSend={(message, images) => sendPrompt(message, { images })}
+              onSend={(message, images, queue) => sendPrompt(message, { images, queue })}
               onLiteral={(message, images) => sendPrompt(message, { images, literal: true })}
               commands={selectedTask ? [...APP_SLASH_COMMANDS, ...(runtime?.slashCommands ?? [])] : APP_SLASH_COMMANDS}
               commandsReady={!selectedTask || runtime?.slashCommands !== undefined}
@@ -1679,6 +1710,8 @@ export default function App() {
               mentionsTruncated={composerMentions?.truncated}
               onRequestMentions={() => void requestMentions()}
               onCommand={sendSlash}
+              queuedMessages={runtime?.queued}
+              onDequeue={dequeueMessages}
               transfer={selectedTask && composerTransfer?.taskId === selectedTask.id ? composerTransfer : undefined}
               seed={selectedTask ? composerSeed : draftSeedNonce ? { text: "", nonce: draftSeedNonce } : undefined}
               onDraftChange={!selectedTask ? (text, images) => { draftComposer.current = { text, images }; } : undefined}

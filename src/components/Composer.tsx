@@ -29,8 +29,10 @@ interface ComposerProps {
   mode?: TaskMode;
   onModeChange?: (mode: TaskMode) => void;
   onConfigure: (patch: { providerId?: string; modelId?: string; thinkingLevel?: ThinkingLevel }) => void;
-  /** Resolves false when the send failed; the composer then restores the draft and images. */
-  onSend: (message: string, images: ImageContent[]) => Promise<boolean>;
+  /** Resolves false when the send failed; the composer then restores the draft and images.
+   *  `queue` is set while a run is in progress: "steer" redirects it at the next boundary,
+   *  "follow_up" queues for after it. */
+  onSend: (message: string, images: ImageContent[], queue?: "steer" | "follow_up") => Promise<boolean>;
   commands?: SlashCommand[];
   commandsReady?: boolean;
   commandsLoading?: boolean;
@@ -47,6 +49,10 @@ interface ComposerProps {
   /** Called whenever a new `@` token opens, so the list is fresh. Omit to turn mentions off. */
   onRequestMentions?: () => void;
   transfer?: { text: string; images: ImageContent[]; nonce: number };
+  /** Messages queued on the running prompt, shown between the transcript and the draft. */
+  queuedMessages?: { steer: string[]; followUp: string[] };
+  /** Takes the queued messages back out of Pi; resolves with their texts for the draft. */
+  onDequeue?: () => Promise<string[] | undefined>;
   onStop: () => void;
   onOpenSettings: () => void;
   /** When true the composer is visually dimmed and non-interactive (e.g. a dialog needs attention). */
@@ -59,7 +65,7 @@ interface ComposerProps {
   frozen?: string;
 }
 
-export function Composer({ status, providerId, modelId, thinkingLevel, providers, stats, header, placeholder, popoverSide = "top", mode, onModeChange, onConfigure, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, onDraftChange, mentionFiles, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, transfer, onStop, onOpenSettings, disabled, seed, comet, frozen }: ComposerProps) {
+export function Composer({ status, providerId, modelId, thinkingLevel, providers, stats, header, placeholder, popoverSide = "top", mode, onModeChange, onConfigure, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, onDraftChange, mentionFiles, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, transfer, queuedMessages, onDequeue, onStop, onOpenSettings, disabled, seed, comet, frozen }: ComposerProps) {
   const [draft, setDraft] = useState(transfer?.text ?? "");
   const [attachments, setAttachments] = useState<ImageContent[]>(transfer?.images ?? []);
   const [attachNotice, setAttachNotice] = useState<string>();
@@ -139,10 +145,38 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
     areaRef.current?.focus();
   }, [seedNonce]);
 
+  /** Queue the draft on the running prompt. Enter steers (delivered at the run's next
+   *  boundary); ⌥Enter and "Send as message" queue it for after the run, raw or expanded. */
+  async function queueDraft(behavior: "steer" | "follow_up", literal = false) {
+    const message = draft.trim();
+    if (!message || status !== "running" || blockedByModel) return;
+    const images = attachments;
+    setDraft("");
+    setAttachments([]);
+    setAttachNotice(undefined);
+    const ok = literal && onLiteral ? await onLiteral(message, images) : await onSend(message, images, behavior);
+    if (!ok) {
+      setDraft(message);
+      setAttachments(images);
+    }
+  }
+
   async function send() {
     if (frozen !== undefined) return;
     const message = draft.trim();
-    if (!message || busy || blockedByModel) return;
+    if (!message || blockedByModel) return;
+    if (busy) {
+      // Pi is working: queue instead of sending. Slash commands that act on the app itself
+      // cannot queue (they are not messages); skills, templates and unknown text can — Pi
+      // expands the first two and refuses extension commands.
+      if (message.startsWith("/") && commands.some((command) => command.name === /^\/([^\s]+)/.exec(message)?.[1] && command.source === "app")) {
+        setSlashNotice(`Wait for Pi to finish before running /${/^\/([^\s]+)/.exec(message)?.[1]}.`);
+        setSlashOpen(false);
+        return;
+      }
+      await queueDraft("steer");
+      return;
+    }
     const images = attachments;
     if (message.startsWith("/") && onCommand) {
       const match = /^\/([^\s]+)(?:\s+([\s\S]*))?$/.exec(message);
@@ -200,7 +234,8 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
   }
 
   async function sendLiteral() {
-    if (!onLiteral || busy) return;
+    if (!onLiteral) return;
+    if (busy) return void queueDraft("steer", true);
     const ok = await onLiteral(draft.trim(), attachments);
     if (ok) { setDraft(""); setAttachments([]); setSlashNotice(undefined); }
   }
@@ -224,7 +259,24 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
     setAttachNotice(undefined);
   }
 
+  /** Take the queued messages back out of Pi and into the draft, keeping anything typed since. */
+  async function restoreQueued() {
+    const texts = await onDequeue?.();
+    if (!texts || texts.length === 0) return;
+    setSlashNotice(undefined);
+    setDraft((current) => {
+      const restored = texts.join("\n\n");
+      return current.trim() ? `${current}\n\n${restored}` : restored;
+    });
+    requestAnimationFrame(() => { areaRef.current?.focus(); });
+  }
+
   const acceptsDrop = (event: DragEvent) => !disabled && providers.length > 0 && event.dataTransfer.types.includes("Files");
+
+  const queuedEntries = [
+    ...(queuedMessages?.steer ?? []).map((text) => ({ kind: "steer" as const, text })),
+    ...(queuedMessages?.followUp ?? []).map((text) => ({ kind: "followUp" as const, text }))
+  ];
 
   const context = stats?.contextUsage;
   const statsLabel = stats
@@ -278,6 +330,19 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
             }) : <div className="slash-picker-status">No matching files</div>}
           {mentionFiles && mentionsTruncated && <div className="slash-picker-status">Only the first 20,000 files are listed.</div>}
         </div>}
+        {queuedEntries.length > 0 && (
+          <div className="composer-queue" role="list" aria-label="Queued messages">
+            {queuedEntries.map((entry, index) => (
+              <div className="queued-message" role="listitem" key={`${entry.kind}-${index}`}>
+                <span className={`queued-tag ${entry.kind}`}>{entry.kind === "steer" ? "Steering" : "Queued"}</span>
+                <span className="queued-text">{entry.text}</span>
+                <button type="button" className="queued-remove" aria-label="Restore queued messages to the composer" onClick={() => void restoreQueued()}>
+                  <Icon name="close" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         {attachments.length > 0 && (
           <div className="composer-attachments">
             {attachments.map((image, index) => (
@@ -342,10 +407,11 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
             }
             if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault();
+              if (event.altKey) { void queueDraft("follow_up"); return; }
               void send();
             }
           }}
-          placeholder={placeholder ?? (providers.length === 0 ? "Connect a provider to start…" : busy ? "Pi is working — queue your next message…" : mode === "plan" ? "Describe the work — in Plan mode Pi inspects and proposes a plan without changing files…" : mode === "ultraplan" ? "Describe the work — in Ultra Plan Pi interviews you in depth, one question at a time, before proposing a plan…" : "Ask Pi to inspect, change, or run something…")}
+          placeholder={placeholder ?? (providers.length === 0 ? "Connect a provider to start…" : busy ? "Pi is working — ⏎ steers the run, ⌥⏎ queues for after…" : mode === "plan" ? "Describe the work — in Plan mode Pi inspects and proposes a plan without changing files…" : mode === "ultraplan" ? "Describe the work — in Ultra Plan Pi interviews you in depth, one question at a time, before proposing a plan…" : "Ask Pi to inspect, change, or run something…")}
           disabled={disabled || providers.length === 0}
         />
         <div className="composer-toolbar">

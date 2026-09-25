@@ -114,6 +114,8 @@ pub fn run() {
             commands::init_agents,
             commands::compact_task,
             commands::prompt,
+            commands::queue_message,
+            commands::dequeue_messages,
             commands::resend_message,
             commands::navigate_task,
             commands::restore_checkpoint,

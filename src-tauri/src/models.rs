@@ -816,6 +816,31 @@ pub struct PromptInput {
     pub literal: bool,
 }
 
+/// Queue a message on a chat's running prompt: "steer" delivers it at the run's next boundary,
+/// "follow_up" holds it until the run finishes.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueMessageInput {
+    pub task_id: String,
+    pub behavior: String,
+    pub message: String,
+    /// Images attached to this message, forwarded verbatim to the worker.
+    #[serde(default)]
+    pub images: Vec<ImageContent>,
+    /// Sent raw, without command, skill or template expansion ("Send as message").
+    #[serde(default)]
+    pub literal: bool,
+}
+
+/// The texts Pi's pending-message queues held when they were cleared, for the composer to take back.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueuedMessages {
+    pub steering: Vec<String>,
+    #[serde(default)]
+    pub follow_up: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SlashCommand {

@@ -3,7 +3,7 @@ use crate::{
     models::{
         AppearanceConfig, BackdropMode, BootstrapPayload, BuiltinModelSuggestion, CheckpointChange, CheckpointRef, CreateTaskInput, ExportPlanInput,
         ForkTaskInput, GitChanges, GitPublishInfo, GitPrInfo, GitGeneratedMessage, DiffComment, ImageContent, ModelRecord, NavigateResult, NavigateTaskInput, NavigateTaskResult,
-        ProjectRecord, PromptConfig, PromptInput, ExtensionUiResponseInput, InstallPackageInput, PackageRecord,
+        ProjectRecord, PromptConfig, PromptInput, QueueMessageInput, QueuedMessages, ExtensionUiResponseInput, InstallPackageInput, PackageRecord,
         PackageSearchResult, ProviderKind, ProviderRecord, ResendInput, RestoreCheckpointInput, RestoreResult,
         SaveProviderInput, SearchPackagesInput, SetPackageResourcesInput, SetTaskModeInput, SetToolConfigInput,
         SlashCommand, SubagentConfig, AutoTitleConfig, TaskMode, TaskRecord, TaskStatus, ToolConfig, WorkspaceFiles,
@@ -1361,6 +1361,49 @@ pub async fn prompt(app: AppHandle, state: State<'_, MetadataState>, input: Prom
     Ok(run_id)
 }
 
+/// Queue a message on a chat's running prompt. Enter while Pi is working steers the run (the
+/// message is delivered at its next boundary); a follow-up waits for the run to finish. The
+/// worker decides: if the run has just settled anyway, the message starts a fresh run instead,
+/// so this never refuses just because the run ended between the renderer's check and here.
+#[tauri::command]
+pub async fn queue_message(app: AppHandle, state: State<'_, MetadataState>, input: QueueMessageInput) -> Result<(), String> {
+    let behavior = queue_behavior(&input.behavior)?;
+    let message = required(&input.message, "Message")?;
+    validate_images(&input.images)?;
+    let lock = task_lock(&app, &input.task_id);
+    let _guard = lock.lock().await;
+    let task = find_task(&state, &input.task_id)?;
+    if matches!(task.status, TaskStatus::Stopping) {
+        return Err("Pi is stopping — wait for it to finish.".into());
+    }
+    // A running chat's worker exists by definition; an idle one may still hold a worker, whose
+    // queue-message fallback runs the message as a fresh prompt.
+    worker::send(&app, &task.id, &json!({
+        "id": Uuid::new_v4().to_string(), "type": "queue_message", "behavior": behavior,
+        "message": message, "literal": input.literal, "images": input.images
+    })).await
+}
+
+fn queue_behavior(behavior: &str) -> Result<&str, String> {
+    match behavior {
+        "steer" | "follow_up" => Ok(behavior),
+        _ => Err("Unknown way to queue a message.".into()),
+    }
+}
+
+/// Take the chat's queued messages back out of Pi's pending lists and return their texts for
+/// the composer. Images cannot be returned and drop out of the restored draft.
+#[tauri::command]
+pub async fn dequeue_messages(app: AppHandle, state: State<'_, MetadataState>, task_id: String) -> Result<QueuedMessages, String> {
+    let lock = task_lock(&app, &task_id);
+    let _guard = lock.lock().await;
+    find_task(&state, &task_id)?;
+    let result = worker::request(&app, &task_id, json!({
+        "id": Uuid::new_v4().to_string(), "type": "dequeue"
+    }), REQUEST_TIMEOUT).await?;
+    serde_json::from_value(result).map_err(|_| "Could not read the queued messages.".to_string())
+}
+
 /// Auto titles live on the Sub-agents page as an agent WackCode runs itself, so they ride
 /// the same switch: while the sub-agents built-in is off no titles run either.
 fn auto_titles_active(config: &AutoTitleConfig, subagents: &SubagentConfig) -> bool {
@@ -2346,6 +2389,17 @@ mod tests {
         assert!(validated_pr_url("github.com/owner/repo", "https://other.example/owner/repo/pull/42").is_err());
         assert!(validated_pr_url("github.com/owner/repo", "https://github.com/owner/other/pull/42").is_err());
         assert!(validated_pr_url("github.com/owner/repo", "https://github.com/owner/repo/issues/42").is_err());
+    }
+
+    #[test]
+    fn queue_behaviors_are_limited_and_pi_camel_case_parses_back() {
+        assert_eq!(queue_behavior("steer").unwrap(), "steer");
+        assert_eq!(queue_behavior("follow_up").unwrap(), "follow_up");
+        assert!(queue_behavior("later").is_err());
+        // Pi's clearQueue answers camelCase ("followUp"); the host hands it to the composer.
+        let cleared: QueuedMessages = serde_json::from_str(r#"{"steering":["a"],"followUp":["b"]}"#).unwrap();
+        assert_eq!(cleared.steering, vec!["a".to_string()]);
+        assert_eq!(cleared.follow_up, vec!["b".to_string()]);
     }
 
     #[test]

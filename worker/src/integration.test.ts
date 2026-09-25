@@ -39,11 +39,13 @@ interface Output {
   id?: string;
   success?: boolean;
   error?: string;
-  result?: { leafId?: string | null; editorText?: string; files?: Checkpoint };
+  result?: { leafId?: string | null; editorText?: string; files?: Checkpoint; steering?: string[]; followUp?: string[] };
   taskId?: string;
   runId?: string;
   startedAt?: number;
   state?: string;
+  steering?: string[];
+  followUp?: string[];
   message?: string;
   event?: string;
   detail?: { toolCallId?: string; toolName?: string; text?: string; details?: unknown };
@@ -2381,5 +2383,106 @@ describe("MCP servers", () => {
     await worker.waitFor((output) => output.type === "activity" && output.event === "mcp_connect_end", 5_000);
     expect(provider.requests).toHaveLength(0);
     expect(worker.outputs.some((output) => output.type === "worker_error" || output.type === "extension_notice")).toBe(false);
+  });
+});
+
+describe("message queueing", () => {
+  /** Starts the run whose bash tool sleeps between two lines, leaving a deterministic
+   *  mid-run window for queue commands, and waits until that window is open. */
+  async function startSlowRun(secret: string, taskName: string) {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), `wackcode-${taskName}-`));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(provider.baseUrl, secret, workspace, `${taskName}-task`);
+    cleanup.push(() => worker.shutdown());
+    const runId = crypto.randomUUID();
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId, message: "stream tool" });
+    await worker.waitFor((output) =>
+      output.type === "activity" && output.event === "tool_execution_update" && output.detail?.text?.includes("first line") === true);
+    return { provider, worker, runId };
+  }
+
+  it("delivers a steered message at the run's next boundary, within the same run", async () => {
+    const { provider, worker, runId } = await startSlowRun("alpha-secret", "steer");
+    const queueId = crypto.randomUUID();
+    worker.send({ id: queueId, type: "queue_message", behavior: "steer", message: "Steer: keep it short." });
+    await worker.waitFor((output) => output.type === "queue_state" && output.steering.includes("Steer: keep it short."));
+    const accepted = await worker.waitFor((output) => output.type === "response" && output.id === queueId);
+    expect(accepted.success).toBe(true);
+
+    // The steered message becomes the last user message of the run's next model request.
+    await worker.waitFor(() => provider.requests.some((request) => request.text === "Steer: keep it short."));
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === runId && output.state === "idle");
+    // One run, not a fresh one: no second run_state running and no new run id.
+    expect(worker.outputs.filter((output) => output.type === "run_state" && output.state === "running")).toHaveLength(1);
+    // The queue row empties once the loop delivers the message.
+    const queueStates = worker.outputs.filter((output) => output.type === "queue_state");
+    expect(queueStates[queueStates.length - 1]?.steering).toEqual([]);
+    expect(worker.view?.messages.some((message) =>
+      message.role === "user" && message.blocks.some((block) => block.text === "Steer: keep it short."))).toBe(true);
+  });
+
+  it("delivers a follow-up only after the run's own answer, still within the run", async () => {
+    const { provider, worker, runId } = await startSlowRun("alpha-secret", "follow-up");
+    const queueId = crypto.randomUUID();
+    worker.send({ id: queueId, type: "queue_message", behavior: "follow_up", message: "Follow-up: then summarize." });
+    await worker.waitFor((output) => output.type === "queue_state" && output.followUp.includes("Follow-up: then summarize."));
+
+    await worker.waitFor(() => provider.requests.some((request) => request.text === "Follow-up: then summarize."));
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === runId && output.state === "idle");
+    expect(worker.outputs.filter((output) => output.type === "run_state" && output.state === "running")).toHaveLength(1);
+    // The follow-up request carries the run's tool result: the agent finished its own answer first.
+    const followUpRequest = provider.requests.find((request) => request.text === "Follow-up: then summarize.");
+    expect(followUpRequest).toBeDefined();
+    expect(JSON.stringify(followUpRequest?.body)).toContain("second line");
+    expect(worker.view?.messages.some((message) =>
+      message.role === "user" && message.blocks.some((block) => block.text === "Follow-up: then summarize."))).toBe(true);
+  });
+
+  it("restores queued messages to the caller without delivering them", async () => {
+    const { provider, worker, runId } = await startSlowRun("alpha-secret", "dequeue");
+    worker.send({ id: crypto.randomUUID(), type: "queue_message", behavior: "steer", message: "Keep this one back." });
+    worker.send({ id: crypto.randomUUID(), type: "queue_message", behavior: "follow_up", message: "And this later." });
+    await worker.waitFor((output) =>
+      output.type === "queue_state" && output.steering.includes("Keep this one back.") && output.followUp.includes("And this later."));
+
+    const id = crypto.randomUUID();
+    worker.send({ id, type: "dequeue" });
+    const cleared = await worker.waitFor((output) => output.type === "response" && output.id === id);
+    expect(cleared.success).toBe(true);
+    expect(cleared.result).toEqual({ steering: ["Keep this one back."], followUp: ["And this later."] });
+
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === runId && output.state === "idle");
+    expect(provider.requests.some((request) => request.text.includes("Keep this one back.") || request.text.includes("And this later."))).toBe(false);
+    const queueStates = worker.outputs.filter((output) => output.type === "queue_state");
+    expect(queueStates[queueStates.length - 1]?.steering).toEqual([]);
+    expect(queueStates[queueStates.length - 1]?.followUp).toEqual([]);
+    expect(worker.view?.messages.some((message) =>
+      message.blocks.some((block) => block.text === "Keep this one back." || block.text === "And this later."))).toBe(false);
+  });
+
+  it("runs a queued message as a fresh prompt when the run has already settled", async () => {
+    const { provider, worker, runId } = await startSlowRun("alpha-secret", "queue-fallback");
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === runId && output.state === "idle");
+    const before = provider.requests.length;
+
+    const queueId = crypto.randomUUID();
+    const outputsBefore = worker.outputs.length;
+    worker.send({ id: queueId, type: "queue_message", behavior: "steer", message: "Fresh prompt for an idle chat." });
+    const accepted = await worker.waitFor((output) => output.type === "response" && output.id === queueId);
+    expect(accepted.success).toBe(true);
+    await worker.waitFor(() => provider.requests.length > before && provider.requests[before].text === "Fresh prompt for an idle chat.");
+    // A fresh run starts for it, not the settled one riding on. (run_state running precedes
+    // the response, so the window opens at the queue command, not at the response.)
+    const runnings = worker.outputs.filter((output, index) =>
+      index >= outputsBefore && output.type === "run_state" && output.state === "running");
+    expect(runnings).toHaveLength(1);
+    const newRunId = runnings[0]?.runId;
+    expect(newRunId).toBeTruthy();
+    expect(newRunId).not.toBe(runId);
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === newRunId && output.state === "idle");
+    expect(worker.view?.messages.some((message) =>
+      message.role === "user" && message.blocks.some((block) => block.text === "Fresh prompt for an idle chat."))).toBe(true);
   });
 });

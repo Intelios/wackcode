@@ -231,6 +231,77 @@ describe("Composer slash commands", () => {
   });
 });
 
+describe("Composer queueing while Pi is working", () => {
+  function setup(extra: Partial<React.ComponentProps<typeof Composer>> = {}) {
+    const onSend = vi.fn().mockResolvedValue(true);
+    render(<Composer status="running" providers={providers} providerId="p" modelId="sees" thinkingLevel="off"
+      onConfigure={vi.fn()} onSend={onSend} onStop={vi.fn()} onOpenSettings={vi.fn()} {...extra} />);
+    return { onSend, area: screen.getByRole("textbox") };
+  }
+
+  it("steers with Enter instead of refusing to send", async () => {
+    const { onSend, area } = setup();
+    fireEvent.change(area, { target: { value: "Try the other approach" } });
+    fireEvent.keyDown(area, { key: "Enter" });
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("Try the other approach", [], "steer"));
+    expect(area).toHaveValue("");
+  });
+
+  it("queues a follow-up on ⌥Enter for after the run", async () => {
+    const { onSend, area } = setup();
+    fireEvent.change(area, { target: { value: "Then run the tests" } });
+    fireEvent.keyDown(area, { key: "Enter", altKey: true });
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("Then run the tests", [], "follow_up"));
+  });
+
+  it("keeps the draft while the run is stopping", () => {
+    const { onSend, area } = setup({ status: "stopping" });
+    fireEvent.change(area, { target: { value: "Hold this" } });
+    fireEvent.keyDown(area, { key: "Enter" });
+    expect(onSend).not.toHaveBeenCalled();
+    expect(area).toHaveValue("Hold this");
+  });
+
+  it("restores the draft when the queue request fails", async () => {
+    const onSend = vi.fn().mockResolvedValue(false);
+    const { area } = setup({ onSend });
+    fireEvent.change(area, { target: { value: "Try again later" } });
+    fireEvent.keyDown(area, { key: "Enter" });
+    await waitFor(() => expect(onSend).toHaveBeenCalled());
+    expect(area).toHaveValue("Try again later");
+  });
+
+  it("queues app commands as refused but unknown slash text as a message", async () => {
+    const compact = { id: "app:compact", name: "compact", description: "Summarize", source: "app" as const, sourceLabel: "WackCode" };
+    const { onSend, area } = setup({ commands: [compact] });
+    // Escape closes the command picker, so Enter queues instead of completing the command.
+    fireEvent.change(area, { target: { value: "/compact" } });
+    fireEvent.keyDown(area, { key: "Escape" });
+    fireEvent.keyDown(area, { key: "Enter" });
+    expect(await screen.findByRole("status")).toHaveTextContent("Wait for Pi to finish before running /compact.");
+    expect(onSend).not.toHaveBeenCalled();
+
+    fireEvent.change(area, { target: { value: "/not-a-command" } });
+    fireEvent.keyDown(area, { key: "Enter" });
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("/not-a-command", [], "steer"));
+  });
+
+  it("lists queued messages and restores them into the draft", async () => {
+    const onDequeue = vi.fn().mockResolvedValue(["Steered note", "Later note"]);
+    const { area } = setup({
+      queuedMessages: { steer: ["Steered note"], followUp: ["Later note"] },
+      onDequeue
+    });
+    const list = screen.getByRole("list", { name: "Queued messages" });
+    expect(list).toHaveTextContent("Steered note");
+    expect(list).toHaveTextContent("Later note");
+    expect(screen.getAllByRole("listitem")[0]).toHaveTextContent("Steering");
+    fireEvent.click(screen.getAllByRole("button", { name: "Restore queued messages to the composer" })[0]);
+    await waitFor(() => expect(onDequeue).toHaveBeenCalled());
+    expect(area).toHaveValue("Steered note\n\nLater note");
+  });
+});
+
 describe("Composer @ file mentions", () => {
   const files = ["README.md", "src/App.tsx", "src/components/Composer.tsx", "my notes.txt"];
 

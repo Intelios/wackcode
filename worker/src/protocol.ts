@@ -436,6 +436,17 @@ export type WorkerCommand =
       leave?: CheckpointRef | null;
     }
   | { id: string; type: "abort" }
+  | {
+      id: string;
+      type: "queue_message";
+      /** "steer" delivers at the run's next boundary; "follow_up" waits for the run to finish. */
+      behavior: "steer" | "follow_up";
+      message: string;
+      /** Sent raw (no command/skill/template expansion) — the composer's "Send as message". */
+      literal?: boolean;
+      images?: ImageContent[];
+    }
+  | { id: string; type: "dequeue" }
   | { id: string; type: "snapshot" }
   | { id: string; type: "generate_commit_message"; diff: string; truncated: boolean }
   | { id: string; type: "set_model"; modelId: string }
@@ -624,6 +635,7 @@ export type WorkerOutput =
   | { type: "snapshot_delta"; taskId: string; delta: SnapshotDelta }
   | { type: "partial"; taskId: string; message: NormalizedMessage }
   | { type: "run_state"; taskId: string; runId?: string; startedAt?: number; state: "running" | "idle" | "stopping" | "interrupted" }
+  | { type: "queue_state"; taskId: string; steering: string[]; followUp: string[] }
   | { type: "activity"; taskId: string; event: string; detail?: unknown }
   | { type: "worker_error"; taskId?: string; message: string }
   | ({ type: "extension_ui_request"; taskId: string; requestId: string } & ExtensionUIRequest)

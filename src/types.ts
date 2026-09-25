@@ -742,6 +742,7 @@ export type WorkerEvent =
   | { type: "snapshot_delta"; taskId: string; delta: SnapshotDelta }
   | { type: "partial"; taskId: string; message: NormalizedMessage }
   | { type: "run_state"; taskId: string; runId?: string; startedAt?: number; state: TaskStatus }
+  | { type: "queue_state"; taskId: string; steering: string[]; followUp: string[] }
   | { type: "activity"; taskId: string; event: string; detail?: Record<string, unknown> }
   | { type: "worker_error"; taskId?: string; message: string }
   | { type: "response"; taskId?: string; id: string; success: boolean; error?: string }
@@ -773,6 +774,8 @@ export interface TaskRuntime {
   planState?: PlanState;
   /** Latest todo list from the worker's built-in todo extension. */
   todoState?: TodoState;
+  /** Messages queued on the running prompt: steering delivers at the next boundary, followUp after the run. */
+  queued?: { steer: string[]; followUp: string[] };
   /** The most recent file restore, offered for undo until dismissed. */
   lastRestore?: { count: number; undo: CheckpointRef };
 }

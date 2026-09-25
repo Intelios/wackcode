@@ -12,27 +12,23 @@ WackCode is a local macOS desktop app for the [Pi coding agent](https://www.npmj
 ## Architecture
 
 - **`src/`**: React renderer. `App.tsx` owns all cross-cutting state and is the only place that listens to Tauri events. `api.ts` is the only bridge to Rust (one typed `invoke` wrapper per command). Components are presentational; `SettingsPage.tsx` is the one exception that calls `api` directly.
-- **`src-tauri/src/`**: Rust. `commands.rs` holds the Tauri commands (subscription sign-in: `subscriptions.rs`), `worker.rs` runs one Node worker per chat, `storage.rs` writes `wackcode.json`, `secrets.rs` writes API keys, `skills.rs` owns Settings › Skills (folders, `~/.agents/skills` writes, pi.dev parsing).
-- **`worker/src/`**: the Node worker wrapping Pi. `protocol.ts` defines its NDJSON stdin/stdout protocol; built-in extensions (Plan mode, todo, `ask_user_question`, sub-agents, web fetch, MCP) live in `builtin/`.
-- **One prompt:** `App.tsx` → `api.prompt` → `commands::prompt` → NDJSON on the worker's stdin → Pi → NDJSON events on stdout → `worker.rs::handle_worker_line` (persists, re-emits as the Tauri event `worker-event`) → `App.tsx`.
-- **Other processes:** `manager.ts` installs packages and never receives an API key; `subscription-auth.ts` runs OAuth sign-in, only after the user clicks Sign in; `mcp-probe.ts` is Settings' MCP "Test connection" and gets only that server's settings; `skills-scan.ts` lists skill folders with Pi's own loader and only reads files. Sub-agents are not processes but in-process child sessions inside the chat's worker. Stdio MCP servers are non-detached children of the chat's worker, so `killpg` ends them with it.
+- **`src-tauri/src/`**: Rust commands, worker lifecycle, persistence, and credentials.
+- **`worker/src/`**: Node wrapper around Pi; `protocol.ts` defines the NDJSON protocol and `builtin/` holds built-in extensions.
 
 ## Cross-file rules
 
 - **Shared types:** a type that crosses layers changes in `models.rs`, `types.ts`, and (if the worker sees it) `protocol.ts` together. New optional Rust fields need `#[serde(default)]` so existing `wackcode.json` files load; runtime-only fields (like `ProjectRecord.branch`) also need `skip_deserializing`.
-- **New Tauri command:** function in `commands.rs` (validation helpers are at the bottom), registered in `lib.rs` `generate_handler![…]`, wrapper in `api.ts`. A new plugin permission also goes in `capabilities/default.json`.
-- **Worker protocol change:** `protocol.ts` → Rust (`worker.rs` payloads and `handle_worker_line`, call sites in `commands.rs`) → `WorkerEvent` in `types.ts` → the `worker-event` switch in `App.tsx`. Run `pnpm test:worker` afterwards.
-- **Command queue:** a running prompt holds the worker's serial command queue until it settles. `abort`, `extension_ui_response`, `queue_message` and `dequeue` bypass it; anything else that must reach a run in progress has to as well, or the run deadlocks. A `queue_message` that arrives when no run is streaming rewrites itself into a `prompt` on the serial queue, so it never runs beside one.
-- **Incremental snapshots:** a new snapshot field that can change mid-run must also be added to `SnapshotDelta` and merged in `applySnapshotDelta` (`chat-utils.ts`), or the UI only sees it on full snapshots. Keep `delta.ts`'s full-snapshot fallback, and keep unchanged messages as the same objects (the transcript's memoization depends on it).
-- **Worker restarts:** a changed fingerprint in `worker.rs` (provider, model, package resources) kills and respawns the worker, even mid-run. Settings applied live (`set_tools`, `set_subagents`, `set_mode`, `set_prompts`, `set_mcp`, `set_skills`) must stay out of it.
+- **New Tauri command:** register in `lib.rs`, add a typed wrapper in `api.ts`, and add any new plugin permission in `capabilities/default.json`.
+- **Worker protocol change:** update `protocol.ts`, Rust payloads and handlers, `WorkerEvent` in `types.ts`, and the event switch in `App.tsx` together. Run `pnpm test:worker` afterwards.
+- **Command queue:** commands that must reach an active run must bypass the serial prompt queue or they deadlock; see the dispatch comments in `worker/src/index.ts`.
+- **Incremental snapshots:** new fields that change mid-run need `SnapshotDelta` and `applySnapshotDelta` (`chat-utils.ts`) updates. Preserve the full-snapshot fallback and unchanged message object identities for transcript memoization.
+- **Worker restarts:** keep settings applied live out of the `worker.rs` fingerprint; changing it kills and respawns the worker even mid-run.
 - **Per-chat lock:** any command that sends a chat work, moves its conversation, or touches its checkpoints holds that chat's `TaskLocks` entry.
-- **Tools:** never pass `tools:` to the chat's `createAgentSession`. In Pi 0.86.1 it is a hard registry filter that erases extension tools, so they can't even appear as switched off in Settings. The user's choice is a denylist applied with `setActiveToolsByName`; built-in tools are exempt from it.
-- **Planning modes:** Plan and Ultra Plan both count as planning, so test `mode !== "build"` (`isPlanMode` in the frontend), never `=== "plan"`. The Plan contract text must stay byte-identical: `builtin.test.ts` pins its hash, and any change re-appends the contract to every saved Plan chat, so don't just update the hash. User custom prompts (Settings › Prompts, `prompt-overrides.ts`) layer on top: the marker line stays code-controlled, the shipped defaults are what an absent override leaves, and Settings display copies live in `src/promptDefaults.ts`, pinned to the worker's builders by tests on both sides.
-- **Built-ins:** adding or renaming one in `worker/src/builtin/` means updating `BUILTIN_EXTENSIONS` in `PackagesSection.tsx` too. Built-in tools ignore the tool denylist except those in `SWITCHABLE_BUILTIN_TOOLS` (`web_fetch`). MCP tools (`source.kind: "mcp"`) ignore it too: their switches are per server, and they register only between runs.
+- **Tools:** never pass `tools:` to the chat's `createAgentSession`: Pi treats it as a registry filter and erases extension tools. Apply the user's denylist with `setActiveToolsByName`.
+- **Planning modes:** Plan and Ultra Plan both count as planning: use `mode !== "build"` (`isPlanMode` in the frontend). Keep the Plan contract byte-identical: edits re-append it to saved chats, so do not just update the test's pinned hash. Custom prompts layer on top; keep Settings defaults in `src/promptDefaults.ts` aligned with the worker builders.
+- **Built-ins:** adding or renaming one in `worker/src/builtin/` also requires updating `BUILTIN_EXTENSIONS` in `PackagesSection.tsx`. Preserve the separate built-in and MCP tool-switch rules in `worker/src/index.ts`.
 - **Session tree and checkpoints:** read the invariants at the top of `worker/src/tree.ts` and `src-tauri/src/checkpoints.rs` before changing either. Checkpoints must never write to the project's own Git repository.
-- **Theme:** themeable colours are tokens computed in `src/theme.ts` (`TOKENS`) with matching `:root` defaults in `styles.css`; never write a raw colour below `:root` (`theme.test.ts` guards it). Over an image or Liquid Glass only the shell (window, sidebar, header, side panels) turns see-through; content surfaces stay solid.
-- **Window:** the main window is created hidden and `transparent` (`macOSPrivateApi`). `glass.rs` paints it opaque in the user's background colour, except in Liquid Glass while focused, before showing it. Don't give it a `backgroundColor` in `tauri.conf.json`.
-- **Drag and drop:** `dragDropEnabled: false` in `tauri.conf.json` is deliberate. The native handler would otherwise swallow the HTML5 drops the composer uses for images.
+- **Window:** keep `tauri.conf.json` free of `backgroundColor`; `glass.rs` controls the native background. Keep `dragDropEnabled: false` so native handling does not swallow composer image drops.
 
 ## Security (don't weaken)
 
@@ -43,12 +39,18 @@ WackCode is a local macOS desktop app for the [Pi coding agent](https://www.npmj
 - **Asset protocol** is enabled only for `$APPDATA/backgrounds/*`. Only `choose_background_image` writes there (native picker opened in Rust, magic-byte check); the renderer never passes it a path. Don't widen the scope.
 - **Package trust:** an installed extension is unsandboxed code inside the worker that holds the API key. `trusted_at` is set only by a user-confirmed `install_package` or `trust_package`. Never default it, and keep `sync_packages` from trusting packages that arrive by any other route.
 
+## Design
+
+- **Animation:** expressive motion is core to the app's identity. Favour lively, considered transitions and feedback that make interactions feel responsive and full of personality. Respect reduced-motion preferences.
+- **Customisation:** make the app feel personal and adaptable to the user. Design features to work across the user's themes, backgrounds, and appearance settings rather than assuming the defaults.
+- **Personality:** WackCode should feel like a distinctive macOS app, never a generic web app or generic AI-generated design. Make deliberate choices in layout, typography, details, and interaction that reinforce its own character.
+- **Theme:** themeable colours are tokens computed in `src/theme.ts` (`TOKENS`) with matching `:root` defaults in `styles.css`; never write a raw colour below `:root` (`theme.test.ts` guards it). Over an image or Liquid Glass only the shell (window, sidebar, header, side panels) turns see-through; content surfaces stay solid.
+
 ## Conventions
 
 - **Rust:** fallible functions return `Result<T, String>` whose error is a user-facing sentence; no `anyhow`/`thiserror`. Every `wackcode.json` write goes through `MetadataState::mutate`. Git goes through the system `git` CLI (no `git2`).
-- **React:** update state immutably via `patchTask` / `patchRuntime` / `setData`. Reuse the primitives in `src/components/ui/` (Popover, Menu, MenuButton, Select, Tooltip, ConfirmDialog). Destructive actions go through `ConfirmDialog` with `danger`.
+- **React:** update state immutably via `patchTask` / `patchRuntime` / `setData`. Reuse the primitives in `src/components/ui/`. Destructive actions go through `ConfirmDialog` with `danger`.
 - **CSS:** one stylesheet, `src/styles.css`: add rules to the matching section, use `--wc-*` variables and the existing button classes, no Tailwind or other CSS system. Keep the `data-tauri-drag-region` strips working (overlay title bar), `aria-label` on icon-only buttons, and the `prefers-reduced-motion` block.
-- **Animation:** the author prefers expressive animation — it's part of the app's identity, so favour lively, considered motion over bare/instant transitions.
 - **Tests:** pure logic in colocated `*.test.ts`; components with Testing Library role-based queries; worker behavior in `worker/src/*.test.ts` (a real worker against an inline mock provider); Rust in inline `#[cfg(test)]` modules with `tempfile`.
 
 ## Commands
@@ -58,7 +60,6 @@ WackCode is a local macOS desktop app for the [Pi coding agent](https://www.npmj
 | `pnpm check` | Fast compile check: frontend, worker, `cargo check`. |
 | `pnpm test` | All suites; or `test:web`, `test:worker`, `test:rust` individually. |
 | `pnpm build:worker` | After editing `worker/src/` (the dev app runs `worker/dist/`). |
-| `pnpm prepare:runtime` | Once per machine: fetches the pinned Node that `tauri dev`/`build` need. |
 | `pnpm dev:background` / `pnpm dev:stop` | Start / stop the live dev app (below). |
 | `pnpm mock:provider` | Deterministic mock provider at `http://127.0.0.1:43127/v1` (Chat Completions). |
 
@@ -66,7 +67,7 @@ WackCode is a local macOS desktop app for the [Pi coding agent](https://www.npmj
 
 - **Start** with `pnpm dev:background`: idempotent, prints `Ready` once the app is up, logs to `/tmp/wackcode-dev.log`. **Stop** with `pnpm dev:stop`. Don't launch the app any other way, and don't restart it between tests: frontend edits hot-reload, Rust edits rebuild and relaunch the app automatically, and worker edits need `pnpm build:worker` plus a new chat.
 - **Drive** the window by its bundle id, `com.wackcode.desktop`. Only when a test needs the bundled worker and resources, use `pnpm build:desktop:debug` and its `.app`, never while the dev app is running.
-- **Real LLMs:** use the connection named **Testing (AI Agents may use this too)** (under Providers in the composer's model picker). It costs the repo owner nothing and exists for agents' testing. Use it through the app; never read its key from `secrets.json`. Don't send prompts through any other connection or subscription sign-in, as those may cost the owner money. For deterministic output, such as testing cancellation, use `pnpm mock:provider`: it hangs on "wait until stopped".
+- **Real LLMs:** use the connection named **Testing (AI Agents may use this too)** (under Providers in the composer's model picker). Use it through the app; never read its key from `secrets.json`. Don't send prompts through any other connection or subscription sign-in, as those may cost the owner money. For deterministic output, such as testing cancellation, use `pnpm mock:provider`: it hangs on "wait until stopped".
 
 ## Out of scope
 

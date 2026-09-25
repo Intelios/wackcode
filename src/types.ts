@@ -800,6 +800,16 @@ export interface GitDiffSection {
   diff: string;
   hunks: GitDiffHunk[];
   truncated: boolean;
+  /** Exact line counts over the full diff, even when `diff` is a truncated preview. */
+  additions: number;
+  deletions: number;
+}
+
+export interface GitDiffLine {
+  kind: string;
+  text: string;
+  oldLine: number | null;
+  newLine: number | null;
 }
 
 export interface GitDiffHunk {
@@ -807,7 +817,7 @@ export interface GitDiffHunk {
   header: string;
   oldStart: number;
   newStart: number;
-  lines: { kind: string; text: string; oldLine: number | null; newLine: number | null }[];
+  lines: GitDiffLine[];
 }
 
 export interface DiffComment {
@@ -832,7 +842,8 @@ export interface GitChanges {
   root: string | null;
   branch: string | null;
   files: GitChangeFile[];
-  stagedRevision: string;
+  /** Guard hash over every changed file's path, status and section revisions. */
+  changesRevision: string;
 }
 
 export interface GitPublishInfo {

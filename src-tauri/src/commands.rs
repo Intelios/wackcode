@@ -1855,13 +1855,13 @@ pub async fn git_change_action(app: AppHandle, state: State<'_, MetadataState>, 
 }
 
 #[tauri::command]
-pub async fn git_commit(app: AppHandle, state: State<'_, MetadataState>, task_id: String, message: String, expected: String) -> Result<GitChanges, String> {
+pub async fn git_commit(app: AppHandle, state: State<'_, MetadataState>, task_id: String, message: String, files: Vec<String>, expected: String) -> Result<GitChanges, String> {
     let _task = task_lock(&app, &task_id).lock_owned().await;
     let workspace = git_workspace(&state, &task_id)?;
     let root = git::inspect_project(&workspace).root.ok_or("No Git repository")?.canonicalize().map_err(|error| error.to_string())?;
     let _git = app.state::<GitLocks>().for_root(root).lock_owned().await;
     git_workspace(&state, &task_id)?;
-    blocking(move || git::commit(&workspace, &message, &expected)
+    blocking(move || git::commit(&workspace, &message, &files, &expected)
         .map_err(|error| worker::redact_and_limit(&error))).await
 }
 
@@ -1991,7 +1991,7 @@ pub async fn git_generate_message(app: AppHandle, state: State<'_, MetadataState
     let mut diff = String::new();
     let mut truncated = false;
     for file in &snapshot.files {
-        for section in file.sections.iter().filter(|section| section.layer == "staged") {
+        for section in &file.sections {
             let remaining = 20_000usize.saturating_sub(diff.len());
             if remaining == 0 { truncated = true; break; }
             let cut = section.diff.char_indices().map(|(index, _)| index).chain(std::iter::once(section.diff.len())).take_while(|index| *index <= remaining).last().unwrap_or(0);
@@ -1999,7 +1999,7 @@ pub async fn git_generate_message(app: AppHandle, state: State<'_, MetadataState
             if cut < section.diff.len() || section.truncated { truncated = true; }
         }
     }
-    if diff.is_empty() { return Err("Stage changes before generating a commit message".into()); }
+    if diff.is_empty() { return Err("Nothing to describe — make a change first".into()); }
     let (task, provider) = {
         let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
         let task = data.tasks.iter().find(|task| task.id == task_id).ok_or("Chat not found")?.clone();
@@ -2010,7 +2010,7 @@ pub async fn git_generate_message(app: AppHandle, state: State<'_, MetadataState
     worker::ensure_worker(&app, &task, &provider, credential.as_deref()).await?;
     let result = worker::request(&app, &task_id, json!({ "id": Uuid::new_v4().to_string(), "type": "generate_commit_message", "diff": diff, "truncated": truncated }), Duration::from_secs(40)).await?;
     let message = result.as_str().ok_or("The model did not return a commit message")?.trim().to_string();
-    Ok(GitGeneratedMessage { message, revision: snapshot.staged_revision })
+    Ok(GitGeneratedMessage { message, revision: snapshot.changes_revision })
 }
 
 /// The files `@` mentions can pick from: a chat's workspace, or a draft's project folder.

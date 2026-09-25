@@ -1003,12 +1003,12 @@ export default function App() {
     }
   }
 
-  async function changeAction(file: GitChangeFile, section: GitDiffSection, action: "stage" | "unstage" | "discard", hunkId?: number): Promise<void> {
+  async function changeAction(file: GitChangeFile, section: GitDiffSection, hunkId?: number): Promise<void> {
     if (!selectedTask) return;
     const taskId = selectedTask.id;
     const perform = async () => {
       try {
-        const next = await api.gitChangeAction({ taskId, file: file.path, layer: section.layer, action, hunkId, expected: section.revision });
+        const next = await api.gitChangeAction({ taskId, file: file.path, layer: section.layer, action: "discard", hunkId, expected: section.revision });
         ++changesRequest.current;
         if (selectedTaskRef.current === taskId) setChanges(next);
       } catch (reason) {
@@ -1016,15 +1016,13 @@ export default function App() {
         throw reason;
       }
     };
-    if (action === "discard") {
-      setConfirm({
-        title: hunkId === undefined ? "Discard file changes?" : "Discard hunk changes?",
-        body: `This removes the selected working-tree changes in ${file.path}. Staged changes stay in place.`,
-        confirmLabel: "Discard changes", danger: true, run: perform
-      });
-      return;
-    }
-    await perform();
+    setConfirm({
+      title: hunkId === undefined ? "Discard file changes?" : "Discard hunk changes?",
+      body: section.layer === "staged"
+        ? `This removes the staged changes in ${file.path}.`
+        : `This removes the selected working-tree changes in ${file.path}.`,
+      confirmLabel: "Discard changes", danger: true, run: perform
+    });
   }
 
   async function saveDiffComments(comments: DiffComment[]): Promise<void> {
@@ -1738,9 +1736,9 @@ export default function App() {
         onSettings={() => setSettingsOpen(true)}
         onReview={reviewChanges}
         onAction={changeAction}
-        onCommit={async (message, revision) => {
+        onCommit={async (message, files, revision) => {
           try {
-            const next = await api.gitCommit(selectedTask.id, message, revision);
+            const next = await api.gitCommit({ taskId: selectedTask.id, message, files, expected: revision });
             ++changesRequest.current;
             if (selectedTaskRef.current === selectedTask.id) setChanges(next);
           } catch (reason) { void refreshChanges(selectedTask.id); throw reason; }

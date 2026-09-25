@@ -30,7 +30,7 @@ const SEMANTIC_COLOURS = new Set([
   // warning
   "#5c4a22", "#e6d2a6", "#574a2d", "#493b20", "#2c2515", "#d9c491", "#211805", "#221c0f", "#332a17",
   // diff and success
-  "#a8d883", "#b7d9a1", "#accd72", "#1d301b", "#9aaed2",
+  "#a8d883", "#b7d9a1", "#accd72", "#1d301b", "#9aaed2", "#232c3f",
   // stop button
   "#2b201c", "#e8b8a5", "#594037", "#37251f"
 ]);

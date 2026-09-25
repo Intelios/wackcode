@@ -1,8 +1,13 @@
-import { useEffect, useState } from "react";
-import type { DiffComment, GitChangeFile, GitChanges, GitDiffSection, GitGeneratedMessage, GitPrInfo, GitPublishInfo, TaskMode } from "../types";
+import { useEffect, useRef, useState } from "react";
+import type { DiffComment, GitChangeFile, GitChanges, GitDiffLine, GitDiffSection, GitGeneratedMessage, GitPrInfo, GitPublishInfo, TaskMode } from "../types";
+import type { ChangeEntry } from "../changes-utils";
+import { changeEntries, lineAnchor } from "../changes-utils";
+import { ChangesFileList } from "./ChangesFileList";
+import { ChangesDock, type DockTab } from "./ChangesDock";
+import { DiffView, type CommentAnchor } from "./DiffView";
 import { Icon } from "./Icons";
+import { Tooltip } from "./ui/Tooltip";
 
-type Action = "stage" | "unstage" | "discard";
 interface Props {
   changes?: GitChanges;
   loading: boolean;
@@ -17,8 +22,8 @@ interface Props {
   onRefresh: () => void;
   onSettings: () => void;
   onReview: () => Promise<boolean>;
-  onAction: (file: GitChangeFile, section: GitDiffSection, action: Action, hunkId?: number) => Promise<void>;
-  onCommit: (message: string, revision: string) => Promise<void>;
+  onAction: (file: GitChangeFile, section: GitDiffSection, hunkId?: number) => Promise<void>;
+  onCommit: (message: string, files: string[], revision: string) => Promise<void>;
   onGenerate: () => Promise<GitGeneratedMessage>;
   onPublishInfo: () => Promise<GitPublishInfo>;
   onPush: (remote?: string) => Promise<void>;
@@ -30,28 +35,37 @@ interface Props {
 }
 
 export function ChangesPanel(props: Props) {
-  const { changes, loading, busy, width, mode, canReview, reviewReason, comments } = props;
+  const { changes, loading, busy, width, canReview, reviewReason, comments } = props;
   const [selected, setSelected] = useState<{ path: string; layer: "staged" | "working" }>();
   const [message, setMessage] = useState("");
   const [messageRevision, setMessageRevision] = useState<string>();
   const [publish, setPublish] = useState<GitPublishInfo>();
   const [remote, setRemote] = useState("");
   const [pr, setPr] = useState<GitPrInfo>();
-  const [prTitle, setPrTitle] = useState("");
-  const [prBase, setPrBase] = useState("");
-  const [prBody, setPrBody] = useState("");
-  const [draft, setDraft] = useState(false);
-  const [commentAt, setCommentAt] = useState<Omit<DiffComment, "id" | "text">>();
+  const [prFields, setPrFields] = useState({ base: "", title: "", body: "", draft: false });
+  const [commentAt, setCommentAt] = useState<CommentAnchor>();
   const [commentText, setCommentText] = useState("");
   const [editing, setEditing] = useState<Record<string, string>>({});
+  const [dockTab, setDockTab] = useState<DockTab | null>(null);
+  /** File paths the commit sheet is scoped to; empty means every changed file. */
+  const [commitScope, setCommitScope] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [localBusy, setLocalBusy] = useState(false);
-  const files = changes?.files ?? [];
-  const entries = files.flatMap((file) => file.sections.map((section) => ({ file, section })));
+  const [flash, setFlash] = useState<string>();
+  const flashTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  const entries = changeEntries(changes?.files ?? []);
   const current = entries.find((entry) => entry.file.path === selected?.path && entry.section.layer === selected.layer) ?? entries[0];
-  const staged = entries.filter((entry) => entry.section.layer === "staged");
-  const working = entries.filter((entry) => entry.section.layer === "working");
   const disabled = busy || localBusy;
+  const files = changes?.files ?? [];
+  // A scoped file that left the change list drops the scope back to all changes.
+  const scope = commitScope.filter((path) => files.some((file) => file.path === path));
+
+  const commentCounts = new Map<string, number>();
+  for (const comment of comments) {
+    const key = `${comment.layer}:${comment.path}`;
+    commentCounts.set(key, (commentCounts.get(key) ?? 0) + 1);
+  }
 
   useEffect(() => {
     if (!changes?.isGit) return;
@@ -63,11 +77,19 @@ export function ChangesPanel(props: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [changes?.root, changes?.branch]);
 
+  useEffect(() => () => clearTimeout(flashTimer.current), []);
+
   async function run(work: () => Promise<unknown>) {
     setLocalBusy(true); setError("");
     try { await work(); }
     catch (reason) { setError(String(reason)); }
     finally { setLocalBusy(false); }
+  }
+
+  function showFlash(text: string) {
+    clearTimeout(flashTimer.current);
+    setFlash(text);
+    flashTimer.current = setTimeout(() => setFlash(undefined), 1800);
   }
 
   function startResize(event: React.PointerEvent) {
@@ -79,114 +101,196 @@ export function ChangesPanel(props: Props) {
     window.addEventListener("pointerup", end);
   }
 
-  function actionButtons(file: GitChangeFile, section: GitDiffSection, hunkId?: number) {
-    const partial = hunkId !== undefined;
-    const allowed = !partial || (file.hunkable && !section.truncated);
-    const locked = disabled || file.status === "conflict" || !allowed;
-    const reason = file.status === "conflict" ? "Resolve this conflict first" : !allowed ? "Whole-file actions only" : undefined;
-    return section.layer === "staged" ? (
-      <button type="button" disabled={locked} title={reason} onClick={() => void run(() => props.onAction(file, section, "unstage", hunkId))}>Unstage</button>
-    ) : (
-      <>
-        <button type="button" disabled={locked} title={reason} onClick={() => void run(() => props.onAction(file, section, "stage", hunkId))}>Stage</button>
-        <button type="button" disabled={locked} title={reason} onClick={() => void run(() => props.onAction(file, section, "discard", hunkId))}>Discard</button>
-      </>
-    );
+  function entryAction(entry: ChangeEntry, hunkId?: number) {
+    void run(() => props.onAction(entry.file, entry.section, hunkId));
   }
 
-  function addComment(file: GitChangeFile, section: GitDiffSection, line: { kind: string; text: string; oldLine: number | null; newLine: number | null }) {
-    const side = line.kind === "deletion" ? "old" : "new";
-    const number = side === "old" ? line.oldLine : line.newLine;
-    if (number === null) return;
-    setCommentAt({ path: file.path, layer: section.layer, side, line: number, excerpt: line.text.slice(0, 1000), revision: section.revision });
+  function commitFile(path: string) {
+    setCommitScope([path]);
+    setDockTab("commit");
+  }
+
+  function addComment(line: GitDiffLine) {
+    if (!current) return;
+    const anchor = lineAnchor(line);
+    if (!anchor) return;
+    setCommentAt({
+      path: current.file.path, layer: current.section.layer, side: anchor.side, line: anchor.line,
+      excerpt: line.text.slice(0, 1000), revision: current.section.revision
+    });
     setCommentText("");
   }
 
   async function saveComment() {
     if (!commentAt || !commentText.trim()) return;
+    const text = commentText.trim();
     await run(async () => {
-      await props.onComments([...comments, { ...commentAt, id: crypto.randomUUID(), text: commentText.trim() }]);
+      await props.onComments([...comments, { ...commentAt, id: crypto.randomUUID(), text }]);
       setCommentAt(undefined); setCommentText("");
     });
   }
 
-  async function preparePr() {
-    if (!remote) return;
-    await run(async () => {
-      const info = await props.onPreparePr(remote);
-      setPr(info); setPrTitle(info.title); setPrBase(info.base); setPrBody(info.body);
+  function editComment(id: string, text: string | null) {
+    setEditing((before) => {
+      const next = { ...before };
+      if (text === null) delete next[id];
+      else next[id] = text;
+      return next;
     });
   }
 
-  const hasStaged = files.some((file) => file.staged);
+  async function updateComment(comment: DiffComment, text: string) {
+    await run(async () => {
+      await props.onComments(comments.map((item) => item.id === comment.id ? { ...item, text: text.trim() } : item));
+      editComment(comment.id, null);
+    });
+  }
+
+  async function commit() {
+    if (!changes || !message.trim()) return;
+    await run(async () => {
+      await props.onCommit(message.trim(), scope, changes.changesRevision);
+      setMessage(""); setMessageRevision(undefined); setCommitScope([]);
+      setDockTab(null);
+      showFlash("Committed");
+    });
+  }
+
+  async function generateMessage() {
+    const generated = await props.onGenerate();
+    setMessage(generated.message);
+    setMessageRevision(generated.revision);
+  }
+
+  async function push() {
+    await run(async () => {
+      await props.onPush(publish?.upstream ? undefined : remote);
+      setPublish(await props.onPublishInfo());
+      showFlash(`Pushed to ${publish?.upstream ?? remote}`);
+    });
+  }
+
+  async function preparePr(remoteName: string) {
+    const info = await props.onPreparePr(remoteName);
+    setPr(info);
+    setPrFields({ base: info.base, title: info.title, body: info.body, draft: false });
+    return info;
+  }
+
+  async function createPr(remoteName: string, base: string, title: string, body: string, draft: boolean) {
+    const url = await props.onCreatePr(remoteName, base, title, body, draft);
+    setPr((before) => before ? { ...before, existingUrl: url } : before);
+    showFlash("Pull request created");
+    return url;
+  }
+
+  const totals = entries.reduce((sum, entry) => ({ add: sum.add + entry.section.additions, del: sum.del + entry.section.deletions }), { add: 0, del: 0 });
+  // The pill stays clickable when the Reviewer is just unconfigured — it opens Settings instead.
+  const reviewUnavailable = !canReview || !changes?.isGit || files.length === 0;
+  const review = (
+    <button
+      type="button"
+      className={`panel-button review-button ${!canReview ? "muted" : ""}`}
+      disabled={disabled || !changes?.isGit || files.length === 0}
+      aria-disabled={!canReview}
+      onClick={() => (canReview ? void run(() => props.onReview()) : props.onSettings())}
+    >
+      <Icon name="agents" /> Review
+    </button>
+  );
+
   return (
     <aside className="changes-panel" style={{ width }}>
       <div className="panel-resizer" onPointerDown={startResize} />
       <header className="changes-header">
-        <div><h3>Changes <span>{files.length}</span></h3></div>
-        <div><button className="icon-button" onClick={props.onRefresh} aria-label="Refresh changes"><Icon name="refresh" className={loading ? "spinning" : ""} /></button><button className="icon-button" onClick={props.onClose} aria-label="Close changes panel">×</button></div>
+        <div className="changes-title">
+          <h3>Changes</h3>
+          {changes?.isGit && files.length > 0 && (
+            <span className="changes-meta">
+              {changes.branch && <span className="changes-branch"><Icon name="branch" />{changes.branch}</span>}
+              {files.length} {files.length === 1 ? "file" : "files"} · <em className="stat-add">+{totals.add}</em> <em className="stat-del">−{totals.del}</em>
+            </span>
+          )}
+        </div>
+        <div className="changes-header-actions">
+          {reviewUnavailable && reviewReason ? <Tooltip label={reviewReason}>{review}</Tooltip> : review}
+          <button className="icon-button" onClick={props.onRefresh} aria-label="Refresh changes"><Icon name="refresh" className={loading ? "spinning" : ""} /></button>
+          <button className="icon-button" onClick={props.onClose} aria-label="Close changes panel"><Icon name="close" /></button>
+        </div>
+        {loading && <span className="changes-loading" aria-hidden="true" />}
       </header>
-      {error && <div className="error-banner">{error}</div>}
-      <div className="changes-toolbar">
-        <button type="button" className="secondary-button" disabled={disabled || !changes?.isGit || files.length === 0 || !canReview} title={reviewReason} onClick={() => void run(() => props.onReview())}>Review changes</button>
-        {!canReview && reviewReason && <button type="button" className="link-button" onClick={props.onSettings}>{reviewReason}</button>}
-      </div>
       {!changes?.isGit ? (
         <div className="panel-empty"><Icon name="git" /><strong>No Git repository</strong><span>Chat and editing still work. Changes can’t be summarized here.</span></div>
+      ) : files.length === 0 ? (
+        <div className="panel-empty"><span className="clean-check">✓</span><strong>Working tree clean</strong><span>No staged, unstaged, or untracked files.</span></div>
       ) : (
         <>
-          {files.length === 0 ? <div className="panel-empty"><span className="clean-check">✓</span><strong>Working tree clean</strong><span>No staged, unstaged, or untracked files.</span></div> : (
-            <>
-              <div className="changed-files">
-                {([ ["Staged", staged], ["Working tree", working] ] as const).map(([label, group]) => group.length > 0 && <div key={label}>
-                  <h4>{label} <span>{group.length}</span></h4>
-                  {group.map(({ file, section }) => <button type="button" key={section.layer + ":" + file.path} className={current?.file.path === file.path && current.section.layer === section.layer ? "active" : ""} onClick={() => setSelected({ path: file.path, layer: section.layer })} title={file.path}>
-                    <span className={"status-letter " + file.status}>{file.status[0]?.toUpperCase()}</span><span>{file.path}</span>
-                  </button>)}
-                </div>)}
-              </div>
-              {current && <>
-                <div className="diff-file-header"><span title={current.file.path}>{current.file.oldPath ? current.file.oldPath + " → " : ""}{current.file.path}</span>{current.file.binary && <em>binary</em>}{current.section.truncated && <em>truncated</em>}{actionButtons(current.file, current.section)}</div>
-                <div className="diff-view" aria-label={"Diff for " + current.file.path}>
-                  {current.file.binary ? <pre>Binary file</pre> : current.section.hunks.length === 0 ? <pre>{current.section.diff || "No text diff available"}</pre> : current.section.hunks.map((hunk) => <div key={hunk.id}>
-                    <div className="diff-hunk"><span>{hunk.header}</span>{actionButtons(current.file, current.section, hunk.id)}</div>
-                    {hunk.lines.map((line, index) => <div className={"diff-line " + line.kind} key={index}>
-                      <button type="button" className="diff-comment-button" aria-label={"Comment on " + current.file.path + " line " + (line.newLine ?? line.oldLine)} disabled={line.oldLine === null && line.newLine === null} onClick={() => addComment(current.file, current.section, line)}>＋</button>
-                      <span className="diff-line-number">{line.oldLine ?? ""}</span><span className="diff-line-number">{line.newLine ?? ""}</span><code>{line.text || " "}</code>
-                    </div>)}
-                  </div>)}
-                </div>
-              </>}
-            </>
+          <ChangesFileList
+            entries={entries}
+            selected={current ? { path: current.file.path, layer: current.section.layer } : undefined}
+            commentCounts={commentCounts}
+            disabled={disabled}
+            onSelect={(entry) => setSelected({ path: entry.file.path, layer: entry.section.layer })}
+            onCommitFile={commitFile}
+            onAction={entryAction}
+          />
+          {current && (
+            <DiffView
+              entry={current}
+              comments={comments}
+              commentAt={commentAt}
+              commentText={commentText}
+              editing={editing}
+              disabled={disabled}
+              onAddComment={addComment}
+              onCommentText={setCommentText}
+              onCloseComposer={() => setCommentAt(undefined)}
+              onSaveComment={() => void saveComment()}
+              onEditComment={editComment}
+              onUpdateComment={(comment, text) => void updateComment(comment, text)}
+              onRemoveComment={(id) => void run(() => props.onComments(comments.filter((item) => item.id !== id)))}
+              onAction={entryAction}
+            />
           )}
-          {commentAt && <div className="changes-form"><strong>Comment on {commentAt.path}:{commentAt.line}</strong><textarea aria-label="Diff comment" value={commentText} onChange={(event) => setCommentText(event.target.value)} /><div><button type="button" onClick={() => setCommentAt(undefined)}>Cancel</button><button type="button" disabled={!commentText.trim() || disabled} onClick={() => void saveComment()}>Save comment</button></div></div>}
-          {comments.length > 0 && <div className="changes-form"><strong>Pending comments ({comments.length})</strong>
-            {comments.map((comment) => {
-              const fresh = files.some((file) => file.path === comment.path && file.sections.some((section) => section.layer === comment.layer && section.revision === comment.revision));
-              return <div className="pending-comment" key={comment.id}><small>{comment.path}:{comment.line} · {comment.layer}{!fresh && " · changed since comment"}</small>
-                <textarea aria-label={"Edit comment " + comment.path + ":" + comment.line} value={editing[comment.id] ?? comment.text} onChange={(event) => setEditing((before) => ({ ...before, [comment.id]: event.target.value }))} />
-                <div><button type="button" disabled={disabled || !editing[comment.id]?.trim()} onClick={() => void run(() => props.onComments(comments.map((item) => item.id === comment.id ? { ...item, text: editing[item.id].trim() } : item)))}>Save</button><button type="button" disabled={disabled} onClick={() => void run(() => props.onComments(comments.filter((item) => item.id !== comment.id)))}>Remove</button></div>
-              </div>;
-            })}
-            <button type="button" className="primary-button" disabled={disabled} onClick={() => void run(() => props.onAddressComments(comments))}>{mode === "build" ? "Address comments" : "Plan fixes"}</button>
-          </div>}
-          <div className="changes-form"><strong>Commit</strong><textarea aria-label="Commit message" placeholder="Commit message" value={message} onChange={(event) => { setMessage(event.target.value); setMessageRevision(undefined); }} />
-            {messageRevision && messageRevision !== changes.stagedRevision && <small>Staged changes have changed since this message was generated.</small>}
-            <div><button type="button" disabled={disabled || !hasStaged} onClick={() => void run(async () => { const generated = await props.onGenerate(); setMessage(generated.message); setMessageRevision(generated.revision); })}>Generate message</button><button type="button" disabled={disabled || !hasStaged || !message.trim()} onClick={() => void run(async () => { await props.onCommit(message, changes.stagedRevision); setMessage(""); setMessageRevision(undefined); })}>Commit</button></div>
-          </div>
-          <div className="changes-form"><strong>Publish {publish?.branch ?? ""}</strong>{publish?.upstream && <small>Push to {publish.upstream}</small>}
-            <select aria-label="Git remote" value={remote} onChange={(event) => setRemote(event.target.value)}>{publish?.remotes.map((name) => <option key={name}>{name}</option>)}</select>
-            <div><button type="button" disabled={disabled || !publish?.branch || (!publish?.upstream && !remote)} onClick={() => void run(async () => { await props.onPush(publish?.upstream ? undefined : remote); setPublish(await props.onPublishInfo()); })}>Push</button>
-              <button type="button" disabled={disabled || !publish?.branch || !remote} onClick={() => void preparePr()}>Create PR</button></div>
-          </div>
-          {pr && <div className="changes-form"><strong>GitHub PR · {pr.repo}</strong>{pr.existingUrl ? <button type="button" onClick={() => props.onOpenPr(pr.existingUrl!)}>Open existing PR</button> : <>
-            <input aria-label="PR base branch" value={prBase} onChange={(event) => setPrBase(event.target.value)} />
-            <input aria-label="PR title" value={prTitle} onChange={(event) => setPrTitle(event.target.value)} />
-            <textarea aria-label="PR description" value={prBody} onChange={(event) => setPrBody(event.target.value)} />
-            <label><input type="checkbox" checked={draft} onChange={(event) => setDraft(event.target.checked)} /> Draft</label>
-            <button type="button" className="primary-button" disabled={disabled || !prBase.trim() || !prTitle.trim()} onClick={() => void run(async () => { const url = await props.onCreatePr(remote, prBase, prTitle, prBody, draft); setPr({ ...pr, existingUrl: url }); })}>Create PR</button>
-          </>}</div>}
         </>
+      )}
+      {changes?.isGit && (
+        <ChangesDock
+          open={dockTab}
+          onOpen={setDockTab}
+          changesRevision={changes.changesRevision}
+          commitScope={scope}
+          onScopeClear={() => setCommitScope([])}
+          commentCount={comments.length}
+          files={files}
+          disabled={disabled}
+          mode={props.mode}
+          flash={flash}
+          error={error}
+          onDismissError={() => setError("")}
+          message={message}
+          messageRevision={messageRevision}
+          onMessage={(value) => { setMessage(value); setMessageRevision(undefined); }}
+          onGenerate={generateMessage}
+          onCommit={() => commit()}
+          publish={publish}
+          remote={remote}
+          onRemote={setRemote}
+          onPush={push}
+          pr={pr}
+          prBase={prFields.base}
+          prTitle={prFields.title}
+          prBody={prFields.body}
+          draft={prFields.draft}
+          onPrFields={(patch) => setPrFields((before) => ({ ...before, ...patch }))}
+          onPreparePr={preparePr}
+          onCreatePr={createPr}
+          onOpenPr={props.onOpenPr}
+          comments={comments}
+          onComments={props.onComments}
+          onAddressComments={props.onAddressComments}
+          run={run}
+        />
       )}
     </aside>
   );

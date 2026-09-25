@@ -95,7 +95,7 @@ pub fn remove_worktree(git_root: &Path, worktree_path: &Path) -> Result<(), Stri
 pub fn changes(path: &Path) -> Result<GitChanges, String> {
     let info = inspect_project(path);
     let Some(root) = info.root else {
-        return Ok(GitChanges { is_git: false, root: None, branch: None, files: Vec::new(), staged_revision: String::new() });
+        return Ok(GitChanges { is_git: false, root: None, branch: None, files: Vec::new(), changes_revision: String::new() });
     };
     let status_output = git_bytes(&root, &["status", "--porcelain=v1", "-z", "--untracked-files=all"])?;
     let records = parse_status(&status_output);
@@ -103,12 +103,20 @@ pub fn changes(path: &Path) -> Result<GitChanges, String> {
     for record in records {
         files.push(build_change(&root, record)?);
     }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for file in &files {
+        file.path.hash(&mut hasher);
+        file.status.hash(&mut hasher);
+        for section in &file.sections {
+            section.revision.hash(&mut hasher);
+        }
+    }
     Ok(GitChanges {
         is_git: true,
         root: Some(root.to_string_lossy().into_owned()),
         branch: current_branch(&root),
         files,
-        staged_revision: revision(&git_bytes(&root, &["diff", "--cached", "--binary", "--full-index"])?),
+        changes_revision: format!("{:016x}", hasher.finish()),
     })
 }
 
@@ -150,6 +158,7 @@ fn build_change(root: &Path, record: StatusRecord) -> Result<GitChangeFile, Stri
     let mut diff = String::new();
     let mut truncated = false;
     let mut sections = Vec::new();
+    let mut untracked_additions: Option<usize> = None;
 
     if untracked {
         if fs::symlink_metadata(&file_path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
@@ -160,6 +169,8 @@ fn build_change(root: &Path, record: StatusRecord) -> Result<GitChangeFile, Stri
             }
             Ok(content) => {
                 let text = String::from_utf8_lossy(&content);
+                // The preview loop below stops at MAX_DIFF_BYTES; keep the true total for the UI.
+                untracked_additions = Some(text.lines().count());
                 let header = format!(
                     "diff --git a/{0} b/{0}\nnew file mode 100644\n--- /dev/null\n+++ b/{0}\n@@ -0,0 +1,{1} @@\n",
                     record.path,
@@ -195,7 +206,11 @@ fn build_change(root: &Path, record: StatusRecord) -> Result<GitChangeFile, Stri
             diff = format!("Binary file · {size} bytes");
         }
     }
-    if untracked { sections.push(section("working", &diff)); }
+    if untracked {
+        let mut working = section("working", &diff);
+        if let Some(total) = untracked_additions { working.additions = total; }
+        sections.push(working);
+    }
     if diff.len() > MAX_DIFF_BYTES {
         diff.truncate(MAX_DIFF_BYTES);
         diff.push_str("\n… diff preview truncated …\n");
@@ -224,10 +239,21 @@ fn revision(bytes: &[u8]) -> String {
     format!("{:016x}", hasher.finish())
 }
 
+fn count_changed_lines(raw: &str) -> (usize, usize) {
+    let mut additions = 0;
+    let mut deletions = 0;
+    for line in raw.lines() {
+        if line.starts_with('+') && !line.starts_with("+++") { additions += 1; }
+        else if line.starts_with('-') && !line.starts_with("---") { deletions += 1; }
+    }
+    (additions, deletions)
+}
+
 fn section(layer: &str, raw: &str) -> GitDiffSection {
     let mut hunks: Vec<GitDiffHunk> = Vec::new();
     let mut old = 0;
     let mut new = 0;
+    let (additions, deletions) = count_changed_lines(raw);
     let preview_end = raw.char_indices().map(|(index, _)| index).chain(std::iter::once(raw.len()))
         .take_while(|index| *index <= MAX_DIFF_BYTES).last().unwrap_or(0);
     for line in raw[..preview_end].lines() {
@@ -250,7 +276,7 @@ fn section(layer: &str, raw: &str) -> GitDiffSection {
         } else { ("meta", None, None) };
         hunk.lines.push(GitDiffLine { kind: kind.into(), text: line.to_string(), old_line, new_line });
     }
-    GitDiffSection { layer: layer.into(), revision: revision(raw.as_bytes()), diff: raw[..preview_end].to_string(), hunks, truncated: raw.len() > MAX_DIFF_BYTES }
+    GitDiffSection { layer: layer.into(), revision: revision(raw.as_bytes()), diff: raw[..preview_end].to_string(), hunks, truncated: raw.len() > MAX_DIFF_BYTES, additions, deletions }
 }
 
 fn git_diff(root: &Path, cached: bool, path: &str) -> Result<String, String> {
@@ -343,9 +369,11 @@ pub fn change_action(path: &Path, file: &str, layer: &str, action: &str, hunk_id
         let mut args = vec!["apply"];
         if action == "stage" || action == "unstage" { args.push("--cached"); }
         if action == "unstage" || action == "discard" { args.push("--reverse"); }
-        if !matches!((layer, action), ("working", "stage" | "discard") | ("staged", "unstage")) {
+        if !matches!((layer, action), ("working", "stage" | "discard") | ("staged", "unstage" | "discard")) {
             return Err("Unsupported change action".into());
         }
+        // Discarding a staged hunk rewrites index and worktree; the others touch one side only.
+        if (layer, action) == ("staged", "discard") { args = vec!["apply", "--index", "--reverse"]; }
         let mut check = args.clone(); check.push("--check");
         run_git(root, &check, Some(patch.as_bytes()))?;
         run_git(root, &args, Some(patch.as_bytes()))?;
@@ -363,19 +391,55 @@ pub fn change_action(path: &Path, file: &str, layer: &str, action: &str, hunk_id
                 fs::remove_file(target).map_err(|error| error.to_string())?;
             }
             ("working", "discard") => { run_git(root, &["restore", "--worktree", "--", file], None)?; }
+            ("staged", "discard") if inspect_project(root).has_head => {
+                run_git(root, &["restore", "--staged", "--worktree", "--", file], None)?;
+            }
+            // No HEAD yet: the staged entry is the file's only history, so unstage and remove it.
+            ("staged", "discard") => {
+                run_git(root, &["rm", "-f", "--cached", "--", file], None)?;
+                let target = root.join(file);
+                if fs::symlink_metadata(&target).is_ok() { fs::remove_file(target).map_err(|error| error.to_string())?; }
+            }
             _ => return Err("Unsupported change action".into()),
         }
     }
     changes(path)
 }
 
-pub fn commit(path: &Path, message: &str, expected: &str) -> Result<GitChanges, String> {
+/// Commit changed files in one step: `files` names the scope (empty = every changed file).
+/// The panel doesn't expose staging, so this stages the targets and commits them together,
+/// guarded by `changes_revision` so a moved working tree is rejected rather than committed blind.
+pub fn commit(path: &Path, message: &str, files: &[String], expected: &str) -> Result<GitChanges, String> {
     if message.trim().is_empty() { return Err("Write a commit message".into()); }
     let snapshot = changes(path)?;
-    if snapshot.staged_revision != expected { return Err("Staged changes have moved; refresh and review the commit".into()); }
-    if !snapshot.files.iter().any(|file| file.staged) { return Err("Stage changes before committing".into()); }
+    if snapshot.changes_revision != expected { return Err("Changes have moved; refresh and review the commit".into()); }
     let root = Path::new(snapshot.root.as_deref().ok_or("No Git repository")?);
-    run_git(root, &["commit", "-m", message], None)?;
+    let mut targets: Vec<&str> = Vec::new();
+    if files.is_empty() {
+        targets.extend(snapshot.files.iter().map(|file| file.path.as_str()));
+    } else {
+        for file in files {
+            if !snapshot.files.iter().any(|item| item.path == *file) { return Err("Changes have moved; refresh and try again".into()); }
+            targets.push(file);
+        }
+    }
+    if targets.is_empty() { return Err("Nothing to commit".into()); }
+    if snapshot.files.iter().any(|file| targets.contains(&file.path.as_str()) && file.status == "conflict") {
+        return Err("Resolve conflicts before committing".into());
+    }
+    for file in &targets {
+        checked_path(root, file)?;
+    }
+    let mut add = vec!["add", "--"];
+    add.extend(targets.iter().copied());
+    run_git(root, &add, None)?;
+    if files.is_empty() {
+        run_git(root, &["commit", "-m", message], None)?;
+    } else {
+        let mut args = vec!["commit", "-m", message, "--"];
+        args.extend(targets.iter().copied());
+        run_git(root, &args, None)?;
+    }
     changes(path)
 }
 
@@ -511,9 +575,48 @@ mod tests {
         assert!(result.files.iter().any(|file| file.path == "staged.txt" && file.staged && file.diff.contains("# Staged changes")));
         assert!(result.files.iter().any(|file| file.path == "deleted.txt" && file.status == "deleted" && file.unstaged));
         assert!(result.files.iter().any(|file| file.path == "binary.dat" && file.binary && file.diff.contains("4 bytes")));
+        let staged_file = result.files.iter().find(|file| file.path == "staged.txt").unwrap();
+        let staged_section = staged_file.sections.iter().find(|section| section.layer == "staged").unwrap();
+        assert_eq!((staged_section.additions, staged_section.deletions), (1, 1));
         let large = result.files.iter().find(|file| file.path == "large.txt").unwrap();
         assert!(large.truncated);
         assert!(large.diff.len() <= MAX_DIFF_BYTES + 40);
+        // Untracked counts are exact even though the preview cut the diff off.
+        assert_eq!(large.sections[0].additions, 1);
+        assert_eq!(large.sections[0].deletions, 0);
+    }
+
+    #[test]
+    fn commit_stages_its_scope_honors_hooks_and_rejects_stale_revisions() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        git(root, &[OsStr::new("init")]);
+        git(root, &[OsStr::new("config"), OsStr::new("user.email"), OsStr::new("test@example.com")]);
+        git(root, &[OsStr::new("config"), OsStr::new("user.name"), OsStr::new("Test")]);
+        fs::write(root.join("tracked.txt"), "base\n").unwrap();
+        git(root, &[OsStr::new("add"), OsStr::new(".")]);
+        git(root, &[OsStr::new("commit"), OsStr::new("-m"), OsStr::new("initial")]);
+        fs::write(root.join("tracked.txt"), "changed\n").unwrap();
+        fs::write(root.join("new.txt"), "brand new\n").unwrap();
+
+        let first = changes(root).unwrap();
+        assert!(commit(root, "nope", &[], "stale-revision").unwrap_err().contains("moved"));
+        // A scoped commit stages only its files; everything else stays untouched.
+        let scoped = commit(root, "only tracked", &["tracked.txt".to_string()], &first.changes_revision).unwrap();
+        assert_eq!(run_git(root, &["show", "--format=", "--name-only", "HEAD"], None).unwrap(), "tracked.txt");
+        assert!(scoped.files.iter().any(|file| file.path == "new.txt" && file.untracked));
+
+        let hook = root.join(".git/hooks/pre-commit");
+        fs::write(&hook, "#!/bin/sh\necho hook refused >&2\nexit 1\n").unwrap();
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o700)).unwrap();
+        let second = changes(root).unwrap();
+        assert!(commit(root, "add the rest", &[], &second.changes_revision).unwrap_err().contains("hook refused"));
+        fs::remove_file(&hook).unwrap();
+        // The failed commit still staged its files, so the revision moved — re-snapshot.
+        let third = changes(root).unwrap();
+        let clean = commit(root, "add the rest", &[], &third.changes_revision).unwrap();
+        assert!(clean.files.is_empty());
     }
 
     #[test]
@@ -658,28 +761,5 @@ mod tests {
         assert_eq!(run_git(&bare, &["show", &format!("refs/heads/{branch}:file.txt")], None).unwrap(), "second");
         git(&root, &[OsStr::new("remote"), OsStr::new("set-url"), OsStr::new("origin"), OsStr::new("git@github.com:owner/repo.git")]);
         assert_eq!(remote_repo(&root, "origin").unwrap(), "github.com/owner/repo");
-    }
-
-    #[test]
-    fn commit_uses_only_staged_files_and_honors_a_failing_hook() {
-        use std::os::unix::fs::PermissionsExt;
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path();
-        git(root, &[OsStr::new("init")]);
-        git(root, &[OsStr::new("config"), OsStr::new("user.email"), OsStr::new("test@example.com")]);
-        git(root, &[OsStr::new("config"), OsStr::new("user.name"), OsStr::new("Test")]);
-        fs::write(root.join("selected.txt"), "selected\n").unwrap();
-        fs::write(root.join("left.txt"), "left\n").unwrap();
-        let first = changes(root).unwrap();
-        let selected = first.files.iter().find(|file| file.path == "selected.txt").unwrap();
-        let staged = change_action(root, "selected.txt", "working", "stage", None, &selected.sections[0].revision).unwrap();
-        let hook = root.join(".git/hooks/pre-commit");
-        fs::write(&hook, "#!/bin/sh\necho hook refused >&2\nexit 1\n").unwrap();
-        fs::set_permissions(&hook, fs::Permissions::from_mode(0o700)).unwrap();
-        assert!(commit(root, "Add selected file", &staged.staged_revision).unwrap_err().contains("hook refused"));
-        fs::remove_file(&hook).unwrap();
-        let result = commit(root, "Add selected file", &staged.staged_revision).unwrap();
-        assert!(result.files.iter().any(|file| file.path == "left.txt" && file.untracked));
-        assert_eq!(run_git(root, &["show", "--format=", "--name-only", "HEAD"], None).unwrap(), "selected.txt");
     }
 }

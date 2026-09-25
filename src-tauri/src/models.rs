@@ -1124,6 +1124,9 @@ pub struct GitDiffSection {
     pub diff: String,
     pub hunks: Vec<GitDiffHunk>,
     pub truncated: bool,
+    /// Line counts over the full diff, so a truncated preview still reports exact totals.
+    pub additions: usize,
+    pub deletions: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1159,7 +1162,9 @@ pub struct GitChanges {
     pub root: Option<String>,
     pub branch: Option<String>,
     pub files: Vec<GitChangeFile>,
-    pub staged_revision: String,
+    /// Guard hash over every changed file's path, status, and section revisions.
+    /// Commit and bulk actions compare against this so a moved working tree is rejected.
+    pub changes_revision: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

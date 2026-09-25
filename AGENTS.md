@@ -48,6 +48,7 @@ WackCode is a local macOS desktop app for the [Pi coding agent](https://www.npmj
 - **Rust:** fallible functions return `Result<T, String>` whose error is a user-facing sentence; no `anyhow`/`thiserror`. Every `wackcode.json` write goes through `MetadataState::mutate`. Git goes through the system `git` CLI (no `git2`).
 - **React:** update state immutably via `patchTask` / `patchRuntime` / `setData`. Reuse the primitives in `src/components/ui/` (Popover, Menu, MenuButton, Select, Tooltip, ConfirmDialog). Destructive actions go through `ConfirmDialog` with `danger`.
 - **CSS:** one stylesheet, `src/styles.css`: add rules to the matching section, use `--wc-*` variables and the existing button classes, no Tailwind or other CSS system. Keep the `data-tauri-drag-region` strips working (overlay title bar), `aria-label` on icon-only buttons, and the `prefers-reduced-motion` block.
+- **Animation:** the author prefers expressive animation — it's part of the app's identity, so favour lively, considered motion over bare/instant transitions.
 - **Tests:** pure logic in colocated `*.test.ts`; components with Testing Library role-based queries; worker behavior in `worker/src/*.test.ts` (a real worker against an inline mock provider); Rust in inline `#[cfg(test)]` modules with `tempfile`.
 
 ## Commands

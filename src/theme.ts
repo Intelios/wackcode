@@ -8,7 +8,9 @@
  * keeps those defaults in `:root` for the first paint; `theme.test.ts` pins both.
  *
  * Semantic colours (danger, warning, diff, success, Ultra Plan) are deliberately not here: an
- * accent recolours interaction, never meaning.
+ * accent recolours interaction, never meaning. Syntax colours are the exception that proves it:
+ * they follow the accent's chroma and lean towards its hue so code always looks at home in the
+ * user's theme, while each token keeps its own hue slot so the palette stays readable.
  */
 
 import type { AppearanceConfig, BackdropMode } from "./types";
@@ -144,8 +146,18 @@ export function contrast(first: string, second: string): number {
  * - `text`: keeps `ref`'s absolute lightness (so a darker background never dims text).
  * - `accent`: sits between the background and the accent in lightness, in the accent's hue.
  * - `on-accent`: dark text drawn on the accent, swapped for near-white if it can't reach 4.5:1.
+ * - `syntax`: code-highlighting ink. Keeps `ref`'s absolute lightness and its own hue slot, so
+ *   the palette stays recognisable; chroma and hue lean towards the user's accent so the whole
+ *   set reads as one family (a grey accent mutes it towards monochrome). Every syntax token's
+ *   `ref` is pre-harmonised against the default accent, which is why the lean is relative to
+ *   `DEFAULT_ACCENT_LCH` and the default theme reproduces the refs exactly.
  */
-type Recipe = "surface" | "text" | "accent" | "on-accent";
+type Recipe = "surface" | "text" | "accent" | "on-accent" | "syntax";
+
+/** How far syntax hues rotate towards the accent (0 = no lean, 1 = collapse onto it). */
+const SYNTAX_HUE_LEAN = 0.18;
+/** Syntax chroma never drops below this share of `ref`'s, even for a near-grey accent. */
+const SYNTAX_CHROMA_FLOOR = 0.35;
 
 /** Every themeable token, with the hex it had before theming existed. */
 export const TOKENS: Record<string, { recipe: Recipe; ref: string }> = {
@@ -194,6 +206,16 @@ export const TOKENS: Record<string, { recipe: Recipe; ref: string }> = {
   "--wc-focus-line": { recipe: "accent", ref: "#596649" },
   "--wc-input-focus": { recipe: "accent", ref: "#5f6d4e" },
 
+  // Syntax highlighting (the `syntax` recipe, except keywords which carry the accent itself).
+  // The refs are one harmonised dark palette: lime keywords, amber strings, violet numbers,
+  // blue titles, teal meta, grey-green comments — all pre-leaned towards the default accent.
+  "--wc-code-keyword": { recipe: "accent", ref: "#d2e4a3" },
+  "--wc-code-string": { recipe: "syntax", ref: "#d8b08c" },
+  "--wc-code-number": { recipe: "syntax", ref: "#c9a3d2" },
+  "--wc-code-title": { recipe: "syntax", ref: "#9fc7d8" },
+  "--wc-code-meta": { recipe: "syntax", ref: "#a3c9c0" },
+  "--wc-code-comment": { recipe: "syntax", ref: "#7d8674" },
+
   "--wc-on-accent": { recipe: "on-accent", ref: "#172000" }
 };
 
@@ -210,7 +232,20 @@ function hueShift(ref: Lch, base: Lch): number {
   return ref.h - base.h;
 }
 
+/** Shortest signed rotation from `from` to `to`, in degrees (−180…180). */
+function angleDelta(from: number, to: number): number {
+  return ((to - from + 540) % 360) - 180;
+}
+
 function derive(recipe: Recipe, ref: Lch, background: Lch, accent: Lch): Lch {
+  if (recipe === "syntax") {
+    const chromaScale = SYNTAX_CHROMA_FLOOR + (1 - SYNTAX_CHROMA_FLOOR) * Math.min(1, Math.max(0, accent.c / DEFAULT_ACCENT_LCH.c));
+    return {
+      l: ref.l,
+      c: ref.c * chromaScale,
+      h: ref.h + SYNTAX_HUE_LEAN * angleDelta(accent.h, DEFAULT_ACCENT_LCH.h)
+    };
+  }
   if (recipe === "surface" || recipe === "text") {
     // Tint beyond the background's own chroma fades out as the background approaches grey.
     const tint = Math.min(1, background.c / DEFAULT_BG_LCH.c);

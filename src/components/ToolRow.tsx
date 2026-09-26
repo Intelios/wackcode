@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { highlightDiffLines, languageForPath } from "../highlight";
 import type { NormalizedBlock } from "../types";
 import { mcpToolParts, summarizeTool } from "../tool-utils";
 import { Icon } from "./Icons";
@@ -17,16 +18,20 @@ const TOOL_ICONS: Record<string, "file" | "pencil" | "terminal" | "search" | "qu
   subagent: "agents"
 };
 
-function DiffLines({ diff }: { diff: string }) {
+function DiffLines({ diff, path }: { diff: string; path?: string }) {
+  const lines = diff.split("\n");
+  const classes = lines.map((line) =>
+    line.startsWith("+") && !line.startsWith("+++") ? "addition"
+      : line.startsWith("-") && !line.startsWith("---") ? "deletion"
+      : line.startsWith("@@") ? "hunk"
+      : line.startsWith("diff ") || line.startsWith("# ") ? "heading" : "");
+  // The edit's own file language highlights the code lines; hunk and heading lines stay plain.
+  const nodes = highlightDiffLines(lines, classes.map((name) => (name === "hunk" || name === "heading" ? "meta" : "code")), languageForPath(path));
   return (
     <pre className="diff-view tool-diff">
-      {diff.split("\n").map((line, index) => {
-        const kind = line.startsWith("+") && !line.startsWith("+++") ? "addition"
-          : line.startsWith("-") && !line.startsWith("---") ? "deletion"
-          : line.startsWith("@@") ? "hunk"
-          : line.startsWith("diff ") || line.startsWith("# ") ? "heading" : "";
-        return <span className={kind} key={index}>{line || " "}{"\n"}</span>;
-      })}
+      {lines.map((line, index) => (
+        <span className={classes[index]} key={index}>{nodes[index]}{"\n"}</span>
+      ))}
     </pre>
   );
 }
@@ -43,7 +48,7 @@ function ToolDetail({ call, result }: { call: NormalizedBlock; result?: Normaliz
   const details = (result?.details ?? {}) as Record<string, unknown>;
 
   if (summary.kind === "edit" && typeof details.diff === "string" && details.diff) {
-    return <DiffLines diff={details.diff} />;
+    return <DiffLines diff={details.diff} path={typeof args.path === "string" ? args.path : undefined} />;
   }
   if (summary.kind === "bash") {
     return (

@@ -1,8 +1,7 @@
 import { createContext, useContext, useMemo, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { formatRunDuration, thinkingPreview } from "../chat-utils";
 import { useSmoothText } from "../hooks/useSmoothText";
+import { Markdown } from "./Markdown";
 import { Icon } from "./Icons";
 
 /**
@@ -32,7 +31,7 @@ function ThinkingBody({ text, live }: { text: string; live: boolean }) {
   const shown = useSmoothText(text, live);
   return (
     <div className="thinking-body">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{shown}</ReactMarkdown>
+      <Markdown streaming={live}>{shown}</Markdown>
     </div>
   );
 }

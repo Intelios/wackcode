@@ -22,6 +22,14 @@
   --wc-focus-line: #596649;
   --wc-input-focus: #5f6d4e;
   --wc-on-accent: #172000;
+  /* Syntax highlighting: keyword/string/number/title/meta/comment ink for code fences and
+     diffs (highlight.js classes map onto these in the Transcript section below). */
+  --wc-code-keyword: #d2e4a3;
+  --wc-code-string: #d8b08c;
+  --wc-code-number: #c9a3d2;
+  --wc-code-title: #9fc7d8;
+  --wc-code-meta: #a3c9c0;
+  --wc-code-comment: #7d8674;
   --bg: #111310;
   /* Shell surfaces: see-through over an image or Liquid Glass (theme.ts shellVariables). */
   --wc-shell: #111310;
@@ -256,6 +264,21 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .msg.assistant code, .stream-text code { font-family: "SFMono-Regular", Consolas, monospace; font-size: .88em; color: var(--wc-accent-code); background: var(--wc-code-bg); border: 1px solid var(--wc-code-border); border-radius: 4px; padding: 1px 5px; }
 .msg.assistant pre, .stream-text pre { margin: 12px 0; border: 1px solid var(--border); background: var(--wc-well); border-radius: 8px; padding: 12px 14px; overflow-x: auto; }
 .msg.assistant pre code, .stream-text pre code { padding: 0; border: 0; background: none; color: var(--wc-code-text); }
+/* Syntax highlighting: highlight.js token classes map onto the accent-derived --wc-code-* tokens
+   (the `syntax` recipe in theme.ts). No highlight.js theme CSS is shipped — plain text between
+   tokens inherits the code colour above, so languages or classes we don't map still read fine. */
+.hljs-keyword, .hljs-selector-tag, .hljs-built_in, .hljs-name, .hljs-tag, .hljs-doctag, .hljs-variable.language_ { color: var(--wc-code-keyword); }
+.hljs-string, .hljs-regexp, .hljs-char.escape_, .hljs-subst { color: var(--wc-code-string); }
+.hljs-number, .hljs-literal, .hljs-symbol, .hljs-bullet, .hljs-link, .hljs-formula { color: var(--wc-code-number); }
+.hljs-title, .hljs-section, .hljs-type, .hljs-selector-id, .hljs-selector-class, .hljs-selector-attr, .hljs-selector-pseudo { color: var(--wc-code-title); }
+.hljs-comment, .hljs-quote { color: var(--wc-code-comment); font-style: italic; }
+.hljs-attr, .hljs-attribute, .hljs-variable, .hljs-template-variable, .hljs-meta, .hljs-template-tag { color: var(--wc-code-meta); }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 600; }
+/* ```diff fences in chat: whole lines come out as hljs-addition/hljs-deletion spans; they use the
+   same semantic diff inks as the real diff views (whitelisted in theme.test.ts). */
+.hljs-addition { color: #b7d9a1; }
+.hljs-deletion { color: #e3a2a2; }
 .msg.assistant blockquote, .stream-text blockquote { border-left: 2px solid var(--border-bright); margin: 12px 0; padding: 2px 14px; color: var(--text-soft); }
 .msg.assistant table, .stream-text table { border-collapse: collapse; width: 100%; margin: 12px 0; }
 .msg.assistant th, .msg.assistant td, .stream-text th, .stream-text td { border: 1px solid var(--border); padding: 7px 9px; text-align: left; }

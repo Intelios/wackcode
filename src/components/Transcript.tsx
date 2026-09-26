@@ -67,7 +67,7 @@ type LocalAction = MessageAction | { type: "start-edit"; id: string } | { type: 
 
 function StreamingText({ text }: { text: string }) {
   const shown = useSmoothText(text, true);
-  return <div className="stream-text assistant-text"><Markdown>{shown}</Markdown></div>;
+  return <div className="stream-text assistant-text"><Markdown streaming>{shown}</Markdown></div>;
 }
 
 function RunDuration({ startedAt, durationMs }: { startedAt?: number; durationMs?: number }) {

@@ -1,15 +1,18 @@
+import { memo, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { markdownComponents, openFenceTail } from "../markdown-components";
 
-export function Markdown({ children }: { children: string }) {
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      skipHtml
-      components={{
-        img: ({ alt }) => <span className="blocked-image">[Remote image blocked{alt ? `: ${alt}` : ""}]</span>,
-        a: ({ href, children: linkChildren }) => <a href={href} target="_blank" rel="noreferrer">{linkChildren}</a>
-      }}
-    >{children}</ReactMarkdown>
+/**
+ * Assistant prose. Code fences are syntax-highlighted (src/highlight.ts). While `streaming`, the
+ * one fence still being written renders plain; closed fences highlight as usual.
+ */
+export const Markdown = memo(function Markdown({ children, streaming }: { children: string; streaming?: boolean }) {
+  const components = useMemo(
+    () => markdownComponents({ streamingTail: streaming ? openFenceTail(children) : undefined }),
+    [children, streaming]
   );
-}
+  return (
+    <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml components={components}>{children}</ReactMarkdown>
+  );
+});

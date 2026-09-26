@@ -2,6 +2,7 @@ import { Fragment } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ChangeEntry } from "../changes-utils";
 import { hunkLabel, lineAnchor, sectionComments, splitPath } from "../changes-utils";
+import { highlightDiffLines, languageForPath } from "../highlight";
 import type { DiffComment, GitDiffHunk, GitDiffLine } from "../types";
 import { Icon } from "./Icons";
 import { Tooltip } from "./ui/Tooltip";
@@ -172,7 +173,15 @@ export function DiffView(props: DiffViewProps) {
                     ))}
                   </div>
                 )}
-                {section.hunks.map((hunk: GitDiffHunk) => (
+                {section.hunks.map((hunk: GitDiffHunk) => {
+                  // Syntax-highlight the hunk's code lines with the file's own language; the diff
+                  // marker stays a plain leading character so it keeps the line's add/del ink.
+                  const lineNodes = highlightDiffLines(
+                    hunk.lines.map((line) => line.text),
+                    hunk.lines.map((line) => (line.kind === "meta" ? "meta" : "code")),
+                    languageForPath(file.path)
+                  );
+                  return (
                   <div key={hunk.id} className="diff-hunk-block">
                     <div className="diff-hunk">
                       <span className="diff-hunk-label">{hunkLabel(hunk)}</span>
@@ -193,13 +202,14 @@ export function DiffView(props: DiffViewProps) {
                             <span className="diff-line-number">{line.oldLine ?? ""}</span>
                             <span className="diff-line-number">{line.newLine ?? ""}</span>
                           </span>
-                          <code>{line.text || " "}</code>
+                          <code>{lineNodes[index]}</code>
                         </div>
                         {commentsAfter(line)}
                       </Fragment>
                     ))}
                   </div>
-                ))}
+                  );
+                })}
               </>
             )}
           </motion.div>

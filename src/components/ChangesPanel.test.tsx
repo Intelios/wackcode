@@ -13,7 +13,7 @@ const changes: GitChanges = {
     sections: [
       { layer: "staged", revision: "staged-1", diff: "", truncated: false, additions: 1, deletions: 1, hunks: [{
         id: 0, header: "@@ -1 +1 @@", oldStart: 1, newStart: 1,
-        lines: [{ kind: "deletion", text: "-old", oldLine: 1, newLine: null }, { kind: "addition", text: "+new", oldLine: null, newLine: 1 }]
+        lines: [{ kind: "deletion", text: "-const gone = 1;", oldLine: 1, newLine: null }, { kind: "addition", text: "+const now = 2;", oldLine: null, newLine: 1 }]
       }] },
       { layer: "working", revision: "working-1", diff: "", truncated: false, additions: 1, deletions: 1, hunks: [{
         id: 0, header: "@@ -3 +3 @@", oldStart: 3, newStart: 3,
@@ -43,13 +43,16 @@ describe("ChangesPanel", () => {
     render(<ChangesPanel {...callbacks} />);
     expect(screen.getByRole("heading", { name: "Staged 1" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Working tree 1" })).toBeInTheDocument();
+    // file.ts diffs are syntax-highlighted with the file's own language.
+    expect(document.querySelector(".diff-line.addition code .hljs-keyword")).not.toBeNull();
+    expect(document.querySelector(".diff-line.deletion code .hljs-keyword")).not.toBeNull();
     // Discard on each file row and the diff header; "Discard hunk" per hunk.
     expect(screen.getAllByRole("button", { name: "Discard" })).toHaveLength(3);
     fireEvent.click(screen.getAllByRole("button", { name: "Comment on file.ts line 1" })[0]);
     fireEvent.change(screen.getByRole("textbox", { name: "Diff comment" }), { target: { value: "Check removal" } });
     fireEvent.click(screen.getByRole("button", { name: "Comment" }));
     await waitFor(() => expect(callbacks.onComments).toHaveBeenCalledWith([expect.objectContaining({
-      path: "file.ts", layer: "staged", side: "old", line: 1, excerpt: "-old", revision: "staged-1", text: "Check removal"
+      path: "file.ts", layer: "staged", side: "old", line: 1, excerpt: "-const gone = 1;", revision: "staged-1", text: "Check removal"
     })]));
     await waitFor(() => expect(screen.queryByRole("textbox", { name: "Diff comment" })).not.toBeInTheDocument());
     fireEvent.click(screen.getAllByRole("button", { name: /file\.ts/ }).filter((button) => button.getAttribute("title") === "file.ts")[1]);

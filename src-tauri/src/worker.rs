@@ -1,7 +1,7 @@
 use crate::{models::{BuiltinModelSuggestion, PackageRecord, ProviderKind, ProviderRecord, TaskMode, TaskRecord, TaskStatus, ToolCatalogEntry}, storage::MetadataState, subscriptions};
 use nix::{sys::signal::{killpg, Signal}, unistd::Pid};
 use serde_json::{json, Value};
-use std::{collections::HashMap, path::PathBuf, process::Stdio, sync::{Arc, Mutex}};
+use std::{collections::HashMap, path::PathBuf, process::Stdio, sync::{Arc, Mutex}, time::{Duration, Instant}};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, process::{ChildStdin, Command}, sync::{oneshot, Mutex as AsyncMutex}};
 
@@ -38,6 +38,17 @@ pub struct WorkerOptions {
 }
 
 const INIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// A worker whose chat is not the open one is stopped once its last output is this old. Every
+/// command that needs the chat goes through `ensure_worker`, which respawns it transparently.
+const IDLE_WORKER_AFTER: Duration = Duration::from_secs(15 * 60);
+/// A sweep never stops the most recently active workers below this count, so chats the user
+/// cycles through reopen instantly.
+const IDLE_WORKER_KEEP: usize = 4;
+const IDLE_WORKER_SWEEP: Duration = Duration::from_secs(60);
+/// A sweep waits at most this long for a chat's task lock; a busy chat is simply skipped until
+/// the next sweep.
+const IDLE_WORKER_LOCK_WAIT: Duration = Duration::from_secs(5);
 
 #[derive(Default)]
 pub struct WorkerState {
@@ -76,6 +87,50 @@ impl WorkerState {
             for (_, worker) in workers.drain() {
                 let _ = killpg(Pid::from_raw(worker.pid as i32), Signal::SIGTERM);
             }
+        }
+    }
+}
+
+/// The chat the user has open. Runtime-only: the idle reaper never stops its worker, so walking
+/// away from the app never kills the chat you come back to. Recorded on selection and on spawn
+/// (spawning means the user is working in that chat, even before selection catches up).
+#[derive(Default)]
+pub struct SelectedTask(Mutex<Option<String>>);
+
+impl SelectedTask {
+    pub fn set(&self, task_id: &str) {
+        if let Ok(mut selected) = self.0.lock() { *selected = Some(task_id.to_string()); }
+    }
+
+    fn get(&self) -> Option<String> {
+        self.0.lock().ok().and_then(|selected| selected.clone())
+    }
+}
+
+/// Last output time of each live worker, runtime-only. Any stdout line refreshes it, so a
+/// worker that streams, waits on MCP or finishes a title request is never idle, and a worker
+/// whose chat was clicked away simply stops being refreshed.
+#[derive(Default)]
+pub struct WorkerActivity(Mutex<HashMap<String, Instant>>);
+
+impl WorkerActivity {
+    fn mark(&self, task_id: &str) {
+        if let Ok(mut activity) = self.0.lock() { activity.insert(task_id.to_string(), Instant::now()); }
+    }
+}
+
+/// Stops the background idle reaper at app exit, before `terminate_all` runs.
+#[derive(Default)]
+pub struct ReaperHandle(Mutex<Option<tauri::async_runtime::JoinHandle<()>>>);
+
+impl ReaperHandle {
+    pub fn install(&self, reaper: tauri::async_runtime::JoinHandle<()>) {
+        if let Ok(mut handle) = self.0.lock() { *handle = Some(reaper); }
+    }
+
+    pub fn stop(&self) {
+        if let Ok(mut handle) = self.0.lock() {
+            if let Some(reaper) = handle.take() { reaper.abort(); }
         }
     }
 }
@@ -177,6 +232,8 @@ pub async fn ensure_worker_with(
         stdin: Arc::new(AsyncMutex::new(stdin)),
         pending: pending.clone(),
     })?;
+    app.state::<WorkerActivity>().mark(&task.id);
+    app.state::<SelectedTask>().set(&task.id);
 
     let task_id = task.id.clone();
     let subscription_worker = provider.kind == ProviderKind::Subscription;
@@ -431,6 +488,70 @@ pub async fn terminate_worker(app: &AppHandle, task_id: &str, graceful: bool) ->
     Ok(())
 }
 
+/// Chooses which idle workers a sweep stops: those past `IDLE_WORKER_AFTER`, least recently
+/// active first, never the newest `IDLE_WORKER_KEEP`. Pure so the policy is unit-testable
+/// without processes. Activity ties break by task id for a deterministic kill order.
+fn idle_reap_plan(candidates: &[(String, Instant)], now: Instant) -> Vec<String> {
+    let mut sorted = candidates.to_vec();
+    sorted.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+    let stoppable = sorted.len().saturating_sub(IDLE_WORKER_KEEP);
+    sorted[..stoppable].iter()
+        .filter(|(_, last)| now.duration_since(*last) >= IDLE_WORKER_AFTER)
+        .map(|(task_id, _)| task_id.clone())
+        .collect()
+}
+
+/// One idle-reaper pass. Each stop happens under the chat's task lock with the status
+/// re-checked, so a run can never race a reap, and goes through `terminate_worker`, which
+/// removes the worker from the registry before signalling — so the crash monitor reports
+/// nothing and the chat's status and transcript are untouched.
+async fn sweep_idle_workers(app: &AppHandle) {
+    let selected = app.state::<SelectedTask>().get();
+    let Ok(ids) = app.state::<WorkerState>().task_ids() else { return };
+    let statuses: HashMap<String, TaskStatus> = match app.state::<MetadataState>().data.lock() {
+        Ok(data) => data.tasks.iter().map(|task| (task.id.clone(), task.status.clone())).collect(),
+        Err(_) => return,
+    };
+    let now = Instant::now();
+    let candidates: Vec<(String, Instant)> = {
+        let activity_state = app.state::<WorkerActivity>();
+        let Ok(mut activity) = activity_state.0.lock() else { return };
+        // Prune tasks whose worker already exited through some other path.
+        activity.retain(|task_id, _| ids.contains(task_id));
+        ids.iter()
+            .filter(|task_id| selected.as_deref() != Some(task_id.as_str()))
+            .filter(|task_id| statuses.get(task_id.as_str()) == Some(&TaskStatus::Idle))
+            .filter_map(|task_id| activity.get(task_id).map(|last| ((*task_id).clone(), *last)))
+            .collect()
+    };
+    for task_id in idle_reap_plan(&candidates, now) {
+        let lock = crate::commands::task_lock(app, &task_id);
+        let Ok(_guard) = tokio::time::timeout(IDLE_WORKER_LOCK_WAIT, lock.lock()).await else { continue };
+        // Re-check under the lock: a prompt queued behind us flips the status away from Idle,
+        // and another stop path may already have removed the worker.
+        let worker_live = app.state::<WorkerState>().get(&task_id).map(|worker| worker.is_some()).unwrap_or(false);
+        let status_idle = app.state::<MetadataState>().data.lock().ok()
+            .and_then(|data| data.tasks.iter().find(|task| task.id == task_id)
+                .map(|task| matches!(task.status, TaskStatus::Idle)))
+            .unwrap_or(false);
+        if worker_live && status_idle {
+            let _ = terminate_worker(app, &task_id, true).await;
+        }
+    }
+}
+
+/// Runs the idle reaper until `ReaperHandle::stop`. Started once from `lib.rs` setup; the
+/// first interval tick fires immediately and finds only freshly spawned workers.
+pub fn start_idle_reaper(app: AppHandle) -> tauri::async_runtime::JoinHandle<()> {
+    tauri::async_runtime::spawn(async move {
+        let mut ticker = tokio::time::interval(IDLE_WORKER_SWEEP);
+        loop {
+            ticker.tick().await;
+            sweep_idle_workers(&app).await;
+        }
+    })
+}
+
 fn worker_entry_path(app: &AppHandle) -> Result<PathBuf, String> {
     if cfg!(debug_assertions) {
         Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist/index.js"))
@@ -667,6 +788,8 @@ pub(crate) fn node_executable_path() -> Result<PathBuf, String> {
 }
 
 fn handle_worker_line(app: &AppHandle, task_id: &str, line: &str, pending: &Pending) {
+    // Any output, even an unparseable line, proves the worker is alive: refresh its idle clock.
+    app.state::<WorkerActivity>().mark(task_id);
     let Ok(mut value) = serde_json::from_str::<Value>(line) else { return; };
     let event_type = value.get("type").and_then(Value::as_str).unwrap_or("").to_string();
     if event_type == "title_result" {
@@ -928,5 +1051,46 @@ mod tests {
         assert!(message.starts_with("Install failed\n"));
         assert!(message.contains("[credential redacted]"));
         assert!(!message.contains("sk-abcdefghijklmnop"));
+    }
+
+    #[test]
+    fn idle_reap_plan_stops_the_oldest_workers_beyond_four() {
+        let base = Instant::now();
+        let now = base + Duration::from_secs(3_600);
+        let candidates: Vec<(String, Instant)> =
+            (0..10).map(|i| (format!("task-{i}"), base + Duration::from_secs(i * 60))).collect();
+        assert_eq!(idle_reap_plan(&candidates, now), vec!["task-0", "task-1", "task-2", "task-3", "task-4", "task-5"]);
+    }
+
+    #[test]
+    fn idle_reap_plan_never_takes_recent_workers() {
+        let base = Instant::now();
+        let now = base + Duration::from_secs(3_600);
+        let candidates = vec![
+            ("ancient".to_string(), base),                                // 60 min idle
+            ("old".to_string(), base + Duration::from_secs(600)),        // 50 min idle
+            ("fresh-1".to_string(), base + Duration::from_secs(3_000)),  // 10 min idle
+            ("fresh-2".to_string(), base + Duration::from_secs(3_100)),
+            ("fresh-3".to_string(), base + Duration::from_secs(3_200)),
+        ];
+        assert_eq!(idle_reap_plan(&candidates, now), vec!["ancient"]);
+    }
+
+    #[test]
+    fn idle_reap_plan_keeps_a_warm_pool_of_four() {
+        let base = Instant::now();
+        let now = base + Duration::from_secs(3_600);
+        let candidates: Vec<(String, Instant)> =
+            (0..3).map(|i| (format!("task-{i}"), base + Duration::from_secs(i))).collect();
+        assert!(idle_reap_plan(&candidates, now).is_empty());
+    }
+
+    #[test]
+    fn idle_reap_plan_breaks_activity_ties_by_task_id() {
+        let base = Instant::now();
+        let now = base + Duration::from_secs(3_600);
+        let candidates: Vec<(String, Instant)> =
+            ["b", "a", "c", "d", "e", "f", "g"].iter().map(|id| (id.to_string(), base)).collect();
+        assert_eq!(idle_reap_plan(&candidates, now), vec!["a", "b", "c"]);
     }
 }

@@ -50,7 +50,7 @@ impl TaskLocks {
     }
 }
 
-fn task_lock(app: &AppHandle, task_id: &str) -> Arc<AsyncMutex<()>> {
+pub(crate) fn task_lock(app: &AppHandle, task_id: &str) -> Arc<AsyncMutex<()>> {
     app.state::<TaskLocks>().for_task(task_id)
 }
 
@@ -1148,6 +1148,8 @@ pub async fn configure_task(
 
 #[tauri::command]
 pub async fn open_task(app: AppHandle, state: State<'_, MetadataState>, task_id: String) -> Result<(), String> {
+    // Recorded before anything can race: the idle reaper never stops the open chat's worker.
+    app.state::<worker::SelectedTask>().set(&task_id);
     let (task, provider) = task_and_provider(&state, &task_id)?;
     let api_key = credential_for(&app, &state, &provider)?;
     {

@@ -47,6 +47,10 @@ pub fn run() {
             }
             // Read the login-shell environment in the background, so the first chat doesn't wait.
             tauri::async_runtime::spawn(shell_env::warm());
+            // Stops idle chat workers so clicking through old chats does not pile up processes.
+            let reaper = worker::start_idle_reaper(app.handle().clone());
+            app.manage(worker::ReaperHandle::default());
+            app.state::<worker::ReaperHandle>().install(reaper);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -150,6 +154,7 @@ pub fn run() {
         if matches!(event, tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }) {
             // Flushes the window geometry `window_state::record` only kept in memory.
             let _ = app.state::<MetadataState>().save();
+            app.state::<worker::ReaperHandle>().stop();
             app.state::<WorkerState>().terminate_all();
             app.state::<subscriptions::SubscriptionState>().terminate_all();
         }

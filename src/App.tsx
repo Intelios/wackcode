@@ -9,6 +9,7 @@ import { modelDisplayName, modelIsReady, pickThinkingLevel } from "./model-utils
 import { titleFromPrompt, samePlanState, sameTodoState, applySnapshotDelta, validateInitCommand, nextMode } from "./chat-utils";
 import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix } from "./tree-utils";
 import { pruneDisabledTools, sameToolCatalog } from "./tool-utils";
+import { APP_SLASH_COMMANDS } from "./command-utils";
 import { DEFAULT_APPEARANCE, applyTheme, cacheTheme } from "./theme";
 import { AssistantNameContext, agentName } from "./agentName";
 import { Backdrop } from "./components/Backdrop";
@@ -16,6 +17,7 @@ import type {
   AppData,
   AutoTitleConfig,
   AppearanceConfig,
+  CommandsConfig,
   PromptConfig,
   CheckpointChange,
   CheckpointRef,
@@ -85,13 +87,6 @@ const LAST_PROJECT_KEY = "wackcode:lastProject";
 const NO_PROJECT_MODEL_KEY = "none";
 const CHANGES_OPEN_KEY = "wackcode:changesOpen";
 const COLLAPSED_PROJECTS_KEY = "wackcode:collapsedProjects";
-const APP_SLASH_COMMANDS: SlashCommand[] = [
-  { id: "app:compact", name: "compact", description: "Summarize older conversation context", source: "app", sourceLabel: "WackCode" },
-  { id: "app:init", name: "init", description: "Create or refine project AGENTS.md", source: "app", sourceLabel: "WackCode" },
-  { id: "app:new", name: "new", description: "Open a new chat", source: "app", sourceLabel: "WackCode" },
-  { id: "app:name", name: "name", description: "Rename this chat", source: "app", sourceLabel: "WackCode" },
-  { id: "app:copy", name: "copy", description: "Copy the latest assistant message", source: "app", sourceLabel: "WackCode" }
-];
 
 interface ModelChoice {
   providerId: string;
@@ -491,6 +486,18 @@ export default function App() {
   }, [refreshChanges]);
 
   const configuredProviders = useMemo(() => data.providers.filter((item) => item.connected && item.models.some(modelIsReady)), [data.providers]);
+  // WackCode's own commands minus the ones switched off in Settings › Commands; the worker
+  // filters the rest of the catalog itself.
+  const enabledAppCommands = useMemo(() => {
+    const disabled = new Set(data.commands?.disabled ?? []);
+    return APP_SLASH_COMMANDS.filter((command) => !disabled.has(command.id));
+  }, [data.commands]);
+  // Settings' commands section reports every saved config, keeping `data.commands` (and so the
+  // composers) in step. Stable: the section rescans when this changes identity.
+  const commandsChanged = useCallback(
+    (config: CommandsConfig) => setData((current) => ({ ...current, commands: config })),
+    []
+  );
 
   async function connectSubscription(providerId: string) {
     pendingSubscriptionCancel.current = false;
@@ -1560,6 +1567,7 @@ export default function App() {
           onRemoveBackgroundImage={removeBackgroundImage}
           prompts={data.prompts}
           onSetPrompts={setPrompts}
+          onCommandsChanged={commandsChanged}
           mcp={data.mcp}
           mcpActions={mcpActions}
           onRefresh={refreshPackages}
@@ -1712,7 +1720,7 @@ export default function App() {
               onConfigure={selectedTask ? (patch) => void configure(patch) : configureDraft}
               onSend={(message, images, queue) => sendPrompt(message, { images, queue })}
               onLiteral={(message, images) => sendPrompt(message, { images, literal: true })}
-              commands={selectedTask ? [...APP_SLASH_COMMANDS, ...(runtime?.slashCommands ?? [])] : APP_SLASH_COMMANDS}
+              commands={selectedTask ? [...enabledAppCommands, ...(runtime?.slashCommands ?? [])] : enabledAppCommands}
               commandsReady={!selectedTask || runtime?.slashCommands !== undefined}
               commandsLoading={selectedTask ? runtime?.slashCommandsLoading : undefined}
               commandsError={selectedTask ? runtime?.slashCommandsError : undefined}

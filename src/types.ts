@@ -95,8 +95,77 @@ export interface SlashCommand {
   id: string;
   name: string;
   description?: string;
-  source: "app" | "extension" | "prompt" | "skill";
+  /** "custom" is a file in the user's own commands folder (Settings › Commands). */
+  source: "app" | "extension" | "prompt" | "custom" | "skill";
   sourceLabel: string;
+  /** A prompt template's `argument-hint`, shown next to its name. */
+  argumentHint?: string;
+}
+
+/**
+ * Settings › Commands, as saved. Which `commandKey`s (`app:` / `extension:` / `prompt:` /
+ * `custom:` / `skill:`) are switched off. Mirrors models.rs.
+ */
+export interface CommandsConfig {
+  disabled: string[];
+}
+
+/** Where one listed command comes from; "app" rows are the desktop's own (added client-side). */
+export type SlashCommandKind = "app" | "extension" | "prompt" | "custom";
+
+export interface SlashCommandEntry {
+  /** Its `commandKey` — the same id a chat's `SlashCommand.id` reports. */
+  key: string;
+  /** What `/` offers: the clash-resolved name, or the command's own name while switched off. */
+  name: string;
+  /** The name before a clash renamed it to `<source>:<name>`, when it was. */
+  rawName?: string;
+  description: string;
+  argumentHint?: string;
+  kind: SlashCommandKind;
+  enabled: boolean;
+  /** The user's own command file may be edited and deleted from Settings. */
+  editable: boolean;
+  /** The template file for prompt/custom, the extension file for extension. */
+  filePath?: string;
+}
+
+export interface SlashCommandGroup {
+  /** "custom" for the user's own commands, else the package's `source`. */
+  id: string;
+  label: string;
+  kind: "custom" | "package";
+  entries: SlashCommandEntry[];
+  diagnostics: SkillDiagnostic[];
+}
+
+/** Everything Settings › Commands lists, from a fresh scan. Runtime only. */
+export interface SlashCommandsOverview {
+  /** `<app data>/commands`, where the user's own command files live. */
+  customPath: string;
+  /** The switched-off keys as saved, for the renderer's own "WackCode" rows. */
+  disabled: string[];
+  groups: SlashCommandGroup[];
+}
+
+/** A change's result: the fresh list, the config as saved, and a note when part was skipped. */
+export interface SlashCommandsChange {
+  overview: SlashCommandsOverview;
+  config: CommandsConfig;
+  note?: string;
+}
+
+export interface SlashCommandDocument {
+  body: string;
+}
+
+export interface SaveSlashCommandInput {
+  /** The command file being rewritten; absent creates a new one. */
+  path?: string;
+  name: string;
+  description?: string;
+  argumentHint?: string;
+  body: string;
 }
 
 interface ProviderBase {
@@ -552,6 +621,7 @@ export interface AppData {
   prompts: PromptConfig;
   mcp: McpConfig;
   skills?: SkillsConfig;
+  commands?: CommandsConfig;
   window?: WindowState | null;
 }
 

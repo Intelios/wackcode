@@ -2,8 +2,9 @@ import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode }
 import { api } from "../api";
 import { applyBuiltinModelSuggestion, mergeDiscoveredModels, modelIsReady, searchBuiltinModels } from "../model-utils";
 import { WEB_FETCH_TOOL_NAME, groupTools } from "../tool-utils";
-import type { ApiFormat, AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CustomProviderRecord, McpConfig, ModelRecord, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ThinkingLevel, ToolCatalogEntry } from "../types";
+import type { ApiFormat, AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CommandsConfig, CustomProviderRecord, McpConfig, ModelRecord, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ThinkingLevel, ToolCatalogEntry } from "../types";
 import { Icon, type IconName } from "./Icons";
+import { CommandsSection, type SlashCommandActions } from "./CommandsSection";
 import { McpSection, type McpActions } from "./McpSection";
 import { PackagesSection, type PackageActions } from "./PackagesSection";
 import { PromptsSection } from "./PromptsSection";
@@ -33,10 +34,19 @@ const SKILL_ACTIONS: SkillActions = {
   onSearch: api.searchSkillPackages,
   onDetails: api.packageDetails
 };
+/** Settings › Commands talks to Rust directly, like Skills; `api`'s functions are stable. */
+const COMMAND_ACTIONS: Omit<SlashCommandActions, "onChanged"> = {
+  onList: api.listSlashCommands,
+  onRead: api.readSlashCommand,
+  onSave: api.saveSlashCommand,
+  onDelete: api.deleteSlashCommand,
+  onSetEnabled: api.setSlashCommandEnabled,
+  onReveal: api.revealPath
+};
 let nextModelCardKey = 0;
 const newModelCardKeys = (count: number) => Array.from({ length: count }, () => ++nextModelCardKey);
 
-type SectionId = "providers" | "packages" | "skills" | "tools" | "mcp" | "appearance" | "prompts" | "subagents";
+type SectionId = "providers" | "packages" | "skills" | "commands" | "tools" | "mcp" | "appearance" | "prompts" | "subagents";
 
 interface Section {
   id: SectionId;
@@ -48,6 +58,7 @@ const SECTIONS: Section[] = [
   { id: "providers", label: "Providers", icon: "key" },
   { id: "packages", label: "Packages", icon: "spark" },
   { id: "skills", label: "Skills", icon: "book" },
+  { id: "commands", label: "Commands", icon: "slash" },
   { id: "tools", label: "Tools", icon: "wrench" },
   { id: "mcp", label: "MCP servers", icon: "plug" },
   // Only listed while the built-in is switched on (Settings → Packages). Auto titles lives
@@ -84,6 +95,8 @@ interface Props extends PackageActions {
   onRemoveBackgroundImage: () => Promise<void>;
   prompts: PromptConfig;
   onSetPrompts: (config: PromptConfig) => Promise<void>;
+  /** Commands-section saves report the config back so `data.commands` stays current. */
+  onCommandsChanged: (config: CommandsConfig) => void;
   mcp?: McpConfig;
   /** Settings › MCP servers is listed once these are wired. */
   mcpActions?: McpActions;
@@ -92,7 +105,7 @@ interface Props extends PackageActions {
 export function SettingsPage({
   providers, packages, toolCatalog, disabledTools, appDataPath,
   onClose, onSave, onDelete, onConnectSubscription, onSignOutSubscription, connectedSubscriptionId, onSetDisabledTools,
-  subagents, onSetSubagents, autoTitle, onSetAutoTitle, appearance, glassSupported, onSetAppearance, onPreviewAppearance, backgroundImageUrl, onChooseBackgroundImage, onRemoveBackgroundImage, prompts, onSetPrompts, mcp, mcpActions, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
+  subagents, onSetSubagents, autoTitle, onSetAutoTitle, appearance, glassSupported, onSetAppearance, onPreviewAppearance, backgroundImageUrl, onChooseBackgroundImage, onRemoveBackgroundImage, prompts, onSetPrompts, onCommandsChanged, mcp, mcpActions, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
 }: Props) {
   const [chosenSection, setSection] = useState<SectionId>("providers");
   // Switching sub-agents off while its page is open lands on Packages, where the switch is.
@@ -263,6 +276,9 @@ export function SettingsPage({
             onSetPackageSkills={(source, enabled) => onSetResources(source, "skills", enabled)}
             onOpenPackages={() => setSection("packages")}
           />
+        )}
+        {section === "commands" && (
+          <CommandsSection {...COMMAND_ACTIONS} onChanged={onCommandsChanged} />
         )}
         {section === "tools" && (
           <ToolsSection catalog={toolCatalog} disabled={disabledTools} onSetDisabled={onSetDisabledTools} />

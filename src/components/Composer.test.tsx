@@ -205,7 +205,10 @@ describe("Composer slash commands", () => {
 
   it("keeps a command and its attachments after validation fails", async () => {
     const onCommand = vi.fn().mockRejectedValue(new Error("Enter a name after /name."));
-    setup({ onCommand });
+    setup({
+      commands: [command, { id: "app:name", name: "name", description: "Rename", source: "app", sourceLabel: "WackCode" }],
+      onCommand
+    });
     const area = screen.getByRole("textbox");
     fireEvent.change(area, { target: { value: "/name ", selectionStart: 6 } });
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));

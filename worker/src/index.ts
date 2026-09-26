@@ -4,7 +4,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 // Type-only: erased at build time, so Pi still loads solely through the dynamic import in initialize().
-import type { ResourceLoader } from "@earendil-works/pi-coding-agent";
+import type { PromptTemplate, ResourceLoader } from "@earendil-works/pi-coding-agent";
 import { SWITCHABLE_BUILTIN_TOOLS, createBuiltinExtensions } from "./builtin/index.js";
 import type { BuiltinHost } from "./builtin/host.js";
 import { SUBAGENT_TOOL_NAME } from "./builtin/subagents/types.js";
@@ -27,7 +27,8 @@ import { JsonLineDecoder } from "./framing.js";
 import { inspectInitAgentsResult, prepareInitAgents } from "./init-agents.js";
 import { RUN_TIMING_ENTRY_TYPE, RUN_TIMING_VERSION, resolveRunTimings, type ThinkingDurations } from "./run-timing.js";
 import { ThinkingClock, resolveThinkingDurations } from "./thinking-timing.js";
-import { expandTemplate } from "./slash.js";
+import { commandKey, expandTemplate, resolveCommandNames } from "./slash.js";
+import { commandsSignature, loadUserCommands, mergePrompts } from "./user-commands.js";
 import { NO_USER_SKILLS, loadUserSkills, mergeSkills, skillsSignature } from "./user-skills.js";
 import {
   CHECKPOINT_ENTRY_TYPE,
@@ -65,6 +66,7 @@ import {
   type ThinkingLevel,
   type TodoState,
   type TurnInfo,
+  type UserCommandsPayload,
   type UserSkillsPayload,
   type ExtensionUIRequest,
   type ToolCatalogEntry,
@@ -110,6 +112,10 @@ let mcpWait: AbortController | undefined;
 let userSkillsPayload: UserSkillsPayload | undefined;
 let userSkills = NO_USER_SKILLS;
 let userSkillsKey = skillsSignature(NO_USER_SKILLS);
+/** The user's own commands (Settings › Commands) and what the folder held at the last read. */
+let userCommandsPayload: UserCommandsPayload | undefined;
+let userCommands: PromptTemplate[] = [];
+let userCommandsKey = commandsSignature([], []);
 const pendingDialogs = new Map<string, (response: DialogResponse) => void>();
 
 interface DialogResponse {
@@ -237,25 +243,32 @@ function respond(id: string, result: unknown): void {
 
 function refreshCommandCatalog(): SlashCommand[] {
   if (!session) throw new Error("Worker is not initialized");
-  const taken = new Set(["compact", "init", "new", "name", "copy"]);
-  const entries: Array<{ source: SlashCommand["source"]; invocation: string; description?: string; label: string; templateContent?: string; skillFile?: string; skillBaseDir?: string }> = [
+  // A file dropped in the commands folder directly joins the picker without waiting for a run.
+  refreshUserCommands();
+  const disabled = new Set(userCommandsPayload?.disabled ?? []);
+  const customPaths = new Set(userCommands.map((template) => template.filePath));
+  const entries: Array<{ source: SlashCommand["source"]; invocation: string; description?: string; label: string; key: string; templateContent?: string; argumentHint?: string; skillFile?: string; skillBaseDir?: string }> = [
     ...session.extensionRunner.getRegisteredCommands()
       .filter((entry) => !entry.sourceInfo.path.startsWith("<inline:"))
-      .map((entry) => ({ source: "extension" as const, invocation: entry.invocationName, description: entry.description, label: entry.sourceInfo.source })),
-    ...session.promptTemplates.map((entry) => ({ source: "prompt" as const, invocation: entry.name, description: entry.description, label: entry.sourceInfo.source, templateContent: entry.content })),
-    ...session.resourceLoader.getSkills().skills.map((entry) => ({ source: "skill" as const, invocation: `skill:${entry.name}`, description: entry.description, label: entry.sourceInfo.source, skillFile: entry.filePath, skillBaseDir: entry.baseDir }))
+      .map((entry) => ({ source: "extension" as const, invocation: entry.invocationName, description: entry.description, label: entry.sourceInfo.source, key: commandKey("extension", entry.sourceInfo.path, entry.name) })),
+    ...session.promptTemplates.map((entry) => {
+      const custom = customPaths.has(entry.filePath);
+      const kind = custom ? "custom" as const : "prompt" as const;
+      return { source: kind, invocation: entry.name, description: entry.description, label: entry.sourceInfo.source, key: commandKey(kind, entry.filePath), templateContent: entry.content, argumentHint: entry.argumentHint };
+    }),
+    ...session.resourceLoader.getSkills().skills.map((entry) => ({ source: "skill" as const, invocation: `skill:${entry.name}`, description: entry.description, label: entry.sourceInfo.source, key: commandKey("skill", entry.filePath), skillFile: entry.filePath, skillBaseDir: entry.baseDir }))
   ];
-  commandCatalog = entries.map((entry, index) => {
-    let name = entry.invocation;
-    if (taken.has(name)) {
-      const base = `${entry.source}:${entry.invocation}`;
-      name = base;
-      let suffix = 2;
-      while (taken.has(name)) name = `${base}:${suffix++}`;
-    }
-    taken.add(name);
-    return { item: { id: `${entry.source}:${index}:${entry.invocation}`, name, description: entry.description, source: entry.source, sourceLabel: entry.label }, invocation: entry.invocation, templateContent: entry.templateContent, skillFile: entry.skillFile, skillBaseDir: entry.skillBaseDir };
-  });
+  // Switched-off commands are dropped before names resolve, so an enabled command can claim
+  // the freed name — the same way a switched-off skill lets the next one load.
+  const active = entries.filter((entry) => !disabled.has(entry.key));
+  const names = resolveCommandNames(active);
+  commandCatalog = active.map((entry, index) => ({
+    item: { id: entry.key, name: names[index].name, description: entry.description, source: entry.source, sourceLabel: entry.label, ...(entry.argumentHint ? { argumentHint: entry.argumentHint } : {}) },
+    invocation: entry.invocation,
+    templateContent: entry.templateContent,
+    skillFile: entry.skillFile,
+    skillBaseDir: entry.skillBaseDir
+  }));
   return commandCatalog.map(({ item }) => item);
 }
 
@@ -915,15 +928,22 @@ async function prepareImages(images: ImageContent[] | undefined): Promise<ImageC
  *   deliberately never enters `DefaultResourceLoaderOptions.systemPrompt`: the loader resolves
  *   that option as a file path when one exists on disk.
  * - The user's own skill folders (Settings › Skills) sit ahead of the package skills.
+ * - The user's own commands (Settings › Commands) sit ahead of the package prompt templates, and
+ *   a switched-off template is dropped before Pi's `/name` expansion can match it.
  *
- * Pi reads the wrapper on every system-prompt rebuild and for `/skill:name`, so `set_prompts` and
- * `set_skills` apply on the next turn without a respawn.
+ * Pi reads the wrapper on every system-prompt rebuild and for `/skill:name`, so `set_prompts`,
+ * `set_skills` and `set_commands` apply on the next turn without a respawn.
  */
 function withAppLayers(loader: ResourceLoader): ResourceLoader {
   return {
     getExtensions: () => loader.getExtensions(),
     getSkills: () => mergeSkills(userSkills, loader.getSkills()),
-    getPrompts: () => loader.getPrompts(),
+    getPrompts: () => {
+      const loaded = loader.getPrompts();
+      const disabled = new Set(userCommandsPayload?.disabled ?? []);
+      const prompts = loaded.prompts.filter((template) => !disabled.has(commandKey("prompt", template.filePath)));
+      return { prompts: mergePrompts(userCommands, prompts), diagnostics: loaded.diagnostics };
+    },
     getThemes: () => loader.getThemes(),
     getAgentsFiles: () => loader.getAgentsFiles(),
     getSystemPrompt: () => promptOverrides().systemPrompt ?? loader.getSystemPrompt(),
@@ -945,6 +965,24 @@ function refreshUserSkills(): boolean {
   const key = skillsSignature(userSkills);
   if (key === userSkillsKey) return false;
   userSkillsKey = key;
+  return true;
+}
+
+/**
+ * Re-read the user's commands folder and the switched-off keys. True when what `/` offers or
+ * prompt expansion can match changed, so the caller rebuilds the system prompt. Read on
+ * `set_commands` and before each run, like skills: edits from Settings reach a chat on its next
+ * message even though the payload (dir + keys) is unchanged.
+ */
+function refreshUserCommands(): boolean {
+  if (!piModule) return false;
+  const disabled = new Set(userCommandsPayload?.disabled ?? []);
+  const loaded = loadUserCommands(piModule, userCommandsPayload?.dir)
+    .filter((template) => !disabled.has(commandKey("custom", template.filePath)));
+  const key = commandsSignature(loaded, [...disabled]);
+  if (key === userCommandsKey) return false;
+  userCommands = loaded;
+  userCommandsKey = key;
   return true;
 }
 
@@ -984,6 +1022,8 @@ async function initialize(command: InitCommand): Promise<void> {
   // Before the session exists, so its first system prompt already lists them.
   userSkillsPayload = command.skills;
   refreshUserSkills();
+  userCommandsPayload = command.commands;
+  refreshUserCommands();
 
   let sessionStartEvent: { type: "session_start"; reason: "fork"; previousSessionFile: string } | undefined;
   let sessionManager: ReturnType<PiModule["SessionManager"]["create"]>;
@@ -1248,8 +1288,11 @@ async function runPrompt(
     // Stopped while MCP servers were starting: the abort already reported the run idle, and
     // nothing of this prompt has been recorded.
     if (!stopRequested) {
-      // Skills added, edited or removed on disk since the last run apply from this message.
-      if (refreshUserSkills()) applyDisabledTools();
+      // Skills and commands added, edited or removed on disk since the last run apply from this
+      // message.
+      const skillsChanged = refreshUserSkills();
+      const commandsChanged = refreshUserCommands();
+      if (skillsChanged || commandsChanged) applyDisabledTools();
       recordCheckpoint(checkpoint);
       await session.prompt(text, { ...(prepared.length > 0 ? { images: prepared } : {}), expandPromptTemplates: !literal });
     }
@@ -1358,10 +1401,15 @@ async function handle(command: WorkerCommand): Promise<void> {
       return;
     } else if (command.type === "execute_command") {
       const entry = commandCatalog.find((candidate) => candidate.item.id === command.commandId);
-      if (!entry) throw new Error("That command changed. Open the command list and try again.");
+      if (!entry) {
+        if ((userCommandsPayload?.disabled ?? []).includes(command.commandId)) {
+          throw new Error("That command is switched off in Settings › Commands.");
+        }
+        throw new Error("That command changed. Open the command list and try again.");
+      }
       if (entry.item.source === "extension" && command.images?.length) throw new Error("Extension commands cannot include images.");
       let line = `/${entry.invocation}${command.args ? ` ${command.args}` : ""}`;
-      if (entry.item.source === "prompt") line = expandTemplate(entry.templateContent ?? "", command.args);
+      if (entry.item.source === "prompt" || entry.item.source === "custom") line = expandTemplate(entry.templateContent ?? "", command.args);
       else if (entry.item.source === "skill") {
         if (!entry.skillFile || !piModule) throw new Error("That skill is no longer available.");
         const body = piModule.stripFrontmatter(await readFile(entry.skillFile, "utf8")).trim();
@@ -1562,6 +1610,12 @@ async function handle(command: WorkerCommand): Promise<void> {
       // Queued like set_prompts, so a run never sees its skills change under it.
       userSkillsPayload = command.skills;
       if (refreshUserSkills()) applyDisabledTools();
+    } else if (command.type === "set_commands") {
+      // Queued like set_skills, so a run never sees its command set change under it. The folder
+      // is re-read so edits made in Settings apply even though dir and keys are unchanged.
+      userCommandsPayload = command.commands;
+      if (refreshUserCommands()) applyDisabledTools();
+      if (commandCatalog.length) refreshCommandCatalog();
     } else if (command.type === "shutdown") {
       await subagentRunner?.abortAll();
       if (!session.isIdle) await session.abort();

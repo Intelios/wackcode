@@ -736,6 +736,8 @@ pub struct AppData {
     pub mcp: McpConfig,
     #[serde(default)]
     pub skills: SkillsConfig,
+    #[serde(default)]
+    pub commands: CommandsConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<WindowState>,
 }
@@ -757,6 +759,7 @@ impl Default for AppData {
             prompts: PromptConfig::default(),
             mcp: McpConfig::default(),
             skills: SkillsConfig::default(),
+            commands: CommandsConfig::default(),
             window: None,
         }
     }
@@ -848,16 +851,116 @@ pub struct QueuedMessages {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SlashCommand {
+    /// Its `commandKey` — stable across sessions and the same key Settings' switches use.
     pub id: String,
     pub name: String,
     pub description: Option<String>,
     pub source: SlashCommandSource,
     pub source_label: String,
+    /// A prompt template's `argument-hint`, shown next to its name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SlashCommandSource { App, Extension, Prompt, Skill }
+pub enum SlashCommandSource { App, Extension, Prompt, Custom, Skill }
+
+/// Settings › Commands. Which `commandKey`s are switched off; the user's commands themselves
+/// are files in `<app data>/commands` (see `slash_commands.rs`), not records here.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandsConfig {
+    /// `app:` / `extension:` / `prompt:` / `custom:` / `skill:` keys the user switched off.
+    #[serde(default)]
+    pub disabled: Vec<String>,
+}
+
+/// Where one listed command comes from, for Settings' grouping. `App` rows are the desktop's own.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SlashCommandKind { App, Extension, Prompt, Custom }
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlashCommandEntry {
+    /// Its `commandKey` — the same id a chat's `SlashCommand.id` reports, so they always agree.
+    pub key: String,
+    /// What `/` offers: the clash-resolved name, or the command's own name while switched off.
+    pub name: String,
+    /// The name before a clash renamed it to `<source>:<name>`, when it was.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_name: Option<String>,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument_hint: Option<String>,
+    pub kind: SlashCommandKind,
+    pub enabled: bool,
+    /// The user's own command file may be edited and deleted from Settings.
+    pub editable: bool,
+    /// The template file for prompt/custom, the extension file for extension.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SlashCommandGroupKind { Custom, Package }
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlashCommandGroup {
+    /// `custom` for the user's own commands, else the package's `source`.
+    pub id: String,
+    pub label: String,
+    pub kind: SlashCommandGroupKind,
+    pub entries: Vec<SlashCommandEntry>,
+    pub diagnostics: Vec<SkillDiagnostic>,
+}
+
+/// Everything Settings › Commands lists, from a fresh scan. Runtime only. The "WackCode" group
+/// is the app's own five commands, which the renderer adds itself (`command-utils.ts`): the
+/// scan never sees them because the picker offers them before the worker catalog is consulted.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlashCommandsOverview {
+    /// `<app data>/commands`, where the user's own command files live.
+    pub custom_path: String,
+    /// The switched-off keys as saved, for the renderer's own "WackCode" rows.
+    pub disabled: Vec<String>,
+    pub groups: Vec<SlashCommandGroup>,
+}
+
+/// A change's result: the fresh list, the config as saved, and a note when part was skipped.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlashCommandsChange {
+    pub overview: SlashCommandsOverview,
+    pub config: CommandsConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveSlashCommandInput {
+    /// The command file being rewritten; absent creates a new one.
+    pub path: Option<String>,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub argument_hint: String,
+    pub body: String,
+}
+
+/// What the command editor needs beyond the list: the template's body.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlashCommandDocument {
+    pub body: String,
+}
 
 /// A workspace checkpoint: a tree in the chat's shadow repository (see `checkpoints.rs`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

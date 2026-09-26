@@ -184,7 +184,9 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
       const match = /^\/([^\s]+)(?:\s+([\s\S]*))?$/.exec(message);
       const name = match?.[1] ?? "";
       const args = match?.[2] ?? "";
-      const known = ["compact", "init", "new", "name", "copy", ...commands.map((command) => command.name)].includes(name);
+      // Every command `/` may offer is in `commands` — WackCode's own filtered by Settings, so a
+      // switched-off `/copy` reads as unknown like any other name.
+      const known = commands.some((command) => command.name === name);
       if (!known) {
         setSlashNotice(`Unknown command /${name}. You can send it as a message.`);
         setSlashOpen(false);
@@ -317,7 +319,7 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
         {showCommands && <div id="slash-command-list" className="slash-picker" role="listbox" aria-label="Slash commands">
           {commandsLoading ? <div className="slash-picker-status">Loading commands…</div> : commandsError ? <div className="slash-picker-status">{commandsError} <button type="button" onClick={onRequestCommands}>Retry</button></div> : suggestions.length ? suggestions.map((command, index) =>
             <button id={`slash-option-${index}`} type="button" role="option" aria-selected={index === slashIndex} className={`slash-option ${index === slashIndex ? "selected" : ""}`} key={command.id} onMouseDown={(event) => event.preventDefault()} onClick={() => insertCommand(command.name)}>
-              <strong>/{command.name}</strong><span>{command.description}</span><small>{command.sourceLabel}</small>
+              <strong>/{command.name}{command.argumentHint ? ` ${command.argumentHint}` : ""}</strong><span>{command.description}</span><small>{command.sourceLabel}</small>
             </button>) : <div className="slash-picker-status">No matching commands</div>}
         </div>}
         {showMentions && <div id="mention-list" className="slash-picker mention-picker" role="listbox" aria-label="Files">

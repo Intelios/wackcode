@@ -25,12 +25,16 @@ import type {
   SaveMcpServerInput,
   SaveProviderInput,
   SaveSkillInput,
+  SaveSlashCommandInput,
   SkillDocument,
   SkillSearchPage,
   SkillSearchSort,
   SkillsChange,
   SkillsOverview,
   SlashCommand,
+  SlashCommandDocument,
+  SlashCommandsChange,
+  SlashCommandsOverview,
   SubagentConfig,
   SubscriptionProviderInfo,
   TaskMode,
@@ -89,6 +93,14 @@ export const api = {
   copySkillToLibrary: (path: string) => invoke<SkillsChange>("copy_skill_to_library", { path }),
   searchSkillPackages: (query: string, sort: SkillSearchSort, page: number) =>
     invoke<SkillSearchPage>("search_skill_packages", { input: { query, sort, page } }),
+  /** Settings › Commands: a fresh scan of every command a chat's `/` would offer. */
+  listSlashCommands: () => invoke<SlashCommandsOverview>("list_slash_commands"),
+  readSlashCommand: (path: string) => invoke<SlashCommandDocument>("read_slash_command", { path }),
+  saveSlashCommand: (input: SaveSlashCommandInput) => invoke<SlashCommandsChange>("save_slash_command", { input }),
+  /** Moves the command's file to the Trash. */
+  deleteSlashCommand: (path: string) => invoke<SlashCommandsChange>("delete_slash_command", { path }),
+  setSlashCommandEnabled: (key: string, enabled: boolean) =>
+    invoke<SlashCommandsChange>("set_slash_command_enabled", { key, enabled }),
   trustPackage: (source: string) => invoke<PackageRecord[]>("trust_package", { input: { source, trusted: true } }),
   removePackage: (source: string) => invoke<PackageRecord[]>("remove_package", { source }),
   updatePackages: (source?: string) => invoke<PackageRecord[]>("update_packages", { source }),

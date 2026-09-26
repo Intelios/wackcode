@@ -351,6 +351,8 @@ export interface InitCommand {
   mcp?: McpServerSpec[];
   /** The user's own skill folders. Absent: none, only package skills load. */
   skills?: UserSkillsPayload;
+  /** The user's own commands and the switched-off keys. Live via `set_commands`. */
+  commands?: UserCommandsPayload;
 }
 
 export interface WorkerResources {
@@ -361,12 +363,77 @@ export interface WorkerResources {
 }
 
 export interface SlashCommand {
+  /** Its `commandKey` (`slash.ts`): stable across sessions, and the same key Settings' switches use. */
   id: string;
   name: string;
   description?: string;
-  source: "app" | "extension" | "prompt" | "skill";
+  /** "custom" is a file in the user's own commands folder (Settings › Commands). */
+  source: "app" | "extension" | "prompt" | "custom" | "skill";
   sourceLabel: string;
+  /** A prompt template's `argument-hint`, shown next to its name. */
+  argumentHint?: string;
 }
+
+/**
+ * The user's own commands (Settings › Commands): the app-owned `commands/` folder, plus the
+ * switched-off `commandKey`s covering every kind (`app:`, `extension:`, `prompt:`, `custom:`,
+ * `skill:`). Live like skills: it arrives in `init`, is replaced with `set_commands`, and stays
+ * out of the worker fingerprint so toggling never respawns a chat.
+ */
+export interface UserCommandsPayload {
+  /** Absolute path of the folder holding the user's `<name>.md` prompt templates. */
+  dir: string;
+  disabled: string[];
+}
+
+/** Settings' command list: `commands-scan.js` reads one of these and prints a `CommandScanResult`. */
+export interface CommandScanRequest {
+  /** Working directory for the resource loader (the user's home, like the skills scan). */
+  cwd: string;
+  /**
+   * Trusted packages' extension and prompt resources, in Settings order. `enabled` mirrors the
+   * package's own resource switches: a switched-off resource contributes nothing, like a chat.
+   */
+  packages: Array<{
+    source: string;
+    label: string;
+    /** The package's install root, so load diagnostics can be attributed to it. */
+    installedPath?: string;
+    extensions: Array<{ path: string; enabled: boolean }>;
+    prompts: Array<{ path: string; enabled: boolean }>;
+  }>;
+  /** The app-owned folder of the user's commands (`<app data>/commands`). */
+  commandsDir: string;
+  /** Switched-off `commandKey`s; they resolve names out of the running set exactly as a chat does. */
+  disabled: string[];
+}
+
+/** One command as Settings rows it. */
+export interface ScannedCommand {
+  /** Its `commandKey` — also the `SlashCommand.id` a chat reports, so the two always agree. */
+  key: string;
+  /** What `/` offers: the resolved name, or the command's own name while it is switched off. */
+  name: string;
+  /** The name a clash renamed (`<source>:<name>`), when it was. */
+  rawName?: string;
+  description?: string;
+  argumentHint?: string;
+  kind: "extension" | "prompt" | "custom";
+  /** The template file for prompt/custom, the extension file for extension. */
+  filePath?: string;
+  enabled: boolean;
+}
+
+/** One package's commands (id = its source). */
+export interface ScannedCommandGroup {
+  id: string;
+  commands: ScannedCommand[];
+  diagnostics: ScannedDiagnostic[];
+}
+
+export type CommandScanResult =
+  | { ok: true; custom: ScannedCommand[]; packages: ScannedCommandGroup[] }
+  | { ok: false; error: string };
 
 /**
  * A workspace checkpoint: a tree in the chat's private shadow repository, taken by the host
@@ -457,6 +524,7 @@ export type WorkerCommand =
   | { id: string; type: "set_prompts"; prompts: PromptOverrides }
   | { id: string; type: "set_mcp"; servers: McpServerSpec[] }
   | { id: string; type: "set_skills"; skills: UserSkillsPayload }
+  | { id: string; type: "set_commands"; commands: UserCommandsPayload }
   | {
       id: string;
       type: "extension_ui_response";

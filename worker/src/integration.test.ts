@@ -2043,6 +2043,88 @@ describe("skills (Settings › Skills)", () => {
   });
 });
 
+describe("commands (Settings › Commands)", () => {
+  async function request(worker: WorkerHarness, command: Record<string, unknown>): Promise<Output> {
+    const id = crypto.randomUUID();
+    worker.send({ id, ...command });
+    return worker.waitFor((output) => output.type === "response" && output.id === id);
+  }
+
+  async function settle(worker: WorkerHarness, runId: string): Promise<SnapshotView> {
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === runId);
+    if (!worker.view) throw new Error("No snapshot after the run");
+    return worker.view;
+  }
+
+  function lastUserText(provider: MockProvider): string {
+    return userParts(provider.requests[provider.requests.length - 1]).filter((part) => part.type === "text").map((part) => part.text).join("");
+  }
+
+  it("lists custom commands ahead of package templates, applies set_commands live", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-commands-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const dir = join(workspace, "commands");
+    await mkdir(dir, { recursive: true });
+    const mine = join(dir, "review.md");
+    await writeFile(mine, "---\ndescription: Mine\nargument-hint: <files>\n---\nReview $ARGUMENTS\n");
+    const theirs = join(workspace, "review.md");
+    await writeFile(theirs, "---\ndescription: Theirs\n---\nPackage review.\n");
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "commands-task", undefined, undefined,
+      { extensions: [], skills: [], prompts: [theirs], themes: [] }, undefined, undefined,
+      { commands: { dir, disabled: [] } });
+    cleanup.push(() => worker.shutdown());
+
+    const listed = await request(worker, { type: "list_commands" });
+    const commands = listed.result as unknown as Array<{ id: string; name: string; source: string; sourceLabel: string; argumentHint?: string }>;
+    const custom = commands.find((entry) => entry.source === "custom");
+    expect(custom).toEqual(expect.objectContaining({ name: "review", argumentHint: "<files>", sourceLabel: "Your commands", id: `custom:${mine}` }));
+    // The user's `review` wins the name; the package template keeps working renamed.
+    expect(commands.find((entry) => entry.source === "prompt")).toEqual(expect.objectContaining({ name: "prompt:review" }));
+
+    expect((await request(worker, { type: "execute_command", commandId: custom!.id, args: "the diff", runId: "cmd-1" })).success).toBe(true);
+    await settle(worker, "cmd-1");
+    expect(lastUserText(provider)).toContain("Review the diff");
+
+    // Switching it off frees the name and refuses the stale key with a clear reason.
+    expect((await request(worker, { type: "set_commands", commands: { dir, disabled: [custom!.id] } })).success).toBe(true);
+    const after = (await request(worker, { type: "list_commands" })).result as unknown as Array<{ name: string; source: string }>;
+    expect(after.find((entry) => entry.source === "custom")).toBeUndefined();
+    expect(after.find((entry) => entry.source === "prompt")).toEqual(expect.objectContaining({ name: "review" }));
+    const refused = await request(worker, { type: "execute_command", commandId: custom!.id, args: "", runId: "cmd-2" });
+    expect(refused.success).toBe(false);
+    expect(refused.error).toMatch(/switched off/);
+  });
+
+  it("picks up a command added on disk at the next run, and a switched-off template never expands", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-commands-disk-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const dir = join(workspace, "commands");
+    await mkdir(dir, { recursive: true });
+    const theirs = join(workspace, "brief.md");
+    await writeFile(theirs, "---\ndescription: Brief\n---\nBRIEF-EXPANDED $ARGUMENTS\n");
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "commands-disk-task", undefined, undefined,
+      { extensions: [], skills: [], prompts: [theirs], themes: [] }, undefined, undefined,
+      { commands: { dir, disabled: [`prompt:${theirs}`] } });
+    cleanup.push(() => worker.shutdown());
+
+    // A switched-off package template does not expand when its name is typed as a message.
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "raw-1", message: "/brief notes" });
+    await settle(worker, "raw-1");
+    expect(lastUserText(provider)).toContain("/brief notes");
+    expect(lastUserText(provider)).not.toContain("BRIEF-EXPANDED");
+
+    await writeFile(join(dir, "late.md"), "---\ndescription: LATE-DESCRIPTION\n---\nDo it.\n");
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "raw-2", message: "check" });
+    await settle(worker, "raw-2");
+    const commands = (await request(worker, { type: "list_commands" })).result as unknown as Array<{ name: string; source: string }>;
+    expect(commands).toEqual(expect.arrayContaining([expect.objectContaining({ name: "late", source: "custom" })]));
+  });
+});
+
 describe("sub-agents", () => {
   const scout = {
     name: "scout",

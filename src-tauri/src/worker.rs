@@ -327,6 +327,9 @@ pub async fn ensure_worker_with(
         "mcp": mcp_payload(app)?,
         // The user's own skill folders (Settings › Skills). Live too, via set_skills.
         "skills": skills_payload(app)?,
+        // The user's own commands folder and switched-off keys (Settings › Commands). Live too,
+        // via set_commands — deliberately not in the fingerprint, so a toggle never respawns.
+        "commands": commands_payload(app)?,
     });
     if options.wait_ready {
         request(app, &task.id, init, INIT_TIMEOUT).await.map(|_| ())
@@ -458,6 +461,21 @@ pub async fn broadcast_skills(app: &AppHandle) -> Result<(), String> {
     broadcast(app, &json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "set_skills", "skills": payload })).await
 }
 
+/// The `commands` value for `init` and `set_commands`: the user's commands folder and the keys
+/// switched off in Settings › Commands.
+pub fn commands_payload(app: &AppHandle) -> Result<Value, String> {
+    let dir = crate::slash_commands::dir(app)?;
+    let state = app.state::<MetadataState>();
+    let config = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?.commands.clone();
+    Ok(crate::slash_commands::payload(&config, &dir))
+}
+
+/// Push the command settings to every running worker. Applied on the next turn; nothing restarts.
+pub async fn broadcast_commands(app: &AppHandle) -> Result<(), String> {
+    let payload = commands_payload(app)?;
+    broadcast(app, &json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "set_commands", "commands": payload })).await
+}
+
 pub async fn send(app: &AppHandle, task_id: &str, value: &Value) -> Result<(), String> {
     let worker = app.state::<WorkerState>().get(task_id)?
         .ok_or_else(|| "This task's Pi worker is not running".to_string())?;
@@ -581,6 +599,15 @@ pub(crate) fn skills_scan_entry_path(app: &AppHandle) -> Result<PathBuf, String>
         Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist/skills-scan.js"))
     } else {
         Ok(app.path().resource_dir().map_err(|error| error.to_string())?.join("resources/worker/dist/skills-scan.js"))
+    }
+}
+
+/// The keyless scan Settings › Commands runs (`commands-scan.js`; see `slash_commands.rs`).
+pub(crate) fn commands_scan_entry_path(app: &AppHandle) -> Result<PathBuf, String> {
+    if cfg!(debug_assertions) {
+        Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist/commands-scan.js"))
+    } else {
+        Ok(app.path().resource_dir().map_err(|error| error.to_string())?.join("resources/worker/dist/commands-scan.js"))
     }
 }
 
@@ -1041,6 +1068,21 @@ mod tests {
         let before = crate::skills::payload(&config, std::path::Path::new("/Users/test"));
         config.folders.push(crate::models::SkillFolderRecord { id: "claude".into(), path: None, enabled: true });
         let after = crate::skills::payload(&config, std::path::Path::new("/Users/test"));
+        assert_ne!(before, after);
+        assert_eq!(fingerprint, super::fingerprint(&provider(), "m", &resources).unwrap());
+    }
+
+    #[test]
+    fn command_settings_reach_workers_live_and_never_restart_them() {
+        // Like skills: the fingerprint has no room for the commands payload, so toggling a
+        // command never respawns a chat mid-run. It travels in `init` and `set_commands`.
+        let resources = resource_paths(&[]);
+        let fingerprint = fingerprint(&provider(), "m", &resources).unwrap();
+        let dir = std::path::Path::new("/app/data/commands");
+        let mut config = crate::models::CommandsConfig::default();
+        let before = crate::slash_commands::payload(&config, dir);
+        config.disabled.push("app:copy".into());
+        let after = crate::slash_commands::payload(&config, dir);
         assert_ne!(before, after);
         assert_eq!(fingerprint, super::fingerprint(&provider(), "m", &resources).unwrap());
     }

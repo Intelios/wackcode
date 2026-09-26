@@ -1,6 +1,6 @@
 import type { SVGProps } from "react";
 
-export type IconName = "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "copy" | "archive" | "send" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "checklist" | "terminal" | "file" | "pencil" | "external" | "brain" | "search" | "wrench" | "question" | "image" | "close" | "rewind" | "agents" | "flame" | "palette" | "plug" | "book" | "comment" | "commit" | "push" | "pullRequest";
+export type IconName = "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "copy" | "archive" | "send" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "checklist" | "terminal" | "file" | "pencil" | "external" | "brain" | "search" | "wrench" | "question" | "image" | "close" | "rewind" | "agents" | "flame" | "palette" | "plug" | "book" | "comment" | "commit" | "push" | "pullRequest" | "slash";
 
 const paths: Record<IconName, React.ReactNode> = {
   plus: <><path d="M12 5v14M5 12h14" /></>,
@@ -49,7 +49,8 @@ const paths: Record<IconName, React.ReactNode> = {
   comment: <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.6 8.6 0 0 1-3.2-.6L3 21l1.7-5.8A8.4 8.4 0 1 1 21 11.5Z" />,
   commit: <><circle cx="12" cy="12" r="3.5" /><path d="M3.5 12h5M15.5 12h5" /></>,
   push: <><path d="M12 19V5" /><path d="m6 11 6-6 6 6" /><path d="M4.5 21.5h15" /></>,
-  pullRequest: <><circle cx="6" cy="5.5" r="2" /><circle cx="6" cy="18.5" r="2" /><path d="M6 7.5v9" /><circle cx="18" cy="8.5" r="2" /><path d="M18 10.5c0 4-4 3.5-7 5.5" /></>
+  pullRequest: <><circle cx="6" cy="5.5" r="2" /><circle cx="6" cy="18.5" r="2" /><path d="M6 7.5v9" /><circle cx="18" cy="8.5" r="2" /><path d="M18 10.5c0 4-4 3.5-7 5.5" /></>,
+  slash: <><path d="m17 4-10 16" /><path d="M7 8.5 5 7l2-1.5" /><path d="m17 15.5 2 1.5-2 1.5" /></>
 };
 
 export function Icon({ name, ...props }: SVGProps<SVGSVGElement> & { name: IconName }) {

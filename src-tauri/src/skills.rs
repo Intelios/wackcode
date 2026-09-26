@@ -255,7 +255,8 @@ pub fn readable_skill(path: &str, roots: &[PathBuf]) -> Result<PathBuf, String> 
 
 /// Pi's own reading (`utils/frontmatter.js`): the file must start with `---`, and the block ends
 /// at the next line that starts with `---`. Returns the text between them, and the trimmed body.
-pub fn split(text: &str) -> (Option<String>, String) {
+/// Shared with `slash_commands.rs`, whose custom commands are the same Markdown format.
+pub(crate) fn split(text: &str) -> (Option<String>, String) {
     let normalized = text.strip_prefix('\u{feff}').unwrap_or(text).replace("\r\n", "\n").replace('\r', "\n");
     if !normalized.starts_with("---") {
         return (None, normalized.trim().to_string());
@@ -334,7 +335,7 @@ fn top_level_key(line: &str) -> Option<&str> {
 
 /// One line of text as a YAML scalar: plain when that reads back as the same string in any YAML
 /// reader, otherwise double-quoted with JSON's escapes, which YAML reads the same way.
-fn yaml_scalar(value: &str) -> String {
+pub(crate) fn yaml_scalar(value: &str) -> String {
     if plain_is_safe(value) {
         value.to_string()
     } else {
@@ -356,14 +357,14 @@ fn plain_is_safe(value: &str) -> bool {
 // ---------------------------------------------------------------------------------------------
 // Files
 
-fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
+pub(crate) fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
     let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
     // A leading dot keeps the half-written file out of every skill scan.
     let staging = path.with_file_name(format!(".{name}.wackcode-{}", Uuid::new_v4()));
-    fs::write(&staging, text).map_err(|error| format!("Could not save the skill: {error}"))?;
+    fs::write(&staging, text).map_err(|error| format!("Could not save the file: {error}"))?;
     fs::rename(&staging, path).map_err(|error| {
         let _ = fs::remove_file(&staging);
-        format!("Could not save the skill: {error}")
+        format!("Could not save the file: {error}")
     })
 }
 
@@ -436,7 +437,7 @@ pub fn delete_skill(home: &Path, path: &str) -> Result<(), String> {
     move_to_trash(&target)
 }
 
-fn move_to_trash(path: &Path) -> Result<(), String> {
+pub(crate) fn move_to_trash(path: &Path) -> Result<(), String> {
     use objc2_foundation::{NSFileManager, NSString, NSURL};
     let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
     NSFileManager::defaultManager()

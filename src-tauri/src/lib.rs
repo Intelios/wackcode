@@ -9,6 +9,7 @@ mod models;
 mod secrets;
 mod shell_env;
 mod skills;
+mod slash_commands;
 mod storage;
 mod subagents;
 mod subscriptions;
@@ -101,6 +102,11 @@ pub fn run() {
             commands::import_skill,
             commands::copy_skill_to_library,
             commands::search_skill_packages,
+            commands::list_slash_commands,
+            commands::read_slash_command,
+            commands::save_slash_command,
+            commands::delete_slash_command,
+            commands::set_slash_command_enabled,
             commands::list_packages,
             commands::refresh_packages,
             commands::install_package,

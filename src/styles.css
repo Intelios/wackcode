@@ -2012,6 +2012,81 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .skill-editor-issue { margin: 0; }
 .skill-editor, .skill-detail { margin-top: 16px; }
 
+/* ── Commands settings ───────────────────────── */
+/* Reuses the Sub-agents/Skills looks; a command row reads like the composer's `/` option. */
+.commands-settings .package-empty h4 { text-transform: none; letter-spacing: 0; font-size: 13px; color: var(--text); }
+.command-try {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 18px; padding: 0 12px;
+  border: 1px solid var(--border); border-radius: 9px; background: var(--wc-input);
+  transition: border-color .15s var(--ease);
+}
+.command-try:focus-within { border-color: var(--wc-input-focus); }
+.command-try-slash { color: var(--wc-accent-text); font: 600 13px "SFMono-Regular", Consolas, monospace; }
+.command-try input {
+  flex: 1; min-width: 0; height: 34px; border: 0; padding: 0; background: none; outline: none;
+  color: var(--text); font: 12px "SFMono-Regular", Consolas, monospace;
+}
+.command-try input::placeholder { color: var(--text-faint); font-family: inherit; }
+.command-list { border: 1px solid var(--border); border-radius: 9px; background: var(--surface); overflow: hidden; }
+.command-row { display: flex; align-items: center; gap: 12px; padding: 9px 12px; }
+.command-row + .command-row { border-top: 1px solid var(--border); }
+.command-row-main {
+  display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; padding: 0; border: 0; background: none;
+  color: var(--text); text-align: left; cursor: pointer; border-radius: 4px;
+}
+.command-row-main:not(.static):hover .command-name { color: var(--wc-accent-text); }
+.command-row-main:focus-visible { outline: 2px solid var(--wc-input-focus); outline-offset: 3px; }
+.command-row-main:disabled { cursor: default; }
+.command-row-head { display: flex; align-items: center; gap: 7px; min-width: 0; flex-wrap: wrap; }
+.command-name { font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: color .12s var(--ease); }
+.command-description {
+  color: var(--text-dim); font-size: 11px; line-height: 1.45; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.command-description em { color: var(--text-faint); font-style: normal; }
+.command-hint {
+  align-self: flex-start; font: 10.5px "SFMono-Regular", Consolas, monospace; color: var(--text-faint);
+  border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; line-height: 1.5; background: var(--wc-well);
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.command-row.off .command-name, .command-row.off .command-description, .command-row.off .command-hint { color: var(--text-faint); }
+.command-row-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.command-icon-button {
+  display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px;
+  border: 1px solid transparent; border-radius: 6px; background: none; color: var(--text-faint); cursor: pointer;
+  transition: color .12s var(--ease), background .12s var(--ease), border-color .12s var(--ease);
+}
+.command-icon-button:hover { color: var(--danger); background: var(--surface-raised); border-color: var(--border); }
+.command-icon-button:focus-visible { outline: 2px solid var(--wc-input-focus); outline-offset: 2px; }
+.command-icon-button svg { width: 13px; height: 13px; }
+.command-icon-button:disabled { opacity: .4; cursor: default; }
+.command-row-status { color: var(--text-faint); font-size: 10.5px; }
+.command-name-field {
+  display: flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 7px;
+  background: var(--wc-input); padding: 0 10px; transition: border-color .15s var(--ease);
+}
+.command-name-field:focus-within { border-color: var(--wc-input-focus); }
+.command-name-field > span { color: var(--wc-accent-text); font: 600 13px "SFMono-Regular", Consolas, monospace; }
+.command-name-field input {
+  flex: 1; min-width: 0; height: 32px; border: 0; padding: 0; background: none; outline: none;
+  color: var(--text); font: 12px "SFMono-Regular", Consolas, monospace;
+}
+.command-body-input { min-height: 180px; }
+.command-preview { display: flex; flex-direction: column; gap: 6px; }
+.command-preview-args {
+  height: 30px; border: 1px solid var(--border); border-radius: 7px; background: var(--wc-input);
+  padding: 0 10px; color: var(--text); outline: none; font: 11px "SFMono-Regular", Consolas, monospace;
+}
+.command-preview-args:focus { border-color: var(--wc-input-focus); }
+.command-preview-view {
+  margin: 0; max-height: 200px; overflow: auto; border: 1px solid var(--border); border-radius: 7px;
+  background: var(--wc-well); padding: 10px 12px;
+  font: 11px/1.55 "SFMono-Regular", Consolas, monospace; color: var(--text-soft); white-space: pre-wrap; word-break: break-word;
+}
+.command-preview-view em { color: var(--text-faint); font-style: normal; }
+.command-editor { margin-top: 16px; }
+.command-editor-issue { margin: 0; }
+
 /* ── MCP settings ──────────────────────────────── */
 .mcp-settings .row-actions .secondary-button { white-space: nowrap; }
 .mcp-mono { font-family: "SFMono-Regular", Consolas, monospace; font-size: 11.5px; }

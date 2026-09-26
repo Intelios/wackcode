@@ -9,9 +9,10 @@ use crate::{
         SlashCommand, SubagentConfig, AutoTitleConfig, TaskMode, TaskRecord, TaskStatus, ToolConfig, WorkspaceFiles,
         McpServerRecord, McpTestResult, SaveMcpServerInput, SaveSkillInput, SearchSkillPackagesInput, SkillDocument,
         SkillFolderKind, SkillFolderRecord, SkillSearchPage, SkillsChange, SkillsOverview,
+        SaveSlashCommandInput, SlashCommandDocument, SlashCommandsChange, SlashCommandsOverview,
     },
     storage::MetadataState,
-    worker::{self, WorkerOptions}, skills, subagents, subscriptions,
+    worker::{self, WorkerOptions}, skills, slash_commands, subagents, subscriptions,
 };
 use chrono::Utc;
 use serde::Deserialize;
@@ -960,6 +961,83 @@ pub async fn copy_skill_to_library(app: AppHandle, path: String) -> Result<Skill
         .ok_or_else(|| "That skill is no longer there.".to_string())?;
     skills::copy_into_library(&skills::home_dir(&app)?, &skill.name, Path::new(&skill.file_path), Path::new(&skill.base_dir))?;
     skills_changed(&app, None).await
+}
+
+// ---------------------------------------------------------------------------------------------
+// Slash commands (Settings › Commands). Every change reaches running chats through
+// `set_commands` on their next turn, and nothing restarts. Each answer is a fresh scan, so
+// Settings shows what a chat will offer, load failures included.
+
+async fn slash_commands_changed(app: &AppHandle, note: Option<String>) -> Result<SlashCommandsChange, String> {
+    worker::broadcast_commands(app).await?;
+    let config = {
+        let state = app.state::<MetadataState>();
+        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        data.commands.clone()
+    };
+    Ok(SlashCommandsChange { overview: slash_commands::overview(app).await?, config, note })
+}
+
+#[tauri::command]
+pub async fn list_slash_commands(app: AppHandle) -> Result<SlashCommandsOverview, String> {
+    slash_commands::overview(&app).await
+}
+
+/// A command file's body, from the user's own commands folder only.
+#[tauri::command]
+pub fn read_slash_command(app: AppHandle, path: String) -> Result<SlashCommandDocument, String> {
+    Ok(SlashCommandDocument { body: slash_commands::read_document(&slash_commands::dir(&app)?, &path)? })
+}
+
+/// Create a command in `<app data>/commands`, or rewrite one already there.
+#[tauri::command]
+pub async fn save_slash_command(app: AppHandle, state: State<'_, MetadataState>, input: SaveSlashCommandInput) -> Result<SlashCommandsChange, String> {
+    let name = slash_commands::validate_name(&input.name)?;
+    let description = slash_commands::validate_description(&input.description)?;
+    let hint = slash_commands::validate_hint(&input.argument_hint)?;
+    let body = slash_commands::validate_body(&input.body)?;
+    let dir = slash_commands::dir(&app)?;
+    match input.path.as_deref() {
+        None => {
+            slash_commands::create(&dir, &name, &description, &hint, &body)?;
+        }
+        Some(path) => {
+            let saved = slash_commands::update(&dir, path, &name, &description, &hint, &body)?.display().to_string();
+            if saved != path {
+                // A renamed command keeps its switch.
+                state.mutate(|data| {
+                    for entry in data.commands.disabled.iter_mut().filter(|entry| entry.as_str() == format!("custom:{path}")) {
+                        *entry = format!("custom:{saved}");
+                    }
+                    Ok(())
+                })?;
+            }
+        }
+    }
+    slash_commands_changed(&app, None).await
+}
+
+/// Move a command in the user's folder to the Trash.
+#[tauri::command]
+pub async fn delete_slash_command(app: AppHandle, state: State<'_, MetadataState>, path: String) -> Result<SlashCommandsChange, String> {
+    slash_commands::delete(&slash_commands::dir(&app)?, &path)?;
+    state.mutate(|data| {
+        data.commands.disabled.retain(|entry| entry != &format!("custom:{path}"));
+        Ok(())
+    })?;
+    slash_commands_changed(&app, None).await
+}
+
+/// Switch one command on or off, from a Settings row's key.
+#[tauri::command]
+pub async fn set_slash_command_enabled(app: AppHandle, state: State<'_, MetadataState>, key: String, enabled: bool) -> Result<SlashCommandsChange, String> {
+    {
+        let dir = slash_commands::dir(&app)?;
+        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        slash_commands::validate_key(&key, &dir, &data.packages)?;
+    }
+    state.mutate(|data| slash_commands::set_disabled(&mut data.commands, &key, enabled))?;
+    slash_commands_changed(&app, None).await
 }
 
 /// Tool changes take effect on the next agent turn, so running workers are updated in place

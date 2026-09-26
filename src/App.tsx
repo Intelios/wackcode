@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -6,9 +6,10 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { api } from "./api";
 import { modelDisplayName, modelIsReady, pickThinkingLevel } from "./model-utils";
-import { titleFromPrompt, samePlanState, sameTodoState, sameGoalState, applySnapshotDelta, validateInitCommand, nextMode, isPlanMode } from "./chat-utils";
+import { titleFromPrompt, samePlanState, sameTodoState, sameGoalState, applySnapshotDelta, applySubagentFrame, pendingSubagentView, validateInitCommand, nextMode, isPlanMode } from "./chat-utils";
 import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix } from "./tree-utils";
-import { pruneDisabledTools, sameToolCatalog } from "./tool-utils";
+import { displayAgentName, hasSubagentCall, pruneDisabledTools, sameToolCatalog, subagentDetailsFor } from "./tool-utils";
+import { CHANGES_VIEW, rememberedChanges, toggleView, viewForChat, viewKey, type SidePanelView } from "./side-panel";
 import { APP_SLASH_COMMANDS } from "./command-utils";
 import { DEFAULT_APPEARANCE, applyTheme, cacheTheme } from "./theme";
 import { AssistantNameContext, agentName } from "./agentName";
@@ -38,6 +39,7 @@ import type {
   SaveProviderInput,
   SlashCommand,
   SubagentConfig,
+  SubagentTarget,
   SubscriptionLoginEvent,
   TaskMode,
   TaskRecord,
@@ -46,6 +48,9 @@ import type {
   WorkerEvent
 } from "./types";
 import { ChangesPanel } from "./components/ChangesPanel";
+import { SidePanel } from "./components/SidePanel";
+import { SubagentPanelLink } from "./components/SubagentChip";
+import { SubagentPanel } from "./components/SubagentPanel";
 import { ChatHeader } from "./components/ChatHeader";
 import { Composer } from "./components/Composer";
 import { Icon } from "./components/Icons";
@@ -86,7 +91,10 @@ const EASE: [number, number, number, number] = [0.33, 1, 0.68, 1];
 const LAST_MODEL_KEY = "wackcode:lastModel";
 const LAST_PROJECT_KEY = "wackcode:lastProject";
 const NO_PROJECT_MODEL_KEY = "none";
+/** Whether Changes is open: the side panel's one durable view (`side-panel.ts`). */
 const CHANGES_OPEN_KEY = "wackcode:changesOpen";
+/** The side panel's width, named for its first view so existing widths carry over. */
+const PANEL_WIDTH_KEY = "wackcode:changesWidth";
 const COLLAPSED_PROJECTS_KEY = "wackcode:collapsedProjects";
 
 interface ModelChoice {
@@ -137,6 +145,19 @@ interface SubscriptionLoginState {
   error?: string;
 }
 
+/** What the chat and the side panel's sub-agent transcripts read from Settings › Appearance. */
+function ChatContexts({ appearance, children }: { appearance: AppearanceConfig; children: ReactNode }) {
+  return (
+    <AssistantNameContext.Provider value={agentName(appearance)}>
+      <ThinkingPreviewEnabled.Provider value={appearance.thinkingPreview}>
+        <ExploreGroupingEnabled.Provider value={appearance.groupExploration}>
+          {children}
+        </ExploreGroupingEnabled.Provider>
+      </ThinkingPreviewEnabled.Provider>
+    </AssistantNameContext.Provider>
+  );
+}
+
 function loadJSON<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
@@ -157,8 +178,14 @@ export default function App() {
   const [changes, setChanges] = useState<GitChanges>();
   const [changesLoading, setChangesLoading] = useState(false);
   const changesRequest = useRef(0);
-  const [changesOpen, setChangesOpen] = useState(() => loadJSON(CHANGES_OPEN_KEY, false));
-  const [changesWidth, setChangesWidth] = useState(() => loadJSON("wackcode:changesWidth", 430));
+  const [sidePanel, setSidePanel] = useState<SidePanelView | null>(() => loadJSON(CHANGES_OPEN_KEY, false) ? CHANGES_VIEW : null);
+  const [panelWidth, setPanelWidth] = useState(() => loadJSON(PANEL_WIDTH_KEY, 430));
+  /** Bumped to watch the shown sub-agent again (a failed watch, a gap, a restarted worker). */
+  const [watchNonce, setWatchNonce] = useState(0);
+  /** The chat whose worker streams a sub-agent to the panel, so it can be told to stop. */
+  const watchedTask = useRef<string | undefined>(undefined);
+  /** Watch commands, one at a time: two racing to the worker could leave it on the wrong child. */
+  const watchQueue = useRef<Promise<void>>(Promise.resolve());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [collapsedProjects, setCollapsedProjects] = useState<ReadonlySet<string>>(() => new Set(loadJSON<string[]>(COLLAPSED_PROJECTS_KEY, [])));
@@ -202,6 +229,34 @@ export default function App() {
     to: modelDisplayName(data.providers, entry.to)
   })), [runtime?.snapshot?.modelSwitches, data.providers]);
 
+  // What the side panel shows in this chat. A sub-agent view never shows in another chat, even
+  // for the one render before the effect below moves the panel back to what was remembered.
+  const panelView = sidePanel?.kind === "subagent" && sidePanel.taskId !== selectedTaskId
+    ? (loadJSON(CHANGES_OPEN_KEY, false) ? CHANGES_VIEW : null)
+    : sidePanel;
+  const shownSubagent = panelView?.kind === "subagent" ? panelView : undefined;
+  const snapshotMessages = runtime?.snapshot?.messages;
+  const shownSubagentCall = useMemo(
+    () => shownSubagent && snapshotMessages
+      ? subagentDetailsFor(snapshotMessages, runtime?.partial, runtime?.liveToolDetails, shownSubagent.toolCallId, selectedBusy)
+      : undefined,
+    [shownSubagent, snapshotMessages, runtime?.partial, runtime?.liveToolDetails, selectedBusy]
+  );
+
+  const toggleChanges = useCallback(() => setSidePanel((current) => toggleView(current, CHANGES_VIEW)), []);
+  const closeSidePanel = useCallback(() => setSidePanel(null), []);
+  const openSubagent = useCallback((toolCallId: string, index: number) => {
+    const taskId = selectedTaskRef.current;
+    if (taskId) setSidePanel((current) => toggleView(current, { kind: "subagent", taskId, toolCallId, index }));
+  }, []);
+  const selectSubagentSibling = useCallback((index: number) => {
+    setSidePanel((current) => current?.kind === "subagent" ? { ...current, index } : current);
+  }, []);
+  const subagentLink = useMemo(() => ({
+    open: shownSubagent ? { toolCallId: shownSubagent.toolCallId, index: shownSubagent.index } : undefined,
+    onOpen: openSubagent
+  }), [shownSubagent?.toolCallId, shownSubagent?.index, openSubagent]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleExtensionRespond = useCallback((request: ExtensionUIRequest, response: ExtensionUIResponse) => {
     setExtensionRequests((current) => current.filter((entry) => entry.requestId !== request.requestId));
     void api.respondExtensionUi({ taskId: request.taskId, requestId: request.requestId, ...response })
@@ -209,8 +264,15 @@ export default function App() {
   }, []);
 
   useEffect(() => { selectedTaskRef.current = selectedTaskId; }, [selectedTaskId]);
-  useEffect(() => { localStorage.setItem(CHANGES_OPEN_KEY, JSON.stringify(changesOpen)); }, [changesOpen]);
-  useEffect(() => { localStorage.setItem("wackcode:changesWidth", JSON.stringify(changesWidth)); }, [changesWidth]);
+  useEffect(() => {
+    const remembered = rememberedChanges(sidePanel);
+    if (remembered !== undefined) localStorage.setItem(CHANGES_OPEN_KEY, JSON.stringify(remembered));
+  }, [sidePanel]);
+  useEffect(() => { localStorage.setItem(PANEL_WIDTH_KEY, JSON.stringify(panelWidth)); }, [panelWidth]);
+  // A sub-agent view belongs to its chat: another chat opens with the remembered Changes state.
+  useEffect(() => {
+    setSidePanel((current) => viewForChat(current, selectedTaskId, loadJSON(CHANGES_OPEN_KEY, false)));
+  }, [selectedTaskId]);
   useEffect(() => { localStorage.setItem(COLLAPSED_PROJECTS_KEY, JSON.stringify([...collapsedProjects])); }, [collapsedProjects]);
 
   const toggleProjectCollapsed = useCallback((key: string) => {
@@ -255,6 +317,49 @@ export default function App() {
   const patchRuntime = useCallback((taskId: string, patch: Partial<TaskRuntime>) => {
     setRuntimes((current) => ({ ...current, [taskId]: { ...current[taskId], ...patch } }));
   }, []);
+
+  // Follow the shown sub-agent: its chat's worker streams its transcript into
+  // `runtime.subagentView` until the panel moves on. Switching children re-targets the same
+  // worker; leaving the chat or closing the panel tells it to stop.
+  const watchKey = shownSubagent ? viewKey(shownSubagent) : undefined;
+  useEffect(() => {
+    const target = shownSubagent;
+    const watch = (taskId: string, next: SubagentTarget | null) => {
+      watchQueue.current = watchQueue.current
+        .then(() => api.watchSubagent(taskId, next))
+        .catch((reason) => {
+          if (!next) return;
+          setRuntimes((current) => {
+            const view = current[taskId]?.subagentView;
+            if (!view || view.toolCallId !== next.toolCallId || view.index !== next.index) return current;
+            return { ...current, [taskId]: { ...current[taskId], subagentView: { ...view, loading: false, error: String(reason) } } };
+          });
+        });
+    };
+    const previous = watchedTask.current;
+    watchedTask.current = target?.taskId;
+    if (previous && previous !== target?.taskId) {
+      watch(previous, null);
+      patchRuntime(previous, { subagentView: undefined });
+    }
+    if (!target) return;
+    const next = { toolCallId: target.toolCallId, index: target.index };
+    patchRuntime(target.taskId, { subagentView: pendingSubagentView(next) });
+    watch(target.taskId, next);
+    // Keyed on the view (and the nonce), not the object, which is rebuilt for every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watchKey, watchNonce, patchRuntime]);
+
+  const resync = shownSubagent ? runtimes[shownSubagent.taskId]?.subagentView?.resync === true : false;
+  useEffect(() => {
+    if (resync) setWatchNonce((nonce) => nonce + 1);
+  }, [resync]);
+
+  // Rewinding past a call takes its chips away, and the panel follows.
+  useEffect(() => {
+    if (!shownSubagent || !snapshotMessages || hasSubagentCall(snapshotMessages, runtime?.partial, shownSubagent.toolCallId)) return;
+    setSidePanel(loadJSON(CHANGES_OPEN_KEY, false) ? CHANGES_VIEW : null);
+  }, [shownSubagent, snapshotMessages, runtime?.partial]);
 
   const refreshChanges = useCallback(async (taskId = selectedTaskRef.current) => {
     if (!taskId) return;
@@ -312,7 +417,12 @@ export default function App() {
             [taskId]: { ...runtime, snapshot, activeRun: snapshot.activeRun, planState, todoState, goalState, partial: undefined, error: undefined,
               // A fresh worker never has anything queued; queue_state events are authoritative after this.
               queued: undefined,
-              ...(payload.type === "ready" ? { slashCommands: undefined, slashCommandsError: undefined } : {}) }
+              ...(payload.type === "ready" ? {
+                slashCommands: undefined,
+                slashCommandsError: undefined,
+                // Nor is it streaming a sub-agent: the panel watches again.
+                ...(runtime?.subagentView ? { subagentView: { ...pendingSubagentView(runtime.subagentView), resync: true } } : {})
+              } : {}) }
           };
         });
         if (snapshot.planState) patchTask(taskId, { mode: snapshot.planState.mode });
@@ -403,6 +513,16 @@ export default function App() {
         patchRuntime(taskId, { todoState: { tasks: payload.tasks } });
       } else if (payload.type === "goal_state") {
         patchRuntime(taskId, { goalState: payload.goal ?? undefined });
+      } else if (payload.type === "subagent_stream") {
+        // Only the watched child streams. A frame that doesn't apply leaves state untouched, so
+        // nothing re-renders; one after a gap asks for a fresh reset.
+        setRuntimes((current) => {
+          const view = current[taskId]?.subagentView;
+          if (!view) return current;
+          const next = applySubagentFrame(view, payload);
+          if (next === view) return current;
+          return { ...current, [taskId]: { ...current[taskId], subagentView: next ?? { ...pendingSubagentView(view), resync: true } } };
+        });
       } else if (payload.type === "extension_ui_request") {
         setExtensionRequests((current) => [...current, payload]);
       } else if (payload.type === "extension_notice") {
@@ -1552,7 +1672,7 @@ export default function App() {
         setSettingsOpen((value) => !value);
       } else if (key === "c" && event.shiftKey) {
         event.preventDefault();
-        setChangesOpen((value) => !value);
+        toggleChanges();
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -1647,8 +1767,8 @@ export default function App() {
               task={selectedTask}
               project={selectedProject}
               changesCount={changes?.files.length}
-              changesOpen={changesOpen}
-              onToggleChanges={() => setChangesOpen((value) => !value)}
+              changesOpen={panelView?.kind === "changes"}
+              onToggleChanges={toggleChanges}
               onRename={(name) => void renameTask(selectedTask.id, name)}
               onTaskAction={(task, action) => void taskAction(task, action)}
               />
@@ -1669,9 +1789,8 @@ export default function App() {
               </div>
             )}
             <motion.div className="chat-transcript" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.1, ease: EASE }}>
-            <AssistantNameContext.Provider value={agentName(data.appearance)}>
-            <ThinkingPreviewEnabled.Provider value={data.appearance.thinkingPreview}>
-            <ExploreGroupingEnabled.Provider value={data.appearance.groupExploration}>
+            <ChatContexts appearance={data.appearance}>
+            <SubagentPanelLink.Provider value={subagentLink}>
             <Transcript
               messages={runtime?.snapshot?.messages ?? []}
               modelSwitches={displayModelSwitches}
@@ -1690,9 +1809,8 @@ export default function App() {
               onMessageAction={onMessageAction}
               onUndoRewind={runtime?.snapshot?.tree?.undo ? onUndoRewind : undefined}
             />
-            </ExploreGroupingEnabled.Provider>
-            </ThinkingPreviewEnabled.Provider>
-            </AssistantNameContext.Provider>
+            </SubagentPanelLink.Provider>
+            </ChatContexts>
             </motion.div>
             <InlineDialog
               requests={extensionRequests}
@@ -1787,18 +1905,36 @@ export default function App() {
         )}
       </main>
 
-      {selectedTask && changesOpen && <ChangesPanel
+      {selectedTask && <SidePanel
+        view={panelView}
+        width={panelWidth}
+        onWidthChange={setPanelWidth}
+        label={shownSubagent
+          ? `SubAgent ${displayAgentName(shownSubagentCall?.details.results[shownSubagent.index]?.agent ?? "")}`.trim()
+          : "Changes"}
+      >{(view) => view.kind === "subagent" ? (
+        <ChatContexts appearance={data.appearance}>
+          <SubagentPanel
+            toolCallId={view.toolCallId}
+            index={view.index}
+            details={shownSubagentCall?.details}
+            live={shownSubagentCall !== undefined && !shownSubagentCall.finished}
+            stream={runtime?.subagentView}
+            onSelect={selectSubagentSibling}
+            onClose={closeSidePanel}
+            onRetry={() => setWatchNonce((nonce) => nonce + 1)}
+          />
+        </ChatContexts>
+      ) : <ChangesPanel
         key={selectedTask.id}
         changes={changes}
         loading={changesLoading}
         busy={selectedTask.status === "running" || selectedTask.status === "stopping"}
-        width={changesWidth}
         mode={currentMode}
         canReview={data.subagents.enabled && data.subagents.agents.some((agent) => agent.id === "builtin:reviewer" && agent.enabled)}
         reviewReason={!data.subagents.enabled ? "Enable sub-agents in Settings" : !data.subagents.agents.some((agent) => agent.id === "builtin:reviewer" && agent.enabled) ? "Enable Reviewer in Settings" : undefined}
         comments={data.diffComments[selectedTask.id] ?? []}
-        onWidthChange={setChangesWidth}
-        onClose={() => setChangesOpen(false)}
+        onClose={closeSidePanel}
         onRefresh={() => void refreshChanges(selectedTask.id)}
         onSettings={() => setSettingsOpen(true)}
         onReview={reviewChanges}
@@ -1822,7 +1958,7 @@ export default function App() {
         onOpenPr={(url) => { void api.revealPath(url).catch((reason) => setGlobalError(String(reason))); }}
         onComments={saveDiffComments}
         onAddressComments={addressDiffComments}
-      />}
+      />}</SidePanel>}
         </>
       )}
 

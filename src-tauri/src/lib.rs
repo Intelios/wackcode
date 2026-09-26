@@ -121,6 +121,7 @@ pub fn run() {
             commands::create_task,
             commands::configure_task,
             commands::open_task,
+            commands::watch_subagent,
             commands::list_commands,
             commands::execute_command,
             commands::init_agents,

@@ -147,11 +147,34 @@ export function progressText(details: SubagentDetails): string {
   return `Sub-agents: ${parts.join(", ")}`;
 }
 
-/** A structured copy, so a queued update can't observe later mutation of the live object. */
+/**
+ * A structured copy, so a queued update can't observe later mutation of the live object. Live
+ * updates are the card's: a finished child's transcript stays out of them, or every frame would
+ * resend it (the side panel streams transcripts on its own channel).
+ */
 export function snapshotDetails(details: SubagentDetails): SubagentDetails {
   return {
     ...details,
-    results: details.results.map((result) => ({ ...result, activity: [...result.activity], usage: { ...result.usage } })),
+    results: details.results.map(({ transcript: _transcript, ...result }) => ({ ...result, activity: [...result.activity], usage: { ...result.usage } })),
+  };
+}
+
+/**
+ * A saved call's details without its children's transcripts, for snapshots: those are the side
+ * panel's alone, fetched with `watch_subagent`, and can run to hundreds of kilobytes a child.
+ * Returns `details` itself when there is nothing to strip.
+ */
+export function withoutTranscripts(details: unknown): unknown {
+  if (!details || typeof details !== "object") return details;
+  const results = (details as { results?: unknown }).results;
+  if (!Array.isArray(results) || !results.some((result) => result && typeof result === "object" && "transcript" in result)) return details;
+  return {
+    ...(details as Record<string, unknown>),
+    results: results.map((result) => {
+      if (!result || typeof result !== "object" || !("transcript" in result)) return result;
+      const { transcript: _transcript, ...rest } = result as Record<string, unknown>;
+      return rest;
+    }),
   };
 }
 

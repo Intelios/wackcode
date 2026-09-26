@@ -8,7 +8,7 @@
 //! The feature is off by default. While it is off a worker receives nothing at all — no roster
 //! and no credentials — and the tool stays out of the model's active set.
 
-use crate::models::{ProviderKind, ProviderRecord, SubagentConfig, SubagentModel, SubagentRecord, SubagentTrigger};
+use crate::models::{ProviderKind, ProviderRecord, SubagentConfig, SubagentModel, SubagentRecord, SubagentTrigger, SubagentWatchTarget};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use uuid::Uuid;
@@ -19,6 +19,10 @@ pub const CHILD_TOOLS: &[&str] = &["read", "grep", "find", "ls", "bash", "edit",
 /// Everything a read-only agent may use; its bash is further limited by the Plan-mode policy.
 const READ_ONLY_TOOLS: &[&str] = &["read", "grep", "find", "ls", "bash", "web_fetch"];
 pub const MAX_CONCURRENCY: u32 = 8;
+/// Children one `subagent` call may carry; mirrors `MAX_PARALLEL_TASKS` in the worker.
+const MAX_PARALLEL_TASKS: u32 = 8;
+/// Longer than any tool call id a provider mints.
+const MAX_TOOL_CALL_ID_CHARS: usize = 256;
 const MAX_AGENTS: usize = 32;
 const MAX_NAME_CHARS: usize = 32;
 const MAX_DESCRIPTION_CHARS: usize = 400;
@@ -265,6 +269,16 @@ pub fn runtime_payload(
     })
 }
 
+/// A side-panel watch can only name a child a `subagent` call could have: a tool call id as a
+/// provider mints one, and a position within one call's limit.
+pub fn validate_watch_target(target: &SubagentWatchTarget) -> Result<(), String> {
+    let id = &target.tool_call_id;
+    if id.is_empty() || id.len() > MAX_TOOL_CALL_ID_CHARS || id.chars().any(char::is_control) || target.index >= MAX_PARALLEL_TASKS {
+        return Err("That sub-agent is not in this chat.".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -420,5 +434,16 @@ mod tests {
         config.agents[1].model = choice("p", "low");
         assert_eq!(agents_using(&config, "p"), ["reviewer"]);
         assert!(agents_using(&config, "other").is_empty());
+    }
+
+    #[test]
+    fn a_watch_names_only_a_child_a_call_could_have() {
+        let target = |id: &str, index: u32| SubagentWatchTarget { tool_call_id: id.into(), index };
+        assert!(validate_watch_target(&target("call_abc123", 0)).is_ok());
+        assert!(validate_watch_target(&target("call_x|fc_y", 7)).is_ok());
+        assert!(validate_watch_target(&target("call_abc123", 8)).is_err());
+        assert!(validate_watch_target(&target("", 0)).is_err());
+        assert!(validate_watch_target(&target("line\nbreak", 0)).is_err());
+        assert!(validate_watch_target(&target(&"x".repeat(257), 0)).is_err());
     }
 }

@@ -12,12 +12,10 @@ interface Props {
   changes?: GitChanges;
   loading: boolean;
   busy: boolean;
-  width: number;
   mode: TaskMode;
   canReview: boolean;
   reviewReason?: string;
   comments: DiffComment[];
-  onWidthChange: (width: number) => void;
   onClose: () => void;
   onRefresh: () => void;
   onSettings: () => void;
@@ -34,8 +32,9 @@ interface Props {
   onAddressComments: (comments: DiffComment[]) => Promise<boolean>;
 }
 
+/** The side panel's Changes view: the chat's Git changes, their diffs, and the commit dock. */
 export function ChangesPanel(props: Props) {
-  const { changes, loading, busy, width, canReview, reviewReason, comments } = props;
+  const { changes, loading, busy, canReview, reviewReason, comments } = props;
   const [selected, setSelected] = useState<{ path: string; layer: "staged" | "working" }>();
   const [message, setMessage] = useState("");
   const [messageRevision, setMessageRevision] = useState<string>();
@@ -90,15 +89,6 @@ export function ChangesPanel(props: Props) {
     clearTimeout(flashTimer.current);
     setFlash(text);
     flashTimer.current = setTimeout(() => setFlash(undefined), 1800);
-  }
-
-  function startResize(event: React.PointerEvent) {
-    const startX = event.clientX;
-    const startWidth = width;
-    const move = (moveEvent: PointerEvent) => props.onWidthChange(Math.max(290, Math.min(720, startWidth + startX - moveEvent.clientX)));
-    const end = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", end);
   }
 
   function entryAction(entry: ChangeEntry, hunkId?: number) {
@@ -200,9 +190,8 @@ export function ChangesPanel(props: Props) {
   );
 
   return (
-    <aside className="changes-panel" style={{ width }}>
-      <div className="panel-resizer" onPointerDown={startResize} />
-      <header className="changes-header">
+    <div className="changes-panel">
+      <header className="panel-header">
         <div className="changes-title">
           <h3>Changes</h3>
           {changes?.isGit && files.length > 0 && (
@@ -217,7 +206,7 @@ export function ChangesPanel(props: Props) {
           <button className="icon-button" onClick={props.onRefresh} aria-label="Refresh changes"><Icon name="refresh" className={loading ? "spinning" : ""} /></button>
           <button className="icon-button" onClick={props.onClose} aria-label="Close changes panel"><Icon name="close" /></button>
         </div>
-        {loading && <span className="changes-loading" aria-hidden="true" />}
+        {loading && <span className="panel-loading" aria-hidden="true" />}
       </header>
       {!changes?.isGit ? (
         <div className="panel-empty"><Icon name="git" /><strong>No Git repository</strong><span>Chat and editing still work. Changes can’t be summarized here.</span></div>
@@ -292,6 +281,6 @@ export function ChangesPanel(props: Props) {
           run={run}
         />
       )}
-    </aside>
+    </div>
   );
 }

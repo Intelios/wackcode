@@ -117,6 +117,8 @@ export function createSubagentsExtension(host: BuiltinHost, currentMode: () => T
       let outcome: SubagentOutcome;
       try {
         outcome = await host.runSubagent({
+          toolCallId,
+          index,
           spec,
           task: input.task,
           tools,
@@ -157,6 +159,9 @@ export function createSubagentsExtension(host: BuiltinHost, currentMode: () => T
       if (card.text) result.output = card.text;
       if (card.truncated) result.outputTruncated = true;
       if (outcome.error) result.error = host.redact(outcome.error);
+      // Saved with the final result for the side panel; `snapshotDetails` keeps it out of the
+      // live card updates that follow while siblings still run.
+      if (outcome.transcript) result.transcript = outcome.transcript;
       result.usage = cardUsage(outcome.usage, outcome.turns);
       result.endedAt = Date.now();
       updates.schedule();

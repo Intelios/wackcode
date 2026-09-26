@@ -25,9 +25,9 @@ const changes: GitChanges = {
 
 function props() {
   return {
-    changes, loading: false, busy: false, width: 430, mode: "build" as const,
+    changes, loading: false, busy: false, mode: "build" as const,
     canReview: true, comments: [],
-    onWidthChange: vi.fn(), onClose: vi.fn(), onRefresh: vi.fn(), onSettings: vi.fn(),
+    onClose: vi.fn(), onRefresh: vi.fn(), onSettings: vi.fn(),
     onReview: vi.fn(async () => true), onAction: vi.fn(async () => {}),
     onCommit: vi.fn(async () => {}), onGenerate: vi.fn(async () => ({ message: "Update file", revision: "index-1" })),
     onPublishInfo: vi.fn(async () => ({ branch: "topic", upstream: null, remotes: ["origin"] })),

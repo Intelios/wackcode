@@ -1,7 +1,7 @@
-import type { NormalizedBlock, SubagentDetails, SubagentResult, SubagentStatus, ToolCatalogEntry } from "./types";
+import type { NormalizedBlock, NormalizedMessage, SubagentDetails, SubagentResult, SubagentStatus, ToolCatalogEntry } from "./types";
 import { displayPath } from "./chat-utils";
 
-/** The built-in sub-agents tool. Its calls render as a card rather than a tool row. */
+/** The built-in sub-agents tool. Its calls render as SubAgent chips rather than a tool row. */
 export const SUBAGENT_TOOL_NAME = "subagent";
 /** The one WackCode built-in tool the user can switch off, through the tool denylist. */
 export const WEB_FETCH_TOOL_NAME = "web_fetch";
@@ -507,4 +507,46 @@ export function pendingSubagentDetails(call: NormalizedBlock): SubagentDetails |
   }
   const single = queued(toolArgs.agent, toolArgs.task);
   return single ? { v: 1, mode: "single", results: [single] } : undefined;
+}
+
+/** Whether a `subagent` call is still in the conversation: rewinding past it removes it. */
+export function hasSubagentCall(messages: NormalizedMessage[], partial: NormalizedMessage | undefined, toolCallId: string): boolean {
+  const holds = (message: NormalizedMessage) =>
+    message.blocks.some((block) => block.type === "tool-call" && block.toolCallId === toolCallId && block.toolName === SUBAGENT_TOOL_NAME);
+  return messages.some(holds) || (partial !== undefined && holds(partial));
+}
+
+/** A sub-agent's name as a title: "scout" → "Scout", "code-reviewer" → "Code Reviewer". */
+export function displayAgentName(name: string): string {
+  const words = name.split(/[-_\s]+/).filter(Boolean);
+  return words.length ? words.map((word) => word[0].toUpperCase() + word.slice(1)).join(" ") : name;
+}
+
+/**
+ * A `subagent` call's details wherever they stand now, by the precedence its chips use: the
+ * final result once there is one; while the chat runs, the latest live update, or the call's own
+ * arguments until the first update. `finished` says the result has landed. Undefined when the
+ * call isn't in the conversation, or was cut off without a result.
+ */
+export function subagentDetailsFor(
+  messages: NormalizedMessage[],
+  partial: NormalizedMessage | undefined,
+  liveToolDetails: Record<string, unknown> | undefined,
+  toolCallId: string,
+  running: boolean
+): { details: SubagentDetails; finished: boolean } | undefined {
+  let call: NormalizedBlock | undefined;
+  for (const message of partial ? [...messages, partial] : messages) {
+    for (const block of message.blocks) {
+      if (block.toolCallId !== toolCallId || block.toolName !== SUBAGENT_TOOL_NAME) continue;
+      if (block.type === "tool-result") {
+        const details = parseSubagentDetails(block.details);
+        return details ? { details, finished: true } : undefined;
+      }
+      if (block.type === "tool-call") call = block;
+    }
+  }
+  if (!call || !running) return undefined;
+  const details = parseSubagentDetails(liveToolDetails?.[toolCallId]) ?? pendingSubagentDetails(call);
+  return details ? { details, finished: false } : undefined;
 }

@@ -14,7 +14,7 @@ import { Markdown } from "./Markdown";
 import { MessageActions, type MessageActionItem } from "./MessageActions";
 import { MessageEditor } from "./MessageEditor";
 import { PlanCard, type PlanAction } from "./PlanCard";
-import { SubagentCard } from "./SubagentCard";
+import { SubagentGroup } from "./SubagentChip";
 import { ThinkingExpansion, ThinkingRow } from "./ThinkingRow";
 import { OrphanResult, ToolRow } from "./ToolRow";
 import { Popover } from "./ui/Popover";
@@ -29,7 +29,7 @@ interface Props {
   activeRun?: { runId?: string; startedAt: number };
   runTimings?: RunTiming[];
   liveToolText?: Record<string, string>;
-  /** Structured progress of in-flight tools that report it (the sub-agent card). */
+  /** Structured progress of in-flight tools that report it (sub-agent chips). */
   liveToolDetails?: Record<string, unknown>;
   /** Latest Plan mode state; PlanCards use it to know which proposal is awaiting a decision. */
   planState?: PlanState;
@@ -206,7 +206,7 @@ function renderBlock(
       const details = result
         ? parseSubagentDetails(result.details)
         : live ? parseSubagentDetails(liveDetails) ?? pendingSubagentDetails(block) : undefined;
-      if (details) return <SubagentCard details={details} running={live && !result} />;
+      if (details && block.toolCallId) return <SubagentGroup toolCallId={block.toolCallId} details={details} live={live && !result} />;
     }
     return <ToolRow call={block} result={result} liveText={liveText} running={live && !result} />;
   }

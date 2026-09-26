@@ -83,6 +83,17 @@ interface Output {
   snapshot?: SnapshotView;
   /** Harness-attached: the merged transcript state as of this output (not from the worker). */
   view?: SnapshotView;
+  /** `subagent_stream` frames. */
+  toolCallId?: string;
+  index?: number;
+  rev?: number;
+  reset?: boolean;
+  upserts?: SnapshotView["messages"];
+  removed?: string[];
+  partial?: SnapshotView["messages"][number] | null;
+  live?: boolean;
+  missing?: boolean;
+  truncated?: boolean;
   delta?: {
     rev: number;
     upserts: SnapshotView["messages"];
@@ -408,6 +419,9 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
           ? [toolCall("subagent", { agent: "scout", task: "child-fetch: http://localhost/docs" })]
         : lastUserText.startsWith("subagent wait")
           ? [toolCall("subagent", { agent: "scout", task: "child-wait: until stopped" })]
+        // The child's answer quotes its task, so it repeats the chat's own key.
+        : lastUserText.startsWith("subagent leak")
+          ? [toolCall("subagent", { agent: "scout", task: "child-ls: leak alpha-secret" })]
         : lastUserText.startsWith("child-ls")
           ? [toolCall("ls", { path: "." })]
         : lastUserText.startsWith("child-fetch: ")
@@ -2429,6 +2443,152 @@ describe("sub-agents", () => {
     await worker.waitFor((output) => emitted(output) && subagentResult(worker) !== undefined);
     expect(subagentResult(worker)?.details.results[0].status).toBe("aborted");
     expect(worker.child.exitCode).toBeNull();
+  });
+
+  const target = { toolCallId: "call-alpha", index: 0 };
+  const streamFrames = (worker: WorkerHarness) => worker.outputs.filter((output) => output.type === "subagent_stream");
+
+  /** The watched child's transcript as the renderer rebuilds it: resets replace, the rest chain by rev. */
+  function replay(frames: Output[]): SnapshotView["messages"] {
+    let messages: SnapshotView["messages"] = [];
+    let rev = -1;
+    for (const frame of frames) {
+      if (frame.reset) {
+        messages = [...(frame.upserts ?? [])];
+      } else {
+        expect(frame.rev).toBe(rev + 1);
+        const removed = new Set(frame.removed);
+        messages = messages.filter((message) => !removed.has(message.id ?? ""));
+        for (const upsert of frame.upserts ?? []) {
+          const at = messages.findIndex((message) => message.id === upsert.id);
+          if (at >= 0) messages[at] = upsert;
+          else messages.push(upsert);
+        }
+      }
+      rev = frame.rev ?? rev;
+    }
+    return messages;
+  }
+
+  it("streams a watched sub-agent from before it starts until it stops", async () => {
+    const { provider, worker } = await start("subagents-stream", { subagents: config() });
+    // Watching is sticky: the child doesn't exist yet, so the first frame says so.
+    const watchId = crypto.randomUUID();
+    worker.send({ id: watchId, type: "watch_subagent", target });
+    const first = await worker.waitFor((output) => output.type === "subagent_stream");
+    expect(first).toMatchObject({ taskId: "subagents-stream", ...target, rev: 0, reset: true, upserts: [], removed: [], partial: null, live: false, missing: true });
+    // The reset frame goes out before the command's answer.
+    const answered = await worker.waitFor((output) => output.type === "response" && output.id === watchId);
+    expect(answered.success).toBe(true);
+    expect(worker.outputs.indexOf(first)).toBeLessThan(worker.outputs.indexOf(answered));
+
+    // The frames follow the child once it begins, while its call still holds the command queue.
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "subagent wait" });
+    await provider.waitForSlowRequest();
+    const live = await worker.waitFor((output) => output.type === "subagent_stream" && output.live === true);
+    expect(live.missing).toBeUndefined();
+
+    worker.send({ id: crypto.randomUUID(), type: "abort" });
+    await worker.waitFor((output) => output.type === "subagent_stream" && output.rev !== undefined && output.rev > (live.rev ?? 0) && output.live === false);
+    replay(streamFrames(worker));
+    expect(worker.outputs.filter((output) => output.type === "worker_error")).toEqual([]);
+
+    // Stopping the watch stops the frames.
+    worker.send({ id: crypto.randomUUID(), type: "watch_subagent", target: null });
+    const count = streamFrames(worker).length;
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-2", message: "subagent single" });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "run-2" && output.state === "idle");
+    expect(streamFrames(worker)).toHaveLength(count);
+  });
+
+  it("saves a sub-agent's transcript on its result, out of snapshots, and serves it after a restart", async () => {
+    const { workspace, worker, provider } = await start("subagents-saved", { subagents: config() });
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "subagent single" });
+    await worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha.")) === true);
+
+    // Snapshots and live card updates never carry transcripts.
+    expect(subagentResult(worker)?.details.results[0]).not.toHaveProperty("transcript");
+    const updates = worker.outputs.filter((output) => output.type === "activity" && output.event === "tool_execution_update");
+    expect(updates.length).toBeGreaterThan(0);
+    expect(JSON.stringify(updates)).not.toContain("transcript");
+
+    worker.send({ id: crypto.randomUUID(), type: "watch_subagent", target });
+    const saved = await worker.waitFor((output) => output.type === "subagent_stream");
+    expect(saved).toMatchObject({ rev: 0, reset: true, live: false, partial: null });
+    expect(saved.missing).toBeUndefined();
+    // What the child ran and answered, never its task (that is on the result already).
+    const transcript = saved.upserts ?? [];
+    expect(transcript.map((message) => message.role)).toEqual(["assistant", "tool", "assistant"]);
+    expect(transcript[0].blocks).toEqual([expect.objectContaining({ type: "tool-call", toolName: "ls" })]);
+    expect(transcript[1].blocks[0]).toMatchObject({ type: "tool-result", toolName: "ls" });
+    expect(transcript[2].blocks).toEqual([expect.objectContaining({ type: "text", text: "Child done: child-ls: look around" })]);
+
+    const sessionFile = worker.view?.sessionFile;
+    expect(sessionFile).toBeTruthy();
+    expect(await readFile(sessionFile as string, "utf8")).toContain("\"transcript\"");
+    await worker.shutdown();
+
+    // A fresh worker reads it back from the session.
+    const restored = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "subagents-saved", sessionFile, undefined, undefined, undefined, undefined, { subagents: config() });
+    cleanup.push(() => restored.worker.shutdown());
+    expect(restored.ready.snapshot?.messages.flatMap((message) => message.blocks)
+      .find((block) => block.toolName === "subagent" && block.type === "tool-result")?.details).not.toHaveProperty("results.0.transcript");
+    restored.worker.send({ id: crypto.randomUUID(), type: "watch_subagent", target });
+    const reread = await restored.worker.waitFor((output) => output.type === "subagent_stream");
+    expect(reread).toMatchObject({ rev: 0, reset: true, live: false });
+    expect(reread.upserts).toEqual(transcript);
+
+    // A child this chat never ran.
+    restored.worker.send({ id: crypto.randomUUID(), type: "watch_subagent", target: { toolCallId: "call-elsewhere", index: 0 } });
+    expect(await restored.worker.waitFor((output) => output.type === "subagent_stream" && output.toolCallId === "call-elsewhere"))
+      .toMatchObject({ reset: true, upserts: [], missing: true });
+  });
+
+  it("redacts a sub-agent's transcript like its answer", async () => {
+    const { worker } = await start("subagents-leak", { subagents: config() });
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "subagent leak" });
+    await worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha.")) === true);
+    expect(subagentResult(worker)?.details.results[0].output).toBe("Child done: child-ls: leak [credential redacted]");
+
+    worker.send({ id: crypto.randomUUID(), type: "watch_subagent", target });
+    const frame = await worker.waitFor((output) => output.type === "subagent_stream");
+    expect(frame.upserts?.at(-1)?.blocks).toEqual([expect.objectContaining({ text: "Child done: child-ls: leak [credential redacted]" })]);
+    // `view` is the harness's own copy of the chat, not part of the frame.
+    const { view: _view, ...sent } = frame;
+    expect(JSON.stringify(sent)).not.toContain("alpha-secret");
+  });
+
+  it("answers a watch sent while the worker is still starting, once it has started", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-subagents-early-watch-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const worker = new WorkerHarness(workspace);
+    cleanup.push(() => worker.shutdown());
+    worker.send({
+      id: crypto.randomUUID(), type: "init", taskId: "subagents-early", cwd: workspace,
+      agentDir: join(workspace, ".agent"), sessionDir: join(workspace, ".sessions"),
+      provider: { id: "p", name: "P", kind: "custom", baseUrl: provider.baseUrl, api: "openai-completions", models: [{ id: "shared-model", name: "Shared model", contextWindow: 16_384, maxTokens: 321, reasoning: false, thinkingLevels: ["off"], thinkingLevelMap: { off: null } }] },
+      modelId: "shared-model", apiKey: "alpha-secret", thinkingLevel: "off", subagents: config()
+    });
+    // Sent right behind init, like a chip clicked while the chat's worker is still spawning.
+    const watchId = crypto.randomUUID();
+    worker.send({ id: watchId, type: "watch_subagent", target });
+    expect(await worker.waitFor((output) => output.type === "response" && output.id === watchId)).toMatchObject({ success: true });
+    const ready = worker.outputs.findIndex((output) => output.type === "ready");
+    const frame = worker.outputs.findIndex((output) => output.type === "subagent_stream");
+    expect(ready).toBeGreaterThanOrEqual(0);
+    expect(frame).toBeGreaterThan(ready);
+    expect(worker.outputs[frame]).toMatchObject({ taskId: "subagents-early", reset: true, missing: true });
+  });
+
+  it("refuses to watch something that isn't a sub-agent", async () => {
+    const { worker } = await start("subagents-watch-invalid", { subagents: config() });
+    const id = crypto.randomUUID();
+    worker.send({ id, type: "watch_subagent", target: { toolCallId: "", index: -1 } });
+    expect(await worker.waitFor((output) => output.type === "response" && output.id === id)).toMatchObject({ success: false, error: "That sub-agent is not in this chat." });
+    // Answered to the caller alone: no banner in the chat.
+    expect(worker.outputs.filter((output) => output.type === "worker_error")).toEqual([]);
   });
 });
 

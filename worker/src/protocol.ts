@@ -220,6 +220,20 @@ export interface SubagentResult {
   usage: SubagentUsage;
   startedAt?: number;
   endedAt?: number;
+  /**
+   * What the child did, for the side panel: saved with the final tool result so it survives a
+   * reload, fork or rewind, but stripped from snapshots and never sent with live card updates —
+   * the panel fetches it with `watch_subagent`. Absent on calls made before transcripts were kept.
+   */
+  transcript?: SubagentTranscript;
+}
+
+/** A child's messages as the panel renders them: normalized, redacted and capped. */
+export interface SubagentTranscript {
+  v: 1;
+  messages: NormalizedMessage[];
+  /** Older tool output was trimmed to keep the chat's session file small. */
+  truncated?: boolean;
 }
 
 /** The `subagent` tool's result details: what the transcript card renders, live and after a reload. */
@@ -227,6 +241,33 @@ export interface SubagentDetails {
   v: 1;
   mode: "single" | "parallel";
   results: SubagentResult[];
+}
+
+/** One child of one `subagent` call: the tool call's id and the child's position in it. */
+export interface SubagentTarget {
+  toolCallId: string;
+  index: number;
+}
+
+/**
+ * One frame of the watched child's transcript (`watch_subagent`). A `reset` frame carries the
+ * whole transcript and replaces whatever the host holds; the frames after it apply on top of the
+ * one carrying `rev - 1`, like `SnapshotDelta`: removed ids first, then each upsert replaces its
+ * message by id or appends.
+ */
+export interface SubagentStreamFrame extends SubagentTarget {
+  rev: number;
+  reset?: true;
+  /** Reset frames: the whole transcript. Other frames: new or changed messages. */
+  upserts: NormalizedMessage[];
+  removed: string[];
+  /** The message the child is writing right now; null when it isn't writing one. */
+  partial: NormalizedMessage | null;
+  /** The child is still running in this worker. */
+  live: boolean;
+  truncated?: boolean;
+  /** Nothing is known about this child yet: not started, or a call from before transcripts were kept. */
+  missing?: boolean;
 }
 
 /**
@@ -558,6 +599,12 @@ export type WorkerCommand =
       checkpoint?: CheckpointRef | null;
     }
   | { id: string; type: "snapshot" }
+  /**
+   * Stream one sub-agent's transcript to the host (`subagent_stream`), starting with a reset
+   * frame; null stops. One child at a time: a new target replaces the last. Bypasses the command
+   * queue, so it answers while the call that runs the child is still going.
+   */
+  | { id: string; type: "watch_subagent"; target: SubagentTarget | null }
   | { id: string; type: "generate_commit_message"; diff: string; truncated: boolean }
   | { id: string; type: "set_model"; modelId: string }
   | { id: string; type: "set_thinking"; level: ThinkingLevel }
@@ -793,4 +840,5 @@ export type WorkerOutput =
   | { type: "plan_state"; taskId: string } & PlanState
   | ({ type: "todo_state"; taskId: string } & TodoState)
   /** The goal loop's state, or null when it was cleared. */
-  | { type: "goal_state"; taskId: string; goal: GoalState | null };
+  | { type: "goal_state"; taskId: string; goal: GoalState | null }
+  | ({ type: "subagent_stream"; taskId: string } & SubagentStreamFrame);

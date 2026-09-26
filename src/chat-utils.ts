@@ -1,4 +1,4 @@
-import type { GoalState, PlanState, SessionSnapshot, SnapshotDelta, TaskMode, TodoState } from "./types";
+import type { GoalState, NormalizedMessage, PlanState, SessionSnapshot, SnapshotDelta, SubagentStreamFrame, SubagentTarget, SubagentView, TaskMode, TodoState } from "./types";
 
 export function validateInitCommand(args: string, projectId: string | null, mode: TaskMode): void {
   if (args.trim()) throw new Error("/init does not accept arguments.");
@@ -44,6 +44,11 @@ export function formatTokens(value?: number): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
   return String(value);
+}
+
+/** A model spend: cents once it reaches a cent, finer below. */
+export function formatCost(cost: number): string {
+  return cost >= 0.01 ? `$${cost.toFixed(2)}` : `$${cost.toFixed(4)}`;
 }
 
 export function formatRunDuration(durationMs: number): string {
@@ -158,22 +163,11 @@ export function sameGoalState(a: GoalState | undefined, b: GoalState | undefined
  * "unchanged"; `activeRun: null` clears the run, `goalState: null` clears the goal.
  */
 export function applySnapshotDelta(snapshot: SessionSnapshot, delta: SnapshotDelta): SessionSnapshot {
-  const removed = new Set(delta.removed);
-  let messages = snapshot.messages;
-  if (removed.size > 0 || delta.upserts.length > 0) {
-    const next = snapshot.messages.filter((message) => !removed.has(message.id));
-    for (const upsert of delta.upserts) {
-      const index = next.findIndex((message) => message.id === upsert.id);
-      if (index >= 0) next[index] = upsert;
-      else next.push(upsert);
-    }
-    messages = next;
-  }
   const activeRun = delta.activeRun === undefined ? snapshot.activeRun : delta.activeRun ?? undefined;
   return {
     ...snapshot,
     rev: delta.rev,
-    messages,
+    messages: mergeMessages(snapshot.messages, delta.upserts, delta.removed),
     modelSwitches: delta.modelSwitches ?? snapshot.modelSwitches,
     sessionFile: delta.sessionFile ?? snapshot.sessionFile,
     runTimings: delta.runTimings ?? snapshot.runTimings,
@@ -187,5 +181,52 @@ export function applySnapshotDelta(snapshot: SessionSnapshot, delta: SnapshotDel
       : delta.goalState === null
         ? undefined
         : sameGoalState(snapshot.goalState, delta.goalState) ? snapshot.goalState : delta.goalState
+  };
+}
+
+/**
+ * Removed ids first, then each upsert replaces its message by id or appends: the merge behind
+ * `snapshot_delta` and `subagent_stream` frames. Untouched messages keep their objects, and a
+ * change with nothing in it returns `messages` itself.
+ */
+export function mergeMessages(messages: NormalizedMessage[], upserts: NormalizedMessage[], removed: string[]): NormalizedMessage[] {
+  if (removed.length === 0 && upserts.length === 0) return messages;
+  const gone = new Set(removed);
+  const next = messages.filter((message) => !gone.has(message.id));
+  for (const upsert of upserts) {
+    const index = next.findIndex((message) => message.id === upsert.id);
+    if (index >= 0) next[index] = upsert;
+    else next.push(upsert);
+  }
+  return next;
+}
+
+/** The side panel's copy of a sub-agent it has just started watching, before the first frame. */
+export function pendingSubagentView(target: SubagentTarget): SubagentView {
+  return { toolCallId: target.toolCallId, index: target.index, rev: -1, messages: [], live: false, truncated: false, missing: false, loading: true };
+}
+
+/**
+ * Apply one `subagent_stream` frame to the panel's copy. A reset replaces it whole; any other
+ * frame chains onto the last one applied. Returns `view` itself for a frame that doesn't apply
+ * (another child's, or a straggler from an earlier watch while the reset is on its way), and
+ * `undefined` when a frame went missing: the caller watches again for a fresh reset.
+ */
+export function applySubagentFrame(view: SubagentView, frame: SubagentStreamFrame): SubagentView | undefined {
+  if (view.toolCallId !== frame.toolCallId || view.index !== frame.index) return view;
+  if (!frame.reset) {
+    if (view.loading) return view;
+    if (frame.rev !== view.rev + 1) return undefined;
+  }
+  return {
+    toolCallId: view.toolCallId,
+    index: view.index,
+    rev: frame.rev,
+    messages: frame.reset ? frame.upserts : mergeMessages(view.messages, frame.upserts, frame.removed),
+    ...(frame.partial ? { partial: frame.partial } : {}),
+    live: frame.live,
+    truncated: frame.truncated === true,
+    missing: frame.missing === true,
+    loading: false
   };
 }

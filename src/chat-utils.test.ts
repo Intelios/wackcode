@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { applySnapshotDelta, displayPath, formatRunDuration, formatTokens, isPlanMode, nextMode, planButtonTarget, sameGoalState, samePlanState, sameTodoState, thinkingPreview, titleFromPrompt, validateInitCommand } from "./chat-utils";
-import type { GoalState, NormalizedMessage, SessionSnapshot, SnapshotDelta } from "./types";
+import { applySnapshotDelta, applySubagentFrame, displayPath, formatRunDuration, formatTokens, isPlanMode, mergeMessages, nextMode, pendingSubagentView, planButtonTarget, sameGoalState, samePlanState, sameTodoState, thinkingPreview, titleFromPrompt, validateInitCommand } from "./chat-utils";
+import type { GoalState, NormalizedMessage, SessionSnapshot, SnapshotDelta, SubagentStreamFrame } from "./types";
 
 describe("titleFromPrompt", () => {
   it("uses the first non-empty line", () => {
@@ -293,5 +293,55 @@ describe("thinkingPreview", () => {
     const preview = thinkingPreview(`${"word ".repeat(80)}end. `);
     expect(preview).toHaveLength(200);
     expect(preview?.endsWith("…")).toBe(true);
+  });
+});
+
+describe("sub-agent transcript frames", () => {
+  function message(id: string, text = id): NormalizedMessage {
+    return { id, role: "assistant", blocks: [{ type: "text", text }] };
+  }
+  const target = { toolCallId: "call-1", index: 0 };
+  function frame(partial: Partial<SubagentStreamFrame> & { rev: number }): SubagentStreamFrame {
+    return { ...target, upserts: [], removed: [], partial: null, live: true, ...partial };
+  }
+
+  it("merges like a snapshot delta, keeping untouched messages and returning the list itself for an empty change", () => {
+    const a = message("a");
+    const b = message("b");
+    const list = [a, b];
+    expect(mergeMessages(list, [], [])).toBe(list);
+    const next = mergeMessages(list, [message("b", "changed"), message("c")], ["a"]);
+    expect(next.map((entry) => entry.id)).toEqual(["b", "c"]);
+    expect(next[0].blocks[0].text).toBe("changed");
+    expect(mergeMessages(list, [message("c")], [])[0]).toBe(a);
+  });
+
+  it("waits for a reset, then chains frames by rev", () => {
+    const pending = pendingSubagentView(target);
+    expect(pending).toMatchObject({ rev: -1, loading: true, messages: [] });
+    // A straggler from an earlier watch is ignored while the reset is on its way.
+    expect(applySubagentFrame(pending, frame({ rev: 7 }))).toBe(pending);
+
+    const a = message("a");
+    const seeded = applySubagentFrame(pending, frame({ rev: 0, reset: true, upserts: [a], live: true, missing: undefined }));
+    expect(seeded).toMatchObject({ rev: 0, loading: false, live: true, missing: false, truncated: false, messages: [a] });
+
+    const streaming = message("partial", "Look");
+    const next = applySubagentFrame(seeded!, frame({ rev: 1, upserts: [message("b")], partial: streaming }));
+    expect(next?.messages.map((entry) => entry.id)).toEqual(["a", "b"]);
+    expect(next?.messages[0]).toBe(a);
+    expect(next?.partial).toBe(streaming);
+
+    const done = applySubagentFrame(next!, frame({ rev: 2, live: false, truncated: true }));
+    expect(done).toMatchObject({ live: false, truncated: true });
+    expect(done?.messages).toBe(next?.messages);
+    expect(done).not.toHaveProperty("partial");
+  });
+
+  it("asks for a fresh reset when a frame went missing, and ignores other children", () => {
+    const seeded = applySubagentFrame(pendingSubagentView(target), frame({ rev: 0, reset: true }))!;
+    expect(applySubagentFrame(seeded, frame({ rev: 2 }))).toBeUndefined();
+    expect(applySubagentFrame(seeded, { ...frame({ rev: 1 }), index: 1 })).toBe(seeded);
+    expect(applySubagentFrame(seeded, frame({ rev: 5, reset: true, missing: true, live: false }))).toMatchObject({ rev: 5, missing: true });
   });
 });

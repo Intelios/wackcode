@@ -457,6 +457,9 @@ pub struct AppearanceConfig {
     /// How much the background colour tints the glass, 0–90 %.
     #[serde(default = "default_glass_tint")]
     pub glass_tint: u8,
+    /// What the app calls the agent in its own copy ("Nova is working…"); `None` is WackCode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
 }
 
 /// What sits behind the app's panels. The modes are exclusive: glass shows the desktop, which
@@ -504,6 +507,7 @@ impl Default for AppearanceConfig {
             image_blur: default_image_blur(),
             glass_style: GlassStyleSetting::Frosted,
             glass_tint: default_glass_tint(),
+            agent_name: None,
         }
     }
 }

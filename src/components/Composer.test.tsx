@@ -231,7 +231,7 @@ describe("Composer slash commands", () => {
   });
 });
 
-describe("Composer queueing while Pi is working", () => {
+describe("Composer queueing while the agent is working", () => {
   function setup(extra: Partial<React.ComponentProps<typeof Composer>> = {}) {
     const onSend = vi.fn().mockResolvedValue(true);
     render(<Composer status="running" providers={providers} providerId="p" modelId="sees" thinkingLevel="off"
@@ -284,6 +284,16 @@ describe("Composer queueing while Pi is working", () => {
     fireEvent.change(area, { target: { value: "/not-a-command" } });
     fireEvent.keyDown(area, { key: "Enter" });
     await waitFor(() => expect(onSend).toHaveBeenCalledWith("/not-a-command", [], "steer"));
+  });
+
+  it("speaks the chosen agent name in the busy notice and placeholders", async () => {
+    const compact = { id: "app:compact", name: "compact", description: "Summarize", source: "app" as const, sourceLabel: "WackCode" };
+    const { area } = setup({ commands: [compact], agentName: "Nova" });
+    expect(area).toHaveAttribute("placeholder", "Nova is working — ⏎ steers the run, ⌥⏎ queues for after…");
+    fireEvent.change(area, { target: { value: "/compact" } });
+    fireEvent.keyDown(area, { key: "Escape" });
+    fireEvent.keyDown(area, { key: "Enter" });
+    expect(await screen.findByRole("status")).toHaveTextContent("Wait for Nova to finish before running /compact.");
   });
 
   it("lists queued messages and restores them into the draft", async () => {

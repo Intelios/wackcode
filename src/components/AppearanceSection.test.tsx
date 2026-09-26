@@ -125,3 +125,43 @@ describe("AppearanceSection backdrop", () => {
     expect(screen.getByRole("radio", { name: "Liquid Glass" })).toBeDisabled();
   });
 });
+
+describe("AppearanceSection agent name", () => {
+  it("shows the stored name", () => {
+    renderSection({ agentName: "Nova" });
+    expect((screen.getByLabelText("Agent name") as HTMLInputElement).value).toBe("Nova");
+  });
+
+  it("an unset name shows the default as the placeholder", () => {
+    renderSection();
+    expect((screen.getByLabelText("Agent name") as HTMLInputElement).placeholder).toBe("WackCode");
+  });
+
+  it("saves a typed name on blur, trimming it", async () => {
+    const { onChange } = renderSection();
+    const input = screen.getByLabelText("Agent name");
+    fireEvent.input(input, { target: { value: "  Nova  " } });
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.blur(input);
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ agentName: "Nova" })));
+  });
+
+  it("clearing the field goes back to the default", async () => {
+    const { onChange } = renderSection({ agentName: "Nova" });
+    const input = screen.getByLabelText("Agent name");
+    fireEvent.input(input, { target: { value: "  " } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ agentName: null })));
+  });
+
+  it("an unchanged name writes nothing", () => {
+    const { onChange } = renderSection({ agentName: "Nova" });
+    fireEvent.blur(screen.getByLabelText("Agent name"));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("the chat previews speak with the chosen name", () => {
+    renderSection({ agentName: "Nova" });
+    expect(screen.getByText(/^Give Nova's replies a bubble/)).toBeInTheDocument();
+  });
+});

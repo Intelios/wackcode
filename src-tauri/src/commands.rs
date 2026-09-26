@@ -2347,6 +2347,8 @@ fn validate_appearance_config(input: AppearanceConfig, current: &AppearanceConfi
         image_blur: if input.image_blur <= 40 { input.image_blur } else { return Err("Image blur must be between 0 and 40 px.".into()) },
         glass_style: input.glass_style,
         glass_tint: percent("Glass tint", input.glass_tint)?,
+        // A persona label for the app's own copy; blank means back to the WackCode default.
+        agent_name: normalize_override("agent name", input.agent_name)?,
     };
     if config.backdrop == BackdropMode::Glass && !glass_supported {
         return Err("Liquid Glass needs macOS 26 or later.".into());

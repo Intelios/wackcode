@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedMessage } from "../types";
+import { AssistantNameContext } from "../agentName";
 import { ExploreGroupingEnabled } from "./ExploreGroup";
 import { ThinkingPreviewEnabled } from "./ThinkingRow";
 import { Transcript } from "./Transcript";
@@ -204,10 +205,10 @@ describe("Transcript run durations", () => {
 
     const rows = container.querySelectorAll(".run-duration");
     expect(rows).toHaveLength(2);
-    expect(rows[0]).toHaveTextContent("Worked for 1m 2s");
+    expect(rows[0]).toHaveTextContent("WackCode worked for 1m 2s");
     expect(rows[0].previousElementSibling).toHaveClass("msg", "user");
     expect(rows[0].nextElementSibling).toHaveClass("msg", "assistant");
-    expect(rows[1]).toHaveTextContent("Worked for 1h 1m 1s");
+    expect(rows[1]).toHaveTextContent("WackCode worked for 1h 1m 1s");
     expect(rows[1].previousElementSibling).toHaveClass("msg", "user");
     expect(rows[1].nextElementSibling).toHaveClass("msg", "assistant");
   });
@@ -220,14 +221,29 @@ describe("Transcript run durations", () => {
       { id: "assistant-1", role: "assistant", blocks: [{ type: "text", text: "Working" }] }
     ];
     const view = render(<Transcript messages={messages} running activeRun={{ startedAt }} />);
-    expect(screen.getByText("Working for 1s")).toBeInTheDocument();
+    expect(screen.getByText("WackCode is working for 1s")).toBeInTheDocument();
 
     act(() => { vi.advanceTimersByTime(1_200); });
-    expect(screen.getByText("Working for 2s")).toBeInTheDocument();
+    expect(screen.getByText("WackCode is working for 2s")).toBeInTheDocument();
 
     view.rerender(<Transcript messages={messages} running={false} runTimings={[{ userMessageId: "user-1", durationMs: 4_200 }]} />);
-    expect(screen.getByText("Worked for 4s")).toBeInTheDocument();
-    expect(screen.queryByText(/Working for/)).not.toBeInTheDocument();
+    expect(screen.getByText("WackCode worked for 4s")).toBeInTheDocument();
+    expect(screen.queryByText(/is working for/)).not.toBeInTheDocument();
+  });
+
+  it("speaks the run duration with the chosen agent name", () => {
+    vi.useFakeTimers();
+    const startedAt = Date.now() - 1_500;
+    const messages: NormalizedMessage[] = [
+      { id: "user-1", role: "user", timestamp: Date.now() - 500, blocks: [{ type: "text", text: "Do the work" }] },
+      { id: "assistant-1", role: "assistant", blocks: [{ type: "text", text: "Working" }] }
+    ];
+    render(
+      <AssistantNameContext.Provider value="Nova">
+        <Transcript messages={messages} running activeRun={{ startedAt }} />
+      </AssistantNameContext.Provider>
+    );
+    expect(screen.getByText("Nova is working for 1s")).toBeInTheDocument();
   });
 });
 

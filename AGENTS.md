@@ -29,6 +29,7 @@ WackCode is a local macOS desktop app for the [Pi coding agent](https://www.npmj
 - **Built-ins:** adding or renaming one in `worker/src/builtin/` also requires updating `BUILTIN_EXTENSIONS` in `PackagesSection.tsx`. Preserve the separate built-in and MCP tool-switch rules in `worker/src/index.ts`.
 - **Session tree and checkpoints:** read the invariants at the top of `worker/src/tree.ts` and `src-tauri/src/checkpoints.rs` before changing either. Checkpoints must never write to the project's own Git repository.
 - **Window:** keep `tauri.conf.json` free of `backgroundColor`; `glass.rs` controls the native background. Keep `dragDropEnabled: false` so native handling does not swallow composer image drops.
+- **Agent persona:** the app's own copy never calls the agent "Pi"; the name comes from `appearance.agentName`, resolved in `src/agentName.ts` (default "WackCode"). Genuine Pi product references (catalogue, sign-in, the worker process) keep the real name.
 
 ## Security (don't weaken)
 

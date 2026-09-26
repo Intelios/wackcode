@@ -1732,6 +1732,8 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 /* ── Appearance settings ───────────────────────────── */
 /* Reuses the tool-setting rows; option names are prose, not identifiers. */
 .appearance-setting .tool-setting-name { font-family: inherit; font-size: 12.5px; font-weight: 500; }
+/* The agent-name field is a right-hand control in its row, not a full-width form input. */
+.agent-name-input { width: 220px; flex: 0 0 220px; }
 /* A centered column: this page is about looks, so it reads as one composed panel rather than
    a stack of rows stretching to the pane's full width. */
 .appearance-inner { width: 100%; max-width: 760px; margin: 0 auto; }

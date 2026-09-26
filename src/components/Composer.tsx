@@ -63,9 +63,11 @@ interface ComposerProps {
   comet?: boolean;
   /** Shows this text read-only instead of the draft while the hero composer hands off to the docked one. */
   frozen?: string;
+  /** The persona name in the built-in placeholder and busy copy; absent keeps the historical "Pi". */
+  agentName?: string;
 }
 
-export function Composer({ status, providerId, modelId, thinkingLevel, providers, stats, header, placeholder, popoverSide = "top", mode, onModeChange, onConfigure, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, onDraftChange, mentionFiles, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, transfer, queuedMessages, onDequeue, onStop, onOpenSettings, disabled, seed, comet, frozen }: ComposerProps) {
+export function Composer({ status, providerId, modelId, thinkingLevel, providers, stats, header, placeholder, popoverSide = "top", mode, onModeChange, onConfigure, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, onDraftChange, mentionFiles, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, transfer, queuedMessages, onDequeue, onStop, onOpenSettings, disabled, seed, comet, frozen, agentName = "Pi" }: ComposerProps) {
   const [draft, setDraft] = useState(transfer?.text ?? "");
   const [attachments, setAttachments] = useState<ImageContent[]>(transfer?.images ?? []);
   const [attachNotice, setAttachNotice] = useState<string>();
@@ -170,7 +172,7 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
       // cannot queue (they are not messages); skills, templates and unknown text can — Pi
       // expands the first two and refuses extension commands.
       if (message.startsWith("/") && commands.some((command) => command.name === /^\/([^\s]+)/.exec(message)?.[1] && command.source === "app")) {
-        setSlashNotice(`Wait for Pi to finish before running /${/^\/([^\s]+)/.exec(message)?.[1]}.`);
+        setSlashNotice(`Wait for ${agentName} to finish before running /${/^\/([^\s]+)/.exec(message)?.[1]}.`);
         setSlashOpen(false);
         return;
       }
@@ -411,7 +413,7 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
               void send();
             }
           }}
-          placeholder={placeholder ?? (providers.length === 0 ? "Connect a provider to start…" : busy ? "Pi is working — ⏎ steers the run, ⌥⏎ queues for after…" : mode === "plan" ? "Describe the work — in Plan mode Pi inspects and proposes a plan without changing files…" : mode === "ultraplan" ? "Describe the work — in Ultra Plan Pi interviews you in depth, one question at a time, before proposing a plan…" : "Ask Pi to inspect, change, or run something…")}
+          placeholder={placeholder ?? (providers.length === 0 ? "Connect a provider to start…" : busy ? `${agentName} is working — ⏎ steers the run, ⌥⏎ queues for after…` : mode === "plan" ? `Describe the work — in Plan mode ${agentName} inspects and proposes a plan without changing files…` : mode === "ultraplan" ? `Describe the work — in Ultra Plan ${agentName} interviews you in depth, one question at a time, before proposing a plan…` : `Ask ${agentName} to inspect, change, or run something…`)}
           disabled={disabled || providers.length === 0}
         />
         <div className="composer-toolbar">

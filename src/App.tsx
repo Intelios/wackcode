@@ -10,6 +10,7 @@ import { titleFromPrompt, samePlanState, sameTodoState, applySnapshotDelta, vali
 import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix } from "./tree-utils";
 import { pruneDisabledTools, sameToolCatalog } from "./tool-utils";
 import { DEFAULT_APPEARANCE, applyTheme, cacheTheme } from "./theme";
+import { AssistantNameContext, agentName } from "./agentName";
 import { Backdrop } from "./components/Backdrop";
 import type {
   AppData,
@@ -1621,6 +1622,7 @@ export default function App() {
               </div>
             )}
             <motion.div className="chat-transcript" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.1, ease: EASE }}>
+            <AssistantNameContext.Provider value={agentName(data.appearance)}>
             <ThinkingPreviewEnabled.Provider value={data.appearance.thinkingPreview}>
             <ExploreGroupingEnabled.Provider value={data.appearance.groupExploration}>
             <Transcript
@@ -1643,6 +1645,7 @@ export default function App() {
             />
             </ExploreGroupingEnabled.Provider>
             </ThinkingPreviewEnabled.Provider>
+            </AssistantNameContext.Provider>
             </motion.div>
             <InlineDialog
               requests={extensionRequests}
@@ -1702,6 +1705,7 @@ export default function App() {
                 />
               ) : undefined}
               placeholder={!selectedTask ? "Describe a task or ask a question…" : undefined}
+              agentName={agentName(data.appearance)}
               mode={currentMode}
               disabled={selectedTask ? pendingDialogTaskIds.has(selectedTask.id) : false}
               onModeChange={(mode) => void setTaskMode(mode)}

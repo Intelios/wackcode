@@ -128,6 +128,20 @@ mod tests {
     }
 
     #[test]
+    fn agent_name_is_absent_until_the_user_picks_one() {
+        // Files written before the setting existed load with the default persona.
+        let data: AppData = serde_json::from_str(r#"{"version":1,"appearance":{"agentName":null}}"#).unwrap();
+        assert_eq!(data.appearance.agent_name, None);
+        let data: AppData = serde_json::from_str(r#"{"version":1,"appearance":{}}"#).unwrap();
+        assert_eq!(data.appearance.agent_name, None);
+        assert!(!serde_json::to_string(&data.appearance).unwrap().contains("agentName"));
+        // A picked name round-trips.
+        let data: AppData = serde_json::from_str(r#"{"version":1,"appearance":{"agentName":"Nova"}}"#).unwrap();
+        assert_eq!(data.appearance.agent_name.as_deref(), Some("Nova"));
+        assert!(serde_json::to_string(&data.appearance).unwrap().contains(r#""agentName":"Nova""#));
+    }
+
+    #[test]
     fn window_geometry_is_absent_until_recorded() {
         let data: AppData = serde_json::from_str(r#"{"version":1}"#).unwrap();
         assert!(data.window.is_none());

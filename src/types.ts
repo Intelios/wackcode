@@ -437,6 +437,8 @@ export interface AppearanceConfig {
   glassStyle: GlassStyle;
   /** How much the background colour tints the glass, 0–90 %. */
   glassTint: number;
+  /** What the app calls the agent in its own copy; absent is `WackCode`. */
+  agentName?: string | null;
 }
 
 /** What sits behind the app's panels. Exclusive: glass shows the desktop an image would cover. */

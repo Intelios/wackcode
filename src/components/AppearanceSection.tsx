@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { DEFAULT_ACCENT, DEFAULT_BACKGROUND, THEME_PRESETS, clampBackground, resolveTheme } from "../theme";
+import { DEFAULT_AGENT_NAME, agentName } from "../agentName";
 import type { AppearanceConfig, BackdropMode, GlassStyle } from "../types";
 import { Icon } from "./Icons";
 import { Tooltip } from "./ui/Tooltip";
@@ -32,23 +33,23 @@ const GLASS_STYLES: { value: GlassStyle; label: string; note: string }[] = [
 
 /** The chat switches each show a miniature of what they change, so the effect is visible
  *  before it is switched on. */
-const CHAT_OPTIONS: { key: "thinkingPreview" | "messageBubbles" | "groupExploration"; label: string; description: string; preview: "bubble" | "thinking" | "explore" }[] = [
+const CHAT_OPTIONS: { key: "thinkingPreview" | "messageBubbles" | "groupExploration"; label: string; description: (name: string) => string; preview: "bubble" | "thinking" | "explore" }[] = [
   {
     key: "messageBubbles",
     label: "Message bubbles",
-    description: "Give the assistant's replies a bubble like yours. Tool rows, thinking and plan cards stay outside it.",
+    description: (name) => `Give ${name}'s replies a bubble like yours. Tool rows, thinking and plan cards stay outside it.`,
     preview: "bubble"
   },
   {
     key: "thinkingPreview",
     label: "Thinking preview",
-    description: "Show a one-line gist of the model's reasoning beside “Thinking…”. Only models that stream their reasoning show one.",
+    description: () => "Show a one-line gist of the model's reasoning beside “Thinking…”. Only models that stream their reasoning show one.",
     preview: "thinking"
   },
   {
     key: "groupExploration",
     label: "Group exploration",
-    description: "Fold runs of file reads, searches and listings into one “Explored” row you can expand.",
+    description: () => "Fold runs of file reads, searches and listings into one “Explored” row you can expand.",
     preview: "explore"
   }
 ];
@@ -73,9 +74,18 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrl, 
   const [error, setError] = useState<string>();
   /** The last picked background was too light and got darkened; cleared by the next pick. */
   const [darkened, setDarkened] = useState(false);
+  /** The name field's live text; committed on blur, so typing never writes `wackcode.json`. */
+  const [draftName, setDraftName] = useState(config.agentName ?? "");
   const theme = resolveTheme(config);
   const accent = config.accent ?? DEFAULT_ACCENT;
   const background = config.background ?? DEFAULT_BACKGROUND;
+  const name = agentName(config);
+
+  function commitName(): void {
+    const next = draftName.trim() || null;
+    if (next === (config.agentName ?? null)) return;
+    void save({ ...config, agentName: next });
+  }
 
   async function run(action: () => Promise<void>): Promise<void> {
     setBusy(true);
@@ -107,6 +117,27 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrl, 
   return (
     <div className="settings-scroll appearance-page">
       <div className="appearance-inner">
+        <section className="tool-setting-group">
+          <h4>Agent</h4>
+          <div className="tool-setting appearance-setting agent-name-setting">
+            <div className="tool-setting-text">
+              <span className="tool-setting-name">Name</span>
+              <span className="tool-setting-description">What the app calls your agent — in the composer, while it works, and in the empty chat.</span>
+            </div>
+            <input
+              className="agent-name-input"
+              value={draftName}
+              onChange={(event) => setDraftName(event.target.value)}
+              onBlur={commitName}
+              onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
+              maxLength={40}
+              disabled={busy}
+              placeholder={DEFAULT_AGENT_NAME}
+              aria-label="Agent name"
+            />
+          </div>
+        </section>
+
         <section className="tool-setting-group theme-group">
           <h4>Theme</h4>
           <div className="theme-presets" role="radiogroup" aria-label="Theme presets">
@@ -331,7 +362,7 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrl, 
                   </div>
                   <div className="chat-preview-text">
                     <span className="tool-setting-name">{option.label}</span>
-                    <span className="tool-setting-description">{option.description}</span>
+                    <span className="tool-setting-description">{option.description(name)}</span>
                   </div>
                   <button
                     type="button"

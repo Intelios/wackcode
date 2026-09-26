@@ -1,5 +1,6 @@
 import { Fragment, memo, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { NormalizedBlock, NormalizedMessage, PlanState, RunTiming } from "../types";
+import { AssistantNameContext } from "../agentName";
 import { useFollowScroll } from "../hooks/useFollowScroll";
 import { useSmoothText } from "../hooks/useSmoothText";
 import { formatRunDuration, isPlanMode } from "../chat-utils";
@@ -82,7 +83,8 @@ function RunDuration({ startedAt, durationMs }: { startedAt?: number; durationMs
 
   const live = startedAt !== undefined;
   const elapsed = durationMs ?? Math.max(0, now - (startedAt ?? now));
-  const label = live ? "Working for" : "Worked for";
+  const name = useContext(AssistantNameContext);
+  const label = live ? `${name} is working for` : `${name} worked for`;
 
   return <div className="run-duration">{label} {formatRunDuration(elapsed)}</div>;
 }
@@ -400,6 +402,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
   const lastAssistantId = useMemo(() => [...messages].reverse().find((message) => message.role === "assistant")?.id, [messages]);
 
   const grouping = useContext(ExploreGroupingEnabled);
+  const assistantName = useContext(AssistantNameContext);
   const [expandedGroups] = useState(() => new Set<string>());
   const layout = useMemo(
     () => layoutTranscript(messages, partial, { grouping, liveMessageId: running ? lastAssistantId : undefined }),
@@ -438,7 +441,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
         <div className="conversation-scroll">
           <div className="conversation-empty">
             <h2>What should we build?</h2>
-            <p>Describe the change, bug, or question — Pi can read this project, run commands, and edit files.</p>
+            <p>Describe the change, bug, or question — {assistantName} can read this project, run commands, and edit files.</p>
             {rewindBar}
           </div>
         </div>

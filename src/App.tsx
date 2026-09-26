@@ -580,6 +580,10 @@ export default function App() {
     }
   }
 
+  /** Creates the chat a hero send needs, once, at send time — a bare keystroke never does.
+   *  Concurrent sends reuse the in-flight promise; the epoch guard drops the task if the user
+   *  left the hero meanwhile. Resolves undefined when no chat could be prepared (the reason is
+   *  already on screen: settings opened for a missing model, or the error banner). */
   function prepareSlashDraft(): Promise<TaskRecord | undefined> {
     if (slashDraftPromise.current) return slashDraftPromise.current;
     if (selectedTask) return Promise.resolve(selectedTask);
@@ -642,15 +646,39 @@ export default function App() {
 
   function requestSlashCommands() {
     if (selectedTask) void loadSlashCommands(selectedTask.id);
-    else void prepareSlashDraft();
+    // The draft hero has no chat to ask for a catalog, and typing must never create one:
+    // its picker offers WackCode's own commands until a send creates the chat (sendSlash).
   }
 
   async function sendSlash(name: string, args: string, images: ImageContent[]): Promise<boolean> {
-    const task = selectedTask ?? await slashDraftPromise.current;
     // `/goal pause|resume|clear` drive a live loop, so they are the one app command that is
     // allowed through while the chat is busy — the Composer mirrors this gate.
     const goalControlAction = name === "goal" && /^(pause|resume|clear)$/.test(args.trim()) ? args.trim() as "pause" | "resume" | "clear" : undefined;
-    if (!task || (selectedBusy && !goalControlAction)) throw new Error("Wait for this chat to be ready before running a command.");
+    if ((name === "new" || name === "copy") && args.trim()) {
+      throw new Error(`/${name} does not accept arguments.`);
+    }
+    if (name === "goal") {
+      const words = args.trim().split(/\s+/).filter(Boolean);
+      if (["pause", "resume", "clear"].includes(words[0] ?? "") && words.length > 1) {
+        throw new Error(`/goal ${words[0]} takes no arguments.`);
+      }
+      if (!args.trim()) throw new Error("Describe the goal — /goal <objective>.");
+      if (isPlanMode(currentMode)) throw new Error("Goal loops don't run while a planning mode is on. Switch to Build first.");
+    }
+    if (name === "init") validateInitCommand(args, selectedTask?.projectId ?? draft?.projectId ?? null, currentMode);
+    // Commands that act on the current chat have nothing to act on from the draft hero and must
+    // not create one; /new just resets the draft. Only a send that starts work (/init,
+    // /goal <objective>) creates the chat, and it does so here — keystrokes never make chats.
+    if (!selectedTask) {
+      if (name === "new") { openDraft(); return true; }
+      if (name === "name") throw new Error("There is no chat to rename yet — send a message first.");
+      if (name === "copy") throw new Error("There is no reply to copy yet.");
+      if (name === "compact") throw new Error("There is no conversation to compact yet.");
+      if (goalControlAction) throw new Error(`There is no goal to ${goalControlAction} yet — start one with /goal <objective>.`);
+    }
+    const task = selectedTask ?? await prepareSlashDraft();
+    if (!task) return false; // prepareSlashDraft already said why (settings opened, or the error banner).
+    if (selectedBusy && !goalControlAction) throw new Error("Wait for this chat to be ready before running a command.");
     const id = task.id;
     const clearPreparedDraft = () => {
       if (!selectedTask) setComposerTransfer({ taskId: id, text: "", images: [], nonce: Date.now() + 1 });
@@ -660,19 +688,7 @@ export default function App() {
       clearPreparedDraft();
       return true;
     }
-    if ((name === "new" || name === "copy") && args.trim()) {
-      throw new Error(`/${name} does not accept arguments.`);
-    }
     if (name === "name" && !args.trim()) throw new Error("Enter a name after /name.");
-    if (name === "init") validateInitCommand(args, task.projectId, currentMode);
-    if (name === "goal") {
-      const words = args.trim().split(/\s+/).filter(Boolean);
-      if (["pause", "resume", "clear"].includes(words[0] ?? "") && words.length > 1) {
-        throw new Error(`/goal ${words[0]} takes no arguments.`);
-      }
-      if (!args.trim()) throw new Error("Describe the goal — /goal <objective>.");
-      if (isPlanMode(currentMode)) throw new Error("Goal loops don't run while a planning mode is on. Switch to Build first.");
-    }
     try {
       if (name === "new") { openDraft(task.projectId); return true; }
       if (name === "name") {
@@ -1750,7 +1766,7 @@ export default function App() {
               commandsReady={!selectedTask || runtime?.slashCommands !== undefined}
               commandsLoading={selectedTask ? runtime?.slashCommandsLoading : undefined}
               commandsError={selectedTask ? runtime?.slashCommandsError : undefined}
-              onRequestCommands={requestSlashCommands}
+              onRequestCommands={selectedTask ? requestSlashCommands : undefined}
               mentionFiles={composerMentions?.files}
               mentionsLoading={composerMentions?.loading}
               mentionsError={composerMentions?.error}

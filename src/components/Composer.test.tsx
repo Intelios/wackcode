@@ -232,6 +232,26 @@ describe("Composer slash commands", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Remove images before running this command.");
     expect(onCommand).not.toHaveBeenCalled();
   });
+
+  // The draft hero wiring: app commands with a live onCommand but no onRequestCommands —
+  // opening the picker must never ask for (and so never create) a chat.
+  it("opens the picker on a slash without a command request and still runs an app command", async () => {
+    const onCommand = vi.fn().mockResolvedValue(true);
+    setup({
+      commands: [{ id: "app:new", name: "new", description: "Start a new chat", source: "app", sourceLabel: "WackCode" }],
+      onRequestCommands: undefined,
+      onCommand
+    });
+    const area = screen.getByRole("textbox");
+    fireEvent.change(area, { target: { value: "/", selectionStart: 1 } });
+    expect(screen.getByRole("listbox", { name: "Slash commands" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /new/ })).toBeInTheDocument();
+    fireEvent.change(area, { target: { value: "/new", selectionStart: 4 } });
+    fireEvent.keyDown(area, { key: "Enter" }); // completes the highlighted suggestion
+    expect(area).toHaveValue("/new ");
+    fireEvent.keyDown(area, { key: "Enter" }); // sends
+    await waitFor(() => expect(onCommand).toHaveBeenCalledWith("new", "", []));
+  });
 });
 
 describe("Composer queueing while the agent is working", () => {

@@ -19,6 +19,7 @@ import { OrphanResult, ToolRow } from "./ToolRow";
 
 interface Props {
   messages: NormalizedMessage[];
+  modelSwitches?: DisplayModelSwitch[];
   partial?: NormalizedMessage;
   running: boolean;
   activity?: string;
@@ -39,6 +40,13 @@ interface Props {
   onMessageAction?: (action: MessageAction) => Promise<boolean> | void;
   /** Offered right after a rewind. */
   onUndoRewind?: () => void;
+}
+
+export interface DisplayModelSwitch {
+  id: string;
+  at: number;
+  from: string;
+  to: string;
 }
 
 /** What the transcript asks the app to do with a message. */
@@ -77,6 +85,14 @@ function RunDuration({ startedAt, durationMs }: { startedAt?: number; durationMs
   const label = live ? "Working for" : "Worked for";
 
   return <div className="run-duration">{label} {formatRunDuration(elapsed)}</div>;
+}
+
+function ModelSwitchDivider({ entry }: { entry: DisplayModelSwitch }) {
+  return (
+    <div className="model-switch-divider">
+      <span>Model switched <strong>{entry.from}</strong> <span className="model-switch-arrow">→</span> <strong>{entry.to}</strong></span>
+    </div>
+  );
 }
 
 /** The plan text a plan_mode_complete result carries, or undefined if it isn't one. */
@@ -349,7 +365,7 @@ function activityLabel(activity?: string): string {
   return "Working…";
 }
 
-export function Transcript({ messages, partial, running, activity, activeRun, runTimings = [], liveToolText, liveToolDetails, planState, onPlanAction, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind }: Props) {
+export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, runTimings = [], liveToolText, liveToolDetails, planState, onPlanAction, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind }: Props) {
   const { ref, onScroll, detached, jumpToLatest } = useFollowScroll();
   const [editingId, setEditingId] = useState<string>();
   const [expandedThinking] = useState(() => new Set<string>());
@@ -394,6 +410,17 @@ export function Transcript({ messages, partial, running, activity, activeRun, ru
     ? [...messages].reverse().find((message) => message.role === "user" && message.timestamp !== undefined && message.timestamp >= activeRun.startedAt)?.id
     : undefined, [messages, activeRun]);
   const timingsByMessage = useMemo(() => new Map(runTimings.map((timing) => [timing.userMessageId, timing.durationMs])), [runTimings]);
+  const switchesByPosition = useMemo(() => {
+    const grouped = new Map<number, DisplayModelSwitch[]>();
+    for (const entry of modelSwitches) {
+      const position = Math.max(0, Math.min(messages.length, entry.at));
+      grouped.set(position, [...(grouped.get(position) ?? []), entry]);
+    }
+    return grouped;
+  }, [messages.length, modelSwitches]);
+  const renderSwitches = (position: number) => switchesByPosition.get(position)?.map((entry) => (
+    <ModelSwitchDivider key={entry.id} entry={entry} />
+  ));
 
   const waiting = running && (!partial || partial.blocks.length === 0);
   const label = activityLabel(activity);
@@ -425,11 +452,15 @@ export function Transcript({ messages, partial, running, activity, activeRun, ru
         <ThinkingExpansion.Provider value={expandedThinking}>
           <ExploreExpansion.Provider value={expandedGroups}>
             <div className="transcript">
-              {messages.map((message) => {
+              {messages.map((message, messageIndex) => {
                 if (message.role === "tool") {
                   const orphans = message.blocks.filter((block) => !block.toolCallId || !callIds.has(block.toolCallId));
-                  if (orphans.length === 0) return null;
-                  return <div key={message.id} className="orphan-group">{orphans.map((block, index) => <OrphanResult key={index} block={block} />)}</div>;
+                  return (
+                    <Fragment key={message.id}>
+                      {renderSwitches(messageIndex)}
+                      {orphans.length > 0 && <div className="orphan-group">{orphans.map((block, index) => <OrphanResult key={index} block={block} />)}</div>}
+                    </Fragment>
+                  );
                 }
                 // Every version of a user message shares one element, so the switcher keeps focus.
                 const key = message.role === "user" && message.versions ? message.versions.group : message.id;
@@ -437,6 +468,7 @@ export function Transcript({ messages, partial, running, activity, activeRun, ru
                 const retry = message.id === (latest?.answer ?? latest?.user)?.id;
                 return (
                   <Fragment key={key}>
+                    {renderSwitches(messageIndex)}
                     <Message
                       message={message}
                       slots={slots}
@@ -464,6 +496,7 @@ export function Transcript({ messages, partial, running, activity, activeRun, ru
                   </Fragment>
                 );
               })}
+              {renderSwitches(messages.length)}
               {activeRun && !activeUserId && <RunDuration startedAt={activeRun.startedAt} />}
               {partial && layout.partial?.length ? (
                 <div className="msg assistant streaming">

@@ -22,6 +22,12 @@ type SnapshotView = {
     checkpoint?: Checkpoint;
     turn?: { userEntryId: string; endEntryId: string; after?: Checkpoint };
   }>;
+  modelSwitches?: Array<{
+    id: string;
+    at: number;
+    from: { providerId: string; modelId: string };
+    to: { providerId: string; modelId: string };
+  }>;
   tree?: { leafId: string | null; undo?: string };
   runTimings?: Array<{ userMessageId: string; durationMs: number }>;
   activeRun?: { runId: string; startedAt: number };
@@ -69,6 +75,7 @@ interface Output {
     upserts: SnapshotView["messages"];
     removed: string[];
     runTimings?: SnapshotView["runTimings"];
+    modelSwitches?: SnapshotView["modelSwitches"];
     activeRun?: { runId: string; startedAt: number } | null;
     tree?: SnapshotView["tree"];
     sessionFile?: string;
@@ -124,6 +131,7 @@ class WorkerHarness {
       this.view = {
         ...this.view,
         messages,
+        modelSwitches: output.delta.modelSwitches ?? this.view.modelSwitches,
         runTimings: output.delta.runTimings ?? this.view.runTimings,
         activeRun: output.delta.activeRun === undefined ? this.view.activeRun : output.delta.activeRun ?? undefined,
         tree: output.delta.tree ?? this.view.tree,
@@ -782,6 +790,50 @@ describe("Pi worker integration", () => {
     cleanup.push(() => reopened.worker.shutdown());
     expect(reopened.ready.snapshot?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha."))).toBe(true);
     expect(provider.requests).toHaveLength(requestCount);
+  });
+
+  it("records a restored session's configured model switch once and replays it", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-model-switch-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const first = await initializeWorker(provider.baseUrl, "switch-secret", workspace, "switch-task");
+    cleanup.push(() => first.worker.shutdown());
+    first.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "switch-run", message: "First model." });
+    await first.worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) => message.role === "assistant") === true);
+    const sessionFile = first.worker.view?.sessionFile;
+    expect(sessionFile).toBeTruthy();
+    await first.worker.shutdown();
+
+    const alternateProvider = {
+      id: "provider-switch-task",
+      name: "Provider switch-task",
+      kind: "custom",
+      baseUrl: provider.baseUrl,
+      api: "openai-completions",
+      models: [{
+        id: "alternate-model", name: "Alternate model", contextWindow: 16_384, maxTokens: 321,
+        reasoning: false, thinkingLevels: ["off"], thinkingLevelMap: { off: null }, vision: false
+      }]
+    };
+    const second = await initializeWorker(provider.baseUrl, "switch-secret", workspace, "switch-task", sessionFile, undefined, undefined, undefined, false, {
+      provider: alternateProvider, modelId: "alternate-model", thinkingLevel: "off"
+    });
+    cleanup.push(() => second.worker.shutdown());
+    expect(second.ready.snapshot?.modelSwitches).toMatchObject([{
+      at: second.ready.snapshot?.messages.length,
+      from: { providerId: "provider-switch-task", modelId: "shared-model" },
+      to: { providerId: "provider-switch-task", modelId: "alternate-model" }
+    }]);
+    await second.worker.shutdown();
+
+    const third = await initializeWorker(provider.baseUrl, "switch-secret", workspace, "switch-task", sessionFile, undefined, undefined, undefined, false, {
+      provider: alternateProvider, modelId: "alternate-model", thinkingLevel: "off"
+    });
+    cleanup.push(() => third.worker.shutdown());
+    expect(third.ready.snapshot?.modelSwitches).toHaveLength(1);
+    const saved = await readFile(sessionFile as string, "utf8");
+    expect(saved.match(/"type":"model_change"/g)).toHaveLength(2);
   });
 
   it("streams partial assistant messages before the authoritative snapshot", async () => {

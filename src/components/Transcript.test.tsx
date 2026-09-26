@@ -10,6 +10,28 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe("Transcript model switches", () => {
+  const messages: NormalizedMessage[] = [
+    { id: "u", role: "user", blocks: [{ type: "text", text: "Hello" }] },
+    { id: "a", role: "assistant", blocks: [{ type: "text", text: "Hi" }] }
+  ];
+
+  it("interleaves named dividers and supports a trailing switch", () => {
+    const { container } = render(<Transcript messages={messages} running={false} modelSwitches={[
+      { id: "between", at: 1, from: "GPT 5", to: "Claude Sonnet 4" },
+      { id: "trailing", at: 2, from: "Claude Sonnet 4", to: "GPT 5" }
+    ]} />);
+    const transcript = container.querySelector(".transcript");
+    const children = Array.from(transcript?.children ?? []);
+    expect(children.map((entry) => entry.textContent?.trim())).toEqual([
+      "Hello",
+      "Model switched GPT 5 → Claude Sonnet 4",
+      "Hi",
+      "Model switched Claude Sonnet 4 → GPT 5"
+    ]);
+  });
+});
+
 describe("Transcript tool output", () => {
   it("keeps live output collapsed, replaces updates, then shows the final result", () => {
     const call: NormalizedMessage = {

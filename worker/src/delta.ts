@@ -1,6 +1,7 @@
 import type {
   CheckpointRef,
   MessageVersions,
+  ModelSwitch,
   NormalizedMessage,
   PlanState,
   RunTiming,
@@ -70,6 +71,17 @@ export function sameRunTimings(a: RunTiming[], b: RunTiming[]): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
   return a.every((timing, index) => timing.userMessageId === b[index].userMessageId && timing.durationMs === b[index].durationMs);
+}
+
+export function sameModelSwitches(a: ModelSwitch[], b: ModelSwitch[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  return a.every((entry, index) => {
+    const other = b[index];
+    return entry.id === other.id && entry.at === other.at
+      && entry.from.providerId === other.from.providerId && entry.from.modelId === other.from.modelId
+      && entry.to.providerId === other.to.providerId && entry.to.modelId === other.to.modelId;
+  });
 }
 
 export function sameStats(a: SessionSnapshot["stats"], b: SessionSnapshot["stats"]): boolean {

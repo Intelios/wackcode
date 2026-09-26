@@ -161,6 +161,7 @@ export function applySnapshotDelta(snapshot: SessionSnapshot, delta: SnapshotDel
     ...snapshot,
     rev: delta.rev,
     messages,
+    modelSwitches: delta.modelSwitches ?? snapshot.modelSwitches,
     sessionFile: delta.sessionFile ?? snapshot.sessionFile,
     runTimings: delta.runTimings ?? snapshot.runTimings,
     activeRun,

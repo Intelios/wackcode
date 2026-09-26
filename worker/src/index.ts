@@ -14,6 +14,7 @@ import { SubagentRunner } from "./subagent-runner.js";
 import {
   diffMessages,
   sameCheckpoint,
+  sameModelSwitches,
   samePlanState,
   sameRunTimings,
   sameStats,
@@ -38,6 +39,7 @@ import {
   isUserMessage,
   latestInSubtree,
   leftWith,
+  modelSwitchesOnPath,
   turnsOnPath,
   undoTarget,
   versionsOf,
@@ -49,6 +51,7 @@ import {
   type ImageContent,
   type InitCommand,
   type MessageVersions,
+  type ModelSwitch,
   type NavigateResult,
   type NavigationKind,
   type NormalizedBlock,
@@ -618,6 +621,11 @@ function getSnapshot(rev: number): SessionSnapshot {
   const entries = session.sessionManager.getEntries() as EntryLike[];
   const index = treeIndex(entries);
   const messages = transcriptMessages(path, index, savedThinking(entries));
+  const messagePositions = new Map<string, number>();
+  messages.forEach((message, position) => {
+    if (message.entryId) messagePositions.set(message.entryId, position);
+  });
+  const modelSwitches = modelSwitchesOnPath(path, messagePositions);
   const visibleUsers = messages.filter((message) => message.role === "user" && message.entryId);
   const leaf = session.sessionManager.getLeafEntry() as EntryLike | undefined;
   if (!runTimingsCache || runTimingsCache.count !== treeCache?.count) {
@@ -631,6 +639,7 @@ function getSnapshot(rev: number): SessionSnapshot {
     sessionId: session.sessionId,
     sessionFile: session.sessionFile,
     messages,
+    modelSwitches,
     runTimings: runTimingsCache.value,
     activeRun: activeRun ? { runId: activeRun.runId, startedAt: activeRun.startedAt } : undefined,
     tree: { leafId: leaf?.id ?? null, undo: undoTarget(leaf) },
@@ -682,6 +691,7 @@ function finalizeActiveRun(): void {
 /** The last state the host was told about; boundary emissions diff against it. */
 interface EmittedState {
   messages: NormalizedMessage[];
+  modelSwitches: ModelSwitch[];
   sessionFile?: string;
   runTimings: RunTiming[];
   activeRun?: { runId: string; startedAt: number };
@@ -698,6 +708,7 @@ let forceFullSnapshot = false;
 function recordEmitted(snapshot: SessionSnapshot): void {
   emitted = {
     messages: snapshot.messages,
+    modelSwitches: snapshot.modelSwitches,
     sessionFile: snapshot.sessionFile,
     runTimings: snapshot.runTimings,
     activeRun: snapshot.activeRun,
@@ -737,6 +748,7 @@ function emitBoundary(): void {
   const planState = samePlanState(emitted.planState, snapshot.planState) ? undefined : snapshot.planState;
   const todoState = sameTodoState(emitted.todoState, snapshot.todoState) ? undefined : snapshot.todoState;
   const runTimings = sameRunTimings(emitted.runTimings, snapshot.runTimings) ? undefined : snapshot.runTimings;
+  const modelSwitches = sameModelSwitches(emitted.modelSwitches, snapshot.modelSwitches) ? undefined : snapshot.modelSwitches;
   const sessionFile = emitted.sessionFile === snapshot.sessionFile ? undefined : snapshot.sessionFile;
   const activeRun = emitted.activeRun?.runId === snapshot.activeRun?.runId
     && emitted.activeRun?.startedAt === snapshot.activeRun?.startedAt
@@ -744,7 +756,7 @@ function emitBoundary(): void {
     : snapshot.activeRun ?? null;
   if (
     diff.upserts.length === 0 && diff.removed.length === 0
-    && planState === undefined && todoState === undefined && runTimings === undefined
+    && planState === undefined && todoState === undefined && runTimings === undefined && modelSwitches === undefined
     && sessionFile === undefined && activeRun === undefined
     && sameStats(emitted.stats, snapshot.stats) && sameTree(emitted.tree, snapshot.tree)
   ) return;
@@ -758,6 +770,7 @@ function emitBoundary(): void {
       upserts: diff.upserts,
       removed: diff.removed,
       ...(runTimings !== undefined ? { runTimings } : {}),
+      ...(modelSwitches !== undefined ? { modelSwitches } : {}),
       ...(activeRun !== undefined ? { activeRun } : {}),
       tree: snapshot.tree,
       stats: snapshot.stats,
@@ -987,6 +1000,17 @@ async function initialize(command: InitCommand): Promise<void> {
     sessionStartEvent = { type: "session_start", reason: "fork", previousSessionFile: command.forkFrom.sessionFile };
   } else {
     sessionManager = pi.SessionManager.create(command.cwd, command.sessionDir);
+  }
+  // Passing `model` to Pi restores an existing session with that model in memory, but Pi does
+  // not append a model_change entry for the override. Record it before creation so the switch is
+  // durable, follows branches, and can be rendered at its exact transcript position.
+  const restored = sessionManager.buildSessionContext();
+  if (restored.messages.length > 0 && (
+    !restored.model
+    || restored.model.provider !== selectedModel.provider
+    || restored.model.modelId !== selectedModel.id
+  )) {
+    sessionManager.appendModelChange(selectedModel.provider, selectedModel.id);
   }
   const settingsManager = workerSettings(pi);
   // Every no* flag stays true: nothing is ever auto-discovered from settings or a project's

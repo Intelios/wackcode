@@ -5,7 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { api } from "./api";
-import { modelIsReady, pickThinkingLevel } from "./model-utils";
+import { modelDisplayName, modelIsReady, pickThinkingLevel } from "./model-utils";
 import { titleFromPrompt, samePlanState, sameTodoState, applySnapshotDelta, validateInitCommand, nextMode } from "./chat-utils";
 import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix } from "./tree-utils";
 import { pruneDisabledTools, sameToolCatalog } from "./tool-utils";
@@ -198,6 +198,12 @@ export default function App() {
   const pendingDialogTaskIds = useMemo(() => new Set(extensionRequests.map((r) => r.taskId)), [extensionRequests]);
   const selectedBusy = selectedTask?.status === "running" || selectedTask?.status === "stopping";
   const selectedModel = data.providers.find((provider) => provider.id === selectedTask?.providerId)?.models.find((model) => model.id === selectedTask?.modelId);
+  const displayModelSwitches = useMemo(() => (runtime?.snapshot?.modelSwitches ?? []).map((entry) => ({
+    id: entry.id,
+    at: entry.at,
+    from: modelDisplayName(data.providers, entry.from),
+    to: modelDisplayName(data.providers, entry.to)
+  })), [runtime?.snapshot?.modelSwitches, data.providers]);
 
   const handleExtensionRespond = useCallback((request: ExtensionUIRequest, response: ExtensionUIResponse) => {
     setExtensionRequests((current) => current.filter((entry) => entry.requestId !== request.requestId));
@@ -872,10 +878,14 @@ export default function App() {
     const modelId = patch.modelId ?? (patch.providerId ? nextProvider?.models.find(modelIsReady)?.id : selectedTask.modelId) ?? "";
     const nextModel = nextProvider?.models.find((item) => item.id === modelId);
     const thinkingLevel = pickThinkingLevel(nextModel, patch.thinkingLevel, selectedTask.thinkingLevel);
+    const modelChanged = providerId !== selectedTask.providerId || modelId !== selectedTask.modelId;
     try {
       const updated = await api.configureTask({ taskId: selectedTask.id, providerId, modelId, thinkingLevel });
       setData((current) => ({ ...current, tasks: current.tasks.map((task) => task.id === updated.id ? updated : task) }));
       rememberModel(updated.projectId, { providerId, modelId, thinkingLevel });
+      // configure_task stops a worker whose model changed. Reopen it now so Pi records the
+      // durable switch and the transcript divider appears without waiting for another prompt.
+      if (modelChanged) await api.openTask(updated.id);
     } catch (reason) {
       patchRuntime(selectedTask.id, { error: String(reason) });
     }
@@ -1615,6 +1625,7 @@ export default function App() {
             <ExploreGroupingEnabled.Provider value={data.appearance.groupExploration}>
             <Transcript
               messages={runtime?.snapshot?.messages ?? []}
+              modelSwitches={displayModelSwitches}
               partial={runtime?.partial}
               running={selectedTask.status === "running" || selectedTask.status === "stopping"}
               activeRun={runtime?.activeRun}

@@ -1,4 +1,4 @@
-import type { AutoTitleConfig, BuiltinModelSuggestion, ModelRecord, ProviderRecord, SubagentModel, ThinkingLevel } from "./types";
+import type { AutoTitleConfig, BuiltinModelSuggestion, ModelRecord, ModelRef, ProviderRecord, SubagentModel, ThinkingLevel } from "./types";
 
 function words(value: string): string[] {
   return value.toLowerCase().normalize("NFKD").match(/[\p{L}\p{N}]+/gu) ?? [];
@@ -68,6 +68,12 @@ export function mergeDiscoveredModels(existing: ModelRecord[], modelIds: string[
 
 export function modelIsReady(model: ModelRecord): boolean {
   return Boolean(model.id.trim() && model.contextWindow && model.maxTokens);
+}
+
+/** Current friendly name for a persisted model reference; old/deleted models fall back to ID. */
+export function modelDisplayName(providers: ProviderRecord[], reference: ModelRef): string {
+  return providers.find((provider) => provider.id === reference.providerId)
+    ?.models.find((model) => model.id === reference.modelId)?.name || reference.modelId;
 }
 
 /**

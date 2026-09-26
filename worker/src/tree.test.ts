@@ -9,6 +9,7 @@ import {
   checkpointBefore,
   latestInSubtree,
   leftWith,
+  modelSwitchesOnPath,
   turnsOnPath,
   undoTarget,
   versionsOf,
@@ -33,6 +34,10 @@ function leave(id: string, parentId: string | null, tree: string | null): EntryL
 
 function nav(id: string, parentId: string | null, kind: string, from: string): EntryLike {
   return custom(id, parentId, NAV_ENTRY_TYPE, { version: TREE_MARKER_VERSION, kind, from });
+}
+
+function model(id: string, parentId: string | null, provider: string, modelId: string): EntryLike {
+  return { type: "model_change", id, parentId, provider, modelId };
 }
 
 /**
@@ -115,5 +120,40 @@ describe("session tree helpers", () => {
     expect(undoTarget(nav("n", "x", "rewind", "left"))).toBe("left");
     expect(undoTarget(nav("n", "x", "switch", "left"))).toBeUndefined();
     expect(undoTarget(message("m", null, "assistant"))).toBeUndefined();
+  });
+
+  it("places genuine model switches on the visible active path", () => {
+    const path = [
+      model("initial", null, "openai", "gpt-4"),
+      model("before-chat", "initial", "openai", "gpt-5"),
+      message("u1", "before-chat", "user"),
+      message("a1", "u1", "assistant"),
+      model("same", "a1", "openai", "gpt-5"),
+      model("sonnet", "same", "anthropic", "sonnet-4"),
+      message("u2", "sonnet", "user"),
+      model("opus", "u2", "anthropic", "opus-4"),
+      message("a2", "opus", "assistant")
+    ];
+    const positions = new Map([["u1", 0], ["a1", 1], ["u2", 2], ["a2", 3]]);
+    expect(modelSwitchesOnPath(path, positions)).toEqual([
+      {
+        id: "sonnet", at: 2,
+        from: { providerId: "openai", modelId: "gpt-5" },
+        to: { providerId: "anthropic", modelId: "sonnet-4" }
+      },
+      {
+        id: "opus", at: 3,
+        from: { providerId: "anthropic", modelId: "sonnet-4" },
+        to: { providerId: "anthropic", modelId: "opus-4" }
+      }
+    ]);
+    expect(modelSwitchesOnPath(path.slice(0, 4), positions)).toEqual([]);
+    // As after compaction, switches above the first still-visible conversation message are a
+    // baseline, not a divider stranded at the top of the transcript.
+    expect(modelSwitchesOnPath(path, new Map([["u2", 0], ["a2", 1]]))).toEqual([{
+      id: "opus", at: 1,
+      from: { providerId: "anthropic", modelId: "sonnet-4" },
+      to: { providerId: "anthropic", modelId: "opus-4" }
+    }]);
   });
 });

@@ -659,12 +659,28 @@ export interface RunTiming {
   durationMs: number;
 }
 
+export interface ModelRef {
+  providerId: string;
+  modelId: string;
+}
+
+/** A durable model change, inserted at `at` in the normalized transcript. */
+export interface ModelSwitch {
+  /** Pi's model_change entry id, stable across snapshots and reloads. */
+  id: string;
+  /** Zero-based insertion point: messages before this index render above the divider. */
+  at: number;
+  from: ModelRef;
+  to: ModelRef;
+}
+
 export interface SessionSnapshot {
   /** Bumped by every full snapshot and delta; lets the renderer chain deltas to a snapshot. */
   rev: number;
   sessionId: string;
   sessionFile?: string;
   messages: NormalizedMessage[];
+  modelSwitches: ModelSwitch[];
   runTimings: RunTiming[];
   activeRun?: { runId: string; startedAt: number };
   /** Where the conversation currently ends in the session tree. */
@@ -694,7 +710,7 @@ export interface SessionSnapshot {
 /**
  * An incremental snapshot: applies on top of the snapshot or delta carrying `rev - 1`. Removed
  * ids go first, then each upsert replaces its message by id or appends when the id is new.
- * Model, thinking level and tool fields only ride full snapshots.
+ * Current model, thinking level and tool fields only ride full snapshots.
  */
 export interface SnapshotDelta {
   rev: number;
@@ -704,6 +720,8 @@ export interface SnapshotDelta {
   removed: string[];
   /** Present only when the field changed since the last emission; absent means unchanged. */
   runTimings?: RunTiming[];
+  /** Complete replacement when the active branch's model switches change. */
+  modelSwitches?: ModelSwitch[];
   /** null clears the active run; absent leaves it unchanged. */
   activeRun?: { runId: string; startedAt: number } | null;
   tree: {

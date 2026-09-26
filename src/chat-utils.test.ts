@@ -140,6 +140,7 @@ describe("applySnapshotDelta", () => {
       rev,
       sessionId: "s",
       messages,
+      modelSwitches: [],
       runTimings: [],
       tree: { leafId: null },
       stats,
@@ -188,6 +189,18 @@ describe("applySnapshotDelta", () => {
     const base = snapshot([message("a")], 1);
     const next = applySnapshotDelta(base, delta({ rev: 2 }));
     expect(next.messages).toBe(base.messages);
+  });
+
+  it("retains absent model switches and replaces them as one identity-stable field", () => {
+    const first = [{
+      id: "switch-1", at: 1,
+      from: { providerId: "p", modelId: "old" },
+      to: { providerId: "p", modelId: "new" }
+    }];
+    const base = { ...snapshot([message("a")], 1), modelSwitches: first };
+    expect(applySnapshotDelta(base, delta({ rev: 2 })).modelSwitches).toBe(first);
+    const replacement = [{ ...first[0], id: "switch-2", at: 2 }];
+    expect(applySnapshotDelta(base, delta({ rev: 2, modelSwitches: replacement })).modelSwitches).toBe(replacement);
   });
 
   it("treats absent fields as unchanged and activeRun null as cleared", () => {

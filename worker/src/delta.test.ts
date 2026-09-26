@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diffMessages, samePlanState, sameRunTimings, sameStats, sameTodoState, sameTurn, sameVersions } from "./delta.js";
+import { diffMessages, sameModelSwitches, samePlanState, sameRunTimings, sameStats, sameTodoState, sameTurn, sameVersions } from "./delta.js";
 import type { NormalizedMessage } from "./protocol.js";
 
 function message(id: string, text = id): NormalizedMessage {
@@ -71,6 +71,16 @@ describe("diffMessages", () => {
 });
 
 describe("snapshot scalar equality", () => {
+  it("sameModelSwitches compares positions and both model references", () => {
+    const switches = [{
+      id: "s", at: 2,
+      from: { providerId: "p", modelId: "old" },
+      to: { providerId: "p", modelId: "new" }
+    }];
+    expect(sameModelSwitches(switches, [{ ...switches[0], from: { ...switches[0].from }, to: { ...switches[0].to } }])).toBe(true);
+    expect(sameModelSwitches(switches, [{ ...switches[0], at: 3 }])).toBe(false);
+  });
+
   it("samePlanState compares mode, phase, and plan", () => {
     expect(samePlanState({ mode: "plan", phase: "ready", plan: "p" }, { mode: "plan", phase: "ready", plan: "p" })).toBe(true);
     expect(samePlanState({ mode: "plan", phase: "ready", plan: "p" }, { mode: "plan", phase: "ready", plan: "q" })).toBe(false);

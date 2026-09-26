@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyBuiltinModelSuggestion, mergeDiscoveredModels, pickThinkingLevel, searchBuiltinModels, subagentModelIssue } from "./model-utils";
+import { applyBuiltinModelSuggestion, mergeDiscoveredModels, modelDisplayName, pickThinkingLevel, searchBuiltinModels, subagentModelIssue } from "./model-utils";
 import type { BuiltinModelSuggestion, ModelRecord, ProviderRecord } from "./types";
 
 const flash: BuiltinModelSuggestion = {
@@ -63,6 +63,18 @@ describe("pickThinkingLevel", () => {
     expect(pickThinkingLevel(model(["off", "medium"]), undefined, "max")).toBe("medium");
     expect(pickThinkingLevel(model(["low", "high"]))).toBe("low");
     expect(pickThinkingLevel(undefined, "high")).toBe("off");
+  });
+});
+
+describe("modelDisplayName", () => {
+  const provider: ProviderRecord = {
+    id: "p", name: "Provider", kind: "custom", baseUrl: "", apiFormat: "openai-completions", createdAt: "", updatedAt: "", hasApiKey: true, connected: true,
+    models: [{ id: "gpt-5", name: "GPT 5", contextWindow: 10, maxTokens: 5, reasoning: false, thinkingLevels: ["off"], thinkingLevelMap: {}, vision: false }]
+  };
+
+  it("uses configured names and falls back to the durable model id", () => {
+    expect(modelDisplayName([provider], { providerId: "p", modelId: "gpt-5" })).toBe("GPT 5");
+    expect(modelDisplayName([provider], { providerId: "gone", modelId: "claude-sonnet-4" })).toBe("claude-sonnet-4");
   });
 });
 

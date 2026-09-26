@@ -8,7 +8,7 @@
  * Versions are therefore grouped by the nearest user, assistant, or tool-result ancestor (the
  * "logical parent"), which every version of a message shares.
  */
-import type { CheckpointRef, MessageVersions, NavigationKind, TurnInfo } from "./protocol.js";
+import type { CheckpointRef, MessageVersions, ModelRef, ModelSwitch, NavigationKind, TurnInfo } from "./protocol.js";
 import { RUN_TIMING_ENTRY_TYPE } from "./run-timing.js";
 
 /** Recorded just above every user message: the files before it was sent. */
@@ -46,6 +46,8 @@ export interface EntryLike {
   type: string;
   id: string;
   parentId: string | null;
+  provider?: string;
+  modelId?: string;
   customType?: string;
   data?: unknown;
   message?: unknown;
@@ -67,6 +69,39 @@ export function isUserMessage(entry: EntryLike | undefined): boolean {
 export function isConversationMessage(entry: EntryLike | undefined): boolean {
   const value = entry && role(entry);
   return value !== undefined && CONVERSATION_ROLES.has(value);
+}
+
+function modelRef(entry: EntryLike): ModelRef | undefined {
+  return entry.type === "model_change" && typeof entry.provider === "string" && typeof entry.modelId === "string"
+    ? { providerId: entry.provider, modelId: entry.modelId }
+    : undefined;
+}
+
+/**
+ * Model changes on the active branch, positioned among the normalized messages. Changes before
+ * the first conversational message establish the initial model and stay out of the transcript.
+ */
+export function modelSwitchesOnPath(path: EntryLike[], messagePositions: Map<string, number>): ModelSwitch[] {
+  const switches: ModelSwitch[] = [];
+  let current: ModelRef | undefined;
+  let conversationSeen = false;
+  let at = 0;
+
+  for (const entry of path) {
+    const position = messagePositions.get(entry.id);
+    if (position !== undefined) at = Math.max(at, position + 1);
+    // Compaction can leave older messages on the path but outside the normalized transcript;
+    // those must not make a historical switch appear above the first message still shown.
+    if (position !== undefined && isConversationMessage(entry)) conversationSeen = true;
+
+    const next = modelRef(entry);
+    if (!next) continue;
+    if (current && conversationSeen && (current.providerId !== next.providerId || current.modelId !== next.modelId)) {
+      switches.push({ id: entry.id, at, from: current, to: next });
+    }
+    current = next;
+  }
+  return switches;
 }
 
 function isCustom(entry: EntryLike, customType: string): boolean {

@@ -80,6 +80,9 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrl, 
   const accent = config.accent ?? DEFAULT_ACCENT;
   const background = config.background ?? DEFAULT_BACKGROUND;
   const name = agentName(config);
+  /** The name the miniature draws: the draft as you type, falling back to the default an
+   *  empty field saves. */
+  const previewName = draftName.trim() || DEFAULT_AGENT_NAME;
 
   function commitName(): void {
     const next = draftName.trim() || null;
@@ -117,27 +120,6 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrl, 
   return (
     <div className="settings-scroll appearance-page">
       <div className="appearance-inner">
-        <section className="tool-setting-group">
-          <h4>Agent</h4>
-          <div className="tool-setting appearance-setting agent-name-setting">
-            <div className="tool-setting-text">
-              <span className="tool-setting-name">Name</span>
-              <span className="tool-setting-description">What the app calls your agent — in the composer, while it works, and in the empty chat.</span>
-            </div>
-            <input
-              className="agent-name-input"
-              value={draftName}
-              onChange={(event) => setDraftName(event.target.value)}
-              onBlur={commitName}
-              onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
-              maxLength={40}
-              disabled={busy}
-              placeholder={DEFAULT_AGENT_NAME}
-              aria-label="Agent name"
-            />
-          </div>
-        </section>
-
         <section className="tool-setting-group theme-group">
           <h4>Theme</h4>
           <div className="theme-presets" role="radiogroup" aria-label="Theme presets">
@@ -378,6 +360,37 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrl, 
                 </div>
               );
             })}
+          </div>
+        </section>
+
+        <section className="tool-setting-group">
+          <h4>Agent</h4>
+          <p className="appearance-group-note">The name the app uses for your assistant. The miniature follows the field as you type.</p>
+          {/* Same card as the chat switches, showing the empty chat the name will meet. */}
+          <div className="chat-preview-card agent-name-card">
+            <div className="chat-preview" aria-hidden="true">
+              <span className="agent-greeting">What should we build?</span>
+              <span className="agent-greeting-sub">Describe the change, bug, or question — {previewName} can read this project, run commands, and edit files.</span>
+              <span className="mini-composer">
+                <span className="mini-composer-text">Ask {previewName} to inspect, change, or run something…</span>
+                <span className="mini-composer-send" />
+              </span>
+            </div>
+            <div className="chat-preview-text">
+              <span className="tool-setting-name">Name</span>
+              <span className="tool-setting-description">What the app calls your agent — in the composer, while it works, and in the empty chat.</span>
+            </div>
+            <input
+              className="agent-name-input"
+              value={draftName}
+              onChange={(event) => setDraftName(event.target.value)}
+              onBlur={commitName}
+              onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
+              maxLength={40}
+              disabled={busy}
+              placeholder={DEFAULT_AGENT_NAME}
+              aria-label="Agent name"
+            />
           </div>
         </section>
         {error && <div className="error-banner">{error}</div>}

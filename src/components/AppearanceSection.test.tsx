@@ -164,4 +164,18 @@ describe("AppearanceSection agent name", () => {
     renderSection({ agentName: "Nova" });
     expect(screen.getByText(/^Give Nova's replies a bubble/)).toBeInTheDocument();
   });
+
+  it("the miniature draws the draft live, before anything is saved", () => {
+    const { onChange } = renderSection();
+    fireEvent.input(screen.getByLabelText("Agent name"), { target: { value: "  Nova  " } });
+    expect(screen.getByText("Describe the change, bug, or question — Nova can read this project, run commands, and edit files.")).toBeInTheDocument();
+    expect(screen.getByText("Ask Nova to inspect, change, or run something…")).toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("an emptied field's miniature falls back to the default name", () => {
+    renderSection({ agentName: "Nova" });
+    fireEvent.input(screen.getByLabelText("Agent name"), { target: { value: "  " } });
+    expect(screen.getByText("Ask WackCode to inspect, change, or run something…")).toBeInTheDocument();
+  });
 });

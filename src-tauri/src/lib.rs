@@ -25,6 +25,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(WorkerState::default())
+        .manage(worker::SelectedTask::default())
+        .manage(worker::WorkerActivity::default())
         .manage(commands::TaskLocks::default())
         .manage(commands::GitLocks::default())
         .manage(subscriptions::SubscriptionState::default())

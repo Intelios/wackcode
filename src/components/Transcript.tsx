@@ -1,5 +1,5 @@
-import { Fragment, memo, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import type { NormalizedBlock, NormalizedMessage, PlanState, RunTiming } from "../types";
+import { Fragment, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { CommandPresentation, NormalizedBlock, NormalizedMessage, PlanState, RunTiming } from "../types";
 import { AssistantNameContext } from "../agentName";
 import { useFollowScroll } from "../hooks/useFollowScroll";
 import { useSmoothText } from "../hooks/useSmoothText";
@@ -17,6 +17,8 @@ import { PlanCard, type PlanAction } from "./PlanCard";
 import { SubagentCard } from "./SubagentCard";
 import { ThinkingExpansion, ThinkingRow } from "./ThinkingRow";
 import { OrphanResult, ToolRow } from "./ToolRow";
+import { Popover } from "./ui/Popover";
+import { Tooltip } from "./ui/Tooltip";
 
 interface Props {
   messages: NormalizedMessage[];
@@ -53,6 +55,7 @@ export interface DisplayModelSwitch {
 /** What the transcript asks the app to do with a message. */
 export type MessageAction =
   | { type: "copy"; message: NormalizedMessage }
+  | { type: "copy-prompt"; text: string }
   | { type: "edit"; message: NormalizedMessage; text: string; removeImages: number[] }
   /** Send this user message again as a new version. */
   | { type: "retry"; message: NormalizedMessage }
@@ -69,6 +72,75 @@ type LocalAction = MessageAction | { type: "start-edit"; id: string } | { type: 
 function StreamingText({ text }: { text: string }) {
   const shown = useSmoothText(text, true);
   return <div className="stream-text assistant-text"><Markdown streaming>{shown}</Markdown></div>;
+}
+
+function MentionText({ text }: { text: string }) {
+  return <>{splitMentions(text).map((segment, index) => segment.mention
+    ? <span key={index} className="mention">{segment.text}</span>
+    : segment.text)}</>;
+}
+
+function commandSummary(presentation: CommandPresentation): string {
+  if (presentation.kind === "command") return presentation.arguments.trim();
+  const label = presentation.kind === "goal-resume" ? "Resumed" : "Automatic";
+  const round = presentation.round ? `${label} round ${presentation.round}` : `${label} goal round`;
+  return presentation.nextAction?.trim() ? `${round} · ${presentation.nextAction.trim()}` : round;
+}
+
+/** Compact transcript face for a command while the complete model-visible prompt stays inspectable. */
+function CommandMessage({ message, onCopy }: {
+  message: NormalizedMessage;
+  onCopy: (text: string) => Promise<boolean> | void;
+}) {
+  const presentation = message.commandPresentation!;
+  const anchor = useRef<HTMLButtonElement>(null);
+  const copyButton = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const prompt = message.blocks.filter((block) => block.type === "text").map((block) => block.text ?? "").join("");
+  const summary = commandSummary(presentation);
+
+  useEffect(() => { setOpen(false); setCopied(false); }, [message.id]);
+  useEffect(() => {
+    if (!open) return;
+    const frame = requestAnimationFrame(() => copyButton.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [open]);
+
+  async function copyPrompt() {
+    await onCopy(prompt);
+    setCopied(true);
+  }
+
+  return (
+    <div className="bubble command-message">
+      <Tooltip label="View sent prompt">
+        <button
+          ref={anchor}
+          type="button"
+          className="command-word"
+          aria-label={`${presentation.name} command. View sent prompt`}
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          onClick={() => setOpen((value) => !value)}
+        >
+          <span>{presentation.name}</span>
+        </button>
+      </Tooltip>
+      {summary && <><span className="command-separator" aria-hidden="true">·</span><span className="command-summary"><MentionText text={summary} /></span></>}
+      <Popover anchor={anchor} open={open} onClose={() => setOpen(false)} side="bottom" align="end" className="command-prompt-popover">
+        <div className="command-prompt-dialog" role="dialog" aria-label={`${presentation.name} prompt sent to the agent`}>
+          <div className="command-prompt-head">
+            <div><strong>{presentation.name}</strong><span>Prompt sent to the agent</span></div>
+            <button ref={copyButton} type="button" className="secondary-button compact" onClick={() => void copyPrompt()}>
+              <Icon name={copied ? "check" : "copy"} /> {copied ? "Copied" : "Copy prompt"}
+            </button>
+          </div>
+          <pre tabIndex={0}>{prompt}</pre>
+        </div>
+      </Popover>
+    </div>
+  );
 }
 
 function RunDuration({ startedAt, durationMs }: { startedAt?: number; durationMs?: number }) {
@@ -209,6 +281,7 @@ function signature(
     message.entryId,
     message.versions,
     message.checkpoint,
+    message.commandPresentation,
     message.turn,
     message.blocks.map((block) => callInputs(block, results, liveToolText, liveToolDetails)),
     // An exploration group also renders blocks from the later messages its run spans.
@@ -315,7 +388,9 @@ const Message = memo(function Message({ message, slots, results, liveToolText, l
             )}
           </div>
         )}
-        {text && <div className="bubble">{splitMentions(text).map((segment, index) => segment.mention ? <span key={index} className="mention">{segment.text}</span> : segment.text)}</div>}
+        {text && (message.commandPresentation
+          ? <CommandMessage message={message} onCopy={(prompt) => onAction({ type: "copy-prompt", text: prompt })} />
+          : <div className="bubble"><MentionText text={text} /></div>)}
         <MessageActions
           align="end"
           items={items}

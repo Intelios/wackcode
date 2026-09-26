@@ -1,6 +1,6 @@
 import type { Usage } from "@earendil-works/pi-ai";
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
-import type { AskQuestion, GoalState, PlanState, QuestionAnswer, SubagentSpec, TodoState } from "../protocol.js";
+import type { AskQuestion, CommandPresentation, GoalState, PlanState, QuestionAnswer, SubagentSpec, TodoState } from "../protocol.js";
 import type { GoalVerdict, GoalVerifyInput } from "./goal/verify.js";
 
 /** What a running child reports while it works. */
@@ -61,6 +61,8 @@ export interface BuiltinHost {
   publishTodoState(state: TodoState): void;
   /** Publish goal-loop state so the desktop can render the banner (null clears it). */
   publishGoalState(state: GoalState | null): void;
+  /** Persist UI-only provenance immediately before a command-generated user message. */
+  recordCommandPresentation(presentation: CommandPresentation): void;
   /**
    * Run the goal loop's completion verifier: one no-tools `completeSimple` on the chat's own
    * model, implemented by the worker which owns the model runtime. Never rejects — failures

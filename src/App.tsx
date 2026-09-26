@@ -1397,6 +1397,8 @@ export default function App() {
     const messages = runtime?.snapshot?.messages ?? [];
     if (action.type === "copy") {
       await writeText(messageText(action.message));
+    } else if (action.type === "copy-prompt") {
+      await writeText(action.text);
     } else if (action.type === "edit") {
       return resend(action.message, { text: action.text, removeImages: action.removeImages });
     } else if (action.type === "retry") {

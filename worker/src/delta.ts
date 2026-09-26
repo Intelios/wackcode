@@ -1,5 +1,6 @@
 import type {
   CheckpointRef,
+  CommandPresentation,
   GoalState,
   MessageVersions,
   ModelSwitch,
@@ -73,6 +74,13 @@ export function sameCheckpoint(a: CheckpointRef | undefined, b: CheckpointRef | 
   if (a === b) return true;
   if (!a || !b) return false;
   return a.id === b.id && a.head === b.head;
+}
+
+export function sameCommandPresentation(a: CommandPresentation | undefined, b: CommandPresentation | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.id === b.id && a.name === b.name && a.arguments === b.arguments && a.kind === b.kind
+    && a.round === b.round && a.nextAction === b.nextAction;
 }
 
 export function sameTurn(a: TurnInfo | undefined, b: TurnInfo | undefined): boolean {

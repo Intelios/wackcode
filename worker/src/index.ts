@@ -16,6 +16,7 @@ import { SubagentRunner } from "./subagent-runner.js";
 import {
   diffMessages,
   sameCheckpoint,
+  sameCommandPresentation,
   sameGoalState,
   sameModelSwitches,
   samePlanState,
@@ -35,11 +36,14 @@ import { commandsSignature, loadUserCommands, mergePrompts } from "./user-comman
 import { NO_USER_SKILLS, loadUserSkills, mergeSkills, skillsSignature } from "./user-skills.js";
 import {
   CHECKPOINT_ENTRY_TYPE,
+  COMMAND_PRESENTATION_ENTRY_TYPE,
+  COMMAND_PRESENTATION_VERSION,
   LEAVE_ENTRY_TYPE,
   NAV_ENTRY_TYPE,
   TREE_MARKER_VERSION,
   buildTreeIndex,
   checkpointBefore,
+  commandPresentationBefore,
   isUserMessage,
   latestInSubtree,
   leftWith,
@@ -52,6 +56,7 @@ import {
 } from "./tree.js";
 import {
   type CheckpointRef,
+  type CommandPresentation,
   type GoalState,
   type ImageContent,
   type InitCommand,
@@ -107,7 +112,14 @@ let activeTitleCredential: string | undefined;
 let activeTitleAuth: { providerId: string; authPath: string } | undefined;
 let stopRequested = false;
 let compacting = false;
-let commandCatalog: Array<{ item: SlashCommand; invocation: string; templateContent?: string; skillFile?: string; skillBaseDir?: string }> = [];
+interface CommandCatalogEntry {
+  item: SlashCommand;
+  invocation: string;
+  templateContent?: string;
+  skillFile?: string;
+  skillBaseDir?: string;
+}
+let commandCatalog: CommandCatalogEntry[] = [];
 let disabledTools = new Set<string>();
 let subagentRunner: SubagentRunner | undefined;
 /** Aborts the wait for MCP servers at the start of a run, when the user presses Stop. */
@@ -121,6 +133,11 @@ let userCommandsPayload: UserCommandsPayload | undefined;
 let userCommands: PromptTemplate[] = [];
 let userCommandsKey = commandsSignature([], []);
 const pendingDialogs = new Map<string, (response: DialogResponse) => void>();
+interface PendingQueuedPresentation {
+  text: string;
+  presentation: CommandPresentation;
+}
+const pendingQueuedPresentations: PendingQueuedPresentation[] = [];
 
 interface DialogResponse {
   value?: string;
@@ -157,6 +174,7 @@ const builtinHost: BuiltinHost = {
     if (taskId) send({ type: "goal_state", taskId, goal });
     scheduleSnapshot();
   },
+  recordCommandPresentation: (presentation) => recordCommandPresentation(presentation),
   runGoalVerification: (input, signal) => {
     // The verifier shares the chat's connection and model — like auto-title it is cheap
     // background judgement, never a second model to configure.
@@ -235,6 +253,7 @@ interface CachedMessage {
   position: number;
   versions: MessageVersions | undefined;
   checkpoint: CheckpointRef | undefined;
+  commandPresentation: CommandPresentation | undefined;
   turn: TurnInfo | undefined;
 }
 const normalizedCache = new WeakMap<object, CachedMessage>();
@@ -285,6 +304,32 @@ function refreshCommandCatalog(): SlashCommand[] {
     skillBaseDir: entry.skillBaseDir
   }));
   return commandCatalog.map(({ item }) => item);
+}
+
+function commandPresentation(entry: CommandCatalogEntry, args: string): CommandPresentation {
+  return { id: entry.item.id, name: entry.item.name, arguments: args, kind: "command" };
+}
+
+async function expandCatalogCommand(entry: CommandCatalogEntry, args: string): Promise<string> {
+  if (entry.item.source === "prompt" || entry.item.source === "custom") {
+    return expandTemplate(entry.templateContent ?? "", args);
+  }
+  if (entry.item.source === "skill") {
+    if (!entry.skillFile || !piModule) throw new Error("That skill is no longer available.");
+    const body = piModule.stripFrontmatter(await readFile(entry.skillFile, "utf8")).trim();
+    return `<skill name="${entry.invocation.slice(6)}" location="${entry.skillFile}">\nReferences are relative to ${entry.skillBaseDir}.\n\n${body}\n</skill>${args.trim() ? `\n\n${args.trim()}` : ""}`;
+  }
+  return `/${entry.invocation}${args ? ` ${args}` : ""}`;
+}
+
+/** A queued command Pi will expand before delivery, paired with that exact expanded text. */
+async function queuedCommandPresentation(input: string): Promise<{ text: string; presentation: CommandPresentation } | undefined> {
+  const match = /^\/([^\s]+)(?:\s+([\s\S]*))?$/.exec(input);
+  if (!match) return undefined;
+  const entry = commandCatalog.find((candidate) => candidate.item.name === match[1]);
+  if (!entry || (entry.item.source !== "prompt" && entry.item.source !== "custom" && entry.item.source !== "skill")) return undefined;
+  const args = match[2] ?? "";
+  return { text: await expandCatalogCommand(entry, args), presentation: commandPresentation(entry, args) };
 }
 
 function textFromContent(content: unknown): string {
@@ -573,6 +618,7 @@ function transcriptMessages(path: EntryLike[], index: TreeIndex, thinking: Map<s
     userEntryId: string | undefined;
     versions: MessageVersions | undefined;
     checkpoint: CheckpointRef | undefined;
+    commandPresentation: CommandPresentation | undefined;
     turn: TurnInfo | undefined;
   }
   const rows: Row[] = [];
@@ -581,7 +627,7 @@ function transcriptMessages(path: EntryLike[], index: TreeIndex, thinking: Map<s
     const role = visibleRole(raw);
     if (!role) return;
     const entryId = entryIds.get(raw);
-    const row: Row = { raw, position, entryId, role, userEntryId: undefined, versions: undefined, checkpoint: undefined, turn: undefined };
+    const row: Row = { raw, position, entryId, role, userEntryId: undefined, versions: undefined, checkpoint: undefined, commandPresentation: undefined, turn: undefined };
     if (role === "user") {
       currentUser = entryId;
       if (entryId) {
@@ -589,6 +635,7 @@ function transcriptMessages(path: EntryLike[], index: TreeIndex, thinking: Map<s
         if (versions && versions.total > 1) row.versions = versions;
         const checkpoint = checkpointBefore(index, entryId);
         if (checkpoint) row.checkpoint = checkpoint;
+        row.commandPresentation = commandPresentationBefore(index, entryId);
       }
     } else if (role === "assistant") {
       row.userEntryId = currentUser;
@@ -614,6 +661,7 @@ function transcriptMessages(path: EntryLike[], index: TreeIndex, thinking: Map<s
       && (row.entryId !== undefined || cached.position === row.position)
       && sameVersions(cached.versions, row.versions)
       && sameCheckpoint(cached.checkpoint, row.checkpoint)
+      && sameCommandPresentation(cached.commandPresentation, row.commandPresentation)
       && sameTurn(cached.turn, row.turn)
     ) {
       return cached.message;
@@ -628,6 +676,7 @@ function transcriptMessages(path: EntryLike[], index: TreeIndex, thinking: Map<s
     }
     if (row.versions) message.versions = row.versions;
     if (row.checkpoint) message.checkpoint = row.checkpoint;
+    if (row.commandPresentation) message.commandPresentation = row.commandPresentation;
     if (row.turn) message.turn = row.turn;
     normalizedCache.set(row.raw as object, {
       message,
@@ -635,6 +684,7 @@ function transcriptMessages(path: EntryLike[], index: TreeIndex, thinking: Map<s
       position: row.position,
       versions: row.versions,
       checkpoint: row.checkpoint,
+      commandPresentation: row.commandPresentation,
       turn: row.turn
     });
     return message;
@@ -1180,6 +1230,15 @@ async function initialize(command: InitCommand): Promise<void> {
   session.subscribe((event) => {
     const value = event as unknown as Record<string, unknown>;
     const eventType = String(value.type ?? "event");
+    const eventMessage = value.message as Record<string, unknown> | undefined;
+    if (eventType === "message_start" && eventMessage?.role === "user") {
+      const text = textFromContent(eventMessage.content);
+      const pendingIndex = pendingQueuedPresentations.findIndex((pending) => pending.text === text);
+      if (pendingIndex >= 0) {
+        recordCommandPresentation(pendingQueuedPresentations[pendingIndex].presentation);
+        pendingQueuedPresentations.splice(pendingIndex, 1);
+      }
+    }
     if (eventType === "tool_execution_start" || eventType === "tool_execution_update" || eventType === "tool_execution_end") {
       send({
         type: "activity",
@@ -1252,6 +1311,9 @@ async function initialize(command: InitCommand): Promise<void> {
       scheduleSnapshot();
     }
     if (eventType === "agent_settled") {
+      // Anything left did not match the user message Pi actually delivered (for example, an
+      // extension input handler rewrote it). Never let stale provenance attach to a later run.
+      pendingQueuedPresentations.length = 0;
       const settledRunId = activeRun?.runId;
       finalizeActiveRun();
       activeRun = undefined;
@@ -1301,6 +1363,13 @@ function recordCheckpoint(checkpoint: CheckpointRef | null | undefined): void {
   });
 }
 
+function recordCommandPresentation(presentation: CommandPresentation | null): void {
+  appendMarker(COMMAND_PRESENTATION_ENTRY_TYPE, {
+    version: COMMAND_PRESENTATION_VERSION,
+    presentation
+  });
+}
+
 /**
  * One prompt, shared by `prompt` and `resend`. The response goes out once the run is marked
  * running, so a request never waits for the run itself.
@@ -1314,7 +1383,8 @@ async function runPrompt(
   text: string,
   images: ImageContent[] | undefined,
   checkpoint: CheckpointRef | null | undefined,
-  literal = false
+  literal = false,
+  commandPresentation?: CommandPresentation
 ): Promise<PromptOutcome> {
   if (!session || !taskId) throw new Error("Worker is not initialized");
   stopRequested = false;
@@ -1337,6 +1407,9 @@ async function runPrompt(
       const commandsChanged = refreshUserCommands();
       if (skillsChanged || commandsChanged) applyDisabledTools();
       recordCheckpoint(checkpoint);
+      // A null marker prevents an edited version from inheriting the command marker that sits
+      // on the shared branch immediately above it.
+      recordCommandPresentation(commandPresentation ?? null);
       await session.prompt(text, { ...(prepared.length > 0 ? { images: prepared } : {}), expandPromptTemplates: !literal });
     }
     const lastAssistant = [...session.messages].reverse().find((message) => message.role === "assistant");
@@ -1417,6 +1490,9 @@ async function resend(command: Extract<WorkerCommand, { type: "resend" }>): Prom
     throw new Error("That message is no longer in this chat.");
   }
   const content = entry.message.content;
+  const retryPresentation = command.message === undefined
+    ? commandPresentationBefore(treeIndex(session.sessionManager.getEntries() as EntryLike[]), command.entryId)
+    : undefined;
   const blocks = Array.isArray(content) ? content : [{ type: "text" as const, text: String(content ?? "") }];
   const original = blocks.map((block) => block.type === "text" ? block.text : "").join("");
   const removed = new Set(command.removeImages ?? []);
@@ -1430,7 +1506,9 @@ async function resend(command: Extract<WorkerCommand, { type: "resend" }>): Prom
   }
   // The restored branch's plan state wins: no mode is applied here.
   await navigate(command.entryId, "before", "resend", command.leave);
-  await runPrompt(command.id, command.runId, runStartedAt(command.startedAt), text, images, command.checkpoint);
+  // This is already the exact stored prompt. Treat it literally so a retry never resolves a
+  // template again (or turns an edited leading slash into a command).
+  await runPrompt(command.id, command.runId, runStartedAt(command.startedAt), text, images, command.checkpoint, true, retryPresentation);
 }
 
 async function handle(command: WorkerCommand): Promise<void> {
@@ -1451,20 +1529,33 @@ async function handle(command: WorkerCommand): Promise<void> {
         throw new Error("That command changed. Open the command list and try again.");
       }
       if (entry.item.source === "extension" && command.images?.length) throw new Error("Extension commands cannot include images.");
-      let line = `/${entry.invocation}${command.args ? ` ${command.args}` : ""}`;
-      if (entry.item.source === "prompt" || entry.item.source === "custom") line = expandTemplate(entry.templateContent ?? "", command.args);
-      else if (entry.item.source === "skill") {
-        if (!entry.skillFile || !piModule) throw new Error("That skill is no longer available.");
-        const body = piModule.stripFrontmatter(await readFile(entry.skillFile, "utf8")).trim();
-        line = `<skill name="${entry.invocation.slice(6)}" location="${entry.skillFile}">\nReferences are relative to ${entry.skillBaseDir}.\n\n${body}\n</skill>${command.args.trim() ? `\n\n${command.args.trim()}` : ""}`;
-      }
-      await runPrompt(command.id, command.runId, runStartedAt(command.startedAt), line, command.images, command.checkpoint, entry.item.source !== "extension");
+      const line = await expandCatalogCommand(entry, command.args);
+      const producesPrompt = entry.item.source !== "extension";
+      await runPrompt(
+        command.id,
+        command.runId,
+        runStartedAt(command.startedAt),
+        line,
+        command.images,
+        command.checkpoint,
+        producesPrompt,
+        producesPrompt ? commandPresentation(entry, command.args) : undefined
+      );
       return;
     } else if (command.type === "init_agents") {
       if (builtins.planMode.getState().mode !== "build") throw new Error("Switch to Build mode before running /init.");
       if (!workspacePath) throw new Error("The workspace is not available for /init.");
       const target = await prepareInitAgents(workspacePath);
-      const outcome = await runPrompt(command.id, command.runId, runStartedAt(command.startedAt), target.prompt, undefined, command.checkpoint, true);
+      const outcome = await runPrompt(
+        command.id,
+        command.runId,
+        runStartedAt(command.startedAt),
+        target.prompt,
+        undefined,
+        command.checkpoint,
+        true,
+        { id: "app:init", name: "init", arguments: "", kind: "command" }
+      );
       if (outcome === "failed") return;
       try {
         const result = await inspectInitAgentsResult(target);
@@ -1538,18 +1629,36 @@ async function handle(command: WorkerCommand): Promise<void> {
           throw new Error("Goal loops don't run while a planning mode is on. Switch to Build first.");
         }
         const kickoff = builtins.goal.start(objective);
-        await runPrompt(command.id, command.runId ?? crypto.randomUUID(), runStartedAt(command.startedAt), kickoff, undefined, command.checkpoint, true);
+        await runPrompt(
+          command.id,
+          command.runId ?? crypto.randomUUID(),
+          runStartedAt(command.startedAt),
+          kickoff,
+          undefined,
+          command.checkpoint,
+          true,
+          { id: "app:goal", name: "goal", arguments: objective, kind: "command" }
+        );
         return;
       }
       if (command.action === "pause") {
         builtins.goal.pause();
       } else if (command.action === "resume") {
         const text = builtins.goal.resume();
+        const goal = builtins.goal.getState();
+        const presentation: CommandPresentation = {
+          id: "app:goal",
+          name: "goal",
+          arguments: "resume",
+          kind: "goal-resume",
+          round: (goal?.iteration ?? 0) + 1,
+          nextAction: goal?.lastNextAction ?? "Continue working toward the objective."
+        };
         if (!session.isStreaming && !session.isCompacting) {
           // Idle: re-kick the loop with a normal run. runPrompt answers the command itself
           // once the run starts, so nothing responds here.
           commandQueue = commandQueue
-            .then(async () => { await runPrompt(command.id, command.runId ?? crypto.randomUUID(), runStartedAt(command.startedAt), text, undefined, command.checkpoint, true); })
+            .then(async () => { await runPrompt(command.id, command.runId ?? crypto.randomUUID(), runStartedAt(command.startedAt), text, undefined, command.checkpoint, true, presentation); })
             .catch((error) => send({ type: "worker_error", taskId, message: safeError(error) }));
           return;
         }
@@ -1582,19 +1691,37 @@ async function handle(command: WorkerCommand): Promise<void> {
     } else if (command.type === "queue_message") {
       // Reached with the command queue held by a running prompt, so this must never await it.
       if (!command.message.trim()) throw new Error("Message is required");
+      const queuedPresentation = command.literal ? undefined : await queuedCommandPresentation(command.message);
       if (session.isStreaming) {
         const prepared = await prepareImages(command.images);
-        if (command.literal) {
-          // "Send as message": queue the text raw, without command, skill or template expansion.
-          await session.sendUserMessage(
-            [{ type: "text", text: command.message }, ...prepared],
-            { deliverAs: command.behavior === "follow_up" ? "followUp" : "steer" }
-          );
-        } else if (command.behavior === "follow_up") {
-          // Expands skills and templates; throws on extension commands, which cannot be queued.
-          await session.followUp(command.message, prepared.length > 0 ? prepared : undefined);
-        } else {
-          await session.steer(command.message, prepared.length > 0 ? prepared : undefined);
+        if (queuedPresentation) pendingQueuedPresentations.push(queuedPresentation);
+        try {
+          if (command.literal) {
+            // "Send as message": queue the text raw, without command, skill or template expansion.
+            await session.sendUserMessage(
+              [{ type: "text", text: command.message }, ...prepared],
+              { deliverAs: command.behavior === "follow_up" ? "followUp" : "steer" }
+            );
+          } else if (queuedPresentation) {
+            // This is the exact catalog entry selected by the desktop, including namespaced
+            // collision names Pi itself does not know. Input handlers still run before queueing.
+            await session.prompt(queuedPresentation.text, {
+              ...(prepared.length > 0 ? { images: prepared } : {}),
+              expandPromptTemplates: false,
+              streamingBehavior: command.behavior === "follow_up" ? "followUp" : "steer"
+            });
+          } else if (command.behavior === "follow_up") {
+            // Expands skills and templates; throws on extension commands, which cannot be queued.
+            await session.followUp(command.message, prepared.length > 0 ? prepared : undefined);
+          } else {
+            await session.steer(command.message, prepared.length > 0 ? prepared : undefined);
+          }
+        } catch (error) {
+          if (queuedPresentation) {
+            const index = pendingQueuedPresentations.indexOf(queuedPresentation);
+            if (index >= 0) pendingQueuedPresentations.splice(index, 1);
+          }
+          throw error;
         }
         // The queue's new contents ride the session's queue_update event.
       } else {
@@ -1602,16 +1729,18 @@ async function handle(command: WorkerCommand): Promise<void> {
         // message with no run to ride would sit in the queue until some later run delivered
         // it mid-flight, so run it as a fresh prompt on the serial queue instead. The prompt
         // answers this same id once the run starts, so nothing responds here.
-        const images = command.images;
-        commandQueue = commandQueue.then(() => handle({
-          id: command.id,
-          type: "prompt",
-          runId: crypto.randomUUID(),
-          startedAt: runStartedAt(undefined),
-          message: command.message,
-          ...(command.literal ? { literal: true } : {}),
-          ...(images && images.length > 0 ? { images } : {})
-        })).catch((error) => {
+        commandQueue = commandQueue.then(async () => {
+          await runPrompt(
+            command.id,
+            crypto.randomUUID(),
+            runStartedAt(undefined),
+            queuedPresentation?.text ?? command.message,
+            command.images,
+            undefined,
+            command.literal === true || queuedPresentation !== undefined,
+            queuedPresentation?.presentation
+          );
+        }).catch((error) => {
           send({ type: "worker_error", taskId, message: safeError(error) });
         });
         return;
@@ -1620,6 +1749,7 @@ async function handle(command: WorkerCommand): Promise<void> {
       // Clearing only empties Pi's pending lists, so it is safe mid-run; the host restores the
       // texts to the composer. Images are not returned by Pi and drop out of the restored draft.
       const cleared = session.clearQueue();
+      pendingQueuedPresentations.length = 0;
       respond(command.id, cleared);
       return;
     } else if (command.type === "snapshot") {

@@ -20,6 +20,14 @@ type SnapshotView = {
     entryId?: string;
     versions?: { index: number; total: number; previous?: string; next?: string; group: string };
     checkpoint?: Checkpoint;
+    commandPresentation?: {
+      id: string;
+      name: string;
+      arguments: string;
+      kind: "command" | "goal-continuation" | "goal-resume";
+      round?: number;
+      nextAction?: string;
+    };
     turn?: { userEntryId: string; endEntryId: string; after?: Checkpoint };
   }>;
   modelSwitches?: Array<{
@@ -1617,6 +1625,9 @@ describe("/init", () => {
     expect((await worker.waitFor((output) => output.type === "response" && output.id === id)).success).toBe(true);
     await worker.waitFor((output) => output.type === "extension_notice" && output.message?.startsWith("Created AGENTS.md") === true);
     expect(await readFile(join(workspace, "AGENTS.md"), "utf8")).toContain("Run `pnpm test`");
+    expect(worker.view?.messages.find((message) => message.role === "user")?.commandPresentation).toEqual({
+      id: "app:init", name: "init", arguments: "", kind: "command"
+    });
 
     worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "after-init", message: "Next task" });
     await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === "after-init");
@@ -1904,8 +1915,8 @@ describe("session tree", () => {
     const skill = join(workspace, "skill");
     await mkdir(skill);
     await writeFile(join(skill, "SKILL.md"), "---\nname: fixture\ndescription: Fixture skill\n---\nRead the fixture.\n");
-    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "command-task", undefined, undefined,
-      { extensions: [extension], skills: [skill], prompts: [prompt], themes: [] });
+    const resources = { extensions: [extension], skills: [skill], prompts: [prompt], themes: [] };
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "command-task", undefined, undefined, resources);
     cleanup.push(() => worker.shutdown());
     const tooSmall = await request(worker, { type: "compact", runId: "compact-small", instructions: "" });
     expect(tooSmall.success).toBe(false);
@@ -1946,10 +1957,33 @@ describe("session tree", () => {
     expect((await request(worker, { type: "execute_command", commandId: template.id, args: '"changed files"', runId: "template-1" })).success).toBe(true);
     await settle(worker, "template-1");
     expect(lastUserText(provider)).toContain("Review changed files");
+    const templateMessage = [...(worker.view?.messages ?? [])].reverse().find((message) => message.role === "user");
+    expect(templateMessage?.commandPresentation).toEqual({
+      id: template.id, name: "prompt:review", arguments: '"changed files"', kind: "command"
+    });
+    expect((await request(worker, { type: "resend", runId: "template-retry", entryId: templateMessage!.entryId })).success).toBe(true);
+    await settle(worker, "template-retry");
+    const retriedTemplate = [...(worker.view?.messages ?? [])].reverse().find((message) => message.role === "user");
+    expect(retriedTemplate?.commandPresentation).toEqual(templateMessage?.commandPresentation);
+    expect((await request(worker, { type: "resend", runId: "template-edit", entryId: retriedTemplate!.entryId, message: "Review edited files" })).success).toBe(true);
+    await settle(worker, "template-edit");
+    expect([...(worker.view?.messages ?? [])].reverse().find((message) => message.role === "user")?.commandPresentation).toBeUndefined();
     const selectedSkill = commands.find((entry) => entry.name === "skill:fixture")!;
     expect((await request(worker, { type: "execute_command", commandId: selectedSkill.id, args: "details", runId: "skill-1" })).success).toBe(true);
     await settle(worker, "skill-1");
     expect(lastUserText(provider)).toContain("<skill name=\"fixture\"");
+    expect([...(worker.view?.messages ?? [])].reverse().find((message) => message.role === "user")?.commandPresentation).toEqual({
+      id: selectedSkill.id, name: "skill:fixture", arguments: "details", kind: "command"
+    });
+
+    const sessionFile = worker.view?.sessionFile;
+    expect(sessionFile).toBeTruthy();
+    await worker.shutdown();
+    const restored = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "command-task", sessionFile, undefined, resources);
+    cleanup.push(() => restored.worker.shutdown());
+    expect([...(restored.ready.snapshot?.messages ?? [])].reverse().find((message) => message.role === "user")?.commandPresentation).toEqual({
+      id: selectedSkill.id, name: "skill:fixture", arguments: "details", kind: "command"
+    });
   });
 });
 
@@ -2602,6 +2636,37 @@ describe("message queueing", () => {
       message.role === "user" && message.blocks.some((block) => block.text === "Follow-up: then summarize."))).toBe(true);
   });
 
+  it("keeps provenance on a queued prompt template when it is delivered", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-queued-command-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const prompt = join(workspace, "brief.md");
+    await writeFile(prompt, "---\ndescription: Brief\n---\nBrief $ARGUMENTS\n");
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "queued-command-task", undefined, undefined,
+      { extensions: [], skills: [], prompts: [prompt], themes: [] });
+    cleanup.push(() => worker.shutdown());
+    const listId = crypto.randomUUID();
+    worker.send({ id: listId, type: "list_commands" });
+    await worker.waitFor((output) => output.type === "response" && output.id === listId && output.success === true);
+
+    const runId = crypto.randomUUID();
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId, message: "stream tool" });
+    await worker.waitFor((output) =>
+      output.type === "activity" && output.event === "tool_execution_update" && output.detail?.text?.includes("first line") === true);
+    const queueId = crypto.randomUUID();
+    worker.send({ id: queueId, type: "queue_message", behavior: "steer", message: "/brief the diff" });
+    await worker.waitFor((output) => output.type === "response" && output.id === queueId && output.success === true);
+    await worker.waitFor(() => provider.requests.some((request) => request.text.includes("Brief the diff")));
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === runId && output.state === "idle");
+
+    const delivered = [...(worker.view?.messages ?? [])].reverse().find((message) =>
+      message.role === "user" && message.blocks.some((block) => block.text?.includes("Brief the diff")));
+    expect(delivered?.commandPresentation).toEqual({
+      id: `prompt:${prompt}`, name: "brief", arguments: "the diff", kind: "command"
+    });
+  });
+
   it("restores queued messages to the caller without delivering them", async () => {
     const { provider, worker, runId } = await startSlowRun("alpha-secret", "dequeue");
     worker.send({ id: crypto.randomUUID(), type: "queue_message", behavior: "steer", message: "Keep this one back." });
@@ -2689,6 +2754,13 @@ describe("message queueing", () => {
     await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
     expect(worker.outputs.filter((output) => output.type === "run_state" && output.state === "idle")).toHaveLength(1);
     expect(worker.outputs.filter((output) => output.type === "run_state" && output.state === "running")).toHaveLength(1);
+    const goalMessages = (worker.view?.messages ?? []).filter((message) => message.role === "user");
+    expect(goalMessages[0]?.commandPresentation).toEqual({
+      id: "app:goal", name: "goal", arguments: "goal: write the file", kind: "command"
+    });
+    expect(goalMessages[1]?.commandPresentation).toEqual({
+      id: "app:goal", name: "goal", arguments: "", kind: "goal-continuation", round: 2, nextAction: "write the file"
+    });
   });
 
   it("fails a goal open on a malformed verdict and stops on a dead end", async () => {
@@ -2752,6 +2824,7 @@ describe("message queueing", () => {
     worker.send({ id: resumeId, type: "goal_control", action: "resume", runId: "goal-resume", startedAt: Date.now() });
     await worker.waitFor((output) => output.type === "goal_state" && output.goal?.phase === "complete");
     expect(provider.requests.filter((request) => request.text.startsWith("Goal continuation")).length).toBeGreaterThanOrEqual(1);
+    expect((worker.view?.messages ?? []).some((message) => message.commandPresentation?.kind === "goal-resume")).toBe(true);
 
     const clearId = crypto.randomUUID();
     worker.send({ id: clearId, type: "goal_control", action: "clear" });

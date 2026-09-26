@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 import { RUN_TIMING_ENTRY_TYPE } from "./run-timing.js";
 import {
   CHECKPOINT_ENTRY_TYPE,
+  COMMAND_PRESENTATION_ENTRY_TYPE,
+  COMMAND_PRESENTATION_VERSION,
   LEAVE_ENTRY_TYPE,
   NAV_ENTRY_TYPE,
   TREE_MARKER_VERSION,
   buildTreeIndex,
   checkpointBefore,
+  commandPresentationBefore,
   latestInSubtree,
   leftWith,
   modelSwitchesOnPath,
@@ -86,6 +89,31 @@ describe("session tree helpers", () => {
     // A version sent while no snapshot was possible must not reach past its own marker.
     const withoutSnapshot = entries.map((entry) => entry.id === "ck-b" ? checkpoint("ck-b", "nav", null) : entry);
     expect(checkpointBefore(buildTreeIndex(withoutSnapshot), "u2b")).toBeUndefined();
+  });
+
+  it("reads only a versioned command marker attached to that user message", () => {
+    const presentation = { id: "app:goal", name: "goal", arguments: "Ship it", kind: "command" as const };
+    const entries = [
+      custom("command", null, COMMAND_PRESENTATION_ENTRY_TYPE, { version: COMMAND_PRESENTATION_VERSION, presentation }),
+      message("user", "command", "user"),
+      message("answer", "user", "assistant"),
+      message("plain", "answer", "user")
+    ];
+    const index = buildTreeIndex(entries);
+    expect(commandPresentationBefore(index, "user")).toEqual(presentation);
+    expect(commandPresentationBefore(index, "plain")).toBeUndefined();
+
+    const cleared = [
+      entries[0],
+      custom("ordinary", "command", COMMAND_PRESENTATION_ENTRY_TYPE, { version: COMMAND_PRESENTATION_VERSION, presentation: null }),
+      message("edited", "ordinary", "user")
+    ];
+    expect(commandPresentationBefore(buildTreeIndex(cleared), "edited")).toBeUndefined();
+
+    const invalid = entries.map((entry) => entry.id === "command"
+      ? custom("command", null, COMMAND_PRESENTATION_ENTRY_TYPE, { version: 999, presentation })
+      : entry);
+    expect(commandPresentationBefore(buildTreeIndex(invalid), "user")).toBeUndefined();
   });
 
   it("finds the newest entry under a message, landing on the marker a branch was left with", () => {

@@ -673,8 +673,10 @@ describe("goal loop", () => {
     const commands = new Map<string, { handler: (args: string, ctx: unknown) => Promise<void> }>();
     const published: unknown[] = [];
     const entries: Array<{ type: string; data: unknown }> = [];
+    const presentations: unknown[] = [];
     const host = {
       publishGoalState: (state: unknown) => published.push(state),
+      recordCommandPresentation: (presentation: unknown) => presentations.push(presentation),
       runGoalVerification: async () => verdicts.shift() ?? { kind: "pass" as const },
     } as unknown as BuiltinHost;
     const pi = {
@@ -689,7 +691,7 @@ describe("goal loop", () => {
     const fire = async (event: string, payload: unknown = {}) => {
       for (const handler of handlers.get(event) ?? []) await handler(payload as never, ctx as never);
     };
-    return { controller, sent, published, entries, commands, fire };
+    return { controller, sent, published, entries, presentations, commands, fire };
   }
 
   it("registers the /goal command inside Pi for name reservation", () => {
@@ -707,7 +709,7 @@ describe("goal loop", () => {
   });
 
   it("verifies a settled round and injects the next turn on a failed check", async () => {
-    const { controller, sent, fire } = harness([{ kind: "continue", reason: "no test ran", nextAction: "run the tests" }]);
+    const { controller, sent, presentations, fire } = harness([{ kind: "continue", reason: "no test ran", nextAction: "run the tests" }]);
     controller.start("Ship it");
     await fire("agent_end", { messages: [ASSISTANT_DONE] });
     await fire("agent_settled");
@@ -717,6 +719,9 @@ describe("goal loop", () => {
     expect(sent[0]).toContain("no test ran");
     expect(controller.getState()).toMatchObject({ phase: "active", iteration: 1, lastNextAction: "run the tests" });
     expect(controller.willContinue()).toBe(true);
+    expect(presentations).toEqual([{
+      id: "app:goal", name: "goal", arguments: "", kind: "goal-continuation", round: 2, nextAction: "run the tests"
+    }]);
   });
 
   it("completes on a pass and sends no continuation", async () => {

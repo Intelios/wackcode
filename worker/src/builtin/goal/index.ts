@@ -317,6 +317,14 @@ export function createGoalExtension(host: BuiltinHost, isPlanning: () => boolean
           goal.phase = "active";
           goal.note = undefined;
           continuing = true;
+          host.recordCommandPresentation({
+            id: "app:goal",
+            name: "goal",
+            arguments: "",
+            kind: "goal-continuation",
+            round: goal.iteration + 1,
+            nextAction: verdict.nextAction
+          });
           pi?.sendUserMessage(goalContinuationPrompt(goal, verdict.reason, verdict.nextAction));
           persist();
           emit();

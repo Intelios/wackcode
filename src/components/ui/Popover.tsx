@@ -74,6 +74,7 @@ export function Popover({ anchor, open, onClose, side = "bottom", align = "start
       if (event.key === "Escape") {
         event.stopPropagation();
         onClose();
+        anchor.current?.focus();
       }
     };
     document.addEventListener("pointerdown", onPointerDown, true);

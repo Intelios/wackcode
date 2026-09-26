@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diffMessages, sameModelSwitches, samePlanState, sameRunTimings, sameStats, sameTodoState, sameTurn, sameVersions } from "./delta.js";
+import { diffMessages, sameCommandPresentation, sameModelSwitches, samePlanState, sameRunTimings, sameStats, sameTodoState, sameTurn, sameVersions } from "./delta.js";
 import type { NormalizedMessage } from "./protocol.js";
 
 function message(id: string, text = id): NormalizedMessage {
@@ -71,6 +71,11 @@ describe("diffMessages", () => {
 });
 
 describe("snapshot scalar equality", () => {
+  it("compares command presentation fields", () => {
+    const presentation = { id: "app:goal", name: "goal", arguments: "Ship", kind: "command" as const };
+    expect(sameCommandPresentation(presentation, { ...presentation })).toBe(true);
+    expect(sameCommandPresentation(presentation, { ...presentation, arguments: "Test" })).toBe(false);
+  });
   it("sameModelSwitches compares positions and both model references", () => {
     const switches = [{
       id: "s", at: 2,

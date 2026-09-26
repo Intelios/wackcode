@@ -315,6 +315,62 @@ describe("Transcript message actions", () => {
   });
 });
 
+describe("Transcript command messages", () => {
+  it("shows the compact invocation and opens the exact sent prompt", async () => {
+    const onMessageAction = vi.fn().mockResolvedValue(true);
+    const command: NormalizedMessage = {
+      id: "goal-1",
+      role: "user",
+      blocks: [{ type: "text", text: "\nThe user has set a goal.\n<objective>\nFix @src/App.tsx\n</objective>\n" }],
+      commandPresentation: {
+        id: "app:goal",
+        name: "goal",
+        arguments: "Fix @src/App.tsx",
+        kind: "command"
+      }
+    };
+    const { container } = render(<Transcript messages={[command]} running={false} onMessageAction={onMessageAction} />);
+
+    const trigger = screen.getByRole("button", { name: "goal command. View sent prompt" });
+    expect(trigger).toHaveTextContent("goal");
+    expect(container.querySelector(".command-message")).toHaveTextContent("goal·Fix @src/App.tsx");
+    expect(container.querySelector(".command-summary .mention")).toHaveTextContent("@src/App.tsx");
+    expect(screen.queryByText(/The user has set a goal/)).not.toBeInTheDocument();
+
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("dialog", { name: "goal prompt sent to the agent" })).toBeInTheDocument();
+    expect(screen.getByText(/The user has set a goal/)).toHaveTextContent("Fix @src/App.tsx");
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Copy prompt" })); });
+    expect(onMessageAction).toHaveBeenCalledWith({ type: "copy-prompt", text: command.blocks[0].text });
+    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("labels automatic and resumed rounds while historical messages remain ordinary", () => {
+    const automatic: NormalizedMessage = {
+      id: "auto",
+      role: "user",
+      blocks: [{ type: "text", text: "Full automatic prompt" }],
+      commandPresentation: { id: "app:goal", name: "goal", arguments: "", kind: "goal-continuation", round: 2, nextAction: "Run tests" }
+    };
+    const resumed: NormalizedMessage = {
+      id: "resume",
+      role: "user",
+      blocks: [{ type: "text", text: "Full resume prompt" }],
+      commandPresentation: { id: "app:goal", name: "goal", arguments: "resume", kind: "goal-resume", round: 3, nextAction: "Fix failure" }
+    };
+    const historical: NormalizedMessage = { id: "old", role: "user", blocks: [{ type: "text", text: "Expanded old prompt" }] };
+    render(<Transcript messages={[automatic, resumed, historical]} running={false} />);
+    expect(screen.getByText("Automatic round 2 · Run tests")).toBeInTheDocument();
+    expect(screen.getByText("Resumed round 3 · Fix failure")).toBeInTheDocument();
+    expect(screen.getByText("Expanded old prompt")).toBeInTheDocument();
+  });
+});
+
 describe("Transcript exploration groups", () => {
   const user: NormalizedMessage = { id: "user-1", role: "user", timestamp: 1_000, blocks: [{ type: "text", text: "Look around" }] };
   const read = (id: string, path: string) => ({ type: "tool-call" as const, toolName: "read", toolCallId: id, arguments: { path } });

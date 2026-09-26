@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { bashExploreKind, diffStats, editStats, exploreKind, groupTools, parseSubagentDetails, pendingSubagentDetails, pruneDisabledTools, sameToolCatalog, summarizeTool } from "./tool-utils";
-import type { NormalizedBlock, ToolCatalogEntry } from "./types";
+import { bashExploreKind, diffStats, displayAgentName, editStats, exploreKind, groupTools, parseSubagentDetails, pendingSubagentDetails, pruneDisabledTools, sameToolCatalog, subagentDetailsFor, summarizeTool } from "./tool-utils";
+import type { NormalizedBlock, NormalizedMessage, ToolCatalogEntry } from "./types";
 
 function call(toolName: string, args: unknown): NormalizedBlock {
   return { type: "tool-call", toolName, toolCallId: "c1", arguments: args };
@@ -145,6 +145,29 @@ describe("sub-agent details", () => {
     expect(pendingSubagentDetails(call("subagent", { tasks: [{ agent: "a", task: "1" }, { agent: "b", task: "2" }] }))?.mode).toBe("parallel");
     expect(pendingSubagentDetails(call("subagent", '{"agent":"sco'))).toBeUndefined();
     expect(summarizeTool(call("subagent", { tasks: [{}, {}] })).activeVerb).toBe("Running 2 sub-agents");
+  });
+
+  it("titles an agent's name for its chip", () => {
+    expect(displayAgentName("scout")).toBe("Scout");
+    expect(displayAgentName("code-reviewer")).toBe("Code Reviewer");
+    expect(displayAgentName("db_migrator2")).toBe("Db Migrator2");
+    expect(displayAgentName("-")).toBe("-");
+  });
+
+  it("finds a call's details by the chips' precedence: result, then live update, then arguments", () => {
+    const toolCall: NormalizedBlock = { type: "tool-call", toolName: "subagent", toolCallId: "call-1", arguments: { agent: "scout", task: "look" } };
+    const asked: NormalizedMessage = { id: "m1", role: "assistant", blocks: [toolCall] };
+    const answered: NormalizedMessage = { id: "m2", role: "tool", blocks: [{ type: "tool-result", toolName: "subagent", toolCallId: "call-1", details: { v: 1, mode: "single", results: [{ ...result, status: "done" }] } }] };
+    const live = { "call-1": { v: 1, mode: "single", results: [{ ...result, status: "running" }] } };
+
+    expect(subagentDetailsFor([asked, answered], undefined, live, "call-1", true)).toMatchObject({ finished: true, details: { results: [{ status: "done" }] } });
+    expect(subagentDetailsFor([asked], undefined, live, "call-1", true)).toMatchObject({ finished: false, details: { results: [{ status: "running" }] } });
+    expect(subagentDetailsFor([asked], undefined, {}, "call-1", true)).toMatchObject({ finished: false, details: { results: [{ status: "queued" }] } });
+    // Still streaming in.
+    expect(subagentDetailsFor([], asked, {}, "call-1", true)?.details.results[0].agent).toBe("scout");
+    // Cut off without a result, or not in the conversation at all.
+    expect(subagentDetailsFor([asked], undefined, live, "call-1", false)).toBeUndefined();
+    expect(subagentDetailsFor([asked, answered], undefined, live, "call-2", true)).toBeUndefined();
   });
 });
 

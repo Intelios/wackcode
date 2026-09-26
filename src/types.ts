@@ -593,7 +593,11 @@ export interface AutoTitleConfig {
 
 export type SubagentStatus = "queued" | "running" | "done" | "failed" | "aborted";
 
-/** One sub-agent in a `subagent` call, as the card renders it. Mirrors worker/src/protocol.ts. */
+/**
+ * One sub-agent in a `subagent` call, as its chip and panel render it. Mirrors
+ * worker/src/protocol.ts, less the saved transcript: the worker strips that from snapshots and
+ * streams it to the side panel instead (`watch_subagent`).
+ */
 export interface SubagentResult {
   agent: string;
   task: string;
@@ -614,6 +618,46 @@ export interface SubagentDetails {
   v: 1;
   mode: "single" | "parallel";
   results: SubagentResult[];
+}
+
+/** One child of one `subagent` call: its tool call and position. Mirrors `SubagentWatchTarget` in models.rs. */
+export interface SubagentTarget {
+  toolCallId: string;
+  index: number;
+}
+
+/**
+ * One frame of the watched child's transcript. Mirrors worker/src/protocol.ts: a `reset` frame
+ * carries the whole transcript in `upserts`; the rest chain by `rev` and merge like snapshot deltas.
+ */
+export interface SubagentStreamFrame extends SubagentTarget {
+  rev: number;
+  reset?: true;
+  upserts: NormalizedMessage[];
+  removed: string[];
+  partial: NormalizedMessage | null;
+  live: boolean;
+  truncated?: boolean;
+  missing?: boolean;
+}
+
+/** The side panel's copy of the watched child's transcript (`TaskRuntime.subagentView`). */
+export interface SubagentView extends SubagentTarget {
+  /** The last frame applied; -1 until the first (reset) frame arrives. */
+  rev: number;
+  messages: NormalizedMessage[];
+  partial?: NormalizedMessage;
+  /** The child is still running. */
+  live: boolean;
+  /** Older tool output was trimmed when the transcript was saved. */
+  truncated: boolean;
+  /** No transcript: not started yet, or a call from before transcripts were kept. */
+  missing: boolean;
+  /** Waiting for the first frame. */
+  loading: boolean;
+  /** A frame went missing or the worker restarted: watch again for a fresh reset. */
+  resync?: boolean;
+  error?: string;
 }
 
 /** The main window's last normal-mode geometry in logical points. Mirrors `WindowState` in models.rs. */
@@ -880,6 +924,8 @@ export type WorkerEvent =
   | ({ type: "plan_state"; taskId: string } & PlanState)
   | ({ type: "todo_state"; taskId: string } & TodoState)
   | { type: "goal_state"; taskId: string; goal: GoalState | null }
+  /** The watched sub-agent's transcript (`watch_subagent`). */
+  | ({ type: "subagent_stream"; taskId: string } & SubagentStreamFrame)
   /** From the host, once per chat per session: why file checkpoints are off for it. */
   | { type: "checkpoint_unavailable"; taskId: string; message: string };
 
@@ -905,6 +951,8 @@ export interface TaskRuntime {
   todoState?: TodoState;
   /** Latest goal-loop state from the worker's built-in goal extension. */
   goalState?: GoalState;
+  /** The transcript of the sub-agent shown in the side panel, while one is. */
+  subagentView?: SubagentView;
   /** Messages queued on the running prompt: steering delivers at the next boundary, followUp after the run. */
   queued?: { steer: string[]; followUp: string[] };
   /** The most recent file restore, offered for undo until dismissed. */

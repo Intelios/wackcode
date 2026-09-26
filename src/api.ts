@@ -36,6 +36,7 @@ import type {
   SlashCommandsChange,
   SlashCommandsOverview,
   SubagentConfig,
+  SubagentTarget,
   SubscriptionProviderInfo,
   TaskMode,
   TaskRecord,
@@ -131,6 +132,8 @@ export const api = {
     thinkingLevel: ThinkingLevel;
   }) => invoke<TaskRecord>("configure_task", { input }),
   openTask: (taskId: string) => invoke<void>("open_task", { taskId }),
+  /** Stream one sub-agent's transcript as `subagent_stream` events (a reset frame first); null stops. */
+  watchSubagent: (taskId: string, target: SubagentTarget | null) => invoke<void>("watch_subagent", { taskId, target }),
   listCommands: (taskId: string) => invoke<SlashCommand[]>("list_commands", { taskId }),
   executeCommand: (input: { taskId: string; commandId: string; args: string; startedAt: number; images?: ImageContent[] }) => invoke<string>("execute_command", { input }),
   initAgents: (taskId: string, startedAt: number) => invoke<string>("init_agents", { taskId, startedAt }),

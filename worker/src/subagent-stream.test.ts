@@ -1,0 +1,216 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { NormalizedMessage, SubagentStreamFrame, SubagentTranscript } from "./protocol.js";
+import {
+  MAX_TOOL_OUTPUT_CHARS,
+  SubagentStreams,
+  TRIMMED_NOTE,
+  capTranscript,
+  clip,
+  isSubagentTranscript,
+  sanitizeMessage
+} from "./subagent-stream.js";
+
+type RawBlock = { type: string; text?: string; thinking?: string; name?: string; id?: string; arguments?: unknown };
+type RawMessage = { role: string; content: RawBlock[]; toolCallId?: string; toolName?: string };
+
+/** Stands in for the worker's normalizer (index.ts), which can't be imported without starting a worker. */
+function normalize(raw: unknown, position: number): NormalizedMessage | undefined {
+  const message = raw as RawMessage;
+  const role = message.role === "toolResult" ? "tool" : message.role;
+  if (role !== "assistant" && role !== "tool" && role !== "user" && role !== "system") return undefined;
+  return {
+    id: `${role}-${position}`,
+    role,
+    blocks: message.content.map((block) =>
+      block.type === "toolCall" ? { type: "tool-call" as const, toolName: block.name, toolCallId: block.id, arguments: block.arguments }
+        : role === "tool" ? { type: "tool-result" as const, text: block.text, toolCallId: message.toolCallId, toolName: message.toolName }
+          : block.type === "thinking" ? { type: "thinking" as const, text: block.thinking }
+            : { type: "text" as const, text: block.text })
+  };
+}
+
+const assistant = (text: string): RawMessage => ({ role: "assistant", content: [{ type: "text", text }] });
+const call = (id: string, name: string, args: unknown): RawMessage => ({ role: "assistant", content: [{ type: "toolCall", id, name, arguments: args }] });
+const result = (id: string, name: string, text: string): RawMessage => ({ role: "toolResult", toolCallId: id, toolName: name, content: [{ type: "text", text }] });
+
+function message(id: string, role: NormalizedMessage["role"], blocks: NormalizedMessage["blocks"]): NormalizedMessage {
+  return { id, role, blocks };
+}
+
+describe("clip", () => {
+  it("keeps the head or the tail, saying how much went", () => {
+    expect(clip("short", 10, "head")).toBe("short");
+    expect(clip("abcdefghij", 4, "head")).toBe("abcd\n… 6 more characters");
+    expect(clip("abcdefghij", 4, "tail")).toBe("… 6 earlier characters\nghij");
+  });
+});
+
+describe("sanitizeMessage", () => {
+  const redact = (text: string) => text.split("sk-secret").join("[credential redacted]");
+
+  it("redacts every place a child's words or a tool's output appear", () => {
+    const clean = sanitizeMessage(message("a", "assistant", [
+      { type: "thinking", text: "the key is sk-secret" },
+      { type: "text", text: "using sk-secret" },
+      { type: "tool-call", toolName: "bash", toolCallId: "c1", arguments: { command: "echo sk-secret", nested: ["sk-secret", 3] } },
+      { type: "image", imageId: "image-1", thumbnail: "data:image/png;base64,AAAA" }
+    ]), redact);
+    expect(JSON.stringify(clean)).not.toContain("sk-secret");
+    expect(clean.blocks.map((block) => block.type)).toEqual(["thinking", "text", "tool-call"]);
+    expect(clean.blocks[2].arguments).toEqual({ command: "echo [credential redacted]", nested: ["[credential redacted]", 3] });
+  });
+
+  it("keeps a tool's output tail and an edit's diff, and drops other details", () => {
+    const long = `${"x".repeat(MAX_TOOL_OUTPUT_CHARS)}END sk-secret`;
+    const clean = sanitizeMessage(message("t", "tool", [
+      { type: "tool-result", toolName: "edit", toolCallId: "c1", text: long, details: { diff: "+sk-secret", fullOutputPath: "/tmp/out" } }
+    ]), redact);
+    const block = clean.blocks[0];
+    expect(block.text?.endsWith("END [credential redacted]")).toBe(true);
+    expect(block.text?.startsWith("… ")).toBe(true);
+    expect(block.details).toEqual({ diff: "+[credential redacted]" });
+    const plain = sanitizeMessage(message("t", "tool", [{ type: "tool-result", text: "ok", details: { truncation: {} } }]), redact);
+    expect(plain.blocks[0]).not.toHaveProperty("details");
+  });
+});
+
+describe("capTranscript", () => {
+  it("leaves a transcript within budget untouched", () => {
+    const messages = [message("a", "assistant", [{ type: "text", text: "hi" }])];
+    const capped = capTranscript(messages, 10_000);
+    expect(capped).toEqual({ messages, truncated: false });
+    expect(capped.messages).toBe(messages);
+  });
+
+  it("trims the oldest tool output first and keeps untouched messages as they were", () => {
+    const answer = message("answer", "assistant", [{ type: "text", text: "All done." }]);
+    const calls = [0, 1, 2].map((index) => message(`call-${index}`, "assistant", [{ type: "tool-call", toolName: "read", toolCallId: `c${index}`, arguments: { path: `f${index}.ts` } }]));
+    const outputs = [0, 1, 2].map((index) => message(`out-${index}`, "tool", [{ type: "tool-result", toolName: "read", toolCallId: `c${index}`, text: "y".repeat(3_000) }]));
+    const messages = [calls[0], outputs[0], calls[1], outputs[1], calls[2], outputs[2], answer];
+    const size = JSON.stringify(messages).length;
+    const capped = capTranscript(messages, size - 4_000);
+    expect(capped.truncated).toBe(true);
+    expect(capped.messages).toHaveLength(messages.length);
+    expect(capped.messages[1].blocks[0].text).toBe(TRIMMED_NOTE);
+    expect(capped.messages[3].blocks[0].text).toBe(TRIMMED_NOTE);
+    expect(capped.messages[5]).toBe(outputs[2]);
+    expect(capped.messages[6]).toBe(answer);
+    expect(JSON.stringify(capped.messages).length).toBeLessThanOrEqual(size - 4_000);
+  });
+
+  it("drops the oldest messages as a last resort, never the answer", () => {
+    const messages = [0, 1, 2, 3].map((index) => message(`m${index}`, "assistant", [{ type: "text", text: `${"z".repeat(1_000)} ${index}` }]));
+    const capped = capTranscript(messages, 1_200);
+    expect(capped.truncated).toBe(true);
+    expect(capped.messages.at(-1)?.id).toBe("m3");
+    expect(capped.messages.length).toBeLessThan(messages.length);
+  });
+});
+
+describe("isSubagentTranscript", () => {
+  it("accepts only the saved shape", () => {
+    expect(isSubagentTranscript({ v: 1, messages: [{ id: "a", role: "assistant", blocks: [] }] })).toBe(true);
+    expect(isSubagentTranscript({ v: 1, messages: [] })).toBe(true);
+    expect(isSubagentTranscript({ v: 2, messages: [] })).toBe(false);
+    expect(isSubagentTranscript({ v: 1, messages: [{ id: 3 }] })).toBe(false);
+    expect(isSubagentTranscript(undefined)).toBe(false);
+  });
+});
+
+describe("SubagentStreams", () => {
+  let frames: SubagentStreamFrame[];
+  let saved: Map<string, SubagentTranscript>;
+  let streams: SubagentStreams;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    frames = [];
+    saved = new Map();
+    streams = new SubagentStreams({
+      emit: (frame) => frames.push(frame),
+      normalize,
+      redactor: () => (text) => text.split("sk-secret").join("[credential redacted]"),
+      saved: (target) => saved.get(`${target.toolCallId}#${target.index}`),
+      intervalMs: 10
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const target = { toolCallId: "call-1", index: 1 };
+
+  it("says a child is missing until it starts, then streams it and reports when it stops", () => {
+    streams.watch(target);
+    expect(frames).toEqual([{ ...target, rev: 0, reset: true, upserts: [], removed: [], partial: null, live: false, missing: true }]);
+
+    const messages: RawMessage[] = [{ role: "user", content: [{ type: "text", text: "the task" }] }, { role: "system", content: [] }];
+    const child = streams.child(target);
+    child.started(() => messages);
+    vi.advanceTimersByTime(10);
+    // The task and Pi's system declaration are not part of the transcript.
+    expect(frames[1]).toMatchObject({ rev: 1, upserts: [], removed: [], partial: null, live: true });
+    expect(frames[1]).not.toHaveProperty("reset");
+    expect(frames[1]).not.toHaveProperty("missing");
+
+    const streaming = { role: "assistant", content: [{ type: "text", text: "Looking at sk-secret" }] };
+    child.event({ type: "message_start", message: streaming });
+    child.event({ type: "message_update", message: streaming, assistantMessageEvent: { type: "text_delta", contentIndex: 0 } });
+    vi.advanceTimersByTime(10);
+    expect(frames).toHaveLength(3);
+    expect(frames[2].partial?.blocks).toEqual([{ type: "text", text: "Looking at [credential redacted]" }]);
+
+    const first = call("t1", "ls", { path: "." });
+    messages.push(first);
+    child.event({ type: "message_end", message: first });
+    messages.push(result("t1", "ls", "a.ts"));
+    child.event({ type: "tool_execution_end" });
+    vi.advanceTimersByTime(10);
+    expect(frames[3].partial).toBeNull();
+    expect(frames[3].upserts.map((entry) => entry.id)).toEqual(["assistant-2", "tool-3"]);
+
+    // Unchanged messages are not sent again.
+    const answer = assistant("Found it.");
+    messages.push(answer);
+    child.event({ type: "message_end", message: answer });
+    vi.advanceTimersByTime(10);
+    expect(frames[4].upserts.map((entry) => entry.id)).toEqual(["assistant-4"]);
+
+    child.ended([...messages]);
+    const transcript = child.finish();
+    expect(transcript?.messages.map((entry) => entry.id)).toEqual(["assistant-2", "tool-3", "assistant-4"]);
+    // Stopping goes out at once, not an interval later.
+    expect(frames.at(-1)).toMatchObject({ rev: 5, live: false, upserts: [], removed: [] });
+
+    // Watched again, it comes back whole from memory.
+    streams.watch(target);
+    expect(frames.at(-1)).toMatchObject({ rev: 0, reset: true, live: false });
+    expect(frames.at(-1)?.upserts).toBe(transcript?.messages);
+  });
+
+  it("serves a saved transcript, and only ever streams the watched child", () => {
+    const transcript: SubagentTranscript = { v: 1, messages: [message("a", "assistant", [{ type: "text", text: "saved" }])], truncated: true };
+    saved.set("call-1#1", transcript);
+    streams.watch(target);
+    expect(frames).toEqual([{ ...target, rev: 0, reset: true, upserts: transcript.messages, removed: [], partial: null, live: false, truncated: true }]);
+
+    const other = streams.child({ toolCallId: "call-2", index: 0 });
+    other.started(() => [assistant("elsewhere")]);
+    other.event({ type: "message_end", message: assistant("elsewhere") });
+    vi.advanceTimersByTime(50);
+    expect(frames).toHaveLength(1);
+
+    streams.watch(null);
+    const again = streams.child(target);
+    again.started(() => [assistant("rerun")]);
+    vi.advanceTimersByTime(50);
+    expect(frames).toHaveLength(1);
+  });
+
+  it("has nothing to save for a child that never started, and never throws into a child's loop", () => {
+    const child = streams.child(target);
+    expect(() => child.event({ type: "message_update", message: { role: "assistant", content: "not an array" }, assistantMessageEvent: null })).not.toThrow();
+    expect(child.finish()).toBeUndefined();
+  });
+});

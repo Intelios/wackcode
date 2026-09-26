@@ -1,7 +1,8 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedMessage } from "../types";
 import { ExploreGroupingEnabled } from "./ExploreGroup";
+import { SubagentPanelLink } from "./SubagentChip";
 import { ThinkingPreviewEnabled } from "./ThinkingRow";
 import { Transcript } from "./Transcript";
 
@@ -138,22 +139,55 @@ describe("Transcript sub-agent calls", () => {
   };
   const usage = { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 1 };
 
-  it("shows the card from the call's arguments, then live progress, then the final result", () => {
+  it("shows a SubAgent chip from the call's arguments, then live progress, then the final result", () => {
     const view = render(<Transcript messages={[call]} running />);
-    expect(screen.getByText("Map the worker")).toBeInTheDocument();
-    expect(screen.getByRole("img", { name: "Queued" })).toBeInTheDocument();
+    const chip = screen.getByRole("button", { name: "SubAgent Scout, queued: Map the worker" });
+    expect(within(chip).getByText("SubAgent")).toBeInTheDocument();
+    expect(within(chip).getByText("Scout")).toBeInTheDocument();
+    expect(within(chip).getByText("Map the worker")).toBeInTheDocument();
+    expect(within(chip).getByText("Queued")).toBeInTheDocument();
 
     const live = { v: 1, mode: "single", results: [{ agent: "scout", task: "Map the worker", readOnly: true, status: "running", activity: [{ tool: "read", subject: "worker/src/index.ts" }], usage }] };
     view.rerender(<Transcript messages={[call]} running liveToolDetails={{ "call-1": live }} />);
-    expect(screen.getByText("worker/src/index.ts")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^SubAgent Scout, working/ })).toBeInTheDocument();
+    expect(screen.getByText("Reading")).toBeInTheDocument();
+    expect(screen.getByText("index.ts")).toBeInTheDocument();
 
     const result: NormalizedMessage = {
       id: "tool-2",
       role: "tool",
-      blocks: [{ type: "tool-result", toolName: "subagent", toolCallId: "call-1", text: "Mapped.", details: { ...live, results: [{ ...live.results[0], status: "done", output: "Mapped." }] } }]
+      blocks: [{ type: "tool-result", toolName: "subagent", toolCallId: "call-1", text: "Mapped.", details: { ...live, results: [{ ...live.results[0], status: "done", output: "Mapped.", startedAt: 1_000, endedAt: 13_000 }] } }]
     };
     view.rerender(<Transcript messages={[call, result]} running={false} />);
-    expect(screen.getByRole("img", { name: "Done" })).toBeInTheDocument();
+    const done = screen.getByRole("button", { name: /^SubAgent Scout, done/ });
+    expect(within(done).getByText("12s")).toBeInTheDocument();
+  });
+
+  it("opens a chip's sub-agent in the side panel, and marks the chip it shows", () => {
+    const onOpen = vi.fn();
+    const view = render(<SubagentPanelLink.Provider value={{ onOpen }}><Transcript messages={[call]} running /></SubagentPanelLink.Provider>);
+    const chip = screen.getByRole("button", { name: /^SubAgent Scout/ });
+    expect(chip).toHaveAttribute("aria-expanded", "false");
+    expect(chip).toHaveAttribute("aria-controls", "side-panel");
+    fireEvent.click(chip);
+    expect(onOpen).toHaveBeenCalledWith("call-1", 0);
+
+    view.rerender(<SubagentPanelLink.Provider value={{ onOpen, open: { toolCallId: "call-1", index: 0 } }}><Transcript messages={[call]} running /></SubagentPanelLink.Provider>);
+    expect(screen.getByRole("button", { name: /^SubAgent Scout/ })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("gives each child of a parallel call its own chip under one summary", () => {
+    const parallel: NormalizedMessage = {
+      id: "assistant-1",
+      role: "assistant",
+      blocks: [{ type: "tool-call", toolName: "subagent", toolCallId: "call-1", arguments: { tasks: [{ agent: "scout", task: "One" }, { agent: "code-reviewer", task: "Two" }] } }]
+    };
+    const onOpen = vi.fn();
+    render(<SubagentPanelLink.Provider value={{ onOpen }}><Transcript messages={[parallel]} running /></SubagentPanelLink.Provider>);
+    expect(screen.getByText("2 SubAgents in parallel")).toBeInTheDocument();
+    expect(screen.getByText("2 queued")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /^SubAgent Code Reviewer/ }));
+    expect(onOpen).toHaveBeenCalledWith("call-1", 1);
   });
 
   it("falls back to a plain row when the call was refused before any sub-agent ran", () => {

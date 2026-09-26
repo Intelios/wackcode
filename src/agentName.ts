@@ -11,8 +11,9 @@ export function agentName(appearance: AppearanceConfig): string {
 
 /**
  * Names the assistant in the transcript's own copy ("Nova can read this project…"). The run-status
- * label stays nameless ("Working for 12s"). Separate from a sub-agent's own name, which the
- * `subagent` tool and its cards keep verbatim. Provided from App around the transcript; the
+ * label stays nameless ("Working for 12s"). Separate from a sub-agent's own name, its role, which
+ * the `subagent` tool keeps verbatim and its chips only title-case. Provided from App around the
+ * transcript and the side panel; the
  * Composer instead takes the name as a prop because its strings are computed outside render.
  */
 export const AssistantNameContext = createContext(DEFAULT_AGENT_NAME);

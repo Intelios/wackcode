@@ -8,11 +8,13 @@ import type { PromptTemplate, ResourceLoader } from "@earendil-works/pi-coding-a
 import { SWITCHABLE_BUILTIN_TOOLS, createBuiltinExtensions } from "./builtin/index.js";
 import { GOAL_VERIFIER_SYSTEM } from "./builtin/goal/prompt.js";
 import { runGoalVerification } from "./builtin/goal/verify.js";
-import type { BuiltinHost } from "./builtin/host.js";
+import type { BuiltinHost, SubagentOutcome } from "./builtin/host.js";
+import { withoutTranscripts } from "./builtin/subagents/details.js";
 import { SUBAGENT_TOOL_NAME } from "./builtin/subagents/types.js";
 import { createModelRuntime, findModel, workerSettings } from "./model-runtime.js";
 import { promptOverrides, setPromptOverrides } from "./prompt-overrides.js";
 import { SubagentRunner } from "./subagent-runner.js";
+import { SubagentStreams, isSubagentTranscript } from "./subagent-stream.js";
 import {
   diffMessages,
   sameCheckpoint,
@@ -72,6 +74,8 @@ import {
   type SessionSnapshot,
   type SlashCommand,
   type SubagentRuntimeConfig,
+  type SubagentTarget,
+  type SubagentTranscript,
   type ThinkingLevel,
   type TodoState,
   type TurnInfo,
@@ -148,6 +152,23 @@ interface DialogResponse {
 }
 
 /**
+ * Sub-agent transcripts for the side panel: every child reports through here while it runs, and
+ * `watch_subagent` streams one of them to the host. Children are normalized exactly like the
+ * chat's own messages, and redacted like their final answers.
+ */
+const subagentStreams = new SubagentStreams({
+  emit: (frame) => {
+    if (taskId) send({ type: "subagent_stream", taskId, ...frame });
+  },
+  normalize: (raw, position, thinking) => normalizeMessage(raw, position, thinking),
+  redactor: () => {
+    const secrets = credentialSecrets();
+    return (text) => redactWith(secrets, text);
+  },
+  saved: savedSubagentTranscript
+});
+
+/**
  * Built-in extensions reach the desktop through this bridge. Declared at module scope because
  * the factories are handed to the resource loader during `initialize`; the closures only use
  * `taskId`/`send` once commands run, so the ordering is safe.
@@ -186,11 +207,18 @@ const builtinHost: BuiltinHost = {
     toolCatalog()
       .filter((tool) => (tool.source.kind === "builtin" || SWITCHABLE_BUILTIN_TOOLS.has(tool.name)) && tool.available && !disabledTools.has(tool.name))
       .map((tool) => tool.name),
-  runSubagent: (request) => {
-    if (!subagentRunner) return Promise.reject(new Error("Worker is not initialized"));
-    return subagentRunner.run(request).catch((error: unknown) => {
+  runSubagent: async (request) => {
+    if (!subagentRunner) throw new Error("Worker is not initialized");
+    const stream = subagentStreams.child({ toolCallId: request.toolCallId, index: request.index });
+    let outcome: SubagentOutcome;
+    try {
+      outcome = await subagentRunner.run(request, stream);
+    } catch (error) {
+      stream.finish();
       throw new Error(safeError(error));
-    });
+    }
+    const transcript = stream.finish();
+    return transcript ? { ...outcome, transcript } : outcome;
   },
   redact: (text) => redactCredentials(text),
   notice: (message, level) => notice(safeError(message), level),
@@ -449,7 +477,8 @@ function normalizeMessage(message: unknown, index: number, thinking?: ThinkingDu
       block.toolName = typeof raw.toolName === "string" ? raw.toolName : undefined;
       block.toolCallId = typeof raw.toolCallId === "string" ? raw.toolCallId : undefined;
       block.isError = raw.isError === true;
-      if (raw.details !== undefined) block.details = raw.details;
+      // A sub-agent call's saved transcripts are the side panel's alone (`watch_subagent`).
+      if (raw.details !== undefined) block.details = raw.toolName === SUBAGENT_TOOL_NAME ? withoutTranscripts(raw.details) : raw.details;
     }
   }
   const timestamp = typeof raw.timestamp === "number" ? raw.timestamp : undefined;
@@ -1754,6 +1783,13 @@ async function handle(command: WorkerCommand): Promise<void> {
       return;
     } else if (command.type === "snapshot") {
       emitSnapshot();
+    } else if (command.type === "watch_subagent") {
+      const target = command.target;
+      if (target !== null && (!target || typeof target.toolCallId !== "string" || !target.toolCallId || !Number.isInteger(target.index) || target.index < 0)) {
+        throw new Error("That sub-agent is not in this chat.");
+      }
+      // The reset frame goes out before this command's response.
+      subagentStreams.watch(target ? { toolCallId: target.toolCallId, index: target.index } : null);
     } else if (command.type === "generate_commit_message") {
       requireSettled();
       if (!modelRuntime || !session.model) throw new Error("Choose an available model before generating a commit message");
@@ -1852,13 +1888,31 @@ function closeMcpServers(): Promise<void> {
 }
 
 /** Commands the host sends with `worker::request` and whose failures it reports itself. */
-const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "list_commands", "execute_command", "init_agents", "compact", "dequeue", "queue_message", "goal_control"]);
+const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "list_commands", "execute_command", "init_agents", "compact", "dequeue", "queue_message", "goal_control", "watch_subagent"]);
 
 /**
- * Remove every credential this worker holds from `text`: the chat's own key or sign-in, and
- * those of any connection a sub-agent uses. Exact values only, so ordinary text is untouched.
+ * A finished sub-agent's transcript, saved on its call's result in the session. Only the
+ * conversation as it stands is searched: a call the user has rewound past has no chip to open.
  */
-function redactCredentials(text: string): string {
+function savedSubagentTranscript(target: SubagentTarget): SubagentTranscript | undefined {
+  if (!session) return undefined;
+  const messages = session.messages as unknown as Record<string, unknown>[];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== "toolResult" || message.toolCallId !== target.toolCallId) continue;
+    const results = (message.details as { results?: unknown } | undefined)?.results;
+    const transcript = Array.isArray(results) ? (results[target.index] as { transcript?: unknown } | undefined)?.transcript : undefined;
+    return isSubagentTranscript(transcript) ? transcript : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Every credential this worker holds: the chat's own key or sign-in, and those of any
+ * connection a sub-agent or MCP server uses. Signed-in connections are read from disk, so a
+ * caller redacting many strings takes this once (`redactWith`).
+ */
+function credentialSecrets(): string[] {
   const secrets: string[] = activeCredential ? [activeCredential] : [];
   if (activeTitleCredential) secrets.push(activeTitleCredential);
   const stored = activeAuthPath && activeProviderId ? [{ providerId: activeProviderId, authPath: activeAuthPath }] : [];
@@ -1881,9 +1935,19 @@ function redactCredentials(text: string): string {
       } catch { /* Never expose a credential-read failure in an error message. */ }
     }
   }
+  return secrets;
+}
+
+/** Remove each of `secrets` from `text`. Exact values only, so ordinary text is untouched. */
+function redactWith(secrets: readonly string[], text: string): string {
   let message = text;
   for (const secret of secrets) if (secret) message = message.split(secret).join("[credential redacted]");
   return message;
+}
+
+/** Remove every credential this worker holds from `text` (see `credentialSecrets`). */
+function redactCredentials(text: string): string {
+  return redactWith(credentialSecrets(), text);
 }
 
 function safeError(error: unknown): string {
@@ -1905,8 +1969,10 @@ process.stdin.on("data", (chunk: Buffer) => {
     // queue: a prompt holds the queue until the agent settles, so anything that has to reach
     // the running run (an abort, a steer) or the user's pending messages deadlocks behind it.
     // Goal pause/resume/clear bypass too — they act on a live loop; only "set" queues, since
-    // starting a run behind another run is exactly what the queue is for.
-    if (command.type === "abort" || command.type === "extension_ui_response" || command.type === "queue_message" || command.type === "dequeue" || (command.type === "goal_control" && command.action !== "set")) {
+    // starting a run behind another run is exactly what the queue is for. So does watching a
+    // sub-agent, since the panel opens on a child while the call running it holds the queue —
+    // but only once the session exists: before that it waits its turn behind `init`.
+    if (command.type === "abort" || command.type === "extension_ui_response" || command.type === "queue_message" || command.type === "dequeue" || (command.type === "watch_subagent" && session !== undefined) || (command.type === "goal_control" && command.action !== "set")) {
       void handle(command).catch((error) => {
         send({ type: "worker_error", taskId, message: safeError(error) });
       });

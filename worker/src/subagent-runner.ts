@@ -24,6 +24,16 @@ import type { SubagentProvider, ThinkingLevel, WorkerProvider } from "./protocol
 type PiModule = typeof import("@earendil-works/pi-coding-agent");
 type AgentSession = Awaited<ReturnType<PiModule["createAgentSession"]>>["session"];
 
+/** What the side panel's transcript stream (`subagent-stream.ts`) follows of a running child. */
+export interface ChildTranscriptHooks {
+  /** The child's session exists; `messages` reads what it holds so far. */
+  started(messages: () => readonly unknown[]): void;
+  /** One of the child's own session events. */
+  event(event: Record<string, unknown>): void;
+  /** The child is done: everything it said, read just before its session is disposed. */
+  ended(messages: readonly unknown[]): void;
+}
+
 export interface SubagentRunnerContext {
   pi: PiModule;
   cwd: string;
@@ -134,7 +144,7 @@ export class SubagentRunner {
     };
   }
 
-  async run(request: SubagentRunRequest): Promise<SubagentOutcome> {
+  async run(request: SubagentRunRequest, transcript?: ChildTranscriptHooks): Promise<SubagentOutcome> {
     const { pi, cwd, agentDir, safeError } = this.context;
     const { signal, observer } = request;
     const usage: Usage = emptyUsage();
@@ -175,8 +185,10 @@ export class SubagentRunner {
     });
 
     this.live.add(child);
+    transcript?.started(() => child.messages as unknown[]);
     const unsubscribe = child.subscribe((event) => {
       const value = event as unknown as Record<string, unknown>;
+      transcript?.event(value);
       if (value.type === "tool_execution_start") {
         observer.tool(String(value.toolName ?? "tool"), value.args);
       } else if (value.type === "message_end") {
@@ -207,6 +219,7 @@ export class SubagentRunner {
 
     const output = child.getLastAssistantText() ?? "";
     const last = lastAssistant(child.messages as unknown[]);
+    transcript?.ended([...(child.messages as unknown[])]);
     child.dispose();
     if (signal?.aborted || last?.stopReason === "aborted") {
       return { status: "aborted", output, usage, turns };

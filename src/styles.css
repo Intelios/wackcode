@@ -834,13 +834,30 @@ button.reasoning-toggle.at-max .reasoning-toggle-label {
 .restore-status.delete { color: var(--danger); }
 .restore-status.recreate { color: var(--wc-accent); }
 
-/* ── Changes panel ─────────────────────────────────── */
-/* container-type lets the dock's tabs collapse to icons at narrow widths. */
-.changes-panel { container-type: inline-size; position: relative; flex: 0 0 auto; min-width: 290px; max-width: 720px; height: 100%; border-left: 1px solid var(--border); background: var(--wc-panel); display: flex; flex-direction: column; overflow: hidden; }
+/* ── Side panel ────────────────────────────────────── */
+/* One view at a time beside the chat (SidePanel.tsx). The aside animates its width while the
+   inner wrapper keeps the final one, so a view rides in with the panel's edge instead of
+   reflowing every frame; the wrapper is also the size container the dock's tabs query to
+   collapse to icons. Pages stack so an outgoing view can fade over the incoming one. */
+.side-panel { position: relative; flex: 0 0 auto; max-width: 720px; height: 100%; border-left: 1px solid var(--border); background: var(--wc-panel); overflow: hidden; }
+.side-panel-inner { container-type: inline-size; position: relative; height: 100%; min-width: 290px; max-width: 720px; }
+.side-panel-page { position: absolute; inset: 0; display: flex; flex-direction: column; }
 .panel-resizer { position: absolute; left: -4px; width: 8px; top: 0; bottom: 0; cursor: col-resize; z-index: 5; }
 .panel-resizer:hover { background: color-mix(in srgb, var(--wc-accent) 12%, transparent); }
 
-.changes-header { position: relative; min-height: 56px; display: flex; align-items: center; gap: 8px; padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--border); }
+/* Shared by every view's header. */
+.panel-header { position: relative; flex: 0 0 auto; min-height: 56px; display: flex; align-items: center; gap: 8px; padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--border); }
+.panel-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.panel-title h3 { margin: 0; font-size: 13.5px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-kicker { color: var(--wc-accent); font-size: 10px; font-weight: 750; letter-spacing: .06em; }
+.panel-header-actions { display: flex; align-items: center; gap: 3px; }
+/* Indeterminate strip under the header while the view works (git refreshing, a sub-agent running). */
+.panel-loading { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; overflow: hidden; }
+.panel-loading::after { content: ""; display: block; height: 100%; width: 38%; border-radius: 1px; background: var(--wc-accent); animation: changes-scan 1s var(--ease) infinite; }
+@keyframes changes-scan { from { transform: translateX(-105%); } to { transform: translateX(268%); } }
+
+/* ── Changes panel ─────────────────────────────────── */
+.changes-panel { height: 100%; min-height: 0; display: flex; flex-direction: column; }
 .changes-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .changes-title h3 { margin: 0; font-size: 13px; font-weight: 650; }
 .changes-meta { display: flex; align-items: center; gap: 5px; color: var(--text-dim); font-size: 10.5px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; }
@@ -853,10 +870,6 @@ button.reasoning-toggle.at-max .reasoning-toggle-label {
 .review-button { height: 27px; font-size: 11px; }
 .review-button svg { width: 13px; height: 13px; }
 .review-button.muted { color: var(--text-dim); }
-/* Indeterminate strip under the header while git state refreshes. */
-.changes-loading { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; overflow: hidden; }
-.changes-loading::after { content: ""; display: block; height: 100%; width: 38%; border-radius: 1px; background: var(--wc-accent); animation: changes-scan 1s var(--ease) infinite; }
-@keyframes changes-scan { from { transform: translateX(-105%); } to { transform: translateX(268%); } }
 
 /* File list */
 .changed-files { flex: 0 0 auto; max-height: 38%; min-height: 0; overflow-y: auto; padding: 3px 6px 7px; border-bottom: 1px solid var(--border); }
@@ -1485,59 +1498,200 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   outline: 2px solid color-mix(in srgb, var(--wc-accent) 70%, transparent); outline-offset: 1px;
 }
 
-/* ── Built-in sub-agent card ───────────────────────── */
-.subagent-card { margin: 6px 0; border: 1px solid var(--border); background: var(--surface); border-radius: 10px; overflow: hidden; }
-.subagent-card.running { border-color: var(--border-bright); }
-.subagent-card-head {
-  display: flex; align-items: center; gap: 7px; padding: 8px 12px; border-bottom: 1px solid var(--border);
-  font-size: 10.5px; color: var(--text-dim);
+/* ── SubAgent chips (SubagentChip.tsx) ─────────────── */
+/* One chip per child of a `subagent` call; a parallel call's chips hang off a shared rail. */
+.subagent-group { margin: 6px 0; display: flex; flex-direction: column; gap: 5px; }
+.subagent-group.parallel { position: relative; padding-left: 13px; }
+.subagent-group.parallel::before {
+  content: ""; position: absolute; left: 4px; top: 22px; bottom: 18px; width: 1.5px; border-radius: 1px;
+  background: linear-gradient(var(--border-bright), var(--border));
 }
-.subagent-card-head svg { width: 13px; height: 13px; color: var(--wc-accent); flex: 0 0 auto; }
-.subagent-card-title { color: var(--wc-accent); font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
-.subagent-card-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.subagent-card-total { margin-left: auto; flex: 0 0 auto; font-variant-numeric: tabular-nums; color: var(--text-faint); }
-.subagent-list { margin: 0; padding: 4px 6px; list-style: none; }
-.subagent-row + .subagent-row { border-top: 1px solid var(--border); }
-.subagent-row-head {
-  display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: transparent; color: var(--text-soft);
-  padding: 7px 6px; border-radius: 6px; cursor: pointer; text-align: left; font-size: 12.5px;
+.subagent-group-head {
+  display: flex; align-items: baseline; gap: 8px; margin: 0 0 1px -13px;
+  color: var(--text-dim); font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
 }
-.subagent-row-head:hover { color: var(--text); }
-.subagent-status { display: inline-grid; place-items: center; width: 13px; height: 13px; flex: 0 0 auto; }
-.subagent-mark { width: 12px; height: 12px; }
-.subagent-mark.done { color: var(--wc-accent); }
-.subagent-mark.failed { color: var(--danger); }
-.subagent-mark.stopped { color: var(--warning); width: 10px; height: 10px; }
-.subagent-mark.queued { display: block; width: 9px; height: 9px; border-radius: 50%; border: 1.5px dashed var(--text-faint); }
-.subagent-name { flex: 0 0 auto; font-family: "SFMono-Regular", Consolas, monospace; font-size: 11.5px; color: var(--text); font-weight: 600; }
+.subagent-group-summary { color: var(--text-faint); font-weight: 500; letter-spacing: 0; text-transform: none; font-variant-numeric: tabular-nums; }
+
+.subagent-chip {
+  position: relative; display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: 38px;
+  padding: 7px 10px 7px 9px; border: 1px solid var(--border); border-radius: 11px;
+  background: var(--surface); color: var(--text-soft); font-size: 12.5px; text-align: left; cursor: pointer;
+  transition: border-color .16s var(--ease), background .16s var(--ease), box-shadow .22s var(--ease);
+}
+.subagent-chip:hover:not(:disabled) { border-color: var(--border-bright); background: var(--surface-raised); box-shadow: 0 6px 18px rgb(0 0 0 / 22%); }
+.subagent-chip:disabled { cursor: default; opacity: 1; }
+.subagent-chip.running { border-color: var(--border-bright); }
+.subagent-chip.selected { border-color: var(--wc-accent-line); background: var(--wc-accent-wash); box-shadow: inset 2px 0 var(--wc-accent); }
+.subagent-chip .robot-mark { width: 18px; height: 18px; }
+.subagent-chip-kind { flex: 0 0 auto; color: var(--wc-accent); font-size: 10.5px; font-weight: 750; letter-spacing: .04em; }
+.subagent-chip-role { flex: 0 0 auto; color: var(--text); font-weight: 650; }
+.subagent-chip-task { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
+/* The status keeps its width (up to a cap) and the task gives way first. */
+.subagent-chip-status {
+  flex: 0 0 auto; min-width: 0; max-width: 42%; display: inline-flex; justify-content: flex-end; overflow: hidden;
+  color: var(--text-faint); font-size: 11px; font-variant-numeric: tabular-nums;
+}
+.subagent-chip-step { display: inline-flex; align-items: baseline; gap: 5px; min-width: 0; white-space: nowrap; }
+.subagent-chip-verb { flex: 0 0 auto; color: var(--text-soft); font-weight: 550; }
+/* Plain monospace, not the message's inline-code pill. */
+.subagent-chip .subagent-chip-step code {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 0; border: 0; background: none;
+  font-family: "SFMono-Regular", Consolas, monospace; font-size: 10.5px; color: var(--text-dim);
+}
+.subagent-chip-state { white-space: nowrap; }
+.subagent-chip.failed .subagent-chip-state { color: var(--danger); }
+.subagent-chip.stopped .subagent-chip-state { color: var(--warning); }
+.subagent-chip-open { flex: 0 0 auto; width: 13px; height: 13px; color: var(--text-faint); transition: color .16s var(--ease); }
+.subagent-chip:hover .subagent-chip-open { color: var(--text-soft); }
+.subagent-chip.selected .subagent-chip-open { color: var(--wc-accent); }
+/* A sheen crossing the top edge while the child works, and a ring that pings once as the panel
+   opens on the chip. */
+.subagent-chip::before, .subagent-chip::after { content: ""; position: absolute; pointer-events: none; }
+.subagent-chip.running::before {
+  left: 12px; right: 12px; top: -1px; height: 1px; opacity: .8;
+  background: linear-gradient(90deg, transparent, var(--wc-accent), transparent) no-repeat;
+  background-size: 35% 100%; animation: subagent-sheen 2.2s var(--ease) infinite;
+}
+.subagent-chip::after { inset: -1px; border-radius: inherit; opacity: 0; }
+.subagent-chip.selected::after { animation: subagent-ping .6s var(--ease); }
+@keyframes subagent-sheen { from { background-position: -40% 0; } to { background-position: 140% 0; } }
+@keyframes subagent-ping {
+  from { opacity: 1; box-shadow: 0 0 0 0 color-mix(in srgb, var(--wc-accent) 55%, transparent); }
+  to { opacity: 0; box-shadow: 0 0 0 7px color-mix(in srgb, var(--wc-accent) 0%, transparent); }
+}
+/* The one the old card kept: marks an agent that can edit files. */
 .subagent-tag {
   flex: 0 0 auto; font-size: 9.5px; font-weight: 600; color: var(--warning); border: 1px solid #5c4a22;
   border-radius: 4px; padding: 1px 5px; line-height: 1.3;
 }
-.subagent-task { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
-.subagent-meta { display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto; color: var(--text-faint); font-size: 10.5px; font-variant-numeric: tabular-nums; }
-.subagent-row.open .tool-chevron { transform: rotate(90deg); }
-.subagent-live, .subagent-activity li {
-  display: flex; align-items: baseline; gap: 7px; min-width: 0; font-size: 11px; color: var(--text-dim);
+
+/* ── SubAgent robot (RobotMark.tsx) ────────────────── */
+.robot-mark { flex: 0 0 auto; overflow: visible; color: var(--text-soft); }
+.robot-mark .robot-light, .robot-mark .robot-eyes.filled { fill: currentColor; stroke: none; }
+.robot-mark .robot-light { color: var(--text-faint); transition: color .25s var(--ease); }
+.robot-mark .robot-body, .robot-mark .robot-gaze, .robot-mark .robot-eyes { transform-box: fill-box; transform-origin: center; }
+.robot-mark.running { color: var(--text); }
+.robot-mark.running .robot-light { color: var(--wc-accent); animation: robot-antenna 1.2s var(--ease) infinite; }
+.robot-mark.running .robot-gaze { animation: robot-scan 2.8s ease-in-out infinite; }
+.robot-mark.running .robot-eyes { animation: robot-blink 4.2s ease-in-out infinite; }
+.robot-mark.queued { color: var(--text-dim); }
+.robot-mark.queued .robot-body { animation: robot-doze 3s ease-in-out infinite; }
+.robot-mark.done .robot-light { color: var(--wc-accent); }
+.robot-mark.failed, .robot-mark.failed .robot-light { color: var(--danger); }
+.robot-mark.stopped, .robot-mark.stopped .robot-light { color: var(--warning); }
+.robot-mark.booting { animation: robot-boot .65s cubic-bezier(.34, 1.56, .64, 1) both; }
+.robot-mark.popping { animation: robot-pop .6s cubic-bezier(.34, 1.56, .64, 1); }
+@keyframes robot-antenna { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+@keyframes robot-scan { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-1.1px); } 60% { transform: translateX(1.1px); } }
+@keyframes robot-blink { 0%, 90%, 100% { transform: scaleY(1); } 94% { transform: scaleY(.12); } }
+@keyframes robot-doze { 0%, 100% { opacity: .6; transform: translateY(0); } 50% { opacity: 1; transform: translateY(.6px); } }
+@keyframes robot-boot { 0% { opacity: 0; transform: scale(.6) rotate(-10deg); } 60% { opacity: 1; transform: scale(1.08) rotate(3deg); } 100% { opacity: 1; transform: none; } }
+@keyframes robot-pop { 0%, 100% { transform: none; } 40% { transform: scale(1.28) rotate(-6deg); } }
+
+/* ── SubAgent panel (SubagentPanel.tsx) ────────────── */
+.subagent-panel { height: 100%; min-height: 0; display: flex; flex-direction: column; }
+.subagent-panel-robot { width: 26px; height: 26px; }
+.subagent-pill {
+  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-soft);
+  font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums;
 }
-.subagent-live { margin: -3px 0 6px 27px; }
-.subagent-live code, .subagent-activity code {
+.subagent-pill-time { color: var(--text-dim); font-weight: 500; }
+.subagent-pill-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-faint); }
+.subagent-pill.running { border-color: var(--wc-accent-line-soft); background: var(--wc-accent-tint); color: var(--wc-accent-text); }
+.subagent-pill.running .subagent-pill-dot { background: var(--wc-accent); animation: pulse 1.8s infinite; }
+.subagent-pill.done .subagent-pill-dot { background: var(--wc-accent); }
+.subagent-pill.failed { color: var(--danger); border-color: #5b3030; }
+.subagent-pill.failed .subagent-pill-dot { background: var(--danger); }
+.subagent-pill.stopped { color: var(--warning); border-color: #5c4a22; }
+.subagent-pill.stopped .subagent-pill-dot { background: var(--warning); }
+
+/* Sibling tabs: a pill (motion layoutId) slides to the chosen one. */
+.subagent-tabs { flex: 0 0 auto; display: flex; gap: 2px; padding: 6px 10px; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
+.subagent-tab {
+  position: relative; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--text-dim); font-size: 11.5px; font-weight: 600; white-space: nowrap; cursor: pointer;
+  transition: color .14s var(--ease);
+}
+.subagent-tab:hover, .subagent-tab.active { color: var(--text); }
+.subagent-tab-pill { position: absolute; inset: 0; border-radius: 7px; background: var(--surface-hover); border: 1px solid var(--border); }
+.subagent-tab-dot, .subagent-tab-label { position: relative; }
+.subagent-tab-dot { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--text-faint); }
+.subagent-tab-dot.running { background: var(--wc-accent); animation: pulse 1.8s infinite; }
+.subagent-tab-dot.done { background: var(--wc-accent); }
+.subagent-tab-dot.failed { background: var(--danger); }
+.subagent-tab-dot.stopped { background: var(--warning); }
+.subagent-tab-dot.queued { background: transparent; border: 1.5px dashed var(--text-faint); width: 7px; height: 7px; }
+
+/* A child's page: brief, transcript, usage. Pages stack so siblings can slide past each other. */
+.subagent-pages { position: relative; flex: 1; min-height: 0; }
+.subagent-page { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.subagent-page-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.subagent-page .transcript { width: calc(100% - 32px); padding: 14px 0 20px; }
+.subagent-page .jump-latest { right: 16px; }
+.subagent-page > .subagent-error { margin: 0 14px 10px; }
+.subagent-trimmed { margin: 8px 16px 0; }
+
+.subagent-brief { flex: 0 0 auto; margin: 12px 14px 0; padding: 9px 11px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.subagent-brief-head {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 5px;
+  color: var(--text-dim); font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+}
+.subagent-brief-head svg { width: 12px; height: 12px; color: var(--wc-accent); }
+.subagent-brief-toggle {
+  margin-left: auto; padding: 2px 5px; border: 0; border-radius: 5px; background: transparent; cursor: pointer;
+  color: var(--text-faint); font-size: 10.5px; font-weight: 600; letter-spacing: 0; text-transform: none;
+}
+.subagent-brief-toggle:hover { color: var(--text-soft); background: var(--surface-hover); }
+.subagent-brief-text { margin: 0; color: var(--wc-text-body); font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+.subagent-brief:not(.open) .subagent-brief-text { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.subagent-brief.open .subagent-brief-text { max-height: 36vh; overflow-y: auto; }
+
+.subagent-waiting {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  padding: 24px; text-align: center; color: var(--text-dim); font-size: 12px; line-height: 1.5;
+}
+.subagent-waiting strong { color: var(--text); font-size: 13px; font-weight: 650; }
+.subagent-waiting-robot { width: 44px; height: 44px; margin-bottom: 4px; }
+.subagent-skeleton { display: flex; flex-direction: column; gap: 10px; padding: 18px 16px; }
+.subagent-skeleton span {
+  height: 11px; border-radius: 6px; background: linear-gradient(90deg, var(--surface) 30%, var(--surface-hover) 50%, var(--surface) 70%);
+  background-size: 220% 100%; animation: shimmer 1.4s linear infinite;
+}
+.subagent-skeleton span:nth-child(2) { width: 82%; }
+.subagent-skeleton span:nth-child(3) { width: 64%; }
+
+/* Without a transcript: what the old card showed. */
+.subagent-summary { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 16px; }
+.subagent-activity li { display: flex; align-items: baseline; gap: 7px; min-width: 0; font-size: 11px; color: var(--text-dim); }
+.subagent-activity code {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-family: "SFMono-Regular", Consolas, monospace; font-size: 10.5px; color: var(--text-faint);
 }
 .subagent-live-tool { flex: 0 0 auto; color: var(--text-soft); font-weight: 550; }
 .subagent-error {
-  margin: 0 6px 8px 27px; border: 1px solid #5b3030; background: var(--danger-bg); color: #ebb1b1;
+  border: 1px solid #5b3030; background: var(--danger-bg); color: #ebb1b1;
   border-radius: 7px; padding: 7px 10px; font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
 }
-.subagent-body { padding: 0 6px 10px 27px; }
-.subagent-body .subagent-error { margin-left: 0; }
-.subagent-full-task { margin: 0 0 8px; color: var(--text-soft); font-size: 12px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
-.subagent-activity { margin: 0 0 8px; padding: 6px 9px; list-style: none; border: 1px solid var(--border); border-radius: 7px; background: var(--wc-well); display: flex; flex-direction: column; gap: 2px; }
+.subagent-activity { margin: 0 0 10px; padding: 6px 9px; list-style: none; border: 1px solid var(--border); border-radius: 7px; background: var(--wc-well); display: flex; flex-direction: column; gap: 2px; }
 .subagent-output { border-left: 2px solid var(--border-bright); padding: 0 0 0 12px; font-size: 13px; line-height: 1.6; }
 .subagent-output > *:first-child { margin-top: 2px; }
-.subagent-note { margin: 4px 0 0; color: var(--text-faint); font-size: 10.5px; }
-.subagent-usage { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; color: var(--text-faint); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.subagent-note { margin: 0 0 8px; color: var(--text-faint); font-size: 10.5px; line-height: 1.5; }
+.subagent-output .subagent-note { margin: 4px 0 0; }
+
+.subagent-usage-bar {
+  flex: 0 0 auto; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; padding: 7px 14px;
+  border-top: 1px solid var(--border); background: var(--wc-elevated); color: var(--text-faint); font-size: 10.5px; font-variant-numeric: tabular-nums;
+}
+.subagent-usage-items { display: inline-flex; flex-wrap: wrap; gap: 4px 12px; }
+.subagent-returned { display: inline-flex; align-items: center; gap: 5px; color: var(--wc-accent-text); font-weight: 600; animation: dock-flash 1.8s var(--ease); }
+.subagent-returned svg { width: 12px; height: 12px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .robot-mark, .robot-mark .robot-light, .robot-mark .robot-body, .robot-mark .robot-gaze, .robot-mark .robot-eyes { animation: none !important; }
+  .subagent-chip.running::before, .subagent-chip.selected::after { animation: none; opacity: 0; }
+  .subagent-pill.running .subagent-pill-dot, .subagent-tab-dot.running, .subagent-skeleton span, .subagent-returned { animation: none; }
+}
 
 /* ── ask_user_question card ────────────────────────── */
 .question-tabs { display: flex; gap: 4px; margin: 4px 0 10px; }
@@ -2212,5 +2366,5 @@ label > span small.mcp-invalid { color: var(--warning); }
 
 @media (max-width: 1120px) {
   .sidebar { width: 216px; flex-basis: 216px; }
-  .changes-panel { max-width: 460px; }
+  .side-panel, .side-panel-inner { max-width: 460px; }
 }

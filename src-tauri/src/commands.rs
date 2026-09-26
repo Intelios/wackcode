@@ -6,7 +6,7 @@ use crate::{
         ProjectRecord, PromptConfig, PromptInput, QueueMessageInput, QueuedMessages, ExtensionUiResponseInput, InstallPackageInput, PackageRecord,
         PackageSearchResult, ProviderKind, ProviderRecord, ResendInput, RestoreCheckpointInput, RestoreResult,
         SaveProviderInput, SearchPackagesInput, SetPackageResourcesInput, SetTaskModeInput, SetToolConfigInput,
-        SlashCommand, SubagentConfig, AutoTitleConfig, TaskMode, TaskRecord, TaskStatus, ToolConfig, WorkspaceFiles,
+        SlashCommand, SubagentConfig, SubagentWatchTarget, AutoTitleConfig, TaskMode, TaskRecord, TaskStatus, ToolConfig, WorkspaceFiles,
         McpServerRecord, McpTestResult, SaveMcpServerInput, SaveSkillInput, SearchSkillPackagesInput, SkillDocument,
         SkillFolderKind, SkillFolderRecord, SkillSearchPage, SkillsChange, SkillsOverview,
         SaveSlashCommandInput, SlashCommandDocument, SlashCommandsChange, SlashCommandsOverview,
@@ -1247,6 +1247,32 @@ pub struct ExecuteCommandInput {
     started_at: u64,
     #[serde(default)]
     images: Vec<crate::models::ImageContent>,
+}
+
+/// Stream one sub-agent's transcript to the side panel as `subagent_stream` events, starting with
+/// a reset frame the worker sends before it answers; no target stops. Watching sends a chat no
+/// work and moves nothing, so the chat's lock is held only around starting its worker, like
+/// `open_task`, and the worker answers even while the call running the child holds its queue.
+#[tauri::command]
+pub async fn watch_subagent(app: AppHandle, state: State<'_, MetadataState>, task_id: String, target: Option<SubagentWatchTarget>) -> Result<(), String> {
+    let Some(target) = target else {
+        // A worker that has stopped streams nothing.
+        if app.state::<worker::WorkerState>().get(&task_id)?.is_none() { return Ok(()); }
+        worker::request(&app, &task_id, json!({ "id": Uuid::new_v4().to_string(), "type": "watch_subagent", "target": null }), REQUEST_TIMEOUT).await?;
+        return Ok(());
+    };
+    subagents::validate_watch_target(&target)?;
+    let (task, provider) = task_and_provider(&state, &task_id)?;
+    let api_key = credential_for(&app, &state, &provider)?;
+    {
+        let lock = task_lock(&app, &task_id);
+        let _guard = lock.lock().await;
+        worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
+    }
+    worker::request(&app, &task_id, json!({
+        "id": Uuid::new_v4().to_string(), "type": "watch_subagent", "target": target
+    }), REQUEST_TIMEOUT).await?;
+    Ok(())
 }
 
 #[tauri::command]

@@ -548,6 +548,15 @@ pub struct SubagentModel {
     pub thinking_level: String,
 }
 
+/// One child of one `subagent` call, as the side panel watches it: the call's tool call id and
+/// the child's position in it. Mirrors `SubagentTarget` in the worker's protocol.ts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentWatchTarget {
+    pub tool_call_id: String,
+    pub index: u32,
+}
+
 /// One agent the `subagent` tool can launch. Built-in records are refreshed from the shipped
 /// definitions on every load (see `subagents.rs`); only `enabled` and `model` are the user's.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

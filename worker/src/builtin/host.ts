@@ -1,6 +1,6 @@
 import type { Usage } from "@earendil-works/pi-ai";
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
-import type { AskQuestion, CommandPresentation, GoalState, PlanState, QuestionAnswer, SubagentSpec, TodoState } from "../protocol.js";
+import type { AskQuestion, CommandPresentation, GoalState, PlanState, QuestionAnswer, SubagentSpec, SubagentTranscript, TodoState } from "../protocol.js";
 import type { GoalVerdict, GoalVerifyInput } from "./goal/verify.js";
 
 /** What a running child reports while it works. */
@@ -14,6 +14,10 @@ export interface SubagentObserver {
 }
 
 export interface SubagentRunRequest {
+  /** The `subagent` call running this child, and the child's position in it: what the side
+   *  panel watches it by. */
+  toolCallId: string;
+  index: number;
   spec: SubagentSpec;
   task: string;
   /** The final tool list: role allowlist, filtered for availability and the user's denylist. */
@@ -33,6 +37,8 @@ export interface SubagentOutcome {
   error?: string;
   usage: Usage;
   turns: number;
+  /** Everything the child did, normalized, redacted and capped for the side panel. */
+  transcript?: SubagentTranscript;
 }
 
 /**

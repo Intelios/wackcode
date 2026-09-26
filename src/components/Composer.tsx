@@ -171,7 +171,19 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
       // Pi is working: queue instead of sending. Slash commands that act on the app itself
       // cannot queue (they are not messages); skills, templates and unknown text can — Pi
       // expands the first two and refuses extension commands.
-      if (message.startsWith("/") && commands.some((command) => command.name === /^\/([^\s]+)/.exec(message)?.[1] && command.source === "app")) {
+      const appCommand = message.startsWith("/") && commands.some((command) => command.name === /^\/([^\s]+)/.exec(message)?.[1] && command.source === "app");
+      if (appCommand) {
+        // `/goal pause|resume|clear` are the exception: they drive a live loop, so they
+        // dispatch exactly like an idle-time command (App's sendSlash gates the same way).
+        const goalMatch = /^\/(goal)\s+(pause|resume|clear)\s*$/.exec(message);
+        if (goalMatch && onCommand) {
+          try {
+            const ok = await onCommand("goal", goalMatch[2], []);
+            if (ok) { setDraft(""); setAttachments([]); setSlashNotice(undefined); setSlashOpen(false); }
+            else setSlashNotice("That command could not run. Try again.");
+          } catch (reason) { setSlashNotice(String(reason)); }
+          return;
+        }
         setSlashNotice(`Wait for ${agentName} to finish before running /${/^\/([^\s]+)/.exec(message)?.[1]}.`);
         setSlashOpen(false);
         return;

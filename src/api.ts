@@ -135,6 +135,8 @@ export const api = {
   executeCommand: (input: { taskId: string; commandId: string; args: string; startedAt: number; images?: ImageContent[] }) => invoke<string>("execute_command", { input }),
   initAgents: (taskId: string, startedAt: number) => invoke<string>("init_agents", { taskId, startedAt }),
   compactTask: (taskId: string, instructions: string, startedAt: number) => invoke<string>("compact_task", { taskId, instructions, startedAt }),
+  goalControl: (taskId: string, action: "set" | "pause" | "resume" | "clear", objective?: string, startedAt?: number) =>
+    invoke<string>("goal_control", { taskId, action, objective, startedAt }),
   prompt: (input: {
     taskId: string;
     message: string;

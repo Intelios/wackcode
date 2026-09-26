@@ -1421,6 +1421,41 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   outline: 2px solid color-mix(in srgb, var(--wc-accent) 70%, transparent); outline-offset: 1px;
 }
 
+/* ── Built-in goal banner ──────────────────────────── */
+.goal-banner-wrap { flex: 0 0 auto; padding: 0 24px 8px; }
+.goal-banner {
+  max-width: 760px; margin: 0 auto; display: flex; align-items: center; gap: 8px;
+  padding: 7px 12px; border: 1px solid var(--border); background: var(--surface); border-radius: 10px;
+}
+.goal-banner.verifying { border-color: color-mix(in srgb, var(--wc-accent) 45%, var(--border)); }
+.goal-dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--wc-accent); }
+.goal-banner.active .goal-dot, .goal-banner.verifying .goal-dot { animation: goal-pulse 1.4s ease-in-out infinite; }
+.goal-banner.paused .goal-dot { background: var(--text-faint); }
+.goal-banner.complete .goal-dot { background: var(--wc-accent); }
+.goal-banner.stopped .goal-dot { background: var(--danger); }
+@keyframes goal-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) {
+  .goal-banner .goal-dot { animation: none; }
+}
+.goal-banner-title {
+  color: var(--wc-accent); font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em;
+}
+.goal-banner.paused .goal-banner-title, .goal-banner.complete .goal-banner-title, .goal-banner.stopped .goal-banner-title { color: var(--text-faint); }
+.goal-banner-round { flex: 0 0 auto; color: var(--text-faint); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.goal-banner-detail {
+  min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-soft); font-size: 11.5px;
+}
+.goal-banner-actions { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.goal-banner-button {
+  border: 0; background: transparent; color: var(--text-faint); font-size: 11px;
+  padding: 2px 7px; border-radius: 5px; cursor: pointer;
+}
+.goal-banner-button:hover { color: var(--text-soft); background: var(--surface-hover); }
+.goal-banner-button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wc-accent) 70%, transparent); outline-offset: 1px;
+}
+
 /* ── Built-in sub-agent card ───────────────────────── */
 .subagent-card { margin: 6px 0; border: 1px solid var(--border); background: var(--surface); border-radius: 10px; overflow: hidden; }
 .subagent-card.running { border-color: var(--border-bright); }

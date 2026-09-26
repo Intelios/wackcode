@@ -6,7 +6,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { api } from "./api";
 import { modelDisplayName, modelIsReady, pickThinkingLevel } from "./model-utils";
-import { titleFromPrompt, samePlanState, sameTodoState, applySnapshotDelta, validateInitCommand, nextMode } from "./chat-utils";
+import { titleFromPrompt, samePlanState, sameTodoState, sameGoalState, applySnapshotDelta, validateInitCommand, nextMode, isPlanMode } from "./chat-utils";
 import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix } from "./tree-utils";
 import { pruneDisabledTools, sameToolCatalog } from "./tool-utils";
 import { APP_SLASH_COMMANDS } from "./command-utils";
@@ -56,6 +56,7 @@ import { Sidebar, NO_PROJECT_KEY, type ProjectAction, type TaskAction } from "./
 import { Transcript, type MessageAction } from "./components/Transcript";
 import { RestoreDialog, type RestoreChoice } from "./components/RestoreDialog";
 import { TodoPanel } from "./components/TodoPanel";
+import { GoalBanner } from "./components/GoalBanner";
 import { InlineDialog, type ExtensionUIResponse } from "./components/InlineDialog";
 import type { PlanAction } from "./components/PlanCard";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
@@ -305,9 +306,10 @@ export default function App() {
           const runtime = current[taskId];
           const planState = samePlanState(runtime?.planState, snapshot.planState) ? runtime?.planState : snapshot.planState;
           const todoState = sameTodoState(runtime?.todoState, snapshot.todoState) ? runtime?.todoState : snapshot.todoState;
+          const goalState = sameGoalState(runtime?.goalState, snapshot.goalState) ? runtime?.goalState : snapshot.goalState;
           return {
             ...current,
-            [taskId]: { ...runtime, snapshot, activeRun: snapshot.activeRun, planState, todoState, partial: undefined, error: undefined,
+            [taskId]: { ...runtime, snapshot, activeRun: snapshot.activeRun, planState, todoState, goalState, partial: undefined, error: undefined,
               // A fresh worker never has anything queued; queue_state events are authoritative after this.
               queued: undefined,
               ...(payload.type === "ready" ? { slashCommands: undefined, slashCommandsError: undefined } : {}) }
@@ -329,7 +331,7 @@ export default function App() {
           const snapshot = applySnapshotDelta(previous, payload.delta);
           return {
             ...current,
-            [taskId]: { ...runtime, snapshot, activeRun: snapshot.activeRun, planState: snapshot.planState, todoState: snapshot.todoState, partial: undefined, error: undefined }
+            [taskId]: { ...runtime, snapshot, activeRun: snapshot.activeRun, planState: snapshot.planState, todoState: snapshot.todoState, goalState: snapshot.goalState, partial: undefined, error: undefined }
           };
         });
         const delta = payload.delta;
@@ -399,6 +401,8 @@ export default function App() {
         patchTask(taskId, { mode: payload.mode });
       } else if (payload.type === "todo_state") {
         patchRuntime(taskId, { todoState: { tasks: payload.tasks } });
+      } else if (payload.type === "goal_state") {
+        patchRuntime(taskId, { goalState: payload.goal ?? undefined });
       } else if (payload.type === "extension_ui_request") {
         setExtensionRequests((current) => [...current, payload]);
       } else if (payload.type === "extension_notice") {
@@ -643,16 +647,32 @@ export default function App() {
 
   async function sendSlash(name: string, args: string, images: ImageContent[]): Promise<boolean> {
     const task = selectedTask ?? await slashDraftPromise.current;
-    if (!task || selectedBusy) throw new Error("Wait for this chat to be ready before running a command.");
+    // `/goal pause|resume|clear` drive a live loop, so they are the one app command that is
+    // allowed through while the chat is busy — the Composer mirrors this gate.
+    const goalControlAction = name === "goal" && /^(pause|resume|clear)$/.test(args.trim()) ? args.trim() as "pause" | "resume" | "clear" : undefined;
+    if (!task || (selectedBusy && !goalControlAction)) throw new Error("Wait for this chat to be ready before running a command.");
     const id = task.id;
     const clearPreparedDraft = () => {
       if (!selectedTask) setComposerTransfer({ taskId: id, text: "", images: [], nonce: Date.now() + 1 });
     };
+    if (goalControlAction) {
+      await api.goalControl(id, goalControlAction);
+      clearPreparedDraft();
+      return true;
+    }
     if ((name === "new" || name === "copy") && args.trim()) {
       throw new Error(`/${name} does not accept arguments.`);
     }
     if (name === "name" && !args.trim()) throw new Error("Enter a name after /name.");
     if (name === "init") validateInitCommand(args, task.projectId, currentMode);
+    if (name === "goal") {
+      const words = args.trim().split(/\s+/).filter(Boolean);
+      if (["pause", "resume", "clear"].includes(words[0] ?? "") && words.length > 1) {
+        throw new Error(`/goal ${words[0]} takes no arguments.`);
+      }
+      if (!args.trim()) throw new Error("Describe the goal — /goal <objective>.");
+      if (isPlanMode(currentMode)) throw new Error("Goal loops don't run while a planning mode is on. Switch to Build first.");
+    }
     try {
       if (name === "new") { openDraft(task.projectId); return true; }
       if (name === "name") {
@@ -676,6 +696,7 @@ export default function App() {
       patchRuntime(id, { error: undefined, activity: "starting", activeRun: { startedAt }, slashCommandsError: undefined });
       if (name === "compact") await api.compactTask(id, args, startedAt);
       else if (name === "init") await api.initAgents(id, startedAt);
+      else if (name === "goal") await api.goalControl(id, "set", args.trim(), startedAt);
       else {
         const command = runtime?.slashCommands?.find((entry) => entry.name === name);
         if (!command) throw new Error("That command changed. Open the command list and try again.");
@@ -1664,6 +1685,11 @@ export default function App() {
               key={selectedTask.id}
               tasks={runtime?.todoState?.tasks}
               busy={selectedTask.status === "running" || selectedTask.status === "stopping"}
+            />
+            <GoalBanner
+              goal={runtime?.goalState}
+              onAction={(action) => void api.goalControl(selectedTask.id, action)
+                .catch((reason) => appendNotice(selectedTask.id, { message: String(reason), level: "warning" }))}
             />
           </motion.div>
         ) : configuredProviders.length === 0 ? (

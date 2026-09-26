@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAskUserQuestionExtension, normalizeAskQuestionsParams } from "./builtin/ask-user-question.js";
+import { createGoalExtension } from "./builtin/goal/index.js";
+import { GOAL_ENTRY_TYPE, NO_PROGRESS_LIMIT, restoreGoalState } from "./builtin/goal/state.js";
+import type { GoalVerdict } from "./builtin/goal/verify.js";
 import type { BuiltinHost } from "./builtin/host.js";
 import { setPromptOverrides } from "./prompt-overrides.js";
 import type { QuestionAnswer } from "./protocol.js";
@@ -657,5 +660,128 @@ describe("sub-agent results", () => {
     expect(text).toContain("### [scout] completed\nA report");
     expect(text).toContain("### [worker] stopped\nworker was stopped before it finished.\n\nPartial output:\nhalf");
     expect(truncate("abcdef", 3)).toEqual({ text: "abc\n\n[… 3 more characters]", truncated: true });
+  });
+});
+
+describe("goal loop", () => {
+  type Handler = (event: never, ctx: never) => unknown;
+  const ASSISTANT_DONE = { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "did it" }] };
+
+  function harness(verdicts: GoalVerdict[], planning = () => false) {
+    const handlers = new Map<string, Handler[]>();
+    const sent: string[] = [];
+    const commands = new Map<string, { handler: (args: string, ctx: unknown) => Promise<void> }>();
+    const published: unknown[] = [];
+    const entries: Array<{ type: string; data: unknown }> = [];
+    const host = {
+      publishGoalState: (state: unknown) => published.push(state),
+      runGoalVerification: async () => verdicts.shift() ?? { kind: "pass" as const },
+    } as unknown as BuiltinHost;
+    const pi = {
+      on: (event: string, handler: Handler) => handlers.set(event, [...(handlers.get(event) ?? []), handler]),
+      registerCommand: (name: string, command: never) => commands.set(name, command),
+      sendUserMessage: (content: string) => sent.push(content),
+      appendEntry: (customType: string, data: unknown) => entries.push({ type: customType, data }),
+    };
+    const { factory, controller } = createGoalExtension(host, planning);
+    factory(pi as never);
+    const ctx = { hasPendingMessages: () => false, sessionManager: { getBranch: () => [] } };
+    const fire = async (event: string, payload: unknown = {}) => {
+      for (const handler of handlers.get(event) ?? []) await handler(payload as never, ctx as never);
+    };
+    return { controller, sent, published, entries, commands, fire };
+  }
+
+  it("registers the /goal command inside Pi for name reservation", () => {
+    const { commands } = harness([]);
+    expect(commands.has("goal")).toBe(true);
+  });
+
+  it("starts a goal and kicks off the first round", () => {
+    const { controller, published, entries } = harness([]);
+    const kickoff = controller.start("Ship the feature");
+    expect(kickoff).toContain("Ship the feature");
+    expect(controller.getState()).toMatchObject({ phase: "active", objective: "Ship the feature", iteration: 0 });
+    expect(published.at(-1)).toMatchObject({ phase: "active" });
+    expect(entries.at(-1)?.type).toBe(GOAL_ENTRY_TYPE);
+  });
+
+  it("verifies a settled round and injects the next turn on a failed check", async () => {
+    const { controller, sent, fire } = harness([{ kind: "continue", reason: "no test ran", nextAction: "run the tests" }]);
+    controller.start("Ship it");
+    await fire("agent_end", { messages: [ASSISTANT_DONE] });
+    await fire("agent_settled");
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain("run the tests");
+    expect(sent[0]).toContain("Ship it");
+    expect(sent[0]).toContain("no test ran");
+    expect(controller.getState()).toMatchObject({ phase: "active", iteration: 1, lastNextAction: "run the tests" });
+    expect(controller.willContinue()).toBe(true);
+  });
+
+  it("completes on a pass and sends no continuation", async () => {
+    const { controller, sent, fire } = harness([{ kind: "pass", reason: "verified" }]);
+    controller.start("Ship it");
+    await fire("agent_end", { messages: [ASSISTANT_DONE] });
+    await fire("agent_settled");
+    expect(sent).toHaveLength(0);
+    expect(controller.getState()?.phase).toBe("complete");
+  });
+
+  it("fails open when the verifier cannot judge, and stops on a dead end", async () => {
+    const inconclusive = harness([{ kind: "inconclusive", reason: "malformed" }]);
+    inconclusive.controller.start("Ship it");
+    await inconclusive.fire("agent_end", { messages: [ASSISTANT_DONE] });
+    await inconclusive.fire("agent_settled");
+    expect(inconclusive.controller.getState()?.phase).toBe("complete");
+    expect(inconclusive.sent).toHaveLength(0);
+
+    const stopped = harness([{ kind: "stop", reason: "nothing to try" }]);
+    stopped.controller.start("Ship it");
+    await stopped.fire("agent_end", { messages: [ASSISTANT_DONE] });
+    await stopped.fire("agent_settled");
+    expect(stopped.controller.getState()?.phase).toBe("stopped");
+  });
+
+  it("never verifies in a planning mode", async () => {
+    const { controller, sent, fire } = harness([], () => true);
+    controller.start("Ship it");
+    await fire("agent_end", { messages: [ASSISTANT_DONE] });
+    await fire("agent_settled");
+    expect(sent).toHaveLength(0);
+    expect(controller.getState()?.phase).toBe("active");
+  });
+
+  it("pauses after consecutive no-progress rounds", async () => {
+    const verdict = { kind: "continue" as const, reason: "still missing", nextAction: "same step" };
+    // Round 1 always counts as progress (no prior nextAction to compare); rounds 2+ repeat it.
+    const { controller, sent, fire } = harness(Array.from({ length: NO_PROGRESS_LIMIT + 1 }, () => verdict));
+    controller.start("Ship it");
+    const round = [ASSISTANT_DONE]; // no tool calls, same nextAction → no progress
+    for (let index = 0; index < NO_PROGRESS_LIMIT + 1; index += 1) {
+      await fire("agent_end", { messages: round });
+      await fire("agent_settled");
+    }
+    expect(controller.getState()).toMatchObject({ phase: "paused", noProgress: NO_PROGRESS_LIMIT });
+    expect(sent).toHaveLength(NO_PROGRESS_LIMIT);
+  });
+
+  it("pauses on user stop instead of completing", async () => {
+    const { controller, sent, fire } = harness([{ kind: "pass" }]);
+    controller.start("Ship it");
+    controller.userStop();
+    await fire("agent_end", { messages: [{ ...ASSISTANT_DONE, stopReason: "aborted" }] });
+    await fire("agent_settled");
+    expect(sent).toHaveLength(0);
+    expect(controller.getState()).toMatchObject({ phase: "paused", note: "Stopped by user." });
+  });
+
+  it("restores a live goal as paused on reload", () => {
+    const paused = restoreGoalState([
+      { type: "custom", customType: GOAL_ENTRY_TYPE, data: { version: 1, objective: "Ship it", phase: "verifying", iteration: 2, maxIterations: 25, noProgress: 0 } },
+    ]);
+    expect(paused).toMatchObject({ objective: "Ship it", phase: "paused", iteration: 2 });
+    expect(paused?.note).toBeTruthy();
+    expect(restoreGoalState([{ type: "custom", customType: GOAL_ENTRY_TYPE, data: { version: 1, phase: "cleared" } }])).toBeUndefined();
   });
 });

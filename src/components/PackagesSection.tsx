@@ -93,6 +93,13 @@ const BUILTIN_EXTENSIONS: readonly BuiltinExtension[] = [
     tools: [],
     icon: "spark",
     kind: "auto_titles"
+  },
+  {
+    name: "Goal loop",
+    description:
+      "Keeps the agent iterating until the goal is verified: /goal <objective> starts a loop, and after every round a separate no-tools check on the chat's own model decides whether the objective is met or supplies the next action. Pauses itself after 3 rounds without progress and stops at 25 rounds; /goal pause, resume and clear control it.",
+    tools: [],
+    icon: "flame"
   }
 ];
 

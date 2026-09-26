@@ -9,6 +9,7 @@
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import { createAskUserQuestionExtension } from "./ask-user-question.js";
 import { createAutoTitleExtension, type AutoTitleController } from "./auto-title.js";
+import { type GoalController, createGoalExtension } from "./goal/index.js";
 import type { BuiltinHost } from "./host.js";
 import { type McpController, createMcpExtension } from "./mcp/index.js";
 import { type PlanModeController, createPlanModeExtension } from "./plan-mode/index.js";
@@ -32,6 +33,8 @@ export interface BuiltinExtensions {
   /** Applies the user's sub-agent settings and says when its tool must stay off. */
   subagents: SubagentsController;
   autoTitle: AutoTitleController;
+  /** The goal loop behind `/goal`: start/control plus the continuation flag the worker reads. */
+  goal: GoalController;
   /** The user's MCP servers: connects them and says which of their tools are usable. */
   mcp: McpController;
 }
@@ -47,6 +50,7 @@ export function createBuiltinExtensions(host: BuiltinHost): BuiltinExtensions {
   const webFetch: InlineExtension = { name: "wackcode-web-fetch", factory: createWebFetchExtension(), hidden: true };
   const subagents = createSubagentsExtension(host, () => planMode.controller.getState().mode, webFetch);
   const autoTitle = createAutoTitleExtension(host);
+  const goal = createGoalExtension(host, () => planMode.controller.getState().mode !== "build");
   return {
     factories: [
       {
@@ -59,6 +63,7 @@ export function createBuiltinExtensions(host: BuiltinHost): BuiltinExtensions {
       { name: "wackcode-todo", factory: todo.factory, hidden: true },
       { name: "wackcode-subagents", factory: subagents.factory, hidden: true },
       { name: "wackcode-auto-title", factory: autoTitle.factory, hidden: true },
+      { name: "wackcode-goal", factory: goal.factory, hidden: true },
       webFetch,
       { name: "wackcode-mcp", factory: mcp.factory, hidden: true },
     ],
@@ -66,6 +71,7 @@ export function createBuiltinExtensions(host: BuiltinHost): BuiltinExtensions {
     todo: todo.handle,
     subagents: subagents.controller,
     autoTitle: autoTitle.controller,
+    goal: goal.controller,
     mcp: mcp.controller,
   };
 }

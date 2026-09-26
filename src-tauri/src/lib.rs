@@ -125,6 +125,7 @@ pub fn run() {
             commands::execute_command,
             commands::init_agents,
             commands::compact_task,
+            commands::goal_control,
             commands::prompt,
             commands::queue_message,
             commands::dequeue_messages,

@@ -39,6 +39,7 @@ describe("commands scan (Settings › Commands)", () => {
     await writeFile(extension, `export default function (pi: any) {
       pi.registerCommand("hello", { description: "Says hello", handler: async () => undefined });
       pi.registerCommand("new", { description: "Package new", handler: async () => undefined });
+      pi.registerCommand("goal", { description: "Package goal", handler: async () => undefined });
     }\n`);
     const prompt = join(packageDir, "review.md");
     await writeFile(prompt, "---\ndescription: Package review\nargument-hint: <diff>\n---\nReview $ARGUMENTS\n");
@@ -59,6 +60,7 @@ describe("commands scan (Settings › Commands)", () => {
     expect(group?.commands).toEqual(expect.arrayContaining([
       expect.objectContaining({ key: `extension:${extension}#hello`, name: "hello", kind: "extension", description: "Says hello", enabled: true }),
       expect.objectContaining({ key: `extension:${extension}#new`, name: "extension:new", rawName: "new", kind: "extension" }),
+      expect.objectContaining({ key: `extension:${extension}#goal`, name: "extension:goal", rawName: "goal", kind: "extension" }),
       expect.objectContaining({ key: `prompt:${prompt}`, name: "review", kind: "prompt", argumentHint: "<diff>", enabled: true })
     ]));
     expect(result.custom).toEqual(expect.arrayContaining([

@@ -40,6 +40,38 @@ export interface TodoState {
   tasks: TodoTask[];
 }
 
+/**
+ * Goal-loop state published by the built-in goal extension (`goal_state`). A goal is a
+ * harness-level loop: after each working round a separate no-tools verifier call judges the
+ * objective and the runtime injects the next turn itself — the working model never gets to
+ * declare victory.
+ */
+export interface GoalState {
+  /** The objective the loop is verifying against. */
+  objective: string;
+  /**
+   * active: a working round is running (or a continuation is queued).
+   * verifying: the completion verifier is judging the last round.
+   * paused: waiting on the user (Stop, /goal pause, reload, or no-progress auto-pause).
+   * complete: the verifier passed (or failed open), or stopped: the loop gave up.
+   */
+  phase: "active" | "verifying" | "paused" | "complete" | "stopped";
+  /** Working rounds verified so far. */
+  iteration: number;
+  /** Hard cap on iterations; the only fixed stop. */
+  maxIterations: number;
+  /** Consecutive rounds with no detected progress. */
+  noProgress: number;
+  /** The verifier's latest reason and queued next action. */
+  lastReason?: string;
+  lastNextAction?: string;
+  /** Why the loop paused or stopped ("user", "no-progress", "max-iterations", "no-next-action", "reload"). */
+  note?: string;
+}
+
+/** What `goal_control` asks the worker to do with the chat's goal. */
+export type GoalAction = "set" | "pause" | "resume" | "clear";
+
 /** One option in an ask_user_question question. */
 export interface AskQuestionOption {
   /** Short choice label (1-5 words). */
@@ -514,6 +546,17 @@ export type WorkerCommand =
       images?: ImageContent[];
     }
   | { id: string; type: "dequeue" }
+  | {
+      id: string;
+      type: "goal_control";
+      action: GoalAction;
+      /** "set": the objective to verify against. */
+      objective?: string;
+      /** "set"/"resume" start a run: they carry the same run bookkeeping as a prompt. */
+      runId?: string;
+      startedAt?: number;
+      checkpoint?: CheckpointRef | null;
+    }
   | { id: string; type: "snapshot" }
   | { id: string; type: "generate_commit_message"; diff: string; truncated: boolean }
   | { id: string; type: "set_model"; modelId: string }
@@ -669,6 +712,7 @@ export interface SessionSnapshot {
   activeTools: string[];
   planState?: PlanState;
   todoState?: TodoState;
+  goalState?: GoalState;
 }
 
 /**
@@ -696,6 +740,8 @@ export interface SnapshotDelta {
   sessionFile?: string;
   planState?: PlanState;
   todoState?: TodoState;
+  /** Present only when it changed; null clears the goal, absent leaves it unchanged. */
+  goalState?: GoalState | null;
 }
 
 /** An extension asking the user something. Mirrors Pi's own RPC dialog surface. */
@@ -728,4 +774,6 @@ export type WorkerOutput =
   | { type: "extension_notice"; taskId: string; message: string; level: "info" | "warning" | "error" }
   | { type: "extensions_loaded"; taskId: string; loaded: string[]; errors: { path: string; error: string }[] }
   | { type: "plan_state"; taskId: string } & PlanState
-  | ({ type: "todo_state"; taskId: string } & TodoState);
+  | ({ type: "todo_state"; taskId: string } & TodoState)
+  /** The goal loop's state, or null when it was cleared. */
+  | { type: "goal_state"; taskId: string; goal: GoalState | null };

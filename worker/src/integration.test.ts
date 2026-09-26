@@ -35,6 +35,10 @@ type SnapshotView = {
   activeTools?: string[];
   planState?: { mode: string; phase: string; plan?: string };
   todoState?: { tasks: Array<{ id: number; subject: string; status: string }> };
+  goalState?: {
+    objective: string; phase: string; iteration: number; maxIterations: number; noProgress: number;
+    lastReason?: string; lastNextAction?: string; note?: string;
+  };
   stats?: { tokens: { input: number; output: number; total: number }; cost: number };
 };
 
@@ -66,6 +70,7 @@ interface Output {
   questions?: Array<{ id: string; header: string; question: string; multiSelect?: boolean; options: Array<{ label: string; description: string }> }>;
   offerWrapUp?: boolean;
   tasks?: Array<{ id: number; subject: string; status: string; activeForm?: string; blockedBy?: number[] }>;
+  goal?: SnapshotView["goalState"] | null;
   errors?: Array<{ path: string; error: string }>;
   snapshot?: SnapshotView;
   /** Harness-attached: the merged transcript state as of this output (not from the worker). */
@@ -81,6 +86,7 @@ interface Output {
     sessionFile?: string;
     planState?: SnapshotView["planState"];
     todoState?: SnapshotView["todoState"];
+    goalState?: SnapshotView["goalState"] | null;
     stats?: SnapshotView["stats"];
   };
 }
@@ -138,6 +144,7 @@ class WorkerHarness {
         sessionFile: output.delta.sessionFile ?? this.view.sessionFile,
         planState: output.delta.planState ?? this.view.planState,
         todoState: output.delta.todoState ?? this.view.todoState,
+        goalState: output.delta.goalState === undefined ? this.view.goalState : output.delta.goalState ?? undefined,
         stats: output.delta.stats ?? this.view.stats
       };
     }
@@ -177,12 +184,15 @@ interface MockProvider {
   baseUrl: string;
   /** `text` is the last user message: the prompt, or a sub-agent's task. */
   requests: Array<{ authorization: string; body: Record<string, unknown>; at: number; text: string }>;
+  /** Goal-verifier replies, one per verifier request (`<goal>` turn); empty = default pass. */
+  verdicts: string[];
   close: () => Promise<void>;
   waitForSlowRequest: () => Promise<void>;
 }
 
 async function startMockProvider(): Promise<MockProvider> {
   const requests: MockProvider["requests"] = [];
+  const verdicts: string[] = [];
   let slowRequestResolve: (() => void) | undefined;
   const slowRequest = new Promise<void>((resolvePromise) => { slowRequestResolve = resolvePromise; });
   const server = createServer(async (request, response) => {
@@ -205,7 +215,7 @@ async function startMockProvider(): Promise<MockProvider> {
     }
     // Keeps parallel read-only children in flight together long enough to observe overlap.
     if (text.startsWith("child-ls") && !hasToolMessage(body)) await new Promise((wake) => setTimeout(wake, 150));
-    streamAgentResponse(response, authorization, body);
+    streamAgentResponse(response, authorization, body, verdicts);
   });
   await new Promise<void>((resolvePromise, reject) => {
     server.once("error", reject);
@@ -219,6 +229,7 @@ async function startMockProvider(): Promise<MockProvider> {
   return {
     baseUrl: `http://127.0.0.1:${address.port}/v1`,
     requests,
+    verdicts,
     waitForSlowRequest: () => slowRequest,
     close: () => new Promise<void>((resolvePromise, reject) => {
       server.closeAllConnections();
@@ -242,7 +253,7 @@ function hasToolMessage(body: Record<string, unknown>): boolean {
   return Array.isArray(body.messages) && (body.messages as Array<{ role?: string }>).some((message) => message.role === "tool");
 }
 
-function streamAgentResponse(response: ServerResponse<IncomingMessage>, authorization: string, body: Record<string, unknown>): void {
+function streamAgentResponse(response: ServerResponse<IncomingMessage>, authorization: string, body: Record<string, unknown>, verdicts: string[]): void {
   response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
   const messages = Array.isArray(body.messages) ? body.messages as Array<{ role?: string }> : [];
   const hasToolResult = messages.some((message) => message.role === "tool");
@@ -308,6 +319,23 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
   }
   const suffix = authorization === "Bearer alpha-secret" ? "alpha" : "beta";
   const send = (value: unknown) => response.write(`data: ${JSON.stringify(value)}\n\n`);
+  const userText = userTextOf(body);
+  // The goal loop's verifier: a no-tools `completeSimple` whose user message is a <goal>
+  // envelope. Tests script its verdicts; unanswered ones pass so a goal always terminates.
+  if (userText.startsWith("<goal>")) {
+    const verdict = verdicts.shift() ?? '{"passed": true, "reason": "verified"}';
+    send({
+      id: `verdict-${suffix}`, object: "chat.completion.chunk", created: 1, model: "shared-model",
+      choices: [{ index: 0, delta: { role: "assistant", content: verdict }, finish_reason: null }]
+    });
+    send({
+      id: `verdict-${suffix}`, object: "chat.completion.chunk", created: 1, model: "shared-model",
+      choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 }
+    });
+    response.end("data: [DONE]\n\n");
+    return;
+  }
   // The last user message steers which tool the fake model "decides" to call, so tests can
   // exercise specific tool paths through the real agent loop. Content arrives as an array
   // of parts, not a bare string. A sub-agent's last user message is its task, so "child-"
@@ -2618,5 +2646,134 @@ describe("message queueing", () => {
     await worker.waitFor((output) => output.type === "run_state" && output.runId === newRunId && output.state === "idle");
     expect(worker.view?.messages.some((message) =>
       message.role === "user" && message.blocks.some((block) => block.text === "Fresh prompt for an idle chat."))).toBe(true);
+  });
+
+  it("iterates a goal until the verifier passes, without flashing idle between rounds", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-goal-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "goal-task");
+    cleanup.push(() => worker.shutdown());
+
+    // Fail the first check, pass the second: one continuation, then done.
+    provider.verdicts.push(
+      '{"passed": false, "reason": "nothing written yet", "nextAction": "write the file"}',
+    );
+    worker.send({
+      id: crypto.randomUUID(), type: "goal_control", action: "set",
+      objective: "goal: write the file", runId: "goal-run", startedAt: Date.now()
+    });
+
+    const done = await worker.waitFor((output) => output.type === "goal_state" && output.goal?.phase === "complete");
+    expect(done.goal).toMatchObject({ objective: "goal: write the file", iteration: 2 });
+
+    // Phase sequence: active → verifying → active → verifying → complete. (The worker also
+    // publishes a null goal at session start, which clears any stale banner.)
+    const phases = worker.outputs
+      .filter((output) => output.type === "goal_state" && output.goal != null)
+      .map((output) => output.goal?.phase);
+    expect(phases).toEqual(["active", "verifying", "active", "verifying", "complete"]);
+
+    // Two working turns plus two verifier calls, all on the chat's own model; the verifier
+    // call carries no tools and the continuation re-states the gap and next action.
+    const verifierRequests = provider.requests.filter((request) => request.text.startsWith("<goal>"));
+    expect(verifierRequests).toHaveLength(2);
+    for (const request of verifierRequests) expect(request.body.tools).toBeUndefined();
+    const continuation = provider.requests.find((request) => request.text.startsWith("Goal continuation"));
+    expect(continuation?.text).toContain("write the file");
+    expect(continuation?.text).toContain("nothing written yet");
+
+    // The loop's continuation is a nested run outside runPrompt, so exactly one idle arrives —
+    // at the end. The settled handler's suppression keeps the chat busy between rounds.
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    expect(worker.outputs.filter((output) => output.type === "run_state" && output.state === "idle")).toHaveLength(1);
+    expect(worker.outputs.filter((output) => output.type === "run_state" && output.state === "running")).toHaveLength(1);
+  });
+
+  it("fails a goal open on a malformed verdict and stops on a dead end", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-goal-open-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "goal-open-task");
+    cleanup.push(() => worker.shutdown());
+
+    provider.verdicts.push("the verifier rambled without JSON");
+    worker.send({
+      id: crypto.randomUUID(), type: "goal_control", action: "set",
+      objective: "goal: malformed", runId: "goal-open", startedAt: Date.now()
+    });
+    const done = await worker.waitFor((output) => output.type === "goal_state" && output.goal?.phase === "complete");
+    expect(done.goal?.note ?? done.goal?.lastReason).toBeTruthy();
+
+    // A clean fail that names no next step stops the loop rather than spinning.
+    const workspace2 = await mkdtemp(join(tmpdir(), "wackcode-goal-stop-"));
+    cleanup.push(() => rm(workspace2, { recursive: true, force: true }));
+    const { worker: worker2 } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace2, "goal-stop-task");
+    cleanup.push(() => worker2.shutdown());
+    provider.verdicts.push('{"passed": false, "reason": "nothing useful left"}');
+    worker2.send({
+      id: crypto.randomUUID(), type: "goal_control", action: "set",
+      objective: "goal: dead end", runId: "goal-stop", startedAt: Date.now()
+    });
+    const stopped = await worker2.waitFor((output) => output.type === "goal_state" && output.goal?.phase === "stopped");
+    expect(stopped.goal?.note ?? stopped.goal?.lastReason).toContain("nothing useful left");
+    expect(provider.requests.filter((request) => request.text.startsWith("Goal continuation"))).toHaveLength(0);
+  });
+
+  it("pauses a live goal with goal_control and resumes it from idle", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-goal-pause-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "goal-pause-task");
+    cleanup.push(() => worker.shutdown());
+
+    provider.verdicts.push(
+      '{"passed": false, "reason": "round one", "nextAction": "step a"}',
+      '{"passed": false, "reason": "round two", "nextAction": "step b"}',
+    );
+    worker.send({
+      id: crypto.randomUUID(), type: "goal_control", action: "set",
+      objective: "goal: pausable", runId: "goal-pause", startedAt: Date.now()
+    });
+
+    // Pause lands mid-run (the command bypasses the serial queue); the paused state sticks.
+    await worker.waitFor((output) => output.type === "goal_state" && output.goal?.phase === "verifying");
+    const pauseId = crypto.randomUUID();
+    worker.send({ id: pauseId, type: "goal_control", action: "pause" });
+    const paused = await worker.waitFor((output) => output.type === "goal_state" && output.goal?.phase === "paused");
+    expect(paused.goal?.note).toBe("Paused.");
+
+    // Resume from a settled chat re-kicks a run; the next verdict continues it once more,
+    // then the default (no scripted verdict) completes it.
+    const resumeId = crypto.randomUUID();
+    worker.send({ id: resumeId, type: "goal_control", action: "resume", runId: "goal-resume", startedAt: Date.now() });
+    await worker.waitFor((output) => output.type === "goal_state" && output.goal?.phase === "complete");
+    expect(provider.requests.filter((request) => request.text.startsWith("Goal continuation")).length).toBeGreaterThanOrEqual(1);
+
+    const clearId = crypto.randomUUID();
+    worker.send({ id: clearId, type: "goal_control", action: "clear" });
+    await worker.waitFor((output) => output.type === "goal_state" && output.goal === null);
+    // The state clears in snapshots too — the delta carries goalState:null, debounced ~32ms.
+    await worker.waitFor((output) => output.type === "snapshot_delta" && output.delta?.goalState === null);
+    expect(worker.view?.goalState).toBeUndefined();
+  });
+
+  it("rejects /goal while a planning mode is on", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-goal-plan-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "goal-plan-task", undefined, undefined, undefined, "plan");
+    cleanup.push(() => worker.shutdown());
+
+    const id = crypto.randomUUID();
+    worker.send({ id, type: "goal_control", action: "set", objective: "goal: in plan mode", runId: "goal-plan", startedAt: Date.now() });
+    const result = await worker.waitFor((output) => output.type === "response" && output.id === id);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("planning mode");
+    expect(provider.requests).toHaveLength(0);
   });
 });

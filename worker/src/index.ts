@@ -6,6 +6,8 @@ import { join } from "node:path";
 // Type-only: erased at build time, so Pi still loads solely through the dynamic import in initialize().
 import type { PromptTemplate, ResourceLoader } from "@earendil-works/pi-coding-agent";
 import { SWITCHABLE_BUILTIN_TOOLS, createBuiltinExtensions } from "./builtin/index.js";
+import { GOAL_VERIFIER_SYSTEM } from "./builtin/goal/prompt.js";
+import { runGoalVerification } from "./builtin/goal/verify.js";
 import type { BuiltinHost } from "./builtin/host.js";
 import { SUBAGENT_TOOL_NAME } from "./builtin/subagents/types.js";
 import { createModelRuntime, findModel, workerSettings } from "./model-runtime.js";
@@ -14,6 +16,7 @@ import { SubagentRunner } from "./subagent-runner.js";
 import {
   diffMessages,
   sameCheckpoint,
+  sameGoalState,
   sameModelSwitches,
   samePlanState,
   sameRunTimings,
@@ -49,6 +52,7 @@ import {
 } from "./tree.js";
 import {
   type CheckpointRef,
+  type GoalState,
   type ImageContent,
   type InitCommand,
   type MessageVersions,
@@ -148,6 +152,17 @@ const builtinHost: BuiltinHost = {
   },
   publishTodoState: (state) => {
     if (taskId) send({ type: "todo_state", taskId, tasks: state.tasks });
+  },
+  publishGoalState: (goal) => {
+    if (taskId) send({ type: "goal_state", taskId, goal });
+    scheduleSnapshot();
+  },
+  runGoalVerification: (input, signal) => {
+    // The verifier shares the chat's connection and model — like auto-title it is cheap
+    // background judgement, never a second model to configure.
+    const model = session?.model;
+    if (!modelRuntime || !model) return Promise.resolve({ kind: "inconclusive", reason: "No model is configured." });
+    return runGoalVerification(modelRuntime, model, GOAL_VERIFIER_SYSTEM, input, signal);
   },
   childToolNames: () =>
     toolCatalog()
@@ -668,7 +683,8 @@ function getSnapshot(rev: number): SessionSnapshot {
     tools: toolCatalog(),
     activeTools: session.getActiveToolNames(),
     planState: builtins.planMode.getState(),
-    todoState: builtins.todo.getState()
+    todoState: builtins.todo.getState(),
+    goalState: builtins.goal.getState()
   };
 }
 
@@ -710,6 +726,7 @@ interface EmittedState {
   activeRun?: { runId: string; startedAt: number };
   planState?: PlanState;
   todoState?: TodoState;
+  goalState?: GoalState;
   stats: SessionSnapshot["stats"];
   tree: SessionSnapshot["tree"];
 }
@@ -727,6 +744,7 @@ function recordEmitted(snapshot: SessionSnapshot): void {
     activeRun: snapshot.activeRun,
     planState: snapshot.planState,
     todoState: snapshot.todoState,
+    goalState: snapshot.goalState,
     stats: snapshot.stats,
     tree: snapshot.tree
   };
@@ -760,6 +778,7 @@ function emitBoundary(): void {
   }
   const planState = samePlanState(emitted.planState, snapshot.planState) ? undefined : snapshot.planState;
   const todoState = sameTodoState(emitted.todoState, snapshot.todoState) ? undefined : snapshot.todoState;
+  const goalState = sameGoalState(emitted.goalState, snapshot.goalState) ? undefined : snapshot.goalState ?? null;
   const runTimings = sameRunTimings(emitted.runTimings, snapshot.runTimings) ? undefined : snapshot.runTimings;
   const modelSwitches = sameModelSwitches(emitted.modelSwitches, snapshot.modelSwitches) ? undefined : snapshot.modelSwitches;
   const sessionFile = emitted.sessionFile === snapshot.sessionFile ? undefined : snapshot.sessionFile;
@@ -769,7 +788,8 @@ function emitBoundary(): void {
     : snapshot.activeRun ?? null;
   if (
     diff.upserts.length === 0 && diff.removed.length === 0
-    && planState === undefined && todoState === undefined && runTimings === undefined && modelSwitches === undefined
+    && planState === undefined && todoState === undefined && goalState === undefined
+    && runTimings === undefined && modelSwitches === undefined
     && sessionFile === undefined && activeRun === undefined
     && sameStats(emitted.stats, snapshot.stats) && sameTree(emitted.tree, snapshot.tree)
   ) return;
@@ -789,7 +809,8 @@ function emitBoundary(): void {
       stats: snapshot.stats,
       ...(sessionFile !== undefined ? { sessionFile } : {}),
       ...(planState !== undefined ? { planState } : {}),
-      ...(todoState !== undefined ? { todoState } : {})
+      ...(todoState !== undefined ? { todoState } : {}),
+      ...(goalState !== undefined ? { goalState } : {})
     }
   });
 }
@@ -800,6 +821,21 @@ function scheduleSnapshot(): void {
     snapshotTimer = undefined;
     emitBoundary();
   }, 32);
+}
+
+// If a goal continuation's sendUserMessage failed inside the extension (Pi routes that error to
+// emitError, not a rejection), no run ever starts and no later event reports the chat idle —
+// un-stick it after a beat. A live continuation keeps isStreaming set, so the check is cheap.
+let goalWatchdog: ReturnType<typeof setTimeout> | undefined;
+function armGoalWatchdog(taskId: string): void {
+  goalWatchdog ??= setTimeout(() => {
+    goalWatchdog = undefined;
+    if (builtins.goal.willContinue() && session && !session.isStreaming && !session.isCompacting) {
+      builtins.goal.continuationDropped();
+      send({ type: "run_state", taskId, state: "idle" });
+    }
+  }, 15_000);
+  goalWatchdog.unref();
 }
 
 // Streaming text: forward the in-flight assistant message at ~60 fps instead of
@@ -1221,7 +1257,14 @@ async function initialize(command: InitCommand): Promise<void> {
       activeRun = undefined;
       dropPartial();
       emitBoundary();
-      send({ type: "run_state", taskId: command.taskId, runId: settledRunId, state: "idle" });
+      // A goal continuation launched from the extension's settled handler is already a fresh
+      // nested run by the time this notification arrives — reporting idle would let the user
+      // send mid-loop, so the chat stays busy until the loop itself stops continuing.
+      if (builtins.goal.willContinue()) {
+        armGoalWatchdog(command.taskId);
+      } else {
+        send({ type: "run_state", taskId: command.taskId, runId: settledRunId, state: "idle" });
+      }
       // Pi persists a just-settled message right around the settle event, so its entry id can
       // arrive one emission late. A trailing re-check picks it up — and sends nothing at all
       // when nothing came of it.
@@ -1485,8 +1528,40 @@ async function handle(command: WorkerCommand): Promise<void> {
       emitSnapshot();
       respond(command.id, result);
       return;
+    } else if (command.type === "goal_control") {
+      // "set" rides the serial queue (it is a run, like prompt); pause/resume/clear bypass it
+      // so they reach a live run — the bypass split happens in the stdin dispatch below.
+      if (command.action === "set") {
+        const objective = command.objective?.trim() ?? "";
+        if (!objective) throw new Error("Describe the goal — /goal <objective>.");
+        if (builtins.planMode.getState().mode !== "build") {
+          throw new Error("Goal loops don't run while a planning mode is on. Switch to Build first.");
+        }
+        const kickoff = builtins.goal.start(objective);
+        await runPrompt(command.id, command.runId ?? crypto.randomUUID(), runStartedAt(command.startedAt), kickoff, undefined, command.checkpoint, true);
+        return;
+      }
+      if (command.action === "pause") {
+        builtins.goal.pause();
+      } else if (command.action === "resume") {
+        const text = builtins.goal.resume();
+        if (!session.isStreaming && !session.isCompacting) {
+          // Idle: re-kick the loop with a normal run. runPrompt answers the command itself
+          // once the run starts, so nothing responds here.
+          commandQueue = commandQueue
+            .then(async () => { await runPrompt(command.id, command.runId ?? crypto.randomUUID(), runStartedAt(command.startedAt), text, undefined, command.checkpoint, true); })
+            .catch((error) => send({ type: "worker_error", taskId, message: safeError(error) }));
+          return;
+        }
+        // Streaming: the goal is active again and the live run's settle re-enters
+        // verification, so nothing is launched here.
+      } else if (command.action === "clear") {
+        builtins.goal.clear();
+      }
     } else if (command.type === "abort") {
       builtins.autoTitle.abort();
+      // Stop pauses a live goal rather than ending it — the user resumes with /goal resume.
+      builtins.goal.userStop();
       activeTitleCredential = undefined;
       activeTitleAuth = undefined;
       stopRequested = true;
@@ -1632,7 +1707,7 @@ async function handle(command: WorkerCommand): Promise<void> {
     if (!REQUEST_COMMANDS.has(command.type)) send({ type: "worker_error", taskId, message: safeError(error) });
     // The host marks a chat running before it sends a prompt; one refused before it started
     // must say it is idle again. (A run that did start reports its own end.)
-    if (taskId && (command.type === "prompt" || command.type === "resend" || command.type === "execute_command" || command.type === "init_agents" || command.type === "compact") && activeRun?.runId !== command.runId) {
+    if (taskId && (command.type === "prompt" || command.type === "resend" || command.type === "execute_command" || command.type === "init_agents" || command.type === "compact" || (command.type === "goal_control" && command.action === "set")) && activeRun?.runId !== command.runId) {
       send({ type: "run_state", taskId, runId: command.runId, state: "idle" });
     }
   }
@@ -1647,7 +1722,7 @@ function closeMcpServers(): Promise<void> {
 }
 
 /** Commands the host sends with `worker::request` and whose failures it reports itself. */
-const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "list_commands", "execute_command", "init_agents", "compact", "dequeue", "queue_message"]);
+const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "list_commands", "execute_command", "init_agents", "compact", "dequeue", "queue_message", "goal_control"]);
 
 /**
  * Remove every credential this worker holds from `text`: the chat's own key or sign-in, and
@@ -1699,7 +1774,9 @@ process.stdin.on("data", (chunk: Buffer) => {
     // Cancellation, dialog answers, message queueing and dequeueing must bypass the prompt
     // queue: a prompt holds the queue until the agent settles, so anything that has to reach
     // the running run (an abort, a steer) or the user's pending messages deadlocks behind it.
-    if (command.type === "abort" || command.type === "extension_ui_response" || command.type === "queue_message" || command.type === "dequeue") {
+    // Goal pause/resume/clear bypass too — they act on a live loop; only "set" queues, since
+    // starting a run behind another run is exactly what the queue is for.
+    if (command.type === "abort" || command.type === "extension_ui_response" || command.type === "queue_message" || command.type === "dequeue" || (command.type === "goal_control" && command.action !== "set")) {
       void handle(command).catch((error) => {
         send({ type: "worker_error", taskId, message: safeError(error) });
       });

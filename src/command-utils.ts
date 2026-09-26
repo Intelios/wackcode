@@ -10,7 +10,8 @@ export const APP_SLASH_COMMANDS: SlashCommand[] = [
   { id: "app:init", name: "init", description: "Create or refine project AGENTS.md", source: "app", sourceLabel: "WackCode" },
   { id: "app:new", name: "new", description: "Open a new chat", source: "app", sourceLabel: "WackCode" },
   { id: "app:name", name: "name", description: "Rename this chat", source: "app", sourceLabel: "WackCode" },
-  { id: "app:copy", name: "copy", description: "Copy the latest assistant message", source: "app", sourceLabel: "WackCode" }
+  { id: "app:copy", name: "copy", description: "Copy the latest assistant message", source: "app", sourceLabel: "WackCode" },
+  { id: "app:goal", name: "goal", description: "Keep iterating until the goal is verified. /goal pause, resume, clear control it.", source: "app", sourceLabel: "WackCode" }
 ];
 
 export const COMMAND_NAME_MAX = 64;

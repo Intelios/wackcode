@@ -88,6 +88,13 @@ describe("CommandsSection", () => {
     expect(row).toHaveAttribute("aria-checked", "false");
   });
 
+  it("lists /goal among WackCode's commands and toggles it by its app key", async () => {
+    const actions = renderSection();
+    const wackcode = await screen.findByRole("region", { name: "WackCode commands" });
+    fireEvent.click(within(wackcode).getByRole("switch", { name: "Use /goal" }));
+    await waitFor(() => expect(actions.onSetEnabled).toHaveBeenCalledWith("app:goal", false));
+  });
+
   it("creates a command once the name and instructions are valid", async () => {
     const actions = renderSection();
     fireEvent.click(await screen.findByRole("button", { name: /New command/ }));

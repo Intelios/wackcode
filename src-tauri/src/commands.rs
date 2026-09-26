@@ -1346,6 +1346,59 @@ pub async fn compact_task(app: AppHandle, state: State<'_, MetadataState>, task_
     Ok(run_id)
 }
 
+/// `/goal` control: "set" starts the loop with a first run (idle chats only — it behaves like
+/// a prompt, runId and all); "pause"/"resume"/"clear" just reach the worker, which bypasses
+/// its serial queue for them so they land mid-loop instead of deadlocking behind it.
+#[tauri::command]
+pub async fn goal_control(
+    app: AppHandle, state: State<'_, MetadataState>,
+    task_id: String, action: String, objective: Option<String>, started_at: Option<u64>,
+) -> Result<String, String> {
+    let lock = task_lock(&app, &task_id);
+    let _guard = lock.lock().await;
+    let _checkout = checkout_dispatch_guard(&app, &state, &task_id).await;
+    let (task, provider) = task_and_provider(&state, &task_id)?;
+    if action == "set" {
+        let objective = objective
+            .map(|text| text.trim().to_string())
+            .filter(|text| !text.is_empty())
+            .ok_or_else(|| "Describe the goal — /goal <objective>.".to_string())?;
+        if objective.len() > 10_000 { return Err("The goal is too long.".into()); }
+        if matches!(task.status, TaskStatus::Running | TaskStatus::Stopping) {
+            return Err("Wait for this chat to finish before starting a goal.".into());
+        }
+        if task.mode != TaskMode::Build {
+            return Err("Goal loops don't run while a planning mode is on. Switch to Build first.".into());
+        }
+        let api_key = credential_for(&app, &state, &provider)?;
+        worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
+        set_status(&state, &task.id, TaskStatus::Running)?;
+        let checkpoint = match checkpoint_location(&app, &state, &task) {
+            Ok(location) => snapshot_quietly(&app, &task.id, &location).await,
+            Err(_) => None,
+        };
+        let run_id = Uuid::new_v4().to_string();
+        let result = worker::request(&app, &task.id, json!({
+            "id": Uuid::new_v4().to_string(), "type": "goal_control", "action": "set",
+            "objective": objective, "startedAt": started_at, "runId": run_id, "checkpoint": checkpoint
+        }), REQUEST_TIMEOUT).await;
+        if let Err(error) = result {
+            let _ = set_status(&state, &task.id, TaskStatus::Idle);
+            return Err(error);
+        }
+        return Ok(run_id);
+    }
+    if !matches!(action.as_str(), "pause" | "resume" | "clear") {
+        return Err("Unknown goal action.".into());
+    }
+    let api_key = credential_for(&app, &state, &provider)?;
+    worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
+    worker::request(&app, &task.id, json!({
+        "id": Uuid::new_v4().to_string(), "type": "goal_control", "action": action
+    }), REQUEST_TIMEOUT).await?;
+    Ok(String::new())
+}
+
 #[tauri::command]
 pub async fn prompt(app: AppHandle, state: State<'_, MetadataState>, input: PromptInput) -> Result<String, String> {
     let message = required(&input.message, "Message")?;

@@ -58,7 +58,7 @@ const KIND_BADGES: Record<SlashCommandEntry["kind"], string> = {
 };
 
 /**
- * Settings › Commands. WackCode's own commands first (the app's five, offered before any
+ * Settings › Commands. WackCode's own commands first (the app's six, offered before any
  * worker catalog is consulted), then the user's own files in `<app data>/commands`, then what
  * trusted packages add — listed by the same scan a chat's `/` uses, so the names and clash
  * resolutions agree. Every change reaches running chats on their next turn.

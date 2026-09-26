@@ -37,6 +37,24 @@ export interface TodoState {
   tasks: TodoTask[];
 }
 
+/**
+ * Goal-loop state published by the worker's built-in goal extension: `/goal <objective>` runs
+ * rounds of work and verifies each one until the verifier passes or a guard stops it.
+ */
+export interface GoalState {
+  objective: string;
+  phase: "active" | "verifying" | "paused" | "complete" | "stopped";
+  /** Verified rounds so far. */
+  iteration: number;
+  maxIterations: number;
+  /** Consecutive rounds with no detected progress. */
+  noProgress: number;
+  lastReason?: string;
+  lastNextAction?: string;
+  /** Paused/stopped explanation, e.g. "Stopped by user." */
+  note?: string;
+}
+
 /** One option in an ask_user_question question. */
 export interface AskQuestionOption {
   label: string;
@@ -777,6 +795,7 @@ export interface SessionSnapshot {
   activeTools: string[];
   planState?: PlanState;
   todoState?: TodoState;
+  goalState?: GoalState;
 }
 
 /**
@@ -804,6 +823,8 @@ export interface SnapshotDelta {
   sessionFile?: string;
   planState?: PlanState;
   todoState?: TodoState;
+  /** null clears the goal; absent leaves it unchanged. */
+  goalState?: GoalState | null;
 }
 
 /** A question an extension asked, mirrored from the worker protocol. */
@@ -841,6 +862,7 @@ export type WorkerEvent =
   | { type: "extensions_loaded"; taskId: string; loaded: string[]; errors: { path: string; error: string }[] }
   | ({ type: "plan_state"; taskId: string } & PlanState)
   | ({ type: "todo_state"; taskId: string } & TodoState)
+  | { type: "goal_state"; taskId: string; goal: GoalState | null }
   /** From the host, once per chat per session: why file checkpoints are off for it. */
   | { type: "checkpoint_unavailable"; taskId: string; message: string };
 
@@ -864,6 +886,8 @@ export interface TaskRuntime {
   planState?: PlanState;
   /** Latest todo list from the worker's built-in todo extension. */
   todoState?: TodoState;
+  /** Latest goal-loop state from the worker's built-in goal extension. */
+  goalState?: GoalState;
   /** Messages queued on the running prompt: steering delivers at the next boundary, followUp after the run. */
   queued?: { steer: string[]; followUp: string[] };
   /** The most recent file restore, offered for undo until dismissed. */

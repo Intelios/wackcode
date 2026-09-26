@@ -12,6 +12,7 @@ describe("resolveCommandNames", () => {
 
   it("protects the app's own names", () => {
     expect(resolveCommandNames([{ source: "extension", invocation: "new" }])[0].name).toBe("extension:new");
+    expect(resolveCommandNames([{ source: "extension", invocation: "goal" }])[0].name).toBe("extension:goal");
   });
 });
 

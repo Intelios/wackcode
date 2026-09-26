@@ -1,5 +1,6 @@
 import type {
   CheckpointRef,
+  GoalState,
   MessageVersions,
   ModelSwitch,
   NormalizedMessage,
@@ -47,6 +48,19 @@ export function sameTodoState(a: TodoState | undefined, b: TodoState | undefined
       && task.status === other.status
       && sameNumberList(task.blockedBy, other.blockedBy);
   });
+}
+
+export function sameGoalState(a: GoalState | undefined, b: GoalState | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.objective === b.objective
+    && a.phase === b.phase
+    && a.iteration === b.iteration
+    && a.maxIterations === b.maxIterations
+    && a.noProgress === b.noProgress
+    && a.lastReason === b.lastReason
+    && a.lastNextAction === b.lastNextAction
+    && a.note === b.note;
 }
 
 export function sameVersions(a: MessageVersions | undefined, b: MessageVersions | undefined): boolean {

@@ -289,6 +289,25 @@ describe("Composer queueing while the agent is working", () => {
     await waitFor(() => expect(onSend).toHaveBeenCalledWith("/not-a-command", [], "steer"));
   });
 
+  it("lets /goal pause reach a live run but holds a bare /goal back", async () => {
+    const goal = { id: "app:goal", name: "goal", description: "Iterate", source: "app" as const, sourceLabel: "WackCode" };
+    const onCommand = vi.fn().mockResolvedValue(true);
+    const { onSend, area } = setup({ commands: [goal], onCommand });
+    fireEvent.change(area, { target: { value: "/goal pause" } });
+    fireEvent.keyDown(area, { key: "Escape" });
+    fireEvent.keyDown(area, { key: "Enter" });
+    await waitFor(() => expect(onCommand).toHaveBeenCalledWith("goal", "pause", []));
+    expect(area).toHaveValue("");
+    expect(onSend).not.toHaveBeenCalled();
+
+    // A new goal can't start mid-run — it is refused like every other app command.
+    fireEvent.change(area, { target: { value: "/goal ship it" } });
+    fireEvent.keyDown(area, { key: "Enter" });
+    expect(await screen.findByRole("status")).toHaveTextContent("Wait for Pi to finish before running /goal.");
+    expect(onSend).not.toHaveBeenCalled();
+    expect(onCommand).toHaveBeenCalledTimes(1);
+  });
+
   it("speaks the chosen agent name in the busy notice and placeholders", async () => {
     const compact = { id: "app:compact", name: "compact", description: "Summarize", source: "app" as const, sourceLabel: "WackCode" };
     const { area } = setup({ commands: [compact], agentName: "Nova" });

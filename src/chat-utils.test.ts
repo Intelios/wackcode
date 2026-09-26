@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { applySnapshotDelta, displayPath, formatRunDuration, formatTokens, isPlanMode, nextMode, planButtonTarget, samePlanState, sameTodoState, thinkingPreview, titleFromPrompt, validateInitCommand } from "./chat-utils";
-import type { NormalizedMessage, SessionSnapshot, SnapshotDelta } from "./types";
+import { applySnapshotDelta, displayPath, formatRunDuration, formatTokens, isPlanMode, nextMode, planButtonTarget, sameGoalState, samePlanState, sameTodoState, thinkingPreview, titleFromPrompt, validateInitCommand } from "./chat-utils";
+import type { GoalState, NormalizedMessage, SessionSnapshot, SnapshotDelta } from "./types";
 
 describe("titleFromPrompt", () => {
   it("uses the first non-empty line", () => {
@@ -128,6 +128,25 @@ describe("sameTodoState", () => {
   });
 });
 
+describe("sameGoalState", () => {
+  const goal: GoalState = { objective: "Ship it", phase: "active", iteration: 1, maxIterations: 25, noProgress: 0 };
+
+  it("matches equal states across object identities and handles undefined", () => {
+    expect(sameGoalState(goal, { ...goal })).toBe(true);
+    expect(sameGoalState(undefined, undefined)).toBe(true);
+    expect(sameGoalState(goal, undefined)).toBe(false);
+    expect(sameGoalState(undefined, goal)).toBe(false);
+  });
+
+  it("rejects any field that changes", () => {
+    expect(sameGoalState(goal, { ...goal, phase: "verifying" })).toBe(false);
+    expect(sameGoalState(goal, { ...goal, iteration: 2 })).toBe(false);
+    expect(sameGoalState(goal, { ...goal, noProgress: 1 })).toBe(false);
+    expect(sameGoalState(goal, { ...goal, lastNextAction: "try again" })).toBe(false);
+    expect(sameGoalState(goal, { ...goal, note: "Paused." })).toBe(false);
+  });
+});
+
 describe("applySnapshotDelta", () => {
   const stats = {
     tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
@@ -221,6 +240,26 @@ describe("applySnapshotDelta", () => {
     expect(next.planState).toBe(base.planState);
     const changed = applySnapshotDelta(base, delta({ rev: 2, planState: { mode: "plan", phase: "planning" } }));
     expect(changed.planState).toEqual({ mode: "plan", phase: "planning" });
+  });
+
+  it("applies goal state: absent keeps, null clears, equal keeps identity", () => {
+    const goal: GoalState = { objective: "Ship it", phase: "active", iteration: 1, maxIterations: 25, noProgress: 0 };
+    const a = message("a");
+    const base = { ...snapshot([a], 1), goalState: goal };
+
+    const kept = applySnapshotDelta(base, delta({ rev: 2 }));
+    expect(kept.goalState).toBe(goal);
+    expect(kept.messages[0]).toBe(a);
+
+    const equal = applySnapshotDelta(base, delta({ rev: 2, goalState: { ...goal } }));
+    expect(equal.goalState).toBe(goal);
+
+    const advanced = applySnapshotDelta(base, delta({ rev: 2, goalState: { ...goal, phase: "verifying" as const } }));
+    expect(advanced.goalState?.phase).toBe("verifying");
+
+    const cleared = applySnapshotDelta(base, delta({ rev: 2, goalState: null }));
+    expect(cleared.goalState).toBeUndefined();
+    expect(cleared.messages[0]).toBe(a);
   });
 });
 

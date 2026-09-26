@@ -36,7 +36,7 @@ const MAX_PATH_CHARS: usize = 4_096;
 const SCAN_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The app's own commands, reserved by the picker before anything else loads.
-pub const APP_COMMAND_NAMES: &[&str] = &["compact", "init", "new", "name", "copy"];
+pub const APP_COMMAND_NAMES: &[&str] = &["compact", "init", "new", "name", "copy", "goal"];
 
 pub fn dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app
@@ -442,6 +442,7 @@ mod tests {
     fn validates_denylist_keys() {
         let (_temp, dir) = dir();
         assert!(validate_key("app:compact", &dir, &[]).is_ok());
+        assert!(validate_key("app:goal", &dir, &[]).is_ok());
         assert!(validate_key("app:nope", &dir, &[]).is_err());
         assert!(validate_key("custom:/etc/x.md", &dir, &[]).is_err());
         let file = create(&dir, "mine", "", "", "b").unwrap();

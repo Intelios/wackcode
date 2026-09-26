@@ -1,4 +1,4 @@
-import type { PlanState, SessionSnapshot, SnapshotDelta, TaskMode, TodoState } from "./types";
+import type { GoalState, PlanState, SessionSnapshot, SnapshotDelta, TaskMode, TodoState } from "./types";
 
 export function validateInitCommand(args: string, projectId: string | null, mode: TaskMode): void {
   if (args.trim()) throw new Error("/init does not accept arguments.");
@@ -138,11 +138,24 @@ export function sameTodoState(a: TodoState | undefined, b: TodoState | undefined
   });
 }
 
+export function sameGoalState(a: GoalState | undefined, b: GoalState | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.objective === b.objective
+    && a.phase === b.phase
+    && a.iteration === b.iteration
+    && a.maxIterations === b.maxIterations
+    && a.noProgress === b.noProgress
+    && a.lastReason === b.lastReason
+    && a.lastNextAction === b.lastNextAction
+    && a.note === b.note;
+}
+
 /**
  * Apply a worker `snapshot_delta` to the snapshot the renderer holds. Untouched messages keep
  * their object identity, so the transcript's per-message memos and its derived maps (built on
  * the messages array) are recomputed only for what actually changed. Absent delta fields mean
- * "unchanged"; `activeRun: null` clears the run.
+ * "unchanged"; `activeRun: null` clears the run, `goalState: null` clears the goal.
  */
 export function applySnapshotDelta(snapshot: SessionSnapshot, delta: SnapshotDelta): SessionSnapshot {
   const removed = new Set(delta.removed);
@@ -168,6 +181,11 @@ export function applySnapshotDelta(snapshot: SessionSnapshot, delta: SnapshotDel
     tree: delta.tree ?? snapshot.tree,
     stats: delta.stats ?? snapshot.stats,
     planState: delta.planState === undefined || samePlanState(snapshot.planState, delta.planState) ? snapshot.planState : delta.planState,
-    todoState: delta.todoState === undefined || sameTodoState(snapshot.todoState, delta.todoState) ? snapshot.todoState : delta.todoState
+    todoState: delta.todoState === undefined || sameTodoState(snapshot.todoState, delta.todoState) ? snapshot.todoState : delta.todoState,
+    goalState: delta.goalState === undefined
+      ? snapshot.goalState
+      : delta.goalState === null
+        ? undefined
+        : sameGoalState(snapshot.goalState, delta.goalState) ? snapshot.goalState : delta.goalState
   };
 }

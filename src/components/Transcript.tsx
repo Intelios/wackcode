@@ -83,8 +83,7 @@ function RunDuration({ startedAt, durationMs }: { startedAt?: number; durationMs
 
   const live = startedAt !== undefined;
   const elapsed = durationMs ?? Math.max(0, now - (startedAt ?? now));
-  const name = useContext(AssistantNameContext);
-  const label = live ? `${name} is working for` : `${name} worked for`;
+  const label = live ? "Working for" : "Worked for";
 
   return <div className="run-duration">{label} {formatRunDuration(elapsed)}</div>;
 }

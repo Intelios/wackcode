@@ -1,7 +1,7 @@
 /**
- * Runs one call's tasks with at most `limit` in flight. Tasks that can edit the workspace share
- * a single writer slot, so two children never write at once; read-only tasks queued behind a
- * waiting writer still start as soon as a slot is free. Results keep the input order.
+ * Runs one call's tasks with at most `limit` in flight. All tasks, including editors,
+ * take slots in input order. The caller assigns independent work in the shared workspace;
+ * the scheduler does not lock files. Results keep the input order.
  *
  * `run` is expected to settle every task itself (a failed child is a result, not an error);
  * a rejection is still collected and rethrown once everything else has finished, so no child
@@ -10,7 +10,6 @@
 export async function runScheduled<T, R>(
   items: readonly T[],
   limit: number,
-  isWriter: (item: T) => boolean,
   run: (item: T, index: number) => Promise<R>,
 ): Promise<R[]> {
   const slots = Math.max(1, Math.floor(limit) || 1);
@@ -19,7 +18,6 @@ export async function runScheduled<T, R>(
   return new Promise<R[]>((resolve, reject) => {
     const pending = items.map((_, index) => index);
     let running = 0;
-    let writerBusy = false;
     let finished = 0;
     let failure: { error: unknown } | undefined;
 
@@ -29,16 +27,9 @@ export async function runScheduled<T, R>(
         else resolve(results);
         return;
       }
-      for (let position = 0; position < pending.length && running < slots; ) {
-        const index = pending[position];
-        const writer = isWriter(items[index]);
-        if (writer && writerBusy) {
-          position += 1;
-          continue;
-        }
-        pending.splice(position, 1);
+      while (pending.length > 0 && running < slots) {
+        const index = pending.shift()!;
         running += 1;
-        if (writer) writerBusy = true;
         run(items[index], index)
           .then(
             (value) => { results[index] = value; },
@@ -46,7 +37,6 @@ export async function runScheduled<T, R>(
           )
           .finally(() => {
             running -= 1;
-            if (writer) writerBusy = false;
             finished += 1;
             pump();
           });

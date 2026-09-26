@@ -589,7 +589,7 @@ pub struct SubagentConfig {
     pub enabled: bool,
     #[serde(default)]
     pub trigger: SubagentTrigger,
-    /// Children one call runs at the same time; those that can edit files still take turns.
+    /// Children one call runs at the same time, including those that can edit files.
     #[serde(default = "default_subagent_concurrency")]
     pub max_concurrency: u32,
     #[serde(default)]

@@ -207,11 +207,13 @@ interface MockProvider {
   verdicts: string[];
   close: () => Promise<void>;
   waitForSlowRequest: () => Promise<void>;
+  holdChildren: (count: number, afterTools?: boolean) => { arrived: Promise<void>; release: () => void };
 }
 
 async function startMockProvider(): Promise<MockProvider> {
   const requests: MockProvider["requests"] = [];
   const verdicts: string[] = [];
+  let childGate: { afterTools: boolean; remaining: number; arrive: () => void; released: Promise<void>; release: () => void } | undefined;
   let slowRequestResolve: (() => void) | undefined;
   const slowRequest = new Promise<void>((resolvePromise) => { slowRequestResolve = resolvePromise; });
   const server = createServer(async (request, response) => {
@@ -221,6 +223,11 @@ async function startMockProvider(): Promise<MockProvider> {
     const authorization = String(request.headers.authorization ?? "");
     const text = userTextOf(body);
     requests.push({ authorization, body, at: Date.now(), text });
+    // Test-controlled barrier: requests stay open until the test observes all expected children.
+    if (childGate && text.startsWith("child-") && hasToolMessage(body) === childGate.afterTools) {
+      if (--childGate.remaining === 0) childGate.arrive();
+      await childGate.released;
+    }
     if (authorization === "Bearer title-fail-secret") {
       response.writeHead(429, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: { message: "Title request failed" } }));
@@ -250,7 +257,16 @@ async function startMockProvider(): Promise<MockProvider> {
     requests,
     verdicts,
     waitForSlowRequest: () => slowRequest,
+    holdChildren: (count, afterTools = false) => {
+      let arrive!: () => void;
+      let release!: () => void;
+      const arrived = new Promise<void>((resolve) => { arrive = resolve; });
+      const released = new Promise<void>((resolve) => { release = resolve; });
+      childGate = { afterTools, remaining: count, arrive, released, release };
+      return { arrived, release };
+    },
     close: () => new Promise<void>((resolvePromise, reject) => {
+      childGate?.release();
       server.closeAllConnections();
       server.close((error) => error ? reject(error) : resolvePromise());
     })
@@ -417,6 +433,8 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
           ? [toolCall("subagent", { agent: "worker", task: "child-write: planned" })]
         : lastUserText.startsWith("subagent fetch")
           ? [toolCall("subagent", { agent: "scout", task: "child-fetch: http://localhost/docs" })]
+        : lastUserText.startsWith("subagent batch wait")
+          ? [toolCall("subagent", { tasks: [0, 1, 2, 3].map((index) => ({ agent: "worker", task: `child-wait: ${index}` })) })]
         : lastUserText.startsWith("subagent wait")
           ? [toolCall("subagent", { agent: "scout", task: "child-wait: until stopped" })]
         // The child's answer quotes its task, so it repeats the chat's own key.
@@ -2347,9 +2365,23 @@ describe("sub-agents", () => {
     expect(worker.view?.stats?.tokens.input).toBeGreaterThanOrEqual(96);
   });
 
-  it("runs read-only sub-agents in parallel while those that edit take turns", async () => {
+  it("runs readers and editors concurrently and streams each child independently", async () => {
     const { provider, workspace, worker } = await start("subagents-parallel", { subagents: config() });
+    const barrier = provider.holdChildren(4, true);
     worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "subagent parallel" });
+    await barrier.arrived;
+    await worker.waitFor((output) => {
+      const details = output.detail?.details as Details | undefined;
+      return details?.results?.filter((child) => child.status === "running").length === 4;
+    });
+    // Both editors have written their own file and are still awaiting their final answer.
+    for (const index of [1, 3]) {
+      worker.send({ id: crypto.randomUUID(), type: "watch_subagent", target: { toolCallId: "call-alpha", index } });
+      const frame = await worker.waitFor((output) => output.type === "subagent_stream" && output.index === index && output.live === true);
+      expect(JSON.stringify(frame.upserts)).toContain(index === 1 ? "one.txt" : "two.txt");
+      expect(JSON.stringify(frame.upserts)).not.toContain(index === 1 ? "two.txt" : "one.txt");
+    }
+    barrier.release();
     await worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha.")) === true, 20_000);
 
     const result = subagentResult(worker);
@@ -2371,10 +2403,41 @@ describe("sub-agents", () => {
     const second = window("child-ls: second");
     expect(second.first).toBeLessThan(first.last);
     expect(first.first).toBeLessThan(second.last);
-    // The two editors never overlapped.
+    // The two editors overlapped too.
     const one = window("child-write: one");
     const two = window("child-write: two");
-    expect(one.last <= two.first || two.last <= one.first).toBe(true);
+    expect(one.first).toBeLessThan(two.last);
+    expect(two.first).toBeLessThan(one.last);
+  });
+
+  it("keeps successful siblings when an editing child is unavailable", async () => {
+    const { worker } = await start("subagents-partial", {
+      subagents: config({ agents: [scout, { ...editor, unavailable: "Test connection unavailable." }] })
+    });
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "subagent parallel" });
+    await worker.waitFor((output) => emitted(output) && subagentResult(worker) !== undefined);
+    expect(subagentResult(worker)?.details.results.map((child) => child.status)).toEqual(["done", "failed", "done", "failed"]);
+    expect(subagentResult(worker)?.details.results[1].error).toBe("Test connection unavailable.");
+    expect(subagentResult(worker)?.isError).not.toBe(true);
+  });
+
+  it("cancels active editors and never sends queued children to the provider", async () => {
+    const { provider, worker } = await start("subagents-batch-abort", { subagents: config({ maxConcurrency: 2 }) });
+    const barrier = provider.holdChildren(2);
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "subagent batch wait" });
+    await barrier.arrived;
+    await worker.waitFor((output) => {
+      const details = output.detail?.details as Details | undefined;
+      return details?.results?.filter((child) => child.status === "running").length === 2;
+    });
+    expect(provider.requests.filter((request) => request.text.startsWith("child-wait"))).toHaveLength(2);
+    barrier.release();
+    await provider.waitForSlowRequest();
+    worker.send({ id: crypto.randomUUID(), type: "abort" });
+    await worker.waitFor((output) => emitted(output) && subagentResult(worker) !== undefined);
+    expect(subagentResult(worker)?.details.results.map((child) => child.status)).toEqual(["aborted", "aborted", "aborted", "aborted"]);
+    expect(provider.requests.filter((request) => request.text.startsWith("child-wait")).map((request) => request.text).sort()).toEqual(["child-wait: 0", "child-wait: 1"]);
+    expect(worker.outputs.filter((output) => output.type === "worker_error")).toEqual([]);
   });
 
   it("blocks a read-only sub-agent's mutating command, and refuses editing agents in Plan mode", async () => {

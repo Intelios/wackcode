@@ -578,7 +578,7 @@ describe("sub-agent tools and policy", () => {
 describe("sub-agent scheduling", () => {
   const tick = () => new Promise((wake) => setTimeout(wake, 5));
 
-  it("caps how many run at once, lets only one writer in at a time, and keeps input order", async () => {
+  it("caps concurrent readers and writers, starts in FIFO order, and keeps input order", async () => {
     let running = 0;
     let peak = 0;
     let writers = 0;
@@ -588,7 +588,7 @@ describe("sub-agent scheduling", () => {
       { id: "w1", writer: true }, { id: "w2", writer: true }, { id: "r1", writer: false },
       { id: "r2", writer: false }, { id: "r3", writer: false }, { id: "w3", writer: true },
     ];
-    const results = await runScheduled(items, 3, (item) => item.writer, async (item) => {
+    const results = await runScheduled(items, 3, async (item) => {
       running += 1;
       peak = Math.max(peak, running);
       if (item.writer) { writers += 1; peakWriters = Math.max(peakWriters, writers); }
@@ -600,21 +600,45 @@ describe("sub-agent scheduling", () => {
     });
     expect(results).toEqual(["W1", "W2", "R1", "R2", "R3", "W3"]);
     expect(peak).toBe(3);
-    expect(peakWriters).toBe(1);
-    // Read-only tasks queued behind the waiting writer started without waiting for it.
-    expect(order.slice(0, 3)).toEqual(["w1", "r1", "r2"]);
+    expect(peakWriters).toBe(2);
+    expect(order).toEqual(items.map((item) => item.id));
+  });
+
+  it("honors a limit of one", async () => {
+    let running = 0;
+    const results = await runScheduled([1, 2, 3], 1, async (item) => {
+      expect(++running).toBe(1);
+      await tick();
+      running -= 1;
+      return item;
+    });
+    expect(results).toEqual([1, 2, 3]);
+  });
+
+  it("keeps result order when children finish out of order", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const finished: number[] = [];
+    const results = await runScheduled([1, 2], 2, async (item) => {
+      if (item === 1) await gate;
+      finished.push(item);
+      if (item === 2) release();
+      return item;
+    });
+    expect(finished).toEqual([2, 1]);
+    expect(results).toEqual([1, 2]);
   });
 
   it("finishes every task before reporting a failure, and handles an empty call", async () => {
     const finished: number[] = [];
-    await expect(runScheduled([1, 2, 3], 2, () => false, async (item) => {
+    await expect(runScheduled([1, 2, 3], 2, async (item) => {
       await tick();
       finished.push(item);
       if (item === 1) throw new Error("boom");
       return item;
     })).rejects.toThrow("boom");
     expect(finished.sort()).toEqual([1, 2, 3]);
-    await expect(runScheduled([], 4, () => false, async () => 1)).resolves.toEqual([]);
+    await expect(runScheduled([], 4, async () => 1)).resolves.toEqual([]);
   });
 });
 

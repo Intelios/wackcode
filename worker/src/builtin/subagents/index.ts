@@ -97,7 +97,7 @@ export function createSubagentsExtension(host: BuiltinHost, currentMode: () => T
     );
     const available = host.childToolNames();
 
-    const usages = await runScheduled(items, current.maxConcurrency, (item) => !item.spec.readOnly, async ({ input, spec }, index) => {
+    const usages = await runScheduled(items, current.maxConcurrency, async ({ input, spec }, index) => {
       const result = details.results[index];
       if (signal?.aborted) {
         result.status = "aborted";

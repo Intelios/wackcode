@@ -179,7 +179,7 @@ export interface SubagentProvider {
 
 export interface SubagentRuntimeConfig {
   trigger: SubagentTrigger;
-  /** Children one call runs at the same time. Children that can edit files still take turns. */
+  /** Children one call runs at the same time, including those that can edit files. */
   maxConcurrency: number;
   /** Enabled agents only. */
   agents: SubagentSpec[];

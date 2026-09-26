@@ -225,7 +225,7 @@ function AgentEditor({ draft, providers, busy, isNew, onChange, onSave, onCancel
           >
             <span />
           </button>
-          <span>Can edit files <small>{draft.readOnly ? "Read-only: allowed in Plan mode, and runs in parallel" : "Takes turns with other agents that edit, and can't run in Plan mode"}</small></span>
+          <span>Can edit files <small>{draft.readOnly ? "Read-only: allowed in Plan mode, and runs in parallel" : "Can run in parallel on separate files; can't run in Plan mode"}</small></span>
         </label>
       </div>
       <ModelField agentName={draft.name || "New agent"} model={draft.model} providers={providers} disabled={busy} onChange={(model) => onChange({ ...draft, model })} />
@@ -536,7 +536,7 @@ export function SubagentsSection({ config, providers, onChange, webFetchEnabled 
             onChange={(value) => void commit({ ...config, maxConcurrency: Number(value) })}
             aria-label="Sub-agents running at the same time"
           />
-          <small className="subagent-hint">Per request. Agents that edit files always take turns.</small>
+          <small className="subagent-hint">Per request, for all agents. Give parallel editing agents separate files.</small>
         </label>
       </div>
 

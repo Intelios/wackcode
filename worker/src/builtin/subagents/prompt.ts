@@ -13,7 +13,7 @@ export function subagentDescription(agents: SubagentSpec[]): string {
   return [
     "Run a sub-agent: a separate agent with its own fresh context window that works in this same workspace and returns only its final answer.",
     `Single mode: pass agent and task. Parallel mode: pass tasks (up to ${MAX_PARALLEL_TASKS}) to run independent tasks at the same time.`,
-    "Read-only sub-agents run in parallel; sub-agents that can edit files take turns.",
+    "All sub-agents, including those that edit files, run concurrently up to the configured limit in the same workspace.",
     `Available sub-agents:\n${roster}`,
   ].join("\n");
 }
@@ -27,7 +27,7 @@ export function subagentGuidelines(trigger: SubagentTrigger): string[] {
   return [
     when,
     `${SUBAGENT_TOOL_NAME} children cannot see this conversation. Put every file path, requirement, constraint and piece of context they need into each task.`,
-    `Use the tasks parameter of ${SUBAGENT_TOOL_NAME} for independent work that can run at the same time; never give two parallel tasks the same files to edit.`,
+    `Use the tasks parameter of ${SUBAGENT_TOOL_NAME} for independent work that can run at the same time; assign distinct files to editing children. Run dependent tasks or edits to the same files sequentially, waiting for each result before starting the next.`,
     `${SUBAGENT_TOOL_NAME} returns each child's final answer. Check important claims before relying on them, and summarize the results for the user instead of pasting them.`,
     `In Plan mode, ${SUBAGENT_TOOL_NAME} only runs read-only sub-agents.`,
   ];

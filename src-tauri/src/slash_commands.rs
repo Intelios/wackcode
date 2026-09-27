@@ -13,8 +13,8 @@
 //! the same resolution code (`resolveCommandNames`).
 
 use crate::models::{
-    CommandsConfig, PackageRecord, SkillDiagnostic, SlashCommandEntry, SlashCommandGroup, SlashCommandGroupKind,
-    SlashCommandKind, SlashCommandsOverview,
+    CommandsConfig, PackageRecord, SkillDiagnostic, SkillsConfig, SlashCommand, SlashCommandEntry,
+    SlashCommandGroup, SlashCommandGroupKind, SlashCommandKind, SlashCommandsOverview,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -237,6 +237,8 @@ struct ScanLine {
     custom: Vec<ScannedCommand>,
     #[serde(default)]
     packages: Vec<ScannedGroup>,
+    #[serde(default)]
+    catalog: Vec<SlashCommand>,
     error: Option<String>,
 }
 
@@ -271,13 +273,14 @@ struct ScannedDiagnostic {
     path: Option<String>,
 }
 
-/// Run Pi's resource loader over the trusted packages' extensions and prompt templates plus the
-/// user's commands dir in a short-lived process (`commands-scan.js`). It executes trusted
+/// Run Pi's resource loader over trusted packages' extensions, prompts and skills plus the user's
+/// command and skill folders in a short-lived process (`commands-scan.js`). It executes trusted
 /// extension code — how a command's name exists at all — with no key and no network.
-async fn run_scan(app: &AppHandle, config: &CommandsConfig, packages: &[&PackageRecord], dir: &Path) -> Result<ScanLine, String> {
+async fn run_scan(app: &AppHandle, config: &CommandsConfig, skills_config: &SkillsConfig, packages: &[&PackageRecord], dir: &Path, cwd: &Path) -> Result<ScanLine, String> {
     let home = crate::skills::home_dir(app)?;
+    let skill_folders = crate::skills::folders(skills_config, &home);
     let request = json!({
-        "cwd": home,
+        "cwd": cwd,
         "packages": packages.iter().map(|package| json!({
             "source": package.source,
             "label": package.display_name,
@@ -285,10 +288,17 @@ async fn run_scan(app: &AppHandle, config: &CommandsConfig, packages: &[&Package
             "extensions": package.extensions.iter().map(|resource| json!({
                 "path": resource.path, "enabled": resource.enabled,
             })).collect::<Vec<_>>(),
+            "skills": package.skills.iter().map(|resource| json!({
+                "path": resource.path, "enabled": resource.enabled,
+            })).collect::<Vec<_>>(),
             "prompts": package.prompts.iter().map(|resource| json!({
                 "path": resource.path, "enabled": resource.enabled,
             })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
+        "skillRoots": skill_folders.iter().filter(|folder| folder.enabled).map(|folder| json!({
+            "path": folder.path, "label": folder.label,
+        })).collect::<Vec<_>>(),
+        "skillDisabled": skills_config.disabled,
         "commandsDir": dir,
         "disabled": config.disabled,
     });
@@ -296,7 +306,7 @@ async fn run_scan(app: &AppHandle, config: &CommandsConfig, packages: &[&Package
     let mut command = Command::new(crate::worker::node_executable_path()?);
     command
         .arg(crate::worker::commands_scan_entry_path(app)?)
-        .current_dir(&home)
+        .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -331,16 +341,17 @@ async fn run_scan(app: &AppHandle, config: &CommandsConfig, packages: &[&Package
 /// Settings' list: the user's own commands first, then every trusted package's commands.
 pub async fn overview(app: &AppHandle) -> Result<SlashCommandsOverview, String> {
     let dir = dir(app)?;
-    let (config, packages) = {
+    let home = crate::skills::home_dir(app)?;
+    let (config, skills_config, packages) = {
         let state = app.state::<crate::storage::MetadataState>();
         let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
-        (data.commands.clone(), data.packages.clone())
+        (data.commands.clone(), data.skills.clone(), data.packages.clone())
     };
     let trusted: Vec<&PackageRecord> = packages.iter()
         .filter(|package| !package.trusted_at.is_empty())
-        .filter(|package| !package.extensions.is_empty() || !package.prompts.is_empty())
+        .filter(|package| !package.extensions.is_empty() || !package.skills.is_empty() || !package.prompts.is_empty())
         .collect();
-    let scanned = run_scan(app, &config, &trusted, &dir).await?;
+    let scanned = run_scan(app, &config, &skills_config, &trusted, &dir, &home).await?;
     let canonical_dir = dir.canonicalize().unwrap_or_else(|_| dir.clone());
 
     let kind_of = |kind: &str| match kind {
@@ -393,6 +404,22 @@ pub async fn overview(app: &AppHandle) -> Result<SlashCommandsOverview, String> 
         disabled: config.disabled.clone(),
         groups,
     })
+}
+
+/// The full taskless `/` catalog for the welcome composer. It uses the same keyless scanner as
+/// Settings, including skills, and never creates a chat or starts a provider-backed worker.
+pub async fn catalog(app: &AppHandle, cwd: &Path) -> Result<Vec<SlashCommand>, String> {
+    let dir = dir(app)?;
+    let (config, skills_config, packages) = {
+        let state = app.state::<crate::storage::MetadataState>();
+        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        (data.commands.clone(), data.skills.clone(), data.packages.clone())
+    };
+    let trusted: Vec<&PackageRecord> = packages.iter()
+        .filter(|package| !package.trusted_at.is_empty())
+        .filter(|package| !package.extensions.is_empty() || !package.skills.is_empty() || !package.prompts.is_empty())
+        .collect();
+    Ok(run_scan(app, &config, &skills_config, &trusted, &dir, cwd).await?.catalog)
 }
 
 #[cfg(test)]

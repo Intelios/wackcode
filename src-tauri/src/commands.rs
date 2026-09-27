@@ -1275,6 +1275,18 @@ pub async fn watch_subagent(app: AppHandle, state: State<'_, MetadataState>, tas
 }
 
 #[tauri::command]
+pub async fn list_draft_commands(app: AppHandle, state: State<'_, MetadataState>, project_id: Option<String>) -> Result<Vec<SlashCommand>, String> {
+    let cwd = if let Some(project_id) = project_id {
+        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        PathBuf::from(data.projects.iter().find(|project| project.id == project_id)
+            .ok_or_else(|| "Project not found".to_string())?.path.clone())
+    } else {
+        skills::home_dir(&app)?
+    };
+    slash_commands::catalog(&app, &cwd).await
+}
+
+#[tauri::command]
 pub async fn list_commands(app: AppHandle, state: State<'_, MetadataState>, task_id: String) -> Result<Vec<SlashCommand>, String> {
     let lock = task_lock(&app, &task_id);
     let _guard = lock.lock().await;

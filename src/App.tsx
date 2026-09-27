@@ -197,6 +197,9 @@ export default function App() {
   const draftComposer = useRef<{ text: string; images: ImageContent[] }>({ text: "", images: [] });
   const slashDraftPromise = useRef<Promise<TaskRecord | undefined> | undefined>(undefined);
   const draftEpoch = useRef(0);
+  /** Taskless `/` catalog for the welcome composer, keyed by its selected project. */
+  const [draftSlash, setDraftSlash] = useState<{ projectId: string | null; commands?: SlashCommand[]; loading: boolean; error?: string }>();
+  const draftSlashRequest = useRef(0);
   const [extensionRequests, setExtensionRequests] = useState<ExtensionUIRequest[]>([]);
   const [booting, setBooting] = useState(true);
   const [globalError, setGlobalError] = useState<string>();
@@ -620,7 +623,10 @@ export default function App() {
   // Settings' commands section reports every saved config, keeping `data.commands` (and so the
   // composers) in step. Stable: the section rescans when this changes identity.
   const commandsChanged = useCallback(
-    (config: CommandsConfig) => setData((current) => ({ ...current, commands: config })),
+    (config: CommandsConfig) => {
+      setData((current) => ({ ...current, commands: config }));
+      setDraftSlash(undefined);
+    },
     []
   );
 
@@ -765,13 +771,32 @@ export default function App() {
     }
   }
 
+  async function loadDraftSlashCommands(projectId: string | null) {
+    const request = ++draftSlashRequest.current;
+    setDraftSlash({ projectId, loading: true });
+    try {
+      const commands = await api.listDraftCommands(projectId);
+      if (request === draftSlashRequest.current) setDraftSlash({ projectId, commands, loading: false });
+    } catch (reason) {
+      if (request === draftSlashRequest.current) setDraftSlash({ projectId, loading: false, error: String(reason) });
+    }
+  }
+
   function requestSlashCommands() {
-    if (selectedTask) void loadSlashCommands(selectedTask.id);
-    // The draft hero has no chat to ask for a catalog, and typing must never create one:
-    // its picker offers WackCode's own commands until a send creates the chat (sendSlash).
+    if (selectedTask) {
+      void loadSlashCommands(selectedTask.id);
+      return;
+    }
+    // This keyless scan loads the same explicit resources as a worker without creating a chat,
+    // touching a provider, or enabling project-local package discovery.
+    void loadDraftSlashCommands(draft?.projectId ?? null);
   }
 
   async function sendSlash(name: string, args: string, images: ImageContent[]): Promise<boolean> {
+    // Capture the taskless entry before prepareSlashDraft switches the view to the new chat.
+    const draftCommand = !selectedTask && draftSlash?.projectId === (draft?.projectId ?? null)
+      ? draftSlash.commands?.find((entry) => entry.name === name)
+      : undefined;
     // `/goal pause|resume|clear` drive a live loop, so they are the one app command that is
     // allowed through while the chat is busy — the Composer mirrors this gate.
     const goalControlAction = name === "goal" && /^(pause|resume|clear)$/.test(args.trim()) ? args.trim() as "pause" | "resume" | "clear" : undefined;
@@ -788,8 +813,8 @@ export default function App() {
     }
     if (name === "init") validateInitCommand(args, selectedTask?.projectId ?? draft?.projectId ?? null, currentMode);
     // Commands that act on the current chat have nothing to act on from the draft hero and must
-    // not create one; /new just resets the draft. Only a send that starts work (/init,
-    // /goal <objective>) creates the chat, and it does so here — keystrokes never make chats.
+    // not create one; /new just resets the draft. A command that starts work (/init, /goal,
+    // a skill, template or extension command) creates the chat here — keystrokes never do.
     if (!selectedTask) {
       if (name === "new") { openDraft(); return true; }
       if (name === "name") throw new Error("There is no chat to rename yet — send a message first.");
@@ -835,7 +860,7 @@ export default function App() {
       else if (name === "init") await api.initAgents(id, startedAt);
       else if (name === "goal") await api.goalControl(id, "set", args.trim(), startedAt);
       else {
-        const command = runtime?.slashCommands?.find((entry) => entry.name === name);
+        const command = runtime?.slashCommands?.find((entry) => entry.name === name) ?? draftCommand;
         if (!command) throw new Error("That command changed. Open the command list and try again.");
         await api.executeCommand({ taskId: id, commandId: command.id, args, startedAt, images });
       }
@@ -1689,6 +1714,7 @@ export default function App() {
 
   // A list fetched for another chat or project never shows here.
   const composerMentions = mentions?.source === (mentionSource().source ?? "") ? mentions : undefined;
+  const draftCatalog = !selectedTask && draftSlash?.projectId === (draft?.projectId ?? null) ? draftSlash : undefined;
 
   return (
     <div className="app-shell">
@@ -1707,7 +1733,14 @@ export default function App() {
           toolCatalog={data.toolCatalog}
           disabledTools={data.toolConfig.disabled}
           appDataPath={appDataPath}
-          onClose={() => setSettingsOpen(false)}
+          onClose={() => {
+            setSettingsOpen(false);
+            // Skills, commands or package resources may have changed while Settings was open.
+            setDraftSlash(undefined);
+            setRuntimes((current) => Object.fromEntries(Object.entries(current).map(([id, value]) => [id, {
+              ...value, slashCommands: undefined, slashCommandsError: undefined
+            }])));
+          }}
           onSave={saveProvider}
           onDelete={deleteProvider}
           onConnectSubscription={connectSubscription}
@@ -1883,11 +1916,11 @@ export default function App() {
               onConfigure={selectedTask ? (patch) => void configure(patch) : configureDraft}
               onSend={(message, images, queue) => sendPrompt(message, { images, queue })}
               onLiteral={(message, images) => sendPrompt(message, { images, literal: true })}
-              commands={selectedTask ? [...enabledAppCommands, ...(runtime?.slashCommands ?? [])] : enabledAppCommands}
-              commandsReady={!selectedTask || runtime?.slashCommands !== undefined}
-              commandsLoading={selectedTask ? runtime?.slashCommandsLoading : undefined}
-              commandsError={selectedTask ? runtime?.slashCommandsError : undefined}
-              onRequestCommands={selectedTask ? requestSlashCommands : undefined}
+              commands={[...enabledAppCommands, ...(selectedTask ? runtime?.slashCommands ?? [] : draftCatalog?.commands ?? [])]}
+              commandsReady={selectedTask ? runtime?.slashCommands !== undefined : draftCatalog?.commands !== undefined}
+              commandsLoading={selectedTask ? runtime?.slashCommandsLoading : draftCatalog?.loading}
+              commandsError={selectedTask ? runtime?.slashCommandsError : draftCatalog?.error}
+              onRequestCommands={requestSlashCommands}
               mentionFiles={composerMentions?.files}
               mentionsLoading={composerMentions?.loading}
               mentionsError={composerMentions?.error}

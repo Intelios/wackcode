@@ -33,8 +33,11 @@ describe("commands scan (Settings › Commands)", () => {
     cleanup.push(root);
     const packageDir = join(root, "package");
     const commandsDir = join(root, "commands");
+    const skillsDir = join(root, "skills");
+    const skillDir = join(skillsDir, "fixture-skill");
     await mkdir(packageDir, { recursive: true });
     await mkdir(commandsDir, { recursive: true });
+    await mkdir(skillDir, { recursive: true });
     const extension = join(packageDir, "ext.ts");
     await writeFile(extension, `export default function (pi: any) {
       pi.registerCommand("hello", { description: "Says hello", handler: async () => undefined });
@@ -46,10 +49,14 @@ describe("commands scan (Settings › Commands)", () => {
     const mine = join(commandsDir, "hello.md");
     await writeFile(mine, "---\ndescription: Mine\n---\nMy hello.\n");
     await writeFile(join(commandsDir, "mine.md"), "Just mine.\n");
+    const skillFile = join(skillDir, "SKILL.md");
+    await writeFile(skillFile, "---\nname: fixture-skill\ndescription: Fixture skill\n---\n\nUse this skill.\n");
 
     const result = await scan({
       cwd: root,
-      packages: [{ source: "npm:fixture", label: "Fixture", installedPath: packageDir, extensions: [{ path: extension, enabled: true }], prompts: [{ path: prompt, enabled: true }] }],
+      packages: [{ source: "npm:fixture", label: "Fixture", installedPath: packageDir, extensions: [{ path: extension, enabled: true }], skills: [], prompts: [{ path: prompt, enabled: true }] }],
+      skillRoots: [{ path: skillsDir, label: "Your skills" }],
+      skillDisabled: [],
       commandsDir,
       disabled: []
     });
@@ -67,11 +74,17 @@ describe("commands scan (Settings › Commands)", () => {
       expect.objectContaining({ key: `custom:${mine}`, name: "custom:hello", rawName: "hello", kind: "custom" }),
       expect.objectContaining({ kind: "custom", name: "mine" })
     ]));
+    expect(result.catalog).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: `extension:${extension}#hello`, name: "hello", source: "extension" }),
+      expect.objectContaining({ id: `skill:${skillFile}`, name: "skill:fixture-skill", source: "skill", sourceLabel: "Your skills" })
+    ]));
 
     // A switched-off key frees its name for the command behind it, exactly like a chat.
     const disabled = await scan({
       cwd: root,
-      packages: [{ source: "npm:fixture", label: "Fixture", installedPath: packageDir, extensions: [{ path: extension, enabled: true }], prompts: [{ path: prompt, enabled: true }] }],
+      packages: [{ source: "npm:fixture", label: "Fixture", installedPath: packageDir, extensions: [{ path: extension, enabled: true }], skills: [], prompts: [{ path: prompt, enabled: true }] }],
+      skillRoots: [{ path: skillsDir, label: "Your skills" }],
+      skillDisabled: [],
       commandsDir,
       disabled: [`extension:${extension}#hello`]
     });

@@ -461,7 +461,7 @@ export interface UserCommandsPayload {
 
 /** Settings' command list: `commands-scan.js` reads one of these and prints a `CommandScanResult`. */
 export interface CommandScanRequest {
-  /** Working directory for the resource loader (the user's home, like the skills scan). */
+  /** Working directory the future chat will use (or the user's home when there is no project). */
   cwd: string;
   /**
    * Trusted packages' extension and prompt resources, in Settings order. `enabled` mirrors the
@@ -473,8 +473,13 @@ export interface CommandScanRequest {
     /** The package's install root, so load diagnostics can be attributed to it. */
     installedPath?: string;
     extensions: Array<{ path: string; enabled: boolean }>;
+    skills: Array<{ path: string; enabled: boolean }>;
     prompts: Array<{ path: string; enabled: boolean }>;
   }>;
+  /** Enabled user skill folders, in the same priority order as a chat. */
+  skillRoots: UserSkillRoot[];
+  /** Skill files switched off in Settings › Skills (separate from disabled slash commands). */
+  skillDisabled: string[];
   /** The app-owned folder of the user's commands (`<app data>/commands`). */
   commandsDir: string;
   /** Switched-off `commandKey`s; they resolve names out of the running set exactly as a chat does. */
@@ -505,7 +510,7 @@ export interface ScannedCommandGroup {
 }
 
 export type CommandScanResult =
-  | { ok: true; custom: ScannedCommand[]; packages: ScannedCommandGroup[] }
+  | { ok: true; custom: ScannedCommand[]; packages: ScannedCommandGroup[]; catalog: SlashCommand[] }
   | { ok: false; error: string };
 
 /**

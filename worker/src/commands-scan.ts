@@ -1,9 +1,9 @@
 /**
  * Settings › Commands: a short-lived process that lists what a chat's `/` menu offers — the
- * user's own commands folder, plus every trusted package's extension commands and prompt
- * templates — without a chat. It reads one `{ request, agentDir }` line on stdin, loads the
- * named resources through Pi's own loader, resolves names exactly like the worker's catalog,
- * prints one `CommandScanResult` line and exits.
+ * user's own commands and skills, plus every trusted package's extension commands, prompt
+ * templates and skills — without a chat. It reads one `{ request, agentDir }` line on stdin,
+ * loads the named resources through Pi's own loader, resolves names exactly like the worker's
+ * catalog, prints one `CommandScanResult` line and exits.
  *
  * There is no session, no provider key and no network (PI_OFFLINE). Unlike the skills scan this
  * one *executes* trusted extension code — the only way a command's name exists at all — inside
@@ -14,12 +14,14 @@ import { sep } from "node:path";
 import { JsonLineDecoder } from "./framing.js";
 import { commandKey, resolveCommandNames, resolveInvocationNames } from "./slash.js";
 import { loadUserCommands } from "./user-commands.js";
+import { loadUserSkills, mergeSkills } from "./user-skills.js";
 import type {
   CommandScanRequest,
   CommandScanResult,
   ScannedCommand,
   ScannedCommandGroup,
-  ScannedDiagnostic
+  ScannedDiagnostic,
+  SlashCommand
 } from "./protocol.js";
 
 process.env.PI_TELEMETRY = "0";
@@ -32,9 +34,10 @@ function finish(result: CommandScanResult): never {
 }
 
 interface PoolEntry {
-  kind: "extension" | "prompt" | "custom";
-  /** The catalog's clash prefix: "extension" | "prompt" | "custom". */
-  source: string;
+  kind: "extension" | "prompt" | "custom" | "skill";
+  /** The catalog's clash prefix. */
+  source: SlashCommand["source"];
+  sourceLabel: string;
   invocation: string;
   key: string;
   description?: string;
@@ -49,6 +52,7 @@ async function scan(request: CommandScanRequest, agentDir: string): Promise<neve
     const pi = await import("@earendil-works/pi-coding-agent");
     // Enabled resources only, exactly what `resource_paths` hands a worker.
     const extensionPaths = request.packages.flatMap((pkg) => pkg.extensions.filter((resource) => resource.enabled).map((resource) => resource.path));
+    const skillPaths = request.packages.flatMap((pkg) => (pkg.skills ?? []).filter((resource) => resource.enabled).map((resource) => resource.path));
     const promptPaths = request.packages.flatMap((pkg) => pkg.prompts.filter((resource) => resource.enabled).map((resource) => resource.path));
     const loader = new pi.DefaultResourceLoader({
       cwd: request.cwd,
@@ -59,12 +63,17 @@ async function scan(request: CommandScanRequest, agentDir: string): Promise<neve
       noThemes: true,
       noContextFiles: true,
       additionalExtensionPaths: extensionPaths,
+      additionalSkillPaths: skillPaths,
       additionalPromptTemplatePaths: promptPaths
     });
     await loader.reload();
     const loaded = loader.getExtensions();
     const prompts = loader.getPrompts();
     const custom = loadUserCommands(pi, request.commandsDir);
+    const skills = mergeSkills(
+      loadUserSkills(pi, { roots: request.skillRoots ?? [], disabled: request.skillDisabled ?? [] }),
+      loader.getSkills()
+    );
 
     const owns = (filePath: string, kind: "extensions" | "prompts") =>
       request.packages.find((pkg) => pkg[kind].some((resource) =>
@@ -84,7 +93,8 @@ async function scan(request: CommandScanRequest, agentDir: string): Promise<neve
     const pool: PoolEntry[] = [
       ...resolved.map((command, index) => ({
         kind: "extension" as const,
-        source: "extension",
+        source: "extension" as const,
+        sourceLabel: command.sourceInfo?.source ?? "Extension",
         invocation: command.invocationName,
         key: commandKey("extension", flat[index].path, command.name),
         description: command.description,
@@ -94,7 +104,8 @@ async function scan(request: CommandScanRequest, agentDir: string): Promise<neve
       // The user's commands merge ahead of package templates in a chat, so they resolve first.
       ...custom.map((template) => ({
         kind: "custom" as const,
-        source: "custom",
+        source: "custom" as const,
+        sourceLabel: template.sourceInfo.source,
         invocation: template.name,
         key: commandKey("custom", template.filePath),
         description: template.description,
@@ -103,13 +114,23 @@ async function scan(request: CommandScanRequest, agentDir: string): Promise<neve
       })),
       ...prompts.prompts.map((template) => ({
         kind: "prompt" as const,
-        source: "prompt",
+        source: "prompt" as const,
+        sourceLabel: template.sourceInfo.source,
         invocation: template.name,
         key: commandKey("prompt", template.filePath),
         description: template.description,
         argumentHint: template.argumentHint,
         filePath: template.filePath,
         owner: owns(template.filePath, "prompts")
+      })),
+      ...skills.skills.map((skill) => ({
+        kind: "skill" as const,
+        source: "skill" as const,
+        sourceLabel: skill.sourceInfo.source,
+        invocation: `skill:${skill.name}`,
+        key: commandKey("skill", skill.filePath),
+        description: skill.description,
+        filePath: skill.filePath
       }))
     ];
 
@@ -119,7 +140,7 @@ async function scan(request: CommandScanRequest, agentDir: string): Promise<neve
     const names = resolveCommandNames(offered.map((entry) => ({ source: entry.source, invocation: entry.invocation })));
     const resolvedName = new Map(offered.map((entry, index) => [entry, names[index]]));
 
-    const toScanned = (entry: PoolEntry): ScannedCommand => {
+    const toScanned = (entry: PoolEntry & { kind: "extension" | "prompt" | "custom" }): ScannedCommand => {
       const resolved = resolvedName.get(entry);
       return {
         key: entry.key,
@@ -132,6 +153,18 @@ async function scan(request: CommandScanRequest, agentDir: string): Promise<neve
         enabled: resolved !== undefined
       };
     };
+
+    const catalog: SlashCommand[] = offered.map((entry) => {
+      const resolved = resolvedName.get(entry)!;
+      return {
+        id: entry.key,
+        name: resolved.name,
+        ...(entry.description ? { description: entry.description } : {}),
+        source: entry.source,
+        sourceLabel: entry.sourceLabel,
+        ...(entry.argumentHint ? { argumentHint: entry.argumentHint } : {})
+      };
+    });
 
     const diagnosticOwner = (path: string | undefined, kind: "extensions" | "prompts"): string | undefined => {
       if (!path) return undefined;
@@ -157,12 +190,17 @@ async function scan(request: CommandScanRequest, agentDir: string): Promise<neve
     const packages: ScannedCommandGroup[] = request.packages
       .map((pkg) => ({
         id: pkg.source,
-        commands: pool.filter((entry) => entry.owner === pkg.source).map(toScanned),
+        commands: pool.filter((entry): entry is PoolEntry & { kind: "extension" | "prompt" | "custom" } => entry.owner === pkg.source && entry.kind !== "skill").map(toScanned),
         diagnostics: diagnostics.get(pkg.source) ?? []
       }))
       .filter((group) => group.commands.length > 0 || group.diagnostics.length > 0);
 
-    finish({ ok: true, custom: pool.filter((entry) => entry.kind === "custom").map(toScanned), packages });
+    finish({
+      ok: true,
+      custom: pool.filter((entry): entry is PoolEntry & { kind: "custom" } => entry.kind === "custom").map(toScanned),
+      packages,
+      catalog
+    });
   } catch (error) {
     finish({ ok: false, error: error instanceof Error ? error.message : String(error) });
   }

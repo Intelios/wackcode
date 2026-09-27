@@ -134,6 +134,8 @@ export const api = {
   openTask: (taskId: string) => invoke<void>("open_task", { taskId }),
   /** Stream one sub-agent's transcript as `subagent_stream` events (a reset frame first); null stops. */
   watchSubagent: (taskId: string, target: SubagentTarget | null) => invoke<void>("watch_subagent", { taskId, target }),
+  /** Full keyless `/` catalog for the welcome composer; this never creates a chat. */
+  listDraftCommands: (projectId?: string | null) => invoke<SlashCommand[]>("list_draft_commands", { projectId }),
   listCommands: (taskId: string) => invoke<SlashCommand[]>("list_commands", { taskId }),
   executeCommand: (input: { taskId: string; commandId: string; args: string; startedAt: number; images?: ImageContent[] }) => invoke<string>("execute_command", { input }),
   initAgents: (taskId: string, startedAt: number) => invoke<string>("init_agents", { taskId, startedAt }),

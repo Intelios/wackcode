@@ -2,7 +2,7 @@ import { useState } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ProjectRecord, TaskRecord } from "../types";
-import { NO_PROJECT_KEY, Sidebar } from "./Sidebar";
+import { NO_PROJECT_KEY, Sidebar, type TaskAction } from "./Sidebar";
 
 afterEach(cleanup);
 
@@ -143,3 +143,126 @@ describe("Sidebar collapsible projects", () => {
     expect(toggled).toEqual([NO_PROJECT_KEY]);
   });
 });
+
+describe("Sidebar task actions", () => {
+  function ActionHarness({
+    tasks,
+    showArchived = false,
+    onTaskAction = () => undefined
+  }: {
+    tasks: TaskRecord[];
+    showArchived?: boolean;
+    onTaskAction?: (task: TaskRecord, action: TaskAction) => void;
+  }) {
+    return (
+      <Sidebar
+        projects={projects}
+        tasks={tasks}
+        showArchived={showArchived}
+        pendingDialogTaskIds={new Set<string>()}
+        collapsedProjectIds={new Set()}
+        onSelectTask={() => undefined}
+        onNewChat={() => undefined}
+        onNewDraft={() => undefined}
+        onAddProject={() => undefined}
+        onToggleArchived={() => undefined}
+        onToggleProjectCollapsed={() => undefined}
+        onOpenSettings={() => undefined}
+        onTaskAction={onTaskAction}
+        onProjectAction={() => undefined}
+        onRenameTask={() => undefined}
+      />
+    );
+  }
+
+  it("renders Archive and Delete buttons on each chat row", () => {
+    render(<ActionHarness tasks={[task("t1", "p1", "Refactor parser")]} />);
+    expect(screen.getByRole("button", { name: "Archive Refactor parser" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete Refactor parser" })).toBeInTheDocument();
+  });
+
+  it("confirms delete on second click without a modal", () => {
+    const actions: [TaskRecord, TaskAction][] = [];
+    const t = task("t1", "p1", "Refactor parser");
+    render(<ActionHarness tasks={[t]} onTaskAction={(task, action) => actions.push([task, action])} />);
+
+    const deleteBtn = screen.getByRole("button", { name: "Delete Refactor parser" });
+    fireEvent.click(deleteBtn);
+
+    expect(actions).toHaveLength(0);
+    const confirmBtn = screen.getByRole("button", { name: "Confirm delete Refactor parser" });
+    expect(confirmBtn).toHaveTextContent("Delete?");
+
+    fireEvent.click(confirmBtn);
+    expect(actions).toEqual([[t, "delete-direct"]]);
+  });
+
+  it("confirms archive on second click", () => {
+    const actions: [TaskRecord, TaskAction][] = [];
+    const t = task("t1", "p1", "Refactor parser");
+    render(<ActionHarness tasks={[t]} onTaskAction={(task, action) => actions.push([task, action])} />);
+
+    const archiveBtn = screen.getByRole("button", { name: "Archive Refactor parser" });
+    fireEvent.click(archiveBtn);
+
+    expect(actions).toHaveLength(0);
+    const confirmBtn = screen.getByRole("button", { name: "Confirm archive Refactor parser" });
+    expect(confirmBtn).toHaveTextContent("Archive?");
+
+    fireEvent.click(confirmBtn);
+    expect(actions).toEqual([[t, "archive"]]);
+  });
+
+  it("confirms unarchive on second click for an archived chat", () => {
+    const actions: [TaskRecord, TaskAction][] = [];
+    const t = { ...task("t1", "p1", "Refactor parser"), archived: true };
+    render(<ActionHarness tasks={[t]} showArchived={true} onTaskAction={(task, action) => actions.push([task, action])} />);
+
+    const unarchiveBtn = screen.getByRole("button", { name: "Unarchive Refactor parser" });
+    fireEvent.click(unarchiveBtn);
+
+    expect(actions).toHaveLength(0);
+    const confirmBtn = screen.getByRole("button", { name: "Confirm unarchive Refactor parser" });
+    expect(confirmBtn).toHaveTextContent("Unarchive?");
+
+    fireEvent.click(confirmBtn);
+    expect(actions).toEqual([[t, "unarchive"]]);
+  });
+
+  it("cancels confirmation when clicking outside", () => {
+    const t = task("t1", "p1", "Refactor parser");
+    render(<ActionHarness tasks={[t]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete Refactor parser" }));
+    expect(screen.getByRole("button", { name: "Confirm delete Refactor parser" })).toHaveTextContent("Delete?");
+
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("button", { name: "Confirm delete Refactor parser" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Delete Refactor parser" })).toBeInTheDocument();
+  });
+
+  it("cancels confirmation when Escape is pressed", () => {
+    const t = task("t1", "p1", "Refactor parser");
+    render(<ActionHarness tasks={[t]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Archive Refactor parser" }));
+    expect(screen.getByRole("button", { name: "Confirm archive Refactor parser" })).toHaveTextContent("Archive?");
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("button", { name: "Confirm archive Refactor parser" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Archive Refactor parser" })).toBeInTheDocument();
+  });
+
+  it("switches confirmation between archive and delete on the same task", () => {
+    const t = task("t1", "p1", "Refactor parser");
+    render(<ActionHarness tasks={[t]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Archive Refactor parser" }));
+    expect(screen.getByRole("button", { name: "Confirm archive Refactor parser" })).toHaveTextContent("Archive?");
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete Refactor parser" }));
+    expect(screen.queryByRole("button", { name: "Confirm archive Refactor parser" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Confirm delete Refactor parser" })).toHaveTextContent("Delete?");
+  });
+});
+

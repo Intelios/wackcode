@@ -1708,6 +1708,21 @@ export default function App() {
     if (selectedTaskRef.current === removedId) openDraft();
   }
 
+  async function performDeleteTask(task: TaskRecord) {
+    try {
+      await api.deleteTask(task.id);
+      setData((current) => ({ ...current, tasks: current.tasks.filter((item) => item.id !== task.id) }));
+      setRuntimes((current) => {
+        const next = { ...current };
+        delete next[task.id];
+        return next;
+      });
+      selectAfterRemoval(task.id);
+    } catch (reason) {
+      setGlobalError(String(reason));
+    }
+  }
+
   async function taskAction(task: TaskRecord, action: TaskAction) {
     if (action === "reveal") {
       try { await api.revealTask(task.id); } catch (reason) { setGlobalError(String(reason)); }
@@ -1731,6 +1746,8 @@ export default function App() {
         const updated = await api.convertToWorktree(task.id);
         setData((current) => ({ ...current, tasks: current.tasks.map((item) => item.id === updated.id ? updated : item) }));
       } catch (reason) { setGlobalError(String(reason)); }
+    } else if (action === "delete-direct") {
+      await performDeleteTask(task);
     } else if (action === "delete") {
       setConfirm({
         title: `Delete “${task.name}”?`,
@@ -1739,16 +1756,7 @@ export default function App() {
           : "This removes the chat and its saved session. Files in the project are not touched.",
         confirmLabel: "Delete",
         danger: true,
-        run: async () => {
-          await api.deleteTask(task.id);
-          setData((current) => ({ ...current, tasks: current.tasks.filter((item) => item.id !== task.id) }));
-          setRuntimes((current) => {
-            const next = { ...current };
-            delete next[task.id];
-            return next;
-          });
-          selectAfterRemoval(task.id);
-        }
+        run: () => performDeleteTask(task)
       });
     }
   }

@@ -163,9 +163,51 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .task-item.archived { opacity: .58; }
 .task-item .task-branch-icon { width: 12px; height: 12px; color: var(--text-dim); flex: 0 0 auto; }
 .task-actions { display: flex; align-items: center; gap: 1px; flex: 0 0 auto; }
-.task-item .row-menu { opacity: 0; width: 22px; height: 22px; transition: opacity .12s; }
+.task-item .row-menu { opacity: 0; width: 22px; height: 22px; transition: opacity .12s var(--ease), background .15s var(--ease), color .15s var(--ease); }
 .task-item:hover .row-menu, .task-item:focus-within .row-menu { opacity: 1; }
+.task-item .row-menu:active { transform: scale(.92); }
 .row-menu.danger:hover { color: var(--danger); background: var(--danger-bg); }
+.task-item .row-menu.confirming {
+  opacity: 1;
+  width: auto;
+  min-width: 22px;
+  padding: 0 7px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 20px;
+  white-space: nowrap;
+  animation: confirm-pop .18s cubic-bezier(.34, 1.56, .64, 1);
+}
+.row-menu.confirming.danger { color: var(--danger); background: var(--danger-bg); }
+.row-menu.confirming.danger:hover { background: color-mix(in srgb, var(--danger) 22%, transparent); }
+.row-menu.confirming:not(.danger) { color: var(--wc-accent); background: var(--surface-hover); }
+.row-menu.confirming:not(.danger):hover { background: color-mix(in srgb, var(--wc-accent) 15%, var(--surface-hover)); }
+.confirm-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  animation: confirm-label-in .14s var(--ease);
+}
+.row-menu-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+@keyframes confirm-pop {
+  0% { transform: scale(.88); opacity: .7; }
+  65% { transform: scale(1.05); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+@keyframes confirm-label-in {
+  from { opacity: 0; transform: translateY(1px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .task-item .row-menu.confirming,
+  .confirm-label { animation: none !important; }
+}
 .task-item.renaming { padding: 2px 6px 2px 9px; }
 .task-item.renaming input { height: 26px; font-size: 13px; padding: 0 6px; }
 .task-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; flex: 1; font-size: 13px; }

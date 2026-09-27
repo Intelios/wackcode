@@ -1,18 +1,20 @@
-import { useRef, useState, type ReactElement, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 interface TooltipProps {
   label: ReactNode;
   side?: "top" | "bottom";
+  disabled?: boolean;
   children: ReactElement;
 }
 
-export function Tooltip({ label, side = "top", children }: TooltipProps) {
+export function Tooltip({ label, side = "top", disabled = false, children }: TooltipProps) {
   const wrapRef = useRef<HTMLSpanElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [style, setStyle] = useState<React.CSSProperties>();
 
   const show = () => {
+    if (disabled || !label) return;
     timer.current = setTimeout(() => {
       const rect = wrapRef.current?.getBoundingClientRect();
       if (!rect) return;
@@ -30,10 +32,17 @@ export function Tooltip({ label, side = "top", children }: TooltipProps) {
     setStyle(undefined);
   };
 
+  useEffect(() => {
+    if (disabled) {
+      if (timer.current) clearTimeout(timer.current);
+      setStyle(undefined);
+    }
+  }, [disabled]);
+
   return (
     <span ref={wrapRef} className="tooltip-wrap" onMouseEnter={show} onMouseLeave={hide} onMouseDown={hide}>
       {children}
-      {style && createPortal(<span className="tooltip" style={style} role="tooltip">{label}</span>, document.body)}
+      {style && !disabled && createPortal(<span className="tooltip" style={style} role="tooltip">{label}</span>, document.body)}
     </span>
   );
 }

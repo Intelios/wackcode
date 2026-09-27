@@ -1,13 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { ProjectRecord, TaskRecord } from "../types";
-import { canFork } from "../tree-utils";
 import { Icon } from "./Icons";
 import { MenuButton } from "./ui/MenuButton";
-import type { MenuEntry } from "./ui/Menu";
 import { Tooltip } from "./ui/Tooltip";
 
-export type TaskAction = "rename" | "worktree" | "fork" | "reveal" | "copy" | "archive" | "unarchive" | "delete";
+export type TaskAction = "rename" | "worktree" | "fork" | "reveal" | "copy" | "archive" | "unarchive" | "delete" | "delete-direct";
 export type ProjectAction = "reveal" | "remove";
 
 /** Collapse-key for the "No project" group, which has no ProjectRecord id. */
@@ -37,10 +35,40 @@ interface SidebarProps {
 export function Sidebar({ projects, tasks, selectedTaskId, showArchived, pendingDialogTaskIds, collapsedProjectIds, onSelectTask, onNewChat, onNewDraft, onAddProject, onToggleArchived, onToggleProjectCollapsed, onOpenSettings, onTaskAction, onProjectAction, onRenameTask }: SidebarProps) {
   const [renamingId, setRenamingId] = useState<string>();
   const [renameValue, setRenameValue] = useState("");
+  const [confirmingAction, setConfirmingAction] = useState<{ taskId: string; action: "delete" | "archive" | "unarchive" } | null>(null);
   const hasArchived = tasks.some((task) => task.archived);
   const looseTasks = tasks.filter((task) => task.projectId === null && (!task.archived || showArchived));
 
+  useEffect(() => {
+    if (!confirmingAction) return;
+    function handleOutside(event: Event) {
+      const target = event.target as HTMLElement | null;
+      if (!target?.closest(".task-confirming")) {
+        setConfirmingAction(null);
+      }
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setConfirmingAction(null);
+      }
+    }
+    const timer = setTimeout(() => {
+      setConfirmingAction(null);
+    }, 4000);
+
+    window.addEventListener("pointerdown", handleOutside);
+    window.addEventListener("mousedown", handleOutside);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("pointerdown", handleOutside);
+      window.removeEventListener("mousedown", handleOutside);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [confirmingAction]);
+
   function startRename(task: TaskRecord) {
+    setConfirmingAction(null);
     setRenamingId(task.id);
     setRenameValue(task.name);
   }
@@ -51,24 +79,31 @@ export function Sidebar({ projects, tasks, selectedTaskId, showArchived, pending
     if (name) onRenameTask(taskId, name);
   }
 
-  function taskMenu(task: TaskRecord, project?: ProjectRecord): MenuEntry[] {
-    const canWorktree = Boolean(!task.usesWorktree && !task.sessionFile && project?.gitHasHead);
-    return [
-      { label: "Rename", icon: <Icon name="pencil" />, onSelect: () => startRename(task) },
-      { label: "Move to worktree", icon: <Icon name="branch" />, disabled: !canWorktree, onSelect: () => onTaskAction(task, "worktree") },
-      { label: "Fork chat", icon: <Icon name="branch" />, disabled: !canFork(task), onSelect: () => onTaskAction(task, "fork") },
-      "separator",
-      { label: "Reveal in Finder", icon: <Icon name="folder" />, onSelect: () => onTaskAction(task, "reveal") },
-      { label: "Copy path", icon: <Icon name="copy" />, onSelect: () => onTaskAction(task, "copy") },
-      "separator",
-      task.archived
-        ? { label: "Unarchive", icon: <Icon name="archive" />, onSelect: () => onTaskAction(task, "unarchive") }
-        : { label: "Archive", icon: <Icon name="archive" />, onSelect: () => onTaskAction(task, "archive") },
-      { label: "Delete", icon: <Icon name="trash" />, danger: true, onSelect: () => onTaskAction(task, "delete") }
-    ];
+  function handleArchiveClick(event: React.MouseEvent, task: TaskRecord) {
+    event.stopPropagation();
+    const action: TaskAction = task.archived ? "unarchive" : "archive";
+    if (confirmingAction?.taskId === task.id && confirmingAction.action === action) {
+      setConfirmingAction(null);
+      onTaskAction(task, action);
+    } else {
+      setConfirmingAction({ taskId: task.id, action });
+    }
   }
 
-  function renderTask(task: TaskRecord, project?: ProjectRecord) {
+  function handleDeleteClick(event: React.MouseEvent, task: TaskRecord) {
+    event.stopPropagation();
+    if (confirmingAction?.taskId === task.id && confirmingAction.action === "delete") {
+      setConfirmingAction(null);
+      onTaskAction(task, "delete-direct");
+    } else {
+      setConfirmingAction({ taskId: task.id, action: "delete" });
+    }
+  }
+
+  function renderTask(task: TaskRecord, _project?: ProjectRecord) {
+    const isConfirmingArchive = confirmingAction?.taskId === task.id && (confirmingAction.action === "archive" || confirmingAction.action === "unarchive");
+    const isConfirmingDelete = confirmingAction?.taskId === task.id && confirmingAction.action === "delete";
+
     return renamingId === task.id ? (
       <div className="task-item renaming" key={task.id}>
         <input
@@ -99,10 +134,33 @@ export function Sidebar({ projects, tasks, selectedTaskId, showArchived, pending
         {task.mode === "ultraplan" && <span className="task-mode-chip ultra">Ultra Plan</span>}
         {task.usesWorktree && <Icon name="branch" className="task-branch-icon" />}
         <span className="task-actions" onClick={(event) => event.stopPropagation()} onDoubleClick={(event) => event.stopPropagation()}>
-          <MenuButton className="row-menu" label={`${task.name} menu`} items={() => taskMenu(task, project)} />
-          <Tooltip label="Delete chat">
-            <button type="button" className="ghost-button row-menu danger" onClick={() => onTaskAction(task, "delete")} aria-label={`Delete ${task.name}`}>
-              <Icon name="trash" />
+          <Tooltip label={task.archived ? "Unarchive chat" : "Archive chat"} disabled={Boolean(isConfirmingArchive)}>
+            <button
+              type="button"
+              className={`ghost-button row-menu${isConfirmingArchive ? " confirming task-confirming" : ""}`}
+              onClick={(event) => handleArchiveClick(event, task)}
+              aria-label={isConfirmingArchive ? `Confirm ${task.archived ? "unarchive" : "archive"} ${task.name}` : task.archived ? `Unarchive ${task.name}` : `Archive ${task.name}`}
+            >
+              {isConfirmingArchive ? (
+                <span className="confirm-label">{task.archived ? "Unarchive?" : "Archive?"}</span>
+              ) : (
+                <span className="row-menu-icon"><Icon name="archive" /></span>
+              )}
+            </button>
+          </Tooltip>
+
+          <Tooltip label="Delete chat" disabled={Boolean(isConfirmingDelete)}>
+            <button
+              type="button"
+              className={`ghost-button row-menu danger${isConfirmingDelete ? " confirming task-confirming" : ""}`}
+              onClick={(event) => handleDeleteClick(event, task)}
+              aria-label={isConfirmingDelete ? `Confirm delete ${task.name}` : `Delete ${task.name}`}
+            >
+              {isConfirmingDelete ? (
+                <span className="confirm-label">Delete?</span>
+              ) : (
+                <span className="row-menu-icon"><Icon name="trash" /></span>
+              )}
             </button>
           </Tooltip>
         </span>

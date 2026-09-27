@@ -6,7 +6,7 @@ import { SidePanel } from "./SidePanel";
 afterEach(cleanup);
 
 const scout: SidePanelView = { kind: "subagent", taskId: "chat-1", toolCallId: "call-1", index: 0 };
-const content = (view: SidePanelView) => <p>{view.kind === "changes" ? "Changes view" : `SubAgent view ${view.index}`}</p>;
+const content = (view: SidePanelView) => <p>{view.kind === "changes" ? "Changes view" : view.kind === "browser" ? "Browser view" : `SubAgent view ${view.index}`}</p>;
 
 function panel(view: SidePanelView | null, label: string, onWidthChange = vi.fn()) {
   return <SidePanel view={view} width={430} onWidthChange={onWidthChange} label={label}>{content}</SidePanel>;
@@ -43,7 +43,7 @@ describe("SidePanel", () => {
     fireEvent.pointerMove(window, { clientX: 400 });
     expect(onWidthChange).toHaveBeenLastCalledWith(530);
     fireEvent.pointerMove(window, { clientX: -1_000 });
-    expect(onWidthChange).toHaveBeenLastCalledWith(720);
+    expect(onWidthChange).toHaveBeenLastCalledWith(1200);
     fireEvent.pointerUp(window);
     fireEvent.pointerMove(window, { clientX: 300 });
     expect(onWidthChange).toHaveBeenCalledTimes(2);

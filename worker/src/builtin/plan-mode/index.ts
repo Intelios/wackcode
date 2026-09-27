@@ -15,6 +15,7 @@ import { ASK_USER_QUESTION_TOOL_NAME } from "../ask-user-question.js";
 import type { BuiltinHost } from "../host.js";
 import { TODO_TOOL_NAME } from "../todo/types.js";
 import { WEB_FETCH_TOOL_NAME } from "../web-fetch/index.js";
+import { BROWSER_ACT_TOOL_NAME, BROWSER_CONSOLE_TOOL_NAME, BROWSER_OPEN_TOOL_NAME, BROWSER_SCREENSHOT_TOOL_NAME, BROWSER_SNAPSHOT_TOOL_NAME } from "../browser.js";
 import {
   PLAN_MODE_COMPLETE_PARAMS,
   PLAN_MODE_COMPLETE_TOOL_NAME,
@@ -167,13 +168,19 @@ export function createPlanModeExtension(host: BuiltinHost, mcpTools?: PlanModeMc
         event.toolName === PLAN_MODE_COMPLETE_TOOL_NAME ||
         event.toolName === TODO_TOOL_NAME ||
         event.toolName === SUBAGENT_TOOL_NAME ||
-        event.toolName === WEB_FETCH_TOOL_NAME;
+        event.toolName === WEB_FETCH_TOOL_NAME ||
+        event.toolName === BROWSER_SNAPSHOT_TOOL_NAME ||
+        event.toolName === BROWSER_SCREENSHOT_TOOL_NAME ||
+        event.toolName === BROWSER_CONSOLE_TOOL_NAME;
       if (!active) {
         return event.toolName === PLAN_MODE_COMPLETE_TOOL_NAME
           ? { block: true, reason: "plan_mode_complete is only available while Plan mode is active." }
           : undefined;
       }
       if (helper) return undefined;
+      if (event.toolName === BROWSER_OPEN_TOOL_NAME || event.toolName === BROWSER_ACT_TOOL_NAME) {
+        return { block: true, reason: `Plan mode may inspect an existing browser page but cannot ${event.toolName === BROWSER_OPEN_TOOL_NAME ? "open or navigate it" : "interact with it"}.` };
+      }
 
       // MCP tools come from servers the user added. One the server marks read-only
       // (`readOnlyHint`) may help with planning; any other could change something.

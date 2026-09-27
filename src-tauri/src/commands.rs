@@ -1854,7 +1854,10 @@ pub async fn stop_task(app: AppHandle, task_id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn archive_task(app: AppHandle, state: State<'_, MetadataState>, task_id: String) -> Result<TaskRecord, String> {
+    let lock = task_lock(&app, &task_id);
+    let _guard = lock.lock().await;
     worker::terminate_worker(&app, &task_id, true).await?;
+    app.state::<crate::browser::BrowserManager>().dispose(&task_id);
     state.mutate(|data| {
         let task = data.tasks.iter_mut().find(|task| task.id == task_id).ok_or_else(|| "Task not found".to_string())?;
         task.archived = true;
@@ -1891,6 +1894,7 @@ pub async fn delete_task(app: AppHandle, state: State<'_, MetadataState>, task_i
     let lock = task_lock(&app, &task_id);
     let _guard = lock.lock().await;
     worker::terminate_worker(&app, &task_id, true).await?;
+    app.state::<crate::browser::BrowserManager>().dispose(&task_id);
     let (task, git_root) = state.mutate(|data| {
         let index = data.tasks.iter().position(|task| task.id == task_id).ok_or_else(|| "Chat not found".to_string())?;
         let task = data.tasks.remove(index);

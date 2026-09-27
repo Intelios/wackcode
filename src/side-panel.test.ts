@@ -3,10 +3,12 @@ import { CHANGES_VIEW, rememberedChanges, sameView, swapDirection, swapKey, togg
 
 const scout: SidePanelView = { kind: "subagent", taskId: "chat-1", toolCallId: "call-1", index: 0 };
 const sibling: SidePanelView = { kind: "subagent", taskId: "chat-1", toolCallId: "call-1", index: 1 };
+const browser: SidePanelView = { kind: "browser", taskId: "chat-1" };
 
 describe("side panel views", () => {
   it("tells views apart by what they show", () => {
     expect(viewKey(CHANGES_VIEW)).toBe("changes");
+    expect(viewKey(browser)).toBe("browser:chat-1");
     expect(viewKey(scout)).toBe("subagent:chat-1:call-1#0");
     expect(sameView(scout, { ...scout })).toBe(true);
     expect(sameView(scout, sibling)).toBe(false);
@@ -37,6 +39,7 @@ describe("side panel views", () => {
     expect(rememberedChanges(CHANGES_VIEW)).toBe(true);
     expect(rememberedChanges(null)).toBe(false);
     expect(rememberedChanges(scout)).toBeUndefined();
+    expect(rememberedChanges(browser)).toBeUndefined();
   });
 
   it("keeps a sub-agent only in its own chat, falling back to the remembered Changes state", () => {
@@ -44,6 +47,9 @@ describe("side panel views", () => {
     expect(viewForChat(scout, "chat-2", true)).toBe(CHANGES_VIEW);
     expect(viewForChat(scout, "chat-2", false)).toBeNull();
     expect(viewForChat(scout, undefined, true)).toBe(CHANGES_VIEW);
+    expect(viewForChat(browser, "chat-1", false)).toBe(browser);
+    expect(viewForChat(browser, "chat-2", true)).toBe(CHANGES_VIEW);
+    expect(viewForChat(browser, "chat-2", false)).toBeNull();
     expect(viewForChat(CHANGES_VIEW, "chat-2", false)).toBe(CHANGES_VIEW);
     expect(viewForChat(null, "chat-2", true)).toBeNull();
   });

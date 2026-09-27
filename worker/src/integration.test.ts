@@ -782,9 +782,27 @@ describe("Pi worker integration", () => {
     cleanup.push(() => worker.shutdown());
 
     // Every tool Pi ships is in the registry, including the three the worker never used to
-    // enable, plus WackCode's five built-in extension tools.
+    // enable, plus WackCode's ten built-in extension tools.
     const names = (ready.snapshot?.tools ?? []).map((tool) => tool.name).sort();
-    expect(names).toEqual(["ask_user_question", "bash", "edit", "find", "grep", "ls", "plan_mode_complete", "read", "subagent", "todo", "web_fetch", "write"]);
+    expect(names).toEqual([
+      "ask_user_question",
+      "bash",
+      "browser_act",
+      "browser_console",
+      "browser_open",
+      "browser_screenshot",
+      "browser_snapshot",
+      "edit",
+      "find",
+      "grep",
+      "ls",
+      "plan_mode_complete",
+      "read",
+      "subagent",
+      "todo",
+      "web_fetch",
+      "write"
+    ]);
     expect(ready.snapshot?.tools?.every((tool) => tool.source.kind === "builtin" || tool.source.kind === "wackcode")).toBe(true);
     // The denylist from `init` is applied before the first turn, and tools whose external
     // binary is missing are never offered even though they stay listed in the catalogue.
@@ -806,9 +824,24 @@ describe("Pi worker integration", () => {
       (request.body.tools as Array<{ function: { name: string } }> ?? []).map((tool) => tool.function.name).sort();
     expect(offered(provider.requests[0])).toEqual(expectedActive);
 
-    // Toggling tools takes effect on the next turn with no worker restart. The wackcode
-    // tools are exempt from the denylist except web_fetch, so six tools stay active.
-    worker.send({ id: crypto.randomUUID(), type: "set_tools", disabledTools: ["bash", "grep", "ls", "find", "web_fetch"] });
+    // Toggling tools takes effect on the next turn with no worker restart. Browser tools
+    // and web_fetch are user-switchable; all other WackCode tools stay active.
+    worker.send({
+      id: crypto.randomUUID(),
+      type: "set_tools",
+      disabledTools: [
+        "bash",
+        "grep",
+        "ls",
+        "find",
+        "web_fetch",
+        "browser_open",
+        "browser_snapshot",
+        "browser_act",
+        "browser_screenshot",
+        "browser_console"
+      ]
+    });
     await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.length === 6);
     // `find`/`grep` availability varies by host, so assert the five that never depend on a binary.
     const beforeSecondRun = provider.requests.length;

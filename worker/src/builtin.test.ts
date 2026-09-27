@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAskUserQuestionExtension, normalizeAskQuestionsParams } from "./builtin/ask-user-question.js";
+import { createBrowserExtension } from "./builtin/browser.js";
 import { createGoalExtension } from "./builtin/goal/index.js";
 import { GOAL_ENTRY_TYPE, NO_PROGRESS_LIMIT, restoreGoalState } from "./builtin/goal/state.js";
 import type { GoalVerdict } from "./builtin/goal/verify.js";
@@ -812,5 +813,46 @@ describe("goal loop", () => {
     expect(paused).toMatchObject({ objective: "Ship it", phase: "paused", iteration: 2 });
     expect(paused?.note).toBeTruthy();
     expect(restoreGoalState([{ type: "custom", customType: GOAL_ENTRY_TYPE, data: { version: 1, phase: "cleared" } }])).toBeUndefined();
+  });
+});
+
+describe("browser built-in", () => {
+  function harness(vision: boolean) {
+    const requests: unknown[] = [];
+    const tools = new Map<string, { execute: (...args: unknown[]) => Promise<{ content: Array<{ type: string; text?: string; data?: string }>; details: unknown }> }>();
+    const host = {
+      browser: async (request: unknown) => {
+        requests.push(request);
+        return (request as { op?: string }).op === "screenshot"
+          ? { image: { mimeType: "image/png", data: "cG5n", width: 20, height: 10 }, coordinateScale: 2, url: "http://localhost/" }
+          : { ok: true };
+      },
+      supportsVision: () => vision,
+      redact: (value: string) => value,
+    } as unknown as BuiltinHost;
+    createBrowserExtension(host)({ registerTool: (tool: { name: string; execute: (...args: unknown[]) => Promise<never> }) => tools.set(tool.name, tool as never) } as never);
+    return { requests, tools };
+  }
+
+  it("routes navigation and interaction through the native host", async () => {
+    const { requests, tools } = harness(true);
+    await tools.get("browser_open")!.execute("call", { url: "http://localhost:5173" }, undefined);
+    await tools.get("browser_act")!.execute("call", { kind: "click", ref: "e1-0" }, undefined);
+    expect(requests).toEqual([
+      { op: "open", url: "http://localhost:5173" },
+      { op: "act", action: { kind: "click", ref: "e1-0" } },
+    ]);
+  });
+
+  it("returns a real image only to vision-capable models", async () => {
+    const unavailable = harness(false);
+    const textOnly = await unavailable.tools.get("browser_screenshot")!.execute("call", {}, undefined);
+    expect(textOnly.content[0]?.text).toContain("cannot receive browser screenshots");
+    expect(unavailable.requests).toHaveLength(0);
+
+    const available = harness(true);
+    const image = await available.tools.get("browser_screenshot")!.execute("call", {}, undefined);
+    expect(image.content).toContainEqual({ type: "image", data: "cG5n", mimeType: "image/png" });
+    expect(image.content[0]?.text).toContain("coordinate scale 2");
   });
 });

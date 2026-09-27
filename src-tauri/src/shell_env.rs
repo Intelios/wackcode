@@ -6,7 +6,7 @@
 //! per app run. Provider API keys are still stripped afterwards (`worker::strip_provider_env`).
 
 use nix::{sys::signal::{killpg, Signal}, unistd::Pid};
-use std::{collections::HashMap, process::Stdio, time::Duration};
+use std::{collections::{HashMap, HashSet}, process::Stdio, time::Duration};
 use tokio::{process::Command, sync::OnceCell};
 
 const START: &str = "__WACKCODE_ENV_START__";
@@ -77,8 +77,10 @@ fn parse(stdout: &[u8]) -> Option<HashMap<String, String>> {
 fn fallback() -> HashMap<String, String> {
     let mut environment: HashMap<String, String> = std::env::vars().collect();
     let current = environment.get("PATH").cloned().unwrap_or_else(|| "/usr/bin:/bin:/usr/sbin:/sbin".into());
-    let mut paths: Vec<&str> = FALLBACK_PATHS.iter().copied().filter(|path| !current.split(':').any(|entry| entry == *path)).collect();
-    paths.push(&current);
+    let mut seen = HashSet::new();
+    let paths: Vec<&str> = FALLBACK_PATHS.iter().copied().chain(current.split(':'))
+        .filter(|path| !path.is_empty() && seen.insert(*path))
+        .collect();
     environment.insert("PATH".into(), paths.join(":"));
     environment
 }

@@ -6,7 +6,7 @@ import { swapDirection, swapKey, type SidePanelView } from "../side-panel";
 const EASE: [number, number, number, number] = [0.33, 1, 0.68, 1];
 
 export const MIN_PANEL_WIDTH = 290;
-export const MAX_PANEL_WIDTH = 720;
+export const MAX_PANEL_WIDTH = 1200;
 
 /** A new view arrives from one side as the old one clears out toward the other (`swapDirection`). */
 function pageVariants(reduce: boolean) {

@@ -1,6 +1,6 @@
 import type { SVGProps } from "react";
 
-export type IconName = "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "copy" | "archive" | "send" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "checklist" | "terminal" | "file" | "pencil" | "external" | "brain" | "search" | "wrench" | "question" | "image" | "close" | "rewind" | "agents" | "flame" | "palette" | "plug" | "book" | "comment" | "commit" | "push" | "pullRequest" | "slash";
+export type IconName = "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "browser" | "expand" | "collapse" | "copy" | "archive" | "send" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "checklist" | "terminal" | "file" | "pencil" | "external" | "brain" | "search" | "wrench" | "question" | "image" | "close" | "rewind" | "agents" | "flame" | "palette" | "plug" | "book" | "comment" | "commit" | "push" | "pullRequest" | "slash";
 
 const paths: Record<IconName, React.ReactNode> = {
   plus: <><path d="M12 5v14M5 12h14" /></>,
@@ -11,6 +11,9 @@ const paths: Record<IconName, React.ReactNode> = {
   git: <><circle cx="6" cy="5" r="2" /><circle cx="18" cy="7" r="2" /><circle cx="8" cy="19" r="2" /><path d="M6 7v3c0 3 2 3 2 7M8 13c0-4 8-1 10-4" /></>,
   refresh: <><path d="M20 7v5h-5" /><path d="M19 12a7 7 0 1 0-2 5" /></>,
   panel: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M15 4v16" /></>,
+  browser: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 8h18" /><circle cx="6" cy="6" r=".45" fill="currentColor" stroke="none" /><circle cx="8" cy="6" r=".45" fill="currentColor" stroke="none" /></>,
+  expand: <><path d="M9 4H4v5M15 4h5v5M20 15v5h-5M9 20H4v-5" /></>,
+  collapse: <><path d="M4 9h5V4M20 9h-5V4M15 20v-5h5M9 20v-5H4" /></>,
   copy: <><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" /></>,
   archive: <><path d="M4 7h16v13H4zM3 4h18v3H3z" /><path d="M9 11h6" /></>,
   send: <><path d="m4 4 17 8-17 8 3-8z" /><path d="M7 12h14" /></>,

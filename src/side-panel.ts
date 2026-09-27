@@ -1,21 +1,22 @@
 /**
- * The right-hand side panel shows one view at a time: the chat's Git changes, or one
+ * The right-hand side panel shows one view at a time: the chat's Git changes, browser, or one
  * sub-agent's transcript. Views are this union; adding one means a member here, a view
  * component rendered in `SidePanel`, and a trigger that opens it (`toggleView`).
  *
  * Only Changes is durable. Whether it is open is remembered across launches and chats
- * (`wackcode:changesOpen`); a sub-agent view belongs to one chat and falls back to that
- * remembered state when the chat changes or the call leaves the conversation.
+ * (`wackcode:changesOpen`); browser and sub-agent views belong to one chat and fall back to
+ * that remembered state when the chat changes or the call leaves the conversation.
  */
 export type SidePanelView =
   | { kind: "changes" }
+  | { kind: "browser"; taskId: string }
   | { kind: "subagent"; taskId: string; toolCallId: string; index: number };
 
 export const CHANGES_VIEW: SidePanelView = { kind: "changes" };
 
 /** Stable per view: keys the panel's swap animation and tells two views apart. */
 export function viewKey(view: SidePanelView): string {
-  return view.kind === "subagent" ? `subagent:${view.taskId}:${view.toolCallId}#${view.index}` : view.kind;
+  return view.kind === "subagent" ? `subagent:${view.taskId}:${view.toolCallId}#${view.index}` : view.kind === "browser" ? `browser:${view.taskId}` : view.kind;
 }
 
 /**
@@ -53,6 +54,6 @@ export function rememberedChanges(view: SidePanelView | null): boolean | undefin
 
 /** The view to show in `taskId`'s chat: the current one if it can stay, else the remembered one. */
 export function viewForChat(view: SidePanelView | null, taskId: string | undefined, changesOpen: boolean): SidePanelView | null {
-  if (view?.kind === "subagent") return view.taskId === taskId ? view : changesOpen ? CHANGES_VIEW : null;
+  if (view?.kind === "subagent" || view?.kind === "browser") return view.taskId === taskId ? view : changesOpen ? CHANGES_VIEW : null;
   return view;
 }

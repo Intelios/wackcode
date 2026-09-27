@@ -6,6 +6,7 @@ import { join } from "node:path";
 // Type-only: erased at build time, so Pi still loads solely through the dynamic import in initialize().
 import type { PromptTemplate, ResourceLoader } from "@earendil-works/pi-coding-agent";
 import { SWITCHABLE_BUILTIN_TOOLS, createBuiltinExtensions } from "./builtin/index.js";
+import { BROWSER_TOOL_NAMES } from "./builtin/browser.js";
 import { GOAL_VERIFIER_SYSTEM } from "./builtin/goal/prompt.js";
 import { runGoalVerification } from "./builtin/goal/verify.js";
 import type { BuiltinHost, SubagentOutcome } from "./builtin/host.js";
@@ -128,6 +129,22 @@ let disabledTools = new Set<string>();
 let subagentRunner: SubagentRunner | undefined;
 /** Aborts the wait for MCP servers at the start of a run, when the user presses Stop. */
 let mcpWait: AbortController | undefined;
+interface PendingBrowserRequest {
+  resolve(value: unknown): void;
+  reject(error: Error): void;
+  detach(): void;
+}
+/** Native browser requests bypass the prompt queue in both directions to avoid tool deadlocks. */
+const pendingBrowserRequests = new Map<string, PendingBrowserRequest>();
+
+function cancelPendingBrowserRequests(message = "Browser action cancelled."): void {
+  for (const [requestId, pending] of pendingBrowserRequests) {
+    pending.detach();
+    pending.reject(new Error(message));
+    if (taskId) send({ type: "browser_cancel", taskId, requestId });
+  }
+  pendingBrowserRequests.clear();
+}
 /** The user's own skill folders (Settings › Skills) and what they held at the last scan. */
 let userSkillsPayload: UserSkillsPayload | undefined;
 let userSkills = NO_USER_SKILLS;
@@ -205,7 +222,7 @@ const builtinHost: BuiltinHost = {
   },
   childToolNames: () =>
     toolCatalog()
-      .filter((tool) => (tool.source.kind === "builtin" || SWITCHABLE_BUILTIN_TOOLS.has(tool.name)) && tool.available && !disabledTools.has(tool.name))
+      .filter((tool) => !BROWSER_TOOL_NAMES.includes(tool.name as typeof BROWSER_TOOL_NAMES[number]) && (tool.source.kind === "builtin" || SWITCHABLE_BUILTIN_TOOLS.has(tool.name)) && tool.available && !disabledTools.has(tool.name))
       .map((tool) => tool.name),
   runSubagent: async (request) => {
     if (!subagentRunner) throw new Error("Worker is not initialized");
@@ -222,7 +239,27 @@ const builtinHost: BuiltinHost = {
   },
   redact: (text) => redactCredentials(text),
   notice: (message, level) => notice(safeError(message), level),
-  workspace: () => workspacePath
+  workspace: () => workspacePath,
+  browser: (request, signal) => {
+    if (!taskId) return Promise.reject(new Error("Worker is not initialized"));
+    if (signal?.aborted) return Promise.reject(new Error("Browser action cancelled."));
+    const requestId = crypto.randomUUID();
+    return new Promise((resolve, reject) => {
+      const onAbort = () => {
+        const pending = pendingBrowserRequests.get(requestId);
+        if (!pending) return;
+        pendingBrowserRequests.delete(requestId);
+        pending.detach();
+        send({ type: "browser_cancel", taskId: taskId!, requestId });
+        reject(new Error("Browser action cancelled."));
+      };
+      const detach = () => signal?.removeEventListener("abort", onAbort);
+      pendingBrowserRequests.set(requestId, { resolve, reject, detach });
+      signal?.addEventListener("abort", onAbort, { once: true });
+      send({ type: "browser_request", taskId: taskId!, requestId, request });
+    });
+  },
+  supportsVision: () => Boolean((session?.model?.input as string[] | undefined)?.includes("image")),
 };
 const builtins = createBuiltinExtensions(builtinHost);
 
@@ -1546,6 +1583,14 @@ async function handle(command: WorkerCommand): Promise<void> {
       await initialize(command);
     } else if (!session || !taskId) {
       throw new Error("Worker is not initialized");
+    } else if (command.type === "browser_response") {
+      const pending = pendingBrowserRequests.get(command.requestId);
+      if (!pending) return;
+      pendingBrowserRequests.delete(command.requestId);
+      pending.detach();
+      if (command.success) pending.resolve(command.result);
+      else pending.reject(new Error(command.error));
+      return;
     } else if (command.type === "list_commands") {
       respond(command.id, refreshCommandCatalog());
       return;
@@ -1698,6 +1743,7 @@ async function handle(command: WorkerCommand): Promise<void> {
       }
     } else if (command.type === "abort") {
       builtins.autoTitle.abort();
+      cancelPendingBrowserRequests();
       // Stop pauses a live goal rather than ending it — the user resumes with /goal resume.
       builtins.goal.userStop();
       activeTitleCredential = undefined;
@@ -1858,6 +1904,7 @@ async function handle(command: WorkerCommand): Promise<void> {
       if (refreshUserCommands()) applyDisabledTools();
       if (commandCatalog.length) refreshCommandCatalog();
     } else if (command.type === "shutdown") {
+      cancelPendingBrowserRequests("Browser action cancelled because the worker stopped.");
       await subagentRunner?.abortAll();
       if (!session.isIdle) await session.abort();
       session.dispose();
@@ -1972,7 +2019,7 @@ process.stdin.on("data", (chunk: Buffer) => {
     // starting a run behind another run is exactly what the queue is for. So does watching a
     // sub-agent, since the panel opens on a child while the call running it holds the queue —
     // but only once the session exists: before that it waits its turn behind `init`.
-    if (command.type === "abort" || command.type === "extension_ui_response" || command.type === "queue_message" || command.type === "dequeue" || (command.type === "watch_subagent" && session !== undefined) || (command.type === "goal_control" && command.action !== "set")) {
+    if (command.type === "abort" || command.type === "browser_response" || command.type === "extension_ui_response" || command.type === "queue_message" || command.type === "dequeue" || (command.type === "watch_subagent" && session !== undefined) || (command.type === "goal_control" && command.action !== "set")) {
       void handle(command).catch((error) => {
         send({ type: "worker_error", taskId, message: safeError(error) });
       });
@@ -1989,6 +2036,7 @@ process.on("SIGTERM", () => {
   void (async () => {
     try {
       builtins.autoTitle.abort();
+      cancelPendingBrowserRequests("Browser action cancelled because the worker stopped.");
       await subagentRunner?.abortAll();
       if (session && !session.isIdle) await session.abort();
       session?.dispose();

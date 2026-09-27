@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { api } from "../api";
 import { applyBuiltinModelSuggestion, mergeDiscoveredModels, modelIsReady, searchBuiltinModels } from "../model-utils";
-import { WEB_FETCH_TOOL_NAME, groupTools } from "../tool-utils";
+import { BROWSER_TOOL_NAMES, WEB_FETCH_TOOL_NAME, groupTools } from "../tool-utils";
 import type { ApiFormat, AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CommandsConfig, CustomProviderRecord, McpConfig, ModelRecord, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ThinkingLevel, ToolCatalogEntry } from "../types";
 import { Icon, type IconName } from "./Icons";
 import { CommandsSection, type SlashCommandActions } from "./CommandsSection";
@@ -246,6 +246,7 @@ export function SettingsPage({
             packages={packages}
             subagentsEnabled={subagents.enabled}
             webFetchEnabled={!disabledTools.includes(WEB_FETCH_TOOL_NAME)}
+            browserEnabled={BROWSER_TOOL_NAMES.every((name) => !disabledTools.includes(name))}
             autoTitlesEnabled={autoTitle.enabled}
             autoTitlesConfigured={providers.some((provider) => provider.id === autoTitle.providerId && provider.connected && provider.models.some((model) => model.id === autoTitle.modelId && modelIsReady(model)))}
             onToggleSubagents={(enabled) => onSetSubagents({ ...subagents, enabled })}
@@ -254,6 +255,11 @@ export function SettingsPage({
               enabled
                 ? disabledTools.filter((name) => name !== WEB_FETCH_TOOL_NAME)
                 : [...disabledTools.filter((name) => name !== WEB_FETCH_TOOL_NAME), WEB_FETCH_TOOL_NAME]
+            )}
+            onToggleBrowser={(enabled) => onSetDisabledTools(
+              enabled
+                ? disabledTools.filter((name) => !(BROWSER_TOOL_NAMES as readonly string[]).includes(name))
+                : [...disabledTools.filter((name) => !(BROWSER_TOOL_NAMES as readonly string[]).includes(name)), ...BROWSER_TOOL_NAMES]
             )}
             onToggleAutoTitles={(enabled) => onSetAutoTitle({ ...autoTitle, enabled })}
             onConfigureAutoTitles={() => setSection("subagents")}

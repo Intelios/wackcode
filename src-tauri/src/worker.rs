@@ -244,7 +244,7 @@ pub async fn ensure_worker_with(
         let stdout_reader = tauri::async_runtime::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                handle_worker_line(&stdout_app, &stdout_task_id, &line, &pending);
+                handle_worker_line(&stdout_app, &stdout_task_id, pid, &line, &pending);
             }
             // Dropping the senders tells every waiting request the worker is gone.
             if let Ok(mut pending) = pending.lock() { pending.clear(); }
@@ -814,11 +814,36 @@ pub(crate) fn node_executable_path() -> Result<PathBuf, String> {
     }
 }
 
-fn handle_worker_line(app: &AppHandle, task_id: &str, line: &str, pending: &Pending) {
+fn handle_worker_line(app: &AppHandle, task_id: &str, worker_pid: u32, line: &str, pending: &Pending) {
     // Any output, even an unparseable line, proves the worker is alive: refresh its idle clock.
     app.state::<WorkerActivity>().mark(task_id);
     let Ok(mut value) = serde_json::from_str::<Value>(line) else { return; };
     let event_type = value.get("type").and_then(Value::as_str).unwrap_or("").to_string();
+    if event_type == "browser_cancel" {
+        if let Some(request_id) = value.get("requestId").and_then(Value::as_str) {
+            app.state::<crate::browser::BrowserManager>().cancel(request_id);
+        }
+        return;
+    }
+    if event_type == "browser_request" {
+        let Some(request_id) = value.get("requestId").and_then(Value::as_str).map(str::to_string) else { return; };
+        let request = value.get("request").cloned().unwrap_or(Value::Null);
+        let request_app = app.clone();
+        let request_task = task_id.to_string();
+        tauri::async_runtime::spawn(async move {
+            let result = crate::browser::execute_agent_request(request_app.clone(), request_task.clone(), request_id.clone(), request).await;
+            // A restarted worker owns the same chat id but a different generation. Never let it
+            // receive a response to an operation issued by the worker that was replaced.
+            let current = request_app.state::<WorkerState>().get(&request_task).ok().flatten();
+            if current.as_ref().map(|worker| worker.pid) != Some(worker_pid) { return; }
+            let response = match result {
+                Ok(result) => json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "browser_response", "requestId": request_id, "success": true, "result": result }),
+                Err(error) => json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "browser_response", "requestId": request_id, "success": false, "error": redact_and_limit(&error) }),
+            };
+            if let Some(worker) = current { let _ = write_line(&worker, &response).await; }
+        });
+        return;
+    }
     if event_type == "title_result" {
         let attempt_id = value.get("attemptId").and_then(Value::as_str).unwrap_or("");
         let title = value.get("title").and_then(Value::as_str).and_then(normalize_auto_title);

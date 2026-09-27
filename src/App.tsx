@@ -18,6 +18,7 @@ import type {
   AppData,
   AutoTitleConfig,
   AppearanceConfig,
+  BrowserState,
   CommandsConfig,
   PromptConfig,
   CheckpointChange,
@@ -48,6 +49,7 @@ import type {
   WorkerEvent
 } from "./types";
 import { ChangesPanel } from "./components/ChangesPanel";
+import { BrowserPanel } from "./components/BrowserPanel";
 import { SidePanel } from "./components/SidePanel";
 import { SubagentPanelLink } from "./components/SubagentChip";
 import { SubagentPanel } from "./components/SubagentPanel";
@@ -181,6 +183,9 @@ export default function App() {
   const changesRequest = useRef(0);
   const [sidePanel, setSidePanel] = useState<SidePanelView | null>(() => loadJSON(CHANGES_OPEN_KEY, false) ? CHANGES_VIEW : null);
   const [panelWidth, setPanelWidth] = useState(() => loadJSON(PANEL_WIDTH_KEY, 430));
+  const [browsers, setBrowsers] = useState<Record<string, BrowserState>>({});
+  const [browserExpanded, setBrowserExpanded] = useState(false);
+  const browserRestoreWidth = useRef(430);
   /** Bumped to watch the shown sub-agent again (a failed watch, a gap, a restarted worker). */
   const [watchNonce, setWatchNonce] = useState(0);
   /** The chat whose worker streams a sub-agent to the panel, so it can be told to stop. */
@@ -235,7 +240,7 @@ export default function App() {
 
   // What the side panel shows in this chat. A sub-agent view never shows in another chat, even
   // for the one render before the effect below moves the panel back to what was remembered.
-  const panelView = sidePanel?.kind === "subagent" && sidePanel.taskId !== selectedTaskId
+  const panelView = (sidePanel?.kind === "subagent" || sidePanel?.kind === "browser") && sidePanel.taskId !== selectedTaskId
     ? (loadJSON(CHANGES_OPEN_KEY, false) ? CHANGES_VIEW : null)
     : sidePanel;
   const shownSubagent = panelView?.kind === "subagent" ? panelView : undefined;
@@ -247,12 +252,47 @@ export default function App() {
     [shownSubagent, snapshotMessages, runtime?.partial, runtime?.liveToolDetails, selectedBusy]
   );
 
-  const toggleChanges = useCallback(() => setSidePanel((current) => toggleView(current, CHANGES_VIEW)), []);
+  const toggleChanges = useCallback(() => {
+    if (browserExpanded) {
+      setPanelWidth(browserRestoreWidth.current);
+      setBrowserExpanded(false);
+    }
+    setSidePanel((current) => toggleView(current, CHANGES_VIEW));
+  }, [browserExpanded]);
+  const toggleBrowser = useCallback(() => {
+    const taskId = selectedTaskRef.current;
+    if (!taskId) return;
+    if (sidePanel?.kind === "browser" && sidePanel.taskId === taskId) {
+      if (browserExpanded) setPanelWidth(browserRestoreWidth.current);
+      setBrowserExpanded(false);
+      setSidePanel(null);
+    } else {
+      setSidePanel({ kind: "browser", taskId });
+    }
+  }, [sidePanel, browserExpanded]);
   const closeSidePanel = useCallback(() => setSidePanel(null), []);
+  const updateBrowser = useCallback((state: BrowserState) => {
+    setBrowsers((current) => current[state.taskId] === state ? current : { ...current, [state.taskId]: state });
+  }, []);
+  const toggleBrowserExpanded = useCallback(() => {
+    setBrowserExpanded((expanded) => {
+      if (expanded) {
+        setPanelWidth(browserRestoreWidth.current);
+      } else {
+        browserRestoreWidth.current = panelWidth;
+        setPanelWidth(Math.min(1200, Math.max(720, window.innerWidth - 560)));
+      }
+      return !expanded;
+    });
+  }, [panelWidth]);
   const openSubagent = useCallback((toolCallId: string, index: number) => {
     const taskId = selectedTaskRef.current;
+    if (browserExpanded) {
+      setPanelWidth(browserRestoreWidth.current);
+      setBrowserExpanded(false);
+    }
     if (taskId) setSidePanel((current) => toggleView(current, { kind: "subagent", taskId, toolCallId, index }));
-  }, []);
+  }, [browserExpanded]);
   const selectSubagentSibling = useCallback((index: number) => {
     setSidePanel((current) => current?.kind === "subagent" ? { ...current, index } : current);
   }, []);
@@ -276,7 +316,9 @@ export default function App() {
   // A sub-agent view belongs to its chat: another chat opens with the remembered Changes state.
   useEffect(() => {
     setSidePanel((current) => viewForChat(current, selectedTaskId, loadJSON(CHANGES_OPEN_KEY, false)));
-  }, [selectedTaskId]);
+    if (browserExpanded) setPanelWidth(browserRestoreWidth.current);
+    setBrowserExpanded(false);
+  }, [selectedTaskId]); // Browser expansion belongs to the chat being left.
   useEffect(() => { localStorage.setItem(COLLAPSED_PROJECTS_KEY, JSON.stringify([...collapsedProjects])); }, [collapsedProjects]);
 
   const toggleProjectCollapsed = useCallback((key: string) => {
@@ -402,6 +444,13 @@ export default function App() {
     void listen<WorkerEvent>("worker-event", ({ payload }) => {
       const taskId = payload.taskId;
       if (!taskId) return;
+      if (payload.type === "browser_state") {
+        updateBrowser(payload.browser);
+        if (payload.reveal && selectedTaskRef.current === taskId) {
+          setSidePanel({ kind: "browser", taskId });
+        }
+        return;
+      }
       if (payload.type === "title_changed") {
         patchTask(taskId, { name: payload.name });
         return;
@@ -543,7 +592,7 @@ export default function App() {
       }
     }).then((stop) => { unlisten = stop; });
     return () => unlisten?.();
-  }, [patchTask, patchRuntime, refreshChanges, appendNotice]);
+  }, [patchTask, patchRuntime, refreshChanges, appendNotice, updateBrowser]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -1802,7 +1851,9 @@ export default function App() {
               project={selectedProject}
               changesCount={changes?.files.length}
               changesOpen={panelView?.kind === "changes"}
+              browserOpen={panelView?.kind === "browser"}
               onToggleChanges={toggleChanges}
+              onToggleBrowser={toggleBrowser}
               onRename={(name) => void renameTask(selectedTask.id, name)}
               onTaskAction={(task, action) => void taskAction(task, action)}
               />
@@ -1943,10 +1994,31 @@ export default function App() {
         view={panelView}
         width={panelWidth}
         onWidthChange={setPanelWidth}
-        label={shownSubagent
+        label={panelView?.kind === "browser" ? "Browser" : shownSubagent
           ? `SubAgent ${displayAgentName(shownSubagentCall?.details.results[shownSubagent.index]?.agent ?? "")}`.trim()
           : "Changes"}
-      >{(view) => view.kind === "subagent" ? (
+      >{(view) => view.kind === "browser" ? (
+        <BrowserPanel
+          taskId={view.taskId}
+          state={browsers[view.taskId]}
+          visible={!confirm && !restoreDialog && !subscriptionLogin && !extensionRequests.some((request) => request.taskId === view.taskId)}
+          expanded={browserExpanded}
+          onState={updateBrowser}
+          onExpand={toggleBrowserExpanded}
+          onReset={() => setConfirm({
+            title: "Reset browser session?",
+            body: "This closes the page and clears this chat's cookies and site data.",
+            confirmLabel: "Reset browser",
+            danger: true,
+            run: async () => updateBrowser(await api.browserReset(view.taskId))
+          })}
+          onClose={() => {
+            if (browserExpanded) setPanelWidth(browserRestoreWidth.current);
+            setBrowserExpanded(false);
+            closeSidePanel();
+          }}
+        />
+      ) : view.kind === "subagent" ? (
         <ChatContexts appearance={data.appearance}>
           <SubagentPanel
             toolCallId={view.toolCallId}

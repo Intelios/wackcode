@@ -3,10 +3,11 @@
  * mechanism rather than the trusted-package path. They are ordinary code in this repo — no
  * trust gate applies because nothing external can reach this list. All are always on except
  * sub-agents, which the user switches on in Settings (its tool stays inactive until then),
- * web fetch, which is on until the user switches it off (see `SWITCHABLE_BUILTIN_TOOLS`), and
- * MCP, whose tools come from the servers the user adds in Settings › MCP servers.
+ * browser preview and web fetch, which are on until the user switches them off (see
+ * `SWITCHABLE_BUILTIN_TOOLS`), and MCP, whose tools come from the servers the user adds.
  */
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
+import { BROWSER_TOOL_NAMES, createBrowserExtension } from "./browser.js";
 import { createAskUserQuestionExtension } from "./ask-user-question.js";
 import { createAutoTitleExtension, type AutoTitleController } from "./auto-title.js";
 import { type GoalController, createGoalExtension } from "./goal/index.js";
@@ -21,7 +22,7 @@ import { WEB_FETCH_TOOL_NAME, createWebFetchExtension } from "./web-fetch/index.
  * Built-in tools the user's Settings denylist applies to. Every other built-in tool is part of
  * how the app works (a disabled plan_mode_complete would break Plan mode) and ignores it.
  */
-export const SWITCHABLE_BUILTIN_TOOLS: ReadonlySet<string> = new Set([WEB_FETCH_TOOL_NAME]);
+export const SWITCHABLE_BUILTIN_TOOLS: ReadonlySet<string> = new Set([WEB_FETCH_TOOL_NAME, ...BROWSER_TOOL_NAMES]);
 
 export interface BuiltinExtensions {
   /** Factories handed to `DefaultResourceLoader.extensionFactories`. */
@@ -51,6 +52,7 @@ export function createBuiltinExtensions(host: BuiltinHost): BuiltinExtensions {
   const subagents = createSubagentsExtension(host, () => planMode.controller.getState().mode, webFetch);
   const autoTitle = createAutoTitleExtension(host);
   const goal = createGoalExtension(host, () => planMode.controller.getState().mode !== "build");
+  const browser: InlineExtension = { name: "wackcode-browser", factory: createBrowserExtension(host), hidden: true };
   return {
     factories: [
       {
@@ -65,6 +67,7 @@ export function createBuiltinExtensions(host: BuiltinHost): BuiltinExtensions {
       { name: "wackcode-auto-title", factory: autoTitle.factory, hidden: true },
       { name: "wackcode-goal", factory: goal.factory, hidden: true },
       webFetch,
+      browser,
       { name: "wackcode-mcp", factory: mcp.factory, hidden: true },
     ],
     planMode: planMode.controller,

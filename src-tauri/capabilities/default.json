@@ -3,6 +3,7 @@
   "identifier": "default",
   "description": "WackCode desktop permissions",
   "windows": ["main"],
+  "webviews": ["main"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

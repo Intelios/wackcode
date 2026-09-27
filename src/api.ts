@@ -4,6 +4,7 @@ import type {
   AppearanceConfig,
   BootstrapPayload,
   BuiltinModelSuggestion,
+  BrowserState,
   CheckpointChange,
   CheckpointRef,
   GitChanges,
@@ -60,6 +61,15 @@ export const api = {
   openSubscriptionAuthUrl: (url: string) => invoke<void>("open_subscription_auth_url", { url }),
   setToolConfig: (disabled: string[]) => invoke<ToolConfig>("set_tool_config", { input: { disabled } }),
   setAppearanceConfig: (input: AppearanceConfig) => invoke<AppearanceConfig>("set_appearance_config", { input }),
+  browserState: (taskId: string) => invoke<BrowserState>("browser_state", { taskId }),
+  browserPresent: (input: { taskId: string; visible: boolean; x: number; y: number; width: number; height: number }) =>
+    invoke<BrowserState>("browser_present", { input }),
+  browserOpen: (taskId: string, url: string) => invoke<BrowserState>("browser_open", { input: { taskId, url } }),
+  browserNavigation: (taskId: string, action: "back" | "forward" | "reload" | "stop") =>
+    invoke<void>("browser_navigation", { input: { taskId, action } }),
+  browserSetControl: (taskId: string, userControl: boolean) => invoke<BrowserState>("browser_set_control", { taskId, userControl }),
+  browserReset: (taskId: string) => invoke<BrowserState>("browser_reset", { taskId }),
+  browserReturnFromPopup: (taskId: string) => invoke<BrowserState>("browser_return_from_popup", { taskId }),
   /** Opens the native picker in Rust; null when the user cancels. */
   chooseBackgroundImage: () => invoke<AppearanceConfig | null>("choose_background_image"),
   removeBackgroundImage: () => invoke<AppearanceConfig>("remove_background_image"),

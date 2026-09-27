@@ -915,8 +915,8 @@ button.reasoning-toggle.at-max .reasoning-toggle-label {
    inner wrapper keeps the final one, so a view rides in with the panel's edge instead of
    reflowing every frame; the wrapper is also the size container the dock's tabs query to
    collapse to icons. Pages stack so an outgoing view can fade over the incoming one. */
-.side-panel { position: relative; flex: 0 0 auto; max-width: 720px; height: 100%; border-left: 1px solid var(--border); background: var(--wc-panel); overflow: hidden; }
-.side-panel-inner { container-type: inline-size; position: relative; height: 100%; min-width: 290px; max-width: 720px; }
+.side-panel { position: relative; flex: 0 0 auto; max-width: 1200px; height: 100%; border-left: 1px solid var(--border); background: var(--wc-panel); overflow: hidden; }
+.side-panel-inner { container-type: inline-size; position: relative; height: 100%; min-width: 290px; max-width: 1200px; }
 .side-panel-page { position: absolute; inset: 0; display: flex; flex-direction: column; }
 .panel-resizer { position: absolute; left: -4px; width: 8px; top: 0; bottom: 0; cursor: col-resize; z-index: 5; }
 .panel-resizer:hover { background: color-mix(in srgb, var(--wc-accent) 12%, transparent); }
@@ -931,6 +931,44 @@ button.reasoning-toggle.at-max .reasoning-toggle-label {
 .panel-loading { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; overflow: hidden; }
 .panel-loading::after { content: ""; display: block; height: 100%; width: 38%; border-radius: 1px; background: var(--wc-accent); animation: changes-scan 1s var(--ease) infinite; }
 @keyframes changes-scan { from { transform: translateX(-105%); } to { transform: translateX(268%); } }
+
+/* ── Browser panel ─────────────────────────────────── */
+/* The page itself is a native child WKWebView placed over .browser-surface. Everything around
+   it remains ordinary themed React chrome, and the surface stays opaque over glass/images. */
+.browser-panel { height: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--wc-panel); }
+.browser-panel-header { flex: 0 0 auto; min-height: 56px; display: flex; align-items: center; gap: 8px; padding: 9px 10px 9px 15px; border-bottom: 1px solid var(--border); }
+.browser-panel-title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px; }
+.browser-panel-title > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.browser-panel-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 650; }
+.browser-panel-title span:not(.browser-status-dot) { color: var(--text-dim); font-size: 10px; }
+.browser-status-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--text-faint); transition: background .18s var(--ease), box-shadow .18s var(--ease); }
+.browser-status-dot.loading { background: var(--warning); animation: pulse 1.5s infinite; }
+.browser-status-dot.agent { background: var(--wc-accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--wc-accent) 12%, transparent); animation: pulse 1.2s infinite; }
+.browser-panel-actions { display: flex; align-items: center; gap: 3px; }
+.browser-toolbar { flex: 0 0 auto; display: flex; align-items: center; gap: 3px; min-height: 44px; padding: 6px 8px; border-bottom: 1px solid var(--border); background: var(--wc-elevated); }
+.browser-forward svg { transform: rotate(180deg); }
+.browser-address { flex: 1; min-width: 90px; height: 30px; display: flex; align-items: center; gap: 6px; padding: 0 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--wc-input); }
+.browser-address:focus-within { border-color: var(--wc-input-focus); }
+.browser-address svg { width: 13px; height: 13px; flex: 0 0 auto; color: var(--text-faint); }
+.browser-address input { width: 100%; min-width: 0; padding: 0; border: 0; outline: 0; color: var(--text); background: transparent; font: 11.5px "SFMono-Regular", Consolas, monospace; }
+.browser-address input::placeholder { color: var(--wc-placeholder); }
+.browser-control { height: 30px; padding: 0 9px; white-space: nowrap; font-size: 10.5px; }
+.browser-control.active { color: var(--wc-accent-text); border-color: var(--wc-accent-line-soft); background: var(--wc-accent-tint); }
+.browser-popup-return { flex: 0 0 auto; height: 30px; display: flex; align-items: center; justify-content: center; gap: 6px; border: 0; border-bottom: 1px solid var(--wc-accent-line-soft); background: var(--wc-accent-tint); color: var(--wc-accent-text); font-size: 11px; cursor: pointer; }
+.browser-popup-return svg { width: 13px; height: 13px; }
+.browser-error { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--border); background: var(--danger-bg); color: var(--danger); font-size: 11px; }
+.browser-error span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browser-error button { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 10px; }
+.browser-surface { position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--surface); }
+.browser-empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; padding: 30px; text-align: center; background: var(--surface); }
+.browser-empty > svg { width: 34px; height: 34px; color: var(--wc-accent); margin-bottom: 12px; }
+.browser-empty h3 { margin: 0; font-size: 14px; }
+.browser-empty p { max-width: 310px; margin: 7px 0 0; color: var(--text-dim); font-size: 11.5px; line-height: 1.55; }
+
+@container (max-width: 520px) {
+  .browser-control { width: 30px; padding: 0; overflow: hidden; color: transparent; }
+  .browser-control::before { content: "◎"; color: var(--text-soft); font-size: 15px; }
+}
 
 /* ── Changes panel ─────────────────────────────────── */
 .changes-panel { height: 100%; min-height: 0; display: flex; flex-direction: column; }

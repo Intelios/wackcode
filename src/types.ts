@@ -912,6 +912,21 @@ export interface ExtensionNotice {
   level: "info" | "warning" | "error";
 }
 
+/** Compact runtime state for one chat's native, ephemeral browser session. */
+export interface BrowserState {
+  taskId: string;
+  exists: boolean;
+  url: string;
+  title: string;
+  loading: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  error?: string;
+  agentActive: boolean;
+  userControl: boolean;
+  popup: boolean;
+}
+
 export type WorkerEvent =
   | { type: "title_changed"; taskId: string; name: string }
   | { type: "ready" | "snapshot"; taskId: string; snapshot: SessionSnapshot }
@@ -921,6 +936,7 @@ export type WorkerEvent =
   | { type: "queue_state"; taskId: string; steering: string[]; followUp: string[] }
   | { type: "activity"; taskId: string; event: string; detail?: Record<string, unknown> }
   | { type: "worker_error"; taskId?: string; message: string }
+  | { type: "browser_state"; taskId: string; browser: BrowserState; reveal: boolean }
   | { type: "response"; taskId?: string; id: string; success: boolean; error?: string }
   | ({ type: "extension_ui_request" } & ExtensionUIRequest)
   | ({ type: "extension_notice"; taskId: string } & ExtensionNotice)

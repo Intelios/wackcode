@@ -11,12 +11,14 @@ interface ChatHeaderProps {
   project?: ProjectRecord;
   changesCount?: number;
   changesOpen: boolean;
+  browserOpen: boolean;
   onToggleChanges: () => void;
+  onToggleBrowser: () => void;
   onRename: (name: string) => void;
   onTaskAction: (task: TaskRecord, action: TaskAction) => void;
 }
 
-export function ChatHeader({ task, project, changesCount, changesOpen, onToggleChanges, onRename, onTaskAction }: ChatHeaderProps) {
+export function ChatHeader({ task, project, changesCount, changesOpen, browserOpen, onToggleChanges, onToggleBrowser, onRename, onTaskAction }: ChatHeaderProps) {
   const [renaming, setRenaming] = useState(false);
   const [value, setValue] = useState(task.name);
 
@@ -70,6 +72,9 @@ export function ChatHeader({ task, project, changesCount, changesOpen, onToggleC
         </div>
       </div>
       <div className="header-actions">
+        <button type="button" className={`panel-button ${browserOpen ? "active" : ""}`} onClick={onToggleBrowser}>
+          <Icon name="browser" /> Browser
+        </button>
         <button type="button" className={`panel-button ${changesOpen ? "active" : ""}`} onClick={onToggleChanges}>
           <Icon name="panel" /> Changes{changesCount ? <em className="changes-badge">{changesCount}</em> : null}
         </button>

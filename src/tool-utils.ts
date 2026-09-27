@@ -5,6 +5,8 @@ import { displayPath } from "./chat-utils";
 export const SUBAGENT_TOOL_NAME = "subagent";
 /** The one WackCode built-in tool the user can switch off, through the tool denylist. */
 export const WEB_FETCH_TOOL_NAME = "web_fetch";
+/** Browser preview is one grouped switch even though the extension exposes five tools. */
+export const BROWSER_TOOL_NAMES = ["browser_open", "browser_snapshot", "browser_act", "browser_screenshot", "browser_console"] as const;
 
 export interface ToolSummary {
   /** Label while the tool is executing, e.g. "Editing". */

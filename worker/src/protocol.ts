@@ -622,6 +622,8 @@ export type WorkerCommand =
   | { id: string; type: "set_mcp"; servers: McpServerSpec[] }
   | { id: string; type: "set_skills"; skills: UserSkillsPayload }
   | { id: string; type: "set_commands"; commands: UserCommandsPayload }
+  | { id: string; type: "browser_response"; requestId: string; success: true; result: unknown }
+  | { id: string; type: "browser_response"; requestId: string; success: false; error: string }
   | {
       id: string;
       type: "extension_ui_response";
@@ -841,6 +843,8 @@ export type WorkerOutput =
   | { type: "queue_state"; taskId: string; steering: string[]; followUp: string[] }
   | { type: "activity"; taskId: string; event: string; detail?: unknown }
   | { type: "worker_error"; taskId?: string; message: string }
+  | { type: "browser_request"; taskId: string; requestId: string; request: Record<string, unknown> }
+  | { type: "browser_cancel"; taskId: string; requestId: string }
   | ({ type: "extension_ui_request"; taskId: string; requestId: string } & ExtensionUIRequest)
   | { type: "extension_notice"; taskId: string; message: string; level: "info" | "warning" | "error" }
   | { type: "extensions_loaded"; taskId: string; loaded: string[]; errors: { path: string; error: string }[] }

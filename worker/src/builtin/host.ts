@@ -89,4 +89,8 @@ export interface BuiltinHost {
   notice(message: string, level: "info" | "warning" | "error"): void;
   /** The chat's workspace folder, once the worker is initialized. */
   workspace(): string | undefined;
+  /** Send one browser operation to the native host. The host owns the per-chat WebKit view. */
+  browser(request: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>;
+  /** Whether this chat's current model can receive an image tool result. */
+  supportsVision(): boolean;
 }

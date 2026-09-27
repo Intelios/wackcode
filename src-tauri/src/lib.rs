@@ -1,4 +1,5 @@
 mod backgrounds;
+mod browser;
 mod checkpoints;
 mod commands;
 mod files;
@@ -27,6 +28,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(WorkerState::default())
+        .manage(browser::BrowserManager::default())
         .manage(worker::SelectedTask::default())
         .manage(worker::WorkerActivity::default())
         .manage(commands::TaskLocks::default())
@@ -116,6 +118,13 @@ pub fn run() {
             commands::update_packages,
             commands::set_package_resources,
             commands::respond_extension_ui,
+            browser::browser_state,
+            browser::browser_present,
+            browser::browser_open,
+            browser::browser_navigation,
+            browser::browser_set_control,
+            browser::browser_reset,
+            browser::browser_return_from_popup,
             commands::search_packages,
             commands::package_details,
             commands::add_project,
@@ -168,6 +177,7 @@ pub fn run() {
             let _ = app.state::<MetadataState>().save();
             app.state::<worker::ReaperHandle>().stop();
             app.state::<WorkerState>().terminate_all();
+            app.state::<browser::BrowserManager>().dispose_all();
             app.state::<subscriptions::SubscriptionState>().terminate_all();
         }
     });

@@ -54,6 +54,7 @@ import { SubagentPanel } from "./components/SubagentPanel";
 import { ChatHeader } from "./components/ChatHeader";
 import { Composer } from "./components/Composer";
 import { Icon } from "./components/Icons";
+import { DuckMark } from "./components/DuckMark";
 import { ProjectBar } from "./components/ProjectBar";
 import type { McpActions } from "./components/McpSection";
 import { SettingsPage } from "./components/SettingsPage";
@@ -1684,7 +1685,7 @@ export default function App() {
     ? convertFileSrc(`${appDataPath}/backgrounds/${data.appearance.backgroundImage}`)
     : undefined;
 
-  if (booting) return <div className="boot-screen"><div className="brand-mark">W</div><span>Starting WackCode</span></div>;
+  if (booting) return <div className="boot-screen"><div className="brand-mark"><DuckMark /></div><span>Starting WackCode</span></div>;
 
   // A list fetched for another chat or project never shows here.
   const composerMentions = mentions?.source === (mentionSource().source ?? "") ? mentions : undefined;

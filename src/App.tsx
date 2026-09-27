@@ -9,7 +9,7 @@ import { modelDisplayName, modelIsReady, pickThinkingLevel } from "./model-utils
 import { titleFromPrompt, samePlanState, sameTodoState, sameGoalState, applySnapshotDelta, applySubagentFrame, pendingSubagentView, validateInitCommand, nextMode, isPlanMode } from "./chat-utils";
 import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix } from "./tree-utils";
 import { displayAgentName, hasSubagentCall, pruneDisabledTools, sameToolCatalog, subagentDetailsFor } from "./tool-utils";
-import { CHANGES_VIEW, rememberedChanges, toggleView, viewForChat, viewKey, type SidePanelView } from "./side-panel";
+import { CHANGES_VIEW, TERMINAL_VIEW, durableView, rememberedView, toggleView, viewForChat, viewKey, type PanelViewKind, type SidePanelView } from "./side-panel";
 import { APP_SLASH_COMMANDS } from "./command-utils";
 import { DEFAULT_APPEARANCE, applyTheme, cacheTheme } from "./theme";
 import { AssistantNameContext, agentName } from "./agentName";
@@ -44,10 +44,12 @@ import type {
   TaskMode,
   TaskRecord,
   TaskRuntime,
+  TerminalEvent,
   ThinkingLevel,
   WorkerEvent
 } from "./types";
 import { ChangesPanel } from "./components/ChangesPanel";
+import { TerminalPanel } from "./components/TerminalPanel";
 import { SidePanel } from "./components/SidePanel";
 import { SubagentPanelLink } from "./components/SubagentChip";
 import { SubagentPanel } from "./components/SubagentPanel";
@@ -92,11 +94,26 @@ const EASE: [number, number, number, number] = [0.33, 1, 0.68, 1];
 const LAST_MODEL_KEY = "wackcode:lastModel";
 const LAST_PROJECT_KEY = "wackcode:lastProject";
 const NO_PROJECT_MODEL_KEY = "none";
-/** Whether Changes is open: the side panel's one durable view (`side-panel.ts`). */
+/** Which durable view the side panel shows ("changes" | "terminal" | null = closed). */
+const PANEL_VIEW_KEY = "wackcode:sidePanel";
+/** The pre-Terminal flag, still read once to migrate it into `PANEL_VIEW_KEY`. */
 const CHANGES_OPEN_KEY = "wackcode:changesOpen";
 /** The side panel's width, named for its first view so existing widths carry over. */
 const PANEL_WIDTH_KEY = "wackcode:changesWidth";
 const COLLAPSED_PROJECTS_KEY = "wackcode:collapsedProjects";
+
+/** The durable view the panel should come back to — the stored pick, or the migrated Changes flag. */
+function rememberedPanelKind(): PanelViewKind | null {
+  const stored = loadJSON<PanelViewKind | null | undefined>(PANEL_VIEW_KEY, undefined);
+  if (stored === "changes" || stored === "terminal") return stored;
+  if (stored === null) return null;
+  return loadJSON<boolean>(CHANGES_OPEN_KEY, false) ? "changes" : null;
+}
+
+function rememberedPanelView(): SidePanelView | null {
+  const kind = rememberedPanelKind();
+  return kind ? durableView(kind) : null;
+}
 
 interface ModelChoice {
   providerId: string;
@@ -179,8 +196,10 @@ export default function App() {
   const [changes, setChanges] = useState<GitChanges>();
   const [changesLoading, setChangesLoading] = useState(false);
   const changesRequest = useRef(0);
-  const [sidePanel, setSidePanel] = useState<SidePanelView | null>(() => loadJSON(CHANGES_OPEN_KEY, false) ? CHANGES_VIEW : null);
+  const [sidePanel, setSidePanel] = useState<SidePanelView | null>(rememberedPanelView);
   const [panelWidth, setPanelWidth] = useState(() => loadJSON(PANEL_WIDTH_KEY, 430));
+  /** Live terminal sessions by chat id — powers the header's caret hint while the panel is hidden. */
+  const [terminals, setTerminals] = useState<Record<string, { sessionId: string; busy: boolean; exit: { code: number; signal: string | null } | null }>>({});
   /** Bumped to watch the shown sub-agent again (a failed watch, a gap, a restarted worker). */
   const [watchNonce, setWatchNonce] = useState(0);
   /** The chat whose worker streams a sub-agent to the panel, so it can be told to stop. */
@@ -236,7 +255,7 @@ export default function App() {
   // What the side panel shows in this chat. A sub-agent view never shows in another chat, even
   // for the one render before the effect below moves the panel back to what was remembered.
   const panelView = sidePanel?.kind === "subagent" && sidePanel.taskId !== selectedTaskId
-    ? (loadJSON(CHANGES_OPEN_KEY, false) ? CHANGES_VIEW : null)
+    ? rememberedPanelView()
     : sidePanel;
   const shownSubagent = panelView?.kind === "subagent" ? panelView : undefined;
   const snapshotMessages = runtime?.snapshot?.messages;
@@ -248,6 +267,7 @@ export default function App() {
   );
 
   const toggleChanges = useCallback(() => setSidePanel((current) => toggleView(current, CHANGES_VIEW)), []);
+  const toggleTerminal = useCallback(() => setSidePanel((current) => toggleView(current, TERMINAL_VIEW)), []);
   const closeSidePanel = useCallback(() => setSidePanel(null), []);
   const openSubagent = useCallback((toolCallId: string, index: number) => {
     const taskId = selectedTaskRef.current;
@@ -269,13 +289,13 @@ export default function App() {
 
   useEffect(() => { selectedTaskRef.current = selectedTaskId; }, [selectedTaskId]);
   useEffect(() => {
-    const remembered = rememberedChanges(sidePanel);
-    if (remembered !== undefined) localStorage.setItem(CHANGES_OPEN_KEY, JSON.stringify(remembered));
+    const remembered = rememberedView(sidePanel);
+    if (remembered !== undefined) localStorage.setItem(PANEL_VIEW_KEY, JSON.stringify(remembered));
   }, [sidePanel]);
   useEffect(() => { localStorage.setItem(PANEL_WIDTH_KEY, JSON.stringify(panelWidth)); }, [panelWidth]);
-  // A sub-agent view belongs to its chat: another chat opens with the remembered Changes state.
+  // A sub-agent view belongs to its chat: another chat opens with the remembered durable view.
   useEffect(() => {
-    setSidePanel((current) => viewForChat(current, selectedTaskId, loadJSON(CHANGES_OPEN_KEY, false)));
+    setSidePanel((current) => viewForChat(current, selectedTaskId, rememberedPanelKind()));
   }, [selectedTaskId]);
   useEffect(() => { localStorage.setItem(COLLAPSED_PROJECTS_KEY, JSON.stringify([...collapsedProjects])); }, [collapsedProjects]);
 
@@ -359,10 +379,36 @@ export default function App() {
     if (resync) setWatchNonce((nonce) => nonce + 1);
   }, [resync]);
 
+  // Terminal sessions live in Rust; these events keep the header's caret hint honest while the
+  // panel is hidden or the chat is in the background. Events carry a sessionId: a restart's
+  // late busy/exit events for the old shell are ignored.
+  useEffect(() => {
+    const unlisten = listen<TerminalEvent>("terminal-event", ({ payload }) => {
+      if (payload.type === "terminal_closed") {
+        setTerminals((current) => {
+          const { [payload.taskId]: _removed, ...rest } = current;
+          return rest;
+        });
+      } else if (payload.type === "terminal_started") {
+        setTerminals((current) => ({ ...current, [payload.taskId]: { sessionId: payload.sessionId, busy: false, exit: null } }));
+      } else {
+        setTerminals((current) => {
+          const session = current[payload.taskId];
+          if (session?.sessionId !== payload.sessionId) return current;
+          const next = payload.type === "terminal_busy"
+            ? { ...session, busy: payload.busy }
+            : { ...session, busy: false, exit: { code: payload.code, signal: payload.signal } };
+          return { ...current, [payload.taskId]: next };
+        });
+      }
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, []);
+
   // Rewinding past a call takes its chips away, and the panel follows.
   useEffect(() => {
     if (!shownSubagent || !snapshotMessages || hasSubagentCall(snapshotMessages, runtime?.partial, shownSubagent.toolCallId)) return;
-    setSidePanel(loadJSON(CHANGES_OPEN_KEY, false) ? CHANGES_VIEW : null);
+    setSidePanel(rememberedPanelView());
   }, [shownSubagent, snapshotMessages, runtime?.partial]);
 
   const refreshChanges = useCallback(async (taskId = selectedTaskRef.current) => {
@@ -1678,6 +1724,8 @@ export default function App() {
     const onKeyDown = (event: KeyboardEvent) => {
       // ⇧Tab cycles Build → Plan → Ultra Plan, like Claude Code. A modal or an active run owns the key.
       if (event.key === "Tab" && event.shiftKey) {
+        // Inside the terminal the keystroke belongs to the shell, not the mode switcher.
+        if (event.target instanceof HTMLElement && event.target.closest(".xterm")) return;
         const busy = selectedTask && (selectedTask.status === "running" || selectedTask.status === "stopping");
         if (!settingsOpen && !confirm && !restoreDialog && extensionRequests.length === 0 && !busy) {
           event.preventDefault();
@@ -1699,6 +1747,9 @@ export default function App() {
       } else if (key === "c" && event.shiftKey) {
         event.preventDefault();
         toggleChanges();
+      } else if (key === "t" && event.shiftKey) {
+        event.preventDefault();
+        toggleTerminal();
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -1803,6 +1854,9 @@ export default function App() {
               changesCount={changes?.files.length}
               changesOpen={panelView?.kind === "changes"}
               onToggleChanges={toggleChanges}
+              terminal={terminals[selectedTask.id]}
+              terminalOpen={panelView?.kind === "terminal"}
+              onToggleTerminal={toggleTerminal}
               onRename={(name) => void renameTask(selectedTask.id, name)}
               onTaskAction={(task, action) => void taskAction(task, action)}
               />
@@ -1945,8 +1999,10 @@ export default function App() {
         onWidthChange={setPanelWidth}
         label={shownSubagent
           ? `SubAgent ${displayAgentName(shownSubagentCall?.details.results[shownSubagent.index]?.agent ?? "")}`.trim()
-          : "Changes"}
-      >{(view) => view.kind === "subagent" ? (
+          : panelView?.kind === "terminal" ? "Terminal" : "Changes"}
+      >{(view) => view.kind === "terminal" ? (
+        <TerminalPanel key={selectedTask.id} taskId={selectedTask.id} appearance={data.appearance} onClose={closeSidePanel} />
+      ) : view.kind === "subagent" ? (
         <ChatContexts appearance={data.appearance}>
           <SubagentPanel
             toolCallId={view.toolCallId}

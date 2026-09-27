@@ -12,7 +12,7 @@ use crate::{
         SaveSlashCommandInput, SlashCommandDocument, SlashCommandsChange, SlashCommandsOverview,
     },
     storage::MetadataState,
-    worker::{self, WorkerOptions}, skills, slash_commands, subagents, subscriptions,
+    worker::{self, WorkerOptions}, skills, slash_commands, subagents, subscriptions, terminal,
 };
 use chrono::Utc;
 use serde::Deserialize;
@@ -1855,6 +1855,7 @@ pub async fn stop_task(app: AppHandle, task_id: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn archive_task(app: AppHandle, state: State<'_, MetadataState>, task_id: String) -> Result<TaskRecord, String> {
     worker::terminate_worker(&app, &task_id, true).await?;
+    app.state::<terminal::TerminalState>().kill_for_task(&app, &task_id);
     state.mutate(|data| {
         let task = data.tasks.iter_mut().find(|task| task.id == task_id).ok_or_else(|| "Task not found".to_string())?;
         task.archived = true;
@@ -1891,6 +1892,7 @@ pub async fn delete_task(app: AppHandle, state: State<'_, MetadataState>, task_i
     let lock = task_lock(&app, &task_id);
     let _guard = lock.lock().await;
     worker::terminate_worker(&app, &task_id, true).await?;
+    app.state::<terminal::TerminalState>().kill_for_task(&app, &task_id);
     let (task, git_root) = state.mutate(|data| {
         let index = data.tasks.iter().position(|task| task.id == task_id).ok_or_else(|| "Chat not found".to_string())?;
         let task = data.tasks.remove(index);
@@ -1939,6 +1941,8 @@ pub async fn convert_task_to_worktree(app: AppHandle, state: State<'_, MetadataS
         Ok(record.clone())
     })?;
     worker::terminate_worker(&app, &task_id, true).await?;
+    // The workspace moved to a worktree; a shell parked in the old folder must not linger.
+    app.state::<terminal::TerminalState>().kill_for_task(&app, &task_id);
     Ok(updated)
 }
 
@@ -1954,7 +1958,10 @@ pub async fn remove_project(app: AppHandle, state: State<'_, MetadataState>, pro
         }
         data.tasks.iter().filter(|task| task.project_id.as_deref() == Some(project_id.as_str())).cloned().collect()
     };
-    for task in &tasks { worker::terminate_worker(&app, &task.id, true).await?; }
+    for task in &tasks {
+        worker::terminate_worker(&app, &task.id, true).await?;
+        app.state::<terminal::TerminalState>().kill_for_task(&app, &task.id);
+    }
     let (git_root, removed) = {
         let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
         let git_root = data.projects.iter().find(|project| project.id == project_id)

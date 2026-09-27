@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   AutoTitleConfig,
   AppearanceConfig,
@@ -40,6 +40,8 @@ import type {
   SubscriptionProviderInfo,
   TaskMode,
   TaskRecord,
+  TerminalFrame,
+  TerminalInfo,
   ThinkingLevel,
   ToolConfig,
   WorkspaceFiles
@@ -216,6 +218,21 @@ export const api = {
   listWorkspaceFiles: (taskId?: string, projectId?: string) => invoke<WorkspaceFiles>("list_workspace_files", { taskId, projectId }),
   revealTask: (taskId: string) => invoke<void>("reveal_task", { taskId }),
   revealPath: (path: string) => invoke<void>("reveal_path", { path }),
+  // Terminal output rides a Channel, not React state: PTY bytes stream straight into xterm.
+  openTerminal: (taskId: string, cols: number, rows: number, onFrame: (frame: TerminalFrame) => void) => {
+    const on_frame = new Channel<TerminalFrame>();
+    on_frame.onmessage = onFrame;
+    return invoke<TerminalInfo>("open_terminal", { input: { taskId, cols, rows }, onFrame: on_frame });
+  },
+  writeTerminal: (taskId: string, data: string) => invoke<void>("write_terminal", { input: { taskId, data } }),
+  resizeTerminal: (taskId: string, cols: number, rows: number) => invoke<void>("resize_terminal", { input: { taskId, cols, rows } }),
+  detachTerminal: (taskId: string) => invoke<void>("detach_terminal", { taskId }),
+  restartTerminal: (taskId: string, cols: number, rows: number, onFrame: (frame: TerminalFrame) => void) => {
+    const on_frame = new Channel<TerminalFrame>();
+    on_frame.onmessage = onFrame;
+    return invoke<TerminalInfo>("restart_terminal", { input: { taskId, cols, rows }, onFrame: on_frame });
+  },
+  closeTerminal: (taskId: string) => invoke<void>("close_terminal", { taskId }),
   respondExtensionUi: (input: {
     taskId: string;
     requestId: string;

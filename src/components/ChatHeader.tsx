@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { ProjectRecord, TaskRecord } from "../types";
+import type { ProjectRecord, TaskRecord, TerminalExit } from "../types";
 import { Icon } from "./Icons";
 import { MenuButton } from "./ui/MenuButton";
 import type { MenuEntry } from "./ui/Menu";
@@ -12,11 +12,15 @@ interface ChatHeaderProps {
   changesCount?: number;
   changesOpen: boolean;
   onToggleChanges: () => void;
+  /** The chat's terminal session, if one is running — drives the button's caret hint. */
+  terminal?: { busy: boolean; exit: TerminalExit | null };
+  terminalOpen: boolean;
+  onToggleTerminal: () => void;
   onRename: (name: string) => void;
   onTaskAction: (task: TaskRecord, action: TaskAction) => void;
 }
 
-export function ChatHeader({ task, project, changesCount, changesOpen, onToggleChanges, onRename, onTaskAction }: ChatHeaderProps) {
+export function ChatHeader({ task, project, changesCount, changesOpen, onToggleChanges, terminal, terminalOpen, onToggleTerminal, onRename, onTaskAction }: ChatHeaderProps) {
   const [renaming, setRenaming] = useState(false);
   const [value, setValue] = useState(task.name);
 
@@ -72,6 +76,22 @@ export function ChatHeader({ task, project, changesCount, changesOpen, onToggleC
       <div className="header-actions">
         <button type="button" className={`panel-button ${changesOpen ? "active" : ""}`} onClick={onToggleChanges}>
           <Icon name="panel" /> Changes{changesCount ? <em className="changes-badge">{changesCount}</em> : null}
+        </button>
+        <button
+          type="button"
+          className={`panel-button ${terminalOpen ? "active" : ""}`}
+          onClick={onToggleTerminal}
+          title="Terminal — ⌘⇧T"
+        >
+          <Icon name="terminal" /> Terminal
+          {/* A blinking caret marks a shell running out of sight; it pulses while it works and
+              dims when the shell has exited. */}
+          {terminal && !terminalOpen && (
+            <em
+              className={`terminal-caret ${terminal.exit ? "exited" : terminal.busy ? "busy" : ""}`}
+              aria-hidden="true"
+            />
+          )}
         </button>
         <MenuButton label="Chat menu" items={menu} />
       </div>

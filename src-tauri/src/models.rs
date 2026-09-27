@@ -1314,3 +1314,63 @@ pub struct GitGeneratedMessage {
     pub message: String,
     pub revision: String,
 }
+
+/// One chunk on a terminal's output channel (`terminal.rs`). `output` carries UTF-8 terminal
+/// bytes ready to write into xterm; `exit` ends the session; `busy` reflects whether the shell
+/// has a foreground job, so the header button can hint at work the user isn't watching.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum TerminalFrame {
+    #[serde(rename_all = "camelCase")]
+    Output { data: String },
+    #[serde(rename_all = "camelCase")]
+    Exit { code: Option<i32>, signal: Option<String> },
+    #[serde(rename_all = "camelCase")]
+    Busy { busy: bool },
+}
+
+/// How a terminal's shell ended; `signal` names the signal when it didn't exit normally.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalExit {
+    pub code: i32,
+    pub signal: Option<String>,
+}
+
+/// What `open_terminal` returns when the panel attaches.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalInfo {
+    /// Identifies this shell; a restart's late events carry the old id and are ignored.
+    pub session_id: String,
+    pub shell: String,
+    pub cwd: String,
+    /// True when this call spawned the shell; false when it attached to a live one.
+    pub fresh: bool,
+    pub exit: Option<TerminalExit>,
+    pub busy: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenTerminalInput {
+    pub task_id: String,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteTerminalInput {
+    pub task_id: String,
+    /// xterm `onData` output: UTF-8 text including escape sequences for special keys.
+    pub data: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResizeTerminalInput {
+    pub task_id: String,
+    pub cols: u16,
+    pub rows: u16,
+}

@@ -1,22 +1,35 @@
 /**
- * The right-hand side panel shows one view at a time: the chat's Git changes, browser, or one
- * sub-agent's transcript. Views are this union; adding one means a member here, a view
- * component rendered in `SidePanel`, and a trigger that opens it (`toggleView`).
+ * The right-hand side panel shows one view at a time: the chat's Git changes, browser,
+ * terminal, or one sub-agent's transcript. Views are this union; adding one means a member
+ * here, a view component rendered in `SidePanel`, and a trigger that opens it (`toggleView`).
  *
- * Only Changes is durable. Whether it is open is remembered across launches and chats
- * (`wackcode:changesOpen`); browser and sub-agent views belong to one chat and fall back to
- * that remembered state when the chat changes or the call leaves the conversation.
+ * Changes and Terminal are durable: which of them is showing is remembered across launches and
+ * chats (`wackcode:sidePanel`; terminal shows the open chat's own shell, spawning lazily on
+ * first attach). Browser and sub-agent views belong to one chat and fall back to that remembered
+ * state when the chat changes or the call leaves the conversation.
  */
 export type SidePanelView =
   | { kind: "changes" }
   | { kind: "browser"; taskId: string }
+  | { kind: "terminal" }
   | { kind: "subagent"; taskId: string; toolCallId: string; index: number };
 
 export const CHANGES_VIEW: SidePanelView = { kind: "changes" };
+export const TERMINAL_VIEW: SidePanelView = { kind: "terminal" };
+
+/** The views the panel can remember showing, in their header order. */
+export type PanelViewKind = "changes" | "terminal";
+const PANEL_ORDER: Record<PanelViewKind, number> = { changes: 0, terminal: 1 };
+
+export function durableView(kind: PanelViewKind): SidePanelView {
+  return kind === "terminal" ? TERMINAL_VIEW : CHANGES_VIEW;
+}
 
 /** Stable per view: keys the panel's swap animation and tells two views apart. */
 export function viewKey(view: SidePanelView): string {
-  return view.kind === "subagent" ? `subagent:${view.taskId}:${view.toolCallId}#${view.index}` : view.kind === "browser" ? `browser:${view.taskId}` : view.kind;
+  if (view.kind === "subagent") return `subagent:${view.taskId}:${view.toolCallId}#${view.index}`;
+  if (view.kind === "browser") return `browser:${view.taskId}`;
+  return view.kind;
 }
 
 /**
@@ -27,33 +40,39 @@ export function swapKey(view: SidePanelView): string {
   return view.kind === "subagent" ? `subagent:${view.taskId}:${view.toolCallId}` : view.kind;
 }
 
-/**
- * Which way a change of view slides: 1 brings the new view in from the right, -1 from the left.
- * A later sibling comes from the right and an earlier one from the left; returning from a
- * sub-agent to Changes reads as going back.
- */
+/** Which way a change of view slides: 1 enters from the right, -1 from the left. */
 export function swapDirection(from: SidePanelView | null, to: SidePanelView | null): 1 | -1 {
-  if (from?.kind === "subagent" && to?.kind === "subagent" && swapKey(from) === swapKey(to)) return to.index < from.index ? -1 : 1;
-  return from?.kind === "subagent" && to?.kind === "changes" ? -1 : 1;
+  if (from?.kind === "subagent" && to?.kind === "subagent" && swapKey(from) === swapKey(to)) {
+    return to.index < from.index ? -1 : 1;
+  }
+  if (from && to && (from.kind === "changes" || from.kind === "terminal") && (to.kind === "changes" || to.kind === "terminal")) {
+    return PANEL_ORDER[to.kind] < PANEL_ORDER[from.kind] ? -1 : 1;
+  }
+  return from?.kind === "subagent" && to?.kind !== "subagent" ? -1 : 1;
 }
 
 export function sameView(a: SidePanelView | null, b: SidePanelView | null): boolean {
   return a === null || b === null ? a === b : viewKey(a) === viewKey(b);
 }
 
-/** A trigger's click: its view replaces whatever is showing, or closes the panel if it is the one showing. */
+/** A trigger replaces the current view, or closes the panel when its view is already showing. */
 export function toggleView(current: SidePanelView | null, next: SidePanelView): SidePanelView | null {
   return sameView(current, next) ? null : next;
 }
 
-/** What the remembered Changes state becomes when `view` shows; undefined leaves it as it was. */
-export function rememberedChanges(view: SidePanelView | null): boolean | undefined {
-  if (view === null) return false;
-  return view.kind === "changes" ? true : undefined;
+/**
+ * What the remembered durable view becomes: its kind for Changes/Terminal, null when the panel
+ * closes, and undefined while a task-bound Browser or sub-agent view is showing.
+ */
+export function rememberedView(view: SidePanelView | null): PanelViewKind | null | undefined {
+  if (view === null) return null;
+  return view.kind === "changes" || view.kind === "terminal" ? view.kind : undefined;
 }
 
-/** The view to show in `taskId`'s chat: the current one if it can stay, else the remembered one. */
-export function viewForChat(view: SidePanelView | null, taskId: string | undefined, changesOpen: boolean): SidePanelView | null {
-  if (view?.kind === "subagent" || view?.kind === "browser") return view.taskId === taskId ? view : changesOpen ? CHANGES_VIEW : null;
+/** The view to show in `taskId`'s chat: task-bound views fall back to the remembered durable one. */
+export function viewForChat(view: SidePanelView | null, taskId: string | undefined, remembered: PanelViewKind | null): SidePanelView | null {
+  if (view?.kind === "subagent" || view?.kind === "browser") {
+    return view.taskId === taskId ? view : remembered ? durableView(remembered) : null;
+  }
   return view;
 }

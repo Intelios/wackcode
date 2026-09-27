@@ -15,6 +15,7 @@ mod slash_commands;
 mod storage;
 mod subagents;
 mod subscriptions;
+mod terminal;
 mod window_state;
 mod worker;
 
@@ -35,6 +36,7 @@ pub fn run() {
         .manage(commands::GitLocks::default())
         .manage(subscriptions::SubscriptionState::default())
         .manage(worker::ManagerState::default())
+        .manage(terminal::TerminalState::default())
         .setup(|app| {
             let state = MetadataState::load(&app.handle())?;
             let (appearance, saved_window) = state
@@ -167,6 +169,12 @@ pub fn run() {
             commands::list_workspace_files,
             commands::reveal_task,
             commands::reveal_path,
+            terminal::open_terminal,
+            terminal::write_terminal,
+            terminal::resize_terminal,
+            terminal::detach_terminal,
+            terminal::restart_terminal,
+            terminal::close_terminal,
         ])
         .build(tauri::generate_context!())
         .expect("error while building WackCode");
@@ -178,6 +186,7 @@ pub fn run() {
             app.state::<worker::ReaperHandle>().stop();
             app.state::<WorkerState>().terminate_all();
             app.state::<browser::BrowserManager>().dispose_all();
+            app.state::<terminal::TerminalState>().terminate_all();
             app.state::<subscriptions::SubscriptionState>().terminate_all();
         }
     });

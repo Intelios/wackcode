@@ -216,6 +216,18 @@ export const TOKENS: Record<string, { recipe: Recipe; ref: string }> = {
   "--wc-code-meta": { recipe: "syntax", ref: "#a3c9c0" },
   "--wc-code-comment": { recipe: "syntax", ref: "#7d8674" },
 
+  // The terminal's ANSI base colours (terminal-theme.ts builds bright variants from these).
+  // Same `syntax` recipe: recognisable ANSI hues that lean towards the user's accent, exactly
+  // like code highlighting. Refs are the default-accent harmonised family.
+  "--wc-term-black": { recipe: "syntax", ref: "#20241e" },
+  "--wc-term-red": { recipe: "syntax", ref: "#e3a2a2" },
+  "--wc-term-green": { recipe: "syntax", ref: "#b7d9a1" },
+  "--wc-term-yellow": { recipe: "syntax", ref: "#e6d2a6" },
+  "--wc-term-blue": { recipe: "syntax", ref: "#9aaed2" },
+  "--wc-term-magenta": { recipe: "syntax", ref: "#c9a3d2" },
+  "--wc-term-cyan": { recipe: "syntax", ref: "#a3c9c0" },
+  "--wc-term-white": { recipe: "syntax", ref: "#dbe0d7" },
+
   "--wc-on-accent": { recipe: "on-accent", ref: "#172000" }
 };
 

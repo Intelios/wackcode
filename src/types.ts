@@ -1073,3 +1073,34 @@ export interface SaveProviderInput {
   models: ModelRecord[];
   apiKey?: string;
 }
+
+/** How a terminal's shell ended; `signal` names the signal when it didn't exit normally. */
+export interface TerminalExit {
+  code: number;
+  signal: string | null;
+}
+
+/** What `openTerminal` returns when the panel attaches (`terminal.rs`). */
+export interface TerminalInfo {
+  /** Identifies this shell; a restart's late events carry the old id and are ignored. */
+  sessionId: string;
+  shell: string;
+  cwd: string;
+  /** True when this call spawned the shell; false when it attached to a live one. */
+  fresh: boolean;
+  exit: TerminalExit | null;
+  busy: boolean;
+}
+
+/** One chunk on a terminal's output channel. `output` is UTF-8 text ready for `xterm.write`. */
+export type TerminalFrame =
+  | { type: "output"; data: string }
+  | { type: "exit"; code: number | null; signal: string | null }
+  | { type: "busy"; busy: boolean };
+
+/** `terminal-event` broadcasts so the header can hint at a hidden session's state. */
+export type TerminalEvent =
+  | { type: "terminal_started"; taskId: string; sessionId: string; shell: string; cwd: string }
+  | { type: "terminal_busy"; taskId: string; sessionId: string; busy: boolean }
+  | { type: "terminal_exited"; taskId: string; sessionId: string; code: number; signal: string | null }
+  | { type: "terminal_closed"; taskId: string; sessionId: string };

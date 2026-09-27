@@ -1,9 +1,12 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { ReactNode } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ProjectRecord, TaskRecord } from "../types";
 import { Icon } from "./Icons";
+import { ArchivedList } from "./ArchivedList";
 import { MenuButton } from "./ui/MenuButton";
 import { Tooltip } from "./ui/Tooltip";
+import { useConfirmAction } from "./ui/useConfirmAction";
 
 export type TaskAction = "rename" | "worktree" | "fork" | "reveal" | "copy" | "archive" | "unarchive" | "delete" | "delete-direct";
 export type ProjectAction = "reveal" | "remove";
@@ -11,11 +14,14 @@ export type ProjectAction = "reveal" | "remove";
 /** Collapse-key for the "No project" group, which has no ProjectRecord id. */
 export const NO_PROJECT_KEY = "__no_project__";
 
+const EASE: [number, number, number, number] = [0.33, 1, 0.68, 1];
+
 interface SidebarProps {
   projects: ProjectRecord[];
   tasks: TaskRecord[];
   selectedTaskId?: string;
-  showArchived: boolean;
+  /** While open, the Archived view replaces the chat list; the footer tile and the header ✕ toggle it. */
+  archivedOpen: boolean;
   /** Task IDs that have a pending extension dialog waiting for a response. */
   pendingDialogTaskIds: ReadonlySet<string>;
   /** Group keys (project ids or NO_PROJECT_KEY) whose chats are hidden. */
@@ -32,43 +38,18 @@ interface SidebarProps {
   onRenameTask: (taskId: string, name: string) => void;
 }
 
-export function Sidebar({ projects, tasks, selectedTaskId, showArchived, pendingDialogTaskIds, collapsedProjectIds, onSelectTask, onNewChat, onNewDraft, onAddProject, onToggleArchived, onToggleProjectCollapsed, onOpenSettings, onTaskAction, onProjectAction, onRenameTask }: SidebarProps) {
+export function Sidebar({ projects, tasks, selectedTaskId, archivedOpen, pendingDialogTaskIds, collapsedProjectIds, onSelectTask, onNewChat, onNewDraft, onAddProject, onToggleArchived, onToggleProjectCollapsed, onOpenSettings, onTaskAction, onProjectAction, onRenameTask }: SidebarProps) {
   const [renamingId, setRenamingId] = useState<string>();
   const [renameValue, setRenameValue] = useState("");
-  const [confirmingAction, setConfirmingAction] = useState<{ taskId: string; action: "delete" | "archive" | "unarchive" } | null>(null);
-  const hasArchived = tasks.some((task) => task.archived);
-  const looseTasks = tasks.filter((task) => task.projectId === null && (!task.archived || showArchived));
-
-  useEffect(() => {
-    if (!confirmingAction) return;
-    function handleOutside(event: Event) {
-      const target = event.target as HTMLElement | null;
-      if (!target?.closest(".task-confirming")) {
-        setConfirmingAction(null);
-      }
-    }
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setConfirmingAction(null);
-      }
-    }
-    const timer = setTimeout(() => {
-      setConfirmingAction(null);
-    }, 4000);
-
-    window.addEventListener("pointerdown", handleOutside);
-    window.addEventListener("mousedown", handleOutside);
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      clearTimeout(timer);
-      window.removeEventListener("pointerdown", handleOutside);
-      window.removeEventListener("mousedown", handleOutside);
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [confirmingAction]);
+  const { confirming, confirm, setConfirming } = useConfirmAction();
+  const reduce = useReducedMotion();
+  const archivedTasks = tasks.filter((task) => task.archived);
+  const hasArchived = archivedTasks.length > 0;
+  // Archived chats never appear inline; they live in the Archived view only.
+  const looseTasks = tasks.filter((task) => task.projectId === null && !task.archived);
 
   function startRename(task: TaskRecord) {
-    setConfirmingAction(null);
+    setConfirming(null);
     setRenamingId(task.id);
     setRenameValue(task.name);
   }
@@ -82,27 +63,17 @@ export function Sidebar({ projects, tasks, selectedTaskId, showArchived, pending
   function handleArchiveClick(event: React.MouseEvent, task: TaskRecord) {
     event.stopPropagation();
     const action: TaskAction = task.archived ? "unarchive" : "archive";
-    if (confirmingAction?.taskId === task.id && confirmingAction.action === action) {
-      setConfirmingAction(null);
-      onTaskAction(task, action);
-    } else {
-      setConfirmingAction({ taskId: task.id, action });
-    }
+    if (confirm(task.id, action)) onTaskAction(task, action);
   }
 
   function handleDeleteClick(event: React.MouseEvent, task: TaskRecord) {
     event.stopPropagation();
-    if (confirmingAction?.taskId === task.id && confirmingAction.action === "delete") {
-      setConfirmingAction(null);
-      onTaskAction(task, "delete-direct");
-    } else {
-      setConfirmingAction({ taskId: task.id, action: "delete" });
-    }
+    if (confirm(task.id, "delete")) onTaskAction(task, "delete-direct");
   }
 
   function renderTask(task: TaskRecord, _project?: ProjectRecord) {
-    const isConfirmingArchive = confirmingAction?.taskId === task.id && (confirmingAction.action === "archive" || confirmingAction.action === "unarchive");
-    const isConfirmingDelete = confirmingAction?.taskId === task.id && confirmingAction.action === "delete";
+    const isConfirmingArchive = confirming?.taskId === task.id && (confirming.action === "archive" || confirming.action === "unarchive");
+    const isConfirmingDelete = confirming?.taskId === task.id && confirming.action === "delete";
 
     return renamingId === task.id ? (
       <div className="task-item renaming" key={task.id}>
@@ -122,7 +93,7 @@ export function Sidebar({ projects, tasks, selectedTaskId, showArchived, pending
         key={task.id}
         role="button"
         tabIndex={0}
-        className={`task-item ${selectedTaskId === task.id ? "active" : ""} ${task.archived ? "archived" : ""}`}
+        className={`task-item ${selectedTaskId === task.id ? "active" : ""}`}
         onClick={() => onSelectTask(task.id)}
         onKeyDown={(event) => { if (event.key === "Enter") onSelectTask(task.id); }}
         onDoubleClick={() => startRename(task)}
@@ -134,15 +105,15 @@ export function Sidebar({ projects, tasks, selectedTaskId, showArchived, pending
         {task.mode === "ultraplan" && <span className="task-mode-chip ultra">Ultra Plan</span>}
         {task.usesWorktree && <Icon name="branch" className="task-branch-icon" />}
         <span className="task-actions" onClick={(event) => event.stopPropagation()} onDoubleClick={(event) => event.stopPropagation()}>
-          <Tooltip label={task.archived ? "Unarchive chat" : "Archive chat"} disabled={Boolean(isConfirmingArchive)}>
+          <Tooltip label="Archive chat" disabled={Boolean(isConfirmingArchive)}>
             <button
               type="button"
               className={`ghost-button row-menu${isConfirmingArchive ? " confirming task-confirming" : ""}`}
               onClick={(event) => handleArchiveClick(event, task)}
-              aria-label={isConfirmingArchive ? `Confirm ${task.archived ? "unarchive" : "archive"} ${task.name}` : task.archived ? `Unarchive ${task.name}` : `Archive ${task.name}`}
+              aria-label={isConfirmingArchive ? `Confirm archive ${task.name}` : `Archive ${task.name}`}
             >
               {isConfirmingArchive ? (
-                <span className="confirm-label">{task.archived ? "Unarchive?" : "Archive?"}</span>
+                <span className="confirm-label">Archive?</span>
               ) : (
                 <span className="row-menu-icon"><Icon name="archive" /></span>
               )}
@@ -206,58 +177,106 @@ export function Sidebar({ projects, tasks, selectedTaskId, showArchived, pending
     );
   }
 
+  const chatList = (
+    <>
+      {projects.length === 0 && looseTasks.length === 0 && (
+        <div className="sidebar-empty">Start a new chat — with a project folder or without one.</div>
+      )}
+      {projects.map((project) => {
+        const projectTasks = tasks.filter((task) => task.projectId === project.id && !task.archived);
+        return (
+          <section className={`project-group ${collapsedProjectIds.has(project.id) ? "" : "open"}`} key={project.id}>
+            {renderHeading({
+              name: project.name,
+              groupKey: project.id,
+              plusLabel: `New chat in ${project.name}`,
+              title: project.path,
+              groupTasks: projectTasks,
+              onPlus: () => onNewChat(project),
+              menu: (
+                <MenuButton
+                  className="ghost-button"
+                  label={`${project.name} menu`}
+                  items={() => [
+                    { label: "New chat", icon: <Icon name="plus" />, onSelect: () => onNewChat(project) },
+                    "separator",
+                    { label: "Reveal in Finder", icon: <Icon name="folder" />, onSelect: () => onProjectAction(project, "reveal") },
+                    { label: "Remove project", icon: <Icon name="trash" />, danger: true, onSelect: () => onProjectAction(project, "remove") }
+                  ]}
+                />
+              )
+            })}
+            {!collapsedProjectIds.has(project.id) && projectTasks.map((task) => renderTask(task, project))}
+          </section>
+        );
+      })}
+      {looseTasks.length > 0 && (
+        <section className={`project-group ${collapsedProjectIds.has(NO_PROJECT_KEY) ? "" : "open"}`}>
+          {renderHeading({
+            name: "No project",
+            groupKey: NO_PROJECT_KEY,
+            plusLabel: "New chat with no project",
+            groupTasks: looseTasks,
+            onPlus: () => onNewChat(null)
+          })}
+          {!collapsedProjectIds.has(NO_PROJECT_KEY) && looseTasks.map((task) => renderTask(task))}
+        </section>
+      )}
+    </>
+  );
+
   return (
     <aside className="sidebar">
       <div className="titlebar-drag" data-tauri-drag-region />
       <div className="sidebar-top">
-        <button type="button" className="sidebar-action" onClick={onNewDraft}>
-          <Icon name="plus" /> New chat <kbd>⌘N</kbd>
-        </button>
+        {archivedOpen ? (
+          <div className="archived-header">
+            <h2 className="archived-heading">Archived</h2>
+            {archivedTasks.length > 0 && <span className="archived-count">{archivedTasks.length}</span>}
+            <Tooltip label="Back to chats">
+              <button type="button" className="ghost-button" onClick={onToggleArchived} aria-label="Close archived chats">
+                <Icon name="close" />
+              </button>
+            </Tooltip>
+          </div>
+        ) : (
+          <button type="button" className="sidebar-action" onClick={onNewDraft}>
+            <Icon name="plus" /> New chat <kbd>⌘N</kbd>
+          </button>
+        )}
       </div>
-      <nav className="project-list" aria-label="Projects and chats">
-        {projects.length === 0 && looseTasks.length === 0 && (
-          <div className="sidebar-empty">Start a new chat — with a project folder or without one.</div>
-        )}
-        {projects.map((project) => {
-          const projectTasks = tasks.filter((task) => task.projectId === project.id && (!task.archived || showArchived));
-          return (
-            <section className={`project-group ${collapsedProjectIds.has(project.id) ? "" : "open"}`} key={project.id}>
-              {renderHeading({
-                name: project.name,
-                groupKey: project.id,
-                plusLabel: `New chat in ${project.name}`,
-                title: project.path,
-                groupTasks: projectTasks,
-                onPlus: () => onNewChat(project),
-                menu: (
-                  <MenuButton
-                    className="ghost-button"
-                    label={`${project.name} menu`}
-                    items={() => [
-                      { label: "New chat", icon: <Icon name="plus" />, onSelect: () => onNewChat(project) },
-                      "separator",
-                      { label: "Reveal in Finder", icon: <Icon name="folder" />, onSelect: () => onProjectAction(project, "reveal") },
-                      { label: "Remove project", icon: <Icon name="trash" />, danger: true, onSelect: () => onProjectAction(project, "remove") }
-                    ]}
-                  />
-                )
-              })}
-              {!collapsedProjectIds.has(project.id) && projectTasks.map((task) => renderTask(task, project))}
-            </section>
-          );
-        })}
-        {looseTasks.length > 0 && (
-          <section className={`project-group ${collapsedProjectIds.has(NO_PROJECT_KEY) ? "" : "open"}`}>
-            {renderHeading({
-              name: "No project",
-              groupKey: NO_PROJECT_KEY,
-              plusLabel: "New chat with no project",
-              groupTasks: looseTasks,
-              onPlus: () => onNewChat(null)
-            })}
-            {!collapsedProjectIds.has(NO_PROJECT_KEY) && looseTasks.map((task) => renderTask(task))}
-          </section>
-        )}
+      <nav className="project-list" aria-label={archivedOpen ? "Archived chats" : "Projects and chats"}>
+        <AnimatePresence initial={false} mode="wait">
+          {archivedOpen ? (
+            <motion.div
+              key="archived"
+              className="sidebar-page"
+              initial={reduce ? false : { opacity: 0, x: 16 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={reduce ? { opacity: 0 } : { opacity: 0, x: -16 }}
+              transition={{ duration: 0.16, ease: EASE }}
+            >
+              <ArchivedList
+                tasks={tasks}
+                projects={projects}
+                selectedTaskId={selectedTaskId}
+                onSelectTask={onSelectTask}
+                onTaskAction={onTaskAction}
+              />
+            </motion.div>
+          ) : (
+            <motion.div
+              key="chats"
+              className="sidebar-page"
+              initial={reduce ? false : { opacity: 0, x: -16 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={reduce ? { opacity: 0 } : { opacity: 0, x: 16 }}
+              transition={{ duration: 0.16, ease: EASE }}
+            >
+              {chatList}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </nav>
       <div className="sidebar-footer">
         <Tooltip label={<>Add project <kbd>⌘O</kbd></>}>
@@ -266,13 +285,13 @@ export function Sidebar({ projects, tasks, selectedTaskId, showArchived, pending
           </button>
         </Tooltip>
         {hasArchived && (
-          <Tooltip label={showArchived ? "Hide archived" : "Show archived"}>
+          <Tooltip label={archivedOpen ? "Hide archived" : "Show archived"}>
             <button
               type="button"
-              className={`sidebar-tile${showArchived ? " active" : ""}`}
+              className={`sidebar-tile${archivedOpen ? " active" : ""}`}
               onClick={onToggleArchived}
-              aria-label={showArchived ? "Hide archived" : "Show archived"}
-              aria-pressed={showArchived}
+              aria-label={archivedOpen ? "Hide archived" : "Show archived"}
+              aria-pressed={archivedOpen}
             >
               <Icon name="archive" />
             </button>

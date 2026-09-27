@@ -259,6 +259,8 @@ export interface TaskRecord {
   /** Mirrors the worker's `plan_state`; the durable hint the UI uses before a worker reports in. */
   mode: TaskMode;
   archived: boolean;
+  /** When the chat was archived; the Archived view orders by it. Null for chats archived before the field existed. */
+  archivedAt: string | null;
   lastError: string | null;
   createdAt: string;
   updatedAt: string;

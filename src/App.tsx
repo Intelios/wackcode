@@ -212,7 +212,8 @@ export default function App() {
   /** Watch commands, one at a time: two racing to the worker could leave it on the wrong child. */
   const watchQueue = useRef<Promise<void>>(Promise.resolve());
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [showArchived, setShowArchived] = useState(false);
+  /** The Archived view replacing the sidebar's chat list; closed again by its ✕ or footer tile. */
+  const [archivedOpen, setArchivedOpen] = useState(false);
   const [collapsedProjects, setCollapsedProjects] = useState<ReadonlySet<string>>(() => new Set(loadJSON<string[]>(COLLAPSED_PROJECTS_KEY, [])));
   const [confirm, setConfirm] = useState<ConfirmState>();
   const [restoreDialog, setRestoreDialog] = useState<RestoreDialogState>();
@@ -347,6 +348,11 @@ export default function App() {
     setBrowserExpanded(false);
   }, [selectedTaskId]);
   useEffect(() => { localStorage.setItem(COLLAPSED_PROJECTS_KEY, JSON.stringify([...collapsedProjects])); }, [collapsedProjects]);
+  // The Archived view closes itself once its last chat leaves (unarchived or deleted):
+  // the footer tile that opens it is gone too, so an empty panel would be a dead end.
+  useEffect(() => {
+    if (archivedOpen && !data.tasks.some((task) => task.archived)) setArchivedOpen(false);
+  }, [archivedOpen, data.tasks]);
 
   const toggleProjectCollapsed = useCallback((key: string) => {
     setCollapsedProjects((current) => {
@@ -1892,14 +1898,14 @@ export default function App() {
         projects={data.projects}
         tasks={data.tasks}
         selectedTaskId={selectedTaskId}
-        showArchived={showArchived}
+        archivedOpen={archivedOpen}
         pendingDialogTaskIds={pendingDialogTaskIds}
         collapsedProjectIds={collapsedProjects}
         onSelectTask={(id) => { draftEpoch.current += 1; slashDraftPromise.current = undefined; selectedTaskRef.current = id; setDraft(undefined); setComposerTransfer(undefined); setSelectedTaskId(id); }}
         onNewChat={(project) => openDraft(project?.id ?? null)}
         onNewDraft={() => openDraft()}
         onAddProject={() => void addProject()}
-        onToggleArchived={() => setShowArchived((value) => !value)}
+        onToggleArchived={() => setArchivedOpen((value) => !value)}
         onToggleProjectCollapsed={toggleProjectCollapsed}
         onOpenSettings={() => setSettingsOpen(true)}
         onTaskAction={(task, action) => void taskAction(task, action)}

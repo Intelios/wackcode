@@ -1180,6 +1180,7 @@ pub fn create_task(
         status: TaskStatus::Idle,
         mode: TaskMode::Build,
         archived: false,
+        archived_at: None,
         last_error: None,
         created_at: now.clone(),
         updated_at: now,
@@ -1744,6 +1745,7 @@ pub async fn fork_task(app: AppHandle, state: State<'_, MetadataState>, input: F
         status: TaskStatus::Idle,
         mode: source.mode,
         archived: false,
+        archived_at: None,
         last_error: None,
         created_at: now.clone(),
         updated_at: now,
@@ -1862,6 +1864,7 @@ pub async fn archive_task(app: AppHandle, state: State<'_, MetadataState>, task_
     state.mutate(|data| {
         let task = data.tasks.iter_mut().find(|task| task.id == task_id).ok_or_else(|| "Task not found".to_string())?;
         task.archived = true;
+        task.archived_at = Some(Utc::now().to_rfc3339());
         task.status = TaskStatus::Idle;
         task.updated_at = Utc::now().to_rfc3339();
         Ok(task.clone())
@@ -1873,6 +1876,7 @@ pub fn unarchive_task(state: State<'_, MetadataState>, task_id: String) -> Resul
     state.mutate(|data| {
         let task = data.tasks.iter_mut().find(|task| task.id == task_id).ok_or_else(|| "Task not found".to_string())?;
         task.archived = false;
+        task.archived_at = None;
         task.updated_at = Utc::now().to_rfc3339();
         Ok(task.clone())
     })
@@ -2784,6 +2788,19 @@ mod tests {
         assert_eq!(task.mode, TaskMode::UltraPlan);
         // The worker's `plan_state` and the frontend both spell it "ultraplan".
         assert_eq!(serde_json::to_value(TaskMode::UltraPlan).unwrap(), json!("ultraplan"));
+    }
+
+    #[test]
+    fn task_records_written_before_archived_at_existed_still_load() {
+        // Chats archived before `archivedAt` existed have no such key; the serde default
+        // keeps them loadable and the Archived view falls back to `updated_at` for ordering.
+        let json = r#"{"id":"t","projectId":null,"name":"n","workspacePath":"/tmp","worktreePath":null,"branch":null,"usesWorktree":false,"providerId":"p","modelId":"m","thinkingLevel":"off","sessionFile":null,"status":"idle","archived":true,"lastError":null,"createdAt":"c","updatedAt":"u"}"#;
+        let task: TaskRecord = serde_json::from_str(json).unwrap();
+        assert!(task.archived);
+        assert_eq!(task.archived_at, None);
+        let with_stamp = json.replace("\"archived\":true", "\"archived\":true,\"archivedAt\":\"2026-09-27T10:00:00Z\"");
+        let task: TaskRecord = serde_json::from_str(&with_stamp).unwrap();
+        assert_eq!(task.archived_at.as_deref(), Some("2026-09-27T10:00:00Z"));
     }
 
     #[test]

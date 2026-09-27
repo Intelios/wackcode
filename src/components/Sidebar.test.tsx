@@ -14,7 +14,7 @@ function task(id: string, projectId: string | null, name: string): TaskRecord {
   return {
     id, projectId, name, autoTitleEligible: false, autoTitleAttemptId: null, workspacePath: "/tmp", worktreePath: null, branch: null, usesWorktree: false,
     providerId: "prov", modelId: "m", thinkingLevel: "off", sessionFile: null, status: "idle",
-    mode: "build", archived: false, lastError: null, createdAt: "now", updatedAt: "now"
+    mode: "build", archived: false, archivedAt: null, lastError: null, createdAt: "now", updatedAt: "now"
   };
 }
 
@@ -24,7 +24,7 @@ function Harness({ tasks, pendingDialogTaskIds = new Set<string>() }: { tasks: T
     <Sidebar
       projects={projects}
       tasks={tasks}
-      showArchived={false}
+      archivedOpen={false}
       pendingDialogTaskIds={pendingDialogTaskIds}
       collapsedProjectIds={collapsed}
       onSelectTask={() => undefined}
@@ -72,7 +72,7 @@ describe("Sidebar collapsible projects", () => {
         <Sidebar
           projects={projects}
           tasks={[task("t1", "p1", "Refactor parser")]}
-          showArchived={false}
+          archivedOpen={false}
           pendingDialogTaskIds={new Set<string>()}
           collapsedProjectIds={collapsed}
           onSelectTask={() => undefined}
@@ -121,7 +121,7 @@ describe("Sidebar collapsible projects", () => {
         <Sidebar
           projects={projects}
           tasks={[task("t2", null, "Loose chat")]}
-          showArchived={false}
+          archivedOpen={false}
           pendingDialogTaskIds={new Set<string>()}
           collapsedProjectIds={new Set([NO_PROJECT_KEY])}
           onSelectTask={() => undefined}
@@ -146,19 +146,19 @@ describe("Sidebar collapsible projects", () => {
 
 describe("Sidebar footer tiles", () => {
   function FooterHarness({ tasks }: { tasks: TaskRecord[] }) {
-    const [archived, setArchived] = useState(false);
+    const [archivedOpen, setArchivedOpen] = useState(false);
     return (
       <Sidebar
         projects={projects}
         tasks={tasks}
-        showArchived={archived}
+        archivedOpen={archivedOpen}
         pendingDialogTaskIds={new Set<string>()}
         collapsedProjectIds={new Set()}
         onSelectTask={() => undefined}
         onNewChat={() => undefined}
         onNewDraft={() => undefined}
         onAddProject={() => undefined}
-        onToggleArchived={() => setArchived((current) => !current)}
+        onToggleArchived={() => setArchivedOpen((current) => !current)}
         onToggleProjectCollapsed={() => undefined}
         onOpenSettings={() => undefined}
         onTaskAction={() => undefined}
@@ -174,8 +174,8 @@ describe("Sidebar footer tiles", () => {
     expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
   });
 
-  it("shows the archive tile only when an archived chat exists, and flags it while archived chats are shown", () => {
-    const archived = { ...task("t2", null, "Old chat"), archived: true };
+  it("shows the archive tile only when an archived chat exists, and opens the Archived view from it", async () => {
+    const archived = { ...task("t2", null, "Old chat"), archived: true, archivedAt: "2026-09-27T10:00:00Z" };
     const { rerender } = render(<FooterHarness tasks={[task("t1", "p1", "Refactor parser")]} />);
     expect(screen.queryByRole("button", { name: "Show archived" })).toBeNull();
 
@@ -185,24 +185,29 @@ describe("Sidebar footer tiles", () => {
 
     fireEvent.click(tile);
     expect(screen.getByRole("button", { name: "Hide archived" })).toHaveAttribute("aria-pressed", "true");
+    // The Archived view replaces the chat list, with its own header and close button.
+    expect(await screen.findByRole("heading", { name: "Archived" })).toBeInTheDocument();
+    expect(await screen.findByText("Old chat")).toBeInTheDocument();
+    expect(screen.queryByText("Refactor parser")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close archived chats" }));
+    expect(await screen.findByText("Refactor parser")).toBeInTheDocument();
   });
 });
 
 describe("Sidebar task actions", () => {
   function ActionHarness({
     tasks,
-    showArchived = false,
     onTaskAction = () => undefined
   }: {
     tasks: TaskRecord[];
-    showArchived?: boolean;
     onTaskAction?: (task: TaskRecord, action: TaskAction) => void;
   }) {
     return (
       <Sidebar
         projects={projects}
         tasks={tasks}
-        showArchived={showArchived}
+        archivedOpen={false}
         pendingDialogTaskIds={new Set<string>()}
         collapsedProjectIds={new Set()}
         onSelectTask={() => undefined}
@@ -257,20 +262,11 @@ describe("Sidebar task actions", () => {
     expect(actions).toEqual([[t, "archive"]]);
   });
 
-  it("confirms unarchive on second click for an archived chat", () => {
-    const actions: [TaskRecord, TaskAction][] = [];
-    const t = { ...task("t1", "p1", "Refactor parser"), archived: true };
-    render(<ActionHarness tasks={[t]} showArchived={true} onTaskAction={(task, action) => actions.push([task, action])} />);
-
-    const unarchiveBtn = screen.getByRole("button", { name: "Unarchive Refactor parser" });
-    fireEvent.click(unarchiveBtn);
-
-    expect(actions).toHaveLength(0);
-    const confirmBtn = screen.getByRole("button", { name: "Confirm unarchive Refactor parser" });
-    expect(confirmBtn).toHaveTextContent("Unarchive?");
-
-    fireEvent.click(confirmBtn);
-    expect(actions).toEqual([[t, "unarchive"]]);
+  it("keeps archived chats out of the normal chat list", () => {
+    const archived = { ...task("t2", "p1", "Old chat"), archived: true };
+    render(<ActionHarness tasks={[task("t1", "p1", "Refactor parser"), archived]} />);
+    expect(screen.getByText("Refactor parser")).toBeInTheDocument();
+    expect(screen.queryByText("Old chat")).toBeNull();
   });
 
   it("cancels confirmation when clicking outside", () => {

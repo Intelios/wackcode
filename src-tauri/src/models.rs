@@ -703,6 +703,10 @@ pub struct TaskRecord {
     pub mode: TaskMode,
     #[serde(default)]
     pub archived: bool,
+    /// When the chat was archived; the Archived view orders by it. Cleared on unarchive,
+    /// and absent for chats archived before it existed (the UI falls back to `updated_at`).
+    #[serde(default)]
+    pub archived_at: Option<String>,
     pub last_error: Option<String>,
     pub created_at: String,
     pub updated_at: String,

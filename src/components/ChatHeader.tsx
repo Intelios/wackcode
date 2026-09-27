@@ -46,7 +46,7 @@ export function ChatHeader({ task, project, changesCount, changesOpen, browserOp
     { label: "Reveal in Finder", icon: <Icon name="folder" />, onSelect: () => onTaskAction(task, "reveal") },
     { label: "Copy path", icon: <Icon name="copy" />, onSelect: () => onTaskAction(task, "copy") },
     "separator",
-    { label: "Archive", icon: <Icon name="archive" />, onSelect: () => onTaskAction(task, "archive") },
+    { label: task.archived ? "Unarchive" : "Archive", icon: <Icon name={task.archived ? "unarchive" : "archive"} />, onSelect: () => onTaskAction(task, task.archived ? "unarchive" : "archive") },
     { label: "Delete", icon: <Icon name="trash" />, danger: true, onSelect: () => onTaskAction(task, "delete") }
   ];
 

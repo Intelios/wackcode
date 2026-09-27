@@ -179,7 +179,7 @@ mod tests {
                 workspace_path: "/tmp/project".into(), worktree_path: None, branch: None,
                 uses_worktree: false, provider_id: "provider".into(), model_id: "model".into(),
                 thinking_level: "off".into(), session_file: Some("session.jsonl".into()),
-                status: TaskStatus::Running, mode: crate::models::TaskMode::Build, archived: false, last_error: None,
+                status: TaskStatus::Running, mode: crate::models::TaskMode::Build, archived: false, archived_at: None, last_error: None,
                 created_at: "now".into(), updated_at: "now".into(),
             }],
             ..AppData::default()

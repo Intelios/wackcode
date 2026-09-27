@@ -1,4 +1,4 @@
-import type { GoalState, NormalizedMessage, PlanState, SessionSnapshot, SnapshotDelta, SubagentStreamFrame, SubagentTarget, SubagentView, TaskMode, TodoState } from "./types";
+import type { GoalState, NormalizedMessage, PlanState, SessionSnapshot, SnapshotDelta, SubagentStreamFrame, SubagentTarget, SubagentView, TaskMode, TaskRecord, TodoState } from "./types";
 
 export function validateInitCommand(args: string, projectId: string | null, mode: TaskMode): void {
   if (args.trim()) throw new Error("/init does not accept arguments.");
@@ -59,6 +59,37 @@ export function formatRunDuration(durationMs: number): string {
   if (hours > 0) return `${hours}h ${minutes}m ${remainder}s`;
   if (minutes > 0) return `${minutes}m ${remainder}s`;
   return `${remainder}s`;
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** How long ago an ISO timestamp was, in the Archived view's shorthand ("now", "5m", "7h", "3d", then a short date). */
+export function formatRelativeTime(iso: string, now: Date = new Date()): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "";
+  const seconds = Math.max(0, Math.floor((now.getTime() - then) / 1000));
+  if (seconds < 60) return "now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d`;
+  const date = new Date(then);
+  const day = date.getDate();
+  const month = MONTHS[date.getMonth()];
+  return date.getFullYear() === now.getFullYear() ? `${day} ${month}` : `${day} ${month} ${date.getFullYear()}`;
+}
+
+/** Archived chats newest-first; chats archived before `archivedAt` existed fall back to `updatedAt`. */
+export function sortedArchived(tasks: TaskRecord[]): TaskRecord[] {
+  const archivedAt = (task: TaskRecord): number => {
+    const time = Date.parse(task.archivedAt ?? task.updatedAt);
+    return Number.isNaN(time) ? 0 : time;
+  };
+  return tasks
+    .filter((task) => task.archived)
+    .sort((a, b) => archivedAt(b) - archivedAt(a));
 }
 
 const THINKING_PREVIEW_MAX = 200;

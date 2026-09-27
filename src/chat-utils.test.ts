@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applySnapshotDelta, applySubagentFrame, displayPath, formatRunDuration, formatTokens, isPlanMode, mergeMessages, nextMode, pendingSubagentView, planButtonTarget, sameGoalState, samePlanState, sameTodoState, thinkingPreview, titleFromPrompt, validateInitCommand } from "./chat-utils";
+import { applySnapshotDelta, applySubagentFrame, displayPath, formatRelativeTime, formatRunDuration, formatTokens, isPlanMode, mergeMessages, nextMode, pendingSubagentView, planButtonTarget, sameGoalState, samePlanState, sameTodoState, sortedArchived, thinkingPreview, titleFromPrompt, validateInitCommand } from "./chat-utils";
 import type { GoalState, NormalizedMessage, SessionSnapshot, SnapshotDelta, SubagentStreamFrame } from "./types";
 
 describe("titleFromPrompt", () => {
@@ -82,6 +82,51 @@ describe("formatRunDuration", () => {
 
   it("clamps negative values to zero", () => {
     expect(formatRunDuration(-1)).toBe("0s");
+  });
+});
+
+describe("formatRelativeTime", () => {
+  // Timezone-less ISO strings parse as local time, keeping the day buckets stable on any machine.
+  const now = new Date("2026-09-27T12:00:00");
+
+  it("uses the archived view's shorthand buckets", () => {
+    expect(formatRelativeTime("2026-09-27T11:59:30", now)).toBe("now");
+    expect(formatRelativeTime("2026-09-27T11:55:00", now)).toBe("5m");
+    expect(formatRelativeTime("2026-09-27T05:00:00", now)).toBe("7h");
+    expect(formatRelativeTime("2026-09-25T12:00:00", now)).toBe("2d");
+  });
+
+  it("falls back to a short date after a week, with the year when it differs", () => {
+    expect(formatRelativeTime("2026-09-14T12:00:00", now)).toBe("14 Sep");
+    expect(formatRelativeTime("2025-03-02T12:00:00", now)).toBe("2 Mar 2025");
+  });
+
+  it("clamps future timestamps to now and tolerates garbage", () => {
+    expect(formatRelativeTime("2026-09-27T12:00:30", now)).toBe("now");
+    expect(formatRelativeTime("not a date", now)).toBe("");
+  });
+});
+
+describe("sortedArchived", () => {
+  const base = { projectId: null, name: "n", autoTitleEligible: false, autoTitleAttemptId: null, workspacePath: "/tmp", worktreePath: null, branch: null, usesWorktree: false, providerId: "p", modelId: "m", thinkingLevel: "off" as const, sessionFile: null, status: "idle" as const, mode: "build" as const, lastError: null, createdAt: "c" };
+  const task = (id: string, extra: Partial<import("./types").TaskRecord>): import("./types").TaskRecord => ({ ...base, id, archived: true, archivedAt: null, updatedAt: "u", ...extra });
+
+  it("orders by archivedAt, newest first", () => {
+    const tasks = [
+      task("old", { archivedAt: "2026-09-25T10:00:00Z", updatedAt: "2026-09-26T10:00:00Z" }),
+      task("new", { archivedAt: "2026-09-27T10:00:00Z", updatedAt: "2026-09-26T10:00:00Z" }),
+      task("mid", { archivedAt: "2026-09-26T10:00:00Z", updatedAt: "2026-09-27T11:00:00Z" })
+    ];
+    expect(sortedArchived(tasks).map((item) => item.id)).toEqual(["new", "mid", "old"]);
+  });
+
+  it("keeps only archived chats and falls back to updatedAt for legacy rows", () => {
+    const tasks = [
+      task("legacy", { archivedAt: null, updatedAt: "2026-09-20T10:00:00Z" }),
+      task("stamped", { archivedAt: "2026-09-21T10:00:00Z", updatedAt: "2026-09-19T10:00:00Z" }),
+      task("live", { archived: false, archivedAt: null, updatedAt: "2026-09-27T10:00:00Z" })
+    ];
+    expect(sortedArchived(tasks).map((item) => item.id)).toEqual(["stamped", "legacy"]);
   });
 });
 

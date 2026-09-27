@@ -14,6 +14,8 @@ import { Markdown } from "./Markdown";
 import { MessageActions, type MessageActionItem } from "./MessageActions";
 import { MessageEditor } from "./MessageEditor";
 import { PlanCard, type PlanAction } from "./PlanCard";
+import { ScrollRail } from "./ScrollRail";
+import { turnExcerpt, type RailTurn } from "../scroll-rail";
 import { SubagentGroup } from "./SubagentChip";
 import { ThinkingExpansion, ThinkingRow } from "./ThinkingRow";
 import { OrphanResult, ToolRow } from "./ToolRow";
@@ -359,7 +361,7 @@ const Message = memo(function Message({ message, slots, results, liveToolText, l
     const text = messageText(message);
     if (editing) {
       return (
-        <div className="msg user editing">
+        <div className="msg user editing" data-turn={message.versions ? message.versions.group : message.id}>
           <MessageEditor
             text={text}
             images={images}
@@ -379,7 +381,7 @@ const Message = memo(function Message({ message, slots, results, liveToolText, l
       items.push({ id: "rewind", label: "Rewind to here", icon: "rewind", onClick: () => void onAction({ type: "rewind", message }) });
     }
     return (
-      <div className="msg user">
+      <div className="msg user" data-turn={message.versions ? message.versions.group : message.id}>
         {images.length > 0 && (
           <div className="message-images">
             {images.map((image, index) => image.thumbnail
@@ -486,6 +488,20 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
   const activeUserId = useMemo(() => activeRun
     ? [...messages].reverse().find((message) => message.role === "user" && message.timestamp !== undefined && message.timestamp >= activeRun.startedAt)?.id
     : undefined, [messages, activeRun]);
+
+  // One rail tick per user turn, keyed like the rendered element (versions share it).
+  const turns = useMemo<RailTurn[]>(() => messages
+    .filter((message) => message.role === "user")
+    .map((message) => {
+      const text = message.commandPresentation
+        ? `/${message.commandPresentation.name} ${commandSummary(message.commandPresentation)}`
+        : messageText(message);
+      return { id: message.versions ? message.versions.group : message.id, excerpt: turnExcerpt(text) };
+    }), [messages]);
+  const liveTurnId = useMemo(() => {
+    const active = activeUserId && messages.find((message) => message.id === activeUserId);
+    return active ? (active.versions ? active.versions.group : active.id) : undefined;
+  }, [messages, activeUserId]);
   const timingsByMessage = useMemo(() => new Map(runTimings.map((timing) => [timing.userMessageId, timing.durationMs])), [runTimings]);
   const switchesByPosition = useMemo(() => {
     const grouped = new Map<number, DisplayModelSwitch[]>();
@@ -588,11 +604,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
           </ExploreExpansion.Provider>
         </ThinkingExpansion.Provider>
       </div>
-      {detached && (
-        <button type="button" className="jump-latest" onClick={jumpToLatest}>
-          <Icon name="chevron" style={{ transform: "rotate(90deg)" }} /> Latest
-        </button>
-      )}
+      <ScrollRail target={ref} turns={turns} liveTurnId={liveTurnId} detached={detached} onJumpToLatest={jumpToLatest} />
     </div>
   );
 }

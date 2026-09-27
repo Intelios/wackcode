@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedMessage } from "../types";
 import { ExploreGroupingEnabled } from "./ExploreGroup";
@@ -494,5 +494,77 @@ describe("Transcript file mentions", () => {
     const mentions = [...container.querySelectorAll(".bubble .mention")].map((node) => node.textContent);
     expect(mentions).toEqual(["@src/App.tsx"]);
     expect(container.querySelector(".bubble")).toHaveTextContent("Fix @src/App.tsx for @someone.");
+  });
+});
+
+describe("Transcript scroll rail", () => {
+  const user = (id: string, text: string, timestamp?: number): NormalizedMessage =>
+    ({ id, role: "user", timestamp, blocks: [{ type: "text", text }] });
+
+  // jsdom reports 0 for every layout metric; pretend the transcript overflows.
+  const overflow = async (container: HTMLElement, scrollHeight = 2_000, clientHeight = 500) => {
+    const scroller = container.querySelector<HTMLElement>(".conversation-scroll")!;
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: scrollHeight });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: clientHeight });
+    fireEvent.scroll(scroller);
+    await waitFor(() => expect(container.querySelector(".scroll-rail-track")).not.toBeNull());
+    return scroller;
+  };
+
+  // The rail measures on an rAF after scroll; flush one frame to settle it.
+  const flushFrame = () => act(async () => { await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined))); });
+
+  it("shows the timeline and one labelled tick per user turn once the transcript overflows", async () => {
+    const { container } = render(<Transcript messages={[user("u1", "First task"), user("u2", "Second task")]} running={false} />);
+    expect(container.querySelector(".scroll-rail-track")).toBeNull();
+
+    await overflow(container);
+    const ticks = container.querySelectorAll<HTMLElement>(".scroll-rail-tick");
+    expect(ticks).toHaveLength(2);
+    expect(ticks[0]).toHaveAttribute("aria-label", "Turn 1: First task");
+    expect(ticks[1]).toHaveAttribute("aria-label", "Turn 2: Second task");
+    expect(screen.getByRole("navigation", { name: "Conversation timeline" })).toBeInTheDocument();
+  });
+
+  it("marks the running turn's tick live", async () => {
+    const startedAt = 1_000;
+    const { container } = render(<Transcript
+      messages={[user("u1", "Earlier", 500), user("u2", "Now running", 2_000)]}
+      running activeRun={{ startedAt }} />);
+    await overflow(container);
+    const ticks = container.querySelectorAll<HTMLElement>(".scroll-rail-tick");
+    expect(ticks[0].className).not.toContain("live");
+    expect(ticks[1].className).toContain("live");
+  });
+
+  it("jumps to a turn when its tick is clicked", async () => {
+    const { container } = render(<Transcript messages={[user("u1", "First task"), user("u2", "Second task")]} running={false} />);
+    const scroller = await overflow(container);
+    const second = scroller.querySelectorAll<HTMLElement>("[data-turn]")[1];
+    Object.defineProperty(second, "offsetTop", { configurable: true, value: 800 });
+    // Turn offsets are only re-read when content size changed — bump scrollHeight to signal it.
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 2_100 });
+    const scrollTo = vi.fn();
+    Object.defineProperty(scroller, "scrollTo", { configurable: true, value: scrollTo });
+    fireEvent.scroll(scroller);
+    await flushFrame();
+    fireEvent.click(screen.getByRole("button", { name: "Turn 2: Second task" }));
+    expect(scrollTo).toHaveBeenCalledWith({ top: 780, behavior: "smooth" });
+  });
+
+  it("scrubs proportionally when the rail is pressed", async () => {
+    const { container } = render(<Transcript messages={[user("u1", "First task"), user("u2", "Second task")]} running={false} />);
+    const scroller = await overflow(container);
+    const rail = container.querySelector<HTMLElement>(".scroll-rail")!;
+    Object.defineProperty(rail, "clientHeight", { configurable: true, value: 400 });
+    fireEvent.scroll(scroller);
+    await flushFrame();
+    // A press that never moves is a click: smooth jump to halfway down the rail.
+    const scrollTo = vi.fn();
+    Object.defineProperty(scroller, "scrollTo", { configurable: true, value: scrollTo });
+    vi.spyOn(rail, "getBoundingClientRect").mockReturnValue({ top: 0, height: 400 } as DOMRect);
+    fireEvent.pointerDown(rail, { clientY: 200 });
+    fireEvent.pointerUp(rail, { clientY: 200 });
+    expect(scrollTo).toHaveBeenCalledWith({ top: 750, behavior: "smooth" });
   });
 });

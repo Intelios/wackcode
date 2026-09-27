@@ -144,6 +144,50 @@ describe("Sidebar collapsible projects", () => {
   });
 });
 
+describe("Sidebar footer tiles", () => {
+  function FooterHarness({ tasks }: { tasks: TaskRecord[] }) {
+    const [archived, setArchived] = useState(false);
+    return (
+      <Sidebar
+        projects={projects}
+        tasks={tasks}
+        showArchived={archived}
+        pendingDialogTaskIds={new Set<string>()}
+        collapsedProjectIds={new Set()}
+        onSelectTask={() => undefined}
+        onNewChat={() => undefined}
+        onNewDraft={() => undefined}
+        onAddProject={() => undefined}
+        onToggleArchived={() => setArchived((current) => !current)}
+        onToggleProjectCollapsed={() => undefined}
+        onOpenSettings={() => undefined}
+        onTaskAction={() => undefined}
+        onProjectAction={() => undefined}
+        onRenameTask={() => undefined}
+      />
+    );
+  }
+
+  it("renders Add project and Settings tiles", () => {
+    render(<FooterHarness tasks={[task("t1", "p1", "Refactor parser")]} />);
+    expect(screen.getByRole("button", { name: "Add project" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
+  });
+
+  it("shows the archive tile only when an archived chat exists, and flags it while archived chats are shown", () => {
+    const archived = { ...task("t2", null, "Old chat"), archived: true };
+    const { rerender } = render(<FooterHarness tasks={[task("t1", "p1", "Refactor parser")]} />);
+    expect(screen.queryByRole("button", { name: "Show archived" })).toBeNull();
+
+    rerender(<FooterHarness tasks={[task("t1", "p1", "Refactor parser"), archived]} />);
+    const tile = screen.getByRole("button", { name: "Show archived" });
+    expect(tile).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(tile);
+    expect(screen.getByRole("button", { name: "Hide archived" })).toHaveAttribute("aria-pressed", "true");
+  });
+});
+
 describe("Sidebar task actions", () => {
   function ActionHarness({
     tasks,

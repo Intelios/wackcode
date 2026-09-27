@@ -260,17 +260,29 @@ export function Sidebar({ projects, tasks, selectedTaskId, showArchived, pending
         )}
       </nav>
       <div className="sidebar-footer">
-        <button type="button" className="sidebar-action" onClick={onAddProject}>
-          <Icon name="folder" /> Add project <kbd>⌘O</kbd>
-        </button>
-        {hasArchived && (
-          <button type="button" className="sidebar-action" onClick={onToggleArchived}>
-            <Icon name="archive" /> {showArchived ? "Hide archived" : "Show archived"}
+        <Tooltip label={<>Add project <kbd>⌘O</kbd></>}>
+          <button type="button" className="sidebar-tile" onClick={onAddProject} aria-label="Add project">
+            <Icon name="folder" />
           </button>
+        </Tooltip>
+        {hasArchived && (
+          <Tooltip label={showArchived ? "Hide archived" : "Show archived"}>
+            <button
+              type="button"
+              className={`sidebar-tile${showArchived ? " active" : ""}`}
+              onClick={onToggleArchived}
+              aria-label={showArchived ? "Hide archived" : "Show archived"}
+              aria-pressed={showArchived}
+            >
+              <Icon name="archive" />
+            </button>
+          </Tooltip>
         )}
-        <button type="button" className="sidebar-action" onClick={onOpenSettings}>
-          <Icon name="settings" /> Settings <kbd>⌘,</kbd>
-        </button>
+        <Tooltip label={<>Settings <kbd>⌘,</kbd></>}>
+          <button type="button" className="sidebar-tile" onClick={onOpenSettings} aria-label="Settings">
+            <Icon name="settings" />
+          </button>
+        </Tooltip>
       </div>
     </aside>
   );

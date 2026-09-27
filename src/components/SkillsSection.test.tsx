@@ -169,6 +169,39 @@ describe("SkillsSection", () => {
     expect(await screen.findByText(/Imported 1 of 2 skills/)).toBeInTheDocument();
   });
 
+  it("imports a ZIP and displays refreshed skills and conflicts", async () => {
+    const actions = renderSection();
+    const updated = { ...overview, folders: overview.folders.map((folder) => folder.kind === "library"
+      ? { ...folder, skills: [...folder.skills, skill("logo-design")] } : folder) };
+    actions.onImport.mockResolvedValue({ overview: updated, note: "Imported 1 of 2 skills. A skill named pdf-tools already exists in Your skills." });
+    fireEvent.click(await screen.findByRole("button", { name: "Import skills" }));
+    fireEvent.click(screen.getByText("A ZIP archive…"));
+    await waitFor(() => expect(actions.onImport).toHaveBeenCalledWith("zip"));
+    expect(await screen.findByRole("button", { name: /logo-design description/ })).toBeInTheDocument();
+    expect(screen.getByText(/Imported 1 of 2 skills/)).toBeInTheDocument();
+  });
+
+  it("leaves skills unchanged when the ZIP picker is cancelled", async () => {
+    const actions = renderSection();
+    actions.onImport.mockResolvedValue(null);
+    fireEvent.click(await screen.findByRole("button", { name: "Import skills" }));
+    fireEvent.click(screen.getByText("A ZIP archive…"));
+    await waitFor(() => expect(actions.onImport).toHaveBeenCalledWith("zip"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Import skills" })).toBeEnabled());
+    expect(screen.getByRole("switch", { name: "Use notes" })).toBeInTheDocument();
+    expect(screen.queryByText(/Imported/)).not.toBeInTheDocument();
+  });
+
+  it("shows ZIP errors and allows another import", async () => {
+    const actions = renderSection();
+    actions.onImport.mockRejectedValue(new Error("That ZIP contains conflicting paths."));
+    fireEvent.click(await screen.findByRole("button", { name: "Import skills" }));
+    fireEvent.click(screen.getByText("A ZIP archive…"));
+    expect(await screen.findByText(/That ZIP contains conflicting paths/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Import skills" })).toBeEnabled();
+    expect(screen.getByRole("switch", { name: "Use notes" })).toBeInTheDocument();
+  });
+
   it("switches a package's skill through the package's own resources", async () => {
     const withPackage: SkillsOverview = {
       ...overview,

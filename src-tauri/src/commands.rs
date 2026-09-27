@@ -895,7 +895,7 @@ pub async fn remove_skill_folder(app: AppHandle, state: State<'_, MetadataState>
     skills_changed(&app, None).await
 }
 
-/// Copy skills the user picks (a folder of them, one skill's folder, or a `.md` file) into
+/// Copy skills the user picks (a ZIP, a folder of skills, one skill folder, or a `.md` file) into
 /// `~/.agents/skills`. The picked originals are never changed. `None` when cancelled.
 #[tauri::command]
 pub async fn import_skill(app: AppHandle, kind: String) -> Result<Option<SkillsChange>, String> {
@@ -904,11 +904,20 @@ pub async fn import_skill(app: AppHandle, kind: String) -> Result<Option<SkillsC
     let picked = match kind.as_str() {
         "folder" => dialog.blocking_pick_folder(),
         "file" => dialog.add_filter("Markdown", &["md"]).blocking_pick_file(),
+        "zip" => dialog.add_filter("ZIP archive", &["zip"]).blocking_pick_file(),
         _ => return Err("Unknown import kind.".into()),
     };
     let Some(picked) = picked else { return Ok(None) };
     let picked = picked.into_path().map_err(|_| "That could not be read.".to_string())?;
     let home = skills::home_dir(&app)?;
+    // Keep the TempDir alive through scanning and copying, including error paths.
+    let extracted = if kind == "zip" {
+        let home = home.clone();
+        let picked = picked.clone();
+        Some(tauri::async_runtime::spawn_blocking(move || crate::skill_archive::extract(&home, &picked))
+            .await.map_err(|error| format!("Could not import that ZIP: {error}"))??)
+    } else { None };
+    let picked = extracted.as_ref().map(|dir| dir.path().to_path_buf()).unwrap_or(picked);
     // A SKILL.md stands for its whole folder; any other file is one skill on its own.
     let (scan_path, only) = if picked.is_file() && picked.file_name().is_some_and(|name| name != "SKILL.md") {
         (picked.clone(), Some(picked.clone()))
@@ -918,7 +927,7 @@ pub async fn import_skill(app: AppHandle, kind: String) -> Result<Option<SkillsC
         (picked.clone(), None)
     };
     let library = skills::library_dir(&home);
-    if skills::inside(&scan_path, &library).is_some() || scan_path.canonicalize().ok() == library.canonicalize().ok() {
+    if extracted.is_none() && (skills::inside(&scan_path, &library).is_some() || scan_path.canonicalize().ok() == library.canonicalize().ok()) {
         return Err("That is already in Your skills.".into());
     }
     if scan_path == home || scan_path == Path::new("/") {
@@ -930,21 +939,11 @@ pub async fn import_skill(app: AppHandle, kind: String) -> Result<Option<SkillsC
     if found.is_empty() {
         return Err("No skills were found there. A skill is a folder with a SKILL.md file that has a name and a description.".into());
     }
-    let mut skipped = Vec::new();
-    for skill in &found {
-        if let Err(error) = skills::copy_into_library(&home, &skill.name, Path::new(&skill.file_path), Path::new(&skill.base_dir)) {
-            skipped.push(error);
-        }
-    }
-    if skipped.len() == found.len() {
-        return Err(skipped.into_iter().take(3).collect::<Vec<_>>().join(" "));
-    }
-    let note = (!skipped.is_empty()).then(|| format!(
-        "Imported {} of {} skills. {}",
-        found.len() - skipped.len(),
-        found.len(),
-        skipped.into_iter().take(3).collect::<Vec<_>>().join(" ")
-    ));
+    let note = tauri::async_runtime::spawn_blocking(move || {
+        // Move staging into the blocking job as well: cancellation must not delete it mid-copy.
+        let _extracted = extracted;
+        skills::import_scanned(&home, &found)
+    }).await.map_err(|error| format!("Could not import the skills: {error}"))??;
     Ok(Some(skills_changed(&app, note).await?))
 }
 

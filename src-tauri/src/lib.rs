@@ -9,6 +9,7 @@ mod models;
 mod secrets;
 mod shell_env;
 mod skills;
+mod skill_archive;
 mod slash_commands;
 mod storage;
 mod subagents;

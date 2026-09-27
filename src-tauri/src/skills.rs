@@ -511,11 +511,40 @@ pub fn copy_into_library(home: &Path, name: &str, file: &Path, base_dir: &Path) 
             .and_then(|_| fs::copy(file, staging.join("SKILL.md")).map(|_| ()))
             .map_err(|error| format!("Could not copy {name}: {error}"))
     };
-    let result = copied.and_then(|_| fs::rename(&staging, &target).map_err(|error| format!("Could not copy {name}: {error}")));
+    let result = copied.and_then(|_| commit_import(&staging, &target, &name));
     if result.is_err() {
         let _ = fs::remove_dir_all(&staging);
     }
     result.map(|_| target.join("SKILL.md"))
+}
+
+/// Shared by folder and ZIP imports: each skill commits independently, existing names win.
+pub fn import_scanned(home: &Path, found: &[ScannedSkill]) -> Result<Option<String>, String> {
+    let mut skipped = Vec::new();
+    for skill in found {
+        if let Err(error) = copy_into_library(home, &skill.name, Path::new(&skill.file_path), Path::new(&skill.base_dir)) {
+            skipped.push(error);
+        }
+    }
+    if skipped.len() == found.len() {
+        return Err(skipped.into_iter().take(3).collect::<Vec<_>>().join(" "));
+    }
+    Ok(Some(format!("Imported {} of {} skills.{}", found.len() - skipped.len(), found.len(),
+        if skipped.is_empty() { String::new() } else { format!(" {}", skipped.into_iter().take(3).collect::<Vec<_>>().join(" ")) })))
+}
+
+/// macOS exclusive rename closes the gap between the name check and commit, even if another
+/// importer creates an empty destination directory while this copy is being staged.
+fn commit_import(staging: &Path, target: &Path, name: &str) -> Result<(), String> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    let from = CString::new(staging.as_os_str().as_bytes()).map_err(|_| "Invalid import path.".to_string())?;
+    let to = CString::new(target.as_os_str().as_bytes()).map_err(|_| "Invalid skill path.".to_string())?;
+    // SAFETY: both paths are NUL-terminated and remain alive throughout this call.
+    let result = unsafe { nix::libc::renamex_np(from.as_ptr(), to.as_ptr(), nix::libc::RENAME_EXCL) };
+    if result == 0 { return Ok(()); }
+    let error = std::io::Error::last_os_error();
+    if error.kind() == std::io::ErrorKind::AlreadyExists { Err(already_exists(name)) }
+    else { Err(format!("Could not copy {name}: {error}")) }
 }
 
 /// Everything in `from` except symlinks, dot-git and `node_modules`, within the copy limits,
@@ -1065,6 +1094,45 @@ mod tests {
         let copied = copy_into_library(home.path(), "loose", &loose, home.path()).unwrap();
         assert_eq!(fs::read_to_string(copied).unwrap(), fs::read_to_string(&loose).unwrap());
         assert!(fs::read_dir(&library).unwrap().flatten().all(|entry| !entry.file_name().to_string_lossy().starts_with(".wackcode")));
+    }
+
+    #[test]
+    fn imports_valid_skills_while_preserving_conflicts_and_cleans_failed_copies() {
+        let home = tempfile::tempdir().unwrap();
+        let existing = create_skill(home.path(), "existing", "Keep me.", false, "original").unwrap();
+        let make = |name: &str| {
+            let base = home.path().join("incoming").join(name);
+            fs::create_dir_all(&base).unwrap();
+            fs::write(base.join("SKILL.md"), "incoming").unwrap();
+            ScannedSkill { name: name.into(), description: "Import.".into(),
+                file_path: base.join("SKILL.md").display().to_string(), base_dir: base.display().to_string(),
+                manual: false, resource_name: None, shadowed_by: None }
+        };
+        let duplicate = make("existing");
+        let valid = make("new-skill");
+        let oversized = make("oversized");
+        fs::File::create(Path::new(&oversized.base_dir).join("huge")).unwrap().set_len(MAX_COPY_BYTES + 1).unwrap();
+        let note = import_scanned(home.path(), &[duplicate.clone(), valid, oversized]).unwrap().unwrap();
+        assert!(note.contains("Imported 1 of 3 skills"));
+        assert!(note.contains("already exists"));
+        assert!(note.contains("too large"));
+        assert!(fs::read_to_string(existing).unwrap().contains("original"));
+        assert!(library_dir(home.path()).join("new-skill/SKILL.md").exists());
+        assert_eq!(fs::read_dir(library_dir(home.path())).unwrap().count(), 2);
+        assert!(import_scanned(home.path(), &[duplicate]).unwrap_err().contains("already exists"));
+    }
+
+    #[test]
+    fn exclusive_import_commit_never_replaces_even_an_empty_directory() {
+        let home = tempfile::tempdir().unwrap();
+        let staging = home.path().join("staging");
+        let target = home.path().join("target");
+        fs::create_dir(&staging).unwrap();
+        fs::write(staging.join("SKILL.md"), "new").unwrap();
+        fs::create_dir(&target).unwrap();
+        assert!(commit_import(&staging, &target, "target").unwrap_err().contains("already exists"));
+        assert_eq!(fs::read_dir(target).unwrap().count(), 0);
+        assert!(staging.join("SKILL.md").exists());
     }
 
     #[test]

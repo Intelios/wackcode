@@ -90,7 +90,7 @@ export const api = {
   addSkillFolder: () => invoke<SkillsChange | null>("add_skill_folder"),
   removeSkillFolder: (id: string) => invoke<SkillsChange>("remove_skill_folder", { id }),
   /** Opens a native panel for a folder or a `.md` file; null when cancelled. */
-  importSkill: (kind: "folder" | "file") => invoke<SkillsChange | null>("import_skill", { kind }),
+  importSkill: (kind: "folder" | "file" | "zip") => invoke<SkillsChange | null>("import_skill", { kind }),
   copySkillToLibrary: (path: string) => invoke<SkillsChange>("copy_skill_to_library", { path }),
   searchSkillPackages: (query: string, sort: SkillSearchSort, page: number) =>
     invoke<SkillSearchPage>("search_skill_packages", { input: { query, sort, page } }),

@@ -22,7 +22,7 @@ export interface SkillActions {
   onAddFolder: () => Promise<SkillsChange | null>;
   onRemoveFolder: (id: string) => Promise<SkillsChange>;
   /** Opens a native panel; null when cancelled. */
-  onImport: (kind: "folder" | "file") => Promise<SkillsChange | null>;
+  onImport: (kind: "folder" | "file" | "zip") => Promise<SkillsChange | null>;
   onCopyToLibrary: (path: string) => Promise<SkillsChange>;
   onReveal: (path: string) => Promise<void>;
   onSearch: (query: string, sort: SkillSearchSort, page: number) => Promise<SkillSearchPage>;
@@ -486,6 +486,7 @@ export function SkillsSection({
                   className="skill-import-button"
                   icon={<><Icon name="archive" /><span>Import</span></>}
                   items={[
+                    { label: "A ZIP archive…", hint: "Skills with their scripts, references and assets", onSelect: () => void apply(() => onImport("zip")) },
                     { label: "A folder of skills…", hint: "One skill's folder, or a folder holding several", onSelect: () => void apply(() => onImport("folder")) },
                     { label: "A single .md file…", hint: "Copied in as its own skill", onSelect: () => void apply(() => onImport("file")) }
                   ]}

@@ -123,6 +123,29 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 [data-backdrop="image"] .draft-title { text-shadow: 0 1px 14px rgb(0 0 0 / 55%); }
 .titlebar-drag { height: 48px; flex: 0 0 48px; }
 
+/* Rebuild choreography (App.tsx sets .rebuild on the shell each time the Settings swap
+   remounts a screen). Every piece flies in from the edge it belongs to, staggered, so the
+   screen reads as assembling itself. The chat header and transcript bring their own Framer
+   entrances instead — a CSS transform here would fight theirs. Reduced motion is covered by
+   the global .01ms rule below. */
+@keyframes rebuild-in {
+  from { opacity: 0; transform: translate(var(--rx, 0px), var(--ry, 0px)) scale(var(--rs, 1)); }
+  to { opacity: 1; transform: none; }
+}
+.app-shell.rebuild .sidebar { animation: rebuild-in .4s cubic-bezier(.3, 1.4, .4, 1) both; --rx: -28px; }
+/* The sidebar's own rows settle a beat after its panel lands; children 2-4 are the action row,
+   the chat list (or Settings nav) and the footer in both screens' sidebars. */
+.app-shell.rebuild .sidebar > :nth-child(2) { animation: rebuild-in .34s cubic-bezier(.3, 1.4, .4, 1) .1s both; --ry: 8px; }
+.app-shell.rebuild .sidebar > :nth-child(3) { animation: rebuild-in .34s cubic-bezier(.3, 1.4, .4, 1) .16s both; --ry: 8px; }
+.app-shell.rebuild .sidebar > :nth-child(4) { animation: rebuild-in .34s cubic-bezier(.3, 1.4, .4, 1) .22s both; --ry: 8px; }
+/* The layer moves, never .composer itself: Framer owns that transform for the hero→dock glide. */
+.app-shell.rebuild .composer-layer { animation: rebuild-in .4s cubic-bezier(.3, 1.4, .4, 1) .18s both; --ry: 26px; }
+.app-shell.rebuild .side-panel { animation: rebuild-in .4s cubic-bezier(.3, 1.4, .4, 1) .24s both; --rx: 24px; }
+.app-shell.rebuild .workspace-empty { animation: rebuild-in .4s cubic-bezier(.3, 1.4, .4, 1) .12s both; --ry: 14px; }
+.app-shell.rebuild .settings-workspace { animation: rebuild-in .4s cubic-bezier(.3, 1.4, .4, 1) .08s both; --ry: 18px; }
+.app-shell.rebuild .settings-page-head { animation: rebuild-in .34s cubic-bezier(.3, 1.4, .4, 1) .14s both; --ry: 10px; }
+.app-shell.rebuild .settings-scroll { animation: rebuild-in .34s cubic-bezier(.3, 1.4, .4, 1) .2s both; --ry: 12px; }
+
 /* ── Sidebar ───────────────────────────────────────── */
 .sidebar {
   width: 240px;

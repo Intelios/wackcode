@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -212,6 +212,10 @@ export default function App() {
   /** Watch commands, one at a time: two racing to the worker could leave it on the wrong child. */
   const watchQueue = useRef<Promise<void>>(Promise.resolve());
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** Arms the rebuild choreography on `.app-shell`: whichever screen just mounted assembles
+      piece by piece. Cleared by the timer so later remounts don't replay it. */
+  const [rebuilding, setRebuilding] = useState(false);
+  const rebuildTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   /** The Archived view replacing the sidebar's chat list; closed again by its ✕ or footer tile. */
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [collapsedProjects, setCollapsedProjects] = useState<ReadonlySet<string>>(() => new Set(loadJSON<string[]>(COLLAPSED_PROJECTS_KEY, [])));
@@ -333,6 +337,29 @@ export default function App() {
     void api.respondExtensionUi({ taskId: request.taskId, requestId: request.requestId, ...response })
       .catch((reason) => setGlobalError(String(reason)));
   }, []);
+
+  const reduce = useReducedMotion();
+
+  /** Swapping screens always rebuilds: every open and close routes through these so the
+      incoming screen plays its assembly once. */
+  function armRebuild() {
+    setRebuilding(true);
+    clearTimeout(rebuildTimer.current);
+    rebuildTimer.current = setTimeout(() => setRebuilding(false), 800);
+  }
+  function openSettings() {
+    armRebuild();
+    setSettingsOpen(true);
+  }
+  function closeSettings() {
+    armRebuild();
+    setSettingsOpen(false);
+    // Skills, commands or package resources may have changed while Settings was open.
+    setDraftSlash(undefined);
+    setRuntimes((current) => Object.fromEntries(Object.entries(current).map(([id, value]) => [id, {
+      ...value, slashCommands: undefined, slashCommandsError: undefined
+    }])));
+  }
 
   useEffect(() => { selectedTaskRef.current = selectedTaskId; }, [selectedTaskId]);
   useEffect(() => {
@@ -493,7 +520,7 @@ export default function App() {
         ? remembered
         : payload.data.projects[0]?.id ?? null;
       setDraft({ projectId, useWorktree: false });
-      if (payload.data.providers.length === 0) setSettingsOpen(true);
+      if (payload.data.providers.length === 0) openSettings();
     }).catch((reason) => setGlobalError(String(reason))).finally(() => active && setBooting(false));
     return () => { active = false; };
   }, []);
@@ -824,7 +851,7 @@ export default function App() {
     if (selectedTask) return Promise.resolve(selectedTask);
     const active = draft ?? { projectId: lastProjectId(), useWorktree: false };
     const choice = active.choice ?? defaultChoice(active.projectId);
-    if (!choice) { setSettingsOpen(true); return Promise.resolve(undefined); }
+    if (!choice) { openSettings(); return Promise.resolve(undefined); }
     const epoch = draftEpoch.current;
     const pending = (async () => { try {
       let task = await api.createTask({
@@ -1209,7 +1236,7 @@ export default function App() {
       const active = draft ?? { projectId: lastProjectId(), useWorktree: false };
       const choice = active.choice ?? defaultChoice(active.projectId);
       if (!choice) {
-        setSettingsOpen(true);
+        openSettings();
         return false;
       }
       const startedAt = Date.now();
@@ -1813,7 +1840,7 @@ export default function App() {
         void addProject();
       } else if (key === ",") {
         event.preventDefault();
-        setSettingsOpen((value) => !value);
+        if (settingsOpen) closeSettings(); else openSettings();
       } else if (key === "c" && event.shiftKey) {
         event.preventDefault();
         toggleChanges();
@@ -1838,7 +1865,7 @@ export default function App() {
   const draftCatalog = !selectedTask && draftSlash?.projectId === (draft?.projectId ?? null) ? draftSlash : undefined;
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${rebuilding ? " rebuild" : ""}`}>
       {data.appearance.backdrop === "image" && (
         <Backdrop
           imageUrl={backgroundImageUrl}
@@ -1854,14 +1881,7 @@ export default function App() {
           toolCatalog={data.toolCatalog}
           disabledTools={data.toolConfig.disabled}
           appDataPath={appDataPath}
-          onClose={() => {
-            setSettingsOpen(false);
-            // Skills, commands or package resources may have changed while Settings was open.
-            setDraftSlash(undefined);
-            setRuntimes((current) => Object.fromEntries(Object.entries(current).map(([id, value]) => [id, {
-              ...value, slashCommands: undefined, slashCommandsError: undefined
-            }])));
-          }}
+          onClose={closeSettings}
           onSave={saveProvider}
           onDelete={deleteProvider}
           onConnectSubscription={connectSubscription}
@@ -1907,7 +1927,7 @@ export default function App() {
         onAddProject={() => void addProject()}
         onToggleArchived={() => setArchivedOpen((value) => !value)}
         onToggleProjectCollapsed={toggleProjectCollapsed}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={openSettings}
         onTaskAction={(task, action) => void taskAction(task, action)}
         onProjectAction={(project, action) => void projectAction(project, action)}
         onRenameTask={(taskId, name) => void renameTask(taskId, name)}
@@ -1916,8 +1936,8 @@ export default function App() {
       <main className="workspace">
         <AnimatePresence initial={false}>
         {selectedTask ? (
-          <motion.div key="chat" className="chat-view" initial={false} exit={{ opacity: 0, transition: { duration: 0.18, ease: EASE } }}>
-            <motion.div initial={{ opacity: 0, y: -36 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.45, ease: EASE }}>
+          <motion.div key="chat" className="chat-view" initial={false} exit={{ opacity: 0, transition: { duration: reduce ? 0 : 0.18, ease: EASE } }}>
+            <motion.div initial={reduce ? false : { opacity: 0, y: -36 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reduce ? 0 : 0.45, delay: reduce ? 0 : 0.05, ease: EASE }}>
               <ChatHeader
               task={selectedTask}
               project={selectedProject}
@@ -1948,7 +1968,7 @@ export default function App() {
                 <button onClick={() => patchRuntime(selectedTask.id, { lastRestore: undefined })}>Dismiss</button>
               </div>
             )}
-            <motion.div className="chat-transcript" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.1, ease: EASE }}>
+            <motion.div className="chat-transcript" initial={reduce ? false : { opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reduce ? 0 : 0.4, delay: reduce ? 0 : 0.14, ease: EASE }}>
             <ChatContexts appearance={data.appearance}>
             <SubagentPanelLink.Provider value={subagentLink}>
             <Transcript
@@ -1992,7 +2012,7 @@ export default function App() {
           <div key="empty" className="workspace-empty">
             <h1>Connect a model provider</h1>
             <p>Sign in with a subscription or add an OpenAI-compatible endpoint and API key to start chatting.</p>
-            <button className="primary-button" onClick={() => setSettingsOpen(true)}><Icon name="key" /> Open settings</button>
+            <button className="primary-button" onClick={openSettings}><Icon name="key" /> Open settings</button>
           </div>
         ) : null}
         </AnimatePresence>
@@ -2059,7 +2079,7 @@ export default function App() {
               seed={selectedTask ? composerSeed : draftSeedNonce ? { text: "", nonce: draftSeedNonce } : undefined}
               onDraftChange={!selectedTask ? (text, images) => { draftComposer.current = { text, images }; } : undefined}
               onStop={() => void stopTask()}
-              onOpenSettings={() => setSettingsOpen(true)}
+              onOpenSettings={openSettings}
             />
           </div>
         )}
@@ -2121,7 +2141,7 @@ export default function App() {
         comments={data.diffComments[selectedTask.id] ?? []}
         onClose={closeSidePanel}
         onRefresh={() => void refreshChanges(selectedTask.id)}
-        onSettings={() => setSettingsOpen(true)}
+        onSettings={openSettings}
         onReview={reviewChanges}
         onAction={changeAction}
         onCommit={async (message, files, revision) => {

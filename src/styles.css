@@ -249,9 +249,21 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
   width: 100%; aspect-ratio: 1; display: grid; place-items: center;
   border: 1px solid var(--border); border-radius: 9px; background: transparent;
   color: var(--text-soft); cursor: pointer;
-  transition: border-color .12s var(--ease), color .12s var(--ease), background .12s var(--ease), transform .12s var(--ease);
+  transition: border-color .12s var(--ease), color .12s var(--ease), background .12s var(--ease), transform .12s var(--ease), border-radius .25s var(--ease);
 }
 .sidebar-tile:hover { border-color: var(--border-bright); color: var(--text); background: var(--surface); }
+/* The tile itself never moves on hover — its outline goes liquid instead: the corners
+   slide between mismatched radii so the edge undulates like jelly. Loops while hovered;
+   the base border-radius transition eases it back to a clean 9px on mouse-out. */
+.sidebar-tile:hover { animation: tile-ooze 1.7s ease-in-out infinite; }
+@keyframes tile-ooze {
+  0%, 100% { border-radius: 34% 22% 30% 24% / 24% 32% 22% 34%; }
+  30%      { border-radius: 24% 34% 20% 32% / 34% 22% 32% 24%; }
+  60%      { border-radius: 28% 20% 34% 22% / 20% 30% 26% 30%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-tile:hover { animation: none; }
+}
 .sidebar-tile:active { transform: scale(.94); }
 .sidebar-tile.active { border-color: var(--wc-accent); color: var(--text); box-shadow: 0 0 0 1px var(--wc-accent); }
 .sidebar-tile svg { width: 17px; height: 17px; }

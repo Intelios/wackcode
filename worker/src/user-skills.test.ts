@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as pi from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadUserSkills, mergeSkills, scanSkills } from "./user-skills.js";
+import { loadUserSkills, mergeSkills, scanSkills, argumentHint } from "./user-skills.js";
 
 const cleanup: string[] = [];
 afterEach(async () => {
@@ -142,5 +142,32 @@ describe("scanSkills", () => {
     await writeFile(file, "---\nname: loose\ndescription: A loose skill.\n---\nBody.\n");
     const result = scanSkills(pi, { folders: [{ id: "import", path: file, label: "Import", enabled: false }], packages: [], disabled: [] }, base);
     expect(result.folders[0].skills).toEqual([expect.objectContaining({ name: "loose", filePath: file })]);
+  });
+
+  it("surfaces a skill's argument-hint, and only when there is one", async () => {
+    const base = await tempDir();
+    const mine = join(base, "mine");
+    await skill(mine, "pdf", "pdf", "PDFs.", "argument-hint: <files>\n");
+    await skill(mine, "plain", "plain", "No hint.");
+    await skill(mine, "blank", "blank", "Blank hint.", "argument-hint: \"\"\n");
+    // Unquoted `[files]` parses as a YAML flow sequence; it still reads as an optional hint.
+    await skill(mine, "maybe", "maybe", "Optional.", "argument-hint: [files]\n");
+
+    const result = scanSkills(pi, { folders: [{ id: "library", path: mine, label: "Your skills", enabled: true }], packages: [], disabled: [] }, base);
+    const byName = Object.fromEntries(result.folders[0].skills.map((entry) => [entry.name, entry]));
+    expect(byName.pdf.argumentHint).toBe("<files>");
+    expect(byName.maybe.argumentHint).toBe("[files]");
+    expect(byName.plain).toEqual(expect.not.objectContaining({ argumentHint: expect.anything() }));
+    expect(byName.blank).toEqual(expect.not.objectContaining({ argumentHint: expect.anything() }));
+  });
+
+  it("caps and trims the hint like a description, and survives an unreadable file", async () => {
+    const long = "x".repeat(2_000);
+    const base = await tempDir();
+    const mine = join(base, "mine");
+    await skill(mine, "long", "long", "Long.", `argument-hint: ${long}\n`);
+    const loaded = loadUserSkills(pi, { roots: [{ path: mine, label: "Your skills" }], disabled: [] });
+    expect(argumentHint(loaded.skills[0], pi.parseFrontmatter)).toHaveLength(1_024);
+    expect(argumentHint({ ...loaded.skills[0], filePath: join(mine, "gone", "SKILL.md") }, pi.parseFrontmatter)).toBeUndefined();
   });
 });

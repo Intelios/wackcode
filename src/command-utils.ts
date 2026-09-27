@@ -4,14 +4,17 @@ import type { SlashCommand } from "./types";
  * WackCode's own slash commands, run by the app itself rather than a worker. The Settings
  * "WackCode" group renders this same list, so the two always agree. The picker's resolved
  * names reserve these first (see `resolveCommandNames` in worker/src/slash.ts).
+ *
+ * `argumentHint` shows next to the name in the picker and as the composer's inline hint once
+ * selected (`<arg>` required, `[arg]` optional); commands without one take no arguments.
  */
 export const APP_SLASH_COMMANDS: SlashCommand[] = [
-  { id: "app:compact", name: "compact", description: "Summarize older conversation context", source: "app", sourceLabel: "WackCode" },
+  { id: "app:compact", name: "compact", description: "Summarize older conversation context", source: "app", sourceLabel: "WackCode", argumentHint: "[instructions]" },
   { id: "app:init", name: "init", description: "Create or refine project AGENTS.md", source: "app", sourceLabel: "WackCode" },
   { id: "app:new", name: "new", description: "Open a new chat", source: "app", sourceLabel: "WackCode" },
-  { id: "app:name", name: "name", description: "Rename this chat", source: "app", sourceLabel: "WackCode" },
+  { id: "app:name", name: "name", description: "Rename this chat", source: "app", sourceLabel: "WackCode", argumentHint: "<name>" },
   { id: "app:copy", name: "copy", description: "Copy the latest assistant message", source: "app", sourceLabel: "WackCode" },
-  { id: "app:goal", name: "goal", description: "Keep iterating until the goal is verified. /goal pause, resume, clear control it.", source: "app", sourceLabel: "WackCode" }
+  { id: "app:goal", name: "goal", description: "Keep iterating until the goal is verified. /goal pause, resume, clear control it.", source: "app", sourceLabel: "WackCode", argumentHint: "<objective>" }
 ];
 
 export const COMMAND_NAME_MAX = 64;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { expandCommandPreview, validateCommandBody, validateCommandName } from "./command-utils";
+import { APP_SLASH_COMMANDS, expandCommandPreview, validateCommandBody, validateCommandName } from "./command-utils";
 
 describe("validateCommandName", () => {
   it("accepts prompt-template style names and refuses the rest", () => {
@@ -30,5 +30,17 @@ describe("expandCommandPreview", () => {
     expect(expandCommandPreview("${@:2}", "a b c")).toBe("b c");
     expect(expandCommandPreview("Say 'x y' $1", "a b")).toBe("Say 'x y' a");
     expect(expandCommandPreview("Split $2", "'two words' end")).toBe("Split end");
+  });
+});
+
+describe("APP_SLASH_COMMANDS", () => {
+  it("hints at exactly the app commands that accept arguments", () => {
+    const hints = new Map(APP_SLASH_COMMANDS.map((command) => [command.name, command.argumentHint]));
+    expect(hints.get("compact")).toBe("[instructions]");
+    expect(hints.get("name")).toBe("<name>");
+    expect(hints.get("goal")).toBe("<objective>");
+    expect(hints.get("init")).toBeUndefined();
+    expect(hints.get("new")).toBeUndefined();
+    expect(hints.get("copy")).toBeUndefined();
   });
 });

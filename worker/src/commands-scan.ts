@@ -14,7 +14,7 @@ import { sep } from "node:path";
 import { JsonLineDecoder } from "./framing.js";
 import { commandKey, resolveCommandNames, resolveInvocationNames } from "./slash.js";
 import { loadUserCommands } from "./user-commands.js";
-import { loadUserSkills, mergeSkills } from "./user-skills.js";
+import { loadUserSkills, mergeSkills, argumentHint } from "./user-skills.js";
 import type {
   CommandScanRequest,
   CommandScanResult,
@@ -130,6 +130,7 @@ async function scan(request: CommandScanRequest, agentDir: string): Promise<neve
         invocation: `skill:${skill.name}`,
         key: commandKey("skill", skill.filePath),
         description: skill.description,
+        argumentHint: argumentHint(skill, pi.parseFrontmatter),
         filePath: skill.filePath
       }))
     ];

@@ -50,7 +50,7 @@ describe("commands scan (Settings › Commands)", () => {
     await writeFile(mine, "---\ndescription: Mine\n---\nMy hello.\n");
     await writeFile(join(commandsDir, "mine.md"), "Just mine.\n");
     const skillFile = join(skillDir, "SKILL.md");
-    await writeFile(skillFile, "---\nname: fixture-skill\ndescription: Fixture skill\n---\n\nUse this skill.\n");
+    await writeFile(skillFile, "---\nname: fixture-skill\ndescription: Fixture skill\nargument-hint: [context]\n---\n\nUse this skill.\n");
 
     const result = await scan({
       cwd: root,
@@ -76,7 +76,7 @@ describe("commands scan (Settings › Commands)", () => {
     ]));
     expect(result.catalog).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: `extension:${extension}#hello`, name: "hello", source: "extension" }),
-      expect.objectContaining({ id: `skill:${skillFile}`, name: "skill:fixture-skill", source: "skill", sourceLabel: "Your skills" })
+      expect.objectContaining({ id: `skill:${skillFile}`, name: "skill:fixture-skill", source: "skill", sourceLabel: "Your skills", argumentHint: "[context]" })
     ]));
 
     // A switched-off key frees its name for the command behind it, exactly like a chat.

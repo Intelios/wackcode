@@ -288,6 +288,9 @@ pub struct SkillEntry {
     pub base_dir: String,
     /// `disable-model-invocation: true`: only `/skill:name` uses it.
     pub manual: bool,
+    /// The SKILL.md's optional `argument-hint`, shown next to the name in Settings and the picker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument_hint: Option<String>,
     /// The skill's own switch (for a package skill, its resource's).
     pub enabled: bool,
     /// Inside `~/.agents/skills`, so WackCode may edit and delete it.
@@ -330,6 +333,9 @@ pub struct SaveSkillInput {
     pub description: String,
     #[serde(default)]
     pub manual: bool,
+    /// Optional `argument-hint` frontmatter; empty writes no key.
+    #[serde(default)]
+    pub argument_hint: String,
     #[serde(default)]
     pub body: String,
 }
@@ -866,7 +872,7 @@ pub struct SlashCommand {
     pub description: Option<String>,
     pub source: SlashCommandSource,
     pub source_label: String,
-    /// A prompt template's `argument-hint`, shown next to its name.
+    /// What the model can call: a prompt template's `argument-hint` or a skill's, shown next to the name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub argument_hint: Option<String>,
 }

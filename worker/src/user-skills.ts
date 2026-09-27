@@ -13,11 +13,12 @@
  * - The same file reached twice (a symlink between two tools' folders) loads once.
  * - A user skill beats a package skill with the same name.
  */
-import { realpathSync, statSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import type { LoadSkillsResult, ResourceDiagnostic, Skill } from "@earendil-works/pi-coding-agent";
 import type { ScannedDiagnostic, ScannedGroup, ScannedSkill, SkillScanRequest, UserSkillsPayload } from "./protocol.js";
 
-type PiSkillLoaders = Pick<typeof import("@earendil-works/pi-coding-agent"), "loadSkills" | "loadSkillsFromDir">;
+type PiSkillLoaders = Pick<typeof import("@earendil-works/pi-coding-agent"), "loadSkills" | "loadSkillsFromDir" | "parseFrontmatter">;
+type ParseFrontmatter = PiSkillLoaders["parseFrontmatter"];
 
 const MAX_SKILLS_PER_GROUP = 500;
 const MAX_DESCRIPTION_CHARS = 1_024;
@@ -95,15 +96,39 @@ export function skillsSignature(result: LoadSkillsResult): string {
   return JSON.stringify(result.skills.map((skill) => [skill.name, skill.description, skill.filePath, skill.disableModelInvocation, skill.sourceInfo.source]));
 }
 
-function scanned(skill: Skill, extra: Partial<ScannedSkill> = {}): ScannedSkill {
+function scanned(skill: Skill, extra: Partial<ScannedSkill> = {}, parseFrontmatter?: ParseFrontmatter): ScannedSkill {
+  const hint = parseFrontmatter ? argumentHint(skill, parseFrontmatter) : undefined;
   return {
     name: skill.name,
     description: skill.description.slice(0, MAX_DESCRIPTION_CHARS),
     filePath: skill.filePath,
     baseDir: skill.baseDir,
     manual: skill.disableModelInvocation,
+    ...(hint ? { argumentHint: hint } : {}),
     ...extra
   };
+}
+
+/**
+ * A skill's optional `argument-hint` frontmatter, shown in the picker and the composer's inline
+ * hint (`<arg>` required, `[arg]` optional). Pi's loader keeps it off `Skill`, so the file's
+ * frontmatter is read again — the same key Pi reads for prompt templates. Display only: never
+ * part of `skillsSignature`, so editing it doesn't churn system-prompt rebuilds.
+ */
+export function argumentHint(skill: Skill, parseFrontmatter: ParseFrontmatter): string | undefined {
+  try {
+    const { frontmatter } = parseFrontmatter(readFileSync(skill.filePath, "utf-8"));
+    const value = frontmatter["argument-hint"];
+    // An unquoted `[files]` parses as a YAML flow sequence; rebuilt as "[files]" so a hand-edited
+    // optional hint reads right. Quoted scalars (what the editor writes) arrive as strings.
+    const hint = Array.isArray(value)
+      ? value.every((item) => typeof item === "string" || typeof item === "number") ? `[${value.join(" ")}]` : undefined
+      : typeof value === "string" ? value : undefined;
+    if (hint && hint.trim()) return hint.trim().slice(0, MAX_DESCRIPTION_CHARS);
+  } catch {
+    // An unreadable file just never shows a hint.
+  }
+  return undefined;
 }
 
 function diagnosticsOf(entries: ResourceDiagnostic[]): ScannedDiagnostic[] {
@@ -163,7 +188,7 @@ export function scanSkills(pi: PiSkillLoaders, request: SkillScanRequest, agentD
     const loaded = isFile(folder.path) ? loadPath(folder.path) : pi.loadSkillsFromDir({ dir: folder.path, source: folder.label });
     return {
       id: folder.id,
-      skills: loaded.skills.slice(0, MAX_SKILLS_PER_GROUP).map((skill) => scanned(skill, folder.enabled && !disabled.has(skill.filePath) ? { shadowedBy: shadowedBy(skill) } : {})),
+      skills: loaded.skills.slice(0, MAX_SKILLS_PER_GROUP).map((skill) => scanned(skill, folder.enabled && !disabled.has(skill.filePath) ? { shadowedBy: shadowedBy(skill) } : {}, pi.parseFrontmatter)),
       diagnostics: diagnosticsOf(loaded.diagnostics)
     };
   });
@@ -176,7 +201,7 @@ export function scanSkills(pi: PiSkillLoaders, request: SkillScanRequest, agentD
       diagnostics.push(...loaded.diagnostics);
       for (const skill of loaded.skills) {
         if (skills.length >= MAX_SKILLS_PER_GROUP) break;
-        skills.push(scanned(skill, { resourceName: resource.name, ...(resource.enabled ? { shadowedBy: shadowedBy(skill) } : {}) }));
+        skills.push(scanned(skill, { resourceName: resource.name, ...(resource.enabled ? { shadowedBy: shadowedBy(skill) } : {}) }, pi.parseFrontmatter));
       }
     }
     return { id: entry.source, skills, diagnostics: diagnosticsOf(diagnostics) };

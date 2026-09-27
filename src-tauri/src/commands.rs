@@ -789,19 +789,22 @@ pub async fn read_skill(app: AppHandle, state: State<'_, MetadataState>, path: S
     skills::read_document(&file)
 }
 
-/// Create a skill in `~/.agents/skills`, or rewrite one already there.
+/// Create a skill in `~/.agents/skills`, or rewrite one already there. The `skills_changed`
+/// broadcast re-reads folders and re-sends the command catalog, so an edited `argument-hint`
+/// (display-only, not in the worker's rebuild fingerprint) still reaches live chats at once.
 #[tauri::command]
 pub async fn save_skill(app: AppHandle, state: State<'_, MetadataState>, input: SaveSkillInput) -> Result<SkillsChange, String> {
     let name = skills::validate_name(&input.name)?;
     let description = skills::validate_description(&input.description)?;
+    let hint = skills::validate_hint(&input.argument_hint)?;
     let body = skills::validate_body(&input.body)?;
     let home = skills::home_dir(&app)?;
     match input.path.as_deref() {
         None => {
-            skills::create_skill(&home, &name, &description, input.manual, &body)?;
+            skills::create_skill(&home, &name, &description, input.manual, &hint, &body)?;
         }
         Some(path) => {
-            let saved = skills::update_skill(&home, path, &name, &description, input.manual, &body)?.display().to_string();
+            let saved = skills::update_skill(&home, path, &name, &description, input.manual, &hint, &body)?.display().to_string();
             if saved != path {
                 // A renamed skill keeps its switch.
                 state.mutate(|data| {

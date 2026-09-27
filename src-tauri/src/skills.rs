@@ -47,6 +47,7 @@ const KNOWN_FOLDERS: &[KnownFolder] = &[
 /// The Agent Skills limits (agentskills.io/specification).
 const MAX_NAME_CHARS: usize = 64;
 const MAX_DESCRIPTION_CHARS: usize = 1_024;
+const MAX_HINT_CHARS: usize = 256;
 const MAX_BODY_CHARS: usize = 200_000;
 const MAX_CUSTOM_FOLDERS: usize = 16;
 const MAX_DISABLED: usize = 2_000;
@@ -171,6 +172,15 @@ pub fn validate_body(body: &str) -> Result<String, String> {
     Ok(body.trim().to_string())
 }
 
+/// The optional `argument-hint` the picker shows; empty means the skill takes none (or doesn't say).
+pub fn validate_hint(hint: &str) -> Result<String, String> {
+    let hint = hint.trim();
+    if hint.chars().count() > MAX_HINT_CHARS {
+        return Err(format!("A skill's argument hint can be at most {MAX_HINT_CHARS} characters."));
+    }
+    Ok(hint.to_string())
+}
+
 /// A skill path the renderer sends back: absolute, a Markdown file, and sane in size. Where it
 /// may point is checked separately against the listed folders.
 pub fn validate_skill_path(path: &str) -> Result<PathBuf, String> {
@@ -272,17 +282,22 @@ pub(crate) fn split(text: &str) -> (Option<String>, String) {
 }
 
 /// The frontmatter keys the editor owns; every other key is carried over untouched.
-const OWNED_KEYS: &[&str] = &["name", "description", "disable-model-invocation"];
+const OWNED_KEYS: &[&str] = &["name", "description", "disable-model-invocation", "argument-hint"];
 
 /// A new `SKILL.md`, keeping every frontmatter key of `original` the editor doesn't own
-/// (`license`, `metadata`, `allowed-tools`, …) exactly as written.
-pub fn compose(original: Option<&str>, name: &str, description: &str, manual: bool, body: &str) -> String {
+/// (`license`, `metadata`, `allowed-tools`, …) exactly as written. An `argument_hint` left empty
+/// writes no key at all, so a skill without one stays bare.
+pub fn compose(original: Option<&str>, name: &str, description: &str, manual: bool, argument_hint: &str, body: &str) -> String {
     let kept = original.and_then(|text| split(text).0).map(|yaml| other_keys(&yaml)).unwrap_or_default();
     let mut out = String::from("---\n");
     out.push_str(&format!("name: {}\n", yaml_scalar(name)));
     out.push_str(&format!("description: {}\n", yaml_scalar(description)));
     if manual {
         out.push_str("disable-model-invocation: true\n");
+    }
+    let hint = argument_hint.trim();
+    if !hint.is_empty() {
+        out.push_str(&format!("argument-hint: {}\n", yaml_scalar(hint)));
     }
     for line in kept {
         out.push_str(&line);
@@ -377,7 +392,7 @@ fn already_exists(name: &str) -> String {
 }
 
 /// A new skill in its own folder, `~/.agents/skills/<name>/SKILL.md`.
-pub fn create_skill(home: &Path, name: &str, description: &str, manual: bool, body: &str) -> Result<PathBuf, String> {
+pub fn create_skill(home: &Path, name: &str, description: &str, manual: bool, argument_hint: &str, body: &str) -> Result<PathBuf, String> {
     let library = library_dir(home);
     fs::create_dir_all(&library).map_err(|error| format!("Could not create ~/.agents/skills: {error}"))?;
     let folder = library.join(name);
@@ -386,7 +401,7 @@ pub fn create_skill(home: &Path, name: &str, description: &str, manual: bool, bo
     }
     fs::create_dir(&folder).map_err(|error| format!("Could not create the skill's folder: {error}"))?;
     let file = folder.join("SKILL.md");
-    if let Err(error) = write_atomic(&file, &compose(None, name, description, manual, body)) {
+    if let Err(error) = write_atomic(&file, &compose(None, name, description, manual, argument_hint, body)) {
         let _ = fs::remove_dir_all(&folder);
         return Err(error);
     }
@@ -396,7 +411,7 @@ pub fn create_skill(home: &Path, name: &str, description: &str, manual: bool, bo
 /// Rewrite a skill in the library. A skill's own folder directly inside the library follows its
 /// name, so renaming the skill renames the folder too. Returns the file's path afterwards,
 /// spelled like `path` was.
-pub fn update_skill(home: &Path, path: &str, name: &str, description: &str, manual: bool, body: &str) -> Result<PathBuf, String> {
+pub fn update_skill(home: &Path, path: &str, name: &str, description: &str, manual: bool, argument_hint: &str, body: &str) -> Result<PathBuf, String> {
     let file = library_skill(path, home)?;
     let library = library_dir(home).canonicalize().map_err(|error| error.to_string())?;
     let metadata = fs::metadata(&file).map_err(|error| format!("Could not read the skill: {error}"))?;
@@ -414,7 +429,7 @@ pub fn update_skill(home: &Path, path: &str, name: &str, description: &str, manu
             return Err(already_exists(name));
         }
     }
-    write_atomic(&file, &compose(Some(&original), name, description, manual, body))?;
+    write_atomic(&file, &compose(Some(&original), name, description, manual, argument_hint, body))?;
     let requested = PathBuf::from(path);
     match rename {
         Some((from, to)) => {
@@ -622,6 +637,8 @@ pub struct ScannedSkill {
     #[serde(default)]
     pub manual: bool,
     #[serde(default)]
+    pub argument_hint: Option<String>,
+    #[serde(default)]
     resource_name: Option<String>,
     #[serde(default)]
     shadowed_by: Option<String>,
@@ -729,6 +746,7 @@ fn build_overview(home: &Path, config: &SkillsConfig, listed: &[Folder], package
                 file_path: skill.file_path.clone(),
                 base_dir: skill.base_dir.clone(),
                 manual: skill.manual,
+                argument_hint: skill.argument_hint.clone(),
                 enabled: !config.disabled.contains(&skill.file_path),
                 editable: folder.kind == SkillFolderKind::Library && inside(Path::new(&skill.file_path), &library).is_some(),
                 shadowed_by: skill.shadowed_by.clone(),
@@ -749,6 +767,7 @@ fn build_overview(home: &Path, config: &SkillsConfig, listed: &[Folder], package
                 file_path: skill.file_path.clone(),
                 base_dir: skill.base_dir.clone(),
                 manual: skill.manual,
+                argument_hint: skill.argument_hint.clone(),
                 enabled: skill.resource_name.as_ref()
                     .and_then(|name| package.skills.iter().find(|resource| &resource.name == name))
                     .is_some_and(|resource| resource.enabled),
@@ -982,7 +1001,20 @@ mod tests {
         assert!(validate_description("  ").is_err());
         assert!(validate_description(&"d".repeat(1_024)).is_ok());
         assert!(validate_description(&"d".repeat(1_025)).is_err());
+        assert_eq!(validate_hint(" [files] ").unwrap(), "[files]");
+        assert!(validate_hint(&"h".repeat(MAX_HINT_CHARS + 1)).is_err());
         assert!(validate_body(&"b".repeat(MAX_BODY_CHARS + 1)).is_err());
+    }
+
+    #[test]
+    fn compose_writes_and_drops_the_argument_hint() {
+        let text = compose(None, "pdf", "PDFs.", false, "<files>", "Do it.");
+        assert!(text.contains("argument-hint: \"<files>\"\n"), "{text}");
+        let cleared = compose(Some(&text), "pdf", "PDFs.", false, "", "Do it.");
+        assert!(!cleared.contains("argument-hint"), "{cleared}");
+        // A hand-edited hint the editor never touched still survives: only set/clear owns the key.
+        let kept = compose(Some("---\nname: pdf\ndescription: PDFs.\nlicense: MIT\n---\n"), "pdf", "PDFs.", false, "[pages]", "");
+        assert!(kept.contains("argument-hint: \"[pages]\"\nlicense: MIT\n"), "{kept}");
     }
 
     #[test]
@@ -998,9 +1030,9 @@ mod tests {
     #[test]
     fn compose_keeps_every_key_the_editor_does_not_own() {
         let original = "---\nname: old\ndescription: >\n  Folded old\n  description.\nlicense: Apache-2.0\nmetadata:\n  author: someone\n  tags:\n  - a\n  - b\ndisable-model-invocation: true\nallowed-tools: Bash(git:*) Read\n---\n\nOld body.\n";
-        let text = compose(Some(original), "new-name", "Does things. Use when needed.", false, "\nNew body.\n\n");
+        let text = compose(Some(original), "new-name", "Does things. Use when needed.", false, "", "\nNew body.\n\n");
         assert_eq!(text, "---\nname: new-name\ndescription: Does things. Use when needed.\nlicense: Apache-2.0\nmetadata:\n  author: someone\n  tags:\n  - a\n  - b\nallowed-tools: Bash(git:*) Read\n---\n\nNew body.\n");
-        let manual = compose(Some(&text), "new-name", "Does things.", true, "");
+        let manual = compose(Some(&text), "new-name", "Does things.", true, "", "");
         assert!(manual.contains("\ndisable-model-invocation: true\nlicense: Apache-2.0\n"));
         assert!(manual.ends_with("allowed-tools: Bash(git:*) Read\n---\n"));
         let (yaml, body) = split(&manual);
@@ -1011,8 +1043,8 @@ mod tests {
     #[test]
     fn a_block_list_under_an_owned_key_goes_with_it() {
         let original = "---\nname: x\ndescription:\n- odd\n- list\nlicense: MIT\n---\n";
-        assert!(!compose(Some(original), "x", "d", false, "").contains("odd"));
-        assert!(compose(Some(original), "x", "d", false, "").contains("license: MIT"));
+        assert!(!compose(Some(original), "x", "d", false, "", "").contains("odd"));
+        assert!(compose(Some(original), "x", "d", false, "", "").contains("license: MIT"));
     }
 
     #[test]
@@ -1058,20 +1090,20 @@ mod tests {
     fn creating_renaming_and_copying_keep_one_folder_per_skill() {
         let home = tempfile::tempdir().unwrap();
         let library = library_dir(home.path());
-        let file = create_skill(home.path(), "draft", "Drafts things.", false, "Do it.").unwrap();
+        let file = create_skill(home.path(), "draft", "Drafts things.", false, "", "Do it.").unwrap();
         assert_eq!(file, library.join("draft/SKILL.md"));
-        assert!(create_skill(home.path(), "draft", "Again.", false, "").unwrap_err().contains("already exists"));
+        assert!(create_skill(home.path(), "draft", "Again.", false, "", "").unwrap_err().contains("already exists"));
         fs::write(library.join("draft/notes.txt"), "keep").unwrap();
 
-        let renamed = update_skill(home.path(), &file.display().to_string(), "final", "Finishes things.", true, "Done.").unwrap();
+        let renamed = update_skill(home.path(), &file.display().to_string(), "final", "Finishes things.", true, "", "Done.").unwrap();
         assert_eq!(renamed, library.join("final/SKILL.md"));
         assert!(!library.join("draft").exists());
         assert_eq!(fs::read_to_string(library.join("final/notes.txt")).unwrap(), "keep");
         let text = fs::read_to_string(&renamed).unwrap();
         assert_eq!(text, "---\nname: final\ndescription: Finishes things.\ndisable-model-invocation: true\n---\n\nDone.\n");
 
-        create_skill(home.path(), "other", "Other.", false, "").unwrap();
-        assert!(update_skill(home.path(), &renamed.display().to_string(), "other", "Clash.", false, "").unwrap_err().contains("already exists"));
+        create_skill(home.path(), "other", "Other.", false, "", "").unwrap();
+        assert!(update_skill(home.path(), &renamed.display().to_string(), "other", "Clash.", false, "", "").unwrap_err().contains("already exists"));
         assert!(fs::read_to_string(&renamed).unwrap().contains("Finishes things."), "a refused rename must not rewrite the file");
 
         let source = home.path().join("from-claude/pdf");
@@ -1099,14 +1131,14 @@ mod tests {
     #[test]
     fn imports_valid_skills_while_preserving_conflicts_and_cleans_failed_copies() {
         let home = tempfile::tempdir().unwrap();
-        let existing = create_skill(home.path(), "existing", "Keep me.", false, "original").unwrap();
+        let existing = create_skill(home.path(), "existing", "Keep me.", false, "", "original").unwrap();
         let make = |name: &str| {
             let base = home.path().join("incoming").join(name);
             fs::create_dir_all(&base).unwrap();
             fs::write(base.join("SKILL.md"), "incoming").unwrap();
             ScannedSkill { name: name.into(), description: "Import.".into(),
                 file_path: base.join("SKILL.md").display().to_string(), base_dir: base.display().to_string(),
-                manual: false, resource_name: None, shadowed_by: None }
+                manual: false, argument_hint: None, resource_name: None, shadowed_by: None }
         };
         let duplicate = make("existing");
         let valid = make("new-skill");
@@ -1151,7 +1183,7 @@ mod tests {
     #[test]
     fn the_document_lists_the_skill_folder_without_skill_md() {
         let home = tempfile::tempdir().unwrap();
-        let file = create_skill(home.path(), "doc", "Docs.", false, "Body text.").unwrap();
+        let file = create_skill(home.path(), "doc", "Docs.", false, "", "Body text.").unwrap();
         let folder = file.parent().unwrap();
         fs::create_dir_all(folder.join("references")).unwrap();
         fs::write(folder.join("references/api.md"), "").unwrap();
@@ -1165,7 +1197,7 @@ mod tests {
     #[test]
     fn readable_skills_stay_inside_the_listed_roots() {
         let home = tempfile::tempdir().unwrap();
-        let file = create_skill(home.path(), "doc", "Docs.", false, "").unwrap();
+        let file = create_skill(home.path(), "doc", "Docs.", false, "", "").unwrap();
         let roots = vec![library_dir(home.path())];
         assert!(readable_skill(&file.display().to_string(), &roots).is_ok());
         let outside = home.path().join("outside.md");
@@ -1202,7 +1234,7 @@ mod tests {
     #[test]
     fn the_overview_marks_only_library_skills_editable_and_maps_package_switches() {
         let home = tempfile::tempdir().unwrap();
-        let file = create_skill(home.path(), "mine", "Mine.", false, "").unwrap();
+        let file = create_skill(home.path(), "mine", "Mine.", false, "", "").unwrap();
         let config = config(&[("claude", None, true)], &[&file.display().to_string()]);
         let listed = folders(&config, home.path());
         let package = PackageRecord {
@@ -1213,7 +1245,7 @@ mod tests {
         };
         let skill = |name: &str, path: &str, resource: Option<&str>, shadowed: Option<&str>| ScannedSkill {
             name: name.into(), description: "d".into(), file_path: path.into(), base_dir: "/".into(), manual: false,
-            resource_name: resource.map(str::to_string), shadowed_by: shadowed.map(str::to_string),
+            argument_hint: None, resource_name: resource.map(str::to_string), shadowed_by: shadowed.map(str::to_string),
         };
         let scanned = ScanLine {
             ok: true,

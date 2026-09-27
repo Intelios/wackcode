@@ -35,7 +35,7 @@ import { RUN_TIMING_ENTRY_TYPE, RUN_TIMING_VERSION, resolveRunTimings, type Thin
 import { ThinkingClock, resolveThinkingDurations } from "./thinking-timing.js";
 import { commandKey, expandTemplate, resolveCommandNames } from "./slash.js";
 import { commandsSignature, loadUserCommands, mergePrompts } from "./user-commands.js";
-import { NO_USER_SKILLS, loadUserSkills, mergeSkills, skillsSignature } from "./user-skills.js";
+import { NO_USER_SKILLS, argumentHint, loadUserSkills, mergeSkills, skillsSignature } from "./user-skills.js";
 import {
   CHECKPOINT_ENTRY_TYPE,
   COMMAND_PRESENTATION_ENTRY_TYPE,
@@ -318,7 +318,7 @@ function refreshCommandCatalog(): SlashCommand[] {
       const kind = custom ? "custom" as const : "prompt" as const;
       return { source: kind, invocation: entry.name, description: entry.description, label: entry.sourceInfo.source, key: commandKey(kind, entry.filePath), templateContent: entry.content, argumentHint: entry.argumentHint };
     }),
-    ...session.resourceLoader.getSkills().skills.map((entry) => ({ source: "skill" as const, invocation: `skill:${entry.name}`, description: entry.description, label: entry.sourceInfo.source, key: commandKey("skill", entry.filePath), skillFile: entry.filePath, skillBaseDir: entry.baseDir }))
+    ...session.resourceLoader.getSkills().skills.map((entry) => ({ source: "skill" as const, invocation: `skill:${entry.name}`, description: entry.description, label: entry.sourceInfo.source, key: commandKey("skill", entry.filePath), argumentHint: piModule ? argumentHint(entry, piModule.parseFrontmatter) : undefined, skillFile: entry.filePath, skillBaseDir: entry.baseDir }))
   ];
   // Switched-off commands are dropped before names resolve, so an enabled command can claim
   // the freed name — the same way a switched-off skill lets the next one load.

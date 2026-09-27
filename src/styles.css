@@ -549,6 +549,8 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .attachment-remove svg { width: 11px; height: 11px; }
 .attachment-remove:hover { color: var(--text); background: var(--border-bright); }
 .attachment-notice { padding: 8px 15px 0; font-size: 12px; color: var(--warning); }
+/* The selected command's `argument-hint`, shown until the first argument is typed. */
+.arg-hint { padding: 8px 15px 0; font: 10.5px "SFMono-Regular", Consolas, monospace; color: var(--text-faint); }
 /* Messages queued on the running prompt, between the transcript and the draft. */
 .composer-queue { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px 0; }
 .queued-message {

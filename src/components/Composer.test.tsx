@@ -252,6 +252,41 @@ describe("Composer slash commands", () => {
     fireEvent.keyDown(area, { key: "Enter" }); // sends
     await waitFor(() => expect(onCommand).toHaveBeenCalledWith("new", "", []));
   });
+
+  it("hints at arguments once a command is selected, until the first argument", async () => {
+    setup({
+      commands: [
+        { id: "app:compact", name: "compact", description: "Summarize", source: "app", sourceLabel: "WackCode", argumentHint: "[instructions]" },
+        { id: "skill:pdf", name: "skill:pdf", description: "PDF work", source: "skill", sourceLabel: "Your skills", argumentHint: "<files>" }
+      ]
+    });
+    const area = screen.getByRole("textbox");
+    fireEvent.change(area, { target: { value: "/compact", selectionStart: 8 } });
+    fireEvent.keyDown(area, { key: "Escape" }); // close the picker so the bare command stands alone
+    expect(screen.getByRole("note")).toHaveTextContent("[instructions] — optional");
+    fireEvent.change(area, { target: { value: "/compact ", selectionStart: 9 } });
+    expect(screen.getByRole("note")).toHaveTextContent("[instructions] — optional");
+    fireEvent.change(area, { target: { value: "/compact terse", selectionStart: 14 } });
+    await waitFor(() => expect(screen.queryByRole("note")).not.toBeInTheDocument());
+
+    fireEvent.change(area, { target: { value: "/skill:pdf", selectionStart: 10 } });
+    fireEvent.keyDown(area, { key: "Escape" });
+    expect(screen.getByRole("note")).toHaveTextContent("<files> — arguments are appended after the skill");
+
+    fireEvent.change(area, { target: { value: "/unknown", selectionStart: 8 } });
+    fireEvent.keyDown(area, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("note")).not.toBeInTheDocument());
+  });
+
+  it("labels a required hint for app commands", () => {
+    setup({
+      commands: [{ id: "app:name", name: "name", description: "Rename", source: "app", sourceLabel: "WackCode", argumentHint: "<name>" }]
+    });
+    const area = screen.getByRole("textbox");
+    fireEvent.change(area, { target: { value: "/name", selectionStart: 5 } });
+    fireEvent.keyDown(area, { key: "Escape" });
+    expect(screen.getByRole("note")).toHaveTextContent("<name> — required argument");
+  });
 });
 
 describe("Composer queueing while the agent is working", () => {

@@ -15,6 +15,22 @@ const EASE: [number, number, number, number] = [0.33, 1, 0.68, 1];
 /** Springy settle (same bezier as `.segmented`) — makes the hero→dock glide land with a hint of overshoot. */
 const GLIDE_EASE: [number, number, number, number] = [0.34, 1.3, 0.64, 1];
 
+/**
+ * The composer's inline hint once a command that takes arguments is selected: the hint plus a
+ * short qualifier, or undefined when there's nothing to say. `<arg>` reads required, `[arg]`
+ * optional — the convention `command-utils.ts` documents. Skills get their own note because
+ * their arguments are appended after the body rather than substituted in (worker `index.ts`).
+ */
+export function argHintNote(command: SlashCommand | undefined): string | undefined {
+  const hint = command?.argumentHint?.trim();
+  if (!command || !hint) return undefined;
+  const qualifier = command.source === "skill"
+    ? "arguments are appended after the skill"
+    : hint.startsWith("<") ? "required argument"
+    : hint.startsWith("[") ? "optional" : undefined;
+  return qualifier ? `${hint} — ${qualifier}` : hint;
+}
+
 interface ComposerProps {
   status: TaskStatus;
   providerId?: string;
@@ -94,6 +110,13 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
   const commandToken = draft.startsWith("/") ? draft.slice(1, commandEnd) : "";
   const suggestions = commands.filter((command) => command.name.toLowerCase().includes(commandToken.toLowerCase()));
   const showCommands = slashOpen && draft.startsWith("/") && caret <= commandEnd && !disabled;
+  // Once a command with a hint is selected but before any argument is typed, surface it inline.
+  // `insertCommand` leaves the caret after the trailing space, so this keys off the draft being
+  // a bare command token — not where the caret sits.
+  const bareCommand = draft.startsWith("/") && !draft.slice(commandEnd).trim();
+  const argNote = !showCommands && frozen === undefined && !disabled && bareCommand
+    ? argHintNote(commands.find((command) => command.name === commandToken))
+    : undefined;
   const mention = onRequestMentions && !showCommands && !disabled && frozen === undefined ? activeMention(draft, caret) : null;
   const showMentions = mention !== null && mention.start !== mentionDismissedAt;
   const mentionQuery = showMentions ? mention.query : undefined;
@@ -375,6 +398,18 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
           <div className="attachment-notice" role="status">{blockedByModel ? `${noVisionMessage} Or remove the images to send.` : attachNotice}</div>
         )}
         {slashNotice && <div className="attachment-notice" role="status">{slashNotice} <button type="button" onClick={() => void sendLiteral()}>Send as message</button></div>}
+        <AnimatePresence initial={false}>
+          {argNote && (
+            <motion.div
+              className="arg-hint"
+              role="note"
+              initial={{ opacity: 0, y: -3 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -3, transition: { duration: 0.12, ease: EASE } }}
+              transition={{ duration: 0.18, ease: EASE }}
+            >{argNote}</motion.div>
+          )}
+        </AnimatePresence>
         <textarea
           ref={areaRef}
           aria-controls={showCommands ? "slash-command-list" : showMentions ? "mention-list" : undefined}

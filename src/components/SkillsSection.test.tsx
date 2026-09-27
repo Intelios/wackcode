@@ -73,11 +73,12 @@ function renderSection(start: SkillsOverview = overview, packages: PackageRecord
 describe("skillDraftIssue", () => {
   it("follows the Agent Skills rules and refuses a name already in Your skills", () => {
     const taken = new Set(["pdf-tools"]);
-    const draft = { name: "review", description: "Reviews code.", manual: false, body: "" };
+    const draft = { name: "review", description: "Reviews code.", manual: false, argumentHint: "", body: "" };
     expect(skillDraftIssue(draft, taken)).toBeUndefined();
     expect(skillDraftIssue({ ...draft, name: "Review" }, taken)).toMatch(/lowercase/);
     expect(skillDraftIssue({ ...draft, name: "re--view" }, taken)).toMatch(/lowercase/);
     expect(skillDraftIssue({ ...draft, name: "pdf-tools" }, taken)).toMatch(/already exists/);
+    expect(skillDraftIssue({ ...draft, argumentHint: "h".repeat(257) }, taken)).toMatch(/256/);
     // Renaming a skill to its own name is fine.
     expect(skillDraftIssue({ ...draft, name: "pdf-tools" }, taken, "pdf-tools")).toBeUndefined();
     expect(skillDraftIssue({ ...draft, description: " " }, taken)).toMatch(/Describe/);
@@ -136,7 +137,7 @@ describe("SkillsSection", () => {
     fireEvent.change(screen.getByRole("textbox", { name: /Instructions/ }), { target: { value: "Read it." } });
     expect(create).toBeEnabled();
     fireEvent.click(create);
-    await waitFor(() => expect(actions.onSave).toHaveBeenCalledWith({ path: undefined, name: "pdf-reader", description: "Reads PDFs.", manual: false, body: "Read it." }));
+    await waitFor(() => expect(actions.onSave).toHaveBeenCalledWith({ path: undefined, name: "pdf-reader", description: "Reads PDFs.", manual: false, argumentHint: "", body: "Read it." }));
     expect(await screen.findByRole("region", { name: "Your skills" })).toBeInTheDocument();
   });
 
@@ -148,7 +149,7 @@ describe("SkillsSection", () => {
     expect(screen.getByRole("textbox", { name: /Instructions/ })).toHaveValue("# Steps\n1. Do it.");
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(actions.onSave).toHaveBeenCalledWith({
-      path: "/Users/me/.agents/skills/notes/SKILL.md", name: "notes", description: "notes description", manual: true, body: "# Steps\n1. Do it."
+      path: "/Users/me/.agents/skills/notes/SKILL.md", name: "notes", description: "notes description", manual: true, argumentHint: "", body: "# Steps\n1. Do it."
     }));
   });
 

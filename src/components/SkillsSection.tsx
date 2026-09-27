@@ -42,6 +42,8 @@ interface SkillDraft {
   name: string;
   description: string;
   manual: boolean;
+  /** Optional `argument-hint` frontmatter (`<arg>` required, `[arg]` optional); empty writes no key. */
+  argumentHint: string;
   body: string;
 }
 
@@ -55,6 +57,7 @@ type View =
 const NAME_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const MAX_NAME_CHARS = 64;
 const MAX_DESCRIPTION_CHARS = 1_024;
+const MAX_HINT_CHARS = 256;
 
 const WHEN_OPTIONS = [
   { value: "auto", label: "The agent decides", hint: "Listed to the model by its description. /skill:name works too." },
@@ -67,7 +70,7 @@ const SORT_OPTIONS = [
   { value: "name", label: "A–Z" }
 ];
 
-const EMPTY_DRAFT: SkillDraft = { name: "", description: "", manual: false, body: "" };
+const EMPTY_DRAFT: SkillDraft = { name: "", description: "", manual: false, argumentHint: "", body: "" };
 
 /** Why a draft can't be saved yet, or nothing when it can. */
 export function skillDraftIssue(draft: SkillDraft, taken: ReadonlySet<string>, original?: string): string | undefined {
@@ -79,6 +82,7 @@ export function skillDraftIssue(draft: SkillDraft, taken: ReadonlySet<string>, o
   const description = draft.description.trim();
   if (!description) return "Describe what the skill does and when to use it.";
   if (description.length > MAX_DESCRIPTION_CHARS) return `A description can be at most ${MAX_DESCRIPTION_CHARS} characters.`;
+  if (draft.argumentHint.trim().length > MAX_HINT_CHARS) return `An argument hint can be at most ${MAX_HINT_CHARS} characters.`;
   return undefined;
 }
 
@@ -211,6 +215,7 @@ export function SkillsSection({
         <button type="button" className="skill-row-main" onClick={() => setView({ kind: "detail", skill, origin })}>
           <span className="skill-row-head">
             <span className="skill-name">{skill.name}</span>
+            {skill.argumentHint && <code className="command-hint">/skill:{skill.name} {skill.argumentHint}</code>}
             {skill.manual && <span className="subagent-badge" title="Kept out of the model's list: runs only when you type /skill:name">/skill only</span>}
             {skill.shadowedBy && <span className="subagent-badge skill-shadowed" title={shadow}>Not loaded</span>}
           </span>
@@ -420,7 +425,7 @@ export function SkillsSection({
     setError(undefined);
     setNote(undefined);
     setView(skill
-      ? { kind: "edit", path: skill.filePath, original: skill.name, draft: { name: skill.name, description: skill.description, manual: skill.manual, body } }
+      ? { kind: "edit", path: skill.filePath, original: skill.name, draft: { name: skill.name, description: skill.description, manual: skill.manual, argumentHint: skill.argumentHint ?? "", body } }
       : { kind: "edit", draft: EMPTY_DRAFT });
   }
 
@@ -522,7 +527,7 @@ export function SkillsSection({
               onChange={(draft) => setView({ ...view, draft })}
               onCancel={() => { setView({ kind: "list" }); setError(undefined); }}
               onSave={() => void apply(
-                () => onSave({ path: view.path, name: view.draft.name.trim(), description: view.draft.description.trim(), manual: view.draft.manual, body: view.draft.body }),
+                () => onSave({ path: view.path, name: view.draft.name.trim(), description: view.draft.description.trim(), manual: view.draft.manual, argumentHint: view.draft.argumentHint.trim(), body: view.draft.body }),
                 () => setView({ kind: "list" })
               )}
             />
@@ -609,6 +614,7 @@ function SkillDetail({ skill, origin, busy, onRead, onBack, onEdit, onDelete, on
       <div className="skill-detail-head">
         <span className="subagent-setting-name">{skill.name}</span>
         <span className="subagent-badge">{origin}</span>
+        {skill.argumentHint && <code className="command-hint">/skill:{skill.name} {skill.argumentHint}</code>}
         {skill.manual && <span className="subagent-badge">/skill only</span>}
         {!skill.enabled && <span className="subagent-badge">Off</span>}
       </div>
@@ -693,6 +699,19 @@ function SkillEditor({ draft, isNew, issue, busy, onChange, onCancel, onSave }: 
               disabled={busy}
               onChange={(value) => onChange({ ...draft, manual: value === "manual" })}
               aria-label="When the skill is used"
+            />
+          </label>
+          <label className="wide-field">
+            <span>
+              Argument hint{" "}
+              <small>Optional — shown next to the name in the picker and the composer. <code>&lt;files&gt;</code> reads required, <code>[files]</code> optional.</small>
+            </span>
+            <input
+              value={draft.argumentHint}
+              onChange={(event) => onChange({ ...draft, argumentHint: event.target.value })}
+              placeholder="<files to work on>"
+              spellCheck={false}
+              maxLength={MAX_HINT_CHARS}
             />
           </label>
           <label className="wide-field">

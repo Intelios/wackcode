@@ -358,6 +358,8 @@ export interface ScannedSkill {
   baseDir: string;
   /** `disable-model-invocation: true`: only `/skill:name` uses it. */
   manual: boolean;
+  /** The SKILL.md's optional `argument-hint`, shown next to the name while typing. */
+  argumentHint?: string;
   /** Package skills: the package resource the skill came from, which its switch toggles. */
   resourceName?: string;
   /** Switched on, but a skill of the same name wins: that skill's folder or package label. */

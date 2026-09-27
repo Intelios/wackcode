@@ -116,7 +116,7 @@ export interface SlashCommand {
   /** "custom" is a file in the user's own commands folder (Settings › Commands). */
   source: "app" | "extension" | "prompt" | "custom" | "skill";
   sourceLabel: string;
-  /** A prompt template's `argument-hint`, shown next to its name. */
+  /** What the model can call with arguments: a template's or skill's `argument-hint`, shown next to its name. `<arg>` reads required, `[arg]` optional. */
   argumentHint?: string;
 }
 
@@ -411,6 +411,8 @@ export interface SkillEntry {
   baseDir: string;
   /** `disable-model-invocation: true`: only `/skill:name` uses it. */
   manual: boolean;
+  /** The SKILL.md's optional `argument-hint`, shown next to the name here and in the picker. */
+  argumentHint?: string;
   enabled: boolean;
   /** In `~/.agents/skills`, so it can be edited and deleted here. */
   editable: boolean;
@@ -471,6 +473,8 @@ export interface SaveSkillInput {
   name: string;
   description: string;
   manual: boolean;
+  /** Optional `argument-hint` frontmatter; empty writes no key. */
+  argumentHint?: string;
   body: string;
 }
 

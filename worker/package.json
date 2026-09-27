@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "pnpm build && vitest run"
@@ -20,6 +22,6 @@
     "@types/node": "^24.5.2",
     "@types/turndown": "^5.0.6",
     "typescript": "^5.9.2",
-    "vitest": "^3.2.4"
+    "vitest": "^5.0.2"
   }
 }

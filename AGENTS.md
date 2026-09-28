@@ -48,7 +48,7 @@ WackCode is a local macOS desktop app for the [Pi coding agent](https://www.npmj
 
 ## Design
 
-- **Animation:** expressive motion is core to the app's identity. Favour lively, considered transitions and feedback that make interactions feel responsive and full of personality. Respect reduced-motion preferences.
+- **Animation:** expressive & playful motion is core to the app's identity. Favour lively, considered transitions and feedback that make interactions feel responsive and full of personality. Respect reduced-motion preferences.
 - **Customisation:** make the app feel personal and adaptable to the user. Design features to work across the user's themes, backgrounds, and appearance settings rather than assuming the defaults.
 - **Personality:** WackCode should feel like a distinctive macOS app, never a generic web app or generic AI-generated design. Make deliberate choices in layout, typography, details, and interaction that reinforce its own character.
 - **Theme:** themeable colours are tokens computed in `src/theme.ts` (`TOKENS`) with matching `:root` defaults in `styles.css`; never write a raw colour below `:root` (`theme.test.ts` guards it). Over an image or Liquid Glass only the shell (window, sidebar, header, side panels) turns see-through; content surfaces stay solid.

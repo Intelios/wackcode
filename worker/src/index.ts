@@ -943,11 +943,18 @@ function scheduleSnapshot(): void {
 // emitError, not a rejection), no run ever starts and no later event reports the chat idle —
 // un-stick it after a beat. A live continuation keeps isStreaming set, so the check is cheap.
 let goalWatchdog: ReturnType<typeof setTimeout> | undefined;
+// A goal continuation starts from the extension's settled hook, after the initial run timing has
+// closed. Keep the root id separately so only the final round publishes the menu's completion.
+let continuingGoalRunId: string | undefined;
 function armGoalWatchdog(taskId: string): void {
   goalWatchdog ??= setTimeout(() => {
     goalWatchdog = undefined;
     if (builtins.goal.willContinue() && session && !session.isStreaming && !session.isCompacting) {
       builtins.goal.continuationDropped();
+      if (continuingGoalRunId) {
+        send({ type: "run_finished", taskId, runId: continuingGoalRunId, outcome: "failed" });
+        continuingGoalRunId = undefined;
+      }
       send({ type: "run_state", taskId, state: "idle" });
     }
   }, 15_000);
@@ -996,6 +1003,7 @@ function askHost<T>(request: ExtensionUIRequest, onResponse: (response: DialogRe
   return new Promise<T>((resolve) => {
     pendingDialogs.set(requestId, (response) => {
       pendingDialogs.delete(requestId);
+      send({ type: "extension_ui_resolved", taskId: taskId as string, requestId, cancelled: response.cancelled === true });
       resolve(response.cancelled ? fallback : onResponse(response));
     });
     send({ type: "extension_ui_request", taskId: taskId as string, requestId, ...request });
@@ -1389,8 +1397,20 @@ async function initialize(command: InitCommand): Promise<void> {
       // nested run by the time this notification arrives — reporting idle would let the user
       // send mid-loop, so the chat stays busy until the loop itself stops continuing.
       if (builtins.goal.willContinue()) {
+        continuingGoalRunId = settledRunId ?? continuingGoalRunId;
         armGoalWatchdog(command.taskId);
       } else {
+        const finishedRunId = settledRunId ?? continuingGoalRunId;
+        continuingGoalRunId = undefined;
+        if (finishedRunId) {
+          const messages = Array.isArray(value.messages) ? value.messages : session?.messages ?? [];
+          send({
+            type: "run_finished",
+            taskId: command.taskId,
+            runId: finishedRunId,
+            outcome: stopRequested ? "stopped" : promptFailed(messages) ? "failed" : "completed"
+          });
+        }
         send({ type: "run_state", taskId: command.taskId, runId: settledRunId, state: "idle" });
       }
       // Pi persists a just-settled message right around the settle event, so its entry id can
@@ -1442,6 +1462,13 @@ function recordCommandPresentation(presentation: CommandPresentation | null): vo
  */
 type PromptOutcome = "completed" | "stopped" | "failed";
 
+function promptFailed(messages: readonly unknown[]): boolean {
+  const lastAssistant = [...messages].reverse().find((message) =>
+    Boolean(message && typeof message === "object" && (message as { role?: unknown }).role === "assistant")
+  ) as { stopReason?: unknown } | undefined;
+  return lastAssistant?.stopReason === "error" || lastAssistant?.stopReason === "aborted";
+}
+
 async function runPrompt(
   commandId: string,
   runId: string,
@@ -1454,6 +1481,7 @@ async function runPrompt(
 ): Promise<PromptOutcome> {
   if (!session || !taskId) throw new Error("Worker is not initialized");
   stopRequested = false;
+  continuingGoalRunId = undefined;
   let outcome: PromptOutcome = "failed";
   const previousUserEntryIds = new Set(session.sessionManager.getBranch()
     .filter((entry) => entry.type === "message" && entry.message.role === "user")
@@ -1478,13 +1506,13 @@ async function runPrompt(
       recordCommandPresentation(commandPresentation ?? null);
       await session.prompt(text, { ...(prepared.length > 0 ? { images: prepared } : {}), expandPromptTemplates: !literal });
     }
-    const lastAssistant = [...session.messages].reverse().find((message) => message.role === "assistant");
-    outcome = stopRequested ? "stopped" : lastAssistant?.stopReason === "error" || lastAssistant?.stopReason === "aborted" ? "failed" : "completed";
+    outcome = stopRequested ? "stopped" : promptFailed(session.messages) ? "failed" : "completed";
     // Pi settles a run before `prompt` resolves. Still active here means no run started at all
     // (an extension command handled the text), and nothing else would report the chat idle.
     if (activeRun?.runId === runId) {
       finalizeActiveRun();
       activeRun = undefined;
+      send({ type: "run_finished", taskId, runId, outcome });
       send({ type: "run_state", taskId, runId, state: "idle" });
     }
   } catch (error) {
@@ -1492,6 +1520,7 @@ async function runPrompt(
     finalizeActiveRun();
     activeRun = undefined;
     if (!stopRequested) send({ type: "worker_error", taskId, message: safeError(error) });
+    send({ type: "run_finished", taskId, runId, outcome });
     send({ type: "run_state", taskId, runId, state: "idle" });
   }
   stopRequested = false;
@@ -1658,18 +1687,22 @@ async function handle(command: WorkerCommand): Promise<void> {
       }
       compacting = true;
       stopRequested = false;
+      let compactOutcome: PromptOutcome = "completed";
       send({ type: "run_state", taskId, runId: command.runId, startedAt: runStartedAt(command.startedAt), state: "running" });
       response(command.id, true);
       try {
         await session.compact(command.instructions || undefined);
         if (!stopRequested) notice("Conversation compacted.", "info");
       } catch (error) {
+        compactOutcome = stopRequested ? "stopped" : "failed";
         if (!stopRequested) send({ type: "worker_error", taskId, message: safeError(error) });
       } finally {
+        if (stopRequested) compactOutcome = "stopped";
         compacting = false;
         stopRequested = false;
         forceFullSnapshot = true;
         emitSnapshot();
+        send({ type: "run_finished", taskId, runId: command.runId, outcome: compactOutcome });
         send({ type: "run_state", taskId, runId: command.runId, state: "idle" });
       }
       return;
@@ -1756,11 +1789,13 @@ async function handle(command: WorkerCommand): Promise<void> {
         send({ type: "run_state", taskId, state: "stopping" });
         return;
       }
-      const stoppedRunId = activeRun?.runId;
+      const stoppedRunId = activeRun?.runId ?? continuingGoalRunId;
       send({ type: "run_state", taskId, runId: stoppedRunId, startedAt: activeRun?.startedAt, state: "stopping" });
       await session.abort();
+      const didNotSettle = stoppedRunId !== undefined && activeRun?.runId === stoppedRunId;
       finalizeActiveRun();
       activeRun = undefined;
+      if (didNotSettle) send({ type: "run_finished", taskId, runId: stoppedRunId, outcome: "stopped" });
       send({ type: "run_state", taskId, runId: stoppedRunId, state: "idle" });
       emitSnapshot();
     } else if (command.type === "queue_message") {

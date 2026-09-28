@@ -840,12 +840,14 @@ export type WorkerOutput =
   | { type: "snapshot_delta"; taskId: string; delta: SnapshotDelta }
   | { type: "partial"; taskId: string; message: NormalizedMessage }
   | { type: "run_state"; taskId: string; runId?: string; startedAt?: number; state: "running" | "idle" | "stopping" | "interrupted" }
+  | { type: "run_finished"; taskId: string; runId: string; outcome: "completed" | "stopped" | "failed" }
   | { type: "queue_state"; taskId: string; steering: string[]; followUp: string[] }
   | { type: "activity"; taskId: string; event: string; detail?: unknown }
   | { type: "worker_error"; taskId?: string; message: string }
   | { type: "browser_request"; taskId: string; requestId: string; request: Record<string, unknown> }
   | { type: "browser_cancel"; taskId: string; requestId: string }
   | ({ type: "extension_ui_request"; taskId: string; requestId: string } & ExtensionUIRequest)
+  | { type: "extension_ui_resolved"; taskId: string; requestId: string; cancelled: boolean }
   | { type: "extension_notice"; taskId: string; message: string; level: "info" | "warning" | "error" }
   | { type: "extensions_loaded"; taskId: string; loaded: string[]; errors: { path: string; error: string }[] }
   | { type: "plan_state"; taskId: string } & PlanState

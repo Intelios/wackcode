@@ -935,12 +935,14 @@ export type WorkerEvent =
   | { type: "snapshot_delta"; taskId: string; delta: SnapshotDelta }
   | { type: "partial"; taskId: string; message: NormalizedMessage }
   | { type: "run_state"; taskId: string; runId?: string; startedAt?: number; state: TaskStatus }
+  | { type: "run_finished"; taskId: string; runId: string; outcome: "completed" | "stopped" | "failed" }
   | { type: "queue_state"; taskId: string; steering: string[]; followUp: string[] }
   | { type: "activity"; taskId: string; event: string; detail?: Record<string, unknown> }
   | { type: "worker_error"; taskId?: string; message: string }
   | { type: "browser_state"; taskId: string; browser: BrowserState; reveal: boolean }
   | { type: "response"; taskId?: string; id: string; success: boolean; error?: string }
   | ({ type: "extension_ui_request" } & ExtensionUIRequest)
+  | { type: "extension_ui_resolved"; taskId: string; requestId: string; cancelled: boolean }
   | ({ type: "extension_notice"; taskId: string } & ExtensionNotice)
   | { type: "extensions_loaded"; taskId: string; loaded: string[]; errors: { path: string; error: string }[] }
   | ({ type: "plan_state"; taskId: string } & PlanState)

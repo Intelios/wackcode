@@ -692,6 +692,8 @@ describe("Pi worker integration", () => {
 
     // The run is still streaming, so this answer has to jump the queue or nothing completes.
     worker.send({ id: crypto.randomUUID(), type: "extension_ui_response", requestId: request.requestId, value: "develop" });
+    const resolved = await worker.waitFor((output) => output.type === "extension_ui_resolved" && output.requestId === request.requestId);
+    expect(resolved.cancelled).toBe(false);
     const answered = await worker.waitFor((output) => output.type === "extension_notice" && output.message === "picked:develop");
     expect(answered.level).toBe("info");
 
@@ -1223,6 +1225,9 @@ describe("built-in extensions", () => {
     worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "ask: which engine?" });
     const request = await worker.waitFor((output) => output.type === "extension_ui_request" && output.method === "questions");
     worker.send({ id: crypto.randomUUID(), type: "extension_ui_response", requestId: request.requestId, cancelled: true });
+
+    const resolved = await worker.waitFor((output) => output.type === "extension_ui_resolved" && output.requestId === request.requestId);
+    expect(resolved.cancelled).toBe(true);
 
     await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
     const toolResult = provider.requests[1].body.messages.find(
@@ -3010,6 +3015,9 @@ describe("message queueing", () => {
     await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
     expect(worker.outputs.filter((output) => output.type === "run_state" && output.state === "idle")).toHaveLength(1);
     expect(worker.outputs.filter((output) => output.type === "run_state" && output.state === "running")).toHaveLength(1);
+    expect(worker.outputs.filter((output) => output.type === "run_finished")).toEqual([
+      expect.objectContaining({ runId: "goal-run", outcome: "completed" })
+    ]);
     const goalMessages = (worker.view?.messages ?? []).filter((message) => message.role === "user");
     expect(goalMessages[0]?.commandPresentation).toEqual({
       id: "app:goal", name: "goal", arguments: "goal: write the file", kind: "command"

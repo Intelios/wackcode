@@ -6,11 +6,12 @@ mod files;
 mod git;
 mod glass;
 mod mcp;
+mod menu_bar;
 mod models;
 mod secrets;
 mod shell_env;
-mod skills;
 mod skill_archive;
+mod skills;
 mod slash_commands;
 mod storage;
 mod subagents;
@@ -37,6 +38,7 @@ pub fn run() {
         .manage(subscriptions::SubscriptionState::default())
         .manage(worker::ManagerState::default())
         .manage(terminal::TerminalState::default())
+        .manage(menu_bar::MenuBarState::default())
         .setup(|app| {
             let state = MetadataState::load(&app.handle())?;
             let (appearance, saved_window) = state
@@ -45,8 +47,13 @@ pub fn run() {
                 .map_err(|_| "Metadata lock was poisoned".to_string())
                 .map(|data| (data.appearance.clone(), data.window))?;
             app.manage(state);
+            menu_bar::setup(app)?;
             // The window is created hidden and transparent: paint it before it first appears.
-            glass::apply(app.handle(), glass::NativeBackdrop::from_config(&appearance), true)?;
+            glass::apply(
+                app.handle(),
+                glass::NativeBackdrop::from_config(&appearance),
+                true,
+            )?;
             if let Some(window) = app.get_webview_window("main") {
                 if let Some(saved_window) = saved_window {
                     window_state::restore(&window, saved_window);
@@ -63,10 +70,22 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             window_state::record(window, event);
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+                return;
+            }
             // Liquid Glass shows only while focused; unfocused, the window is painted opaque.
             if let tauri::WindowEvent::Focused(focused) = event {
                 let app = window.app_handle();
-                let Ok(data) = app.state::<MetadataState>().data.lock().map(|data| data.appearance.clone()) else { return };
+                let Ok(data) = app
+                    .state::<MetadataState>()
+                    .data
+                    .lock()
+                    .map(|data| data.appearance.clone())
+                else {
+                    return;
+                };
                 if data.backdrop == models::BackdropMode::Glass {
                     let _ = glass::apply(app, glass::NativeBackdrop::from_config(&data), *focused);
                 }
@@ -175,19 +194,27 @@ pub fn run() {
             terminal::detach_terminal,
             terminal::restart_terminal,
             terminal::close_terminal,
+            menu_bar::take_menu_navigation,
         ])
         .build(tauri::generate_context!())
         .expect("error while building WackCode");
 
     app.run(|app, event| {
-        if matches!(event, tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }) {
+        if matches!(event, tauri::RunEvent::Reopen { .. }) {
+            menu_bar::show_main_window(app);
+        }
+        if matches!(
+            event,
+            tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
+        ) {
             // Flushes the window geometry `window_state::record` only kept in memory.
             let _ = app.state::<MetadataState>().save();
             app.state::<worker::ReaperHandle>().stop();
             app.state::<WorkerState>().terminate_all();
             app.state::<browser::BrowserManager>().dispose_all();
             app.state::<terminal::TerminalState>().terminate_all();
-            app.state::<subscriptions::SubscriptionState>().terminate_all();
+            app.state::<subscriptions::SubscriptionState>()
+                .terminate_all();
         }
     });
 }

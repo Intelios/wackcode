@@ -50,6 +50,7 @@ import type {
 
 export const api = {
   bootstrap: () => invoke<BootstrapPayload>("bootstrap"),
+  takeMenuNavigation: () => invoke<string | null>("take_menu_navigation"),
   saveProvider: (input: SaveProviderInput) => invoke<ProviderRecord>("save_provider", { input }),
   deleteProvider: (providerId: string) => invoke<void>("delete_provider", { providerId }),
   discoverModels: (providerId: string) => invoke<string[]>("discover_models", { input: { providerId } }),

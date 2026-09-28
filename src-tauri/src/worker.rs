@@ -1,19 +1,52 @@
-use crate::{models::{BuiltinModelSuggestion, PackageRecord, ProviderKind, ProviderRecord, TaskMode, TaskRecord, TaskStatus, ToolCatalogEntry}, storage::MetadataState, subscriptions};
-use nix::{sys::signal::{killpg, Signal}, unistd::Pid};
+use crate::{
+    models::{
+        BuiltinModelSuggestion, PackageRecord, ProviderKind, ProviderRecord, TaskMode, TaskRecord,
+        TaskStatus, ToolCatalogEntry,
+    },
+    storage::MetadataState,
+    subscriptions,
+};
+use nix::{
+    sys::signal::{killpg, Signal},
+    unistd::Pid,
+};
 use serde_json::{json, Value};
-use std::{collections::HashMap, path::PathBuf, process::Stdio, sync::{Arc, Mutex}, time::{Duration, Instant}};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    process::Stdio,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, process::{ChildStdin, Command}, sync::{oneshot, Mutex as AsyncMutex}};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    process::{ChildStdin, Command},
+    sync::{oneshot, Mutex as AsyncMutex},
+};
 
 const PROVIDER_ENVIRONMENT_KEYS: &[&str] = &[
-    "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY",
-    "GOOGLE_API_KEY", "DEEPSEEK_API_KEY", "XAI_API_KEY", "GROQ_API_KEY",
-    "MISTRAL_API_KEY", "CEREBRAS_API_KEY", "TOGETHER_API_KEY", "FIREWORKS_API_KEY",
-    "AZURE_OPENAI_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "HF_TOKEN"
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "XAI_API_KEY",
+    "GROQ_API_KEY",
+    "MISTRAL_API_KEY",
+    "CEREBRAS_API_KEY",
+    "TOGETHER_API_KEY",
+    "FIREWORKS_API_KEY",
+    "AZURE_OPENAI_API_KEY",
+    "AWS_BEARER_TOKEN_BEDROCK",
+    "HF_TOKEN",
 ];
 
 pub(crate) fn strip_provider_env(command: &mut Command) {
-    for key in PROVIDER_ENVIRONMENT_KEYS { command.env_remove(key); }
+    for key in PROVIDER_ENVIRONMENT_KEYS {
+        command.env_remove(key);
+    }
 }
 
 /// Commands awaiting their `response` line, by command id. Owned by one worker process: its
@@ -57,16 +90,27 @@ pub struct WorkerState {
 
 impl WorkerState {
     pub fn get(&self, task_id: &str) -> Result<Option<WorkerProcess>, String> {
-        Ok(self.workers.lock().map_err(|_| "Worker lock was poisoned".to_string())?.get(task_id).cloned())
+        Ok(self
+            .workers
+            .lock()
+            .map_err(|_| "Worker lock was poisoned".to_string())?
+            .get(task_id)
+            .cloned())
     }
 
     fn insert(&self, task_id: String, worker: WorkerProcess) -> Result<(), String> {
-        self.workers.lock().map_err(|_| "Worker lock was poisoned".to_string())?.insert(task_id, worker);
+        self.workers
+            .lock()
+            .map_err(|_| "Worker lock was poisoned".to_string())?
+            .insert(task_id, worker);
         Ok(())
     }
 
     fn remove_if_pid(&self, task_id: &str, pid: u32) -> Result<bool, String> {
-        let mut workers = self.workers.lock().map_err(|_| "Worker lock was poisoned".to_string())?;
+        let mut workers = self
+            .workers
+            .lock()
+            .map_err(|_| "Worker lock was poisoned".to_string())?;
         if workers.get(task_id).is_some_and(|worker| worker.pid == pid) {
             workers.remove(task_id);
             return Ok(true);
@@ -75,11 +119,21 @@ impl WorkerState {
     }
 
     pub fn task_ids(&self) -> Result<Vec<String>, String> {
-        Ok(self.workers.lock().map_err(|_| "Worker lock was poisoned".to_string())?.keys().cloned().collect())
+        Ok(self
+            .workers
+            .lock()
+            .map_err(|_| "Worker lock was poisoned".to_string())?
+            .keys()
+            .cloned()
+            .collect())
     }
 
     pub fn remove(&self, task_id: &str) -> Result<Option<WorkerProcess>, String> {
-        Ok(self.workers.lock().map_err(|_| "Worker lock was poisoned".to_string())?.remove(task_id))
+        Ok(self
+            .workers
+            .lock()
+            .map_err(|_| "Worker lock was poisoned".to_string())?
+            .remove(task_id))
     }
 
     pub fn terminate_all(&self) {
@@ -99,7 +153,9 @@ pub struct SelectedTask(Mutex<Option<String>>);
 
 impl SelectedTask {
     pub fn set(&self, task_id: &str) {
-        if let Ok(mut selected) = self.0.lock() { *selected = Some(task_id.to_string()); }
+        if let Ok(mut selected) = self.0.lock() {
+            *selected = Some(task_id.to_string());
+        }
     }
 
     fn get(&self) -> Option<String> {
@@ -115,7 +171,9 @@ pub struct WorkerActivity(Mutex<HashMap<String, Instant>>);
 
 impl WorkerActivity {
     fn mark(&self, task_id: &str) {
-        if let Ok(mut activity) = self.0.lock() { activity.insert(task_id.to_string(), Instant::now()); }
+        if let Ok(mut activity) = self.0.lock() {
+            activity.insert(task_id.to_string(), Instant::now());
+        }
     }
 }
 
@@ -125,12 +183,16 @@ pub struct ReaperHandle(Mutex<Option<tauri::async_runtime::JoinHandle<()>>>);
 
 impl ReaperHandle {
     pub fn install(&self, reaper: tauri::async_runtime::JoinHandle<()>) {
-        if let Ok(mut handle) = self.0.lock() { *handle = Some(reaper); }
+        if let Ok(mut handle) = self.0.lock() {
+            *handle = Some(reaper);
+        }
     }
 
     pub fn stop(&self) {
         if let Ok(mut handle) = self.0.lock() {
-            if let Some(reaper) = handle.take() { reaper.abort(); }
+            if let Some(reaper) = handle.take() {
+                reaper.abort();
+            }
         }
     }
 }
@@ -156,12 +218,17 @@ pub fn resource_paths(packages: &[PackageRecord]) -> Value {
 /// A worker is respawned when this changes. Resources are resolved once at spawn time, so they
 /// belong here alongside the provider and model; tool toggles do not, because `set_tools`
 /// applies them live.
-pub fn fingerprint(provider: &ProviderRecord, model_id: &str, resources: &Value) -> Result<String, String> {
+pub fn fingerprint(
+    provider: &ProviderRecord,
+    model_id: &str,
+    resources: &Value,
+) -> Result<String, String> {
     serde_json::to_string(&json!({
         "provider": provider,
         "modelId": model_id,
         "resources": resources,
-    })).map_err(|error| error.to_string())
+    }))
+    .map_err(|error| error.to_string())
 }
 
 pub async fn ensure_worker(
@@ -183,15 +250,23 @@ pub async fn ensure_worker_with(
     let worker_state = app.state::<WorkerState>();
     let wanted_fingerprint = {
         let state = app.state::<MetadataState>();
-        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        let data = state
+            .data
+            .lock()
+            .map_err(|_| "Metadata lock was poisoned".to_string())?;
         fingerprint(provider, &task.model_id, &resource_paths(&data.packages))?
     };
     if let Some(existing) = worker_state.get(&task.id)? {
-        if existing.fingerprint == wanted_fingerprint { return Ok(()); }
+        if existing.fingerprint == wanted_fingerprint {
+            return Ok(());
+        }
         terminate_worker(app, &task.id, true).await?;
     }
 
-    let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
     let agent_dir = app_data.join("agent").join(&task.id);
     let session_dir = app_data.join("sessions").join(&task.id);
     std::fs::create_dir_all(&agent_dir).map_err(|error| error.to_string())?;
@@ -220,18 +295,34 @@ pub async fn ensure_worker_with(
         use std::os::unix::process::CommandExt;
         command.as_std_mut().process_group(0);
     }
-    let mut child = command.spawn().map_err(|error| format!("Could not start the bundled Pi worker: {error}"))?;
-    let pid = child.id().ok_or_else(|| "The Pi worker did not return a process id".to_string())?;
-    let stdin = child.stdin.take().ok_or_else(|| "The Pi worker has no stdin".to_string())?;
-    let stdout = child.stdout.take().ok_or_else(|| "The Pi worker has no stdout".to_string())?;
-    let stderr = child.stderr.take().ok_or_else(|| "The Pi worker has no stderr".to_string())?;
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("Could not start the bundled Pi worker: {error}"))?;
+    let pid = child
+        .id()
+        .ok_or_else(|| "The Pi worker did not return a process id".to_string())?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "The Pi worker has no stdin".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "The Pi worker has no stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "The Pi worker has no stderr".to_string())?;
     let pending: Pending = Arc::default();
-    worker_state.insert(task.id.clone(), WorkerProcess {
-        pid,
-        fingerprint: wanted_fingerprint,
-        stdin: Arc::new(AsyncMutex::new(stdin)),
-        pending: pending.clone(),
-    })?;
+    worker_state.insert(
+        task.id.clone(),
+        WorkerProcess {
+            pid,
+            fingerprint: wanted_fingerprint,
+            stdin: Arc::new(AsyncMutex::new(stdin)),
+            pending: pending.clone(),
+        },
+    )?;
     app.state::<WorkerActivity>().mark(&task.id);
     app.state::<SelectedTask>().set(&task.id);
 
@@ -247,7 +338,9 @@ pub async fn ensure_worker_with(
                 handle_worker_line(&stdout_app, &stdout_task_id, pid, &line, &pending);
             }
             // Dropping the senders tells every waiting request the worker is gone.
-            if let Ok(mut pending) = pending.lock() { pending.clear(); }
+            if let Ok(mut pending) = pending.lock() {
+                pending.clear();
+            }
         });
         let stderr_tail = Arc::new(AsyncMutex::new(String::new()));
         let stderr_copy = stderr_tail.clone();
@@ -257,7 +350,9 @@ pub async fn ensure_worker_with(
                 let mut tail = stderr_copy.lock().await;
                 tail.push_str(&line);
                 tail.push('\n');
-                if tail.len() > 4_000 { *tail = tail[tail.len() - 4_000..].to_string(); }
+                if tail.len() > 4_000 {
+                    *tail = tail[tail.len() - 4_000..].to_string();
+                }
             }
         });
         let _status = child.wait().await;
@@ -267,14 +362,20 @@ pub async fn ensure_worker_with(
         // Intentional shutdown paths remove the process from the registry before
         // signaling it. Any process that exits while still registered is a crash,
         // including a nominal exit code caused by an external SIGTERM handler.
-        let unexpected = app_for_process.state::<WorkerState>().remove_if_pid(&task_id, pid).unwrap_or(true);
+        let unexpected = app_for_process
+            .state::<WorkerState>()
+            .remove_if_pid(&task_id, pid)
+            .unwrap_or(true);
         if unexpected {
             let message = if subscription_worker {
                 "The Pi worker stopped unexpectedly while using a subscription.".to_string()
             } else if stderr_message.is_empty() {
                 "The Pi worker stopped unexpectedly.".to_string()
             } else {
-                format!("The Pi worker stopped unexpectedly: {}", redact_and_limit(&stderr_message))
+                format!(
+                    "The Pi worker stopped unexpectedly: {}",
+                    redact_and_limit(&stderr_message)
+                )
             };
             let _ = app_for_process.state::<MetadataState>().mutate(|data| {
                 if let Some(task) = data.tasks.iter_mut().find(|task| task.id == task_id) {
@@ -285,21 +386,34 @@ pub async fn ensure_worker_with(
                 }
                 Ok(())
             });
-            let _ = app_for_process.emit("worker-event", json!({
-                "type": "worker_error", "taskId": task_id, "message": message
-            }));
+            let _ = app_for_process.emit(
+                "worker-event",
+                json!({
+                    "type": "worker_error", "taskId": task_id, "message": message
+                }),
+            );
+            crate::menu_bar::worker_stopped(&app_for_process, &task_id, true);
         }
     });
 
     let (disabled_tools, resources, prompts) = {
         let state = app.state::<MetadataState>();
-        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
-        (data.tool_config.disabled.clone(), resource_paths(&data.packages), data.prompts.clone())
+        let data = state
+            .data
+            .lock()
+            .map_err(|_| "Metadata lock was poisoned".to_string())?;
+        (
+            data.tool_config.disabled.clone(),
+            resource_paths(&data.packages),
+            data.prompts.clone(),
+        )
     };
 
     let auth_path = if provider.kind == ProviderKind::Subscription {
         Some(subscriptions::auth_path(app, &provider.id)?)
-    } else { None };
+    } else {
+        None
+    };
     let init = json!({
         "id": uuid::Uuid::new_v4().to_string(),
         "type": "init",
@@ -342,19 +456,38 @@ pub async fn ensure_worker_with(
 ///
 /// Used for commands whose outcome the caller needs (moving in the session tree, resending) —
 /// most commands stay fire-and-forget, with the worker's events telling the UI what happened.
-pub async fn request(app: &AppHandle, task_id: &str, value: Value, timeout: std::time::Duration) -> Result<Value, String> {
-    let worker = app.state::<WorkerState>().get(task_id)?
+pub async fn request(
+    app: &AppHandle,
+    task_id: &str,
+    value: Value,
+    timeout: std::time::Duration,
+) -> Result<Value, String> {
+    let worker = app
+        .state::<WorkerState>()
+        .get(task_id)?
         .ok_or_else(|| "This task's Pi worker is not running".to_string())?;
-    let id = value.get("id").and_then(Value::as_str).ok_or_else(|| "A worker request needs an id".to_string())?.to_string();
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "A worker request needs an id".to_string())?
+        .to_string();
     let (sender, receiver) = oneshot::channel();
-    worker.pending.lock().map_err(|_| "Worker lock was poisoned".to_string())?.insert(id.clone(), sender);
+    worker
+        .pending
+        .lock()
+        .map_err(|_| "Worker lock was poisoned".to_string())?
+        .insert(id.clone(), sender);
     if let Err(error) = write_line(&worker, &value).await {
-        if let Ok(mut pending) = worker.pending.lock() { pending.remove(&id); }
+        if let Ok(mut pending) = worker.pending.lock() {
+            pending.remove(&id);
+        }
         return Err(error);
     }
     match tokio::time::timeout(timeout, receiver).await {
         Err(_) => {
-            if let Ok(mut pending) = worker.pending.lock() { pending.remove(&id); }
+            if let Ok(mut pending) = worker.pending.lock() {
+                pending.remove(&id);
+            }
             Err("Pi did not answer in time.".into())
         }
         Ok(Err(_)) => Err("The Pi worker stopped before it answered.".into()),
@@ -362,7 +495,10 @@ pub async fn request(app: &AppHandle, task_id: &str, value: Value, timeout: std:
             if response.get("success").and_then(Value::as_bool) == Some(true) {
                 Ok(response.get("result").cloned().unwrap_or(Value::Null))
             } else {
-                Err(response.get("error").and_then(Value::as_str).map(redact_and_limit)
+                Err(response
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .map(redact_and_limit)
                     .unwrap_or_else(|| "Pi could not do that.".into()))
             }
         }
@@ -382,18 +518,22 @@ pub async fn broadcast(app: &AppHandle, value: &Value) -> Result<(), String> {
 /// A connection as the worker's protocol describes it. Only models with confirmed limits are
 /// sent: Pi cannot run a model without them.
 pub fn worker_provider_json(provider: &ProviderRecord) -> Value {
-    let models: Vec<Value> = provider.models.iter().filter_map(|model| {
-        Some(json!({
-            "id": model.id,
-            "name": model.name,
-            "contextWindow": model.context_window?,
-            "maxTokens": model.max_tokens?,
-            "reasoning": model.reasoning,
-            "thinkingLevels": model.thinking_levels,
-            "thinkingLevelMap": model.thinking_level_map,
-            "vision": model.vision,
-        }))
-    }).collect();
+    let models: Vec<Value> = provider
+        .models
+        .iter()
+        .filter_map(|model| {
+            Some(json!({
+                "id": model.id,
+                "name": model.name,
+                "contextWindow": model.context_window?,
+                "maxTokens": model.max_tokens?,
+                "reasoning": model.reasoning,
+                "thinkingLevels": model.thinking_levels,
+                "thinkingLevelMap": model.thinking_level_map,
+                "vision": model.vision,
+            }))
+        })
+        .collect();
     json!({
         "id": provider.id,
         "name": provider.name,
@@ -410,19 +550,34 @@ pub fn worker_provider_json(provider: &ProviderRecord) -> Value {
 pub fn subagent_payload(app: &AppHandle) -> Result<Value, String> {
     let state = app.state::<MetadataState>();
     let (config, providers) = {
-        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        let data = state
+            .data
+            .lock()
+            .map_err(|_| "Metadata lock was poisoned".to_string())?;
         (data.subagents.clone(), data.providers.clone())
     };
-    Ok(crate::subagents::runtime_payload(&config, &providers, |provider| {
-        if provider.kind == ProviderKind::Subscription {
-            if !subscriptions::has_credential(app, &provider.id) { return None; }
-            let path = subscriptions::auth_path(app, &provider.id).ok()?;
-            Some(crate::subagents::ProviderCredential { api_key: None, auth_path: Some(path.to_string_lossy().into_owned()) })
-        } else {
-            let key = state.secrets.get(&provider.id).ok()?;
-            Some(crate::subagents::ProviderCredential { api_key: Some(key), auth_path: None })
-        }
-    }))
+    Ok(crate::subagents::runtime_payload(
+        &config,
+        &providers,
+        |provider| {
+            if provider.kind == ProviderKind::Subscription {
+                if !subscriptions::has_credential(app, &provider.id) {
+                    return None;
+                }
+                let path = subscriptions::auth_path(app, &provider.id).ok()?;
+                Some(crate::subagents::ProviderCredential {
+                    api_key: None,
+                    auth_path: Some(path.to_string_lossy().into_owned()),
+                })
+            } else {
+                let key = state.secrets.get(&provider.id).ok()?;
+                Some(crate::subagents::ProviderCredential {
+                    api_key: Some(key),
+                    auth_path: None,
+                })
+            }
+        },
+    ))
 }
 
 /// Push the current sub-agent settings to every running worker. Applied live on the worker's
@@ -436,14 +591,26 @@ pub async fn broadcast_subagents(app: &AppHandle) -> Result<(), String> {
 /// environment values from `secrets.json`. Like `init`'s own key, they only travel over stdin.
 pub fn mcp_payload(app: &AppHandle) -> Result<Value, String> {
     let state = app.state::<MetadataState>();
-    let servers = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?.mcp.servers.clone();
-    Ok(crate::mcp::runtime_payload(&servers, |id| crate::mcp::load_secrets(&state.secrets, id)))
+    let servers = state
+        .data
+        .lock()
+        .map_err(|_| "Metadata lock was poisoned".to_string())?
+        .mcp
+        .servers
+        .clone();
+    Ok(crate::mcp::runtime_payload(&servers, |id| {
+        crate::mcp::load_secrets(&state.secrets, id)
+    }))
 }
 
 /// Push the MCP servers to every running worker. Applied between runs; nothing restarts.
 pub async fn broadcast_mcp(app: &AppHandle) -> Result<(), String> {
     let payload = mcp_payload(app)?;
-    broadcast(app, &json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "set_mcp", "servers": payload })).await
+    broadcast(
+        app,
+        &json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "set_mcp", "servers": payload }),
+    )
+    .await
 }
 
 /// The `skills` value for `init` and `set_skills`: `~/.agents/skills` and the other folders the
@@ -451,14 +618,23 @@ pub async fn broadcast_mcp(app: &AppHandle) -> Result<(), String> {
 pub fn skills_payload(app: &AppHandle) -> Result<Value, String> {
     let home = crate::skills::home_dir(app)?;
     let state = app.state::<MetadataState>();
-    let config = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?.skills.clone();
+    let config = state
+        .data
+        .lock()
+        .map_err(|_| "Metadata lock was poisoned".to_string())?
+        .skills
+        .clone();
     Ok(crate::skills::payload(&config, &home))
 }
 
 /// Push the skill folders to every running worker. Applied on the next turn; nothing restarts.
 pub async fn broadcast_skills(app: &AppHandle) -> Result<(), String> {
     let payload = skills_payload(app)?;
-    broadcast(app, &json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "set_skills", "skills": payload })).await
+    broadcast(
+        app,
+        &json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "set_skills", "skills": payload }),
+    )
+    .await
 }
 
 /// The `commands` value for `init` and `set_commands`: the user's commands folder and the keys
@@ -466,7 +642,12 @@ pub async fn broadcast_skills(app: &AppHandle) -> Result<(), String> {
 pub fn commands_payload(app: &AppHandle) -> Result<Value, String> {
     let dir = crate::slash_commands::dir(app)?;
     let state = app.state::<MetadataState>();
-    let config = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?.commands.clone();
+    let config = state
+        .data
+        .lock()
+        .map_err(|_| "Metadata lock was poisoned".to_string())?
+        .commands
+        .clone();
     Ok(crate::slash_commands::payload(&config, &dir))
 }
 
@@ -477,7 +658,9 @@ pub async fn broadcast_commands(app: &AppHandle) -> Result<(), String> {
 }
 
 pub async fn send(app: &AppHandle, task_id: &str, value: &Value) -> Result<(), String> {
-    let worker = app.state::<WorkerState>().get(task_id)?
+    let worker = app
+        .state::<WorkerState>()
+        .get(task_id)?
         .ok_or_else(|| "This task's Pi worker is not running".to_string())?;
     write_line(&worker, value).await
 }
@@ -486,12 +669,22 @@ async fn write_line(worker: &WorkerProcess, value: &Value) -> Result<(), String>
     let mut bytes = serde_json::to_vec(value).map_err(|error| error.to_string())?;
     bytes.push(b'\n');
     let mut stdin = worker.stdin.lock().await;
-    stdin.write_all(&bytes).await.map_err(|error| format!("Could not send a command to Pi: {error}"))?;
+    stdin
+        .write_all(&bytes)
+        .await
+        .map_err(|error| format!("Could not send a command to Pi: {error}"))?;
     stdin.flush().await.map_err(|error| error.to_string())
 }
 
-pub async fn terminate_worker(app: &AppHandle, task_id: &str, graceful: bool) -> Result<(), String> {
-    let Some(worker) = app.state::<WorkerState>().remove(task_id)? else { return Ok(()); };
+pub async fn terminate_worker(
+    app: &AppHandle,
+    task_id: &str,
+    graceful: bool,
+) -> Result<(), String> {
+    let Some(worker) = app.state::<WorkerState>().remove(task_id)? else {
+        crate::menu_bar::worker_stopped(app, task_id, false);
+        return Ok(());
+    };
     if graceful {
         let value = json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "shutdown" });
         let mut bytes = serde_json::to_vec(&value).map_err(|error| error.to_string())?;
@@ -503,6 +696,7 @@ pub async fn terminate_worker(app: &AppHandle, task_id: &str, graceful: bool) ->
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     let _ = killpg(Pid::from_raw(worker.pid as i32), Signal::SIGTERM);
+    crate::menu_bar::worker_stopped(app, task_id, false);
     Ok(())
 }
 
@@ -513,7 +707,8 @@ fn idle_reap_plan(candidates: &[(String, Instant)], now: Instant) -> Vec<String>
     let mut sorted = candidates.to_vec();
     sorted.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
     let stoppable = sorted.len().saturating_sub(IDLE_WORKER_KEEP);
-    sorted[..stoppable].iter()
+    sorted[..stoppable]
+        .iter()
         .filter(|(_, last)| now.duration_since(*last) >= IDLE_WORKER_AFTER)
         .map(|(task_id, _)| task_id.clone())
         .collect()
@@ -525,32 +720,58 @@ fn idle_reap_plan(candidates: &[(String, Instant)], now: Instant) -> Vec<String>
 /// nothing and the chat's status and transcript are untouched.
 async fn sweep_idle_workers(app: &AppHandle) {
     let selected = app.state::<SelectedTask>().get();
-    let Ok(ids) = app.state::<WorkerState>().task_ids() else { return };
+    let Ok(ids) = app.state::<WorkerState>().task_ids() else {
+        return;
+    };
     let statuses: HashMap<String, TaskStatus> = match app.state::<MetadataState>().data.lock() {
-        Ok(data) => data.tasks.iter().map(|task| (task.id.clone(), task.status.clone())).collect(),
+        Ok(data) => data
+            .tasks
+            .iter()
+            .map(|task| (task.id.clone(), task.status.clone()))
+            .collect(),
         Err(_) => return,
     };
     let now = Instant::now();
     let candidates: Vec<(String, Instant)> = {
         let activity_state = app.state::<WorkerActivity>();
-        let Ok(mut activity) = activity_state.0.lock() else { return };
+        let Ok(mut activity) = activity_state.0.lock() else {
+            return;
+        };
         // Prune tasks whose worker already exited through some other path.
         activity.retain(|task_id, _| ids.contains(task_id));
         ids.iter()
             .filter(|task_id| selected.as_deref() != Some(task_id.as_str()))
             .filter(|task_id| statuses.get(task_id.as_str()) == Some(&TaskStatus::Idle))
-            .filter_map(|task_id| activity.get(task_id).map(|last| ((*task_id).clone(), *last)))
+            .filter_map(|task_id| {
+                activity
+                    .get(task_id)
+                    .map(|last| ((*task_id).clone(), *last))
+            })
             .collect()
     };
     for task_id in idle_reap_plan(&candidates, now) {
         let lock = crate::commands::task_lock(app, &task_id);
-        let Ok(_guard) = tokio::time::timeout(IDLE_WORKER_LOCK_WAIT, lock.lock()).await else { continue };
+        let Ok(_guard) = tokio::time::timeout(IDLE_WORKER_LOCK_WAIT, lock.lock()).await else {
+            continue;
+        };
         // Re-check under the lock: a prompt queued behind us flips the status away from Idle,
         // and another stop path may already have removed the worker.
-        let worker_live = app.state::<WorkerState>().get(&task_id).map(|worker| worker.is_some()).unwrap_or(false);
-        let status_idle = app.state::<MetadataState>().data.lock().ok()
-            .and_then(|data| data.tasks.iter().find(|task| task.id == task_id)
-                .map(|task| matches!(task.status, TaskStatus::Idle)))
+        let worker_live = app
+            .state::<WorkerState>()
+            .get(&task_id)
+            .map(|worker| worker.is_some())
+            .unwrap_or(false);
+        let status_idle = app
+            .state::<MetadataState>()
+            .data
+            .lock()
+            .ok()
+            .and_then(|data| {
+                data.tasks
+                    .iter()
+                    .find(|task| task.id == task_id)
+                    .map(|task| matches!(task.status, TaskStatus::Idle))
+            })
             .unwrap_or(false);
         if worker_live && status_idle {
             let _ = terminate_worker(app, &task_id, true).await;
@@ -574,7 +795,11 @@ fn worker_entry_path(app: &AppHandle) -> Result<PathBuf, String> {
     if cfg!(debug_assertions) {
         Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist/index.js"))
     } else {
-        Ok(app.path().resource_dir().map_err(|error| error.to_string())?.join("resources/worker/dist/index.js"))
+        Ok(app
+            .path()
+            .resource_dir()
+            .map_err(|error| error.to_string())?
+            .join("resources/worker/dist/index.js"))
     }
 }
 
@@ -582,7 +807,11 @@ fn manager_entry_path(app: &AppHandle) -> Result<PathBuf, String> {
     if cfg!(debug_assertions) {
         Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist/manager.js"))
     } else {
-        Ok(app.path().resource_dir().map_err(|error| error.to_string())?.join("resources/worker/dist/manager.js"))
+        Ok(app
+            .path()
+            .resource_dir()
+            .map_err(|error| error.to_string())?
+            .join("resources/worker/dist/manager.js"))
     }
 }
 
@@ -590,7 +819,11 @@ pub(crate) fn mcp_probe_entry_path(app: &AppHandle) -> Result<PathBuf, String> {
     if cfg!(debug_assertions) {
         Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist/mcp-probe.js"))
     } else {
-        Ok(app.path().resource_dir().map_err(|error| error.to_string())?.join("resources/worker/dist/mcp-probe.js"))
+        Ok(app
+            .path()
+            .resource_dir()
+            .map_err(|error| error.to_string())?
+            .join("resources/worker/dist/mcp-probe.js"))
     }
 }
 
@@ -598,7 +831,11 @@ pub(crate) fn skills_scan_entry_path(app: &AppHandle) -> Result<PathBuf, String>
     if cfg!(debug_assertions) {
         Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist/skills-scan.js"))
     } else {
-        Ok(app.path().resource_dir().map_err(|error| error.to_string())?.join("resources/worker/dist/skills-scan.js"))
+        Ok(app
+            .path()
+            .resource_dir()
+            .map_err(|error| error.to_string())?
+            .join("resources/worker/dist/skills-scan.js"))
     }
 }
 
@@ -607,7 +844,11 @@ pub(crate) fn commands_scan_entry_path(app: &AppHandle) -> Result<PathBuf, Strin
     if cfg!(debug_assertions) {
         Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist/commands-scan.js"))
     } else {
-        Ok(app.path().resource_dir().map_err(|error| error.to_string())?.join("resources/worker/dist/commands-scan.js"))
+        Ok(app
+            .path()
+            .resource_dir()
+            .map_err(|error| error.to_string())?
+            .join("resources/worker/dist/commands-scan.js"))
     }
 }
 
@@ -615,7 +856,11 @@ fn catalog_entry_path(app: &AppHandle) -> Result<PathBuf, String> {
     if cfg!(debug_assertions) {
         Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist/catalog.js"))
     } else {
-        Ok(app.path().resource_dir().map_err(|error| error.to_string())?.join("resources/worker/dist/catalog.js"))
+        Ok(app
+            .path()
+            .resource_dir()
+            .map_err(|error| error.to_string())?
+            .join("resources/worker/dist/catalog.js"))
     }
 }
 
@@ -631,14 +876,18 @@ pub async fn list_builtin_models(app: &AppHandle) -> Result<Vec<BuiltinModelSugg
         .env("PI_TELEMETRY", "0")
         .env("PI_SKIP_VERSION_CHECK", "1")
         .env("PI_OFFLINE", "1");
-    for key in PROVIDER_ENVIRONMENT_KEYS { command.env_remove(key); }
+    for key in PROVIDER_ENVIRONMENT_KEYS {
+        command.env_remove(key);
+    }
     let output = tokio::time::timeout(std::time::Duration::from_secs(15), command.output())
         .await
         .map_err(|_| "Reading the bundled Pi model catalogue timed out.".to_string())?
         .map_err(|error| format!("Could not read the bundled Pi model catalogue: {error}"))?;
     if !output.status.success() {
-        return Err(format!("Could not read the bundled Pi model catalogue: {}",
-            redact_and_limit(&String::from_utf8_lossy(&output.stderr))));
+        return Err(format!(
+            "Could not read the bundled Pi model catalogue: {}",
+            redact_and_limit(&String::from_utf8_lossy(&output.stderr))
+        ));
     }
     if output.stdout.len() > 2_000_000 {
         return Err("The bundled Pi model catalogue is unexpectedly large.".into());
@@ -655,12 +904,18 @@ fn npm_command(app: &AppHandle) -> Option<Vec<String>> {
     let cli = if cfg!(debug_assertions) {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/npm/bin/npm-cli.js")
     } else {
-        app.path().resource_dir().ok()?.join("resources/npm/bin/npm-cli.js")
+        app.path()
+            .resource_dir()
+            .ok()?
+            .join("resources/npm/bin/npm-cli.js")
     };
     if !cli.exists() {
         return None;
     }
-    Some(vec![node.to_string_lossy().into_owned(), cli.to_string_lossy().into_owned()])
+    Some(vec![
+        node.to_string_lossy().into_owned(),
+        cli.to_string_lossy().into_owned(),
+    ])
 }
 
 /// Shared store for installed packages: Pi's own settings.json plus npm/ and git/. Deliberately
@@ -708,9 +963,18 @@ pub async fn run_manager(app: &AppHandle, command: Value) -> Result<Value, Strin
     let mut process = command_builder
         .spawn()
         .map_err(|error| format!("Could not start the package manager: {error}"))?;
-    let mut stdin = process.stdin.take().ok_or_else(|| "The package manager has no stdin".to_string())?;
-    let stdout = process.stdout.take().ok_or_else(|| "The package manager has no stdout".to_string())?;
-    let stderr = process.stderr.take().ok_or_else(|| "The package manager has no stderr".to_string())?;
+    let mut stdin = process
+        .stdin
+        .take()
+        .ok_or_else(|| "The package manager has no stdin".to_string())?;
+    let stdout = process
+        .stdout
+        .take()
+        .ok_or_else(|| "The package manager has no stdout".to_string())?;
+    let stderr = process
+        .stderr
+        .take()
+        .ok_or_else(|| "The package manager has no stderr".to_string())?;
 
     let init = json!({
         "id": uuid::Uuid::new_v4().to_string(),
@@ -726,7 +990,10 @@ pub async fn run_manager(app: &AppHandle, command: Value) -> Result<Value, Strin
     for line in [&init, &request] {
         let mut bytes = serde_json::to_vec(line).map_err(|error| error.to_string())?;
         bytes.push(b'\n');
-        stdin.write_all(&bytes).await.map_err(|error| format!("Could not reach the package manager: {error}"))?;
+        stdin
+            .write_all(&bytes)
+            .await
+            .map_err(|error| format!("Could not reach the package manager: {error}"))?;
     }
     stdin.flush().await.map_err(|error| error.to_string())?;
 
@@ -746,25 +1013,41 @@ pub async fn run_manager(app: &AppHandle, command: Value) -> Result<Value, Strin
     let mut outcome: Option<Result<(), String>> = None;
     while let Ok(Some(line)) = reader.next_line().await {
         let Some(payload) = line.strip_prefix(MANAGER_FRAME) else {
-            if noise.len() < MANAGER_NOISE_LIMIT { noise.push_str(&line); noise.push('\n'); }
+            if noise.len() < MANAGER_NOISE_LIMIT {
+                noise.push_str(&line);
+                noise.push('\n');
+            }
             continue;
         };
-        let Ok(value) = serde_json::from_str::<Value>(payload) else { continue; };
+        let Ok(value) = serde_json::from_str::<Value>(payload) else {
+            continue;
+        };
         match value.get("type").and_then(Value::as_str) {
             Some("catalog") => catalog = value.get("packages").cloned().unwrap_or(Value::Null),
-            Some("progress") => { let _ = app.emit("package-event", value); }
+            Some("progress") => {
+                let _ = app.emit("package-event", value);
+            }
             Some("manager_error") => {
                 if let Some(message) = value.get("message").and_then(Value::as_str) {
                     outcome = Some(Err(redact_and_limit(message)));
                     break;
                 }
             }
-            Some("response") if value.get("id").and_then(Value::as_str) == Some(command_id.as_str()) => {
-                outcome = Some(if value.get("success").and_then(Value::as_bool) == Some(true) {
-                    Ok(())
-                } else {
-                    Err(redact_and_limit(value.get("error").and_then(Value::as_str).unwrap_or("The package operation failed")))
-                });
+            Some("response")
+                if value.get("id").and_then(Value::as_str) == Some(command_id.as_str()) =>
+            {
+                outcome = Some(
+                    if value.get("success").and_then(Value::as_bool) == Some(true) {
+                        Ok(())
+                    } else {
+                        Err(redact_and_limit(
+                            value
+                                .get("error")
+                                .and_then(Value::as_str)
+                                .unwrap_or("The package operation failed"),
+                        ))
+                    },
+                );
                 break;
             }
             _ => {}
@@ -794,79 +1077,149 @@ fn with_context(message: String, noise: &str, stderr: &str) -> String {
     }
     let tail: String = {
         let characters: Vec<char> = detail.chars().collect();
-        characters[characters.len().saturating_sub(600)..].iter().collect()
+        characters[characters.len().saturating_sub(600)..]
+            .iter()
+            .collect()
     };
     format!("{message}\n{}", redact_and_limit(&tail))
 }
 
 pub fn package_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app.path().app_data_dir().map_err(|error| error.to_string())?.join("pi");
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("pi");
     std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     Ok(dir)
 }
 
 pub(crate) fn node_executable_path() -> Result<PathBuf, String> {
     if cfg!(debug_assertions) {
-        Ok(std::env::var_os("WACKCODE_NODE_PATH").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("node")))
+        Ok(std::env::var_os("WACKCODE_NODE_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("node")))
     } else {
         let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-        Ok(executable.parent().ok_or_else(|| "Could not locate the app executable directory".to_string())?.join("wackcode-node"))
+        Ok(executable
+            .parent()
+            .ok_or_else(|| "Could not locate the app executable directory".to_string())?
+            .join("wackcode-node"))
     }
 }
 
-fn handle_worker_line(app: &AppHandle, task_id: &str, worker_pid: u32, line: &str, pending: &Pending) {
+fn handle_worker_line(
+    app: &AppHandle,
+    task_id: &str,
+    worker_pid: u32,
+    line: &str,
+    pending: &Pending,
+) {
     // Any output, even an unparseable line, proves the worker is alive: refresh its idle clock.
     app.state::<WorkerActivity>().mark(task_id);
-    let Ok(mut value) = serde_json::from_str::<Value>(line) else { return; };
-    let event_type = value.get("type").and_then(Value::as_str).unwrap_or("").to_string();
+    let Ok(mut value) = serde_json::from_str::<Value>(line) else {
+        return;
+    };
+    let event_type = value
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     if event_type == "browser_cancel" {
         if let Some(request_id) = value.get("requestId").and_then(Value::as_str) {
-            app.state::<crate::browser::BrowserManager>().cancel(request_id);
+            app.state::<crate::browser::BrowserManager>()
+                .cancel(request_id);
         }
         return;
     }
     if event_type == "browser_request" {
-        let Some(request_id) = value.get("requestId").and_then(Value::as_str).map(str::to_string) else { return; };
+        let Some(request_id) = value
+            .get("requestId")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        else {
+            return;
+        };
         let request = value.get("request").cloned().unwrap_or(Value::Null);
         let request_app = app.clone();
         let request_task = task_id.to_string();
         tauri::async_runtime::spawn(async move {
-            let result = crate::browser::execute_agent_request(request_app.clone(), request_task.clone(), request_id.clone(), request).await;
+            let result = crate::browser::execute_agent_request(
+                request_app.clone(),
+                request_task.clone(),
+                request_id.clone(),
+                request,
+            )
+            .await;
             // A restarted worker owns the same chat id but a different generation. Never let it
             // receive a response to an operation issued by the worker that was replaced.
-            let current = request_app.state::<WorkerState>().get(&request_task).ok().flatten();
-            if current.as_ref().map(|worker| worker.pid) != Some(worker_pid) { return; }
+            let current = request_app
+                .state::<WorkerState>()
+                .get(&request_task)
+                .ok()
+                .flatten();
+            if current.as_ref().map(|worker| worker.pid) != Some(worker_pid) {
+                return;
+            }
             let response = match result {
-                Ok(result) => json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "browser_response", "requestId": request_id, "success": true, "result": result }),
-                Err(error) => json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "browser_response", "requestId": request_id, "success": false, "error": redact_and_limit(&error) }),
+                Ok(result) => {
+                    json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "browser_response", "requestId": request_id, "success": true, "result": result })
+                }
+                Err(error) => {
+                    json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "browser_response", "requestId": request_id, "success": false, "error": redact_and_limit(&error) })
+                }
             };
-            if let Some(worker) = current { let _ = write_line(&worker, &response).await; }
+            if let Some(worker) = current {
+                let _ = write_line(&worker, &response).await;
+            }
         });
         return;
     }
     if event_type == "title_result" {
         let attempt_id = value.get("attemptId").and_then(Value::as_str).unwrap_or("");
-        let title = value.get("title").and_then(Value::as_str).and_then(normalize_auto_title);
-        let accepted = app.state::<MetadataState>().mutate(|data| {
-            let Some(task) = data.tasks.iter_mut().find(|task| task.id == task_id) else { return Ok(false); };
-            if task.auto_title_attempt_id.as_deref() != Some(attempt_id) { return Ok(false); }
-            task.auto_title_attempt_id = None;
-            if let Some(title) = &title { task.name = title.clone(); }
-            task.updated_at = chrono::Utc::now().to_rfc3339();
-            Ok(true)
-        }).unwrap_or(false);
-        if !accepted { return; }
+        let title = value
+            .get("title")
+            .and_then(Value::as_str)
+            .and_then(normalize_auto_title);
+        let accepted = app
+            .state::<MetadataState>()
+            .mutate(|data| {
+                let Some(task) = data.tasks.iter_mut().find(|task| task.id == task_id) else {
+                    return Ok(false);
+                };
+                if task.auto_title_attempt_id.as_deref() != Some(attempt_id) {
+                    return Ok(false);
+                }
+                task.auto_title_attempt_id = None;
+                if let Some(title) = &title {
+                    task.name = title.clone();
+                }
+                task.updated_at = chrono::Utc::now().to_rfc3339();
+                Ok(true)
+            })
+            .unwrap_or(false);
+        if !accepted {
+            return;
+        }
         if let Some(title) = title {
-            let _ = app.emit("worker-event", json!({ "type": "title_changed", "taskId": task_id, "name": title }));
+            let _ = app.emit(
+                "worker-event",
+                json!({ "type": "title_changed", "taskId": task_id, "name": title }),
+            );
         } else {
             let _ = app.emit("worker-event", json!({ "type": "extension_notice", "taskId": task_id,
                 "message": "Automatic title could not be generated. The current title was kept.", "level": "warning" }));
         }
+        let _ = crate::menu_bar::refresh(app);
         return;
     }
     if event_type == "response" {
-        let waiting = value.get("id").and_then(Value::as_str)
-            .and_then(|id| pending.lock().ok().and_then(|mut pending| pending.remove(id)));
+        let waiting = value.get("id").and_then(Value::as_str).and_then(|id| {
+            pending
+                .lock()
+                .ok()
+                .and_then(|mut pending| pending.remove(id))
+        });
         // A caller is waiting for this one and reports it itself.
         if let Some(sender) = waiting {
             let _ = sender.send(value);
@@ -874,7 +1227,11 @@ fn handle_worker_line(app: &AppHandle, task_id: &str, worker_pid: u32, line: &st
         }
     }
     if event_type == "worker_error" {
-        if let Some(message) = value.get("message").and_then(Value::as_str).map(redact_and_limit) {
+        if let Some(message) = value
+            .get("message")
+            .and_then(Value::as_str)
+            .map(redact_and_limit)
+        {
             value["message"] = Value::String(message);
         }
     }
@@ -898,7 +1255,8 @@ fn handle_worker_line(app: &AppHandle, task_id: &str, worker_pid: u32, line: &st
             // Tools panel to render when no chat is open. Deltas never carry tools — they ride
             // full snapshots, which is where tool-changing commands force one.
             if let Some(tools) = value.pointer("/snapshot/tools") {
-                if let Ok(catalog) = serde_json::from_value::<Vec<ToolCatalogEntry>>(tools.clone()) {
+                if let Ok(catalog) = serde_json::from_value::<Vec<ToolCatalogEntry>>(tools.clone())
+                {
                     if data.tool_catalog != catalog {
                         data.tool_catalog = catalog;
                         should_save = true;
@@ -918,7 +1276,9 @@ fn handle_worker_line(app: &AppHandle, task_id: &str, worker_pid: u32, line: &st
             if let Ok(mut data) = app.state::<MetadataState>().data.lock() {
                 if let Some(task) = data.tasks.iter_mut().find(|task| task.id == task_id) {
                     task.status = next;
-                    if event_type == "run_state" && value.get("state").and_then(Value::as_str) == Some("running") {
+                    if event_type == "run_state"
+                        && value.get("state").and_then(Value::as_str) == Some("running")
+                    {
                         task.last_error = None;
                     }
                     task.updated_at = chrono::Utc::now().to_rfc3339();
@@ -938,7 +1298,10 @@ fn handle_worker_line(app: &AppHandle, task_id: &str, worker_pid: u32, line: &st
     } else if event_type == "plan_state" {
         // Mirror the worker's mode onto the record, the same way `session_file` is mirrored:
         // the record is the durable hint the UI uses before a worker reports in.
-        let mode = value.get("mode").cloned().and_then(|mode| serde_json::from_value::<TaskMode>(mode).ok());
+        let mode = value
+            .get("mode")
+            .cloned()
+            .and_then(|mode| serde_json::from_value::<TaskMode>(mode).ok());
         if let Some(mode) = mode {
             if let Ok(mut data) = app.state::<MetadataState>().data.lock() {
                 if let Some(task) = data.tasks.iter_mut().find(|task| task.id == task_id) {
@@ -951,17 +1314,30 @@ fn handle_worker_line(app: &AppHandle, task_id: &str, worker_pid: u32, line: &st
             }
         }
     }
-    if should_save { let _ = app.state::<MetadataState>().save(); }
+    if should_save {
+        let _ = app.state::<MetadataState>().save();
+    }
+    crate::menu_bar::handle_worker_event(app, task_id, &value);
     let _ = app.emit("worker-event", value);
 }
 
 fn normalize_auto_title(raw: &str) -> Option<String> {
     let compact = raw.split_whitespace().collect::<Vec<_>>().join(" ");
-    let trimmed = compact.trim_matches(|c: char| c == '"' || c == '\'' || c == '“' || c == '”' || c == '‘' || c == '’').trim();
+    let trimmed = compact
+        .trim_matches(|c: char| {
+            c == '"' || c == '\'' || c == '“' || c == '”' || c == '‘' || c == '’'
+        })
+        .trim();
     let title: String = trimmed.chars().take(80).collect();
     let one_word_ascii = title.is_ascii() && title.split_whitespace().count() < 3;
-    let has_emoji = title.chars().any(|c| matches!(c as u32, 0x1F000..=0x1FAFF | 0x2600..=0x27BF));
-    if title.is_empty() || one_word_ascii || has_emoji { None } else { Some(title) }
+    let has_emoji = title
+        .chars()
+        .any(|c| matches!(c as u32, 0x1F000..=0x1FAFF | 0x2600..=0x27BF));
+    if title.is_empty() || one_word_ascii || has_emoji {
+        None
+    } else {
+        Some(title)
+    }
 }
 
 #[cfg(test)]
@@ -970,11 +1346,20 @@ mod auto_title_tests {
 
     #[test]
     fn trims_model_wrapping_and_rejects_blank_output() {
-        assert_eq!(normalize_auto_title("  “  Short   chat title  ” "), Some("Short chat title".into()));
+        assert_eq!(
+            normalize_auto_title("  “  Short   chat title  ” "),
+            Some("Short chat title".into())
+        );
         assert_eq!(normalize_auto_title(" \n '  '  "), None);
         assert_eq!(normalize_auto_title("OK."), None);
         assert_eq!(normalize_auto_title("Emoji title here 😀"), None);
-        assert_eq!(normalize_auto_title(&format!("Long title {}", "x".repeat(90))).unwrap().chars().count(), 80);
+        assert_eq!(
+            normalize_auto_title(&format!("Long title {}", "x".repeat(90)))
+                .unwrap()
+                .chars()
+                .count(),
+            80
+        );
     }
 }
 
@@ -982,14 +1367,21 @@ pub(crate) fn redact_and_limit(message: &str) -> String {
     let mut safe = message.to_string();
     for marker in ["sk-", "Bearer "] {
         while let Some(start) = safe.find(marker) {
-            let end = safe[start..].find(char::is_whitespace).map(|index| start + index).unwrap_or(safe.len());
+            let end = safe[start..]
+                .find(char::is_whitespace)
+                .map(|index| start + index)
+                .unwrap_or(safe.len());
             safe.replace_range(start..end, "[credential redacted]");
         }
     }
     for marker in ["access_token=", "refresh_token=", "device_code=", "code="] {
         while let Some(start) = safe.to_ascii_lowercase().find(marker) {
-            let end = safe[start..].find(|character: char| character.is_whitespace() || character == '&' || character == '#')
-                .map(|index| start + index).unwrap_or(safe.len());
+            let end = safe[start..]
+                .find(|character: char| {
+                    character.is_whitespace() || character == '&' || character == '#'
+                })
+                .map(|index| start + index)
+                .unwrap_or(safe.len());
             safe.replace_range(start..end, "[credential redacted]");
         }
     }
@@ -1008,23 +1400,39 @@ mod tests {
             kind: "npm".into(),
             version: None,
             installed_path: None,
-            extensions: resources.iter().map(|(path, enabled)| PackageResourceRecord {
-                path: (*path).into(), name: (*path).into(), enabled: *enabled,
-            }).collect(),
+            extensions: resources
+                .iter()
+                .map(|(path, enabled)| PackageResourceRecord {
+                    path: (*path).into(),
+                    name: (*path).into(),
+                    enabled: *enabled,
+                })
+                .collect(),
             skills: Vec::new(),
             prompts: Vec::new(),
             themes: Vec::new(),
             errors: Vec::new(),
-            trusted_at: if trusted { "2026-01-01T00:00:00Z".into() } else { String::new() },
+            trusted_at: if trusted {
+                "2026-01-01T00:00:00Z".into()
+            } else {
+                String::new()
+            },
             installed_at: "2026-01-01T00:00:00Z".into(),
         }
     }
 
     fn provider() -> ProviderRecord {
         ProviderRecord {
-            id: "p".into(), name: "P".into(), kind: ProviderKind::Custom, base_url: "https://example.test/v1".into(),
-            api_format: "openai-completions".into(), models: Vec::new(),
-            created_at: "now".into(), updated_at: "now".into(), has_api_key: true, connected: true,
+            id: "p".into(),
+            name: "P".into(),
+            kind: ProviderKind::Custom,
+            base_url: "https://example.test/v1".into(),
+            api_format: "openai-completions".into(),
+            models: Vec::new(),
+            created_at: "now".into(),
+            updated_at: "now".into(),
+            has_api_key: true,
+            connected: true,
         }
     }
 
@@ -1052,19 +1460,31 @@ mod tests {
 
     #[test]
     fn a_switched_off_resource_never_reaches_a_worker() {
-        let packages = vec![package("npm:x", true, &[("/pkg/x/on.ts", true), ("/pkg/x/off.ts", false)])];
-        let extensions = resource_paths(&packages)["extensions"].as_array().unwrap().clone();
+        let packages = vec![package(
+            "npm:x",
+            true,
+            &[("/pkg/x/on.ts", true), ("/pkg/x/off.ts", false)],
+        )];
+        let extensions = resource_paths(&packages)["extensions"]
+            .as_array()
+            .unwrap()
+            .clone();
         assert_eq!(extensions, vec!["/pkg/x/on.ts"]);
     }
 
     #[test]
     fn an_untrusted_package_contributes_nothing_even_with_every_resource_enabled() {
-        let packages = vec![package("npm:appeared-somehow", false, &[
-            ("/pkg/a.ts", true), ("/pkg/b.ts", true),
-        ])];
+        let packages = vec![package(
+            "npm:appeared-somehow",
+            false,
+            &[("/pkg/a.ts", true), ("/pkg/b.ts", true)],
+        )];
         let paths = resource_paths(&packages);
         for kind in ["extensions", "skills", "prompts", "themes"] {
-            assert!(paths[kind].as_array().unwrap().is_empty(), "{kind} leaked from an untrusted package");
+            assert!(
+                paths[kind].as_array().unwrap().is_empty(),
+                "{kind} leaked from an untrusted package"
+            );
         }
     }
 
@@ -1091,10 +1511,17 @@ mod tests {
         let fingerprint = fingerprint(&provider(), "m", &resources).unwrap();
         let mut config = crate::models::SkillsConfig::default();
         let before = crate::skills::payload(&config, std::path::Path::new("/Users/test"));
-        config.folders.push(crate::models::SkillFolderRecord { id: "claude".into(), path: None, enabled: true });
+        config.folders.push(crate::models::SkillFolderRecord {
+            id: "claude".into(),
+            path: None,
+            enabled: true,
+        });
         let after = crate::skills::payload(&config, std::path::Path::new("/Users/test"));
         assert_ne!(before, after);
-        assert_eq!(fingerprint, super::fingerprint(&provider(), "m", &resources).unwrap());
+        assert_eq!(
+            fingerprint,
+            super::fingerprint(&provider(), "m", &resources).unwrap()
+        );
     }
 
     #[test]
@@ -1109,12 +1536,19 @@ mod tests {
         config.disabled.push("app:copy".into());
         let after = crate::slash_commands::payload(&config, dir);
         assert_ne!(before, after);
-        assert_eq!(fingerprint, super::fingerprint(&provider(), "m", &resources).unwrap());
+        assert_eq!(
+            fingerprint,
+            super::fingerprint(&provider(), "m", &resources).unwrap()
+        );
     }
 
     #[test]
     fn manager_noise_is_bounded_and_redacted() {
-        let message = with_context("Install failed".into(), "npm warn deprecated\n", "sk-abcdefghijklmnop leaked");
+        let message = with_context(
+            "Install failed".into(),
+            "npm warn deprecated\n",
+            "sk-abcdefghijklmnop leaked",
+        );
         assert!(message.starts_with("Install failed\n"));
         assert!(message.contains("[credential redacted]"));
         assert!(!message.contains("sk-abcdefghijklmnop"));
@@ -1124,9 +1558,13 @@ mod tests {
     fn idle_reap_plan_stops_the_oldest_workers_beyond_four() {
         let base = Instant::now();
         let now = base + Duration::from_secs(3_600);
-        let candidates: Vec<(String, Instant)> =
-            (0..10).map(|i| (format!("task-{i}"), base + Duration::from_secs(i * 60))).collect();
-        assert_eq!(idle_reap_plan(&candidates, now), vec!["task-0", "task-1", "task-2", "task-3", "task-4", "task-5"]);
+        let candidates: Vec<(String, Instant)> = (0..10)
+            .map(|i| (format!("task-{i}"), base + Duration::from_secs(i * 60)))
+            .collect();
+        assert_eq!(
+            idle_reap_plan(&candidates, now),
+            vec!["task-0", "task-1", "task-2", "task-3", "task-4", "task-5"]
+        );
     }
 
     #[test]
@@ -1134,9 +1572,9 @@ mod tests {
         let base = Instant::now();
         let now = base + Duration::from_secs(3_600);
         let candidates = vec![
-            ("ancient".to_string(), base),                                // 60 min idle
-            ("old".to_string(), base + Duration::from_secs(600)),        // 50 min idle
-            ("fresh-1".to_string(), base + Duration::from_secs(3_000)),  // 10 min idle
+            ("ancient".to_string(), base),                        // 60 min idle
+            ("old".to_string(), base + Duration::from_secs(600)), // 50 min idle
+            ("fresh-1".to_string(), base + Duration::from_secs(3_000)), // 10 min idle
             ("fresh-2".to_string(), base + Duration::from_secs(3_100)),
             ("fresh-3".to_string(), base + Duration::from_secs(3_200)),
         ];
@@ -1147,8 +1585,9 @@ mod tests {
     fn idle_reap_plan_keeps_a_warm_pool_of_four() {
         let base = Instant::now();
         let now = base + Duration::from_secs(3_600);
-        let candidates: Vec<(String, Instant)> =
-            (0..3).map(|i| (format!("task-{i}"), base + Duration::from_secs(i))).collect();
+        let candidates: Vec<(String, Instant)> = (0..3)
+            .map(|i| (format!("task-{i}"), base + Duration::from_secs(i)))
+            .collect();
         assert!(idle_reap_plan(&candidates, now).is_empty());
     }
 
@@ -1156,8 +1595,10 @@ mod tests {
     fn idle_reap_plan_breaks_activity_ties_by_task_id() {
         let base = Instant::now();
         let now = base + Duration::from_secs(3_600);
-        let candidates: Vec<(String, Instant)> =
-            ["b", "a", "c", "d", "e", "f", "g"].iter().map(|id| (id.to_string(), base)).collect();
+        let candidates: Vec<(String, Instant)> = ["b", "a", "c", "d", "e", "f", "g"]
+            .iter()
+            .map(|id| (id.to_string(), base))
+            .collect();
         assert_eq!(idle_reap_plan(&candidates, now), vec!["a", "b", "c"]);
     }
 }

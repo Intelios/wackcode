@@ -11,6 +11,7 @@ import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix 
 import { displayAgentName, hasSubagentCall, pruneDisabledTools, sameToolCatalog, subagentDetailsFor } from "./tool-utils";
 import { CHANGES_VIEW, TERMINAL_VIEW, durableView, rememberedView, toggleView, viewForChat, viewKey, type PanelViewKind, type SidePanelView } from "./side-panel";
 import { APP_SLASH_COMMANDS } from "./command-utils";
+import { performChatNavigation, withoutResolvedDialog } from "./menu-navigation";
 import { DEFAULT_APPEARANCE, applyTheme, cacheTheme } from "./theme";
 import { AssistantNameContext, agentName } from "./agentName";
 import { Backdrop } from "./components/Backdrop";
@@ -193,6 +194,7 @@ export default function App() {
   const [glassSupported, setGlassSupported] = useState(false);
   const savedAppearance = useRef<AppearanceConfig>(DEFAULT_APPEARANCE);
   const [selectedTaskId, setSelectedTaskId] = useState<string>();
+  const selectTaskRef = useRef<(id: string) => void>(() => undefined);
   const selectedTaskRef = useRef<string | undefined>(undefined);
   const [runtimes, setRuntimes] = useState<Record<string, TaskRuntime>>({});
   const [changes, setChanges] = useState<GitChanges>();
@@ -333,7 +335,7 @@ export default function App() {
   }), [shownSubagent?.toolCallId, shownSubagent?.index, openSubagent]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleExtensionRespond = useCallback((request: ExtensionUIRequest, response: ExtensionUIResponse) => {
-    setExtensionRequests((current) => current.filter((entry) => entry.requestId !== request.requestId));
+    setExtensionRequests((current) => withoutResolvedDialog(current, request.requestId));
     void api.respondExtensionUi({ taskId: request.taskId, requestId: request.requestId, ...response })
       .catch((reason) => setGlobalError(String(reason)));
   }, []);
@@ -360,6 +362,37 @@ export default function App() {
       ...value, slashCommands: undefined, slashCommandsError: undefined
     }])));
   }
+
+  function selectTask(id: string) {
+    performChatNavigation(id, {
+      dismissSettings: () => { if (settingsOpen) closeSettings(); },
+      abandonDraft: () => {
+        draftEpoch.current += 1;
+        slashDraftPromise.current = undefined;
+        setDraft(undefined);
+        setComposerTransfer(undefined);
+      },
+      selectTask: (taskId) => {
+        selectedTaskRef.current = taskId;
+        setSelectedTaskId(taskId);
+      }
+    });
+  }
+  selectTaskRef.current = selectTask;
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    const consume = () => {
+      void api.takeMenuNavigation()
+        .then((taskId) => { if (taskId) selectTaskRef.current(taskId); })
+        .catch((reason) => setGlobalError(String(reason)));
+    };
+    void listen<{ taskId: string }>("native-chat-navigation", consume).then((stop) => {
+      unlisten = stop;
+      consume();
+    });
+    return () => unlisten?.();
+  }, []);
 
   useEffect(() => { selectedTaskRef.current = selectedTaskId; }, [selectedTaskId]);
   useEffect(() => {
@@ -606,6 +639,8 @@ export default function App() {
         } else if (payload.state === "idle" || payload.state === "interrupted") {
           patchRuntime(taskId, { activeRun: undefined, activity: undefined, liveToolText: {}, liveToolDetails: {} });
         }
+      } else if (payload.type === "run_finished") {
+        // The native menu owns recent-run outcomes; the transcript already reflects the result.
       } else if (payload.type === "activity") {
         patchRuntime(taskId, { activity: payload.event });
         const callId = payload.detail?.toolCallId;
@@ -664,6 +699,8 @@ export default function App() {
         });
       } else if (payload.type === "extension_ui_request") {
         setExtensionRequests((current) => [...current, payload]);
+      } else if (payload.type === "extension_ui_resolved") {
+        setExtensionRequests((current) => withoutResolvedDialog(current, payload.requestId));
       } else if (payload.type === "extension_notice") {
         appendNotice(taskId, { message: payload.message, level: payload.level });
       } else if (payload.type === "extensions_loaded") {
@@ -1921,7 +1958,7 @@ export default function App() {
         archivedOpen={archivedOpen}
         pendingDialogTaskIds={pendingDialogTaskIds}
         collapsedProjectIds={collapsedProjects}
-        onSelectTask={(id) => { draftEpoch.current += 1; slashDraftPromise.current = undefined; selectedTaskRef.current = id; setDraft(undefined); setComposerTransfer(undefined); setSelectedTaskId(id); }}
+        onSelectTask={selectTask}
         onNewChat={(project) => openDraft(project?.id ?? null)}
         onNewDraft={() => openDraft()}
         onAddProject={() => void addProject()}

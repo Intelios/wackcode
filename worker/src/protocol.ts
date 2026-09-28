@@ -832,6 +832,7 @@ export type ExtensionUIRequest =
     };
 
 export type WorkerOutput =
+  | { type: "usage_record"; taskId: string; record: import("./usage.js").UsageRecord }
   | { type: "title_result"; taskId: string; attemptId: string; title?: string }
   | { type: "response"; taskId?: string; id: string; success: true; result?: unknown }
   | { type: "response"; taskId?: string; id: string; success: false; error: string }

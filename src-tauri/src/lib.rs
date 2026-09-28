@@ -19,6 +19,7 @@ mod subscriptions;
 mod terminal;
 mod window_state;
 mod worker;
+mod usage;
 
 use storage::MetadataState;
 use tauri::Manager;
@@ -30,6 +31,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(WorkerState::default())
+        .manage(usage::UsageState::default())
         .manage(browser::BrowserManager::default())
         .manage(worker::SelectedTask::default())
         .manage(worker::WorkerActivity::default())
@@ -47,6 +49,7 @@ pub fn run() {
                 .map_err(|_| "Metadata lock was poisoned".to_string())
                 .map(|data| (data.appearance.clone(), data.window))?;
             app.manage(state);
+            usage::start_retry(app.handle().clone());
             menu_bar::setup(app)?;
             // The window is created hidden and transparent: paint it before it first appears.
             glass::apply(
@@ -93,6 +96,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap,
+            usage::usage_status,
+            usage::set_usage_recording,
             commands::save_provider,
             commands::delete_provider,
             commands::discover_models,

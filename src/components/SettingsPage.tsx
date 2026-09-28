@@ -5,6 +5,7 @@ import { BROWSER_TOOL_NAMES, WEB_FETCH_TOOL_NAME, groupTools } from "../tool-uti
 import type { ApiFormat, AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CommandsConfig, CustomProviderRecord, McpConfig, ModelRecord, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ThinkingLevel, ToolCatalogEntry } from "../types";
 import { Icon, type IconName } from "./Icons";
 import { CommandsSection, type SlashCommandActions } from "./CommandsSection";
+import { IntegrationsSection } from "./IntegrationsSection";
 import { McpSection, type McpActions } from "./McpSection";
 import { PackagesSection, type PackageActions } from "./PackagesSection";
 import { PromptsSection } from "./PromptsSection";
@@ -46,7 +47,7 @@ const COMMAND_ACTIONS: Omit<SlashCommandActions, "onChanged"> = {
 let nextModelCardKey = 0;
 const newModelCardKeys = (count: number) => Array.from({ length: count }, () => ++nextModelCardKey);
 
-type SectionId = "providers" | "packages" | "skills" | "commands" | "tools" | "mcp" | "appearance" | "prompts" | "subagents";
+type SectionId = "providers" | "packages" | "skills" | "commands" | "tools" | "mcp" | "appearance" | "prompts" | "subagents" | "integrations";
 
 interface Section {
   id: SectionId;
@@ -56,6 +57,7 @@ interface Section {
 
 const SECTIONS: Section[] = [
   { id: "providers", label: "Providers", icon: "key" },
+  { id: "integrations", label: "Integrations", icon: "plug" },
   { id: "packages", label: "Packages", icon: "spark" },
   { id: "skills", label: "Skills", icon: "book" },
   { id: "commands", label: "Commands", icon: "slash" },
@@ -241,6 +243,7 @@ export function SettingsPage({
             catalogLoading={catalogLoading}
             catalogError={catalogError}
           />)}
+        {section === "integrations" && <IntegrationsSection />}
         {section === "packages" && (
           <PackagesSection
             packages={packages}

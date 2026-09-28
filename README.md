@@ -1,5 +1,24 @@
 # WackCode
 
+## TokenTrail
+
+Usage recording is enabled by default in **Settings > Integrations > TokenTrail**.
+TokenTrail discovers the local usage-only ledger automatically and refreshes every 30 seconds,
+including history recorded while TokenTrail was closed. The ledger lives at
+`~/Library/Application Support/com.wackcode.desktop/usage/v1/` and is retained indefinitely,
+independently of deleted chats. Disabling recording preserves existing history but does not
+backfill the disabled interval or chats from before this integration.
+
+Records contain token counts, model/provider identity, project/workspace paths, opaque chat
+and request IDs, timing, purpose, and outcome. They never contain prompts, responses, chat
+titles, credentials, endpoint URLs, or tool arguments. Chat, sub-agents, titles, compaction,
+branch summaries, goal verification, and commit messages are included. TokenTrail calculates
+API-equivalent cost estimates, not actual subscription spend. Missing provider usage stays
+unknown; extension-owned requests and usage lost before crash delivery cannot be recovered.
+Recording errors and dropped retry records are visible in Integrations; failed writes retry
+with a bounded in-memory queue, which does not survive quitting. See the
+[v1 contract](docs/wackcode-usage-v1.md).
+
 WackCode is a local macOS desktop interface for the Pi coding agent, built with Tauri 2, React, TypeScript, Rust, and `@earendil-works/pi-coding-agent` 0.86.1.
 
 It supports named OpenAI-compatible connections and subscription sign-in through Pi for OpenAI Codex (ChatGPT Plus/Pro), GitHub Copilot, Anthropic, xAI, Meta, and Kimi For Coding. API key connections retain explicit model limits, reasoning mappings, and a per-model Vision switch. Settings can suggest those values from Pi's bundled model catalogue when you search by name or ID; you choose a suggestion, review it, and save. It also supports image attachments (paste, drop, or pick PNG, JPEG, GIF, or WebP files for models with Vision on), concurrent task workers (an idle chat's worker stops after 15 minutes and starts again on demand), persistent Pi sessions, optional Git worktrees, and Git changes review and publishing. Chats open as drafts with a project selector and a Local/Worktree toggle, and can also run without a project in a per-chat scratch folder inside WackCode's application-data directory. Archiving a chat (the row's hover button, or the chat menu) removes it from the sidebar's project groups; the archive tile in the sidebar footer then opens a dedicated Archived view that replaces the chat list — every archived chat across projects, newest-archived first, each row showing its title, how long it has been archived, and its project, with buttons to unarchive it back into the normal list or delete it for good, and clicking a row opens the chat for a look before deciding.

@@ -1125,6 +1125,12 @@ fn handle_worker_line(
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    if event_type == "usage_record" {
+        if let Some(record) = value.get("record") {
+            crate::usage::record(app, task_id, record.clone());
+        }
+        return;
+    }
     if event_type == "browser_cancel" {
         if let Some(request_id) = value.get("requestId").and_then(Value::as_str) {
             app.state::<crate::browser::BrowserManager>()

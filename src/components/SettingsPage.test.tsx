@@ -179,6 +179,7 @@ describe("SettingsPage sidebar navigation", () => {
       "Entrim AI",
       "Test",
       "New connection",
+      "Integrations",
       "Packages",
       "Skills",
       "Commands",

@@ -51,6 +51,7 @@ type SnapshotView = {
 };
 
 interface Output {
+  record?: import("./usage.js").UsageRecord;
   type: string;
   attemptId?: string;
   title?: string;
@@ -596,6 +597,7 @@ describe("Pi worker integration", () => {
     const result = await worker.waitFor((output) => output.type === "response" && output.id === id);
     expect(result.success).toBe(true);
     expect(result.result).toBe("Summarize staged changes");
+    expect(worker.outputs.filter((o) => o.type === "usage_record").map((o) => o.record?.purpose)).toEqual(["commit_message"]);
     expect(provider.requests).toHaveLength(1);
     expect(provider.requests[0].body.tools).toBeUndefined();
     expect(provider.requests[0].text).toContain("+new text");
@@ -632,6 +634,11 @@ describe("Pi worker integration", () => {
     worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "title-second", message: "Follow up" });
     await worker.waitFor((output) => output.type === "run_state" && output.runId === "title-second" && output.state === "idle");
     expect(provider.requests.filter((request) => request.authorization === "Bearer title-secret")).toHaveLength(1);
+    const usage = worker.outputs.filter((o) => o.type === "usage_record").map((o) => o.record!);
+    expect(usage.filter((r) => r.purpose === "title")).toHaveLength(1);
+    expect(usage.filter((r) => r.purpose === "chat")).toHaveLength(3);
+    expect(usage).toHaveLength(provider.requests.length);
+    expect(new Set(usage.map((r) => r.id)).size).toBe(usage.length);
   });
 
   it("reports a failed title request once without retrying or failing the chat", async () => {
@@ -2401,6 +2408,11 @@ describe("sub-agents", () => {
 
     // The children's usage is part of the chat's totals: two parent requests and two child ones.
     expect(worker.view?.stats?.tokens.input).toBeGreaterThanOrEqual(96);
+    const records = worker.outputs.filter((o) => o.type === "usage_record").map((o) => o.record!);
+    expect(records.filter((r) => r.purpose === "subagent")).toHaveLength(2);
+    expect(records.filter((r) => r.purpose === "chat")).toHaveLength(2);
+    expect(records.filter((r) => r.subagent_id)).toHaveLength(2);
+    expect(records).toHaveLength(provider.requests.length);
   });
 
   it("runs readers and editors concurrently and streams each child independently", async () => {
@@ -3005,6 +3017,7 @@ describe("message queueing", () => {
     // call carries no tools and the continuation re-states the gap and next action.
     const verifierRequests = provider.requests.filter((request) => request.text.startsWith("<goal>"));
     expect(verifierRequests).toHaveLength(2);
+    expect(worker.outputs.filter((o) => o.record?.purpose === "goal_verification")).toHaveLength(2);
     for (const request of verifierRequests) expect(request.body.tools).toBeUndefined();
     const continuation = provider.requests.find((request) => request.text.startsWith("Goal continuation"));
     expect(continuation?.text).toContain("write the file");

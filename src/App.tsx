@@ -570,6 +570,8 @@ export default function App() {
         }
         return;
       }
+      // Usage is persisted by Rust, never accumulated in transcript state.
+      if (payload.type === "usage_record") return;
       if (payload.type === "title_changed") {
         patchTask(taskId, { name: payload.name });
         return;

@@ -747,6 +747,8 @@ pub struct AppData {
     pub subagents: SubagentConfig,
     #[serde(default)]
     pub auto_title: AutoTitleConfig,
+    #[serde(default = "record_usage_default")]
+    pub record_usage: bool,
     #[serde(default)]
     pub appearance: AppearanceConfig,
     #[serde(default)]
@@ -761,6 +763,8 @@ pub struct AppData {
     pub window: Option<WindowState>,
 }
 
+fn record_usage_default() -> bool { true }
+
 impl Default for AppData {
     fn default() -> Self {
         Self {
@@ -774,6 +778,7 @@ impl Default for AppData {
             packages: Vec::new(),
             subagents: SubagentConfig::default(),
             auto_title: AutoTitleConfig::default(),
+            record_usage: true,
             appearance: AppearanceConfig::default(),
             prompts: PromptConfig::default(),
             mcp: McpConfig::default(),

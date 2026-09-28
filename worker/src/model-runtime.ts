@@ -5,6 +5,7 @@
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { instrumentUsage } from "./usage.js";
 import { THINKING_LEVELS, type WorkerModel, type WorkerProvider } from "./protocol.js";
 
 type PiModule = typeof import("@earendil-works/pi-coding-agent");
@@ -74,6 +75,7 @@ export async function createModelRuntime(
     if (!credential.apiKey) throw new Error("This connection has no API key");
     await runtime.setRuntimeApiKey(provider.id, credential.apiKey);
   }
+  instrumentUsage(runtime);
   return runtime;
 }
 

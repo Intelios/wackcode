@@ -9,6 +9,7 @@
  * from the environment on purpose.
  */
 import { join } from "node:path";
+import { trackSession } from "./usage.js";
 import type { Usage } from "@earendil-works/pi-ai";
 import type { SubagentOutcome, SubagentRunRequest } from "./builtin/host.js";
 import { addUsage, emptyUsage } from "./builtin/subagents/details.js";
@@ -184,6 +185,7 @@ export class SubagentRunner {
       resourceLoader,
     });
 
+    trackSession(child, `${request.toolCallId}:${request.index}`);
     this.live.add(child);
     transcript?.started(() => child.messages as unknown[]);
     const unsubscribe = child.subscribe((event) => {

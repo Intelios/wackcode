@@ -685,6 +685,7 @@ export interface AppData {
   packages: PackageRecord[];
   subagents: SubagentConfig;
   autoTitle: AutoTitleConfig;
+  recordUsage?: boolean;
   appearance: AppearanceConfig;
   prompts: PromptConfig;
   mcp: McpConfig;
@@ -929,7 +930,18 @@ export interface BrowserState {
   popup: boolean;
 }
 
+export interface UsageRecord {
+  v: 1; id: string; ts: number; duration_ms: number; provider: string; model: string;
+  purpose: "chat" | "subagent" | "title" | "compaction" | "branch_summary" | "goal_verification" | "commit_message";
+  subagent_id?: string; outcome: "completed" | "failed" | "cancelled";
+  tokens: { input: number; output: number; cache_read: number; cache_write: number } | null;
+}
+export interface UsageStatus {
+  enabled: boolean; path: string; hasHistory: boolean; error: string | null; pending: number; dropped: number; lastWritten: number | null;
+}
+
 export type WorkerEvent =
+  | { type: "usage_record"; taskId: string; record: UsageRecord }
   | { type: "title_changed"; taskId: string; name: string }
   | { type: "ready" | "snapshot"; taskId: string; snapshot: SessionSnapshot }
   | { type: "snapshot_delta"; taskId: string; delta: SnapshotDelta }

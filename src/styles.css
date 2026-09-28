@@ -1279,6 +1279,11 @@ button.compact.primary:hover:not(:disabled) { background: var(--wc-accent-hover)
 .subscription-model-list { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 6px; }
 .subscription-model-list li { display: flex; justify-content: space-between; gap: 12px; padding: 8px 10px; background: var(--surface); border-radius: 6px; font-size: 12px; }
 .subscription-model-list span { color: var(--text-dim); overflow-wrap: anywhere; }
+.integrations-section { padding: 24px; width: 100%; max-width: 720px; overflow: auto; }
+.integration-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.integration-heading h3 { margin: 0; font-size: 18px; }
+.integrations-section p { margin: 16px 0; overflow-wrap: anywhere; color: var(--text-soft); }
+.integrations-section [role="alert"] { color: var(--text); }
 .settings-head { height: 30px; margin: -8px 0 2px; padding: 0 4px; display: flex; align-items: center; }
 .settings-back-button {
   display: inline-flex;

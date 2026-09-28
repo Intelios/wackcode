@@ -3,9 +3,10 @@ import { api } from "../api";
 import { agentName } from "../agentName";
 import { applyBuiltinModelSuggestion, mergeDiscoveredModels, modelIsReady, searchBuiltinModels } from "../model-utils";
 import { BROWSER_TOOL_NAMES, WEB_FETCH_TOOL_NAME, groupTools } from "../tool-utils";
-import type { ApiFormat, AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CommandsConfig, ComputerUseConfig, CustomProviderRecord, McpConfig, ModelRecord, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ThinkingLevel, ToolCatalogEntry } from "../types";
+import type { ApiFormat, AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CommandsConfig, ComputerUseConfig, CustomProviderRecord, McpConfig, MemoryConfig, ModelRecord, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ThinkingLevel, ToolCatalogEntry } from "../types";
 import { Icon, type IconName } from "./Icons";
 import { CommandsSection, type SlashCommandActions } from "./CommandsSection";
+import { MemorySection, type MemoryActions } from "./MemorySection";
 import { ComputerUseSection, type ComputerUseActions } from "./ComputerUseSection";
 import { ComputerUseSetupDialog } from "./ComputerUseSetupDialog";
 import { IntegrationsSection } from "./IntegrationsSection";
@@ -47,6 +48,16 @@ const COMMAND_ACTIONS: Omit<SlashCommandActions, "onChanged"> = {
   onSetEnabled: api.setSlashCommandEnabled,
   onReveal: api.revealPath
 };
+/** Settings › Memory talks to Rust directly, like Commands; the master switch comes from App. */
+const MEMORY_ACTIONS: Omit<MemoryActions, "onSetEnabled"> = {
+  onList: api.listMemories,
+  onRead: api.readMemory,
+  onSave: api.saveMemory,
+  onDelete: api.deleteMemory,
+  onSetProjectEnabled: api.setProjectMemoryEnabled,
+  onReveal: api.revealPath,
+  onFindFile: api.findMemoryInFinder
+};
 /** Settings › Computer use and its setup dialog talk to Rust directly, like Skills. */
 const COMPUTER_USE_ACTIONS: ComputerUseActions = {
   onStatus: api.computerUseStatus,
@@ -60,7 +71,7 @@ const COMPUTER_USE_OFF: ComputerUseConfig = { enabled: false, neverAllow: [] };
 let nextModelCardKey = 0;
 const newModelCardKeys = (count: number) => Array.from({ length: count }, () => ++nextModelCardKey);
 
-type SectionId = "providers" | "packages" | "skills" | "commands" | "tools" | "mcp" | "appearance" | "prompts" | "subagents" | "computer_use" | "integrations";
+type SectionId = "providers" | "packages" | "skills" | "commands" | "memory" | "tools" | "mcp" | "appearance" | "prompts" | "subagents" | "computer_use" | "integrations";
 
 interface Section {
   id: SectionId;
@@ -74,6 +85,7 @@ const SECTIONS: Section[] = [
   { id: "packages", label: "Packages", icon: "spark" },
   { id: "skills", label: "Skills", icon: "book" },
   { id: "commands", label: "Commands", icon: "slash" },
+  { id: "memory", label: "Memory", icon: "memory" },
   { id: "tools", label: "Tools", icon: "wrench" },
   { id: "mcp", label: "MCP servers", icon: "plug" },
   // Only listed while the built-in is switched on (Settings → Packages). Auto titles lives
@@ -118,6 +130,8 @@ interface Props extends PackageActions {
   onSetPrompts: (config: PromptConfig) => Promise<void>;
   /** Commands-section saves report the config back so `data.commands` stays current. */
   onCommandsChanged: (config: CommandsConfig) => void;
+  memory: MemoryConfig;
+  onSetMemory: (config: MemoryConfig) => Promise<void>;
   mcp?: McpConfig;
   /** Settings › MCP servers is listed once these are wired. */
   mcpActions?: McpActions;
@@ -126,7 +140,7 @@ interface Props extends PackageActions {
 export function SettingsPage({
   providers, packages, toolCatalog, disabledTools, appDataPath,
   onClose, onSave, onDelete, onConnectSubscription, onSignOutSubscription, connectedSubscriptionId, onSetDisabledTools,
-  subagents, onSetSubagents, computerUse = COMPUTER_USE_OFF, computerUseSupported = false, onSetComputerUse, autoTitle, onSetAutoTitle, appearance, glassSupported, onSetAppearance, onPreviewAppearance, backgroundImageUrl, onChooseBackgroundImage, onRemoveBackgroundImage, prompts, onSetPrompts, onCommandsChanged, mcp, mcpActions, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
+  subagents, onSetSubagents, computerUse = COMPUTER_USE_OFF, computerUseSupported = false, onSetComputerUse, autoTitle, onSetAutoTitle, appearance, glassSupported, onSetAppearance, onPreviewAppearance, backgroundImageUrl, onChooseBackgroundImage, onRemoveBackgroundImage, prompts, onSetPrompts, onCommandsChanged, memory, onSetMemory, mcp, mcpActions, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
 }: Props) {
   const [chosenSection, setSection] = useState<SectionId>("providers");
   const [computerSetup, setComputerSetup] = useState(false);
@@ -270,6 +284,8 @@ export function SettingsPage({
           <PackagesSection
             packages={packages}
             subagentsEnabled={subagents.enabled}
+            memoryEnabled={memory.enabled}
+            onConfigureMemory={() => setSection("memory")}
             webFetchEnabled={!disabledTools.includes(WEB_FETCH_TOOL_NAME)}
             browserEnabled={BROWSER_TOOL_NAMES.every((name) => !disabledTools.includes(name))}
             computerUseEnabled={computerUse.enabled}
@@ -318,6 +334,12 @@ export function SettingsPage({
         )}
         {section === "commands" && (
           <CommandsSection {...COMMAND_ACTIONS} onChanged={onCommandsChanged} />
+        )}
+        {section === "memory" && (
+          <MemorySection
+            {...MEMORY_ACTIONS}
+            onSetEnabled={(enabled) => onSetMemory({ ...memory, enabled })}
+          />
         )}
         {section === "tools" && (
           <ToolsSection catalog={toolCatalog} disabled={disabledTools} onSetDisabled={onSetDisabledTools} />

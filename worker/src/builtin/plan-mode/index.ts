@@ -13,6 +13,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { PlanState, TaskMode } from "../../protocol.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../ask-user-question.js";
 import type { BuiltinHost } from "../host.js";
+import { MEMORY_TOOL_NAMES } from "../memory/index.js";
 import { TODO_TOOL_NAME } from "../todo/types.js";
 import { WEB_FETCH_TOOL_NAME } from "../web-fetch/index.js";
 import { BROWSER_ACT_TOOL_NAME, BROWSER_CONSOLE_TOOL_NAME, BROWSER_OPEN_TOOL_NAME, BROWSER_SCREENSHOT_TOOL_NAME, BROWSER_SNAPSHOT_TOOL_NAME } from "../browser.js";
@@ -163,7 +164,9 @@ export function createPlanModeExtension(host: BuiltinHost, mcpTools?: PlanModeMc
       // list, never the workspace, so tracking a task list during planning stays on the
       // right side of the read-only policy. `subagent` refuses any agent that can edit files
       // while Plan mode is on, and read-only children run under this same shell policy.
-      // `web_fetch` only reads a public page. Computer use may list apps and look at a window
+      // `web_fetch` only reads a public page. Memory notes live outside the workspace, and a
+      // correction heard during planning is exactly what should outlive the session, so the
+      // memory tools stay available. Computer use may list apps and look at a window
       // the user has allowed (the access card is theirs to answer), never open or operate one.
       const helper =
         event.toolName === ASK_USER_QUESTION_TOOL_NAME ||
@@ -171,6 +174,7 @@ export function createPlanModeExtension(host: BuiltinHost, mcpTools?: PlanModeMc
         event.toolName === TODO_TOOL_NAME ||
         event.toolName === SUBAGENT_TOOL_NAME ||
         event.toolName === WEB_FETCH_TOOL_NAME ||
+        (MEMORY_TOOL_NAMES as readonly string[]).includes(event.toolName) ||
         event.toolName === BROWSER_SNAPSHOT_TOOL_NAME ||
         event.toolName === BROWSER_SCREENSHOT_TOOL_NAME ||
         event.toolName === BROWSER_CONSOLE_TOOL_NAME ||

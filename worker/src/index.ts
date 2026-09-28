@@ -648,12 +648,13 @@ function toolCatalog(): ToolCatalogEntry[] {
 // tools contributed by a newly installed package on by default. Built-in extension tools are
 // exempt: the denylist is never offered for them and a disabled plan_mode_complete would
 // silently break Plan mode. Two exceptions: web_fetch is switched off through this same
-// denylist (`SWITCHABLE_BUILTIN_TOOLS`, from its Built-ins card), and sub-agents and computer use,
-// which have their own settings, say which of their tools must stay out while off. MCP tools have their own
+// denylist (`SWITCHABLE_BUILTIN_TOOLS`, from its Built-ins card), and sub-agents, memory and
+// computer use, which have their own settings, say which of their tools must stay out while
+// off. MCP tools have their own
 // switches too (Settings › MCP servers), and stay out while their server is off or unreachable.
 function applyDisabledTools(): void {
   if (!session) return;
-  const inactive = new Set([...builtins.subagents.inactiveTools(), ...builtins.mcp.inactiveTools(), ...builtins.computerUse.inactiveTools()]);
+  const inactive = new Set([...builtins.subagents.inactiveTools(), ...builtins.mcp.inactiveTools(), ...builtins.computerUse.inactiveTools(), ...builtins.memory.inactiveTools()]);
   session.setActiveToolsByName(
     toolCatalog()
       .filter((tool) => tool.available && !inactive.has(tool.name))
@@ -1123,9 +1124,11 @@ async function prepareImages(images: ImageContent[] | undefined): Promise<ImageC
  * - The user's own skill folders (Settings › Skills) sit ahead of the package skills.
  * - The user's own commands (Settings › Commands) sit ahead of the package prompt templates, and
  *   a switched-off template is dropped before Pi's `/name` expansion can match it.
+ * - This project's memory index is appended to the system prompt. It is served from a snapshot
+ *   the worker refreshes between runs, so a save never rewrites the prompt mid-run.
  *
  * Pi reads the wrapper on every system-prompt rebuild and for `/skill:name`, so `set_prompts`,
- * `set_skills` and `set_commands` apply on the next turn without a respawn.
+ * `set_skills`, `set_commands` and `set_memory` apply on the next turn without a respawn.
  */
 function withAppLayers(loader: ResourceLoader): ResourceLoader {
   return {
@@ -1141,8 +1144,16 @@ function withAppLayers(loader: ResourceLoader): ResourceLoader {
     getAgentsFiles: () => loader.getAgentsFiles(),
     getSystemPrompt: () => promptOverrides().systemPrompt ?? loader.getSystemPrompt(),
     getSystemPromptSource: () => loader.getSystemPromptSource(),
-    getAppendSystemPrompt: () => loader.getAppendSystemPrompt(),
-    getAppendSystemPromptSources: () => loader.getAppendSystemPromptSources(),
+    getAppendSystemPrompt: () => {
+      const memory = builtins.memory.appendPrompt();
+      return memory ? [...loader.getAppendSystemPrompt(), memory] : loader.getAppendSystemPrompt();
+    },
+    getAppendSystemPromptSources: () => {
+      const path = builtins.memory.sourcePath();
+      const memory = builtins.memory.appendPrompt();
+      const base = loader.getAppendSystemPromptSources();
+      return path && memory ? [...base, { path }] : base;
+    },
     extendResources: (paths) => loader.extendResources(paths),
     reload: (options) => loader.reload(options)
   };
@@ -1218,6 +1229,9 @@ async function initialize(command: InitCommand): Promise<void> {
   refreshUserSkills();
   userCommandsPayload = command.commands;
   refreshUserCommands();
+  // Same timing: the first system prompt already carries this project's memory index.
+  builtins.memory.configure(command.memory ?? null);
+  builtins.memory.refresh();
 
   let sessionStartEvent: { type: "session_start"; reason: "fork"; previousSessionFile: string } | undefined;
   let sessionManager: ReturnType<PiModule["SessionManager"]["create"]>;
@@ -1532,10 +1546,12 @@ async function runPrompt(
     // nothing of this prompt has been recorded.
     if (!stopRequested) {
       // Skills and commands added, edited or removed on disk since the last run apply from this
-      // message.
+      // message. So do memory notes: Settings edits and the agent's own saves from an earlier
+      // run land in the index here, keeping the prompt stable for the run in flight.
       const skillsChanged = refreshUserSkills();
       const commandsChanged = refreshUserCommands();
-      if (skillsChanged || commandsChanged) applyDisabledTools();
+      const memoryChanged = builtins.memory.refresh();
+      if (skillsChanged || commandsChanged || memoryChanged) applyDisabledTools();
       recordCheckpoint(checkpoint);
       // A null marker prevents an edited version from inheriting the command marker that sits
       // on the shared branch immediately above it.
@@ -1983,6 +1999,14 @@ async function handle(command: WorkerCommand): Promise<void> {
       userCommandsPayload = command.commands;
       if (refreshUserCommands()) applyDisabledTools();
       if (commandCatalog.length) refreshCommandCatalog();
+    } else if (command.type === "set_memory") {
+      // Queued like set_skills: the tools and the index never change under a running call. The
+      // re-apply is unconditional: a switch with an empty index changes only inactiveTools, not
+      // the served text, so gating on refresh() would leave the tool set stale.
+      builtins.memory.configure(command.memory ?? null);
+      builtins.memory.refresh();
+      applyDisabledTools();
+      emitSnapshot();
     } else if (command.type === "shutdown") {
       cancelPendingNativeRequests(true);
       await subagentRunner?.abortAll();

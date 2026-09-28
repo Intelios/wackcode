@@ -643,6 +643,28 @@ pub struct AutoTitleConfig {
     pub model_id: Option<String>,
 }
 
+/// Project memory (Settings › Memory, see `memory.rs`). On by default; each project can be
+/// switched off on its own. The notes themselves are files under `<app data>/memory/`, never
+/// records here.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryConfig {
+    #[serde(default = "memory_enabled_default")]
+    pub enabled: bool,
+    /// Memory keys (the hash suffix of each `<app data>/memory/<name>-<key>` directory) the
+    /// user switched off, on top of the global switch.
+    #[serde(default)]
+    pub disabled_projects: Vec<String>,
+}
+
+fn memory_enabled_default() -> bool { true }
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self { enabled: true, disabled_projects: Vec::new() }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectRecord {
@@ -773,6 +795,8 @@ pub struct AppData {
     pub commands: CommandsConfig,
     #[serde(default)]
     pub computer_use: ComputerUseConfig,
+    #[serde(default)]
+    pub memory: MemoryConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<WindowState>,
 }
@@ -799,6 +823,7 @@ impl Default for AppData {
             skills: SkillsConfig::default(),
             commands: CommandsConfig::default(),
             computer_use: ComputerUseConfig::default(),
+            memory: MemoryConfig::default(),
             window: None,
         }
     }
@@ -998,6 +1023,78 @@ pub struct SaveSlashCommandInput {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SlashCommandDocument {
+    pub body: String,
+}
+
+/// One project's memory directory as Settings lists it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryProject {
+    /// The hash suffix of the directory name; what the per-project switch stores.
+    pub key: String,
+    /// The project's name when a known project maps to this directory, else the folder name.
+    pub name: String,
+    /// The repository or folder the memory belongs to, from the directory's `origin.json`.
+    pub path: String,
+    /// `<app data>/memory/<name>-<key>`.
+    pub dir: String,
+    pub entries: Vec<MemoryEntry>,
+    /// The global switch is on and this project hasn't been switched off.
+    pub enabled: bool,
+}
+
+/// One note file, parsed for the list. Files without a title stay invisible (the worker's
+/// index skips them too); the trash folder never appears.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryEntry {
+    /// Filename without `.md` — the id `memory_recall` takes.
+    pub name: String,
+    pub file_path: String,
+    /// user / feedback / project / reference.
+    pub kind: String,
+    pub title: String,
+    pub description: String,
+    /// ISO 8601, when the note was last written.
+    pub modified: Option<String>,
+}
+
+/// Everything Settings › Memory lists, from a fresh scan.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoriesOverview {
+    pub enabled: bool,
+    pub projects: Vec<MemoryProject>,
+}
+
+/// A change's result: the fresh list and the config as saved.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoriesChange {
+    pub overview: MemoriesOverview,
+    pub config: MemoryConfig,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveMemoryInput {
+    /// The note file being rewritten; absent creates a new one.
+    pub path: Option<String>,
+    /// The project's memory directory, where a new note is created.
+    pub dir: String,
+    pub name: String,
+    /// user / feedback / project / reference.
+    pub memory_type: String,
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    pub body: String,
+}
+
+/// What the note editor needs beyond the list: the note's body.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryDocument {
     pub body: String,
 }
 

@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAskUserQuestionExtension, normalizeAskQuestionsParams } from "./builtin/ask-user-question.js";
 import { createBrowserExtension } from "./builtin/browser.js";
@@ -6,6 +9,7 @@ import { createGoalExtension } from "./builtin/goal/index.js";
 import { GOAL_ENTRY_TYPE, NO_PROGRESS_LIMIT, restoreGoalState } from "./builtin/goal/state.js";
 import type { GoalVerdict } from "./builtin/goal/verify.js";
 import type { BuiltinHost } from "./builtin/host.js";
+import { createMemoryExtension } from "./builtin/memory/index.js";
 import { setPromptOverrides } from "./prompt-overrides.js";
 import type { QuestionAnswer } from "./protocol.js";
 import {
@@ -854,5 +858,103 @@ describe("browser built-in", () => {
     const image = await available.tools.get("browser_screenshot")!.execute("call", {}, undefined);
     expect(image.content).toContainEqual({ type: "image", data: "cG5n", mimeType: "image/png" });
     expect(image.content[0]?.text).toContain("coordinate scale 2");
+  });
+});
+
+describe("memory built-in", () => {
+  type Tool = { name: string; execute: (id: string, params: unknown, signal: undefined) => Promise<never> };
+
+  function harness(root: string) {
+    const tools = new Map<string, Tool>();
+    const { factory, controller } = createMemoryExtension();
+    factory({ registerTool: (tool: Tool) => tools.set(tool.name, tool) } as never);
+    return { tools, controller };
+  }
+
+  function dir(): { root: string; cleanup: () => void } {
+    const root = mkdtempSync(join(tmpdir(), "wackcode-memory-"));
+    return { root, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  }
+
+  it("keeps its tools inactive until the host configures a project root", () => {
+    const { controller } = harness(dir().root);
+    expect(controller.inactiveTools()).toHaveLength(3);
+    expect(controller.appendPrompt()).toBeUndefined();
+    controller.configure({ root: "/tmp/nowhere", enabled: true });
+    expect(controller.inactiveTools()).toEqual([]);
+    expect(controller.refresh()).toBe(false);
+    expect(controller.appendPrompt()).toBeUndefined();
+  });
+
+  it("saves, indexes, recalls and forgets notes in the project's directory", async () => {
+    const { root, cleanup } = dir();
+    const { tools, controller } = harness(root);
+    controller.configure({ root, enabled: true });
+    const save = tools.get("memory_save")!;
+    const saved = await save.execute("c1", {
+      type: "feedback",
+      title: "Run worker tests",
+      description: "Protocol edits need pnpm test:worker",
+      body: "Any protocol.ts change needs pnpm test:worker."
+    }, undefined);
+    expect(saved.content[0].text).toContain("feedback_run-worker-tests");
+    expect(saved.details).toMatchObject({ kind: "save", type: "feedback" });
+    // The served index changes only on refresh — a save never rewrites the prompt mid-run.
+    expect(controller.appendPrompt()).toBeUndefined();
+    expect(controller.refresh()).toBe(true);
+    expect(controller.appendPrompt()).toContain("(name: feedback_run-worker-tests)");
+
+    const recalled = await tools.get("memory_recall")!.execute("c2", { names: ["feedback_run-worker-tests"] }, undefined);
+    expect(recalled.content[0].text).toContain("pnpm test:worker");
+    expect(recalled.details).toMatchObject({ names: ["feedback_run-worker-tests"] });
+
+    await tools.get("memory_forget")!.execute("c3", { name: "feedback_run-worker-tests" }, undefined);
+    expect(existsSync(join(root, ".trash", "feedback_run-worker-tests.md"))).toBe(true);
+    expect(controller.refresh()).toBe(true);
+    expect(controller.appendPrompt()).toBeUndefined();
+    cleanup();
+  });
+
+  it("updates an existing note by name and suffixes slug collisions", async () => {
+    const { root, cleanup } = dir();
+    const { tools, controller } = harness(root);
+    controller.configure({ root, enabled: true });
+    const save = tools.get("memory_save")!;
+    await save.execute("c1", { type: "project", title: "Shipping checklist", description: "", body: "v1" }, undefined);
+    // Same title again, no name: a distinct note with a -2 suffix rather than an overwrite.
+    const collision = await save.execute("c2", { type: "project", title: "Shipping checklist", description: "", body: "v2" }, undefined);
+    expect(collision.content[0].text).toContain("project_shipping-checklist-2");
+    // Updating by name rewrites that note in place, title change and all.
+    const updated = await save.execute("c3", {
+      type: "project", title: "Renamed entirely", description: "", body: "new body", name: "project_shipping-checklist"
+    }, undefined);
+    expect(updated.content[0].text).toContain("Updated project_shipping-checklist");
+    expect(readFileSync(join(root, "project_shipping-checklist.md"), "utf-8")).toContain("new body");
+    expect(readFileSync(join(root, "project_shipping-checklist-2.md"), "utf-8")).toContain("v2");
+    cleanup();
+  });
+
+  it("refuses calls while memory is off, even if a run holds the tools", async () => {
+    const { root, cleanup } = dir();
+    const { tools } = harness(root);
+    await expect(tools.get("memory_save")!.execute("c1", { type: "user", title: "x", description: "", body: "y" }, undefined))
+      .rejects.toThrow("switched off");
+    cleanup();
+  });
+
+  it("refuses note names that are not plain filenames", async () => {
+    const { root, cleanup } = dir();
+    const { tools, controller } = harness(root);
+    controller.configure({ root, enabled: true });
+    const save = tools.get("memory_save")!;
+    for (const name of ["../escape", "a/b", ".hidden", "Has Space", "UPPER"]) {
+      await expect(
+        save.execute("c", { type: "project", title: "t", description: "", body: "b", name }, undefined)
+      ).rejects.toThrow("lowercase");
+    }
+    expect(readdirSync(root)).toEqual([]);
+    await expect(tools.get("memory_forget")!.execute("c", { name: "../escape" }, undefined))
+      .rejects.toThrow("No memory named '../escape'");
+    cleanup();
   });
 });

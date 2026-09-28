@@ -9,6 +9,8 @@ export const WEB_FETCH_TOOL_NAME = "web_fetch";
 export const BROWSER_TOOL_NAMES = ["browser_open", "browser_snapshot", "browser_act", "browser_screenshot", "browser_console"] as const;
 /** Computer use: its own setting (Settings › Packages), never the tool denylist. */
 export const COMPUTER_TOOL_NAMES = ["computer_apps", "computer_open", "computer_snapshot", "computer_screenshot", "computer_act"] as const;
+/** Memory: its own setting (Settings › Memory), never the tool denylist. */
+export const MEMORY_TOOL_NAMES = ["memory_save", "memory_recall", "memory_forget"] as const;
 
 /** An app as the model named it: a `.app` path shows as its name. */
 function appName(value: string): string {
@@ -156,6 +158,16 @@ export function summarizeTool(call: NormalizedBlock, result?: NormalizedBlock): 
       return { kind: "other", activeVerb: "Updating todos", doneVerb: "Todos updated", subject: str(toolArgs.subject) };
     case WEB_FETCH_TOOL_NAME:
       return { kind: "other", activeVerb: "Fetching", doneVerb: "Fetched", subject: displayUrl(str(toolArgs.url)) };
+    case "memory_save": {
+      const updated = typeof toolArgs.name === "string" && toolArgs.name.trim();
+      return { kind: "other", activeVerb: updated ? "Updating memory" : "Saving memory", doneVerb: updated ? "Updated memory" : "Saved memory", subject: str(toolArgs.title) };
+    }
+    case "memory_recall": {
+      const names = Array.isArray(toolArgs.names) ? toolArgs.names.map((name) => str(name)) : [];
+      return { kind: "other", activeVerb: "Recalling memory", doneVerb: "Recalled memory", subject: names.join(", ") };
+    }
+    case "memory_forget":
+      return { kind: "other", activeVerb: "Forgetting memory", doneVerb: "Forgot memory", subject: str(toolArgs.name) };
     case "computer_apps":
       return { kind: "other", activeVerb: "Listing apps", doneVerb: "Listed apps", subject: "" };
     case "computer_open":

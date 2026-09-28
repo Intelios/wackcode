@@ -18,6 +18,11 @@ import type {
   ImageContent,
   McpServerRecord,
   McpTestResult,
+  MemoriesChange,
+  MemoriesOverview,
+  MemoryConfig,
+  MemoryDocument,
+  SaveMemoryInput,
   NavigateTaskResult,
   PackageRecord,
   PackageSearchResult,
@@ -133,6 +138,17 @@ export const api = {
   deleteSlashCommand: (path: string) => invoke<SlashCommandsChange>("delete_slash_command", { path }),
   setSlashCommandEnabled: (key: string, enabled: boolean) =>
     invoke<SlashCommandsChange>("set_slash_command_enabled", { key, enabled }),
+  /** Settings › Memory: every project's notes and switches, from a fresh scan. */
+  listMemories: () => invoke<MemoriesOverview>("list_memories"),
+  readMemory: (path: string) => invoke<MemoryDocument>("read_memory", { path }),
+  saveMemory: (input: SaveMemoryInput) => invoke<MemoriesChange>("save_memory", { input }),
+  /** Moves the note's file to the Trash. */
+  deleteMemory: (path: string) => invoke<MemoriesChange>("delete_memory", { path }),
+  setMemoryConfig: (input: MemoryConfig) => invoke<MemoryConfig>("set_memory_config", { input }),
+  setProjectMemoryEnabled: (key: string, enabled: boolean) =>
+    invoke<MemoriesChange>("set_project_memory_enabled", { key, enabled }),
+  /** Shows one note selected in its project's memory folder (`open -R`). */
+  findMemoryInFinder: (path: string) => invoke<void>("find_memory_in_finder", { path }),
   trustPackage: (source: string) => invoke<PackageRecord[]>("trust_package", { input: { source, trusted: true } }),
   removePackage: (source: string) => invoke<PackageRecord[]>("remove_package", { source }),
   updatePackages: (source?: string) => invoke<PackageRecord[]>("update_packages", { source }),

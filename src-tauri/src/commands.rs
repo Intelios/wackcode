@@ -5,18 +5,19 @@ use crate::{
         CheckpointChange, CheckpointRef, CreateTaskInput, DiffComment, ExportPlanInput,
         ExtensionUiResponseInput, ForkTaskInput, GitChanges, GitGeneratedMessage, GitPrInfo,
         GitPublishInfo, ImageContent, InstallPackageInput, McpServerRecord, McpTestResult,
-        ModelRecord, NavigateResult, NavigateTaskInput, NavigateTaskResult, PackageRecord,
+        MemoriesChange, MemoriesOverview, MemoryConfig, MemoryDocument, ModelRecord,
+        NavigateResult, NavigateTaskInput, NavigateTaskResult, PackageRecord,
         PackageSearchResult, ProjectRecord, PromptConfig, PromptInput, ProviderKind,
         ProviderRecord, QueueMessageInput, QueuedMessages, ResendInput, RestoreCheckpointInput,
-        RestoreResult, SaveMcpServerInput, SaveProviderInput, SaveSkillInput,
-        SaveSlashCommandInput, SearchPackagesInput, SearchSkillPackagesInput,
+        RestoreResult, SaveMcpServerInput, SaveMemoryInput, SaveProviderInput,
+        SaveSkillInput, SaveSlashCommandInput, SearchPackagesInput, SearchSkillPackagesInput,
         SetPackageResourcesInput, SetTaskModeInput, SetToolConfigInput, SkillDocument,
         SkillFolderKind, SkillFolderRecord, SkillSearchPage, SkillsChange, SkillsOverview,
         SlashCommand, SlashCommandDocument, SlashCommandsChange, SlashCommandsOverview,
         SubagentConfig, SubagentWatchTarget, TaskMode, TaskRecord, TaskStatus, ToolConfig,
         WorkspaceFiles,
     },
-    skills, slash_commands,
+    memory, skills, slash_commands,
     storage::MetadataState,
     subagents, subscriptions, terminal,
     worker::{self, WorkerOptions},
@@ -1594,6 +1595,90 @@ pub async fn set_slash_command_enabled(
     }
     state.mutate(|data| slash_commands::set_disabled(&mut data.commands, &key, enabled))?;
     slash_commands_changed(&app, None).await
+}
+
+/// Every change to memory files or switches ends here: push the setting to running workers
+/// (each chat's own project directory) and report the fresh scan.
+async fn memory_changed(app: &AppHandle) -> Result<MemoriesChange, String> {
+    worker::broadcast_memory(app).await?;
+    let config = {
+        let state = app.state::<MetadataState>();
+        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        data.memory.clone()
+    };
+    memory::change(app, config)
+}
+
+/// Settings › Memory: every project's notes and switches, from a fresh scan.
+#[tauri::command]
+pub async fn list_memories(app: AppHandle) -> Result<MemoriesOverview, String> {
+    memory::overview(&app)
+}
+
+/// A note file's body, for the editor.
+#[tauri::command]
+pub fn read_memory(app: AppHandle, path: String) -> Result<MemoryDocument, String> {
+    memory::read_document(&memory::dir(&app)?, &path)
+}
+
+/// Create a note in a project's memory folder, or rewrite one already there.
+#[tauri::command]
+pub async fn save_memory(app: AppHandle, input: SaveMemoryInput) -> Result<MemoriesChange, String> {
+    let (name, kind, title, description, body) = memory::validated(&input)?;
+    let root = memory::dir(&app)?;
+    match input.path.as_deref() {
+        None => {
+            let dir = memory::project_dir(&input.dir, &root)?;
+            memory::create(&dir, &name, &kind, &title, &description, &body)?;
+        }
+        Some(path) => {
+            memory::update(&root, path, &name, &kind, &title, &description, &body)?;
+        }
+    }
+    memory_changed(&app).await
+}
+
+/// Move a note to the Trash.
+#[tauri::command]
+pub async fn delete_memory(app: AppHandle, path: String) -> Result<MemoriesChange, String> {
+    memory::delete(&memory::dir(&app)?, &path)?;
+    memory_changed(&app).await
+}
+
+/// Show one note in Finder, selected inside its project's memory folder.
+#[tauri::command]
+pub fn find_memory_in_finder(app: AppHandle, path: String) -> Result<(), String> {
+    // The guard also keeps `open` pointing only at a file WackCode itself listed.
+    let file = memory::findable_file(&memory::dir(&app)?, &path)?;
+    let status = Command::new("open").arg("-R").arg(&file).status().map_err(|error| error.to_string())?;
+    if status.success() { Ok(()) } else { Err("macOS could not reveal that memory.".into()) }
+}
+
+/// The master switch. Pushed to running workers, applied on their next turn.
+#[tauri::command]
+pub async fn set_memory_config(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    input: MemoryConfig,
+) -> Result<MemoryConfig, String> {
+    state.mutate(|data| {
+        data.memory = input.clone();
+        Ok(())
+    })?;
+    worker::broadcast_memory(&app).await?;
+    Ok(input)
+}
+
+/// Switch one project's memory on or off, from a Settings row's key.
+#[tauri::command]
+pub async fn set_project_memory_enabled(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    key: String,
+    enabled: bool,
+) -> Result<MemoriesChange, String> {
+    state.mutate(|data| memory::set_project_disabled(&mut data.memory, &key, enabled))?;
+    memory_changed(&app).await
 }
 
 /// Tool changes take effect on the next agent turn, so running workers are updated in place

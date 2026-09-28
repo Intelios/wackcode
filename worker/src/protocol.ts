@@ -383,6 +383,18 @@ export type SkillScanResult =
   | { ok: true; folders: ScannedGroup[]; packages: ScannedGroup[] }
   | { ok: false; error: string };
 
+/**
+ * Project memory (Settings › Memory): the per-project notes directory under the app's own data
+ * (never the workspace), plus the effective on/off after the global and per-project switches.
+ * Live like skills: it arrives in `init`, is replaced with `set_memory`, and stays out of the
+ * worker fingerprint so a toggle never respawns a chat.
+ */
+export interface MemoryPayload {
+  /** Absolute path of the directory holding this project's `<type>_<slug>.md` notes. */
+  root: string;
+  enabled: boolean;
+}
+
 export interface InitCommand {
   id: string;
   type: "init";
@@ -428,6 +440,8 @@ export interface InitCommand {
   skills?: UserSkillsPayload;
   /** The user's own commands and the switched-off keys. Live via `set_commands`. */
   commands?: UserCommandsPayload;
+  /** This project's memory directory and the effective on/off. Live via `set_memory`. */
+  memory?: MemoryPayload | null;
   /**
    * Computer use. Off (absent, null or `enabled: false`) until the user switches it on and this
    * Mac supports it; live via `set_computer_use`. The host enforces it on every request anyway.
@@ -627,6 +641,7 @@ export type WorkerCommand =
   | { id: string; type: "set_mcp"; servers: McpServerSpec[] }
   | { id: string; type: "set_skills"; skills: UserSkillsPayload }
   | { id: string; type: "set_commands"; commands: UserCommandsPayload }
+  | { id: string; type: "set_memory"; memory: MemoryPayload | null }
   | { id: string; type: "set_computer_use"; enabled: boolean }
   | { id: string; type: "browser_response"; requestId: string; success: true; result: unknown }
   | { id: string; type: "browser_response"; requestId: string; success: false; error: string }

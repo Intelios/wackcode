@@ -7,6 +7,7 @@ mod files;
 mod git;
 mod glass;
 mod mcp;
+mod memory;
 mod menu_bar;
 mod models;
 mod secrets;
@@ -139,6 +140,13 @@ pub fn run() {
             commands::save_slash_command,
             commands::delete_slash_command,
             commands::set_slash_command_enabled,
+            commands::list_memories,
+            commands::read_memory,
+            commands::save_memory,
+            commands::delete_memory,
+            commands::set_memory_config,
+            commands::set_project_memory_enabled,
+            commands::find_memory_in_finder,
             commands::list_packages,
             commands::refresh_packages,
             commands::install_package,

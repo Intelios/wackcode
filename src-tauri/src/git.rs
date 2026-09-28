@@ -25,6 +25,16 @@ pub fn inspect_project(path: &Path) -> ProjectGitInfo {
     ProjectGitInfo { root, has_head }
 }
 
+/// The repository one working tree belongs to: `--git-common-dir` names the shared `.git`
+/// directory (a worktree's own `.git` is a file pointing there), so every worktree of a
+/// repository resolves to the same root. None outside a repository.
+pub fn common_root(path: &Path) -> Option<PathBuf> {
+    let common = git_output(path, &["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .ok()
+        .map(|value| PathBuf::from(value.trim_end()))?;
+    common.parent().map(Path::to_path_buf)
+}
+
 /// The commit `HEAD` points at in the checkout or worktree at `path`.
 pub fn head_commit(path: &Path) -> Option<String> {
     git_output(path, &["rev-parse", "--verify", "--quiet", "HEAD"]).ok()

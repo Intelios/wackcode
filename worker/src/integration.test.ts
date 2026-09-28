@@ -796,7 +796,7 @@ describe("Pi worker integration", () => {
     cleanup.push(() => worker.shutdown());
 
     // Every tool Pi ships is in the registry, including the three the worker never used to
-    // enable, plus WackCode's fifteen built-in extension tools.
+    // enable, plus WackCode's eighteen built-in extension tools.
     const names = (ready.snapshot?.tools ?? []).map((tool) => tool.name).sort();
     expect(names).toEqual([
       "ask_user_question",
@@ -815,6 +815,9 @@ describe("Pi worker integration", () => {
       "find",
       "grep",
       "ls",
+      "memory_forget",
+      "memory_recall",
+      "memory_save",
       "plan_mode_complete",
       "read",
       "subagent",
@@ -826,9 +829,10 @@ describe("Pi worker integration", () => {
     // The denylist from `init` is applied before the first turn, and tools whose external
     // binary is missing are never offered even though they stay listed in the catalogue.
     const catalog = ready.snapshot?.tools ?? [];
-    // Sub-agents and computer use are the built-ins that are off until the user switches them on.
+    // Sub-agents, computer use and memory are the built-ins that stay off until the user (or
+    // the host's memory payload) switches them on; this test sends no memory payload.
     const expectedActive = catalog
-      .filter((tool) => tool.available && tool.name !== "find" && tool.name !== "subagent" && !tool.name.startsWith("computer_"))
+      .filter((tool) => tool.available && tool.name !== "find" && tool.name !== "subagent" && !tool.name.startsWith("computer_") && !tool.name.startsWith("memory_"))
       .map((tool) => tool.name)
       .sort();
     expect(ready.snapshot?.activeTools?.sort()).toEqual(expectedActive);
@@ -2283,6 +2287,110 @@ describe("skills (Settings › Skills)", () => {
     const prompt = systemTextOf(provider, 0);
     expect(prompt).toContain("MINE-DESCRIPTION");
     expect(prompt).not.toContain("PROJECT-");
+  });
+});
+
+describe("memory (Settings › Memory)", () => {
+  async function request(worker: WorkerHarness, command: Record<string, unknown>): Promise<Output> {
+    const id = crypto.randomUUID();
+    worker.send({ id, ...command });
+    return worker.waitFor((output) => output.type === "response" && output.id === id);
+  }
+
+  async function run(worker: WorkerHarness, runId: string): Promise<void> {
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId, message: "Go." });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === runId);
+  }
+
+  async function toolNames(provider: MockProvider): Promise<string[]> {
+    return ((provider.requests[provider.requests.length - 1].body.tools ?? []) as { function?: { name?: string } }[])
+      .map((tool) => tool.function?.name ?? "");
+  }
+
+  const systemTextOf = (source: MockProvider, index: number) =>
+    ((source.requests[index].body.messages ?? []) as { role?: string; content?: unknown }[])
+      .filter((message) => message.role === "system" || message.role === "developer")
+      .map((message) => typeof message.content === "string"
+        ? message.content
+        : Array.isArray(message.content) ? message.content.map((part) => (part as { text?: string }).text ?? "").join("") : "")
+      .join("\n---\n");
+
+  it("injects the index, reads notes on disk between runs, and applies set_memory live", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-memory-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const memoryRoot = join(workspace, "memory");
+    await mkdir(memoryRoot, { recursive: true });
+    await writeFile(join(memoryRoot, "feedback_run-worker-tests.md"),
+      "---\ntype: feedback\ntitle: Run worker tests\ndescription: Protocol edits need pnpm test:worker\nmodified: 2026-09-28T10:12:00.000Z\n---\nAny protocol.ts change needs pnpm test:worker.\n");
+    const { worker } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "memory-task", undefined, undefined, undefined, undefined, undefined,
+      { memory: { root: memoryRoot, enabled: true } }
+    );
+    cleanup.push(() => worker.shutdown());
+
+    await run(worker, "run-1");
+    const prompt = systemTextOf(provider, 0);
+    expect(prompt).toContain("## Project memory");
+    expect(prompt).toContain("- [feedback] Run worker tests — Protocol edits need pnpm test:worker (name: feedback_run-worker-tests)");
+    // The body itself is never injected — only the one-line index.
+    expect(prompt).not.toContain("Any protocol.ts change needs pnpm test:worker.");
+    expect(await toolNames(provider)).toContain("memory_save");
+
+    // A note written on disk between runs (Settings, or another chat in the same project)
+    // reaches the next run's index.
+    await writeFile(join(memoryRoot, "user_prefers.md"),
+      "---\ntype: user\ntitle: Prefers terse answers\ndescription: No filler\n---\nSkip preamble.\n");
+    await run(worker, "run-2");
+    const second = systemTextOf(provider, provider.requests.length - 1);
+    expect(second).toContain("(name: user_prefers)");
+
+    // Switching memory off withdraws the tools and the section on the next turn.
+    expect((await request(worker, { type: "set_memory", memory: null })).success).toBe(true);
+    await run(worker, "run-3");
+    const names = await toolNames(provider);
+    expect(names).not.toContain("memory_save");
+    expect(names).not.toContain("memory_recall");
+    expect(systemTextOf(provider, provider.requests.length - 1)).not.toContain("## Project memory");
+  });
+
+  it("offers no memory tools and no section while off at init", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-memory-off-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "memory-off-task", undefined, undefined, undefined, undefined, undefined,
+      { memory: { root: join(workspace, "memory"), enabled: false } }
+    );
+    cleanup.push(() => worker.shutdown());
+    await run(worker, "run-1");
+    const names = await toolNames(provider);
+    expect(names).not.toContain("memory_save");
+    expect(systemTextOf(provider, 0)).not.toContain("## Project memory");
+  });
+
+  it("activates the tools on an empty project switched on live", async () => {
+    // Regression: the index text is identical (empty) on and off, so a toggle gated on the
+    // index changing would leave the tools inactive forever — and the agent could never save
+    // the note that would have created them.
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-memory-live-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const memoryRoot = join(workspace, "memory");
+    await mkdir(memoryRoot, { recursive: true });
+    const { worker } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "memory-live-task", undefined, undefined, undefined, undefined, undefined,
+      { memory: { root: memoryRoot, enabled: false } }
+    );
+    cleanup.push(() => worker.shutdown());
+    await run(worker, "run-1");
+    expect(await toolNames(provider)).not.toContain("memory_save");
+    expect((await request(worker, { type: "set_memory", memory: { root: memoryRoot, enabled: true } })).success).toBe(true);
+    await run(worker, "run-2");
+    expect(await toolNames(provider)).toContain("memory_save");
   });
 });
 

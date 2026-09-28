@@ -19,6 +19,18 @@ describe("summarizeTool", () => {
     expect(summary.subject).toBe("…/src/main.ts");
   });
 
+  it("summarizes memory saves, recalls and forgets", () => {
+    const saved = summarizeTool(call("memory_save", { type: "feedback", title: "Run worker tests", description: "", body: "…" }));
+    expect(saved.doneVerb).toBe("Saved memory");
+    expect(saved.subject).toBe("Run worker tests");
+    const updated = summarizeTool(call("memory_save", { type: "feedback", name: "feedback_run-worker-tests", title: "Run worker tests", description: "", body: "…" }));
+    expect(updated.doneVerb).toBe("Updated memory");
+    const recalled = summarizeTool(call("memory_recall", { names: ["user_prefers", "feedback_run-worker-tests"] }));
+    expect(recalled.doneVerb).toBe("Recalled memory");
+    expect(recalled.subject).toBe("user_prefers, feedback_run-worker-tests");
+    expect(summarizeTool(call("memory_forget", { name: "user_prefers" })).subject).toBe("user_prefers");
+  });
+
   it("summarizes web_fetch calls with a short URL", () => {
     const summary = summarizeTool(call("web_fetch", { url: "https://www.example.com/docs/intro?ref=x" }));
     expect(summary.activeVerb).toBe("Fetching");

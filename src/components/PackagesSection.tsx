@@ -32,7 +32,7 @@ interface BuiltinExtension {
   description: string;
   tools: readonly string[];
   icon: IconName;
-  kind?: "subagents" | "auto_titles" | "web_fetch" | "browser" | "computer_use" | "mcp";
+  kind?: "subagents" | "auto_titles" | "web_fetch" | "browser" | "computer_use" | "mcp" | "memory";
 }
 
 /**
@@ -96,6 +96,14 @@ const BUILTIN_EXTENSIONS: readonly BuiltinExtension[] = [
     kind: "web_fetch"
   },
   {
+    name: "Memory",
+    description:
+      "Notes the agent keeps for itself across chats, one folder per repository: your preferences, corrections, decisions and pointers that AGENTS.md files don't carry. A one-line index rides in every chat; full notes are read only when relevant. Switch it on or off in Settings › Memory.",
+    tools: ["memory_save", "memory_recall", "memory_forget"],
+    icon: "memory",
+    kind: "memory"
+  },
+  {
     name: "MCP servers",
     description:
       "Gives the agent the tools of the MCP servers you add: local commands (stdio) or remote servers over HTTP or SSE, each with its own switch. Servers start when a chat sends its first message.",
@@ -135,6 +143,8 @@ export interface PackageActions {
 interface Props extends PackageActions {
   packages: PackageRecord[];
   subagentsEnabled?: boolean;
+  /** The Memory master switch (Settings › Memory); the card shows state, the page holds the switch. */
+  memoryEnabled?: boolean;
   /** On unless `web_fetch` is in the tool denylist. */
   webFetchEnabled?: boolean;
   browserEnabled?: boolean;
@@ -151,6 +161,8 @@ interface Props extends PackageActions {
   onConfigureComputerUse?: () => void;
   onToggleAutoTitles?: (enabled: boolean) => Promise<void>;
   onConfigureAutoTitles?: () => void;
+  /** Settings › Packages › Memory card: opens Settings › Memory, where the switch lives. */
+  onConfigureMemory?: () => void;
   /** Opens Settings → Sub-agents. */
   onConfigureSubagents?: () => void;
   /** Opens Settings → MCP servers. */
@@ -160,9 +172,9 @@ interface Props extends PackageActions {
 type Tab = "installed" | "browse";
 
 export function PackagesSection({
-  packages, subagentsEnabled = false, webFetchEnabled = true, browserEnabled = true, computerUseEnabled = false, computerUseSupported = true,
+  packages, subagentsEnabled = false, webFetchEnabled = true, browserEnabled = true, computerUseEnabled = false, computerUseSupported = true, memoryEnabled = true,
   autoTitlesEnabled = false, autoTitlesConfigured = false,
-  onToggleSubagents, onToggleWebFetch, onToggleBrowser, onToggleComputerUse, onConfigureComputerUse, onToggleAutoTitles, onConfigureSubagents, onConfigureAutoTitles, onConfigureMcp,
+  onToggleSubagents, onToggleWebFetch, onToggleBrowser, onToggleComputerUse, onConfigureComputerUse, onToggleAutoTitles, onConfigureSubagents, onConfigureAutoTitles, onConfigureMemory, onConfigureMcp,
   onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
 }: Props) {
   const [tab, setTab] = useState<Tab>("installed");
@@ -311,7 +323,7 @@ export function PackagesSection({
           <BuiltinCard
             key={extension.name}
             extension={extension}
-            enabled={extension.kind === "subagents" ? subagentsEnabled : extension.kind === "browser" ? browserEnabled : extension.kind === "computer_use" ? computerUseEnabled : extension.kind === "web_fetch" ? webFetchEnabled : extension.kind === "auto_titles" ? autoTitlesEnabled : true}
+            enabled={extension.kind === "subagents" ? subagentsEnabled : extension.kind === "browser" ? browserEnabled : extension.kind === "computer_use" ? computerUseEnabled : extension.kind === "web_fetch" ? webFetchEnabled : extension.kind === "auto_titles" ? autoTitlesEnabled : extension.kind === "memory" ? memoryEnabled : true}
             busy={busy}
             onToggle={extension.kind === "subagents" && onToggleSubagents
               ? (enabled) => void run(() => onToggleSubagents(enabled)).catch(() => undefined)
@@ -324,7 +336,7 @@ export function PackagesSection({
               : extension.kind === "auto_titles" && onToggleAutoTitles
               ? (enabled) => void run(() => onToggleAutoTitles(enabled)).catch(() => undefined)
               : undefined}
-            onConfigure={extension.kind === "subagents" ? onConfigureSubagents : extension.kind === "computer_use" ? onConfigureComputerUse : extension.kind === "auto_titles" ? onConfigureAutoTitles : extension.kind === "mcp" ? onConfigureMcp : undefined}
+            onConfigure={extension.kind === "subagents" ? onConfigureSubagents : extension.kind === "computer_use" ? onConfigureComputerUse : extension.kind === "auto_titles" ? onConfigureAutoTitles : extension.kind === "memory" ? onConfigureMemory : extension.kind === "mcp" ? onConfigureMcp : undefined}
             toggleDisabled={(extension.kind === "auto_titles" && !autoTitlesEnabled && (!autoTitlesConfigured || !subagentsEnabled)) || (extension.kind === "computer_use" && !computerUseEnabled && !computerUseSupported)}
             disabledReason={extension.kind === "computer_use" ? "Requires macOS 14 or later" : undefined}
             subagentsOff={extension.kind === "auto_titles" && !subagentsEnabled}

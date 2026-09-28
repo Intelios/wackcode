@@ -450,6 +450,10 @@ pub async fn ensure_worker_with(
         // The user's own commands folder and switched-off keys (Settings › Commands). Live too,
         // via set_commands — deliberately not in the fingerprint, so a toggle never respawns.
         "commands": commands_payload(app)?,
+        // This project's memory directory (Settings › Memory) and the effective on/off. Live
+        // too, via set_memory; like skills, never in the fingerprint. A memory folder that
+        // cannot be created degrades to off rather than blocking the chat from starting.
+        "memory": crate::memory::payload(app, task).unwrap_or(Value::Null),
         // Computer use. Live too, via set_computer_use; the host enforces it per request anyway.
         "computerUse": computer_use_payload(app),
     });
@@ -676,6 +680,30 @@ pub fn commands_payload(app: &AppHandle) -> Result<Value, String> {
 pub async fn broadcast_commands(app: &AppHandle) -> Result<(), String> {
     let payload = commands_payload(app)?;
     broadcast(app, &json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "set_commands", "commands": payload })).await
+}
+
+/// Push each chat's memory setting to its own worker. Per worker, not one value for all: the
+/// directory is whatever project that chat belongs to. Applied on the next turn; nothing
+/// restarts, and a chat without a worker picks the same value up in its next `init`.
+pub async fn broadcast_memory(app: &AppHandle) -> Result<(), String> {
+    for task_id in app.state::<crate::worker::WorkerState>().task_ids()? {
+        let task = {
+            let state = app.state::<MetadataState>();
+            let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+            data.tasks.iter().find(|task| task.id == task_id).cloned()
+        };
+        let Some(task) = task else { continue };
+        // One bad memory folder must not leave the other chats' workers stale: degrade that
+        // chat to memory-off and keep going.
+        let payload = crate::memory::payload(app, &task).unwrap_or(Value::Null);
+        let _ = send(
+            app,
+            &task_id,
+            &json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "set_memory", "memory": payload }),
+        )
+        .await;
+    }
+    Ok(())
 }
 
 pub async fn send(app: &AppHandle, task_id: &str, value: &Value) -> Result<(), String> {

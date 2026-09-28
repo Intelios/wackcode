@@ -21,6 +21,7 @@ import type {
   AppearanceConfig,
   BrowserState,
   CommandsConfig,
+  MemoryConfig,
   PromptConfig,
   CheckpointChange,
   CheckpointRef,
@@ -1134,6 +1135,18 @@ export default function App() {
     }
   }
 
+  async function setMemory(config: MemoryConfig) {
+    const previous = data.memory;
+    setData((current) => ({ ...current, memory: config }));
+    try {
+      const saved = await api.setMemoryConfig(config);
+      setData((current) => ({ ...current, memory: saved }));
+    } catch (reason) {
+      setData((current) => ({ ...current, memory: previous }));
+      throw reason;
+    }
+  }
+
   /** Replace (or add) one MCP server as the host saved it. */
   function putMcpServer(server: McpServerRecord) {
     setData((current) => ({
@@ -1988,6 +2001,8 @@ export default function App() {
           prompts={data.prompts}
           onSetPrompts={setPrompts}
           onCommandsChanged={commandsChanged}
+          memory={data.memory ?? { enabled: true, disabledProjects: [] }}
+          onSetMemory={setMemory}
           mcp={data.mcp}
           mcpActions={mcpActions}
           onRefresh={refreshPackages}

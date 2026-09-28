@@ -186,6 +186,72 @@ export interface SaveSlashCommandInput {
   body: string;
 }
 
+/** The four kinds of note the agent keeps, as the memory tools spell them. */
+export type MemoryType = "user" | "feedback" | "project" | "reference";
+
+/**
+ * Settings › Memory, as saved. Mirrors models.rs. On by default; each project can be switched
+ * off by its memory key (the hash suffix of its directory under `<app data>/memory/`).
+ */
+export interface MemoryConfig {
+  enabled: boolean;
+  disabledProjects: string[];
+}
+
+/** One note file. `name` (filename without `.md`) is the id `memory_recall` takes. */
+export interface MemoryEntry {
+  name: string;
+  filePath: string;
+  kind: MemoryType;
+  title: string;
+  description: string;
+  /** ISO 8601, when the note was last written. */
+  modified?: string;
+}
+
+/** One project's memory directory as Settings lists it. */
+export interface MemoryProject {
+  /** The hash suffix of the directory name; what the per-project switch stores. */
+  key: string;
+  /** The project's name when a known project maps to this directory, else the folder name. */
+  name: string;
+  /** The repository or folder the memory belongs to, from the directory's `origin.json`. */
+  path: string;
+  /** `<app data>/memory/<name>-<key>`. */
+  dir: string;
+  entries: MemoryEntry[];
+  /** The global switch is on and this project hasn't been switched off. */
+  enabled: boolean;
+}
+
+/** Everything Settings › Memory lists, from a fresh scan. Runtime only. */
+export interface MemoriesOverview {
+  enabled: boolean;
+  projects: MemoryProject[];
+}
+
+/** A change's result: the fresh list and the config as saved. */
+export interface MemoriesChange {
+  overview: MemoriesOverview;
+  config: MemoryConfig;
+}
+
+export interface MemoryDocument {
+  body: string;
+}
+
+export interface SaveMemoryInput {
+  /** The note file being rewritten; absent creates a new one. */
+  path?: string;
+  /** The project's memory directory, where a new note is created. */
+  dir: string;
+  name: string;
+  memoryType: MemoryType;
+  title: string;
+  description?: string;
+  body: string;
+}
+
 interface ProviderBase {
   id: string;
   name: string;
@@ -692,6 +758,7 @@ export interface AppData {
   skills?: SkillsConfig;
   commands?: CommandsConfig;
   computerUse?: ComputerUseConfig;
+  memory?: MemoryConfig;
   window?: WindowState | null;
 }
 

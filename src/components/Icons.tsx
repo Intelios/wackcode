@@ -1,6 +1,6 @@
 import type { SVGProps } from "react";
 
-export type IconName = "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "browser" | "expand" | "collapse" | "copy" | "archive" | "unarchive" | "send" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "checklist" | "terminal" | "file" | "pencil" | "external" | "brain" | "search" | "wrench" | "question" | "image" | "close" | "rewind" | "agents" | "flame" | "palette" | "plug" | "book" | "comment" | "commit" | "push" | "pullRequest" | "slash" | "erase" | "cursor";
+export type IconName = "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "browser" | "expand" | "collapse" | "copy" | "archive" | "unarchive" | "send" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "checklist" | "terminal" | "file" | "pencil" | "external" | "brain" | "search" | "wrench" | "question" | "image" | "close" | "rewind" | "agents" | "flame" | "palette" | "plug" | "book" | "comment" | "commit" | "push" | "pullRequest" | "slash" | "erase" | "cursor" | "memory";
 
 const paths: Record<IconName, React.ReactNode> = {
   plus: <><path d="M12 5v14M5 12h14" /></>,
@@ -58,6 +58,8 @@ const paths: Record<IconName, React.ReactNode> = {
   push: <><path d="M12 19V5" /><path d="m6 11 6-6 6 6" /><path d="M4.5 21.5h15" /></>,
   pullRequest: <><circle cx="6" cy="5.5" r="2" /><circle cx="6" cy="18.5" r="2" /><path d="M6 7.5v9" /><circle cx="18" cy="8.5" r="2" /><path d="M18 10.5c0 4-4 3.5-7 5.5" /></>,
   slash: <><path d="m17 4-10 16" /><path d="M7 8.5 5 7l2-1.5" /><path d="m17 15.5 2 1.5-2 1.5" /></>,
+  // Memory: the bookmark a saved note is.
+  memory: <path d="M7 3.5h10a1 1 0 0 1 1 1V20l-6-3.8L6 20V4.5a1 1 0 0 1 1-1z" />,
   erase: <><path d="m8.2 20.6-4.5-4.6a2 2 0 0 1 0-2.8L12 4.7a2 2 0 0 1 2.8 0l4.7 4.8a2 2 0 0 1 0 2.8l-6.5 6.5a2 2 0 0 1-1.4.6H9.5" /><path d="m9.8 7.8 6.6 6.6" /><path d="M3.5 20.5h17" /></>
 };
 

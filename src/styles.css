@@ -2838,3 +2838,18 @@ label > span small.mcp-invalid { color: var(--warning); }
   .sidebar { width: 216px; flex-basis: 216px; }
   .side-panel, .side-panel-inner { max-width: 460px; }
 }
+
+/* ── Memory settings ──────────────────────────── */
+/* Reuses the Commands rows; a note reads like a saved thought: type badge, title, when. */
+.memory-settings .section-heading-row { margin-bottom: 18px; }
+.memory-project-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.memory-new { white-space: nowrap; }
+.memory-when { color: var(--text-faint); font-size: 10.5px; }
+/* The four kinds of note, told apart at a glance with the theme's own hues. */
+.memory-type-badge { text-transform: capitalize; }
+.memory-type-badge[data-type="user"] { color: var(--wc-accent-text); }
+.memory-type-badge[data-type="feedback"] { color: var(--wc-code-string); }
+.memory-type-badge[data-type="project"] { color: var(--wc-code-keyword); }
+.memory-type-badge[data-type="reference"] { color: var(--wc-code-meta); }
+.memory-empty p, .memory-first-empty p { max-width: 46ch; }
+.memory-name-field input { font-size: 12px; }

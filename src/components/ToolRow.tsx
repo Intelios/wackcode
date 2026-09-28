@@ -28,6 +28,9 @@ const TOOL_ICONS: Record<string, IconName> = {
   computer_snapshot: "cursor",
   computer_screenshot: "image",
   computer_act: "cursor",
+  memory_save: "memory",
+  memory_recall: "memory",
+  memory_forget: "memory",
   browser_screenshot: "image"
 };
 

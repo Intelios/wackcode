@@ -124,6 +124,7 @@ pub async fn start_subscription_login(app: AppHandle, state: State<'_, MetadataS
                 id: provider_id.clone(), name: name.to_string(), kind: ProviderKind::Subscription,
                 base_url: String::new(), api_format: String::new(), models: Vec::new(),
                 created_at: now.clone(), updated_at: now.clone(), has_api_key: false, connected: false,
+                enabled: true,
             });
         }
         data.providers.iter().find(|provider| provider.id == provider_id).cloned()

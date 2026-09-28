@@ -239,6 +239,9 @@ pub fn runtime_payload(
             let provider = providers.iter().find(|provider| provider.id == choice.provider_id);
             let unavailable = model_problem(&agent.name, choice, providers).or_else(|| {
                 let provider = provider?;
+                if !provider.enabled {
+                    return Some(format!("{}'s model is on {}, which is turned off. Enable it in Settings → Providers, or pick another model in Settings → Sub-agents.", agent.name, provider.name));
+                }
                 if seen_connections.contains(&provider.id) { return None; }
                 match credential(provider) {
                     Some(found) => {
@@ -294,6 +297,7 @@ mod tests {
                 reasoning: true, thinking_levels: vec!["off".into(), "low".into()], thinking_level_map: BTreeMap::new(), vision: false,
             }],
             created_at: "now".into(), updated_at: "now".into(), has_api_key: true, connected: true,
+            enabled: true,
         }
     }
 
@@ -425,6 +429,18 @@ mod tests {
         assert_eq!(payload["providers"][0]["apiKey"], "sk-test-key");
         assert!(payload["agents"][0].get("unavailable").is_none());
         assert!(payload["agents"][1]["unavailable"].as_str().unwrap().contains("signed out"));
+    }
+
+    #[test]
+    fn a_turned_off_connection_marks_its_agent_unavailable_and_shares_no_credential() {
+        let mut config = SubagentConfig { enabled: true, trigger: SubagentTrigger::Auto, ..SubagentConfig::default() };
+        normalize(&mut config);
+        config.agents[0].model = choice("p", "low");
+        let mut off = provider("p", ProviderKind::Custom);
+        off.enabled = false;
+        let payload = runtime_payload(&config, &[off], |_| panic!("a turned-off connection must not yield a credential"));
+        assert!(payload["providers"].as_array().unwrap().is_empty());
+        assert!(payload["agents"][0]["unavailable"].as_str().unwrap().contains("turned off"));
     }
 
     #[test]

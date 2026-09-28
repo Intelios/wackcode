@@ -406,6 +406,7 @@ mod tests {
             updated_at: "now".into(),
             has_api_key: false,
             connected: false,
+            enabled: true,
         });
         assert_eq!(
             provider_display_name(&data, "custom-1"),

@@ -32,7 +32,7 @@ it("shows subscription guidance before sign-in and reconnect", async () => {
   const onConnectSubscription = vi.fn().mockResolvedValue(undefined);
   const props = {
     packages: [], toolCatalog: [], disabledTools: [], appDataPath: "/tmp/wackcode",
-    onClose: vi.fn(), onSave: vi.fn(), onDelete: vi.fn(), onConnectSubscription,
+    onClose: vi.fn(), onSave: vi.fn(), onDelete: vi.fn(), onSetProviderEnabled: vi.fn(), onConnectSubscription,
     onSignOutSubscription: vi.fn(), onSetDisabledTools: vi.fn(), subagents: noSubagents, onSetSubagents: vi.fn(), autoTitle: { enabled: false, providerId: null, modelId: null }, onSetAutoTitle: vi.fn(), appearance: defaultAppearance, glassSupported: true, onSetAppearance: vi.fn(), onPreviewAppearance: vi.fn(), onChooseBackgroundImage: vi.fn(), onRemoveBackgroundImage: vi.fn(), prompts: defaultPrompts, onSetPrompts: vi.fn(), onCommandsChanged: vi.fn(), memory: { enabled: true, disabledProjects: [] }, onSetMemory: vi.fn(),
     onRefresh: vi.fn().mockResolvedValue(undefined), onInstall: vi.fn(), onTrust: vi.fn(),
     onSearch: vi.fn().mockResolvedValue([]), onRemove: vi.fn(), onUpdate: vi.fn(), onSetResources: vi.fn()
@@ -72,6 +72,7 @@ function renderTools(overrides: { disabled?: string[]; onSetDisabledTools?: (nex
       onClose={vi.fn()}
       onSave={vi.fn()}
       onDelete={vi.fn()}
+      onSetProviderEnabled={vi.fn()}
       onConnectSubscription={vi.fn()}
       onSignOutSubscription={vi.fn()}
       onSetDisabledTools={onSetDisabledTools} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
@@ -163,6 +164,7 @@ describe("SettingsPage sidebar navigation", () => {
         onClose={vi.fn()}
         onSave={vi.fn()}
         onDelete={vi.fn()}
+        onSetProviderEnabled={vi.fn()}
         onConnectSubscription={vi.fn()}
         onSignOutSubscription={vi.fn()}
         onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
@@ -207,6 +209,7 @@ describe("SettingsPage sidebar navigation", () => {
         onClose={vi.fn()}
         onSave={vi.fn()}
         onDelete={vi.fn()}
+        onSetProviderEnabled={vi.fn()}
         onConnectSubscription={vi.fn()}
         onSignOutSubscription={vi.fn()}
         onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
@@ -254,6 +257,7 @@ describe("SettingsPage sidebar navigation", () => {
         onClose={onClose}
         onSave={vi.fn()}
         onDelete={vi.fn()}
+        onSetProviderEnabled={vi.fn()}
         onConnectSubscription={vi.fn()}
         onSignOutSubscription={vi.fn()}
         onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
@@ -296,6 +300,7 @@ describe("SettingsPage model capabilities", () => {
         onClose={vi.fn()}
         onSave={onSave}
         onDelete={vi.fn()}
+        onSetProviderEnabled={vi.fn()}
         onConnectSubscription={vi.fn()}
         onSignOutSubscription={vi.fn()}
         onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
@@ -318,6 +323,58 @@ describe("SettingsPage model capabilities", () => {
   });
 });
 
+describe("SettingsPage provider enable switch", () => {
+  function renderProviderSettings(provider: ProviderRecord, onSetProviderEnabled = vi.fn().mockResolvedValue(undefined)) {
+    const view = render(
+      <SettingsPage
+        providers={[provider]}
+        packages={[]}
+        toolCatalog={catalog}
+        disabledTools={[]}
+        appDataPath="/tmp/wackcode"
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+        onDelete={vi.fn()}
+        onSetProviderEnabled={onSetProviderEnabled}
+        onConnectSubscription={vi.fn()}
+        onSignOutSubscription={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
+        onRefresh={vi.fn().mockResolvedValue(undefined)}
+        onInstall={vi.fn()}
+        onTrust={vi.fn()}
+        onSearch={vi.fn().mockResolvedValue([])}
+        onRemove={vi.fn()}
+        onUpdate={vi.fn()}
+        onSetResources={vi.fn()}
+      />
+    );
+    return { ...view, onSetProviderEnabled };
+  }
+
+  it("switches the saved connection off immediately and keeps unsaved form edits", async () => {
+    const provider = { ...testProviders[0] };
+    const { rerender, onSetProviderEnabled } = renderProviderSettings(provider);
+    const toggle = screen.getByRole("switch", { name: "Use Entrim AI" });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    fireEvent.change(screen.getByLabelText("Name", { selector: "input" }), { target: { value: "Renamed" } });
+    fireEvent.click(toggle);
+    await waitFor(() => expect(onSetProviderEnabled).toHaveBeenCalledWith(provider.id, false));
+    // The switch rewrites `providers` live; only the saved record's flag changed, so the
+    // in-progress rename must survive it.
+    expect(screen.getByLabelText("Name", { selector: "input" })).toHaveValue("Renamed");
+    rerender(<SettingsPage providers={[{ ...provider, enabled: false }]} packages={[]} toolCatalog={catalog} disabledTools={[]} appDataPath="/tmp/wackcode" onClose={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onSetProviderEnabled={onSetProviderEnabled} onConnectSubscription={vi.fn()} onSignOutSubscription={vi.fn()} onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()} onRefresh={vi.fn().mockResolvedValue(undefined)} onInstall={vi.fn()} onTrust={vi.fn()} onSearch={vi.fn().mockResolvedValue([])} onRemove={vi.fn()} onUpdate={vi.fn()} onSetResources={vi.fn()} />);
+    expect(screen.getByLabelText("Name", { selector: "input" })).toHaveValue("Renamed");
+    expect(screen.getByRole("switch", { name: "Use Entrim AI" })).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("hides the switch while a new connection is being created", () => {
+    renderProviderSettings(testProviders[0]);
+    fireEvent.click(screen.getByRole("button", { name: /New connection/ }));
+    // The blank editor has no saved record yet, so there is nothing to switch off.
+    expect(screen.queryByRole("switch", { name: /Use / })).not.toBeInTheDocument();
+  });
+});
+
 const flashSuggestion: BuiltinModelSuggestion = {
   sourceProvider: "deepseek", sourceApi: "openai-completions", id: "deepseek-flash", name: "DeepSeek V4.1 Flash",
   contextWindow: 1_000_000, maxTokens: 384_000, reasoning: true,
@@ -330,7 +387,7 @@ function renderModelSettings(provider: ProviderRecord = testProviders[0]) {
   const view = render(
     <SettingsPage
       providers={[provider]} packages={[]} toolCatalog={catalog} disabledTools={[]}
-      appDataPath="/tmp/wackcode" onClose={vi.fn()} onSave={onSave} onDelete={vi.fn()}
+      appDataPath="/tmp/wackcode" onClose={vi.fn()} onSave={onSave} onDelete={vi.fn()} onSetProviderEnabled={vi.fn()}
       onConnectSubscription={vi.fn()} onSignOutSubscription={vi.fn()}
       onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()} onRefresh={vi.fn()} onInstall={vi.fn()} onTrust={vi.fn()}
       onSearch={vi.fn()} onRemove={vi.fn()} onUpdate={vi.fn()} onSetResources={vi.fn()}
@@ -411,7 +468,7 @@ describe("SettingsPage sub-agents", () => {
   function renderPage(enabled: boolean) {
     const props = {
       providers: [], packages: [], toolCatalog: [], disabledTools: [], appDataPath: "/tmp/wackcode",
-      onClose: vi.fn(), onSave: vi.fn(), onDelete: vi.fn(), onConnectSubscription: vi.fn(),
+      onClose: vi.fn(), onSave: vi.fn(), onDelete: vi.fn(), onSetProviderEnabled: vi.fn(), onConnectSubscription: vi.fn(),
       onSignOutSubscription: vi.fn(), onSetDisabledTools: vi.fn(), onSetSubagents: vi.fn().mockResolvedValue(undefined),
       autoTitle: { enabled: false, providerId: null, modelId: null }, onSetAutoTitle: vi.fn(),
       appearance: defaultAppearance, glassSupported: true, onSetAppearance: vi.fn(), onPreviewAppearance: vi.fn(), onChooseBackgroundImage: vi.fn(), onRemoveBackgroundImage: vi.fn(), prompts: defaultPrompts, onSetPrompts: vi.fn(), onCommandsChanged: vi.fn(), memory: { enabled: true, disabledProjects: [] }, onSetMemory: vi.fn(),
@@ -502,7 +559,7 @@ describe("SettingsPage MCP servers", () => {
     render(
       <SettingsPage
         providers={[]} packages={[]} toolCatalog={[]} disabledTools={[]} appDataPath="/tmp/wackcode"
-        onClose={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onConnectSubscription={vi.fn()} onSignOutSubscription={vi.fn()}
+        onClose={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onSetProviderEnabled={vi.fn()} onConnectSubscription={vi.fn()} onSignOutSubscription={vi.fn()}
         onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
         mcp={{ servers: [] }} mcpActions={mcpActions}
         onRefresh={vi.fn().mockResolvedValue(undefined)} onInstall={vi.fn()} onTrust={vi.fn()} onSearch={vi.fn().mockResolvedValue([])} onRemove={vi.fn()} onUpdate={vi.fn()} onSetResources={vi.fn()}
@@ -527,7 +584,7 @@ describe("SettingsPage appearance section", () => {
     render(
       <SettingsPage
         providers={[]} packages={[]} toolCatalog={[]} disabledTools={[]} appDataPath="/tmp/wackcode"
-        onClose={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onConnectSubscription={vi.fn()} onSignOutSubscription={vi.fn()}
+        onClose={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onSetProviderEnabled={vi.fn()} onConnectSubscription={vi.fn()} onSignOutSubscription={vi.fn()}
         onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()}
         appearance={appearance} glassSupported onSetAppearance={onSetAppearance} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)} onInstall={vi.fn()} onTrust={vi.fn()}

@@ -258,6 +258,8 @@ interface ProviderBase {
   models: ModelRecord[];
   createdAt: string;
   updatedAt: string;
+  /** Off keeps the connection saved but out of every model picker; absent means on. */
+  enabled?: boolean;
 }
 
 export interface CustomProviderRecord extends ProviderBase {

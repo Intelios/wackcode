@@ -820,7 +820,7 @@ export default function App() {
     return () => window.removeEventListener("focus", refresh);
   }, [refreshChanges]);
 
-  const configuredProviders = useMemo(() => data.providers.filter((item) => item.connected && item.models.some(modelIsReady)), [data.providers]);
+  const configuredProviders = useMemo(() => data.providers.filter((item) => item.enabled !== false && item.connected && item.models.some(modelIsReady)), [data.providers]);
   // WackCode's own commands minus the ones switched off in Settings › Commands; the worker
   // filters the rest of the catalog itself.
   const enabledAppCommands = useMemo(() => {
@@ -1291,6 +1291,11 @@ export default function App() {
   async function deleteProvider(providerId: string) {
     await api.deleteProvider(providerId);
     setData((current) => ({ ...current, providers: current.providers.filter((provider) => provider.id !== providerId) }));
+  }
+
+  async function setProviderEnabled(providerId: string, enabled: boolean) {
+    const provider = await api.setProviderEnabled(providerId, enabled);
+    setData((current) => ({ ...current, providers: current.providers.map((item) => item.id === providerId ? provider : item) }));
   }
 
   async function configure(patch: Partial<Pick<TaskRecord, "providerId" | "modelId" | "thinkingLevel">>) {
@@ -1980,6 +1985,7 @@ export default function App() {
           onClose={closeSettings}
           onSave={saveProvider}
           onDelete={deleteProvider}
+          onSetProviderEnabled={setProviderEnabled}
           onConnectSubscription={connectSubscription}
           onSignOutSubscription={signOutSubscription}
           connectedSubscriptionId={connectedSubscriptionId}
@@ -2118,7 +2124,9 @@ export default function App() {
         ) : configuredProviders.length === 0 ? (
           <div key="empty" className="workspace-empty">
             <h1>Connect a model provider</h1>
-            <p>Sign in with a subscription or add an OpenAI-compatible endpoint and API key to start chatting.</p>
+            <p>{data.providers.length > 0
+              ? "Every connection is turned off. Switch one back on in Settings to start chatting."
+              : "Sign in with a subscription or add an OpenAI-compatible endpoint and API key to start chatting."}</p>
             <button className="primary-button" onClick={openSettings}><Icon name="key" /> Open settings</button>
           </div>
         ) : null}

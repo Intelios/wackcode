@@ -55,6 +55,11 @@ pub struct ProviderRecord {
     pub has_api_key: bool,
     #[serde(default)]
     pub connected: bool,
+    /// Off keeps the connection saved (key, models, chats) but out of every model picker; see
+    /// `set_provider_enabled`. Toggling it must never respawn a worker, so it stays out of
+    /// `worker::fingerprint`.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

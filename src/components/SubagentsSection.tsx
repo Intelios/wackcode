@@ -99,7 +99,7 @@ interface ModelFieldProps {
 
 /** "Chat's model", or a model of the agent's own from any connected provider. */
 function ModelField({ agentName, model, providers, disabled, onChange }: ModelFieldProps) {
-  const usable = useMemo(() => providers.filter((provider) => provider.connected && provider.models.some(modelIsReady)), [providers]);
+  const usable = useMemo(() => providers.filter((provider) => provider.enabled !== false && provider.connected && provider.models.some(modelIsReady)), [providers]);
 
   function choose(patch: { providerId?: string; modelId?: string; thinkingLevel?: ThinkingLevel }) {
     const providerId = patch.providerId ?? model?.providerId ?? usable[0]?.id;
@@ -261,11 +261,11 @@ interface AutoTitleCardProps {
  * than the model calling it, so it needs its own model and has no tools or instructions.
  */
 function AutoTitleCard({ config, providers, busy, open, onToggleOpen, onSave, onOpenProviders }: AutoTitleCardProps) {
-  const available = providers.filter((provider) => provider.connected && provider.models.some(modelIsReady));
+  const available = providers.filter((provider) => provider.enabled !== false && provider.connected && provider.models.some(modelIsReady));
   const provider = providers.find((item) => item.id === config.providerId);
   const record = provider?.models.find((item) => item.id === config.modelId);
   const issue = autoTitleModelIssue(config, providers);
-  const ready = Boolean(provider?.connected && record && modelIsReady(record));
+  const ready = Boolean(provider?.enabled !== false && provider?.connected && record && modelIsReady(record));
   const summary = config.providerId && config.modelId
     ? `${provider?.name ?? "Missing connection"} · ${record?.name || config.modelId}`
     : "No model chosen";

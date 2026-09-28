@@ -103,6 +103,7 @@ pub fn run() {
             usage::usage_status,
             usage::set_usage_recording,
             commands::save_provider,
+            commands::set_provider_enabled,
             commands::delete_provider,
             commands::discover_models,
             commands::list_builtin_models,

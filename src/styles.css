@@ -1422,6 +1422,7 @@ button.compact.primary:hover:not(:disabled) { background: var(--wc-accent-hover)
 .settings-subnav-item > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .settings-subnav-item:hover { background: var(--surface); color: var(--text-soft); }
 .settings-subnav-item.active { color: var(--text); }
+.settings-subnav-item.off > span:last-child { color: var(--text-faint); }
 .settings-subnav-item svg { width: 12px; height: 12px; flex: 0 0 auto; }
 .credential-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--text-faint); }
 .credential-dot.connected { background: var(--wc-accent); }
@@ -1430,6 +1431,10 @@ button.compact.primary:hover:not(:disabled) { background: var(--wc-accent-hover)
 .settings-page-head h2 { font-size: 16px; letter-spacing: -.3px; margin: 0; }
 .settings-scroll { flex: 1; overflow-y: auto; padding: 23px 24px 30px; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+.connection-use-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding-bottom: 18px; }
+.connection-use-row strong { display: block; font-size: 12px; }
+.connection-use-row small { display: block; margin-top: 2px; color: var(--text-dim); font-size: 11px; font-weight: 400; }
+.connection-use-row .toggle { flex: 0 0 auto; }
 .connection-grid { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); border-bottom: 1px solid var(--border); padding-bottom: 24px; }
 label { display: flex; flex-direction: column; gap: 6px; color: var(--text-soft); font-size: 11px; font-weight: 600; }
 label > span small { margin-left: 6px; font-weight: 400; color: var(--text-dim); }

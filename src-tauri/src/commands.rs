@@ -164,15 +164,15 @@ pub async fn save_provider(
         return Err("Wait for tasks using this connection to finish before changing it".into());
     }
     let now = Utc::now().to_rfc3339();
-    let created_at = state
+    let (created_at, enabled) = state
         .data
         .lock()
         .map_err(|_| "Metadata lock was poisoned".to_string())?
         .providers
         .iter()
         .find(|provider| provider.id == id)
-        .map(|provider| provider.created_at.clone())
-        .unwrap_or_else(|| now.clone());
+        .map(|provider| (provider.created_at.clone(), provider.enabled))
+        .unwrap_or_else(|| (now.clone(), true));
     if state
         .data
         .lock()
@@ -208,6 +208,7 @@ pub async fn save_provider(
         updated_at: now,
         has_api_key,
         connected: has_api_key,
+        enabled,
     };
     state.mutate(|data| {
         if let Some(existing) = data.providers.iter_mut().find(|provider| provider.id == id) {
@@ -231,6 +232,30 @@ pub async fn save_provider(
         worker::terminate_worker(&app, &task_id, true).await?;
     }
     // Other chats' sub-agents may use this connection with its old key or models.
+    worker::broadcast_subagents(&app).await?;
+    Ok(record)
+}
+
+/// Switch a saved connection off without deleting it. An active run finishes on its old config;
+/// the next prompt on it is refused, and sub-agent models lose its credential live. Editing the
+/// connection in Settings still works while it is off.
+#[tauri::command]
+pub async fn set_provider_enabled(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    provider_id: String,
+    enabled: bool,
+) -> Result<ProviderRecord, String> {
+    let record = state.mutate(|data| {
+        let provider = data
+            .providers
+            .iter_mut()
+            .find(|provider| provider.id == provider_id)
+            .ok_or_else(|| "Connection not found".to_string())?;
+        provider.enabled = enabled;
+        provider.updated_at = Utc::now().to_rfc3339();
+        Ok(provider.clone())
+    })?;
     worker::broadcast_subagents(&app).await?;
     Ok(record)
 }
@@ -1970,7 +1995,7 @@ pub async fn open_task(
 ) -> Result<(), String> {
     // Recorded before anything can race: the idle reaper never stops the open chat's worker.
     app.state::<worker::SelectedTask>().set(&task_id);
-    let (task, provider) = task_and_provider(&state, &task_id)?;
+    let (task, provider) = view_task_and_provider(&state, &task_id)?;
     let api_key = credential_for(&app, &state, &provider)?;
     {
         let lock = task_lock(&app, &task_id);
@@ -2022,7 +2047,7 @@ pub async fn watch_subagent(
         return Ok(());
     };
     subagents::validate_watch_target(&target)?;
-    let (task, provider) = task_and_provider(&state, &task_id)?;
+    let (task, provider) = view_task_and_provider(&state, &task_id)?;
     let api_key = credential_for(&app, &state, &provider)?;
     {
         let lock = task_lock(&app, &task_id);
@@ -2417,7 +2442,7 @@ pub async fn prompt(
             .iter()
             .find(|item| Some(item.id.as_str()) == title_config.provider_id.as_deref())?;
         let model_id = title_config.model_id.as_deref()?;
-        if !provider.connected || validate_selected_model(provider, model_id).is_err() {
+        if !provider.enabled || !provider.connected || validate_selected_model(provider, model_id).is_err() {
             return None;
         }
         let credential = credential_for(&app, &state, provider).ok()?;
@@ -3977,6 +4002,19 @@ fn task_and_provider(
     state: &State<'_, MetadataState>,
     task_id: &str,
 ) -> Result<(TaskRecord, ProviderRecord), String> {
+    let (task, provider) = view_task_and_provider(state, task_id)?;
+    validate_model_selection(&provider, &task.model_id, &task.thinking_level)?;
+    Ok((task, provider))
+}
+
+/// The lookup `open_task` and `watch_subagent` use: the chat and its connection must exist, but
+/// the model selection is not re-checked, so a chat on a connection that was switched off (or a
+/// signed-out subscription) still opens and streams its transcript. `credential_for` and the
+/// prompt path still refuse anything that cannot run.
+fn view_task_and_provider(
+    state: &State<'_, MetadataState>,
+    task_id: &str,
+) -> Result<(TaskRecord, ProviderRecord), String> {
     let data = state
         .data
         .lock()
@@ -3993,7 +4031,6 @@ fn task_and_provider(
         .find(|provider| provider.id == task.provider_id)
         .cloned()
         .ok_or_else(|| "This task's connection no longer exists".to_string())?;
-    validate_model_selection(&provider, &task.model_id, &task.thinking_level)?;
     Ok((task, provider))
 }
 
@@ -4044,6 +4081,9 @@ fn validate_model_selection(
     model_id: &str,
     thinking_level: &str,
 ) -> Result<(), String> {
+    if !provider.enabled {
+        return Err("This connection is turned off. Enable it in Settings → Providers or pick another model.".into());
+    }
     if provider.kind == ProviderKind::Subscription && !provider.connected {
         return Err("Sign in to this subscription again in Settings".into());
     }
@@ -4621,6 +4661,7 @@ mod tests {
             updated_at: "now".into(),
             has_api_key: true,
             connected: true,
+            enabled: true,
         };
         assert!(require_vision(&provider, "sees").is_ok());
         assert!(require_vision(&provider, "blind")
@@ -4634,6 +4675,44 @@ mod tests {
         let provider: ProviderRecord = serde_json::from_str(json).unwrap();
         assert_eq!(provider.kind, ProviderKind::Custom);
         assert_eq!(provider.api_format, "openai-completions");
+    }
+
+    #[test]
+    fn connection_records_written_before_the_enabled_switch_default_to_on() {
+        let json = r#"{"id":"p","name":"P","baseUrl":"https://example.test/v1","apiFormat":"openai-completions","models":[],"createdAt":"now","updatedAt":"now","hasApiKey":true}"#;
+        let provider: ProviderRecord = serde_json::from_str(json).unwrap();
+        assert!(provider.enabled);
+    }
+
+    #[test]
+    fn a_turned_off_connection_refuses_model_selections() {
+        let mut provider = ProviderRecord {
+            id: "p".into(),
+            name: "P".into(),
+            kind: ProviderKind::Custom,
+            base_url: "https://example.test/v1".into(),
+            api_format: "openai-completions".into(),
+            models: vec![ModelRecord {
+                id: "m".into(),
+                name: "M".into(),
+                context_window: Some(8_000),
+                max_tokens: Some(1_000),
+                reasoning: false,
+                thinking_levels: vec!["off".into()],
+                thinking_level_map: Default::default(),
+                vision: false,
+            }],
+            created_at: "now".into(),
+            updated_at: "now".into(),
+            has_api_key: true,
+            connected: true,
+            enabled: false,
+        };
+        assert!(validate_model_selection(&provider, "m", "off")
+            .unwrap_err()
+            .contains("turned off"));
+        provider.enabled = true;
+        assert!(validate_model_selection(&provider, "m", "off").is_ok());
     }
 
     #[test]

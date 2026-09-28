@@ -60,6 +60,7 @@ export const api = {
   bootstrap: () => invoke<BootstrapPayload>("bootstrap"),
   takeMenuNavigation: () => invoke<string | null>("take_menu_navigation"),
   saveProvider: (input: SaveProviderInput) => invoke<ProviderRecord>("save_provider", { input }),
+  setProviderEnabled: (providerId: string, enabled: boolean) => invoke<ProviderRecord>("set_provider_enabled", { providerId, enabled }),
   deleteProvider: (providerId: string) => invoke<void>("delete_provider", { providerId }),
   discoverModels: (providerId: string) => invoke<string[]>("discover_models", { input: { providerId } }),
   listBuiltinModels: () => invoke<BuiltinModelSuggestion[]>("list_builtin_models"),

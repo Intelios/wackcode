@@ -106,6 +106,8 @@ interface Props extends PackageActions {
   onClose: () => void;
   onSave: (input: SaveProviderInput) => Promise<ProviderRecord>;
   onDelete: (providerId: string) => Promise<void>;
+  /** Switches a saved connection off/on; unlike `onSave` it applies immediately, not on Save. */
+  onSetProviderEnabled: (providerId: string, enabled: boolean) => Promise<void>;
   onConnectSubscription: (providerId: string) => Promise<void>;
   onSignOutSubscription: (providerId: string) => Promise<void>;
   connectedSubscriptionId?: string;
@@ -139,7 +141,7 @@ interface Props extends PackageActions {
 
 export function SettingsPage({
   providers, packages, toolCatalog, disabledTools, appDataPath,
-  onClose, onSave, onDelete, onConnectSubscription, onSignOutSubscription, connectedSubscriptionId, onSetDisabledTools,
+  onClose, onSave, onDelete, onSetProviderEnabled, onConnectSubscription, onSignOutSubscription, connectedSubscriptionId, onSetDisabledTools,
   subagents, onSetSubagents, computerUse = COMPUTER_USE_OFF, computerUseSupported = false, onSetComputerUse, autoTitle, onSetAutoTitle, appearance, glassSupported, onSetAppearance, onPreviewAppearance, backgroundImageUrl, onChooseBackgroundImage, onRemoveBackgroundImage, prompts, onSetPrompts, onCommandsChanged, memory, onSetMemory, mcp, mcpActions, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
 }: Props) {
   const [chosenSection, setSection] = useState<SectionId>("providers");
@@ -212,7 +214,7 @@ export function SettingsPage({
                         <button
                           key={provider.id}
                           type="button"
-                          className={`settings-subnav-item ${selectedProviderId === provider.id ? "active" : ""}`}
+                          className={`settings-subnav-item ${selectedProviderId === provider.id ? "active" : ""} ${provider.enabled === false ? "off" : ""}`}
                           onClick={() => {
                             setSelectedProviderId(provider.id);
                             setSection("providers");
@@ -265,6 +267,7 @@ export function SettingsPage({
               onConnect={onConnectSubscription}
               onSignOut={onSignOutSubscription}
               onDelete={onDelete}
+              onSetProviderEnabled={onSetProviderEnabled}
               onSelect={setSelectedProviderId}
             />
           : selectedProviderId === "new" && newMethod === "subscription"
@@ -275,6 +278,7 @@ export function SettingsPage({
             onSelect={setSelectedProviderId}
             onSave={onSave}
             onDelete={onDelete}
+            onSetProviderEnabled={onSetProviderEnabled}
             builtinModels={builtinModels}
             catalogLoading={catalogLoading}
             catalogError={catalogError}
@@ -586,12 +590,13 @@ interface ProvidersSectionProps {
   onSelect: (id: string) => void;
   onSave: (input: SaveProviderInput) => Promise<ProviderRecord>;
   onDelete: (providerId: string) => Promise<void>;
+  onSetProviderEnabled: (providerId: string, enabled: boolean) => Promise<void>;
   builtinModels: BuiltinModelSuggestion[];
   catalogLoading: boolean;
   catalogError?: string;
 }
 
-function ProvidersSection({ providers, selectedId, onSelect, onSave, onDelete, builtinModels, catalogLoading, catalogError }: ProvidersSectionProps) {
+function ProvidersSection({ providers, selectedId, onSelect, onSave, onDelete, onSetProviderEnabled, builtinModels, catalogLoading, catalogError }: ProvidersSectionProps) {
   const candidate = providers.find((provider) => provider.id === selectedId);
   const selected = candidate?.kind === "custom" ? candidate : undefined;
   const [draft, setDraft] = useState<Draft>(() => selected ? fromProvider(selected) : blankDraft());
@@ -601,14 +606,17 @@ function ProvidersSection({ providers, selectedId, onSelect, onSave, onDelete, b
   const [notice, setNotice] = useState<string>();
   const [confirmDelete, setConfirmDelete] = useState(false);
 
+  // Reseed from the saved record when the selection changes or its editable fields change —
+  // keyed by content, so the enabled switch (which rewrites `providers` live) keeps unsaved
+  // form edits, as does anything else that leaves the fields below untouched.
+  const seed = selected ? fromProvider(selected) : blankDraft();
+  const seedKey = JSON.stringify(seed);
   useEffect(() => {
-    const candidate = providers.find((item) => item.id === selectedId);
-    const provider = candidate?.kind === "custom" ? candidate : undefined;
-    setDraft(provider ? fromProvider(provider) : blankDraft());
-    setModelCardKeys(newModelCardKeys(provider?.models.length ?? 0));
+    setDraft(seed);
+    setModelCardKeys(newModelCardKeys(selected?.models.length ?? 0));
     setError(undefined);
     setNotice(undefined);
-  }, [selectedId, providers]);
+  }, [selectedId, seedKey]);
 
   const incomplete = useMemo(() => draft.models.filter((model) => !modelIsReady(model)).length, [draft.models]);
 
@@ -699,9 +707,42 @@ function ProvidersSection({ providers, selectedId, onSelect, onSave, onDelete, b
     }
   }
 
+  async function toggleEnabled() {
+    if (!selected) return;
+    setBusy(true);
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      await onSetProviderEnabled(selected.id, selected.enabled === false);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <>
       <div className="settings-scroll">
+        {selected && (
+          <div className="connection-use-row">
+            <div>
+              <strong>Use this connection</strong>
+              <small>Turned off, it keeps its key and models here but disappears from the model picker.</small>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={selected.enabled !== false}
+              aria-label={`Use ${selected.name}`}
+              className={`toggle ${selected.enabled !== false ? "on" : ""}`}
+              disabled={busy}
+              onClick={() => void toggleEnabled()}
+            >
+              <span />
+            </button>
+          </div>
+        )}
         <div className="form-grid connection-grid">
           <label>
             <span>Name</span>
@@ -869,10 +910,11 @@ interface SubscriptionSectionProps {
   onConnect: (providerId: string) => Promise<void>;
   onSignOut: (providerId: string) => Promise<void>;
   onDelete: (providerId: string) => Promise<void>;
+  onSetProviderEnabled: (providerId: string, enabled: boolean) => Promise<void>;
   onSelect: (id: string) => void;
 }
 
-function SubscriptionSection({ provider, guidance, onConnect, onSignOut, onDelete, onSelect }: SubscriptionSectionProps) {
+function SubscriptionSection({ provider, guidance, onConnect, onSignOut, onDelete, onSetProviderEnabled, onSelect }: SubscriptionSectionProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [confirmSignOut, setConfirmSignOut] = useState(false);
@@ -889,6 +931,23 @@ function SubscriptionSection({ provider, guidance, onConnect, onSignOut, onDelet
 
   return <>
     <div className="settings-scroll subscription-detail">
+      <div className="connection-use-row">
+        <div>
+          <strong>Use this connection</strong>
+          <small>Turned off, it keeps its sign-in and models here but disappears from the model picker.</small>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={provider.enabled !== false}
+          aria-label={`Use ${provider.name}`}
+          className={`toggle ${provider.enabled !== false ? "on" : ""}`}
+          disabled={busy}
+          onClick={() => void action(() => onSetProviderEnabled(provider.id, provider.enabled === false))}
+        >
+          <span />
+        </button>
+      </div>
       <p className="subscription-status"><span className={`credential-dot ${provider.connected ? "connected" : ""}`} /> {provider.connected ? "Signed in" : "Signed out"}</p>
       {guidance && <p>{guidance}</p>}
       {provider.id === "anthropic" && <button type="button" className="text-button" onClick={() => void api.openSubscriptionAuthUrl("https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account").catch((reason) => setError(String(reason)))}>Review Anthropic’s billing guidance</button>}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyBuiltinModelSuggestion, mergeDiscoveredModels, modelDisplayName, pickThinkingLevel, searchBuiltinModels, subagentModelIssue } from "./model-utils";
+import { applyBuiltinModelSuggestion, autoTitleModelIssue, mergeDiscoveredModels, modelDisplayName, pickThinkingLevel, searchBuiltinModels, subagentModelIssue } from "./model-utils";
 import type { BuiltinModelSuggestion, ModelRecord, ProviderRecord } from "./types";
 
 const flash: BuiltinModelSuggestion = {
@@ -89,8 +89,25 @@ describe("subagentModelIssue", () => {
     expect(subagentModelIssue(null, [provider])).toBeUndefined();
     expect(subagentModelIssue(choice, [provider])).toBeUndefined();
     expect(subagentModelIssue(choice, [])).toBe("Its connection no longer exists.");
+    expect(subagentModelIssue(choice, [{ ...provider, enabled: false }])).toBe("Its connection is turned off.");
     expect(subagentModelIssue(choice, [{ ...provider, connected: false }])).toBe("Cheap is signed out.");
     expect(subagentModelIssue({ ...choice, modelId: "gone" }, [provider])).toBe("Its model is no longer configured.");
     expect(subagentModelIssue({ ...choice, thinkingLevel: "high" }, [provider])).toBe("Mini doesn't support high reasoning.");
+  });
+});
+
+describe("autoTitleModelIssue", () => {
+  const provider: ProviderRecord = {
+    id: "p", name: "Cheap", kind: "custom", baseUrl: "", apiFormat: "openai-completions", createdAt: "", updatedAt: "", hasApiKey: true, connected: true,
+    models: [{ id: "m", name: "Mini", contextWindow: 10, maxTokens: 5, reasoning: true, thinkingLevels: ["off", "low"], thinkingLevelMap: {}, vision: false }]
+  };
+  const config = { enabled: true, providerId: "p", modelId: "m" };
+
+  it("explains why the titles model can't run, and stays quiet while unset", () => {
+    expect(autoTitleModelIssue({ ...config, providerId: null, modelId: null }, [provider])).toBeUndefined();
+    expect(autoTitleModelIssue(config, [provider])).toBeUndefined();
+    expect(autoTitleModelIssue(config, [])).toBe("Its connection no longer exists.");
+    expect(autoTitleModelIssue(config, [{ ...provider, enabled: false }])).toBe("Cheap is turned off.");
+    expect(autoTitleModelIssue(config, [{ ...provider, connected: false }])).toBe("Cheap has no API key.");
   });
 });

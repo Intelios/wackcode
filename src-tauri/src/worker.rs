@@ -223,6 +223,11 @@ pub fn fingerprint(
     model_id: &str,
     resources: &Value,
 ) -> Result<String, String> {
+    // The enabled switch is applied live (set_provider_enabled), so it must never respawn a
+    // worker: a disabled connection cannot reach a prompt anyway, and re-enabling has to find
+    // the chat's worker still warm.
+    let mut provider = provider.clone();
+    provider.enabled = true;
     serde_json::to_string(&json!({
         "provider": provider,
         "modelId": model_id,
@@ -1504,6 +1509,7 @@ mod tests {
             updated_at: "now".into(),
             has_api_key: true,
             connected: true,
+            enabled: true,
         }
     }
 
@@ -1571,6 +1577,19 @@ mod tests {
         assert_eq!(
             fingerprint(&provider, "m", &before).unwrap(),
             fingerprint(&provider, "m", &before).unwrap()
+        );
+    }
+
+    #[test]
+    fn switching_a_connection_off_never_respawns_its_workers() {
+        // The enabled switch reaches workers live via set_provider_enabled, so like skills it
+        // stays out of the fingerprint.
+        let resources = resource_paths(&[]);
+        let mut off = provider();
+        off.enabled = false;
+        assert_eq!(
+            fingerprint(&provider(), "m", &resources).unwrap(),
+            fingerprint(&off, "m", &resources).unwrap()
         );
     }
 

@@ -92,6 +92,7 @@ export function subagentModelIssue(choice: SubagentModel | null | undefined, pro
   if (!choice) return undefined;
   const provider = providers.find((item) => item.id === choice.providerId);
   if (!provider) return "Its connection no longer exists.";
+  if (provider.enabled === false) return "Its connection is turned off.";
   if (!provider.connected) return provider.kind === "subscription" ? `${provider.name} is signed out.` : `${provider.name} has no API key.`;
   const model = provider.models.find((item) => item.id === choice.modelId);
   if (!model || !modelIsReady(model)) return "Its model is no longer configured.";
@@ -107,6 +108,7 @@ export function autoTitleModelIssue(config: AutoTitleConfig, providers: Provider
   if (!config.providerId || !config.modelId) return undefined;
   const provider = providers.find((item) => item.id === config.providerId);
   if (!provider) return "Its connection no longer exists.";
+  if (provider.enabled === false) return `${provider.name} is turned off.`;
   if (!provider.connected) return provider.kind === "subscription" ? `${provider.name} is signed out.` : `${provider.name} has no API key.`;
   const model = provider.models.find((item) => item.id === config.modelId);
   if (!model || !modelIsReady(model)) return "Its model is no longer configured.";

@@ -1,5 +1,6 @@
 //! Usage-only ledger. A writer UUID isolates simultaneous app processes. Chat deletion
 //! never touches this directory; TokenTrail only reads it.
+use crate::models::AppData;
 use crate::storage::MetadataState;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -28,6 +29,8 @@ pub struct UsageRecord {
     pub ts: i64,
     pub duration_ms: u64,
     pub provider: String,
+    #[serde(default)]
+    pub provider_name: Option<String>,
     pub model: String,
     pub purpose: String,
     pub subagent_id: Option<String>,
@@ -50,6 +53,10 @@ impl UsageRecord {
             && [&self.provider, &self.model]
                 .iter()
                 .all(|s| !s.is_empty() && s.len() <= 1024)
+            && self
+                .provider_name
+                .as_ref()
+                .is_none_or(|s| !s.is_empty() && s.len() <= 1024)
             && self.subagent_id.as_ref().is_none_or(|s| s.len() <= 256)
             && [
                 "chat",
@@ -195,6 +202,16 @@ pub fn start_retry(app: AppHandle) {
         }
     });
 }
+/// The registry is the source of truth for what a provider is called: the display
+/// name is recorded next to the stable id so readers can show what the user typed.
+/// A miss (deleted/unknown provider) is None; consumers fall back to the raw id.
+fn provider_display_name(data: &AppData, provider: &str) -> Option<String> {
+    data.providers
+        .iter()
+        .find(|p| p.id == provider)
+        .map(|p| p.name.clone())
+}
+
 pub fn record(app: &AppHandle, task_id: &str, value: serde_json::Value) {
     let Ok(mut record) = serde_json::from_value::<UsageRecord>(value) else {
         return;
@@ -219,6 +236,7 @@ pub fn record(app: &AppHandle, task_id: &str, value: serde_json::Value) {
         .as_ref()
         .and_then(|id| data.projects.iter().find(|p| &p.id == id))
         .map(|p| p.git_root.clone().unwrap_or_else(|| p.path.clone()));
+    record.provider_name = provider_display_name(&data, &record.provider);
     let state = app.state::<UsageState>();
     let Ok(mut writer) = state.writer.lock() else {
         return;
@@ -359,6 +377,41 @@ mod tests {
         state.flush(&root, &mut writer);
         assert!(writer.error.is_none());
         assert!(writer.queue.is_empty());
+    }
+    #[test]
+    fn validates_provider_name_bounds() {
+        let mut record = records().remove(0);
+        record.provider_name = Some("Fixture Provider".into());
+        assert!(record.validate());
+        record.provider_name = Some(String::new());
+        assert!(!record.validate());
+        record.provider_name = Some("x".repeat(1025));
+        assert!(!record.validate());
+        record.provider_name = Some("x".repeat(1024));
+        assert!(record.validate());
+        record.provider_name = None;
+        assert!(record.validate());
+    }
+    #[test]
+    fn provider_name_enrichment_resolves_from_the_registry() {
+        let mut data = crate::models::AppData::default();
+        data.providers.push(crate::models::ProviderRecord {
+            id: "custom-1".into(),
+            name: "My Connection".into(),
+            kind: crate::models::ProviderKind::Custom,
+            base_url: "https://example.test/v1".into(),
+            api_format: "openai-completions".into(),
+            models: Vec::new(),
+            created_at: "now".into(),
+            updated_at: "now".into(),
+            has_api_key: false,
+            connected: false,
+        });
+        assert_eq!(
+            provider_display_name(&data, "custom-1"),
+            Some("My Connection".into())
+        );
+        assert_eq!(provider_display_name(&data, "custom-gone"), None);
     }
     #[test]
     fn rejects_unexpected_payload_and_old_settings_enable_recording() {

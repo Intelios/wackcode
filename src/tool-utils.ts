@@ -7,6 +7,40 @@ export const SUBAGENT_TOOL_NAME = "subagent";
 export const WEB_FETCH_TOOL_NAME = "web_fetch";
 /** Browser preview is one grouped switch even though the extension exposes five tools. */
 export const BROWSER_TOOL_NAMES = ["browser_open", "browser_snapshot", "browser_act", "browser_screenshot", "browser_console"] as const;
+/** Computer use: its own setting (Settings › Packages), never the tool denylist. */
+export const COMPUTER_TOOL_NAMES = ["computer_apps", "computer_open", "computer_snapshot", "computer_screenshot", "computer_act"] as const;
+
+/** An app as the model named it: a `.app` path shows as its name. */
+function appName(value: string): string {
+  const match = /([^/]+)\.app\/?$/i.exec(value);
+  return match ? match[1] : value;
+}
+
+/** A one-line description of a `computer_act` batch: its only action, or how many. */
+function describeActions(actions: unknown): string {
+  if (!Array.isArray(actions) || actions.length === 0) return "";
+  if (actions.length > 1) return `${actions.length} actions`;
+  const action = actions[0] as Record<string, unknown>;
+  const text = (value: unknown, max = 40) => {
+    const raw = typeof value === "string" ? value.replace(/\s+/g, " ") : "";
+    return raw.length > max ? `${raw.slice(0, max)}…` : raw;
+  };
+  switch (action.kind) {
+    case "typeText":
+    case "setText":
+      return `typed "${text(action.text)}"`;
+    case "keypress":
+      return `pressed ${text(action.keys)}`;
+    case "menu":
+      return Array.isArray(action.path) ? `chose ${action.path.map((item) => text(item, 30)).join(" › ")}` : "chose a menu item";
+    case "click":
+      return action.ref ? `clicked ${text(action.ref)}` : "clicked";
+    case "press":
+      return `pressed ${text(action.ref)}`;
+    default:
+      return typeof action.kind === "string" ? action.kind : "";
+  }
+}
 
 export interface ToolSummary {
   /** Label while the tool is executing, e.g. "Editing". */
@@ -122,6 +156,19 @@ export function summarizeTool(call: NormalizedBlock, result?: NormalizedBlock): 
       return { kind: "other", activeVerb: "Updating todos", doneVerb: "Todos updated", subject: str(toolArgs.subject) };
     case WEB_FETCH_TOOL_NAME:
       return { kind: "other", activeVerb: "Fetching", doneVerb: "Fetched", subject: displayUrl(str(toolArgs.url)) };
+    case "computer_apps":
+      return { kind: "other", activeVerb: "Listing apps", doneVerb: "Listed apps", subject: "" };
+    case "computer_open":
+      return { kind: "other", activeVerb: "Opening", doneVerb: "Opened", subject: appName(str(toolArgs.app)) };
+    case "computer_snapshot":
+      return { kind: "other", activeVerb: "Inspecting", doneVerb: "Inspected", subject: appName(str(toolArgs.app)) };
+    case "computer_screenshot":
+      return { kind: "other", activeVerb: "Capturing", doneVerb: "Captured", subject: appName(str(toolArgs.app)) };
+    case "computer_act": {
+      const described = describeActions(toolArgs.actions);
+      const app = appName(str(toolArgs.app));
+      return { kind: "other", activeVerb: "Using", doneVerb: "Used", subject: described ? `${app} · ${described}` : app };
+    }
     case SUBAGENT_TOOL_NAME: {
       const tasks = Array.isArray(toolArgs.tasks) ? toolArgs.tasks.length : 0;
       return {

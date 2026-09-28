@@ -604,6 +604,18 @@ pub struct SubagentConfig {
 
 pub const DEFAULT_SUBAGENT_CONCURRENCY: u32 = 4;
 
+/// The computer-use built-in (`computer_use/`). Off by default. Which apps a chat may use is
+/// never stored: grants live in memory per chat until the app quits.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerUseConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Bundle ids the user never wants the agent to use, on top of the built-in block list.
+    #[serde(default)]
+    pub never_allow: Vec<String>,
+}
+
 fn default_subagent_concurrency() -> u32 {
     DEFAULT_SUBAGENT_CONCURRENCY
 }
@@ -759,6 +771,8 @@ pub struct AppData {
     pub skills: SkillsConfig,
     #[serde(default)]
     pub commands: CommandsConfig,
+    #[serde(default)]
+    pub computer_use: ComputerUseConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<WindowState>,
 }
@@ -784,6 +798,7 @@ impl Default for AppData {
             mcp: McpConfig::default(),
             skills: SkillsConfig::default(),
             commands: CommandsConfig::default(),
+            computer_use: ComputerUseConfig::default(),
             window: None,
         }
     }
@@ -1229,6 +1244,8 @@ pub struct BootstrapPayload {
     pub app_data_path: String,
     /// Liquid Glass needs `NSGlassEffectView` (macOS 26+). Runtime-only, never stored.
     pub glass_supported: bool,
+    /// Computer use needs `SCScreenshotManager` (macOS 14+). Runtime-only, never stored.
+    pub computer_use_supported: bool,
 }
 
 #[derive(Debug, Serialize)]

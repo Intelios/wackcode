@@ -1,10 +1,17 @@
-import { useState } from "react";
+import { createContext, useCallback, useContext, useState } from "react";
 import { highlightDiffLines, languageForPath } from "../highlight";
 import type { NormalizedBlock } from "../types";
 import { mcpToolParts, summarizeTool } from "../tool-utils";
-import { Icon } from "./Icons";
+import { Icon, type IconName } from "./Icons";
+import { ImageLightbox } from "./ui/ImageLightbox";
 
-const TOOL_ICONS: Record<string, "file" | "pencil" | "terminal" | "search" | "question" | "brain" | "checklist" | "agents"> = {
+/**
+ * Loads the original of a screenshot tool result's image (`api.toolImage` for the open chat),
+ * as a URL. Without a provider, the lightbox shows the preview alone.
+ */
+export const ToolImageSource = createContext<((toolCallId: string, index: number) => Promise<string | undefined>) | undefined>(undefined);
+
+const TOOL_ICONS: Record<string, IconName> = {
   read: "file",
   edit: "pencil",
   write: "file",
@@ -15,8 +22,39 @@ const TOOL_ICONS: Record<string, "file" | "pencil" | "terminal" | "search" | "qu
   ask_user_question: "question",
   plan_mode_complete: "brain",
   todo: "checklist",
-  subagent: "agents"
+  subagent: "agents",
+  computer_apps: "cursor",
+  computer_open: "cursor",
+  computer_snapshot: "cursor",
+  computer_screenshot: "image",
+  computer_act: "cursor",
+  browser_screenshot: "image"
 };
+
+/** A screenshot result's previews, always visible under its row; each opens full size. */
+function ToolImages({ call, result }: { call: NormalizedBlock; result: NormalizedBlock }) {
+  const load = useContext(ToolImageSource);
+  const [shown, setShown] = useState<number>();
+  const images = result.images ?? [];
+  const subject = summarizeTool(call, result).subject || "the app";
+  const loadShown = useCallback(
+    () => (load && call.toolCallId && shown !== undefined ? load(call.toolCallId, shown) : Promise.resolve(undefined)),
+    [load, call.toolCallId, shown]
+  );
+  const preview = shown !== undefined ? images[shown]?.thumbnail : undefined;
+  return (
+    <div className="tool-images">
+      {images.map((image, index) => image.thumbnail ? (
+        <button key={image.imageId} type="button" className="tool-image" onClick={() => setShown(index)} aria-label={`Open screenshot of ${subject}`}>
+          <img src={image.thumbnail} alt={`Screenshot of ${subject}`} />
+        </button>
+      ) : (
+        <span key={image.imageId} className="tool-image pending" aria-label="Preparing screenshot preview" />
+      ))}
+      {preview && <ImageLightbox preview={preview} load={loadShown} alt={`Screenshot of ${subject}`} onClose={() => setShown(undefined)} />}
+    </div>
+  );
+}
 
 function DiffLines({ diff, path }: { diff: string; path?: string }) {
   const lines = diff.split("\n");
@@ -105,6 +143,7 @@ export function ToolRow({ call, result, liveText, running }: ToolRowProps) {
           {expandable && <Icon name="chevron" className="tool-chevron" />}
         </span>
       </button>
+      {result?.images?.length ? <ToolImages call={call} result={result} /> : null}
       {open && expandable && <ToolDetail call={call} result={shownResult} />}
     </div>
   );

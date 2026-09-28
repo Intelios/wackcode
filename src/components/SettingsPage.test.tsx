@@ -8,7 +8,13 @@ import { SettingsPage } from "./SettingsPage";
 vi.mock("../api", () => ({ api: {
   revealPath: vi.fn().mockResolvedValue(undefined),
   listBuiltinModels: vi.fn().mockResolvedValue([]),
-  listSubscriptionProviders: vi.fn().mockResolvedValue([])
+  listSubscriptionProviders: vi.fn().mockResolvedValue([]),
+  computerUseStatus: vi.fn().mockResolvedValue({ supported: true, accessibility: true, screenRecording: false, hotkeyAvailable: true, devBuild: false }),
+  computerUseRequestPermission: vi.fn().mockResolvedValue(undefined),
+  computerUseOpenSettings: vi.fn().mockResolvedValue(undefined),
+  computerUseResetPermissions: vi.fn().mockResolvedValue(undefined),
+  computerUseRelaunch: vi.fn().mockResolvedValue(undefined),
+  computerUseListApps: vi.fn().mockResolvedValue([{ name: "Notes", bundleId: "com.apple.Notes" }])
 } }));
 
 const noSubagents: SubagentConfig = { enabled: false, trigger: "on_request", maxConcurrency: 4, agents: [] };
@@ -433,6 +439,42 @@ describe("SettingsPage sub-agents", () => {
     rerender(<SettingsPage {...props} subagents={subagents} />);
     expect(screen.queryByRole("heading", { name: "How the agent uses sub-agents" })).not.toBeInTheDocument();
     expect(within(nav).getByRole("button", { name: /Packages/ })).toHaveClass("active");
+  });
+
+  it("switches computer use on only through its setup dialog, then lists its page", async () => {
+    const { rerender, props, subagents } = renderPage(false);
+    const onSetComputerUse = vi.fn().mockResolvedValue(undefined);
+    const off = { enabled: false, neverAllow: [] };
+    rerender(<SettingsPage {...props} subagents={subagents} computerUse={off} computerUseSupported onSetComputerUse={onSetComputerUse} />);
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    expect(within(nav).queryByRole("button", { name: /Computer use/ })).not.toBeInTheDocument();
+    fireEvent.click(within(nav).getByRole("button", { name: /Packages/ }));
+    fireEvent.click(await screen.findByRole("switch", { name: "Computer use" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Set up computer use" });
+    expect(onSetComputerUse).not.toHaveBeenCalled();
+    // Accessibility is allowed; Screen Recording still needs granting.
+    await within(dialog).findByText("Allowed");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Allow…" }));
+    expect(api.computerUseRequestPermission).toHaveBeenCalledWith("screenRecording");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Turn on anyway" }));
+    await waitFor(() => expect(onSetComputerUse).toHaveBeenCalledWith({ enabled: true, neverAllow: [] }));
+
+    rerender(<SettingsPage {...props} subagents={subagents} computerUse={{ enabled: true, neverAllow: [] }} computerUseSupported onSetComputerUse={onSetComputerUse} />);
+    expect(within(nav).getByRole("button", { name: /Computer use/ })).toHaveClass("active");
+    expect(screen.getByRole("heading", { name: "Apps it never uses" })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "Bundle id to never allow" }), { target: { value: "com.example.Secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(onSetComputerUse).toHaveBeenLastCalledWith({ enabled: true, neverAllow: ["com.example.Secret"] }));
+  });
+
+  it("keeps the computer use switch off on Macs that can't run it", async () => {
+    const { rerender, props, subagents } = renderPage(false);
+    rerender(<SettingsPage {...props} subagents={subagents} computerUse={{ enabled: false, neverAllow: [] }} computerUseSupported={false} onSetComputerUse={vi.fn()} />);
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Settings sections" })).getByRole("button", { name: /Packages/ }));
+    const toggle = await screen.findByRole("switch", { name: "Computer use" });
+    expect(toggle).toBeDisabled();
+    expect(toggle).toHaveAttribute("title", "Requires macOS 14 or later");
   });
 
   it("switches Web Fetch through the tool denylist, keeping the rest of it", async () => {

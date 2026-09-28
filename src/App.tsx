@@ -26,6 +26,9 @@ import type {
   CheckpointRef,
   ExtensionNotice,
   ExtensionUIRequest,
+  ComputerAccessDecision,
+  ComputerAccessRequest,
+  ComputerUseConfig,
   DiffComment,
   GitChangeFile,
   GitChanges,
@@ -55,6 +58,7 @@ import { BrowserPanel } from "./components/BrowserPanel";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { SidePanel } from "./components/SidePanel";
 import { SubagentPanelLink } from "./components/SubagentChip";
+import { ToolImageSource } from "./components/ToolRow";
 import { SubagentPanel } from "./components/SubagentPanel";
 import { ChatHeader } from "./components/ChatHeader";
 import { Composer } from "./components/Composer";
@@ -68,6 +72,7 @@ import { Transcript, type MessageAction } from "./components/Transcript";
 import { RestoreDialog, type RestoreChoice } from "./components/RestoreDialog";
 import { TodoPanel } from "./components/TodoPanel";
 import { GoalBanner } from "./components/GoalBanner";
+import { ComputerUseBanner } from "./components/ComputerUseBanner";
 import { InlineDialog, type ExtensionUIResponse } from "./components/InlineDialog";
 import type { PlanAction } from "./components/PlanCard";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
@@ -192,6 +197,7 @@ export default function App() {
   const [data, setData] = useState<AppData>(emptyData);
   const [appDataPath, setAppDataPath] = useState("");
   const [glassSupported, setGlassSupported] = useState(false);
+  const [computerUseSupported, setComputerUseSupported] = useState(false);
   const savedAppearance = useRef<AppearanceConfig>(DEFAULT_APPEARANCE);
   const [selectedTaskId, setSelectedTaskId] = useState<string>();
   const selectTaskRef = useRef<(id: string) => void>(() => undefined);
@@ -232,6 +238,8 @@ export default function App() {
   const [draftSlash, setDraftSlash] = useState<{ projectId: string | null; commands?: SlashCommand[]; loading: boolean; error?: string }>();
   const draftSlashRequest = useRef(0);
   const [extensionRequests, setExtensionRequests] = useState<ExtensionUIRequest[]>([]);
+  /** Computer-use access cards the host raised, oldest first (may span chats). */
+  const [accessRequests, setAccessRequests] = useState<ComputerAccessRequest[]>([]);
   const [booting, setBooting] = useState(true);
   const [globalError, setGlobalError] = useState<string>();
   const [subscriptionLogin, setSubscriptionLogin] = useState<SubscriptionLoginState>();
@@ -254,7 +262,10 @@ export default function App() {
   // The worker's latest plan_state is the freshest mode signal; the record (or the draft's
   // choice before a task exists) is the durable fallback.
   const currentMode: TaskMode = runtime?.planState?.mode ?? selectedTask?.mode ?? draft?.mode ?? "build";
-  const pendingDialogTaskIds = useMemo(() => new Set(extensionRequests.map((r) => r.taskId)), [extensionRequests]);
+  const pendingDialogTaskIds = useMemo(
+    () => new Set([...extensionRequests.map((r) => r.taskId), ...accessRequests.map((r) => r.taskId)]),
+    [extensionRequests, accessRequests]
+  );
   const selectedBusy = selectedTask?.status === "running" || selectedTask?.status === "stopping";
   const selectedModel = data.providers.find((provider) => provider.id === selectedTask?.providerId)?.models.find((model) => model.id === selectedTask?.modelId);
   const displayModelSwitches = useMemo(() => (runtime?.snapshot?.modelSwitches ?? []).map((entry) => ({
@@ -337,6 +348,20 @@ export default function App() {
   const handleExtensionRespond = useCallback((request: ExtensionUIRequest, response: ExtensionUIResponse) => {
     setExtensionRequests((current) => withoutResolvedDialog(current, request.requestId));
     void api.respondExtensionUi({ taskId: request.taskId, requestId: request.requestId, ...response })
+      .catch((reason) => setGlobalError(String(reason)));
+  }, []);
+
+  /** Full-size screenshots for the transcript's lightbox, from the open chat's session. */
+  const loadToolImage = useCallback((toolCallId: string, index: number) => {
+    const taskId = selectedTaskRef.current;
+    if (!taskId) return Promise.resolve(undefined);
+    return api.toolImage(taskId, toolCallId, index).then((image) => image ? `data:${image.mimeType};base64,${image.data}` : undefined);
+  }, []);
+
+  const handleComputerAccess = useCallback((request: ComputerAccessRequest, decision: ComputerAccessDecision) => {
+    setAccessRequests((current) => current.filter((entry) => entry.requestId !== request.requestId));
+    void api.computerUseRespondAccess(request.taskId, request.requestId, decision)
+      .then((config) => { if (config) setData((current) => ({ ...current, computerUse: config })); })
       .catch((reason) => setGlobalError(String(reason)));
   }, []);
 
@@ -547,6 +572,7 @@ export default function App() {
       setData(payload.data);
       setAppDataPath(payload.appDataPath);
       setGlassSupported(payload.glassSupported);
+      setComputerUseSupported(payload.computerUseSupported === true);
       savedAppearance.current = payload.data.appearance;
       const remembered = loadJSON<string | null>(LAST_PROJECT_KEY, null);
       const projectId = payload.data.projects.some((project) => project.id === remembered)
@@ -703,6 +729,12 @@ export default function App() {
         setExtensionRequests((current) => [...current, payload]);
       } else if (payload.type === "extension_ui_resolved") {
         setExtensionRequests((current) => withoutResolvedDialog(current, payload.requestId));
+      } else if (payload.type === "computer_access_request") {
+        setAccessRequests((current) => [...current.filter((entry) => entry.requestId !== payload.requestId), payload]);
+      } else if (payload.type === "computer_access_resolved") {
+        setAccessRequests((current) => current.filter((entry) => entry.requestId !== payload.requestId));
+      } else if (payload.type === "computer_state") {
+        patchRuntime(taskId, { computer: payload.computer.active ? payload.computer : undefined });
       } else if (payload.type === "extension_notice") {
         appendNotice(taskId, { message: payload.message, level: payload.level });
       } else if (payload.type === "extensions_loaded") {
@@ -1076,6 +1108,18 @@ export default function App() {
         : [...current.providers, saved]
     }));
     return saved;
+  }
+
+  async function setComputerUse(config: ComputerUseConfig) {
+    const previous = data.computerUse;
+    setData((current) => ({ ...current, computerUse: config }));
+    try {
+      const saved = await api.setComputerUseConfig(config);
+      setData((current) => ({ ...current, computerUse: saved }));
+    } catch (reason) {
+      setData((current) => ({ ...current, computerUse: previous }));
+      throw reason;
+    }
   }
 
   async function setSubagents(config: SubagentConfig) {
@@ -1863,7 +1907,7 @@ export default function App() {
         // Inside the terminal the keystroke belongs to the shell, not the mode switcher.
         if (event.target instanceof HTMLElement && event.target.closest(".xterm")) return;
         const busy = selectedTask && (selectedTask.status === "running" || selectedTask.status === "stopping");
-        if (!settingsOpen && !confirm && !restoreDialog && extensionRequests.length === 0 && !busy) {
+        if (!settingsOpen && !confirm && !restoreDialog && extensionRequests.length === 0 && accessRequests.length === 0 && !busy) {
           event.preventDefault();
           void setTaskMode(nextMode(currentMode));
         }
@@ -1929,6 +1973,9 @@ export default function App() {
           onSetDisabledTools={setDisabledTools}
           subagents={data.subagents}
           onSetSubagents={setSubagents}
+          computerUse={data.computerUse ?? { enabled: false, neverAllow: [] }}
+          computerUseSupported={computerUseSupported}
+          onSetComputerUse={setComputerUse}
           autoTitle={data.autoTitle}
           onSetAutoTitle={setAutoTitle}
           appearance={data.appearance}
@@ -2010,6 +2057,7 @@ export default function App() {
             <motion.div className="chat-transcript" initial={reduce ? false : { opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reduce ? 0 : 0.4, delay: reduce ? 0 : 0.14, ease: EASE }}>
             <ChatContexts appearance={data.appearance}>
             <SubagentPanelLink.Provider value={subagentLink}>
+            <ToolImageSource.Provider value={loadToolImage}>
             <Transcript
               messages={runtime?.snapshot?.messages ?? []}
               modelSwitches={displayModelSwitches}
@@ -2028,14 +2076,19 @@ export default function App() {
               onMessageAction={onMessageAction}
               onUndoRewind={runtime?.snapshot?.tree?.undo ? onUndoRewind : undefined}
             />
+            </ToolImageSource.Provider>
             </SubagentPanelLink.Provider>
             </ChatContexts>
             </motion.div>
             <InlineDialog
               requests={extensionRequests}
+              accessRequests={accessRequests}
               selectedTaskId={selectedTask.id}
+              agentName={agentName(data.appearance)}
               onRespond={handleExtensionRespond}
+              onAccess={handleComputerAccess}
             />
+            <ComputerUseBanner computer={runtime?.computer} onStop={() => void stopTask()} />
             <TodoPanel
               key={selectedTask.id}
               tasks={runtime?.todoState?.tasks}
@@ -2137,7 +2190,7 @@ export default function App() {
         <BrowserPanel
           taskId={view.taskId}
           state={browsers[view.taskId]}
-          visible={!confirm && !restoreDialog && !subscriptionLogin && !extensionRequests.some((request) => request.taskId === view.taskId)}
+          visible={!confirm && !restoreDialog && !subscriptionLogin && !extensionRequests.some((request) => request.taskId === view.taskId) && !accessRequests.some((request) => request.taskId === view.taskId)}
           expanded={browserExpanded}
           onState={updateBrowser}
           onExpand={toggleBrowserExpanded}

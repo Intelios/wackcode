@@ -2,13 +2,14 @@
  * WackCode's built-in extensions: compiled into the worker, loaded through Pi's inline-factory
  * mechanism rather than the trusted-package path. They are ordinary code in this repo — no
  * trust gate applies because nothing external can reach this list. All are always on except
- * sub-agents, which the user switches on in Settings (its tool stays inactive until then),
- * browser preview and web fetch, which are on until the user switches them off (see
- * `SWITCHABLE_BUILTIN_TOOLS`), and MCP, whose tools come from the servers the user adds.
+ * sub-agents and computer use, which the user switches on in Settings (their tools stay
+ * inactive until then), browser preview and web fetch, which are on until the user switches them
+ * off (see `SWITCHABLE_BUILTIN_TOOLS`), and MCP, whose tools come from the servers the user adds.
  */
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import { BROWSER_TOOL_NAMES, createBrowserExtension } from "./browser.js";
 import { createAskUserQuestionExtension } from "./ask-user-question.js";
+import { type ComputerUseController, createComputerUseExtension } from "./computer-use/index.js";
 import { createAutoTitleExtension, type AutoTitleController } from "./auto-title.js";
 import { type GoalController, createGoalExtension } from "./goal/index.js";
 import type { BuiltinHost } from "./host.js";
@@ -38,6 +39,8 @@ export interface BuiltinExtensions {
   goal: GoalController;
   /** The user's MCP servers: connects them and says which of their tools are usable. */
   mcp: McpController;
+  /** Computer use: off until the user switches it on, and inactive while off. */
+  computerUse: ComputerUseController;
 }
 
 export function createBuiltinExtensions(host: BuiltinHost): BuiltinExtensions {
@@ -53,6 +56,7 @@ export function createBuiltinExtensions(host: BuiltinHost): BuiltinExtensions {
   const autoTitle = createAutoTitleExtension(host);
   const goal = createGoalExtension(host, () => planMode.controller.getState().mode !== "build");
   const browser: InlineExtension = { name: "wackcode-browser", factory: createBrowserExtension(host), hidden: true };
+  const computerUse = createComputerUseExtension(host);
   return {
     factories: [
       {
@@ -68,6 +72,7 @@ export function createBuiltinExtensions(host: BuiltinHost): BuiltinExtensions {
       { name: "wackcode-goal", factory: goal.factory, hidden: true },
       webFetch,
       browser,
+      { name: "wackcode-computer-use", factory: computerUse.factory, hidden: true },
       { name: "wackcode-mcp", factory: mcp.factory, hidden: true },
     ],
     planMode: planMode.controller,
@@ -76,5 +81,6 @@ export function createBuiltinExtensions(host: BuiltinHost): BuiltinExtensions {
     autoTitle: autoTitle.controller,
     goal: goal.controller,
     mcp: mcp.controller,
+    computerUse: computerUse.controller,
   };
 }

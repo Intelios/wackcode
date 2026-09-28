@@ -2,6 +2,7 @@ mod backgrounds;
 mod browser;
 mod checkpoints;
 mod commands;
+mod computer_use;
 mod files;
 mod git;
 mod glass;
@@ -30,9 +31,11 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(computer_use::shortcut_plugin())
         .manage(WorkerState::default())
         .manage(usage::UsageState::default())
         .manage(browser::BrowserManager::default())
+        .manage(computer_use::ComputerUseManager::default())
         .manage(worker::SelectedTask::default())
         .manage(worker::WorkerActivity::default())
         .manage(commands::TaskLocks::default())
@@ -200,6 +203,15 @@ pub fn run() {
             terminal::restart_terminal,
             terminal::close_terminal,
             menu_bar::take_menu_navigation,
+            commands::tool_image,
+            computer_use::computer_use_status,
+            computer_use::computer_use_request_permission,
+            computer_use::computer_use_open_settings,
+            computer_use::computer_use_reset_permissions,
+            computer_use::computer_use_relaunch,
+            computer_use::set_computer_use_config,
+            computer_use::computer_use_respond_access,
+            computer_use::computer_use_list_apps,
         ])
         .build(tauri::generate_context!())
         .expect("error while building WackCode");
@@ -212,14 +224,20 @@ pub fn run() {
             event,
             tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
         ) {
-            // Flushes the window geometry `window_state::record` only kept in memory.
-            let _ = app.state::<MetadataState>().save();
-            app.state::<worker::ReaperHandle>().stop();
-            app.state::<WorkerState>().terminate_all();
-            app.state::<browser::BrowserManager>().dispose_all();
-            app.state::<terminal::TerminalState>().terminate_all();
-            app.state::<subscriptions::SubscriptionState>()
-                .terminate_all();
+            cleanup_before_exit(app);
         }
     });
+}
+
+/// Everything that must happen before the process exits: on quit, and before a relaunch.
+pub(crate) fn cleanup_before_exit(app: &tauri::AppHandle) {
+    // Flushes the window geometry `window_state::record` only kept in memory.
+    let _ = app.state::<MetadataState>().save();
+    app.state::<worker::ReaperHandle>().stop();
+    app.state::<WorkerState>().terminate_all();
+    app.state::<browser::BrowserManager>().dispose_all();
+    computer_use::dispose_all(app);
+    app.state::<terminal::TerminalState>().terminate_all();
+    app.state::<subscriptions::SubscriptionState>()
+        .terminate_all();
 }

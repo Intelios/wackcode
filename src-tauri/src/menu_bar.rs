@@ -15,6 +15,7 @@ const TRAY_ID: &str = "wackcode-menu-bar";
 const CHAT_PREFIX: &str = "menu-chat:";
 const OPEN_ID: &str = "menu-open";
 const QUIT_ID: &str = "menu-quit";
+const STOP_COMPUTER_ID: &str = "menu-stop-computer-use";
 const RECENT_LIMIT: usize = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -246,6 +247,9 @@ fn tray_icon() -> Result<Image<'static>, String> {
 fn handle_menu_event(app: &AppHandle, id: &str) {
     if id == OPEN_ID {
         show_main_window(app);
+    } else if id == STOP_COMPUTER_ID {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move { crate::computer_use::emergency_stop(&app, "menu bar").await });
     } else if id == QUIT_ID {
         app.exit(0);
     } else if let Some(task_id) = id.strip_prefix(CHAT_PREFIX) {
@@ -328,7 +332,8 @@ pub fn handle_worker_event(app: &AppHandle, task_id: &str, value: &Value) {
                     false
                 }
             }
-            "extension_ui_request" => {
+            // A computer-use access card waits on the user just like an extension dialog.
+            "extension_ui_request" | "computer_access_request" => {
                 if let Some(request_id) = value.get("requestId").and_then(Value::as_str) {
                     activity.request_dialog(task_id, request_id);
                     true
@@ -336,7 +341,7 @@ pub fn handle_worker_event(app: &AppHandle, task_id: &str, value: &Value) {
                     false
                 }
             }
-            "extension_ui_resolved" => {
+            "extension_ui_resolved" | "computer_access_resolved" => {
                 if let Some(request_id) = value.get("requestId").and_then(Value::as_str) {
                     activity.resolve_dialog(task_id, request_id);
                     true
@@ -418,6 +423,15 @@ fn build_menu(
         .lock()
         .map_err(|_| "Metadata lock was poisoned".to_string())?;
     let menu = Menu::new(manager).map_err(|error| error.to_string())?;
+    // Lock order: the activity store (held by the caller), then computer use's own state.
+    if manager.state::<crate::computer_use::ComputerUseManager>().any_session() {
+        menu.append(
+            &MenuItem::with_id(manager, STOP_COMPUTER_ID, "Stop Computer Use  ⌃⌥⌘.", true, None::<&str>)
+                .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+        append_separator(manager, &menu)?;
+    }
     append_label(manager, &menu, "menu-active-heading", "Active Chats")?;
     let active = visible_rows(activity.active(), &data);
     if active.is_empty() {

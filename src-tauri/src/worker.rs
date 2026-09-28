@@ -366,6 +366,12 @@ pub async fn ensure_worker_with(
             .state::<WorkerState>()
             .remove_if_pid(&task_id, pid)
             .unwrap_or(true);
+        // Whatever this worker asked computer use to do can no longer be answered — unless a
+        // replacement worker already owns the chat, whose requests must not be touched.
+        let replaced = app_for_process.state::<WorkerState>().get(&task_id).ok().flatten().is_some();
+        if !replaced {
+            crate::computer_use::on_worker_stopped(&app_for_process, &task_id);
+        }
         if unexpected {
             let message = if subscription_worker {
                 "The Pi worker stopped unexpectedly while using a subscription.".to_string()
@@ -444,6 +450,8 @@ pub async fn ensure_worker_with(
         // The user's own commands folder and switched-off keys (Settings › Commands). Live too,
         // via set_commands — deliberately not in the fingerprint, so a toggle never respawns.
         "commands": commands_payload(app)?,
+        // Computer use. Live too, via set_computer_use; the host enforces it per request anyway.
+        "computerUse": computer_use_payload(app),
     });
     if options.wait_ready {
         request(app, &task.id, init, INIT_TIMEOUT).await.map(|_| ())
@@ -585,6 +593,19 @@ pub fn subagent_payload(app: &AppHandle) -> Result<Value, String> {
 pub async fn broadcast_subagents(app: &AppHandle) -> Result<(), String> {
     let payload = subagent_payload(app)?;
     broadcast(app, &json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "set_subagents", "subagents": payload })).await
+}
+
+/// The `computerUse` value for `init` and `set_computer_use`: on only while the user switched it
+/// on and this Mac supports it.
+pub fn computer_use_payload(app: &AppHandle) -> Value {
+    let enabled = app.state::<MetadataState>().data.lock().map(|data| data.computer_use.enabled).unwrap_or(false);
+    json!({ "enabled": enabled && crate::computer_use::supported() })
+}
+
+/// Push the computer-use setting to every running worker. Applied between runs; nothing restarts.
+pub async fn broadcast_computer_use(app: &AppHandle) -> Result<(), String> {
+    let enabled = computer_use_payload(app)["enabled"].as_bool().unwrap_or(false);
+    broadcast(app, &json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "set_computer_use", "enabled": enabled })).await
 }
 
 /// The `mcp` value for `init` and `set_mcp`: every enabled MCP server with its header and
@@ -1131,54 +1152,19 @@ fn handle_worker_line(
         }
         return;
     }
-    if event_type == "browser_cancel" {
+    if event_type == "browser_cancel" || event_type == "computer_cancel" {
         if let Some(request_id) = value.get("requestId").and_then(Value::as_str) {
-            app.state::<crate::browser::BrowserManager>()
-                .cancel(request_id);
+            if event_type == "browser_cancel" {
+                app.state::<crate::browser::BrowserManager>().cancel(request_id);
+            } else {
+                app.state::<crate::computer_use::ComputerUseManager>().cancel(request_id);
+            }
         }
         return;
     }
-    if event_type == "browser_request" {
-        let Some(request_id) = value
-            .get("requestId")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-        else {
-            return;
-        };
-        let request = value.get("request").cloned().unwrap_or(Value::Null);
-        let request_app = app.clone();
-        let request_task = task_id.to_string();
-        tauri::async_runtime::spawn(async move {
-            let result = crate::browser::execute_agent_request(
-                request_app.clone(),
-                request_task.clone(),
-                request_id.clone(),
-                request,
-            )
-            .await;
-            // A restarted worker owns the same chat id but a different generation. Never let it
-            // receive a response to an operation issued by the worker that was replaced.
-            let current = request_app
-                .state::<WorkerState>()
-                .get(&request_task)
-                .ok()
-                .flatten();
-            if current.as_ref().map(|worker| worker.pid) != Some(worker_pid) {
-                return;
-            }
-            let response = match result {
-                Ok(result) => {
-                    json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "browser_response", "requestId": request_id, "success": true, "result": result })
-                }
-                Err(error) => {
-                    json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "browser_response", "requestId": request_id, "success": false, "error": redact_and_limit(&error) })
-                }
-            };
-            if let Some(worker) = current {
-                let _ = write_line(&worker, &response).await;
-            }
-        });
+    if event_type == "browser_request" || event_type == "computer_request" {
+        let channel = if event_type == "browser_request" { NativeChannel::Browser } else { NativeChannel::Computer };
+        spawn_native_request(app, task_id, worker_pid, channel, &value);
         return;
     }
     if event_type == "title_result" {
@@ -1323,8 +1309,59 @@ fn handle_worker_line(
     if should_save {
         let _ = app.state::<MetadataState>().save();
     }
+    if event_type == "run_state" {
+        if let Some(state) = value.get("state").and_then(Value::as_str) {
+            crate::computer_use::on_run_state(app, task_id, state);
+        }
+    }
     crate::menu_bar::handle_worker_event(app, task_id, &value);
     let _ = app.emit("worker-event", value);
+}
+
+#[derive(Clone, Copy)]
+enum NativeChannel {
+    Browser,
+    Computer,
+}
+
+/// Runs a worker's request to a native subsystem (the browser preview or computer use) and
+/// answers with `<channel>_response`. Both bypass the worker's prompt queue in both directions.
+fn spawn_native_request(app: &AppHandle, task_id: &str, worker_pid: u32, channel: NativeChannel, value: &Value) {
+    let Some(request_id) = value.get("requestId").and_then(Value::as_str).map(str::to_string) else {
+        return;
+    };
+    let request = value.get("request").cloned().unwrap_or(Value::Null);
+    let request_app = app.clone();
+    let request_task = task_id.to_string();
+    tauri::async_runtime::spawn(async move {
+        let (result, response_type) = match channel {
+            NativeChannel::Browser => (
+                crate::browser::execute_agent_request(request_app.clone(), request_task.clone(), request_id.clone(), request).await,
+                "browser_response",
+            ),
+            NativeChannel::Computer => (
+                crate::computer_use::execute_agent_request(request_app.clone(), request_task.clone(), request_id.clone(), request).await,
+                "computer_response",
+            ),
+        };
+        // A restarted worker owns the same chat id but a different generation. Never let it
+        // receive a response to an operation issued by the worker that was replaced.
+        let current = request_app.state::<WorkerState>().get(&request_task).ok().flatten();
+        if current.as_ref().map(|worker| worker.pid) != Some(worker_pid) {
+            return;
+        }
+        let response = match result {
+            Ok(result) => {
+                json!({ "id": uuid::Uuid::new_v4().to_string(), "type": response_type, "requestId": request_id, "success": true, "result": result })
+            }
+            Err(error) => {
+                json!({ "id": uuid::Uuid::new_v4().to_string(), "type": response_type, "requestId": request_id, "success": false, "error": redact_and_limit(&error) })
+            }
+        };
+        if let Some(worker) = current {
+            let _ = write_line(&worker, &response).await;
+        }
+    });
 }
 
 fn normalize_auto_title(raw: &str) -> Option<String> {

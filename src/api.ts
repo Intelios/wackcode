@@ -7,6 +7,9 @@ import type {
   BrowserState,
   CheckpointChange,
   CheckpointRef,
+  ComputerAccessDecision,
+  ComputerUseConfig,
+  ComputerUseStatus,
   GitChanges,
   GitPublishInfo,
   GitPrInfo,
@@ -71,6 +74,19 @@ export const api = {
   browserNavigation: (taskId: string, action: "back" | "forward" | "reload" | "stop") =>
     invoke<void>("browser_navigation", { input: { taskId, action } }),
   browserSetControl: (taskId: string, userControl: boolean) => invoke<BrowserState>("browser_set_control", { taskId, userControl }),
+  computerUseStatus: () => invoke<ComputerUseStatus>("computer_use_status"),
+  /** Shows macOS's own permission prompt (listing WackCode in the pane) and opens the pane. */
+  computerUseRequestPermission: (pane: "accessibility" | "screenRecording") => invoke<void>("computer_use_request_permission", { pane }),
+  computerUseOpenSettings: (pane: "accessibility" | "screenRecording") => invoke<void>("computer_use_open_settings", { pane }),
+  computerUseResetPermissions: () => invoke<void>("computer_use_reset_permissions"),
+  computerUseRelaunch: () => invoke<void>("computer_use_relaunch"),
+  setComputerUseConfig: (input: ComputerUseConfig) => invoke<ComputerUseConfig>("set_computer_use_config", { input }),
+  /** Answers an access card. "never" also adds the app to Settings' list and returns the new settings. */
+  computerUseRespondAccess: (taskId: string, requestId: string, decision: ComputerAccessDecision) =>
+    invoke<ComputerUseConfig | null>("computer_use_respond_access", { taskId, requestId, decision }),
+  computerUseListApps: () => invoke<{ name: string; bundleId: string }[]>("computer_use_list_apps"),
+  /** The original image of a screenshot tool result, or null when it's gone. */
+  toolImage: (taskId: string, toolCallId: string, index = 0) => invoke<ImageContent | null>("tool_image", { taskId, toolCallId, index }),
   browserReset: (taskId: string) => invoke<BrowserState>("browser_reset", { taskId }),
   browserReturnFromPopup: (taskId: string) => invoke<BrowserState>("browser_return_from_popup", { taskId }),
   /** Opens the native picker in Rust; null when the user cancels. */

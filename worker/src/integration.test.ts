@@ -16,7 +16,10 @@ type SnapshotView = {
     id?: string;
     role?: string;
     timestamp?: number;
-    blocks: Array<{ type: string; text?: string; toolName?: string; details?: unknown; imageId?: string; thumbnail?: string; mimeType?: string; durationMs?: number }>;
+    blocks: Array<{
+      type: string; text?: string; toolName?: string; toolCallId?: string; details?: unknown; imageId?: string; thumbnail?: string; mimeType?: string;
+      durationMs?: number; images?: Array<{ imageId: string; thumbnail?: string }>;
+    }>;
     entryId?: string;
     versions?: { index: number; total: number; previous?: string; next?: string; group: string };
     checkpoint?: Checkpoint;
@@ -69,6 +72,8 @@ interface Output {
   event?: string;
   detail?: { toolCallId?: string; toolName?: string; text?: string; details?: unknown };
   requestId?: string;
+  /** `computer_request` / `browser_request` payloads. */
+  request?: Record<string, unknown>;
   method?: string;
   title?: string;
   options?: string[];
@@ -791,7 +796,7 @@ describe("Pi worker integration", () => {
     cleanup.push(() => worker.shutdown());
 
     // Every tool Pi ships is in the registry, including the three the worker never used to
-    // enable, plus WackCode's ten built-in extension tools.
+    // enable, plus WackCode's fifteen built-in extension tools.
     const names = (ready.snapshot?.tools ?? []).map((tool) => tool.name).sort();
     expect(names).toEqual([
       "ask_user_question",
@@ -801,6 +806,11 @@ describe("Pi worker integration", () => {
       "browser_open",
       "browser_screenshot",
       "browser_snapshot",
+      "computer_act",
+      "computer_apps",
+      "computer_open",
+      "computer_screenshot",
+      "computer_snapshot",
       "edit",
       "find",
       "grep",
@@ -816,9 +826,9 @@ describe("Pi worker integration", () => {
     // The denylist from `init` is applied before the first turn, and tools whose external
     // binary is missing are never offered even though they stay listed in the catalogue.
     const catalog = ready.snapshot?.tools ?? [];
-    // Sub-agents is the one built-in that is off until the user switches it on.
+    // Sub-agents and computer use are the built-ins that are off until the user switches them on.
     const expectedActive = catalog
-      .filter((tool) => tool.available && tool.name !== "find" && tool.name !== "subagent")
+      .filter((tool) => tool.available && tool.name !== "find" && tool.name !== "subagent" && !tool.name.startsWith("computer_"))
       .map((tool) => tool.name)
       .sort();
     expect(ready.snapshot?.activeTools?.sort()).toEqual(expectedActive);
@@ -1185,6 +1195,100 @@ describe("built-in extensions", () => {
 
     worker.send({ id: crypto.randomUUID(), type: "set_tools", disabledTools: ["web_fetch"] });
     await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.includes("web_fetch") === false);
+    expect(worker.child.exitCode).toBeNull();
+  });
+
+  it("keeps computer use off until it is switched on, then round-trips a screenshot while the prompt holds the queue", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-computer-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker, ready } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "computer-task", undefined, undefined, undefined, undefined, true
+    );
+    cleanup.push(() => worker.shutdown());
+    expect(ready.snapshot?.tools?.some((tool) => tool.name === "computer_screenshot")).toBe(true);
+    expect(ready.snapshot?.activeTools?.some((name) => name.startsWith("computer_"))).toBe(false);
+
+    worker.send({ id: crypto.randomUUID(), type: "set_computer_use", enabled: true });
+    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.includes("computer_screenshot") === true);
+
+    // Wider than the 480px transcript preview, so the preview is a resized copy.
+    const shot = solidPng(1200, 30);
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "computer-run", message: 'mcp: computer_screenshot {"app":"TextEdit"}' });
+    const request = await worker.waitFor((output) => output.type === "computer_request");
+    expect(request.request).toEqual({ op: "screenshot", app: "TextEdit" });
+    // The response reaches the tool even though the running prompt holds the command queue.
+    worker.send({
+      id: crypto.randomUUID(), type: "computer_response", requestId: request.requestId, success: true,
+      result: {
+        stateId: "s1", app: { name: "TextEdit", bundleId: "com.apple.TextEdit", pid: 42 },
+        window: { id: 7, title: "Untitled", width: 32, height: 20 },
+        image: { mimeType: "image/png", data: shot, width: 1200, height: 30 }, coordinateScale: 2
+      }
+    });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    expect(JSON.stringify(provider.requests[1].body.messages)).toContain(shot);
+
+    // The transcript gets a preview on the result block; the original stays in the session.
+    await worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) =>
+      message.blocks.some((block) => block.type === "tool-result" && block.images?.[0]?.thumbnail?.startsWith("data:image/"))) === true);
+    const result = worker.view?.messages.flatMap((message) => message.blocks).find((block) => block.type === "tool-result" && block.images);
+    expect(result?.images?.[0]?.imageId).toBeTruthy();
+    expect(result?.text).toContain("stateId: s1");
+    expect(JSON.stringify(worker.view)).not.toContain(shot);
+
+    const id = crypto.randomUUID();
+    worker.send({ id, type: "tool_image", toolCallId: result?.toolCallId });
+    const original = await worker.waitFor((output) => output.type === "response" && output.id === id);
+    expect(original.result).toEqual({ type: "image", data: shot, mimeType: "image/png" });
+
+    worker.send({ id: crypto.randomUUID(), type: "set_computer_use", enabled: false });
+    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.includes("computer_screenshot") === false);
+    expect(worker.child.exitCode).toBeNull();
+  });
+
+  it("lets Plan mode look at an allowed app but never operate one", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-computer-plan-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "computer-plan", undefined, undefined, undefined, "plan", false,
+      { computerUse: { enabled: true } }
+    );
+    cleanup.push(() => worker.shutdown());
+
+    const before = provider.requests.length;
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "plan-act", message: 'mcp: computer_act {"app":"TextEdit","stateId":"s1","actions":[{"kind":"press","ref":"e1-0"}]}' });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && provider.requests.length > before + 1);
+    expect(JSON.stringify(provider.requests[before + 1].body.messages)).toContain("Plan mode may look at an app you've allowed but cannot open or operate one.");
+    expect(worker.outputs.some((output) => output.type === "computer_request")).toBe(false);
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "plan-look", message: 'mcp: computer_snapshot {"app":"TextEdit"}' });
+    const request = await worker.waitFor((output) => output.type === "computer_request");
+    expect(request.request).toEqual({ op: "snapshot", app: "TextEdit" });
+    worker.send({ id: crypto.randomUUID(), type: "computer_response", requestId: request.requestId, success: false, error: "TextEdit isn't running." });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === "plan-look");
+  });
+
+  it("cancels a pending computer-use request when the run is stopped", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-computer-stop-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "computer-stop", undefined, undefined, undefined, undefined, false,
+      { computerUse: { enabled: true } }
+    );
+    cleanup.push(() => worker.shutdown());
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "stop-run", message: "mcp: computer_apps {}" });
+    const request = await worker.waitFor((output) => output.type === "computer_request");
+    expect(request.request).toEqual({ op: "apps" });
+    worker.send({ id: crypto.randomUUID(), type: "abort" });
+    const cancel = await worker.waitFor((output) => output.type === "computer_cancel");
+    expect(cancel.requestId).toBe(request.requestId);
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
     expect(worker.child.exitCode).toBeNull();
   });
 

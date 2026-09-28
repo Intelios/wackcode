@@ -1,10 +1,13 @@
 import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { api } from "../api";
+import { agentName } from "../agentName";
 import { applyBuiltinModelSuggestion, mergeDiscoveredModels, modelIsReady, searchBuiltinModels } from "../model-utils";
 import { BROWSER_TOOL_NAMES, WEB_FETCH_TOOL_NAME, groupTools } from "../tool-utils";
-import type { ApiFormat, AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CommandsConfig, CustomProviderRecord, McpConfig, ModelRecord, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ThinkingLevel, ToolCatalogEntry } from "../types";
+import type { ApiFormat, AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CommandsConfig, ComputerUseConfig, CustomProviderRecord, McpConfig, ModelRecord, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ThinkingLevel, ToolCatalogEntry } from "../types";
 import { Icon, type IconName } from "./Icons";
 import { CommandsSection, type SlashCommandActions } from "./CommandsSection";
+import { ComputerUseSection, type ComputerUseActions } from "./ComputerUseSection";
+import { ComputerUseSetupDialog } from "./ComputerUseSetupDialog";
 import { IntegrationsSection } from "./IntegrationsSection";
 import { McpSection, type McpActions } from "./McpSection";
 import { PackagesSection, type PackageActions } from "./PackagesSection";
@@ -44,10 +47,20 @@ const COMMAND_ACTIONS: Omit<SlashCommandActions, "onChanged"> = {
   onSetEnabled: api.setSlashCommandEnabled,
   onReveal: api.revealPath
 };
+/** Settings › Computer use and its setup dialog talk to Rust directly, like Skills. */
+const COMPUTER_USE_ACTIONS: ComputerUseActions = {
+  onStatus: api.computerUseStatus,
+  onRequestPermission: api.computerUseRequestPermission,
+  onOpenSettings: api.computerUseOpenSettings,
+  onResetPermissions: api.computerUseResetPermissions,
+  onRelaunch: api.computerUseRelaunch,
+  onListApps: api.computerUseListApps
+};
+const COMPUTER_USE_OFF: ComputerUseConfig = { enabled: false, neverAllow: [] };
 let nextModelCardKey = 0;
 const newModelCardKeys = (count: number) => Array.from({ length: count }, () => ++nextModelCardKey);
 
-type SectionId = "providers" | "packages" | "skills" | "commands" | "tools" | "mcp" | "appearance" | "prompts" | "subagents" | "integrations";
+type SectionId = "providers" | "packages" | "skills" | "commands" | "tools" | "mcp" | "appearance" | "prompts" | "subagents" | "computer_use" | "integrations";
 
 interface Section {
   id: SectionId;
@@ -66,6 +79,8 @@ const SECTIONS: Section[] = [
   // Only listed while the built-in is switched on (Settings → Packages). Auto titles lives
   // on the same page, as an agent WackCode runs itself rather than one the model can call.
   { id: "subagents", label: "Sub-agents", icon: "agents" },
+  // Only listed while computer use is switched on (Settings → Packages).
+  { id: "computer_use", label: "Computer use", icon: "cursor" },
   { id: "appearance", label: "Appearance", icon: "palette" },
   { id: "prompts", label: "Prompts", icon: "pencil" }
 ];
@@ -85,6 +100,10 @@ interface Props extends PackageActions {
   onSetDisabledTools: (disabled: string[]) => Promise<void>;
   subagents: SubagentConfig;
   onSetSubagents: (config: SubagentConfig) => Promise<void>;
+  computerUse?: ComputerUseConfig;
+  /** macOS 14+: computer use can be switched on. */
+  computerUseSupported?: boolean;
+  onSetComputerUse?: (config: ComputerUseConfig) => Promise<void>;
   autoTitle: AutoTitleConfig;
   onSetAutoTitle: (config: AutoTitleConfig) => Promise<void>;
   appearance: AppearanceConfig;
@@ -107,12 +126,15 @@ interface Props extends PackageActions {
 export function SettingsPage({
   providers, packages, toolCatalog, disabledTools, appDataPath,
   onClose, onSave, onDelete, onConnectSubscription, onSignOutSubscription, connectedSubscriptionId, onSetDisabledTools,
-  subagents, onSetSubagents, autoTitle, onSetAutoTitle, appearance, glassSupported, onSetAppearance, onPreviewAppearance, backgroundImageUrl, onChooseBackgroundImage, onRemoveBackgroundImage, prompts, onSetPrompts, onCommandsChanged, mcp, mcpActions, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
+  subagents, onSetSubagents, computerUse = COMPUTER_USE_OFF, computerUseSupported = false, onSetComputerUse, autoTitle, onSetAutoTitle, appearance, glassSupported, onSetAppearance, onPreviewAppearance, backgroundImageUrl, onChooseBackgroundImage, onRemoveBackgroundImage, prompts, onSetPrompts, onCommandsChanged, mcp, mcpActions, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
 }: Props) {
   const [chosenSection, setSection] = useState<SectionId>("providers");
-  // Switching sub-agents off while its page is open lands on Packages, where the switch is.
-  const section: SectionId = chosenSection === "subagents" && !subagents.enabled ? "packages" : chosenSection;
-  const sections = SECTIONS.filter((item) => (item.id !== "subagents" || subagents.enabled) && (item.id !== "mcp" || mcpActions));
+  const [computerSetup, setComputerSetup] = useState(false);
+  // Switching sub-agents or computer use off while its page is open lands on Packages, where the switch is.
+  const section: SectionId =
+    (chosenSection === "subagents" && !subagents.enabled) || (chosenSection === "computer_use" && !computerUse.enabled) ? "packages" : chosenSection;
+  const sections = SECTIONS.filter((item) =>
+    (item.id !== "subagents" || subagents.enabled) && (item.id !== "computer_use" || computerUse.enabled) && (item.id !== "mcp" || mcpActions));
   const [selectedProviderId, setSelectedProviderId] = useState(providers[0]?.id ?? "new");
   const [builtinModels, setBuiltinModels] = useState<BuiltinModelSuggestion[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(true);
@@ -250,6 +272,14 @@ export function SettingsPage({
             subagentsEnabled={subagents.enabled}
             webFetchEnabled={!disabledTools.includes(WEB_FETCH_TOOL_NAME)}
             browserEnabled={BROWSER_TOOL_NAMES.every((name) => !disabledTools.includes(name))}
+            computerUseEnabled={computerUse.enabled}
+            computerUseSupported={computerUseSupported}
+            // Switching on goes through the setup dialog, which saves the setting itself.
+            onToggleComputerUse={onSetComputerUse && (async (enabled) => {
+              if (enabled) setComputerSetup(true);
+              else await onSetComputerUse({ ...computerUse, enabled: false });
+            })}
+            onConfigureComputerUse={() => setSection("computer_use")}
             autoTitlesEnabled={autoTitle.enabled}
             autoTitlesConfigured={providers.some((provider) => provider.id === autoTitle.providerId && provider.connected && provider.models.some((model) => model.id === autoTitle.modelId && modelIsReady(model)))}
             onToggleSubagents={(enabled) => onSetSubagents({ ...subagents, enabled })}
@@ -305,6 +335,21 @@ export function SettingsPage({
         )}
         {section === "prompts" && <PromptsSection config={prompts} onChange={onSetPrompts} />}
         {section === "mcp" && mcpActions && <McpSection servers={mcp?.servers ?? []} {...mcpActions} />}
+        {section === "computer_use" && onSetComputerUse && (
+          <ComputerUseSection config={computerUse} actions={COMPUTER_USE_ACTIONS} onChange={onSetComputerUse} />
+        )}
+        {computerSetup && onSetComputerUse && (
+          <ComputerUseSetupDialog
+            actions={COMPUTER_USE_ACTIONS}
+            agentName={agentName(appearance)}
+            onEnable={async () => {
+              await onSetComputerUse({ ...computerUse, enabled: true });
+              setComputerSetup(false);
+              setSection("computer_use");
+            }}
+            onCancel={() => setComputerSetup(false)}
+          />
+        )}
         {section === "subagents" && (
           <SubagentsSection
             config={subagents}

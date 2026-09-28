@@ -514,6 +514,28 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
   border: 1.5px solid var(--border-bright); border-top-color: var(--wc-accent);
   animation: spin .7s linear infinite;
 }
+/* screenshot previews under a computer_screenshot / browser_screenshot row (ToolRow.tsx) */
+.tool-images { display: flex; flex-wrap: wrap; gap: 6px; padding: 3px 0 5px 20px; }
+.tool-image {
+  position: relative; display: block; padding: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+  background: var(--wc-well); cursor: zoom-in; max-width: min(320px, 100%);
+  transition: transform .18s var(--ease), border-color .18s var(--ease), box-shadow .18s var(--ease);
+  animation: tool-image-in .32s var(--ease) both;
+}
+.tool-image img { display: block; max-width: 100%; max-height: 180px; object-fit: contain; }
+.tool-image:hover { transform: translateY(-1px); border-color: var(--wc-accent-line); box-shadow: 0 6px 18px rgb(0 0 0 / 22%); }
+.tool-image:focus-visible { outline: 2px solid color-mix(in srgb, var(--wc-accent) 70%, transparent); outline-offset: 2px; }
+.tool-image.pending {
+  width: 160px; height: 100px; cursor: default;
+  background: linear-gradient(100deg, var(--wc-well) 30%, var(--surface-hover) 50%, var(--wc-well) 70%) 0 0 / 300% 100%;
+  animation: tool-image-shimmer 1.3s linear infinite;
+}
+@keyframes tool-image-in { from { opacity: 0; transform: translateY(4px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes tool-image-shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .tool-image, .tool-image.pending { animation: none; transition: none; }
+  .tool-image:hover { transform: none; }
+}
 /* exploration groups: a run of read-only tool rows folded into one (ExploreGroup.tsx) */
 .explore-group { margin: 3px 0; font-size: 12.5px; }
 .explore-head {
@@ -678,6 +700,38 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 }
 .inline-dialog-card h3 { margin: 0 0 6px; font-size: 15px; font-weight: 650; letter-spacing: -.2px; }
 @keyframes slide-in-dialog { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+/* Computer use's per-app access card (ComputerAccessCard.tsx). The app's icon breathes in an
+   accent ring: this card is asking for something bigger than a question. */
+.computer-access-head { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; }
+.computer-access-icon {
+  position: relative; flex: 0 0 auto; width: 44px; height: 44px; display: grid; place-items: center;
+  border-radius: 12px; background: var(--wc-accent-tint); color: var(--wc-accent-text);
+}
+.computer-access-icon::after {
+  content: ""; position: absolute; inset: -4px; border-radius: 15px; border: 1.5px solid var(--wc-accent-ring);
+  animation: computer-access-ring 2.2s var(--ease) infinite;
+}
+.computer-access-icon img { width: 40px; height: 40px; }
+.computer-access-icon svg { width: 22px; height: 22px; }
+.computer-access-title { min-width: 0; }
+.computer-access-title h3 { margin-bottom: 2px; }
+.computer-access-id {
+  display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: "SFMono-Regular", Consolas, monospace; font-size: 10.5px; color: var(--text-dim);
+}
+.computer-access-body { margin: 0; color: var(--text-soft); font-size: 12px; line-height: 1.55; }
+.computer-access-body kbd, .computer-banner-key, .computer-settings kbd {
+  margin: 0; padding: 1px 5px; border: 1px solid var(--border-bright); border-radius: 5px;
+  background: var(--surface); color: var(--text-soft); font-size: 10.5px; white-space: nowrap;
+}
+.computer-access-actions .computer-access-never { margin-right: auto; color: var(--text-dim); }
+@keyframes computer-access-ring {
+  0% { opacity: .9; transform: scale(.94); }
+  70%, 100% { opacity: 0; transform: scale(1.12); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .computer-access-icon::after { animation: none; opacity: .6; }
+}
 
 /* ── Composer ──────────────────────────────────────── */
 .composer-wrap { flex: 0 0 auto; padding: 4px 24px 16px; background: linear-gradient(0deg, var(--wc-composer-fade) 78%, transparent); }
@@ -1257,6 +1311,24 @@ button.compact.primary:hover:not(:disabled) { background: var(--wc-accent-hover)
 
 /* ── Modals ────────────────────────────────────────── */
 .modal-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: rgb(3 4 3 / 68%); backdrop-filter: blur(8px); }
+/* A screenshot at full size (ui/ImageLightbox.tsx). */
+.image-lightbox { cursor: zoom-out; }
+.image-lightbox-figure { position: relative; margin: 0; cursor: default; }
+.image-lightbox-figure img {
+  display: block; max-width: min(92vw, 1600px); max-height: 86vh; border-radius: 10px;
+  border: 1px solid var(--border-bright); box-shadow: 0 24px 70px rgb(0 0 0 / 45%); background: var(--wc-well);
+  transition: filter .35s var(--ease);
+}
+.image-lightbox-figure img.preview { filter: blur(3px) saturate(.9); }
+.image-lightbox-close {
+  position: absolute; top: -12px; right: -12px; width: 28px; height: 28px; display: grid; place-items: center;
+  border: 1px solid var(--border-bright); border-radius: 50%; background: var(--wc-elevated); color: var(--text-soft); cursor: pointer;
+}
+.image-lightbox-close:hover { color: var(--text); }
+.image-lightbox-close svg { width: 13px; height: 13px; }
+@media (prefers-reduced-motion: reduce) {
+  .image-lightbox-figure img { transition: none; }
+}
 .subscription-login-dialog { width: min(480px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 10px; }
 .subscription-login-dialog .subscription-prompt { display: flex; flex-direction: column; gap: 8px; }
 .subscription-login-dialog .subscription-prompt input, .subscription-login-dialog .subscription-prompt select { width: 100%; }
@@ -1745,6 +1817,36 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   outline: 2px solid color-mix(in srgb, var(--wc-accent) 70%, transparent); outline-offset: 1px;
 }
 
+/* ── Computer use banner (ComputerUseBanner.tsx) ───── */
+/* While the agent is using an app: the pointer in the icon taps, so the banner reads as live. */
+.computer-banner-wrap { flex: 0 0 auto; padding: 0 24px 8px; animation: slide-in-dialog .18s var(--ease); }
+.computer-banner {
+  max-width: 760px; margin: 0 auto; display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px 6px 11px; border: 1px solid var(--wc-accent-line-soft); border-radius: 10px;
+  background: linear-gradient(90deg, var(--wc-accent-wash), var(--surface) 55%);
+}
+.computer-banner-icon { flex: 0 0 auto; display: grid; place-items: center; color: var(--wc-accent-text); }
+.computer-banner-icon svg { width: 14px; height: 14px; animation: computer-tap 1.8s var(--ease) infinite; transform-origin: 70% 70%; }
+.computer-banner-title { color: var(--wc-accent); font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+.computer-banner-detail {
+  min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-soft); font-size: 11.5px;
+}
+.computer-banner-stop {
+  flex: 0 0 auto; border: 1px solid var(--border); background: var(--surface); color: var(--text-soft);
+  font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 6px; cursor: pointer;
+}
+.computer-banner-stop:hover { color: var(--danger); border-color: var(--danger); }
+.computer-banner-stop:focus-visible { outline: 2px solid color-mix(in srgb, var(--wc-accent) 70%, transparent); outline-offset: 1px; }
+@keyframes computer-tap {
+  0%, 60%, 100% { transform: none; }
+  70% { transform: translate(1px, 1px) scale(.9); }
+  80% { transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .computer-banner-wrap, .computer-banner-icon svg { animation: none; }
+}
+
 /* ── SubAgent chips (SubagentChip.tsx) ─────────────── */
 /* One chip per child of a `subagent` call; a parallel call's chips hang off a shared rail. */
 .subagent-group { margin: 6px 0; display: flex; flex-direction: column; gap: 5px; }
@@ -2187,6 +2289,7 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   border-color: var(--wc-accent-ring); background: var(--wc-accent-tint); color: var(--wc-accent-text);
 }
 .package-icon.kind-subagents, .package-icon.kind-mcp { border-color: var(--wc-accent-ring); background: var(--wc-accent-tint); color: var(--wc-accent-text); }
+.package-icon.kind-computer_use { border-color: var(--wc-accent-ring); background: var(--wc-accent-tint); color: var(--wc-accent-text); }
 .package-icon.kind-web_fetch { color: var(--wc-accent-text); border-color: var(--wc-accent-line-soft); background: var(--wc-accent-wash); }
 .package-icon.kind-auto_titles { color: var(--warning); border-color: #5c4a22; }
 
@@ -2450,6 +2553,51 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .auto-title-package-card { border-color: var(--border-bright); }
 .subagents-settings .form-grid { align-items: start; }
 .subagent-hint { color: var(--text-dim); font-size: 10.5px; font-weight: 400; line-height: 1.45; }
+
+/* ── Settings › Computer use (ComputerUseSection.tsx) ── */
+.computer-settings .section-heading-row:first-child { padding-top: 0; }
+.computer-permissions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.computer-permission {
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
+  transition: border-color .25s var(--ease), background .25s var(--ease);
+}
+.computer-permission.granted { border-color: var(--wc-accent-line-soft); background: var(--wc-accent-wash); }
+.computer-permission-mark {
+  flex: 0 0 auto; width: 24px; height: 24px; display: grid; place-items: center; border-radius: 50%;
+  border: 1.5px solid var(--border-bright); color: var(--text-dim); font-size: 11px; font-weight: 700;
+}
+.computer-permission.granted .computer-permission-mark {
+  border-color: var(--wc-accent); background: var(--wc-accent); color: var(--wc-on-accent);
+  animation: computer-granted .45s cubic-bezier(.3, 1.6, .5, 1);
+}
+.computer-permission-mark svg { width: 13px; height: 13px; stroke-width: 2.4; }
+.computer-permission-text { min-width: 0; flex: 1 1 auto; display: flex; flex-direction: column; gap: 2px; }
+.computer-permission-text strong { font-size: 12.5px; }
+.computer-permission-text span { color: var(--text-dim); font-size: 11.5px; line-height: 1.45; }
+.computer-permission-text small { color: var(--warning); font-size: 11px; line-height: 1.45; }
+.computer-permission-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; }
+.computer-permission-state { color: var(--wc-accent-text); font-size: 11.5px; font-weight: 600; }
+.computer-note { margin: 10px 0 0; color: var(--text-dim); font-size: 11px; line-height: 1.55; }
+.computer-blocked { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.computer-blocked li { display: flex; align-items: center; gap: 8px; color: var(--text-soft); font-size: 11.5px; }
+.computer-blocked svg { flex: 0 0 auto; width: 11px; height: 11px; color: var(--text-faint); }
+.computer-never { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.computer-never li {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 4px 3px 10px;
+  border: 1px solid var(--border-bright); border-radius: 999px; background: var(--surface); font-size: 11.5px;
+}
+.computer-never code { color: var(--text-dim); font-size: 10.5px; }
+.computer-never-add { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.computer-never-add .settings-select { min-width: 200px; }
+.computer-never-add input { flex: 1 1 auto; min-width: 0; }
+.computer-settings .error-banner { margin-top: 10px; }
+.computer-setup { max-width: 540px; }
+.computer-setup .computer-permissions { margin: 14px 0 4px; }
+@keyframes computer-granted { from { transform: scale(.6); } to { transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .computer-permission, .computer-permission.granted .computer-permission-mark { animation: none; transition: none; }
+}
 .subagents-error { margin-bottom: 10px; }
 .subagent-group { margin-bottom: 18px; }
 .subagent-group h4 { margin: 0 0 8px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .08em; font-size: 9px; font-weight: 700; }

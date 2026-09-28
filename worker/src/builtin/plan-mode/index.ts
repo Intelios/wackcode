@@ -16,6 +16,7 @@ import type { BuiltinHost } from "../host.js";
 import { TODO_TOOL_NAME } from "../todo/types.js";
 import { WEB_FETCH_TOOL_NAME } from "../web-fetch/index.js";
 import { BROWSER_ACT_TOOL_NAME, BROWSER_CONSOLE_TOOL_NAME, BROWSER_OPEN_TOOL_NAME, BROWSER_SCREENSHOT_TOOL_NAME, BROWSER_SNAPSHOT_TOOL_NAME } from "../browser.js";
+import { COMPUTER_ACT_TOOL_NAME, COMPUTER_APPS_TOOL_NAME, COMPUTER_OPEN_TOOL_NAME, COMPUTER_SCREENSHOT_TOOL_NAME, COMPUTER_SNAPSHOT_TOOL_NAME } from "../computer-use/params.js";
 import {
   PLAN_MODE_COMPLETE_PARAMS,
   PLAN_MODE_COMPLETE_TOOL_NAME,
@@ -162,7 +163,8 @@ export function createPlanModeExtension(host: BuiltinHost, mcpTools?: PlanModeMc
       // list, never the workspace, so tracking a task list during planning stays on the
       // right side of the read-only policy. `subagent` refuses any agent that can edit files
       // while Plan mode is on, and read-only children run under this same shell policy.
-      // `web_fetch` only reads a public page.
+      // `web_fetch` only reads a public page. Computer use may list apps and look at a window
+      // the user has allowed (the access card is theirs to answer), never open or operate one.
       const helper =
         event.toolName === ASK_USER_QUESTION_TOOL_NAME ||
         event.toolName === PLAN_MODE_COMPLETE_TOOL_NAME ||
@@ -171,7 +173,10 @@ export function createPlanModeExtension(host: BuiltinHost, mcpTools?: PlanModeMc
         event.toolName === WEB_FETCH_TOOL_NAME ||
         event.toolName === BROWSER_SNAPSHOT_TOOL_NAME ||
         event.toolName === BROWSER_SCREENSHOT_TOOL_NAME ||
-        event.toolName === BROWSER_CONSOLE_TOOL_NAME;
+        event.toolName === BROWSER_CONSOLE_TOOL_NAME ||
+        event.toolName === COMPUTER_APPS_TOOL_NAME ||
+        event.toolName === COMPUTER_SNAPSHOT_TOOL_NAME ||
+        event.toolName === COMPUTER_SCREENSHOT_TOOL_NAME;
       if (!active) {
         return event.toolName === PLAN_MODE_COMPLETE_TOOL_NAME
           ? { block: true, reason: "plan_mode_complete is only available while Plan mode is active." }
@@ -180,6 +185,9 @@ export function createPlanModeExtension(host: BuiltinHost, mcpTools?: PlanModeMc
       if (helper) return undefined;
       if (event.toolName === BROWSER_OPEN_TOOL_NAME || event.toolName === BROWSER_ACT_TOOL_NAME) {
         return { block: true, reason: `Plan mode may inspect an existing browser page but cannot ${event.toolName === BROWSER_OPEN_TOOL_NAME ? "open or navigate it" : "interact with it"}.` };
+      }
+      if (event.toolName === COMPUTER_OPEN_TOOL_NAME || event.toolName === COMPUTER_ACT_TOOL_NAME) {
+        return { block: true, reason: "Plan mode may look at an app you've allowed but cannot open or operate one." };
       }
 
       // MCP tools come from servers the user added. One the server marks read-only

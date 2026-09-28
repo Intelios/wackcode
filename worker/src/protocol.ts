@@ -428,6 +428,11 @@ export interface InitCommand {
   skills?: UserSkillsPayload;
   /** The user's own commands and the switched-off keys. Live via `set_commands`. */
   commands?: UserCommandsPayload;
+  /**
+   * Computer use. Off (absent, null or `enabled: false`) until the user switches it on and this
+   * Mac supports it; live via `set_computer_use`. The host enforces it on every request anyway.
+   */
+  computerUse?: { enabled: boolean } | null;
 }
 
 export interface WorkerResources {
@@ -622,8 +627,16 @@ export type WorkerCommand =
   | { id: string; type: "set_mcp"; servers: McpServerSpec[] }
   | { id: string; type: "set_skills"; skills: UserSkillsPayload }
   | { id: string; type: "set_commands"; commands: UserCommandsPayload }
+  | { id: string; type: "set_computer_use"; enabled: boolean }
   | { id: string; type: "browser_response"; requestId: string; success: true; result: unknown }
   | { id: string; type: "browser_response"; requestId: string; success: false; error: string }
+  | { id: string; type: "computer_response"; requestId: string; success: true; result: unknown }
+  | { id: string; type: "computer_response"; requestId: string; success: false; error: string }
+  /**
+   * The original image of a screenshot tool result (answered with an `ImageContent` or null),
+   * for the transcript's lightbox. Bypasses the command queue once the session exists.
+   */
+  | { id: string; type: "tool_image"; toolCallId: string; index?: number }
   | {
       id: string;
       type: "extension_ui_response";
@@ -653,6 +666,12 @@ export interface NormalizedBlock {
   arguments?: unknown;
   isError?: boolean;
   details?: unknown;
+  /**
+   * Screenshot tool results: in-memory previews of the result's images, like image blocks'
+   * `thumbnail` (absent until generated). Never persisted in `details`; the original comes from
+   * `tool_image`.
+   */
+  images?: { imageId: string; thumbnail?: string }[];
 }
 
 /** The other versions of a user message: edits and retries sent from the same point. */
@@ -847,6 +866,8 @@ export type WorkerOutput =
   | { type: "worker_error"; taskId?: string; message: string }
   | { type: "browser_request"; taskId: string; requestId: string; request: Record<string, unknown> }
   | { type: "browser_cancel"; taskId: string; requestId: string }
+  | { type: "computer_request"; taskId: string; requestId: string; request: Record<string, unknown> }
+  | { type: "computer_cancel"; taskId: string; requestId: string }
   | ({ type: "extension_ui_request"; taskId: string; requestId: string } & ExtensionUIRequest)
   | { type: "extension_ui_resolved"; taskId: string; requestId: string; cancelled: boolean }
   | { type: "extension_notice"; taskId: string; message: string; level: "info" | "warning" | "error" }

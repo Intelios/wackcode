@@ -7,7 +7,8 @@ import { join } from "node:path";
 // Type-only: erased at build time, so Pi still loads solely through the dynamic import in initialize().
 import type { PromptTemplate, ResourceLoader } from "@earendil-works/pi-coding-agent";
 import { SWITCHABLE_BUILTIN_TOOLS, createBuiltinExtensions } from "./builtin/index.js";
-import { BROWSER_TOOL_NAMES } from "./builtin/browser.js";
+import { BROWSER_SCREENSHOT_TOOL_NAME, BROWSER_TOOL_NAMES } from "./builtin/browser.js";
+import { COMPUTER_SCREENSHOT_TOOL_NAME, COMPUTER_TOOL_NAMES } from "./builtin/computer-use/params.js";
 import { GOAL_VERIFIER_SYSTEM } from "./builtin/goal/prompt.js";
 import { runGoalVerification } from "./builtin/goal/verify.js";
 import type { BuiltinHost, SubagentOutcome } from "./builtin/host.js";
@@ -130,21 +131,54 @@ let disabledTools = new Set<string>();
 let subagentRunner: SubagentRunner | undefined;
 /** Aborts the wait for MCP servers at the start of a run, when the user presses Stop. */
 let mcpWait: AbortController | undefined;
-interface PendingBrowserRequest {
+/** Which native host subsystem a request goes to: the per-chat browser or computer use. */
+type NativeChannel = "browser" | "computer";
+interface PendingNativeRequest {
+  channel: NativeChannel;
   resolve(value: unknown): void;
   reject(error: Error): void;
   detach(): void;
 }
-/** Native browser requests bypass the prompt queue in both directions to avoid tool deadlocks. */
-const pendingBrowserRequests = new Map<string, PendingBrowserRequest>();
+/** Native host requests bypass the prompt queue in both directions to avoid tool deadlocks. */
+const pendingNativeRequests = new Map<string, PendingNativeRequest>();
 
-function cancelPendingBrowserRequests(message = "Browser action cancelled."): void {
-  for (const [requestId, pending] of pendingBrowserRequests) {
+const NATIVE_CANCELLED: Record<NativeChannel, string> = {
+  browser: "Browser action cancelled.",
+  computer: "Computer use was stopped.",
+};
+const NATIVE_WORKER_STOPPED: Record<NativeChannel, string> = {
+  browser: "Browser action cancelled because the worker stopped.",
+  computer: "Computer use was stopped because the chat's worker stopped.",
+};
+
+/** Rejects every pending native request and tells the host, which stops the work it can. */
+function cancelPendingNativeRequests(stopping = false): void {
+  for (const [requestId, pending] of pendingNativeRequests) {
     pending.detach();
-    pending.reject(new Error(message));
-    if (taskId) send({ type: "browser_cancel", taskId, requestId });
+    pending.reject(new Error((stopping ? NATIVE_WORKER_STOPPED : NATIVE_CANCELLED)[pending.channel]));
+    if (taskId) send({ type: `${pending.channel}_cancel`, taskId, requestId });
   }
-  pendingBrowserRequests.clear();
+  pendingNativeRequests.clear();
+}
+
+function nativeRequest(channel: NativeChannel, request: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+  if (!taskId) return Promise.reject(new Error("Worker is not initialized"));
+  if (signal?.aborted) return Promise.reject(new Error(NATIVE_CANCELLED[channel]));
+  const requestId = crypto.randomUUID();
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      const pending = pendingNativeRequests.get(requestId);
+      if (!pending) return;
+      pendingNativeRequests.delete(requestId);
+      pending.detach();
+      send({ type: `${channel}_cancel`, taskId: taskId!, requestId });
+      reject(new Error(NATIVE_CANCELLED[channel]));
+    };
+    const detach = () => signal?.removeEventListener("abort", onAbort);
+    pendingNativeRequests.set(requestId, { channel, resolve, reject, detach });
+    signal?.addEventListener("abort", onAbort, { once: true });
+    send({ type: `${channel}_request`, taskId: taskId!, requestId, request });
+  });
 }
 /** The user's own skill folders (Settings › Skills) and what they held at the last scan. */
 let userSkillsPayload: UserSkillsPayload | undefined;
@@ -223,7 +257,7 @@ const builtinHost: BuiltinHost = {
   },
   childToolNames: () =>
     toolCatalog()
-      .filter((tool) => !BROWSER_TOOL_NAMES.includes(tool.name as typeof BROWSER_TOOL_NAMES[number]) && (tool.source.kind === "builtin" || SWITCHABLE_BUILTIN_TOOLS.has(tool.name)) && tool.available && !disabledTools.has(tool.name))
+      .filter((tool) => !BROWSER_TOOL_NAMES.includes(tool.name as typeof BROWSER_TOOL_NAMES[number]) && !COMPUTER_TOOL_NAMES.includes(tool.name as typeof COMPUTER_TOOL_NAMES[number]) && (tool.source.kind === "builtin" || SWITCHABLE_BUILTIN_TOOLS.has(tool.name)) && tool.available && !disabledTools.has(tool.name))
       .map((tool) => tool.name),
   runSubagent: async (request) => {
     if (!subagentRunner) throw new Error("Worker is not initialized");
@@ -241,25 +275,8 @@ const builtinHost: BuiltinHost = {
   redact: (text) => redactCredentials(text),
   notice: (message, level) => notice(safeError(message), level),
   workspace: () => workspacePath,
-  browser: (request, signal) => {
-    if (!taskId) return Promise.reject(new Error("Worker is not initialized"));
-    if (signal?.aborted) return Promise.reject(new Error("Browser action cancelled."));
-    const requestId = crypto.randomUUID();
-    return new Promise((resolve, reject) => {
-      const onAbort = () => {
-        const pending = pendingBrowserRequests.get(requestId);
-        if (!pending) return;
-        pendingBrowserRequests.delete(requestId);
-        pending.detach();
-        send({ type: "browser_cancel", taskId: taskId!, requestId });
-        reject(new Error("Browser action cancelled."));
-      };
-      const detach = () => signal?.removeEventListener("abort", onAbort);
-      pendingBrowserRequests.set(requestId, { resolve, reject, detach });
-      signal?.addEventListener("abort", onAbort, { once: true });
-      send({ type: "browser_request", taskId: taskId!, requestId, request });
-    });
-  },
+  browser: (request, signal) => nativeRequest("browser", request, signal),
+  computer: (request, signal) => nativeRequest("computer", request, signal),
   supportsVision: () => Boolean((session?.model?.input as string[] | undefined)?.includes("image")),
 };
 const builtins = createBuiltinExtensions(builtinHost);
@@ -425,6 +442,11 @@ function toolUpdateText(partialResult: unknown): string {
 // Snapshots carry a small preview of each image, never the original: a snapshot is re-sent on
 // every message boundary, and the originals can run to megabytes each.
 const THUMBNAIL_OPTIONS = { maxWidth: 512, maxHeight: 512, maxBytes: 128 * 1024 };
+// Screenshot tool results can come by the dozen, and every full snapshot re-sends their previews,
+// so theirs are smaller. The lightbox fetches the original on demand (`tool_image`).
+const RESULT_THUMBNAIL_OPTIONS = { maxWidth: 480, maxHeight: 480, maxBytes: 64 * 1024 };
+/** Tool results whose images the transcript previews; every other result's images stay model-only. */
+const THUMBNAIL_RESULT_TOOLS: ReadonlySet<string> = new Set([COMPUTER_SCREENSHOT_TOOL_NAME, BROWSER_SCREENSHOT_TOOL_NAME]);
 
 interface ImagePreview {
   id: string;
@@ -438,7 +460,7 @@ let nextImageId = 0;
 // One preview at a time: each resize spawns a thread, and a restored session may hold dozens.
 let previewQueue = Promise.resolve();
 
-function imageBlock(block: Record<string, unknown>): NormalizedBlock {
+function imageBlock(block: Record<string, unknown>, options = THUMBNAIL_OPTIONS): NormalizedBlock {
   const mimeType = typeof block.mimeType === "string" ? block.mimeType : "image/png";
   let preview = imagePreviews.get(block);
   if (!preview) {
@@ -450,7 +472,7 @@ function imageBlock(block: Record<string, unknown>): NormalizedBlock {
       previewQueue = previewQueue
         .then(async () => {
           if (!piModule) return;
-          const resized = await piModule.resizeImage(Buffer.from(data, "base64"), mimeType, THUMBNAIL_OPTIONS);
+          const resized = await piModule.resizeImage(Buffer.from(data, "base64"), mimeType, options);
           if (!resized) return;
           created.url = `data:${resized.mimeType};base64,${resized.data}`;
           // The owning message's cached normalization still has no thumbnail; drop only that
@@ -482,7 +504,8 @@ function normalizeBlocks(content: unknown, role: string, thinking?: ThinkingDura
     if (block.type === "text") return [{ type: "text", text: String(block.text ?? "") }];
     // A tool result's images (e.g. `read` on a PNG) still reach the model; the transcript shows
     // only its text. Left in, each would become an empty result sharing the call's id and
-    // overwrite the real one.
+    // overwrite the real one. Screenshot tools' images ride their result block instead
+    // (`normalizeMessage`).
     if (block.type === "image") return role === "toolResult" ? [] : [imageBlock(block)];
     if (block.type === "thinking") {
       const durationMs = thinking?.[thought++];
@@ -510,6 +533,14 @@ function normalizeMessage(message: unknown, index: number, thinking?: ThinkingDu
   if (rawRole === "toolResult") {
     // An image-only result still has to mark its call as finished.
     if (blocks.length === 0) blocks.push({ type: "tool-result", text: "" });
+    // The transcript keeps the last block per call id, so a screenshot's previews go on that one.
+    if (typeof raw.toolName === "string" && THUMBNAIL_RESULT_TOOLS.has(raw.toolName) && Array.isArray(raw.content)) {
+      const images = (raw.content as unknown[])
+        .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null && (item as { type?: unknown }).type === "image")
+        .map((item) => imageBlock(item, RESULT_THUMBNAIL_OPTIONS))
+        .map(({ imageId, thumbnail }) => ({ imageId: imageId as string, ...(thumbnail ? { thumbnail } : {}) }));
+      if (images.length) blocks[blocks.length - 1].images = images;
+    }
     for (const block of blocks) {
       block.type = "tool-result";
       block.toolName = typeof raw.toolName === "string" ? raw.toolName : undefined;
@@ -532,6 +563,7 @@ function normalizeMessage(message: unknown, index: number, thinking?: ThinkingDu
   // invalidate exactly this message's cache entry when it does.
   for (const block of blocks) {
     if (block.type === "image" && block.imageId) imageOwners.set(block.imageId, message);
+    for (const image of block.images ?? []) imageOwners.set(image.imageId, message);
   }
   return normalized;
 }
@@ -616,12 +648,12 @@ function toolCatalog(): ToolCatalogEntry[] {
 // tools contributed by a newly installed package on by default. Built-in extension tools are
 // exempt: the denylist is never offered for them and a disabled plan_mode_complete would
 // silently break Plan mode. Two exceptions: web_fetch is switched off through this same
-// denylist (`SWITCHABLE_BUILTIN_TOOLS`, from its Built-ins card), and sub-agents, which has its
-// own setting, says which of its tools must stay out while it is off. MCP tools have their own
+// denylist (`SWITCHABLE_BUILTIN_TOOLS`, from its Built-ins card), and sub-agents and computer use,
+// which have their own settings, say which of their tools must stay out while off. MCP tools have their own
 // switches too (Settings › MCP servers), and stay out while their server is off or unreachable.
 function applyDisabledTools(): void {
   if (!session) return;
-  const inactive = new Set([...builtins.subagents.inactiveTools(), ...builtins.mcp.inactiveTools()]);
+  const inactive = new Set([...builtins.subagents.inactiveTools(), ...builtins.mcp.inactiveTools(), ...builtins.computerUse.inactiveTools()]);
   session.setActiveToolsByName(
     toolCatalog()
       .filter((tool) => tool.available && !inactive.has(tool.name))
@@ -1177,6 +1209,7 @@ async function initialize(command: InitCommand): Promise<void> {
   });
   applySubagents(command.subagents ?? null);
   builtins.mcp.configure(command.mcp ?? []);
+  builtins.computerUse.configure(command.computerUse?.enabled === true);
   // Before any contract can be published: the plan-mode extension composes each contract from
   // the current overrides, and the restored session's reconcile runs right after creation.
   setPromptOverrides(command.prompts);
@@ -1615,16 +1648,19 @@ async function handle(command: WorkerCommand): Promise<void> {
       await initialize(command);
     } else if (!session || !taskId) {
       throw new Error("Worker is not initialized");
-    } else if (command.type === "browser_response") {
-      const pending = pendingBrowserRequests.get(command.requestId);
+    } else if (command.type === "browser_response" || command.type === "computer_response") {
+      const pending = pendingNativeRequests.get(command.requestId);
       if (!pending) return;
-      pendingBrowserRequests.delete(command.requestId);
+      pendingNativeRequests.delete(command.requestId);
       pending.detach();
       if (command.success) pending.resolve(command.result);
       else pending.reject(new Error(command.error));
       return;
     } else if (command.type === "list_commands") {
       respond(command.id, refreshCommandCatalog());
+      return;
+    } else if (command.type === "tool_image") {
+      respond(command.id, toolResultImage(command.toolCallId, command.index ?? 0));
       return;
     } else if (command.type === "execute_command") {
       const entry = commandCatalog.find((candidate) => candidate.item.id === command.commandId);
@@ -1779,7 +1815,7 @@ async function handle(command: WorkerCommand): Promise<void> {
       }
     } else if (command.type === "abort") {
       builtins.autoTitle.abort();
-      cancelPendingBrowserRequests();
+      cancelPendingNativeRequests();
       // Stop pauses a live goal rather than ending it — the user resumes with /goal resume.
       builtins.goal.userStop();
       activeTitleCredential = undefined;
@@ -1919,6 +1955,12 @@ async function handle(command: WorkerCommand): Promise<void> {
       applySubagents(command.subagents);
       applyDisabledTools();
       emitSnapshot();
+    } else if (command.type === "set_computer_use") {
+      // Queued, so the tools never vanish under a running call; the host has already stopped
+      // any computer-use work of this chat and cleared its grants when it was switched off.
+      builtins.computerUse.configure(command.enabled);
+      applyDisabledTools();
+      emitSnapshot();
     } else if (command.type === "set_prompts") {
       // Queued so a prompt's text never changes under the run that quoted it. Re-applying the
       // active tools forces Pi's per-request system-prompt rebuild, which re-reads the persona
@@ -1942,7 +1984,7 @@ async function handle(command: WorkerCommand): Promise<void> {
       if (refreshUserCommands()) applyDisabledTools();
       if (commandCatalog.length) refreshCommandCatalog();
     } else if (command.type === "shutdown") {
-      cancelPendingBrowserRequests("Browser action cancelled because the worker stopped.");
+      cancelPendingNativeRequests(true);
       await subagentRunner?.abortAll();
       if (!session.isIdle) await session.abort();
       session.dispose();
@@ -1973,7 +2015,25 @@ function closeMcpServers(): Promise<void> {
 }
 
 /** Commands the host sends with `worker::request` and whose failures it reports itself. */
-const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "list_commands", "execute_command", "init_agents", "compact", "dequeue", "queue_message", "goal_control", "watch_subagent"]);
+const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "list_commands", "execute_command", "init_agents", "compact", "dequeue", "queue_message", "goal_control", "watch_subagent", "tool_image"]);
+
+/**
+ * The original of a screenshot tool result's image, for the transcript's lightbox. Only the
+ * tools whose previews the transcript shows (`THUMBNAIL_RESULT_TOOLS`) answer: other results'
+ * images stay model-only.
+ */
+function toolResultImage(toolCallId: string, index: number): ImageContent | null {
+  if (!session) return null;
+  const messages = session.messages as unknown as Record<string, unknown>[];
+  for (let position = messages.length - 1; position >= 0; position -= 1) {
+    const message = messages[position];
+    if (message?.role !== "toolResult" || message.toolCallId !== toolCallId) continue;
+    if (typeof message.toolName !== "string" || !THUMBNAIL_RESULT_TOOLS.has(message.toolName) || !Array.isArray(message.content)) return null;
+    const image = (message.content as Record<string, unknown>[]).filter((block) => block?.type === "image")[index];
+    return image && typeof image.data === "string" && typeof image.mimeType === "string" ? { type: "image", data: image.data, mimeType: image.mimeType } : null;
+  }
+  return null;
+}
 
 /**
  * A finished sub-agent's transcript, saved on its call's result in the session. Only the
@@ -2056,8 +2116,9 @@ process.stdin.on("data", (chunk: Buffer) => {
     // Goal pause/resume/clear bypass too — they act on a live loop; only "set" queues, since
     // starting a run behind another run is exactly what the queue is for. So does watching a
     // sub-agent, since the panel opens on a child while the call running it holds the queue —
-    // but only once the session exists: before that it waits its turn behind `init`.
-    if (command.type === "abort" || command.type === "browser_response" || command.type === "extension_ui_response" || command.type === "queue_message" || command.type === "dequeue" || (command.type === "watch_subagent" && session !== undefined) || (command.type === "goal_control" && command.action !== "set")) {
+    // but only once the session exists: before that it waits its turn behind `init`. Fetching a
+    // screenshot for the lightbox only reads the session, so it bypasses on the same terms.
+    if (command.type === "abort" || command.type === "browser_response" || command.type === "computer_response" || command.type === "extension_ui_response" || command.type === "queue_message" || command.type === "dequeue" || ((command.type === "watch_subagent" || command.type === "tool_image") && session !== undefined) || (command.type === "goal_control" && command.action !== "set")) {
       void handle(command).catch((error) => {
         send({ type: "worker_error", taskId, message: safeError(error) });
       });
@@ -2074,7 +2135,7 @@ process.on("SIGTERM", () => {
   void (async () => {
     try {
       builtins.autoTitle.abort();
-      cancelPendingBrowserRequests("Browser action cancelled because the worker stopped.");
+      cancelPendingNativeRequests(true);
       await subagentRunner?.abortAll();
       if (session && !session.isIdle) await session.abort();
       session?.dispose();

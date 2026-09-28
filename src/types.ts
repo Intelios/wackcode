@@ -691,7 +691,47 @@ export interface AppData {
   mcp: McpConfig;
   skills?: SkillsConfig;
   commands?: CommandsConfig;
+  computerUse?: ComputerUseConfig;
   window?: WindowState | null;
+}
+
+/** The computer-use built-in. Off by default; per-app grants are never stored. */
+export interface ComputerUseConfig {
+  enabled: boolean;
+  /** Bundle ids the agent may never use, on top of the built-in block list. */
+  neverAllow: string[];
+}
+
+/** Live permission state from `computer_use_status`. */
+export interface ComputerUseStatus {
+  /** macOS 14+ (ScreenCaptureKit's `SCScreenshotManager`). */
+  supported: boolean;
+  accessibility: boolean;
+  /** Effective, not just cached: a grant from an earlier build reads false. */
+  screenRecording: boolean;
+  /** False when another app already owns the ⌃⌥⌘. stop shortcut. */
+  hotkeyAvailable: boolean;
+  /** Dev builds are launched from a shell, which macOS credits the permissions to. */
+  devBuild: boolean;
+}
+
+export type ComputerAccessDecision = "allow" | "deny" | "never";
+
+/** An access card Rust raised: the first time a chat's agent wants to use an app. */
+export interface ComputerAccessRequest {
+  taskId: string;
+  requestId: string;
+  /** The app is not running yet: allowing also launches it. */
+  launch: boolean;
+  app: { name: string; bundleId?: string | null; path?: string | null; icon?: string | null };
+}
+
+/** Whether a chat is using computer use right now, and on which app. */
+export interface ComputerState {
+  active: boolean;
+  app?: string | null;
+  /** The ⌃⌥⌘. stop shortcut is registered. */
+  hotkey: boolean;
 }
 
 export interface BootstrapPayload {
@@ -699,6 +739,8 @@ export interface BootstrapPayload {
   appDataPath: string;
   /** Liquid Glass needs macOS 26+ (`NSGlassEffectView`). */
   glassSupported: boolean;
+  /** Computer use needs macOS 14+ (`SCScreenshotManager`). */
+  computerUseSupported?: boolean;
 }
 
 export interface NormalizedBlock {
@@ -717,6 +759,9 @@ export interface NormalizedBlock {
   arguments?: unknown;
   isError?: boolean;
   details?: unknown;
+  /** Screenshot tool results: in-memory previews (`thumbnail` absent until generated); the
+   *  original comes from `api.toolImage`. */
+  images?: { imageId: string; thumbnail?: string }[];
 }
 
 /**
@@ -963,7 +1008,11 @@ export type WorkerEvent =
   /** The watched sub-agent's transcript (`watch_subagent`). */
   | ({ type: "subagent_stream"; taskId: string } & SubagentStreamFrame)
   /** From the host, once per chat per session: why file checkpoints are off for it. */
-  | { type: "checkpoint_unavailable"; taskId: string; message: string };
+  | { type: "checkpoint_unavailable"; taskId: string; message: string }
+  /** From the host (computer use): an access card to show, and its end (answered or stopped). */
+  | ({ type: "computer_access_request" } & ComputerAccessRequest)
+  | { type: "computer_access_resolved"; taskId: string; requestId: string; decision: ComputerAccessDecision | "cancelled" }
+  | { type: "computer_state"; taskId: string; computer: ComputerState };
 
 export interface TaskRuntime {
   slashCommands?: SlashCommand[];
@@ -993,6 +1042,8 @@ export interface TaskRuntime {
   queued?: { steer: string[]; followUp: string[] };
   /** The most recent file restore, offered for undo until dismissed. */
   lastRestore?: { count: number; undo: CheckpointRef };
+  /** Computer use in this chat, while a run is using it. */
+  computer?: ComputerState;
 }
 
 export interface GitChangeFile {

@@ -32,7 +32,7 @@ interface BuiltinExtension {
   description: string;
   tools: readonly string[];
   icon: IconName;
-  kind?: "subagents" | "auto_titles" | "web_fetch" | "browser" | "mcp";
+  kind?: "subagents" | "auto_titles" | "web_fetch" | "browser" | "computer_use" | "mcp";
 }
 
 /**
@@ -78,6 +78,14 @@ const BUILTIN_EXTENSIONS: readonly BuiltinExtension[] = [
     tools: ["browser_open", "browser_snapshot", "browser_act", "browser_screenshot", "browser_console"],
     icon: "browser",
     kind: "browser"
+  },
+  {
+    name: "Computer use",
+    description:
+      "Lets the agent open, look at and operate native app windows — for checking the apps it builds. Off by default: it needs macOS's Accessibility and Screen Recording permissions, the agent asks in the chat before using each app, and ⌃⌥⌘. stops it.",
+    tools: ["computer_apps", "computer_open", "computer_snapshot", "computer_screenshot", "computer_act"],
+    icon: "cursor",
+    kind: "computer_use"
   },
   {
     name: "Web Fetch",
@@ -130,11 +138,17 @@ interface Props extends PackageActions {
   /** On unless `web_fetch` is in the tool denylist. */
   webFetchEnabled?: boolean;
   browserEnabled?: boolean;
+  computerUseEnabled?: boolean;
+  /** macOS 14+; otherwise the switch stays off. */
+  computerUseSupported?: boolean;
   autoTitlesEnabled?: boolean;
   autoTitlesConfigured?: boolean;
   onToggleSubagents?: (enabled: boolean) => Promise<void>;
   onToggleWebFetch?: (enabled: boolean) => Promise<void>;
   onToggleBrowser?: (enabled: boolean) => Promise<void>;
+  onToggleComputerUse?: (enabled: boolean) => Promise<void>;
+  /** Opens Settings → Computer use. */
+  onConfigureComputerUse?: () => void;
   onToggleAutoTitles?: (enabled: boolean) => Promise<void>;
   onConfigureAutoTitles?: () => void;
   /** Opens Settings → Sub-agents. */
@@ -146,8 +160,9 @@ interface Props extends PackageActions {
 type Tab = "installed" | "browse";
 
 export function PackagesSection({
-  packages, subagentsEnabled = false, webFetchEnabled = true, browserEnabled = true, autoTitlesEnabled = false, autoTitlesConfigured = false,
-  onToggleSubagents, onToggleWebFetch, onToggleBrowser, onToggleAutoTitles, onConfigureSubagents, onConfigureAutoTitles, onConfigureMcp,
+  packages, subagentsEnabled = false, webFetchEnabled = true, browserEnabled = true, computerUseEnabled = false, computerUseSupported = true,
+  autoTitlesEnabled = false, autoTitlesConfigured = false,
+  onToggleSubagents, onToggleWebFetch, onToggleBrowser, onToggleComputerUse, onConfigureComputerUse, onToggleAutoTitles, onConfigureSubagents, onConfigureAutoTitles, onConfigureMcp,
   onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
 }: Props) {
   const [tab, setTab] = useState<Tab>("installed");
@@ -288,7 +303,7 @@ export function PackagesSection({
       <div className="section-heading-row builtin-heading">
         <div>
           <h3>Built-In</h3>
-          <p>Compiled into WackCode — you don&rsquo;t need a package for these. Sub-agents, Browser preview, Web Fetch and Auto chat titles are optional, and MCP does nothing until you add a server.</p>
+          <p>Compiled into WackCode — you don&rsquo;t need a package for these. Sub-agents, Browser preview, Computer use, Web Fetch and Auto chat titles are optional, and MCP does nothing until you add a server.</p>
         </div>
       </div>
       <div className="package-grid">
@@ -296,7 +311,7 @@ export function PackagesSection({
           <BuiltinCard
             key={extension.name}
             extension={extension}
-            enabled={extension.kind === "subagents" ? subagentsEnabled : extension.kind === "browser" ? browserEnabled : extension.kind === "web_fetch" ? webFetchEnabled : extension.kind === "auto_titles" ? autoTitlesEnabled : true}
+            enabled={extension.kind === "subagents" ? subagentsEnabled : extension.kind === "browser" ? browserEnabled : extension.kind === "computer_use" ? computerUseEnabled : extension.kind === "web_fetch" ? webFetchEnabled : extension.kind === "auto_titles" ? autoTitlesEnabled : true}
             busy={busy}
             onToggle={extension.kind === "subagents" && onToggleSubagents
               ? (enabled) => void run(() => onToggleSubagents(enabled)).catch(() => undefined)
@@ -304,11 +319,14 @@ export function PackagesSection({
               ? (enabled) => void run(() => onToggleWebFetch(enabled)).catch(() => undefined)
               : extension.kind === "browser" && onToggleBrowser
               ? (enabled) => void run(() => onToggleBrowser(enabled)).catch(() => undefined)
+              : extension.kind === "computer_use" && onToggleComputerUse
+              ? (enabled) => void run(() => onToggleComputerUse(enabled)).catch(() => undefined)
               : extension.kind === "auto_titles" && onToggleAutoTitles
               ? (enabled) => void run(() => onToggleAutoTitles(enabled)).catch(() => undefined)
               : undefined}
-            onConfigure={extension.kind === "subagents" ? onConfigureSubagents : extension.kind === "auto_titles" ? onConfigureAutoTitles : extension.kind === "mcp" ? onConfigureMcp : undefined}
-            toggleDisabled={extension.kind === "auto_titles" && !autoTitlesEnabled && (!autoTitlesConfigured || !subagentsEnabled)}
+            onConfigure={extension.kind === "subagents" ? onConfigureSubagents : extension.kind === "computer_use" ? onConfigureComputerUse : extension.kind === "auto_titles" ? onConfigureAutoTitles : extension.kind === "mcp" ? onConfigureMcp : undefined}
+            toggleDisabled={(extension.kind === "auto_titles" && !autoTitlesEnabled && (!autoTitlesConfigured || !subagentsEnabled)) || (extension.kind === "computer_use" && !computerUseEnabled && !computerUseSupported)}
+            disabledReason={extension.kind === "computer_use" ? "Requires macOS 14 or later" : undefined}
             subagentsOff={extension.kind === "auto_titles" && !subagentsEnabled}
           />
         ))}
@@ -345,6 +363,8 @@ interface BuiltinCardProps {
   enabled: boolean;
   busy: boolean;
   toggleDisabled?: boolean;
+  /** Tooltip for a disabled switch; auto titles has its own. */
+  disabledReason?: string;
   /** Auto titles only: the Sub-agents built-in it rides is off, so setup and enabling are blocked. */
   subagentsOff?: boolean;
   /** Present only for a built-in with an off switch. */
@@ -356,7 +376,7 @@ interface BuiltinCardProps {
  *  sub-agents, browser preview and web fetch have a live one. Auto titles lives on the Sub-agents page, so its
  *  Set up is blocked while that built-in is off. MCP is always on and has its own page, where
  *  each server has a switch. */
-function BuiltinCard({ extension, enabled, busy, toggleDisabled = false, subagentsOff = false, onToggle, onConfigure }: BuiltinCardProps) {
+function BuiltinCard({ extension, enabled, busy, toggleDisabled = false, disabledReason, subagentsOff = false, onToggle, onConfigure }: BuiltinCardProps) {
   const autoTitles = extension.kind === "auto_titles";
   return (
     <article className={`package-card builtin-card ${autoTitles ? "auto-title-package-card" : ""}`}>
@@ -372,7 +392,7 @@ function BuiltinCard({ extension, enabled, busy, toggleDisabled = false, subagen
           aria-label={extension.name}
           className={`toggle ${enabled ? "on" : ""}`}
           disabled={!onToggle || busy || toggleDisabled}
-          title={toggleDisabled ? (subagentsOff ? "Switch on Sub-agents to use auto titles" : "Choose a title model in Set up first") : undefined}
+          title={toggleDisabled ? (disabledReason ?? (subagentsOff ? "Switch on Sub-agents to use auto titles" : "Choose a title model in Set up first")) : undefined}
           onClick={() => onToggle?.(!enabled)}
         >
           <span />

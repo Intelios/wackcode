@@ -129,6 +129,7 @@ pub fn bootstrap(
             .to_string_lossy()
             .into_owned(),
         glass_supported: glass::is_supported(),
+        computer_use_supported: crate::computer_use::supported(),
     })
 }
 
@@ -1955,6 +1956,38 @@ pub async fn watch_subagent(
     Ok(())
 }
 
+/// The original image of a screenshot tool result, for the transcript's lightbox. The worker
+/// answers only for screenshot tools and reads its own session, bypassing its prompt queue, so
+/// this works mid-run; like `watch_subagent`, the chat's lock covers only starting its worker.
+#[tauri::command]
+pub async fn tool_image(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    task_id: String,
+    tool_call_id: String,
+    index: Option<u32>,
+) -> Result<Value, String> {
+    if tool_call_id.is_empty() || tool_call_id.len() > 256 {
+        return Err("That tool call is not in this chat.".into());
+    }
+    let (task, provider) = task_and_provider(&state, &task_id)?;
+    let api_key = credential_for(&app, &state, &provider)?;
+    {
+        let lock = task_lock(&app, &task_id);
+        let _guard = lock.lock().await;
+        worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
+    }
+    worker::request(
+        &app,
+        &task_id,
+        json!({
+            "id": Uuid::new_v4().to_string(), "type": "tool_image", "toolCallId": tool_call_id, "index": index.unwrap_or(0)
+        }),
+        REQUEST_TIMEOUT,
+    )
+    .await
+}
+
 #[tauri::command]
 pub async fn list_draft_commands(
     app: AppHandle,
@@ -2848,6 +2881,7 @@ pub async fn archive_task(
     worker::terminate_worker(&app, &task_id, true).await?;
     app.state::<crate::browser::BrowserManager>()
         .dispose(&task_id);
+    crate::computer_use::dispose(&app, &task_id);
     app.state::<terminal::TerminalState>()
         .kill_for_task(&app, &task_id);
     let task = state.mutate(|data| {
@@ -2921,6 +2955,7 @@ pub async fn delete_task(
     worker::terminate_worker(&app, &task_id, true).await?;
     app.state::<crate::browser::BrowserManager>()
         .dispose(&task_id);
+    crate::computer_use::dispose(&app, &task_id);
     app.state::<terminal::TerminalState>()
         .kill_for_task(&app, &task_id);
     let (task, git_root) = state.mutate(|data| {
@@ -3054,6 +3089,7 @@ pub async fn remove_project(
         };
     for task in &tasks {
         worker::terminate_worker(&app, &task.id, true).await?;
+        crate::computer_use::dispose(&app, &task.id);
         app.state::<terminal::TerminalState>()
             .kill_for_task(&app, &task.id);
     }

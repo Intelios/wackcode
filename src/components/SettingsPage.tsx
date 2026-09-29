@@ -362,7 +362,7 @@ export function SettingsPage({
         {section === "prompts" && <PromptsSection config={prompts} onChange={onSetPrompts} />}
         {section === "mcp" && mcpActions && <McpSection servers={mcp?.servers ?? []} {...mcpActions} />}
         {section === "computer_use" && onSetComputerUse && (
-          <ComputerUseSection config={computerUse} actions={COMPUTER_USE_ACTIONS} onChange={onSetComputerUse} />
+          <ComputerUseSection config={computerUse} actions={COMPUTER_USE_ACTIONS} agentName={agentName(appearance)} onChange={onSetComputerUse} />
         )}
         {computerSetup && onSetComputerUse && (
           <ComputerUseSetupDialog

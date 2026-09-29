@@ -1,6 +1,6 @@
 import type { SVGProps } from "react";
 
-export type IconName = "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "browser" | "expand" | "collapse" | "copy" | "archive" | "unarchive" | "send" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "checklist" | "terminal" | "file" | "paperclip" | "pencil" | "external" | "brain" | "hammer" | "search" | "wrench" | "question" | "image" | "close" | "rewind" | "agents" | "flame" | "palette" | "plug" | "book" | "comment" | "commit" | "push" | "pullRequest" | "slash" | "erase" | "cursor" | "memory";
+export type IconName = "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "browser" | "expand" | "collapse" | "copy" | "archive" | "unarchive" | "send" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "checklist" | "terminal" | "file" | "paperclip" | "pencil" | "external" | "brain" | "hammer" | "search" | "wrench" | "question" | "image" | "close" | "rewind" | "agents" | "flame" | "palette" | "plug" | "book" | "comment" | "commit" | "push" | "pullRequest" | "slash" | "erase" | "cursor" | "memory" | "accessibility" | "viewfinder" | "lock" | "dock";
 
 const paths: Record<IconName, React.ReactNode> = {
   plus: <><path d="M12 5v14M5 12h14" /></>,
@@ -13,6 +13,11 @@ const paths: Record<IconName, React.ReactNode> = {
   panel: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M15 4v16" /></>,
   // Computer use: a window with a pointer resting on its corner.
   cursor: <><path d="M17 10.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h5.5" /><path d="m13 13 8 3-3.4 1.4L16 21z" /></>,
+  // Computer use permissions: the accessibility figure, a viewfinder, a padlock, and the Dock strip.
+  accessibility: <><circle cx="12" cy="12" r="9" /><circle cx="12" cy="7.6" r=".6" fill="currentColor" /><path d="M7.5 10.5c3 1 6 1 9 0M12 11v3.2m0 0-2.2 3.6m2.2-3.6 2.2 3.6" /></>,
+  viewfinder: <><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2" /><circle cx="12" cy="12" r="3" /></>,
+  lock: <><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></>,
+  dock: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 8h18" /><rect x="7" y="14.5" width="10" height="3.5" rx="1.2" /></>,
   browser: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 8h18" /><circle cx="6" cy="6" r=".45" fill="currentColor" stroke="none" /><circle cx="8" cy="6" r=".45" fill="currentColor" stroke="none" /></>,
   expand: <><path d="M9 4H4v5M15 4h5v5M20 15v5h-5M9 20H4v-5" /></>,
   collapse: <><path d="M4 9h5V4M20 9h-5V4M15 20v-5h5M9 20v-5H4" /></>,

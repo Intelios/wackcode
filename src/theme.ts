@@ -27,6 +27,9 @@ export const DEFAULT_APPEARANCE: AppearanceConfig = {
   backdrop: "solid",
   imageDim: 65,
   imageBlur: 12,
+  imageZoom: 100,
+  imageX: 500,
+  imageY: 500,
   glassStyle: "frosted",
   glassTint: 40
 };

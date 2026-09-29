@@ -122,6 +122,8 @@ mod tests {
         assert_eq!(data.appearance, AppearanceConfig { thinking_preview: false, ..AppearanceConfig::default() });
         assert_eq!(data.appearance.backdrop, BackdropMode::Solid);
         assert_eq!((data.appearance.image_dim, data.appearance.image_blur, data.appearance.glass_tint), (65, 12, 40));
+        // Files from before image cropping show the picture centred and uncropped.
+        assert_eq!((data.appearance.image_zoom, data.appearance.image_x, data.appearance.image_y), (100, 500, 500));
         // Unpicked colours stay absent, so a future default still reaches this user.
         let saved = serde_json::to_string(&data.appearance).unwrap();
         assert!(!saved.contains("accent") && !saved.contains("backgroundImage"), "{saved}");

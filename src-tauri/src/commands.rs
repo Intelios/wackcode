@@ -967,6 +967,11 @@ pub async fn choose_background_image(
     let config = state.mutate(|data| {
         data.appearance.background_image = Some(name.clone());
         data.appearance.backdrop = BackdropMode::Image;
+        // A crop belongs to one picture; a new one starts centred.
+        let fresh = AppearanceConfig::default();
+        data.appearance.image_zoom = fresh.image_zoom;
+        data.appearance.image_x = fresh.image_x;
+        data.appearance.image_y = fresh.image_y;
         Ok(data.appearance.clone())
     })?;
     backgrounds::prune(&folder, Some(&name));
@@ -4276,6 +4281,21 @@ fn validate_appearance_config(
         } else {
             return Err("Image blur must be between 0 and 40 px.".into());
         },
+        image_zoom: if (100..=400).contains(&input.image_zoom) {
+            input.image_zoom
+        } else {
+            return Err("Image zoom must be between 100 and 400%.".into());
+        },
+        image_x: if input.image_x <= 1000 {
+            input.image_x
+        } else {
+            return Err("Image position must be between 0 and 1000.".into());
+        },
+        image_y: if input.image_y <= 1000 {
+            input.image_y
+        } else {
+            return Err("Image position must be between 0 and 1000.".into());
+        },
         glass_style: input.glass_style,
         glass_tint: percent("Glass tint", input.glass_tint)?,
         // A persona label for the app's own copy; blank means back to the WackCode default.
@@ -4553,6 +4573,23 @@ mod tests {
                 .as_deref(),
             Some("kept.png")
         );
+    }
+
+    #[test]
+    fn the_image_crop_stays_in_range() {
+        let current = AppearanceConfig::default();
+        let with = |zoom, x, y| AppearanceConfig {
+            image_zoom: zoom,
+            image_x: x,
+            image_y: y,
+            ..current.clone()
+        };
+        assert!(validate_appearance_config(with(100, 0, 1000), &current, true).is_ok());
+        assert!(validate_appearance_config(with(400, 1000, 0), &current, true).is_ok());
+        assert!(validate_appearance_config(with(99, 500, 500), &current, true).is_err());
+        assert!(validate_appearance_config(with(401, 500, 500), &current, true).is_err());
+        assert!(validate_appearance_config(with(100, 1001, 500), &current, true).is_err());
+        assert!(validate_appearance_config(with(100, 500, 1001), &current, true).is_err());
     }
 
     #[test]

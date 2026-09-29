@@ -3,6 +3,7 @@ import { DEFAULT_ACCENT, DEFAULT_BACKGROUND, THEME_PRESETS, clampBackground, res
 import { DEFAULT_AGENT_NAME, agentName } from "../agentName";
 import type { AppearanceConfig, BackdropMode, GlassStyle } from "../types";
 import { Icon } from "./Icons";
+import { BackdropCropEditor } from "./BackdropCropEditor";
 import { Tooltip } from "./ui/Tooltip";
 
 interface AppearanceSectionProps {
@@ -237,6 +238,15 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrl, 
                   <button type="button" className="secondary-button" disabled={busy} onClick={() => void run(onRemoveImage)}>Remove</button>
                 </div>
               </div>
+              {backgroundImageUrl && (
+                <BackdropCropEditor
+                  imageUrl={backgroundImageUrl}
+                  crop={{ zoom: config.imageZoom, x: config.imageX, y: config.imageY }}
+                  disabled={busy}
+                  onPreview={(crop) => onPreview({ ...config, imageZoom: crop.zoom, imageX: crop.x, imageY: crop.y })}
+                  onCommit={(crop) => void save({ ...config, imageZoom: crop.zoom, imageX: crop.x, imageY: crop.y })}
+                />
+              )}
               <div className="appearance-pair">
                 <SliderRow
                   label="Dim"

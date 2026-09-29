@@ -104,12 +104,28 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
    a vivid hero copy that fades out above the composer on the new-chat screen, and a blurred,
    dimmed copy behind chats and Settings. Animating the blur itself would re-rasterize. */
 .backdrop { position: absolute; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; background: var(--bg); }
+/* The crop (backdrop-crop.ts): the picture is cover-fitted, magnified by --backdrop-zoom, and
+   --backdrop-x / -y (0–1) say how far along its overflow it is shifted. cq units make that
+   independent of the window's size, so no script re-measures on resize. --backdrop-aspect is the
+   picture's width / height. The Settings editor (.crop-frame) draws through the same rules. */
+.backdrop, .crop-frame {
+  container-type: size;
+  --backdrop-aspect: 1.6; --backdrop-zoom: 1; --backdrop-x: .5; --backdrop-y: .5;
+  --crop-w: calc(max(100cqw, 100cqh * var(--backdrop-aspect)) * var(--backdrop-zoom));
+  --crop-h: calc(max(100cqh, 100cqw / var(--backdrop-aspect)) * var(--backdrop-zoom));
+}
+.backdrop-layer::before, .crop-image {
+  background-image: var(--backdrop-image);
+  background-repeat: no-repeat;
+  background-size: var(--crop-w) var(--crop-h);
+  background-position: calc((100cqw - var(--crop-w)) * var(--backdrop-x)) calc((100cqh - var(--crop-h)) * var(--backdrop-y));
+}
 /* will-change keeps each copy on its own GPU layer for good, not only while it fades. Without it
    WebKit folds the blurred copy back into the window's layer after the fade, and any repaint of the
    see-through shell above it (the Settings nav reflowing, a page switch) re-runs the blur clipped to
    the dirty rect: a dark box with shadowy edges that lingers until the next full repaint. */
 .backdrop-layer { position: absolute; inset: 0; opacity: 0; transition: opacity .45s var(--ease); will-change: opacity; }
-.backdrop-layer::before { content: ""; position: absolute; inset: 0; background: var(--backdrop-image) center / cover no-repeat; }
+.backdrop-layer::before { content: ""; position: absolute; inset: 0; }
 .backdrop-layer::after { content: ""; position: absolute; inset: 0; background: var(--bg); }
 .backdrop-hero::before {
   -webkit-mask-image: linear-gradient(to bottom, black 0%, black 26%, transparent 74%);
@@ -2632,6 +2648,31 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .swatch-reset:disabled { opacity: .3; cursor: default; background: none; color: var(--text-soft); }
 .background-image-setting .row-actions { flex: 0 0 auto; }
 .background-image-setting .secondary-button { height: 30px; font-size: 11.5px; }
+/* Position editor (BackdropCropEditor.tsx): a miniature of the window with the picture in it. */
+.crop-setting { align-items: flex-start; flex-wrap: wrap; gap: 14px; }
+.crop-frame {
+  position: relative; flex: 0 1 320px; width: 320px; max-width: 100%; overflow: hidden;
+  border: 1px solid var(--border-bright); border-radius: 8px; background: var(--bg);
+  cursor: grab; touch-action: none; user-select: none;
+}
+.crop-frame.dragging { cursor: grabbing; }
+.crop-frame.disabled { cursor: default; opacity: .6; }
+.crop-image { position: absolute; inset: 0; pointer-events: none; }
+.crop-guides { position: absolute; inset: 0; pointer-events: none; }
+.crop-guide {
+  position: absolute; display: grid; place-items: center; overflow: hidden;
+  border: 1px dashed color-mix(in srgb, var(--text) 75%, transparent); border-radius: 4px;
+  background: color-mix(in srgb, var(--bg) 38%, transparent); color: var(--text);
+  font-size: 9.5px; letter-spacing: .04em; text-transform: uppercase; text-shadow: 0 1px 4px rgb(0 0 0 / 60%);
+}
+.crop-guide-sidebar { left: 0; top: 0; bottom: 0; border-radius: 0; border-width: 0 1px 0 0; }
+.crop-guide-composer { border-radius: 6px; }
+.crop-controls { flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.crop-controls kbd { margin: 0; padding: 0 3px; border: 1px solid var(--border); border-radius: 4px; font-size: 10px; }
+.crop-zoom { width: 100%; }
+.crop-zoom input[type="range"] { width: auto; flex: 1; }
+.crop-zoom-icon { width: 14px; height: 14px; flex: 0 0 auto; color: var(--text-dim); }
+.crop-controls .row-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .background-thumb { width: 72px; height: 44px; flex: 0 0 auto; object-fit: cover; border-radius: 6px; border: 1px solid var(--border-bright); }
 .appearance-slider { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
 .appearance-slider output { width: 44px; text-align: right; color: var(--text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }

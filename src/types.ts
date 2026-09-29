@@ -595,6 +595,11 @@ export interface AppearanceConfig {
   imageDim: number;
   /** Blur of the image behind a chat, 0–40 px. */
   imageBlur: number;
+  /** Magnification over a cover fit, 100–400 %. */
+  imageZoom: number;
+  /** Where the visible part sits, 0–1000: 0 is flush left / top, 1000 flush right / bottom. */
+  imageX: number;
+  imageY: number;
   glassStyle: GlassStyle;
   /** How much the background colour tints the glass, 0–90 %. */
   glassTint: number;

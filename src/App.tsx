@@ -1978,6 +1978,7 @@ export default function App() {
           scene={settingsOpen || selectedTask ? "chat" : "hero"}
           dim={data.appearance.imageDim}
           blur={data.appearance.imageBlur}
+          crop={{ zoom: data.appearance.imageZoom, x: data.appearance.imageX, y: data.appearance.imageY }}
         />
       )}
       {settingsOpen ? (

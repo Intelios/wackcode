@@ -463,6 +463,16 @@ pub struct AppearanceConfig {
     /// Blur of the image behind a chat, 0–40 px.
     #[serde(default = "default_image_blur")]
     pub image_blur: u8,
+    /// Magnification of the image over a cover fit, 100–400 %.
+    #[serde(default = "default_image_zoom")]
+    pub image_zoom: u16,
+    /// Where the visible part sits along each axis, 0–1000 (thousandths): 0 is flush with the
+    /// left / top edge, 1000 flush with the right / bottom, the same convention as CSS
+    /// `background-position`. It holds for any window shape, so the crop survives a resize.
+    #[serde(default = "default_image_focus")]
+    pub image_x: u16,
+    #[serde(default = "default_image_focus")]
+    pub image_y: u16,
     #[serde(default)]
     pub glass_style: GlassStyleSetting,
     /// How much the background colour tints the glass, 0–90 %.
@@ -500,6 +510,14 @@ fn default_image_blur() -> u8 {
     12
 }
 
+fn default_image_zoom() -> u16 {
+    100
+}
+
+fn default_image_focus() -> u16 {
+    500
+}
+
 fn default_glass_tint() -> u8 {
     40
 }
@@ -516,6 +534,9 @@ impl Default for AppearanceConfig {
             background_image: None,
             image_dim: default_image_dim(),
             image_blur: default_image_blur(),
+            image_zoom: default_image_zoom(),
+            image_x: default_image_focus(),
+            image_y: default_image_focus(),
             glass_style: GlassStyleSetting::Frosted,
             glass_tint: default_glass_tint(),
             agent_name: None,

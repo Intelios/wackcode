@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ImageContent, ProviderRecord } from "../types";
+import { composeFileSection, type FileAttachment } from "../attachment-utils";
 import { Composer } from "./Composer";
 
 afterEach(cleanup);
@@ -25,7 +26,11 @@ function png(name = "shot.png"): File {
   return new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], name, { type: "image/png" });
 }
 
-function renderComposer(modelId: string, onSend: (message: string, images: ImageContent[]) => Promise<boolean> = vi.fn().mockResolvedValue(true)) {
+function txt(name = "notes.txt", body = "hi"): File {
+  return new File([body], name, { type: "text/plain" });
+}
+
+function renderComposer(modelId: string, onSend: (message: string, images: ImageContent[], files: FileAttachment[]) => Promise<boolean> = vi.fn().mockResolvedValue(true)) {
   const props = {
     status: "idle" as const,
     providers,
@@ -44,15 +49,16 @@ function attach(...files: File[]) {
   fireEvent.change(screen.getByTestId("attach-input"), { target: { files } });
 }
 
-describe("Composer image attachments", () => {
-  it("explains instead of attaching when the model has no vision", async () => {
+describe("Composer attachments", () => {
+  it("explains instead of attaching images when the model has no vision, but still takes text files", async () => {
     renderComposer("blind");
-    const button = screen.getByRole("button", { name: "Attach images" });
-    expect(button).toHaveAttribute("aria-disabled", "true");
-    fireEvent.click(button);
-    expect(screen.getByRole("status")).toHaveTextContent("Blind doesn't accept images");
+    const button = screen.getByRole("button", { name: "Attach files" });
+    expect(button).not.toHaveAttribute("aria-disabled");
     fireEvent.paste(screen.getByRole("textbox"), { clipboardData: { files: [png()], types: ["Files"] } });
+    expect(await screen.findByRole("status")).toHaveTextContent("Blind doesn't accept images");
     expect(screen.queryByAltText("Attached image 1")).not.toBeInTheDocument();
+    attach(txt("notes.txt", "hi"));
+    expect(await screen.findByText("notes.txt")).toBeInTheDocument();
   });
 
   it("sends picked images with the message and clears the tray", async () => {
@@ -61,8 +67,33 @@ describe("Composer image attachments", () => {
     expect(await screen.findByAltText("Attached image 1")).toBeInTheDocument();
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "What is this?" } });
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-    await waitFor(() => expect(onSend).toHaveBeenCalledWith("What is this?", [{ type: "image", mimeType: "image/png", data: "iVBORw==" }]));
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("What is this?", [{ type: "image", mimeType: "image/png", data: "iVBORw==" }], []));
     expect(screen.queryByAltText("Attached image 1")).not.toBeInTheDocument();
+  });
+
+  it("sends attached text files with the message and clears the tray", async () => {
+    const { onSend } = renderComposer("sees");
+    attach(txt("notes.txt", "hello"));
+    expect(await screen.findByText("notes.txt")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Summarize this" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("Summarize this", [], [{ name: "notes.txt", text: "hello" }]));
+    expect(screen.queryByText("notes.txt")).not.toBeInTheDocument();
+  });
+
+  it("removes an attached file from the tray", async () => {
+    renderComposer("sees");
+    attach(txt("notes.txt", "hi"));
+    await screen.findByText("notes.txt");
+    fireEvent.click(screen.getByRole("button", { name: "Remove file 1" }));
+    expect(screen.queryByText("notes.txt")).not.toBeInTheDocument();
+  });
+
+  it("refuses a file it can't read as text, and says why", async () => {
+    renderComposer("sees");
+    attach(new File([new Uint8Array([0x50, 0x4b, 0x00, 0x01])], "pack.zip", { type: "application/zip" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("pack.zip");
+    expect(screen.queryByText("pack.zip")).not.toBeInTheDocument();
   });
 
   it("attaches a pasted screenshot but leaves text pastes alone", async () => {
@@ -76,15 +107,18 @@ describe("Composer image attachments", () => {
     expect(screen.queryByAltText("Attached image 1")).not.toBeInTheDocument();
   });
 
-  it("restores the message and images when the send fails", async () => {
+  it("restores the message and attachments when the send fails", async () => {
     const onSend = vi.fn().mockResolvedValue(false);
     renderComposer("sees", onSend);
     attach(png());
     await screen.findByAltText("Attached image 1");
+    attach(txt("notes.txt", "hello"));
+    await screen.findByText("notes.txt");
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "Look" } });
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() => expect(onSend).toHaveBeenCalled());
     expect(await screen.findByAltText("Attached image 1")).toBeInTheDocument();
+    expect(screen.getByText("notes.txt")).toBeInTheDocument();
     expect(screen.getByRole("textbox")).toHaveValue("Look");
   });
 
@@ -120,6 +154,24 @@ describe("Composer seed", () => {
     expect(area).toHaveValue("Rewound request, tweaked");
     view.rerender(<Composer {...props} seed={{ text: "Another", nonce: 2 }} />);
     expect(area).toHaveValue("Another");
+  });
+
+  it("restores attached files from a seeded message's generated section", () => {
+    const props = {
+      status: "idle" as const,
+      providers,
+      providerId: "p",
+      modelId: "sees",
+      thinkingLevel: "off" as const,
+      onConfigure: vi.fn(),
+      onSend: vi.fn().mockResolvedValue(true),
+      onStop: vi.fn(),
+      onOpenSettings: vi.fn()
+    };
+    const seeded = composeFileSection("Rewound request", [{ name: "notes.txt", text: "hi" }]);
+    render(<Composer {...props} seed={{ text: seeded, nonce: 1 }} />);
+    expect(screen.getByRole("textbox")).toHaveValue("Rewound request");
+    expect(screen.getByText("notes.txt")).toBeInTheDocument();
   });
 });
 
@@ -189,7 +241,7 @@ describe("Composer slash commands", () => {
     expect(area).toHaveValue("/unknown");
     expect(onCommand).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Send as message" }));
-    await waitFor(() => expect(onLiteral).toHaveBeenCalledWith("/unknown", []));
+    await waitFor(() => expect(onLiteral).toHaveBeenCalledWith("/unknown", [], []));
   });
 
   it("carries a new draft into the initialized chat and clears it after a send", () => {
@@ -197,9 +249,9 @@ describe("Composer slash commands", () => {
       status: "idle" as const, providers, providerId: "p", modelId: "sees", thinkingLevel: "off" as const,
       onConfigure: vi.fn(), onSend: vi.fn().mockResolvedValue(true), onStop: vi.fn(), onOpenSettings: vi.fn()
     };
-    const view = render(<Composer {...props} transfer={{ text: "/hello draft", images: [], nonce: 1 }} />);
+    const view = render(<Composer {...props} transfer={{ text: "/hello draft", images: [], files: [], nonce: 1 }} />);
     expect(screen.getByRole("textbox")).toHaveValue("/hello draft");
-    view.rerender(<Composer {...props} transfer={{ text: "", images: [], nonce: 2 }} />);
+    view.rerender(<Composer {...props} transfer={{ text: "", images: [], files: [], nonce: 2 }} />);
     expect(screen.getByRole("textbox")).toHaveValue("");
   });
 
@@ -231,6 +283,21 @@ describe("Composer slash commands", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     expect(screen.getByRole("status")).toHaveTextContent("Remove images before running this command.");
     expect(onCommand).not.toHaveBeenCalled();
+  });
+
+  it("refuses attached files before running a command, but sends them raw as a message", async () => {
+    const { onCommand, onLiteral } = setup();
+    const area = screen.getByRole("textbox");
+    attach(txt("notes.txt", "hi"));
+    await screen.findByText("notes.txt");
+    fireEvent.change(area, { target: { value: "/hello world", selectionStart: 12 } });
+    fireEvent.keyDown(area, { key: "Escape" });
+    fireEvent.keyDown(area, { key: "Enter" });
+    expect(await screen.findByRole("status")).toHaveTextContent("Remove attached files before running this command.");
+    expect(onCommand).not.toHaveBeenCalled();
+    // Nothing expands a literal message, so the section is safe there.
+    fireEvent.click(screen.getByRole("button", { name: "Send as message" }));
+    await waitFor(() => expect(onLiteral).toHaveBeenCalledWith("/hello world", [], [{ name: "notes.txt", text: "hi" }]));
   });
 
   // The draft hero wiring: app commands with a live onCommand but no onRequestCommands —
@@ -301,7 +368,7 @@ describe("Composer queueing while the agent is working", () => {
     const { onSend, area } = setup();
     fireEvent.change(area, { target: { value: "Try the other approach" } });
     fireEvent.keyDown(area, { key: "Enter" });
-    await waitFor(() => expect(onSend).toHaveBeenCalledWith("Try the other approach", [], "steer"));
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("Try the other approach", [], [], "steer"));
     expect(area).toHaveValue("");
   });
 
@@ -309,7 +376,7 @@ describe("Composer queueing while the agent is working", () => {
     const { onSend, area } = setup();
     fireEvent.change(area, { target: { value: "Then run the tests" } });
     fireEvent.keyDown(area, { key: "Enter", altKey: true });
-    await waitFor(() => expect(onSend).toHaveBeenCalledWith("Then run the tests", [], "follow_up"));
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("Then run the tests", [], [], "follow_up"));
   });
 
   it("keeps the draft while the run is stopping", () => {
@@ -341,7 +408,7 @@ describe("Composer queueing while the agent is working", () => {
 
     fireEvent.change(area, { target: { value: "/not-a-command" } });
     fireEvent.keyDown(area, { key: "Enter" });
-    await waitFor(() => expect(onSend).toHaveBeenCalledWith("/not-a-command", [], "steer"));
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("/not-a-command", [], [], "steer"));
   });
 
   it("lets /goal pause reach a live run but holds a bare /goal back", async () => {
@@ -386,6 +453,19 @@ describe("Composer queueing while the agent is working", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Restore queued messages to the composer" })[0]);
     await waitFor(() => expect(onDequeue).toHaveBeenCalled());
     expect(area).toHaveValue("Steered note\n\nLater note");
+  });
+
+  it("shows only the words of a queued message and restores its files into the tray", async () => {
+    const composed = composeFileSection("Steered note", [{ name: "notes.txt", text: "hi" }]);
+    const onDequeue = vi.fn().mockResolvedValue([composed]);
+    const { area } = setup({ queuedMessages: { steer: [composed], followUp: [] }, onDequeue });
+    const list = screen.getByRole("list", { name: "Queued messages" });
+    expect(list).toHaveTextContent("Steered note");
+    expect(list).not.toHaveTextContent("attached-files");
+    fireEvent.click(screen.getByRole("button", { name: "Restore queued messages to the composer" }));
+    await waitFor(() => expect(onDequeue).toHaveBeenCalled());
+    expect(area).toHaveValue("Steered note");
+    expect(await screen.findByText("notes.txt")).toBeInTheDocument();
   });
 });
 
@@ -437,7 +517,7 @@ describe("Composer @ file mentions", () => {
     fireEvent.keyDown(area, { key: "Escape" });
     expect(screen.queryByRole("listbox", { name: "Files" })).not.toBeInTheDocument();
     fireEvent.keyDown(area, { key: "Enter" });
-    expect(onSend).toHaveBeenCalledWith("see @src", []);
+    expect(onSend).toHaveBeenCalledWith("see @src", [], []);
   });
 
   it("shows loading and errors, and ignores emails", () => {

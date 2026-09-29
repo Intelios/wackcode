@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import type { ImageContent, ProviderRecord, SessionSnapshot, SlashCommand, TaskMode, TaskStatus, ThinkingLevel } from "../types";
-import { ACCEPTED_IMAGE_TYPES, attachImages, imageDataUrl, imageFilesFrom } from "../attachment-utils";
+import { attachFiles, filesFrom, imageDataUrl, splitFileSection, type FileAttachment } from "../attachment-utils";
 import { formatTokens } from "../chat-utils";
 import { activeMention, mentionValue, rankMentions, type MentionSuggestion } from "../mention-utils";
 import { Icon } from "./Icons";
@@ -45,18 +45,19 @@ interface ComposerProps {
   mode?: TaskMode;
   onModeChange?: (mode: TaskMode) => void;
   onConfigure: (patch: { providerId?: string; modelId?: string; thinkingLevel?: ThinkingLevel }) => void;
-  /** Resolves false when the send failed; the composer then restores the draft and images.
-   *  `queue` is set while a run is in progress: "steer" redirects it at the next boundary,
-   *  "follow_up" queues for after it. */
-  onSend: (message: string, images: ImageContent[], queue?: "steer" | "follow_up") => Promise<boolean>;
+  /** Resolves false when the send failed; the composer then restores the draft and attachments.
+   *  Attached text files travel as `files` and join the message text at the wire; `queue` is set
+   *  while a run is in progress: "steer" redirects it at the next boundary, "follow_up" queues
+   *  for after it. */
+  onSend: (message: string, images: ImageContent[], files: FileAttachment[], queue?: "steer" | "follow_up") => Promise<boolean>;
   commands?: SlashCommand[];
   commandsReady?: boolean;
   commandsLoading?: boolean;
   commandsError?: string;
   onRequestCommands?: () => void;
   onCommand?: (name: string, args: string, images: ImageContent[]) => Promise<boolean>;
-  onLiteral?: (message: string, images: ImageContent[]) => Promise<boolean>;
-  onDraftChange?: (text: string, images: ImageContent[]) => void;
+  onLiteral?: (message: string, images: ImageContent[], files: FileAttachment[]) => Promise<boolean>;
+  onDraftChange?: (text: string, images: ImageContent[], files: FileAttachment[]) => void;
   /** Workspace files for `@` mentions, relative to it; undefined until loaded. */
   mentionFiles?: string[];
   mentionsLoading?: boolean;
@@ -64,7 +65,7 @@ interface ComposerProps {
   mentionsTruncated?: boolean;
   /** Called whenever a new `@` token opens, so the list is fresh. Omit to turn mentions off. */
   onRequestMentions?: () => void;
-  transfer?: { text: string; images: ImageContent[]; nonce: number };
+  transfer?: { text: string; images: ImageContent[]; files: FileAttachment[]; nonce: number };
   /** Messages queued on the running prompt, shown between the transcript and the draft. */
   queuedMessages?: { steer: string[]; followUp: string[] };
   /** Takes the queued messages back out of Pi; resolves with their texts for the draft. */
@@ -73,7 +74,8 @@ interface ComposerProps {
   onOpenSettings: () => void;
   /** When true the composer is visually dimmed and non-interactive (e.g. a dialog needs attention). */
   disabled?: boolean;
-  /** Replaces the draft whenever `nonce` changes, e.g. with the text of a rewound message. */
+  /** Replaces the draft whenever `nonce` changes, e.g. with the text of a rewound message
+   *  (whose attached files are restored from its generated section). */
   seed?: { text: string; nonce: number };
   /** Traces an ambient accent line around the border; used on the draft hero only. */
   comet?: boolean;
@@ -86,6 +88,7 @@ interface ComposerProps {
 export function Composer({ status, providerId, modelId, thinkingLevel, providers, stats, header, placeholder, popoverSide = "top", mode, onModeChange, onConfigure, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, onDraftChange, mentionFiles, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, transfer, queuedMessages, onDequeue, onStop, onOpenSettings, disabled, seed, comet, frozen, agentName = "Pi" }: ComposerProps) {
   const [draft, setDraft] = useState(transfer?.text ?? "");
   const [attachments, setAttachments] = useState<ImageContent[]>(transfer?.images ?? []);
+  const [files, setFiles] = useState<FileAttachment[]>(transfer?.files ?? []);
   const [attachNotice, setAttachNotice] = useState<string>();
   const [slashNotice, setSlashNotice] = useState<string>();
   const [slashOpen, setSlashOpen] = useState(transfer?.text.startsWith("/") ?? false);
@@ -130,12 +133,13 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
     if (showCommands && commandsReady === false && !commandsLoading && !commandsError) onRequestCommands?.();
   }, [showCommands, commandsReady, commandsLoading, commandsError]);
 
-  useEffect(() => { onDraftChange?.(draft, attachments); }, [draft, attachments, onDraftChange]);
+  useEffect(() => { onDraftChange?.(draft, attachments, files); }, [draft, attachments, files, onDraftChange]);
   useEffect(() => {
     if (!transfer || transferNonce.current === transfer.nonce) return;
     transferNonce.current = transfer.nonce;
     setDraft(transfer.text);
     setAttachments(transfer.images);
+    setFiles(transfer.files);
     setSlashOpen(transfer.text.startsWith("/"));
   }, [transfer?.nonce]);
   useEffect(() => { if (commandsError && draft.startsWith("/") && !commandsLoading) setSlashNotice(commandsError); }, [commandsError, commandsLoading]);
@@ -166,23 +170,42 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
   const seedNonce = seed?.nonce;
   useEffect(() => {
     if (seedNonce === undefined || seedText.current === undefined) return;
-    setDraft(seedText.current);
+    // A rewound message's text carries its attached files in the generated section; put them
+    // back in the tray instead of showing the section in the draft.
+    const restored = splitFileSection(seedText.current);
+    setDraft(restored.text);
+    setFiles(restored.files);
     areaRef.current?.focus();
   }, [seedNonce]);
+
+  /** Attached files travel inside the message text, so they can't ride a `/` command: Pi
+   *  expands commands (and the queue resolves the catalog entry first) and the generated
+   *  section would fold into the expansion. Sending the same text literally never expands. */
+  function filesVsCommand(message: string): boolean {
+    return files.length > 0 && message.startsWith("/");
+  }
 
   /** Queue the draft on the running prompt. Enter steers (delivered at the run's next
    *  boundary); ⌥Enter and "Send as message" queue it for after the run, raw or expanded. */
   async function queueDraft(behavior: "steer" | "follow_up", literal = false) {
     const message = draft.trim();
     if (!message || status !== "running" || blockedByModel) return;
+    if (!literal && filesVsCommand(message)) {
+      setSlashNotice("Remove attached files before running this command.");
+      setSlashOpen(false);
+      return;
+    }
     const images = attachments;
+    const keptFiles = files;
     setDraft("");
     setAttachments([]);
+    setFiles([]);
     setAttachNotice(undefined);
-    const ok = literal && onLiteral ? await onLiteral(message, images) : await onSend(message, images, behavior);
+    const ok = literal && onLiteral ? await onLiteral(message, images, keptFiles) : await onSend(message, images, keptFiles, behavior);
     if (!ok) {
       setDraft(message);
       setAttachments(images);
+      setFiles(keptFiles);
     }
   }
 
@@ -190,6 +213,11 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
     if (frozen !== undefined) return;
     const message = draft.trim();
     if (!message || blockedByModel) return;
+    if (filesVsCommand(message)) {
+      setSlashNotice("Remove attached files before running this command.");
+      setSlashOpen(false);
+      return;
+    }
     if (busy) {
       // Pi is working: queue instead of sending. Slash commands that act on the app itself
       // cannot queue (they are not messages); skills, templates and unknown text can — Pi
@@ -239,13 +267,16 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
       } catch (reason) { setSlashNotice(String(reason)); }
       return;
     }
+    const keptFiles = files;
     setDraft("");
     setAttachments([]);
+    setFiles([]);
     setAttachNotice(undefined);
-    const ok = await onSend(message, images);
+    const ok = await onSend(message, images, keptFiles);
     if (!ok) {
       setDraft(message);
       setAttachments(images);
+      setFiles(keptFiles);
     }
   }
 
@@ -275,46 +306,54 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
   async function sendLiteral() {
     if (!onLiteral) return;
     if (busy) return void queueDraft("steer", true);
-    const ok = await onLiteral(draft.trim(), attachments);
-    if (ok) { setDraft(""); setAttachments([]); setSlashNotice(undefined); }
+    const ok = await onLiteral(draft.trim(), attachments, files);
+    if (ok) { setDraft(""); setAttachments([]); setFiles([]); setSlashNotice(undefined); }
   }
 
-  async function addFiles(files: File[]) {
-    if (files.length === 0) return;
-    if (!vision) {
-      setAttachNotice(noVisionMessage);
-      return;
-    }
-    const result = await attachImages(attachments, files);
+  /** Images need the model's Vision; text files ride the message text and always attach. */
+  async function addFiles(picked: File[]) {
+    if (picked.length === 0) return;
+    const result = await attachFiles({ images: attachments, files }, picked, { vision, noVisionMessage });
     setAttachments(result.images);
-    onDraftChange?.(draft, result.images);
+    setFiles(result.files);
+    onDraftChange?.(draft, result.images, result.files);
     setAttachNotice(result.error);
   }
 
   function removeAttachment(index: number) {
     const next = attachments.filter((_, itemIndex) => itemIndex !== index);
     setAttachments(next);
-    onDraftChange?.(draft, next);
+    onDraftChange?.(draft, next, files);
     setAttachNotice(undefined);
   }
 
-  /** Take the queued messages back out of Pi and into the draft, keeping anything typed since. */
+  function removeFile(index: number) {
+    const next = files.filter((_, itemIndex) => itemIndex !== index);
+    setFiles(next);
+    onDraftChange?.(draft, attachments, next);
+    setAttachNotice(undefined);
+  }
+
+  /** Take the queued messages back out of Pi and into the draft, keeping anything typed since.
+   *  Their attached files come back out of the generated section and into the tray. */
   async function restoreQueued() {
     const texts = await onDequeue?.();
     if (!texts || texts.length === 0) return;
     setSlashNotice(undefined);
-    setDraft((current) => {
-      const restored = texts.join("\n\n");
-      return current.trim() ? `${current}\n\n${restored}` : restored;
-    });
+    const parts = texts.map((text) => splitFileSection(text));
+    const restoredFiles = parts.flatMap((part) => part.files);
+    if (restoredFiles.length > 0) setFiles((current) => [...current, ...restoredFiles]);
+    const restored = parts.map((part) => part.text).filter(Boolean).join("\n\n");
+    if (restored) setDraft((current) => (current.trim() ? `${current}\n\n${restored}` : restored));
     requestAnimationFrame(() => { areaRef.current?.focus(); });
   }
 
   const acceptsDrop = (event: DragEvent) => !disabled && providers.length > 0 && event.dataTransfer.types.includes("Files");
 
+  // The queued chip shows the words, not the generated section their files travel in.
   const queuedEntries = [
-    ...(queuedMessages?.steer ?? []).map((text) => ({ kind: "steer" as const, text })),
-    ...(queuedMessages?.followUp ?? []).map((text) => ({ kind: "followUp" as const, text }))
+    ...(queuedMessages?.steer ?? []).map((text) => ({ kind: "steer" as const, text: splitFileSection(text).text })),
+    ...(queuedMessages?.followUp ?? []).map((text) => ({ kind: "followUp" as const, text: splitFileSection(text).text }))
   ];
 
   const context = stats?.contextUsage;
@@ -329,7 +368,7 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
       onDragOver={(event) => {
         if (!acceptsDrop(event)) return;
         event.preventDefault();
-        event.dataTransfer.dropEffect = vision ? "copy" : "none";
+        event.dataTransfer.dropEffect = "copy";
         setDragging(true);
       }}
       onDragLeave={(event) => {
@@ -339,7 +378,7 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
         if (!acceptsDrop(event)) return;
         event.preventDefault();
         setDragging(false);
-        void addFiles(imageFilesFrom(event.dataTransfer));
+        void addFiles(filesFrom(event.dataTransfer));
       }}
     >
       <AnimatePresence initial={false} mode="popLayout">
@@ -382,12 +421,21 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
             ))}
           </div>
         )}
-        {attachments.length > 0 && (
+        {(attachments.length > 0 || files.length > 0) && (
           <div className="composer-attachments">
             {attachments.map((image, index) => (
               <div className="attachment-thumb" key={index}>
                 <img src={imageDataUrl(image)} alt={`Attached image ${index + 1}`} />
                 <button type="button" className="attachment-remove" aria-label={`Remove image ${index + 1}`} onClick={() => removeAttachment(index)}>
+                  <Icon name="close" />
+                </button>
+              </div>
+            ))}
+            {files.map((file, index) => (
+              <div className="attachment-file" key={index}>
+                <Icon name="file" />
+                <span className="attachment-file-name">{file.name}</span>
+                <button type="button" className="attachment-remove" aria-label={`Remove file ${index + 1}`} onClick={() => removeFile(index)}>
                   <Icon name="close" />
                 </button>
               </div>
@@ -423,7 +471,7 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
             if (frozen !== undefined) return;
             const value = event.target.value;
             setDraft(value);
-            onDraftChange?.(value, attachments);
+            onDraftChange?.(value, attachments, files);
             setCaret(event.target.selectionStart);
             setSlashIndex(0);
             setMentionIndex(0);
@@ -437,10 +485,10 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
           onPaste={(event) => {
             // Rich-text apps put an image rendition next to copied text; that is a text paste.
             if (event.clipboardData.types.includes("text/plain")) return;
-            const files = imageFilesFrom(event.clipboardData);
-            if (files.length === 0) return;
+            const picked = filesFrom(event.clipboardData);
+            if (picked.length === 0) return;
             event.preventDefault();
-            void addFiles(files);
+            void addFiles(picked);
           }}
           onKeyDown={(event) => {
             if (showCommands && !event.nativeEvent.isComposing) {
@@ -473,29 +521,27 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
               </button>
             ) : (
               <>
-                <Tooltip label={vision ? "Attach images" : noVisionMessage}>
+                <Tooltip label="Attach files or images">
                   <button
                     type="button"
-                    className={`attach-button ${vision ? "" : "unavailable"}`}
-                    aria-label="Attach images"
-                    aria-disabled={!vision || undefined}
+                    className="attach-button"
+                    aria-label="Attach files"
                     disabled={disabled}
-                    onClick={() => vision ? fileRef.current?.click() : setAttachNotice(noVisionMessage)}
+                    onClick={() => fileRef.current?.click()}
                   >
-                    <Icon name="image" />
+                    <Icon name="paperclip" />
                   </button>
                 </Tooltip>
                 <input
                   ref={fileRef}
                   type="file"
-                  accept={ACCEPTED_IMAGE_TYPES.join(",")}
                   multiple
                   hidden
                   data-testid="attach-input"
                   onChange={(event) => {
-                    const files = imageFilesFrom(event.target.files);
+                    const picked = filesFrom(event.target.files);
                     event.target.value = "";
-                    void addFiles(files);
+                    void addFiles(picked);
                   }}
                 />
                 <ModelPicker

@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedMessage } from "../types";
+import { composeFileSection } from "../attachment-utils";
 import { ExploreGroupingEnabled } from "./ExploreGroup";
 import { SubagentPanelLink } from "./SubagentChip";
 import { ThinkingPreviewEnabled } from "./ThinkingRow";
@@ -307,7 +308,7 @@ describe("Transcript message actions", () => {
     expect(editor).toHaveValue("Make it blue");
     fireEvent.change(editor, { target: { value: "Make it green" } });
     await act(async () => { fireEvent.keyDown(editor, { key: "Enter" }); });
-    expect(onMessageAction).toHaveBeenCalledWith({ type: "edit", message: user, text: "Make it green", removeImages: [] });
+    expect(onMessageAction).toHaveBeenCalledWith({ type: "edit", message: user, text: "Make it green", files: [], removeImages: [] });
     expect(screen.queryByRole("textbox", { name: "Edit message" })).not.toBeInTheDocument();
   });
 
@@ -332,7 +333,31 @@ describe("Transcript message actions", () => {
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Remove image 1" }));
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Send" })); });
-    expect(onMessageAction).toHaveBeenCalledWith({ type: "edit", message: withImage, text: "Make it blue", removeImages: [0] });
+    expect(onMessageAction).toHaveBeenCalledWith({ type: "edit", message: withImage, text: "Make it blue", files: [], removeImages: [0] });
+  });
+
+  it("shows attached files as chips and lets the edit drop one", async () => {
+    const withFiles: NormalizedMessage = {
+      ...user,
+      versions: undefined,
+      blocks: [{ type: "text", text: composeFileSection("Make it blue", [{ name: "notes.txt", text: "one\ntwo" }, { name: "more.txt", text: "x" }]) }]
+    };
+    const onMessageAction = vi.fn().mockResolvedValue(true);
+    render(<Transcript messages={[withFiles]} running={false} actionsEnabled onMessageAction={onMessageAction} />);
+    // The words show without the generated section; each file is a chip that opens its text.
+    expect(screen.getByText("Make it blue")).toBeInTheDocument();
+    expect(screen.queryByText(/attached-files/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /notes\.txt/ }));
+    expect(screen.getByText(/one\s*two/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("textbox", { name: "Edit message" })).toHaveValue("Make it blue");
+    fireEvent.click(screen.getByRole("button", { name: "Remove file 1" }));
+    await act(async () => { fireEvent.keyDown(screen.getByRole("textbox", { name: "Edit message" }), { key: "Enter" }); });
+    expect(onMessageAction).toHaveBeenCalledWith({
+      type: "edit", message: withFiles, text: "Make it blue",
+      files: [{ name: "more.txt", text: "x" }], removeImages: []
+    });
   });
 
   it("offers retry on an unanswered latest message and shows the empty state after rewinding the first one", () => {

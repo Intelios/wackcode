@@ -352,6 +352,25 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
   border: 1px solid var(--border); background: var(--surface-raised); object-fit: cover;
 }
 .message-images .image-pending { display: grid; place-items: center; width: 120px; height: 90px; color: var(--text-faint); }
+/* Attached text files (attachment-utils' generated section): a chip per file, opening to the
+   exact text the model received. */
+.message-files { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; max-width: 78%; }
+.file-chip {
+  display: flex; flex-direction: column; align-items: stretch; min-width: 0; max-width: 100%;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); overflow: hidden;
+}
+.file-chip-label {
+  display: flex; align-items: center; gap: 7px; padding: 6px 11px; border: 0; background: transparent;
+  color: var(--text); font-size: 12px; text-align: left; cursor: pointer; transition: .12s var(--ease);
+}
+.file-chip-label:hover { background: var(--surface-hover); }
+.file-chip-label svg { width: 13px; height: 13px; flex: 0 0 auto; color: var(--text-dim); }
+.file-chip-label strong { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-chip-label small { flex: 0 0 auto; color: var(--text-faint); font-size: 10.5px; }
+.file-chip-content {
+  margin: 0; max-height: 260px; overflow: auto; padding: 8px 11px; border-top: 1px solid var(--border);
+  background: var(--surface); color: var(--text-soft); font: 10.5px/1.5 "SFMono-Regular", Consolas, monospace; white-space: pre;
+}
 .msg.user .bubble {
   max-width: 78%; background: var(--surface-raised); border: 1px solid var(--border);
   border-radius: 12px; border-bottom-right-radius: 4px;
@@ -797,6 +816,14 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 }
 .attachment-remove svg { width: 11px; height: 11px; }
 .attachment-remove:hover { color: var(--text); background: var(--border-bright); }
+/* Text files share the tray with image thumbs: a chip with the file's name. */
+.attachment-file {
+  position: relative; display: flex; align-items: center; gap: 6px; max-width: 180px; height: 34px;
+  padding: 0 12px; border: 1px solid var(--border-bright); border-radius: 8px; background: var(--surface-raised);
+  color: var(--text-soft); font-size: 11.5px;
+}
+.attachment-file > svg { width: 13px; height: 13px; flex: 0 0 auto; color: var(--text-dim); }
+.attachment-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attachment-notice { padding: 8px 15px 0; font-size: 12px; color: var(--warning); }
 /* The selected command's `argument-hint`, shown until the first argument is typed. */
 .arg-hint { padding: 8px 15px 0; font: 10.5px "SFMono-Regular", Consolas, monospace; color: var(--text-faint); }

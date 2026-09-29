@@ -1,26 +1,32 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import type { NormalizedBlock } from "../types";
+import type { FileAttachment } from "../attachment-utils";
 import { Icon } from "./Icons";
 
 interface Props {
+  /** The message's own words, without the generated attached-files section. */
   text: string;
   /** The original message's images, as the transcript shows them. */
   images: NormalizedBlock[];
+  /** The original message's attached text files. */
+  files: FileAttachment[];
   /** Whether the chat's model accepts images. */
   vision: boolean;
   modelName?: string;
   /** Resolves false when the send did not go through; the editor then stays open. */
-  onSend: (text: string, removeImages: number[]) => Promise<boolean>;
+  onSend: (text: string, files: FileAttachment[], removeImages: number[]) => Promise<boolean>;
   onCancel: () => void;
 }
 
 /** Edits a sent message in place. Sending makes the edit a new version of the message. */
-export function MessageEditor({ text, images, vision, modelName, onSend, onCancel }: Props) {
+export function MessageEditor({ text, images, files, vision, modelName, onSend, onCancel }: Props) {
   const [draft, setDraft] = useState(text);
   const [removed, setRemoved] = useState<number[]>([]);
+  const [removedFiles, setRemovedFiles] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const kept = images.filter((_, index) => !removed.includes(index));
+  const keptFiles = files.filter((_, index) => !removedFiles.includes(index));
   const blocked = kept.length > 0 && !vision;
 
   useLayoutEffect(() => {
@@ -41,7 +47,7 @@ export function MessageEditor({ text, images, vision, modelName, onSend, onCance
     const message = draft.trim();
     if (!message || busy || blocked) return;
     setBusy(true);
-    const sent = await onSend(message, removed);
+    const sent = await onSend(message, keptFiles, removed);
     if (!sent) setBusy(false);
   }
 
@@ -55,6 +61,19 @@ export function MessageEditor({ text, images, vision, modelName, onSend, onCance
                 ? <img src={image.thumbnail} alt={`Attached image ${index + 1}`} />
                 : <div className="image-pending" role="img" aria-label={`Attached image ${index + 1}`}><Icon name="image" /></div>}
               <button type="button" className="attachment-remove" aria-label={`Remove image ${index + 1}`} onClick={() => setRemoved((current) => [...current, index])}>
+                <Icon name="close" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {keptFiles.length > 0 && (
+        <div className="composer-attachments">
+          {files.map((file, index) => removedFiles.includes(index) ? null : (
+            <div className="attachment-file" key={index}>
+              <Icon name="file" />
+              <span className="attachment-file-name">{file.name}</span>
+              <button type="button" className="attachment-remove" aria-label={`Remove file ${index + 1}`} onClick={() => setRemovedFiles((current) => [...current, index])}>
                 <Icon name="close" />
               </button>
             </div>

@@ -18,6 +18,7 @@ WackCode is a local macOS desktop app for the [Pi coding agent](https://www.npmj
 ## Cross-file rules
 
 - **Shared types:** a type that crosses layers changes in `models.rs`, `types.ts`, and (if the worker sees it) `protocol.ts` together. New optional Rust fields need `#[serde(default)]` so existing `wackcode.json` files load; runtime-only fields (like `ProjectRecord.branch`) also need `skip_deserializing`.
+- **Attachments:** images ride `images` through `api.ts` to the worker; attached text files are folded into the message text by `composeFileSection` and read back by `splitFileSection` (`src/attachment-utils.ts`) — change both halves together. Attached files never ride a `/`-command message (Pi expands commands and would swallow the section); sending the same text literally is the deliberate escape hatch.
 - **New Tauri command:** register in `lib.rs`, add a typed wrapper in `api.ts`, and add any new plugin permission in `capabilities/default.json`.
 - **Worker protocol change:** update `protocol.ts`, Rust payloads and handlers, `WorkerEvent` in `types.ts`, and the event switch in `App.tsx` together. Run `pnpm test:worker` afterwards.
 - **Command queue:** commands that must reach an active run must bypass the serial prompt queue or they deadlock; see the dispatch comments in `worker/src/index.ts`.
@@ -33,7 +34,7 @@ WackCode is a local macOS desktop app for the [Pi coding agent](https://www.npmj
 - **Memory:** the note file format (`<type>_<slug>.md` with `type`/`title`/`description`/`modified` frontmatter) is one contract shared between `src-tauri/src/memory.rs` and `worker/src/builtin/memory/store.ts` — change them together. The system prompt gets only the generated index (`memoryIndex`), refreshed before each run, never mid-run; the tools are gated by their own setting via `inactiveTools()` (like sub-agents) and stay out of sub-agents.
 - **Built-ins:** adding or renaming one in `worker/src/builtin/` also requires updating `BUILTIN_EXTENSIONS` in `PackagesSection.tsx`. Preserve the separate built-in and MCP tool-switch rules in `worker/src/index.ts`.
 - **Session tree and checkpoints:** read the invariants at the top of `worker/src/tree.ts` and `src-tauri/src/checkpoints.rs` before changing either. Checkpoints must never write to the project's own Git repository.
-- **Window:** keep `tauri.conf.json` free of `backgroundColor`; `glass.rs` controls the native background. Keep `dragDropEnabled: false` so native handling does not swallow composer image drops.
+- **Window:** keep `tauri.conf.json` free of `backgroundColor`; `glass.rs` controls the native background. Keep `dragDropEnabled: false` so native handling does not swallow composer attachment drops.
 - **Agent persona:** the app's own copy never calls the agent "Pi"; the name comes from `appearance.agentName`, resolved in `src/agentName.ts` (default "WackCode"). Genuine Pi product references (catalogue, sign-in, the worker process) keep the real name.
 
 ## Security (don't weaken)
@@ -78,4 +79,4 @@ WackCode is a local macOS desktop app for the [Pi coding agent](https://www.npmj
 
 ## Out of scope
 
-Don't propose these as fixes: non-image attachments, embedded editors, permission prompts (tool-call approval gates; Computer use's per-app access card is the one deliberate exception), automatic merging, notarization, auto-updates, other platforms. `todo.md` (gitignored) is the owner's idea list: ask before starting anything from it.
+Don't propose these as fixes: embedded editors, permission prompts (tool-call approval gates; Computer use's per-app access card is the one deliberate exception), automatic merging, notarization, auto-updates, other platforms. `todo.md` (gitignored) is the owner's idea list: ask before starting anything from it.

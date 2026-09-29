@@ -5,6 +5,7 @@ import { useFollowScroll } from "../hooks/useFollowScroll";
 import { useSmoothText } from "../hooks/useSmoothText";
 import { formatRunDuration, isPlanMode } from "../chat-utils";
 import { blockKey, layoutTranscript, type TranscriptSlot } from "../explore-utils";
+import { splitFileSection, type FileAttachment } from "../attachment-utils";
 import { splitMentions } from "../mention-utils";
 import { SUBAGENT_TOOL_NAME, parseSubagentDetails, pendingSubagentDetails } from "../tool-utils";
 import { hasVisibleMessages, latestTurn, messageText } from "../tree-utils";
@@ -58,7 +59,7 @@ export interface DisplayModelSwitch {
 export type MessageAction =
   | { type: "copy"; message: NormalizedMessage }
   | { type: "copy-prompt"; text: string }
-  | { type: "edit"; message: NormalizedMessage; text: string; removeImages: number[] }
+  | { type: "edit"; message: NormalizedMessage; text: string; files: FileAttachment[]; removeImages: number[] }
   /** Send this user message again as a new version. */
   | { type: "retry"; message: NormalizedMessage }
   /** Take the conversation back to just before this user message. */
@@ -334,6 +335,22 @@ function cachedSignature(
   return sig;
 }
 
+/** An attached text file on a user message; opens to show the exact text the model received. */
+function FileChip({ file }: { file: FileAttachment }) {
+  const [open, setOpen] = useState(false);
+  const lines = file.text.split("\n").length;
+  return (
+    <div className={`file-chip ${open ? "open" : ""}`}>
+      <button type="button" className="file-chip-label" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        <Icon name="file" />
+        <strong>{file.name}</strong>
+        <small>{lines} {lines === 1 ? "line" : "lines"}</small>
+      </button>
+      {open && <pre className="file-chip-content">{file.text}</pre>}
+    </div>
+  );
+}
+
 interface MessageProps {
   message: NormalizedMessage;
   /** What the message renders: its blocks, minus those an exploration group folded away. */
@@ -358,17 +375,20 @@ interface MessageProps {
 const Message = memo(function Message({ message, slots, results, liveToolText, liveToolDetails, live, running, planState, onPlanAction, actionsEnabled, retry, editing, vision, modelName, onAction }: MessageProps) {
   if (message.role === "user") {
     const images = message.blocks.filter((block) => block.type === "image");
-    const text = messageText(message);
+    // The message text carries attached files in its generated section; the transcript shows
+    // them as chips and the words without them.
+    const { text, files } = splitFileSection(messageText(message));
     if (editing) {
       return (
         <div className="msg user editing" data-turn={message.versions ? message.versions.group : message.id}>
           <MessageEditor
             text={text}
             images={images}
+            files={files}
             vision={vision}
             modelName={modelName}
             onCancel={() => void onAction({ type: "cancel-edit" })}
-            onSend={async (edited, removeImages) => (await onAction({ type: "edit", message, text: edited, removeImages })) === true}
+            onSend={async (edited, keptFiles, removeImages) => (await onAction({ type: "edit", message, text: edited, files: keptFiles, removeImages })) === true}
           />
         </div>
       );
@@ -388,6 +408,11 @@ const Message = memo(function Message({ message, slots, results, liveToolText, l
               ? <img key={image.imageId ?? index} src={image.thumbnail} alt={`Attached image ${index + 1}`} />
               : <div key={image.imageId ?? index} className="image-pending" role="img" aria-label={`Attached image ${index + 1}`}><Icon name="image" /></div>
             )}
+          </div>
+        )}
+        {files.length > 0 && (
+          <div className="message-files">
+            {files.map((file, index) => <FileChip key={index} file={file} />)}
           </div>
         )}
         {text && (message.commandPresentation
@@ -495,7 +520,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
     .map((message) => {
       const text = message.commandPresentation
         ? `/${message.commandPresentation.name} ${commandSummary(message.commandPresentation)}`
-        : messageText(message);
+        : splitFileSection(messageText(message)).text;
       return { id: message.versions ? message.versions.group : message.id, excerpt: turnExcerpt(text) };
     }), [messages]);
   const liveTurnId = useMemo(() => {

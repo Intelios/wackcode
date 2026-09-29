@@ -8,6 +8,7 @@ import { api } from "./api";
 import { modelDisplayName, modelIsReady, pickThinkingLevel } from "./model-utils";
 import { titleFromPrompt, samePlanState, sameTodoState, sameGoalState, applySnapshotDelta, applySubagentFrame, pendingSubagentView, validateInitCommand, nextMode, isPlanMode } from "./chat-utils";
 import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix } from "./tree-utils";
+import { composeFileSection, splitFileSection, type FileAttachment } from "./attachment-utils";
 import { displayAgentName, hasSubagentCall, pruneDisabledTools, sameToolCatalog, subagentDetailsFor } from "./tool-utils";
 import { CHANGES_VIEW, TERMINAL_VIEW, durableView, rememberedView, toggleView, viewForChat, viewKey, type PanelViewKind, type SidePanelView } from "./side-panel";
 import { APP_SLASH_COMMANDS } from "./command-utils";
@@ -231,8 +232,8 @@ export default function App() {
   const [confirm, setConfirm] = useState<ConfirmState>();
   const [restoreDialog, setRestoreDialog] = useState<RestoreDialogState>();
   const [composerSeed, setComposerSeed] = useState<{ text: string; nonce: number }>();
-  const [composerTransfer, setComposerTransfer] = useState<{ taskId: string; text: string; images: ImageContent[]; nonce: number }>();
-  const draftComposer = useRef<{ text: string; images: ImageContent[] }>({ text: "", images: [] });
+  const [composerTransfer, setComposerTransfer] = useState<{ taskId: string; text: string; images: ImageContent[]; files: FileAttachment[]; nonce: number }>();
+  const draftComposer = useRef<{ text: string; images: ImageContent[]; files: FileAttachment[] }>({ text: "", images: [], files: [] });
   const slashDraftPromise = useRef<Promise<TaskRecord | undefined> | undefined>(undefined);
   const draftEpoch = useRef(0);
   /** Taskless `/` catalog for the welcome composer, keyed by its selected project. */
@@ -894,7 +895,7 @@ export default function App() {
   function openDraft(projectId?: string | null) {
     draftEpoch.current += 1;
     slashDraftPromise.current = undefined;
-    draftComposer.current = { text: "", images: [] };
+    draftComposer.current = { text: "", images: [], files: [] };
     setComposerTransfer(undefined);
     // The composer is shared across views; entering the hero from a task clears its draft.
     if (selectedTaskRef.current) setDraftSeedNonce((n) => n + 1);
@@ -1034,7 +1035,7 @@ export default function App() {
     if (selectedBusy && !goalControlAction) throw new Error("Wait for this chat to be ready before running a command.");
     const id = task.id;
     const clearPreparedDraft = () => {
-      if (!selectedTask) setComposerTransfer({ taskId: id, text: "", images: [], nonce: Date.now() + 1 });
+      if (!selectedTask) setComposerTransfer({ taskId: id, text: "", images: [], files: [], nonce: Date.now() + 1 });
     };
     if (goalControlAction) {
       await api.goalControl(id, goalControlAction);
@@ -1331,8 +1332,11 @@ export default function App() {
     });
   }
 
-  async function sendPrompt(message: string, options: { images?: ImageContent[]; mode?: TaskMode; literal?: boolean; queue?: "steer" | "follow_up" } = {}): Promise<boolean> {
-    const { images, mode: modeOverride, literal, queue } = options;
+  async function sendPrompt(message: string, options: { images?: ImageContent[]; files?: FileAttachment[]; mode?: TaskMode; literal?: boolean; queue?: "steer" | "follow_up" } = {}): Promise<boolean> {
+    const { images, files = [], mode: modeOverride, literal, queue } = options;
+    // Attached text files travel inside the message text; the composer's own words stay `message`
+    // (the frozen hand-off and the chat's stand-in title show those).
+    const sent = composeFileSection(message, files);
     if (!selectedTask) {
       const active = draft ?? { projectId: lastProjectId(), useWorktree: false };
       const choice = active.choice ?? defaultChoice(active.projectId);
@@ -1377,7 +1381,7 @@ export default function App() {
       try {
         await api.prompt({
           taskId: task.id,
-          message,
+          message: sent,
           startedAt,
           providerId: task.providerId,
           modelId: task.modelId,
@@ -1397,7 +1401,7 @@ export default function App() {
       // already-running worker instead of racing it to spawn a second process.
       setSelectedTaskId(task.id);
       setDraft(undefined);
-      if (pendingSlash) setComposerTransfer({ taskId: task.id, text: "", images: [], nonce: Date.now() + 1 });
+      if (pendingSlash) setComposerTransfer({ taskId: task.id, text: "", images: [], files: [], nonce: Date.now() + 1 });
       return true;
     }
     if (selectedTask.status === "stopping") return false;
@@ -1408,7 +1412,7 @@ export default function App() {
       const behavior = queue ?? (literal ? "steer" : undefined);
       if (!behavior) return false;
       try {
-        await api.queueMessage({ taskId: selectedTask.id, behavior, message, images, ...(literal ? { literal: true } : {}) });
+        await api.queueMessage({ taskId: selectedTask.id, behavior, message: sent, images, ...(literal ? { literal: true } : {}) });
         return true;
       } catch (reason) {
         patchRuntime(selectedTask.id, { error: String(reason) });
@@ -1421,7 +1425,7 @@ export default function App() {
     try {
       await api.prompt({
         taskId: selectedTask.id,
-        message,
+        message: sent,
         startedAt,
         providerId: selectedTask.providerId,
         modelId: selectedTask.modelId,
@@ -1615,7 +1619,7 @@ export default function App() {
   }
 
   /** Retry (unchanged) or edit: send a user message again as a new version of itself. */
-  async function resend(user: NormalizedMessage, edit?: { text: string; removeImages: number[] }): Promise<boolean> {
+  async function resend(user: NormalizedMessage, edit?: { text: string; files: FileAttachment[]; removeImages: number[] }): Promise<boolean> {
     const task = selectedTask;
     const entryId = user.entryId;
     if (!task || !entryId) return false;
@@ -1627,7 +1631,7 @@ export default function App() {
         await api.resendMessage({
           taskId: task.id,
           entryId,
-          message: edit?.text,
+          message: edit ? composeFileSection(edit.text, edit.files) : undefined,
           removeImages: edit?.removeImages,
           restore,
           startedAt,
@@ -1778,11 +1782,12 @@ export default function App() {
   async function messageAction(action: MessageAction): Promise<boolean> {
     const messages = runtime?.snapshot?.messages ?? [];
     if (action.type === "copy") {
-      await writeText(messageText(action.message));
+      // The generated attached-files section is transport, not the message's words.
+      await writeText(splitFileSection(messageText(action.message)).text);
     } else if (action.type === "copy-prompt") {
       await writeText(action.text);
     } else if (action.type === "edit") {
-      return resend(action.message, { text: action.text, removeImages: action.removeImages });
+      return resend(action.message, { text: action.text, files: action.files, removeImages: action.removeImages });
     } else if (action.type === "retry") {
       const user = action.message.role === "user" ? action.message : userOfTurn(messages, action.message);
       return user ? resend(user) : false;
@@ -2175,8 +2180,8 @@ export default function App() {
               disabled={selectedTask ? pendingDialogTaskIds.has(selectedTask.id) : false}
               onModeChange={(mode) => void setTaskMode(mode)}
               onConfigure={selectedTask ? (patch) => void configure(patch) : configureDraft}
-              onSend={(message, images, queue) => sendPrompt(message, { images, queue })}
-              onLiteral={(message, images) => sendPrompt(message, { images, literal: true })}
+              onSend={(message, images, files, queue) => sendPrompt(message, { images, files, queue })}
+              onLiteral={(message, images, files) => sendPrompt(message, { images, files, literal: true })}
               commands={[...enabledAppCommands, ...(selectedTask ? runtime?.slashCommands ?? [] : draftCatalog?.commands ?? [])]}
               commandsReady={selectedTask ? runtime?.slashCommands !== undefined : draftCatalog?.commands !== undefined}
               commandsLoading={selectedTask ? runtime?.slashCommandsLoading : draftCatalog?.loading}
@@ -2192,7 +2197,7 @@ export default function App() {
               onDequeue={dequeueMessages}
               transfer={selectedTask && composerTransfer?.taskId === selectedTask.id ? composerTransfer : undefined}
               seed={selectedTask ? composerSeed : draftSeedNonce ? { text: "", nonce: draftSeedNonce } : undefined}
-              onDraftChange={!selectedTask ? (text, images) => { draftComposer.current = { text, images }; } : undefined}
+              onDraftChange={!selectedTask ? (text, images, files) => { draftComposer.current = { text, images, files }; } : undefined}
               onStop={() => void stopTask()}
               onOpenSettings={openSettings}
             />

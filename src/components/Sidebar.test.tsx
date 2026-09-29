@@ -41,6 +41,8 @@ function Harness({ tasks, pendingDialogTaskIds = new Set<string>() }: { tasks: T
       onTaskAction={() => undefined}
       onProjectAction={() => undefined}
       onRenameTask={() => undefined}
+      onArchiveAll={() => undefined}
+      onDeleteAllArchived={() => undefined}
     />
   );
 }
@@ -89,6 +91,8 @@ describe("Sidebar collapsible projects", () => {
           onTaskAction={() => undefined}
           onProjectAction={() => undefined}
           onRenameTask={() => undefined}
+          onArchiveAll={() => undefined}
+          onDeleteAllArchived={() => undefined}
         />
       );
     }
@@ -134,6 +138,8 @@ describe("Sidebar collapsible projects", () => {
           onTaskAction={() => undefined}
           onProjectAction={() => undefined}
           onRenameTask={() => undefined}
+          onArchiveAll={() => undefined}
+          onDeleteAllArchived={() => undefined}
         />
       );
     }
@@ -164,6 +170,8 @@ describe("Sidebar footer tiles", () => {
         onTaskAction={() => undefined}
         onProjectAction={() => undefined}
         onRenameTask={() => undefined}
+        onArchiveAll={() => undefined}
+        onDeleteAllArchived={() => undefined}
       />
     );
   }
@@ -220,6 +228,8 @@ describe("Sidebar task actions", () => {
         onTaskAction={onTaskAction}
         onProjectAction={() => undefined}
         onRenameTask={() => undefined}
+        onArchiveAll={() => undefined}
+        onDeleteAllArchived={() => undefined}
       />
     );
   }
@@ -306,3 +316,57 @@ describe("Sidebar task actions", () => {
   });
 });
 
+
+describe("Sidebar bulk actions", () => {
+  function BulkHarness({ tasks, archivedOpen = false, onArchiveAll = () => undefined, onDeleteAllArchived = () => undefined }: {
+    tasks: TaskRecord[];
+    archivedOpen?: boolean;
+    onArchiveAll?: (projectId: string | null) => void;
+    onDeleteAllArchived?: () => void;
+  }) {
+    return (
+      <Sidebar
+        projects={projects}
+        tasks={tasks}
+        archivedOpen={archivedOpen}
+        pendingDialogTaskIds={new Set<string>()}
+        collapsedProjectIds={new Set()}
+        onSelectTask={() => undefined}
+        onNewChat={() => undefined}
+        onNewDraft={() => undefined}
+        onAddProject={() => undefined}
+        onToggleArchived={() => undefined}
+        onToggleProjectCollapsed={() => undefined}
+        onOpenSettings={() => undefined}
+        onTaskAction={() => undefined}
+        onProjectAction={() => undefined}
+        onRenameTask={() => undefined}
+        onArchiveAll={onArchiveAll}
+        onDeleteAllArchived={onDeleteAllArchived}
+      />
+    );
+  }
+
+  it("archives all chats in a project, or with no project, from the group menu", () => {
+    const calls: (string | null)[] = [];
+    render(<BulkHarness tasks={[task("t1", "p1", "Refactor parser"), task("t2", null, "Loose chat")]} onArchiveAll={(id) => calls.push(id)} />);
+    fireEvent.click(screen.getByRole("button", { name: "TokenTrail menu" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive all chats" }));
+    fireEvent.click(screen.getByRole("button", { name: "No project menu" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive all chats" }));
+    expect(calls).toEqual(["p1", null]);
+  });
+
+  it("disables Archive all chats for a project with no open chats", () => {
+    render(<BulkHarness tasks={[{ ...task("t1", "p1", "Old chat"), archived: true }]} />);
+    fireEvent.click(screen.getByRole("button", { name: "TokenTrail menu" }));
+    expect(screen.getByRole("menuitem", { name: "Archive all chats" })).toBeDisabled();
+  });
+
+  it("offers Delete all in the Archived view header", async () => {
+    let deleted = 0;
+    render(<BulkHarness tasks={[{ ...task("t1", "p1", "Old chat"), archived: true }]} archivedOpen onDeleteAllArchived={() => { deleted += 1; }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Delete all archived chats" }));
+    expect(deleted).toBe(1);
+  });
+});

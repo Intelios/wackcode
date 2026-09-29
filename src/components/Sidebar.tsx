@@ -36,9 +36,12 @@ interface SidebarProps {
   onTaskAction: (task: TaskRecord, action: TaskAction) => void;
   onProjectAction: (project: ProjectRecord, action: ProjectAction) => void;
   onRenameTask: (taskId: string, name: string) => void;
+  /** Archive every open chat in one group: a project id, or null for "No project". */
+  onArchiveAll: (projectId: string | null) => void;
+  onDeleteAllArchived: () => void;
 }
 
-export function Sidebar({ projects, tasks, selectedTaskId, archivedOpen, pendingDialogTaskIds, collapsedProjectIds, onSelectTask, onNewChat, onNewDraft, onAddProject, onToggleArchived, onToggleProjectCollapsed, onOpenSettings, onTaskAction, onProjectAction, onRenameTask }: SidebarProps) {
+export function Sidebar({ projects, tasks, selectedTaskId, archivedOpen, pendingDialogTaskIds, collapsedProjectIds, onSelectTask, onNewChat, onNewDraft, onAddProject, onToggleArchived, onToggleProjectCollapsed, onOpenSettings, onTaskAction, onProjectAction, onRenameTask, onArchiveAll, onDeleteAllArchived }: SidebarProps) {
   const [renamingId, setRenamingId] = useState<string>();
   const [renameValue, setRenameValue] = useState("");
   const { confirming, confirm, setConfirming } = useConfirmAction();
@@ -199,6 +202,7 @@ export function Sidebar({ projects, tasks, selectedTaskId, archivedOpen, pending
                   label={`${project.name} menu`}
                   items={() => [
                     { label: "New chat", icon: <Icon name="plus" />, onSelect: () => onNewChat(project) },
+                    { label: "Archive all chats", icon: <Icon name="archive" />, disabled: projectTasks.length === 0, onSelect: () => onArchiveAll(project.id) },
                     "separator",
                     { label: "Reveal in Finder", icon: <Icon name="folder" />, onSelect: () => onProjectAction(project, "reveal") },
                     { label: "Remove project", icon: <Icon name="trash" />, danger: true, onSelect: () => onProjectAction(project, "remove") }
@@ -217,7 +221,17 @@ export function Sidebar({ projects, tasks, selectedTaskId, archivedOpen, pending
             groupKey: NO_PROJECT_KEY,
             plusLabel: "New chat with no project",
             groupTasks: looseTasks,
-            onPlus: () => onNewChat(null)
+            onPlus: () => onNewChat(null),
+            menu: (
+              <MenuButton
+                className="ghost-button"
+                label="No project menu"
+                items={[
+                  { label: "New chat", icon: <Icon name="plus" />, onSelect: () => onNewChat(null) },
+                  { label: "Archive all chats", icon: <Icon name="archive" />, onSelect: () => onArchiveAll(null) }
+                ]}
+              />
+            )
           })}
           {!collapsedProjectIds.has(NO_PROJECT_KEY) && looseTasks.map((task) => renderTask(task))}
         </section>
@@ -233,11 +247,20 @@ export function Sidebar({ projects, tasks, selectedTaskId, archivedOpen, pending
           <div className="archived-header">
             <h2 className="archived-heading">Archived</h2>
             {archivedTasks.length > 0 && <span className="archived-count">{archivedTasks.length}</span>}
-            <Tooltip label="Back to chats">
-              <button type="button" className="ghost-button" onClick={onToggleArchived} aria-label="Close archived chats">
-                <Icon name="close" />
-              </button>
-            </Tooltip>
+            <span className="archived-header-actions">
+              {archivedTasks.length > 0 && (
+                <Tooltip label="Delete all archived">
+                  <button type="button" className="ghost-button row-menu danger" onClick={onDeleteAllArchived} aria-label="Delete all archived chats">
+                    <span className="row-menu-icon"><Icon name="trash" /></span>
+                  </button>
+                </Tooltip>
+              )}
+              <Tooltip label="Back to chats">
+                <button type="button" className="ghost-button" onClick={onToggleArchived} aria-label="Close archived chats">
+                  <Icon name="close" />
+                </button>
+              </Tooltip>
+            </span>
           </div>
         ) : (
           <button type="button" className="sidebar-action" onClick={onNewDraft}>

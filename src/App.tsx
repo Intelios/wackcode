@@ -1847,19 +1847,71 @@ export default function App() {
     if (selectedTaskRef.current === removedId) openDraft();
   }
 
+  function removeTaskLocally(taskId: string) {
+    setData((current) => ({ ...current, tasks: current.tasks.filter((item) => item.id !== taskId) }));
+    setRuntimes((current) => {
+      const next = { ...current };
+      delete next[taskId];
+      return next;
+    });
+    selectAfterRemoval(taskId);
+  }
+
   async function performDeleteTask(task: TaskRecord) {
     try {
       await api.deleteTask(task.id);
-      setData((current) => ({ ...current, tasks: current.tasks.filter((item) => item.id !== task.id) }));
-      setRuntimes((current) => {
-        const next = { ...current };
-        delete next[task.id];
-        return next;
-      });
-      selectAfterRemoval(task.id);
+      removeTaskLocally(task.id);
     } catch (reason) {
       setGlobalError(String(reason));
     }
+  }
+
+  /**
+   * Run a per-chat call over many chats one at a time, so each row leaves the list as it
+   * finishes (and parallel git worktree removals never race). One failure doesn't stop the rest.
+   */
+  async function forEachChat(tasks: TaskRecord[], verb: string, run: (task: TaskRecord) => Promise<void>) {
+    const failed: string[] = [];
+    for (const task of tasks) {
+      try { await run(task); } catch { failed.push(task.name); }
+    }
+    if (failed.length === 1) throw `Could not ${verb} “${failed[0]}”.`;
+    if (failed.length > 1) throw `Could not ${verb} ${failed.length} chats.`;
+  }
+
+  function archiveAll(projectId: string | null) {
+    const targets = data.tasks.filter((task) => task.projectId === projectId && !task.archived);
+    if (targets.length === 0) return;
+    const groupName = projectId === null ? "No project" : data.projects.find((project) => project.id === projectId)?.name ?? "this project";
+    const running = targets.filter((task) => task.status === "running" || task.status === "stopping").length;
+    setConfirm({
+      title: targets.length === 1 ? `Archive 1 chat in “${groupName}”?` : `Archive ${targets.length} chats in “${groupName}”?`,
+      body: `They move to Archived, where you can unarchive or delete them.${running > 0 ? ` ${running === 1 ? "1 is" : `${running} are`} still working and will be stopped.` : ""}`,
+      confirmLabel: "Archive all",
+      run: () => forEachChat(targets, "archive", async (task) => {
+        const archived = await api.archiveTask(task.id);
+        setData((current) => ({ ...current, tasks: current.tasks.map((item) => item.id === archived.id ? archived : item) }));
+        selectAfterRemoval(task.id);
+      })
+    });
+  }
+
+  function deleteAllArchived() {
+    const targets = data.tasks.filter((task) => task.archived);
+    if (targets.length === 0) return;
+    const worktrees = targets.some((task) => task.usesWorktree);
+    setConfirm({
+      title: targets.length === 1 ? "Delete 1 archived chat?" : `Delete all ${targets.length} archived chats?`,
+      body: worktrees
+        ? "This removes them, their saved sessions, and their git worktrees — including any uncommitted changes inside them. It can't be undone."
+        : "This removes them and their saved sessions. Files in your projects are not touched. It can't be undone.",
+      confirmLabel: "Delete all",
+      danger: true,
+      run: () => forEachChat(targets, "delete", async (task) => {
+        await api.deleteTask(task.id);
+        removeTaskLocally(task.id);
+      })
+    });
   }
 
   async function taskAction(task: TaskRecord, action: TaskAction) {
@@ -2044,6 +2096,8 @@ export default function App() {
         onTaskAction={(task, action) => void taskAction(task, action)}
         onProjectAction={(project, action) => void projectAction(project, action)}
         onRenameTask={(taskId, name) => void renameTask(taskId, name)}
+        onArchiveAll={archiveAll}
+        onDeleteAllArchived={deleteAllArchived}
       />
 
       <main className="workspace">

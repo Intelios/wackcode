@@ -160,7 +160,11 @@ function RunDuration({ startedAt, durationMs }: { startedAt?: number; durationMs
   const elapsed = durationMs ?? Math.max(0, now - (startedAt ?? now));
   const label = live ? "Working for" : "Worked for";
 
-  return <div className="run-duration">{label} {formatRunDuration(elapsed)}</div>;
+  return (
+    <div className={`run-duration${live ? " live" : ""}`}>
+      <span className="run-duration-chip"><Icon name="clock" />{label} <strong>{formatRunDuration(elapsed)}</strong></span>
+    </div>
+  );
 }
 
 function ModelSwitchDivider({ entry }: { entry: DisplayModelSwitch }) {

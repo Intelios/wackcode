@@ -255,14 +255,18 @@ describe("Transcript run durations", () => {
       { id: "assistant-1", role: "assistant", blocks: [{ type: "text", text: "Working" }] }
     ];
     const view = render(<Transcript messages={messages} running activeRun={{ startedAt }} />);
-    expect(screen.getByText("Working for 1s")).toBeInTheDocument();
+    const row = () => view.container.querySelectorAll(".run-duration");
+    expect(row()).toHaveLength(1);
+    expect(row()[0]).toHaveTextContent("Working for 1s");
+    expect(row()[0]).toHaveClass("live");
 
     act(() => { vi.advanceTimersByTime(1_200); });
-    expect(screen.getByText("Working for 2s")).toBeInTheDocument();
+    expect(row()[0]).toHaveTextContent("Working for 2s");
 
     view.rerender(<Transcript messages={messages} running={false} runTimings={[{ userMessageId: "user-1", durationMs: 4_200 }]} />);
-    expect(screen.getByText("Worked for 4s")).toBeInTheDocument();
-    expect(screen.queryByText(/working for/)).not.toBeInTheDocument();
+    expect(row()).toHaveLength(1);
+    expect(row()[0]).toHaveTextContent("Worked for 4s");
+    expect(row()[0]).not.toHaveClass("live");
   });
 });
 

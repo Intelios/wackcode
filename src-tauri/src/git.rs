@@ -1,4 +1,4 @@
-use crate::models::{GitChangeFile, GitChanges, GitDiffHunk, GitDiffLine, GitDiffSection, GitPublishInfo};
+use crate::models::{GitChangeFile, GitChanges, GitDiffHunk, GitDiffLine, GitDiffSection, GitBranch, GitBranches, GitPublishInfo};
 use std::{fs, hash::{Hash, Hasher}, path::{Component, Path, PathBuf}, process::{Command, Stdio}, thread, time::{Duration, Instant}};
 
 const MAX_DIFF_BYTES: usize = 240_000;
@@ -461,6 +461,81 @@ pub fn publish_info(path: &Path) -> Result<GitPublishInfo, String> {
     Ok(GitPublishInfo { branch, upstream, remotes })
 }
 
+/// Most branches a picker lists; the newest commits win.
+const MAX_BRANCHES: usize = 500;
+
+/// Local branches, then remote-tracking branches that have no local branch of the same name,
+/// each newest commit first. Reads refs only: nothing is fetched.
+pub fn branches(path: &Path) -> Result<GitBranches, String> {
+    let root = inspect_project(path).root.ok_or("No Git repository")?;
+    let current = current_branch(&root);
+    let output = run_git(&root, &[
+        "for-each-ref", "--sort=-committerdate",
+        "--format=%(refname)%00%(refname:short)%00%(worktreepath)",
+        "refs/heads", "refs/remotes",
+    ], None)?;
+    let mut local = Vec::new();
+    let mut remote = Vec::new();
+    for line in output.lines() {
+        let mut fields = line.split('\0');
+        let (Some(full), Some(name), worktree) = (fields.next(), fields.next(), fields.next()) else { continue };
+        if full.starts_with("refs/heads/") {
+            let worktree = worktree.filter(|path| !path.is_empty() && current.as_deref() != Some(name)).map(str::to_owned);
+            local.push(GitBranch { name: name.to_string(), remote: false, worktree });
+        } else if !full.ends_with("/HEAD") {
+            remote.push(GitBranch { name: name.to_string(), remote: true, worktree: None });
+        }
+    }
+    // `origin/main` is shadowed by a local `main`: switching to it would only switch to `main`.
+    remote.retain(|branch| branch.name.split_once('/').is_none_or(|(_, short)| !local.iter().any(|item| item.name == short)));
+    local.extend(remote);
+    local.truncate(MAX_BRANCHES);
+    Ok(GitBranches { current, branches: local })
+}
+
+/// Switch the checkout at `path` to a branch. `kind` is `local` (an existing branch), `remote`
+/// (create the local tracking branch for a remote-tracking ref) or `create` (a new branch at
+/// `HEAD`). Git's own safety applies: it refuses to overwrite uncommitted changes and carries
+/// the ones that don't conflict across.
+pub fn checkout(path: &Path, name: &str, kind: &str) -> Result<Option<String>, String> {
+    let root = inspect_project(path).root.ok_or("No Git repository")?;
+    let name = name.trim();
+    if name.is_empty() || name.starts_with('-') || run_git(&root, &["check-ref-format", "--branch", name], None).is_err() {
+        return Err(format!("“{name}” is not a valid branch name"));
+    }
+    let args: Vec<&str> = match kind {
+        "local" => {
+            run_git(&root, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{name}")], None)
+                .map_err(|_| format!("There is no branch named {name}"))?;
+            vec!["switch", "--", name]
+        }
+        "remote" => {
+            run_git(&root, &["rev-parse", "--verify", "--quiet", &format!("refs/remotes/{name}")], None)
+                .map_err(|_| format!("There is no remote branch named {name}"))?;
+            vec!["switch", "--track", "--", name]
+        }
+        "create" => {
+            if run_git(&root, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{name}")], None).is_ok() {
+                return Err(format!("A branch named {name} already exists"));
+            }
+            vec!["switch", "-c", name]
+        }
+        _ => return Err("Unknown branch action".into()),
+    };
+    run_git(&root, &args, None).map_err(|error| checkout_error(name, &error))?;
+    Ok(current_branch(&root))
+}
+
+fn checkout_error(name: &str, stderr: &str) -> String {
+    if stderr.contains("would be overwritten") {
+        format!("Commit or discard your changes first: switching to {name} would overwrite them")
+    } else if stderr.contains("already used by worktree") || stderr.contains("already checked out") {
+        format!("{name} is checked out in another worktree")
+    } else {
+        format!("Could not switch to {name}: {}", stderr.lines().find(|line| !line.trim().is_empty()).unwrap_or(stderr).trim())
+    }
+}
+
 pub fn push_args(info: GitPublishInfo, remote: Option<String>) -> Result<Vec<String>, String> {
     let branch = info.branch.ok_or("Check out a branch before pushing")?;
     if let Some(upstream) = info.upstream {
@@ -771,5 +846,51 @@ mod tests {
         assert_eq!(run_git(&bare, &["show", &format!("refs/heads/{branch}:file.txt")], None).unwrap(), "second");
         git(&root, &[OsStr::new("remote"), OsStr::new("set-url"), OsStr::new("origin"), OsStr::new("git@github.com:owner/repo.git")]);
         assert_eq!(remote_repo(&root, "origin").unwrap(), "github.com/owner/repo");
+    }
+
+    #[test]
+    fn lists_and_switches_branches() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("checkout");
+        let bare = directory.path().join("remote.git");
+        let other = directory.path().join("other");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&bare).unwrap();
+        git(&root, &[OsStr::new("init"), OsStr::new("-b"), OsStr::new("main")]);
+        git(&bare, &[OsStr::new("init"), OsStr::new("--bare")]);
+        git(&root, &[OsStr::new("config"), OsStr::new("user.email"), OsStr::new("test@example.com")]);
+        git(&root, &[OsStr::new("config"), OsStr::new("user.name"), OsStr::new("Test")]);
+        fs::write(root.join("file.txt"), "main\n").unwrap();
+        git(&root, &[OsStr::new("add"), OsStr::new("file.txt")]);
+        git(&root, &[OsStr::new("commit"), OsStr::new("-m"), OsStr::new("first")]);
+        git(&root, &[OsStr::new("remote"), OsStr::new("add"), OsStr::new("origin"), bare.as_os_str()]);
+        git(&root, &[OsStr::new("switch"), OsStr::new("-c"), OsStr::new("feature")]);
+        fs::write(root.join("file.txt"), "feature\n").unwrap();
+        git(&root, &[OsStr::new("commit"), OsStr::new("-am"), OsStr::new("feature")]);
+        git(&root, &[OsStr::new("push"), OsStr::new("origin"), OsStr::new("main"), OsStr::new("feature")]);
+        git(&root, &[OsStr::new("switch"), OsStr::new("main")]);
+        git(&root, &[OsStr::new("branch"), OsStr::new("-D"), OsStr::new("feature")]);
+        git(&root, &[OsStr::new("worktree"), OsStr::new("add"), OsStr::new("-b"), OsStr::new("elsewhere"), other.as_os_str()]);
+
+        let listed = branches(&root).unwrap();
+        assert_eq!(listed.current.as_deref(), Some("main"));
+        let find = |name: &str| listed.branches.iter().find(|branch| branch.name == name);
+        assert!(find("main").is_some_and(|branch| !branch.remote && branch.worktree.is_none()));
+        assert!(find("elsewhere").is_some_and(|branch| branch.worktree.is_some()));
+        assert!(find("origin/feature").is_some_and(|branch| branch.remote));
+        assert!(find("origin/main").is_none(), "a local branch shadows its remote");
+
+        assert!(checkout(&root, "elsewhere", "local").unwrap_err().contains("another worktree"));
+        assert!(checkout(&root, "--force", "local").is_err());
+        assert!(checkout(&root, "missing", "local").is_err());
+        assert_eq!(checkout(&root, "origin/feature", "remote").unwrap().as_deref(), Some("feature"));
+        assert_eq!(fs::read_to_string(root.join("file.txt")).unwrap(), "feature\n");
+        assert!(checkout(&root, "feature", "create").unwrap_err().contains("already exists"));
+
+        fs::write(root.join("file.txt"), "edited\n").unwrap();
+        assert!(checkout(&root, "main", "local").unwrap_err().contains("Commit or discard"));
+        assert_eq!(current_branch(&root).as_deref(), Some("feature"));
+        assert_eq!(checkout(&root, "topic/new", "create").unwrap().as_deref(), Some("topic/new"));
+        assert_eq!(fs::read_to_string(root.join("file.txt")).unwrap(), "edited\n");
     }
 }

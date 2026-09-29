@@ -34,6 +34,7 @@ import type {
   DiffComment,
   GitChangeFile,
   GitChanges,
+  GitCheckoutKind,
   GitDiffSection,
   ImageContent,
   McpServerRecord,
@@ -1090,6 +1091,26 @@ export default function App() {
     setDraft((current) => ({ projectId: current?.projectId ?? null, useWorktree, choice: current?.choice, mode: current?.mode }));
   }
 
+  /** Lists a project's branches, relabelling it if its checkout moved since launch. */
+  async function listProjectBranches(projectId: string) {
+    const result = await api.gitBranches({ projectId });
+    setData((current) => ({ ...current, projects: current.projects.map((item) => item.id === projectId && item.branch !== result.current ? { ...item, branch: result.current } : item) }));
+    return result;
+  }
+
+  /** Switches a checkout's branch; every chat and project in that checkout takes the new label. */
+  async function checkoutBranch(target: { taskId: string } | { projectId: string }, name: string, kind: GitCheckoutKind) {
+    const result = await api.gitCheckout(target, name, kind);
+    const tasks = new Set(result.taskIds);
+    const projects = new Set(result.projectIds);
+    setData((current) => ({
+      ...current,
+      tasks: current.tasks.map((task) => tasks.has(task.id) ? { ...task, branch: result.branch } : task),
+      projects: current.projects.map((project) => projects.has(project.id) ? { ...project, branch: result.branch } : project)
+    }));
+    void refreshChanges();
+  }
+
   async function addProject() {
     const selected = await open({ directory: true, multiple: false, title: "Add a project folder" });
     if (!selected) return;
@@ -2108,6 +2129,9 @@ export default function App() {
               <ChatHeader
               task={selectedTask}
               project={selectedProject}
+              git={changes ? (changes.isGit ? { branch: changes.branch } : undefined) : selectedTask.branch ? { branch: selectedTask.branch } : undefined}
+              onListBranches={() => api.gitBranches({ taskId: selectedTask.id })}
+              onCheckoutBranch={(name, kind) => checkoutBranch({ taskId: selectedTask.id }, name, kind)}
               changesCount={changes?.files.length}
               changesOpen={panelView?.kind === "changes"}
               browserOpen={panelView?.kind === "browser"}
@@ -2227,6 +2251,8 @@ export default function App() {
                   onSelectProject={setDraftProject}
                   onToggleWorktree={setDraftWorktree}
                   onAddProject={() => void addProject()}
+                  onListBranches={listProjectBranches}
+                  onCheckoutBranch={(projectId, name, kind) => checkoutBranch({ projectId }, name, kind)}
                 />
               ) : undefined}
               placeholder={!selectedTask ? "Describe a task or ask a question…" : undefined}

@@ -1446,6 +1446,34 @@ pub struct GitPublishInfo {
     pub remotes: Vec<String>,
 }
 
+/// One branch the checkout can switch to. `remote` branches are remote-tracking refs with no
+/// local branch of the same name; switching to one creates that local tracking branch.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranch {
+    pub name: String,
+    pub remote: bool,
+    /// Another worktree that has this branch checked out; Git refuses to switch to it here.
+    pub worktree: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranches {
+    /// None on a detached HEAD.
+    pub current: Option<String>,
+    pub branches: Vec<GitBranch>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCheckoutResult {
+    pub branch: Option<String>,
+    /// Chats and projects whose folder is this checkout, so the renderer can relabel them.
+    pub task_ids: Vec<String>,
+    pub project_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitPrInfo {

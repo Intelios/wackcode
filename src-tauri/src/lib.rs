@@ -199,6 +199,8 @@ pub fn run() {
             commands::set_diff_comments,
             commands::git_publish_info,
             commands::git_push,
+            commands::git_branches,
+            commands::git_checkout,
             commands::git_pr_prepare,
             commands::git_pr_create,
             commands::git_generate_message,

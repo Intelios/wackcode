@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
-import type { ProjectRecord } from "../types";
+import type { GitBranches, GitCheckoutKind, ProjectRecord } from "../types";
+import { BranchPicker } from "./BranchPicker";
 import { Icon } from "./Icons";
 import { Popover } from "./ui/Popover";
 import { Tooltip } from "./ui/Tooltip";
@@ -11,9 +12,11 @@ interface ProjectBarProps {
   onSelectProject: (projectId: string | null) => void;
   onToggleWorktree: (value: boolean) => void;
   onAddProject: () => void;
+  onListBranches: (projectId: string) => Promise<GitBranches>;
+  onCheckoutBranch: (projectId: string, name: string, kind: GitCheckoutKind) => Promise<void>;
 }
 
-export function ProjectBar({ projects, projectId, useWorktree, onSelectProject, onToggleWorktree, onAddProject }: ProjectBarProps) {
+export function ProjectBar({ projects, projectId, useWorktree, onSelectProject, onToggleWorktree, onAddProject, onListBranches, onCheckoutBranch }: ProjectBarProps) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const project = projects.find((item) => item.id === projectId);
@@ -33,10 +36,16 @@ export function ProjectBar({ projects, projectId, useWorktree, onSelectProject, 
         <span className="model-pill-name">{project?.name ?? "No project"}</span>
         <svg className="select-chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
       </button>
-      {project?.branch && (
-        <span className="project-bar-branch" title={`${project.branch} in ${project.path}`}>
-          <Icon name="branch" /> {project.branch}
-        </span>
+      {project?.gitRoot && (
+        // A worktree chat starts from the branch checked out here, so switching applies to both modes.
+        <BranchPicker
+          key={project.id}
+          branch={project.branch}
+          variant="pill"
+          side="top"
+          onLoad={() => onListBranches(project.id)}
+          onCheckout={(name, kind) => onCheckoutBranch(project.id, name, kind)}
+        />
       )}
       <div className="segmented" role="group" aria-label="Workspace location">
         <button

@@ -23,6 +23,8 @@ function Harness({ initialProjectId = "p1", worktreeable = true }: { initialProj
       onSelectProject={setProjectId}
       onToggleWorktree={setUseWorktree}
       onAddProject={() => undefined}
+      onListBranches={async () => ({ current: "master", branches: [] })}
+      onCheckoutBranch={async () => undefined}
     />
   );
 }
@@ -44,6 +46,8 @@ describe("ProjectBar", () => {
         onSelectProject={(id) => selected.push(id)}
         onToggleWorktree={() => undefined}
         onAddProject={() => undefined}
+        onListBranches={async () => ({ current: "master", branches: [] })}
+        onCheckoutBranch={async () => undefined}
       />
     );
     fireEvent.click(screen.getByRole("button", { name: /TokenTrail/ }));

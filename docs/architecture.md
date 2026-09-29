@@ -62,7 +62,7 @@ The renderer keeps only UI conveniences in `localStorage` (`wackcode:*` keys suc
 ## Locks
 
 - **`TaskLocks`** (`commands.rs`): any command that sends a chat work, moves its conversation, or touches its checkpoints holds that chat's lock.
-- **`GitLocks`**: one per checkout root. Changes-panel Git actions and prompt dispatch (which snapshots a checkpoint) take it, so chats sharing a folder never interleave those operations.
+- **`GitLocks`**: one per checkout root. Changes-panel Git actions, branch switches and prompt dispatch (which snapshots a checkpoint) take it, so chats sharing a folder never interleave those operations.
 
 ## Session tree and checkpoints
 

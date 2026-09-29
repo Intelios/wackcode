@@ -1,5 +1,6 @@
 import { useState } from "react";
-import type { ProjectRecord, TaskRecord, TerminalExit } from "../types";
+import type { GitBranches, GitCheckoutKind, ProjectRecord, TaskRecord, TerminalExit } from "../types";
+import { BranchPicker } from "./BranchPicker";
 import { Icon } from "./Icons";
 import { MenuButton } from "./ui/MenuButton";
 import type { MenuEntry } from "./ui/Menu";
@@ -9,6 +10,8 @@ import { canFork } from "../tree-utils";
 interface ChatHeaderProps {
   task: TaskRecord;
   project?: ProjectRecord;
+  /** The chat's checkout when it is a Git repository; `branch` is null on a detached HEAD. */
+  git?: { branch: string | null };
   changesCount?: number;
   changesOpen: boolean;
   browserOpen: boolean;
@@ -20,9 +23,11 @@ interface ChatHeaderProps {
   onToggleTerminal: () => void;
   onRename: (name: string) => void;
   onTaskAction: (task: TaskRecord, action: TaskAction) => void;
+  onListBranches: () => Promise<GitBranches>;
+  onCheckoutBranch: (name: string, kind: GitCheckoutKind) => Promise<void>;
 }
 
-export function ChatHeader({ task, project, changesCount, changesOpen, browserOpen, onToggleChanges, onToggleBrowser, terminal, terminalOpen, onToggleTerminal, onRename, onTaskAction }: ChatHeaderProps) {
+export function ChatHeader({ task, project, git, onListBranches, onCheckoutBranch, changesCount, changesOpen, browserOpen, onToggleChanges, onToggleBrowser, terminal, terminalOpen, onToggleTerminal, onRename, onTaskAction }: ChatHeaderProps) {
   const [renaming, setRenaming] = useState(false);
   const [value, setValue] = useState(task.name);
 
@@ -72,7 +77,7 @@ export function ChatHeader({ task, project, changesCount, changesOpen, browserOp
           <button type="button" title={task.workspacePath} onClick={() => onTaskAction(task, "reveal")}>
             <Icon name="folder" /> {task.projectId === null ? "No project" : task.workspacePath.split("/").filter(Boolean).slice(-2).join("/") || task.workspacePath}
           </button>
-          {task.branch && <span><Icon name="branch" /> {task.branch}</span>}
+          {git && <BranchPicker key={task.id} branch={git.branch} variant="meta" onLoad={onListBranches} onCheckout={onCheckoutBranch} />}
         </div>
       </div>
       <div className="header-actions">

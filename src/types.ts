@@ -1192,6 +1192,29 @@ export interface GitPublishInfo {
   remotes: string[];
 }
 
+/** A branch a checkout can switch to; `remote` ones create their local tracking branch. */
+export interface GitBranch {
+  name: string;
+  remote: boolean;
+  /** Another worktree that has this branch checked out; it can't be switched to here. */
+  worktree: string | null;
+}
+
+export interface GitBranches {
+  /** Null on a detached HEAD. */
+  current: string | null;
+  branches: GitBranch[];
+}
+
+export type GitCheckoutKind = "local" | "remote" | "create";
+
+export interface GitCheckoutResult {
+  branch: string | null;
+  /** Chats and projects whose folder is the switched checkout. */
+  taskIds: string[];
+  projectIds: string[];
+}
+
 export interface GitPrInfo {
   repo: string;
   base: string;

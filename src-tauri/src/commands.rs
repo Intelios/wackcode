@@ -3,8 +3,9 @@ use crate::{
     models::{
         AppearanceConfig, AutoTitleConfig, BackdropMode, BootstrapPayload, BuiltinModelSuggestion,
         CheckpointChange, CheckpointRef, CreateTaskInput, DiffComment, ExportPlanInput,
-        ExtensionUiResponseInput, ForkTaskInput, GitChanges, GitGeneratedMessage, GitPrInfo,
-        GitPublishInfo, ImageContent, InstallPackageInput, McpServerRecord, McpTestResult,
+        ExtensionUiResponseInput, ForkTaskInput, GitBranches, GitChanges, GitCheckoutResult,
+        GitGeneratedMessage, GitPrInfo, GitPublishInfo, ImageContent, InstallPackageInput,
+        McpServerRecord, McpTestResult,
         MemoriesChange, MemoriesOverview, MemoryConfig, MemoryDocument, ModelRecord,
         NavigateResult, NavigateTaskInput, NavigateTaskResult, PackageRecord,
         PackageSearchResult, ProjectRecord, PromptConfig, PromptInput, ProviderKind,
@@ -3276,24 +3277,21 @@ pub async fn git_changes(
 }
 
 fn git_workspace(state: &MetadataState, task_id: &str) -> Result<PathBuf, String> {
-    let (workspace, active) = {
-        let data = state
-            .data
-            .lock()
-            .map_err(|_| "Metadata lock was poisoned".to_string())?;
-        let task = data
-            .tasks
-            .iter()
-            .find(|task| task.id == task_id)
-            .ok_or("Chat not found")?;
-        let active = data
-            .tasks
-            .iter()
-            .filter(|task| matches!(task.status, TaskStatus::Running | TaskStatus::Stopping))
-            .map(|task| task.workspace_path.clone())
-            .collect::<Vec<_>>();
-        (PathBuf::from(&task.workspace_path), active)
-    };
+    idle_checkout(state, task_workspace(state, task_id)?)
+}
+
+/// `workspace`, once no chat is running in the same checkout: Git actions from the panel must
+/// not move files under an agent that is still working in them.
+fn idle_checkout(state: &MetadataState, workspace: PathBuf) -> Result<PathBuf, String> {
+    let active = state
+        .data
+        .lock()
+        .map_err(|_| "Metadata lock was poisoned".to_string())?
+        .tasks
+        .iter()
+        .filter(|task| matches!(task.status, TaskStatus::Running | TaskStatus::Stopping))
+        .map(|task| task.workspace_path.clone())
+        .collect::<Vec<_>>();
     let root = git::inspect_project(&workspace)
         .root
         .ok_or("No Git repository")?;
@@ -3507,6 +3505,125 @@ pub async fn git_push(
     let args = git::push_args(info, remote)?;
     git_cli(&root, "git", &args).await?;
     git::publish_info(&workspace)
+}
+
+/// The folder a branch picker acts on: a chat's workspace, or a project's folder before its
+/// first chat exists.
+fn branch_target(
+    state: &MetadataState,
+    task_id: Option<&str>,
+    project_id: Option<&str>,
+) -> Result<PathBuf, String> {
+    match (task_id, project_id) {
+        (Some(task_id), None) => task_workspace(state, task_id),
+        (None, Some(project_id)) => state
+            .data
+            .lock()
+            .map_err(|_| "Metadata lock was poisoned".to_string())?
+            .projects
+            .iter()
+            .find(|project| project.id == project_id)
+            .map(|project| PathBuf::from(&project.path))
+            .ok_or("Project not found".into()),
+        _ => Err("Choose a chat or a project".into()),
+    }
+}
+
+/// The ids whose folder lies in the checkout at `root`. A path under the root is only a
+/// candidate: a nested repository has its own root.
+fn ids_in_checkout(root: &Path, items: Vec<(String, String)>) -> Vec<String> {
+    items
+        .into_iter()
+        .filter(|(_, path)| {
+            let path = Path::new(path);
+            path.canonicalize().is_ok_and(|path| path.starts_with(root))
+                && git::inspect_project(path)
+                    .root
+                    .and_then(|found| found.canonicalize().ok())
+                    .as_deref()
+                    == Some(root)
+        })
+        .map(|(id, _)| id)
+        .collect()
+}
+
+#[tauri::command]
+pub async fn git_branches(
+    state: State<'_, MetadataState>,
+    task_id: Option<String>,
+    project_id: Option<String>,
+) -> Result<GitBranches, String> {
+    let workspace = branch_target(&state, task_id.as_deref(), project_id.as_deref())?;
+    blocking(move || git::branches(&workspace)).await
+}
+
+/// Switch a checkout's branch. It holds the checkout's Git lock, so no prompt snapshots a
+/// checkpoint mid-switch, and relabels every chat whose folder is that checkout (a chat records
+/// its branch; worktree chats have their own checkout and are untouched).
+#[tauri::command]
+pub async fn git_checkout(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    task_id: Option<String>,
+    project_id: Option<String>,
+    name: String,
+    kind: String,
+) -> Result<GitCheckoutResult, String> {
+    let _task = match task_id.as_deref() {
+        Some(task_id) => Some(task_lock(&app, task_id).lock_owned().await),
+        None => None,
+    };
+    let target = branch_target(&state, task_id.as_deref(), project_id.as_deref())?;
+    let workspace = idle_checkout(&state, target)?;
+    let root = git::inspect_project(&workspace)
+        .root
+        .ok_or("No Git repository")?
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let _git = app
+        .state::<GitLocks>()
+        .for_root(root.clone())
+        .lock_owned()
+        .await;
+    idle_checkout(&state, workspace.clone())?;
+    let branch = blocking(move || {
+        git::checkout(&workspace, &name, &kind).map_err(|error| worker::redact_and_limit(&error))
+    })
+    .await?;
+    let (tasks, projects) = {
+        let data = state
+            .data
+            .lock()
+            .map_err(|_| "Metadata lock was poisoned".to_string())?;
+        let tasks = data
+            .tasks
+            .iter()
+            .map(|task| (task.id.clone(), task.workspace_path.clone()))
+            .collect::<Vec<_>>();
+        let projects = data
+            .projects
+            .iter()
+            .map(|project| (project.id.clone(), project.path.clone()))
+            .collect::<Vec<_>>();
+        (tasks, projects)
+    };
+    let (task_ids, project_ids) = blocking(move || {
+        Ok((ids_in_checkout(&root, tasks), ids_in_checkout(&root, projects)))
+    })
+    .await?;
+    state.mutate(|data| {
+        for task in &mut data.tasks {
+            if task_ids.contains(&task.id) {
+                task.branch = branch.clone();
+            }
+        }
+        Ok(())
+    })?;
+    Ok(GitCheckoutResult {
+        branch,
+        task_ids,
+        project_ids,
+    })
 }
 
 #[tauri::command]

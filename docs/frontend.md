@@ -1,0 +1,52 @@
+# The renderer
+
+`src/` is a React 19 app in a WKWebView. It never fetches anything and never holds a credential: everything goes through Rust. Visual rules are in [design.md](design.md).
+
+## State and data flow
+
+- **`App.tsx`** owns all cross-cutting state: `data` (the `AppData` from `bootstrap`) and each chat's runtime. Update it immutably through `patchTask`, `patchRuntime` and `setData`.
+- **Events:** `App.tsx` is the only place that listens to Tauri events: `worker-event`, `terminal-event`, `subscription-login-event` and `native-chat-navigation` (the menu bar). A worker protocol change ends in its `worker-event` switch; see [worker.md](worker.md#protocol-changes).
+- **`api.ts`** is the only bridge to Rust: one typed `invoke` wrapper per command. Terminal output arrives on a `Channel`, not an event.
+- **Components are presentational.** The exceptions call `api` directly because they wrap one self-contained surface: `SettingsPage.tsx` (and `IntegrationsSection.tsx`), `BrowserPanel.tsx` (positions the native web view) and `TerminalPanel.tsx` (streams the PTY). Don't add more without the same reason.
+
+## Transcript snapshots
+
+The worker sends full snapshots and deltas ([worker.md](worker.md#snapshots-and-deltas)); `applySnapshotDelta` in `chat-utils.ts` merges them. A new field that changes mid-run needs updates on both sides. Keep the full-snapshot fallback, and keep unchanged messages as the *same objects*: transcript rows are memoized by identity.
+
+## Attachments
+
+- Images ride `images` through `api.ts` to the worker, and reach only models with Vision on.
+- Attached text files are folded into the message text by `composeFileSection` and read back out for display by `splitFileSection` (`src/attachment-utils.ts`). Change both halves together.
+- Attached files never ride a `/`-command message: Pi expands commands and would swallow the section. Sending the same text literally is the deliberate escape hatch.
+
+## Side panel
+
+`SidePanel` shows one `SidePanelView` (`src/side-panel.ts`) at a time: Changes, Browser, Terminal, or one sub-agent's transcript.
+
+- A new view is a union member, a component `SidePanel` renders, and a trigger that opens it (`toggleView`).
+- Changes and Terminal are durable: which one is showing is remembered across chats and launches (`wackcode:sidePanel`). Browser and sub-agent views belong to one chat and fall back to the remembered durable view when the chat changes.
+- Sub-agent transcripts reach the panel only through `watch_subagent` frames, never through snapshots.
+
+## Terminal
+
+The user's own shell, in `src-tauri/src/terminal.rs`. The agent never sees it.
+
+- One PTY per chat, keyed by task id, spawned lazily in the chat's `workspace_path` with the login-shell environment.
+- It is not a worker: it never joins the worker fingerprint and the idle reaper never kills it. It dies only via `kill_for_task` (delete, archive, worktree conversion), when the user ends it, or via `terminate_all` on app exit.
+- Output streams over a `Channel<TerminalFrame>` straight into xterm, never through React state. A ~256 KiB scrollback ring buffer replays on reattach; one lock orders replay and live output so nothing is lost or duplicated.
+- `App.tsx` owns the `terminal-event` listener that drives the header's caret. After a restart, stale frames are filtered out by `sessionId`.
+
+## Browser preview
+
+A native child `WKWebView` per chat (`browser.rs`), placed over `.browser-surface` by `BrowserPanel` through `browserPresent`. Hidden views stay attached, so a background chat's agent can keep using its page. Pages get an ephemeral data store and no Tauri capabilities.
+
+## Scroll rail
+
+`.conversation-scroll`'s native scrollbar stays hidden; `ScrollRail` replaces it with a turn timeline. Two things are load-bearing: `.conversation-scroll`'s `position: relative`, and the `data-turn` markers on `.msg.user`. Tick offsets come from `offsetTop`, which must resolve in scroll-content coordinates.
+
+## Window
+
+- The main window is created hidden and `transparent` (WKWebView can only stop drawing its background at creation). `glass.rs` paints it opaque in the user's background colour, and see-through only for Liquid Glass while focused. Keep `tauri.conf.json` free of `backgroundColor`.
+- Keep `dragDropEnabled: false`, or native handling swallows the composer's attachment drops.
+- The title bar is an overlay: keep the `data-tauri-drag-region` strips working when changing headers or the sidebar.
+- Closing the window hides it; the app keeps running behind the menu bar duck until ⌘Q.

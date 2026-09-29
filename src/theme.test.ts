@@ -12,7 +12,8 @@ import {
   applyTheme,
   contrast,
   parseHex,
-  resolveTheme
+  resolveTheme,
+  swatchTint
 } from "./theme";
 
 const stylesheet = readFileSync(resolve(__dirname, "styles.css"), "utf8");
@@ -94,6 +95,36 @@ describe("theme tokens", () => {
     const lightness = (name: string) => parseHex(variables[name])!.reduce((sum, channel) => sum + channel, 0);
     expect(lightness("--border")).toBeGreaterThan(lightness("--surface-hover"));
     expect(lightness("--surface-hover")).toBeGreaterThan(lightness("--surface") + 20);
+  });
+
+  it("lift a swatch's near-black fill into a rim its hue can be seen in", () => {
+    const sum = (rgb: number[]) => rgb[0] + rgb[1] + rgb[2];
+    // The rim keeps the fill's hue: the two rank their channels the same way.
+    const order = (rgb: number[]) => rgb.map((_, index) => index).sort((a, b) => rgb[b] - rgb[a]);
+    for (const preset of THEME_PRESETS) {
+      const tint = parseHex(swatchTint(preset.background))!;
+      const fill = parseHex(preset.background)!;
+      expect(sum(tint), preset.name).toBeGreaterThan(sum(fill) * 3);
+      expect(order(tint), preset.name).toEqual(order(fill));
+    }
+  });
+
+  it("tell the preset backgrounds' rims apart, which the fills alone never do", () => {
+    const tints = THEME_PRESETS.map((preset) => parseHex(swatchTint(preset.background))!);
+    for (let first = 0; first < tints.length; first += 1) {
+      for (let second = first + 1; second < tints.length; second += 1) {
+        const apart = Math.hypot(...tints[first].map((channel, index) => channel - tints[second][index]));
+        expect(apart, `${THEME_PRESETS[first].name} / ${THEME_PRESETS[second].name}`).toBeGreaterThan(30);
+      }
+    }
+  });
+
+  it("leave a grey background grey, and an unparseable colour untouched", () => {
+    const grey = parseHex(swatchTint("#111111"))!;
+    expect(grey[0]).toBe(grey[1]);
+    expect(grey[1]).toBe(grey[2]);
+    expect(grey[0]).toBeGreaterThan(100);
+    expect(swatchTint("not a colour")).toBe("not a colour");
   });
 
   it("turns only the shell see-through over an image or Liquid Glass", () => {

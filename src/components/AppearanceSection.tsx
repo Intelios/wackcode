@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { DEFAULT_ACCENT, DEFAULT_BACKGROUND, THEME_PRESETS, clampBackground, resolveTheme } from "../theme";
+import { DEFAULT_ACCENT, DEFAULT_BACKGROUND, THEME_PRESETS, clampBackground, resolveTheme, swatchTint } from "../theme";
 import { DEFAULT_AGENT_NAME, agentName } from "../agentName";
 import type { AppearanceConfig, BackdropMode, GlassStyle } from "../types";
 import { Icon } from "./Icons";
@@ -171,6 +171,7 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrl, 
               choices={THEME_PRESETS.map((preset) => ({ name: preset.name, value: preset.background }))}
               isDefault={!config.background}
               disabled={busy}
+              tinted
               onPick={(value) => void save(withBackground(value))}
               onPreview={(value) => onPreview({ ...config, background: clampBackground(value) })}
               onReset={() => { setDarkened(false); void save({ ...config, background: null }); }}
@@ -406,13 +407,16 @@ interface ColourRowProps {
   choices: { name: string; value: string }[];
   isDefault: boolean;
   disabled: boolean;
+  /** Ring each swatch in its own lifted tint: the backgrounds are near-black and would
+   *  otherwise read as one row of identical dark dots. */
+  tinted?: boolean;
   onPick: (value: string) => void;
   onPreview: (value: string) => void;
   onReset: () => void;
 }
 
 /** A settings row of colour swatches plus a native colour picker for anything else. */
-function ColourRow({ label, description, value, choices, isDefault, disabled, onPick, onPreview, onReset }: ColourRowProps) {
+function ColourRow({ label, description, value, choices, isDefault, disabled, tinted, onPick, onPreview, onReset }: ColourRowProps) {
   const custom = !choices.some((choice) => same(value, choice.value));
   const inputRef = useRef<HTMLInputElement>(null);
   // React's onChange fires on every drag step of the picker; the native change event fires once,
@@ -426,6 +430,11 @@ function ColourRow({ label, description, value, choices, isDefault, disabled, on
     input.addEventListener("change", listener);
     return () => input.removeEventListener("change", listener);
   }, []);
+
+  // A tinted row paints the fill as picked and hands the CSS its rim as a custom property,
+  // which keeps the two in one place instead of splitting them across a class and a style.
+  const fill = (colour: string): CSSProperties =>
+    tinted ? ({ background: colour, "--swatch-tint": swatchTint(colour) } as CSSProperties) : { background: colour };
 
   return (
     <div className="tool-setting appearance-setting colour-setting">
@@ -441,13 +450,17 @@ function ColourRow({ label, description, value, choices, isDefault, disabled, on
             aria-checked={same(value, choice.value)}
             aria-label={`${choice.name} ${label.toLowerCase()}`}
             key={choice.value}
-            className="swatch"
-            style={{ background: choice.value }}
+            className={`swatch ${tinted ? "swatch-tint" : ""}`}
+            style={fill(choice.value)}
             disabled={disabled}
             onClick={() => onPick(choice.value)}
           />
         ))}
-        <label className={`swatch swatch-custom ${custom ? "selected" : ""}`} style={custom ? { background: value } : undefined} title="Custom colour">
+        <label
+          className={`swatch swatch-custom ${custom ? "selected" : ""} ${tinted && custom ? "swatch-tint" : ""}`}
+          style={custom ? fill(value) : undefined}
+          title="Custom colour"
+        >
           <input
             ref={inputRef}
             type="color"

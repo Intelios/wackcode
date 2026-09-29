@@ -2589,6 +2589,13 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 }
 .swatch:hover:not(:disabled) { transform: scale(1.08); }
 .swatch[aria-checked="true"], .swatch-custom.selected { box-shadow: inset 0 0 0 1px rgb(255 255 255 / 24%), 0 0 0 2px var(--surface), 0 0 0 3.5px var(--text); }
+/* The background swatches: their colours are all near-black, so as flat fills they read as one
+   row of identical dark dots on a dark card. Each wears its own lifted tint as a rim
+   (`swatchTint` in theme.ts sets --swatch-tint) and keeps the exact colour as the fill, so the
+   hue that tells them apart is visible while the dot still says how dark the colour is. The rim
+   is the edge here, so the white hairline above stays for the flat accent discs only. */
+.swatch-tint { border: 3px solid var(--swatch-tint, var(--border-bright)); box-shadow: none; }
+.swatch-tint[aria-checked="true"], .swatch-tint.selected { box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--text); }
 /* The custom swatch shows a colour wheel until a custom colour is picked; the native input
    covers it invisibly, so a click opens the system colour panel. */
 .swatch-custom { display: block; background: conic-gradient(hsl(0 85% 62%), hsl(60 85% 60%), hsl(120 70% 55%), hsl(180 75% 55%), hsl(240 80% 66%), hsl(300 75% 62%), hsl(360 85% 62%)); }

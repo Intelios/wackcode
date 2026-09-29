@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_APPEARANCE } from "../theme";
+import { DEFAULT_APPEARANCE, swatchTint } from "../theme";
 import type { AppearanceConfig } from "../types";
 import { AppearanceSection } from "./AppearanceSection";
 
@@ -44,6 +44,15 @@ describe("AppearanceSection theme", () => {
     const { onChange } = renderSection({ background: "#14111b" });
     fireEvent.click(screen.getByRole("radio", { name: "Rosé accent colour" }));
     await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ accent: "#ff8fb8", background: "#14111b" })));
+  });
+
+  it("rings the near-black background swatches in their tint, and leaves the accent discs flat", () => {
+    renderSection();
+    const background = screen.getByRole("radio", { name: "Grape background colour" });
+    expect(background).toHaveClass("swatch-tint");
+    expect(background.style.getPropertyValue("--swatch-tint")).toBe(swatchTint("#14111b"));
+    const accent = screen.getByRole("radio", { name: "Grape accent colour" });
+    expect(accent).not.toHaveClass("swatch-tint");
   });
 
   it("previews a custom colour while dragging and saves it once committed", async () => {

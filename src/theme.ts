@@ -295,6 +295,27 @@ function lightnessUnchanged(candidate: string, original: Rgb): boolean {
   return parseHex(candidate)!.every((channel, index) => Math.abs(channel - original[index]) <= 1);
 }
 
+/** A swatch rim sits at this lightness: bright enough to read on any card, still a tint. */
+const SWATCH_TINT_L = 0.64;
+/** Rim chroma is the colour's own, raised into this range so near-black hues still read. */
+const SWATCH_TINT_C: [number, number] = [0.12, 0.2];
+/** Below this chroma a colour is grey, and inventing a hue for it would only add noise. */
+const NEUTRAL_CHROMA = 0.005;
+
+/**
+ * The rim a colour swatch wears in Settings: the same hue at a lightness and chroma the eye
+ * can read. The six preset backgrounds are all near-black, so as flat fills on a dark card
+ * they are indistinguishable; the fill stays the exact colour and only the rim is amplified,
+ * so the row can tell the backgrounds apart without lying about how dark they are.
+ */
+export function swatchTint(hex: string): string {
+  const rgb = parseHex(hex);
+  if (!rgb) return hex;
+  const { c, h } = toLch(rgb);
+  const chroma = c < NEUTRAL_CHROMA ? 0 : Math.min(SWATCH_TINT_C[1], Math.max(SWATCH_TINT_C[0], c * 5));
+  return toHex(fromLch({ l: SWATCH_TINT_L, c: chroma, h }));
+}
+
 /** The user's accent, lightened if needed until it reads as text on `background`. */
 export function readableAccent(hex: string, background: string): string {
   const rgb = parseHex(hex);

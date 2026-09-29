@@ -11,10 +11,7 @@
 
 <p align="center">macOS 12+ · Apple Silicon · Tauri 2, React and Rust</p>
 
-<!-- IMAGE: docs/images/hero.png (or hero.gif) -->
-> **Image to add: `docs/images/hero.png`**
-> The main window mid-run in the default lime-on-black theme. The sidebar shows a couple of projects with chats, one with the pulsing "working" dot. The transcript has an "Explored · 3 files, 2 searches" row, an edit tool row with a small diff, and an answer streaming in. The composer at the bottom shows the Build/Plan toggle and the model picker, and the Changes panel is open on the right with a diff. Capture the window only, at retina size (about 2880×1800).
-> *Alternative:* a 6–10 second GIF or MP4 of the welcome screen, with the comet tracing the composer, a prompt being sent, the composer gliding down and the chat assembling itself.
+![WackCode's new-chat screen: the sidebar lists projects and their chats, and the centred composer offers the project, its branch, a Local/Worktree toggle, the model picker and the Build/Plan switch.](docs/images/hero.png)
 
 WackCode gives the Pi coding agent a proper home on your Mac. Open a project, describe what you want, and watch the agent read, edit and run things. You can steer it mid-run, rewind when it goes the wrong way, review its diff, and commit, push or open a PR without leaving the window.
 
@@ -39,9 +36,7 @@ Add a project folder with <kbd>⌘ O</kbd> and start a chat with <kbd>⌘ N</kbd
 
 Chats keep working when you switch away, and even when you close the window: WackCode stays in the menu bar, where the duck lists chats that are working or waiting for you. An idle chat's background process stops after 15 minutes and starts again the moment you return. Archive finished chats to tidy the sidebar; the Archived view lets you restore or delete them.
 
-<!-- IMAGE: docs/images/menu-bar.png -->
-> **Image to add: `docs/images/menu-bar.png`**
-> The menu bar duck's menu open, listing one chat that's working, one waiting for an answer or plan approval, and a few recently finished ones, with **Quit WackCode** at the bottom. A small crop, not the full screen.
+<p align="center"><img src="docs/images/menu-bar.png" width="568" alt="The menu bar duck's menu, listing an active chat marked Working, with Open WackCode and Quit WackCode."></p>
 
 ### Steer the run, never lose work
 
@@ -57,9 +52,7 @@ Before every message WackCode takes a checkpoint of the chat's files. Each of th
 
 Instead of a scrollbar, the transcript has a timeline: a tick for each of your messages (hover for the prompt, click to jump), a glowing tick on the turn the agent is working on, and a line that lights up as far as you've read.
 
-<!-- IMAGE: docs/images/versions.png -->
-> **Image to add: `docs/images/versions.png`**
-> A user message showing the **‹ 2/3 ›** version switcher and its hover actions (copy, edit, rewind, retry, fork), with the timeline rail visible on the right edge. Ideally the "put files back?" restore dialog is open, listing two or three changed files.
+![A chat in WackCode: collapsible "Thought for" rows, a shell command the agent ran and its answer, with Browser, Changes and Terminal buttons in the header and the timeline rail on the right edge.](docs/images/versions.png)
 
 ### Plan first
 
@@ -70,9 +63,7 @@ Press <kbd>⇧ Tab</kbd> or use the Build/Plan toggle to switch modes:
 
 For longer jobs, `/goal <objective>` starts a goal loop: the agent works a round, a separate check decides whether the objective is met, and if not, the next step becomes the next round. It pauses itself after three rounds without progress and stops at 25.
 
-<!-- IMAGE: docs/images/plan-mode.png -->
-> **Image to add: `docs/images/plan-mode.png`**
-> Ultra Plan in action: the warm, flame-marked mode toggle and a question card above the composer, showing multiple-choice answers with the recommended one first and a **Write the plan now** button. A second, side-by-side option is the finished plan card with its Approve / Revise / Save as PLAN.md actions.
+![An Ultra Plan question above the composer: multiple-choice answers with the recommended one first, an Other option, and a Write the plan now button. The composer's mode switch shows Ultra Plan with its flame.](docs/images/plan-mode.png)
 
 ### Review and ship
 
@@ -84,27 +75,13 @@ Open the Changes panel with <kbd>⌘ ⇧ C</kbd> to see staged and unstaged chan
 - Push to your remote and open a GitHub pull request with an editable title and description (uses your existing `gh` login).
 - **Review** in the header asks the Reviewer sub-agent to look over everything uncommitted.
 
-<!-- IMAGE: docs/images/changes.png -->
-> **Image to add: `docs/images/changes.png`**
-> The Changes panel beside a chat: the file list with +/− counts, a syntax-highlighted diff with one inline comment card under a line, and the bottom dock expanded to show a generated commit message and the **Push** and **Create PR** actions.
-
 ### Watch what it builds
 
 - **Browser preview.** A real WebKit page that you and the agent share. Open your localhost dev server and the agent can read the page, click, type, scroll, check console errors, and screenshot it for models that support images. Each chat gets its own cookies and site data, wiped when WackCode quits. **Take control** pauses the agent's browsing while you use the page.
 - **Computer use** *(optional, macOS 14+)*. Lets the agent check native apps it builds (Mac apps, Tauri or Electron apps, the iOS Simulator) the same way. It works in the background through Accessibility wherever it can, leaving your pointer and your current app alone. The first time a chat wants an app, a card asks you to allow it for that chat, deny it, or never allow it. WackCode itself, terminals, password managers, System Settings and security prompts are always off-limits. <kbd>⌃ ⌥ ⌘ .</kbd> stops computer use everywhere.
 - **Terminal.** <kbd>⌘ ⇧ T</kbd> opens a real login shell in the chat's folder. It keeps running when you hide it or switch chats, full-screen programs like `vim` and `htop` work, and the agent never sees it.
 
-<!-- IMAGE: docs/images/browser.png -->
-> **Image to add: `docs/images/browser.png`**
-> The Browser panel showing a local dev server (for example, a small todo app on `localhost:5173`), with the transcript beside it showing the agent's browser tool rows and a screenshot thumbnail under one of them.
-
-<!-- IMAGE: docs/images/computer-use.png -->
-> **Image to add: `docs/images/computer-use.png`**
-> The per-app access card above the composer asking to allow an app (for example, the Simulator) for this chat, with its allow / deny / never choices, plus the banner showing which app the chat is using. If there's room, show the iOS Simulator window beside WackCode.
-
-<!-- IMAGE: docs/images/terminal.png -->
-> **Image to add: `docs/images/terminal.png`**
-> The Terminal panel running something colourful (a test run or `htop`) in the theme's colours, with its Working badge in the header and the blinking caret on the Terminal button.
+![The computer-use access card above the composer asking "Let WackCode use CotEditor?", with Never allow, Deny and Allow for this chat, and a reminder that ⌃⌥⌘. stops it at any time.](docs/images/computer-use.png)
 
 ### Sub-agents
 
@@ -117,10 +94,6 @@ Switch on sub-agents in **Settings › Packages** and the agent can hand self-co
 You can add your own roles and give each one its own model. Each helper appears as a chip in the chat; click it to watch its reasoning, tool calls and answer live in the side panel, along with its token use and cost. Sub-agents are off by default and only used when you ask, because every one costs extra model usage.
 
 Auto chat titles live here too: switch on the `auto-titles` agent with a small, cheap model, and each new chat gets a proper title from its first message.
-
-<!-- IMAGE: docs/images/subagents.png -->
-> **Image to add: `docs/images/subagents.png`**
-> A parallel batch of SubAgent chips in the transcript (Scout, Reviewer, Worker, each with its little robot and a live status line), and the side panel watching one of them with tabs for its siblings.
 
 ### Extend the agent
 
@@ -137,9 +110,7 @@ Auto chat titles live here too: switch on the `auto-titles` agent with a small, 
 
 In the composer, type `@` to mention a file or folder, and paste, drop or attach files: text files are sent inside your message, and images go to models that support them.
 
-<!-- IMAGE: docs/images/settings.png -->
-> **Image to add: `docs/images/settings.png`**
-> Settings › Skills (or Settings › MCP servers) with a handful of entries and their switches, showing the Settings sidebar with all its sections.
+![Settings › Packages: installed packages, then a card for each built-in (Plan Mode, Ask User Questions, Todo List, Sub-agents, Browser preview, Computer use, Web Fetch, Memory) with its tools and switches.](docs/images/settings.png)
 
 ### Make it yours
 
@@ -149,10 +120,6 @@ In the composer, type `@` to mention a file or folder, and paste, drop or attach
 - A solid background, your own image (clear on the welcome screen, dimmed and blurred behind chats), or **Liquid Glass** on macOS 26.
 - Your agent's name: call it anything you like instead of "WackCode".
 - Optional message bubbles, thinking previews, and grouping of the agent's file reads and searches into one "Explored" row.
-
-<!-- IMAGE: docs/images/themes.png -->
-> **Image to add: `docs/images/themes.png`**
-> A 2×2 collage of the same chat in four looks: the default theme, a colourful preset (Grape or Rosé), an image backdrop, and Liquid Glass over a recognisable desktop wallpaper.
 
 ### Keyboard shortcuts
 

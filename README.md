@@ -1,108 +1,288 @@
-# WackCode
+<p align="center">
+  <img src="src-tauri/icons/128x128@2x.png" width="128" height="128" alt="WackCode's app icon: a black rubber duck on a lime tile">
+</p>
 
-## TokenTrail
+<h1 align="center">WackCode</h1>
 
-Usage recording is enabled by default in **Settings > Integrations > TokenTrail**.
-TokenTrail discovers the local usage-only ledger automatically and refreshes every 30 seconds,
-including history recorded while TokenTrail was closed. The ledger lives at
-`~/Library/Application Support/com.wackcode.desktop/usage/v1/` and is retained indefinitely,
-independently of deleted chats. Disabling recording preserves existing history but does not
-backfill the disabled interval or chats from before this integration.
+<p align="center">
+  <strong>A playful, local-first Mac app for the <a href="https://www.npmjs.com/package/@earendil-works/pi-coding-agent">Pi coding agent</a>.</strong><br>
+  Bring your own model. No account, no backend, no telemetry.
+</p>
 
-Records contain token counts, model/provider identity, project/workspace paths, opaque chat
-and request IDs, timing, purpose, and outcome. They never contain prompts, responses, chat
-titles, credentials, endpoint URLs, or tool arguments. Chat, sub-agents, titles, compaction,
-branch summaries, goal verification, and commit messages are included. TokenTrail calculates
-API-equivalent cost estimates, not actual subscription spend. Missing provider usage stays
-unknown; extension-owned requests and usage lost before crash delivery cannot be recovered.
-Recording errors and dropped retry records are visible in Integrations; failed writes retry
-with a bounded in-memory queue, which does not survive quitting. See the
-[v1 contract](docs/wackcode-usage-v1.md).
+<p align="center">macOS 12+ · Apple Silicon · Tauri 2, React and Rust</p>
 
-WackCode is a local macOS desktop interface for the Pi coding agent, built with Tauri 2, React, TypeScript, Rust, and `@earendil-works/pi-coding-agent` 0.86.1.
+<!-- IMAGE: docs/images/hero.png (or hero.gif) -->
+> **Image to add: `docs/images/hero.png`**
+> The main window mid-run in the default lime-on-black theme. The sidebar shows a couple of projects with chats, one with the pulsing "working" dot. The transcript has an "Explored · 3 files, 2 searches" row, an edit tool row with a small diff, and an answer streaming in. The composer at the bottom shows the Build/Plan toggle and the model picker, and the Changes panel is open on the right with a diff. Capture the window only, at retina size (about 2880×1800).
+> *Alternative:* a 6–10 second GIF or MP4 of the welcome screen, with the comet tracing the composer, a prompt being sent, the composer gliding down and the chat assembling itself.
 
-It supports named OpenAI-compatible connections and subscription sign-in through Pi for OpenAI Codex (ChatGPT Plus/Pro), GitHub Copilot, Anthropic, xAI, Meta, and Kimi For Coding. API key connections retain explicit model limits, reasoning mappings, and a per-model Vision switch. Every connection has its own on/off switch: a turned-off connection keeps its settings, key, and chats, but disappears from the model picker and refuses new runs until it is switched back on. Settings can suggest those values from Pi's bundled model catalogue when you search by name or ID; you choose a suggestion, review it, and save. It also supports attachments (paste, drop, or pick files with the composer's paperclip: text files travel inside the message for the model to read, and PNG, JPEG, GIF, or WebP images go to models with Vision on), concurrent task workers (an idle chat's worker stops after 15 minutes and starts again on demand), persistent Pi sessions, optional Git worktrees, and Git changes review and publishing. Chats open as drafts with a project selector and a Local/Worktree toggle, and can also run without a project in a per-chat scratch folder inside WackCode's application-data directory. Archiving a chat (the row's hover button, or the chat menu) removes it from the sidebar's project groups; the archive tile in the sidebar footer then opens a dedicated Archived view that replaces the chat list — every archived chat across projects, newest-archived first, each row showing its title, how long it has been archived, and its project, with buttons to unarchive it back into the normal list or delete it for good, and clicking a row opens the chat for a look before deciding.
+WackCode gives the Pi coding agent a proper home on your Mac. Open a project, describe what you want, and watch the agent read, edit and run things. You can steer it mid-run, rewind when it goes the wrong way, review its diff, and commit, push or open a PR without leaving the window.
 
-The macOS menu bar duck shows chats that are working, stopping, or waiting for an answer or plan approval, plus the ten most recently finished chats from the current WackCode run. Click a chat to restore the window and open it. Closing the window leaves WackCode and its chats running behind the menu bar; **Quit WackCode** or ⌘Q fully exits, and recent menu history starts fresh on the next launch.
+Everything runs locally. Your conversations go straight from your Mac to the model provider you choose, whether that's an OpenAI-compatible API key or an existing subscription (ChatGPT Plus/Pro via OpenAI Codex, GitHub Copilot, Anthropic, xAI, Meta or Kimi For Coding).
 
-The side panel on the right shows one thing at a time: the Browser, the Changes panel, or a sub-agent you're watching. The Browser and Changes buttons switch views, clicking a sub-agent's chip switches to that sub-agent, and activating the current view again closes it; whether Changes is open is remembered across chats and launches. The Changes panel separates staged and working-tree diffs, lists each file with its +/− counts, and fills the rest of the panel with the selected file's diff. There is no separate staging step: committing automatically stages everything — all changed files at once from the dock, or a single file from its row — and you can discard files and individual hunks in modified text files; discarding asks for confirmation. Clicking the gutter on a diff line adds a pending comment right under that line, including removed lines; comments are editable, and ones whose lines moved since are marked. The dock at the bottom collects pending comments (**Address comments** sends them to the chat together, and comments whose diffs changed are marked as outdated), an editable commit message you can have generated from all your changes, a push to a configured remote, and a GitHub PR form with an editable title and description. The PR form defaults to ready for review and requires a pushed branch and an existing authenticated GitHub CLI (`gh`) installation. The **Review** button in the header asks the enabled Reviewer sub-agent to inspect all uncommitted files and leaves its findings in chat.
-The side panel on the right shows one thing at a time: the Changes panel, the chat's Terminal, or a sub-agent you're watching. The Changes button and ⌘⇧C switch it to Changes, the Terminal button and ⌘⇧T switch it to the terminal, clicking a sub-agent's chip switches it to that sub-agent, and doing any again closes it; which of Changes or Terminal is showing is remembered across chats and launches. The Changes panel separates staged and working-tree diffs, lists each file with its +/− counts, and fills the rest of the panel with the selected file's diff. There is no separate staging step: committing automatically stages everything — all changed files at once from the dock, or a single file from its row — and you can discard files and individual hunks in modified text files; discarding asks for confirmation. Clicking the gutter on a diff line adds a pending comment right under that line, including removed lines; comments are editable, and ones whose lines moved since are marked. The dock at the bottom collects pending comments (**Address comments** sends them to the chat together, and comments whose diffs changed are marked as outdated), an editable commit message you can have generated from all your changes, a push to a configured remote, and a GitHub PR form with an editable title and description. The PR form defaults to ready for review and requires a pushed branch and an existing authenticated GitHub CLI (`gh`) installation. The **Review** button in the header asks the enabled Reviewer sub-agent to inspect all uncommitted files and leaves its findings in chat.
+## Highlights
 
-The Terminal view gives each chat one real terminal: your login shell (the one `$SHELL` names, with your normal shell environment) running in the chat's workspace folder — the project, its worktree, or the chat's scratch folder. Full-screen programs like `vim` and `htop` work, colours follow your theme, and dragging the panel's edge resizes the shell. The shell belongs to the chat rather than the panel: closing the panel or switching chats leaves it running, and the Terminal button shows a blinking caret while a hidden shell exists, pulsing while a command runs in it. Reopening replays recent output and picks up live. Its header marks a running command as Working and a dead shell as Exited, with buttons to clear the screen, restart the shell, and end the session; ending or restarting while a command runs asks first, and when the shell exits on its own you can start a new one over its last screen. A terminal is yours alone — the agent never sees it — and it ends when its chat is deleted or archived, when the chat moves into a worktree, or when WackCode quits.
+- **Many chats at once.** Each chat runs its own agent in the background, in your project folder, a Git worktree, or a scratch folder.
+- **Steer instead of waiting.** Type while the agent works: <kbd>Enter</kbd> redirects the current run, and <kbd>⌥ Enter</kbd> queues a message for after it.
+- **Nothing is lost.** Retry, edit, rewind or fork from any message. Checkpoints can put your files back too.
+- **Plan before building.** Plan mode keeps the agent read-only until you approve a plan; Ultra Plan interviews you first.
+- **Review and ship.** A built-in diff view with line comments, generated commit messages, push, and GitHub PRs.
+- **Sees what it builds.** A shared browser preview for web apps, and optional computer use for native Mac and iOS Simulator apps.
+- **Extensible.** MCP servers, Agent Skills, your own slash commands, Pi packages, per-project memory, and sub-agents.
+- **Yours.** Themes, image backdrops, Liquid Glass, and your agent's name.
 
-Conversations are Pi session trees, so nothing is lost when you change course: retry the last answer, edit an earlier message in place and send it again, rewind to before any message (its text returns to the composer), flip between the resulting versions with the ‹ n/m › switcher, or fork a chat from any turn into a new one. Before every prompt WackCode takes a checkpoint of the chat's files, so each of these can also put files back — it lists what changed and asks, and every restore can itself be undone. Instead of a scrollbar the transcript has a slim timeline on its right edge: a journey line that lights up as far as you've read, a tick for each of your turns (hover it for the prompt, click to jump back), a glowing tick on the turn the agent is working on, and an end cap at the bottom that jumps to the latest (lit when you've scrolled away). Click or drag anywhere on it to scrub through the conversation.
+## Features
 
-While the agent is working you can still type: **Enter steers the run** — your message is delivered at its next boundary, before the model's next step, so you can correct course without waiting. **⌥Enter queues the message for after the run** instead, and both kinds appear above the composer, tagged *Steering* or *Queued*, until Pi takes them; the ✕ on a row takes them back out and returns the text to the composer. If the run ends before your message is delivered, it simply starts the next run on its own. Slash commands that act on the app itself (`/new`, `/compact`, …) still wait for the run to finish.
+### Chats, projects and worktrees
 
-Plan mode (the Build/Plan toggle in the composer, or ⇧Tab) keeps the agent read-only: it inspects the workspace, asks a few questions, and proposes a plan you can approve, revise, save as `PLAN.md`, or discard. Click Plan again for Ultra Plan, a "grill me" interview: the agent asks as many questions as it needs, one at a time with its recommended answer first, before it writes the plan. Expect more usage; "Write the plan now" on any question ends the interview.
+Add a project folder with <kbd>⌘ O</kbd> and start a chat with <kbd>⌘ N</kbd>. A new chat opens as a draft where you pick the project and choose **Local** (work in the folder itself) or **Worktree** (work in a separate Git worktree, so parallel chats don't collide). A chat can also run without a project, in its own scratch folder.
 
-Browser preview is a native WebKit page shared by you and the main agent. Enter an HTTP or HTTPS address in the Browser panel, including a localhost development server started with the normal shell tools; the agent can also open a page, inspect its visible text and controls, click, fill, scroll and press keys, read bounded console errors, and send an actual viewport screenshot to a model with Vision. Each chat has its own cookie and site-data store for the current WackCode run, including chats working in the background; nothing is restored on launch. Closing the panel only hides it. **Take control** cancels pending agent browser work until you choose **Resume agent control**, and **Reset browser session** closes the page and clears that chat's browser data. Popups used by sign-in flows share the same session and show a return control. Plan and Ultra Plan can inspect an already-open page but cannot open, navigate or interact with one. Sub-agents never receive browser tools. Switch the agent's five browser tools as one group in Settings › Packages. Browser screenshots show as a small preview under their tool row; click one to see it full size.
+Chats keep working when you switch away, and even when you close the window: WackCode stays in the menu bar, where the duck lists chats that are working or waiting for you. An idle chat's background process stops after 15 minutes and starts again the moment you return. Archive finished chats to tidy the sidebar; the Archived view lets you restore or delete them.
 
-Computer use lets the agent check the native apps it builds — macOS apps, Tauri or Electron shells, the iOS Simulator — the way Browser preview checks web pages. It is off by default and needs macOS 14 or later: switching it on in Settings › Packages walks you through macOS's Accessibility and Screen Recording permissions. The agent can list running apps, launch one (including a `.app` it just built) in the background without taking focus, read a window's buttons, fields and menus with fresh element references, capture that one window even while other windows cover it, and press, type, set text, choose menu items, press keys, scroll and drag, then check the result. Wherever it can it works through Accessibility and sends keys only to that app, so your pointer and the app you're using are left alone; a click on something Accessibility can't reach briefly brings the app forward, but only after you've been idle for a moment and only if that app's own window is under the point, and your previous app and pointer position come back afterwards. The first time a chat wants an app, a card above the composer asks you to allow it for that chat (until WackCode quits), deny it, or never allow it; a denied app isn't asked for again in that chat. WackCode itself, terminals and script runners, password managers and Keychain Access, System Settings and the system's security prompts, and the Dock, menu bar and notifications are always refused, and Settings › Computer use keeps your own never-allow list. Secure text fields are never read or typed into. While a chat is using an app a banner above its composer says which, the menu bar icon offers **Stop Computer Use**, and ⌃⌥⌘. stops computer use in every chat; the chat's own Stop works too. Screenshots show as previews under their tool rows; click one to see it full size. Older screenshots are dropped from what the model sees, keeping at least the three most recent, so a long session doesn't fill its context. Plan and Ultra Plan can list apps and look at an app you've allowed, but can't launch or operate one, and sub-agents never receive computer-use tools.
+<!-- IMAGE: docs/images/menu-bar.png -->
+> **Image to add: `docs/images/menu-bar.png`**
+> The menu bar duck's menu open, listing one chat that's working, one waiting for an answer or plan approval, and a few recently finished ones, with **Quit WackCode** at the bottom. A small crop, not the full screen.
 
-Settings › Prompts shows the built-in prompts — the default system prompt that opens every chat, and the Plan mode and Ultra Plan contracts — and lets you customize them. It's optional: the built-ins are designed to work best with Pi and WackCode, but you can change them to your own liking, and restore the built-in text at any time. Changes apply from the next message in your chats, including chats that are already planning; nothing restarts.
+### Steer the run, never lose work
 
-Sub-agents are an optional built-in, off until you switch them on in Settings › Packages. When they're on, the agent can hand a self-contained task to a sub-agent that has its own context window, or run several at once. WackCode ships three roles: Scout (read-only reconnaissance), Reviewer (read-only code review) and Worker (edits files). All three can read web pages with Web Fetch, so you can send Scout off to read a library's docs as well as your code. You can add your own. Each one uses the chat's model unless you give it its own on the Sub-agents settings page. By default the agent only delegates when you ask, because every sub-agent is extra model usage. All sub-agents, including ones that edit files, can run concurrently within a batch in the same workspace. Settings › Sub-agents controls how many run at once (1–8, default 4). Give parallel editing agents separate files; dependent tasks or edits to the same files should run sequentially. The parent waits for the batch to finish before continuing. In Plan and Ultra Plan, only read-only sub-agents run. Each sub-agent appears in the chat as a **SubAgent** chip with its role (such as Scout) and what it's doing right now; several started together share one group. Click a chip to watch that sub-agent in the side panel: what it was asked, its reasoning, every tool call with its output, and its answer as it writes it, plus its model, token use and cost. A parallel call's sub-agents are tabs there. The transcript is saved with the chat, so it's still there after the run and after a restart; very long ones keep only the most recent tool output. Sub-agents from before this version, or ones a restart cut off mid-run, show just their reported steps and answer.
+While the agent works you can keep typing. <kbd>Enter</kbd> **steers**: your message reaches the agent before its next step, so you can correct course without stopping it. <kbd>⌥ Enter</kbd> **queues** the message for after the run. Pending messages sit above the composer until the agent picks them up, and you can pull them back out.
 
-Web Fetch is a built-in `web_fetch` tool that lets the agent read a web page by URL: the page's main content comes back as Markdown, and JSON or plain text comes back as is. It doesn't search, so the agent needs a URL from you, your project, or a page it already read. It reads only public addresses, never `localhost` or your local network, sends no cookies or credentials, and it works in Plan mode because it only reads. Sub-agents whose role includes it can use it too. It's on by default; switch it off in Settings › Packages, which also takes it from sub-agents.
+Every conversation is a tree, so changing course never throws anything away:
 
-MCP servers give the agent more tools. Add them in Settings › MCP servers: a local command (stdio, such as `npx -y @modelcontextprotocol/server-filesystem ~/Documents`, with optional environment variables) or a remote server over HTTP or SSE (with optional headers, such as `Authorization: Bearer <token>`). Each server has a name, a timeout for starting up and for each tool call (two minutes unless you change it), and its own switch; "Test connection" lists its tools, and each tool has a switch too. Tools reach the agent as `mcp__<server>__<tool>`. A server starts when a chat sends its first message, not when you open a chat, and runs until the chat's worker stops; a stdio server starts in the chat's project folder. One that can't start is reported once in the chat and tried again a few minutes later, so a broken server never holds up your messages, and Stop ends the wait. Changes apply to running chats from their next message. In Plan and Ultra Plan only tools the server marks read-only run. Sub-agents don't get MCP tools, and OAuth sign-in to remote servers isn't supported: use a token header.
+- **Retry** the last answer, or **edit** an earlier message and send it again.
+- **Rewind** to before any message; its text returns to the composer.
+- Flip between versions with the **‹ 2/3 ›** switcher, or **fork** any turn into a new chat.
 
-Skills are the Agent Skills standard that Codex, Claude Code, OpenCode and the Pi CLI also read: a folder with a `SKILL.md` whose name and description sit in the agent's context, and whose instructions, scripts and references the agent reads when a task matches. Settings › Skills lists yours, the ones in `~/.agents/skills`, which that folder shares with Codex, OpenCode and the Pi CLI. You can write a new skill there (name, description, whether the agent may use it by itself or only when you type `/skill:name`, an optional argument hint like `<files>` or `[files]` shown next to the name in the composer's `/` picker, and Markdown instructions), edit or delete one (a deleted skill goes to the Trash), import a ZIP archive, a skill folder, a folder of skills, or a `.md` file, and switch any skill off. ZIP imports preserve each skill’s scripts, references, assets and relative paths, skip names already in Your skills, and report what was imported or skipped. ZIPs may contain one skill or several; imports never run bundled scripts or install dependencies. Archives are limited to 100 MiB compressed, 250 MiB extracted and 20,000 entries, with the existing 50 MiB and 2,000-file limit per skill. Unsafe paths, links, conflicting paths and corrupt or unsupported ZIPs are rejected; macOS archive metadata, `.git` and `node_modules` are ignored. Skills other tools keep in their own user-level folders (`~/.claude/skills`, `~/.codex/skills`, `~/.pi/agent/skills`, `~/.config/opencode/skills`) are listed too, but load only once you switch that folder on; WackCode never changes them, and "Copy to Your skills" makes an editable copy that loads instead of the original. You can add any other folder of skills. When two skills share a name, yours win, then other folders in the order listed, then packages; the skill that loses says so. A project's own skill folders, such as `.agents/skills` or `.claude/skills` in a repository, never load. Changes apply to running chats from their next message, including skills you add or edit on disk. The Browse tab lists pi.dev's skill packages; installing one switches on only its skills, and any extensions it also contains stay off until you turn them on in Settings › Packages. Sub-agents don't get skills.
+Before every message WackCode takes a checkpoint of the chat's files. Each of these actions offers to put the files back as well: it lists what changed and asks first, and every restore can itself be undone. Checkpoints live in a private store and never touch your repository's history. Ignored files and files over 25 MB aren't captured, and checkpoints are off when the workspace is your home folder.
 
-Auto chat titles are another optional built-in, off by default. They live on Settings › Sub-agents as the `auto-titles` agent — one WackCode runs itself, never offered to the model — so setting them up starts with switching Sub-agents on in Settings › Packages. Choose a connected provider and a small, inexpensive model on that agent, then switch it on. On a new chat's first prompt, WackCode sends only that prompt's text to the chosen connection in one extra request. The title arrives in the background while the chat responds. Each chat gets one attempt, even if the request fails or is interrupted; later messages, retries, forks, and chats created before the feature was enabled never trigger it, and it pauses while Sub-agents is switched off. Until a title succeeds, the usual free title based on the opening prompt remains. A manual rename always wins.
+Instead of a scrollbar, the transcript has a timeline: a tick for each of your messages (hover for the prompt, click to jump), a glowing tick on the turn the agent is working on, and a line that lights up as far as you've read.
 
-Type `/` in the composer to browse commands from enabled packages, prompt templates, your own commands, and skills. WackCode also provides `/init`, `/compact [instructions]`, `/new`, `/name <name>`, `/copy`, and `/goal <objective>`. A command that takes arguments shows its usage — `<arg>` meaning required, `[arg]` optional — next to its name in the picker and, once selected and before you type anything, as a subtle line in the composer explaining what the arguments are for (a skill's are appended after its instructions). A command-generated prompt appears compactly in the transcript as its highlighted command name plus your arguments; click the name to inspect or copy the complete prompt sent to the agent. `/init` takes no arguments and creates or carefully improves a concise `AGENTS.md` in a Build-mode project chat's current workspace; its change appears in the normal file diff. `/goal` starts a goal loop: the agent works a round, then a separate no-tools check on the same model decides whether the objective is met — if not, its suggested next action becomes the next turn, and this repeats until the check passes. A banner above the composer shows the round and the verifier's current next step. The loop pauses itself after 3 rounds without progress and stops at 25; `/goal pause`, `/goal resume` and `/goal clear` control it, Stop pauses it, and Plan and Ultra Plan don't offer it. Selecting a suggestion inserts it so you can add arguments before sending. The welcome-screen picker shows that same full catalog through a keyless local scan. A new draft still never creates its chat until you actually send: typing `/` only opens the picker, a message or a chat-starting command like `/init`, `/goal`, a skill, or a package command creates the chat with its send, and the commands that act on the current chat (`/name`, `/copy`, `/compact`, `/goal pause|resume|clear`) explain that there is no chat yet.
+<!-- IMAGE: docs/images/versions.png -->
+> **Image to add: `docs/images/versions.png`**
+> A user message showing the **‹ 2/3 ›** version switcher and its hover actions (copy, edit, rewind, retry, fork), with the timeline rail visible on the right edge. Ideally the "put files back?" restore dialog is open, listing two or three changed files.
 
-Settings › Commands lists every slash command a chat can offer: WackCode's own six, your commands, and each trusted package's extension commands and prompt templates, with the same resolved names the composer shows (a command that loses a name to another one appears as `/prompt:name` or `/extension:name`). Each row has a switch; a switched-off command stops being offered and can't be run. Your own commands are ordinary Pi prompt templates in the app's commands folder — a `<name>.md` file whose optional `description` and `argument-hint` sit above the instructions — and you create, edit and delete them right there (a deleted command goes to the Trash). Instructions take arguments like `/review src/main.ts`: `$1`, `$2`, `$ARGUMENTS`, `${1:-default}` and `${@:2}` are filled in when the command runs, and the editor previews the exact text the agent receives. When your command and a package template share a name, yours wins the plain name. Changes apply to running chats from their next message, including commands you add or edit on disk.
+### Plan first
 
-Memory lets the agent accumulate knowledge across chats on its own, per project. As it works it may save a short note — one of four kinds: *user* (your role and lasting preferences), *feedback* (corrections you make and approaches you confirm), *project* (ongoing work, decisions and deadlines not derivable from the code or git history), or *reference* (where information lives outside the project, such as an issue tracker). It skips anything the codebase or your AGENTS.md files already say, and it doesn't save something every chat: only what would help a future conversation. Every chat in a project carries a one-line index of the notes' titles and descriptions in its system prompt, and the agent reads a note's full text with `memory_recall` only when it looks relevant — saves and recalls show as rows in the transcript. Notes live in WackCode's application-data folder, one directory per repository shared by all of its worktrees, machine-local and never inside the project. Settings › Memory lists every project's notes: edit or delete any of them (a deleted note goes to the Trash), reveal the folder — or any single note's file — in Finder, switch memory off for one project, or switch the whole feature off with the master switch — the memory tools are withdrawn from running chats on their next message. Sub-agents never see memory, and Plan mode may save notes but never touches the workspace to do it.
+Press <kbd>⇧ Tab</kbd> or use the Build/Plan toggle to switch modes:
 
-Type `@` to mention a file or folder in the chat's workspace (in a Git repository, every file that isn't ignored). Pick one from the list and the message keeps its path, such as `@src/App.tsx`, the way Pi's own terminal does; the model reads the file itself when it needs it. Paths with spaces are quoted, and choosing a folder lists what's inside it.
+- **Plan** keeps the agent read-only. It inspects the project, asks a few questions, and proposes a plan you can approve, revise, save as `PLAN.md`, or discard.
+- **Ultra Plan** is a "grill me" interview. The agent asks as many questions as it needs, one at a time, with its recommended answer first, before it writes the plan. Press **Write the plan now** whenever you've said enough. Expect more model usage.
 
-When the agent looks around before making a change, its file reads, searches and listings fold into one "Explored" row, such as "Explored · 3 files, 2 searches", instead of a row per call. Click it to see each call. While it runs, the row shows the call in progress. Shell commands that only read, such as `ls`, `grep`, `cat`, `sed -n` or `git log`, fold in too; any command that might change something keeps its own row, as do edits and every other tool. Switch this off in Settings › Appearance › Group exploration.
+For longer jobs, `/goal <objective>` starts a goal loop: the agent works a round, a separate check decides whether the objective is met, and if not, the next step becomes the next round. It pauses itself after three rounds without progress and stops at 25.
 
-Settings › Appearance changes how WackCode looks, never what the model does. Pick a preset theme (WackCode, Midnight, Grape, Rosé, Ember, Mono) or your own accent and background colours; a background too light for the app's text is darkened, and an accent too dark to read is lightened. Code fences in messages and diffs — in the Changes panel and on edit tool rows — are syntax-highlighted, and the highlighting colours are derived from your accent so they follow the theme you picked. Behind the app you can keep a solid colour, use an image of your own, or use Liquid Glass. An image shows clearly on the new-chat screen and dimmed and blurred behind chats, with sliders for both. Liquid Glass (macOS 26 or later) lets the desktop show through, Frosted or Clear and tinted by your background colour; while another app has focus the window turns solid. Either way, chat bubbles, the composer and cards stay solid so text stays readable. Appearance also names your agent: the composer's prompts and the empty chat speak with the name you type there — WackCode by default, anything you like instead.
+<!-- IMAGE: docs/images/plan-mode.png -->
+> **Image to add: `docs/images/plan-mode.png`**
+> Ultra Plan in action: the warm, flame-marked mode toggle and a question card above the composer, showing multiple-choice answers with the recommended one first and a **Write the plan now** button. A second, side-by-side option is the finished plan card with its Approve / Revise / Save as PLAN.md actions.
 
-## Run from source
+### Review and ship
 
-The build currently targets macOS on Apple Silicon.
+Open the Changes panel with <kbd>⌘ ⇧ C</kbd> to see staged and unstaged changes file by file, with the selected file's diff beside the list.
 
-```sh
-pnpm install
-pnpm dev:desktop
+- Discard a file or a single hunk (after a confirmation).
+- Click beside any diff line to leave a comment, then **Address comments** to send them all to the agent at once.
+- Commit everything or a single file; committing stages for you. The commit message can be generated from your changes.
+- Push to your remote and open a GitHub pull request with an editable title and description (uses your existing `gh` login).
+- **Review** in the header asks the Reviewer sub-agent to look over everything uncommitted.
+
+<!-- IMAGE: docs/images/changes.png -->
+> **Image to add: `docs/images/changes.png`**
+> The Changes panel beside a chat: the file list with +/− counts, a syntax-highlighted diff with one inline comment card under a line, and the bottom dock expanded to show a generated commit message and the **Push** and **Create PR** actions.
+
+### Watch what it builds
+
+- **Browser preview.** A real WebKit page that you and the agent share. Open your localhost dev server and the agent can read the page, click, type, scroll, check console errors, and screenshot it for models that support images. Each chat gets its own cookies and site data, wiped when WackCode quits. **Take control** pauses the agent's browsing while you use the page.
+- **Computer use** *(optional, macOS 14+)*. Lets the agent check native apps it builds (Mac apps, Tauri or Electron apps, the iOS Simulator) the same way. It works in the background through Accessibility wherever it can, leaving your pointer and your current app alone. The first time a chat wants an app, a card asks you to allow it for that chat, deny it, or never allow it. WackCode itself, terminals, password managers, System Settings and security prompts are always off-limits. <kbd>⌃ ⌥ ⌘ .</kbd> stops computer use everywhere.
+- **Terminal.** <kbd>⌘ ⇧ T</kbd> opens a real login shell in the chat's folder. It keeps running when you hide it or switch chats, full-screen programs like `vim` and `htop` work, and the agent never sees it.
+
+<!-- IMAGE: docs/images/browser.png -->
+> **Image to add: `docs/images/browser.png`**
+> The Browser panel showing a local dev server (for example, a small todo app on `localhost:5173`), with the transcript beside it showing the agent's browser tool rows and a screenshot thumbnail under one of them.
+
+<!-- IMAGE: docs/images/computer-use.png -->
+> **Image to add: `docs/images/computer-use.png`**
+> The per-app access card above the composer asking to allow an app (for example, the Simulator) for this chat, with its allow / deny / never choices, plus the banner showing which app the chat is using. If there's room, show the iOS Simulator window beside WackCode.
+
+<!-- IMAGE: docs/images/terminal.png -->
+> **Image to add: `docs/images/terminal.png`**
+> The Terminal panel running something colourful (a test run or `htop`) in the theme's colours, with its Working badge in the header and the blinking caret on the Terminal button.
+
+### Sub-agents
+
+Switch on sub-agents in **Settings › Packages** and the agent can hand self-contained tasks to helpers with their own context windows, one at a time or several in parallel (up to 8; 4 by default). WackCode ships three roles:
+
+- **Scout:** read-only reconnaissance, including reading docs on the web.
+- **Reviewer:** read-only code review.
+- **Worker:** makes edits.
+
+You can add your own roles and give each one its own model. Each helper appears as a chip in the chat; click it to watch its reasoning, tool calls and answer live in the side panel, along with its token use and cost. Sub-agents are off by default and only used when you ask, because every one costs extra model usage.
+
+Auto chat titles live here too: switch on the `auto-titles` agent with a small, cheap model, and each new chat gets a proper title from its first message.
+
+<!-- IMAGE: docs/images/subagents.png -->
+> **Image to add: `docs/images/subagents.png`**
+> A parallel batch of SubAgent chips in the transcript (Scout, Reviewer, Worker, each with its little robot and a live status line), and the side panel watching one of them with tabs for its siblings.
+
+### Extend the agent
+
+| Feature | What it does | Where |
+|---|---|---|
+| **MCP servers** | Adds tools from local (stdio) or remote (HTTP/SSE) MCP servers. Each server and each tool has its own switch. Remote servers use a token header; OAuth sign-in isn't supported. | Settings › MCP servers |
+| **Skills** | Agent Skills (`SKILL.md` folders) in `~/.agents/skills`, the same folder Codex, OpenCode and the Pi CLI read. Write, edit or import them (ZIP, folder or `.md`), switch on skill folders from Claude Code, Codex, Pi or OpenCode, or browse pi.dev's catalogue. | Settings › Skills |
+| **Commands** | Type `/` for commands from packages, skills and your own prompt templates, which take arguments like `$1` and `$ARGUMENTS`. Built in: `/init` (write or improve an `AGENTS.md`), `/compact`, `/new`, `/name`, `/copy`, `/goal`. | Settings › Commands |
+| **Memory** | The agent keeps short notes per project (your preferences, corrections, ongoing decisions) and recalls them in later chats. Every note is a file you can read, edit or delete. | Settings › Memory |
+| **Web Fetch** | Lets the agent read a public web page by URL, returned as Markdown. It never reaches `localhost` or your local network. On by default. | Settings › Packages |
+| **Packages** | Install Pi packages (extensions, prompt templates, skills) from npm or Git. | Settings › Packages |
+| **Tools** | Switch any of the agent's tools off. | Settings › Tools |
+| **Prompts** | Customise the system prompt and the Plan / Ultra Plan instructions, and restore the originals at any time. | Settings › Prompts |
+
+In the composer, type `@` to mention a file or folder, and paste, drop or attach files: text files are sent inside your message, and images go to models that support them.
+
+<!-- IMAGE: docs/images/settings.png -->
+> **Image to add: `docs/images/settings.png`**
+> Settings › Skills (or Settings › MCP servers) with a handful of entries and their switches, showing the Settings sidebar with all its sections.
+
+### Make it yours
+
+**Settings › Appearance** changes how WackCode looks, never what the model does:
+
+- Six preset themes (WackCode, Midnight, Grape, Rosé, Ember, Mono), or your own accent and background colours. Code highlighting, diffs and the terminal all follow them, and colours that would be hard to read are adjusted automatically.
+- A solid background, your own image (clear on the welcome screen, dimmed and blurred behind chats), or **Liquid Glass** on macOS 26.
+- Your agent's name: call it anything you like instead of "WackCode".
+- Optional message bubbles, thinking previews, and grouping of the agent's file reads and searches into one "Explored" row.
+
+<!-- IMAGE: docs/images/themes.png -->
+> **Image to add: `docs/images/themes.png`**
+> A 2×2 collage of the same chat in four looks: the default theme, a colourful preset (Grape or Rosé), an image backdrop, and Liquid Glass over a recognisable desktop wallpaper.
+
+### Keyboard shortcuts
+
+| Keys | Action |
+|---|---|
+| <kbd>⌘ N</kbd> | New chat |
+| <kbd>⌘ O</kbd> | Add a project |
+| <kbd>⌘ ,</kbd> | Settings |
+| <kbd>⇧ Tab</kbd> | Cycle Build → Plan → Ultra Plan |
+| <kbd>Enter</kbd> / <kbd>⇧ Enter</kbd> | Send (or steer a running chat) / new line |
+| <kbd>⌥ Enter</kbd> | Queue a message for after the current run |
+| <kbd>⌘ ⇧ C</kbd> | Show or hide Changes |
+| <kbd>⌘ ⇧ T</kbd> | Show or hide the Terminal |
+| <kbd>⌃ ⌥ ⌘ .</kbd> | Stop computer use in every chat |
+| <kbd>⌘ Q</kbd> | Quit (closing the window keeps WackCode in the menu bar) |
+
+## How it works
+
+```mermaid
+flowchart LR
+  UI["WackCode window<br/>(React)"] <--> Host["WackCode app<br/>(Rust)<br/>settings · keys · Git · checkpoints<br/>browser · terminal · computer use"]
+  Host <--> W1["Chat worker<br/>(Pi session)"]
+  Host <--> W2["Chat worker<br/>(Pi session)"]
+  W1 --> P["Your model provider"]
+  W2 --> P
 ```
 
-Build the self-contained application with:
+- **One agent per chat.** Each chat runs its own [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) session in a separate background process, so chats run side by side without interfering.
+- **Pi does the agent work;** WackCode is the interface and the guardrails. The app bundles its own Node runtime and Pi, so you don't need either installed.
+- **Your files, your permissions.** The agent's tools (read, edit, write, bash, grep, find, ls) run as your macOS user in the chat's folder, using your normal shell environment, so Homebrew tools, `npx` and friends just work.
+- **Local state.** Settings, chats, sessions, checkpoints and memory live in WackCode's application-data folder on your Mac.
+
+## Getting started
+
+You build WackCode from source; it takes a few minutes.
+
+### Requirements
+
+- A Mac with Apple Silicon, running macOS 12 or later (computer use needs macOS 14; Liquid Glass needs macOS 26).
+- [Rust](https://rustup.rs) 1.88 or later, Xcode Command Line Tools (`xcode-select --install`), Node.js 24, and pnpm (`corepack enable`).
+- Optional: [`gh`](https://cli.github.com) for pull requests, and `ripgrep` and `fd` (`brew install ripgrep fd`) for the agent's `grep` and `find` tools.
+
+### Build and install
 
 ```sh
+git clone https://github.com/Intelios/wackcode.git
+cd wackcode
+pnpm install
 pnpm build:desktop
 ```
 
-The result is written to `src-tauri/target/release/bundle/macos/WackCode.app`. The build downloads the official Node archive recorded in `runtime-lock.json`, checks its SHA-256 checksum, and bundles it with the production Pi worker. Running the app does not require a system Node or Pi installation.
+The app lands in `src-tauri/target/release/bundle/macos/WackCode.app`; drag it into Applications. The build downloads the official Node runtime (checked against the SHA-256 in `runtime-lock.json`) and bundles it with the agent. WackCode is signed ad hoc and isn't notarized.
 
-## Test
+### Connect a model
+
+Open **Settings › Providers** (<kbd>⌘ ,</kbd>) and either:
+
+- **Add a connection:** any OpenAI-compatible endpoint (Chat Completions or Responses) with its API key. Search Pi's built-in model catalogue to fill in context limits and reasoning settings, or enter them yourself.
+- **Sign in with a subscription:** OpenAI Codex (ChatGPT Plus/Pro), GitHub Copilot, Anthropic, xAI, Meta, or Kimi For Coding. Check your provider's terms for third-party apps.
+
+Then press <kbd>⌘ O</kbd> to add a project, pick a model in the composer, and send your first message. Try `/init` to have the agent write an `AGENTS.md` for your project.
+
+## Privacy and security
+
+- **Nothing phones home.** There is no WackCode account, backend, analytics, telemetry, updater or automatic model discovery, and nothing is contacted on launch or on a timer. Pi's own telemetry and update checks are switched off.
+- **Your conversations go only to your chosen provider:** the conversation, anything you attach, and whatever project files the agent reads.
+- **Keys stay local.** API keys and MCP secrets live in files only your account can read, and a chat's background process receives them privately, never through command-line arguments or environment variables. Subscription sign-ins keep their own credential files, separate from the Pi CLI's.
+- **Projects can't run code on their own.** A project's `.pi/` extensions and skill folders never load. Its `AGENTS.md` does, on purpose.
+
+It's still an agent with real access to your Mac, so a few things are worth knowing:
+
+- **It's not a sandbox.** The agent's tools, and any stdio MCP servers you add, run with your account's permissions. A project folder or worktree is a working directory, not a boundary. Switch off any tool you don't want in **Settings › Tools**.
+- **Packages are ordinary code.** An installed extension can read and write your files, run commands, use the network, and read your API keys. WackCode shows where a package comes from and asks before its first install. Only install what you trust.
+- **Computer use permissions cover all of WackCode.** Once you grant Accessibility and Screen Recording, anything WackCode runs (the agent's shell commands, MCP servers, extensions) can use them too; only the computer-use tools ask per app. **Settings › Computer use › Reset WackCode's permissions** removes both. Because the app is signed ad hoc, macOS forgets these grants whenever you rebuild it, so reset and allow them again.
+
+<details>
+<summary><strong>Everything WackCode connects to</strong></summary>
+
+<br>
+
+- The model providers you configure, and subscription sign-in services after you choose **Sign in**. Expired tokens refresh as part of a model request.
+- The npm registry and a package's own source, only while you browse or install packages.
+- pi.dev's skill catalogue, only while you browse **Settings › Skills › Browse** (falls back to the npm registry).
+- Public web pages the agent reads with Web Fetch during a run: GET requests to public addresses only. Switch it off in **Settings › Packages**.
+- Pages you or the agent open in Browser preview, plus their assets, API calls and WebSockets.
+- MCP servers you add over HTTP/SSE: only their own address, with the headers you gave. Headers are refused over plain `http://` except to your own Mac.
+- Your Git remote when you push, and GitHub (through `gh`) when you open a PR.
+
+Generating a commit message sends a bounded diff of your changes to the chat's model. Computer use contacts nothing itself, but window captures and accessibility text of apps you allow go to your model provider like any other tool result.
+
+</details>
+
+<details>
+<summary><strong>Where your data lives</strong></summary>
+
+<br>
+
+Everything is under `~/Library/Application Support/com.wackcode.desktop/`: settings and chat metadata, Pi sessions, keys (`secrets.json`) and sign-ins, checkpoints, memory notes, your slash commands, installed packages, copies of background images, and the usage ledger. Deleting a chat deletes its session and checkpoints.
+
+The one exception is your skills, which WackCode writes to `~/.agents/skills` so other tools can share them. Skill folders from other tools are only read, never changed, and deleted skills, commands and notes go to the Trash.
+
+</details>
+
+## TokenTrail usage tracking
+
+WackCode keeps a local, usage-only ledger that TokenTrail reads to chart your token use and estimated cost. It's on by default; switch it off in **Settings › Integrations**.
+
+Each record holds token counts, the provider and model, project and workspace paths, opaque chat and request IDs, timing, purpose (chat, sub-agent, title, compaction, goal check, commit message, and so on) and outcome. Records **never** contain prompts, responses, chat titles, credentials, endpoint URLs or tool arguments. The ledger lives in `usage/v1/` in WackCode's application-data folder, is kept when chats are deleted, and is never sent anywhere. Cost figures are API-equivalent estimates, not your actual subscription spend. The format is documented in the [v1 contract](docs/wackcode-usage-v1.md).
+
+## What WackCode isn't
+
+WackCode is an early (0.1) project with a deliberately focused scope. It won't gain an embedded code editor, approval prompts for each tool call (computer use's per-app card is the one exception), automatic merging, notarization, auto-updates, or support for other platforms.
+
+## Development
 
 ```sh
-pnpm test:web
-pnpm test:worker
-pnpm test:rust
+pnpm install
+pnpm dev:desktop   # run the app with hot reload
+pnpm check         # compile the frontend, worker and Rust
+pnpm test          # web, worker and Rust test suites
 ```
 
-The worker integration suite uses a private mock OpenAI-compatible endpoint. It covers concurrent sessions with overlapping model IDs, tool edits, request settings, cancellation, credential isolation, session restoration, and image attachments on vision and text-only models. It also covers retries and edits as session-tree versions, rewinds that survive a worker restart, and forks. The web suite covers the composer's attachments — images and text files — including how attached text travels inside the message and is read back out for the transcript, editing, and queued messages. Rust tests cover metadata recovery, Git changes, unusual filenames, binaries, repositories without commits, worktree isolation, and checkpoint snapshots and restores (byte-exact round trips, ignored and oversized files left alone, case-only renames, nested repositories).
+`pnpm mock:provider` starts a deterministic mock model at `http://127.0.0.1:43127/v1` (add it as a Chat Completions connection), and `pnpm mock:mcp` starts a mock MCP server.
 
-For a manual UI fixture, run `pnpm mock:provider` and configure `http://127.0.0.1:43127/v1` as a Chat Completions connection. For MCP, add `node <repo>/scripts/mock-mcp-server.mjs` as a stdio server, or run `pnpm mock:mcp` and add `http://127.0.0.1:43128/mcp` (HTTP) or `/sse` (SSE).
+Start with [AGENTS.md](AGENTS.md), which holds the project's rules and design direction and is written for human contributors and coding agents alike. The [`docs/`](docs) folder covers the [architecture](docs/architecture.md), the [chat worker](docs/worker.md), the [frontend](docs/frontend.md), [security boundaries](docs/security.md), the [design toolkit](docs/design.md) and [testing](docs/testing.md).
 
-## Local data and network boundaries
+## Acknowledgements
 
-WackCode has no WackCode account, backend, analytics, updater, or automatic model discovery. Browsing or installing a package contacts the public npm registry and the package's own npm or git source, and only when you ask it to. Settings › Skills › Browse reads pi.dev's package catalogue page (following redirects only within pi.dev), and falls back to the npm registry if that page can't be read; nothing is contacted until you open Browse. Skills you create, edit or import are written to `~/.agents/skills`, the only folder outside WackCode's application-data directory that Settings writes to. Push contacts your chosen Git remote; opening or creating a PR contacts the GitHub host through your existing `gh` login, only after you click the relevant action. With Web Fetch on, the agent can contact public websites of its choosing during a run, using only GET requests and only to public IP addresses; switch it off in Settings › Packages to prevent that. A page you or the agent explicitly opens in Browser preview can contact its HTTP/HTTPS origin and load its assets, API requests and WebSocket connections, including while its chat is in the background. Computer use contacts nothing itself; the window captures and accessibility text of apps you allow go to the chat's model provider like any other tool result, and are kept in the chat's session. Browser pages receive no Tauri commands, WackCode asset protocol, provider credentials or renderer storage; their cookies and site data are isolated by chat and discarded at app exit. An HTTP or SSE MCP server you add is contacted at the URL you gave, with the headers you gave, when a chat sends a message and whenever you test it; redirects are followed only within that server's address, and headers are refused over plain `http://` except to your own Mac. Subscription sign-in contacts the provider’s authorization service after you choose **Sign in**; Pi refreshes an expired token as part of a model request, never on launch or on a timer. Provider requests contain the conversation, any files or images you attach, and any project context Pi reads or creates through its tools. Generating a commit message sends a bounded diff of all changes to the chat's selected model. Manually entered API keys, and the values of MCP servers' headers and environment variables, are stored in `secrets.json` and delivered to a task worker (or the connection test) only through its private stdin pipe; an environment variable goes further only to its own stdio server. With sub-agents on, that includes the key or sign-in of any connection a sub-agent's own model uses. Subscription credentials (which may include provider-minted keys) live in separate mode-0600 Pi auth files under WackCode’s application-data directory, never in the Pi CLI’s auth file. Settings, task metadata, Pi sessions, pending diff comments, captured browser tool results, and file checkpoints live in WackCode’s macOS application-data directory. A background image you choose is copied there (`backgrounds/`); your original is never changed, and the copy never leaves your Mac. Checkpoints are a private Git object store per chat that borrows unchanged files from the project's own repository without writing to it; they are deleted with the chat. Ignored files and files over 25 MB are never captured or restored, checkpoints are off for a home folder, and a restore in a folder other chats also work in changes their files too.
+WackCode is built on [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent). Several built-ins are adapted from MIT-licensed work:
 
-Workers disable Pi telemetry, update checks, remote model-catalog refresh, cache warming, and project `.pi` configuration. Sub-agents run as separate Pi sessions inside the chat's worker. They load no packages and can use only Pi's own tools and Web Fetch. Model suggestions read only the catalogue shipped with the app and make no network request. Packages you install through Settings are loaded by explicit path, so a project's own `.pi/extensions` is still never run.
-
-Project instruction files such as `AGENTS.md` still load. The `read`, `bash`, `edit`, `write`, `grep`, `find`, and `ls` tools execute with the current macOS account’s permissions; a selected folder or worktree is a working directory, not a sandbox. So do stdio MCP servers, which are ordinary programs you chose to run. Chat workers get the environment your login shell would have (read once per app run, with provider API keys removed), so tools such as Homebrew's, `npx` and `uvx` are found even when WackCode is opened from Finder; a stdio MCP server gets only a minimal environment (`HOME`, `PATH`, `SHELL`, and the like) plus the variables you set for it. Each tool can be switched off in Settings › Tools, and a tool whose helper binary is missing (`grep` needs ripgrep, `find` needs fd) is listed as unavailable rather than offered to the model.
-
-**Computer use's macOS permissions belong to WackCode as a whole.** Once you allow Accessibility and Screen Recording, anything WackCode runs can use them too — the agent's shell commands, stdio MCP servers and installed extensions — whether or not Computer use is switched on; only the computer-use tools themselves ask per app. Settings › Computer use › **Reset WackCode's permissions** removes both. WackCode is signed ad hoc, so macOS forgets these approvals whenever WackCode is rebuilt or updated, even though System Settings may still show it switched on; reset and allow them again.
-
-**Installed packages run as ordinary local code with the same permissions.** An extension can read and write any file you can, run any command, make network requests, and read WackCode's API keys and subscription credentials, including those of connections your sub-agents or auto titles use. WackCode names the source and states this before the first install of each package, but that is informed consent, not a sandbox — install only what you trust.
-
-Embedded editors, permission prompts (apart from Computer use's one-time, per-app access card), automatic merging, notarization, updates, and other platforms remain outside this milestone.
+- Plan mode and the question dialog, from [`@narumitw/pi-plan-mode`](https://www.npmjs.com/package/@narumitw/pi-plan-mode).
+- The todo list, from [`@juicesharp/rpiv-todo`](https://www.npmjs.com/package/@juicesharp/rpiv-todo).
+- The sub-agent roles, from Pi's `examples/extensions/subagent` (© Mario Zechner), with the foreground model of `pi-subagents`.

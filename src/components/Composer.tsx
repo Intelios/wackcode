@@ -2,7 +2,6 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, 
 import { AnimatePresence, motion } from "motion/react";
 import type { ImageContent, ProviderRecord, SessionSnapshot, SlashCommand, TaskMode, TaskStatus, ThinkingLevel } from "../types";
 import { attachFiles, filesFrom, imageDataUrl, splitFileSection, type FileAttachment } from "../attachment-utils";
-import { formatTokens } from "../chat-utils";
 import { activeMention, mentionValue, rankMentions, type MentionSuggestion } from "../mention-utils";
 import { Icon } from "./Icons";
 import { ContextPanel } from "./ContextPanel";
@@ -356,11 +355,6 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
     ...(queuedMessages?.followUp ?? []).map((text) => ({ kind: "followUp" as const, text: splitFileSection(text).text }))
   ];
 
-  const context = stats?.contextUsage;
-  const statsLabel = stats
-    ? `${formatTokens(stats.tokens.total)} tokens · ${context?.percent == null ? "?" : Math.round(context.percent)}% context${stats.cost ? ` · $${stats.cost.toFixed(3)}` : ""}`
-    : undefined;
-
   return (
     <div
       ref={wrapRef}
@@ -566,7 +560,7 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
             )}
           </div>
           <div className="composer-right">
-            {statsLabel && stats && <ContextPanel stats={stats} label={statsLabel} />}
+            {stats && <ContextPanel stats={stats} />}
             {busy ? (
               <Tooltip label={status === "stopping" ? "Stopping…" : "Stop"}>
                 <button type="button" className="send-button stop" onClick={onStop} disabled={status === "stopping"} aria-label="Stop">

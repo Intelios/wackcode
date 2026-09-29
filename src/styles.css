@@ -819,8 +819,10 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .composer-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px 8px 10px; gap: 8px; }
 .composer-left { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .composer-right { display: flex; align-items: center; gap: 10px; }
-.composer-stats { color: var(--text-faint); font-size: 10.5px; white-space: nowrap; border: 0; background: transparent; padding: 3px 6px; border-radius: 5px; cursor: pointer; }
-.composer-stats:hover, .composer-stats.active { color: var(--text-soft); background: var(--surface); }
+.composer-stats { display: grid; place-items: center; width: 26px; height: 26px; border: 0; background: transparent; padding: 0; border-radius: 7px; cursor: pointer; }
+.composer-stats:hover, .composer-stats.active { background: var(--surface); }
+.composer-stats .context-ring { transition: transform 0.25s var(--ease); }
+.composer-stats:hover .context-ring, .composer-stats.active .context-ring { transform: scale(1.12); }
 .composer-header { max-width: 760px; margin: 0 auto 8px; }
 .composer-wrap.dropping .composer { border-color: var(--wc-accent); box-shadow: 0 10px 36px rgb(0 0 0 / 28%), 0 0 0 3px color-mix(in srgb, var(--wc-accent) 14%, transparent); }
 .composer-attachments { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px 0; }
@@ -888,10 +890,25 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 
 /* context breakdown popover */
 .context-pop { padding: 0; }
-.context-panel { width: 300px; padding: 13px 14px 11px; }
-.context-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
-.context-head h3 { margin: 0; font-size: 12px; font-weight: 650; }
-.context-head > span { color: var(--text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+.context-panel { width: 300px; padding: 14px 14px 11px; }
+/* The ring fills clockwise from 12 o'clock; its stroke is the accent until the window is nearly full. */
+.context-ring { position: relative; display: inline-grid; place-items: center; flex: 0 0 auto; }
+.context-ring svg { position: absolute; inset: 0; transform: rotate(-90deg); overflow: visible; }
+.context-ring circle { fill: none; stroke-width: 2.6; }
+.context-ring-track { stroke: var(--wc-track); }
+.context-ring-fill { stroke: var(--wc-accent); stroke-linecap: round; transition: stroke-dashoffset 0.7s var(--ease), stroke 0.3s var(--ease); }
+.context-ring.full .context-ring-fill { stroke: var(--warning); }
+.context-ring-value { position: relative; font-size: 10.5px; font-weight: 650; font-variant-numeric: tabular-nums; color: var(--text); }
+.context-hero { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.context-hero .context-ring svg circle { stroke-width: 2; }
+.context-hero-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.context-hero-text h3 { margin: 0 0 2px; font-size: 12.5px; font-weight: 650; }
+.context-hero-text > span { color: var(--text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+.context-hero-text > .context-left { color: var(--text-faint); }
+.context-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin: 0; }
+.context-stats > div { display: flex; flex-direction: column; gap: 2px; padding: 7px 8px; border-radius: 7px; background: var(--surface); min-width: 0; }
+.context-stats dt { color: var(--text-faint); font-size: 9.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.context-stats dd { margin: 0; color: var(--text); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .context-bar { display: flex; height: 7px; border-radius: 999px; overflow: hidden; background: var(--wc-track); margin-bottom: 10px; }
 .context-bar span { display: block; height: 100%; }
 .context-legend { display: flex; flex-direction: column; gap: 4px; }
@@ -900,7 +917,6 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .context-label { flex: 1; color: var(--text-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .context-value { color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .context-pct { width: 44px; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
-.context-foot .context-label { color: var(--text-dim); }
 .context-divider { height: 1px; background: var(--border); margin: 10px 0 9px; }
 .context-hint { margin-top: 9px; color: var(--text-faint); font-size: 9.5px; }
 .model-pill {

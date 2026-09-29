@@ -359,7 +359,7 @@ export function SettingsPage({
             onRemoveImage={onRemoveBackgroundImage}
           />
         )}
-        {section === "prompts" && <PromptsSection config={prompts} onChange={onSetPrompts} />}
+        {section === "prompts" && <PromptsSection config={prompts} agentName={agentName(appearance)} onChange={onSetPrompts} />}
         {section === "mcp" && mcpActions && <McpSection servers={mcp?.servers ?? []} {...mcpActions} />}
         {section === "computer_use" && onSetComputerUse && (
           <ComputerUseSection config={computerUse} actions={COMPUTER_USE_ACTIONS} agentName={agentName(appearance)} onChange={onSetComputerUse} />

@@ -3090,38 +3090,142 @@ label > span small.mcp-invalid { color: var(--warning); }
 .mcp-tool-text .resource-name { flex: 0 1 auto; }
 .mcp-tool-description { flex-basis: 100%; color: var(--text-dim); font-size: 10.5px; line-height: 1.45; }
 
-/* ── Prompts settings ──────────────────────────────── */
-.prompts-settings .section-heading-row { margin-bottom: 16px; }
-.prompt-card { border: 1px solid var(--border); border-radius: 9px; background: var(--surface); padding: 12px 14px; }
-.prompt-card + .prompt-card { margin-top: 10px; }
-.prompt-card-head { display: flex; align-items: flex-start; gap: 12px; }
-.prompt-card-head > div:first-child { flex: 1; min-width: 0; }
-.prompt-card-head h4 { margin: 0; font-size: 12.5px; font-weight: 600; display: flex; align-items: center; gap: 7px; }
-.prompt-card-head p { margin: 4px 0 0; color: var(--text-dim); font-size: 11px; line-height: 1.5; }
-.prompt-card-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
-.prompt-card-actions button { height: 30px; font-size: 11.5px; }
+/* ── Settings › Prompts (PromptsSection.tsx) ──────── */
+/* The same shape as Computer use: a centred column of solid cards under an accent-washed hero.
+   Cards rise in one after another (--i). Each card carries a tone (--tone*): the accent for the
+   persona and Plan mode, Ultra Plan's fixed warm palette in every theme. The hero stage's loop
+   stills under reduced motion (block at the end). */
+.prompts-page { max-width: 780px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+.prompts-hero, .prompt-card { animation: pop-in .36s var(--ease) both; animation-delay: calc(var(--i, 0) * 70ms); }
+.prompts-hero {
+  position: relative; overflow: hidden; display: flex; align-items: center; gap: 20px; padding: 16px 18px 16px 16px;
+  border: 1px solid var(--border-bright); border-radius: 14px;
+  background: radial-gradient(120% 140% at 0% 0%, var(--wc-accent-wash), var(--surface) 60%);
+  transition: border-color .3s var(--ease);
+}
+.prompts-hero.live { border-color: var(--wc-accent-line-soft); }
+.prompt-stage { flex: 0 0 auto; width: 160px; height: 110px; overflow: visible; }
+.prompt-stage-page { fill: var(--wc-well); stroke: var(--border-bright); stroke-width: 1.5; stroke-dasharray: 4 3; transition: stroke .3s var(--ease); }
+.prompt-stage-title { fill: var(--border-bright); }
+.prompt-stage-line { fill: var(--border-bright); transform-box: fill-box; transform-origin: left center; }
+.prompt-stage-caret { fill: var(--wc-accent); opacity: 0; }
+.prompt-stage.live .prompt-stage-page { stroke: var(--wc-accent-line); stroke-dasharray: none; }
+.prompt-stage.live .prompt-stage-title { fill: var(--wc-accent-text); }
+.prompt-stage.live .prompt-stage-line { fill: var(--wc-accent); animation: prompt-stage-write 6.4s var(--ease) calc(var(--k) * .55s) infinite backwards; }
+.prompt-stage.live .prompt-stage-caret { animation: prompt-stage-caret 6.4s steps(1) 2.55s infinite; }
+.prompts-hero-text { min-width: 0; flex: 1 1 auto; }
+.prompts-hero-text h3 { margin: 8px 0 4px; font-size: 16px; letter-spacing: -.3px; }
+.prompts-hero-text p { margin: 0; max-width: 48ch; color: var(--text-dim); font-size: 12px; line-height: 1.55; }
+.prompts-pill {
+  display: inline-flex; align-items: center; gap: 6px; height: 21px; padding: 0 9px 0 8px; border-radius: 999px;
+  border: 1px solid var(--border-bright); background: var(--wc-well); color: var(--text-soft);
+  font-size: 10.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+}
+.prompts-pill i { width: 6px; height: 6px; border-radius: 50%; background: var(--text-faint); }
+.prompts-pill.live { color: var(--wc-accent-text); border-color: var(--wc-accent-line-soft); background: var(--wc-accent-tint); }
+.prompts-pill.live i { background: var(--wc-accent); animation: pulse 2.4s ease-in-out infinite; }
+
+.prompt-card {
+  --tone: var(--wc-accent); --tone-text: var(--wc-accent-text); --tone-tint: var(--wc-accent-tint);
+  --tone-line: var(--wc-accent-line-soft); --tone-wash: var(--wc-accent-wash);
+  padding: 16px 18px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface);
+  transition: border-color .25s var(--ease), background .25s var(--ease);
+}
+.prompt-card.ultra {
+  --tone: var(--wc-ultra); --tone-text: var(--wc-ultra); --tone-tint: color-mix(in srgb, var(--wc-ultra) 11%, var(--surface));
+  --tone-line: color-mix(in srgb, var(--wc-ultra) 32%, transparent); --tone-wash: color-mix(in srgb, var(--wc-ultra-hot) 9%, var(--surface));
+}
+.prompt-card.customized { border-color: var(--tone-line); background: linear-gradient(100deg, var(--tone-wash), var(--surface) 70%); }
+.prompt-card.editing { border-color: var(--tone-line); }
+.prompt-card-head { display: flex; align-items: flex-start; gap: 13px; }
+.prompt-mark {
+  flex: 0 0 auto; width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center;
+  border: 1px solid var(--border-bright); background: var(--wc-well); color: var(--text-dim);
+  transition: background .25s var(--ease), border-color .25s var(--ease), color .25s var(--ease);
+}
+.prompt-mark svg { width: 19px; height: 19px; }
+.prompt-card.ultra .prompt-mark { color: var(--wc-ultra); }
+.prompt-card.customized .prompt-mark, .prompt-card.editing .prompt-mark { background: var(--tone-tint); border-color: var(--tone-line); color: var(--tone-text); }
+.prompt-card-title { flex: 1; min-width: 0; }
+.prompt-card-title h4 { margin: 1px 0 0; font-size: 14px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.prompt-card-title p { margin: 4px 0 0; max-width: 62ch; color: var(--text-dim); font-size: 11.5px; line-height: 1.5; }
+.prompt-meta { display: block; margin-top: 6px; color: var(--text-faint); font: 10.5px "SFMono-Regular", Consolas, monospace; }
 .prompt-badge {
-  font-size: 9.5px; font-weight: 600; color: var(--text-dim); border: 1px solid var(--border-bright);
-  border-radius: 4px; padding: 1px 5px; line-height: 1.3;
+  display: inline-flex; align-items: center; gap: 5px; height: 18px; padding: 0 8px 0 7px; border-radius: 999px;
+  border: 1px solid var(--border-bright); background: var(--wc-well); color: var(--text-dim);
+  font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
 }
-.prompt-badge.customized { color: var(--warning); border-color: #5c4a22; }
+.prompt-badge::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--text-faint); }
+.prompt-badge.customized { color: var(--tone-text); border-color: var(--tone-line); background: var(--tone-tint); }
+.prompt-badge.customized::before { background: var(--tone); }
+.prompt-card-actions { display: flex; align-items: center; gap: 12px; flex: 0 0 auto; }
+.prompt-restore { display: inline-flex; align-items: center; gap: 5px; color: var(--text-dim); text-decoration: none; font-size: 11.5px; font-weight: 600; }
+.prompt-restore svg { width: 13px; height: 13px; }
+.prompt-restore:hover:not(:disabled) { color: var(--danger); }
+.prompt-restore:focus-visible, .prompt-expand:focus-visible, .prompt-view:focus-visible { outline: 2px solid var(--wc-accent-line); outline-offset: 3px; border-radius: 6px; }
+.prompt-restore:disabled { opacity: .5; cursor: default; }
+
+.prompt-preview { margin-top: 14px; }
 .prompt-view {
-  margin: 10px 0 0; max-height: 220px; overflow: auto; border: 1px solid var(--border); background: var(--wc-well); border-radius: 7px;
-  padding: 10px 12px; font: 11px/1.55 "SFMono-Regular", Consolas, monospace; color: var(--text-soft); white-space: pre-wrap; word-break: break-word;
+  margin: 0; max-height: 360px; overflow: auto; border: 1px solid var(--border); background: var(--wc-well); border-radius: 10px;
+  padding: 11px 13px; font: 11px/1.55 "SFMono-Regular", Consolas, monospace; color: var(--text-soft); white-space: pre-wrap; word-break: break-word;
 }
-.prompt-editor { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+/* Long prompts show their first lines under a fade; "Show full text" lifts the clamp. */
+.prompt-view.clamped {
+  max-height: 141px; overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, rgb(0 0 0) 58%, transparent);
+  mask-image: linear-gradient(to bottom, rgb(0 0 0) 58%, transparent);
+}
+.prompt-expand {
+  margin-top: 8px; display: inline-flex; align-items: center; gap: 5px; padding: 2px 0; background: none; border: 0;
+  color: var(--text-dim); font-size: 11.5px; font-weight: 600; cursor: pointer;
+}
+.prompt-expand:hover { color: var(--text); }
+.prompt-expand svg { width: 13px; height: 13px; transform: rotate(90deg); transition: transform .2s var(--ease); }
+.prompt-expand[aria-expanded="true"] svg { transform: rotate(-90deg); }
+
+.prompt-editor { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
 .prompt-editor-input {
-  width: 100%; min-height: 140px; resize: vertical; border: 1px solid var(--border); border-radius: 7px; background: var(--wc-input);
-  color: var(--text); padding: 9px 10px; outline: none; font: 12px/1.55 "SFMono-Regular", Consolas, monospace;
+  width: 100%; min-height: 140px; resize: vertical; border: 1px solid var(--border); border-radius: 10px; background: var(--wc-input);
+  color: var(--text); padding: 11px 13px; outline: none; font: 12px/1.55 "SFMono-Regular", Consolas, monospace;
 }
 .prompt-editor-input:hover { border-color: var(--border-bright); }
 .prompt-editor-input:focus { border-color: var(--wc-input-focus); }
-.prompt-editor-actions { display: flex; align-items: center; gap: 8px; }
+.prompt-editor-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .prompt-editor-spacer { flex: 1; }
-.prompt-editor-actions .primary-button, .prompt-editor-actions .secondary-button { height: 30px; font-size: 11.5px; }
+/* Fills toward the character limit: the tone while there is room, warning near it, danger past it. */
+.prompt-meter { position: relative; flex: 0 0 96px; height: 7px; border-radius: 999px; border: 1px solid var(--border); background: var(--wc-well); overflow: hidden; }
+.prompt-meter i { position: absolute; inset: 0; background: var(--tone); transform-origin: left center; transform: scaleX(var(--fill, 0)); transition: transform .2s var(--ease), background .2s var(--ease); }
+.prompt-meter.warn i { background: var(--warning); }
+.prompt-meter.over i { background: var(--danger); }
 .prompt-count { color: var(--text-dim); font-size: 10.5px; font-weight: 400; }
 .prompt-count.over { color: var(--warning); }
-.prompt-note { color: var(--text-dim); font-size: 10.5px; font-weight: 400; line-height: 1.45; }
+.prompt-note {
+  margin: 0; display: flex; align-items: flex-start; gap: 9px; padding: 9px 12px; border: 1px dashed var(--border-bright); border-radius: 10px;
+  color: var(--text-dim); font-size: 11px; line-height: 1.5;
+}
+.prompt-note svg { flex: 0 0 auto; width: 14px; height: 14px; margin-top: 1px; color: var(--text-faint); }
+
+@keyframes prompt-stage-write {
+  0% { opacity: 1; transform: scaleX(0); }
+  14%, 84% { opacity: 1; transform: scaleX(1); }
+  94%, 100% { opacity: 0; transform: scaleX(1); }
+}
+/* The caret blinks once the last line is written, and is gone before that line fades. */
+@keyframes prompt-stage-caret {
+  0% { opacity: 1; } 10% { opacity: 0; } 20% { opacity: 1; } 30% { opacity: 0; } 40% { opacity: 1; } 50% { opacity: 0; } 60% { opacity: 1; } 66%, 100% { opacity: 0; }
+}
+@media (max-width: 720px) {
+  .prompts-hero { flex-wrap: wrap; }
+  .prompt-card-head { flex-wrap: wrap; }
+  .prompt-card-actions { flex-basis: 100%; justify-content: flex-end; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .prompts-hero, .prompt-card, .prompts-pill.live i { animation: none; }
+  .prompt-mark, .prompt-card, .prompt-meter i, .prompt-expand svg { transition: none; }
+  .prompt-stage.live .prompt-stage-line { animation: none; }
+  .prompt-stage.live .prompt-stage-caret { animation: none; opacity: 1; }
+}
 
 @media (max-width: 1120px) {
   .sidebar { width: 216px; flex-basis: 216px; }

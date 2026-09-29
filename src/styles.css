@@ -1708,14 +1708,63 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 /* A run owns the mode: hold the fire still rather than animating a control the user can't use. */
 .mode-option.ultra.active:disabled .mode-flame svg, .mode-option.ultra.active:disabled .mode-flame::before { animation: none; }
 .mode-option.ultra.active:disabled .flame-ember { animation: none; }
+
+/* ── Build & Plan activation nudge ───────────────────
+   Ultra Plan's fire is the loud moment; switching into Build or Plan gets a short one-shot
+   instead, so every mode change lands with some motion but nothing loops. The hammer lifts
+   and taps once (pivoting on its handle's base, 21% 83% of the icon box), the brain swells
+   twice like a thought settling, and behind the option a soft wash blooms out as the pill
+   arrives. ModeToggle remounts the icon on every switch (a nonce key), which is what
+   replays these; the classes alone would sit inert after the first run. */
+.mode-toggle.sliding .mode-option.build.mode-in .mode-icon {
+  transform-origin: 21% 83%;
+  animation: build-tap .55s var(--ease) both;
+}
+.mode-toggle.sliding .mode-option.plan.mode-in .mode-icon {
+  transform-origin: 50% 50%;
+  animation: plan-think .5s ease-out both;
+}
+/* The strike is the only overshoot: lift, come down through rest to a bright impact, one
+   small recoil. Scale stays close to 1 — the tap reads from the rotation and the flash. */
+@keyframes build-tap {
+  0% { transform: rotate(0) scale(1); filter: brightness(1); }
+  30% { transform: rotate(-13deg) scale(1.04); filter: brightness(1.08); }
+  50% { transform: rotate(6deg) scale(1.1); filter: brightness(1.5); }
+  68% { transform: rotate(-2.5deg) scale(1.02); filter: brightness(1.12); }
+  100% { transform: none; filter: brightness(1); }
+}
+@keyframes plan-think {
+  0% { transform: scale(1); filter: drop-shadow(0 0 0 transparent); }
+  35% { transform: scale(1.15); filter: drop-shadow(0 0 4px color-mix(in srgb, var(--wc-accent) 60%, transparent)); }
+  60% { transform: scale(.97); filter: drop-shadow(0 0 1px transparent); }
+  80% { transform: scale(1.06); filter: drop-shadow(0 0 2px color-mix(in srgb, var(--wc-accent) 35%, transparent)); }
+  100% { transform: scale(1); filter: drop-shadow(0 0 0 transparent); }
+}
+/* z-index -1 is the flame bloom's stacking trick: over the pill, under the icon and label
+   (the button's z-index: 1 is the stacking context). Inset 0 matches the pill's box, which
+   is measured from these buttons. The base opacity 0 also keeps it invisible if its
+   animation never runs. */
+.mode-glow {
+  position: absolute; inset: 0; border-radius: 6px; z-index: -1; pointer-events: none; opacity: 0;
+  background: color-mix(in srgb, var(--wc-accent) 26%, transparent);
+  animation: mode-glow .5s ease-out both;
+}
+.mode-glow.build { background: color-mix(in srgb, var(--text) 18%, transparent); }
+@keyframes mode-glow {
+  0% { opacity: .75; transform: scale(.92); }
+  100% { opacity: 0; transform: scale(1.08); }
+}
 /* After the rules above (the global reduced-motion block precedes this section): hold the
-   gradient still instead of flickering at the global .01ms duration. */
+   gradient still instead of flickering at the global .01ms duration, and skip the one-shot
+   nudge outright — the mode change itself is feedback enough. */
 @media (prefers-reduced-motion: reduce) {
   .mode-pill.settled { transition: none; }
   .mode-pill.ultra { animation: none; }
   .mode-option.ultra.active .mode-flame svg { animation: none; }
   .mode-option.ultra.active .mode-flame::before { animation: none; opacity: .34; }
   .flame-ember { animation: none; }
+  .mode-option.mode-in .mode-icon { animation: none; }
+  .mode-glow { animation: none; }
 }
 
 .task-mode-chip {

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { planButtonTarget } from "../chat-utils";
 import type { TaskMode } from "../types";
 import { Icon } from "./Icons";
@@ -19,6 +19,12 @@ interface ModeToggleProps {
  * A pill behind the options slides to the active one. Its geometry is measured from the
  * button itself rather than hardcoded, because the Plan button resizes when it becomes
  * Ultra Plan (wider label, flame instead of brain).
+ *
+ * Switching into Build or Plan plays a one-shot nudge on the icon that just became active
+ * (the hammer taps, the brain swells) plus a soft wash behind the option — subtle, but the
+ * mode change lands. Ultra Plan is deliberately exempt: swapping in its fire is its own,
+ * much louder, moment. The nudge is keyed by a nonce so each switch remounts the icon and
+ * replays the animation; see the activation block in styles.css.
  */
 export function ModeToggle({ mode, disabled, onChange }: ModeToggleProps) {
   const planning = mode !== "build";
@@ -27,6 +33,8 @@ export function ModeToggle({ mode, disabled, onChange }: ModeToggleProps) {
   const planRef = useRef<HTMLButtonElement>(null);
   const [pill, setPill] = useState<{ left: number; width: number } | null>(null);
   const [settled, setSettled] = useState(false);
+  const [pulse, setPulse] = useState<{ side: "build" | "plan"; nonce: number } | null>(null);
+  const lastMode = useRef(mode);
   const tip = disabled
     ? "Wait for the current run"
     : mode === "plan"
@@ -34,6 +42,15 @@ export function ModeToggle({ mode, disabled, onChange }: ModeToggleProps) {
       : ultra
         ? "Click to go back to Plan (⇧Tab)"
         : "Switch mode (⇧Tab)";
+
+  // A run that owns the mode gets no motion (like the held-still flame): only an actual
+  // switch the user made replays the nudge, never the mount of a fresh composer.
+  useEffect(() => {
+    if (lastMode.current === mode) return;
+    lastMode.current = mode;
+    if (disabled || mode === "ultraplan") setPulse(null);
+    else setPulse((prev) => ({ side: mode, nonce: (prev?.nonce ?? 0) + 1 }));
+  }, [mode, disabled]);
 
   const active = planning ? planRef.current : buildRef.current;
   useLayoutEffect(() => {
@@ -52,6 +69,12 @@ export function ModeToggle({ mode, disabled, onChange }: ModeToggleProps) {
     };
   }, [active]);
 
+  // The nudge belongs to the option that is actually active, so a stale pulse left over
+  // from the other side (or from before an Ultra Plan swap) never touches the wrong button.
+  const pulsing = pulse && pulse.side === mode ? pulse : null;
+  const pulseKey = (side: "build" | "plan") => (pulsing?.side === side ? `pulse-${pulsing.nonce}` : "idle");
+  const pulseClass = (side: "build" | "plan") => (pulsing?.side === side ? "mode-in" : "");
+
   return (
     <Tooltip label={tip}>
       <div className="mode-toggle sliding" role="radiogroup" aria-label="Mode">
@@ -67,18 +90,20 @@ export function ModeToggle({ mode, disabled, onChange }: ModeToggleProps) {
           type="button"
           role="radio"
           aria-checked={mode === "build"}
-          className={`mode-option ${mode === "build" ? "active" : ""}`}
+          className={`mode-option build ${mode === "build" ? "active" : ""} ${pulseClass("build")}`}
           disabled={disabled}
           onClick={() => onChange("build")}
         >
-          Build
+          {pulseClass("build") && <span key={pulseKey("build")} className="mode-glow build" aria-hidden="true" />}
+          <Icon key={pulseKey("build")} name="hammer" className="mode-icon" />
+          <span className="mode-label">Build</span>
         </button>
         <button
           ref={planRef}
           type="button"
           role="radio"
           aria-checked={planning}
-          className={`mode-option plan ${planning ? "active" : ""} ${ultra ? "ultra" : ""}`}
+          className={`mode-option plan ${planning ? "active" : ""} ${ultra ? "ultra" : ""} ${pulseClass("plan")}`}
           disabled={disabled}
           onClick={() => onChange(planButtonTarget(mode))}
         >
@@ -92,7 +117,10 @@ export function ModeToggle({ mode, disabled, onChange }: ModeToggleProps) {
               <span className="flame-ember" aria-hidden="true" />
             </span>
           ) : (
-            <Icon name="brain" className="mode-icon" />
+            <>
+              {pulseClass("plan") && <span key={pulseKey("plan")} className="mode-glow plan" aria-hidden="true" />}
+              <Icon key={pulseKey("plan")} name="brain" className="mode-icon" />
+            </>
           )}
           <span className="mode-label">{ultra ? "Ultra Plan" : "Plan"}</span>
         </button>

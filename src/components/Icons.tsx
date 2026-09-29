@@ -1,6 +1,6 @@
 import type { SVGProps } from "react";
 
-export type IconName = "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "browser" | "expand" | "collapse" | "copy" | "archive" | "unarchive" | "send" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "checklist" | "terminal" | "file" | "pencil" | "external" | "brain" | "search" | "wrench" | "question" | "image" | "close" | "rewind" | "agents" | "flame" | "palette" | "plug" | "book" | "comment" | "commit" | "push" | "pullRequest" | "slash" | "erase" | "cursor" | "memory";
+export type IconName = "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "browser" | "expand" | "collapse" | "copy" | "archive" | "unarchive" | "send" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "checklist" | "terminal" | "file" | "pencil" | "external" | "brain" | "hammer" | "search" | "wrench" | "question" | "image" | "close" | "rewind" | "agents" | "flame" | "palette" | "plug" | "book" | "comment" | "commit" | "push" | "pullRequest" | "slash" | "erase" | "cursor" | "memory";
 
 const paths: Record<IconName, React.ReactNode> = {
   plus: <><path d="M12 5v14M5 12h14" /></>,
@@ -43,6 +43,15 @@ const paths: Record<IconName, React.ReactNode> = {
       <path d="M15.5 13a3.5 3.5 0 0 0-3.5 3.5" />
       <path d="M8.5 13A3.5 3.5 0 0 1 12 16.5" />
     </g>
+  ),
+  // Build mode: a mallet — the head crosses the handle at its top, and the handle's base
+  // (5,20) is the tap animation's transform-origin in styles.css. The head is drawn long
+  // and thin on purpose: at 11px a squarer bar collapses into a diamond blob.
+  hammer: (
+    <>
+      <path d="M5 20 13.3 11.7" />
+      <rect x="8.9" y="7.2" width="13.2" height="4.6" rx="1.2" transform="rotate(45 15.5 9.5)" />
+    </>
   ),
   image: <><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="1.8" /><path d="m21 16-5-5-9 9" /></>,
   close: <path d="M6 6l12 12M18 6 6 18" />,

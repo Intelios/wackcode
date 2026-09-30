@@ -118,7 +118,13 @@ export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, arc
         tabIndex={0}
         className={`task-item ${selectedTaskId === task.id ? "active" : ""}`}
         onClick={() => onSelectTask(task.id)}
-        onKeyDown={(event) => { if (event.key === "Enter") onSelectTask(task.id); }}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter") return;
+          // Swallow the keypress or it leaks into the chat that opens — its terminal takes it
+          // as an extra prompt line.
+          event.preventDefault();
+          onSelectTask(task.id);
+        }}
         onDoubleClick={() => startRename(task)}
       >
         <span className={`task-status ${task.lastError ? "error" : task.status}`} />

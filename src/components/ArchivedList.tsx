@@ -54,7 +54,13 @@ export function ArchivedList({ tasks, projects, selectedTaskId, onSelectTask, on
               role="button"
               tabIndex={0}
               onClick={() => onSelectTask(task.id)}
-              onKeyDown={(event) => { if (event.key === "Enter") onSelectTask(task.id); }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                // Swallow the keypress or it leaks into the chat that opens — its terminal takes it
+                // as an extra prompt line.
+                event.preventDefault();
+                onSelectTask(task.id);
+              }}
               initial={reduce ? false : { opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={reduce ? { opacity: 0 } : { opacity: 0, height: 0, marginTop: 0, marginBottom: 0, overflow: "hidden" }}

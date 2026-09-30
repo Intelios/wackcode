@@ -58,6 +58,36 @@ describe("commandDraftIssue", () => {
 });
 
 describe("CommandsSection", () => {
+  it("counts switched-on commands in the hero, across the app's, yours and packages'", async () => {
+    renderSection();
+    const hero = screen.getByRole("region", { name: "Commands overview" });
+    // Six of WackCode's, two of yours (one off), two from the package.
+    expect(await within(hero).findByText("9 of 10 on")).toBeInTheDocument();
+  });
+
+  it("walks through a command in the empty state, in the agent's name, and opens the editor from it", async () => {
+    const empty: SlashCommandsOverview = { ...overview, groups: [{ ...overview.groups[0], entries: [] }] };
+    const change = { overview: empty, config: { disabled: [] } };
+    render(
+      <CommandsSection
+        agentName="Quack"
+        onList={vi.fn().mockResolvedValue(empty)}
+        onRead={vi.fn()}
+        onSave={vi.fn().mockResolvedValue(change)}
+        onDelete={vi.fn()}
+        onSetEnabled={vi.fn()}
+        onReveal={vi.fn()}
+        onChanged={vi.fn()}
+      />
+    );
+    const demo = await screen.findByRole("list", { name: "How a command works" });
+    expect(within(demo).getAllByRole("listitem")).toHaveLength(3);
+    expect(within(demo).getByText("Quack reads")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Write your first/ }));
+    expect(screen.getByRole("heading", { name: "New command" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /New command/ })).toBeDisabled();
+  });
+
   it("lists WackCode's own commands, yours, and each package's", async () => {
     renderSection();
     const wackcode = await screen.findByRole("region", { name: "WackCode commands" });

@@ -5,6 +5,7 @@ import type {
 } from "../types";
 import { APP_SLASH_COMMANDS, expandCommandPreview, validateCommandBody, validateCommandDescription, validateCommandHint, validateCommandName } from "../command-utils";
 import { Icon } from "./Icons";
+import { SettingsHero, stagger } from "./SettingsHero";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 
 /** Matches `--ease` in styles.css. */
@@ -21,6 +22,42 @@ export interface SlashCommandActions {
   /** Keeps `data.commands` in step, so the composer filters switched-off WackCode commands too. */
   onChanged: (config: CommandsConfig) => void;
 }
+
+/**
+ * The hero's little stage: a slash lands in a composer, the command menu rises over it, the
+ * highlight steps down a row and picks it, and the command expands into the text the agent reads.
+ * Rests dashed and dimmed while every command is off. Pure decoration; the pill says the same in
+ * words. The loop lives in styles.css, which stills it under reduced motion.
+ */
+function CommandsStage({ live }: { live: boolean }) {
+  const rows = [{ name: 20, text: 46 }, { name: 26, text: 36 }, { name: 16, text: 52 }];
+  return (
+    <svg className={`settings-stage commands-stage ${live ? "live" : ""}`} viewBox="0 0 160 110" aria-hidden="true">
+      <g className="commands-stage-menu">
+        <rect className="commands-stage-card" x="16" y="8" width="128" height="58" rx="9" />
+        <rect className="commands-stage-pick" x="21" y="13" width="118" height="15" rx="5" />
+        {rows.map((row, index) => (
+          <g key={index}>
+            <rect className="commands-stage-name" x="28" y={18.5 + index * 16} width={row.name} height="4" rx="2" />
+            <rect className="commands-stage-text" x={34 + row.name} y={18.5 + index * 16} width={row.text} height="4" rx="2" />
+          </g>
+        ))}
+      </g>
+      <rect className="commands-stage-composer" x="16" y="74" width="128" height="26" rx="9" />
+      <path className="commands-stage-slash" d="M28 93l5-12" />
+      <rect className="commands-stage-typed" x="38" y="85" width="22" height="4" rx="2" />
+      <rect className="commands-stage-expanded" x="38" y="85" width="94" height="4" rx="2" />
+    </svg>
+  );
+}
+
+/** The empty state's walk-through: a saved command, what you type, what the agent reads. */
+const DEMO: { step: string; text: React.ReactNode }[] = [
+  { step: "You save", text: <>Review <mark>$ARGUMENTS</mark> for bugs.</> },
+  { step: "You type", text: <>/review <mark>src/main.ts</mark></> },
+  // Labelled with the agent's name where it renders.
+  { step: "The agent reads", text: <>Review <mark>src/main.ts</mark> for bugs.</> }
+];
 
 interface CommandDraft {
   name: string;
@@ -63,7 +100,9 @@ const KIND_BADGES: Record<SlashCommandEntry["kind"], string> = {
  * trusted packages add — listed by the same scan a chat's `/` uses, so the names and clash
  * resolutions agree. Every change reaches running chats on their next turn.
  */
-export function CommandsSection({ onList, onRead, onSave, onDelete, onSetEnabled, onReveal, onChanged }: SlashCommandActions) {
+export function CommandsSection({
+  agentName = "WackCode", onList, onRead, onSave, onDelete, onSetEnabled, onReveal, onChanged
+}: SlashCommandActions & { agentName?: string }) {
   const reduce = useReducedMotion();
   const [overview, setOverview] = useState<SlashCommandsOverview>();
   const [loading, setLoading] = useState(true);
@@ -222,7 +261,7 @@ export function CommandsSection({ onList, onRead, onSave, onDelete, onSetEnabled
   }
 
   function renderList() {
-    if (loading && !overview) return <div className="model-empty">Reading your commands…</div>;
+    if (loading && !overview) return <section className="settings-block commands-loading" style={stagger(1)}>Reading your commands…</section>;
     if (!overview) return null;
     const mine = (customGroup?.entries ?? []).filter((entry) => matches(entry.name, entry.description, filter));
     return (
@@ -240,11 +279,9 @@ export function CommandsSection({ onList, onRead, onSave, onDelete, onSetEnabled
           </div>
         )}
 
-        <section className="subagent-group" aria-label="WackCode commands">
-          <div className="skill-group-head">
-            <h4>WackCode</h4>
-            <span className="skill-group-path">The app&rsquo;s own commands — they act on the chat or the app itself</span>
-          </div>
+        <section className="settings-block" style={stagger(1)} aria-label="WackCode commands">
+          <h3 className="settings-block-title">WackCode&rsquo;s own</h3>
+          <p className="settings-block-sub">They act on the chat or the app itself, so they&rsquo;re always here.</p>
           <div className="command-list">
             <AnimatePresence initial={false}>
               {appEntries.map(({ command, enabled }) => (
@@ -260,7 +297,6 @@ export function CommandsSection({ onList, onRead, onSave, onDelete, onSetEnabled
                   <div className="command-row-main static">
                     <span className="command-row-head">
                       <span className="command-name">/{command.name}</span>
-                      <span className="subagent-badge">WackCode</span>
                       {!enabled && <span className="subagent-badge">Off</span>}
                     </span>
                     <span className="command-description">{command.description}</span>
@@ -269,28 +305,36 @@ export function CommandsSection({ onList, onRead, onSave, onDelete, onSetEnabled
                 </motion.div>
               ))}
             </AnimatePresence>
-            {appEntries.length === 0 && <small className="subagent-hint">No WackCode commands match the filter.</small>}
+            {appEntries.length === 0 && <small className="subagent-hint command-list-note">No WackCode commands match the filter.</small>}
           </div>
         </section>
 
-        <section className="subagent-group" aria-label="Your commands">
-          <div className="skill-group-head">
-            <h4>Your commands</h4>
-            <span className="skill-group-path" title={overview.customPath}>{overview.customPath}</span>
+        <section className="settings-block" style={stagger(2)} aria-label="Your commands">
+          <div className="commands-block-head">
+            <div>
+              <h3 className="settings-block-title">Your commands</h3>
+              <p className="settings-block-sub commands-path" title={overview.customPath}>{overview.customPath}</p>
+            </div>
             <button type="button" className="ghost-button skill-reveal" disabled={busy} onClick={() => void apply(() => onReveal(overview.customPath))}>
               Show in Finder
             </button>
           </div>
           {(customGroup?.entries.length ?? 0) === 0 ? (
-            <div className="package-empty">
-              <span className="package-empty-icon"><Icon name="slash" /></span>
+            <div className="commands-empty">
               <h4>No commands of your own yet</h4>
               <p>
-                A command is a saved instruction the agent expands when you type its name — like a snippet with arguments.
-                Write <code>Review $ARGUMENTS</code> once and run it as <code>/review src/main.ts</code>.
+                A command is a saved instruction {agentName} expands when you type its name, like a snippet with arguments.
               </p>
+              <ol className="command-demo" aria-label="How a command works">
+                {DEMO.map((item, index) => (
+                  <li key={item.step} style={{ "--k": index } as React.CSSProperties}>
+                    <span className="command-demo-step">{index === DEMO.length - 1 ? `${agentName} reads` : item.step}</span>
+                    <code className="command-demo-text">{item.text}</code>
+                  </li>
+                ))}
+              </ol>
               <button type="button" className="secondary-button" disabled={busy} onClick={() => void openEditor()}>
-                <Icon name="plus" /> New command
+                <Icon name="plus" /> Write your first
               </button>
             </div>
           ) : mine.length === 0 ? (
@@ -304,17 +348,15 @@ export function CommandsSection({ onList, onRead, onSave, onDelete, onSetEnabled
           )}
         </section>
 
-        {packageGroups.map((group) => {
+        {packageGroups.map((group, index) => {
           const shown = group.entries.filter((entry) => matches(entry.name, entry.description, filter));
           const on = group.entries.filter((entry) => entry.enabled).length;
           return (
-            <section className="subagent-group" aria-label={`${group.label} commands`} key={group.id}>
-              <div className="skill-group-head">
-                <h4>{group.label}</h4>
-                <span className="skill-group-path" title={group.id}>{group.id} · {on}/{group.entries.length} on</span>
-              </div>
+            <section className="settings-block" style={stagger(3 + index)} aria-label={`${group.label} commands`} key={group.id}>
+              <h3 className="settings-block-title">{group.label}</h3>
+              <p className="settings-block-sub"><code>{group.id}</code> · {on} of {group.entries.length} on. A package&rsquo;s commands run its code.</p>
               {shown.length === 0 ? (
-                <small className="subagent-hint">{filter ? "No commands here match the filter." : "This package&rsquo;s commands could not be read."}</small>
+                <small className="subagent-hint">{filter ? "No commands here match the filter." : "This package\u2019s commands could not be read."}</small>
               ) : (
                 <div className="command-list">
                   <AnimatePresence initial={false}>
@@ -330,53 +372,62 @@ export function CommandsSection({ onList, onRead, onSave, onDelete, onSetEnabled
     );
   }
 
+  const allEntries = [...APP_SLASH_COMMANDS.map((command) => !disabledSet.has(command.id)), ...(overview?.groups.flatMap((group) => group.entries.map((entry) => entry.enabled)) ?? [])];
+  const on = allEntries.filter(Boolean).length;
+  const pill = !overview ? "Reading…"
+    : on === allEntries.length ? "All on"
+    : on === 0 ? "All off"
+    : `${on} of ${allEntries.length} on`;
+
   return (
     <div className="settings-scroll subagents-settings commands-settings">
-      {view.kind === "list" && (
-        <div className="section-heading-row">
-          <div>
-            <h3>Slash commands</h3>
-            <p>
-              What typing <code>/</code> in a chat offers. Commands a package adds run its code; your own expand saved
-              instructions with arguments like <code>$1</code> and <code>$ARGUMENTS</code>. Switches apply to running
-              chats from their next message.
-            </p>
-          </div>
-          <div className="row-actions">
-            <button type="button" className="secondary-button" disabled={busy || !overview} onClick={() => void openEditor()}>
+      <div className="settings-page">
+        <SettingsHero
+          label="Commands overview"
+          stage={<CommandsStage live={on > 0} />}
+          live={Boolean(overview) && on > 0}
+          pill={pill}
+          title="Everything one slash away"
+          action={(
+            <button type="button" className="secondary-button compact" disabled={busy || !overview || view.kind === "edit"} onClick={() => void openEditor()}>
               <Icon name="plus" /> New command
             </button>
-          </div>
-        </div>
-      )}
-      {error && <div className="error-banner subagents-error" role="alert">{error}</div>}
-      {note && <div className="package-notice" role="status">{note}</div>}
-      {view.kind === "list" && renderList()}
-      {view.kind === "edit" && (
-        <CommandEditor
-          draft={view.draft}
-          isNew={!view.path}
-          issue={commandDraftIssue(view.draft, taken, view.original)}
-          busy={busy}
-          customPath={overview?.customPath ?? ""}
-          onChange={(draft) => setView({ ...view, draft })}
-          onCancel={() => { setView({ kind: "list" }); setError(undefined); }}
-          onDelete={view.path ? () => {
-            const entry = customGroup?.entries.find((item) => item.filePath === view.path);
-            if (entry) setDeleting(entry);
-          } : undefined}
-          onSave={() => void apply(
-            () => onSave({
-              path: view.path,
-              name: view.draft.name.trim(),
-              description: view.draft.description.trim(),
-              argumentHint: view.draft.argumentHint.trim(),
-              body: view.draft.body
-            }),
-            () => setView({ kind: "list" })
           )}
-        />
-      )}
+        >
+          <p>
+            What typing <code>/</code> in a chat offers: WackCode&rsquo;s own commands, yours, and any a package adds. Switches apply to
+            running chats from their next message.
+          </p>
+        </SettingsHero>
+        {error && <div className="error-banner" role="alert">{error}</div>}
+        {note && <div className="package-notice" role="status">{note}</div>}
+        {view.kind === "list" && renderList()}
+        {view.kind === "edit" && (
+          <CommandEditor
+            draft={view.draft}
+            isNew={!view.path}
+            issue={commandDraftIssue(view.draft, taken, view.original)}
+            busy={busy}
+            customPath={overview?.customPath ?? ""}
+            onChange={(draft) => setView({ ...view, draft })}
+            onCancel={() => { setView({ kind: "list" }); setError(undefined); }}
+            onDelete={view.path ? () => {
+              const entry = customGroup?.entries.find((item) => item.filePath === view.path);
+              if (entry) setDeleting(entry);
+            } : undefined}
+            onSave={() => void apply(
+              () => onSave({
+                path: view.path,
+                name: view.draft.name.trim(),
+                description: view.draft.description.trim(),
+                argumentHint: view.draft.argumentHint.trim(),
+                body: view.draft.body
+              }),
+              () => setView({ kind: "list" })
+            )}
+          />
+        )}
+      </div>
 
       {deleting && (
         <ConfirmDialog
@@ -429,6 +480,10 @@ function CommandEditor({ draft, isNew, issue, busy, customPath, onChange, onCanc
       transition={reduce ? { duration: 0 } : { duration: 0.25, ease: EASE }}
     >
       <div className="subagent-editor">
+        <div>
+          <h3 className="settings-block-title">{isNew ? "New command" : "Edit command"}</h3>
+          <p className="settings-block-sub command-editor-sub">Chats offer it from their next message.</p>
+        </div>
         <div className="form-grid">
           <label>
             <span>Name <small>Lowercase letters, numbers and hyphens. What you type after /.</small></span>

@@ -87,6 +87,30 @@ describe("skillDraftIssue", () => {
 });
 
 describe("SkillsSection", () => {
+  it("counts loaded skills in the hero, leaving out switched-off folders and shadowed copies", async () => {
+    renderSection();
+    const hero = screen.getByRole("region", { name: "Skills overview" });
+    // pdf-tools and notes from Your skills; Claude Code's folder is off.
+    expect(await within(hero).findByText("2 skills loaded")).toBeInTheDocument();
+  });
+
+  it("shows what a skill is made of when you have none, and opens the editor from it", async () => {
+    renderSection({ ...overview, folders: [{ ...overview.folders[0], skills: [] }, ...overview.folders.slice(1)] });
+    expect(await screen.findByText("No skills yet")).toBeInTheDocument();
+    expect(screen.getByText("pdf-tools/SKILL.md")).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Skills overview" })).getByText("None loaded")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Write your first/ }));
+    expect(screen.getByRole("heading", { name: "New skill" })).toBeInTheDocument();
+  });
+
+  it("starts a new skill from the hero while browsing, back on Your skills", async () => {
+    renderSection();
+    fireEvent.click(await screen.findByRole("tab", { name: "Browse" }));
+    fireEvent.click(screen.getByRole("button", { name: /New skill/ }));
+    expect(screen.getByRole("tab", { name: /Your skills/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("heading", { name: "New skill" })).toBeInTheDocument();
+  });
+
   it("lists your skills, and other tools' folders stay off until switched on", async () => {
     const actions = renderSection();
     const yours = await screen.findByRole("region", { name: "Your skills" });

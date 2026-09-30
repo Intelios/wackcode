@@ -500,12 +500,12 @@ describe("SettingsPage sub-agents", () => {
 
     rerender(<SettingsPage {...props} subagents={{ ...subagents, enabled: true }} />);
     fireEvent.click(within(screen.getByRole("switch", { name: "Sub-agents" }).closest("article")!).getByRole("button", { name: /Configure/ }));
-    expect(screen.getByRole("heading", { name: "How the agent uses sub-agents" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Helpers WackCode can hand work to" })).toBeInTheDocument();
     expect(within(nav).getByRole("button", { name: /Sub-agents/ })).toHaveClass("active");
 
     // Switched off elsewhere while its page is open: back to Packages, where the switch lives.
     rerender(<SettingsPage {...props} subagents={subagents} />);
-    expect(screen.queryByRole("heading", { name: "How the agent uses sub-agents" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Helpers WackCode can hand work to" })).not.toBeInTheDocument();
     expect(within(nav).getByRole("button", { name: /Packages/ })).toHaveClass("active");
   });
 

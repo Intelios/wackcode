@@ -12,6 +12,8 @@ interface Props {
   pill: ReactNode;
   /** Lights the border and the pill with the accent. The stage decides what it animates. */
   live: boolean;
+  /** Something needs the user: the pill's dot turns to the fixed warning colour. */
+  attention?: boolean;
   title: ReactNode;
   /** The page's one or two sentences, as `<p>`s. */
   children: ReactNode;
@@ -20,17 +22,17 @@ interface Props {
 }
 
 /**
- * The illustrated header of a Settings page in the finished shape (Tools, MCP servers, Memory):
- * a stage on the left, a status pill, a title and a sentence or two, and an optional action. It
- * sits first in a `.settings-page` column. Computer use and Prompts predate it and keep their own
- * copies of the same look.
+ * The illustrated header of a Settings page in the finished shape (Tools, MCP servers, Memory,
+ * Commands, Skills, Integrations, Sub-agents): a stage on the left, a status pill, a title and a
+ * sentence or two, and an optional action. It sits first in a `.settings-page` column. Computer
+ * use and Prompts predate it and keep their own copies of the same look.
  */
-export function SettingsHero({ label, stage, pill, live, title, children, action }: Props) {
+export function SettingsHero({ label, stage, pill, live, attention = false, title, children, action }: Props) {
   return (
     <section className={`settings-hero ${live ? "live" : ""}`} style={stagger(0)} aria-label={label}>
       {stage}
       <div className="settings-hero-text">
-        <span className={`settings-pill ${live ? "live" : ""}`}><i aria-hidden="true" />{pill}</span>
+        <span className={`settings-pill ${attention ? "attention" : live ? "live" : ""}`}><i aria-hidden="true" />{pill}</span>
         <h3>{title}</h3>
         {children}
       </div>

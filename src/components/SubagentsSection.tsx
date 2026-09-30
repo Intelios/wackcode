@@ -11,10 +11,12 @@ import {
   type SubagentRecord,
   type ThinkingLevel
 } from "../types";
-import { Icon } from "./Icons";
+import { DuckMark } from "./DuckMark";
+import { Icon, type IconName } from "./Icons";
 import { ModelPicker, ReasoningToggle } from "./ModelPicker";
+import { RobotMark } from "./RobotMark";
+import { SettingsHero, stagger } from "./SettingsHero";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
-import { Select } from "./ui/Select";
 
 interface Props {
   config: SubagentConfig;
@@ -28,6 +30,8 @@ interface Props {
   onSetAutoTitle: (config: AutoTitleConfig) => Promise<void>;
   /** Opens Settings → Providers on a blank connection, for when nothing usable is connected. */
   onOpenProviders: () => void;
+  /** The agent's name in the app's own copy (Settings › Appearance). */
+  agentName?: string;
 }
 
 /** Shown under an agent's tools when it lists web_fetch but Web Fetch is switched off. */
@@ -36,15 +40,41 @@ function WebFetchOffHint({ tools, webFetchEnabled }: { tools: string[]; webFetch
   return <small className="subagent-hint">Web Fetch is off in Settings › Packages, so no sub-agent gets web_fetch.</small>;
 }
 
-const TRIGGER_OPTIONS = [
-  { value: "on_request", label: "Only when I ask", hint: "Predictable cost" },
-  { value: "auto", label: "Whenever useful", hint: "Agent decides" }
+const TRIGGER_OPTIONS: { value: SubagentConfig["trigger"]; label: string; hint: string; icon: IconName }[] = [
+  { value: "on_request", label: "Only when I ask", hint: "Predictable cost", icon: "comment" },
+  { value: "auto", label: "Whenever useful", hint: "The agent decides", icon: "spark" }
 ];
 
-const CONCURRENCY_OPTIONS = Array.from({ length: MAX_SUBAGENT_CONCURRENCY }, (_, index) => ({
-  value: String(index + 1),
-  label: String(index + 1)
-}));
+const CONCURRENCY_OPTIONS = Array.from({ length: MAX_SUBAGENT_CONCURRENCY }, (_, index) => index + 1);
+
+/**
+ * The hero's little stage: the duck hands work to three robots. As many as run at the same time
+ * (up to three) are awake, scanning, their progress bars filling in turn; the rest doze. With every
+ * agent off they all doze and the lines rest dashed. Pure decoration; the pill says the same in
+ * words. The loop lives in styles.css, which stills it (and the robots) under reduced motion.
+ */
+function SubagentsStage({ working }: { working: number }) {
+  const lanes = [16, 44, 72];
+  return (
+    <svg className={`settings-stage agents-stage ${working > 0 ? "live" : ""}`} viewBox="0 0 160 110" aria-hidden="true">
+      {lanes.map((y, index) => {
+        const awake = index < working;
+        return (
+          <g key={y} className={`agents-stage-lane ${awake ? "on" : ""}`} style={{ "--k": index } as React.CSSProperties}>
+            <path className="agents-stage-line" d={`M58 55C80 55 76 ${y + 12} 94 ${y + 12}`} />
+            <g transform={`translate(94 ${y}) scale(1.35)`}>
+              <RobotMark status={awake ? "running" : "queued"} />
+            </g>
+            <rect className="agents-stage-track" x="127" y={y + 10} width="22" height="4" rx="2" />
+            <rect className="agents-stage-fill" x="127" y={y + 10} width="22" height="4" rx="2" />
+          </g>
+        );
+      })}
+      <rect className="agents-stage-tile" x="14" y="33" width="44" height="44" rx="12" />
+      <DuckMark x="24" y="43" width="24" height="24" />
+    </svg>
+  );
+}
 
 /** A custom agent being created or edited, before it is saved. */
 interface AgentDraft {
@@ -172,6 +202,10 @@ function AgentEditor({ draft, providers, busy, isNew, onChange, onSave, onCancel
 
   return (
     <div className="subagent-editor">
+      <div>
+        <h3 className="settings-block-title">{isNew ? "New agent" : "Edit agent"}</h3>
+        <p className="settings-block-sub subagent-editor-sub">Saved agents are offered to the model from a chat&rsquo;s next turn.</p>
+      </div>
       <div className="form-grid">
         <label>
           <span>Name <small>Lowercase letters, digits and hyphens</small></span>
@@ -342,7 +376,7 @@ function AutoTitleCard({ config, providers, busy, open, onToggleOpen, onSave, on
  * Packages). Switches and model choices save at once; a custom agent's text is edited as a
  * draft and saved explicitly.
  */
-export function SubagentsSection({ config, providers, onChange, webFetchEnabled = true, autoTitle, onSetAutoTitle, onOpenProviders }: Props) {
+export function SubagentsSection({ config, providers, onChange, webFetchEnabled = true, autoTitle, onSetAutoTitle, onOpenProviders, agentName = "WackCode" }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [expanded, setExpanded] = useState<string>();
@@ -496,100 +530,127 @@ export function SubagentsSection({ config, providers, onChange, webFetchEnabled 
     );
   }
 
+  const enabledAgents = config.agents.filter((agent) => agent.enabled).length;
+  const pill = enabledAgents === config.agents.length ? "All on"
+    : enabledAgents === 0 ? "All off"
+    : `${enabledAgents} of ${config.agents.length} on`;
+
   return (
     <div className="settings-scroll subagents-settings">
-      <div className="section-heading-row">
-        <div>
-          <h3>How the agent uses sub-agents</h3>
+      <div className="settings-page">
+        <SettingsHero
+          label="Sub-agents overview"
+          stage={<SubagentsStage working={Math.min(enabledAgents, config.maxConcurrency, 3)} />}
+          live={enabledAgents > 0}
+          pill={pill}
+          title={`Helpers ${agentName} can hand work to`}
+          action={(
+            <button type="button" className="secondary-button compact" disabled={busy || editing?.key === "new"} onClick={startNew}>
+              <Icon name="plus" /> New agent
+            </button>
+          )}
+        >
           <p>
-            A sub-agent works on one self-contained task in its own context window and hands back its answer. Every sub-agent is extra
-            model usage, billed like any other request. Changes apply to running chats on their next turn.
+            A sub-agent works on one self-contained task in its own context window and hands back its answer. Each one is extra
+            model usage, billed like any other request.
           </p>
-        </div>
-      </div>
-      <div className="form-grid">
-        <label>
-          <span>When to use them</span>
-          <Select
-            className="settings-select"
-            matchWidth
-            value={config.trigger}
-            disabled={busy}
-            options={TRIGGER_OPTIONS}
-            onChange={(value) => void commit({ ...config, trigger: value === "auto" ? "auto" : "on_request" })}
-            aria-label="When to use sub-agents"
-          />
-          <small className="subagent-hint">
+        </SettingsHero>
+        {error && <div className="error-banner" role="alert">{error}</div>}
+
+        <section className="settings-block" style={stagger(1)} aria-labelledby="subagents-usage-title">
+          <h3 className="settings-block-title" id="subagents-usage-title">How they&rsquo;re used</h3>
+          <p className="settings-block-sub">Changes apply to running chats on their next turn.</p>
+          <span className="subagent-field-label">When to use them</span>
+          <div className="subagent-trigger" role="radiogroup" aria-label="When to use sub-agents">
+            {TRIGGER_OPTIONS.map((option) => {
+              const selected = config.trigger === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  className={`subagent-trigger-option ${selected ? "selected" : ""}`}
+                  disabled={busy}
+                  onClick={() => { if (!selected) void commit({ ...config, trigger: option.value }); }}
+                >
+                  <span className="subagent-trigger-mark" aria-hidden="true"><Icon name={option.icon} /></span>
+                  <span className="subagent-trigger-text">
+                    <strong>{option.label}</strong>
+                    <small>{option.hint}</small>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <small className="subagent-hint subagent-usage-hint">
             {config.trigger === "auto"
               ? "The agent delegates on its own when a task clearly benefits, such as broad exploration or an independent review."
               : "The agent only delegates when you ask for sub-agents, or name one."}
           </small>
-        </label>
-        <label>
-          <span>Run at the same time</span>
-          <Select
-            className="settings-select"
-            matchWidth
-            value={String(config.maxConcurrency)}
-            disabled={busy}
-            options={CONCURRENCY_OPTIONS}
-            onChange={(value) => void commit({ ...config, maxConcurrency: Number(value) })}
-            aria-label="Sub-agents running at the same time"
-          />
-          <small className="subagent-hint">Per request, for all agents. Give parallel editing agents separate files.</small>
-        </label>
-      </div>
+          <span className="subagent-field-label">Run at the same time</span>
+          <div className="subagent-concurrency" role="radiogroup" aria-label="Sub-agents running at the same time">
+            {CONCURRENCY_OPTIONS.map((count) => (
+              <button
+                key={count}
+                type="button"
+                role="radio"
+                aria-checked={config.maxConcurrency === count}
+                className={config.maxConcurrency === count ? "selected" : count < config.maxConcurrency ? "within" : ""}
+                disabled={busy}
+                onClick={() => { if (config.maxConcurrency !== count) void commit({ ...config, maxConcurrency: count }); }}
+              >
+                {count}
+              </button>
+            ))}
+          </div>
+          <small className="subagent-hint subagent-usage-hint">Per request, for all agents. Give parallel editing agents separate files.</small>
+        </section>
 
-      <div className="section-heading-row">
-        <div>
-          <h3>Agents</h3>
-          <p>Switched-off agents are not offered to the model. Each one uses the chat's model unless you give it its own.</p>
-        </div>
-        <div className="row-actions">
-          <button type="button" className="secondary-button" disabled={busy || editing?.key === "new"} onClick={startNew}><Icon name="plus" /> New agent</button>
-        </div>
-      </div>
-      {error && <div className="error-banner subagents-error" role="alert">{error}</div>}
-      {editing?.key === "new" && (
-        <article className="subagent-setting open new">
-          <AgentEditor
-            draft={editing.draft}
+        {editing?.key === "new" && (
+          <article className="subagent-setting open new">
+            <AgentEditor
+              draft={editing.draft}
+              providers={providers}
+              busy={busy}
+              isNew
+              webFetchEnabled={webFetchEnabled}
+              onChange={(draft) => setEditing({ key: "new", draft })}
+              onSave={() => void saveDraft()}
+              onCancel={() => { setEditing(undefined); setError(undefined); }}
+            />
+          </article>
+        )}
+
+        <section className="settings-block" style={stagger(2)} aria-labelledby="subagents-agents-title">
+          <h3 className="settings-block-title" id="subagents-agents-title">Agents</h3>
+          <p className="settings-block-sub">Switched-off agents are not offered to the model. Each one uses the chat&rsquo;s model unless you give it its own.</p>
+          <section className="subagent-group" aria-label="Built-in agents">
+            <h4>Built-in</h4>
+            {builtins.map(renderAgent)}
+          </section>
+          {customs.length > 0 && (
+            <section className="subagent-group" aria-label="Custom agents">
+              <h4>Custom</h4>
+              {customs.map(renderAgent)}
+            </section>
+          )}
+        </section>
+
+        <section className="settings-block" style={stagger(3)} aria-labelledby="subagents-auto-title">
+          <h3 className="settings-block-title" id="subagents-auto-title">Automatic</h3>
+          <p className="settings-block-sub">WackCode runs this one itself; the model can never call it.</p>
+          <AutoTitleCard
+            config={autoTitle}
             providers={providers}
             busy={busy}
-            isNew
-            webFetchEnabled={webFetchEnabled}
-            onChange={(draft) => setEditing({ key: "new", draft })}
-            onSave={() => void saveDraft()}
-            onCancel={() => { setEditing(undefined); setError(undefined); }}
+            open={expanded === "auto-titles"}
+            onToggleOpen={() => setExpanded(expanded === "auto-titles" ? undefined : "auto-titles")}
+            onSave={commitTitle}
+            onOpenProviders={onOpenProviders}
           />
-        </article>
-      )}
-      <section className="subagent-group" aria-label="Built-in agents">
-        <h4>Built-in</h4>
-        {builtins.map(renderAgent)}
-      </section>
-      {customs.length > 0 && (
-        <section className="subagent-group" aria-label="Custom agents">
-          <h4>Custom</h4>
-          {customs.map(renderAgent)}
         </section>
-      )}
-
-      <div className="section-heading-row">
-        <div>
-          <h3>Automatic</h3>
-          <p>WackCode runs this one itself — it is never offered to the model, so nothing can call it.</p>
-        </div>
       </div>
-      <AutoTitleCard
-        config={autoTitle}
-        providers={providers}
-        busy={busy}
-        open={expanded === "auto-titles"}
-        onToggleOpen={() => setExpanded(expanded === "auto-titles" ? undefined : "auto-titles")}
-        onSave={commitTitle}
-        onOpenProviders={onOpenProviders}
-      />
 
       {deleting && (
         <ConfirmDialog

@@ -2912,14 +2912,65 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .trust-ack { display: flex; flex-direction: row; align-items: center; gap: 8px; margin: 12px 0 0; font-size: 11.5px; color: var(--text-soft); cursor: pointer; }
 .trust-ack input { width: 14px; height: 14px; accent-color: var(--wc-accent); cursor: pointer; }
 
-/* ── Integrations settings (IntegrationsSection.tsx) ── */
-/* Same card language as the package grid, so one integration doesn't look stranded. */
-.integrations-settings .section-heading-row:first-child { padding-top: 0; }
-.integrations-settings .package-grid { margin-bottom: 4px; }
-.package-icon.kind-integration { border-color: var(--wc-accent-ring); background: var(--wc-accent-tint); color: var(--wc-accent-text); }
+/* ── Settings › Integrations (IntegrationsSection.tsx) ── */
+/* A Settings page (SettingsHero): a block per integration, then what the ledger holds. */
 .package-state.attention { color: var(--danger); }
 .package-state.attention::before { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 16%, transparent); }
-.integration-note { margin: 5px 0 0 36px; color: var(--text-dim); font-size: 10.5px; }
+.integration-head { display: flex; align-items: center; gap: 13px; }
+.integration-mark {
+  flex: 0 0 auto; width: 38px; height: 38px; display: grid; place-items: center; border-radius: 11px;
+  border: 1px solid var(--wc-accent-line-soft); background: var(--wc-accent-tint); color: var(--wc-accent-text);
+  transition: color .25s var(--ease), background .25s var(--ease), border-color .25s var(--ease);
+}
+.integration-mark svg { width: 19px; height: 19px; }
+.integration-block.off .integration-mark { border-color: var(--border-bright); background: var(--wc-well); color: var(--text-faint); }
+.integration-block.attention .integration-mark { border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); background: var(--wc-well); color: var(--danger); }
+.integration-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.integration-title h3 { display: flex; align-items: center; gap: 8px; }
+.integration-status { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.integration-desc { margin: 12px 0 0; max-width: 62ch; color: var(--text-dim); font-size: 11.5px; line-height: 1.55; }
+.integration-block .package-error, .integration-note { margin: 8px 0 0; }
+.integration-note { color: var(--text-dim); font-size: 10.5px; }
+.integration-path {
+  margin-top: 14px; display: flex; align-items: center; gap: 12px; padding: 9px 10px 9px 12px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--wc-well);
+}
+.integration-path > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.integration-path span { color: var(--text-dim); font-size: 10.5px; }
+.integration-path code { color: var(--text-faint); font: 10.5px "SFMono-Regular", Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-block .integration-scope-group { background: var(--wc-well); }
+
+/* Stage: the duck writes records into a ledger, and TokenTrail's flame reads them. */
+.ledger-stage-tile, .ledger-stage-page { fill: var(--wc-well); stroke: var(--border-bright); stroke-width: 1.5; transition: stroke .3s var(--ease); }
+.ledger-stage-page { stroke-dasharray: 4 3; }
+.ledger-stage .duck-mark { color: var(--text-faint); transition: color .3s var(--ease); }
+.ledger-stage-head { fill: var(--border-bright); }
+.ledger-stage-row circle { fill: var(--border-bright); }
+.ledger-stage-row rect { fill: var(--border-bright); }
+.ledger-stage-flow { fill: none; stroke: var(--border-bright); stroke-width: 2.4; stroke-linecap: round; stroke-dasharray: 0 6; }
+.ledger-stage-flame { fill: none; stroke: var(--text-faint); stroke-width: 1.5; stroke-linejoin: round; transform-box: fill-box; transform-origin: 50% 100%; }
+.ledger-stage.live .ledger-stage-tile, .ledger-stage.live .ledger-stage-page { stroke: var(--wc-accent-line); stroke-dasharray: none; }
+.ledger-stage.live .duck-mark { color: var(--wc-accent); }
+.ledger-stage.live .ledger-stage-head { fill: var(--wc-accent-text); }
+.ledger-stage.live .ledger-stage-row circle { fill: var(--wc-accent); }
+.ledger-stage.live .ledger-stage-row { animation: ledger-stage-row 7s var(--ease) calc(var(--k) * .6s) infinite backwards; }
+.ledger-stage.live .ledger-stage-flow { stroke: var(--wc-accent); animation: ledger-stage-flow .9s linear infinite; }
+.ledger-stage.live .ledger-stage-flame { stroke: var(--wc-accent); fill: var(--wc-accent-tint); animation: ledger-stage-flicker 2.2s ease-in-out infinite; }
+@keyframes ledger-stage-row {
+  0% { opacity: 0; transform: translateX(-5px); }
+  6%, 84% { opacity: 1; transform: none; }
+  92%, 100% { opacity: 0; transform: none; }
+}
+@keyframes ledger-stage-flow { to { stroke-dashoffset: -6; } }
+@keyframes ledger-stage-flicker {
+  0%, 100% { transform: none; }
+  30% { transform: scale(.96, 1.05) rotate(-2deg); }
+  60% { transform: scale(1.03, .96) rotate(2deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ledger-stage.live .ledger-stage-row, .ledger-stage.live .ledger-stage-flow, .ledger-stage.live .ledger-stage-flame { animation: none; }
+  .integration-mark { transition: none; }
+}
 
 /* The ledger contract at a glance: two columns so "never recorded" reads as a boundary,
    not just more prose under the card. */
@@ -3174,8 +3225,8 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .subagent-hint { color: var(--text-dim); font-size: 10.5px; font-weight: 400; line-height: 1.45; }
 
 /* ── Settings pages (SettingsHero.tsx) ─────────────── */
-/* The finished page shape Tools, MCP servers and Memory share (Computer use and Prompts keep their
-   own copies): a centred column of solid cards under an accent-washed hero whose stage is the
+/* The finished page shape Tools, MCP servers, Memory, Commands, Skills, Integrations and Sub-agents
+   share (Computer use and Prompts keep their own copies): a centred column of solid cards under an accent-washed hero whose stage is the
    page's own illustration. Cards rise in one after another (--i). Each stage's loop sits with its
    page below, and stills under reduced motion there. */
 .settings-page { max-width: 780px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
@@ -3201,11 +3252,23 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .settings-pill i { width: 6px; height: 6px; border-radius: 50%; background: var(--text-faint); }
 .settings-pill.live { color: var(--wc-accent-text); border-color: var(--wc-accent-line-soft); background: var(--wc-accent-tint); }
 .settings-pill.live i { background: var(--wc-accent); animation: pulse 2.4s ease-in-out infinite; }
+.settings-pill.attention { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 35%, var(--border)); }
+.settings-pill.attention i { background: var(--warning); }
 .settings-block { padding: 16px 18px 18px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
 .settings-block-title { margin: 0; font-size: 14px; }
 .settings-block-sub { margin: 4px 0 12px; max-width: 62ch; color: var(--text-dim); font-size: 11.5px; line-height: 1.5; }
 .settings-block-sub code { font: 10.5px "SFMono-Regular", Consolas, monospace; color: var(--text-soft); }
 .settings-page > .package-notice { margin: 0; }
+/* An editor or detail view opened in a Settings page's column: a card like the blocks, with a
+   heading over its form. */
+.settings-page > .subagent-setting.open { margin: 0; border-radius: 14px; padding: 16px 18px 18px; }
+.settings-page > .subagent-setting.open.new { border-color: var(--wc-accent-line-soft); }
+.memory-editor-sub, .command-editor-sub, .skill-editor-sub, .subagent-editor-sub { margin-bottom: 0; }
+/* Expandable cards (servers, folders, agents) sit in a block on the well, a step darker. */
+.settings-block .subagent-setting { background: var(--wc-well); }
+.settings-block .subagent-group { margin-bottom: 0; }
+.settings-block .subagent-group + .subagent-group { margin-top: 14px; }
+.settings-hero-action .icon-button.skill-import-button { height: 28px; padding: 0 11px; font-size: 11.5px; border-radius: 6px; }
 @media (max-width: 720px) {
   .settings-hero { flex-wrap: wrap; }
 }
@@ -3403,7 +3466,6 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   .computer-stage.live .computer-stage-button, .computer-stage.live .computer-stage-pointer { animation: none; }
   .computer-stage.live .computer-stage-pointer { transform: translate(108px, 76px); }
 }
-.subagents-error { margin-bottom: 10px; }
 .subagent-group { margin-bottom: 18px; }
 .subagent-group h4 { margin: 0 0 8px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .08em; font-size: 9px; font-weight: 700; }
 .subagent-setting { border: 1px solid var(--border); border-radius: 9px; background: var(--surface); padding: 10px 12px; }
@@ -3453,16 +3515,68 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .subagent-editor-spacer { flex: 1; }
 .subagent-editor-actions .primary-button, .subagent-editor-actions .secondary-button, .subagent-editor-actions .danger-button { height: 30px; font-size: 11.5px; }
 
+/* ── Settings › Sub-agents page (SubagentsSection.tsx) ── */
+/* A Settings page (SettingsHero). When to delegate is two tiles; how many at once is a row of
+   counts that fills up to the chosen one, like a meter. */
+.subagent-trigger { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+.subagent-trigger-option {
+  display: flex; align-items: center; gap: 12px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 11px;
+  background: var(--wc-well); color: var(--text-soft); text-align: left; cursor: pointer;
+  transition: border-color .15s var(--ease), color .15s var(--ease), box-shadow .15s var(--ease);
+}
+.subagent-trigger-option:hover:not(:disabled) { border-color: var(--border-bright); color: var(--text); }
+.subagent-trigger-option.selected { border-color: var(--wc-accent); box-shadow: 0 0 0 1px var(--wc-accent); color: var(--text); }
+.subagent-trigger-option:focus-visible { outline: 2px solid var(--wc-accent-line); outline-offset: 2px; }
+.subagent-trigger-option:disabled { cursor: default; }
+.subagent-trigger-mark {
+  flex: 0 0 auto; width: 32px; height: 32px; display: grid; place-items: center; border-radius: 9px;
+  border: 1px solid var(--border-bright); background: var(--surface); color: var(--text-dim);
+  transition: color .15s var(--ease), background .15s var(--ease), border-color .15s var(--ease);
+}
+.subagent-trigger-mark svg { width: 16px; height: 16px; }
+.subagent-trigger-option.selected .subagent-trigger-mark { border-color: var(--wc-accent-line-soft); background: var(--wc-accent-tint); color: var(--wc-accent-text); }
+.subagent-trigger-text { display: flex; flex-direction: column; gap: 1px; }
+.subagent-trigger-text strong { font-size: 12.5px; }
+.subagent-trigger-text small { color: var(--text-dim); font-size: 11px; }
+.subagent-usage-hint { display: block; margin: 7px 0 16px; }
+.settings-block > .subagent-usage-hint:last-child { margin-bottom: 0; }
+.subagent-concurrency { display: flex; flex-wrap: wrap; gap: 5px; }
+.subagent-concurrency button {
+  width: 34px; height: 30px; border: 1px solid var(--border); border-radius: 8px; background: var(--wc-well);
+  color: var(--text-faint); font-size: 12px; font-weight: 600; cursor: pointer;
+  transition: background .15s var(--ease), border-color .15s var(--ease), color .15s var(--ease);
+}
+.subagent-concurrency button:hover:not(:disabled):not(.selected) { border-color: var(--border-bright); color: var(--text); }
+.subagent-concurrency button.within { border-color: var(--wc-accent-line-soft); background: var(--wc-accent-tint); color: var(--wc-accent-text); }
+.subagent-concurrency button.selected { border-color: var(--wc-accent); background: var(--wc-accent); color: var(--wc-on-accent); }
+.subagent-concurrency button:focus-visible { outline: 2px solid var(--wc-accent-line); outline-offset: 2px; }
+.subagent-concurrency button:disabled { cursor: default; }
+
+/* Stage: the duck hands work to robots; the awake ones fill their bars in turn. */
+.agents-stage-tile { fill: var(--wc-well); stroke: var(--border-bright); stroke-width: 1.5; transition: stroke .3s var(--ease); }
+.agents-stage .duck-mark { color: var(--text-faint); transition: color .3s var(--ease); }
+.agents-stage-line { fill: none; stroke: var(--border-bright); stroke-width: 1.6; stroke-dasharray: 3 3; }
+.agents-stage-track { fill: var(--wc-well); stroke: var(--border-bright); stroke-width: 1; }
+.agents-stage-fill { fill: var(--wc-accent); opacity: 0; transform-box: fill-box; transform-origin: left center; transform: scaleX(0); }
+.agents-stage .robot-mark { color: var(--text-faint); }
+.agents-stage.live .agents-stage-tile { stroke: var(--wc-accent-line); }
+.agents-stage.live .duck-mark { color: var(--wc-accent); }
+.agents-stage-lane.on .agents-stage-line { stroke: var(--wc-accent-line); stroke-dasharray: none; }
+.agents-stage-lane.on .robot-mark { color: var(--wc-accent-text); }
+.agents-stage-lane.on .agents-stage-fill { opacity: 1; animation: agents-stage-fill 4.8s var(--ease) calc(var(--k) * .7s) infinite backwards; }
+@keyframes agents-stage-fill {
+  0% { opacity: 1; transform: scaleX(0); }
+  70%, 86% { opacity: 1; transform: scaleX(1); }
+  96%, 100% { opacity: 0; transform: scaleX(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agents-stage-lane.on .agents-stage-fill { animation: none; transform: scaleX(.7); }
+  .subagent-trigger-option, .subagent-trigger-mark, .subagent-concurrency button { transition: none; }
+}
+
 /* ── Skills settings ───────────────────────────────── */
 /* Reuses the Sub-agents cards (.subagent-setting); a skill is a row inside a group or a card. */
-.skills-settings .row-actions .secondary-button { white-space: nowrap; }
 .skill-filter { margin-top: 0; }
-/* The empty state sits inside a group, whose h4 is a small caps label; this one is a title. */
-.skills-settings .package-empty h4 { text-transform: none; letter-spacing: 0; font-size: 13px; color: var(--text); }
-.skill-subheading { margin-top: 22px; }
-.skill-group-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
-.skill-group-head h4 { margin: 0; }
-.skill-group-path { flex: 1; min-width: 0; color: var(--text-faint); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .skill-reveal.ghost-button { width: auto; height: 22px; padding: 0 7px; font-size: 10.5px; color: var(--text-dim); }
 .skill-list { border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
 .skill-list.nested { border-radius: 7px; background: var(--wc-well); }
@@ -3505,9 +3619,66 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .skill-editor-issue { margin: 0; }
 .skill-editor, .skill-detail { margin-top: 16px; }
 
+/* ── Settings › Skills page (SkillsSection.tsx) ──── */
+/* A Settings page (SettingsHero): tabs under the hero, then a block per source. The empty state
+   shows a skill's anatomy, with the part that always stays in context picked out. */
+.settings-page > .package-tabs { margin: 0; }
+.settings-page > .skill-filter { margin: 0; }
+.skills-loading { color: var(--text-dim); font-size: 12px; }
+.skills-block-head { display: flex; align-items: flex-start; gap: 12px; }
+.skills-block-head > div { flex: 1; min-width: 0; }
+.skills-block-head > button { flex: 0 0 auto; }
+.settings-block .skill-list { background: var(--wc-well); }
+.settings-block .skill-list.nested { background: var(--surface); }
+.skills-browse .section-heading-row { padding-top: 0; }
+.skills-empty { display: grid; grid-template-columns: minmax(0, 250px) minmax(0, 1fr); gap: 20px; align-items: center; padding: 4px 2px 2px; }
+.skill-anatomy { border: 1px solid var(--border); border-radius: 10px; background: var(--wc-well); overflow: hidden; }
+.skill-anatomy-file { display: block; padding: 6px 10px; border-bottom: 1px solid var(--border); color: var(--text-faint); font: 10px "SFMono-Regular", Consolas, monospace; }
+.skill-anatomy pre { margin: 0; padding: 9px 10px 10px; font: 10.5px/1.6 "SFMono-Regular", Consolas, monospace; color: var(--text-faint); white-space: pre-wrap; }
+.skill-anatomy-kept {
+  display: block; margin: -2px -4px 4px; padding: 2px 4px; border-radius: 5px;
+  background: var(--wc-accent-tint); color: var(--wc-accent-text); box-shadow: inset 0 0 0 1px var(--wc-accent-line-soft);
+}
+.skills-empty-text h4 { margin: 0; font-size: 13px; }
+.skills-empty-text p { margin: 5px 0 12px; color: var(--text-dim); font-size: 11.5px; line-height: 1.55; }
+.skills-empty-text mark { background: none; color: var(--wc-accent-text); font-weight: 600; }
+.skills-empty-text .secondary-button { height: 30px; padding: 0 11px; font-size: 11.5px; display: inline-flex; align-items: center; gap: 6px; }
+.skills-empty-text .secondary-button svg { width: 13px; height: 13px; }
+
+/* Stage: a shelf of skills; one lifts out with a spark as a task matches it. */
+.skills-stage-shelf { stroke: var(--border-bright); stroke-width: 2; stroke-linecap: round; transition: stroke .3s var(--ease); }
+.skills-stage-book { transform-box: fill-box; transform-origin: 50% 100%; }
+.skills-stage-book rect { fill: var(--wc-well); stroke: var(--border-bright); stroke-width: 1.3; stroke-dasharray: 3 2.5; }
+.skills-stage-book path { stroke: var(--border-bright); stroke-width: 1.3; stroke-linecap: round; }
+.skills-stage-spark { fill: var(--wc-accent); opacity: 0; transform-box: fill-box; transform-origin: center; }
+.skills-stage.live .skills-stage-shelf { stroke: var(--wc-accent-line); }
+.skills-stage.live .skills-stage-book rect { fill: var(--surface-raised); stroke-dasharray: none; }
+.skills-stage.live .skills-stage-book.picked rect { fill: var(--wc-accent-tint); stroke: var(--wc-accent-line); }
+.skills-stage.live .skills-stage-book.picked path { stroke: var(--wc-accent); }
+.skills-stage.live .skills-stage-book.picked { animation: skills-stage-lift 5.6s cubic-bezier(.3, 1.3, .5, 1) infinite; }
+.skills-stage.live .skills-stage-spark { animation: skills-stage-spark 5.6s var(--ease) infinite; }
+@keyframes skills-stage-lift {
+  0%, 16% { transform: none; }
+  28%, 62% { transform: translateY(-18px) rotate(-6deg); }
+  76%, 100% { transform: none; }
+}
+@keyframes skills-stage-spark {
+  0%, 24% { opacity: 0; transform: scale(.3); }
+  32% { opacity: 1; transform: scale(1.15) rotate(20deg); }
+  38%, 58% { opacity: 1; transform: scale(1) rotate(45deg); }
+  66%, 100% { opacity: 0; transform: scale(.3) rotate(90deg); }
+}
+@media (max-width: 720px) {
+  .skills-empty { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skills-stage.live .skills-stage-book.picked, .skills-stage.live .skills-stage-spark { animation: none; }
+  .skills-stage.live .skills-stage-book.picked { transform: translateY(-18px) rotate(-6deg); }
+  .skills-stage.live .skills-stage-spark { opacity: 1; }
+}
+
 /* ── Commands settings ───────────────────────── */
 /* Reuses the Sub-agents/Skills looks; a command row reads like the composer's `/` option. */
-.commands-settings .package-empty h4 { text-transform: none; letter-spacing: 0; font-size: 13px; color: var(--text); }
 .command-try {
   display: flex; align-items: center; gap: 8px; margin-bottom: 18px; padding: 0 12px;
   border: 1px solid var(--border); border-radius: 9px; background: var(--wc-input);
@@ -3580,8 +3751,89 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .command-editor { margin-top: 16px; }
 .command-editor-issue { margin: 0; }
 
+/* ── Settings › Commands page (CommandsSection.tsx) ── */
+/* A Settings page (SettingsHero). Each group is a block of the rows above; the empty state walks
+   through one command from saved text to what the agent reads, its steps rising in turn (--k). */
+.settings-page > .command-try { margin: 0; }
+.commands-loading { color: var(--text-dim); font-size: 12px; }
+.commands-block-head { display: flex; align-items: flex-start; gap: 12px; }
+.commands-block-head > div { flex: 1; min-width: 0; }
+.commands-path {
+  color: var(--text-faint); font: 10.5px "SFMono-Regular", Consolas, monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.settings-block .command-list { background: var(--wc-well); }
+.command-list-note { display: block; padding: 9px 12px; }
+.commands-empty { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 10px 4px 2px; }
+.commands-empty h4 { margin: 0; font-size: 13px; }
+.commands-empty > p { margin: 5px 0 14px; max-width: 52ch; color: var(--text-dim); font-size: 11.5px; line-height: 1.55; }
+.commands-empty .secondary-button { height: 30px; padding: 0 11px; font-size: 11.5px; display: inline-flex; align-items: center; gap: 6px; }
+.commands-empty .secondary-button svg { width: 13px; height: 13px; }
+.command-demo { list-style: none; margin: 0 0 16px; padding: 0; width: 100%; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px; }
+.command-demo li {
+  position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--wc-well); text-align: left;
+  animation: pop-in .36s var(--ease) backwards; animation-delay: calc(220ms + var(--k, 0) * 140ms);
+}
+/* A chevron in each gap, pointing on to the next step. */
+.command-demo li + li::before {
+  content: ""; position: absolute; left: -15px; top: 50%; width: 6px; height: 6px;
+  border-top: 1.8px solid var(--text-faint); border-right: 1.8px solid var(--text-faint); transform: translateY(-50%) rotate(45deg);
+}
+.command-demo-step { color: var(--text-faint); font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.command-demo-text { font: 11.5px/1.45 "SFMono-Regular", Consolas, monospace; color: var(--text-soft); overflow-wrap: anywhere; }
+.command-demo mark { background: var(--wc-accent-tint); color: var(--wc-accent-text); border-radius: 3px; padding: 0 2px; }
+
+/* Stage: a slash, the menu rising over the composer, a pick, and the command expanding. */
+.commands-stage-card { fill: var(--wc-well); stroke: var(--border-bright); stroke-width: 1.5; stroke-dasharray: 4 3; transition: stroke .3s var(--ease); }
+.commands-stage-pick { fill: var(--surface-raised); }
+.commands-stage-name { fill: var(--text-faint); }
+.commands-stage-text { fill: var(--border-bright); }
+.commands-stage-composer { fill: var(--wc-input); stroke: var(--border-bright); stroke-width: 1.5; }
+.commands-stage-slash { fill: none; stroke: var(--text-faint); stroke-width: 2.2; stroke-linecap: round; }
+.commands-stage-typed { fill: var(--text-faint); transform-box: fill-box; transform-origin: left center; }
+.commands-stage-expanded { fill: var(--wc-accent); opacity: 0; transform-box: fill-box; transform-origin: left center; }
+.commands-stage-menu { transform-box: fill-box; transform-origin: 50% 100%; }
+.commands-stage.live .commands-stage-card { stroke: var(--wc-accent-line); stroke-dasharray: none; }
+.commands-stage.live .commands-stage-name { fill: var(--wc-accent-text); }
+.commands-stage.live .commands-stage-slash { stroke: var(--wc-accent); animation: commands-stage-slash 6.4s var(--ease) infinite; }
+.commands-stage.live .commands-stage-typed { fill: var(--wc-accent-text); animation: commands-stage-typed 6.4s var(--ease) infinite; }
+.commands-stage.live .commands-stage-expanded { animation: commands-stage-expanded 6.4s var(--ease) infinite; }
+.commands-stage.live .commands-stage-menu { animation: commands-stage-menu 6.4s var(--ease) infinite; }
+.commands-stage.live .commands-stage-pick { animation: commands-stage-pick 6.4s var(--ease) infinite; }
+@keyframes commands-stage-menu {
+  0%, 8% { opacity: 0; transform: translateY(6px) scale(.97); }
+  15%, 56% { opacity: 1; transform: none; }
+  62%, 100% { opacity: 0; transform: translateY(4px) scale(.98); }
+}
+@keyframes commands-stage-pick {
+  0%, 26% { transform: none; fill: var(--wc-accent-tint); }
+  32%, 47% { transform: translateY(16px); fill: var(--wc-accent-tint); }
+  50%, 56% { transform: translateY(16px); fill: var(--wc-accent-line-soft); }
+  60%, 100% { transform: translateY(16px); fill: var(--wc-accent-tint); }
+}
+@keyframes commands-stage-slash { 0% { opacity: 0; } 4%, 90% { opacity: 1; } 96%, 100% { opacity: 0; } }
+@keyframes commands-stage-typed {
+  0%, 15% { opacity: 1; transform: scaleX(0); }
+  26%, 58% { opacity: 1; transform: scaleX(1); }
+  62%, 100% { opacity: 0; transform: scaleX(1); }
+}
+@keyframes commands-stage-expanded {
+  0%, 60% { opacity: 1; transform: scaleX(0); }
+  76%, 90% { opacity: 1; transform: scaleX(1); }
+  96%, 100% { opacity: 0; transform: scaleX(1); }
+}
+@media (max-width: 720px) {
+  .command-demo { grid-template-columns: 1fr; }
+  .command-demo li + li::before { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .commands-stage.live .commands-stage-slash, .commands-stage.live .commands-stage-typed, .commands-stage.live .commands-stage-expanded,
+  .commands-stage.live .commands-stage-menu, .commands-stage.live .commands-stage-pick, .command-demo li { animation: none; }
+  .commands-stage.live .commands-stage-pick { transform: translateY(16px); fill: var(--wc-accent-tint); }
+}
+
 /* ── MCP settings ──────────────────────────────── */
-.mcp-settings .row-actions .secondary-button { white-space: nowrap; }
 .mcp-mono { font-family: "SFMono-Regular", Consolas, monospace; font-size: 11.5px; }
 .mcp-summary { font-family: "SFMono-Regular", Consolas, monospace; font-size: 10.5px; max-width: 45%; }
 .mcp-status { margin: 5px 0 0 19px; color: var(--text-dim); font-size: 10.5px; line-height: 1.45; overflow-wrap: anywhere; }
@@ -3872,8 +4124,6 @@ label > span small.mcp-invalid { color: var(--warning); }
 @keyframes mcp-stage-flow { to { stroke-dashoffset: -9; } }
 @keyframes mcp-stage-blink { 0%, 64% { opacity: 1; } 66% { opacity: .25; } 70% { opacity: 1; } 72% { opacity: .25; } 76%, 100% { opacity: 1; } }
 
-.mcp-servers .subagent-setting { background: var(--wc-well); }
-.mcp-servers .subagent-group { margin-bottom: 0; }
 .mcp-new .subagent-editor { margin-top: 14px; }
 .mcp-starts { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 8px; }
 .mcp-start {
@@ -3910,8 +4160,7 @@ label > span small.mcp-invalid { color: var(--warning); }
 /* A Settings page (SettingsHero). A project with notes is a card of Commands rows; projects still
    waiting for a first note share one card, a row each. A note reads like a saved thought: type
    badge, title, when. */
-.memory-settings .command-editor { margin-top: 0; border-radius: 14px; padding: 16px 18px 18px; }
-.memory-editor-sub { margin-bottom: 0; }
+
 .memory-loading { color: var(--text-dim); font-size: 12px; }
 .memory-project-head { display: flex; align-items: center; gap: 12px; }
 .memory-project-mono {

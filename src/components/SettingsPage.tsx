@@ -333,13 +333,14 @@ export function SettingsPage({
           <SkillsSection
             {...SKILL_ACTIONS}
             packages={packages}
+            agentName={agentName(appearance)}
             onInstallSkills={(source) => onInstall(source, { skillsOnly: true })}
             onSetPackageSkills={(source, enabled) => onSetResources(source, "skills", enabled)}
             onOpenPackages={() => setSection("packages")}
           />
         )}
         {section === "commands" && (
-          <CommandsSection {...COMMAND_ACTIONS} onChanged={onCommandsChanged} />
+          <CommandsSection {...COMMAND_ACTIONS} agentName={agentName(appearance)} onChanged={onCommandsChanged} />
         )}
         {section === "memory" && (
           <MemorySection
@@ -396,6 +397,7 @@ export function SettingsPage({
             autoTitle={autoTitle}
             onSetAutoTitle={onSetAutoTitle}
             onOpenProviders={() => { setSelectedProviderId("new"); setSection("providers"); }}
+            agentName={agentName(appearance)}
           />
         )}
       </main>

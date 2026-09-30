@@ -5,6 +5,7 @@ import type {
 } from "../types";
 import { Icon } from "./Icons";
 import { PackageBrowser, type BrowsePage } from "./PackageBrowser";
+import { SettingsHero, stagger } from "./SettingsHero";
 import { TrustDialog } from "./TrustDialog";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 import { MenuButton } from "./ui/MenuButton";
@@ -31,6 +32,8 @@ export interface SkillActions {
 
 interface Props extends SkillActions {
   packages: PackageRecord[];
+  /** The agent's name in the app's own copy (Settings › Appearance). */
+  agentName?: string;
   /** Installs a package with only its skills switched on. */
   onInstallSkills: (source: string) => Promise<void>;
   /** A package skill's switch is its package resource's: the resource names left on. */
@@ -72,6 +75,33 @@ const SORT_OPTIONS = [
 
 const EMPTY_DRAFT: SkillDraft = { name: "", description: "", manual: false, argumentHint: "", body: "" };
 
+/**
+ * The hero's little stage: a shelf of skills, one of which lifts out with a spark as a task
+ * matches it, then settles back. Rests dashed and dimmed while no skill is loaded. Pure
+ * decoration; the pill says the same in words. The loop lives in styles.css, which stills it
+ * under reduced motion.
+ */
+function SkillsStage({ live }: { live: boolean }) {
+  const books = [
+    { x: 26, w: 14, h: 50 }, { x: 42, w: 12, h: 58 }, { x: 56, w: 16, h: 46 }, { x: 74, w: 14, h: 56, picked: true },
+    { x: 90, w: 12, h: 44 }, { x: 104, w: 15, h: 54 }, { x: 121, w: 12, h: 48 }
+  ];
+  return (
+    <svg className={`settings-stage skills-stage ${live ? "live" : ""}`} viewBox="0 0 160 110" aria-hidden="true">
+      <path className="skills-stage-shelf" d="M16 93h128" />
+      {books.map((book) => (
+        <g key={book.x} className={`skills-stage-book ${book.picked ? "picked" : ""}`}>
+          <rect x={book.x} y={92 - book.h} width={book.w} height={book.h} rx="2.5" />
+          <path d={`M${book.x + 3} ${100 - book.h}h${book.w - 6}M${book.x + 3} ${104 - book.h}h${book.w - 6}`} />
+        </g>
+      ))}
+      <g transform="translate(88 2) scale(.85)">
+        <path className="skills-stage-spark" d="m12 3 1.2 4.8L18 9l-4.8 1.2L12 15l-1.2-4.8L6 9l4.8-1.2z" />
+      </g>
+    </svg>
+  );
+}
+
 /** Why a draft can't be saved yet, or nothing when it can. */
 export function skillDraftIssue(draft: SkillDraft, taken: ReadonlySet<string>, original?: string): string | undefined {
   const name = draft.name.trim();
@@ -104,7 +134,7 @@ function shadowNote(skill: SkillEntry): string | undefined {
  */
 export function SkillsSection({
   onList, onRead, onSave, onDelete, onSetEnabled, onSetFolderEnabled, onAddFolder, onRemoveFolder, onImport,
-  onCopyToLibrary, onReveal, onSearch, onDetails, packages, onInstallSkills, onSetPackageSkills, onOpenPackages
+  onCopyToLibrary, onReveal, onSearch, onDetails, packages, agentName = "WackCode", onInstallSkills, onSetPackageSkills, onOpenPackages
 }: Props) {
   const [tab, setTab] = useState<Tab>("yours");
   const [overview, setOverview] = useState<SkillsOverview>();
@@ -340,7 +370,7 @@ export function SkillsSection({
   }
 
   function renderList() {
-    if (loading && !overview) return <div className="model-empty">Reading your skill folders…</div>;
+    if (loading && !overview) return <section className="settings-block skills-loading" style={stagger(1)}>Reading your skill folders…</section>;
     if (!overview || !library) return null;
     const mine = library.skills.filter((skill) => matches(skill, filter));
     const total = overview.folders.reduce((sum, folder) => sum + folder.skills.length, 0) + packageGroups.reduce((sum, group) => sum + group.skills.length, 0);
@@ -356,10 +386,14 @@ export function SkillsSection({
             spellCheck={false}
           />
         )}
-        <section className="subagent-group" aria-label="Your skills">
-          <div className="skill-group-head">
-            <h4>Your skills</h4>
-            <span className="skill-group-path" title={library.path}>{library.displayPath} · shared with Codex, OpenCode and the Pi CLI</span>
+        <section className="settings-block" style={stagger(1)} aria-label="Your skills">
+          <div className="skills-block-head">
+            <div>
+              <h3 className="settings-block-title">Your skills</h3>
+              <p className="settings-block-sub" title={library.path}>
+                <code>{library.displayPath}</code> · shared with Codex, OpenCode and the Pi CLI
+              </p>
+            </div>
             {library.exists && (
               <button type="button" className="ghost-button skill-reveal" disabled={busy} onClick={() => void apply(() => onReveal(library.path))}>
                 Show in Finder
@@ -367,16 +401,24 @@ export function SkillsSection({
             )}
           </div>
           {library.skills.length === 0 ? (
-            <div className="package-empty">
-              <span className="package-empty-icon"><Icon name="book" /></span>
-              <h4>No skills yet</h4>
-              <p>
-                A skill is a set of instructions, with any scripts or references it needs, that the agent picks up when a task
-                matches its description. Write one, or import skills you already have.
-              </p>
-              <button type="button" className="secondary-button" disabled={busy} onClick={() => setView({ kind: "edit", draft: EMPTY_DRAFT })}>
-                <Icon name="plus" /> New skill
-              </button>
+            <div className="skills-empty">
+              <div className="skill-anatomy" aria-hidden="true">
+                <span className="skill-anatomy-file">pdf-tools/SKILL.md</span>
+                <pre>
+                  <span className="skill-anatomy-kept">{"name: pdf-tools\ndescription: Reads text and tables from PDFs."}</span>
+                  {"\n# PDF tools\n1. Check the file is a PDF.\n2. Run scripts/extract.py…"}
+                </pre>
+              </div>
+              <div className="skills-empty-text">
+                <h4>No skills yet</h4>
+                <p>
+                  A skill is a folder of instructions, with any scripts or references it needs. {agentName} keeps only
+                  the <mark>name and description</mark> in mind, and reads the rest when a task matches.
+                </p>
+                <button type="button" className="secondary-button" disabled={busy} onClick={() => openEditor()}>
+                  <Icon name="plus" /> Write your first
+                </button>
+              </div>
             </div>
           ) : mine.length === 0 ? (
             <small className="subagent-hint">None of your skills match the filter.</small>
@@ -388,34 +430,32 @@ export function SkillsSection({
           {renderDiagnostics(library, library.path)}
         </section>
 
-        <div className="section-heading-row skill-subheading">
-          <div>
-            <h3>Other tools&rsquo; folders</h3>
-            <p>Skills you already use with other agents. A folder loads only once you switch it on, and nothing here is changed.</p>
-          </div>
-          <div className="row-actions">
-            <button type="button" className="secondary-button" disabled={busy} onClick={() => void apply(onAddFolder)}>
+        <section className="settings-block" style={stagger(2)} aria-label="Other tools' folders">
+          <div className="skills-block-head">
+            <div>
+              <h3 className="settings-block-title">Other tools&rsquo; folders</h3>
+              <p className="settings-block-sub">Skills you already use with other agents. A folder loads only once you switch it on, and nothing in it is changed.</p>
+            </div>
+            <button type="button" className="secondary-button compact" disabled={busy} onClick={() => void apply(onAddFolder)}>
               <Icon name="plus" /> Add folder…
             </button>
           </div>
-        </div>
-        <section className="subagent-group" aria-label="Other tools' folders">{others.map(renderFolder)}</section>
+          <div className="subagent-group">{others.map(renderFolder)}</div>
+        </section>
 
         {packageGroups.length > 0 && (
-          <>
-            <div className="section-heading-row skill-subheading">
+          <section className="settings-block" style={stagger(3)} aria-label="Skills from packages">
+            <div className="skills-block-head">
               <div>
-                <h3>From packages</h3>
-                <p>Skills that installed Pi packages add. Their switches are the package&rsquo;s own, and changing one restarts idle chats.</p>
+                <h3 className="settings-block-title">From packages</h3>
+                <p className="settings-block-sub">Skills that installed Pi packages add. Their switches are the package&rsquo;s own, and changing one restarts idle chats.</p>
               </div>
-              <div className="row-actions">
-                <button type="button" className="ghost-button builtin-configure" onClick={onOpenPackages}>
-                  Manage in Packages <Icon name="chevron" />
-                </button>
-              </div>
+              <button type="button" className="ghost-button builtin-configure" onClick={onOpenPackages}>
+                Manage in Packages <Icon name="chevron" />
+              </button>
             </div>
-            <section className="subagent-group" aria-label="Skills from packages">{packageGroups.map(renderPackage)}</section>
-          </>
+            <div className="subagent-group">{packageGroups.map(renderPackage)}</div>
+          </section>
         )}
       </>
     );
@@ -429,111 +469,128 @@ export function SkillsSection({
       : { kind: "edit", draft: EMPTY_DRAFT });
   }
 
-  const listing = view.kind === "list";
+  const loaded = overview
+    ? [...overview.folders.filter((folder) => folder.enabled).flatMap((folder) => folder.skills), ...packageGroups.flatMap((group) => group.skills)]
+        .filter((skill) => skill.enabled && !skill.shadowedBy).length
+    : 0;
+  const pill = !overview ? "Reading…" : loaded === 0 ? "None loaded" : `${loaded} ${loaded === 1 ? "skill" : "skills"} loaded`;
+  const showYours = (next: View) => { setTab("yours"); setView(next); };
 
   return (
     <div className="settings-scroll subagents-settings skills-settings">
-      <div className="package-tabs" role="tablist">
-        {(["yours", "browse"] as Tab[]).map((id) => (
-          <button
-            key={id}
-            type="button"
-            role="tab"
-            aria-selected={tab === id}
-            className={`package-tab ${tab === id ? "active" : ""}`}
-            onClick={() => { setTab(id); setView({ kind: "list" }); }}
-          >
-            {id === "yours" ? `Your skills${library?.skills.length ? ` (${library.skills.length})` : ""}` : "Browse"}
-          </button>
-        ))}
-      </div>
-
-      {tab === "browse" ? (
-        <>
-          {note && <div className="package-notice" role="status">{note}</div>}
-          <PackageBrowser
-            installed={new Set(packages.map((entry) => entry.source))}
-            busy={busy}
-            onSearch={searchSkills}
-            onInstall={startInstall}
-            heading="Browse skills"
-            blurb="Skill packages from pi.dev's catalogue. Installing one switches on only its skills. Searching contacts pi.dev."
-            placeholder="Search skills…"
-            toolbar={
-              <Select
-                className="settings-select"
-                value={sort}
-                options={SORT_OPTIONS}
-                onChange={(value) => setSort(value as SkillSearchSort)}
-                aria-label="Sort skills"
+      <div className="settings-page">
+        <SettingsHero
+          label="Skills overview"
+          stage={<SkillsStage live={loaded > 0} />}
+          live={loaded > 0}
+          pill={pill}
+          title={`Know-how ${agentName} picks up when it fits`}
+          action={(
+            <>
+              <button
+                type="button"
+                className="secondary-button compact"
+                disabled={busy || !overview || (tab === "yours" && view.kind === "edit")}
+                onClick={() => { setTab("yours"); openEditor(); }}
+              >
+                <Icon name="plus" /> New skill
+              </button>
+              <MenuButton
+                label="Import skills"
+                className="skill-import-button"
+                icon={<><Icon name="archive" /><span>Import</span></>}
+                items={[
+                  { label: "A ZIP archive…", hint: "Skills with their scripts, references and assets", onSelect: () => void apply(() => onImport("zip"), () => showYours({ kind: "list" })) },
+                  { label: "A folder of skills…", hint: "One skill's folder, or a folder holding several", onSelect: () => void apply(() => onImport("folder"), () => showYours({ kind: "list" })) },
+                  { label: "A single .md file…", hint: "Copied in as its own skill", onSelect: () => void apply(() => onImport("file"), () => showYours({ kind: "list" })) }
+                ]}
               />
-            }
-          />
-        </>
-      ) : (
-        <>
-          {listing && (
-            <div className="section-heading-row">
-              <div>
-                <h3>Skills</h3>
-                <p>
-                  Instructions the agent loads when a task matches. Only each skill&rsquo;s name and description stay in context, and the
-                  agent reads the rest when it needs it. Use one directly with <code>/skill:name</code>. Changes apply to running chats
-                  from their next message.
-                </p>
-              </div>
-              <div className="row-actions">
-                <button type="button" className="secondary-button" disabled={busy || !overview} onClick={() => openEditor()}>
-                  <Icon name="plus" /> New skill
-                </button>
-                <MenuButton
-                  label="Import skills"
-                  className="skill-import-button"
-                  icon={<><Icon name="archive" /><span>Import</span></>}
-                  items={[
-                    { label: "A ZIP archive…", hint: "Skills with their scripts, references and assets", onSelect: () => void apply(() => onImport("zip")) },
-                    { label: "A folder of skills…", hint: "One skill's folder, or a folder holding several", onSelect: () => void apply(() => onImport("folder")) },
-                    { label: "A single .md file…", hint: "Copied in as its own skill", onSelect: () => void apply(() => onImport("file")) }
-                  ]}
-                />
-              </div>
-            </div>
+            </>
           )}
-          {error && <div className="error-banner subagents-error" role="alert">{error}</div>}
-          {note && <div className="package-notice" role="status">{note}</div>}
-          {view.kind === "list" && renderList()}
-          {view.kind === "detail" && (
-            <SkillDetail
-              skill={view.skill}
-              origin={view.origin}
-              busy={busy}
-              onRead={onRead}
-              onBack={() => setView({ kind: "list" })}
-              onEdit={(body) => openEditor(view.skill, body)}
-              onDelete={() => setDeleting(view.skill)}
-              onCopy={() => void apply(() => onCopyToLibrary(view.skill.filePath), () => {
-                setView({ kind: "list" });
-                setNote(`Copied ${view.skill.name} to Your skills. Your copy loads instead of the original, so edit it freely.`);
-              })}
-              onReveal={() => void apply(() => onReveal(view.skill.baseDir))}
-            />
-          )}
-          {view.kind === "edit" && (
-            <SkillEditor
-              draft={view.draft}
-              isNew={!view.path}
-              issue={skillDraftIssue(view.draft, taken, view.original)}
-              busy={busy}
-              onChange={(draft) => setView({ ...view, draft })}
-              onCancel={() => { setView({ kind: "list" }); setError(undefined); }}
-              onSave={() => void apply(
-                () => onSave({ path: view.path, name: view.draft.name.trim(), description: view.draft.description.trim(), manual: view.draft.manual, argumentHint: view.draft.argumentHint.trim(), body: view.draft.body }),
-                () => setView({ kind: "list" })
-              )}
-            />
-          )}
-        </>
-      )}
+        >
+          <p>
+            Instructions the agent loads when a task matches. Only each skill&rsquo;s name and description stay in context; it reads
+            the rest when it needs it. Run one yourself with <code>/skill:name</code>.
+          </p>
+        </SettingsHero>
+
+        <div className="package-tabs skills-tabs" role="tablist">
+          {(["yours", "browse"] as Tab[]).map((id) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={tab === id}
+              className={`package-tab ${tab === id ? "active" : ""}`}
+              onClick={() => { setTab(id); setView({ kind: "list" }); }}
+            >
+              {id === "yours" ? `Your skills${library?.skills.length ? ` (${library.skills.length})` : ""}` : "Browse"}
+            </button>
+          ))}
+        </div>
+
+        {tab === "browse" ? (
+          <>
+            {note && <div className="package-notice" role="status">{note}</div>}
+            <section className="settings-block skills-browse" style={stagger(1)}>
+              <PackageBrowser
+                installed={new Set(packages.map((entry) => entry.source))}
+                busy={busy}
+                onSearch={searchSkills}
+                onInstall={startInstall}
+                heading="Browse skills"
+                blurb="Skill packages from pi.dev's catalogue. Installing one switches on only its skills. Searching contacts pi.dev."
+                placeholder="Search skills…"
+                toolbar={
+                  <Select
+                    className="settings-select"
+                    value={sort}
+                    options={SORT_OPTIONS}
+                    onChange={(value) => setSort(value as SkillSearchSort)}
+                    aria-label="Sort skills"
+                  />
+                }
+              />
+            </section>
+          </>
+        ) : (
+          <>
+            {error && <div className="error-banner" role="alert">{error}</div>}
+            {note && <div className="package-notice" role="status">{note}</div>}
+            {view.kind === "list" && renderList()}
+            {view.kind === "detail" && (
+              <SkillDetail
+                skill={view.skill}
+                origin={view.origin}
+                busy={busy}
+                onRead={onRead}
+                onBack={() => setView({ kind: "list" })}
+                onEdit={(body) => openEditor(view.skill, body)}
+                onDelete={() => setDeleting(view.skill)}
+                onCopy={() => void apply(() => onCopyToLibrary(view.skill.filePath), () => {
+                  setView({ kind: "list" });
+                  setNote(`Copied ${view.skill.name} to Your skills. Your copy loads instead of the original, so edit it freely.`);
+                })}
+                onReveal={() => void apply(() => onReveal(view.skill.baseDir))}
+              />
+            )}
+            {view.kind === "edit" && (
+              <SkillEditor
+                draft={view.draft}
+                isNew={!view.path}
+                issue={skillDraftIssue(view.draft, taken, view.original)}
+                busy={busy}
+                onChange={(draft) => setView({ ...view, draft })}
+                onCancel={() => { setView({ kind: "list" }); setError(undefined); }}
+                onSave={() => void apply(
+                  () => onSave({ path: view.path, name: view.draft.name.trim(), description: view.draft.description.trim(), manual: view.draft.manual, argumentHint: view.draft.argumentHint.trim(), body: view.draft.body }),
+                  () => setView({ kind: "list" })
+                )}
+              />
+            )}
+          </>
+        )}
+      </div>
 
       {pendingInstall && (
         <TrustDialog
@@ -678,6 +735,10 @@ function SkillEditor({ draft, isNew, issue, busy, onChange, onCancel, onSave }: 
   return (
     <article className="subagent-setting skill-editor open new">
       <div className="subagent-editor">
+        <div>
+          <h3 className="settings-block-title">{isNew ? "New skill" : "Edit skill"}</h3>
+          <p className="settings-block-sub skill-editor-sub">Chats pick it up from their next message.</p>
+        </div>
         <div className="form-grid">
           <label>
             <span>Name <small>Lowercase letters, numbers and hyphens. Also the folder&rsquo;s name.</small></span>

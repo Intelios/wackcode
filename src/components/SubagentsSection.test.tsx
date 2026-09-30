@@ -48,6 +48,25 @@ function renderSection(
 }
 
 describe("SubagentsSection", () => {
+  it("sets when to delegate and how many run at once with one click each", async () => {
+    const { onChange } = renderSection();
+    const when = screen.getByRole("radiogroup", { name: "When to use sub-agents" });
+    expect(within(when).getByRole("radio", { name: /Only when I ask/ })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(within(when).getByRole("radio", { name: /Whenever useful/ }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ trigger: "auto" })));
+    const count = screen.getByRole("radiogroup", { name: "Sub-agents running at the same time" });
+    expect(within(count).getByRole("radio", { name: "4" })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(within(count).getByRole("radio", { name: "2" }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ maxConcurrency: 2 })));
+  });
+
+  it("counts switched-on agents in the hero", () => {
+    renderSection({ agents: [scout, { ...docs, enabled: false }] });
+    const hero = screen.getByRole("region", { name: "Sub-agents overview" });
+    expect(within(hero).getByText("1 of 2 on")).toBeInTheDocument();
+    expect(within(hero).getByRole("heading", { name: "Helpers WackCode can hand work to" })).toBeInTheDocument();
+  });
+
   it("offers web_fetch to read-only agents, and says when Web Fetch is switched off", () => {
     const webScout = { ...scout, tools: [...scout.tools, "web_fetch"] };
     renderSection({ agents: [webScout, docs] });

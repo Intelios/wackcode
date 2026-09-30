@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IntegrationsSection } from "./IntegrationsSection";
 import { api } from "../api";
@@ -27,6 +27,19 @@ describe("TokenTrail integration", () => {
     fireEvent.click(toggle);
     await screen.findByText("Recording paused");
     expect(api.setUsageRecording).toHaveBeenCalledWith(false);
+  });
+  it("says in the hero whether usage is being recorded", async () => {
+    render(<IntegrationsSection />);
+    const hero = screen.getByRole("region", { name: "Integrations overview" });
+    expect(await within(hero).findByText("Recording")).toBeInTheDocument();
+    cleanup();
+    vi.mocked(api.usageStatus).mockResolvedValue({ ...status, enabled: false });
+    render(<IntegrationsSection />);
+    expect(await within(screen.getByRole("region", { name: "Integrations overview" })).findByText("Paused")).toBeInTheDocument();
+    cleanup();
+    vi.mocked(api.usageStatus).mockResolvedValue({ ...status, error: "Disk full" });
+    render(<IntegrationsSection />);
+    expect(await within(screen.getByRole("region", { name: "Integrations overview" })).findByText("Needs attention")).toBeInTheDocument();
   });
   it("surfaces write failures and dropped records", async () => {
     vi.mocked(api.usageStatus).mockResolvedValue({ ...status, error: "Disk full", pending: 2, dropped: 1 });

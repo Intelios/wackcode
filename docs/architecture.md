@@ -13,6 +13,7 @@ How WackCode's processes fit together, where state lives, and the rules that kee
 | Skills scan | `worker/src/skills-scan.ts` | Never | Never; reads files only |
 | Commands scan | `worker/src/commands-scan.ts` | Never | Never; runs trusted extension code offline |
 | MCP probe (Test connection) | `worker/src/mcp-probe.ts` | That one server's values | That one server |
+| Saved history | `worker/src/session-reader.ts` | Never | Never; read-only session projection |
 | Model catalogue | `worker/src/catalog.ts` | Never | Never; static catalogue |
 
 Each chat worker runs one Pi session in-process. Sub-agents are in-memory child sessions inside the same worker (`subagent-runner.ts`), not separate processes. Helpers are short-lived and do one job each. The dev app runs them from `worker/dist/`; the bundle runs `resources/worker/dist/` on a pinned Node runtime (`runtime-lock.json`).
@@ -54,6 +55,7 @@ The renderer keeps only UI conveniences in `localStorage` (`wackcode:*` keys suc
 
 ## Worker lifecycle (`worker.rs`)
 
+- **History:** `open_task` asks an existing worker for its live snapshot; otherwise `history.rs` reads the saved session through a keyless, read-only helper. It holds the task lock through emission, never needs a connection or workspace, and never starts a worker.
 - **Spawn:** any command that talks to a chat's worker goes through `ensure_worker`, which starts one if needed. Never assume a worker is running.
 - **Fingerprint:** provider, model and the trusted package resources resolved at spawn. When it changes, the worker is killed and respawned, even mid-run. Settings that apply live (tools, prompts, sub-agents, MCP, skills, commands, memory, computer use, a provider's on/off switch) travel in `init` and in `set_*` commands and must stay out of the fingerprint.
 - **Idle reaper:** stops a worker 15 minutes after its last output, never the open chat (`SelectedTask`) and never the newest four. It takes the chat's task lock and re-checks status, so it can't race a run.

@@ -1,3 +1,4 @@
+import { transcriptMessages, type CachedMessage } from "./transcript.js";
 import { spawnSync } from "node:child_process";
 import { setUsagePublisher, trackSession, withUsage } from "./usage.js";
 import { existsSync } from "node:fs";
@@ -7,12 +8,12 @@ import { join } from "node:path";
 // Type-only: erased at build time, so Pi still loads solely through the dynamic import in initialize().
 import type { PromptTemplate, ResourceLoader } from "@earendil-works/pi-coding-agent";
 import { SWITCHABLE_BUILTIN_TOOLS, createBuiltinExtensions } from "./builtin/index.js";
-import { BROWSER_SCREENSHOT_TOOL_NAME, BROWSER_TOOL_NAMES } from "./builtin/browser.js";
-import { COMPUTER_SCREENSHOT_TOOL_NAME, COMPUTER_TOOL_NAMES } from "./builtin/computer-use/params.js";
+import { BROWSER_TOOL_NAMES } from "./builtin/browser.js";
+import { COMPUTER_TOOL_NAMES } from "./builtin/computer-use/params.js";
 import { GOAL_VERIFIER_SYSTEM } from "./builtin/goal/prompt.js";
 import { runGoalVerification } from "./builtin/goal/verify.js";
 import type { BuiltinHost, SubagentOutcome } from "./builtin/host.js";
-import { withoutTranscripts } from "./builtin/subagents/details.js";
+import { normalizeMessage as normalizeSavedMessage, textFromContent, THUMBNAIL_OPTIONS, THUMBNAIL_RESULT_TOOLS } from "./message-normalization.js";
 import { SUBAGENT_TOOL_NAME } from "./builtin/subagents/types.js";
 import { createModelRuntime, findModel, missingModelPlaceholder, workerSettings, type PiModel } from "./model-runtime.js";
 import { promptOverrides, setPromptOverrides } from "./prompt-overrides.js";
@@ -20,17 +21,13 @@ import { SubagentRunner } from "./subagent-runner.js";
 import { SubagentStreams, isSubagentTranscript } from "./subagent-stream.js";
 import {
   diffMessages,
-  sameCheckpoint,
-  sameCommandPresentation,
   sameGoalState,
   sameModelSwitches,
   samePlanState,
   sameRunTimings,
   sameStats,
   sameTodoState,
-  sameTree,
-  sameTurn,
-  sameVersions
+  sameTree
 } from "./delta.js";
 import { JsonLineDecoder } from "./framing.js";
 import { inspectInitAgentsResult, prepareInitAgents } from "./init-agents.js";
@@ -47,15 +44,12 @@ import {
   NAV_ENTRY_TYPE,
   TREE_MARKER_VERSION,
   buildTreeIndex,
-  checkpointBefore,
   commandPresentationBefore,
   isUserMessage,
   latestInSubtree,
   leftWith,
   modelSwitchesOnPath,
-  turnsOnPath,
   undoTarget,
-  versionsOf,
   type EntryLike,
   type TreeIndex
 } from "./tree.js";
@@ -65,7 +59,6 @@ import {
   type GoalState,
   type ImageContent,
   type InitCommand,
-  type MessageVersions,
   type ModelSwitch,
   type NavigateResult,
   type NavigationKind,
@@ -81,7 +74,6 @@ import {
   type SubagentTranscript,
   type ThinkingLevel,
   type TodoState,
-  type TurnInfo,
   type UserCommandsPayload,
   type UserSkillsPayload,
   type ExtensionUIRequest,
@@ -330,17 +322,6 @@ const thinkingClock = new ThinkingClock();
 // message_end onward (Pi stores the same objects on its session entries, and identity survives
 // navigation and compaction). An unchanged message reuses its object, which is what lets the
 // snapshot diff run on identity and cost O(changes) instead of O(session).
-interface CachedMessage {
-  message: NormalizedMessage;
-  /** The entry id the message was normalized under; a change forces a rebuild. */
-  entryId: string | undefined;
-  /** Positions back the positional id used while the entry id is still unknown. */
-  position: number;
-  versions: MessageVersions | undefined;
-  checkpoint: CheckpointRef | undefined;
-  commandPresentation: CommandPresentation | undefined;
-  turn: TurnInfo | undefined;
-}
 const normalizedCache = new WeakMap<object, CachedMessage>();
 
 // imageId -> the raw message whose block awaits a thumbnail, so a finished preview can
@@ -417,19 +398,6 @@ async function queuedCommandPresentation(input: string): Promise<{ text: string;
   return { text: await expandCatalogCommand(entry, args), presentation: commandPresentation(entry, args) };
 }
 
-function textFromContent(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .map((item) => {
-      if (typeof item === "string") return item;
-      if (!item || typeof item !== "object") return "";
-      const block = item as Record<string, unknown>;
-      return typeof block.text === "string" ? block.text : typeof block.content === "string" ? block.content : "";
-    })
-    .join("");
-}
-
 // Pi sends accumulated progress on every update. Keep activity frames small even when a tool
 // produces a long stream; the completed result still comes from the session snapshot.
 function toolUpdateText(partialResult: unknown): string {
@@ -440,15 +408,6 @@ function toolUpdateText(partialResult: unknown): string {
     : "";
   return text.slice(-64 * 1024);
 }
-
-// Snapshots carry a small preview of each image, never the original: a snapshot is re-sent on
-// every message boundary, and the originals can run to megabytes each.
-const THUMBNAIL_OPTIONS = { maxWidth: 512, maxHeight: 512, maxBytes: 128 * 1024 };
-// Screenshot tool results can come by the dozen, and every full snapshot re-sends their previews,
-// so theirs are smaller. The lightbox fetches the original on demand (`tool_image`).
-const RESULT_THUMBNAIL_OPTIONS = { maxWidth: 480, maxHeight: 480, maxBytes: 64 * 1024 };
-/** Tool results whose images the transcript previews; every other result's images stay model-only. */
-const THUMBNAIL_RESULT_TOOLS: ReadonlySet<string> = new Set([COMPUTER_SCREENSHOT_TOOL_NAME, BROWSER_SCREENSHOT_TOOL_NAME]);
 
 interface ImagePreview {
   id: string;
@@ -492,84 +451,13 @@ function imageBlock(block: Record<string, unknown>, options = THUMBNAIL_OPTIONS)
   return { type: "image", mimeType, imageId: preview.id, thumbnail: preview.url };
 }
 
-function normalizeBlocks(content: unknown, role: string, thinking?: ThinkingDurations): NormalizedBlock[] {
-  if (typeof content === "string") {
-    return [{ type: role === "toolResult" ? "tool-result" : "text", text: content }];
-  }
-  if (!Array.isArray(content)) return [];
-
-  let thought = 0;
-  return content.flatMap((item): NormalizedBlock[] => {
-    if (typeof item === "string") return [{ type: "text", text: item }];
-    if (!item || typeof item !== "object") return [];
-    const block = item as Record<string, unknown>;
-    if (block.type === "text") return [{ type: "text", text: String(block.text ?? "") }];
-    // A tool result's images (e.g. `read` on a PNG) still reach the model; the transcript shows
-    // only its text. Left in, each would become an empty result sharing the call's id and
-    // overwrite the real one. Screenshot tools' images ride their result block instead
-    // (`normalizeMessage`).
-    if (block.type === "image") return role === "toolResult" ? [] : [imageBlock(block)];
-    if (block.type === "thinking") {
-      const durationMs = thinking?.[thought++];
-      return [{ type: "thinking", text: String(block.thinking ?? block.text ?? ""), ...(typeof durationMs === "number" ? { durationMs } : {}) }];
-    }
-    if (block.type === "toolCall") {
-      return [{
-        type: "tool-call",
-        toolName: String(block.name ?? "tool"),
-        toolCallId: String(block.id ?? ""),
-        arguments: block.arguments
-      }];
-    }
-    return [{ type: role === "toolResult" ? "tool-result" : "text", text: textFromContent([block]) }];
-  });
-}
-
 function normalizeMessage(message: unknown, index: number, thinking?: ThinkingDurations): NormalizedMessage | undefined {
-  if (!message || typeof message !== "object") return undefined;
-  const raw = message as Record<string, unknown>;
-  const rawRole = String(raw.role ?? "system");
-  const role = rawRole === "toolResult" ? "tool" : rawRole;
-  if (role !== "user" && role !== "assistant" && role !== "tool" && role !== "system") return undefined;
-  const blocks = normalizeBlocks(raw.content, rawRole, thinking);
-  if (rawRole === "toolResult") {
-    // An image-only result still has to mark its call as finished.
-    if (blocks.length === 0) blocks.push({ type: "tool-result", text: "" });
-    // The transcript keeps the last block per call id, so a screenshot's previews go on that one.
-    if (typeof raw.toolName === "string" && THUMBNAIL_RESULT_TOOLS.has(raw.toolName) && Array.isArray(raw.content)) {
-      const images = (raw.content as unknown[])
-        .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null && (item as { type?: unknown }).type === "image")
-        .map((item) => imageBlock(item, RESULT_THUMBNAIL_OPTIONS))
-        .map(({ imageId, thumbnail }) => ({ imageId: imageId as string, ...(thumbnail ? { thumbnail } : {}) }));
-      if (images.length) blocks[blocks.length - 1].images = images;
+  const normalized = normalizeSavedMessage(message, index, thinking, imageBlock);
+  if (normalized && message && typeof message === "object") {
+    for (const block of normalized.blocks) {
+      if (block.type === "image" && block.imageId) imageOwners.set(block.imageId, message);
+      for (const image of block.images ?? []) imageOwners.set(image.imageId, message);
     }
-    for (const block of blocks) {
-      block.type = "tool-result";
-      block.toolName = typeof raw.toolName === "string" ? raw.toolName : undefined;
-      block.toolCallId = typeof raw.toolCallId === "string" ? raw.toolCallId : undefined;
-      block.isError = raw.isError === true;
-      // A sub-agent call's saved transcripts are the side panel's alone (`watch_subagent`).
-      if (raw.details !== undefined) block.details = raw.toolName === SUBAGENT_TOOL_NAME ? withoutTranscripts(raw.details) : raw.details;
-    }
-  }
-  const timestamp = typeof raw.timestamp === "number" ? raw.timestamp : undefined;
-  // A Stop during a tool call still lets Pi start the next model request, which fails at once on
-  // the aborted signal ("This operation was aborted"). That is the stop, not a failure: the
-  // transcript shows the quiet "Stopped" label, live and when a saved chat is restored.
-  const abortStop = raw.stopReason === "error" && /operation was aborted/i.test(String(raw.errorMessage ?? ""));
-  const normalized: NormalizedMessage = {
-    id: `${role}-${timestamp ?? "na"}-${index}`,
-    role,
-    timestamp,
-    blocks,
-    stopReason: abortStop ? "aborted" : typeof raw.stopReason === "string" ? raw.stopReason : undefined,
-    errorMessage: abortStop ? undefined : typeof raw.errorMessage === "string" ? raw.errorMessage : undefined
-  };
-  // Thumbnails land after the message is normalized; keying the raw object lets the preview
-  // invalidate exactly this message's cache entry when it does.
-  for (const block of blocks) {
-    if (block.type === "image" && block.imageId) imageOwners.set(block.imageId, message);
-    for (const image of block.images ?? []) imageOwners.set(image.imageId, message);
   }
   return normalized;
 }
@@ -690,113 +578,6 @@ function treeIndex(entries: EntryLike[]): TreeIndex {
   return treeCache.index;
 }
 
-/** The roles that reach the transcript; mirrors the gate at the top of normalizeMessage. */
-function visibleRole(raw: unknown): NormalizedMessage["role"] | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
-  const rawRole = String((raw as Record<string, unknown>).role ?? "system");
-  const role = rawRole === "toolResult" ? "tool" : rawRole;
-  return role === "user" || role === "assistant" || role === "tool" || role === "system" ? role : undefined;
-}
-
-/**
- * The transcript is `session.messages` (what the model sees). Pi stores those same message
- * objects on its session entries, so each one maps to its entry by identity, the same way image
- * previews are keyed. A message that has just finished can be in state a moment before Pi saves
- * it; it goes without an entry id until the next snapshot.
- *
- * Each message's normalized form is cached by its raw object and reused verbatim while the
- * entry id, position, and derived tree annotations hold steady, so unchanged messages keep
- * their object identity across emissions and the diff against the last sent state is
- * O(changes). Cached objects are never mutated; any change rebuilds from scratch.
- */
-function transcriptMessages(path: EntryLike[], index: TreeIndex, thinking: Map<string, ThinkingDurations>): NormalizedMessage[] {
-  if (!session) return [];
-  const entryIds = new Map<unknown, string>();
-  for (const entry of path) if (entry.type === "message") entryIds.set(entry.message, entry.id);
-  const turns = turnsOnPath(path);
-
-  interface Row {
-    raw: unknown;
-    position: number;
-    entryId: string | undefined;
-    role: NormalizedMessage["role"];
-    /** Assistant messages: the user entry id their turn answers to. */
-    userEntryId: string | undefined;
-    versions: MessageVersions | undefined;
-    checkpoint: CheckpointRef | undefined;
-    commandPresentation: CommandPresentation | undefined;
-    turn: TurnInfo | undefined;
-  }
-  const rows: Row[] = [];
-  let currentUser: string | undefined;
-  session.messages.forEach((raw, position) => {
-    const role = visibleRole(raw);
-    if (!role) return;
-    const entryId = entryIds.get(raw);
-    const row: Row = { raw, position, entryId, role, userEntryId: undefined, versions: undefined, checkpoint: undefined, commandPresentation: undefined, turn: undefined };
-    if (role === "user") {
-      currentUser = entryId;
-      if (entryId) {
-        const versions = versionsOf(index, entryId);
-        if (versions && versions.total > 1) row.versions = versions;
-        const checkpoint = checkpointBefore(index, entryId);
-        if (checkpoint) row.checkpoint = checkpoint;
-        row.commandPresentation = commandPresentationBefore(index, entryId);
-      }
-    } else if (role === "assistant") {
-      row.userEntryId = currentUser;
-    }
-    rows.push(row);
-  });
-  // Only the last assistant message of a turn carries the turn, and a newer answer strips it
-  // from the previous one, so this is decided per emission rather than cached per message.
-  const seenTurns = new Set<string>();
-  for (let i = rows.length - 1; i >= 0; i--) {
-    const row = rows[i];
-    if (row.role === "assistant" && row.userEntryId && !seenTurns.has(row.userEntryId)) {
-      seenTurns.add(row.userEntryId);
-      row.turn = turns.get(row.userEntryId);
-    }
-  }
-
-  return rows.map((row): NormalizedMessage | null => {
-    const cached = row.raw === streamingMessage ? undefined : normalizedCache.get(row.raw as object);
-    if (
-      cached
-      && cached.entryId === row.entryId
-      && (row.entryId !== undefined || cached.position === row.position)
-      && sameVersions(cached.versions, row.versions)
-      && sameCheckpoint(cached.checkpoint, row.checkpoint)
-      && sameCommandPresentation(cached.commandPresentation, row.commandPresentation)
-      && sameTurn(cached.turn, row.turn)
-    ) {
-      return cached.message;
-    }
-    // Clocked by this worker, or saved with an earlier run.
-    const durations = thinkingClock.durations(row.raw) ?? (row.entryId ? thinking.get(row.entryId) : undefined);
-    const message = normalizeMessage(row.raw, row.position, durations);
-    if (!message) return null;
-    if (row.entryId) {
-      message.entryId = row.entryId;
-      message.id = row.entryId;
-    }
-    if (row.versions) message.versions = row.versions;
-    if (row.checkpoint) message.checkpoint = row.checkpoint;
-    if (row.commandPresentation) message.commandPresentation = row.commandPresentation;
-    if (row.turn) message.turn = row.turn;
-    normalizedCache.set(row.raw as object, {
-      message,
-      entryId: row.entryId,
-      position: row.position,
-      versions: row.versions,
-      checkpoint: row.checkpoint,
-      commandPresentation: row.commandPresentation,
-      turn: row.turn
-    });
-    return message;
-  }).filter((message): message is NormalizedMessage => message !== null);
-}
-
 function getSnapshot(rev: number): SessionSnapshot {
   if (!session) throw new Error("Worker is not initialized");
   const stats = session.getSessionStats();
@@ -804,7 +585,7 @@ function getSnapshot(rev: number): SessionSnapshot {
   const path = session.sessionManager.getBranch() as EntryLike[];
   const entries = session.sessionManager.getEntries() as EntryLike[];
   const index = treeIndex(entries);
-  const messages = transcriptMessages(path, index, savedThinking(entries));
+  const messages = transcriptMessages(session.messages, path, index, savedThinking(entries), { normalize: normalizeMessage, cache: normalizedCache, streamingMessage, durations: (raw) => thinkingClock.durations(raw) });
   const messagePositions = new Map<string, number>();
   messages.forEach((message, position) => {
     if (message.entryId) messagePositions.set(message.entryId, position);

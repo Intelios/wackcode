@@ -36,7 +36,7 @@ Add a project folder with <kbd>⌘ O</kbd> and start a chat with <kbd>⌘ N</kbd
 
 Each chat keeps its unsent text and attachments while the app is running. Switch chats or open a new one with <kbd>⌘ N</kbd>, then return to pick up your draft.
 
-Chats keep working when you switch away, and even when you close the window: WackCode stays in the menu bar, where the duck lists chats that are working or waiting for you. An idle chat's background process stops after 15 minutes and starts again the moment you return. Archive finished chats to tidy the sidebar; the Archived view lets you restore or delete them.
+Chats keep working when you switch away, and even when you close the window: WackCode stays in the menu bar, where the duck lists chats that are working or waiting for you. An idle chat's background process stops after 15 minutes. Saved history opens directly from disk, even without a working model connection; the agent starts again when you send it work. Archive finished chats to tidy the sidebar; the Archived view lets you restore or delete them.
 
 <p align="center"><img src="docs/images/menu-bar.png" width="568" alt="The menu bar duck's menu, listing an active chat marked Working, with Open WackCode and Quit WackCode."></p>
 

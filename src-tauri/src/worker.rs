@@ -57,6 +57,8 @@ type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>>;
 pub struct WorkerProcess {
     pub pid: u32,
     pub fingerprint: String,
+    /// Only a ready session owns live transcript state; a starting/failed init does not.
+    pub initialized: bool,
     stdin: Arc<AsyncMutex<ChildStdin>>,
     pending: Pending,
 }
@@ -89,6 +91,39 @@ pub struct WorkerState {
 }
 
 impl WorkerState {
+    fn mark_ready(&self, task_id: &str, pid: u32) {
+        if let Ok(mut workers) = self.workers.lock() {
+            if let Some(worker) = workers.get_mut(task_id).filter(|worker| worker.pid == pid) {
+                worker.initialized = true;
+            }
+        }
+    }
+
+    /// Serialize cold emission with the ready transition. A reader finishing after a worker
+    /// becomes ready must never overwrite its newer snapshot or clear its streaming message.
+    pub fn emit_history_if_cold(
+        &self,
+        app: &AppHandle,
+        task_id: &str,
+        snapshot: Value,
+    ) -> Result<(), String> {
+        let workers = self
+            .workers
+            .lock()
+            .map_err(|_| "Worker lock was poisoned".to_string())?;
+        if workers
+            .get(task_id)
+            .is_some_and(|worker| worker.initialized)
+        {
+            return Ok(());
+        }
+        app.emit(
+            "worker-event",
+            json!({ "type": "snapshot", "taskId": task_id, "snapshot": snapshot }),
+        )
+        .map_err(|_| "Could not show this chat's saved history.".to_string())
+    }
+
     pub fn get(&self, task_id: &str) -> Result<Option<WorkerProcess>, String> {
         Ok(self
             .workers
@@ -324,6 +359,7 @@ pub async fn ensure_worker_with(
         WorkerProcess {
             pid,
             fingerprint: wanted_fingerprint,
+            initialized: false,
             stdin: Arc::new(AsyncMutex::new(stdin)),
             pending: pending.clone(),
         },
@@ -1179,6 +1215,9 @@ fn handle_worker_line(
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    if event_type == "ready" {
+        app.state::<WorkerState>().mark_ready(task_id, worker_pid);
+    }
     if event_type == "usage_record" {
         if let Some(record) = value.get("record") {
             crate::usage::record(app, task_id, record.clone());

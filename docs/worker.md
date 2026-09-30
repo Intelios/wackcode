@@ -28,7 +28,17 @@ Settings pushed with `set_*` (tools, prompts, sub-agents, MCP, skills, commands,
 
 ## Model-less chats
 
-A chat whose configured model left its connection (removed in Settings, or dropped by a subscription) still opens: `init` restores the session on a stand-in model (`missingModelPlaceholder` in `model-runtime.ts`), the snapshot carries `modelMissing`, and the transcript, tree and checkpoints stay readable. Everything that needs the model — prompts, `/compact`, commit-message generation, the goal verifier — is refused with "This chat's model is no longer configured. Pick another to continue." Picking a model respawns the worker through `configure_task` (the model is in the fingerprint) and records the durable switch on the way back in.
+Saved history opens without a model or worker. When a worker starts for a chat whose configured model left its connection (removed in Settings, or dropped by a subscription), `init` restores the session on a stand-in model (`missingModelPlaceholder` in `model-runtime.ts`), the snapshot carries `modelMissing`, and the transcript, tree and checkpoints stay readable. Everything that needs the model — prompts, `/compact`, commit-message generation, the goal verifier — is refused with "This chat's model is no longer configured. Pick another to continue." Picking a model stops the old worker through `configure_task` (the model is in the fingerprint); the next worker records the durable switch when it starts.
+
+## Saved history
+
+`session-reader.ts` opens saved history without a chat worker. It shares the live message
+normalizer and transcript annotations, and uses the pinned Pi session projection for compaction
+and branch context. It receives only a host-owned session path and chat metadata, runs with a
+cleared environment (only PATH and offline flags remain), never loads extensions or credentials,
+and never rewrites the file (legacy migrations happen in memory). Cold snapshots use revision 0; a new worker's
+full ready snapshot establishes its own delta chain. Ready workers remain authoritative; a
+reader that finishes after a worker becomes ready discards its cold snapshot.
 
 ## Snapshots and deltas
 

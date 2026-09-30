@@ -2074,21 +2074,63 @@ pub async fn open_task(
     state: State<'_, MetadataState>,
     task_id: String,
 ) -> Result<(), String> {
-    // Recorded before anything can race: the idle reaper never stops the open chat's worker.
     app.state::<worker::SelectedTask>().set(&task_id);
-    let (task, provider) = view_task_and_provider(&state, &task_id)?;
-    let api_key = credential_for(&app, &state, &provider)?;
+    let lock = task_lock(&app, &task_id);
+    let _guard = lock.lock().await;
+    let task = find_task(&state, &task_id)?;
+    if app
+        .state::<worker::WorkerState>()
+        .get(&task_id)?
+        .is_some_and(|worker| worker.initialized)
     {
-        let lock = task_lock(&app, &task_id);
-        let _guard = lock.lock().await;
-        worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
+        // A live worker owns unsaved/streaming state and its delta revision. Do not replace
+        // it with a disk snapshot, or reconfigure/respawn it merely to look at history.
+        return worker::send(
+            &app,
+            &task.id,
+            &json!({ "id": Uuid::new_v4().to_string(), "type": "snapshot" }),
+        )
+        .await;
     }
-    worker::send(
+    let (model, tools) = {
+        let data = state
+            .data
+            .lock()
+            .map_err(|_| "Metadata lock was poisoned".to_string())?;
+        // Model metadata is cosmetic here: missing connections and signed-out subscriptions
+        // must still open. No credential lookup or model validation belongs on this path.
+        let model = data
+            .providers
+            .iter()
+            .find(|provider| provider.id == task.provider_id)
+            .and_then(|provider| {
+                provider
+                    .models
+                    .iter()
+                    .find(|model| model.id == task.model_id)
+            })
+            .cloned();
+        (model, data.tool_catalog.clone())
+    };
+    let mut snapshot = crate::history::read(
         &app,
-        &task.id,
-        &json!({ "id": Uuid::new_v4().to_string(), "type": "snapshot" }),
+        &task,
+        model.as_ref().and_then(|model| model.context_window),
     )
-    .await
+    .await?;
+    snapshot["model"] = json!({ "provider": task.provider_id, "id": task.model_id, "name": model.as_ref().map(|model| &model.name) });
+    snapshot["availableThinkingLevels"] = json!(model
+        .as_ref()
+        .map(|model| &model.thinking_levels)
+        .cloned()
+        .unwrap_or_default());
+    if model.is_none() {
+        snapshot["modelMissing"] = json!(true);
+    }
+    // The registry is a live-worker feature; retain the latest cached catalogue.
+    snapshot["tools"] = json!(tools);
+    app.state::<worker::WorkerState>()
+        .emit_history_if_cold(&app, &task.id, snapshot)
 }
 
 #[derive(Debug, Deserialize)]
@@ -2105,7 +2147,7 @@ pub struct ExecuteCommandInput {
 /// Stream one sub-agent's transcript to the side panel as `subagent_stream` events, starting with
 /// a reset frame the worker sends before it answers; no target stops. Watching sends a chat no
 /// work and moves nothing, so the chat's lock is held only around starting its worker, like
-/// `open_task`, and the worker answers even while the call running the child holds its queue.
+/// opening a live chat, and the worker answers even while the call running the child holds its queue.
 #[tauri::command]
 pub async fn watch_subagent(
     app: AppHandle,
@@ -4522,7 +4564,7 @@ fn task_and_provider(
     Ok((task, provider))
 }
 
-/// The lookup `open_task` and `watch_subagent` use: the chat and its connection must exist, but
+/// The lookup worker-backed views (`watch_subagent`) use: the chat and its connection must exist, but
 /// the model selection is not re-checked, so a chat on a connection that was switched off (or a
 /// signed-out subscription) still opens and streams its transcript. `credential_for` and the
 /// prompt path still refuse anything that cannot run.

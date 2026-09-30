@@ -6,6 +6,7 @@ mod computer_use;
 mod files;
 mod git;
 mod glass;
+mod history;
 mod mcp;
 mod memory;
 mod menu_bar;

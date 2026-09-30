@@ -1422,8 +1422,8 @@ export default function App() {
       const updated = await api.configureTask({ taskId: selectedTask.id, providerId, modelId, thinkingLevel });
       setData((current) => ({ ...current, tasks: current.tasks.map((task) => task.id === updated.id ? updated : task) }));
       rememberModel(updated.projectId, { providerId, modelId, thinkingLevel });
-      // configure_task stops a worker whose model changed. Reopen it now so Pi records the
-      // durable switch and the transcript divider appears without waiting for another prompt.
+      // Refresh the saved snapshot's model metadata after a switch. The durable transcript
+      // divider is recorded when the next worker starts; viewing history stays read-only.
       if (modelChanged) await api.openTask(updated.id);
     } catch (reason) {
       patchRuntime(selectedTask.id, { error: String(reason) });

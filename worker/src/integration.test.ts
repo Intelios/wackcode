@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it } from "vitest";
-import type { TaskMode } from "./protocol.js";
+import { readSavedSession } from "./saved-session.js";
+import type { SessionSnapshot, TaskMode } from "./protocol.js";
 
 interface Checkpoint { id: string; head?: string }
 
@@ -51,8 +52,23 @@ type SnapshotView = {
     objective: string; phase: string; iteration: number; maxIterations: number; noProgress: number;
     lastReason?: string; lastNextAction?: string; note?: string;
   };
-  stats?: { tokens: { input: number; output: number; total: number }; cost: number };
+  stats?: { tokens: { input: number; output: number; total: number }; cost: number; contextUsage?: SessionSnapshot["stats"]["contextUsage"]; contextBreakdown?: SessionSnapshot["stats"]["contextBreakdown"] };
 };
+
+async function expectSavedHistory(view: SnapshotView, mode: TaskMode = "build") {
+  const history = await readSavedSession({ sessionFile: view.sessionFile, taskId: "offline-history", mode, thinkingLevel: "off", contextWindow: view.stats?.contextUsage?.contextWindow });
+  expect(history.messages).toEqual(view.messages);
+  expect(history.tree).toEqual(view.tree);
+  expect(history.runTimings).toEqual(view.runTimings ?? []);
+  expect(history.modelSwitches).toEqual(view.modelSwitches ?? []);
+  expect(history.stats.tokens).toEqual(view.stats?.tokens);
+  expect(history.stats.cost).toEqual(view.stats?.cost);
+  expect(history.stats.contextUsage).toEqual(view.stats?.contextUsage);
+  expect(history.stats.contextBreakdown).toEqual(view.stats?.contextBreakdown);
+  expect(history.planState).toEqual(view.planState);
+  expect(history.todoState).toEqual(view.todoState);
+  expect(history.goalState).toEqual(view.goalState);
+}
 
 interface Output {
   record?: import("./usage.js").UsageRecord;
@@ -995,6 +1011,7 @@ describe("Pi worker integration", () => {
     });
     cleanup.push(() => third.worker.shutdown());
     expect(third.ready.snapshot?.modelSwitches).toHaveLength(1);
+    await expectSavedHistory(third.ready.snapshot!);
     const saved = await readFile(sessionFile as string, "utf8");
     expect(saved.match(/"type":"model_change"/g)).toHaveLength(2);
   });
@@ -1271,6 +1288,7 @@ describe("built-in extensions", () => {
     const restored = await initializeWorker(provider.baseUrl, "timing-secret", workspace, "timing-task", sessionFile);
     cleanup.push(() => restored.worker.shutdown());
     expect(restored.ready.snapshot?.runTimings).toHaveLength(2);
+    await expectSavedHistory(restored.ready.snapshot!);
     const restoredUserIds = restored.ready.snapshot?.messages.filter((message) => message.role === "user").map((message) => message.id);
     expect(restored.ready.snapshot?.runTimings.map((timing) => timing.userMessageId)).toEqual(restoredUserIds);
   });
@@ -1922,6 +1940,9 @@ describe("image attachments", () => {
     expect(stored).toContain('"type":"image"');
     expect(stored).toContain('"mimeType":"image/png"');
     await first.worker.shutdown();
+    const history = await readSavedSession({ sessionFile, taskId: "image-restore", mode: "build", thinkingLevel: "off" });
+    expect(history.messages.find((message) => message.role === "user")?.blocks).toContainEqual(expect.objectContaining({ type: "image", thumbnail: expect.stringMatching(/^data:image\//) }));
+    expect(await readFile(sessionFile as string, "utf8")).toBe(stored);
 
     const second = await initializeWorker(
       provider.baseUrl, "alpha-secret", workspace, "image-restore", sessionFile, undefined, undefined, undefined, true
@@ -2100,6 +2121,7 @@ describe("session tree", () => {
     expect(shown.versions).toMatchObject({ index: 0, total: 2, next: retried.entryId });
     expect(back?.messages.some((message) => message.blocks.some((block) => block.text === "Finished alpha."))).toBe(true);
     expect(provider.requests).toHaveLength(4);
+    await expectSavedHistory(back!);
   });
 
   it("edits a message, rewinds it into the composer, and keeps the rewind across a restart", async () => {
@@ -2127,6 +2149,7 @@ describe("session tree", () => {
     expect(empty).toBeDefined();
     expect(users(empty)).toHaveLength(0);
     expect(empty?.tree?.undo).toBeTruthy();
+    await expectSavedHistory(empty!);
     const sessionFile = empty?.sessionFile as string;
     const requestsBefore = provider.requests.length;
     await first.worker.shutdown();
@@ -2322,6 +2345,7 @@ describe("session tree", () => {
 
     const sessionFile = worker.view?.sessionFile;
     expect(sessionFile).toBeTruthy();
+    await expectSavedHistory(worker.view!);
     await worker.shutdown();
     const restored = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "command-task", sessionFile, undefined, resources);
     cleanup.push(() => restored.worker.shutdown());

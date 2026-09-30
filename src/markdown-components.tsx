@@ -2,7 +2,9 @@
  * Shared react-markdown component overrides, used by `Markdown.tsx` for the transcript, plans,
  * sub-agent output and thinking rows. `pre` is where syntax highlighting happens: the fenced
  * block's `code` child is re-rendered from highlight.js tokens (src/highlight.ts), while inline
- * code needs no override at all. The img/a overrides are the originals from Markdown.tsx.
+ * code needs no override at all. The img override is the original from Markdown.tsx; the a
+ * override intercepts clicks (the webview cannot open links itself) and routes http(s) URLs
+ * through `api.revealPath`.
  *
  * `streamingTail` gates streaming: it carries the content of a fence that is still being
  * written (openFenceTail), and any block matching it renders plain so a growing fence neither
@@ -13,6 +15,7 @@
 import type { ReactNode } from "react";
 import type { Element, ElementContent } from "hast";
 import type { Components } from "react-markdown";
+import { api } from "./api";
 import { highlightBlock } from "./highlight";
 
 interface ComponentsOptions {
@@ -101,6 +104,23 @@ export function markdownComponents(options: ComponentsOptions = {}): Components 
   return {
     pre: ({ node, children }) => <CodePre node={node} streamingTail={streamingTail}>{children}</CodePre>,
     img: ({ alt }) => <span className="blocked-image">[Remote image blocked{alt ? `: ${alt}` : ""}]</span>,
-    a: ({ href, children: linkChildren }) => <a href={href} target="_blank" rel="noreferrer">{linkChildren}</a>
+    a: ({ href, children: linkChildren }) => (
+      <a
+        href={href}
+        target="_blank"
+        rel="noreferrer"
+        onClick={(event) => {
+          // The webview has nothing to open a new window with, and a link left to navigate would
+          // replace the app itself, so every click is intercepted. http(s) URLs go to Rust,
+          // which opens them in the default browser and refuses every other scheme.
+          event.preventDefault();
+          if (href !== undefined && /^https?:\/\//i.test(href)) {
+            void api.revealPath(href).catch(() => undefined);
+          }
+        }}
+      >
+        {linkChildren}
+      </a>
+    )
   };
 }

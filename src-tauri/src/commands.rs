@@ -4163,8 +4163,30 @@ pub fn reveal_task(state: State<'_, MetadataState>, task_id: String) -> Result<(
     }
 }
 
+/// The URL scheme at the front of `value`, lowercased, when it starts like a URL. Plain paths —
+/// everything the reveal buttons send, always absolute — never match: a scheme must begin with
+/// an ASCII letter, so `/Users/jack/Photo 10:30` is a path, not a `scheme:` URL.
+fn url_scheme(value: &str) -> Option<String> {
+    let (scheme, _) = value.split_once(':')?;
+    let mut characters = scheme.chars();
+    let is_scheme = characters.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && characters.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    is_scheme.then(|| scheme.to_ascii_lowercase())
+}
+
+/// `open` launches whatever handler is registered for the URL scheme it is handed, so anything
+/// carrying a scheme other than http(s) — a `file://` URL, a custom scheme from chat content —
+/// is refused before it reaches the system.
+fn ensure_openable(path: &str) -> Result<(), String> {
+    match url_scheme(path).as_deref() {
+        None | Some("http") | Some("https") => Ok(()),
+        Some(_) => Err("Only http and https links can be opened".into()),
+    }
+}
+
 #[tauri::command]
 pub fn reveal_path(path: String) -> Result<(), String> {
+    ensure_openable(&path)?;
     let status = Command::new("open")
         .arg(&path)
         .status()
@@ -4859,6 +4881,25 @@ mod tests {
             "https://github.com/owner/repo/issues/42"
         )
         .is_err());
+    }
+
+    #[test]
+    fn reveal_path_accepts_only_paths_and_http_links() {
+        // Plain paths pass through, including a colon later in a filename.
+        assert!(ensure_openable("/Users/jack").is_ok());
+        assert!(ensure_openable("/Users/jack/Photo 10:30").is_ok());
+        assert!(ensure_openable("https://example.com/docs").is_ok());
+        assert!(ensure_openable("HTTP://EXAMPLE.COM").is_ok());
+        // `open` would hand these to their registered handler; chat content must not reach one.
+        for refused in [
+            "file:///etc/passwd",
+            "mailto:someone@example.com",
+            "steam://run/70",
+            "javascript:alert(1)",
+            "ftp://example.com",
+        ] {
+            assert!(ensure_openable(refused).is_err(), "{refused} should be refused");
+        }
     }
 
     #[test]

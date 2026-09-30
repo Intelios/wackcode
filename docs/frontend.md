@@ -7,7 +7,7 @@
 - **`App.tsx`** owns all cross-cutting state: `data` (the `AppData` from `bootstrap`) and each chat's runtime. Update it immutably through `patchTask`, `patchRuntime` and `setData`.
 - **Events:** `App.tsx` is the only place that listens to Tauri events: `worker-event`, `terminal-event`, `subscription-login-event` and `native-chat-navigation` (the menu bar). A worker protocol change ends in its `worker-event` switch; see [worker.md](worker.md#protocol-changes).
 - **`api.ts`** is the only bridge to Rust: one typed `invoke` wrapper per command. Terminal output arrives on a `Channel`, not an event.
-- **Components are presentational.** The exceptions call `api` directly because they wrap one self-contained surface: `SettingsPage.tsx` (and `IntegrationsSection.tsx`), `BrowserPanel.tsx` (positions the native web view) and `TerminalPanel.tsx` (streams the PTY). Don't add more without the same reason.
+- **Components are presentational.** The exceptions call `api` directly because they wrap one self-contained surface: `SettingsPage.tsx` (and `IntegrationsSection.tsx`), `BrowserPanel.tsx` (positions the native web view), `TerminalPanel.tsx` (streams the PTY) and `markdown-components.tsx` (its link override routes http(s) clicks through `revealPath`; the webview cannot open links itself). Don't add more without the same reason.
 
 ## Transcript snapshots
 

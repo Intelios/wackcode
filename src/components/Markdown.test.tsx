@@ -1,8 +1,12 @@
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { api } from "../api";
 import { Markdown } from "./Markdown";
 
+vi.mock("../api", () => ({ api: { revealPath: vi.fn().mockResolvedValue(undefined) } }));
+
 afterEach(cleanup);
+beforeEach(() => vi.mocked(api.revealPath).mockClear());
 
 describe("Markdown", () => {
   it("highlights a closed fenced block with its language", () => {
@@ -32,5 +36,23 @@ describe("Markdown", () => {
   it("highlights everything once the stream settles", () => {
     render(<Markdown>{"```js\nlet b = 2;\n```"}</Markdown>);
     expect(screen.getByText("let")).toHaveClass("hljs-keyword");
+  });
+
+  it("opens http links through Rust instead of navigating the webview", () => {
+    render(<Markdown>{"See [the docs](https://example.com/guide)"}</Markdown>);
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+    screen.getByRole("link", { name: "the docs" }).dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(true);
+    expect(api.revealPath).toHaveBeenCalledWith("https://example.com/guide");
+  });
+
+  it("never hands links with another scheme to the system", () => {
+    render(<Markdown>{"[mail me](mailto:x@example.com) or [rel](./other)"}</Markdown>);
+    for (const name of ["mail me", "rel"]) {
+      const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+      screen.getByRole("link", { name }).dispatchEvent(click);
+      expect(click.defaultPrevented).toBe(true);
+    }
+    expect(api.revealPath).not.toHaveBeenCalled();
   });
 });

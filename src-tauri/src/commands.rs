@@ -684,6 +684,41 @@ pub async fn respond_extension_ui(
     worker::send(&app, &input.task_id, &payload).await
 }
 
+/// Whether a package sync may restart workers. Loaded resources are baked into a worker at
+/// spawn time, so restarting is how a change reaches existing chats — but a plain refresh runs
+/// whenever the Packages page opens, mid-chat included, and must never stop anyone.
+enum WorkerRestart {
+    /// Never stop a worker. If the store really did change, `ensure_worker`'s fingerprint
+    /// check respawns it on next use.
+    Never,
+    /// Stop every task's worker, but only when the resources a fresh worker would load actually
+    /// changed. Callers must have refused while busy first, so only idle workers stop.
+    OnResourceChange,
+}
+
+/// Whether a sync changed anything a task worker bakes in at spawn: the enabled resource paths
+/// of trusted packages (`worker::resource_paths`, the same gate a session loads through), or a
+/// new version installed at those paths — an in-place update rewrites them without moving them.
+/// Display names, timestamps and untrusted packages churn freely without a restart.
+fn resources_moved(before: &[PackageRecord], after: &[PackageRecord]) -> bool {
+    fn resolved(records: &[PackageRecord]) -> Vec<(String, Option<String>, Value)> {
+        let mut projection: Vec<(String, Option<String>, Value)> = records
+            .iter()
+            .filter(|record| !record.trusted_at.is_empty())
+            .map(|record| {
+                (
+                    record.source.clone(),
+                    record.version.clone(),
+                    worker::resource_paths(std::slice::from_ref(record)),
+                )
+            })
+            .collect();
+        projection.sort_by(|a, b| a.0.cmp(&b.0));
+        projection
+    }
+    resolved(before) != resolved(after)
+}
+
 /// Read the installed packages back from the shared store and reconcile them with the trust
 /// receipts in `wackcode.json`. A package present on disk but never trusted here stays untrusted
 /// and so never loads.
@@ -693,6 +728,7 @@ async fn sync_packages(
     catalog: Value,
     // Source the user just accepted the warning for. Only this one may gain trust here.
     newly_trusted: Option<&str>,
+    restart: WorkerRestart,
 ) -> Result<Vec<PackageRecord>, String> {
     let now = Utc::now().to_rfc3339();
     let existing: Vec<PackageRecord> = {
@@ -772,17 +808,21 @@ async fn sync_packages(
         data.packages = records.clone();
         Ok(())
     })?;
-    // Loaded resources are baked into a worker at spawn time, so every worker must restart.
-    // Collect first: the metadata guard must not be held across an await.
-    let task_ids: Vec<String> = {
-        let data = state
-            .data
-            .lock()
-            .map_err(|_| "Metadata lock was poisoned".to_string())?;
-        data.tasks.iter().map(|task| task.id.clone()).collect()
-    };
-    for task_id in task_ids {
-        worker::terminate_worker(app, &task_id, true).await?;
+    // A worker that predates this sync keeps serving the resources it baked in at spawn, so
+    // restart it when what a fresh worker would load actually moved — and never on a plain
+    // refresh, which runs while chats are mid-run.
+    if matches!(restart, WorkerRestart::OnResourceChange) && resources_moved(&existing, &records) {
+        // Collect first: the metadata guard must not be held across an await.
+        let task_ids: Vec<String> = {
+            let data = state
+                .data
+                .lock()
+                .map_err(|_| "Metadata lock was poisoned".to_string())?;
+            data.tasks.iter().map(|task| task.id.clone()).collect()
+        };
+        for task_id in task_ids {
+            worker::terminate_worker(app, &task_id, true).await?;
+        }
     }
     Ok(records)
 }
@@ -825,7 +865,7 @@ pub async fn refresh_packages(
     state: State<'_, MetadataState>,
 ) -> Result<Vec<PackageRecord>, String> {
     let catalog = worker::run_manager(&app, json!({ "type": "list" })).await?;
-    sync_packages(&app, &state, catalog, None).await
+    sync_packages(&app, &state, catalog, None, WorkerRestart::Never).await
 }
 
 #[tauri::command]
@@ -844,7 +884,7 @@ pub async fn install_package(
         json!({ "type": "install", "source": source, "onlySkills": input.skills_only }),
     )
     .await?;
-    sync_packages(&app, &state, catalog, Some(&source)).await
+    sync_packages(&app, &state, catalog, Some(&source), WorkerRestart::OnResourceChange).await
 }
 
 #[tauri::command]
@@ -856,7 +896,7 @@ pub async fn remove_package(
     let source = validate_package_source(&source)?;
     refuse_while_busy(&state)?;
     let catalog = worker::run_manager(&app, json!({ "type": "remove", "source": source })).await?;
-    sync_packages(&app, &state, catalog, None).await
+    sync_packages(&app, &state, catalog, None, WorkerRestart::OnResourceChange).await
 }
 
 #[tauri::command]
@@ -871,7 +911,7 @@ pub async fn update_packages(
         command["source"] = Value::String(validate_package_source(&source)?);
     }
     let catalog = worker::run_manager(&app, command).await?;
-    sync_packages(&app, &state, catalog, None).await
+    sync_packages(&app, &state, catalog, None, WorkerRestart::OnResourceChange).await
 }
 
 #[tauri::command]
@@ -894,7 +934,7 @@ pub async fn set_package_resources(
         }
     }
     let catalog = worker::run_manager(&app, command).await?;
-    sync_packages(&app, &state, catalog, None).await
+    sync_packages(&app, &state, catalog, None, WorkerRestart::OnResourceChange).await
 }
 
 /// Grant trust to a package already present in the store but never confirmed here, so the user
@@ -4804,6 +4844,70 @@ mod tests {
             "https://github.com/owner/repo/issues/42"
         )
         .is_err());
+    }
+
+    #[test]
+    fn package_syncs_restart_workers_only_when_resolved_resources_move() {
+        fn record(
+            source: &str,
+            trusted: bool,
+            version: Option<&str>,
+            extensions: &[(&str, bool)],
+        ) -> PackageRecord {
+            PackageRecord {
+                source: source.into(),
+                display_name: source.into(),
+                kind: "npm".into(),
+                version: version.map(str::to_string),
+                installed_path: Some("/pkg".into()),
+                extensions: extensions
+                    .iter()
+                    .map(|(path, enabled)| crate::models::PackageResourceRecord {
+                        path: (*path).into(),
+                        name: "a.ts".into(),
+                        enabled: *enabled,
+                    })
+                    .collect(),
+                skills: Vec::new(),
+                prompts: Vec::new(),
+                themes: Vec::new(),
+                errors: Vec::new(),
+                trusted_at: trusted.then(|| "2026-01-01T00:00:00Z".into()).unwrap_or_default(),
+                installed_at: "2026-01-01T00:00:00Z".into(),
+            }
+        }
+        let installed = vec![record("npm:x", true, Some("1.0.0"), &[("/pkg/a.ts", true)])];
+        // Display names, timestamps, errors and untrusted packages never reach a worker.
+        let mut churned = record("npm:x", true, Some("1.0.0"), &[("/pkg/a.ts", true)]);
+        churned.display_name = "Renamed".into();
+        churned.installed_at = "2026-02-01T00:00:00Z".into();
+        churned.errors = vec!["stale warning".into()];
+        let untrusted = record("npm:y", false, Some("1.0.0"), &[("/pkg/y/a.ts", true)]);
+        assert!(!resources_moved(&installed, &[churned, untrusted]));
+        // A new path, a disabled path, a removed package and granted trust all move resources.
+        assert!(resources_moved(
+            &installed,
+            &[record(
+                "npm:x",
+                true,
+                Some("1.0.0"),
+                &[("/pkg/a.ts", true), ("/pkg/b.ts", true)]
+            )]
+        ));
+        assert!(resources_moved(
+            &installed,
+            &[record("npm:x", true, Some("1.0.0"), &[("/pkg/a.ts", false)])]
+        ));
+        assert!(resources_moved(&installed, &[]));
+        assert!(resources_moved(
+            &[record("npm:x", false, Some("1.0.0"), &[("/pkg/a.ts", true)])],
+            &installed
+        ));
+        // An in-place update keeps its paths; only the version says the contents moved.
+        assert!(resources_moved(
+            &installed,
+            &[record("npm:x", true, Some("2.0.0"), &[("/pkg/a.ts", true)])]
+        ));
     }
 
     #[test]

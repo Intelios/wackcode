@@ -3118,6 +3118,21 @@ pub fn rename_task(
     Ok(task)
 }
 
+/// Dismissing the error banner must reach `wackcode.json`, or the saved error
+/// returns with the next launch.
+#[tauri::command]
+pub fn clear_task_error(state: State<'_, MetadataState>, task_id: String) -> Result<(), String> {
+    state.mutate(|data| {
+        let task = data
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == task_id)
+            .ok_or_else(|| "Chat not found".to_string())?;
+        task.last_error = None;
+        Ok(())
+    })
+}
+
 #[tauri::command]
 pub async fn delete_task(
     app: AppHandle,

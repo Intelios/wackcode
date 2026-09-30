@@ -551,6 +551,14 @@ export default function App() {
     setRuntimes((current) => ({ ...current, [taskId]: { ...current[taskId], ...patch } }));
   }, []);
 
+  // The banner reads the durable `lastError` as well as the live error, so dismissing
+  // must clear both and persist, or the banner returns with the next launch.
+  const dismissError = useCallback((taskId: string) => {
+    patchRuntime(taskId, { error: undefined });
+    patchTask(taskId, { lastError: null });
+    api.clearTaskError(taskId).catch((reason) => setGlobalError(String(reason)));
+  }, [patchRuntime, patchTask]);
+
   // Follow the shown sub-agent: its chat's worker streams its transcript into
   // `runtime.subagentView` until the panel moves on. Switching children re-targets the same
   // worker; leaving the chat or closing the panel tells it to stop.
@@ -722,8 +730,9 @@ export default function App() {
         patchRuntime(taskId, { queued: { steer: [...payload.steering], followUp: [...payload.followUp] } });
       } else if (payload.type === "run_state") {
         // A run starting makes the chat the most recently active, which Git mode's linked
-        // chat follows.
-        patchTask(taskId, { status: payload.state, lastError: payload.state === "running" ? null : undefined, ...(payload.state === "running" ? { updatedAt: new Date().toISOString() } : {}) });
+        // chat follows. Only "running" clears the saved error — the host mirrors exactly
+        // that in wackcode.json, and clearing more here would desync the two.
+        patchTask(taskId, { status: payload.state, ...(payload.state === "running" ? { lastError: null, updatedAt: new Date().toISOString() } : {}) });
         if (payload.state === "idle" || payload.state === "interrupted") gitRef.current.onWorkerActivity(taskId);
         if (payload.state === "running") {
           setRuntimes((current) => ({
@@ -2568,7 +2577,7 @@ export default function App() {
               />
             </motion.div>
             {sharedWorkers.length > 0 && <div className="shared-notice"><span>!</span><strong>{sharedWorkers[0].name}</strong> is also running in this folder. File edits are shared.</div>}
-            {(runtime?.error || selectedTask.lastError) && <div className="error-banner workspace-error"><span>{runtime?.error || selectedTask.lastError}</span><button onClick={() => patchRuntime(selectedTask.id, { error: undefined })}>Dismiss</button></div>}
+            {(runtime?.error || selectedTask.lastError) && <div className="error-banner workspace-error"><span>{runtime?.error || selectedTask.lastError}</span><button onClick={() => dismissError(selectedTask.id)}>Dismiss</button></div>}
             {selectedModelGone && (
               <div className="model-missing-notice" role="status">
                 <span>!</span>

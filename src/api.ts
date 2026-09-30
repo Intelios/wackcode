@@ -181,6 +181,8 @@ export const api = {
     thinkingLevel: ThinkingLevel;
   }) => invoke<TaskRecord>("create_task", { input }),
   renameTask: (taskId: string, name: string) => invoke<TaskRecord>("rename_task", { taskId, name }),
+  /** Clears a chat's saved error; Dismiss must persist or the banner returns on relaunch. */
+  clearTaskError: (taskId: string) => invoke<void>("clear_task_error", { taskId }),
   deleteTask: (taskId: string) => invoke<void>("delete_task", { taskId }),
   convertToWorktree: (taskId: string) => invoke<TaskRecord>("convert_task_to_worktree", { taskId }),
   removeProject: (projectId: string) => invoke<void>("remove_project", { projectId }),

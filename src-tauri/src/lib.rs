@@ -191,6 +191,7 @@ pub fn run() {
             commands::archive_task,
             commands::unarchive_task,
             commands::rename_task,
+            commands::clear_task_error,
             commands::delete_task,
             commands::convert_task_to_worktree,
             commands::remove_project,

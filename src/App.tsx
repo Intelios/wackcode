@@ -781,7 +781,10 @@ export default function App() {
         if (payload.event === "tool_execution_end") {
           // Git mode reads its own project's changes; the chat's panel catches up on exit.
           if (gitRef.current.view) gitRef.current.onWorkerActivity(taskId);
-          else void refreshChanges(taskId);
+          // Only the selected chat's panel: a background chat's refresh would bump the request
+          // counter and set loading without ever clearing it, and selecting that chat later
+          // refreshes changes anyway.
+          else if (taskId === selectedTaskRef.current) void refreshChanges(taskId);
         }
       } else if (payload.type === "worker_error") {
         patchRuntime(taskId, { error: payload.message });

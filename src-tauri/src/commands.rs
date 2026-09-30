@@ -3,8 +3,10 @@ use crate::{
     models::{
         AppearanceConfig, AutoTitleConfig, BackdropMode, BootstrapPayload, BuiltinModelSuggestion,
         CheckpointChange, CheckpointRef, CreateTaskInput, DiffComment, ExportPlanInput,
-        ExtensionUiResponseInput, ForkTaskInput, GitBranches, GitChanges, GitCheckoutResult,
-        GitGeneratedMessage, GitPrInfo, GitPublishInfo, ImageContent, InstallPackageInput,
+        ExtensionUiResponseInput, ForkTaskInput, GitBranches, GitChangeFile, GitChanges,
+        GitCheckoutResult, GitCommitFiles, GitGeneratedMessage, GitLogPage, GitPrInfo,
+        GitPublishInfo, GitPullResult, GitRevertResult, GitSyncStatus, GitUndoResult, ImageContent,
+        InstallPackageInput,
         McpServerRecord, McpTestResult,
         MemoriesChange, MemoriesOverview, MemoryConfig, MemoryDocument, ModelRecord,
         NavigateResult, NavigateTaskInput, NavigateTaskResult, PackageRecord,
@@ -34,7 +36,7 @@ use std::{
     time::Duration,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 use uuid::Uuid;
 
 /// One lock per chat, held by every command that sends it work, moves its conversation, or
@@ -47,6 +49,22 @@ pub struct TaskLocks(Mutex<HashMap<String, Arc<AsyncMutex<()>>>>);
 pub struct GitLocks(Mutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>>);
 
 impl GitLocks {
+    fn for_root(&self, root: PathBuf) -> Arc<AsyncMutex<()>> {
+        let mut locks = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        locks.entry(root).or_default().clone()
+    }
+}
+
+/// One per checkout root, held while a fetch talks to the remote. Separate from `GitLocks`
+/// because prompt dispatch waits on that one, and a fetch can take up to 90 seconds; a fetch
+/// only writes remote-tracking refs and objects, which Git guards with its own lockfiles.
+#[derive(Default)]
+pub struct GitNetworkLocks(Mutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>>);
+
+impl GitNetworkLocks {
     fn for_root(&self, root: PathBuf) -> Arc<AsyncMutex<()>> {
         let mut locks = self
             .0
@@ -3270,14 +3288,42 @@ fn cleanup_task_files(app: &AppHandle, task: &TaskRecord, git_root: Option<&str>
 #[tauri::command]
 pub async fn git_changes(
     state: State<'_, MetadataState>,
-    task_id: String,
+    task_id: Option<String>,
+    project_id: Option<String>,
 ) -> Result<GitChanges, String> {
-    let workspace = task_workspace(&state, &task_id)?;
+    let workspace = git_target(&state, task_id.as_deref(), project_id.as_deref())?;
     blocking(move || git::changes(&workspace)).await
 }
 
-fn git_workspace(state: &MetadataState, task_id: &str) -> Result<PathBuf, String> {
-    idle_checkout(state, task_workspace(state, task_id)?)
+/// What a Git write holds while it runs: the chat's own lock when the target is a chat, and
+/// the checkout's `GitLocks`, taken between two `idle_checkout` checks because a chat may start
+/// while this waits for the lock.
+struct CheckoutGuard {
+    _task: Option<OwnedMutexGuard<()>>,
+    _git: OwnedMutexGuard<()>,
+    workspace: PathBuf,
+    root: PathBuf,
+}
+
+async fn locked_checkout(
+    app: &AppHandle,
+    state: &MetadataState,
+    task_id: Option<&str>,
+    project_id: Option<&str>,
+) -> Result<CheckoutGuard, String> {
+    let task = match task_id {
+        Some(task_id) => Some(task_lock(app, task_id).lock_owned().await),
+        None => None,
+    };
+    let workspace = idle_checkout(state, git_target(state, task_id, project_id)?)?;
+    let root = git::inspect_project(&workspace)
+        .root
+        .ok_or("No Git repository")?
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let git = app.state::<GitLocks>().for_root(root.clone()).lock_owned().await;
+    idle_checkout(state, workspace.clone())?;
+    Ok(CheckoutGuard { _task: task, _git: git, workspace, root })
 }
 
 /// `workspace`, once no chat is running in the same checkout: Git actions from the panel must
@@ -3321,22 +3367,16 @@ fn task_workspace(state: &MetadataState, task_id: &str) -> Result<PathBuf, Strin
 pub async fn git_change_action(
     app: AppHandle,
     state: State<'_, MetadataState>,
-    task_id: String,
+    task_id: Option<String>,
+    project_id: Option<String>,
     file: String,
     layer: String,
     action: String,
     hunk_id: Option<usize>,
     expected: String,
 ) -> Result<GitChanges, String> {
-    let _task = task_lock(&app, &task_id).lock_owned().await;
-    let workspace = git_workspace(&state, &task_id)?;
-    let root = git::inspect_project(&workspace)
-        .root
-        .ok_or("No Git repository")?
-        .canonicalize()
-        .map_err(|error| error.to_string())?;
-    let _git = app.state::<GitLocks>().for_root(root).lock_owned().await;
-    git_workspace(&state, &task_id)?;
+    let guard = locked_checkout(&app, &state, task_id.as_deref(), project_id.as_deref()).await?;
+    let workspace = guard.workspace.clone();
     blocking(move || {
         git::change_action(&workspace, &file, &layer, &action, hunk_id, &expected)
             .map_err(|error| worker::redact_and_limit(&error))
@@ -3348,20 +3388,14 @@ pub async fn git_change_action(
 pub async fn git_commit(
     app: AppHandle,
     state: State<'_, MetadataState>,
-    task_id: String,
+    task_id: Option<String>,
+    project_id: Option<String>,
     message: String,
     files: Vec<String>,
     expected: String,
 ) -> Result<GitChanges, String> {
-    let _task = task_lock(&app, &task_id).lock_owned().await;
-    let workspace = git_workspace(&state, &task_id)?;
-    let root = git::inspect_project(&workspace)
-        .root
-        .ok_or("No Git repository")?
-        .canonicalize()
-        .map_err(|error| error.to_string())?;
-    let _git = app.state::<GitLocks>().for_root(root).lock_owned().await;
-    git_workspace(&state, &task_id)?;
+    let guard = locked_checkout(&app, &state, task_id.as_deref(), project_id.as_deref()).await?;
+    let workspace = guard.workspace.clone();
     blocking(move || {
         git::commit(&workspace, &message, &files, &expected)
             .map_err(|error| worker::redact_and_limit(&error))
@@ -3399,13 +3433,26 @@ pub fn set_diff_comments(
 }
 
 async fn git_cli(root: &Path, program: &str, args: &[String]) -> Result<String, String> {
+    git_cli_with(root, program, args, &[]).await
+}
+
+/// `git`/`gh` for anything that talks to the network: the login shell's environment (so the
+/// user's credential helper, ssh-agent and PATH work), provider keys stripped, prompts off.
+async fn git_cli_with(
+    root: &Path,
+    program: &str,
+    args: &[String],
+    env: &[(&str, &str)],
+) -> Result<String, String> {
     let mut command = tokio::process::Command::new(program);
     crate::shell_env::apply(&mut command).await;
     worker::strip_provider_env(&mut command);
+    command.envs(env.iter().copied());
     command
         .current_dir(root)
         .args(args)
         .kill_on_drop(true)
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -3475,9 +3522,10 @@ fn pr_create_args(
 #[tauri::command]
 pub async fn git_publish_info(
     state: State<'_, MetadataState>,
-    task_id: String,
+    task_id: Option<String>,
+    project_id: Option<String>,
 ) -> Result<GitPublishInfo, String> {
-    let workspace = task_workspace(&state, &task_id)?;
+    let workspace = git_target(&state, task_id.as_deref(), project_id.as_deref())?;
     blocking(move || git::publish_info(&workspace)).await
 }
 
@@ -3485,31 +3533,190 @@ pub async fn git_publish_info(
 pub async fn git_push(
     app: AppHandle,
     state: State<'_, MetadataState>,
-    task_id: String,
+    task_id: Option<String>,
+    project_id: Option<String>,
     remote: Option<String>,
 ) -> Result<GitPublishInfo, String> {
-    let _task = task_lock(&app, &task_id).lock_owned().await;
-    let workspace = git_workspace(&state, &task_id)?;
-    let root = git::inspect_project(&workspace)
+    let guard = locked_checkout(&app, &state, task_id.as_deref(), project_id.as_deref()).await?;
+    let info = git::publish_info(&guard.root)?;
+    let args = git::push_args(info, remote)?;
+    git_cli(&guard.root, "git", &args).await?;
+    git::publish_info(&guard.workspace)
+}
+
+/// Read-only: where the checkout stands against its remote, from local refs.
+#[tauri::command]
+pub async fn git_sync_status(
+    state: State<'_, MetadataState>,
+    task_id: Option<String>,
+    project_id: Option<String>,
+) -> Result<GitSyncStatus, String> {
+    let workspace = git_target(&state, task_id.as_deref(), project_id.as_deref())?;
+    blocking(move || git::sync_status(&workspace)).await
+}
+
+/// Fetch the checkout's remote (Git mode runs one in the `background` when it opens, and on
+/// the user's click otherwise; never on a timer). It doesn't need an idle checkout: fetching
+/// moves no local branch, index or file.
+#[tauri::command]
+pub async fn git_fetch(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    task_id: Option<String>,
+    project_id: Option<String>,
+    background: Option<bool>,
+) -> Result<GitSyncStatus, String> {
+    let workspace = git_target(&state, task_id.as_deref(), project_id.as_deref())?;
+    let root = canonical_root(&workspace)?;
+    fetch_checkout(&app, &root, background.unwrap_or(false)).await?;
+    blocking(move || git::sync_status(&workspace)).await
+}
+
+fn canonical_root(workspace: &Path) -> Result<PathBuf, String> {
+    git::inspect_project(workspace)
         .root
         .ok_or("No Git repository")?
         .canonicalize()
-        .map_err(|error| error.to_string())?;
-    let _git = app
-        .state::<GitLocks>()
-        .for_root(root.clone())
-        .lock_owned()
-        .await;
-    git_workspace(&state, &task_id)?;
-    let info = git::publish_info(&root)?;
-    let args = git::push_args(info, remote)?;
-    git_cli(&root, "git", &args).await?;
-    git::publish_info(&workspace)
+        .map_err(|error| error.to_string())
 }
 
-/// The folder a branch picker acts on: a chat's workspace, or a project's folder before its
-/// first chat exists.
-fn branch_target(
+/// One fetch per checkout at a time; a caller that finds one running waits for it and uses
+/// its result instead of fetching again.
+async fn fetch_checkout(app: &AppHandle, root: &Path, background: bool) -> Result<(), String> {
+    let lock = app.state::<GitNetworkLocks>().for_root(root.to_path_buf());
+    let _guard = match lock.clone().try_lock_owned() {
+        Ok(guard) => guard,
+        Err(_) => {
+            drop(lock.lock_owned().await);
+            return Ok(());
+        }
+    };
+    let status = {
+        let root = root.to_path_buf();
+        blocking(move || git::sync_status(&root)).await?
+    };
+    let remote = status
+        .fetch_remote
+        .ok_or("This repository has no remote to fetch from")?;
+    let mut args: Vec<String> = Vec::new();
+    // Opening Git mode must never pop a sign-in window: a background fetch that needs
+    // credentials just fails quietly, and a clicked Fetch can still prompt.
+    let env: &[(&str, &str)] = if background {
+        args.extend(["-c".to_string(), "credential.interactive=never".to_string()]);
+        &[("GCM_INTERACTIVE", "never")]
+    } else {
+        &[]
+    };
+    args.extend(git::fetch_args(&remote));
+    git_cli_with(root, "git", &args, env).await.map_err(|error| {
+        let line = error.lines().find(|line| !line.trim().is_empty()).unwrap_or(&error).trim().to_string();
+        format!("Could not fetch from {remote}: {line}")
+    })?;
+    Ok(())
+}
+
+/// A fast-forward-only pull: fetch (off `GitLocks`), then move the branch under the checkout's
+/// guards. A branch that has diverged is reported, never merged.
+#[tauri::command]
+pub async fn git_pull(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    task_id: Option<String>,
+    project_id: Option<String>,
+) -> Result<GitPullResult, String> {
+    let workspace = idle_checkout(&state, git_target(&state, task_id.as_deref(), project_id.as_deref())?)?;
+    let root = canonical_root(&workspace)?;
+    let status = {
+        let root = root.clone();
+        blocking(move || git::sync_status(&root)).await?
+    };
+    if status.branch.is_none() {
+        return Err("Check out a branch before pulling".into());
+    }
+    if status.upstream.is_none() {
+        return Err("This branch has no upstream yet. Publish it first".into());
+    }
+    fetch_checkout(&app, &root, false).await?;
+    let guard = locked_checkout(&app, &state, task_id.as_deref(), project_id.as_deref()).await?;
+    let workspace = guard.workspace.clone();
+    blocking(move || {
+        let (outcome, pulled) = git::fast_forward(&workspace)?;
+        Ok(GitPullResult {
+            outcome,
+            pulled,
+            sync: git::sync_status(&workspace)?,
+            changes: git::changes(&workspace)?,
+        })
+    })
+    .await
+    .map_err(|error| worker::redact_and_limit(&error))
+}
+
+#[tauri::command]
+pub async fn git_log(
+    state: State<'_, MetadataState>,
+    task_id: Option<String>,
+    project_id: Option<String>,
+    skip: usize,
+    limit: usize,
+) -> Result<GitLogPage, String> {
+    let workspace = git_target(&state, task_id.as_deref(), project_id.as_deref())?;
+    blocking(move || git::log(&workspace, skip, limit)).await
+}
+
+#[tauri::command]
+pub async fn git_commit_files(
+    state: State<'_, MetadataState>,
+    task_id: Option<String>,
+    project_id: Option<String>,
+    sha: String,
+) -> Result<GitCommitFiles, String> {
+    let workspace = git_target(&state, task_id.as_deref(), project_id.as_deref())?;
+    blocking(move || git::commit_files(&workspace, &sha)).await
+}
+
+#[tauri::command]
+pub async fn git_commit_diff(
+    state: State<'_, MetadataState>,
+    task_id: Option<String>,
+    project_id: Option<String>,
+    sha: String,
+    path: String,
+    old_path: Option<String>,
+) -> Result<GitChangeFile, String> {
+    let workspace = git_target(&state, task_id.as_deref(), project_id.as_deref())?;
+    blocking(move || git::commit_diff(&workspace, &sha, &path, old_path.as_deref())).await
+}
+
+#[tauri::command]
+pub async fn git_undo_commit(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    task_id: Option<String>,
+    project_id: Option<String>,
+    sha: String,
+) -> Result<GitUndoResult, String> {
+    let guard = locked_checkout(&app, &state, task_id.as_deref(), project_id.as_deref()).await?;
+    let workspace = guard.workspace.clone();
+    blocking(move || git::undo_commit(&workspace, &sha).map_err(|error| worker::redact_and_limit(&error))).await
+}
+
+#[tauri::command]
+pub async fn git_revert_commit(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    task_id: Option<String>,
+    project_id: Option<String>,
+    sha: String,
+) -> Result<GitRevertResult, String> {
+    let guard = locked_checkout(&app, &state, task_id.as_deref(), project_id.as_deref()).await?;
+    let workspace = guard.workspace.clone();
+    blocking(move || git::revert_commit(&workspace, &sha).map_err(|error| worker::redact_and_limit(&error))).await
+}
+
+/// The folder a Git command acts on: a chat's workspace, or a project's folder (Git mode, and
+/// a draft's branch picker before its first chat exists).
+fn git_target(
     state: &MetadataState,
     task_id: Option<&str>,
     project_id: Option<&str>,
@@ -3553,7 +3760,7 @@ pub async fn git_branches(
     task_id: Option<String>,
     project_id: Option<String>,
 ) -> Result<GitBranches, String> {
-    let workspace = branch_target(&state, task_id.as_deref(), project_id.as_deref())?;
+    let workspace = git_target(&state, task_id.as_deref(), project_id.as_deref())?;
     blocking(move || git::branches(&workspace)).await
 }
 
@@ -3573,7 +3780,7 @@ pub async fn git_checkout(
         Some(task_id) => Some(task_lock(&app, task_id).lock_owned().await),
         None => None,
     };
-    let target = branch_target(&state, task_id.as_deref(), project_id.as_deref())?;
+    let target = git_target(&state, task_id.as_deref(), project_id.as_deref())?;
     let workspace = idle_checkout(&state, target)?;
     let root = git::inspect_project(&workspace)
         .root
@@ -3629,13 +3836,19 @@ pub async fn git_checkout(
 #[tauri::command]
 pub async fn git_pr_prepare(
     state: State<'_, MetadataState>,
-    task_id: String,
+    task_id: Option<String>,
+    project_id: Option<String>,
     remote: String,
 ) -> Result<GitPrInfo, String> {
-    let workspace = git_workspace(&state, &task_id)?;
+    let workspace = idle_checkout(&state, git_target(&state, task_id.as_deref(), project_id.as_deref())?)?;
     let root = git::inspect_project(&workspace)
         .root
         .ok_or("No Git repository")?;
+    prepare_pr(&root, &remote).await
+}
+
+async fn prepare_pr(root: &Path, remote: &str) -> Result<GitPrInfo, String> {
+    let root = root.to_path_buf();
     let info = git::publish_info(&root)?;
     let head = info
         .branch
@@ -3651,7 +3864,7 @@ pub async fn git_pr_prepare(
     if local != pushed {
         return Err("Push the latest commits before creating a PR".into());
     }
-    let repo = git::remote_repo(&root, &remote)?;
+    let repo = git::remote_repo(&root, remote)?;
     let metadata = git_cli(
         &root,
         "gh",
@@ -3731,7 +3944,8 @@ pub async fn git_pr_prepare(
 pub async fn git_pr_create(
     app: AppHandle,
     state: State<'_, MetadataState>,
-    task_id: String,
+    task_id: Option<String>,
+    project_id: Option<String>,
     remote: String,
     base: String,
     title: String,
@@ -3742,23 +3956,13 @@ pub async fn git_pr_create(
     {
         return Err("Enter a base branch and a PR title".into());
     }
-    let _task = task_lock(&app, &task_id).lock_owned().await;
-    let workspace = git_workspace(&state, &task_id)?;
-    let root = git::inspect_project(&workspace)
-        .root
-        .ok_or("No Git repository")?;
-    let _git = app
-        .state::<GitLocks>()
-        .for_root(root.canonicalize().map_err(|error| error.to_string())?)
-        .lock_owned()
-        .await;
-    git_workspace(&state, &task_id)?;
-    let prepared = git_pr_prepare(state, task_id, remote).await?;
+    let guard = locked_checkout(&app, &state, task_id.as_deref(), project_id.as_deref()).await?;
+    let prepared = prepare_pr(&guard.root, &remote).await?;
     if let Some(url) = prepared.existing_url {
         return Ok(url);
     }
     let args = pr_create_args(&prepared, base, title, body, draft);
-    let url = git_cli(&root, "gh", &args).await?;
+    let url = git_cli(&guard.root, "gh", &args).await?;
     validated_pr_url(&prepared.repo, &url)
 }
 
@@ -3767,13 +3971,17 @@ pub async fn git_generate_message(
     app: AppHandle,
     state: State<'_, MetadataState>,
     task_id: String,
+    files: Option<Vec<String>>,
+    body: Option<bool>,
 ) -> Result<GitGeneratedMessage, String> {
     let _task = task_lock(&app, &task_id).lock_owned().await;
-    let workspace = git_workspace(&state, &task_id)?;
+    let workspace = idle_checkout(&state, task_workspace(&state, &task_id)?)?;
     let snapshot = blocking(move || git::changes(&workspace)).await?;
+    // Git mode describes only the files ticked for the commit; empty means all of them.
+    let scope = files.unwrap_or_default();
     let mut diff = String::new();
     let mut truncated = false;
-    for file in &snapshot.files {
+    for file in snapshot.files.iter().filter(|file| scope.is_empty() || scope.contains(&file.path)) {
         for section in &file.sections {
             let remaining = 20_000usize.saturating_sub(diff.len());
             if remaining == 0 {
@@ -3818,14 +4026,18 @@ pub async fn git_generate_message(
     };
     let credential = credential_for(&app, &state, &provider)?;
     worker::ensure_worker(&app, &task, &provider, credential.as_deref()).await?;
-    let result = worker::request(&app, &task_id, json!({ "id": Uuid::new_v4().to_string(), "type": "generate_commit_message", "diff": diff, "truncated": truncated }), Duration::from_secs(40)).await?;
+    let body = body.unwrap_or(false);
+    let result = worker::request(&app, &task_id, json!({ "id": Uuid::new_v4().to_string(), "type": "generate_commit_message", "diff": diff, "truncated": truncated, "body": body }), Duration::from_secs(40)).await?;
     let message = result
         .as_str()
         .ok_or("The model did not return a commit message")?
         .trim()
         .to_string();
+    let (summary, description) = git::split_commit_message(&message);
     Ok(GitGeneratedMessage {
         message,
+        summary,
+        description,
         revision: snapshot.changes_revision,
     })
 }

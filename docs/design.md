@@ -27,6 +27,7 @@ Test a new surface in at least the default, Mono and one colourful preset, with 
 
 - **motion/react** (`motion`, `AnimatePresence`, `LayoutGroup`) for enter/exit, layout moves and anything tied to state: panel swaps, list reordering, the composer's hero→dock glide. Use springs for things that move. Read `useReducedMotion()` and drop transforms when it's true.
 - **CSS** for hover feedback, ambient loops and choreography: transitions use `var(--ease)`; the shell's staggered `rebuild-in` entrance, the sidebar tiles' liquid outline, pulsing status dots, the send comet, the Ultra Plan flame with its embers.
+- **Git mode's cast:** the composer ducks under the window as the mode opens (`composer-duck`, on the layer) and surfaces on the way out; the sync button's arrow launches on click and the send comet's ring runs round it while Git talks to the remote; committed rows zip up toward History as a "+1" floats off its tab; the duck splashes down on a clean tree.
 - **Direction means something:** side-panel views slide by their order (`swapDirection` in `side-panel.ts`); sub-agent tabs slide only the transcript.
 - **Cheap properties:** animate `transform` and `opacity`. The image backdrop crossfades two pre-blurred layers rather than animating the blur.
 - **Reduced motion:** a global rule collapses every duration to `.01ms`. A looping animation therefore also needs its own `@media (prefers-reduced-motion: reduce)` override beside it, setting a still end state so it doesn't flicker. The welcome comet is the one deliberate ambient exception.
@@ -34,7 +35,7 @@ Test a new surface in at least the default, Mono and one colourful preset, with 
 
 ## Components
 
-- **Primitives** (`src/components/ui/`): `ConfirmDialog` (use `danger` for destructive actions), `Menu` / `MenuButton`, `Popover`, `Select`, `Tooltip`, `ImageLightbox`, and `useConfirmAction` (the sidebar's two-click "Delete?" arm).
+- **Primitives** (`src/components/ui/`): `ConfirmDialog` (use `danger` for destructive actions), `Menu` / `MenuButton`, `Popover`, `Select`, `Tooltip`, `Checkbox` (a native checkbox, tri-state, with a drawn tick), `ImageLightbox`, and `useConfirmAction` (the sidebar's two-click "Delete?" arm).
 - **Buttons** (`styles.css`): `.primary-button`, `.secondary-button`, `.danger-button` (add `.compact` for dense rows), `.icon-button`, `.ghost-button`, `.text-button`, `.panel-button` in the chat header.
 - **Icons** (`Icons.tsx`): one hand-drawn set on a 24px grid, 1.8 stroke, round caps, `currentColor`. Add a path and a name to `IconName`; don't pull in an icon library.
 - **The agent asking the user** (questions, extension dialogs, the computer-use access card) renders inline above the composer (`InlineDialog`), not as a modal. Live status (goal loop, computer use) goes in a banner above the composer.

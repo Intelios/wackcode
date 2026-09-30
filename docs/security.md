@@ -13,7 +13,7 @@ No telemetry, account, backend, updater, automatic model discovery, or traffic o
 - public pages the agent reads with the built-in `web_fetch` during a run (GET only, public IPs only, user-switchable);
 - pages explicitly opened in the per-chat browser preview, plus their assets, API and WebSocket traffic (including in background chats);
 - HTTP/SSE MCP servers the user adds (their URL's origin only; headers refused over plain `http://` except to localhost);
-- the user's Git remote and GitHub (through their own `gh` login), only when they push or open a PR.
+- the user's Git remote and GitHub (through their own `gh` login), only when they fetch, pull, push or open a PR. Git mode also fetches once when it opens or switches repository (`git_fetch` with `background`, which can never raise a credential prompt); nothing fetches on a timer, on window focus, or while Git mode is closed.
 
 Never add a network origin silently; call it out explicitly and update `README.md`.
 

@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { DiffComment, GitChangeFile, GitPrInfo, GitPublishInfo, TaskMode } from "../types";
-import { isFresh } from "../changes-utils";
 import { Icon } from "./Icons";
 import { Select } from "./ui/Select";
+import { CommentsList, PrForm } from "./ChangesSheets";
 
 export type DockTab = "commit" | "publish" | "pr" | "comments";
 
@@ -211,97 +211,37 @@ function PublishSheet(props: ChangesDockProps & { upstream?: string | null }) {
 }
 
 function PrSheet(props: ChangesDockProps & { preparing: boolean; onRetryPrepare: () => void }) {
-  const { pr } = props;
-  if (props.preparing) {
-    return <div className="dock-form"><div className="dock-note dock-preparing"><Icon name="spark" className="spinning" /> Drafting title and description…</div></div>;
-  }
-  if (!pr) {
-    return (
-      <div className="dock-form">
-        <small className="dock-note">Title and description are drafted from the branch's commits.</small>
-        <div className="dock-actions">
-          <span className="dock-spacer" />
-          <button type="button" className="secondary-button compact" disabled={props.disabled || !props.remote} onClick={props.onRetryPrepare}>Prepare pull request</button>
-        </div>
-      </div>
-    );
-  }
-  if (pr.existingUrl) {
-    return (
-      <div className="dock-form">
-        <div className="dock-row"><Icon name="pullRequest" /><span className="dock-note">A pull request already exists for this branch.</span></div>
-        <div className="dock-actions">
-          <span className="dock-spacer" />
-          <button type="button" className="secondary-button compact" onClick={() => props.onOpenPr(pr.existingUrl!)}><Icon name="external" /> Open pull request</button>
-        </div>
-      </div>
-    );
-  }
   return (
-    <div className="dock-form">
-      <div className="dock-note">{pr.repo} · {pr.head} → <input aria-label="PR base branch" className="dock-inline" value={props.prBase} onChange={(event) => props.onPrFields({ base: event.target.value })} /></div>
-      <input aria-label="PR title" placeholder="Title" value={props.prTitle} onChange={(event) => props.onPrFields({ title: event.target.value })} />
-      <textarea aria-label="PR description" placeholder="Description" value={props.prBody} onChange={(event) => props.onPrFields({ body: event.target.value })} />
-      <div className="dock-actions">
-        <label className="dock-check"><input type="checkbox" checked={props.draft} onChange={(event) => props.onPrFields({ draft: event.target.checked })} /> Draft</label>
-        <span className="dock-spacer" />
-        <button type="button" className="primary-button compact" disabled={props.disabled || !props.prBase.trim() || !props.prTitle.trim()}
-          onClick={() => void props.run(() => props.onCreatePr(props.remote, props.prBase, props.prTitle, props.prBody, props.draft))}>
-          Create pull request
-        </button>
-      </div>
-    </div>
+    <PrForm
+      pr={props.pr}
+      base={props.prBase}
+      title={props.prTitle}
+      body={props.prBody}
+      draft={props.draft}
+      preparing={props.preparing}
+      disabled={props.disabled}
+      remote={props.remote}
+      onFields={props.onPrFields}
+      onRetryPrepare={props.onRetryPrepare}
+      onCreate={props.onCreatePr}
+      onOpenPr={props.onOpenPr}
+      run={props.run}
+    />
   );
 }
 
 function CommentsSheet(props: ChangesDockProps & { editText: Record<string, string>; setEditText: React.Dispatch<React.SetStateAction<Record<string, string>>> }) {
-  const { comments, files, editText, setEditText } = props;
   return (
-    <div className="dock-form">
-      {comments.length === 0 && <small className="dock-note">No pending comments — hover a diff line and click +.</small>}
-      {comments.map((comment) => {
-        const file = files.find((item) => item.path === comment.path);
-        const fresh = isFresh(comment, file);
-        const draft = editText[comment.id];
-        return (
-          <div className="dock-comment" key={comment.id}>
-            <div className="diff-comment-meta">
-              <span>{comment.path}:{comment.line} · {comment.layer}{comment.side === "old" ? " · removed" : ""}</span>
-              {!fresh && <em>changed since comment</em>}
-            </div>
-            {draft !== undefined ? (
-              <>
-                <textarea aria-label={`Edit comment ${comment.path}:${comment.line}`} value={draft}
-                  onChange={(event) => setEditText((before) => ({ ...before, [comment.id]: event.target.value }))} />
-                <div className="diff-comment-actions">
-                  <button type="button" className="compact" onClick={() => setEditText((before) => { const next = { ...before }; delete next[comment.id]; return next; })}>Cancel</button>
-                  <button type="button" className="compact" disabled={props.disabled || !draft.trim()}
-                    onClick={() => void props.run(async () => { await props.onComments(comments.map((item) => item.id === comment.id ? { ...item, text: draft.trim() } : item)); setEditText((before) => { const next = { ...before }; delete next[comment.id]; return next; }); })}>Save</button>
-                </div>
-              </>
-            ) : (
-              <>
-                <p>{comment.text}</p>
-                <div className="diff-comment-actions">
-                  <button type="button" className="compact" onClick={() => setEditText((before) => ({ ...before, [comment.id]: comment.text }))}>Edit</button>
-                  <button type="button" className="compact danger" disabled={props.disabled}
-                    onClick={() => void props.run(() => props.onComments(comments.filter((item) => item.id !== comment.id)))}>Remove</button>
-                </div>
-              </>
-            )}
-          </div>
-        );
-      })}
-      {comments.length > 0 && (
-        <div className="dock-actions">
-          <span className="dock-note">{comments.length} pending</span>
-          <span className="dock-spacer" />
-          <button type="button" className="primary-button compact" disabled={props.disabled}
-            onClick={() => void props.run(() => props.onAddressComments(comments))}>
-            {props.mode === "build" ? "Address comments" : "Plan fixes"}
-          </button>
-        </div>
-      )}
-    </div>
+    <CommentsList
+      comments={props.comments}
+      files={props.files}
+      disabled={props.disabled}
+      mode={props.mode}
+      editText={props.editText}
+      setEditText={props.setEditText}
+      onComments={props.onComments}
+      onAddressComments={props.onAddressComments}
+      run={props.run}
+    />
   );
 }

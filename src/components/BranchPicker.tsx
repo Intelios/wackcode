@@ -7,8 +7,11 @@ import { Popover } from "./ui/Popover";
 interface BranchPickerProps {
   /** The checked-out branch; null on a detached HEAD. */
   branch: string | null;
-  /** `pill` sits in the new-chat project bar; `meta` in the chat header's workspace line. */
-  variant: "pill" | "meta";
+  /** `pill` sits in the new-chat project bar; `meta` in the chat header's workspace line;
+   *  `toolbar` in Git mode's toolbar, captioned like GitHub Desktop's "Current branch". */
+  variant: "pill" | "meta" | "toolbar";
+  /** Why switching is unavailable right now; the popover still opens and says so. */
+  disabledReason?: string;
   side?: "top" | "bottom";
   onLoad: () => Promise<GitBranches>;
   /** Rejects with a user-facing sentence, shown in the popover. */
@@ -19,7 +22,7 @@ type Row = { key: string; name: string; kind: GitCheckoutKind; branch?: GitBranc
 
 /** The branch label, and a searchable popover to switch the checkout to another branch,
  *  track a remote one, or create one at HEAD. Nothing is fetched: it lists the refs Git has. */
-export function BranchPicker({ branch, variant, side = "bottom", onLoad, onCheckout }: BranchPickerProps) {
+export function BranchPicker({ branch, variant, side = "bottom", disabledReason, onLoad, onCheckout }: BranchPickerProps) {
   const reduce = useReducedMotion();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -64,6 +67,7 @@ export function BranchPicker({ branch, variant, side = "bottom", onLoad, onCheck
 
   async function choose(row: Row) {
     if (pending || row.branch?.worktree) return;
+    if (disabledReason) { setError(disabledReason); return; }
     if (row.kind === "local" && row.name === current) { setOpen(false); return; }
     setPending(row.key); setError("");
     try {
@@ -117,7 +121,7 @@ export function BranchPicker({ branch, variant, side = "bottom", onLoad, onCheck
       <button
         ref={triggerRef}
         type="button"
-        className={`branch-trigger ${variant === "pill" ? "project-bar-branch" : "branch-meta"}`}
+        className={`branch-trigger ${variant === "pill" ? "project-bar-branch" : variant === "toolbar" ? "branch-toolbar" : "branch-meta"}`}
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={`Branch: ${label}. Switch branch`}
@@ -125,6 +129,7 @@ export function BranchPicker({ branch, variant, side = "bottom", onLoad, onCheck
         onClick={() => (open ? close() : show())}
       >
         <Icon name="branch" />
+        {variant === "toolbar" && <span className="branch-toolbar-caption">Current branch</span>}
         <span className="branch-trigger-name">
           <AnimatePresence initial={false} mode="popLayout">
             <motion.span

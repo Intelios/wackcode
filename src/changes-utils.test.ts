@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DiffComment, GitChangeFile, GitDiffSection } from "./types";
-import { changeEntries, hunkLabel, isFresh, lineAnchor, sectionComments, splitPath } from "./changes-utils";
+import { changeEntries, hunkLabel, isFresh, lineAnchor, sectionComments, splitPath, splitRows } from "./changes-utils";
+import type { GitDiffHunk, GitDiffLine } from "./types";
 
 const section: GitDiffSection = {
   layer: "working", revision: "rev-1", diff: "", truncated: false, additions: 2, deletions: 1,
@@ -17,7 +18,7 @@ const section: GitDiffSection = {
 
 const file: GitChangeFile = {
   path: "src/deep/file.ts", oldPath: null, status: "modified", staged: false, unstaged: true,
-  untracked: false, binary: false, hunkable: true, truncated: false, diff: "", sections: [section]
+  untracked: false, binary: false, hunkable: true, truncated: false, sections: [section]
 };
 
 const comment = (over: Partial<DiffComment>): DiffComment => ({
@@ -79,5 +80,25 @@ describe("changes-utils", () => {
     expect(orphans.map((item) => item.id)).toEqual(["d"]);
     // Stale revisions and other files are neither inline nor orphan here.
     expect([...inline.values()].flat().length + orphans.length).toBe(4);
+  });
+
+  it("pairs a hunk side by side for the split view", () => {
+    const line = (text: string): GitDiffLine => ({
+      kind: text[0] === "+" ? "addition" : text[0] === "-" ? "deletion" : text[0] === " " ? "context" : "meta",
+      text, oldLine: null, newLine: null
+    });
+    const hunk = (...texts: string[]): GitDiffHunk => ({ id: 0, header: "@@", oldStart: 1, newStart: 1, lines: texts.map(line) });
+    const shape = (h: GitDiffHunk) => splitRows(h).map((row) => row.kind === "meta"
+      ? `meta:${row.cell.index}`
+      : `${row.left?.index ?? "·"}|${row.right?.index ?? "·"}`);
+
+    // Context on both sides; two removals pair with one addition, leaving a blank right cell.
+    expect(shape(hunk(" a", "-b", "-c", "+B", " d"))).toEqual(["0|0", "1|3", "2|·", "4|4"]);
+    // Pure additions and a trailing removal.
+    expect(shape(hunk("+x", "+y"))).toEqual(["·|0", "·|1"]);
+    expect(shape(hunk(" a", "-z"))).toEqual(["0|0", "1|·"]);
+    // "\ No newline" spans both columns; two change blocks stay separate.
+    expect(shape(hunk("-a", "\\ No newline at end of file", "+a"))).toEqual(["0|·", "meta:1", "·|2"]);
+    expect(shape(hunk("-a", "+A", " m", "-b", "+B"))).toEqual(["0|1", "2|2", "3|4"]);
   });
 });

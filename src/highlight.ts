@@ -193,9 +193,13 @@ function highlightDiffContent(content: string, lang: string, count: number): Rea
  * keeping the diff marker as a plain leading character so it inherits the line's add/del ink;
  * everything else (hunk headers, `\ No newline at end of file`) stays plain. Falls back to the
  * plain texts when the language is unknown. `kinds` marks lines that are not code as `"meta"`.
+ * `marker: false` drops the `+`/`-`/space marker: the split view shows each side's code bare.
  */
-export function highlightDiffLines(texts: string[], kinds: string[], lang: string | null | undefined): ReactNode[] {
-  const plain = texts.map((text) => text || " ");
+export function highlightDiffLines(texts: string[], kinds: string[], lang: string | null | undefined, options: { marker?: boolean } = {}): ReactNode[] {
+  const keepMarker = options.marker !== false;
+  const bare = (text: string, index: number) =>
+    !keepMarker && kinds[index] !== "meta" && text && "+- ".includes(text[0]) ? text.slice(1) : text;
+  const plain = texts.map((text, index) => bare(text, index) || " ");
   if (!lang) return plain;
   const code: number[] = [];
   const parts: string[] = [];
@@ -209,9 +213,10 @@ export function highlightDiffLines(texts: string[], kinds: string[], lang: strin
   if (!perLine) return plain;
   let next = 0;
   return texts.map((text, index) => {
-    if (code[next] !== index) return text || " ";
+    if (code[next] !== index) return bare(text, index) || " ";
     const at = next;
     next += 1;
-    return createElement(Fragment, null, text[0], perLine[at]);
+    if (keepMarker) return createElement(Fragment, null, text[0], perLine[at]);
+    return perLine[at].length ? createElement(Fragment, null, perLine[at]) : " ";
   });
 }

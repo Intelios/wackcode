@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { orderProjects, sidebarPageDirection, type SidebarPage } from "../git-mode";
 import type { ProjectRecord, TaskRecord } from "../types";
 import { Icon } from "./Icons";
 import { ArchivedList } from "./ArchivedList";
@@ -9,7 +10,7 @@ import { Tooltip } from "./ui/Tooltip";
 import { useConfirmAction } from "./ui/useConfirmAction";
 
 export type TaskAction = "rename" | "worktree" | "fork" | "reveal" | "copy" | "archive" | "unarchive" | "delete" | "delete-direct";
-export type ProjectAction = "reveal" | "remove";
+export type ProjectAction = "reveal" | "remove" | "pin" | "unpin";
 
 /** Collapse-key for the "No project" group, which has no ProjectRecord id. */
 export const NO_PROJECT_KEY = "__no_project__";
@@ -18,6 +19,8 @@ const EASE: [number, number, number, number] = [0.33, 1, 0.68, 1];
 
 interface SidebarProps {
   projects: ProjectRecord[];
+  /** Pinned projects float to the top (and to the top of Git mode's repository switcher). */
+  pinnedProjectIds: ReadonlySet<string>;
   tasks: TaskRecord[];
   selectedTaskId?: string;
   /** While open, the Archived view replaces the chat list; the footer tile and the header ✕ toggle it. */
@@ -39,13 +42,30 @@ interface SidebarProps {
   /** Archive every open chat in one group: a project id, or null for "No project". */
   onArchiveAll: (projectId: string | null) => void;
   onDeleteAllArchived: () => void;
+  /** Git mode: `top` replaces the New chat row and `page` the chat list. */
+  git?: { top: ReactNode; page: ReactNode };
+  /** Null when there's no project to open Git mode on. */
+  onToggleGit: (() => void) | null;
 }
 
-export function Sidebar({ projects, tasks, selectedTaskId, archivedOpen, pendingDialogTaskIds, collapsedProjectIds, onSelectTask, onNewChat, onNewDraft, onAddProject, onToggleArchived, onToggleProjectCollapsed, onOpenSettings, onTaskAction, onProjectAction, onRenameTask, onArchiveAll, onDeleteAllArchived }: SidebarProps) {
+/** Pages slide by their order (chats, archived, git): forward enters from the right. */
+const pageVariants = {
+  enter: ({ direction, reduce }: { direction: 1 | -1; reduce: boolean }) => (reduce ? { opacity: 0 } : { opacity: 0, x: 16 * direction }),
+  center: { opacity: 1, x: 0 },
+  exit: ({ direction, reduce }: { direction: 1 | -1; reduce: boolean }) => (reduce ? { opacity: 0 } : { opacity: 0, x: -16 * direction })
+};
+
+export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, archivedOpen, pendingDialogTaskIds, collapsedProjectIds, onSelectTask, onNewChat, onNewDraft, onAddProject, onToggleArchived, onToggleProjectCollapsed, onOpenSettings, onTaskAction, onProjectAction, onRenameTask, onArchiveAll, onDeleteAllArchived, git, onToggleGit }: SidebarProps) {
   const [renamingId, setRenamingId] = useState<string>();
   const [renameValue, setRenameValue] = useState("");
   const { confirming, confirm, setConfirming } = useConfirmAction();
-  const reduce = useReducedMotion();
+  const reduce = useReducedMotion() ?? false;
+  const page: SidebarPage = git ? "git" : archivedOpen ? "archived" : "chats";
+  // The direction is fixed when the page changes and held through the swap: App re-renders
+  // often, and recomputing it mid-animation would send the incoming page in from the wrong side.
+  const swap = useRef<{ page: SidebarPage; direction: 1 | -1 }>({ page, direction: 1 });
+  if (swap.current.page !== page) swap.current = { page, direction: sidebarPageDirection(swap.current.page, page) };
+  const direction = swap.current.direction;
   const archivedTasks = tasks.filter((task) => task.archived);
   const hasArchived = archivedTasks.length > 0;
   // Archived chats never appear inline; they live in the Archived view only.
@@ -142,12 +162,13 @@ export function Sidebar({ projects, tasks, selectedTaskId, archivedOpen, pending
     );
   }
 
-  function renderHeading({ name, groupKey, plusLabel, title, groupTasks, onPlus, menu }: {
+  function renderHeading({ name, groupKey, plusLabel, title, groupTasks, pinned, onPlus, menu }: {
     name: string;
     groupKey: string;
     plusLabel: string;
     title?: string;
     groupTasks: TaskRecord[];
+    pinned?: boolean;
     onPlus: () => void;
     menu?: ReactNode;
   }) {
@@ -164,6 +185,7 @@ export function Sidebar({ projects, tasks, selectedTaskId, archivedOpen, pending
           <Icon name="chevron" />
         </button>
         <span className="project-name">{name}</span>
+        {pinned && <Icon name="pin" className="project-pin" aria-label="Pinned" />}
         {collapsed && groupTasks.length > 0 && <span className="project-count">{groupTasks.length}</span>}
         {collapsed && groupTasks.some((task) => pendingDialogTaskIds.has(task.id)) && (
           <span className="sidebar-question-dot" title="A chat in this group is waiting for your answer" />
@@ -185,16 +207,23 @@ export function Sidebar({ projects, tasks, selectedTaskId, archivedOpen, pending
       {projects.length === 0 && looseTasks.length === 0 && (
         <div className="sidebar-empty">Start a new chat — with a project folder or without one.</div>
       )}
-      {projects.map((project) => {
+      {orderProjects(projects, pinnedProjectIds).map((project) => {
         const projectTasks = tasks.filter((task) => task.projectId === project.id && !task.archived);
+        const pinned = pinnedProjectIds.has(project.id);
         return (
-          <section className={`project-group ${collapsedProjectIds.has(project.id) ? "" : "open"}`} key={project.id}>
+          <motion.section
+            layout={reduce ? false : "position"}
+            transition={{ type: "spring", stiffness: 420, damping: 36 }}
+            className={`project-group ${collapsedProjectIds.has(project.id) ? "" : "open"}${pinned ? " pinned" : ""}`}
+            key={project.id}
+          >
             {renderHeading({
               name: project.name,
               groupKey: project.id,
               plusLabel: `New chat in ${project.name}`,
               title: project.path,
               groupTasks: projectTasks,
+              pinned,
               onPlus: () => onNewChat(project),
               menu: (
                 <MenuButton
@@ -203,6 +232,7 @@ export function Sidebar({ projects, tasks, selectedTaskId, archivedOpen, pending
                   items={() => [
                     { label: "New chat", icon: <Icon name="plus" />, onSelect: () => onNewChat(project) },
                     { label: "Archive all chats", icon: <Icon name="archive" />, disabled: projectTasks.length === 0, onSelect: () => onArchiveAll(project.id) },
+                    { label: pinned ? "Unpin project" : "Pin project", icon: <Icon name="pin" />, onSelect: () => onProjectAction(project, pinned ? "unpin" : "pin") },
                     "separator",
                     { label: "Reveal in Finder", icon: <Icon name="folder" />, onSelect: () => onProjectAction(project, "reveal") },
                     { label: "Remove project", icon: <Icon name="trash" />, danger: true, onSelect: () => onProjectAction(project, "remove") }
@@ -211,7 +241,7 @@ export function Sidebar({ projects, tasks, selectedTaskId, archivedOpen, pending
               )
             })}
             {!collapsedProjectIds.has(project.id) && projectTasks.map((task) => renderTask(task, project))}
-          </section>
+          </motion.section>
         );
       })}
       {looseTasks.length > 0 && (
@@ -240,10 +270,10 @@ export function Sidebar({ projects, tasks, selectedTaskId, archivedOpen, pending
   );
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar${git ? " git" : ""}`}>
       <div className="titlebar-drag" data-tauri-drag-region />
       <div className="sidebar-top">
-        {archivedOpen ? (
+        {git ? git.top : archivedOpen ? (
           <div className="archived-header">
             <h2 className="archived-heading">Archived</h2>
             {archivedTasks.length > 0 && <span className="archived-count">{archivedTasks.length}</span>}
@@ -268,17 +298,19 @@ export function Sidebar({ projects, tasks, selectedTaskId, archivedOpen, pending
           </button>
         )}
       </div>
-      <nav className="project-list" aria-label={archivedOpen ? "Archived chats" : "Projects and chats"}>
-        <AnimatePresence initial={false} mode="wait">
-          {archivedOpen ? (
-            <motion.div
-              key="archived"
-              className="sidebar-page"
-              initial={reduce ? false : { opacity: 0, x: 16 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={reduce ? { opacity: 0 } : { opacity: 0, x: -16 }}
-              transition={{ duration: 0.16, ease: EASE }}
-            >
+      <nav className={`project-list${git ? " git-list" : ""}`} aria-label={git ? "Git changes" : archivedOpen ? "Archived chats" : "Projects and chats"}>
+        <AnimatePresence initial={false} mode="wait" custom={{ direction, reduce }}>
+          <motion.div
+            key={page}
+            className={`sidebar-page${page === "git" ? " git-page" : ""}`}
+            custom={{ direction, reduce }}
+            variants={pageVariants}
+            initial="enter"
+            animate="center"
+            exit="exit"
+            transition={{ duration: 0.16, ease: EASE }}
+          >
+            {page === "git" ? git?.page : page === "archived" ? (
               <ArchivedList
                 tasks={tasks}
                 projects={projects}
@@ -286,25 +318,26 @@ export function Sidebar({ projects, tasks, selectedTaskId, archivedOpen, pending
                 onSelectTask={onSelectTask}
                 onTaskAction={onTaskAction}
               />
-            </motion.div>
-          ) : (
-            <motion.div
-              key="chats"
-              className="sidebar-page"
-              initial={reduce ? false : { opacity: 0, x: -16 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={reduce ? { opacity: 0 } : { opacity: 0, x: 16 }}
-              transition={{ duration: 0.16, ease: EASE }}
-            >
-              {chatList}
-            </motion.div>
-          )}
+            ) : chatList}
+          </motion.div>
         </AnimatePresence>
       </nav>
       <div className="sidebar-footer">
         <Tooltip label={<>Add project <kbd>⌘O</kbd></>}>
           <button type="button" className="sidebar-tile" onClick={onAddProject} aria-label="Add project">
             <Icon name="folder" />
+          </button>
+        </Tooltip>
+        <Tooltip label={onToggleGit ? <>{git ? "Exit Git mode" : "Git mode"} <kbd>⌘⇧G</kbd></> : "Add a project to use Git mode"}>
+          <button
+            type="button"
+            className={`sidebar-tile git-tile${git ? " active" : ""}`}
+            onClick={onToggleGit ?? undefined}
+            disabled={!onToggleGit}
+            aria-label="Git mode"
+            aria-pressed={Boolean(git)}
+          >
+            <Icon name="git" />
           </button>
         </Tooltip>
         {hasArchived && (

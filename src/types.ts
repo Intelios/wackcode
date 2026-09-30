@@ -1130,12 +1130,12 @@ export interface GitChangeFile {
   binary: boolean;
   hunkable: boolean;
   truncated: boolean;
-  diff: string;
   sections: GitDiffSection[];
 }
 
 export interface GitDiffSection {
-  layer: "staged" | "working";
+  /** `commit`: a past commit against its first parent (History; read-only). */
+  layer: "staged" | "working" | "commit";
   revision: string;
   diff: string;
   hunks: GitDiffHunk[];
@@ -1226,7 +1226,88 @@ export interface GitPrInfo {
 
 export interface GitGeneratedMessage {
   message: string;
+  /** `message` split for Git mode's form: its first line, then the rest. */
+  summary: string;
+  description: string;
   revision: string;
+}
+
+/** Which folder a Git command acts on: a chat's workspace, or a project's folder (Git mode). */
+export type GitTarget = { taskId: string } | { projectId: string };
+
+export type DiffLayout = "unified" | "split";
+
+/** Where a checkout stands against its remote, read from local refs (no network). */
+export interface GitSyncStatus {
+  branch: string | null;
+  upstream: string | null;
+  remotes: string[];
+  /** Where Fetch goes: the upstream's remote, else `origin`, else the first remote. */
+  fetchRemote: string | null;
+  /** Against the upstream; with no upstream, `ahead` counts commits no remote has yet. */
+  ahead: number;
+  behind: number;
+  /** When the last fetch finished (RFC 3339); null before the first. */
+  fetchedAt: string | null;
+  head: string | null;
+  hasHead: boolean;
+}
+
+export type GitPullOutcome = "updated" | "up_to_date" | "diverged";
+
+export interface GitPullResult {
+  outcome: GitPullOutcome;
+  pulled: number;
+  sync: GitSyncStatus;
+  changes: GitChanges;
+}
+
+export interface GitCommit {
+  sha: string;
+  shortSha: string;
+  parents: string[];
+  authorName: string;
+  authorEmail: string;
+  authoredAt: string;
+  subject: string;
+  body: string;
+  /** No remote-tracking ref contains it yet. */
+  unpushed: boolean;
+}
+
+export interface GitLogPage {
+  commits: GitCommit[];
+  hasMore: boolean;
+  head: string | null;
+}
+
+export interface GitCommitFile {
+  path: string;
+  oldPath: string | null;
+  status: string;
+  /** Null for binary files. */
+  additions: number | null;
+  deletions: number | null;
+  binary: boolean;
+}
+
+export interface GitCommitFiles {
+  sha: string;
+  files: GitCommitFile[];
+  truncated: boolean;
+}
+
+export interface GitUndoResult {
+  summary: string;
+  description: string;
+  files: string[];
+  changes: GitChanges;
+}
+
+export interface GitRevertResult {
+  /** `conflict`: the revert was aborted and the tree is unchanged. */
+  outcome: "reverted" | "conflict";
+  changes: GitChanges;
 }
 
 export interface SaveProviderInput {

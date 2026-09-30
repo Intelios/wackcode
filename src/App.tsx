@@ -13,6 +13,8 @@ import { displayAgentName, hasSubagentCall, pruneDisabledTools, sameToolCatalog,
 import { CHANGES_VIEW, TERMINAL_VIEW, durableView, rememberedView, toggleView, viewForChat, viewKey, type PanelViewKind, type SidePanelView } from "./side-panel";
 import { APP_SLASH_COMMANDS } from "./command-utils";
 import { performChatNavigation, withoutResolvedDialog } from "./menu-navigation";
+import { PINNED_PROJECTS_KEY, busyChatsInCheckout, includedFiles, linkableChats, resolveLinkedChat } from "./git-mode";
+import { useGitMode } from "./hooks/useGitMode";
 import { DEFAULT_APPEARANCE, applyTheme, cacheTheme } from "./theme";
 import { AssistantNameContext, agentName } from "./agentName";
 import { Backdrop } from "./components/Backdrop";
@@ -35,7 +37,9 @@ import type {
   GitChangeFile,
   GitChanges,
   GitCheckoutKind,
+  GitCommit,
   GitDiffSection,
+  GitTarget,
   ImageContent,
   McpServerRecord,
   NormalizedMessage,
@@ -57,7 +61,13 @@ import type {
   WorkerEvent
 } from "./types";
 import { ChangesPanel } from "./components/ChangesPanel";
-import { BrowserPanel } from "./components/BrowserPanel";
+import { BrowserPanel, NativeOverlaysHidden } from "./components/BrowserPanel";
+import { GitChangesList, GitHistoryList, GitPanelTop } from "./components/GitSidebar";
+import { GitCommitForm } from "./components/GitCommitForm";
+import { GitCommitView } from "./components/GitCommitView";
+import { GitToolbar } from "./components/GitToolbar";
+import { GitActivity, GitNoticeCard, GitWorkspace } from "./components/GitWorkspace";
+import { RepoSwitcher } from "./components/RepoSwitcher";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { SidePanel } from "./components/SidePanel";
 import { SubagentPanelLink } from "./components/SubagentChip";
@@ -101,6 +111,16 @@ const emptyData: AppData = {
 
 /** Matches `--ease` in styles.css. */
 const EASE: [number, number, number, number] = [0.33, 1, 0.68, 1];
+
+const REVIEW_PROMPT = "Review all current uncommitted changes, including staged, unstaged, and untracked files. Delegate the review to the Reviewer sub-agent. Report its findings with file and line references. Do not make fixes or edit files.";
+const NO_COMMENTS: DiffComment[] = [];
+
+/** Pending diff comments as a prompt: fix them in Build, plan the fixes otherwise. */
+function commentsPrompt(comments: DiffComment[], mode: TaskMode): string {
+  const list = comments.map((comment) => `${comment.path}:${comment.line} (${comment.layer}, ${comment.side}; ${comment.revision}): ${comment.text}\nSource: ${comment.excerpt}`).join("\n\n");
+  const instruction = mode === "build" ? "Address these diff comments in the workspace, then explain what changed." : "Plan how to address these diff comments. Keep the workspace read-only.";
+  return `${instruction}\n\n${list}`;
+}
 
 const LAST_MODEL_KEY = "wackcode:lastModel";
 const LAST_PROJECT_KEY = "wackcode:lastProject";
@@ -230,6 +250,14 @@ export default function App() {
   /** The Archived view replacing the sidebar's chat list; closed again by its ✕ or footer tile. */
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [collapsedProjects, setCollapsedProjects] = useState<ReadonlySet<string>>(() => new Set(loadJSON<string[]>(COLLAPSED_PROJECTS_KEY, [])));
+  /** Projects pinned to the top of the sidebar and Git mode's repository switcher. */
+  const [pinnedProjects, setPinnedProjects] = useState<ReadonlySet<string>>(() => new Set(loadJSON<string[]>(PINNED_PROJECTS_KEY, [])));
+  /** The composer ducking out of Git mode's way ("away") and resurfacing ("back"). */
+  const [composerPhase, setComposerPhase] = useState<"away" | "back">();
+  const composerPhaseTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const [gitGenerating, setGitGenerating] = useState(false);
+  /** Bumped to open Git mode's pull request form from the clean state's card. */
+  const [gitPrRequest, setGitPrRequest] = useState(0);
   const [confirm, setConfirm] = useState<ConfirmState>();
   const [restoreDialog, setRestoreDialog] = useState<RestoreDialogState>();
   const [composerSeed, setComposerSeed] = useState<{ text: string; nonce: number }>();
@@ -270,6 +298,11 @@ export default function App() {
     [extensionRequests, accessRequests]
   );
   const selectedBusy = selectedTask?.status === "running" || selectedTask?.status === "stopping";
+  const git = useGitMode({ projects: data.projects, tasks: data.tasks, selectedTask, pinned: pinnedProjects });
+  const gitMode = git.view;
+  /** Read by long-lived listeners (worker events, window focus) that must not re-subscribe. */
+  const gitRef = useRef(git);
+  gitRef.current = git;
   const selectedModel = data.providers.find((provider) => provider.id === selectedTask?.providerId)?.models.find((model) => model.id === selectedTask?.modelId);
   const displayModelSwitches = useMemo(() => (runtime?.snapshot?.modelSwitches ?? []).map((entry) => ({
     id: entry.id,
@@ -391,8 +424,37 @@ export default function App() {
     }])));
   }
 
+  /** Git mode: the sidebar becomes the Git panel and the workspace a diff reader. The chat
+      view and the composer stay mounted underneath (the composer owns the draft). */
+  function openGit(request?: { projectId?: string; path?: string }) {
+    if (settingsOpen) closeSettings();
+    setArchivedOpen(false);
+    clearTimeout(composerPhaseTimer.current);
+    setComposerPhase("away");
+    // From the new-chat screen, the project the composer is set to is the one in view.
+    const draftProjectId = !selectedTask ? draft?.projectId ?? undefined : undefined;
+    git.open({ ...request, projectId: request?.projectId ?? draftProjectId });
+  }
+  function closeGit() {
+    if (!gitRef.current.view) return;
+    git.close();
+    clearTimeout(composerPhaseTimer.current);
+    setComposerPhase("back");
+    composerPhaseTimer.current = setTimeout(() => setComposerPhase(undefined), 700);
+    // The chat's own Changes panel skipped refreshes while Git mode was open.
+    void refreshChanges();
+  }
+  function toggleGit() {
+    if (gitRef.current.view) closeGit(); else openGit();
+  }
+  /** Leave Git mode for one of its chats. */
+  function openChatFromGit(taskId: string) {
+    selectTask(taskId);
+  }
+
   function selectTask(id: string) {
     performChatNavigation(id, {
+      dismissGitMode: () => closeGit(),
       dismissSettings: () => { if (settingsOpen) closeSettings(); },
       abandonDraft: () => {
         draftEpoch.current += 1;
@@ -436,6 +498,8 @@ export default function App() {
     setBrowserExpanded(false);
   }, [selectedTaskId]);
   useEffect(() => { localStorage.setItem(COLLAPSED_PROJECTS_KEY, JSON.stringify([...collapsedProjects])); }, [collapsedProjects]);
+  useEffect(() => { localStorage.setItem(PINNED_PROJECTS_KEY, JSON.stringify([...pinnedProjects])); }, [pinnedProjects]);
+  useEffect(() => () => clearTimeout(composerPhaseTimer.current), []);
   // The Archived view closes itself once its last chat leaves (unarchived or deleted):
   // the footer tile that opens it is gone too, so an empty panel would be a dead end.
   useEffect(() => {
@@ -559,7 +623,7 @@ export default function App() {
     const request = ++changesRequest.current;
     setChangesLoading(true);
     try {
-      const next = await api.gitChanges(taskId);
+      const next = await api.gitChanges({ taskId });
       if (selectedTaskRef.current === taskId && changesRequest.current === request) setChanges(next);
     } catch (reason) {
       if (selectedTaskRef.current === taskId && changesRequest.current === request) setGlobalError(String(reason));
@@ -655,7 +719,10 @@ export default function App() {
       } else if (payload.type === "queue_state") {
         patchRuntime(taskId, { queued: { steer: [...payload.steering], followUp: [...payload.followUp] } });
       } else if (payload.type === "run_state") {
-        patchTask(taskId, { status: payload.state, lastError: payload.state === "running" ? null : undefined });
+        // A run starting makes the chat the most recently active, which Git mode's linked
+        // chat follows.
+        patchTask(taskId, { status: payload.state, lastError: payload.state === "running" ? null : undefined, ...(payload.state === "running" ? { updatedAt: new Date().toISOString() } : {}) });
+        if (payload.state === "idle" || payload.state === "interrupted") gitRef.current.onWorkerActivity(taskId);
         if (payload.state === "running") {
           setRuntimes((current) => ({
             ...current,
@@ -699,7 +766,11 @@ export default function App() {
             });
           }
         }
-        if (payload.event === "tool_execution_end") void refreshChanges(taskId);
+        if (payload.event === "tool_execution_end") {
+          // Git mode reads its own project's changes; the chat's panel catches up on exit.
+          if (gitRef.current.view) gitRef.current.onWorkerActivity(taskId);
+          else void refreshChanges(taskId);
+        }
       } else if (payload.type === "worker_error") {
         patchRuntime(taskId, { error: payload.message });
         patchTask(taskId, { lastError: payload.message });
@@ -817,7 +888,11 @@ export default function App() {
   }, [transitioning, selectedTaskId, runtimes]);
 
   useEffect(() => {
-    const refresh = () => void refreshChanges();
+    // Focus refreshes what's on screen, never fetches: Git mode's network stays user-driven.
+    const refresh = () => {
+      if (gitRef.current.view) gitRef.current.scheduleRefresh();
+      else void refreshChanges();
+    };
     window.addEventListener("focus", refresh);
     return () => window.removeEventListener("focus", refresh);
   }, [refreshChanges]);
@@ -1425,56 +1500,66 @@ export default function App() {
       if (pendingSlash) setComposerTransfer({ taskId: task.id, text: "", images: [], files: [], nonce: Date.now() + 1 });
       return true;
     }
-    if (selectedTask.status === "stopping") return false;
-    if (selectedTask.status === "running") {
+    return promptTask(selectedTask, sent, { images, mode: modeOverride, literal, queue });
+  }
+
+  /**
+   * Send an already-composed message to an existing chat, selected or not (Git mode prompts its
+   * linked chat without leaving). The mode defaults to the chat's own.
+   */
+  async function promptTask(task: TaskRecord, sent: string, options: { images?: ImageContent[]; mode?: TaskMode; literal?: boolean; queue?: "steer" | "follow_up" } = {}): Promise<boolean> {
+    const { images, mode: modeOverride, literal, queue } = options;
+    const status = data.tasks.find((item) => item.id === task.id)?.status ?? task.status;
+    if (status === "stopping") return false;
+    if (status === "running") {
       // While Pi works, a message queues onto the run: steering delivers it at the run's next
       // boundary, a follow-up waits for the run to finish. Sends that cannot queue — the
       // programmatic ones (plan approval, reviews) and a stopped run — still refuse.
       const behavior = queue ?? (literal ? "steer" : undefined);
       if (!behavior) return false;
       try {
-        await api.queueMessage({ taskId: selectedTask.id, behavior, message: sent, images, ...(literal ? { literal: true } : {}) });
+        await api.queueMessage({ taskId: task.id, behavior, message: sent, images, ...(literal ? { literal: true } : {}) });
         return true;
       } catch (reason) {
-        patchRuntime(selectedTask.id, { error: String(reason) });
+        patchRuntime(task.id, { error: String(reason) });
         return false;
       }
     }
     const startedAt = Date.now();
-    patchTask(selectedTask.id, { status: "running", lastError: null });
-    patchRuntime(selectedTask.id, { error: undefined, activity: "starting", activeRun: { startedAt } });
+    const ownMode = task.id === selectedTask?.id ? currentMode : runtimes[task.id]?.planState?.mode ?? task.mode;
+    patchTask(task.id, { status: "running", lastError: null });
+    patchRuntime(task.id, { error: undefined, activity: "starting", activeRun: { startedAt } });
     try {
       await api.prompt({
-        taskId: selectedTask.id,
+        taskId: task.id,
         message: sent,
         startedAt,
-        providerId: selectedTask.providerId,
-        modelId: selectedTask.modelId,
-        thinkingLevel: selectedTask.thinkingLevel,
+        providerId: task.providerId,
+        modelId: task.modelId,
+        thinkingLevel: task.thinkingLevel,
         // modeOverride matters for "Approve & implement": the plan_state → record sync can
         // still be in flight when the follow-up prompt goes out.
-        mode: modeOverride ?? currentMode,
+        mode: modeOverride ?? ownMode,
         images,
         literal
       });
       return true;
     } catch (reason) {
-      patchTask(selectedTask.id, { status: "idle" });
-      patchRuntime(selectedTask.id, { error: String(reason), activeRun: undefined });
+      patchTask(task.id, { status: "idle" });
+      patchRuntime(task.id, { error: String(reason), activeRun: undefined });
       return false;
     }
   }
 
-  async function changeAction(file: GitChangeFile, section: GitDiffSection, hunkId?: number): Promise<void> {
-    if (!selectedTask) return;
-    const taskId = selectedTask.id;
+  /** Discard a file's or hunk's changes behind a danger confirmation; `apply` takes the fresh changes. */
+  function confirmDiscard(target: GitTarget, file: GitChangeFile, section: GitDiffSection, hunkId: number | undefined, apply: (next: GitChanges) => void, recover: () => void) {
+    if (section.layer === "commit") return;
+    const layer = section.layer;
     const perform = async () => {
       try {
-        const next = await api.gitChangeAction({ taskId, file: file.path, layer: section.layer, action: "discard", hunkId, expected: section.revision });
-        ++changesRequest.current;
-        if (selectedTaskRef.current === taskId) setChanges(next);
+        apply(await api.gitChangeAction(target, { file: file.path, layer, action: "discard", hunkId, expected: section.revision }));
       } catch (reason) {
-        void refreshChanges(taskId);
+        recover();
         throw reason;
       }
     };
@@ -1487,6 +1572,15 @@ export default function App() {
     });
   }
 
+  async function changeAction(file: GitChangeFile, section: GitDiffSection, hunkId?: number): Promise<void> {
+    if (!selectedTask) return;
+    const taskId = selectedTask.id;
+    confirmDiscard({ taskId }, file, section, hunkId, (next) => {
+      ++changesRequest.current;
+      if (selectedTaskRef.current === taskId) setChanges(next);
+    }, () => void refreshChanges(taskId));
+  }
+
   async function saveDiffComments(comments: DiffComment[]): Promise<void> {
     if (!selectedTask) return;
     const taskId = selectedTask.id;
@@ -1497,9 +1591,7 @@ export default function App() {
   async function addressDiffComments(comments: DiffComment[]): Promise<boolean> {
     if (!selectedTask) return false;
     const taskId = selectedTask.id;
-    const list = comments.map((comment) => `${comment.path}:${comment.line} (${comment.layer}, ${comment.side}; ${comment.revision}): ${comment.text}\nSource: ${comment.excerpt}`).join("\n\n");
-    const instruction = currentMode === "build" ? "Address these diff comments in the workspace, then explain what changed." : "Plan how to address these diff comments. Keep the workspace read-only.";
-    const sent = await sendPrompt(`${instruction}\n\n${list}`, { literal: true });
+    const sent = await sendPrompt(commentsPrompt(comments, currentMode), { literal: true });
     if (!sent) throw new Error("Could not send the comments. They remain pending.");
     const saved = await api.setDiffComments(taskId, []);
     setData((current) => ({ ...current, diffComments: { ...current.diffComments, [taskId]: saved } }));
@@ -1507,9 +1599,134 @@ export default function App() {
   }
 
   async function reviewChanges(): Promise<boolean> {
-    const sent = await sendPrompt("Review all current uncommitted changes, including staged, unstaged, and untracked files. Delegate the review to the Reviewer sub-agent. Report its findings with file and line references. Do not make fixes or edit files.", { literal: true });
+    const sent = await sendPrompt(REVIEW_PROMPT, { literal: true });
     if (!sent) throw new Error("Could not start review");
     return true;
+  }
+
+  // ── Git mode's hand-offs ── Every AI action goes through the linked chat (created on first
+  // use when the project has none) and Git mode stays open, so the diff updates as it works.
+
+  /** A chat in the project's own folder, for Git mode's AI actions. */
+  async function createProjectChat(projectId: string, name: string): Promise<TaskRecord | undefined> {
+    const choice = defaultChoice(projectId);
+    if (!choice) { openSettings(); return undefined; }
+    const task = await api.createTask({ projectId, useWorktree: false, name, ...choice });
+    setData((current) => ({ ...current, tasks: [...current.tasks, task] }));
+    rememberModel(projectId, choice);
+    git.actions.setPicked(task.id);
+    return task;
+  }
+
+  async function gitChat(name: string): Promise<TaskRecord | undefined> {
+    if (!gitMode) return undefined;
+    return gitLinked ?? await createProjectChat(gitMode.projectId, name);
+  }
+
+  /** Sends to the linked chat; failures land above the diff instead of throwing. */
+  async function gitSend(message: string, name: string): Promise<boolean> {
+    try {
+      const task = await gitChat(name);
+      if (!task) return false;
+      if (await promptTask(task, message, { literal: true })) return true;
+      git.actions.reportError(`Couldn't send to ${task.name}. Try again once it finishes.`);
+    } catch (reason) {
+      git.actions.reportError(String(reason));
+    }
+    return false;
+  }
+
+  async function gitAddressComments(comments: DiffComment[]): Promise<boolean> {
+    const task = gitLinked;
+    if (!task) return false;
+    const mode = runtimes[task.id]?.planState?.mode ?? task.mode;
+    if (!await promptTask(task, commentsPrompt(comments, mode), { literal: true })) throw new Error("Could not send the comments. They remain pending.");
+    const saved = await api.setDiffComments(task.id, []);
+    setData((current) => ({ ...current, diffComments: { ...current.diffComments, [task.id]: saved } }));
+    return true;
+  }
+
+  /** Comments belong to the linked chat, so its own Changes panel shows them too. */
+  async function saveGitComments(comments: DiffComment[]): Promise<void> {
+    const task = await gitChat("Review comments");
+    if (!task) return;
+    const saved = await api.setDiffComments(task.id, comments);
+    setData((current) => ({ ...current, diffComments: { ...current.diffComments, [task.id]: saved } }));
+  }
+
+  async function gitGenerate() {
+    const changes = git.state?.changes;
+    if (!gitLinked || !changes) return;
+    setGitGenerating(true);
+    try {
+      const files = includedFiles(changes.files, new Set(git.state?.excluded ?? []));
+      const generated = await api.gitGenerateMessage(gitLinked.id, { files, body: true });
+      git.actions.setDraft({ summary: generated.summary, description: generated.description, generatedRevision: generated.revision });
+    } catch (reason) {
+      git.actions.reportError(String(reason));
+    } finally {
+      setGitGenerating(false);
+    }
+  }
+
+  function gitAskCommit(commit: GitCommit, kind: "explain" | "review") {
+    const target = `commit ${commit.sha} ("${commit.subject}")`;
+    void gitSend(kind === "explain"
+      ? `Explain what ${target} changed and why. Read it with \`git show ${commit.sha}\`. Don't edit any files.`
+      : `Review ${target}. Read it with \`git show ${commit.sha}\`. Delegate the review to the Reviewer sub-agent if it's available, and report findings with file and line references. Don't edit any files.`,
+    kind === "explain" ? "Explain a commit" : "Review a commit");
+  }
+
+  function gitAskIntegrate() {
+    const divergence = git.state?.divergence;
+    const branch = git.state?.sync?.branch;
+    if (!divergence || !branch) return;
+    const plan = gitLinked ? isPlanMode(runtimes[gitLinked.id]?.planState?.mode ?? gitLinked.mode) : false;
+    git.actions.dismiss("divergence");
+    void gitSend(`${plan ? "Plan how to bring" : "Bring"} ${branch} up to date with ${divergence.upstream}: they have diverged (${divergence.ahead} local and ${divergence.behind} remote commits, already fetched). Rebase or merge as fits this repository, resolve any conflicts, then explain what you did. Don't push.`, "Update branch");
+  }
+
+  function gitAskRevert(commit: GitCommit) {
+    git.actions.dismiss("revertConflict");
+    void gitSend(`Revert commit ${commit.sha} ("${commit.subject}") by hand: \`git revert\` conflicted with later changes. Undo what that commit did while keeping the later work, then explain what changed. Don't commit or push.`, "Revert a commit");
+  }
+
+  /** Discarding from Git mode's list drops every layer of the file (staged and working). */
+  function gitDiscard(file: GitChangeFile, section?: GitDiffSection, hunkId?: number) {
+    if (!gitMode) return;
+    const target = section ?? file.sections.find((item) => item.layer === "staged") ?? file.sections[0];
+    if (!target) return;
+    confirmDiscard({ projectId: gitMode.projectId }, file, target, hunkId, git.actions.applyChanges, () => void git.refresh());
+  }
+
+  function gitUndoState(commit?: GitCommit): { can: boolean; reason?: string } {
+    const sync = git.state?.sync;
+    if (!commit || !sync) return { can: false };
+    if (gitBusyReason) return { can: false, reason: gitBusyReason };
+    if (commit.sha !== sync.head) return { can: false, reason: "Only the latest commit can be undone" };
+    if (commit.parents.length === 0) return { can: false, reason: "The first commit can't be undone" };
+    if (commit.parents.length > 1) return { can: false, reason: "Merge commits can't be undone here" };
+    if (sync.remotes.length > 0 && !commit.unpushed) return { can: false, reason: "This commit is already pushed" };
+    if (!sync.branch) return { can: false, reason: "Check out a branch first" };
+    return { can: true };
+  }
+
+  function gitRevertState(commit?: GitCommit): { can: boolean; reason?: string } {
+    if (!commit) return { can: false };
+    if (gitBusyReason) return { can: false, reason: gitBusyReason };
+    if (commit.parents.length > 1) return { can: false, reason: "Reverting merge commits isn't supported here" };
+    if ((git.state?.changes?.files.length ?? 0) > 0) return { can: false, reason: "Commit or discard your changes first" };
+    return { can: true };
+  }
+
+  function gitRevert(commit: GitCommit) {
+    const branch = git.state?.sync?.branch ?? "this branch";
+    setConfirm({
+      title: "Revert this commit?",
+      body: `This adds a new commit on ${branch} that undoes “${commit.subject}”. Nothing is pushed.`,
+      confirmLabel: "Revert commit",
+      run: () => git.actions.revert(commit)
+    });
   }
 
   /**
@@ -1973,8 +2190,18 @@ export default function App() {
     }
   }
 
+  function setProjectPinned(projectId: string, pinned: boolean) {
+    setPinnedProjects((current) => {
+      const next = new Set(current);
+      if (pinned) next.add(projectId); else next.delete(projectId);
+      return next;
+    });
+  }
+
   async function projectAction(project: ProjectRecord, action: ProjectAction) {
-    if (action === "reveal") {
+    if (action === "pin" || action === "unpin") {
+      setProjectPinned(project.id, action === "pin");
+    } else if (action === "reveal") {
       try { await api.revealPath(project.path); } catch (reason) { setGlobalError(String(reason)); }
     } else if (action === "remove") {
       setConfirm({
@@ -1990,6 +2217,8 @@ export default function App() {
             tasks: current.tasks.filter((task) => task.projectId !== project.id)
           }));
           setDraft((current) => current && current.projectId === project.id ? { ...current, projectId: null, useWorktree: false } : current);
+          setProjectPinned(project.id, false);
+          if (gitRef.current.view?.projectId === project.id) closeGit();
           if (selectedTask?.projectId === project.id) openDraft();
         }
       });
@@ -2002,6 +2231,8 @@ export default function App() {
       if (event.key === "Tab" && event.shiftKey) {
         // Inside the terminal the keystroke belongs to the shell, not the mode switcher.
         if (event.target instanceof HTMLElement && event.target.closest(".xterm")) return;
+        // Git mode hides the composer: ⇧Tab keeps its usual job of moving focus back.
+        if (gitMode) return;
         const busy = selectedTask && (selectedTask.status === "running" || selectedTask.status === "stopping");
         if (!settingsOpen && !confirm && !restoreDialog && extensionRequests.length === 0 && accessRequests.length === 0 && !busy) {
           event.preventDefault();
@@ -2013,6 +2244,7 @@ export default function App() {
       const key = event.key.toLowerCase();
       if (key === "n" && !event.shiftKey) {
         event.preventDefault();
+        closeGit();
         openDraft(selectedTask ? selectedTask.projectId : draft?.projectId);
       } else if (key === "o" && !event.shiftKey) {
         event.preventDefault();
@@ -2022,15 +2254,104 @@ export default function App() {
         if (settingsOpen) closeSettings(); else openSettings();
       } else if (key === "c" && event.shiftKey) {
         event.preventDefault();
+        closeGit();
         toggleChanges();
       } else if (key === "t" && event.shiftKey) {
         event.preventDefault();
+        closeGit();
         toggleTerminal();
+      } else if (key === "g" && event.shiftKey) {
+        event.preventDefault();
+        if (data.projects.length > 0 || gitMode) toggleGit();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   });
+
+  // ── Git mode's derived state. Memoized: App re-renders on every streaming delta, and the Git
+  // components are memo'd so a running agent doesn't re-render the whole file list.
+  const gitState = git.state;
+  const gitProjectId = gitMode?.projectId;
+  const gitProject = data.projects.find((project) => project.id === gitProjectId);
+  const gitLinkable = useMemo(() => gitProjectId ? linkableChats(data.tasks, gitProjectId) : [], [data.tasks, gitProjectId]);
+  const gitLinked = useMemo(
+    () => gitProjectId ? resolveLinkedChat(data.tasks, gitProjectId, gitState?.picked, gitMode?.cameFrom) : undefined,
+    [data.tasks, gitProjectId, gitState?.picked, gitMode?.cameFrom]
+  );
+  const gitBusy = useMemo(() => gitProjectId
+    ? busyChatsInCheckout(data.tasks, gitProjectId).sort((a, b) => Number(b.id === gitLinked?.id) - Number(a.id === gitLinked?.id))
+    : [], [data.tasks, gitProjectId, gitLinked?.id]);
+  const gitBusyReason = gitBusy[0] ? `Wait for ${gitBusy[0].name} to finish before changing Git files` : undefined;
+  const gitComments = gitLinked ? data.diffComments[gitLinked.id] ?? NO_COMMENTS : NO_COMMENTS;
+  const gitExcluded = useMemo(() => new Set(gitState?.excluded ?? []), [gitState?.excluded]);
+  const gitCommentCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const comment of gitComments) counts.set(comment.path, (counts.get(comment.path) ?? 0) + 1);
+    return counts;
+  }, [gitComments]);
+  const canReview = data.subagents.enabled && data.subagents.agents.some((agent) => agent.id === "builtin:reviewer" && agent.enabled);
+  const reviewReason = !data.subagents.enabled ? "Enable sub-agents in Settings" : !canReview ? "Enable Reviewer in Settings" : undefined;
+  const gitReviewState = useMemo(() => ({ can: canReview, reason: reviewReason }), [canReview, reviewReason]);
+  const gitChangeFiles = gitState?.changes?.files;
+  const gitSelectedFile = gitChangeFiles?.find((file) => file.path === gitState?.selectedPath) ?? gitChangeFiles?.[0];
+  const gitCommit = gitState?.log?.commits.find((commit) => commit.sha === gitState.selectedSha);
+
+  /** Git mode's callbacks, stable across renders (the `handlers` pattern): each forwards to
+      this render's closure, so memo'd Git components only re-render when their data moves. */
+  const gitImpl = {
+    exit: () => closeGit(),
+    switchProject: (projectId: string) => git.switchProject(projectId),
+    setPinned: (projectId: string, pinned: boolean) => setProjectPinned(projectId, pinned),
+    addProject: () => void addProject(),
+    discard: (file: GitChangeFile, section?: GitDiffSection, hunkId?: number) => gitDiscard(file, section, hunkId),
+    copyPath: (path: string) => void writeText(path).then(() => git.actions.notify("Path copied")),
+    copy: (text: string, what: string) => void writeText(text).then(() => git.actions.notify(`${what} copied`)),
+    revealFolder: (path: string) => {
+      const root = git.state?.changes?.root ?? gitProject?.path;
+      if (!root) return;
+      const slash = path.lastIndexOf("/");
+      void api.revealPath(slash > 0 ? `${root}/${path.slice(0, slash)}` : root).catch((reason) => setGlobalError(String(reason)));
+    },
+    revealProject: () => { if (gitProject) void api.revealPath(gitProject.path).catch((reason) => setGlobalError(String(reason))); },
+    generate: () => void gitGenerate(),
+    summary: (summary: string) => git.actions.setDraft({ summary }),
+    description: (description: string) => git.actions.setDraft({ description }),
+    commit: () => void git.actions.commit(),
+    listBranches: () => gitProjectId ? listProjectBranches(gitProjectId) : Promise.reject(new Error("No project")),
+    checkout: async (name: string, kind: GitCheckoutKind) => {
+      if (!gitProjectId) return;
+      await checkoutBranch({ projectId: gitProjectId }, name, kind);
+      void git.refresh();
+    },
+    publish: (remote: string) => void git.actions.push(remote),
+    preparePr: (remote: string) => gitProjectId ? api.gitPrPrepare({ projectId: gitProjectId }, remote) : Promise.reject(new Error("No project")),
+    createPr: async (remote: string, base: string, title: string, body: string, draft: boolean) => {
+      if (!gitProjectId) throw new Error("No project");
+      const url = await api.gitPrCreate({ projectId: gitProjectId }, remote, base, title, body, draft);
+      void api.revealPath(url).catch((reason) => setGlobalError(String(reason)));
+      return url;
+    },
+    openPr: (url: string) => void api.revealPath(url).catch((reason) => setGlobalError(String(reason))),
+    requestPr: () => setGitPrRequest((value) => value + 1),
+    link: (taskId: string) => git.actions.setPicked(taskId),
+    openChat: (taskId: string) => openChatFromGit(taskId),
+    review: async () => { await gitSend(REVIEW_PROMPT, "Review changes"); },
+    settings: () => openSettings(),
+    saveComments: (comments: DiffComment[]) => saveGitComments(comments),
+    addressComments: (comments: DiffComment[]) => gitAddressComments(comments),
+    askIntegrate: () => gitAskIntegrate(),
+    askCommit: (kind: "explain" | "review") => { if (gitCommit) gitAskCommit(gitCommit, kind); },
+    askRevert: () => { const commit = git.state?.revertConflict; if (commit) gitAskRevert(commit); },
+    undo: () => { if (gitCommit) void git.actions.undo(gitCommit); },
+    revert: () => { if (gitCommit) gitRevert(gitCommit); }
+  };
+  const gitImplRef = useRef(gitImpl);
+  gitImplRef.current = gitImpl;
+  const gitHandlers = useMemo(() => {
+    const keys = Object.keys(gitImplRef.current) as (keyof typeof gitImpl)[];
+    return Object.fromEntries(keys.map((key) => [key, (...args: unknown[]) => (gitImplRef.current[key] as (...values: unknown[]) => unknown)(...args)])) as typeof gitImpl;
+  }, []);
 
   // Served by the asset protocol, which may read only <app data>/backgrounds/ (tauri.conf.json).
   const backgroundImageUrl = data.appearance.backgroundImage && appDataPath
@@ -2043,12 +2364,99 @@ export default function App() {
   const composerMentions = mentions?.source === (mentionSource().source ?? "") ? mentions : undefined;
   const draftCatalog = !selectedTask && draftSlash?.projectId === (draft?.projectId ?? null) ? draftSlash : undefined;
 
+  // Git mode's sidebar: the repository switcher and tabs on top, the file list with the commit
+  // form (Changes) or the commit list (History) below.
+  const gitSidebar = gitMode && gitProject ? {
+    top: (
+      <GitPanelTop
+        switcher={(
+          <RepoSwitcher
+            projects={data.projects}
+            currentId={gitProject.id}
+            branch={gitState?.sync?.branch ?? gitState?.changes?.branch ?? gitProject.branch}
+            pinned={pinnedProjects}
+            onSelect={gitHandlers.switchProject}
+            onSetPinned={gitHandlers.setPinned}
+            onAddProject={gitHandlers.addProject}
+          />
+        )}
+        tab={gitMode.tab}
+        changesCount={gitChangeFiles?.length ?? 0}
+        commitPulse={gitState?.commitPulse ?? 0}
+        onTab={git.setTab}
+      />
+    ),
+    page: (
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div
+          key={gitMode.tab}
+          className="git-page-body"
+          initial={reduce ? false : { opacity: 0, x: gitMode.tab === "history" ? 14 : -14 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={reduce ? { opacity: 0 } : { opacity: 0, x: gitMode.tab === "history" ? -14 : 14 }}
+          transition={{ duration: reduce ? 0 : 0.15, ease: EASE }}
+        >
+          {gitMode.tab === "history" ? (
+            <GitHistoryList
+              commits={gitState?.log?.commits ?? []}
+              hasMore={gitState?.log?.hasMore ?? false}
+              loading={gitState?.log?.loading ?? true}
+              error={gitState?.log?.error}
+              showUnpushed={(gitState?.sync?.remotes.length ?? 0) > 0}
+              selectedSha={gitState?.selectedSha}
+              onSelect={git.actions.selectCommit}
+              onLoadMore={git.actions.loadMoreLog}
+            />
+          ) : gitState?.changes && !gitState.changes.isGit ? (
+            <div className="git-sidebar-empty">{gitProject.name} isn't a Git repository.</div>
+          ) : (
+            <>
+              <GitChangesList
+                files={gitChangeFiles ?? []}
+                excluded={gitExcluded}
+                selectedPath={gitSelectedFile?.path}
+                commentCounts={gitCommentCounts}
+                disabled={Boolean(gitBusyReason)}
+                onSelect={git.actions.select}
+                onToggle={git.actions.toggle}
+                onToggleAll={git.actions.toggleAll}
+                onDiscard={gitHandlers.discard}
+                onCopyPath={gitHandlers.copyPath}
+                onReveal={gitHandlers.revealFolder}
+              />
+              <GitCommitForm
+                branch={gitState?.sync?.branch ?? gitState?.changes?.branch ?? null}
+                summary={gitState?.summary ?? ""}
+                description={gitState?.description ?? ""}
+                stale={Boolean(gitState?.generatedRevision && gitState.changes && gitState.generatedRevision !== gitState.changes.changesRevision)}
+                checkedCount={includedFiles(gitChangeFiles ?? [], gitExcluded).length}
+                blockedReason={gitBusyReason ?? (gitChangeFiles?.some((file) => file.status === "conflict") && includedFiles(gitChangeFiles, gitExcluded).length === 0 ? "Resolve conflicts before committing" : undefined)}
+                generate={{
+                  available: Boolean(gitLinked) && !gitBusyReason,
+                  reason: !gitLinked ? "Start a chat in this project to generate messages" : gitBusyReason,
+                  running: gitGenerating
+                }}
+                agentName={agentName(data.appearance)}
+                committing={gitState?.committing ?? false}
+                commitPulse={gitState?.commitPulse ?? 0}
+                onSummary={gitHandlers.summary}
+                onDescription={gitHandlers.description}
+                onGenerate={gitHandlers.generate}
+                onCommit={gitHandlers.commit}
+              />
+            </>
+          )}
+        </motion.div>
+      </AnimatePresence>
+    )
+  } : undefined;
+
   return (
-    <div className={`app-shell${rebuilding ? " rebuild" : ""}`}>
+    <div className={`app-shell${rebuilding ? " rebuild" : ""}${gitMode ? " git-mode" : ""}`}>
       {data.appearance.backdrop === "image" && (
         <Backdrop
           imageUrl={backgroundImageUrl}
-          scene={settingsOpen || selectedTask ? "chat" : "hero"}
+          scene={settingsOpen || selectedTask || gitMode ? "chat" : "hero"}
           dim={data.appearance.imageDim}
           blur={data.appearance.imageBlur}
           crop={{ zoom: data.appearance.imageZoom, x: data.appearance.imageX, y: data.appearance.imageY }}
@@ -2102,16 +2510,21 @@ export default function App() {
         <>
       <Sidebar
         projects={data.projects}
+        pinnedProjectIds={pinnedProjects}
         tasks={data.tasks}
         selectedTaskId={selectedTaskId}
         archivedOpen={archivedOpen}
         pendingDialogTaskIds={pendingDialogTaskIds}
         collapsedProjectIds={collapsedProjects}
         onSelectTask={selectTask}
-        onNewChat={(project) => openDraft(project?.id ?? null)}
-        onNewDraft={() => openDraft()}
+        onNewChat={(project) => { closeGit(); openDraft(project?.id ?? null); }}
+        onNewDraft={() => { closeGit(); openDraft(); }}
         onAddProject={() => void addProject()}
-        onToggleArchived={() => setArchivedOpen((value) => !value)}
+        onToggleArchived={() => {
+          if (gitMode) { closeGit(); setArchivedOpen(true); } else setArchivedOpen((value) => !value);
+        }}
+        git={gitSidebar}
+        onToggleGit={data.projects.length > 0 || gitMode ? toggleGit : null}
         onToggleProjectCollapsed={toggleProjectCollapsed}
         onOpenSettings={openSettings}
         onTaskAction={(task, action) => void taskAction(task, action)}
@@ -2124,7 +2537,7 @@ export default function App() {
       <main className="workspace">
         <AnimatePresence initial={false}>
         {selectedTask ? (
-          <motion.div key="chat" className="chat-view" initial={false} exit={{ opacity: 0, transition: { duration: reduce ? 0 : 0.18, ease: EASE } }}>
+          <motion.div key="chat" className={`chat-view${gitMode ? " git-behind" : ""}`} inert={gitMode ? true : undefined} initial={false} exit={{ opacity: 0, transition: { duration: reduce ? 0 : 0.18, ease: EASE } }}>
             <motion.div initial={reduce ? false : { opacity: 0, y: -36 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reduce ? 0 : 0.45, delay: reduce ? 0 : 0.05, ease: EASE }}>
               <ChatHeader
               task={selectedTask}
@@ -2216,8 +2629,134 @@ export default function App() {
         ) : null}
         </AnimatePresence>
 
+        {/* Git mode covers the chat view, which stays mounted underneath (scroll position, and
+            no transcript remount on every toggle). */}
+        <AnimatePresence initial={false}>
+          {gitMode && gitProject && (
+            <motion.div
+              key="git"
+              className="git-view"
+              initial={reduce ? false : { opacity: 0 }}
+              animate={{ opacity: 1, transition: { duration: reduce ? 0 : 0.2, ease: EASE } }}
+              exit={{ opacity: 0, transition: { duration: reduce ? 0 : 0.18, ease: EASE } }}
+            >
+              <motion.div className="git-toolbar-wrap" initial={reduce ? false : { opacity: 0, y: -36 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reduce ? 0 : 0.45, delay: reduce ? 0 : 0.05, ease: EASE }}>
+                <GitToolbar
+                  branch={gitState?.sync?.branch ?? gitState?.changes?.branch ?? null}
+                  busyReason={gitBusyReason}
+                  onListBranches={gitHandlers.listBranches}
+                  onCheckout={gitHandlers.checkout}
+                  sync={gitState?.sync}
+                  network={gitState?.network}
+                  networkError={gitState?.networkError}
+                  onFetch={git.actions.fetch}
+                  onPull={git.actions.pull}
+                  onPush={git.actions.push}
+                  onPublish={gitHandlers.publish}
+                  onDismissNetworkError={() => git.actions.dismiss("networkError")}
+                  onPreparePr={gitHandlers.preparePr}
+                  onCreatePr={gitHandlers.createPr}
+                  onOpenPr={gitHandlers.openPr}
+                  linked={gitLinked}
+                  linkable={gitLinkable}
+                  onLink={gitHandlers.link}
+                  onOpenChat={gitHandlers.openChat}
+                  review={gitReviewState}
+                  onReview={gitHandlers.review}
+                  onSettings={gitHandlers.settings}
+                  comments={gitComments}
+                  files={gitChangeFiles ?? []}
+                  mode={gitLinked ? runtimes[gitLinked.id]?.planState?.mode ?? gitLinked.mode : "build"}
+                  onComments={gitHandlers.saveComments}
+                  onAddressComments={gitHandlers.addressComments}
+                  layout={git.layout}
+                  onLayout={git.setLayout}
+                  showLayout={gitMode.tab === "history" ? Boolean(gitState?.commitDiff) : Boolean(gitSelectedFile)}
+                  flash={gitState?.flash}
+                  prRequest={gitPrRequest}
+                  agentName={agentName(data.appearance)}
+                  onExit={gitHandlers.exit}
+                />
+              </motion.div>
+              <motion.div className="git-main" initial={reduce ? false : { opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reduce ? 0 : 0.4, delay: reduce ? 0 : 0.14, ease: EASE }}>
+                <GitActivity busy={gitBusy} waiting={pendingDialogTaskIds} agentName={agentName(data.appearance)} onOpenChat={gitHandlers.openChat} />
+                {gitMode.tab === "history" ? (
+                  <div className="git-history-main">
+                    {gitState?.revertConflict && (
+                      <GitNoticeCard
+                        icon="rewind"
+                        title="Reverting that commit conflicted with later changes."
+                        body="Nothing changed: the revert was aborted. The agent can undo it by hand while keeping the later work."
+                        action={`Ask ${agentName(data.appearance)} to revert it`}
+                        onAction={gitHandlers.askRevert}
+                        onDismiss={() => git.actions.dismiss("revertConflict")}
+                      />
+                    )}
+                    {gitState?.actionError && (
+                      <div className="error-banner git-error" role="alert">
+                        <span>{gitState.actionError}</span>
+                        <button type="button" className="icon-button" aria-label="Dismiss error" onClick={() => git.actions.dismiss("actionError")}><Icon name="close" /></button>
+                      </div>
+                    )}
+                    <GitCommitView
+                      commit={gitCommit}
+                      files={gitState?.commitFiles?.sha === gitCommit?.sha ? gitState?.commitFiles?.files : undefined}
+                      truncated={gitState?.commitFiles?.truncated ?? false}
+                      selectedPath={gitState?.commitPath}
+                      diff={gitState?.commitDiff?.sha === gitCommit?.sha ? gitState?.commitDiff?.file : undefined}
+                      loading={gitState?.commitLoading ?? false}
+                      layout={git.layout}
+                      direction={gitState?.direction ?? 1}
+                      showUnpushed={(gitState?.sync?.remotes.length ?? 0) > 0}
+                      undo={gitUndoState(gitCommit)}
+                      revert={gitRevertState(gitCommit)}
+                      agentName={agentName(data.appearance)}
+                      onSelectFile={git.actions.selectCommitFile}
+                      onUndo={gitHandlers.undo}
+                      onRevert={gitHandlers.revert}
+                      onAsk={gitHandlers.askCommit}
+                      onCopy={gitHandlers.copy}
+                    />
+                  </div>
+                ) : (
+                  <GitWorkspace
+                    isGit={gitState?.changes?.isGit ?? true}
+                    loading={gitState?.loading ?? true}
+                    error={gitState?.error}
+                    file={gitSelectedFile}
+                    layout={git.layout}
+                    direction={gitState?.direction ?? 1}
+                    comments={gitComments}
+                    disabled={Boolean(gitBusyReason)}
+                    onComments={gitHandlers.saveComments}
+                    onDiscard={gitHandlers.discard}
+                    sync={gitState?.sync}
+                    agentName={agentName(data.appearance)}
+                    linked={gitLinked}
+                    onPush={git.actions.push}
+                    onPull={git.actions.pull}
+                    onPublish={gitHandlers.publish}
+                    onCreatePr={gitHandlers.requestPr}
+                    onOpenChat={gitHandlers.openChat}
+                    onReveal={gitHandlers.revealProject}
+                    divergence={gitState?.divergence}
+                    onAskIntegrate={gitHandlers.askIntegrate}
+                    onDismissDivergence={() => git.actions.dismiss("divergence")}
+                    actionError={gitState?.actionError}
+                    onDismissError={() => git.actions.dismiss("actionError")}
+                  />
+                )}
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {configuredProviders.length > 0 && (
-          <div className={`composer-layer ${selectedTask ? "dock" : "hero"}`}>
+          <div
+            className={`composer-layer ${selectedTask ? "dock" : "hero"}`}
+            data-git={composerPhase}
+            inert={gitMode ? true : undefined}
+          >
             <AnimatePresence initial={false} mode="popLayout">
               {!selectedTask && (
                 <motion.h1
@@ -2286,8 +2825,8 @@ export default function App() {
         )}
       </main>
 
-      {selectedTask && <SidePanel
-        view={panelView}
+      {selectedTask && <NativeOverlaysHidden.Provider value={gitMode !== null}><SidePanel
+        view={gitMode ? null : panelView}
         width={panelWidth}
         onWidthChange={setPanelWidth}
         label={panelView?.kind === "browser" ? "Browser"
@@ -2337,8 +2876,8 @@ export default function App() {
         loading={changesLoading}
         busy={selectedTask.status === "running" || selectedTask.status === "stopping"}
         mode={currentMode}
-        canReview={data.subagents.enabled && data.subagents.agents.some((agent) => agent.id === "builtin:reviewer" && agent.enabled)}
-        reviewReason={!data.subagents.enabled ? "Enable sub-agents in Settings" : !data.subagents.agents.some((agent) => agent.id === "builtin:reviewer" && agent.enabled) ? "Enable Reviewer in Settings" : undefined}
+        canReview={canReview}
+        reviewReason={reviewReason}
         comments={data.diffComments[selectedTask.id] ?? []}
         onClose={closeSidePanel}
         onRefresh={() => void refreshChanges(selectedTask.id)}
@@ -2347,24 +2886,25 @@ export default function App() {
         onAction={changeAction}
         onCommit={async (message, files, revision) => {
           try {
-            const next = await api.gitCommit({ taskId: selectedTask.id, message, files, expected: revision });
+            const next = await api.gitCommit({ taskId: selectedTask.id }, { message, files, expected: revision });
             ++changesRequest.current;
             if (selectedTaskRef.current === selectedTask.id) setChanges(next);
           } catch (reason) { void refreshChanges(selectedTask.id); throw reason; }
         }}
         onGenerate={() => api.gitGenerateMessage(selectedTask.id)}
-        onPublishInfo={() => api.gitPublishInfo(selectedTask.id)}
-        onPush={async (remote) => { await api.gitPush(selectedTask.id, remote); void refreshChanges(selectedTask.id); }}
-        onPreparePr={(remote) => api.gitPrPrepare(selectedTask.id, remote)}
+        onPublishInfo={() => api.gitPublishInfo({ taskId: selectedTask.id })}
+        onPush={async (remote) => { await api.gitPush({ taskId: selectedTask.id }, remote); void refreshChanges(selectedTask.id); }}
+        onPreparePr={(remote) => api.gitPrPrepare({ taskId: selectedTask.id }, remote)}
         onCreatePr={async (remote, base, title, body, draft) => {
-          const url = await api.gitPrCreate(selectedTask.id, remote, base, title, body, draft);
+          const url = await api.gitPrCreate({ taskId: selectedTask.id }, remote, base, title, body, draft);
           void api.revealPath(url).catch((reason) => setGlobalError(String(reason)));
           return url;
         }}
         onOpenPr={(url) => { void api.revealPath(url).catch((reason) => setGlobalError(String(reason))); }}
         onComments={saveDiffComments}
         onAddressComments={addressDiffComments}
-      />}</SidePanel>}
+        onOpenGitMode={selectedTask.projectId && !selectedTask.usesWorktree ? (path) => openGit({ projectId: selectedTask.projectId!, path }) : undefined}
+      />}</SidePanel></NativeOverlaysHidden.Provider>}
         </>
       )}
 

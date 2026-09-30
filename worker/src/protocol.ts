@@ -631,7 +631,7 @@ export type WorkerCommand =
    * queue, so it answers while the call that runs the child is still going.
    */
   | { id: string; type: "watch_subagent"; target: SubagentTarget | null }
-  | { id: string; type: "generate_commit_message"; diff: string; truncated: boolean }
+  | { id: string; type: "generate_commit_message"; diff: string; truncated: boolean; body?: boolean }
   | { id: string; type: "set_model"; modelId: string }
   | { id: string; type: "set_thinking"; level: ThinkingLevel }
   | { id: string; type: "set_mode"; mode: TaskMode }

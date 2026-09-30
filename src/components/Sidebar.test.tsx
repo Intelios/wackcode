@@ -43,6 +43,8 @@ function Harness({ tasks, pendingDialogTaskIds = new Set<string>() }: { tasks: T
       onRenameTask={() => undefined}
       onArchiveAll={() => undefined}
       onDeleteAllArchived={() => undefined}
+      pinnedProjectIds={new Set<string>()}
+      onToggleGit={null}
     />
   );
 }
@@ -93,6 +95,8 @@ describe("Sidebar collapsible projects", () => {
           onRenameTask={() => undefined}
           onArchiveAll={() => undefined}
           onDeleteAllArchived={() => undefined}
+          pinnedProjectIds={new Set<string>()}
+          onToggleGit={null}
         />
       );
     }
@@ -140,6 +144,8 @@ describe("Sidebar collapsible projects", () => {
           onRenameTask={() => undefined}
           onArchiveAll={() => undefined}
           onDeleteAllArchived={() => undefined}
+          pinnedProjectIds={new Set<string>()}
+          onToggleGit={null}
         />
       );
     }
@@ -172,6 +178,8 @@ describe("Sidebar footer tiles", () => {
         onRenameTask={() => undefined}
         onArchiveAll={() => undefined}
         onDeleteAllArchived={() => undefined}
+        pinnedProjectIds={new Set<string>()}
+        onToggleGit={null}
       />
     );
   }
@@ -230,6 +238,8 @@ describe("Sidebar task actions", () => {
         onRenameTask={() => undefined}
         onArchiveAll={() => undefined}
         onDeleteAllArchived={() => undefined}
+        pinnedProjectIds={new Set<string>()}
+        onToggleGit={null}
       />
     );
   }
@@ -343,6 +353,8 @@ describe("Sidebar bulk actions", () => {
         onRenameTask={() => undefined}
         onArchiveAll={onArchiveAll}
         onDeleteAllArchived={onDeleteAllArchived}
+        pinnedProjectIds={new Set<string>()}
+        onToggleGit={null}
       />
     );
   }
@@ -370,3 +382,82 @@ describe("Sidebar bulk actions", () => {
     expect(deleted).toBe(1);
   });
 });
+
+describe("Sidebar pinning and Git mode", () => {
+  const many: ProjectRecord[] = [
+    { id: "p1", name: "Alpha", path: "/code/alpha", gitRoot: "/code/alpha", gitHasHead: true, branch: "main", createdAt: "now" },
+    { id: "p2", name: "Beta", path: "/code/beta", gitRoot: "/code/beta", gitHasHead: true, branch: "main", createdAt: "now" },
+    { id: "p3", name: "Gamma", path: "/code/gamma", gitRoot: "/code/gamma", gitHasHead: true, branch: "main", createdAt: "now" }
+  ];
+
+  function PinHarness({ pinned = [], git, onProjectAction = () => undefined, onToggleGit = () => undefined }: {
+    pinned?: string[];
+    git?: { top: React.ReactNode; page: React.ReactNode };
+    onProjectAction?: (project: ProjectRecord, action: string) => void;
+    onToggleGit?: (() => void) | null;
+  }) {
+    return (
+      <Sidebar
+        projects={many}
+        pinnedProjectIds={new Set(pinned)}
+        tasks={[task("t1", "p1", "Alpha chat")]}
+        archivedOpen={false}
+        pendingDialogTaskIds={new Set()}
+        collapsedProjectIds={new Set()}
+        onSelectTask={() => undefined}
+        onNewChat={() => undefined}
+        onNewDraft={() => undefined}
+        onAddProject={() => undefined}
+        onToggleArchived={() => undefined}
+        onToggleProjectCollapsed={() => undefined}
+        onOpenSettings={() => undefined}
+        onTaskAction={() => undefined}
+        onProjectAction={onProjectAction}
+        onRenameTask={() => undefined}
+        onArchiveAll={() => undefined}
+        onDeleteAllArchived={() => undefined}
+        git={git}
+        onToggleGit={onToggleGit}
+      />
+    );
+  }
+
+  const order = () => screen.getAllByRole("button", { name: /^Collapse / }).map((button) => button.getAttribute("aria-label"));
+
+  it("floats pinned projects to the top and pins from the project menu", () => {
+    const actions: string[] = [];
+    const { rerender } = render(<PinHarness onProjectAction={(project, action) => actions.push(`${project.id}:${action}`)} />);
+    expect(order()).toEqual(["Collapse Alpha", "Collapse Beta", "Collapse Gamma"]);
+    fireEvent.click(screen.getByRole("button", { name: "Gamma menu" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Pin project" }));
+    expect(actions).toEqual(["p3:pin"]);
+
+    rerender(<PinHarness pinned={["p3"]} onProjectAction={(project, action) => actions.push(`${project.id}:${action}`)} />);
+    expect(order()).toEqual(["Collapse Gamma", "Collapse Alpha", "Collapse Beta"]);
+    fireEvent.click(screen.getByRole("button", { name: "Gamma menu" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Unpin project" }));
+    expect(actions).toEqual(["p3:pin", "p3:unpin"]);
+  });
+
+  it("toggles Git mode from its tile and swaps in the Git panel", async () => {
+    let toggled = 0;
+    const { rerender } = render(<PinHarness onToggleGit={() => { toggled += 1; }} />);
+    const tile = screen.getByRole("button", { name: "Git mode" });
+    expect(tile).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(tile);
+    expect(toggled).toBe(1);
+
+    rerender(<PinHarness git={{ top: <div>repository switcher</div>, page: <div>changed files</div> }} />);
+    expect(screen.getByRole("button", { name: "Git mode" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("repository switcher")).toBeInTheDocument();
+    expect(await screen.findByText("changed files")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /New chat ⌘N/ })).toBeNull();
+    expect(screen.getByRole("navigation", { name: "Git changes" })).toBeInTheDocument();
+  });
+
+  it("disables the Git tile when there is no project to open", () => {
+    render(<PinHarness onToggleGit={null} />);
+    expect(screen.getByRole("button", { name: "Git mode" })).toBeDisabled();
+  });
+});
+

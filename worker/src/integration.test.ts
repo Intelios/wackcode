@@ -353,7 +353,11 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
     return;
   }
   if (userTextOf(body).startsWith("Staged diff")) {
-    response.write(`data: ${JSON.stringify({ id: "commit-message", object: "chat.completion.chunk", created: 1, model: "shared-model", choices: [{ index: 0, delta: { role: "assistant", content: "Summarize staged changes" }, finish_reason: null }] })}\n\n`);
+    // Git mode's body mode asks for a description after the summary line.
+    const content = JSON.stringify(body.messages ?? []).includes("short description")
+      ? "Summarize staged changes\n\nExplain the change."
+      : "Summarize staged changes";
+    response.write(`data: ${JSON.stringify({ id: "commit-message", object: "chat.completion.chunk", created: 1, model: "shared-model", choices: [{ index: 0, delta: { role: "assistant", content }, finish_reason: null }] })}\n\n`);
     response.write(`data: ${JSON.stringify({ id: "commit-message", object: "chat.completion.chunk", created: 1, model: "shared-model", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`);
     response.end("data: [DONE]\n\n");
     return;
@@ -608,6 +612,15 @@ describe("Pi worker integration", () => {
     expect(provider.requests[0].text).toContain("+new text");
     expect(worker.view?.messages ?? []).toHaveLength(0);
     expect(JSON.stringify(worker.outputs) + worker.stderr).not.toContain("alpha-secret");
+
+    // Body mode (Git mode's form): a summary, a blank line, then a description, newlines kept.
+    const bodyId = crypto.randomUUID();
+    worker.send({ id: bodyId, type: "generate_commit_message", diff: "diff --git a/file b/file\n+new text", truncated: false, body: true });
+    const described = await worker.waitFor((output) => output.type === "response" && output.id === bodyId);
+    expect(described.success).toBe(true);
+    expect(described.result).toBe("Summarize staged changes\n\nExplain the change.");
+    expect(provider.requests).toHaveLength(2);
+    expect(provider.requests[1].body.max_tokens ?? provider.requests[1].body.max_completion_tokens).toBe(512);
   });
   it("makes an isolated title request on the chosen connection without delaying the main run", async () => {
     const provider = await startMockProvider();

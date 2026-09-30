@@ -1,6 +1,6 @@
 import type { SVGProps } from "react";
 
-export type IconName = "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "browser" | "expand" | "collapse" | "copy" | "archive" | "unarchive" | "send" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "checklist" | "terminal" | "file" | "paperclip" | "pencil" | "external" | "brain" | "hammer" | "search" | "wrench" | "question" | "image" | "close" | "rewind" | "agents" | "flame" | "palette" | "plug" | "book" | "comment" | "commit" | "push" | "pullRequest" | "slash" | "erase" | "cursor" | "memory" | "accessibility" | "viewfinder" | "lock" | "dock" | "clock";
+export type IconName = "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "browser" | "expand" | "collapse" | "copy" | "archive" | "unarchive" | "send" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "checklist" | "terminal" | "file" | "paperclip" | "pencil" | "external" | "brain" | "hammer" | "search" | "wrench" | "question" | "image" | "close" | "rewind" | "agents" | "flame" | "palette" | "plug" | "book" | "comment" | "commit" | "push" | "pullRequest" | "slash" | "erase" | "cursor" | "memory" | "accessibility" | "viewfinder" | "lock" | "dock" | "clock" | "pull" | "fetch" | "pin" | "split" | "unified" | "undo";
 
 const paths: Record<IconName, React.ReactNode> = {
   plus: <><path d="M12 5v14M5 12h14" /></>,
@@ -73,6 +73,12 @@ const paths: Record<IconName, React.ReactNode> = {
   comment: <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.6 8.6 0 0 1-3.2-.6L3 21l1.7-5.8A8.4 8.4 0 1 1 21 11.5Z" />,
   commit: <><circle cx="12" cy="12" r="3.5" /><path d="M3.5 12h5M15.5 12h5" /></>,
   push: <><path d="M12 19V5" /><path d="m6 11 6-6 6 6" /><path d="M4.5 21.5h15" /></>,
+  pull: <><path d="M12 3v14" /><path d="m6 11 6 6 6-6" /><path d="M4.5 21.5h15" /></>,
+  fetch: <><path d="M20 12a8 8 0 1 1-2.35-5.65" /><path d="M20 4v4.5h-4.5" /><path d="M12 8.5v6" /><path d="m9.5 12 2.5 2.5 2.5-2.5" /></>,
+  pin: <><path d="M9 3.5h6" /><path d="M10 3.5v5.5l-3 3.5h10l-3-3.5V3.5" /><path d="M12 12.5v8" /></>,
+  split: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M12 4v16" /><path d="M6 9h3M6 12.5h3M15 9h3M15 15.5h3" /></>,
+  unified: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M7 9h10M7 12.5h7M7 16h9" /></>,
+  undo: <><path d="M9 14 4.5 9.5 9 5" /><path d="M4.5 9.5H14a5.5 5.5 0 0 1 0 11h-3" /></>,
   pullRequest: <><circle cx="6" cy="5.5" r="2" /><circle cx="6" cy="18.5" r="2" /><path d="M6 7.5v9" /><circle cx="18" cy="8.5" r="2" /><path d="M18 10.5c0 4-4 3.5-7 5.5" /></>,
   slash: <><path d="m17 4-10 16" /><path d="M7 8.5 5 7l2-1.5" /><path d="m17 15.5 2 1.5-2 1.5" /></>,
   // Memory: the bookmark a saved note is.

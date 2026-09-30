@@ -1,5 +1,6 @@
 import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from "motion/react";
 import type { ChangeEntry } from "../changes-utils";
+import type { GitDiffSection } from "../types";
 import { splitPath } from "../changes-utils";
 import { Icon } from "./Icons";
 
@@ -13,7 +14,7 @@ const GROUPS = [
 
 interface ChangesFileListProps {
   entries: ChangeEntry[];
-  selected?: { path: string; layer: "staged" | "working" };
+  selected?: { path: string; layer: GitDiffSection["layer"] };
   /** `${layer}:${path}` → pending comment count, shown as a small bubble on the row. */
   commentCounts: Map<string, number>;
   disabled: boolean;

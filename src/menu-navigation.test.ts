@@ -3,19 +3,21 @@ import type { ExtensionUIRequest } from "./types";
 import { performChatNavigation, withoutResolvedDialog } from "./menu-navigation";
 
 describe("native menu chat navigation", () => {
-  it("dismisses Settings and the draft before selecting the requested chat", () => {
+  it("leaves Git mode, Settings and the draft before selecting the requested chat", () => {
     const calls: string[] = [];
     performChatNavigation("chat-2", {
+      dismissGitMode: () => calls.push("git"),
       dismissSettings: () => calls.push("settings"),
       abandonDraft: () => calls.push("draft"),
       selectTask: (taskId) => calls.push(`select:${taskId}`),
     });
-    expect(calls).toEqual(["settings", "draft", "select:chat-2"]);
+    expect(calls).toEqual(["git", "settings", "draft", "select:chat-2"]);
   });
 
   it("selects the exact chat id supplied by the native event", () => {
     const selectTask = vi.fn();
     performChatNavigation("target-chat", {
+      dismissGitMode: vi.fn(),
       dismissSettings: vi.fn(),
       abandonDraft: vi.fn(),
       selectTask,

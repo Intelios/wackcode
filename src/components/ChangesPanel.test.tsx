@@ -9,7 +9,7 @@ const changes: GitChanges = {
   isGit: true, root: "/tmp/project", branch: "topic", changesRevision: "index-1",
   files: [{
     path: "file.ts", oldPath: null, status: "modified", staged: true, unstaged: true,
-    untracked: false, binary: false, hunkable: true, truncated: false, diff: "",
+    untracked: false, binary: false, hunkable: true, truncated: false,
     sections: [
       { layer: "staged", revision: "staged-1", diff: "", truncated: false, additions: 1, deletions: 1, hunks: [{
         id: 0, header: "@@ -1 +1 @@", oldStart: 1, newStart: 1,
@@ -29,7 +29,7 @@ function props() {
     canReview: true, comments: [],
     onClose: vi.fn(), onRefresh: vi.fn(), onSettings: vi.fn(),
     onReview: vi.fn(async () => true), onAction: vi.fn(async () => {}),
-    onCommit: vi.fn(async () => {}), onGenerate: vi.fn(async () => ({ message: "Update file", revision: "index-1" })),
+    onCommit: vi.fn(async () => {}), onGenerate: vi.fn(async () => ({ message: "Update file", summary: "Update file", description: "", revision: "index-1" })),
     onPublishInfo: vi.fn(async () => ({ branch: "topic", upstream: null, remotes: ["origin"] })),
     onPush: vi.fn(async () => {}), onPreparePr: vi.fn(async () => ({ repo: "github.com/o/r", base: "main", head: "topic", title: "Title", body: "", existingUrl: null })),
     onCreatePr: vi.fn(async () => "https://github.com/o/r/pull/1"), onOpenPr: vi.fn(),
@@ -100,5 +100,14 @@ describe("ChangesPanel", () => {
     expect(screen.getByRole("checkbox", { name: "Draft" })).not.toBeChecked();
     fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
     await waitFor(() => expect(callbacks.onCreatePr).toHaveBeenCalledWith("origin", "main", "Better title", "", false));
+  });
+
+  it("opens Git mode on the file being read, when the chat works in its project's folder", () => {
+    const onOpenGitMode = vi.fn();
+    const { rerender } = render(<ChangesPanel {...props()} />);
+    expect(screen.queryByRole("button", { name: "Open in Git mode" })).toBeNull();
+    rerender(<ChangesPanel {...props()} onOpenGitMode={onOpenGitMode} />);
+    fireEvent.click(screen.getByRole("button", { name: "Open in Git mode" }));
+    expect(onOpenGitMode).toHaveBeenCalledWith("file.ts");
   });
 });

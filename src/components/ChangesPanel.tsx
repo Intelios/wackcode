@@ -30,12 +30,14 @@ interface Props {
   onOpenPr: (url: string) => void;
   onComments: (comments: DiffComment[]) => Promise<void>;
   onAddressComments: (comments: DiffComment[]) => Promise<boolean>;
+  /** Opens Git mode on this file; only for chats that work in their project's own folder. */
+  onOpenGitMode?: (path?: string) => void;
 }
 
 /** The side panel's Changes view: the chat's Git changes, their diffs, and the commit dock. */
 export function ChangesPanel(props: Props) {
   const { changes, loading, busy, canReview, reviewReason, comments } = props;
-  const [selected, setSelected] = useState<{ path: string; layer: "staged" | "working" }>();
+  const [selected, setSelected] = useState<{ path: string; layer: GitDiffSection["layer"] }>();
   const [message, setMessage] = useState("");
   const [messageRevision, setMessageRevision] = useState<string>();
   const [publish, setPublish] = useState<GitPublishInfo>();
@@ -103,9 +105,10 @@ export function ChangesPanel(props: Props) {
   function addComment(line: GitDiffLine) {
     if (!current) return;
     const anchor = lineAnchor(line);
-    if (!anchor) return;
+    const layer = current.section.layer;
+    if (!anchor || layer === "commit") return;
     setCommentAt({
-      path: current.file.path, layer: current.section.layer, side: anchor.side, line: anchor.line,
+      path: current.file.path, layer, side: anchor.side, line: anchor.line,
       excerpt: line.text.slice(0, 1000), revision: current.section.revision
     });
     setCommentText("");
@@ -203,6 +206,11 @@ export function ChangesPanel(props: Props) {
         </div>
         <div className="changes-header-actions">
           {reviewUnavailable && reviewReason ? <Tooltip label={reviewReason}>{review}</Tooltip> : review}
+          {props.onOpenGitMode && changes?.isGit && (
+            <Tooltip label={<>Open in Git mode <kbd>⌘⇧G</kbd></>}>
+              <button className="icon-button" onClick={() => props.onOpenGitMode?.(current?.file.path)} aria-label="Open in Git mode"><Icon name="expand" /></button>
+            </Tooltip>
+          )}
           <button className="icon-button" onClick={props.onRefresh} aria-label="Refresh changes"><Icon name="refresh" className={loading ? "spinning" : ""} /></button>
           <button className="icon-button" onClick={props.onClose} aria-label="Close changes panel"><Icon name="close" /></button>
         </div>
@@ -225,20 +233,21 @@ export function ChangesPanel(props: Props) {
           />
           {current && (
             <DiffView
-              entry={current}
+              file={current.file}
+              sections={[current.section]}
               comments={comments}
               commentAt={commentAt}
               commentText={commentText}
               editing={editing}
               disabled={disabled}
-              onAddComment={addComment}
+              onAddComment={(_, line) => addComment(line)}
               onCommentText={setCommentText}
               onCloseComposer={() => setCommentAt(undefined)}
               onSaveComment={() => void saveComment()}
               onEditComment={editComment}
               onUpdateComment={(comment, text) => void updateComment(comment, text)}
               onRemoveComment={(id) => void run(() => props.onComments(comments.filter((item) => item.id !== id)))}
-              onAction={entryAction}
+              onAction={(file, section, hunkId) => entryAction({ file, section }, hunkId)}
             />
           )}
         </>

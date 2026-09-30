@@ -504,7 +504,7 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
               void send();
             }
           }}
-          placeholder={placeholder ?? (providers.length === 0 ? "Connect a provider to start…" : busy ? `${agentName} is working — ⏎ steers the run, ⌥⏎ queues for after…` : mode === "plan" ? `Describe the work — in Plan mode ${agentName} inspects and proposes a plan without changing files…` : mode === "ultraplan" ? `Describe the work — in Ultra Plan ${agentName} interviews you in depth, one question at a time, before proposing a plan…` : `Ask ${agentName} to inspect, change, or run something…`)}
+          placeholder={placeholder ?? (providers.length === 0 ? "Connect a provider to start…" : busy ? `${agentName} is working — ⏎ steers the run, ⌥⏎ queues for after…` : mode === "plan" ? `Describe the work — in Plan mode ${agentName} inspects and proposes a plan without changing files…` : mode === "ultraplan" ? `Describe the work — in Ultra Plan ${agentName} interviews you one question at a time…` : `Ask ${agentName} to inspect, change, or run something…`)}
           disabled={disabled || providers.length === 0}
         />
         <div className="composer-toolbar">

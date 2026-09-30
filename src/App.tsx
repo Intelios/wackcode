@@ -260,7 +260,8 @@ export default function App() {
   const [gitPrRequest, setGitPrRequest] = useState(0);
   const [confirm, setConfirm] = useState<ConfirmState>();
   const [restoreDialog, setRestoreDialog] = useState<RestoreDialogState>();
-  const [composerSeed, setComposerSeed] = useState<{ text: string; nonce: number }>();
+  /** A rewind's text, keyed to the chat it came from so it can only reseed that chat's composer. */
+  const [composerSeed, setComposerSeed] = useState<{ taskId: string; text: string; nonce: number }>();
   const [composerTransfer, setComposerTransfer] = useState<{ taskId: string; text: string; images: ImageContent[]; files: FileAttachment[]; nonce: number }>();
   const draftComposer = useRef<{ text: string; images: ImageContent[]; files: FileAttachment[] }>({ text: "", images: [], files: [] });
   const slashDraftPromise = useRef<Promise<TaskRecord | undefined> | undefined>(undefined);
@@ -988,6 +989,7 @@ export default function App() {
     slashDraftPromise.current = undefined;
     draftComposer.current = { text: "", images: [], files: [] };
     setComposerTransfer(undefined);
+    setComposerSeed(undefined);
     // The composer is shared across views; entering the hero from a task clears its draft.
     if (selectedTaskRef.current) setDraftSeedNonce((n) => n + 1);
     const resolved = projectId === undefined ? lastProjectId() : projectId;
@@ -1936,7 +1938,7 @@ export default function App() {
     const scope = restoreScope(task);
     const moveConversation = async (restore?: { checkpointId: string; paths: string[] }) => {
       const result = await api.navigateTask({ taskId: task.id, entryId, target: "before", kind: "rewind", restore });
-      if (result.navigate.editorText) setComposerSeed({ text: result.navigate.editorText, nonce: Date.now() });
+      if (result.navigate.editorText) setComposerSeed({ taskId: task.id, text: result.navigate.editorText, nonce: Date.now() });
       patchRuntime(task.id, { lastRestore: undefined });
       afterRestore(task.id, result.restore, result.restoreError);
     };
@@ -2846,7 +2848,7 @@ export default function App() {
               queuedMessages={runtime?.queued}
               onDequeue={dequeueMessages}
               transfer={selectedTask && composerTransfer?.taskId === selectedTask.id ? composerTransfer : undefined}
-              seed={selectedTask ? composerSeed : draftSeedNonce ? { text: "", nonce: draftSeedNonce } : undefined}
+              seed={selectedTask ? (composerSeed?.taskId === selectedTask.id ? composerSeed : undefined) : draftSeedNonce ? { text: "", nonce: draftSeedNonce } : undefined}
               onDraftChange={!selectedTask ? (text, images, files) => { draftComposer.current = { text, images, files }; } : undefined}
               onStop={() => void stopTask()}
               onOpenSettings={openSettings}

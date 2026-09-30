@@ -1226,6 +1226,13 @@ describe("Pi worker integration", () => {
     await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
     await worker.waitFor((output) => emitted(output) && output.view?.activeRun === undefined);
     expect(worker.outputs.filter((output) => output.type === "worker_error").map((output) => output.message)).toEqual([]);
+    // The aborted-signal failure Pi records on the trailing assistant message must not reach the
+    // transcript as an error either: saved chats showed it as a red "This operation was aborted"
+    // block instead of the quiet "Stopped" label.
+    const trailing = [...worker.view?.messages ?? []].reverse().find((message) => message.role === "assistant");
+    expect(trailing?.stopReason).toBe("aborted");
+    expect(trailing?.errorMessage).toBeUndefined();
+    expect(worker.view?.messages.some((message) => message.stopReason === "error")).toBe(false);
   });
 });
 

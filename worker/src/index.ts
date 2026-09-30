@@ -553,13 +553,17 @@ function normalizeMessage(message: unknown, index: number, thinking?: ThinkingDu
     }
   }
   const timestamp = typeof raw.timestamp === "number" ? raw.timestamp : undefined;
+  // A Stop during a tool call still lets Pi start the next model request, which fails at once on
+  // the aborted signal ("This operation was aborted"). That is the stop, not a failure: the
+  // transcript shows the quiet "Stopped" label, live and when a saved chat is restored.
+  const abortStop = raw.stopReason === "error" && /operation was aborted/i.test(String(raw.errorMessage ?? ""));
   const normalized: NormalizedMessage = {
     id: `${role}-${timestamp ?? "na"}-${index}`,
     role,
     timestamp,
     blocks,
-    stopReason: typeof raw.stopReason === "string" ? raw.stopReason : undefined,
-    errorMessage: typeof raw.errorMessage === "string" ? raw.errorMessage : undefined
+    stopReason: abortStop ? "aborted" : typeof raw.stopReason === "string" ? raw.stopReason : undefined,
+    errorMessage: abortStop ? undefined : typeof raw.errorMessage === "string" ? raw.errorMessage : undefined
   };
   // Thumbnails land after the message is normalized; keying the raw object lets the preview
   // invalidate exactly this message's cache entry when it does.

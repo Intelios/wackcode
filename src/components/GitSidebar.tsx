@@ -2,7 +2,7 @@ import { memo, useEffect, useRef, type ReactNode } from "react";
 import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from "motion/react";
 import { splitPath } from "../changes-utils";
 import { formatRelativeTime } from "../chat-utils";
-import { isCommittable, selectionState, type GitTab } from "../git-mode";
+import { isCommittable, firstLine, selectionState, type GitTab } from "../git-mode";
 import type { GitChangeFile, GitCommit } from "../types";
 import { Icon } from "./Icons";
 import { Checkbox } from "./ui/Checkbox";
@@ -242,6 +242,8 @@ export const GitHistoryList = memo(function GitHistoryList(props: GitHistoryList
 
   return (
     <ul className="git-history-list" ref={listRef} aria-label="Commits">
+      {/* The list may hold the previous page: a failed refresh must still say so. */}
+      {props.error && <li className="git-history-error" role="alert">{firstLine(props.error)}</li>}
       <AnimatePresence initial={false}>
         {commits.map((commit, index) => {
           const active = commit.sha === props.selectedSha;

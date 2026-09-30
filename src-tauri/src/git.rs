@@ -2,7 +2,7 @@ use crate::models::{
     GitBranch, GitBranches, GitChangeFile, GitChanges, GitCommit, GitCommitFile, GitCommitFiles, GitDiffHunk, GitDiffLine,
     GitDiffSection, GitLogPage, GitPublishInfo, GitPullOutcome, GitRevertOutcome, GitRevertResult, GitSyncStatus, GitUndoResult,
 };
-use std::{collections::{HashMap, HashSet}, fs, hash::{Hash, Hasher}, path::{Component, Path, PathBuf}, process::{Command, Stdio}, thread, time::{Duration, Instant}};
+use std::{collections::{HashMap, HashSet}, fs, hash::{Hash, Hasher}, io::{Read, Write}, path::{Component, Path, PathBuf}, process::{Command, Stdio}, thread, time::{Duration, Instant}};
 
 const MAX_DIFF_BYTES: usize = 240_000;
 const BINARY_SCAN_BYTES: usize = 8_192;
@@ -322,31 +322,41 @@ fn checked_path(root: &Path, path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Git with a deadline, as trimmed text. Both pipes drain on their own threads: git blocks once
+/// it fills a pipe nobody reads, so output past the pipe's capacity (about 64 KB) would
+/// otherwise stall the child until the deadline — and a patch written on this thread while git
+/// is filling its own pipes could deadlock both sides.
 fn run_git(root: &Path, args: &[&str], input: Option<&[u8]>) -> Result<String, String> {
     let mut command = Command::new("git");
     command.arg("-C").arg(root).args(args);
     if input.is_some() { command.stdin(Stdio::piped()); }
-    let mut child = command.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()
-        .map_err(|error| format!("Could not start git: {error}"))?;
-    if let Some(input) = input {
-        use std::io::Write;
-        child.stdin.take().ok_or("Could not send patch to git")?.write_all(input).map_err(|error| error.to_string())?;
-    }
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(|error| format!("Could not start git: {error}"))?;
+    let writer = input.map(|bytes| {
+        let bytes = bytes.to_vec();
+        let mut stdin = child.stdin.take();
+        thread::spawn(move || { if let Some(stdin) = stdin.as_mut() { let _ = stdin.write_all(&bytes); } })
+    });
+    let mut stdout = child.stdout.take();
+    let mut stderr = child.stderr.take();
+    let out = thread::spawn(move || { let mut buffer = Vec::new(); if let Some(pipe) = stdout.as_mut() { let _ = pipe.read_to_end(&mut buffer); } buffer });
+    let err = thread::spawn(move || { let mut buffer = Vec::new(); if let Some(pipe) = stderr.as_mut() { let _ = pipe.read_to_end(&mut buffer); } buffer });
     let deadline = Instant::now() + Duration::from_secs(90);
-    loop {
-        if child.try_wait().map_err(|error| error.to_string())?.is_some() { break; }
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? { break status; }
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
             return Err("Git did not finish in time".into());
         }
         thread::sleep(Duration::from_millis(20));
+    };
+    if let Some(writer) = writer { let _ = writer.join(); }
+    let stderr = err.join().unwrap_or_default();
+    if !status.success() {
+        return Err(String::from_utf8_lossy(&stderr).trim().to_string());
     }
-    let output = child.wait_with_output().map_err(|error| error.to_string())?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    Ok(String::from_utf8_lossy(&out.join().unwrap_or_default()).trim().to_string())
 }
 
 /// The renderer identifies a displayed section; the patch always comes from a fresh Git diff.
@@ -1434,6 +1444,20 @@ mod tests {
         assert_eq!(second.commits.len(), 1);
         assert!(!second.commits[0].unpushed, "the pushed commit has no marker");
         assert_eq!(second.commits[0].author_name, "Test");
+    }
+
+    #[test]
+    fn run_git_collects_output_past_the_pipe_capacity() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        init_repo(root);
+        // A page bigger than a pipe's ~64 KB capacity used to block git until the deadline
+        // (the History hang with thousands of unpushed commits).
+        let big = format!("{}\n", "x".repeat(200_000));
+        fs::write(root.join("big.txt"), &big).unwrap();
+        run(root, &["add", "big.txt"]);
+        run(root, &["commit", "-m", "big"]);
+        assert_eq!(run_git(root, &["show", "HEAD:big.txt"], None).unwrap().len(), 200_000);
     }
 
     #[test]

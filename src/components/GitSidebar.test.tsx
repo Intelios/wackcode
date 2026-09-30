@@ -102,4 +102,10 @@ describe("GitHistoryList", () => {
     render(<GitHistoryList commits={[]} hasMore={false} loading={false} showUnpushed onSelect={vi.fn()} onLoadMore={vi.fn()} />);
     expect(screen.getByText("No commits yet")).toBeInTheDocument();
   });
+
+  it("shows a refresh failure even while the previous commits are still listed", () => {
+    render(<GitHistoryList commits={commits} hasMore={false} loading={false} error="Git did not finish in time" showUnpushed onSelect={vi.fn()} onLoadMore={vi.fn()} />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Git did not finish in time");
+    expect(screen.getByRole("button", { name: /Newest/ })).toBeInTheDocument();
+  });
 });

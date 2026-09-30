@@ -1511,6 +1511,8 @@ button.compact.primary:hover:not(:disabled) { background: var(--wc-accent-hover)
 .git-history-list li.active { background: var(--wc-selected); }
 .git-commit-row { width: 100%; display: flex; flex-direction: column; gap: 3px; padding: 7px 8px 7px 11px; border: 0; border-radius: 7px; background: transparent; color: var(--text-soft); text-align: left; cursor: pointer; }
 .git-history-list li:not(.active) .git-commit-row:hover { background: var(--wc-sidebar-hover); }
+/* Danger colours stay literal: they carry meaning, so no theme token (docs/design.md). */
+.git-history-error { margin: 6px 2px 4px; padding: 7px 9px; border: 1px solid #5b3030; border-radius: 7px; background: var(--danger-bg); color: #ebb1b1; font-size: 11px; line-height: 1.45; }
 .git-commit-subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 12.5px; }
 .git-commit-meta { min-width: 0; display: flex; align-items: center; gap: 4px; color: var(--text-dim); font-size: 11px; }
 .git-commit-meta > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -1,8 +1,9 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode, type SetStateAction } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import type { ImageContent, ProviderRecord, SessionSnapshot, SlashCommand, TaskMode, TaskStatus, ThinkingLevel } from "../types";
 import { attachFiles, filesFrom, imageDataUrl, splitFileSection, type FileAttachment } from "../attachment-utils";
 import { activeMention, mentionValue, rankMentions, type MentionSuggestion } from "../mention-utils";
+import { EMPTY_DRAFT, type ComposerDraft, type ComposerDraftState } from "../hooks/useComposerDrafts";
 import { Icon } from "./Icons";
 import { ContextPanel } from "./ContextPanel";
 import { ModelPicker, ReasoningToggle } from "./ModelPicker";
@@ -32,6 +33,8 @@ export function argHintNote(command: SlashCommand | undefined): string | undefin
 
 interface ComposerProps {
   status: TaskStatus;
+  /** App-owned draft for the selected chat; the composer stays mounted across selection. */
+  draftState?: ComposerDraftState;
   providerId?: string;
   modelId?: string;
   thinkingLevel?: ThinkingLevel;
@@ -56,7 +59,6 @@ interface ComposerProps {
   onRequestCommands?: () => void;
   onCommand?: (name: string, args: string, images: ImageContent[]) => Promise<boolean>;
   onLiteral?: (message: string, images: ImageContent[], files: FileAttachment[]) => Promise<boolean>;
-  onDraftChange?: (text: string, images: ImageContent[], files: FileAttachment[]) => void;
   /** Workspace files for `@` mentions, relative to it; undefined until loaded. */
   mentionFiles?: string[];
   mentionsLoading?: boolean;
@@ -64,7 +66,6 @@ interface ComposerProps {
   mentionsTruncated?: boolean;
   /** Called whenever a new `@` token opens, so the list is fresh. Omit to turn mentions off. */
   onRequestMentions?: () => void;
-  transfer?: { text: string; images: ImageContent[]; files: FileAttachment[]; nonce: number };
   /** Messages queued on the running prompt, shown between the transcript and the draft. */
   queuedMessages?: { steer: string[]; followUp: string[] };
   /** Takes the queued messages back out of Pi; resolves with their texts for the draft. */
@@ -84,22 +85,33 @@ interface ComposerProps {
   agentName?: string;
 }
 
-export function Composer({ status, providerId, modelId, thinkingLevel, providers, stats, header, placeholder, popoverSide = "top", mode, onModeChange, onConfigure, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, onDraftChange, mentionFiles, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, transfer, queuedMessages, onDequeue, onStop, onOpenSettings, disabled, seed, comet, frozen, agentName = "Pi" }: ComposerProps) {
-  const [draft, setDraft] = useState(transfer?.text ?? "");
-  const [attachments, setAttachments] = useState<ImageContent[]>(transfer?.images ?? []);
-  const [files, setFiles] = useState<FileAttachment[]>(transfer?.files ?? []);
+export function Composer({ draftState, status, providerId, modelId, thinkingLevel, providers, stats, header, placeholder, popoverSide = "top", mode, onModeChange, onConfigure, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, mentionFiles, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, queuedMessages, onDequeue, onStop, onOpenSettings, disabled, seed, comet, frozen, agentName = "Pi" }: ComposerProps) {
+  const [localDraft, setLocalDraft] = useState<ComposerDraft>(EMPTY_DRAFT);
+  const value = draftState?.value ?? localDraft;
+  const updateDraft = draftState?.update ?? setLocalDraft;
+  const { text: draft, images: attachments, files } = value;
+  const draftKey = draftState?.key ?? "local";
+  const activeDraftKey = useRef(draftKey);
+  activeDraftKey.current = draftKey;
+  function setField<K extends keyof ComposerDraft>(field: K, next: SetStateAction<ComposerDraft[K]>) {
+    updateDraft((current) => ({ ...current, [field]: typeof next === "function"
+      ? (next as (value: ComposerDraft[K]) => ComposerDraft[K])(current[field]) : next }));
+  }
+  const setDraft = (next: SetStateAction<string>) => setField("text", next);
+  const setAttachments = (next: SetStateAction<ImageContent[]>) => setField("images", next);
+  const setFiles = (next: SetStateAction<FileAttachment[]>) => setField("files", next);
   const [attachNotice, setAttachNotice] = useState<string>();
   const [slashNotice, setSlashNotice] = useState<string>();
-  const [slashOpen, setSlashOpen] = useState(transfer?.text.startsWith("/") ?? false);
+  const [slashOpen, setSlashOpen] = useState(draft.startsWith("/"));
   const [slashIndex, setSlashIndex] = useState(0);
-  const [caret, setCaret] = useState(transfer?.text.length ?? 0);
+  const [caret, setCaret] = useState(draft.length);
   const [mentionIndex, setMentionIndex] = useState(0);
   /** Where the `@` token Escape closed starts; it stays closed until that `@` goes away. */
   const [mentionDismissedAt, setMentionDismissedAt] = useState<number>();
   const [dragging, setDragging] = useState(false);
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
-  const transferNonce = useRef(transfer?.nonce);
+  const seedNonces = useRef(new Map<string, number>());
   const fileRef = useRef<HTMLInputElement>(null);
   const busy = status === "running" || status === "stopping";
   const model = providers.find((provider) => provider.id === providerId)?.models.find((item) => item.id === modelId);
@@ -130,17 +142,21 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
   useEffect(() => { if (mentionStart !== undefined) onRequestMentions?.(); }, [mentionStart]);
   useEffect(() => {
     if (showCommands && commandsReady === false && !commandsLoading && !commandsError) onRequestCommands?.();
-  }, [showCommands, commandsReady, commandsLoading, commandsError]);
+  }, [showCommands, commandsReady, commandsLoading, commandsError, draftKey]);
 
-  useEffect(() => { onDraftChange?.(draft, attachments, files); }, [draft, attachments, files, onDraftChange]);
-  useEffect(() => {
-    if (!transfer || transferNonce.current === transfer.nonce) return;
-    transferNonce.current = transfer.nonce;
-    setDraft(transfer.text);
-    setAttachments(transfer.images);
-    setFiles(transfer.files);
-    setSlashOpen(transfer.text.startsWith("/"));
-  }, [transfer?.nonce]);
+  // Picker state and notices belong to the visible composer, never to the previous chat.
+  useLayoutEffect(() => {
+    setAttachNotice(undefined);
+    setSlashNotice(undefined);
+    setSlashOpen(draft.startsWith("/"));
+    setSlashIndex(0);
+    setCaret(draft.length);
+    setMentionIndex(0);
+    setMentionDismissedAt(undefined);
+    setDragging(false);
+    areaRef.current?.setSelectionRange(draft.length, draft.length);
+  }, [draftKey]);
+
   useEffect(() => { if (commandsError && draft.startsWith("/") && !commandsLoading) setSlashNotice(commandsError); }, [commandsError, commandsLoading]);
 
   useLayoutEffect(() => {
@@ -168,14 +184,15 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
   seedText.current = seed?.text;
   const seedNonce = seed?.nonce;
   useEffect(() => {
-    if (seedNonce === undefined || seedText.current === undefined) return;
+    if (seedNonce === undefined || seedText.current === undefined || seedNonces.current.get(draftKey) === seedNonce) return;
+    seedNonces.current.set(draftKey, seedNonce);
     // A rewound message's text carries its attached files in the generated section; put them
     // back in the tray instead of showing the section in the draft.
     const restored = splitFileSection(seedText.current);
     setDraft(restored.text);
     setFiles(restored.files);
     areaRef.current?.focus();
-  }, [seedNonce]);
+  }, [seedNonce, draftKey]);
 
   /** Attached files travel inside the message text, so they can't ride a `/` command: Pi
    *  expands commands (and the queue resolves the catalog entry first) and the generated
@@ -196,15 +213,15 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
     }
     const images = attachments;
     const keptFiles = files;
-    setDraft("");
-    setAttachments([]);
-    setFiles([]);
+    updateDraft(EMPTY_DRAFT);
     setAttachNotice(undefined);
     const ok = literal && onLiteral ? await onLiteral(message, images, keptFiles) : await onSend(message, images, keptFiles, behavior);
     if (!ok) {
-      setDraft(message);
-      setAttachments(images);
-      setFiles(keptFiles);
+      updateDraft((current) => ({
+        text: current.text ? `${message}\n\n${current.text}` : message,
+        images: [...images, ...current.images],
+        files: [...keptFiles, ...current.files]
+      }));
     }
   }
 
@@ -229,9 +246,12 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
         if (goalMatch && onCommand) {
           try {
             const ok = await onCommand("goal", goalMatch[2], []);
-            if (ok) { setDraft(""); setAttachments([]); setSlashNotice(undefined); setSlashOpen(false); }
-            else setSlashNotice("That command could not run. Try again.");
-          } catch (reason) { setSlashNotice(String(reason)); }
+            if (ok) updateDraft((current) => current === value ? EMPTY_DRAFT : current);
+            if (activeDraftKey.current === draftKey) {
+              if (ok) { setSlashNotice(undefined); setSlashOpen(false); }
+              else setSlashNotice("That command could not run. Try again.");
+            }
+          } catch (reason) { if (activeDraftKey.current === draftKey) setSlashNotice(String(reason)); }
           return;
         }
         setSlashNotice(`Wait for ${agentName} to finish before running /${/^\/([^\s]+)/.exec(message)?.[1]}.`);
@@ -261,21 +281,24 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
       }
       try {
         const ok = await onCommand(name, args, images);
-        if (ok) { setDraft(""); setAttachments([]); setSlashNotice(undefined); setSlashOpen(false); }
-        else setSlashNotice("That command could not run. Try again.");
-      } catch (reason) { setSlashNotice(String(reason)); }
+        if (ok) updateDraft((current) => current === value ? EMPTY_DRAFT : current);
+        if (activeDraftKey.current === draftKey) {
+          if (ok) { setSlashNotice(undefined); setSlashOpen(false); }
+          else setSlashNotice("That command could not run. Try again.");
+        }
+      } catch (reason) { if (activeDraftKey.current === draftKey) setSlashNotice(String(reason)); }
       return;
     }
     const keptFiles = files;
-    setDraft("");
-    setAttachments([]);
-    setFiles([]);
+    updateDraft(EMPTY_DRAFT);
     setAttachNotice(undefined);
     const ok = await onSend(message, images, keptFiles);
     if (!ok) {
-      setDraft(message);
-      setAttachments(images);
-      setFiles(keptFiles);
+      updateDraft((current) => ({
+        text: current.text ? `${message}\n\n${current.text}` : message,
+        images: [...images, ...current.images],
+        files: [...keptFiles, ...current.files]
+      }));
     }
   }
 
@@ -285,7 +308,7 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
     setDraft(next);
     setSlashOpen(false);
     setSlashNotice(undefined);
-    requestAnimationFrame(() => { areaRef.current?.focus(); areaRef.current?.setSelectionRange(name.length + 2, name.length + 2); });
+    requestAnimationFrame(() => { if (activeDraftKey.current !== draftKey) return; areaRef.current?.focus(); areaRef.current?.setSelectionRange(name.length + 2, name.length + 2); });
   }
 
   function insertMention(entry: MentionSuggestion) {
@@ -299,14 +322,17 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
     setDraft(next);
     setCaret(position);
     setMentionIndex(0);
-    requestAnimationFrame(() => { areaRef.current?.focus(); areaRef.current?.setSelectionRange(position, position); });
+    requestAnimationFrame(() => { if (activeDraftKey.current !== draftKey) return; areaRef.current?.focus(); areaRef.current?.setSelectionRange(position, position); });
   }
 
   async function sendLiteral() {
     if (!onLiteral) return;
     if (busy) return void queueDraft("steer", true);
     const ok = await onLiteral(draft.trim(), attachments, files);
-    if (ok) { setDraft(""); setAttachments([]); setFiles([]); setSlashNotice(undefined); }
+    if (ok) {
+      updateDraft((current) => current === value ? EMPTY_DRAFT : current);
+      if (activeDraftKey.current === draftKey) setSlashNotice(undefined);
+    }
   }
 
   /** Images need the model's Vision; text files ride the message text and always attach. */
@@ -315,21 +341,18 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
     const result = await attachFiles({ images: attachments, files }, picked, { vision, noVisionMessage });
     setAttachments(result.images);
     setFiles(result.files);
-    onDraftChange?.(draft, result.images, result.files);
-    setAttachNotice(result.error);
+    if (activeDraftKey.current === draftKey) setAttachNotice(result.error);
   }
 
   function removeAttachment(index: number) {
     const next = attachments.filter((_, itemIndex) => itemIndex !== index);
     setAttachments(next);
-    onDraftChange?.(draft, next, files);
     setAttachNotice(undefined);
   }
 
   function removeFile(index: number) {
     const next = files.filter((_, itemIndex) => itemIndex !== index);
     setFiles(next);
-    onDraftChange?.(draft, attachments, next);
     setAttachNotice(undefined);
   }
 
@@ -338,13 +361,13 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
   async function restoreQueued() {
     const texts = await onDequeue?.();
     if (!texts || texts.length === 0) return;
-    setSlashNotice(undefined);
+    if (activeDraftKey.current === draftKey) setSlashNotice(undefined);
     const parts = texts.map((text) => splitFileSection(text));
     const restoredFiles = parts.flatMap((part) => part.files);
     if (restoredFiles.length > 0) setFiles((current) => [...current, ...restoredFiles]);
     const restored = parts.map((part) => part.text).filter(Boolean).join("\n\n");
     if (restored) setDraft((current) => (current.trim() ? `${current}\n\n${restored}` : restored));
-    requestAnimationFrame(() => { areaRef.current?.focus(); });
+    requestAnimationFrame(() => { if (activeDraftKey.current === draftKey) areaRef.current?.focus(); });
   }
 
   const acceptsDrop = (event: DragEvent) => !disabled && providers.length > 0 && event.dataTransfer.types.includes("Files");
@@ -465,7 +488,6 @@ export function Composer({ status, providerId, modelId, thinkingLevel, providers
             if (frozen !== undefined) return;
             const value = event.target.value;
             setDraft(value);
-            onDraftChange?.(value, attachments, files);
             setCaret(event.target.selectionStart);
             setSlashIndex(0);
             setMentionIndex(0);

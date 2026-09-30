@@ -15,6 +15,7 @@ import { APP_SLASH_COMMANDS } from "./command-utils";
 import { performChatNavigation, withoutResolvedDialog } from "./menu-navigation";
 import { PINNED_PROJECTS_KEY, busyChatsInCheckout, includedFiles, linkableChats, resolveLinkedChat } from "./git-mode";
 import { useGitMode } from "./hooks/useGitMode";
+import { EMPTY_DRAFT, useComposerDrafts } from "./hooks/useComposerDrafts";
 import { DEFAULT_APPEARANCE, applyTheme, cacheTheme } from "./theme";
 import { AssistantNameContext, agentName } from "./agentName";
 import { Backdrop } from "./components/Backdrop";
@@ -260,10 +261,9 @@ export default function App() {
   const [gitPrRequest, setGitPrRequest] = useState(0);
   const [confirm, setConfirm] = useState<ConfirmState>();
   const [restoreDialog, setRestoreDialog] = useState<RestoreDialogState>();
-  /** A rewind's text, keyed to the chat it came from so it can only reseed that chat's composer. */
+  const composerDrafts = useComposerDrafts();
+  /** Rewind requests are consumed once by their chat, including across selection changes. */
   const [composerSeed, setComposerSeed] = useState<{ taskId: string; text: string; nonce: number }>();
-  const [composerTransfer, setComposerTransfer] = useState<{ taskId: string; text: string; images: ImageContent[]; files: FileAttachment[]; nonce: number }>();
-  const draftComposer = useRef<{ text: string; images: ImageContent[]; files: FileAttachment[] }>({ text: "", images: [], files: [] });
   const slashDraftPromise = useRef<Promise<TaskRecord | undefined> | undefined>(undefined);
   const draftEpoch = useRef(0);
   /** Taskless `/` catalog for the welcome composer, keyed by its selected project. */
@@ -284,10 +284,9 @@ export default function App() {
   const mentionRequest = useRef(0);
   /** Mid first-send choreography: the hero is exiting while this message rides the composer down. */
   const [transitioning, setTransitioning] = useState<{ message: string; taskId?: string; fromSelectedId?: string }>();
-  /** Bumped when returning to the draft hero from a task; reseeds the shared composer to a clean draft. */
-  const [draftSeedNonce, setDraftSeedNonce] = useState(0);
 
   const selectedTask = data.tasks.find((task) => task.id === selectedTaskId);
+  const composerDraftKey = selectedTask ? `task:${selectedTask.id}` : `new:${draftEpoch.current}`;
   const selectedProject = data.projects.find((project) => project.id === selectedTask?.projectId);
   const runtime = selectedTaskId ? runtimes[selectedTaskId] : undefined;
   const sharedWorkers = selectedTask ? data.tasks.filter((task) => !task.archived && task.id !== selectedTask.id && task.workspacePath === selectedTask.workspacePath && task.status === "running") : [];
@@ -428,7 +427,7 @@ export default function App() {
   }
 
   /** Git mode: the sidebar becomes the Git panel and the workspace a diff reader. The chat
-      view and the composer stay mounted underneath (the composer owns the draft). */
+      view and the composer stay mounted underneath (App keeps drafts by chat). */
   function openGit(request?: { projectId?: string; path?: string }) {
     if (settingsOpen) closeSettings();
     setArchivedOpen(false);
@@ -460,10 +459,10 @@ export default function App() {
       dismissGitMode: () => closeGit(),
       dismissSettings: () => { if (settingsOpen) closeSettings(); },
       abandonDraft: () => {
+        if (!selectedTask) composerDrafts.remove(composerDraftKey);
         draftEpoch.current += 1;
         slashDraftPromise.current = undefined;
         setDraft(undefined);
-        setComposerTransfer(undefined);
       },
       selectTask: (taskId) => {
         selectedTaskRef.current = taskId;
@@ -988,13 +987,9 @@ export default function App() {
   }
 
   function openDraft(projectId?: string | null) {
+    if (!selectedTask) composerDrafts.remove(composerDraftKey);
     draftEpoch.current += 1;
     slashDraftPromise.current = undefined;
-    draftComposer.current = { text: "", images: [], files: [] };
-    setComposerTransfer(undefined);
-    setComposerSeed(undefined);
-    // The composer is shared across views; entering the hero from a task clears its draft.
-    if (selectedTaskRef.current) setDraftSeedNonce((n) => n + 1);
     const resolved = projectId === undefined ? lastProjectId() : projectId;
     selectedTaskRef.current = undefined;
     setSelectedTaskId(undefined);
@@ -1038,7 +1033,7 @@ export default function App() {
         return undefined;
       }
       setData((current) => ({ ...current, tasks: [...current.tasks, task] }));
-      setComposerTransfer({ taskId: task.id, ...draftComposer.current, nonce: Date.now() });
+      composerDrafts.update(`task:${task.id}`, composerDrafts.get(composerDraftKey));
       setSelectedTaskId(task.id);
       setDraft(undefined);
       void loadSlashCommands(task.id);
@@ -1131,7 +1126,7 @@ export default function App() {
     if (selectedBusy && !goalControlAction) throw new Error("Wait for this chat to be ready before running a command.");
     const id = task.id;
     const clearPreparedDraft = () => {
-      if (!selectedTask) setComposerTransfer({ taskId: id, text: "", images: [], files: [], nonce: Date.now() + 1 });
+      if (!selectedTask) composerDrafts.update(`task:${id}`, EMPTY_DRAFT);
     };
     if (goalControlAction) {
       await api.goalControl(id, goalControlAction);
@@ -1519,7 +1514,7 @@ export default function App() {
       // already-running worker instead of racing it to spawn a second process.
       setSelectedTaskId(task.id);
       setDraft(undefined);
-      if (pendingSlash) setComposerTransfer({ taskId: task.id, text: "", images: [], files: [], nonce: Date.now() + 1 });
+      if (pendingSlash) composerDrafts.update(`task:${task.id}`, EMPTY_DRAFT);
       return true;
     }
     return promptTask(selectedTask, sent, { images, mode: modeOverride, literal, queue });
@@ -2108,6 +2103,7 @@ export default function App() {
   }
 
   function removeTaskLocally(taskId: string) {
+    composerDrafts.remove(`task:${taskId}`);
     setData((current) => ({ ...current, tasks: current.tasks.filter((item) => item.id !== taskId) }));
     setRuntimes((current) => {
       const next = { ...current };
@@ -2850,9 +2846,8 @@ export default function App() {
               onCommand={sendSlash}
               queuedMessages={runtime?.queued}
               onDequeue={dequeueMessages}
-              transfer={selectedTask && composerTransfer?.taskId === selectedTask.id ? composerTransfer : undefined}
-              seed={selectedTask ? (composerSeed?.taskId === selectedTask.id ? composerSeed : undefined) : draftSeedNonce ? { text: "", nonce: draftSeedNonce } : undefined}
-              onDraftChange={!selectedTask ? (text, images, files) => { draftComposer.current = { text, images, files }; } : undefined}
+              draftState={composerDrafts.forChat(composerDraftKey)}
+              seed={selectedTask && composerSeed?.taskId === selectedTask.id ? composerSeed : undefined}
               onStop={() => void stopTask()}
               onOpenSettings={openSettings}
             />

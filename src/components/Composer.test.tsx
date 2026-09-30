@@ -1,8 +1,9 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ImageContent, ProviderRecord } from "../types";
 import { composeFileSection, type FileAttachment } from "../attachment-utils";
 import { Composer } from "./Composer";
+import { useComposerDrafts } from "../hooks/useComposerDrafts";
 
 afterEach(cleanup);
 
@@ -242,17 +243,6 @@ describe("Composer slash commands", () => {
     expect(onCommand).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Send as message" }));
     await waitFor(() => expect(onLiteral).toHaveBeenCalledWith("/unknown", [], []));
-  });
-
-  it("carries a new draft into the initialized chat and clears it after a send", () => {
-    const props = {
-      status: "idle" as const, providers, providerId: "p", modelId: "sees", thinkingLevel: "off" as const,
-      onConfigure: vi.fn(), onSend: vi.fn().mockResolvedValue(true), onStop: vi.fn(), onOpenSettings: vi.fn()
-    };
-    const view = render(<Composer {...props} transfer={{ text: "/hello draft", images: [], files: [], nonce: 1 }} />);
-    expect(screen.getByRole("textbox")).toHaveValue("/hello draft");
-    view.rerender(<Composer {...props} transfer={{ text: "", images: [], files: [], nonce: 2 }} />);
-    expect(screen.getByRole("textbox")).toHaveValue("");
   });
 
   it("keeps a command and its attachments after validation fails", async () => {
@@ -532,5 +522,147 @@ describe("Composer @ file mentions", () => {
     fireEvent.change(failed.area, { target: { value: "@", selectionStart: 1 } });
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(failed.onRequestMentions).toHaveBeenCalledTimes(2);
+  });
+});
+
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+describe("Composer per-chat drafts", () => {
+  const base = {
+    status: "idle" as const, providers, providerId: "p", modelId: "sees",
+    onConfigure: vi.fn(), onSend: vi.fn().mockResolvedValue(true),
+    onStop: vi.fn(), onOpenSettings: vi.fn()
+  };
+
+  function Harness({ chat, ...props }: { chat: string } & Partial<React.ComponentProps<typeof Composer>>) {
+    const drafts = useComposerDrafts();
+    return <Composer {...base} {...props} draftState={drafts.forChat(chat)} />;
+  }
+
+  it("keeps text, images and files with each chat without remounting the composer", async () => {
+    const view = render(<Harness chat="task:a" />);
+    const area = screen.getByRole("textbox");
+    fireEvent.change(area, { target: { value: "Draft A" } });
+    attach(png(), txt("a.txt", "A"));
+    await screen.findByText("a.txt");
+    expect(screen.getByAltText("Attached image 1")).toBeInTheDocument();
+
+    view.rerender(<Harness chat="task:b" />);
+    expect(screen.getByRole("textbox")).toBe(area);
+    expect(area).toHaveValue("");
+    expect(screen.queryByAltText("Attached image 1")).not.toBeInTheDocument();
+    expect(screen.queryByText("a.txt")).not.toBeInTheDocument();
+    fireEvent.change(area, { target: { value: "Draft B" } });
+    attach(txt("b.txt", "B"));
+    await screen.findByText("b.txt");
+
+    view.rerender(<Harness chat="task:a" />);
+    expect(area).toHaveValue("Draft A");
+    expect(screen.getByText("a.txt")).toBeInTheDocument();
+    expect(screen.getByAltText("Attached image 1")).toBeInTheDocument();
+    expect(screen.queryByText("b.txt")).not.toBeInTheDocument();
+    view.rerender(<Harness chat="task:b" />);
+    expect(area).toHaveValue("Draft B");
+    expect(screen.getByText("b.txt")).toBeInTheDocument();
+  });
+
+  it("opens a fresh welcome draft for every new-chat request and retains the chat draft", () => {
+    const view = render(<Harness chat="task:a" />);
+    const area = screen.getByRole("textbox");
+    fireEvent.change(area, { target: { value: "Keep this in A" } });
+    view.rerender(<Harness chat="new:1" />);
+    expect(area).toHaveValue("");
+    fireEvent.change(area, { target: { value: "Unsent new task" } });
+    view.rerender(<Harness chat="new:2" />);
+    expect(area).toHaveValue("");
+    view.rerender(<Harness chat="task:a" />);
+    expect(area).toHaveValue("Keep this in A");
+  });
+
+  it.each(["idle", "running"] as const)("restores a failed %s send to its chat, keeping newer typing", async (status) => {
+    const pending = deferred<boolean>();
+    const onSend = vi.fn().mockReturnValue(pending.promise);
+    const view = render(<Harness chat="task:a" status={status} onSend={onSend} />);
+    const area = screen.getByRole("textbox");
+    fireEvent.change(area, { target: { value: "Send from A" } });
+    attach(txt("a.txt", "A"));
+    await screen.findByText("a.txt");
+    fireEvent.keyDown(area, { key: "Enter" });
+    expect(onSend).toHaveBeenCalledWith("Send from A", [], [{ name: "a.txt", text: "A" }], ...(status === "running" ? ["steer"] : []));
+    expect(area).toHaveValue("");
+    fireEvent.change(area, { target: { value: "Newer A note" } });
+    view.rerender(<Harness chat="task:b" status={status} onSend={onSend} />);
+    fireEvent.change(area, { target: { value: "Keep B" } });
+    await act(async () => pending.resolve(false));
+    expect(area).toHaveValue("Keep B");
+    expect(screen.queryByText("a.txt")).not.toBeInTheDocument();
+    view.rerender(<Harness chat="task:a" status={status} onSend={onSend} />);
+    expect(area).toHaveValue("Send from A\n\nNewer A note");
+    expect(screen.getByText("a.txt")).toBeInTheDocument();
+  });
+
+  it("clears only the sending chat when a slash command finishes after navigation", async () => {
+    const pending = deferred<boolean>();
+    const props = { onCommand: vi.fn().mockReturnValue(pending.promise), commands: [{ id: "app:compact", name: "compact", description: "Compact", source: "app" as const, sourceLabel: "WackCode" }] };
+    const view = render(<Harness chat="task:a" {...props} />);
+    const area = screen.getByRole("textbox");
+    fireEvent.change(area, { target: { value: "/compact" } });
+    fireEvent.keyDown(area, { key: "Escape" });
+    fireEvent.keyDown(area, { key: "Enter" });
+    expect(props.onCommand).toHaveBeenCalledWith("compact", "", []);
+    view.rerender(<Harness chat="task:b" {...props} />);
+    fireEvent.change(area, { target: { value: "Keep B" } });
+    await act(async () => pending.resolve(true));
+    expect(area).toHaveValue("Keep B");
+    view.rerender(<Harness chat="task:a" {...props} />);
+    expect(area).toHaveValue("");
+  });
+
+  it("puts a delayed file read into its originating chat", async () => {
+    let reader: FileReader | undefined;
+    const read = vi.spyOn(FileReader.prototype, "readAsArrayBuffer").mockImplementation(function (this: FileReader) { reader = this; });
+    try {
+      const view = render(<Harness chat="task:a" />);
+      attach(txt("a.txt", "A"));
+      expect(reader).toBeDefined();
+      view.rerender(<Harness chat="task:b" />);
+      fireEvent.change(screen.getByRole("textbox"), { target: { value: "Keep B" } });
+      Object.defineProperty(reader!, "result", { value: new TextEncoder().encode("A").buffer });
+      await act(async () => reader!.onload!(new ProgressEvent("load") as ProgressEvent<FileReader>));
+      expect(screen.getByRole("textbox")).toHaveValue("Keep B");
+      expect(screen.queryByText("a.txt")).not.toBeInTheDocument();
+      view.rerender(<Harness chat="task:a" />);
+      expect(screen.getByText("a.txt")).toBeInTheDocument();
+    } finally { read.mockRestore(); }
+  });
+
+  it("restores queued messages to their chat even after selection changes", async () => {
+    const pending = deferred<string[] | undefined>();
+    const props = { onDequeue: vi.fn().mockReturnValue(pending.promise), queuedMessages: { steer: ["Queued A"], followUp: [] } };
+    const view = render(<Harness chat="task:a" {...props} />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Draft A" } });
+    fireEvent.click(screen.getByRole("button", { name: "Restore queued messages to the composer" }));
+    view.rerender(<Harness chat="task:b" />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Keep B" } });
+    await act(async () => pending.resolve([composeFileSection("Queued A", [{ name: "a.txt", text: "A" }])]));
+    expect(screen.getByRole("textbox")).toHaveValue("Keep B");
+    view.rerender(<Harness chat="task:a" />);
+    expect(screen.getByRole("textbox")).toHaveValue("Draft A\n\nQueued A");
+    expect(screen.getByText("a.txt")).toBeInTheDocument();
+  });
+
+  it("consumes a rewind seed once so returning to the chat keeps subsequent edits", () => {
+    const seed = { text: "Rewound A", nonce: 1 };
+    const view = render(<Harness chat="task:a" seed={seed} />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Rewound A, edited" } });
+    view.rerender(<Harness chat="task:b" />);
+    expect(screen.getByRole("textbox")).toHaveValue("");
+    view.rerender(<Harness chat="task:a" seed={seed} />);
+    expect(screen.getByRole("textbox")).toHaveValue("Rewound A, edited");
   });
 });

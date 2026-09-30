@@ -13,6 +13,15 @@
 
 The worker sends full snapshots and deltas ([worker.md](worker.md#snapshots-and-deltas)); `applySnapshotDelta` in `chat-utils.ts` merges them. A new field that changes mid-run needs updates on both sides. Keep the full-snapshot fallback, and keep unchanged messages as the *same objects*: transcript rows are memoized by identity.
 
+## Composer drafts
+
+`App` keeps in-memory text, image and file drafts by chat id through `useComposerDrafts`.
+The composer stays mounted for the hero→dock animation and reads the selected chat's draft.
+⌘N gives the welcome screen a fresh draft key without clearing the previous chat. Async
+updates capture their originating key, so a delayed send, file read or queue restore cannot
+change another chat's draft. Deleting a chat removes its draft; app exit discards all drafts.
+Rewind seeds are consumed once per chat so returning to it cannot overwrite later edits.
+
 ## Attachments
 
 - Images ride `images` through `api.ts` to the worker, and reach only models with Vision on.
@@ -32,7 +41,7 @@ The worker sends full snapshots and deltas ([worker.md](worker.md#snapshots-and-
 A full-window Git client over the chat view, for one project's own folder (worktree chats keep their changes in the Changes panel). `useGitMode` (`src/hooks/`) holds its state per project and is called by `App`, so it may call `api`; `src/git-mode.ts` holds the pure rules (which project it opens on, the linked chat, the sync button's next action, the remote's web page, the checkbox arithmetic). The `Git*` components and `RepoSwitcher` are presentational.
 
 - **Entering** (the sidebar's Git tile, ⌘⇧G, the Changes panel's button) swaps the sidebar to its `git` page and mounts `.git-view` over the workspace. **Leaving** is the toolbar ✕, ⌘⇧G, ⌘N, ⌘⇧C / ⌘⇧T, or any chat navigation (`dismissGitMode` in `menu-navigation.ts`). Settings opens over it and returns to it.
-- **Nothing underneath unmounts.** The chat view stays mounted with `inert` (scroll position, no transcript remount), and so does the composer, which owns the draft: `.composer-layer` takes `inert` and `data-git`, and CSS ducks it away.
+- **Nothing underneath unmounts.** The chat view stays mounted with `inert` (scroll position, no transcript remount), and so does the composer, whose drafts live in `App`: `.composer-layer` takes `inert` and `data-git`, and CSS ducks it away.
 - **The side panel** closes through `view={null}`, keeping the remembered view. A native browser page would still float over Git mode while the drawer animates shut, because the exiting element keeps its old props; `NativeOverlaysHidden` (a context in `BrowserPanel.tsx`) is what hides it in time. Use it for any future full-window view.
 - **Network is user-driven:** one background fetch when Git mode opens or switches project, and whatever the user clicks. Refreshes on window focus, on `tool_execution_end` and at the end of a run read local state only (debounced and single-flight), and the chat's own Changes refresh is skipped while Git mode is open.
 - **The linked chat** runs the AI actions (comments, Review, Generate, Ask): the chat the user came from if it works in the project's folder, else the project's most recent, else one created on first use. `promptTask` sends to it without selecting it, and Git mode stays open. Comments are stored under the linked chat's id, so its Changes panel shows the same ones.

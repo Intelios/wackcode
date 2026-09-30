@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyBuiltinModelSuggestion, autoTitleModelIssue, mergeDiscoveredModels, modelDisplayName, pickThinkingLevel, searchBuiltinModels, subagentModelIssue } from "./model-utils";
+import { applyBuiltinModelSuggestion, autoTitleModelIssue, chatModelGone, mergeDiscoveredModels, modelDisplayName, pickThinkingLevel, searchBuiltinModels, subagentModelIssue } from "./model-utils";
 import type { BuiltinModelSuggestion, ModelRecord, ProviderRecord } from "./types";
 
 const flash: BuiltinModelSuggestion = {
@@ -109,5 +109,25 @@ describe("autoTitleModelIssue", () => {
     expect(autoTitleModelIssue(config, [])).toBe("Its connection no longer exists.");
     expect(autoTitleModelIssue(config, [{ ...provider, enabled: false }])).toBe("Cheap is turned off.");
     expect(autoTitleModelIssue(config, [{ ...provider, connected: false }])).toBe("Cheap has no API key.");
+  });
+});
+
+describe("chatModelGone", () => {
+  const provider: ProviderRecord = {
+    id: "p", name: "Custom", kind: "custom", baseUrl: "", apiFormat: "openai-completions", createdAt: "", updatedAt: "", hasApiKey: true, connected: true,
+    models: [{ id: "m", name: "Mini", contextWindow: 10, maxTokens: 5, reasoning: false, thinkingLevels: ["off"], thinkingLevelMap: {}, vision: false }]
+  };
+  const task = { providerId: "p", modelId: "m" };
+
+  it("spots a model removed from its connection, and reports the worker's view of a subscription drop", () => {
+    expect(chatModelGone([provider], task)).toBe(false);
+    expect(chatModelGone([provider], { ...task, modelId: "removed" })).toBe(true);
+    // A subscription can stop serving a model while it stays configured: only the snapshot knows.
+    expect(chatModelGone([provider], task, { modelMissing: true })).toBe(true);
+  });
+
+  it("stays quiet with no chat open, and leaves a missing connection to its own error", () => {
+    expect(chatModelGone([provider], undefined, { modelMissing: true })).toBe(false);
+    expect(chatModelGone([], { ...task, providerId: "gone" })).toBe(false);
   });
 });

@@ -14,7 +14,7 @@ import { runGoalVerification } from "./builtin/goal/verify.js";
 import type { BuiltinHost, SubagentOutcome } from "./builtin/host.js";
 import { withoutTranscripts } from "./builtin/subagents/details.js";
 import { SUBAGENT_TOOL_NAME } from "./builtin/subagents/types.js";
-import { createModelRuntime, findModel, workerSettings } from "./model-runtime.js";
+import { createModelRuntime, findModel, missingModelPlaceholder, workerSettings, type PiModel } from "./model-runtime.js";
 import { promptOverrides, setPromptOverrides } from "./prompt-overrides.js";
 import { SubagentRunner } from "./subagent-runner.js";
 import { SubagentStreams, isSubagentTranscript } from "./subagent-stream.js";
@@ -105,6 +105,8 @@ let workspacePath: string | undefined;
 let session: AgentSession | undefined;
 let piModule: PiModule | undefined;
 let modelRuntime: ModelRuntime | undefined;
+/** The stand-in session model while the chat's configured model is gone; see `missingModelPlaceholder`. */
+let missingModel: PiModel | undefined;
 let activeRun: {
   runId: string;
   startedAt: number;
@@ -252,7 +254,7 @@ const builtinHost: BuiltinHost = {
     // The verifier shares the chat's connection and model — like auto-title it is cheap
     // background judgement, never a second model to configure.
     const model = session?.model;
-    if (!modelRuntime || !model) return Promise.resolve({ kind: "inconclusive", reason: "No model is configured." });
+    if (!modelRuntime || !model || chatModelMissing()) return Promise.resolve({ kind: "inconclusive", reason: "No model is configured." });
     return withUsage("goal_verification", () => runGoalVerification(modelRuntime!, model, GOAL_VERIFIER_SYSTEM, input, signal));
   },
   childToolNames: () =>
@@ -830,6 +832,7 @@ function getSnapshot(rev: number): SessionSnapshot {
     thinkingLevel: session.thinkingLevel as ThinkingLevel,
     availableThinkingLevels: session.getAvailableThinkingLevels() as ThinkingLevel[],
     model: model ? { provider: model.provider, id: model.id, name: model.name } : undefined,
+    ...(chatModelMissing() ? { modelMissing: true } : {}),
     tools: toolCatalog(),
     activeTools: session.getActiveToolNames(),
     planState: builtins.planMode.getState(),
@@ -1190,6 +1193,18 @@ function refreshUserCommands(): boolean {
   return true;
 }
 
+/** Shown wherever the user tries to make a model-less chat do model work. */
+const MODEL_MISSING_MESSAGE = "This chat's model is no longer configured. Pick another to continue.";
+
+/**
+ * True while the session runs on the stand-in for a model that left its connection: the chat
+ * reads (transcript, tree, checkpoints) but nothing that needs the model may run. Identity, not
+ * a flag, so a later `set_model` with a real model clears it on its own.
+ */
+function chatModelMissing(): boolean {
+  return missingModel !== undefined && session?.model === missingModel;
+}
+
 async function initialize(command: InitCommand): Promise<void> {
   workerAgentDir = command.agentDir;
   if (session) throw new Error("Worker is already initialized");
@@ -1206,8 +1221,12 @@ async function initialize(command: InitCommand): Promise<void> {
     apiKey: command.apiKey,
     authPath: command.authPath
   });
+  // A model that left its connection no longer breaks the chat open: the session loads on a
+  // stand-in for reading, the snapshot says `modelMissing`, and runs are refused until the user
+  // picks another model (which respawns the worker through `configure_task`).
   const selectedModel = await findModel(modelRuntime, command.provider, command.modelId);
-  if (!selectedModel) throw new Error(`Configured model was not found: ${command.provider.name}/${command.modelId}`);
+  missingModel = selectedModel ? undefined : missingModelPlaceholder(command.provider, command.modelId);
+  const sessionModel = selectedModel ?? missingModel;
   subagentRunner = new SubagentRunner({
     pi,
     cwd: command.cwd,
@@ -1251,9 +1270,11 @@ async function initialize(command: InitCommand): Promise<void> {
   }
   // Passing `model` to Pi restores an existing session with that model in memory, but Pi does
   // not append a model_change entry for the override. Record it before creation so the switch is
-  // durable, follows branches, and can be rendered at its exact transcript position.
+  // durable, follows branches, and can be rendered at its exact transcript position. Skipped on
+  // the stand-in: restoring the dead model it stands for is not a switch, and the entry lands
+  // when the user picks a real model and the worker respawns.
   const restored = sessionManager.buildSessionContext();
-  if (restored.messages.length > 0 && (
+  if (selectedModel && restored.messages.length > 0 && (
     !restored.model
     || restored.model.provider !== selectedModel.provider
     || restored.model.modelId !== selectedModel.id
@@ -1287,7 +1308,7 @@ async function initialize(command: InitCommand): Promise<void> {
     cwd: command.cwd,
     agentDir: command.agentDir,
     modelRuntime,
-    model: selectedModel,
+    model: sessionModel,
     thinkingLevel: command.thinkingLevel,
     excludeTools: UNSUPPORTED_TOOLS,
     sessionManager,
@@ -1530,6 +1551,7 @@ async function runPrompt(
   commandPresentation?: CommandPresentation
 ): Promise<PromptOutcome> {
   if (!session || !taskId) throw new Error("Worker is not initialized");
+  if (chatModelMissing()) throw new Error(MODEL_MISSING_MESSAGE);
   stopRequested = false;
   continuingGoalRunId = undefined;
   let outcome: PromptOutcome = "failed";
@@ -1737,6 +1759,7 @@ async function handle(command: WorkerCommand): Promise<void> {
       }
       return;
     } else if (command.type === "compact") {
+      if (chatModelMissing()) throw new Error(MODEL_MISSING_MESSAGE);
       if (session.sessionManager.getBranch().filter((entry) => entry.type === "message" && entry.message.role === "user").length < 2) {
         throw new Error("There is not enough conversation to compact yet.");
       }
@@ -1765,7 +1788,8 @@ async function handle(command: WorkerCommand): Promise<void> {
       // A mode recorded on the task (or chosen for a draft) is applied before the prompt so
       // the first message of a plan-mode task arrives with the contract already in place.
       if (command.mode) builtins.planMode.setMode(command.mode);
-      if (command.autoTitle && piModule && workerAgentDir && modelRuntime) {
+      // The prompt below refuses a model-less chat, so its auto-title must not start either.
+      if (command.autoTitle && !chatModelMissing() && piModule && workerAgentDir && modelRuntime) {
         activeTitleCredential = command.autoTitle.apiKey;
         activeTitleAuth = command.autoTitle.authPath ? { providerId: command.autoTitle.provider.id, authPath: command.autoTitle.authPath } : undefined;
         builtins.autoTitle.start(command.autoTitle, command.message, piModule, workerAgentDir, activeProviderId ?? "", modelRuntime);
@@ -1928,7 +1952,7 @@ async function handle(command: WorkerCommand): Promise<void> {
       subagentStreams.watch(target ? { toolCallId: target.toolCallId, index: target.index } : null);
     } else if (command.type === "generate_commit_message") {
       requireSettled();
-      if (!modelRuntime || !session.model) throw new Error("Choose an available model before generating a commit message");
+      if (chatModelMissing() || !modelRuntime || !session.model) throw new Error("Choose an available model before generating a commit message");
       // Git mode asks for a summary line plus a description (`body`); the Changes panel keeps
       // the one-line subject. Rust splits the message into the two form fields.
       const withBody = command.body === true;

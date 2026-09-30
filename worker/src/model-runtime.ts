@@ -86,6 +86,26 @@ export async function findModel(runtime: ModelRuntime, provider: WorkerProvider,
     : runtime.getModel(provider.id, modelId);
 }
 
+/**
+ * The stand-in for a model that left its connection, so a chat can still be opened and read:
+ * the session restores on it, the snapshot says `modelMissing`, and every run is refused. A
+ * zero context window keeps the context meter honestly absent instead of inventing a limit.
+ */
+export function missingModelPlaceholder(provider: WorkerProvider, modelId: string): PiModel {
+  return {
+    id: modelId,
+    name: modelId,
+    api: provider.api,
+    provider: provider.id,
+    baseUrl: provider.baseUrl,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 0,
+    maxTokens: 0
+  };
+}
+
 /** Every session in the worker, the chat's and each sub-agent's, runs with these settings. */
 export function workerSettings(pi: PiModule): SettingsManager {
   return pi.SettingsManager.inMemory({

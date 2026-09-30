@@ -114,3 +114,19 @@ export function autoTitleModelIssue(config: AutoTitleConfig, providers: Provider
   if (!model || !modelIsReady(model)) return "Its model is no longer configured.";
   return undefined;
 }
+
+/**
+ * True when an open chat's own model can no longer run. The provider list catches a model
+ * removed in Settings; the snapshot flag catches one a subscription stopped serving while it is
+ * still configured. Either way the chat opens read-only until another model is picked.
+ */
+export function chatModelGone(
+  providers: ProviderRecord[],
+  task: { providerId: string; modelId: string } | undefined,
+  snapshot?: { modelMissing?: true }
+): boolean {
+  if (!task) return false;
+  if (snapshot?.modelMissing) return true;
+  const provider = providers.find((item) => item.id === task.providerId);
+  return provider !== undefined && !provider.models.some((model) => model.id === task.modelId);
+}

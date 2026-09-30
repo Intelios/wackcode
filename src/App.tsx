@@ -5,7 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { api } from "./api";
-import { modelDisplayName, modelIsReady, pickThinkingLevel } from "./model-utils";
+import { chatModelGone, modelDisplayName, modelIsReady, pickThinkingLevel } from "./model-utils";
 import { titleFromPrompt, samePlanState, sameTodoState, sameGoalState, applySnapshotDelta, applySubagentFrame, pendingSubagentView, validateInitCommand, nextMode, isPlanMode } from "./chat-utils";
 import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix } from "./tree-utils";
 import { composeFileSection, splitFileSection, type FileAttachment } from "./attachment-utils";
@@ -304,6 +304,8 @@ export default function App() {
   const gitRef = useRef(git);
   gitRef.current = git;
   const selectedModel = data.providers.find((provider) => provider.id === selectedTask?.providerId)?.models.find((model) => model.id === selectedTask?.modelId);
+  /** The chat still opens and reads, but the composer's model pill says "Choose model" until one is picked. */
+  const selectedModelGone = chatModelGone(data.providers, selectedTask, runtime?.snapshot);
   const displayModelSwitches = useMemo(() => (runtime?.snapshot?.modelSwitches ?? []).map((entry) => ({
     id: entry.id,
     at: entry.at,
@@ -2567,6 +2569,12 @@ export default function App() {
             </motion.div>
             {sharedWorkers.length > 0 && <div className="shared-notice"><span>!</span><strong>{sharedWorkers[0].name}</strong> is also running in this folder. File edits are shared.</div>}
             {(runtime?.error || selectedTask.lastError) && <div className="error-banner workspace-error"><span>{runtime?.error || selectedTask.lastError}</span><button onClick={() => patchRuntime(selectedTask.id, { error: undefined })}>Dismiss</button></div>}
+            {selectedModelGone && (
+              <div className="model-missing-notice" role="status">
+                <span>!</span>
+                This chat's model is no longer configured. Pick another to continue.
+              </div>
+            )}
             {runtime?.notices?.map((entry, index) => (
               <div className={`extension-notice ${entry.level}`} key={`${index}-${entry.message}`}>
                 <span>{entry.message}</span>

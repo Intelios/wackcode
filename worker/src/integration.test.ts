@@ -39,6 +39,7 @@ type SnapshotView = {
     from: { providerId: string; modelId: string };
     to: { providerId: string; modelId: string };
   }>;
+  modelMissing?: boolean;
   tree?: { leafId: string | null; undo?: string };
   runTimings?: Array<{ userMessageId: string; durationMs: number }>;
   activeRun?: { runId: string; startedAt: number };
@@ -996,6 +997,76 @@ describe("Pi worker integration", () => {
     expect(third.ready.snapshot?.modelSwitches).toHaveLength(1);
     const saved = await readFile(sessionFile as string, "utf8");
     expect(saved.match(/"type":"model_change"/g)).toHaveLength(2);
+  });
+
+  it("opens a chat read-only when its model left the connection, and runs again once another is picked", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-missing-model-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const first = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "missing-model-task");
+    cleanup.push(() => first.worker.shutdown());
+    first.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "first-run", message: "Run once." });
+    await first.worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) => message.role === "assistant") === true);
+    const sessionFile = first.worker.view?.sessionFile;
+    expect(sessionFile).toBeTruthy();
+    await first.worker.shutdown();
+    const servedRequests = provider.requests.length;
+    const modelChanges = ((await readFile(sessionFile as string, "utf8")).match(/"type":"model_change"/g) ?? []).length;
+
+    // The connection no longer lists the model the chat was configured with: the session must
+    // still load for reading, on a stand-in the snapshot reports, without touching the provider.
+    const withoutModel = {
+      id: "provider-missing-model-task",
+      name: "Provider missing-model-task",
+      kind: "custom",
+      baseUrl: provider.baseUrl,
+      api: "openai-completions",
+      models: [{
+        id: "alternate-model", name: "Alternate model", contextWindow: 16_384, maxTokens: 321,
+        reasoning: false, thinkingLevels: ["off"], thinkingLevelMap: { off: null }, vision: false
+      }]
+    };
+    const degraded = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "missing-model-task", sessionFile, undefined, undefined, undefined, false, {
+      provider: withoutModel, modelId: "shared-model", thinkingLevel: "off"
+    });
+    cleanup.push(() => degraded.worker.shutdown());
+    expect(degraded.ready.snapshot?.modelMissing).toBe(true);
+    expect(degraded.ready.snapshot?.messages.some((message) => message.role === "assistant")).toBe(true);
+    expect(degraded.worker.outputs.filter((output) => output.type === "worker_error")).toEqual([]);
+    expect(provider.requests).toHaveLength(servedRequests);
+    expect(((await readFile(sessionFile as string, "utf8")).match(/"type":"model_change"/g) ?? []).length).toBe(modelChanges);
+
+    // Everything that needs the model is refused with one actionable sentence, not a crash.
+    const promptId = crypto.randomUUID();
+    degraded.worker.send({ id: promptId, type: "prompt", runId: "refused-run", message: "Try to run." });
+    const refusal = await degraded.worker.waitFor((output) => output.type === "response" && output.id === promptId && output.success === false);
+    expect(refusal.error).toBe("This chat's model is no longer configured. Pick another to continue.");
+    await degraded.worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === "refused-run");
+    const commitId = crypto.randomUUID();
+    degraded.worker.send({ id: commitId, type: "generate_commit_message", diff: "diff --git a/file b/file\n+new text", truncated: false });
+    const commitRefusal = await degraded.worker.waitFor((output) => output.type === "response" && output.id === commitId && output.success === false);
+    expect(commitRefusal.error).toBe("Choose an available model before generating a commit message");
+    expect(provider.requests).toHaveLength(servedRequests);
+    await degraded.worker.shutdown();
+
+    // Picking a model that exists respawns into a normal chat, records the durable switch, runs.
+    const repaired = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "missing-model-task", sessionFile, undefined, undefined, undefined, false, {
+      provider: withoutModel, modelId: "alternate-model", thinkingLevel: "off"
+    });
+    cleanup.push(() => repaired.worker.shutdown());
+    expect(repaired.ready.snapshot?.modelMissing).toBeUndefined();
+    expect(repaired.ready.snapshot?.modelSwitches).toMatchObject([{
+      from: { providerId: "provider-missing-model-task", modelId: "shared-model" },
+      to: { providerId: "provider-missing-model-task", modelId: "alternate-model" }
+    }]);
+    repaired.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "repaired-run", message: "Run again." });
+    await repaired.worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === "repaired-run");
+    // The restored transcript already ends in "Finished alpha." from the first run; the repaired
+    // run adds its own.
+    const finished = repaired.worker.view?.messages.filter((message) => message.blocks.some((block) => block.text === "Finished alpha."));
+    expect(finished).toHaveLength(2);
+    expect(provider.requests.at(-1)?.body.model).toBe("alternate-model");
   });
 
   it("streams partial assistant messages before the authoritative snapshot", async () => {

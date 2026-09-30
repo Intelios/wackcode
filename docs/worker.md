@@ -26,6 +26,10 @@ Before the first `init` settles there is no session to act on, so a bypass comma
 
 Settings pushed with `set_*` (tools, prompts, sub-agents, MCP, skills, commands, memory, computer use) deliberately **queue**, so a run never sees its tools, prompt or skills change under it. They apply from the next message; nothing respawns.
 
+## Model-less chats
+
+A chat whose configured model left its connection (removed in Settings, or dropped by a subscription) still opens: `init` restores the session on a stand-in model (`missingModelPlaceholder` in `model-runtime.ts`), the snapshot carries `modelMissing`, and the transcript, tree and checkpoints stay readable. Everything that needs the model — prompts, `/compact`, commit-message generation, the goal verifier — is refused with "This chat's model is no longer configured. Pick another to continue." Picking a model respawns the worker through `configure_task` (the model is in the fingerprint) and records the durable switch on the way back in.
+
 ## Snapshots and deltas
 
 The transcript reaches the host as a full `snapshot`, then as `snapshot_delta`s at each message boundary, with `partial` frames (~60 fps) for the streaming message.

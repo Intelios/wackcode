@@ -815,6 +815,8 @@ export interface SessionSnapshot {
   thinkingLevel: ThinkingLevel;
   availableThinkingLevels: ThinkingLevel[];
   model?: { provider: string; id: string; name?: string };
+  /** True while the session runs on the stand-in for a model that left its connection. */
+  modelMissing?: true;
   tools: ToolCatalogEntry[];
   activeTools: string[];
   planState?: PlanState;

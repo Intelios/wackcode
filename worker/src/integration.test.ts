@@ -496,7 +496,7 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
   response.end("data: [DONE]\n\n");
 }
 
-async function initializeWorker(
+function initCommand(
   baseUrl: string,
   apiKey: string,
   workspace: string,
@@ -507,9 +507,8 @@ async function initializeWorker(
   mode?: TaskMode,
   vision?: boolean,
   extra: Record<string, unknown> = {}
-): Promise<{ worker: WorkerHarness; ready: Output }> {
-  const worker = new WorkerHarness(workspace);
-  worker.send({
+) {
+  return {
     id: crypto.randomUUID(),
     type: "init",
     taskId,
@@ -541,8 +540,34 @@ async function initializeWorker(
     resources,
     mode,
     ...extra
-  });
+  };
+}
+
+async function initializeWorker(
+  baseUrl: string,
+  apiKey: string,
+  workspace: string,
+  taskId: string,
+  sessionFile?: string,
+  disabledTools?: string[],
+  resources?: { extensions: string[]; skills: string[]; prompts: string[]; themes: string[] },
+  mode?: TaskMode,
+  vision?: boolean,
+  extra: Record<string, unknown> = {}
+): Promise<{ worker: WorkerHarness; ready: Output }> {
+  const worker = new WorkerHarness(workspace);
+  worker.send(initCommand(baseUrl, apiKey, workspace, taskId, sessionFile, disabledTools, resources, mode, vision, extra));
   return { worker, ready: await worker.waitFor((output) => output.type === "ready") };
+}
+
+/**
+ * Sends only `init`, without waiting for `ready`: tests for the start-up window then send
+ * their commands the way the host does, back to back with the init that is still running.
+ */
+function launchWorker(baseUrl: string, apiKey: string, workspace: string, taskId: string): WorkerHarness {
+  const worker = new WorkerHarness(workspace);
+  worker.send(initCommand(baseUrl, apiKey, workspace, taskId));
+  return worker;
 }
 
 /** A solid-colour RGB PNG, built by hand so the tests need no image fixtures. */
@@ -1071,6 +1096,49 @@ describe("Pi worker integration", () => {
     expect(stopped?.runTimings).toHaveLength(1);
     const user = stopped?.messages.find((message) => message.role === "user");
     expect(stopped?.runTimings?.[0]?.userMessageId).toBe(user?.id);
+  });
+
+  it("honours a stop sent while the worker is still starting", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-early-abort-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    // The host writes init and the first prompt back to back; a stop in that first second
+    // used to bounce off "Worker is not initialized" and the run carried on.
+    const worker = launchWorker(provider.baseUrl, "cancel-secret", workspace, "early-abort-task");
+    cleanup.push(() => worker.shutdown());
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "early-run", message: "Wait until stopped." });
+    worker.send({ id: crypto.randomUUID(), type: "abort" });
+
+    await worker.waitFor((output) => output.type === "ready");
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "stopping");
+    const finished = await worker.waitFor((output) => output.type === "run_finished" && output.runId === "early-run");
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    expect(finished.outcome).toBe("stopped");
+    expect(worker.outputs.some((output) => output.type === "worker_error")).toBe(false);
+    // Whether the stop landed before the run's first model request or cancelled it mid-stream,
+    // at most one request went out.
+    expect(provider.requests.length).toBeLessThanOrEqual(1);
+  });
+
+  it("delivers a message queued while the worker is still starting", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-early-queue-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    // The second message used to skip the queue straight into a session that didn't exist yet
+    // and vanish: fire-and-forget on the host side, error wiped by the next snapshot.
+    const worker = launchWorker(provider.baseUrl, "alpha-secret", workspace, "early-queue-task");
+    cleanup.push(() => worker.shutdown());
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "early-one", message: "Create the fixture." });
+    worker.send({ id: crypto.randomUUID(), type: "queue_message", behavior: "follow_up", message: "Second message." });
+
+    await worker.waitFor((output) => emitted(output)
+      && output.view?.messages.filter((message) => message.role === "user").length === 2
+      && output.view?.messages.some((message) => message.role === "user" && message.blocks.some((block) => block.text === "Second message.")) === true);
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    expect(worker.outputs.some((output) => output.type === "worker_error")).toBe(false);
+    expect(worker.view?.messages.some((message) => message.role === "assistant")).toBe(true);
   });
 
   it("does not report a stop during a tool call as a failure", async () => {

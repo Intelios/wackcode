@@ -282,7 +282,7 @@ export default function App() {
   const [mentions, setMentions] = useState<{ source: string; files?: string[]; truncated?: boolean; loading: boolean; error?: string }>();
   const mentionRequest = useRef(0);
   /** Mid first-send choreography: the hero is exiting while this message rides the composer down. */
-  const [transitioning, setTransitioning] = useState<{ message: string; taskId?: string }>();
+  const [transitioning, setTransitioning] = useState<{ message: string; taskId?: string; fromSelectedId?: string }>();
   /** Bumped when returning to the draft hero from a task; reseeds the shared composer to a clean draft. */
   const [draftSeedNonce, setDraftSeedNonce] = useState(0);
 
@@ -873,7 +873,11 @@ export default function App() {
   useEffect(() => {
     const taskId = transitioning?.taskId;
     if (!transitioning) return;
-    if (taskId && selectedTaskId !== taskId) {
+    // Selection landed on a different chat, so the handoff is off — but only once it has
+    // actually moved. Between attaching the task id and selection switching (after the prompt
+    // is out), selectedTaskId still holds the value from before the send; clearing there would
+    // unfreeze the hero mid-flight and let a quick second send create a second chat.
+    if (taskId && selectedTaskId !== taskId && selectedTaskId !== transitioning.fromSelectedId) {
       setTransitioning(undefined);
       return;
     }
@@ -1467,7 +1471,9 @@ export default function App() {
         setGlobalError(String(reason));
         return false;
       }
-      setTransitioning({ message, taskId: task.id });
+      // `fromSelectedId` is the selection the handoff began under: the freeze holds until
+      // selection switches to the new task (after api.prompt resolves) or truly moves away.
+      setTransitioning({ message, taskId: task.id, fromSelectedId: selectedTaskId });
       rememberModel(active.projectId, choice);
       localStorage.setItem(LAST_PROJECT_KEY, JSON.stringify(active.projectId));
       const mode = modeOverride ?? active.mode ?? "build";

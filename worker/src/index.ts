@@ -2129,6 +2129,41 @@ function safeError(error: unknown): string {
   return message.replace(/(sk-[A-Za-z0-9_-]{8,}|Bearer\s+[A-Za-z0-9._-]+|(?:code|device_code|refresh_token|access_token)=[^\s&]+)/gi, "[credential redacted]");
 }
 
+/**
+ * Commands that must ride outside the serial prompt queue: a prompt holds the queue until the
+ * agent settles, so anything that has to reach the running run (an abort, a steer) or the
+ * user's pending messages deadlocks behind it. Goal pause/resume/clear bypass too — they act
+ * on a live loop; only "set" queues, since starting a run behind another run is exactly what
+ * the queue is for. Watching a sub-agent and fetching a lightbox screenshot only read the
+ * session, but the panel opens on a child while the call running it holds the queue, so they
+ * bypass as well.
+ */
+function bypassesQueue(command: WorkerCommand): boolean {
+  switch (command.type) {
+    case "abort":
+    case "browser_response":
+    case "computer_response":
+    case "extension_ui_response":
+    case "queue_message":
+    case "dequeue":
+    case "watch_subagent":
+    case "tool_image":
+      return true;
+    case "goal_control":
+      return command.action !== "set";
+    default:
+      return false;
+  }
+}
+
+/**
+ * Resolves once the first `init` settles. A bypass command that arrives while the worker is
+ * still starting (the host sends `init` and the first prompt back to back) has no session to
+ * act on, but bouncing it with "Worker is not initialized" would drop a message or ignore a
+ * stop. It waits here instead, then runs exactly as it would have.
+ */
+let initSettled: Promise<void> = Promise.resolve();
+
 const decoder = new JsonLineDecoder();
 process.stdin.on("data", (chunk: Buffer) => {
   for (const line of decoder.push(chunk)) {
@@ -2139,16 +2174,23 @@ process.stdin.on("data", (chunk: Buffer) => {
       send({ type: "worker_error", taskId, message: "The desktop bridge sent invalid JSON" });
       continue;
     }
-    // Cancellation, dialog answers, message queueing and dequeueing must bypass the prompt
-    // queue: a prompt holds the queue until the agent settles, so anything that has to reach
-    // the running run (an abort, a steer) or the user's pending messages deadlocks behind it.
-    // Goal pause/resume/clear bypass too — they act on a live loop; only "set" queues, since
-    // starting a run behind another run is exactly what the queue is for. So does watching a
-    // sub-agent, since the panel opens on a child while the call running it holds the queue —
-    // but only once the session exists: before that it waits its turn behind `init`. Fetching a
-    // screenshot for the lightbox only reads the session, so it bypasses on the same terms.
-    if (command.type === "abort" || command.type === "browser_response" || command.type === "computer_response" || command.type === "extension_ui_response" || command.type === "queue_message" || command.type === "dequeue" || ((command.type === "watch_subagent" || command.type === "tool_image") && session !== undefined) || (command.type === "goal_control" && command.action !== "set")) {
-      void handle(command).catch((error) => {
+    if (command.type === "init") {
+      let release!: () => void;
+      initSettled = new Promise<void>((resolve) => { release = resolve; });
+      commandQueue = commandQueue
+        .then(() => handle(command))
+        .catch((error) => {
+          send({ type: "worker_error", taskId, message: safeError(error) });
+        })
+        // The gate opens on the next macrotask, after the microtasks queued behind `init` have
+        // run: the first prompt (sent right behind `init`) has then started its run, so a held
+        // abort finds it live — and stops it through the same path as any other stop — while a
+        // held follow-up finds a streaming session to queue onto instead of starting fresh.
+        .finally(() => { setTimeout(release, 0); });
+      continue;
+    }
+    if (bypassesQueue(command)) {
+      void initSettled.then(() => handle(command)).catch((error) => {
         send({ type: "worker_error", taskId, message: safeError(error) });
       });
       continue;

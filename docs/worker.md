@@ -20,7 +20,9 @@ Commands run one at a time on a serial queue, and a prompt holds the queue until
 - `abort`, `extension_ui_response`, `browser_response`, `computer_response`: answers the running run is waiting on.
 - `queue_message`, `dequeue`: the user's steering and follow-up messages.
 - `goal_control` except `set`: pause, resume and clear act on a live loop. `set` starts a run, so it queues.
-- `watch_subagent`, `tool_image`: read-only, but only once the session exists; before that they wait behind `init`.
+- `watch_subagent`, `tool_image`: read-only peeks; the panel opens on a child while the call running it holds the queue.
+
+Before the first `init` settles there is no session to act on, so a bypass command is held on `initSettled` rather than bounced with "Worker is not initialized": the host sends `init` and the first prompt back to back, and a stop or a follow-up sent in that window must survive it. The gate opens one macrotask later — after the microtasks queued behind `init` have run — so a held stop finds the just-started first run live and stops it through the ordinary path, and a held follow-up finds a streaming session to queue onto.
 
 Settings pushed with `set_*` (tools, prompts, sub-agents, MCP, skills, commands, memory, computer use) deliberately **queue**, so a run never sees its tools, prompt or skills change under it. They apply from the next message; nothing respawns.
 

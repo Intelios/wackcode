@@ -83,6 +83,8 @@ The Changes panel is for glancing at edits while the agent works. For a big diff
 - **Read one file at a time**, unified or side by side, at full height.
 - **Tick the files to commit**, write a summary and a description (or generate both from the ticked files), and commit. Discard a file or a hunk after a confirmation.
 - **Fetch, pull and push** from one button that shows what's next: Fetch, Pull ↓, Push ↑ or Publish branch. Pull only fast-forwards; if your branch and the remote have diverged, nothing is merged and you can ask the agent to rebase or merge.
+- **Open the project in your editor** (VS Code, Zed, Cursor, …) from a button beside the sync one. The chevron picks which editor, and the pick is remembered.
+- **Nothing to commit?** The screen suggests what to do next, including opening the repository in GitHub in your browser.
 - **History** lists the branch's commits with their diffs. Undo the latest unpushed commit, revert any commit, or ask the agent to explain or review one.
 - **The agent stays in reach.** Line comments, Review and the generated message go through a chat in that project, shown as "via *chat*" in the toolbar. Git mode stays open while the agent works, and the diff updates as it edits.
 

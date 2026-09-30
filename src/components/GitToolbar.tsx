@@ -6,6 +6,7 @@ import type {
 } from "../types";
 import { BranchPicker } from "./BranchPicker";
 import { CommentsList, PrForm } from "./ChangesSheets";
+import { GitEditorButton } from "./GitEditorButton";
 import { GitSyncButton } from "./GitSyncButton";
 import { Icon } from "./Icons";
 import { Popover } from "./ui/Popover";
@@ -24,6 +25,10 @@ interface GitToolbarProps {
   onPull: () => void;
   onPush: () => void;
   onPublish: (remote: string) => void;
+  /** The external editors installed on this Mac, and the one "Open in editor" opens. */
+  editors: string[];
+  editor?: string;
+  onOpenEditor: (editor: string) => void;
   onDismissNetworkError: () => void;
   onPreparePr: (remote: string) => Promise<GitPrInfo>;
   onCreatePr: (remote: string, base: string, title: string, body: string, draft: boolean) => Promise<string>;
@@ -142,6 +147,7 @@ export const GitToolbar = memo(function GitToolbar(props: GitToolbarProps) {
             onDismissError={props.onDismissNetworkError}
           />
         </div>
+        <GitEditorButton editors={props.editors} editor={props.editor} onOpen={props.onOpenEditor} />
       </div>
       <span className="git-toolbar-spacer" data-tauri-drag-region />
       <AnimatePresence>

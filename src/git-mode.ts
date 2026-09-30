@@ -13,6 +13,8 @@ export type GitTab = "changes" | "history";
 export const GIT_PROJECT_KEY = "wackcode:gitProject";
 /** Unified or split diffs, remembered per user. */
 export const DIFF_LAYOUT_KEY = "wackcode:diffLayout";
+/** The external editor Git mode last opened a project in. */
+export const GIT_EDITOR_KEY = "wackcode:gitEditor";
 /** Project ids pinned to the top of the sidebar and the repository switcher. */
 export const PINNED_PROJECTS_KEY = "wackcode:pinnedProjects";
 
@@ -132,4 +134,51 @@ export function listDirection(paths: string[], from: string | undefined, to: str
 /** The first line of a multi-line error: Rust errors can carry Git's own trailing detail. */
 export function firstLine(message: string): string {
   return message.split("\n").find((line) => line.trim())?.trim() ?? message;
+}
+
+/** The editor the toolbar's button opens: the remembered one while it is still installed, else the first found. */
+export function pickEditor(installed: string[], remembered: string | null): string | undefined {
+  return remembered && installed.includes(remembered) ? remembered : installed[0];
+}
+
+/**
+ * The web page a Git remote URL points at: HTTP(S) URLs keep their scheme, and SSH, `git://`
+ * and the scp-like `git@host:owner/repo` form become HTTPS. Null when the URL points at no
+ * page, like a local path.
+ */
+export function repoWebUrl(remoteUrl: string | null | undefined): string | null {
+  const raw = remoteUrl?.trim();
+  if (!raw) return null;
+  let page: URL;
+  try {
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
+      const parsed = new URL(raw);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") page = parsed;
+      else if (parsed.protocol === "ssh:" || parsed.protocol === "git:") page = new URL(`https://${parsed.hostname}${parsed.pathname}`);
+      else return null;
+    } else {
+      const scp = /^(?:[^@/:\s]+@)?([^:/\s]+):(.+)$/.exec(raw);
+      if (!scp || scp[2].startsWith("/") || scp[2].includes("\\")) return null;
+      page = new URL(`https://${scp[1]}/${scp[2]}`);
+    }
+  } catch {
+    return null;
+  }
+  // The page keeps no credentials, query or fragment: it opens in the user's own browser.
+  page.username = "";
+  page.password = "";
+  page.search = "";
+  page.hash = "";
+  const path = page.pathname.replace(/\/+$/, "").replace(/\.git$/i, "");
+  if (!page.hostname || path === "") return null;
+  page.pathname = path;
+  return page.toString();
+}
+
+/** The "Nothing to commit" card copy for the repository's web page: GitHub names itself. */
+export function repoWebCopy(webUrl: string): { title: string; body: string; label: string } {
+  const host = new URL(webUrl).hostname;
+  return host === "github.com" || host.startsWith("github.")
+    ? { title: "Open in GitHub", body: "See the repository in your browser.", label: "Open in GitHub" }
+    : { title: "Open on the web", body: `See the repository on ${host} in your browser.`, label: `Open on ${host}` };
 }

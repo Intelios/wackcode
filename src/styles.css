@@ -1618,6 +1618,21 @@ button.compact.primary:hover:not(:disabled) { background: var(--wc-accent-hover)
 .git-toolbar-error { left: auto; right: 12px; }
 .git-sync-error > span, .git-toolbar-error > span { flex: 1; }
 .git-sync-error .icon-button, .git-toolbar-error .icon-button { width: 20px; height: 20px; flex: 0 0 auto; color: inherit; }
+
+/* Editor: "Open in editor" beside the sync button; the chevron picks VS Code, Zed, … */
+.git-editor { position: relative; height: 42px; display: flex; align-items: stretch; border: 1px solid var(--border); border-radius: 10px; }
+.git-editor-wrap { display: flex; }
+.git-editor-main { min-width: 148px; display: flex; align-items: center; gap: 10px; padding: 0 12px 0 11px; border: 0; border-radius: 9px 0 0 9px; background: transparent; color: var(--text); text-align: left; cursor: pointer; transition: background .12s var(--ease); }
+.git-editor-main:hover:not(:disabled) { background: var(--surface); }
+.git-editor-main:disabled { opacity: 1; cursor: default; }
+.git-editor-main:disabled .git-editor-text { opacity: .6; }
+.git-editor-main > svg { width: 17px; height: 17px; flex: 0 0 auto; color: var(--text-dim); }
+.git-editor-text { min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+.git-editor-text strong { font-size: 12.5px; font-weight: 650; white-space: nowrap; }
+.git-editor-text small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); font-size: 10.5px; }
+.git-editor-more { width: 26px; display: grid; place-items: center; border: 0; border-left: 1px solid var(--border); border-radius: 0 9px 9px 0; background: transparent; color: var(--text-dim); cursor: pointer; }
+.git-editor-more:hover:not(:disabled), .git-editor-more[aria-expanded="true"] { background: var(--surface); color: var(--text); }
+.git-editor-more:disabled { opacity: .5; cursor: default; }
 .git-flash {
   position: absolute; z-index: 6; top: calc(100% + 8px); left: 50%; translate: -50% 0;
   display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid var(--wc-accent-line); border-radius: 999px;

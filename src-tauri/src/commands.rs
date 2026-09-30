@@ -3555,6 +3555,17 @@ pub async fn git_sync_status(
     blocking(move || git::sync_status(&workspace)).await
 }
 
+/// Read-only: the fetch remote's configured URL, for the repository's web page.
+#[tauri::command]
+pub async fn git_remote_url(
+    state: State<'_, MetadataState>,
+    task_id: Option<String>,
+    project_id: Option<String>,
+) -> Result<Option<String>, String> {
+    let workspace = git_target(&state, task_id.as_deref(), project_id.as_deref())?;
+    blocking(move || git::remote_url(&workspace)).await
+}
+
 /// Fetch the checkout's remote (Git mode runs one in the `background` when it opens, and on
 /// the user's click otherwise; never on a timer). It doesn't need an idle checkout: fetching
 /// moves no local branch, index or file.
@@ -4107,6 +4118,82 @@ pub fn reveal_path(path: String) -> Result<(), String> {
         Ok(())
     } else {
         Err("macOS could not reveal that path".into())
+    }
+}
+
+/// GUI editors WackCode can open a project folder in, most common first. A name is the app's
+/// bundle name, which is also what `open -a` takes.
+const EDITORS: &[&str] = &[
+    "Visual Studio Code",
+    "Visual Studio Code - Insiders",
+    "Cursor",
+    "Zed",
+    "Zed Preview",
+    "VSCodium",
+    "Sublime Text",
+    "Nova",
+    "Fleet",
+    "BBEdit",
+    "CotEditor",
+    "IntelliJ IDEA",
+    "IntelliJ IDEA CE",
+    "WebStorm",
+    "PyCharm",
+    "PyCharm CE",
+    "GoLand",
+    "PhpStorm",
+    "RubyMine",
+    "CLion",
+    "Rider",
+    "DataGrip",
+    "Android Studio",
+];
+
+/// The catalog editors installed in `roots`, in catalog order. Detection only looks at bundle
+/// names on disk; `open -a` itself resolves anything macOS knows about.
+fn editors_in(roots: &[PathBuf]) -> Vec<String> {
+    EDITORS
+        .iter()
+        .copied()
+        .filter(|name| roots.iter().any(|root| root.join(format!("{name}.app")).is_dir()))
+        .map(str::to_string)
+        .collect()
+}
+
+/// The editors installed on this Mac, for Git mode's "Open in editor" picker.
+#[tauri::command]
+pub fn list_editors(app: AppHandle) -> Result<Vec<String>, String> {
+    let home = skills::home_dir(&app)?;
+    Ok(editors_in(&[
+        PathBuf::from("/Applications"),
+        home.join("Applications"),
+        home.join("Applications/JetBrains Toolbox"),
+    ]))
+}
+
+/// Open the project's folder in an external editor (VS Code, Zed, …) by app name.
+#[tauri::command]
+pub fn open_in_editor(
+    state: State<'_, MetadataState>,
+    task_id: Option<String>,
+    project_id: Option<String>,
+    editor: String,
+) -> Result<(), String> {
+    let workspace = git_target(&state, task_id.as_deref(), project_id.as_deref())?;
+    let editor = editor.trim();
+    if editor.is_empty() {
+        return Err("Choose an editor to open this project in".into());
+    }
+    let output = Command::new("open")
+        .arg("-a")
+        .arg(editor)
+        .arg(&workspace)
+        .output()
+        .map_err(|error| error.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!("{editor} could not open this project. Check that it is installed."))
     }
 }
 
@@ -5195,5 +5282,16 @@ mod tests {
             std::fs::read_to_string(&written).unwrap(),
             "# Plan\n\n- step\n"
         );
+    }
+
+    #[test]
+    fn editors_are_found_by_bundle_name_in_catalog_order() {
+        let directory = tempfile::tempdir().unwrap();
+        let apps = directory.path().join("Applications");
+        std::fs::create_dir_all(apps.join("Zed.app")).unwrap();
+        std::fs::create_dir_all(apps.join("Visual Studio Code.app")).unwrap();
+        std::fs::create_dir_all(apps.join("NotAnEditor.app")).unwrap();
+        std::fs::create_dir_all(apps.join("Zed")).unwrap();
+        assert_eq!(editors_in(&[apps]), vec!["Visual Studio Code", "Zed"]);
     }
 }

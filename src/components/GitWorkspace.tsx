@@ -1,7 +1,7 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { lineAnchor } from "../changes-utils";
-import { firstLine, syncAction } from "../git-mode";
+import { firstLine, repoWebCopy, syncAction } from "../git-mode";
 import type { DiffComment, DiffLayout, GitChangeFile, GitDiffLine, GitDiffSection, GitSyncStatus, TaskRecord } from "../types";
 import { DiffView, type CommentAnchor } from "./DiffView";
 import { DuckMark } from "./DuckMark";
@@ -30,6 +30,9 @@ interface GitWorkspaceProps {
   onPull: () => void;
   onPublish: (remote: string) => void;
   onCreatePr: () => void;
+  /** The repository's web page for the clean state's "Open in GitHub" card. */
+  repoUrl?: string | null;
+  onOpenRepo: (url: string) => void;
   onOpenChat: (taskId: string) => void;
   onReveal: () => void;
   divergence?: { ahead: number; behind: number; upstream: string };
@@ -159,6 +162,11 @@ function CleanState(props: GitWorkspaceProps) {
   }
   if (props.sync?.upstream && action.kind !== "publish") {
     cards.push({ key: "pr", icon: "pullRequest", title: "Create a pull request", body: `Open a pull request for ${props.sync.branch ?? "this branch"} with your own gh login.`, label: "Create pull request", onClick: props.onCreatePr });
+  }
+  const repoUrl = props.repoUrl;
+  if (repoUrl) {
+    const copy = repoWebCopy(repoUrl);
+    cards.push({ key: "repo", icon: "external", title: copy.title, body: copy.body, label: copy.label, onClick: () => props.onOpenRepo(repoUrl) });
   }
   if (props.linked) {
     const linked = props.linked;

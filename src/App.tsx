@@ -2325,6 +2325,8 @@ export default function App() {
       void git.refresh();
     },
     publish: (remote: string) => void git.actions.push(remote),
+    openEditor: (editor: string) => void git.actions.openEditor(editor),
+    openRepo: (url: string) => void api.revealPath(url).catch((reason) => setGlobalError(String(reason))),
     preparePr: (remote: string) => gitProjectId ? api.gitPrPrepare({ projectId: gitProjectId }, remote) : Promise.reject(new Error("No project")),
     createPr: async (remote: string, base: string, title: string, body: string, draft: boolean) => {
       if (!gitProjectId) throw new Error("No project");
@@ -2653,6 +2655,9 @@ export default function App() {
                   onPull={git.actions.pull}
                   onPush={git.actions.push}
                   onPublish={gitHandlers.publish}
+                  editors={git.editors}
+                  editor={git.editor}
+                  onOpenEditor={gitHandlers.openEditor}
                   onDismissNetworkError={() => git.actions.dismiss("networkError")}
                   onPreparePr={gitHandlers.preparePr}
                   onCreatePr={gitHandlers.createPr}
@@ -2737,6 +2742,8 @@ export default function App() {
                     onPull={git.actions.pull}
                     onPublish={gitHandlers.publish}
                     onCreatePr={gitHandlers.requestPr}
+                    repoUrl={gitState?.repoUrl}
+                    onOpenRepo={gitHandlers.openRepo}
                     onOpenChat={gitHandlers.openChat}
                     onReveal={gitHandlers.revealProject}
                     divergence={gitState?.divergence}

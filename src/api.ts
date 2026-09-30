@@ -277,6 +277,8 @@ export const api = {
   /** Written by the chat's own model; `files` limits the diff it sees, `body` adds a description. */
   gitGenerateMessage: (taskId: string, options: { files?: string[]; body?: boolean } = {}) => invoke<GitGeneratedMessage>("git_generate_message", { taskId, ...options }),
   gitSyncStatus: (target: GitTarget) => invoke<GitSyncStatus>("git_sync_status", target),
+  /** The fetch remote's configured URL; null when the checkout has no remote. */
+  gitRemoteUrl: (target: GitTarget) => invoke<string | null>("git_remote_url", target),
   /** Network: the user's own remote. `background` is Git mode's one fetch on open, which never prompts for credentials. */
   gitFetch: (target: GitTarget, background = false) => invoke<GitSyncStatus>("git_fetch", { ...target, background }),
   gitPull: (target: GitTarget) => invoke<GitPullResult>("git_pull", target),
@@ -289,6 +291,9 @@ export const api = {
   listWorkspaceFiles: (taskId?: string, projectId?: string) => invoke<WorkspaceFiles>("list_workspace_files", { taskId, projectId }),
   revealTask: (taskId: string) => invoke<void>("reveal_task", { taskId }),
   revealPath: (path: string) => invoke<void>("reveal_path", { path }),
+  /** The GUI editors installed on this Mac (VS Code, Zed, …), for Git mode's picker. */
+  listEditors: () => invoke<string[]>("list_editors"),
+  openInEditor: (target: GitTarget, editor: string) => invoke<void>("open_in_editor", { ...target, editor }),
   // Terminal output rides a Channel, not React state: PTY bytes stream straight into xterm.
   openTerminal: (taskId: string, cols: number, rows: number, onFrame: (frame: TerminalFrame) => void) => {
     const on_frame = new Channel<TerminalFrame>();

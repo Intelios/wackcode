@@ -931,6 +931,15 @@ pub fn remote_repo(path: &Path, remote: &str) -> Result<String, String> {
     Ok(format!("{}/{}/{}", parts[0], parts[1], parts[2]))
 }
 
+/// The fetch remote's configured URL, as Git reports it (HTTPS, SSH or scp-like). None when
+/// the checkout has no remote. The renderer turns it into the repository's web page.
+pub fn remote_url(path: &Path) -> Result<Option<String>, String> {
+    let root = inspect_project(path).root.ok_or("No Git repository")?;
+    let publish = publish_info(&root)?;
+    let Some(remote) = fetch_remote(&publish) else { return Ok(None) };
+    Ok(Some(run_git(&root, &["remote", "get-url", &remote], None)?.trim().to_string()))
+}
+
 fn is_binary_file(path: &Path) -> bool {
     if fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) { return false; }
     fs::read(path)
@@ -1212,6 +1221,17 @@ mod tests {
         assert_eq!(run_git(&bare, &["show", &format!("refs/heads/{branch}:file.txt")], None).unwrap(), "second");
         git(&root, &[OsStr::new("remote"), OsStr::new("set-url"), OsStr::new("origin"), OsStr::new("git@github.com:owner/repo.git")]);
         assert_eq!(remote_repo(&root, "origin").unwrap(), "github.com/owner/repo");
+    }
+
+    #[test]
+    fn remote_url_reports_the_fetch_remote_as_configured() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        init_repo(root);
+        commit_file(root, "file.txt", "one\n", "first");
+        assert_eq!(remote_url(root).unwrap(), None);
+        run(root, &["remote", "add", "origin", "git@github.com:owner/repo.git"]);
+        assert_eq!(remote_url(root).unwrap().as_deref(), Some("git@github.com:owner/repo.git"));
     }
 
     fn run(path: &Path, args: &[&str]) -> String {

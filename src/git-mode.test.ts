@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   busyChatsInCheckout, commitLabel, fetchedLabel, includedFiles, initialGitProject, linkableChats, listDirection,
-  orderProjects, resolveLinkedChat, selectionState, sidebarPageDirection, syncAction
+  orderProjects, pickEditor, repoWebCopy, repoWebUrl, resolveLinkedChat, selectionState, sidebarPageDirection, syncAction
 } from "./git-mode";
 import type { GitChangeFile, GitSyncStatus, ProjectRecord, TaskRecord } from "./types";
 
@@ -98,5 +98,42 @@ describe("git mode rules", () => {
     expect(sidebarPageDirection("git", "chats")).toBe(-1);
     expect(listDirection(["a", "b", "c"], "c", "a")).toBe(-1);
     expect(listDirection(["a", "b", "c"], undefined, "b")).toBe(1);
+  });
+
+  it("keeps the remembered editor while it is installed, else the first one", () => {
+    expect(pickEditor(["Visual Studio Code", "Zed"], "Zed")).toBe("Zed");
+    expect(pickEditor(["Visual Studio Code", "Zed"], "Gone")).toBe("Visual Studio Code");
+    expect(pickEditor(["Zed"], null)).toBe("Zed");
+    expect(pickEditor([], "Zed")).toBeUndefined();
+    expect(pickEditor([], null)).toBeUndefined();
+  });
+
+  it("turns a remote URL into the repository's web page", () => {
+    expect(repoWebUrl("https://github.com/owner/repo.git")).toBe("https://github.com/owner/repo");
+    expect(repoWebUrl("https://github.com/owner/repo.git/")).toBe("https://github.com/owner/repo");
+    expect(repoWebUrl("http://intranet.example/git/repo")).toBe("http://intranet.example/git/repo");
+    expect(repoWebUrl("git@github.com:owner/repo.git")).toBe("https://github.com/owner/repo");
+    expect(repoWebUrl("git@gitlab.com:group/subgroup/repo.git")).toBe("https://gitlab.com/group/subgroup/repo");
+    expect(repoWebUrl("ssh://git@github.com/owner/repo.git")).toBe("https://github.com/owner/repo");
+    expect(repoWebUrl("ssh://git@ssh.github.com:443/owner/repo.git")).toBe("https://ssh.github.com/owner/repo");
+    expect(repoWebUrl("git://github.com/owner/repo.git")).toBe("https://github.com/owner/repo");
+    expect(repoWebUrl("https://token@github.com/owner/repo.git")).toBe("https://github.com/owner/repo");
+  });
+
+  it("has no web page for local paths and unusable remote URLs", () => {
+    expect(repoWebUrl("/Users/me/other/repo")).toBeNull();
+    expect(repoWebUrl("C:\\Users\\me\\repo")).toBeNull();
+    expect(repoWebUrl("file:///tmp/repo")).toBeNull();
+    expect(repoWebUrl("https://github.com/")).toBeNull();
+    expect(repoWebUrl("not a url")).toBeNull();
+    expect(repoWebUrl("")).toBeNull();
+    expect(repoWebUrl(null)).toBeNull();
+    expect(repoWebUrl(undefined)).toBeNull();
+  });
+
+  it("names GitHub in the clean-state card copy, other hosts by name", () => {
+    expect(repoWebCopy("https://github.com/owner/repo")).toMatchObject({ title: "Open in GitHub", label: "Open in GitHub" });
+    expect(repoWebCopy("https://github.example.com/owner/repo")).toMatchObject({ label: "Open in GitHub" });
+    expect(repoWebCopy("https://gitlab.com/owner/repo")).toMatchObject({ title: "Open on the web", label: "Open on gitlab.com" });
   });
 });

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import { DIFF_LAYOUT_KEY, GIT_PROJECT_KEY, includedFiles, initialGitProject, listDirection, selectionState, type GitTab } from "../git-mode";
+import { DIFF_LAYOUT_KEY, GIT_EDITOR_KEY, GIT_PROJECT_KEY, includedFiles, initialGitProject, listDirection, pickEditor, repoWebUrl, selectionState, type GitTab } from "../git-mode";
 import type {
   DiffLayout, GitChangeFile, GitChanges, GitCommit, GitCommitFile, GitSyncStatus, ProjectRecord, TaskRecord
 } from "../types";
@@ -37,6 +37,8 @@ export interface ProjectGitState {
   loading: boolean;
   error?: string;
   sync?: GitSyncStatus;
+  /** The repository's web page, derived from the fetch remote's URL; null when it has none. */
+  repoUrl?: string | null;
   network?: { kind: GitNetworkKind; background: boolean };
   /** The last network failure; a background fetch's is shown quietly on the sync button. */
   networkError?: { message: string; background: boolean };
@@ -95,6 +97,15 @@ function loadRemembered(): string | null {
   }
 }
 
+/** The external editor the toolbar last opened a project in. */
+function loadEditorChoice(): string | null {
+  try {
+    return localStorage.getItem(GIT_EDITOR_KEY);
+  } catch {
+    return null;
+  }
+}
+
 function remember(projectId: string) {
   try { localStorage.setItem(GIT_PROJECT_KEY, projectId); } catch { /* per-viewer convenience only */ }
 }
@@ -108,6 +119,9 @@ export function useGitMode(options: {
   const [view, setView] = useState<GitModeView | null>(null);
   const [states, setStates] = useState<Record<string, ProjectGitState>>({});
   const [layout, setLayoutState] = useState<DiffLayout>(loadLayout);
+  /** The GUI editors installed on this Mac, and the one the toolbar opens. */
+  const [editors, setEditors] = useState<string[]>([]);
+  const [editorChoice, setEditorChoice] = useState<string | null>(loadEditorChoice);
   const statesRef = useRef(states);
   statesRef.current = states;
   const viewRef = useRef(view);
@@ -251,13 +265,22 @@ export function useGitMode(options: {
     }
   }, [patch, reloadLog]);
 
-  /** Load a project and run its one background fetch. */
+  /** Load a project, the installed editors and its repository's web page, and run its one background fetch. */
   const enter = useCallback((projectId: string) => {
     remember(projectId);
+    void api.listEditors().then(setEditors).catch(() => setEditors([]));
     void refreshNow(projectId).then((sync) => {
-      if (sync?.fetchRemote && viewRef.current?.projectId === projectId) void fetchRemote(projectId, true);
+      if (!sync?.fetchRemote || viewRef.current?.projectId !== projectId) return;
+      void fetchRemote(projectId, true);
+      // The remote's URL becomes the clean state's "Open in GitHub" card. It changes rarely,
+      // so one lookup per visit is enough.
+      if (statesRef.current[projectId]?.repoUrl === undefined) {
+        void api.gitRemoteUrl({ projectId })
+          .then((url) => patch(projectId, { repoUrl: repoWebUrl(url) }))
+          .catch(() => patch(projectId, { repoUrl: null }));
+      }
     });
-  }, [refreshNow, fetchRemote]);
+  }, [refreshNow, fetchRemote, patch]);
 
   const open = useCallback((request: { projectId?: string; path?: string; cameFrom?: string } = {}) => {
     const { projects, selectedTask, pinned } = optionsRef.current;
@@ -375,6 +398,15 @@ export function useGitMode(options: {
           void refreshNow(id);
         }
       },
+      /** Open the project folder in an external editor, remembering which one for next time. */
+      openEditor(editor: string) {
+        const id = need(); if (!id) return;
+        setEditorChoice(editor);
+        try { localStorage.setItem(GIT_EDITOR_KEY, editor); } catch { /* per-viewer convenience only */ }
+        void api.openInEditor({ projectId: id }, editor).catch((reason) => {
+          if (viewRef.current?.projectId === id) patch(id, { actionError: String(reason) });
+        });
+      },
       fetch() {
         const id = need(); if (id) void fetchRemote(id, false);
       },
@@ -459,6 +491,9 @@ export function useGitMode(options: {
     state: current,
     layout,
     setLayout,
+    editors,
+    /** The editor the toolbar's button opens: the remembered one, else the first installed. */
+    editor: pickEditor(editors, editorChoice),
     open,
     close,
     switchProject,

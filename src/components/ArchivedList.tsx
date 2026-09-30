@@ -14,6 +14,8 @@ interface ArchivedListProps {
   tasks: TaskRecord[];
   projects: ProjectRecord[];
   selectedTaskId?: string;
+  searching?: boolean;
+  now?: Date;
   onSelectTask: (id: string) => void;
   onTaskAction: (task: TaskRecord, action: ArchivedTaskAction) => void;
 }
@@ -23,7 +25,7 @@ interface ArchivedListProps {
  * Two-line rows — title plus how long it has been archived, then its project with the
  * unarchive and delete actions always visible, since this list exists to manage them.
  */
-export function ArchivedList({ tasks, projects, selectedTaskId, onSelectTask, onTaskAction }: ArchivedListProps) {
+export function ArchivedList({ tasks, projects, selectedTaskId, searching = false, now, onSelectTask, onTaskAction }: ArchivedListProps) {
   const { confirming, confirm } = useConfirmAction();
   const reduce = useReducedMotion();
   const archived = sortedArchived(tasks);
@@ -35,7 +37,7 @@ export function ArchivedList({ tasks, projects, selectedTaskId, onSelectTask, on
   }
 
   if (archived.length === 0) {
-    return <div className="sidebar-empty">No archived chats.</div>;
+    return <div className="sidebar-empty" role="status">{searching ? "No archived chats match your search." : "No archived chats."}</div>;
   }
 
   return (
@@ -69,7 +71,9 @@ export function ArchivedList({ tasks, projects, selectedTaskId, onSelectTask, on
               <div className="archived-row-top">
                 <span className="archived-title">{task.name}</span>
                 {/* Chats archived before `archivedAt` existed fall back to `updatedAt`, which archive also stamped. */}
-                <span className="archived-time">{formatRelativeTime(task.archivedAt ?? task.updatedAt)}</span>
+                <time className="archived-time" dateTime={task.archivedAt ?? task.updatedAt} title={`Archived ${new Date(task.archivedAt ?? task.updatedAt).toLocaleString()}`}>
+                  {formatRelativeTime(task.archivedAt ?? task.updatedAt, now)}
+                </time>
               </div>
               <div className="archived-row-bottom">
                 <span className="archived-project"><Icon name="folder" />{projectName}</span>

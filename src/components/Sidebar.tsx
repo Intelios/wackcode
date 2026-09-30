@@ -1,7 +1,9 @@
-import { useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { orderProjects, sidebarPageDirection, type SidebarPage } from "../git-mode";
+import { formatRelativeTime } from "../chat-utils";
+import { matchingChats, newestChats } from "../sidebar-utils";
 import type { ProjectRecord, TaskRecord } from "../types";
 import { Icon } from "./Icons";
 import { ArchivedList } from "./ArchivedList";
@@ -58,6 +60,14 @@ const pageVariants = {
 export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, archivedOpen, pendingDialogTaskIds, collapsedProjectIds, onSelectTask, onNewChat, onNewDraft, onAddProject, onToggleArchived, onToggleProjectCollapsed, onOpenSettings, onTaskAction, onProjectAction, onRenameTask, onArchiveAll, onDeleteAllArchived, git, onToggleGit }: SidebarProps) {
   const [renamingId, setRenamingId] = useState<string>();
   const [renameValue, setRenameValue] = useState("");
+  const [query, setQuery] = useState("");
+  const searchInput = useRef<HTMLInputElement>(null);
+  const [now, setNow] = useState(() => new Date());
+  // Relative timestamps stay current even while the app is idle.
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const { confirming, confirm, setConfirming } = useConfirmAction();
   const reduce = useReducedMotion() ?? false;
   const page: SidebarPage = git ? "git" : archivedOpen ? "archived" : "chats";
@@ -68,8 +78,12 @@ export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, arc
   const direction = swap.current.direction;
   const archivedTasks = tasks.filter((task) => task.archived);
   const hasArchived = archivedTasks.length > 0;
+  const searching = query.trim().length > 0;
+  const matchingTasks = useMemo(() => matchingChats(tasks, projects, query), [tasks, projects, query]);
+  const openTasks = useMemo(() => newestChats(matchingTasks.filter((task) => !task.archived)), [matchingTasks]);
   // Archived chats never appear inline; they live in the Archived view only.
-  const looseTasks = tasks.filter((task) => task.projectId === null && !task.archived);
+  const looseTasks = openTasks.filter((task) => task.projectId === null);
+  const isCollapsed = (key: string) => !searching && collapsedProjectIds.has(key);
 
   function startRename(task: TaskRecord) {
     setConfirming(null);
@@ -94,14 +108,17 @@ export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, arc
     if (confirm(task.id, "delete")) onTaskAction(task, "delete-direct");
   }
 
-  function renderTask(task: TaskRecord, _project?: ProjectRecord) {
+  function renderTask(task: TaskRecord) {
     const isConfirmingArchive = confirming?.taskId === task.id && (confirming.action === "archive" || confirming.action === "unarchive");
     const isConfirmingDelete = confirming?.taskId === task.id && confirming.action === "delete";
+    const age = formatRelativeTime(task.createdAt, now);
+    const createdLabel = age ? `Created ${new Date(task.createdAt).toLocaleString()}` : undefined;
 
     return renamingId === task.id ? (
       <div className="task-item renaming" key={task.id}>
         <input
           autoFocus
+          aria-label="Chat name"
           value={renameValue}
           onChange={(event) => setRenameValue(event.target.value)}
           onBlur={() => commitRename(task.id)}
@@ -115,6 +132,7 @@ export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, arc
       <div
         key={task.id}
         role="button"
+        aria-label={task.name}
         tabIndex={0}
         className={`task-item ${selectedTaskId === task.id ? "active" : ""}`}
         onClick={() => onSelectTask(task.id)}
@@ -128,11 +146,22 @@ export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, arc
         onDoubleClick={() => startRename(task)}
       >
         <span className={`task-status ${task.lastError ? "error" : task.status}`} />
-        <span className="task-name">{task.name}</span>
-        {pendingDialogTaskIds.has(task.id) && <span className="sidebar-question-dot" title="Waiting for your answer" />}
-        {task.mode === "plan" && <span className="task-mode-chip">Plan</span>}
-        {task.mode === "ultraplan" && <span className="task-mode-chip ultra">Ultra Plan</span>}
-        {task.usesWorktree && <Icon name="branch" className="task-branch-icon" />}
+        <span className="task-details">
+          <span className="task-label">
+            <span className="task-name">{task.name}</span>
+            {pendingDialogTaskIds.has(task.id) && <span className="sidebar-question-dot" title="Waiting for your answer" />}
+          </span>
+          <span className="task-meta">
+            {age && (
+              <time dateTime={task.createdAt} title={createdLabel} aria-label={createdLabel}>
+                {age}
+              </time>
+            )}
+            {task.mode === "plan" && <span className="task-mode-chip">Plan</span>}
+            {task.mode === "ultraplan" && <span className="task-mode-chip ultra">Ultra Plan</span>}
+            {task.usesWorktree && <Icon name="branch" className="task-branch-icon" />}
+          </span>
+        </span>
         <span className="task-actions" onClick={(event) => event.stopPropagation()} onDoubleClick={(event) => event.stopPropagation()}>
           <Tooltip label="Archive chat" disabled={Boolean(isConfirmingArchive)}>
             <button
@@ -178,13 +207,14 @@ export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, arc
     onPlus: () => void;
     menu?: ReactNode;
   }) {
-    const collapsed = collapsedProjectIds.has(groupKey);
+    const collapsed = isCollapsed(groupKey);
     return (
-      <div className="project-heading" title={title} onClick={() => onToggleProjectCollapsed(groupKey)}>
+      <div className="project-heading" title={title} onClick={() => { if (!searching) onToggleProjectCollapsed(groupKey); }}>
         <button
           type="button"
           className="ghost-button project-chevron"
           aria-expanded={!collapsed}
+          disabled={searching}
           aria-label={collapsed ? `Expand ${name}` : `Collapse ${name}`}
           onClick={(event) => { event.stopPropagation(); onToggleProjectCollapsed(groupKey); }}
         >
@@ -210,17 +240,21 @@ export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, arc
 
   const chatList = (
     <>
-      {projects.length === 0 && looseTasks.length === 0 && (
+      {searching && openTasks.length === 0 && (
+        <div className="sidebar-empty" role="status">No chats match your search.</div>
+      )}
+      {!searching && projects.length === 0 && looseTasks.length === 0 && (
         <div className="sidebar-empty">Start a new chat — with a project folder or without one.</div>
       )}
       {orderProjects(projects, pinnedProjectIds).map((project) => {
-        const projectTasks = tasks.filter((task) => task.projectId === project.id && !task.archived);
+        const projectTasks = openTasks.filter((task) => task.projectId === project.id);
+        if (searching && projectTasks.length === 0) return null;
         const pinned = pinnedProjectIds.has(project.id);
         return (
           <motion.section
             layout={reduce ? false : "position"}
             transition={{ type: "spring", stiffness: 420, damping: 36 }}
-            className={`project-group ${collapsedProjectIds.has(project.id) ? "" : "open"}${pinned ? " pinned" : ""}`}
+            className={`project-group ${isCollapsed(project.id) ? "" : "open"}${pinned ? " pinned" : ""}`}
             key={project.id}
           >
             {renderHeading({
@@ -246,12 +280,12 @@ export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, arc
                 />
               )
             })}
-            {!collapsedProjectIds.has(project.id) && projectTasks.map((task) => renderTask(task, project))}
+            {!isCollapsed(project.id) && projectTasks.map((task) => renderTask(task))}
           </motion.section>
         );
       })}
       {looseTasks.length > 0 && (
-        <section className={`project-group ${collapsedProjectIds.has(NO_PROJECT_KEY) ? "" : "open"}`}>
+        <section className={`project-group ${isCollapsed(NO_PROJECT_KEY) ? "" : "open"}`}>
           {renderHeading({
             name: "No project",
             groupKey: NO_PROJECT_KEY,
@@ -269,7 +303,7 @@ export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, arc
               />
             )
           })}
-          {!collapsedProjectIds.has(NO_PROJECT_KEY) && looseTasks.map((task) => renderTask(task))}
+          {!isCollapsed(NO_PROJECT_KEY) && looseTasks.map((task) => renderTask(task))}
         </section>
       )}
     </>
@@ -303,6 +337,31 @@ export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, arc
             <Icon name="plus" /> New chat <kbd>⌘N</kbd>
           </button>
         )}
+        {!git && (
+          <div className="sidebar-search">
+            <Icon name="search" />
+            <input
+              ref={searchInput}
+              type="search"
+              aria-label={archivedOpen ? "Search archived chats" : "Search chats"}
+              placeholder="Search chats…"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape" && query) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setQuery("");
+                }
+              }}
+            />
+            {query && (
+              <button type="button" className="ghost-button" aria-label="Clear chat search" onClick={() => { setQuery(""); searchInput.current?.focus(); }}>
+                <Icon name="close" />
+              </button>
+            )}
+          </div>
+        )}
       </div>
       <nav className={`project-list${git ? " git-list" : ""}`} aria-label={git ? "Git changes" : archivedOpen ? "Archived chats" : "Projects and chats"}>
         <AnimatePresence initial={false} mode="wait" custom={{ direction, reduce }}>
@@ -318,8 +377,10 @@ export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, arc
           >
             {page === "git" ? git?.page : page === "archived" ? (
               <ArchivedList
-                tasks={tasks}
+                tasks={matchingTasks}
                 projects={projects}
+                searching={searching}
+                now={now}
                 selectedTaskId={selectedTaskId}
                 onSelectTask={onSelectTask}
                 onTaskAction={onTaskAction}

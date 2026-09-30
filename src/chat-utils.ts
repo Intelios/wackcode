@@ -63,7 +63,7 @@ export function formatRunDuration(durationMs: number): string {
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-/** How long ago an ISO timestamp was, in the Archived view's shorthand ("now", "5m", "7h", "3d", then a short date). */
+/** How long ago an ISO timestamp was, in the sidebar's shorthand ("now", "5m", "7h", "3d", then a short date). */
 export function formatRelativeTime(iso: string, now: Date = new Date()): string {
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) return "";

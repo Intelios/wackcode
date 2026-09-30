@@ -1,10 +1,10 @@
 import { useState } from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProjectRecord, TaskRecord } from "../types";
 import { NO_PROJECT_KEY, Sidebar, type TaskAction } from "./Sidebar";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 const projects: ProjectRecord[] = [
   { id: "p1", name: "TokenTrail", path: "/code/tokentrail", gitRoot: "/code/tokentrail", gitHasHead: true, branch: "master", createdAt: "now" }
@@ -18,16 +18,16 @@ function task(id: string, projectId: string | null, name: string): TaskRecord {
   };
 }
 
-function Harness({ tasks, pendingDialogTaskIds = new Set<string>() }: { tasks: TaskRecord[]; pendingDialogTaskIds?: ReadonlySet<string> }) {
+function Harness({ tasks, pendingDialogTaskIds = new Set<string>(), archivedOpen = false, onSelectTask = () => undefined }: { tasks: TaskRecord[]; pendingDialogTaskIds?: ReadonlySet<string>; archivedOpen?: boolean; onSelectTask?: (id: string) => void }) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   return (
     <Sidebar
       projects={projects}
       tasks={tasks}
-      archivedOpen={false}
+      archivedOpen={archivedOpen}
       pendingDialogTaskIds={pendingDialogTaskIds}
       collapsedProjectIds={collapsed}
-      onSelectTask={() => undefined}
+      onSelectTask={onSelectTask}
       onNewChat={() => undefined}
       onNewDraft={() => undefined}
       onAddProject={() => undefined}
@@ -48,6 +48,84 @@ function Harness({ tasks, pendingDialogTaskIds = new Set<string>() }: { tasks: T
     />
   );
 }
+
+describe("Sidebar order, timestamps and search", () => {
+  it("orders chats newest first in both project and projectless groups", () => {
+    const dated = (id: string, projectId: string | null, createdAt: string) => ({ ...task(id, projectId, id), createdAt });
+    render(<Harness tasks={[
+      dated("Project old", "p1", "2020-01-10T12:00:00"),
+      dated("Loose old", null, "2020-02-10T12:00:00"),
+      dated("Project new", "p1", "2020-06-10T12:00:00"),
+      dated("Loose new", null, "2020-07-10T12:00:00")
+    ]} />);
+    expect(screen.getAllByRole("button", { name: /^(Project|Loose) (old|new)$/ }).map((row) => row.getAttribute("aria-label")))
+      .toEqual(["Project new", "Project old", "Loose new", "Loose old"]);
+    const row = screen.getByRole("button", { name: "Project new" });
+    expect(within(row).getByText("10 Jun 2020")).toHaveAttribute("datetime", "2020-06-10T12:00:00");
+    expect(within(row).getByText("10 Jun 2020")).toHaveAttribute("title", `Created ${new Date("2020-06-10T12:00:00").toLocaleString()}`);
+  });
+
+  it("refreshes relative ages while idle and clears its timer on unmount", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-30T12:00:00"));
+    const { unmount } = render(<Harness tasks={[{ ...task("t1", "p1", "Fresh chat"), createdAt: "2026-09-30T11:59:00" }]} />);
+    expect(screen.getByText("1m")).toBeInTheDocument();
+    act(() => { vi.advanceTimersByTime(60_000); });
+    expect(screen.getByText("2m")).toBeInTheDocument();
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("reveals matches in collapsed groups and restores collapse when cleared", () => {
+    const selected = vi.fn();
+    render(<Harness tasks={[task("t1", "p1", "Refactor parser"), task("t2", null, "Loose parser"), task("t3", "p1", "Fix typo")]} onSelectTask={selected} />);
+    fireEvent.click(screen.getByRole("button", { name: "Collapse TokenTrail" }));
+    fireEvent.click(screen.getByRole("button", { name: "Collapse No project" }));
+    const search = screen.getByRole("searchbox", { name: "Search chats" });
+    fireEvent.change(search, { target: { value: "  PARSER " } });
+    expect(screen.getByRole("button", { name: "Refactor parser" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Loose parser" })).toBeInTheDocument();
+    expect(screen.queryByText("Fix typo")).toBeNull();
+    expect(screen.getByRole("button", { name: "Collapse TokenTrail" })).toBeDisabled();
+    fireEvent.keyDown(screen.getByRole("button", { name: "Refactor parser" }), { key: "Enter" });
+    expect(selected).toHaveBeenCalledWith("t1");
+    fireEvent.click(screen.getByRole("button", { name: "Clear chat search" }));
+    expect(search).toHaveFocus();
+    expect(screen.queryByText("Refactor parser")).toBeNull();
+    expect(screen.queryByText("Loose parser")).toBeNull();
+    expect(screen.getByRole("button", { name: "Expand TokenTrail" })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("matches project names, hides unrelated groups, and clears with Escape", () => {
+    render(<Harness tasks={[task("t1", "p1", "Refactor parser"), task("t2", null, "Loose chat")]} />);
+    const search = screen.getByRole("searchbox", { name: "Search chats" });
+    fireEvent.change(search, { target: { value: "tokentrail" } });
+    expect(screen.getByText("Refactor parser")).toBeInTheDocument();
+    expect(screen.queryByText("No project")).toBeNull();
+    fireEvent.change(search, { target: { value: "missing" } });
+    expect(screen.getByRole("status")).toHaveTextContent("No chats match your search.");
+    expect(screen.queryByText("TokenTrail")).toBeNull();
+    fireEvent.keyDown(search, { key: "Escape" });
+    expect(search).toHaveValue("");
+    expect(screen.getByText("Loose chat")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("searches archived chats with their archive order and a distinct empty state", () => {
+    render(<Harness archivedOpen tasks={[
+      { ...task("t1", "p1", "Old parser"), archived: true, archivedAt: "2020-01-10T12:00:00" },
+      { ...task("t2", "p1", "New parser"), archived: true, archivedAt: "2020-06-10T12:00:00" },
+      task("t3", "p1", "Live parser")
+    ]} />);
+    const search = screen.getByRole("searchbox", { name: "Search archived chats" });
+    fireEvent.change(search, { target: { value: "parser" } });
+    expect(screen.getAllByText(/^(Old|New) parser$/).map((title) => title.textContent)).toEqual(["New parser", "Old parser"]);
+    expect(screen.queryByText("Live parser")).toBeNull();
+    fireEvent.change(search, { target: { value: "missing" } });
+    expect(screen.getByRole("status")).toHaveTextContent("No archived chats match your search.");
+    expect(screen.getByRole("button", { name: "Delete all archived chats" })).toBeInTheDocument();
+  });
+});
 
 describe("Sidebar collapsible projects", () => {
   it("hides a project's chats when its heading is clicked and shows a count", () => {
@@ -460,4 +538,3 @@ describe("Sidebar pinning and Git mode", () => {
     expect(screen.getByRole("button", { name: "Git mode" })).toBeDisabled();
   });
 });
-

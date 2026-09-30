@@ -470,6 +470,20 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .msg.assistant code, .stream-text code { font-family: "SFMono-Regular", Consolas, monospace; font-size: .88em; color: var(--wc-accent-code); background: var(--wc-code-bg); border: 1px solid var(--wc-code-border); border-radius: 4px; padding: 1px 5px; }
 .msg.assistant pre, .stream-text pre { margin: 12px 0; border: 1px solid var(--border); background: var(--wc-well); border-radius: 8px; padding: 12px 14px; overflow-x: auto; }
 .msg.assistant pre code, .stream-text pre code { padding: 0; border: 0; background: none; color: var(--wc-code-text); }
+/* Source actions sit above the scrollable text, so long lines never hide the copy button. */
+.code-block { margin: 12px 0; min-width: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--wc-well); overflow: hidden; }
+.code-block-toolbar, .tool-text-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--text-dim); font-size: 11px; }
+.code-block-toolbar { padding: 5px 8px 5px 14px; border-bottom: 1px solid var(--border); }
+.code-block-language { font-family: "SFMono-Regular", Consolas, monospace; }
+.code-block > pre, .msg.assistant .code-block > pre, .stream-text .code-block > pre {
+  margin: 0; border: 0; border-radius: 0; background: none; padding: 12px 14px; overflow-x: auto;
+}
+.code-block pre code { padding: 0; border: 0; background: none; color: var(--wc-code-text); font-family: "SFMono-Regular", Consolas, monospace; font-size: .88em; }
+.copy-control { margin-left: auto; display: inline-flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.copy-button.secondary-button.compact { height: 24px; padding: 3px 7px; gap: 5px; font-size: 11px; }
+.copy-button.secondary-button.compact svg { width: 12px; height: 12px; }
+.copy-feedback { color: var(--text-soft); font-size: 11px; }
+.copy-feedback:empty { display: none; }
 /* Syntax highlighting: highlight.js token classes map onto the accent-derived --wc-code-* tokens
    (the `syntax` recipe in theme.ts). No highlight.js theme CSS is shipped — plain text between
    tokens inherits the code colour above, so languages or classes we don't map still read fine. */
@@ -607,6 +621,8 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .explore-body { margin: 1px 0 6px 6px; padding-left: 13px; border-left: 1px solid var(--border); }
 .explore-body > .thinking-row { margin: 3px 0; }
 .tool-detail { margin: 2px 0 8px 20px; }
+.tool-text-toolbar { padding: 3px 0 0; }
+.tool-text-count { font-variant-numeric: tabular-nums; }
 .tool-detail pre, .tool-diff {
   margin: 4px 0; border: 1px solid var(--border); background: var(--wc-well); border-radius: 7px;
   padding: 10px 12px; max-height: 280px; overflow: auto;

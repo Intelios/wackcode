@@ -73,6 +73,7 @@ import { TerminalPanel } from "./components/TerminalPanel";
 import { SidePanel } from "./components/SidePanel";
 import { SubagentPanelLink } from "./components/SubagentChip";
 import { ToolImageSource } from "./components/ToolRow";
+import { CopyText } from "./components/ui/CopyButton";
 import { SubagentPanel } from "./components/SubagentPanel";
 import { ChatHeader } from "./components/ChatHeader";
 import { Composer } from "./components/Composer";
@@ -201,7 +202,7 @@ function ChatContexts({ appearance, children }: { appearance: AppearanceConfig; 
     <AssistantNameContext.Provider value={agentName(appearance)}>
       <ThinkingPreviewEnabled.Provider value={appearance.thinkingPreview}>
         <ExploreGroupingEnabled.Provider value={appearance.groupExploration}>
-          {children}
+          <CopyText.Provider value={writeText}>{children}</CopyText.Provider>
         </ExploreGroupingEnabled.Provider>
       </ThinkingPreviewEnabled.Provider>
     </AssistantNameContext.Provider>

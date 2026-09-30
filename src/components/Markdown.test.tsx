@@ -1,7 +1,8 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { Markdown } from "./Markdown";
+import { CopyText } from "./ui/CopyButton";
 
 vi.mock("../api", () => ({ api: { revealPath: vi.fn().mockResolvedValue(undefined) } }));
 
@@ -19,6 +20,45 @@ describe("Markdown", () => {
     render(<Markdown>{"Run `npm ci` now"}</Markdown>);
     expect(screen.getByText("npm ci")).not.toHaveClass("hljs");
     expect(document.querySelector(".hljs")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy code" })).toBeNull();
+  });
+
+  it.each(["ts", "unknown", ""])("copies %s fences as plain source, preserving whitespace", async (language) => {
+    const source = "  const x = '<tag>';\n\n  // keep indentation\n";
+    const copy = vi.fn().mockResolvedValue(undefined);
+    render(<CopyText.Provider value={copy}><Markdown>{`\`\`\`${language}\n${source}\`\`\``}</Markdown></CopyText.Provider>);
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+    expect(copy).toHaveBeenCalledWith(source);
+    expect(await screen.findByRole("status")).toHaveTextContent("Copied to clipboard.");
+  });
+
+  it("copies indented blocks too", async () => {
+    const copy = vi.fn().mockResolvedValue(undefined);
+    render(<CopyText.Provider value={copy}><Markdown>{"    plain code\n    next line\n"}</Markdown></CopyText.Provider>);
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+    expect(copy).toHaveBeenCalledWith("plain code\nnext line\n");
+    await screen.findByText("Copied to clipboard.");
+  });
+
+  it("copies the current content of an unfinished streaming fence", async () => {
+    const copy = vi.fn().mockResolvedValue(undefined);
+    const view = render(<CopyText.Provider value={copy}><Markdown streaming>{"```ts\nconst x = "}</Markdown></CopyText.Provider>);
+    view.rerender(<CopyText.Provider value={copy}><Markdown streaming>{"```ts\nconst x = 2;"}</Markdown></CopyText.Provider>);
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+    expect(copy).toHaveBeenCalledWith("const x = 2;\n");
+    await screen.findByText("Copied to clipboard.");
+  });
+
+  it("reports clipboard failures and allows retrying", async () => {
+    const copy = vi.fn().mockRejectedValueOnce(new Error("Clipboard unavailable")).mockResolvedValue(undefined);
+    render(<CopyText.Provider value={copy}><Markdown>{"```\nsource\n```"}</Markdown></CopyText.Provider>);
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+    expect(await screen.findByText("Couldn’t copy. Try again.")).toBeInTheDocument();
+    expect(screen.queryByText("Copied")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+    await screen.findByText("Copied to clipboard.");
+    expect(copy).toHaveBeenCalledTimes(2);
+    expect(copy).toHaveBeenLastCalledWith("source\n");
   });
 
   it("keeps the text of an unknown language", () => {

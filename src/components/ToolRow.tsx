@@ -1,9 +1,10 @@
-import { createContext, useCallback, useContext, useState } from "react";
+import { createContext, useCallback, useContext, useId, useMemo, useState } from "react";
 import { highlightDiffLines, languageForPath } from "../highlight";
 import type { NormalizedBlock } from "../types";
 import { mcpToolParts, summarizeTool } from "../tool-utils";
 import { Icon, type IconName } from "./Icons";
 import { ImageLightbox } from "./ui/ImageLightbox";
+import { CopyButton } from "./ui/CopyButton";
 
 /**
  * Loads the original of a screenshot tool result's image (`api.toolImage` for the open chat),
@@ -77,10 +78,31 @@ function DiffLines({ diff, path }: { diff: string; path?: string }) {
   );
 }
 
-function tail(text: string, maxLines: number): string {
-  const lines = text.split("\n");
-  if (lines.length <= maxLines) return text;
-  return `… ${lines.length - maxLines} earlier lines\n${lines.slice(-maxLines).join("\n")}`;
+/** Preview limits only affect rendering: expansion and copying always use the source text. */
+function ToolText({ text, label = "output", maxLines = 60, command = false }: {
+  text: string; label?: string; maxLines?: number; command?: boolean;
+}) {
+  const [all, setAll] = useState(false);
+  const id = useId();
+  const lines = useMemo(() => text.split("\n"), [text]);
+  const truncated = lines.length > maxLines;
+  const preview = truncated && !all ? lines.slice(-maxLines).join("\n") : text;
+  return (
+    <div className="tool-text">
+      <div className="tool-text-toolbar">
+        {truncated && (
+          <>
+            <span className="tool-text-count">{all ? `All ${lines.length} lines` : `Last ${maxLines} of ${lines.length} lines`}</span>
+            <button type="button" className="text-button" aria-expanded={all} aria-controls={id} onClick={() => setAll((value) => !value)}>
+              {all ? "Show less" : "Show all"}
+            </button>
+          </>
+        )}
+        <CopyButton text={text} label={`Copy ${label}`} />
+      </div>
+      <pre id={id} className={command ? "tool-command" : undefined}>{command ? "$ " : ""}{preview}</pre>
+    </div>
+  );
 }
 
 function ToolDetail({ call, result }: { call: NormalizedBlock; result?: NormalizedBlock }) {
@@ -89,26 +111,31 @@ function ToolDetail({ call, result }: { call: NormalizedBlock; result?: Normaliz
   const details = (result?.details ?? {}) as Record<string, unknown>;
 
   if (summary.kind === "edit" && typeof details.diff === "string" && details.diff) {
-    return <DiffLines diff={details.diff} path={typeof args.path === "string" ? args.path : undefined} />;
+    return (
+      <div className="tool-detail">
+        <div className="tool-text-toolbar"><CopyButton text={details.diff} label="Copy diff" /></div>
+        <DiffLines diff={details.diff} path={typeof args.path === "string" ? args.path : undefined} />
+      </div>
+    );
   }
   if (summary.kind === "bash") {
     return (
       <div className="tool-detail">
-        <pre className="tool-command">$ {String(args.command ?? "")}</pre>
-        {result?.text && <pre>{tail(result.text, 60)}</pre>}
+        <ToolText text={String(args.command ?? "")} label="command" command />
+        {result?.text && <ToolText text={result.text} />}
       </div>
     );
   }
   if (summary.kind === "write" && typeof args.content === "string") {
-    return <div className="tool-detail"><pre>{tail(args.content, 80)}</pre></div>;
+    return <div className="tool-detail"><ToolText text={args.content} label="file content" maxLines={80} /></div>;
   }
   if (summary.kind === "search") {
-    return <div className="tool-detail"><pre>{result?.text ? tail(result.text, 60) : "No matches"}</pre></div>;
+    return <div className="tool-detail">{result?.text ? <ToolText text={result.text} /> : <pre>No matches</pre>}</div>;
   }
   return (
     <div className="tool-detail">
-      <pre>{JSON.stringify(args, null, 2)}</pre>
-      {result?.text && <pre>{tail(result.text, 60)}</pre>}
+      <ToolText text={JSON.stringify(args, null, 2)} label="arguments" />
+      {result?.text && <ToolText text={result.text} />}
     </div>
   );
 }
@@ -156,14 +183,14 @@ export function ToolRow({ call, result, liveText, running }: ToolRowProps) {
 export function OrphanResult({ block }: { block: NormalizedBlock }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className={`tool-row ${block.isError ? "error" : ""}`}>
+    <div className={`tool-row ${open ? "open" : ""} ${block.isError ? "error" : ""}`}>
       <button type="button" className="tool-row-head" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
         <Icon name="terminal" className="tool-row-icon" />
         <span className="tool-row-verb">{block.toolName ? `${block.toolName} result` : "Tool result"}</span>
         {block.isError && <span className="tool-row-failed">failed</span>}
         <span className="tool-row-status"><Icon name="chevron" className="tool-chevron" /></span>
       </button>
-      {open && <div className="tool-detail"><pre>{tail(block.text ?? "", 60)}</pre></div>}
+      {open && <div className="tool-detail"><ToolText text={block.text ?? ""} /></div>}
     </div>
   );
 }

@@ -1,9 +1,10 @@
 /**
  * Shared react-markdown component overrides, used by `Markdown.tsx` for the transcript, plans,
  * sub-agent output and thinking rows. `pre` is where syntax highlighting happens: the fenced
- * block's `code` child is re-rendered from highlight.js tokens (src/highlight.ts), while inline
- * code needs no override at all. The img override is the original from Markdown.tsx; the a
- * override intercepts clicks (the webview cannot open links itself) and routes http(s) URLs
+ * block's `code` child is re-rendered from highlight.js tokens (src/highlight.ts), with a copy
+ * action using the original text. Inline code needs no override at all. The img override is
+ * the original from Markdown.tsx; the a override intercepts clicks (the webview cannot open
+ * links itself) and routes http(s) URLs
  * through `api.revealPath`.
  *
  * `streamingTail` gates streaming: it carries the content of a fence that is still being
@@ -17,6 +18,7 @@ import type { Element, ElementContent } from "hast";
 import type { Components } from "react-markdown";
 import { api } from "./api";
 import { highlightBlock } from "./highlight";
+import { CopyButton } from "./components/ui/CopyButton";
 
 interface ComponentsOptions {
   /** Content of the trailing unterminated fence while streaming; undefined once settled. */
@@ -84,11 +86,17 @@ function CodePre({ node, children, streamingTail }: CodePreProps) {
   const tag = /language-([\w+#.-]+)/.exec(className ?? "")?.[1];
   const plain = streamingTail !== undefined && matchesOpenTail(text, streamingTail);
   return (
-    <pre>
-      <code className={plain ? className : className ? `hljs ${className}` : "hljs"}>
-        {plain ? text : highlightBlock(text, tag)}
-      </code>
-    </pre>
+    <div className="code-block">
+      <div className="code-block-toolbar">
+        <span className="code-block-language">{tag ?? "Code"}</span>
+        <CopyButton text={text} label="Copy code" />
+      </div>
+      <pre>
+        <code className={plain ? className : className ? `hljs ${className}` : "hljs"}>
+          {plain ? text : highlightBlock(text, tag)}
+        </code>
+      </pre>
+    </div>
   );
 }
 

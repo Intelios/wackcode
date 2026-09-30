@@ -66,6 +66,13 @@ export function mergeDiscoveredModels(existing: ModelRecord[], modelIds: string[
   return [...known.values()];
 }
 
+/** A token count as a model row shows it: 8K, 131K, 1M, 1.5M. */
+export function formatTokens(count: number): string {
+  if (count >= 1_000_000) return `${Number((count / 1_000_000).toFixed(1))}M`;
+  if (count >= 1_000) return `${Math.round(count / 1_000)}K`;
+  return String(count);
+}
+
 export function modelIsReady(model: ModelRecord): boolean {
   return Boolean(model.id.trim() && model.contextWindow && model.maxTokens);
 }

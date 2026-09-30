@@ -122,7 +122,7 @@ describe("PackagesSection built-ins", () => {
   it("lists MCP as always on, with a way to its servers", () => {
     const onConfigureMcp = vi.fn();
     renderSection([], { onConfigureMcp });
-    const card = screen.getByRole("switch", { name: "MCP servers" }).closest("article")!;
+    const card = screen.getByRole("article", { name: "MCP servers" });
     expect(within(card).getByText("Always on")).toBeInTheDocument();
     fireEvent.click(within(card).getByRole("button", { name: /Configure/ }));
     expect(onConfigureMcp).toHaveBeenCalledOnce();
@@ -159,15 +159,15 @@ describe("PackagesSection built-ins", () => {
     await waitFor(() => expect(onToggleAutoTitles).toHaveBeenCalledWith(false));
   });
 
-  it("lists the compiled-in extensions with pinned-on, disabled toggles even with no packages", () => {
+  it("lists the compiled-in extensions as always on, without dead switches, even with no packages", () => {
     renderSection([]);
-    expect(screen.getByRole("heading", { name: "Built-In" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Built-ins" })).toBeInTheDocument();
     for (const name of ["Plan Mode", "Ask User Questions", "Todo List"]) {
-      const toggle = screen.getByRole("switch", { name });
-      expect(toggle).toBeDisabled();
-      expect(toggle).toHaveAttribute("aria-checked", "true");
+      const card = screen.getByRole("article", { name });
+      expect(within(card).getByText("Always on")).toBeInTheDocument();
+      expect(within(card).queryByRole("switch")).toBeNull();
     }
-    // Their tools can never be switched individually, so they carry a mark, not a dead switch.
+    // Their tools can never be switched individually, so they are listed by name.
     for (const tool of ["plan_mode_complete", "ask_user_question", "todo"]) {
       expect(screen.getByText(tool)).toBeInTheDocument();
       expect(screen.queryByRole("switch", { name: tool })).toBeNull();
@@ -181,7 +181,8 @@ describe("PackagesSection built-ins", () => {
     const toggle = screen.getByRole("switch", { name: "Sub-agents" });
     expect(toggle).toBeEnabled();
     expect(toggle).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByRole("switch", { name: "subagent" })).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText("subagent")).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "subagent" })).toBeNull();
     expect(screen.getByText(/every sub-agent is extra model usage/)).toBeInTheDocument();
     const subagentCard = screen.getByRole("switch", { name: "Sub-agents" }).closest("article")!;
     expect(within(subagentCard).queryByRole("button", { name: /Configure/ })).not.toBeInTheDocument();
@@ -205,7 +206,7 @@ describe("PackagesSection built-ins", () => {
     expect(toggle).toBeEnabled();
     expect(toggle).toHaveAttribute("aria-checked", "true");
     expect(within(card).getByText("On")).toBeInTheDocument();
-    expect(within(card).getByRole("switch", { name: "web_fetch" })).toHaveAttribute("aria-checked", "true");
+    expect(within(card).getByText("web_fetch")).toBeInTheDocument();
     expect(within(card).queryByRole("button", { name: /Configure/ })).not.toBeInTheDocument();
     fireEvent.click(toggle);
     await waitFor(() => expect(onToggleWebFetch).toHaveBeenCalledWith(false));
@@ -220,7 +221,18 @@ describe("PackagesSection built-ins", () => {
   it("still shows them alongside installed packages", () => {
     renderSection([installed]);
     expect(screen.getByRole("button", { name: "pi-web-access" })).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: "Plan Mode" })).toBeInTheDocument();
+    expect(screen.getByRole("article", { name: "Plan Mode" })).toBeInTheDocument();
+  });
+
+  it("shows Memory's state and links to its page, where its switch lives", () => {
+    const onConfigureMemory = vi.fn();
+    renderSection([], { memoryEnabled: false, onConfigureMemory });
+    const card = screen.getByRole("article", { name: "Memory" });
+    expect(within(card).getByText("Off")).toBeInTheDocument();
+    expect(within(card).queryByText("Always on")).toBeNull();
+    expect(within(card).queryByRole("switch")).toBeNull();
+    fireEvent.click(within(card).getByRole("button", { name: /Configure/ }));
+    expect(onConfigureMemory).toHaveBeenCalledOnce();
   });
 });
 

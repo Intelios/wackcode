@@ -17,6 +17,11 @@ vi.mock("../api", () => ({ api: {
   computerUseListApps: vi.fn().mockResolvedValue([{ name: "Notes", bundleId: "com.apple.Notes" }])
 } }));
 
+/** Opens a connection from the Settings sidebar, where each one is listed under Providers. */
+function openConnection(name: string) {
+  fireEvent.click(within(screen.getByRole("navigation", { name: "Settings sections" })).getByRole("button", { name }));
+}
+
 const noSubagents: SubagentConfig = { enabled: false, trigger: "on_request", maxConcurrency: 4, agents: [] };
 const defaultAppearance: AppearanceConfig = DEFAULT_APPEARANCE;
 const defaultPrompts: PromptConfig = {};
@@ -38,7 +43,7 @@ it("shows subscription guidance before sign-in and reconnect", async () => {
     onSearch: vi.fn().mockResolvedValue([]), onRemove: vi.fn(), onUpdate: vi.fn(), onSetResources: vi.fn()
   };
   const { rerender } = render(<SettingsPage {...props} providers={[]} />);
-  fireEvent.click(screen.getByRole("button", { name: "Sign in with a subscription" }));
+  fireEvent.click(screen.getByRole("button", { name: /Sign in with a subscription/ }));
   expect(await screen.findByText("Claude usage may be billed separately.")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
   expect(onConnectSubscription).toHaveBeenCalledWith("anthropic");
@@ -239,7 +244,8 @@ describe("SettingsPage sidebar navigation", () => {
     expect(providersBtn).toHaveAttribute("aria-expanded", "true");
     expect(subnavWrapper).toHaveClass("expanded");
     expect(subnavWrapper).toHaveAttribute("aria-hidden", "false");
-    expect(screen.getByRole("button", { name: /Entrim AI/ })).toBeInTheDocument();
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    expect(within(nav).getByRole("button", { name: /Entrim AI/ })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Packages" }));
     expect(providersBtn).toHaveAttribute("aria-expanded", "false");
@@ -252,7 +258,7 @@ describe("SettingsPage sidebar navigation", () => {
     expect(providersBtn).toHaveAttribute("aria-expanded", "true");
     expect(subnavWrapper).toHaveClass("expanded");
     expect(subnavWrapper).toHaveAttribute("aria-hidden", "false");
-    expect(screen.getByRole("button", { name: /Entrim AI/ })).toBeInTheDocument();
+    expect(within(nav).getByRole("button", { name: /Entrim AI/ })).toBeInTheDocument();
   });
 
   it("calls onClose when clicking the settings back button containing icon and Settings label", () => {
@@ -323,6 +329,8 @@ describe("SettingsPage model capabilities", () => {
         onSetResources={vi.fn()}
       />
     );
+    openConnection("Entrim AI");
+    fireEvent.click(screen.getByRole("button", { name: /^Vision model/ }));
     const toggle = screen.getByRole("switch", { name: "Vision for Vision model" });
     expect(toggle).toHaveAttribute("aria-checked", "false");
     fireEvent.click(toggle);
@@ -364,6 +372,7 @@ describe("SettingsPage provider enable switch", () => {
   it("switches the saved connection off immediately and keeps unsaved form edits", async () => {
     const provider = { ...testProviders[0] };
     const { rerender, onSetProviderEnabled } = renderProviderSettings(provider);
+    openConnection("Entrim AI");
     const toggle = screen.getByRole("switch", { name: "Use Entrim AI" });
     expect(toggle).toHaveAttribute("aria-checked", "true");
     fireEvent.change(screen.getByLabelText("Name", { selector: "input" }), { target: { value: "Renamed" } });
@@ -379,7 +388,7 @@ describe("SettingsPage provider enable switch", () => {
 
   it("hides the switch while a new connection is being created", () => {
     renderProviderSettings(testProviders[0]);
-    fireEvent.click(screen.getByRole("button", { name: /New connection/ }));
+    openConnection("New connection");
     // The blank editor has no saved record yet, so there is nothing to switch off.
     expect(screen.queryByRole("switch", { name: /Use / })).not.toBeInTheDocument();
   });
@@ -413,15 +422,16 @@ describe("SettingsPage Pi catalogue suggestions", () => {
       { ...flashSuggestion, sourceProvider: "openrouter", id: "deepseek/deepseek-flash" }
     ]);
     const { onSave } = renderModelSettings();
-    fireEvent.click(screen.getByRole("button", { name: "Add manually" }));
+    openConnection("Entrim AI");
+    fireEvent.click(screen.getByRole("button", { name: /Add model/ }));
     const search = screen.getByRole("combobox", { name: /Find in Pi catalogue/ });
     fireEvent.change(search, { target: { value: "Deepseek V4 Flash" } });
     const options = await screen.findAllByRole("option");
     expect(options).toHaveLength(2);
     expect(options[0]).toHaveTextContent("deepseek · openai-completions · deepseek-flash");
     expect(options[1]).toHaveTextContent("openrouter");
-    expect(screen.getByRole("textbox", { name: "Model ID" })).toHaveValue("");
-    expect(screen.getByRole("spinbutton", { name: "Context tokens" })).toHaveValue(null);
+    // Nothing is added until a suggestion is picked.
+    expect(screen.queryByRole("textbox", { name: "Model ID" })).not.toBeInTheDocument();
     expect(onSave).not.toHaveBeenCalled();
 
     fireEvent.click(options[0]);
@@ -445,6 +455,9 @@ describe("SettingsPage Pi catalogue suggestions", () => {
         thinkingLevelMap: { off: null }, vision: false }]
     };
     renderModelSettings(provider);
+    openConnection("Entrim AI");
+    expect(screen.getByText("Needs limits")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /^gateway\/deepseek-flash/ }));
     const search = screen.getByRole("combobox", { name: /Find in Pi catalogue/ });
     fireEvent.change(search, { target: { value: "Deepseek V4 Flash" } });
     await screen.findByRole("option");
@@ -460,15 +473,18 @@ describe("SettingsPage Pi catalogue suggestions", () => {
 
   it("keeps manual entry available when there is no match or the catalogue fails", async () => {
     const { unmount } = renderModelSettings();
-    fireEvent.click(screen.getByRole("button", { name: "Add manually" }));
+    openConnection("Entrim AI");
+    fireEvent.click(screen.getByRole("button", { name: /Add model/ }));
     fireEvent.change(screen.getByRole("combobox", { name: /Find in Pi catalogue/ }), { target: { value: "unknown" } });
     expect(await screen.findByText(/No Pi catalogue matches/)).toBeInTheDocument();
     unmount();
 
     vi.mocked(api.listBuiltinModels).mockRejectedValue(new Error("Catalogue unavailable"));
     renderModelSettings();
-    fireEvent.click(screen.getByRole("button", { name: "Add manually" }));
+    openConnection("Entrim AI");
+    fireEvent.click(screen.getByRole("button", { name: /Add model/ }));
     expect(await screen.findByText(/Could not load Pi catalogue: Error: Catalogue unavailable/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Enter it manually" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Model ID" }), { target: { value: "my-model" } });
     expect(screen.getByRole("textbox", { name: "Model ID" })).toHaveValue("my-model");
   });
@@ -584,7 +600,7 @@ describe("SettingsPage MCP servers", () => {
     expect(screen.getByRole("heading", { name: "No servers yet" })).toBeInTheDocument();
 
     fireEvent.click(within(nav).getByRole("button", { name: "Packages" }));
-    fireEvent.click(within(screen.getByRole("switch", { name: "MCP servers" }).closest("article")!).getByRole("button", { name: /Configure/ }));
+    fireEvent.click(within(screen.getByRole("article", { name: "MCP servers" })).getByRole("button", { name: /Configure/ }));
     expect(screen.getByRole("heading", { level: 2, name: "MCP servers" })).toBeInTheDocument();
   });
 });

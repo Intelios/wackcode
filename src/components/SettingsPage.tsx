@@ -1,9 +1,9 @@
-import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { api } from "../api";
 import { agentName } from "../agentName";
-import { applyBuiltinModelSuggestion, mergeDiscoveredModels, modelIsReady, searchBuiltinModels } from "../model-utils";
+import { modelIsReady } from "../model-utils";
 import { BROWSER_TOOL_NAMES, WEB_FETCH_TOOL_NAME } from "../tool-utils";
-import type { ApiFormat, AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CommandsConfig, ComputerUseConfig, CustomProviderRecord, McpConfig, MemoryConfig, ModelRecord, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ThinkingLevel, ToolCatalogEntry } from "../types";
+import type { AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CommandsConfig, ComputerUseConfig, McpConfig, MemoryConfig, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ToolCatalogEntry } from "../types";
 import { Icon, type IconName } from "./Icons";
 import { CommandsSection, type SlashCommandActions } from "./CommandsSection";
 import { MemorySection, type MemoryActions } from "./MemorySection";
@@ -13,16 +13,12 @@ import { IntegrationsSection } from "./IntegrationsSection";
 import { McpSection, type McpActions } from "./McpSection";
 import { PackagesSection, type PackageActions } from "./PackagesSection";
 import { PromptsSection } from "./PromptsSection";
+import { ProvidersSection, type ConnectionMethod } from "./ProvidersSection";
 import { SkillsSection, type SkillActions } from "./SkillsSection";
 import { SubagentsSection } from "./SubagentsSection";
 import { ToolsSection } from "./ToolsSection";
 import { AppearanceSection } from "./AppearanceSection";
-import { ConfirmDialog } from "./ui/ConfirmDialog";
-import { Popover } from "./ui/Popover";
-import { Select } from "./ui/Select";
 import { Tooltip } from "./ui/Tooltip";
-
-const levels: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 /** Settings › Skills talks to Rust directly, like the rest of this page; `api`'s functions are stable. */
 const SKILL_ACTIONS: SkillActions = {
@@ -70,8 +66,6 @@ const COMPUTER_USE_ACTIONS: ComputerUseActions = {
   onListApps: api.computerUseListApps
 };
 const COMPUTER_USE_OFF: ComputerUseConfig = { enabled: false, neverAllow: [] };
-let nextModelCardKey = 0;
-const newModelCardKeys = (count: number) => Array.from({ length: count }, () => ++nextModelCardKey);
 
 type SectionId = "providers" | "packages" | "skills" | "commands" | "memory" | "tools" | "mcp" | "appearance" | "prompts" | "subagents" | "computer_use" | "integrations";
 
@@ -153,13 +147,16 @@ export function SettingsPage({
     (chosenSection === "subagents" && !subagents.enabled) || (chosenSection === "computer_use" && !computerUse.enabled) ? "packages" : chosenSection;
   const sections = SECTIONS.filter((item) =>
     (item.id !== "subagents" || subagents.enabled) && (item.id !== "computer_use" || computerUse.enabled) && (item.id !== "mcp" || mcpActions));
-  const [selectedProviderId, setSelectedProviderId] = useState(providers[0]?.id ?? "new");
+  /** Undefined shows the connections overview; "new" a new connection. */
+  const [selectedProviderId, setSelectedProviderId] = useState<string>();
+  /** Bumped on every navigation between connections, so each opens in a fresh editor. */
+  const [providerEditor, setProviderEditor] = useState(0);
   const [builtinModels, setBuiltinModels] = useState<BuiltinModelSuggestion[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(true);
   const [catalogError, setCatalogError] = useState<string>();
   const [subscriptionProviders, setSubscriptionProviders] = useState<SubscriptionProviderInfo[]>([]);
   const [subscriptionError, setSubscriptionError] = useState<string>();
-  const [newMethod, setNewMethod] = useState<"apiKey" | "subscription">("apiKey");
+  const [newMethod, setNewMethod] = useState<ConnectionMethod>("apiKey");
   const selectedSection = SECTIONS.find((item) => item.id === section);
 
   useEffect(() => {
@@ -177,8 +174,14 @@ export function SettingsPage({
     return () => { active = false; };
   }, []);
 
+  function openProvider(id?: string) {
+    setSelectedProviderId(id);
+    setProviderEditor((value) => value + 1);
+    setSection("providers");
+  }
+
   useEffect(() => {
-    if (connectedSubscriptionId) { setSelectedProviderId(connectedSubscriptionId); setSection("providers"); }
+    if (connectedSubscriptionId) openProvider(connectedSubscriptionId);
   }, [connectedSubscriptionId]);
 
   return (
@@ -199,7 +202,7 @@ export function SettingsPage({
               <button
                 type="button"
                 className={`settings-nav-item ${item.id === section ? "active" : ""}`}
-                onClick={() => setSection(item.id)}
+                onClick={() => (item.id === "providers" ? openProvider(undefined) : setSection(item.id))}
                 aria-expanded={item.id === "providers" ? section === "providers" : undefined}
               >
                 <Icon name={item.icon} /> {item.label}
@@ -217,10 +220,7 @@ export function SettingsPage({
                           key={provider.id}
                           type="button"
                           className={`settings-subnav-item ${selectedProviderId === provider.id ? "active" : ""} ${provider.enabled === false ? "off" : ""}`}
-                          onClick={() => {
-                            setSelectedProviderId(provider.id);
-                            setSection("providers");
-                          }}
+                          onClick={() => openProvider(provider.id)}
                         >
                           <span className={`credential-dot ${provider.connected ? "connected" : ""}`} />
                           <span>{provider.name}</span>
@@ -229,10 +229,7 @@ export function SettingsPage({
                       <button
                         type="button"
                         className={`settings-subnav-item ${selectedProviderId === "new" ? "active" : ""}`}
-                        onClick={() => {
-                          setSelectedProviderId("new");
-                          setSection("providers");
-                        }}
+                        onClick={() => { setNewMethod("apiKey"); openProvider("new"); }}
                       >
                         <Icon name="plus" /> New connection
                       </button>
@@ -253,42 +250,39 @@ export function SettingsPage({
       <main className="workspace settings-workspace">
         <header className="settings-page-head">
           <div>
-            <span className="eyebrow">{selectedSection?.label}</span>
-            <h2>{section === "providers" ? providerHeading(providers, selectedProviderId) : selectedSection?.label}</h2>
+            <h2>{selectedSection?.label}</h2>
           </div>
           <button type="button" className="secondary-button" onClick={onClose}>Done</button>
         </header>
-        {section === "providers" && selectedProviderId === "new" && <div className="connection-methods" role="group" aria-label="Connection method">
-          <button type="button" className={newMethod === "apiKey" ? "selected" : ""} onClick={() => setNewMethod("apiKey")}>API key</button>
-          <button type="button" className={newMethod === "subscription" ? "selected" : ""} onClick={() => setNewMethod("subscription")}>Sign in with a subscription</button>
-        </div>}
-        {section === "providers" && (providers.find((provider) => provider.id === selectedProviderId)?.kind === "subscription"
-          ? <SubscriptionSection
-              provider={providers.find((provider) => provider.id === selectedProviderId)!}
-              guidance={subscriptionProviders.find((provider) => provider.id === selectedProviderId)?.guidance}
-              onConnect={onConnectSubscription}
-              onSignOut={onSignOutSubscription}
-              onDelete={onDelete}
-              onSetProviderEnabled={onSetProviderEnabled}
-              onSelect={setSelectedProviderId}
-            />
-          : selectedProviderId === "new" && newMethod === "subscription"
-          ? <SubscriptionCatalog providers={subscriptionProviders} error={subscriptionError} onConnect={onConnectSubscription} />
-          : <ProvidersSection
+        {section === "providers" && (
+          <ProvidersSection
             providers={providers}
             selectedId={selectedProviderId}
-            onSelect={setSelectedProviderId}
-            onSave={onSave}
-            onDelete={onDelete}
-            onSetProviderEnabled={onSetProviderEnabled}
+            editorKey={providerEditor}
+            newMethod={newMethod}
+            agentName={agentName(appearance)}
             builtinModels={builtinModels}
             catalogLoading={catalogLoading}
             catalogError={catalogError}
-          />)}
+            subscriptionProviders={subscriptionProviders}
+            subscriptionError={subscriptionError}
+            onSelect={openProvider}
+            onCreated={setSelectedProviderId}
+            onStartNew={(method) => { setNewMethod(method); openProvider("new"); }}
+            onSave={onSave}
+            onDelete={onDelete}
+            onSetProviderEnabled={onSetProviderEnabled}
+            onConnectSubscription={onConnectSubscription}
+            onSignOutSubscription={onSignOutSubscription}
+            onDiscover={api.discoverModels}
+            onOpenAuthUrl={api.openSubscriptionAuthUrl}
+          />
+        )}
         {section === "integrations" && <IntegrationsSection />}
         {section === "packages" && (
           <PackagesSection
             packages={packages}
+            agentName={agentName(appearance)}
             subagentsEnabled={subagents.enabled}
             memoryEnabled={memory.enabled}
             onConfigureMemory={() => setSection("memory")}
@@ -396,511 +390,11 @@ export function SettingsPage({
             webFetchEnabled={!disabledTools.includes(WEB_FETCH_TOOL_NAME)}
             autoTitle={autoTitle}
             onSetAutoTitle={onSetAutoTitle}
-            onOpenProviders={() => { setSelectedProviderId("new"); setSection("providers"); }}
+            onOpenProviders={() => { setNewMethod("apiKey"); openProvider("new"); }}
             agentName={agentName(appearance)}
           />
         )}
       </main>
     </>
   );
-}
-
-function providerHeading(providers: ProviderRecord[], selectedId: string): ReactNode {
-  const provider = providers.find((item) => item.id === selectedId);
-  return provider ? provider.name : "New connection";
-}
-
-interface Draft extends SaveProviderInput {
-  id?: string;
-}
-
-function blankDraft(): Draft {
-  return { name: "", baseUrl: "", apiFormat: "openai-completions", apiKey: "", models: [] };
-}
-
-function fromProvider(provider: CustomProviderRecord): Draft {
-  return {
-    id: provider.id,
-    name: provider.name,
-    baseUrl: provider.baseUrl,
-    apiFormat: provider.apiFormat,
-    apiKey: "",
-    models: provider.models.map((model) => ({
-      ...model,
-      thinkingLevels: [...model.thinkingLevels],
-      thinkingLevelMap: { ...model.thinkingLevelMap }
-    }))
-  };
-}
-
-interface ModelSuggestionSearchProps {
-  modelLabel: string;
-  catalog: BuiltinModelSuggestion[];
-  loading: boolean;
-  error?: string;
-  onSelect: (suggestion: BuiltinModelSuggestion) => void;
-}
-
-function ModelSuggestionSearch({ modelLabel, catalog, loading, error, onSelect }: ModelSuggestionSearchProps) {
-  const [query, setQuery] = useState("");
-  const [open, setOpen] = useState(false);
-  const [active, setActive] = useState(-1);
-  const [applied, setApplied] = useState<BuiltinModelSuggestion>();
-  const anchor = useRef<HTMLDivElement>(null);
-  const listId = useId();
-  const matches = useMemo(() => searchBuiltinModels(catalog, query), [catalog, query]);
-  const visible = open && matches.length > 0 && !error;
-
-  function choose(suggestion: BuiltinModelSuggestion) {
-    onSelect(suggestion);
-    setApplied(suggestion);
-    setQuery("");
-    setOpen(false);
-    setActive(-1);
-  }
-
-  return (
-    <div className="model-catalog-search" ref={anchor}>
-      <label>
-        <span>Find in Pi catalogue</span>
-        <input
-          role="combobox"
-          aria-label={`Find in Pi catalogue for ${modelLabel}`}
-          aria-autocomplete="list"
-          aria-expanded={visible}
-          aria-controls={visible ? listId : undefined}
-          aria-activedescendant={visible && active >= 0 ? `${listId}-${active}` : undefined}
-          value={query}
-          onChange={(event) => { setQuery(event.target.value); setOpen(true); setActive(-1); }}
-          onFocus={() => { if (query.trim()) setOpen(true); }}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") { setOpen(false); setActive(-1); }
-            else if (event.key === "Tab") setOpen(false);
-            else if (event.key === "ArrowDown" && matches.length) {
-              event.preventDefault();
-              setOpen(true);
-              setActive((value) => (value + 1) % matches.length);
-            } else if (event.key === "ArrowUp" && matches.length) {
-              event.preventDefault();
-              setOpen(true);
-              setActive((value) => value < 0 ? matches.length - 1 : (value - 1 + matches.length) % matches.length);
-            } else if (event.key === "Enter" && visible) {
-              event.preventDefault();
-              choose(matches[active < 0 ? 0 : active]);
-            }
-          }}
-          placeholder="Search by model name or ID"
-          autoComplete="off"
-          spellCheck={false}
-        />
-      </label>
-      {loading && <small role="status">Loading bundled Pi catalogue…</small>}
-      {error && <small role="status">Could not load Pi catalogue: {error} Manual entry is still available.</small>}
-      {!loading && !error && query.trim() && matches.length === 0 && <small role="status">No Pi catalogue matches. You can enter settings manually.</small>}
-      {applied && <small>Filled from Pi’s {applied.sourceProvider} catalogue entry. Review these settings before saving.</small>}
-      <Popover anchor={anchor} open={visible} onClose={() => { setOpen(false); setActive(-1); }} matchWidth className="model-catalog-popover">
-        <div id={listId} role="listbox" aria-label="Pi model suggestions" className="model-catalog-options">
-          {matches.map((suggestion, index) => (
-            <button
-              id={`${listId}-${index}`}
-              key={`${suggestion.sourceProvider}:${suggestion.id}`}
-              type="button"
-              role="option"
-              aria-selected={index === active}
-              className={index === active ? "active" : ""}
-              onMouseDown={(event) => event.preventDefault()}
-              onMouseEnter={() => setActive(index)}
-              onClick={() => choose(suggestion)}
-            >
-              <strong>{suggestion.name}</strong>
-              <span>{suggestion.sourceProvider} · {suggestion.sourceApi} · {suggestion.id}</span>
-            </button>
-          ))}
-        </div>
-      </Popover>
-    </div>
-  );
-}
-
-interface ProvidersSectionProps {
-  providers: ProviderRecord[];
-  selectedId: string;
-  onSelect: (id: string) => void;
-  onSave: (input: SaveProviderInput) => Promise<ProviderRecord>;
-  onDelete: (providerId: string) => Promise<void>;
-  onSetProviderEnabled: (providerId: string, enabled: boolean) => Promise<void>;
-  builtinModels: BuiltinModelSuggestion[];
-  catalogLoading: boolean;
-  catalogError?: string;
-}
-
-function ProvidersSection({ providers, selectedId, onSelect, onSave, onDelete, onSetProviderEnabled, builtinModels, catalogLoading, catalogError }: ProvidersSectionProps) {
-  const candidate = providers.find((provider) => provider.id === selectedId);
-  const selected = candidate?.kind === "custom" ? candidate : undefined;
-  const [draft, setDraft] = useState<Draft>(() => selected ? fromProvider(selected) : blankDraft());
-  const [modelCardKeys, setModelCardKeys] = useState<number[]>(() => newModelCardKeys(selected?.models.length ?? 0));
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-  const [notice, setNotice] = useState<string>();
-  const [confirmDelete, setConfirmDelete] = useState(false);
-
-  // Reseed from the saved record when the selection changes or its editable fields change —
-  // keyed by content, so the enabled switch (which rewrites `providers` live) keeps unsaved
-  // form edits, as does anything else that leaves the fields below untouched.
-  const seed = selected ? fromProvider(selected) : blankDraft();
-  const seedKey = JSON.stringify(seed);
-  useEffect(() => {
-    setDraft(seed);
-    setModelCardKeys(newModelCardKeys(selected?.models.length ?? 0));
-    setError(undefined);
-    setNotice(undefined);
-  }, [selectedId, seedKey]);
-
-  const incomplete = useMemo(() => draft.models.filter((model) => !modelIsReady(model)).length, [draft.models]);
-
-  async function save(): Promise<ProviderRecord | undefined> {
-    setBusy(true);
-    setError(undefined);
-    setNotice(undefined);
-    try {
-      const saved = await onSave({ ...draft, apiKey: draft.apiKey?.trim() || undefined });
-      onSelect(saved.id);
-      setDraft(saved.kind === "custom" ? fromProvider(saved) : blankDraft());
-      setModelCardKeys(newModelCardKeys(saved.models.length));
-      setNotice("Connection saved. The API key is stored on this device.");
-      return saved;
-    } catch (reason) {
-      setError(String(reason));
-      return undefined;
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function fetchModels() {
-    const saved = await save();
-    if (!saved) return;
-    setBusy(true);
-    setError(undefined);
-    try {
-      const ids = await api.discoverModels(saved.id);
-      const models = mergeDiscoveredModels(saved.models, ids);
-      setDraft({ ...(saved.kind === "custom" ? fromProvider(saved) : blankDraft()), models });
-      setModelCardKeys(newModelCardKeys(models.length));
-      setNotice(`Found ${ids.length} model${ids.length === 1 ? "" : "s"}. Confirm limits for new entries, then save.`);
-    } catch (reason) {
-      setError(`${String(reason)} Manual model entry is still available below.`);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function updateModel(index: number, patch: Partial<ModelRecord>) {
-    setDraft((current) => ({
-      ...current,
-      models: current.models.map((model, modelIndex) => modelIndex === index ? { ...model, ...patch } : model)
-    }));
-  }
-
-  function applySuggestion(index: number, suggestion: BuiltinModelSuggestion) {
-    setDraft((current) => ({
-      ...current,
-      models: current.models.map((model, modelIndex) => modelIndex === index
-        ? applyBuiltinModelSuggestion(model, suggestion) : model)
-    }));
-  }
-
-  function toggleLevel(index: number, level: ThinkingLevel) {
-    const model = draft.models[index];
-    const present = model.thinkingLevels.includes(level);
-    const next = present ? model.thinkingLevels.filter((item) => item !== level) : [...model.thinkingLevels, level];
-    const thinkingLevelMap = { ...model.thinkingLevelMap };
-    if (present) delete thinkingLevelMap[level];
-    else thinkingLevelMap[level] = level === "off" ? null : level;
-    if (next.length === 0) thinkingLevelMap.off = null;
-    updateModel(index, { thinkingLevels: next.length ? next : ["off"], thinkingLevelMap });
-  }
-
-  function updateThinkingMapping(index: number, level: ThinkingLevel, value: string) {
-    const model = draft.models[index];
-    updateModel(index, {
-      thinkingLevelMap: {
-        ...model.thinkingLevelMap,
-        [level]: value.trim() ? value : level === "off" ? null : level
-      }
-    });
-  }
-
-  async function removeProvider() {
-    if (!draft.id) return;
-    setBusy(true);
-    setError(undefined);
-    try {
-      await onDelete(draft.id);
-      onSelect("new");
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function toggleEnabled() {
-    if (!selected) return;
-    setBusy(true);
-    setError(undefined);
-    setNotice(undefined);
-    try {
-      await onSetProviderEnabled(selected.id, selected.enabled === false);
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <>
-      <div className="settings-scroll">
-        {selected && (
-          <div className="connection-use-row">
-            <div>
-              <strong>Use this connection</strong>
-              <small>Turned off, it keeps its key and models here but disappears from the model picker.</small>
-            </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={selected.enabled !== false}
-              aria-label={`Use ${selected.name}`}
-              className={`toggle ${selected.enabled !== false ? "on" : ""}`}
-              disabled={busy}
-              onClick={() => void toggleEnabled()}
-            >
-              <span />
-            </button>
-          </div>
-        )}
-        <div className="form-grid connection-grid">
-          <label>
-            <span>Name</span>
-            <input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="My inference gateway" />
-          </label>
-          <label>
-            <span>API format</span>
-            <Select
-              className="settings-select"
-              matchWidth
-              value={draft.apiFormat}
-              onChange={(value) => setDraft({ ...draft, apiFormat: value as ApiFormat })}
-              options={[
-                { value: "openai-completions", label: "Chat Completions compatible" },
-                { value: "openai-responses", label: "Responses compatible" }
-              ]}
-              aria-label="API format"
-            />
-          </label>
-          <label>
-            <span>Base URL</span>
-            <input value={draft.baseUrl} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" spellCheck={false} />
-          </label>
-          <label>
-            <span>API key <small>{draft.id && selected?.hasApiKey ? "Leave blank to keep the saved key" : "Stored on this device"}</small></span>
-            <div className="input-with-icon">
-              <Icon name="key" />
-              <input type="password" autoComplete="off" value={draft.apiKey ?? ""} onChange={(event) => setDraft({ ...draft, apiKey: event.target.value })} placeholder={selected?.hasApiKey ? "••••••••••••••••" : "Enter API key"} />
-            </div>
-          </label>
-        </div>
-
-        <div className="section-heading-row">
-          <div>
-            <h3>Models</h3>
-            <p>Discovery adds IDs only. Search Pi’s bundled catalogue for suggested settings, then review them before saving.</p>
-          </div>
-          <div className="row-actions">
-            <button className="secondary-button" disabled={busy} onClick={fetchModels}><Icon name="refresh" /> Fetch models</button>
-            <button className="secondary-button" onClick={() => {
-              setDraft((current) => ({ ...current, models: [...current.models, {
-                id: "", name: "", contextWindow: null, maxTokens: null, reasoning: false, thinkingLevels: ["off"], thinkingLevelMap: { off: null }, vision: false
-              }] }));
-              setModelCardKeys((keys) => [...keys, ++nextModelCardKey]);
-            }}><Icon name="plus" /> Add manually</button>
-          </div>
-        </div>
-
-        {draft.models.length === 0 ? (
-          <div className="model-empty">Fetch from the provider or add a model ID manually.</div>
-        ) : (
-          <div className="model-list">
-            {draft.models.map((model, index) => (
-              <article className={`model-card ${modelIsReady(model) ? "" : "incomplete"}`} key={modelCardKeys[index]}>
-                <div className="model-card-top">
-                  <div className="model-index">{String(index + 1).padStart(2, "0")}</div>
-                  <label><span>Model ID</span><input value={model.id} onChange={(event) => updateModel(index, { id: event.target.value })} placeholder="provider/model-id" spellCheck={false} /></label>
-                  <label><span>Display name</span><input value={model.name} onChange={(event) => updateModel(index, { name: event.target.value })} placeholder={model.id || "Model name"} /></label>
-                  <button className="icon-button" aria-label="Remove model" onClick={() => {
-                    setDraft((current) => ({ ...current, models: current.models.filter((_, modelIndex) => modelIndex !== index) }));
-                    setModelCardKeys((keys) => keys.filter((_, modelIndex) => modelIndex !== index));
-                  }}><Icon name="trash" /></button>
-                </div>
-                <ModelSuggestionSearch
-                  modelLabel={model.name || model.id || `model ${index + 1}`}
-                  catalog={builtinModels}
-                  loading={catalogLoading}
-                  error={catalogError}
-                  onSelect={(suggestion) => applySuggestion(index, suggestion)}
-                />
-                <div className="model-limits">
-                  <label><span>Context tokens</span><input type="number" min="1" value={model.contextWindow ?? ""} onChange={(event) => updateModel(index, { contextWindow: event.target.value ? Number(event.target.value) : null })} placeholder="Required" /></label>
-                  <label><span>Max output tokens</span><input type="number" min="1" value={model.maxTokens ?? ""} onChange={(event) => updateModel(index, { maxTokens: event.target.value ? Number(event.target.value) : null })} placeholder="Required" /></label>
-                  <label className="reasoning-toggle"><span>Reasoning</span><button className={`toggle ${model.reasoning ? "on" : ""}`} onClick={() => updateModel(index, {
-                    reasoning: !model.reasoning,
-                    thinkingLevels: !model.reasoning ? ["off", "low", "medium", "high"] : ["off"],
-                    thinkingLevelMap: !model.reasoning ? { off: null, low: "low", medium: "medium", high: "high" } : { off: null }
-                  })} type="button"><span /></button></label>
-                  <label className="capability-toggle"><span>Vision</span><button
-                    type="button"
-                    role="switch"
-                    aria-checked={model.vision}
-                    aria-label={`Vision for ${model.name || model.id || "this model"}`}
-                    title="Accepts image attachments"
-                    className={`toggle ${model.vision ? "on" : ""}`}
-                    onClick={() => updateModel(index, { vision: !model.vision })}
-                  ><span /></button></label>
-                </div>
-                {model.reasoning && (
-                  <>
-                    <div className="reasoning-levels">
-                      <span>Supported efforts</span>
-                      {levels.map((level) => <button key={level} type="button" className={model.thinkingLevels.includes(level) ? "selected" : ""} onClick={() => toggleLevel(index, level)}>{level}</button>)}
-                    </div>
-                    <div className="reasoning-mappings">
-                      <span>Provider values</span>
-                      {model.thinkingLevels.map((level) => (
-                        <label key={level}>
-                          <span>{level}</span>
-                          <input
-                            value={model.thinkingLevelMap[level] ?? ""}
-                            onChange={(event) => updateThinkingMapping(index, level, event.target.value)}
-                            placeholder={level === "off" ? "omit" : level}
-                            spellCheck={false}
-                          />
-                        </label>
-                      ))}
-                      <small>Blank “off” omits reasoning; other blanks use the effort name.</small>
-                    </div>
-                  </>
-                )}
-                {!modelIsReady(model) && <div className="model-warning">Confirm context and output limits before this model can be used.</div>}
-              </article>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <footer className="settings-footer">
-        <div className="form-status">
-          {error && <span className="error-text">{error}</span>}
-          {!error && notice && <span className="success-text">{notice}</span>}
-          {!error && !notice && incomplete > 0 && <span>{incomplete} model{incomplete === 1 ? " needs" : "s need"} limits</span>}
-        </div>
-        {draft.id && <button className="danger-button" disabled={busy} onClick={() => setConfirmDelete(true)}>Delete</button>}
-        <button className="primary-button" disabled={busy || !draft.name.trim() || !draft.baseUrl.trim()} onClick={save}>{busy ? "Working…" : "Save connection"}</button>
-      </footer>
-
-      {confirmDelete && (
-        <ConfirmDialog
-          title={`Delete “${draft.name || "this connection"}”?`}
-          body="This removes the connection and its saved API key."
-          confirmLabel="Delete"
-          danger
-          onConfirm={removeProvider}
-          onCancel={() => setConfirmDelete(false)}
-        />
-      )}
-    </>
-  );
-}
-
-interface SubscriptionCatalogProps {
-  providers: SubscriptionProviderInfo[];
-  error?: string;
-  onConnect: (providerId: string) => Promise<void>;
-}
-
-function SubscriptionCatalog({ providers, error, onConnect }: SubscriptionCatalogProps) {
-  return <div className="settings-scroll subscription-catalog">
-    <h3>Sign in with a subscription</h3>
-    <p>WackCode uses Pi’s built-in sign-in for these providers. Your account remains separate from any Pi CLI installation.</p>
-    {error && <div className="error-banner">Could not load subscription providers: {error}</div>}
-    {providers.map((provider) => <article className="subscription-provider-card" key={provider.id}>
-      <div><strong>{provider.name}</strong><p>{provider.guidance}</p></div>
-      <button type="button" className="primary-button" onClick={() => void onConnect(provider.id)}>Sign in</button>
-    </article>)}
-    <p className="subscription-billing-note">Anthropic may charge usage credits for third-party app access. <button type="button" className="text-button" onClick={() => void api.openSubscriptionAuthUrl("https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account")}>Review Anthropic’s guidance</button></p>
-  </div>;
-}
-
-interface SubscriptionSectionProps {
-  provider: ProviderRecord;
-  guidance?: string;
-  onConnect: (providerId: string) => Promise<void>;
-  onSignOut: (providerId: string) => Promise<void>;
-  onDelete: (providerId: string) => Promise<void>;
-  onSetProviderEnabled: (providerId: string, enabled: boolean) => Promise<void>;
-  onSelect: (id: string) => void;
-}
-
-function SubscriptionSection({ provider, guidance, onConnect, onSignOut, onDelete, onSetProviderEnabled, onSelect }: SubscriptionSectionProps) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-  const [confirmSignOut, setConfirmSignOut] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  if (provider.kind !== "subscription") return null;
-
-  async function action(run: () => Promise<void>) {
-    setBusy(true);
-    setError(undefined);
-    try { await run(); }
-    catch (reason) { setError(String(reason)); throw reason; }
-    finally { setBusy(false); }
-  }
-
-  return <>
-    <div className="settings-scroll subscription-detail">
-      <div className="connection-use-row">
-        <div>
-          <strong>Use this connection</strong>
-          <small>Turned off, it keeps its sign-in and models here but disappears from the model picker.</small>
-        </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={provider.enabled !== false}
-          aria-label={`Use ${provider.name}`}
-          className={`toggle ${provider.enabled !== false ? "on" : ""}`}
-          disabled={busy}
-          onClick={() => void action(() => onSetProviderEnabled(provider.id, provider.enabled === false))}
-        >
-          <span />
-        </button>
-      </div>
-      <p className="subscription-status"><span className={`credential-dot ${provider.connected ? "connected" : ""}`} /> {provider.connected ? "Signed in" : "Signed out"}</p>
-      {guidance && <p>{guidance}</p>}
-      {provider.id === "anthropic" && <button type="button" className="text-button" onClick={() => void api.openSubscriptionAuthUrl("https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account").catch((reason) => setError(String(reason)))}>Review Anthropic’s billing guidance</button>}
-      <p>Pi manages this provider’s models and refreshes its credential when you send a request. Sign in again if authentication fails.</p>
-      <button type="button" className="primary-button" disabled={busy} onClick={() => void onConnect(provider.id)}>{provider.connected ? "Reconnect" : "Sign in"}</button>
-      <h3>{provider.connected ? "Available models" : "Last known models"}</h3>
-      {provider.models.length ? <ul className="subscription-model-list">{provider.models.map((model) => <li key={model.id}><strong>{model.name}</strong><span>{model.id}</span></li>)}</ul>
-        : <p>{provider.connected ? "No models are available to this account." : "Sign in to load models available to this account."}</p>}
-    </div>
-    <footer className="settings-footer">
-      {error && <span className="error-text">{error}</span>}
-      <button type="button" className="danger-button" disabled={busy} onClick={() => setConfirmDelete(true)}>Delete</button>
-      {provider.connected && <button type="button" className="secondary-button" disabled={busy} onClick={() => setConfirmSignOut(true)}>Sign out</button>}
-    </footer>
-    {confirmSignOut && <ConfirmDialog title={`Sign out of ${provider.name}?`} body="Saved chats will remain, but they cannot use this connection until you sign in again." confirmLabel="Sign out" onConfirm={() => action(() => onSignOut(provider.id))} onCancel={() => setConfirmSignOut(false)} />}
-    {confirmDelete && <ConfirmDialog title={`Delete ${provider.name}?`} body="This removes its WackCode sign-in. Saved chats must use another connection before deletion." confirmLabel="Delete" danger onConfirm={() => action(async () => { await onDelete(provider.id); onSelect("new"); })} onCancel={() => setConfirmDelete(false)} />}
-  </>;
 }

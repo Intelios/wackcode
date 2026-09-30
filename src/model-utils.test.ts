@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyBuiltinModelSuggestion, autoTitleModelIssue, chatModelGone, mergeDiscoveredModels, modelDisplayName, pickThinkingLevel, searchBuiltinModels, subagentModelIssue } from "./model-utils";
+import { applyBuiltinModelSuggestion, autoTitleModelIssue, chatModelGone, formatTokens, mergeDiscoveredModels, modelDisplayName, pickThinkingLevel, searchBuiltinModels, subagentModelIssue } from "./model-utils";
 import type { BuiltinModelSuggestion, ModelRecord, ProviderRecord } from "./types";
 
 const flash: BuiltinModelSuggestion = {
@@ -129,5 +129,15 @@ describe("chatModelGone", () => {
   it("stays quiet with no chat open, and leaves a missing connection to its own error", () => {
     expect(chatModelGone([provider], undefined, { modelMissing: true })).toBe(false);
     expect(chatModelGone([], { ...task, providerId: "gone" })).toBe(false);
+  });
+});
+
+describe("formatTokens", () => {
+  it("shortens token counts the way model rows show them", () => {
+    expect(formatTokens(512)).toBe("512");
+    expect(formatTokens(8_000)).toBe("8K");
+    expect(formatTokens(131_072)).toBe("131K");
+    expect(formatTokens(1_000_000)).toBe("1M");
+    expect(formatTokens(1_500_000)).toBe("1.5M");
   });
 });

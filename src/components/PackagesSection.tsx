@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { PACKAGE_RESOURCE_KINDS, type PackageRecord, type PackageResourceKind, type PackageSearchResult } from "../types";
 import { Icon, type IconName } from "./Icons";
+import { DuckMark } from "./DuckMark";
 import { PackageBrowser, type BrowsePage } from "./PackageBrowser";
+import { SettingsHero, stagger } from "./SettingsHero";
 import { TrustDialog } from "./TrustDialog";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 
@@ -127,6 +129,34 @@ const BUILTIN_EXTENSIONS: readonly BuiltinExtension[] = [
   }
 ];
 
+/**
+ * The hero's little stage: the duck beside a board of modules, the built-ins, lighting up in a
+ * wave, while a new one drops into the empty slot as a package would. Pure decoration; the pill
+ * says the same in words. The loop lives in styles.css, which stills it under reduced motion.
+ */
+function PackagesStage() {
+  const slots = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+  return (
+    <svg className="settings-stage packages-stage live" viewBox="0 0 160 110" aria-hidden="true">
+      <rect className="packages-stage-tile" x="12" y="33" width="44" height="44" rx="12" />
+      <DuckMark x="22" y="43" width="24" height="24" />
+      <path className="packages-stage-bus" d="M56 55h12M68 29v52M68 29h8M68 55h8M68 81h8" />
+      {slots.map((slot) => {
+        const x = 78 + (slot % 3) * 24;
+        const y = 19 + Math.floor(slot / 3) * 26;
+        const incoming = slot === 8;
+        return (
+          <g key={slot} className={`packages-stage-module ${incoming ? "incoming" : ""}`} style={{ "--k": slot } as React.CSSProperties}>
+            {incoming && <rect className="packages-stage-slot" x={x} y={y} width="20" height="20" rx="6" />}
+            <rect className="packages-stage-block" x={x} y={y} width="20" height="20" rx="6" />
+            <circle className="packages-stage-light" cx={x + 10} cy={y + 10} r="3" />
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 export interface PackageActions {
   /** Re-reads the shared package store. The cached list can be stale if `pi` was used elsewhere. */
   onRefresh: () => Promise<void>;
@@ -142,6 +172,8 @@ export interface PackageActions {
 
 interface Props extends PackageActions {
   packages: PackageRecord[];
+  /** The agent's name in the app's own copy (Settings › Appearance). */
+  agentName?: string;
   subagentsEnabled?: boolean;
   /** The Memory master switch (Settings › Memory); the card shows state, the page holds the switch. */
   memoryEnabled?: boolean;
@@ -172,7 +204,7 @@ interface Props extends PackageActions {
 type Tab = "installed" | "browse";
 
 export function PackagesSection({
-  packages, subagentsEnabled = false, webFetchEnabled = true, browserEnabled = true, computerUseEnabled = false, computerUseSupported = true, memoryEnabled = true,
+  packages, agentName = "WackCode", subagentsEnabled = false, webFetchEnabled = true, browserEnabled = true, computerUseEnabled = false, computerUseSupported = true, memoryEnabled = true,
   autoTitlesEnabled = false, autoTitlesConfigured = false,
   onToggleSubagents, onToggleWebFetch, onToggleBrowser, onToggleComputerUse, onConfigureComputerUse, onToggleAutoTitles, onConfigureSubagents, onConfigureAutoTitles, onConfigureMemory, onConfigureMcp,
   onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
@@ -225,126 +257,150 @@ export function PackagesSection({
     }
   }
 
+  const builtinEnabled = (extension: BuiltinExtension) =>
+    extension.kind === "subagents" ? subagentsEnabled
+    : extension.kind === "browser" ? browserEnabled
+    : extension.kind === "computer_use" ? computerUseEnabled
+    : extension.kind === "web_fetch" ? webFetchEnabled
+    : extension.kind === "auto_titles" ? autoTitlesEnabled
+    : extension.kind === "memory" ? memoryEnabled
+    : true;
+  const builtinsOn = BUILTIN_EXTENSIONS.filter(builtinEnabled).length;
+  const pill = packages.length
+    ? `${packages.length} ${packages.length === 1 ? "package" : "packages"} · ${builtinsOn} built-ins on`
+    : `${builtinsOn} of ${BUILTIN_EXTENSIONS.length} built-ins on`;
+
   return (
-    <div className="settings-scroll">
-      <div className="package-tabs" role="tablist">
-        {(["installed", "browse"] as Tab[]).map((id) => (
-          <button
-            key={id}
-            type="button"
-            role="tab"
-            aria-selected={tab === id}
-            className={`package-tab ${tab === id ? "active" : ""}`}
-            onClick={() => setTab(id)}
-          >
-            {id === "installed" ? `Installed${packages.length ? ` (${packages.length})` : ""}` : "Browse"}
-          </button>
-        ))}
-      </div>
-
-      {tab === "browse" ? (
-        <PackageBrowser
-          installed={new Set(packages.map((entry) => entry.source))}
-          busy={busy}
-          onSearch={searchPage}
-          onInstall={(next) => setPendingTrust({ source: next, mode: "install" })}
-        />
-      ) : (
-      <>
-      <div className="section-heading-row">
-        <div>
-          <h3>Installed packages</h3>
+    <div className="settings-scroll packages-settings">
+      <div className="settings-page">
+        <SettingsHero
+          label="Packages overview"
+          stage={<PackagesStage />}
+          live
+          pill={pill}
+          title={`Add to what ${agentName} can do`}
+          action={tab === "installed" && packages.length > 0 && (
+            <button type="button" className="secondary-button compact" onClick={() => setTab("browse")}>
+              <Icon name="search" /> Browse packages
+            </button>
+          )}
+        >
           <p>
-            Pi packages add tools, skills, and prompts. Only the resources switched on here are loaded,
-            and nothing from a project&rsquo;s own <code>.pi</code> folder is ever run.
+            WackCode ships with the built-ins below. Pi packages add more tools, skills and prompts; only what you switch on
+            here loads, and nothing from a project&rsquo;s own <code>.pi</code> folder ever runs.
           </p>
-        </div>
-      </div>
+        </SettingsHero>
 
-      <form
-        className="package-add"
-        onSubmit={(event) => { event.preventDefault(); if (source.trim()) setPendingTrust({ source: source.trim(), mode: "install" }); }}
-      >
-        <input
-          value={source}
-          onChange={(event) => setSource(event.target.value)}
-          placeholder="npm:pi-web-access"
-          aria-label="Package source"
-          spellCheck={false}
-        />
-        <button type="submit" className="primary-button" disabled={busy || !source.trim()}>
-          <Icon name="plus" /> Add package
-        </button>
-      </form>
-      <p className="package-add-hint">
-        Accepts <code>npm:name</code>, <code>git:github.com/user/repo</code>, or an absolute path.
-      </p>
-
-      {error && !pendingTrust && <div className="error-banner">{error}</div>}
-
-      {loading && packages.length === 0 ? (
-        <div className="model-empty">Loading packages…</div>
-      ) : packages.length === 0 ? (
-        <div className="package-empty">
-          <span className="package-empty-icon"><Icon name="archive" /></span>
-          <h4>Nothing installed yet</h4>
-          <p>
-            A package can add tools, skills and prompts to every chat. Add one by name above,
-            or look at what other people have published.
-          </p>
-          <button type="button" className="secondary-button" onClick={() => setTab("browse")}>
-            <Icon name="search" /> Browse packages
-          </button>
-        </div>
-      ) : (
-        <div className="package-grid">
-          {packages.map((entry) => (
-            <PackageCard
-              key={entry.source}
-              entry={entry}
-              busy={busy}
-              onTrust={() => setPendingTrust({ source: entry.source, mode: "enable" })}
-              onRemove={() => setRemoving(entry)}
-              onUpdate={() => void run(() => onUpdate(entry.source)).catch(() => undefined)}
-              onToggle={(kind, enabled) => void run(() => onSetResources(entry.source, kind, enabled)).catch(() => undefined)}
-            />
+        <div className="package-tabs" role="tablist">
+          {(["installed", "browse"] as Tab[]).map((id) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={tab === id}
+              className={`package-tab ${tab === id ? "active" : ""}`}
+              onClick={() => setTab(id)}
+            >
+              {id === "installed" ? `Installed${packages.length ? ` (${packages.length})` : ""}` : "Browse"}
+            </button>
           ))}
         </div>
-      )}
 
-      <div className="section-heading-row builtin-heading">
-        <div>
-          <h3>Built-In</h3>
-          <p>Compiled into WackCode — you don&rsquo;t need a package for these. Sub-agents, Browser preview, Computer use, Web Fetch and Auto chat titles are optional, and MCP does nothing until you add a server.</p>
-        </div>
+        {tab === "browse" ? (
+          <section className="settings-block skills-browse" style={stagger(1)}>
+            <PackageBrowser
+              installed={new Set(packages.map((entry) => entry.source))}
+              busy={busy}
+              onSearch={searchPage}
+              onInstall={(next) => setPendingTrust({ source: next, mode: "install" })}
+            />
+          </section>
+        ) : (
+          <>
+            {error && !pendingTrust && <div className="error-banner" role="alert">{error}</div>}
+            <section className="settings-block" style={stagger(1)} aria-labelledby="packages-yours-title">
+              <h3 className="settings-block-title" id="packages-yours-title">Your packages</h3>
+              <p className="settings-block-sub">
+                Add one by source: <code>npm:name</code>, <code>git:github.com/user/repo</code>, or an absolute path. You review what it
+                can reach before anything is installed.
+              </p>
+              <form
+                className="package-add"
+                onSubmit={(event) => { event.preventDefault(); if (source.trim()) setPendingTrust({ source: source.trim(), mode: "install" }); }}
+              >
+                <input
+                  value={source}
+                  onChange={(event) => setSource(event.target.value)}
+                  placeholder="npm:pi-web-access"
+                  aria-label="Package source"
+                  spellCheck={false}
+                />
+                <button type="submit" className="primary-button compact" disabled={busy || !source.trim()}>
+                  <Icon name="plus" /> Add package
+                </button>
+              </form>
+
+              {loading && packages.length === 0 ? (
+                <p className="models-empty">Loading packages…</p>
+              ) : packages.length === 0 ? (
+                <div className="packages-empty">
+                  <p>Nothing installed yet. A package can add tools, skills and prompts to every chat; see what other people have published.</p>
+                  <button type="button" className="secondary-button compact" onClick={() => setTab("browse")}>
+                    <Icon name="search" /> Browse packages
+                  </button>
+                </div>
+              ) : (
+                <div className="package-grid">
+                  {packages.map((entry) => (
+                    <PackageCard
+                      key={entry.source}
+                      entry={entry}
+                      busy={busy}
+                      onTrust={() => setPendingTrust({ source: entry.source, mode: "enable" })}
+                      onRemove={() => setRemoving(entry)}
+                      onUpdate={() => void run(() => onUpdate(entry.source)).catch(() => undefined)}
+                      onToggle={(kind, enabled) => void run(() => onSetResources(entry.source, kind, enabled)).catch(() => undefined)}
+                    />
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="settings-block" style={stagger(2)} aria-labelledby="packages-builtin-title">
+              <h3 className="settings-block-title" id="packages-builtin-title">Built-ins</h3>
+              <p className="settings-block-sub">
+                Compiled into WackCode, so you don&rsquo;t need a package for these. The ones with a switch are optional, and MCP does nothing
+                until you add a server.
+              </p>
+              <div className="package-grid">
+                {BUILTIN_EXTENSIONS.map((extension) => (
+                  <BuiltinCard
+                    key={extension.name}
+                    extension={extension}
+                    enabled={builtinEnabled(extension)}
+                    busy={busy}
+                    onToggle={extension.kind === "subagents" && onToggleSubagents
+                      ? (enabled) => void run(() => onToggleSubagents(enabled)).catch(() => undefined)
+                      : extension.kind === "web_fetch" && onToggleWebFetch
+                      ? (enabled) => void run(() => onToggleWebFetch(enabled)).catch(() => undefined)
+                      : extension.kind === "browser" && onToggleBrowser
+                      ? (enabled) => void run(() => onToggleBrowser(enabled)).catch(() => undefined)
+                      : extension.kind === "computer_use" && onToggleComputerUse
+                      ? (enabled) => void run(() => onToggleComputerUse(enabled)).catch(() => undefined)
+                      : extension.kind === "auto_titles" && onToggleAutoTitles
+                      ? (enabled) => void run(() => onToggleAutoTitles(enabled)).catch(() => undefined)
+                      : undefined}
+                    onConfigure={extension.kind === "subagents" ? onConfigureSubagents : extension.kind === "computer_use" ? onConfigureComputerUse : extension.kind === "auto_titles" ? onConfigureAutoTitles : extension.kind === "memory" ? onConfigureMemory : extension.kind === "mcp" ? onConfigureMcp : undefined}
+                    toggleDisabled={(extension.kind === "auto_titles" && !autoTitlesEnabled && (!autoTitlesConfigured || !subagentsEnabled)) || (extension.kind === "computer_use" && !computerUseEnabled && !computerUseSupported)}
+                    disabledReason={extension.kind === "computer_use" ? "Requires macOS 14 or later" : undefined}
+                    subagentsOff={extension.kind === "auto_titles" && !subagentsEnabled}
+                  />
+                ))}
+              </div>
+            </section>
+          </>
+        )}
       </div>
-      <div className="package-grid">
-        {BUILTIN_EXTENSIONS.map((extension) => (
-          <BuiltinCard
-            key={extension.name}
-            extension={extension}
-            enabled={extension.kind === "subagents" ? subagentsEnabled : extension.kind === "browser" ? browserEnabled : extension.kind === "computer_use" ? computerUseEnabled : extension.kind === "web_fetch" ? webFetchEnabled : extension.kind === "auto_titles" ? autoTitlesEnabled : extension.kind === "memory" ? memoryEnabled : true}
-            busy={busy}
-            onToggle={extension.kind === "subagents" && onToggleSubagents
-              ? (enabled) => void run(() => onToggleSubagents(enabled)).catch(() => undefined)
-              : extension.kind === "web_fetch" && onToggleWebFetch
-              ? (enabled) => void run(() => onToggleWebFetch(enabled)).catch(() => undefined)
-              : extension.kind === "browser" && onToggleBrowser
-              ? (enabled) => void run(() => onToggleBrowser(enabled)).catch(() => undefined)
-              : extension.kind === "computer_use" && onToggleComputerUse
-              ? (enabled) => void run(() => onToggleComputerUse(enabled)).catch(() => undefined)
-              : extension.kind === "auto_titles" && onToggleAutoTitles
-              ? (enabled) => void run(() => onToggleAutoTitles(enabled)).catch(() => undefined)
-              : undefined}
-            onConfigure={extension.kind === "subagents" ? onConfigureSubagents : extension.kind === "computer_use" ? onConfigureComputerUse : extension.kind === "auto_titles" ? onConfigureAutoTitles : extension.kind === "memory" ? onConfigureMemory : extension.kind === "mcp" ? onConfigureMcp : undefined}
-            toggleDisabled={(extension.kind === "auto_titles" && !autoTitlesEnabled && (!autoTitlesConfigured || !subagentsEnabled)) || (extension.kind === "computer_use" && !computerUseEnabled && !computerUseSupported)}
-            disabledReason={extension.kind === "computer_use" ? "Requires macOS 14 or later" : undefined}
-            subagentsOff={extension.kind === "auto_titles" && !subagentsEnabled}
-          />
-        ))}
-      </div>
-      </>
-      )}
 
       {pendingTrust && (
         <TrustDialog
@@ -384,80 +440,66 @@ interface BuiltinCardProps {
   onConfigure?: () => void;
 }
 
-/** A built-in extension: same card shape as a package. Always-on ones show a disabled toggle;
- *  sub-agents, browser preview and web fetch have a live one. Auto titles lives on the Sub-agents page, so its
- *  Set up is blocked while that built-in is off. MCP is always on and has its own page, where
- *  each server has a switch. */
+/**
+ * A built-in extension, in the same card shape as a package. Optional ones (sub-agents, browser
+ * preview, computer use, web fetch, auto titles) carry a live switch. Memory's switch lives on its
+ * own page, so its card shows the state and links there. The rest are part of the app and say
+ * "Always on" rather than showing a switch that can't move. Auto titles lives on the Sub-agents
+ * page, so its Set up is blocked while that built-in is off. Its tools are listed as names; a
+ * built-in's tools switch together.
+ */
 function BuiltinCard({ extension, enabled, busy, toggleDisabled = false, disabledReason, subagentsOff = false, onToggle, onConfigure }: BuiltinCardProps) {
   const autoTitles = extension.kind === "auto_titles";
+  const elsewhere = extension.kind === "memory";
+  const switchable = Boolean(onToggle) || autoTitles;
+  const showState = switchable || elsewhere;
+  const configurable = onConfigure && (autoTitles || elsewhere || extension.kind === "mcp" || (onToggle && enabled));
   return (
-    <article className={`package-card builtin-card ${autoTitles ? "auto-title-package-card" : ""}`}>
+    <article className={`package-card builtin-card ${showState && !enabled ? "off" : ""} ${autoTitles ? "auto-title-package-card" : ""}`} aria-label={extension.name}>
       <div className="package-card-head">
         <span className={`package-icon kind-${extension.kind ?? "core"}`} aria-hidden="true">
           <Icon name={extension.icon} />
         </span>
         <span className="package-name builtin-name">{extension.name}</span>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={enabled}
-          aria-label={extension.name}
-          className={`toggle ${enabled ? "on" : ""}`}
-          disabled={!onToggle || busy || toggleDisabled}
-          title={toggleDisabled ? (disabledReason ?? (subagentsOff ? "Switch on Sub-agents to use auto titles" : "Choose a title model in Set up first")) : undefined}
-          onClick={() => onToggle?.(!enabled)}
-        >
-          <span />
-        </button>
-      </div>
-      <div className="package-card-status">
-        <span className={`package-state ${enabled ? "on" : "off"}`}>
-          {(autoTitles || onToggle) ? (enabled ? "On" : "Off") : "Always on"}
-        </span>
-        {!autoTitles && onConfigure && ((onToggle && enabled) || extension.kind === "mcp") && (
-          <button type="button" className="ghost-button builtin-configure" onClick={onConfigure}>
-            Configure <Icon name="chevron" />
-          </button>
-        )}
-        {autoTitles && (
+        {switchable ? (
           <button
             type="button"
-            className="ghost-button builtin-configure"
-            disabled={subagentsOff}
-            title={subagentsOff ? "Switch on Sub-agents to set up auto titles" : undefined}
-            onClick={onConfigure}
+            role="switch"
+            aria-checked={enabled}
+            aria-label={extension.name}
+            className={`toggle ${enabled ? "on" : ""}`}
+            disabled={!onToggle || busy || toggleDisabled}
+            title={toggleDisabled ? (disabledReason ?? (subagentsOff ? "Switch on Sub-agents to use auto titles" : "Choose a title model in Set up first")) : undefined}
+            onClick={() => onToggle?.(!enabled)}
           >
-            {toggleDisabled ? "Set up" : "Configure"} <Icon name="chevron" />
+            <span />
           </button>
+        ) : !elsewhere && (
+          <span className="builtin-always"><Icon name="check" /> Always on</span>
         )}
       </div>
+      {(showState || configurable) && (
+        <div className="package-card-status">
+          {showState && <span className={`package-state ${enabled ? "on" : "off"}`}>{enabled ? "On" : "Off"}</span>}
+          {configurable && (
+            <button
+              type="button"
+              className="ghost-button builtin-configure"
+              disabled={autoTitles && subagentsOff}
+              title={autoTitles && subagentsOff ? "Switch on Sub-agents to set up auto titles" : undefined}
+              onClick={onConfigure}
+            >
+              {autoTitles && toggleDisabled ? "Set up" : "Configure"} <Icon name="chevron" />
+            </button>
+          )}
+        </div>
+      )}
       <p className="builtin-desc">{extension.description}</p>
-      {extension.tools.length > 0 && <section className="resource-group builtin-resources">
-        <h5>Tools</h5>
-        {extension.tools.map((tool) => (
-          <div className="resource-row" key={tool}>
-            <span className="resource-name">{tool}</span>
-            {onToggle ? (
-              // Switchable built-ins (Sub-agents, Web Fetch) carry their switch here as a mirror:
-              // the card's toggle is the control, so this one stays disabled.
-              <button
-                type="button"
-                role="switch"
-                aria-checked={enabled}
-                aria-label={tool}
-                className={`toggle ${enabled ? "on" : ""}`}
-                disabled
-              >
-                <span />
-              </button>
-            ) : (
-              <span className="resource-lock" title="Ships with WackCode — always available">
-                <Icon name="check" />
-              </span>
-            )}
-          </div>
-        ))}
-      </section>}
+      {extension.tools.length > 0 && (
+        <ul className={`builtin-tools ${enabled ? "" : "off"}`} aria-label={`${extension.name} tools`}>
+          {extension.tools.map((tool) => <li key={tool}>{tool}</li>)}
+        </ul>
+      )}
     </article>
   );
 }

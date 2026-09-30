@@ -39,7 +39,7 @@ export function ImageLightbox({ preview, load, alt, onClose }: Props) {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: reduce ? 0 : 0.18 }}
-      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+      onMouseDown={(event) => event.button === 0 && event.target === event.currentTarget && onClose()}
     >
       <motion.figure
         className="image-lightbox-figure"

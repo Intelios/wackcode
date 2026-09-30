@@ -34,7 +34,7 @@ export function ComputerUseSetupDialog({ actions, agentName, onEnable, onCancel 
   }
 
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onCancel()}>
+    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.button === 0 && event.target === event.currentTarget && onCancel()}>
       <div className="confirm-dialog computer-setup" role="dialog" aria-modal="true" aria-label="Set up computer use">
         <span className="eyebrow">Computer use</span>
         <h2>Let {agentName} use the apps you build</h2>

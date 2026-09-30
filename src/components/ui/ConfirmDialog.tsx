@@ -32,7 +32,7 @@ export function ConfirmDialog({ title, body, confirmLabel = "Confirm", danger, o
   }
 
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onCancel()}>
+    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.button === 0 && event.target === event.currentTarget && onCancel()}>
       <div className="confirm-dialog" role="alertdialog" aria-modal="true" aria-label={title}>
         <h2>{title}</h2>
         {body && <p>{body}</p>}

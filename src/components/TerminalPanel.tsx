@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { useContextClipboard, useContextMenu } from "./ui/ContextMenu";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -43,6 +44,8 @@ function StatusPill({ exited, busy }: { exited: boolean; busy: boolean }) {
  * it detaches and leaves the shell running; `onClose` just closes the panel.
  */
 export function TerminalPanel({ taskId, appearance, onClose }: TerminalPanelProps) {
+  const contextMenu = useContextMenu();
+  const clipboard = useContextClipboard();
   const reduce = useReducedMotion();
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | undefined>(undefined);
@@ -222,6 +225,22 @@ export function TerminalPanel({ taskId, appearance, onClose }: TerminalPanelProp
       <div className="terminal-body">
         <div
           ref={hostRef}
+          onContextMenu={(event) => {
+            const term = termRef.current;
+            const selection = term?.getSelection() ?? "";
+            contextMenu(event, [
+              { label: "Copy selection", icon: <Icon name="copy" />, disabled: !clipboard || !selection, onSelect: () => clipboard?.copyText(selection) },
+              { label: "Paste text", disabled: !clipboard || !live || !info || Boolean(error), onSelect: async () => {
+                const text = await clipboard?.readText();
+                if (text && termRef.current === term && !term?.options.disableStdin) term?.paste(text);
+              } },
+              { label: "Select all", hint: "⌘A", disabled: !term, onSelect: () => term?.selectAll() },
+              "separator",
+              { label: "Clear screen", icon: <Icon name="erase" />, disabled: !live, onSelect: () => term?.clear() },
+              { label: "Restart shell", icon: <Icon name="refresh" />, onSelect: () => (busy && live ? setConfirmAction("restart") : void restart()) },
+              { label: "End session", icon: <Icon name="stop" />, disabled: ended, danger: true, onSelect: () => (busy && live ? setConfirmAction("end") : void endSession()) }
+            ], "Terminal menu", false);
+          }}
           className={`terminal-screen ${booting ? "power-on" : ""} ${exit || ended || error ? "settled" : ""}`}
           onAnimationEnd={(event) => { if (event.animationName === "terminal-sweep") setBooting(false); }}
         />

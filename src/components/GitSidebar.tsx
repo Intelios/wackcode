@@ -6,6 +6,8 @@ import { isCommittable, firstLine, selectionState, type GitTab } from "../git-mo
 import type { GitChangeFile, GitCommit } from "../types";
 import { Icon } from "./Icons";
 import { Checkbox } from "./ui/Checkbox";
+import { useContextClipboard, useContextMenu } from "./ui/ContextMenu";
+import type { MenuEntry } from "./ui/Menu";
 import { MenuButton } from "./ui/MenuButton";
 
 /** Matches `--ease` in styles.css. */
@@ -86,12 +88,25 @@ function fileStats(file: GitChangeFile) {
  * commit, a click shows the diff. ↑/↓ move the selection; Space ticks the selected file.
  */
 export const GitChangesList = memo(function GitChangesList(props: GitChangesListProps) {
+  const contextMenu = useContextMenu();
   const { files, excluded } = props;
   const reduce = useReducedMotion();
   const listRef = useRef<HTMLUListElement>(null);
   const state = selectionState(files, excluded);
   const totals = files.reduce((sum, file) => { const stats = fileStats(file); return { add: sum.add + stats.add, del: sum.del + stats.del }; }, { add: 0, del: 0 });
   const selected = files.find((file) => file.path === props.selectedPath) ?? files[0];
+
+  function fileMenu(file: GitChangeFile): MenuEntry[] {
+    return [
+      { label: "Show diff", icon: <Icon name="code" />, onSelect: () => props.onSelect(file.path) },
+      { label: excluded.has(file.path) ? "Include in commit" : "Exclude from commit", icon: <Icon name="check" />, disabled: props.disabled || !isCommittable(file), onSelect: () => props.onToggle(file.path) },
+      "separator",
+      { label: "Discard changes…", icon: <Icon name="trash" />, danger: true, disabled: props.disabled || file.status === "conflict", onSelect: () => props.onDiscard(file) },
+      "separator",
+      { label: "Copy path", icon: <Icon name="copy" />, onSelect: () => props.onCopyPath(file.path) },
+      { label: "Reveal in Finder", icon: <Icon name="folder" />, disabled: file.status === "deleted", onSelect: () => props.onReveal(file.path) }
+    ];
+  }
 
   function onKeyDown(event: React.KeyboardEvent, file: GitChangeFile) {
     const index = files.indexOf(file);
@@ -137,6 +152,7 @@ export const GitChangesList = memo(function GitChangesList(props: GitChangesList
               return (
                 <motion.li
                   key={file.path}
+                  onContextMenu={(event) => contextMenu(event, fileMenu(file), "File menu")}
                   layout="position"
                   className={`${active ? "active" : ""} ${included ? "" : "excluded"}`}
                   initial={reduce ? false : { opacity: 0, y: -8 }}
@@ -178,12 +194,7 @@ export const GitChangesList = memo(function GitChangesList(props: GitChangesList
                   <MenuButton
                     className="ghost-button git-file-menu"
                     label={`Actions for ${file.path}`}
-                    items={() => [
-                      { label: "Discard changes…", icon: <Icon name="trash" />, danger: true, disabled: props.disabled || file.status === "conflict", onSelect: () => props.onDiscard(file) },
-                      "separator",
-                      { label: "Copy path", icon: <Icon name="copy" />, onSelect: () => props.onCopyPath(file.path) },
-                      { label: "Reveal in Finder", icon: <Icon name="folder" />, disabled: file.status === "deleted", onSelect: () => props.onReveal(file.path) }
-                    ]}
+                    items={() => fileMenu(file)}
                   />
                 </motion.li>
               );
@@ -209,6 +220,8 @@ interface GitHistoryListProps {
 
 /** HEAD's history, newest first; scrolling near the end loads the next page. */
 export const GitHistoryList = memo(function GitHistoryList(props: GitHistoryListProps) {
+  const contextMenu = useContextMenu();
+  const clipboard = useContextClipboard();
   const { commits } = props;
   const reduce = useReducedMotion();
   const listRef = useRef<HTMLUListElement>(null);
@@ -250,6 +263,12 @@ export const GitHistoryList = memo(function GitHistoryList(props: GitHistoryList
           return (
             <motion.li
               key={commit.sha}
+              onContextMenu={(event) => contextMenu(event, [
+                { label: "Show commit", icon: <Icon name="commit" />, onSelect: () => props.onSelect(commit.sha) },
+                "separator",
+                { label: "Copy commit ID", icon: <Icon name="copy" />, disabled: !clipboard, onSelect: () => clipboard?.copyText(commit.sha) },
+                { label: "Copy commit message", icon: <Icon name="copy" />, disabled: !clipboard, onSelect: () => clipboard?.copyText([commit.subject, commit.body].filter(Boolean).join("\n\n")) }
+              ], "Commit menu")}
               layout="position"
               initial={reduce ? false : { opacity: 0, y: -10 }}
               animate={{ opacity: 1, y: 0 }}

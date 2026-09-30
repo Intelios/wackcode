@@ -1,12 +1,13 @@
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ProjectRecord, TaskRecord } from "../types";
 import { formatRelativeTime, sortedArchived } from "../chat-utils";
+import { useContextMenu } from "./ui/ContextMenu";
 import { Icon } from "./Icons";
 import { Tooltip } from "./ui/Tooltip";
 import { useConfirmAction } from "./ui/useConfirmAction";
 
 /** Row actions in the Archived view: restore the chat to the normal list, or remove it for good. */
-export type ArchivedTaskAction = "unarchive" | "delete-direct";
+export type ArchivedTaskAction = "unarchive" | "delete-direct" | "delete";
 
 const EASE: [number, number, number, number] = [0.33, 1, 0.68, 1];
 
@@ -26,6 +27,7 @@ interface ArchivedListProps {
  * unarchive and delete actions always visible, since this list exists to manage them.
  */
 export function ArchivedList({ tasks, projects, selectedTaskId, searching = false, now, onSelectTask, onTaskAction }: ArchivedListProps) {
+  const contextMenu = useContextMenu();
   const { confirming, confirm } = useConfirmAction();
   const reduce = useReducedMotion();
   const archived = sortedArchived(tasks);
@@ -55,6 +57,12 @@ export function ArchivedList({ tasks, projects, selectedTaskId, searching = fals
               className={`archived-row${selectedTaskId === task.id ? " active" : ""}`}
               role="button"
               tabIndex={0}
+              onContextMenu={(event) => contextMenu(event, [
+                { label: "Open chat", icon: <Icon name="external" />, onSelect: () => onSelectTask(task.id) },
+                { label: "Unarchive", icon: <Icon name="unarchive" />, onSelect: () => onTaskAction(task, "unarchive") },
+                "separator",
+                { label: "Delete", icon: <Icon name="trash" />, danger: true, onSelect: () => onTaskAction(task, "delete") }
+              ], "Archived chat menu")}
               onClick={() => onSelectTask(task.id)}
               onKeyDown={(event) => {
                 if (event.key !== "Enter") return;

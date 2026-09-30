@@ -12,13 +12,15 @@ export interface MenuItem {
 
 export type MenuEntry = MenuItem | "separator";
 
-export function Menu({ items, onClose }: { items: MenuEntry[]; onClose: () => void }) {
+export function Menu({ items, onClose, label }: { items: MenuEntry[]; onClose: () => void; label?: string }) {
   const [active, setActive] = useState(() => items.findIndex((item) => item !== "separator" && !item.disabled));
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    listRef.current?.focus();
-  }, []);
+    const button = listRef.current?.querySelector<HTMLButtonElement>(`[data-menu-index="${active}"]`);
+    (button ?? listRef.current)?.focus();
+    button?.scrollIntoView?.({ block: "nearest" });
+  }, [active]);
 
   const enabledIndexes = items.map((item, index) => item !== "separator" && !item.disabled ? index : -1).filter((index) => index >= 0);
 
@@ -43,8 +45,12 @@ export function Menu({ items, onClose }: { items: MenuEntry[]; onClose: () => vo
       ref={listRef}
       className="menu"
       role="menu"
+      aria-label={label}
       tabIndex={-1}
       onKeyDown={(event) => {
+        // Leave Escape to Popover (context menus catch it in their document listener).
+        if (!["ArrowDown", "ArrowUp", "Home", "End", "Enter", " "].includes(event.key)) return;
+        event.stopPropagation();
         if (event.key === "ArrowDown") { event.preventDefault(); move(1); }
         else if (event.key === "ArrowUp") { event.preventDefault(); move(-1); }
         else if (event.key === "Home") { event.preventDefault(); setActive(enabledIndexes[0] ?? -1); }
@@ -59,9 +65,12 @@ export function Menu({ items, onClose }: { items: MenuEntry[]; onClose: () => vo
           key={index}
           type="button"
           role="menuitem"
+          data-menu-index={index}
+          tabIndex={index === active ? 0 : -1}
           className={`menu-item ${index === active ? "active" : ""} ${item.danger ? "danger" : ""}`}
           disabled={item.disabled}
-          onMouseEnter={() => setActive(index)}
+          onMouseEnter={() => { if (!item.disabled) setActive(index); }}
+          onFocus={() => setActive(index)}
           onClick={() => choose(index)}
         >
           {item.icon && <span className="menu-icon">{item.icon}</span>}

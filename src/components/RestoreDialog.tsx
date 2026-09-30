@@ -64,7 +64,7 @@ export function RestoreDialog({ title, body, changes, initialSelection, sharedWi
   }
 
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !busy && onCancel()}>
+    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.button === 0 && event.target === event.currentTarget && !busy && onCancel()}>
       <div ref={dialogRef} className="confirm-dialog restore-dialog" role="dialog" aria-modal="true" aria-label={title}>
         <h2>{title}</h2>
         {body && <p>{body}</p>}

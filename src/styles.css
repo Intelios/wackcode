@@ -1159,6 +1159,11 @@ button.reasoning-toggle.at-max .reasoning-toggle-label {
   background: var(--wc-elevated); border: 1px solid var(--border-bright); border-radius: 10px;
   box-shadow: var(--shadow-pop); overflow: hidden; animation: pop-in .12s var(--ease);
 }
+.context-menu {
+  position: fixed; z-index: 300; max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px); overflow-y: auto;
+  background: var(--wc-menu); transform-origin: top left;
+}
 .menu { min-width: 190px; padding: 5px; outline: none; }
 .menu-item {
   width: 100%; display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 9px;

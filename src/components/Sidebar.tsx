@@ -7,6 +7,9 @@ import { matchingChats, newestChats } from "../sidebar-utils";
 import type { ProjectRecord, TaskRecord } from "../types";
 import { Icon } from "./Icons";
 import { ArchivedList } from "./ArchivedList";
+import { chatMenu } from "./chat-menu";
+import { useContextMenu } from "./ui/ContextMenu";
+import type { MenuEntry } from "./ui/Menu";
 import { MenuButton } from "./ui/MenuButton";
 import { Tooltip } from "./ui/Tooltip";
 import { useConfirmAction } from "./ui/useConfirmAction";
@@ -58,6 +61,7 @@ const pageVariants = {
 };
 
 export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, archivedOpen, pendingDialogTaskIds, collapsedProjectIds, onSelectTask, onNewChat, onNewDraft, onAddProject, onToggleArchived, onToggleProjectCollapsed, onOpenSettings, onTaskAction, onProjectAction, onRenameTask, onArchiveAll, onDeleteAllArchived, git, onToggleGit }: SidebarProps) {
+  const contextMenu = useContextMenu();
   const [renamingId, setRenamingId] = useState<string>();
   const [renameValue, setRenameValue] = useState("");
   const [query, setQuery] = useState("");
@@ -144,6 +148,7 @@ export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, arc
           onSelectTask(task.id);
         }}
         onDoubleClick={() => startRename(task)}
+        onContextMenu={(event) => contextMenu(event, chatMenu(task, projects.find((project) => project.id === task.projectId), () => startRename(task), onTaskAction), "Chat menu")}
       >
         <span className={`task-status ${task.lastError ? "error" : task.status}`} />
         <span className="task-details">
@@ -205,11 +210,11 @@ export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, arc
     groupTasks: TaskRecord[];
     pinned?: boolean;
     onPlus: () => void;
-    menu?: ReactNode;
+    menu?: MenuEntry[];
   }) {
     const collapsed = isCollapsed(groupKey);
     return (
-      <div className="project-heading" title={title} onClick={() => { if (!searching) onToggleProjectCollapsed(groupKey); }}>
+      <div className="project-heading" onContextMenu={(event) => contextMenu(event, menu ?? [], "Project menu")} title={title} onClick={() => { if (!searching) onToggleProjectCollapsed(groupKey); }}>
         <button
           type="button"
           className="ghost-button project-chevron"
@@ -227,7 +232,7 @@ export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, arc
           <span className="sidebar-question-dot" title="A chat in this group is waiting for your answer" />
         )}
         <span className="project-actions" onClick={(event) => event.stopPropagation()}>
-          {menu}
+          {menu && <MenuButton className="ghost-button" label={`${name} menu`} items={menu} />}
           <Tooltip label={plusLabel}>
             <button type="button" className="ghost-button" onClick={onPlus} aria-label={plusLabel}>
               <Icon name="plus" />
@@ -265,20 +270,14 @@ export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, arc
               groupTasks: projectTasks,
               pinned,
               onPlus: () => onNewChat(project),
-              menu: (
-                <MenuButton
-                  className="ghost-button"
-                  label={`${project.name} menu`}
-                  items={() => [
-                    { label: "New chat", icon: <Icon name="plus" />, onSelect: () => onNewChat(project) },
-                    { label: "Archive all chats", icon: <Icon name="archive" />, disabled: projectTasks.length === 0, onSelect: () => onArchiveAll(project.id) },
-                    { label: pinned ? "Unpin project" : "Pin project", icon: <Icon name="pin" />, onSelect: () => onProjectAction(project, pinned ? "unpin" : "pin") },
-                    "separator",
-                    { label: "Reveal in Finder", icon: <Icon name="folder" />, onSelect: () => onProjectAction(project, "reveal") },
-                    { label: "Remove project", icon: <Icon name="trash" />, danger: true, onSelect: () => onProjectAction(project, "remove") }
-                  ]}
-                />
-              )
+              menu: [
+                { label: "New chat", icon: <Icon name="plus" />, onSelect: () => onNewChat(project) },
+                { label: "Archive all chats", icon: <Icon name="archive" />, disabled: projectTasks.length === 0, onSelect: () => onArchiveAll(project.id) },
+                { label: pinned ? "Unpin project" : "Pin project", icon: <Icon name="pin" />, onSelect: () => onProjectAction(project, pinned ? "unpin" : "pin") },
+                "separator",
+                { label: "Reveal in Finder", icon: <Icon name="folder" />, onSelect: () => onProjectAction(project, "reveal") },
+                { label: "Remove project", icon: <Icon name="trash" />, danger: true, onSelect: () => onProjectAction(project, "remove") }
+              ]
             })}
             {!isCollapsed(project.id) && projectTasks.map((task) => renderTask(task))}
           </motion.section>
@@ -292,16 +291,10 @@ export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, arc
             plusLabel: "New chat with no project",
             groupTasks: looseTasks,
             onPlus: () => onNewChat(null),
-            menu: (
-              <MenuButton
-                className="ghost-button"
-                label="No project menu"
-                items={[
-                  { label: "New chat", icon: <Icon name="plus" />, onSelect: () => onNewChat(null) },
-                  { label: "Archive all chats", icon: <Icon name="archive" />, onSelect: () => onArchiveAll(null) }
-                ]}
-              />
-            )
+            menu: [
+              { label: "New chat", icon: <Icon name="plus" />, onSelect: () => onNewChat(null) },
+              { label: "Archive all chats", icon: <Icon name="archive" />, onSelect: () => onArchiveAll(null) }
+            ]
           })}
           {!isCollapsed(NO_PROJECT_KEY) && looseTasks.map((task) => renderTask(task))}
         </section>

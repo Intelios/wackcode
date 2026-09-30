@@ -2,6 +2,7 @@ import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from "motion/r
 import type { ChangeEntry } from "../changes-utils";
 import type { GitDiffSection } from "../types";
 import { splitPath } from "../changes-utils";
+import { useContextClipboard, useContextMenu } from "./ui/ContextMenu";
 import { Icon } from "./Icons";
 
 /** Matches `--ease` in styles.css. */
@@ -26,6 +27,8 @@ interface ChangesFileListProps {
 }
 
 export function ChangesFileList({ entries, selected, commentCounts, disabled, onSelect, onCommitFile, onAction }: ChangesFileListProps) {
+  const contextMenu = useContextMenu();
+  const clipboard = useContextClipboard();
   const reduce = useReducedMotion();
   const transition = reduce ? { duration: 0 } : { duration: 0.18, ease: EASE };
 
@@ -52,6 +55,13 @@ export function ChangesFileList({ entries, selected, commentCounts, disabled, on
                   return (
                     <motion.li
                       key={key}
+                      onContextMenu={(event) => contextMenu(event, [
+                        { label: "Show diff", icon: <Icon name="code" />, onSelect: () => onSelect(entry) },
+                        { label: "Commit this file…", icon: <Icon name="commit" />, disabled: disabled || conflict, onSelect: () => onCommitFile(file.path) },
+                        { label: "Discard changes…", icon: <Icon name="trash" />, danger: true, disabled: disabled || conflict, onSelect: () => onAction(entry) },
+                        "separator",
+                        { label: "Copy path", icon: <Icon name="copy" />, disabled: !clipboard, onSelect: () => clipboard?.copyText(file.path) }
+                      ], "File menu")}
                       layoutId={file.sections.length === 1 ? file.path : key}
                       initial={reduce ? false : { opacity: 0, x: 8 }}
                       animate={{ opacity: 1, x: 0 }}

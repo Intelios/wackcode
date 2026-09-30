@@ -3,9 +3,10 @@ import type { GitBranches, GitCheckoutKind, ProjectRecord, TaskRecord, TerminalE
 import { BranchPicker } from "./BranchPicker";
 import { Icon } from "./Icons";
 import { MenuButton } from "./ui/MenuButton";
-import type { MenuEntry } from "./ui/Menu";
+import { chatMenu } from "./chat-menu";
+import { useContextMenu } from "./ui/ContextMenu";
 import type { TaskAction } from "./Sidebar";
-import { canFork } from "../tree-utils";
+
 
 interface ChatHeaderProps {
   task: TaskRecord;
@@ -28,6 +29,7 @@ interface ChatHeaderProps {
 }
 
 export function ChatHeader({ task, project, git, onListBranches, onCheckoutBranch, changesCount, changesOpen, browserOpen, onToggleChanges, onToggleBrowser, terminal, terminalOpen, onToggleTerminal, onRename, onTaskAction }: ChatHeaderProps) {
+  const contextMenu = useContextMenu();
   const [renaming, setRenaming] = useState(false);
   const [value, setValue] = useState(task.name);
 
@@ -38,26 +40,11 @@ export function ChatHeader({ task, project, git, onListBranches, onCheckoutBranc
     else setValue(task.name);
   }
 
-  const menu: MenuEntry[] = [
-    { label: "Rename", icon: <Icon name="pencil" />, onSelect: () => { setValue(task.name); setRenaming(true); } },
-    {
-      label: "Move to worktree",
-      icon: <Icon name="branch" />,
-      disabled: Boolean(task.usesWorktree || task.sessionFile || !project?.gitHasHead),
-      onSelect: () => onTaskAction(task, "worktree")
-    },
-    { label: "Fork chat", icon: <Icon name="branch" />, disabled: !canFork(task), onSelect: () => onTaskAction(task, "fork") },
-    "separator",
-    { label: "Reveal in Finder", icon: <Icon name="folder" />, onSelect: () => onTaskAction(task, "reveal") },
-    { label: "Copy path", icon: <Icon name="copy" />, onSelect: () => onTaskAction(task, "copy") },
-    "separator",
-    { label: task.archived ? "Unarchive" : "Archive", icon: <Icon name={task.archived ? "unarchive" : "archive"} />, onSelect: () => onTaskAction(task, task.archived ? "unarchive" : "archive") },
-    { label: "Delete", icon: <Icon name="trash" />, danger: true, onSelect: () => onTaskAction(task, "delete") }
-  ];
+  const menu = chatMenu(task, project, () => { setValue(task.name); setRenaming(true); }, onTaskAction);
 
   return (
     <header className="workspace-header">
-      <div className="task-title">
+      <div className="task-title" onContextMenu={(event) => contextMenu(event, menu, "Chat menu")}>
         {renaming ? (
           <input
             className="title-input"

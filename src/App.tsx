@@ -3,7 +3,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { api } from "./api";
 import { chatModelGone, modelDisplayName, modelIsReady, pickThinkingLevel } from "./model-utils";
 import { titleFromPrompt, samePlanState, sameTodoState, sameGoalState, applySnapshotDelta, applySubagentFrame, pendingSubagentView, validateInitCommand, nextMode, isPlanMode } from "./chat-utils";
@@ -73,6 +73,7 @@ import { TerminalPanel } from "./components/TerminalPanel";
 import { SidePanel } from "./components/SidePanel";
 import { SubagentPanelLink } from "./components/SubagentChip";
 import { ToolImageSource } from "./components/ToolRow";
+import { ContextMenuProvider } from "./components/ui/ContextMenu";
 import { CopyText } from "./components/ui/CopyButton";
 import { SubagentPanel } from "./components/SubagentPanel";
 import { ChatHeader } from "./components/ChatHeader";
@@ -2473,6 +2474,19 @@ export default function App() {
   } : undefined;
 
   return (
+    <ContextMenuProvider
+      scope={`${composerDraftKey}-${settingsOpen}-${gitMode?.projectId ?? ""}-${gitMode?.tab ?? ""}-${panelView?.kind ?? ""}-${selectedBusy}-${gitBusyReason ?? ""}-${archivedOpen}-${Boolean(confirm || restoreDialog || subscriptionLogin)}`}
+      copyText={writeText}
+      readText={readText}
+      openLink={api.revealPath}
+      onError={setGlobalError}
+      items={[
+        { label: "New chat", icon: <Icon name="plus" />, hint: "⌘N", onSelect: () => { if (settingsOpen) closeSettings(); closeGit(); openDraft(selectedTask ? selectedTask.projectId : draft?.projectId); } },
+        { label: "Add project…", icon: <Icon name="folder" />, hint: "⌘O", onSelect: () => { void addProject(); } },
+        "separator",
+        { label: "Settings…", icon: <Icon name="settings" />, hint: "⌘,", onSelect: openSettings }
+      ]}
+    >
     <div className={`app-shell${rebuilding ? " rebuild" : ""}${gitMode ? " git-mode" : ""}`}>
       {data.appearance.backdrop === "image" && (
         <Backdrop
@@ -2968,5 +2982,6 @@ export default function App() {
       />}
       {globalError && <div className="global-toast"><span>{globalError}</span><button onClick={() => setGlobalError(undefined)}>×</button></div>}
     </div>
+    </ContextMenuProvider>
   );
 }

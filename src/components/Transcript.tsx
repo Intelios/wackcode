@@ -20,6 +20,7 @@ import { turnExcerpt, type RailTurn } from "../scroll-rail";
 import { SubagentGroup } from "./SubagentChip";
 import { ThinkingExpansion, ThinkingRow } from "./ThinkingRow";
 import { OrphanResult, ToolRow } from "./ToolRow";
+import { useContextMenu } from "./ui/ContextMenu";
 import { Popover } from "./ui/Popover";
 import { Tooltip } from "./ui/Tooltip";
 
@@ -377,6 +378,7 @@ interface MessageProps {
 }
 
 const Message = memo(function Message({ message, slots, results, liveToolText, liveToolDetails, live, running, planState, onPlanAction, actionsEnabled, retry, editing, vision, modelName, onAction }: MessageProps) {
+  const contextMenu = useContextMenu();
   if (message.role === "user") {
     const images = message.blocks.filter((block) => block.type === "image");
     // The message text carries attached files in its generated section; the transcript shows
@@ -405,7 +407,7 @@ const Message = memo(function Message({ message, slots, results, liveToolText, l
       items.push({ id: "rewind", label: "Rewind to here", icon: "rewind", onClick: () => void onAction({ type: "rewind", message }) });
     }
     return (
-      <div className="msg user" data-turn={message.versions ? message.versions.group : message.id}>
+      <div className="msg user" onContextMenu={(event) => contextMenu(event, items.map((item) => ({ label: item.label, icon: <Icon name={item.icon} />, onSelect: item.onClick })), "Message menu")} data-turn={message.versions ? message.versions.group : message.id}>
         {images.length > 0 && (
           <div className="message-images">
             {images.map((image, index) => image.thumbnail
@@ -440,7 +442,7 @@ const Message = memo(function Message({ message, slots, results, liveToolText, l
   // Everything it had belongs to an exploration group an earlier message shows.
   if (slots.length === 0 && !failed && !message.turn) return null;
   return (
-    <div className="msg assistant">
+    <div className="msg assistant" onContextMenu={(event) => contextMenu(event, turnMenu(message, actionsEnabled && Boolean(message.turn), retry, onAction).map((item) => ({ label: item.label, icon: <Icon name={item.icon} />, onSelect: item.onClick })), "Message menu")}>
       {renderSlots(message, slots, results, liveToolText, liveToolDetails, live, planState, onPlanAction, running)}
       {message.stopReason === "error" && <div className="message-error">{message.errorMessage || "The provider rejected the request."}</div>}
       {message.stopReason === "aborted" && <span className="aborted-label">Stopped</span>}
@@ -453,14 +455,18 @@ const Message = memo(function Message({ message, slots, results, liveToolText, l
   && prev.actionsEnabled === next.actionsEnabled && prev.retry === next.retry && prev.editing === next.editing
   && prev.vision === next.vision && prev.modelName === next.modelName && prev.onAction === next.onAction);
 
-function TurnActions({ message, actionsEnabled, retry, onAction }: Pick<MessageProps, "message" | "actionsEnabled" | "retry" | "onAction">) {
+function turnMenu(message: NormalizedMessage, actionsEnabled: boolean, retry: boolean, onAction: MessageProps["onAction"]): MessageActionItem[] {
   const items: MessageActionItem[] = [];
   if (messageText(message)) items.push({ id: "copy", label: "Copy", icon: "copy", onClick: () => void onAction({ type: "copy", message }) });
   if (actionsEnabled) {
     if (retry) items.push({ id: "retry", label: "Retry", icon: "refresh", onClick: () => void onAction({ type: "retry", message }) });
     items.push({ id: "fork", label: "Fork from here", icon: "branch", onClick: () => void onAction({ type: "fork", message }) });
   }
-  return <MessageActions align="start" items={items} />;
+  return items;
+}
+
+function TurnActions({ message, actionsEnabled, retry, onAction }: Pick<MessageProps, "message" | "actionsEnabled" | "retry" | "onAction">) {
+  return <MessageActions align="start" items={turnMenu(message, actionsEnabled, retry, onAction)} />;
 }
 
 function activityLabel(activity?: string): string {

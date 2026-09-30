@@ -1228,7 +1228,10 @@ button.reasoning-toggle.at-max .reasoning-toggle-label {
 .browser-address svg { width: 13px; height: 13px; flex: 0 0 auto; color: var(--text-faint); }
 .browser-address input { width: 100%; min-width: 0; padding: 0; border: 0; outline: 0; color: var(--text); background: transparent; font: 11.5px "SFMono-Regular", Consolas, monospace; }
 .browser-address input::placeholder { color: var(--wc-placeholder); }
-.browser-control { height: 30px; padding: 0 9px; white-space: nowrap; font-size: 10.5px; }
+/* Scoped past .secondary-button so these win the cascade: the shared button rules sit later in
+   this file and same-specificity order was letting them re-pad, re-color and re-heighten the
+   control button, clipping its label to "ke co" once the container query collapsed it. */
+.browser-toolbar .browser-control { height: 30px; padding: 0 9px; white-space: nowrap; font-size: 10.5px; }
 .browser-control.active { color: var(--wc-accent-text); border-color: var(--wc-accent-line-soft); background: var(--wc-accent-tint); }
 .browser-popup-return { flex: 0 0 auto; height: 30px; display: flex; align-items: center; justify-content: center; gap: 6px; border: 0; border-bottom: 1px solid var(--wc-accent-line-soft); background: var(--wc-accent-tint); color: var(--wc-accent-text); font-size: 11px; cursor: pointer; }
 .browser-popup-return svg { width: 13px; height: 13px; }
@@ -1242,8 +1245,11 @@ button.reasoning-toggle.at-max .reasoning-toggle-label {
 .browser-empty p { max-width: 310px; margin: 7px 0 0; color: var(--text-dim); font-size: 11.5px; line-height: 1.55; }
 
 @container (max-width: 520px) {
-  .browser-control { width: 30px; padding: 0; overflow: hidden; color: transparent; }
-  .browser-control::before { content: "◎"; color: var(--text-soft); font-size: 15px; }
+  /* Collapsed to a 30px icon: font-size 0 hides the label without fighting the .secondary-button
+     color cascade (its :hover and .active recolors outrank a transparent color here). */
+  .browser-toolbar .browser-control { width: 30px; padding: 0; overflow: hidden; font-size: 0; }
+  .browser-toolbar .browser-control::before { content: "◎"; color: var(--text-soft); font-size: 15px; }
+  .browser-toolbar .browser-control.active::before { color: var(--wc-accent-text); }
 }
 
 /* ── Changes panel ─────────────────────────────────── */

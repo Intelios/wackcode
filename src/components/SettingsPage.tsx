@@ -2,7 +2,7 @@ import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode }
 import { api } from "../api";
 import { agentName } from "../agentName";
 import { applyBuiltinModelSuggestion, mergeDiscoveredModels, modelIsReady, searchBuiltinModels } from "../model-utils";
-import { BROWSER_TOOL_NAMES, WEB_FETCH_TOOL_NAME, groupTools } from "../tool-utils";
+import { BROWSER_TOOL_NAMES, WEB_FETCH_TOOL_NAME } from "../tool-utils";
 import type { ApiFormat, AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CommandsConfig, ComputerUseConfig, CustomProviderRecord, McpConfig, MemoryConfig, ModelRecord, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ThinkingLevel, ToolCatalogEntry } from "../types";
 import { Icon, type IconName } from "./Icons";
 import { CommandsSection, type SlashCommandActions } from "./CommandsSection";
@@ -15,6 +15,7 @@ import { PackagesSection, type PackageActions } from "./PackagesSection";
 import { PromptsSection } from "./PromptsSection";
 import { SkillsSection, type SkillActions } from "./SkillsSection";
 import { SubagentsSection } from "./SubagentsSection";
+import { ToolsSection } from "./ToolsSection";
 import { AppearanceSection } from "./AppearanceSection";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 import { Popover } from "./ui/Popover";
@@ -343,11 +344,20 @@ export function SettingsPage({
         {section === "memory" && (
           <MemorySection
             {...MEMORY_ACTIONS}
+            agentName={agentName(appearance)}
             onSetEnabled={(enabled) => onSetMemory({ ...memory, enabled })}
           />
         )}
         {section === "tools" && (
-          <ToolsSection catalog={toolCatalog} disabled={disabledTools} onSetDisabled={onSetDisabledTools} />
+          <ToolsSection
+            catalog={toolCatalog}
+            disabled={disabledTools}
+            packages={packages}
+            agentName={agentName(appearance)}
+            onSetDisabled={onSetDisabledTools}
+            onOpen={setSection}
+            mcpAvailable={Boolean(mcpActions)}
+          />
         )}
         {section === "appearance" && (
           <AppearanceSection
@@ -361,7 +371,7 @@ export function SettingsPage({
           />
         )}
         {section === "prompts" && <PromptsSection config={prompts} agentName={agentName(appearance)} onChange={onSetPrompts} />}
-        {section === "mcp" && mcpActions && <McpSection servers={mcp?.servers ?? []} {...mcpActions} />}
+        {section === "mcp" && mcpActions && <McpSection servers={mcp?.servers ?? []} agentName={agentName(appearance)} {...mcpActions} />}
         {section === "computer_use" && onSetComputerUse && (
           <ComputerUseSection config={computerUse} actions={COMPUTER_USE_ACTIONS} agentName={agentName(appearance)} onChange={onSetComputerUse} />
         )}
@@ -390,81 +400,6 @@ export function SettingsPage({
         )}
       </main>
     </>
-  );
-}
-
-interface ToolsSectionProps {
-  catalog: ToolCatalogEntry[];
-  disabled: string[];
-  onSetDisabled: (disabled: string[]) => Promise<void>;
-}
-
-function ToolsSection({ catalog, disabled, onSetDisabled }: ToolsSectionProps) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-  const groups = useMemo(() => groupTools(catalog), [catalog]);
-  const disabledSet = useMemo(() => new Set(disabled), [disabled]);
-
-  async function toggle(name: string, enabled: boolean): Promise<void> {
-    const next = enabled ? disabled.filter((item) => item !== name) : [...disabled, name];
-    setBusy(true);
-    setError(undefined);
-    try {
-      await onSetDisabled(next);
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (!catalog.length) {
-    return (
-      <div className="settings-scroll">
-        <div className="model-empty">
-          Tools are listed once a chat has started. Open or create a chat, then come back.
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="settings-scroll">
-      <div className="section-heading-row">
-        <div>
-          <h3>Available tools</h3>
-          <p>Switched-off tools are not offered to the model. Changes apply to running chats on their next turn.</p>
-        </div>
-      </div>
-      {groups.map((group) => (
-        <section className="tool-setting-group" key={group.id}>
-          <h4>{group.label}</h4>
-          {group.tools.map((tool) => {
-            const enabled = tool.available && !disabledSet.has(tool.name);
-            return (
-              <div className={`tool-setting ${tool.available ? "" : "unavailable"}`} key={tool.name}>
-                <div className="tool-setting-text">
-                  <span className="tool-setting-name">{tool.name}</span>
-                  <span className="tool-setting-description">{tool.unavailableReason ?? tool.description}</span>
-                </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={enabled}
-                  aria-label={tool.name}
-                  className={`toggle ${enabled ? "on" : ""}`}
-                  disabled={busy || !tool.available}
-                  onClick={() => void toggle(tool.name, disabledSet.has(tool.name))}
-                >
-                  <span />
-                </button>
-              </div>
-            );
-          })}
-        </section>
-      ))}
-      {error && <div className="error-banner">{error}</div>}
-    </div>
   );
 }
 

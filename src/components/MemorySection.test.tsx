@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MemoriesOverview, MemoryProject } from "../types";
 import { MemorySection, memoryDraftIssue } from "./MemorySection";
@@ -65,10 +65,37 @@ describe("Settings › Memory", () => {
     expect(screen.getByText(/Open a chat in a project and ask it to remember something/i)).toBeInTheDocument();
   });
 
+  it("lists projects still waiting for a note as rows of one card, not a card each", async () => {
+    const empty = (name: string, key: string) => project({ name, key, dir: `/app data/memory/${name}-${key}`, path: `/repos/${name}`, entries: [] });
+    const actions = renderSection({ enabled: true, projects: [project(), empty("alpha", "a1"), empty("beta", "b2")] });
+    const waiting = await screen.findByRole("region", { name: "Waiting for a first note" });
+    expect(within(waiting).getAllByRole("listitem")).toHaveLength(2);
+    expect(screen.queryByText(/No memories yet/)).not.toBeInTheDocument();
+    // Each row keeps a way to write the first note, the project's own folder and its switch.
+    fireEvent.click(within(waiting).getByRole("button", { name: "New memory in alpha" }));
+    expect(await screen.findByRole("heading", { name: "New memory" })).toBeInTheDocument();
+    expect(screen.getByText(/In alpha’s memory folder/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    const again = screen.getByRole("region", { name: "Waiting for a first note" });
+    expect(within(again).getByRole("button", { name: "Show beta's memory folder in Finder" })).toBeInTheDocument();
+    fireEvent.click(within(again).getByRole("switch", { name: "Use memory in beta" }));
+    await waitFor(() => expect(actions.onSetProjectEnabled).toHaveBeenCalledWith("b2", false));
+  });
+
+  it("says in the hero how many notes there are, or that memory is off", async () => {
+    renderSection();
+    const hero = screen.getByRole("region", { name: "Memory overview" });
+    expect(await within(hero).findByText("2 notes")).toBeInTheDocument();
+    cleanup();
+    renderSection({ ...overview, enabled: false });
+    expect(await within(screen.getByRole("region", { name: "Memory overview" })).findByText("Off")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Memory is switched off");
+  });
+
   it("switches the master switch and a project's memory through their toggles", async () => {
     const actions = renderSection();
     await screen.findByText("Run worker tests");
-    fireEvent.click(screen.getByRole("switch", { name: "Memory" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Use memory" }));
     await waitFor(() => expect(actions.onSetEnabled).toHaveBeenCalledWith(false));
     fireEvent.click(screen.getByRole("switch", { name: "Use memory in wackcode" }));
     await waitFor(() => expect(actions.onSetProjectEnabled).toHaveBeenCalledWith("abc123456789", false));

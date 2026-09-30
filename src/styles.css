@@ -2932,8 +2932,9 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .integration-scope-group:last-child li { color: var(--text-dim); }
 .integration-scope-group:last-child li svg { color: var(--text-faint); }
 
-/* ── Tools settings ────────────────────────────────── */
-/* Named tool-setting-* on purpose: .tool-row above belongs to the transcript. */
+/* ── Settings rows (Appearance, backdrop crop) ─────── */
+/* Named tool-setting-* after the Tools page they began on; Settings › Tools now uses .tool-card.
+   Not .tool-row: that one belongs to the transcript. */
 .tool-setting-group { margin-bottom: 18px; }
 .tool-setting-group h4 { margin: 0 0 8px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .08em; font-size: 9px; font-weight: 700; }
 .tool-setting { display: flex; align-items: center; gap: 14px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); }
@@ -2951,6 +2952,19 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 /* A centered column: this page is about looks, so it reads as one composed panel rather than
    a stack of rows stretching to the pane's full width. */
 .appearance-inner { width: 100%; max-width: 760px; margin: 0 auto; }
+/* Entrance: the groups rise in one after another (--i), like the other finished Settings pages,
+   and the theme cards are dealt onto their row (--k), alternately tilted, each preview's accent
+   dot popping as its card lands. `backwards`, not `both`, so nothing is held once they land and
+   hover and selection styles keep working. */
+.appearance-inner > .tool-setting-group { animation: pop-in .36s var(--ease) backwards; animation-delay: calc(var(--i, 0) * 70ms); }
+.theme-preset { animation: appearance-deal .46s cubic-bezier(.3, 1.4, .4, 1) backwards; animation-delay: calc(90ms + var(--k, 0) * 45ms); }
+.theme-preset:nth-child(even) { --tilt: 3deg; }
+.theme-preset-send { animation: appearance-dot .32s cubic-bezier(.3, 1.8, .5, 1) backwards; animation-delay: calc(330ms + var(--k, 0) * 45ms); }
+@keyframes appearance-deal { from { opacity: 0; transform: translateY(12px) rotate(var(--tilt, -3deg)) scale(.92); } }
+@keyframes appearance-dot { from { transform: scale(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .appearance-inner > .tool-setting-group, .theme-preset, .theme-preset-send { animation: none; }
+}
 /* The group notes are prose under a label, so they keep the label's 8px rhythm. */
 .appearance-group-note { margin: -2px 0 10px; color: var(--text-dim); font-size: 11.5px; line-height: 1.55; max-width: 560px; }
 /* This group's label sits over the centered preset row, so it is centered with it. */
@@ -3158,6 +3172,47 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .auto-title-package-card { border-color: var(--border-bright); }
 .subagents-settings .form-grid { align-items: start; }
 .subagent-hint { color: var(--text-dim); font-size: 10.5px; font-weight: 400; line-height: 1.45; }
+
+/* ── Settings pages (SettingsHero.tsx) ─────────────── */
+/* The finished page shape Tools, MCP servers and Memory share (Computer use and Prompts keep their
+   own copies): a centred column of solid cards under an accent-washed hero whose stage is the
+   page's own illustration. Cards rise in one after another (--i). Each stage's loop sits with its
+   page below, and stills under reduced motion there. */
+.settings-page { max-width: 780px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+.settings-hero, .settings-block { animation: pop-in .36s var(--ease) both; animation-delay: calc(var(--i, 0) * 70ms); }
+.settings-hero {
+  position: relative; overflow: hidden; display: flex; align-items: center; gap: 20px; padding: 16px 18px 16px 16px;
+  border: 1px solid var(--border-bright); border-radius: 14px;
+  background: radial-gradient(120% 140% at 0% 0%, var(--wc-accent-wash), var(--surface) 60%);
+  transition: border-color .3s var(--ease);
+}
+.settings-hero.live { border-color: var(--wc-accent-line-soft); }
+.settings-stage { flex: 0 0 auto; width: 160px; height: 110px; overflow: visible; }
+.settings-hero-text { min-width: 0; flex: 1 1 auto; }
+.settings-hero-text h3 { margin: 8px 0 4px; font-size: 16px; letter-spacing: -.3px; }
+.settings-hero-text p { margin: 0; max-width: 48ch; color: var(--text-dim); font-size: 12px; line-height: 1.55; }
+.settings-hero-action { align-self: flex-start; flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
+.settings-hero-switch { display: inline-flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: 11.5px; font-weight: 600; }
+.settings-pill {
+  display: inline-flex; align-items: center; gap: 6px; height: 21px; padding: 0 9px 0 8px; border-radius: 999px;
+  border: 1px solid var(--border-bright); background: var(--wc-well); color: var(--text-soft);
+  font-size: 10.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+}
+.settings-pill i { width: 6px; height: 6px; border-radius: 50%; background: var(--text-faint); }
+.settings-pill.live { color: var(--wc-accent-text); border-color: var(--wc-accent-line-soft); background: var(--wc-accent-tint); }
+.settings-pill.live i { background: var(--wc-accent); animation: pulse 2.4s ease-in-out infinite; }
+.settings-block { padding: 16px 18px 18px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+.settings-block-title { margin: 0; font-size: 14px; }
+.settings-block-sub { margin: 4px 0 12px; max-width: 62ch; color: var(--text-dim); font-size: 11.5px; line-height: 1.5; }
+.settings-block-sub code { font: 10.5px "SFMono-Regular", Consolas, monospace; color: var(--text-soft); }
+.settings-page > .package-notice { margin: 0; }
+@media (max-width: 720px) {
+  .settings-hero { flex-wrap: wrap; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-hero, .settings-block, .settings-pill.live i { animation: none; }
+  .settings-hero { transition: none; }
+}
 
 /* ── Settings › Computer use (ComputerUseSection.tsx) ── */
 /* A centred column of solid cards: hero stage, permissions, stop keys, blocked apps. Sections
@@ -3693,18 +3748,271 @@ label > span small.mcp-invalid { color: var(--warning); }
   .side-panel, .side-panel-inner { max-width: 460px; }
 }
 
-/* ── Memory settings ──────────────────────────── */
-/* Reuses the Commands rows; a note reads like a saved thought: type badge, title, when. */
-.memory-settings .section-heading-row { margin-bottom: 18px; }
-.memory-project-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
-.memory-new { white-space: nowrap; }
-.memory-remove:hover { color: var(--danger); background: var(--danger-bg); }
+/* ── Settings › Tools (ToolsSection.tsx) ───────────── */
+/* A Settings page (SettingsHero): Pi's tools as cards in two groups, then package tools, then
+   where the rest are set up. The model-facing text waits behind each card's disclosure. */
+.tool-cards { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.tool-card {
+  display: flex; align-items: flex-start; gap: 13px; padding: 11px 14px 10px;
+  border: 1px solid var(--border); border-radius: 11px; background: var(--wc-well);
+  transition: border-color .2s var(--ease);
+}
+.tool-card-mark {
+  flex: 0 0 auto; width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px;
+  border: 1px solid var(--border-bright); background: var(--surface); color: var(--wc-accent-text);
+  transition: color .2s var(--ease), border-color .2s var(--ease);
+}
+.tool-card-mark svg { width: 17px; height: 17px; }
+.tool-card.off .tool-card-mark { color: var(--text-faint); border-style: dashed; }
+.tool-card.unavailable { border-color: color-mix(in srgb, var(--warning) 28%, var(--border)); }
+.tool-card.unavailable .tool-card-mark { color: var(--warning); border-style: solid; }
+.tool-card-text { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.tool-card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.tool-card-head strong { font-size: 13px; font-weight: 600; color: var(--text); transition: color .2s var(--ease); }
+.tool-card-head strong.mono { font: 600 12px "SFMono-Regular", Consolas, monospace; }
+.tool-card.off .tool-card-head strong { color: var(--text-dim); }
+.tool-card-head code, .tool-card-needs code {
+  font: 10.5px "SFMono-Regular", Consolas, monospace; color: var(--text-dim);
+  border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; line-height: 1.5; background: var(--surface);
+}
+.tool-card-detail { color: var(--text-dim); font-size: 11.5px; line-height: 1.45; }
+.tool-card-needs { color: var(--warning); font-size: 11px; line-height: 1.5; }
+.tool-card-needs code { color: var(--warning); }
+.tool-card-more {
+  margin-top: 2px; display: inline-flex; align-items: center; gap: 4px; padding: 1px 0; border: 0; background: none;
+  color: var(--text-faint); font-size: 10.5px; font-weight: 600; cursor: pointer; transition: color .12s var(--ease);
+}
+.tool-card-more:hover { color: var(--text-soft); }
+.tool-card-more svg { width: 11px; height: 11px; transition: transform .2s var(--ease); }
+.tool-card-more[aria-expanded="true"] svg { transform: rotate(90deg); }
+.tool-card-more:focus-visible { outline: 2px solid var(--wc-accent-line); outline-offset: 2px; border-radius: 4px; }
+.tool-card-model {
+  align-self: stretch; margin: 4px 0 0; padding: 9px 11px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface); color: var(--text-soft); font: 10.5px/1.55 "SFMono-Regular", Consolas, monospace;
+  white-space: pre-wrap; word-break: break-word;
+}
+.tool-card > .toggle { flex: 0 0 auto; margin-top: 6px; }
+.tools-note {
+  margin: 12px 0 0; display: flex; align-items: flex-start; gap: 9px; padding: 9px 12px;
+  border: 1px dashed var(--border-bright); border-radius: 10px; color: var(--text-dim); font-size: 11px; line-height: 1.5;
+}
+.tools-note svg { flex: 0 0 auto; width: 13px; height: 13px; margin-top: 1px; color: var(--text-faint); }
+.tools-empty { border: 0; background: none; padding: 10px 20px 4px; }
+.tools-elsewhere { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px; }
+.tools-elsewhere-link {
+  display: flex; align-items: center; gap: 11px; min-width: 0; padding: 10px 10px 10px 12px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--wc-well); color: var(--text); text-align: left; cursor: pointer;
+  transition: border-color .15s var(--ease), transform .15s var(--ease);
+}
+.tools-elsewhere-link:hover { border-color: var(--wc-accent-line-soft); transform: translateY(-1px); }
+.tools-elsewhere-link:focus-visible { outline: 2px solid var(--wc-accent-line); outline-offset: 2px; }
+.tools-elsewhere-icon {
+  flex: 0 0 auto; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px;
+  background: var(--surface); border: 1px solid var(--border); color: var(--text-dim); transition: color .15s var(--ease);
+}
+.tools-elsewhere-icon svg { width: 15px; height: 15px; }
+.tools-elsewhere-link:hover .tools-elsewhere-icon { color: var(--wc-accent-text); }
+.tools-elsewhere-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.tools-elsewhere-text strong { font-size: 12px; }
+.tools-elsewhere-text span { color: var(--text-dim); font-size: 10.5px; line-height: 1.4; }
+.tools-elsewhere-link > svg:last-child { flex: 0 0 auto; width: 12px; height: 12px; color: var(--text-faint); transition: transform .15s var(--ease), color .15s var(--ease); }
+.tools-elsewhere-link:hover > svg:last-child { transform: translateX(2px); color: var(--wc-accent-text); }
+
+/* Stage: three tool calls land in a chat card in turn, each ticking off as it finishes. */
+.tools-stage-card { fill: var(--wc-well); stroke: var(--border-bright); stroke-width: 1.5; stroke-dasharray: 4 3; transition: stroke .3s var(--ease); }
+.tools-stage-icon { fill: var(--surface-raised); stroke: var(--border-bright); stroke-width: 1.2; }
+.tools-stage-glyph { fill: none; stroke: var(--text-faint); stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.tools-stage-verb { fill: var(--text-faint); }
+.tools-stage-subject { fill: var(--border-bright); }
+.tools-stage-dot { fill: var(--border-bright); }
+.tools-stage-check { fill: none; stroke: var(--wc-accent); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; opacity: 0; }
+.tools-stage.live .tools-stage-card { stroke: var(--wc-accent-line); stroke-dasharray: none; }
+.tools-stage.live .tools-stage-glyph { stroke: var(--wc-accent-text); }
+.tools-stage.live .tools-stage-verb { fill: var(--wc-accent-text); }
+.tools-stage.live .tools-stage-dot { fill: var(--wc-accent); }
+.tools-stage.live .tools-stage-row { animation: tools-stage-row 6.6s var(--ease) calc(var(--k) * .9s) infinite backwards; }
+.tools-stage.live .tools-stage-dot { animation: tools-stage-dot 6.6s var(--ease) calc(var(--k) * .9s) infinite backwards; }
+.tools-stage.live .tools-stage-check { animation: tools-stage-check 6.6s var(--ease) calc(var(--k) * .9s) infinite backwards; }
+.tools-stage.live .tools-stage-icon { animation: tools-stage-icon 6.6s var(--ease) calc(var(--k) * .9s) infinite backwards; }
+@keyframes tools-stage-row {
+  0% { opacity: 0; transform: translateY(5px); }
+  7%, 82% { opacity: 1; transform: none; }
+  92%, 100% { opacity: 0; transform: none; }
+}
+@keyframes tools-stage-dot { 0%, 8% { opacity: 1; } 12% { opacity: .3; } 16% { opacity: 1; } 19%, 100% { opacity: 0; } }
+@keyframes tools-stage-check { 0%, 18% { opacity: 0; } 22%, 100% { opacity: 1; } }
+@keyframes tools-stage-icon {
+  0%, 18% { fill: var(--surface-raised); stroke: var(--border-bright); }
+  22%, 100% { fill: var(--wc-accent-tint); stroke: var(--wc-accent-line); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tool-card, .tool-card-mark, .tool-card-head strong, .tool-card-more svg, .tools-elsewhere-link, .tools-elsewhere-link > svg:last-child { transition: none; }
+  .tools-stage.live .tools-stage-row, .tools-stage.live .tools-stage-dot,
+  .tools-stage.live .tools-stage-check, .tools-stage.live .tools-stage-icon { animation: none; }
+  .tools-stage.live .tools-stage-dot { opacity: 0; }
+  .tools-stage.live .tools-stage-check { opacity: 1; }
+  .tools-stage.live .tools-stage-icon { fill: var(--wc-accent-tint); stroke: var(--wc-accent-line); }
+}
+
+/* ── Settings › MCP servers stage and empty state (McpSection.tsx) ── */
+/* The duck cabled to two servers: each switched-on one lights and draws dots along its cable. */
+.mcp-stage-app { fill: var(--wc-well); stroke: var(--border-bright); stroke-width: 1.5; transition: stroke .3s var(--ease); }
+.mcp-stage .duck-mark { color: var(--text-faint); transition: color .3s var(--ease); }
+.mcp-stage-cable { fill: none; stroke: var(--border-bright); stroke-width: 1.6; stroke-dasharray: 3 3; transition: stroke .3s var(--ease); }
+.mcp-stage-flow { fill: none; stroke: var(--wc-accent); stroke-width: 2.6; stroke-linecap: round; stroke-dasharray: 0 9; opacity: 0; }
+.mcp-stage-rack { fill: var(--wc-well); stroke: var(--border-bright); stroke-width: 1.4; stroke-dasharray: 4 3; transition: stroke .3s var(--ease); }
+.mcp-stage-slots { stroke: var(--border-bright); stroke-width: 2.4; stroke-linecap: round; }
+.mcp-stage-led { fill: var(--border-bright); }
+.mcp-stage-link.present .mcp-stage-rack { fill: var(--surface-raised); stroke-dasharray: none; }
+.mcp-stage-link.present .mcp-stage-cable { stroke-dasharray: none; }
+.mcp-stage-link.on .mcp-stage-cable, .mcp-stage-link.on .mcp-stage-rack, .mcp-stage.live .mcp-stage-app { stroke: var(--wc-accent-line); }
+.mcp-stage.live .duck-mark { color: var(--wc-accent); }
+.mcp-stage-link.on .mcp-stage-led { fill: var(--wc-accent); animation: mcp-stage-blink 3.2s steps(1) calc(var(--k) * -1.3s) infinite; }
+.mcp-stage-link.on .mcp-stage-flow { opacity: 1; animation: mcp-stage-flow 1.1s linear calc(var(--k) * -.5s) infinite; }
+@keyframes mcp-stage-flow { to { stroke-dashoffset: -9; } }
+@keyframes mcp-stage-blink { 0%, 64% { opacity: 1; } 66% { opacity: .25; } 70% { opacity: 1; } 72% { opacity: .25; } 76%, 100% { opacity: 1; } }
+
+.mcp-servers .subagent-setting { background: var(--wc-well); }
+.mcp-servers .subagent-group { margin-bottom: 0; }
+.mcp-new .subagent-editor { margin-top: 14px; }
+.mcp-starts { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 8px; }
+.mcp-start {
+  display: flex; align-items: flex-start; gap: 12px; padding: 13px 14px; border: 1px solid var(--border); border-radius: 11px;
+  background: var(--wc-well); color: var(--text); text-align: left; cursor: pointer;
+  transition: border-color .15s var(--ease), transform .15s var(--ease), box-shadow .15s var(--ease);
+}
+.mcp-start:hover:not(:disabled) {
+  border-color: var(--wc-accent-line-soft); transform: translateY(-1px);
+  box-shadow: 0 10px 22px -14px color-mix(in srgb, var(--wc-accent) 45%, transparent);
+}
+.mcp-start:focus-visible { outline: 2px solid var(--wc-accent-line); outline-offset: 2px; }
+.mcp-start:disabled { opacity: .5; cursor: default; }
+.mcp-start-mark {
+  flex: 0 0 auto; width: 38px; height: 38px; display: grid; place-items: center; border-radius: 11px;
+  border: 1px solid var(--border-bright); background: var(--surface); color: var(--text-soft);
+  transition: color .15s var(--ease), border-color .15s var(--ease), background .15s var(--ease);
+}
+.mcp-start-mark svg { width: 19px; height: 19px; }
+.mcp-start:hover:not(:disabled) .mcp-start-mark { color: var(--wc-accent-text); border-color: var(--wc-accent-line-soft); background: var(--wc-accent-tint); }
+.mcp-start-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.mcp-start-text strong { font-size: 13px; }
+.mcp-start-text span { color: var(--text-dim); font-size: 11.5px; line-height: 1.45; }
+.mcp-start code {
+  flex: 0 0 auto; font: 10px "SFMono-Regular", Consolas, monospace; color: var(--text-dim);
+  border: 1px solid var(--border-bright); border-radius: 999px; padding: 1px 7px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .mcp-stage-link.on .mcp-stage-led, .mcp-stage-link.on .mcp-stage-flow { animation: none; }
+  .mcp-start, .mcp-start-mark { transition: none; }
+}
+
+/* ── Settings › Memory (MemorySection.tsx) ──────────── */
+/* A Settings page (SettingsHero). A project with notes is a card of Commands rows; projects still
+   waiting for a first note share one card, a row each. A note reads like a saved thought: type
+   badge, title, when. */
+.memory-settings .command-editor { margin-top: 0; border-radius: 14px; padding: 16px 18px 18px; }
+.memory-editor-sub { margin-bottom: 0; }
+.memory-loading { color: var(--text-dim); font-size: 12px; }
+.memory-project-head { display: flex; align-items: center; gap: 12px; }
+.memory-project-mono {
+  flex: 0 0 auto; width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px;
+  border: 1px solid var(--wc-accent-line-soft); background: var(--wc-accent-tint); color: var(--wc-accent-text);
+  font-size: 14px; font-weight: 700; transition: color .2s var(--ease), background .2s var(--ease), border-color .2s var(--ease);
+}
+.memory-project.off .memory-project-mono, .memory-waiting-list li.off .memory-project-mono {
+  border-color: var(--border-bright); background: var(--surface); color: var(--text-faint);
+}
+.memory-project-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.memory-project-path {
+  color: var(--text-faint); font: 10.5px "SFMono-Regular", Consolas, monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.memory-project-actions { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.memory-project-actions .toggle { margin-left: 6px; }
+.memory-project-actions .memory-reveal:hover { color: var(--text); }
+.memory-kinds { list-style: none; margin: 12px 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.memory-kinds li {
+  display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px 0 8px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--wc-well); color: var(--text-soft); font-size: 11px;
+}
+.memory-kinds i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.memory-project .command-list { background: var(--wc-well); }
+.memory-project.off .command-name, .memory-project.off .command-description { color: var(--text-faint); }
+.memory-add {
+  margin-top: 8px; width: 100%; height: 32px; display: flex; align-items: center; justify-content: center; gap: 6px;
+  border: 1px dashed var(--border-bright); border-radius: 9px; background: none; color: var(--text-dim);
+  font-size: 11.5px; font-weight: 600; cursor: pointer;
+  transition: color .15s var(--ease), border-color .15s var(--ease), background .15s var(--ease);
+}
+.memory-add:hover:not(:disabled) { color: var(--wc-accent-text); border-color: var(--wc-accent-line-soft); background: var(--wc-accent-wash); }
+.memory-add:focus-visible { outline: 2px solid var(--wc-accent-line); outline-offset: 2px; }
+.memory-add:disabled { opacity: .5; cursor: default; }
+.memory-add svg { width: 13px; height: 13px; }
+.memory-waiting-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 10px; background: var(--wc-well); overflow: hidden; }
+.memory-waiting-list li { display: flex; align-items: center; gap: 11px; padding: 9px 10px 9px 12px; }
+.memory-waiting-list li + li { border-top: 1px solid var(--border); }
+.memory-waiting-list .memory-project-mono { width: 26px; height: 26px; border-radius: 8px; font-size: 11.5px; }
+.memory-waiting-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.memory-waiting-text strong { font-size: 12.5px; font-weight: 600; }
+.memory-waiting-list li.off .memory-waiting-text strong { color: var(--text-dim); }
+.memory-waiting-text span {
+  color: var(--text-faint); font: 10.5px "SFMono-Regular", Consolas, monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.memory-write.ghost-button { width: auto; height: 26px; padding: 0 9px 0 7px; display: inline-flex; gap: 5px; font-size: 11px; font-weight: 600; color: var(--text-dim); }
+.memory-write svg { width: 12px; height: 12px; }
 .memory-when { color: var(--text-faint); font-size: 10.5px; }
+/* A note's title is prose, unlike a command's name; its file name below stays mono. */
+.memory-row .command-name { font-family: inherit; font-size: 12.5px; }
 /* The four kinds of note, told apart at a glance with the theme's own hues. */
 .memory-type-badge { text-transform: capitalize; }
-.memory-type-badge[data-type="user"] { color: var(--wc-accent-text); }
-.memory-type-badge[data-type="feedback"] { color: var(--wc-code-string); }
-.memory-type-badge[data-type="project"] { color: var(--wc-code-keyword); }
-.memory-type-badge[data-type="reference"] { color: var(--wc-code-meta); }
-.memory-empty p, .memory-first-empty p { max-width: 46ch; }
+.memory-type-badge[data-type="user"], .memory-kinds li[data-type="user"] i { color: var(--wc-accent-text); }
+.memory-type-badge[data-type="feedback"], .memory-kinds li[data-type="feedback"] i { color: var(--wc-code-string); }
+.memory-type-badge[data-type="project"], .memory-kinds li[data-type="project"] i { color: var(--wc-code-keyword); }
+.memory-type-badge[data-type="reference"], .memory-kinds li[data-type="reference"] i { color: var(--wc-code-meta); }
+.memory-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
+.memory-steps li { display: flex; flex-direction: column; gap: 3px; padding: 12px 13px; border: 1px solid var(--border); border-radius: 11px; background: var(--wc-well); }
+.memory-step-mark {
+  position: relative; width: 34px; height: 34px; margin-bottom: 7px; display: grid; place-items: center; border-radius: 10px;
+  border: 1px solid var(--border-bright); background: var(--surface); color: var(--wc-accent-text);
+}
+.memory-step-mark svg { width: 17px; height: 17px; }
+.memory-step-mark b {
+  position: absolute; top: -6px; left: -6px; width: 16px; height: 16px; display: grid; place-items: center; border-radius: 50%;
+  background: var(--surface-raised); border: 1px solid var(--border-bright); color: var(--text-dim); font-size: 9.5px; font-weight: 700;
+}
+.memory-steps strong { font-size: 12.5px; }
+.memory-steps li > span:last-child { color: var(--text-dim); font-size: 11px; line-height: 1.45; }
+
+/* Stage: a fresh note is filed onto the stack, its lines appear and a bookmark drops onto it. */
+.memory-stage-card { fill: var(--wc-well); stroke: var(--border-bright); stroke-width: 1.4; stroke-dasharray: 4 3; transition: stroke .3s var(--ease); }
+.memory-stage-card.top { fill: var(--surface-raised); }
+.memory-stage-title, .memory-stage-line { fill: var(--border-bright); }
+.memory-stage-ribbon { fill: var(--text-faint); }
+.memory-stage-note { transform-box: fill-box; transform-origin: 50% 50%; }
+.memory-stage-line { transform-box: fill-box; transform-origin: left center; }
+.memory-stage.live .memory-stage-card { stroke-dasharray: none; }
+.memory-stage.live .memory-stage-card.top { stroke: var(--wc-accent-line); }
+.memory-stage.live .memory-stage-title { fill: var(--wc-accent-text); }
+.memory-stage.live .memory-stage-line { fill: var(--wc-accent); animation: memory-stage-line 7s var(--ease) calc(var(--k) * .14s) infinite backwards; }
+.memory-stage.live .memory-stage-ribbon { fill: var(--wc-accent); animation: memory-stage-ribbon 7s cubic-bezier(.3, 1.5, .5, 1) infinite; }
+.memory-stage.live .memory-stage-note { animation: memory-stage-file 7s var(--ease) infinite; }
+@keyframes memory-stage-file {
+  0% { opacity: 0; transform: translate(26px, -10px) rotate(9deg); }
+  12%, 84% { opacity: 1; transform: none; }
+  94%, 100% { opacity: 0; transform: translateY(-6px); }
+}
+@keyframes memory-stage-line {
+  0%, 16% { opacity: 0; transform: scaleX(.3); }
+  24%, 90% { opacity: 1; transform: none; }
+  96%, 100% { opacity: 0; transform: none; }
+}
+@keyframes memory-stage-ribbon {
+  0%, 30% { opacity: 0; transform: translateY(-12px); }
+  38%, 100% { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .memory-stage.live .memory-stage-note, .memory-stage.live .memory-stage-line, .memory-stage.live .memory-stage-ribbon { animation: none; }
+  .memory-project-mono, .memory-add { transition: none; }
+}
 .memory-name-field input { font-size: 12px; }

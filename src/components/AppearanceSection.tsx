@@ -62,6 +62,9 @@ const MINI_EXPLORATION: { icon: "file" | "search"; verb: string; subject: string
   { icon: "search", verb: "Listed", subject: "src" }
 ];
 
+/** A group's place in the page's entrance: they rise in one after another (styles.css). */
+const enter = (index: number) => ({ "--i": index } as CSSProperties);
+
 const same = (first: string | null | undefined, second: string) => (first ?? "").toLowerCase() === second.toLowerCase();
 
 /** What to save for a picked background: darkened for readability, and null for the default. */
@@ -121,10 +124,10 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrl, 
   return (
     <div className="settings-scroll appearance-page">
       <div className="appearance-inner">
-        <section className="tool-setting-group theme-group">
+        <section className="tool-setting-group theme-group" style={enter(0)}>
           <h4>Theme</h4>
           <div className="theme-presets" role="radiogroup" aria-label="Theme presets">
-            {THEME_PRESETS.map((preset) => {
+            {THEME_PRESETS.map((preset, index) => {
               const variables = resolveTheme(preset).variables;
               const checked = same(accent, preset.accent) && same(background, preset.background);
               return (
@@ -134,6 +137,7 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrl, 
                   aria-checked={checked}
                   key={preset.id}
                   className="theme-preset"
+                  style={{ "--k": index } as CSSProperties}
                   disabled={busy}
                   onClick={() => { setDarkened(false); void save({ ...withAccent(preset.accent), background: storedBackground(preset.background) }); }}
                 >
@@ -180,7 +184,7 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrl, 
           </div>
         </section>
 
-        <section className="tool-setting-group">
+        <section className="tool-setting-group" style={enter(1)}>
           <h4>Backdrop</h4>
           <p className="appearance-group-note">What sits behind the window. Chat bubbles, cards and the composer stay solid whatever you pick.</p>
           <div className="appearance-tiles" role="radiogroup" aria-label="Backdrop">
@@ -309,7 +313,7 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrl, 
           )}
         </section>
 
-        <section className="tool-setting-group">
+        <section className="tool-setting-group" style={enter(2)}>
           <h4>Chat</h4>
           <p className="appearance-group-note">How the conversation itself is drawn. Each switch shows its effect as you flip it.</p>
           <div className="appearance-pair">
@@ -374,7 +378,7 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrl, 
           </div>
         </section>
 
-        <section className="tool-setting-group">
+        <section className="tool-setting-group" style={enter(3)}>
           <h4>Agent</h4>
           <p className="appearance-group-note">The name the app uses for your assistant. The miniature follows the field as you type.</p>
           {/* Same card as the chat switches, showing the empty chat the name will meet. */}

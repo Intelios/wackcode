@@ -8,7 +8,9 @@ import {
   type McpTransport,
   type SaveMcpServerInput
 } from "../types";
-import { Icon } from "./Icons";
+import { DuckMark } from "./DuckMark";
+import { Icon, type IconName } from "./Icons";
+import { SettingsHero, stagger } from "./SettingsHero";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 
 export interface McpActions {
@@ -23,6 +25,8 @@ export interface McpActions {
 
 interface Props extends McpActions {
   servers: McpServerRecord[];
+  /** The agent's name in the app's own copy (Settings › Appearance). */
+  agentName?: string;
 }
 
 const TRANSPORTS: { value: McpTransport; label: string; hint: string }[] = [
@@ -32,6 +36,40 @@ const TRANSPORTS: { value: McpTransport; label: string; hint: string }[] = [
 ];
 
 const transportLabel = (transport: McpTransport) => TRANSPORTS.find((item) => item.value === transport)?.label ?? transport;
+
+/** The empty state's two ways in; each opens the editor with its transport chosen. */
+const STARTS: { transport: McpTransport; icon: IconName; title: string; detail: string; kind: string }[] = [
+  { transport: "stdio", icon: "terminal", title: "A command on your Mac", detail: "npx, uvx, docker or any program that speaks MCP over stdin and stdout.", kind: "stdio" },
+  { transport: "http", icon: "globe", title: "A server at a URL", detail: "A hosted server over Streamable HTTP or SSE, with headers for its token.", kind: "HTTP · SSE" }
+];
+
+/**
+ * The hero's little stage: the duck on the left, cabled to two servers. Each switched-on server
+ * (up to two) lights up and draws a stream of dots along its cable; with none, the cables and
+ * racks rest dashed. Pure decoration; the pill says the same in words. The flow lives in
+ * styles.css, which stills it under reduced motion.
+ */
+function McpStage({ servers, lit }: { servers: number; lit: number }) {
+  const racks = [22, 62];
+  return (
+    <svg className={`settings-stage mcp-stage ${lit > 0 ? "live" : ""}`} viewBox="0 0 160 110" aria-hidden="true">
+      {racks.map((y, index) => {
+        const cable = `M58 55C82 55 80 ${y + 13} 102 ${y + 13}`;
+        return (
+          <g key={y} className={`mcp-stage-link ${index < servers ? "present" : ""} ${index < lit ? "on" : ""}`} style={{ "--k": index } as React.CSSProperties}>
+            <path className="mcp-stage-cable" d={cable} />
+            <path className="mcp-stage-flow" d={cable} />
+            <rect className="mcp-stage-rack" x="102" y={y} width="46" height="26" rx="7" />
+            <path className="mcp-stage-slots" d={`M110 ${y + 9}h18M110 ${y + 17}h12`} />
+            <circle className="mcp-stage-led" cx="140" cy={y + 13} r="3" />
+          </g>
+        );
+      })}
+      <rect className="mcp-stage-app" x="14" y="33" width="44" height="44" rx="12" />
+      <DuckMark className="mcp-stage-duck" x="24" y="43" width="24" height="24" />
+    </svg>
+  );
+}
 
 let nextEntryKey = 0;
 
@@ -280,7 +318,7 @@ function ServerEditor({ draft, busy, onChange, onSave, onCancel, onDelete }: Edi
  * saved explicitly, after which the connection is tested so its tools can be listed. Header and
  * environment values never come back from the host: a saved one shows as "Saved".
  */
-export function McpSection({ servers, onSaveMcpServer, onDeleteMcpServer, onSetMcpServerEnabled, onSetMcpServerTools, onTestMcpServer }: Props) {
+export function McpSection({ servers, agentName = "WackCode", onSaveMcpServer, onDeleteMcpServer, onSetMcpServerEnabled, onSetMcpServerTools, onTestMcpServer }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [expanded, setExpanded] = useState<string>();
@@ -446,43 +484,83 @@ export function McpSection({ servers, onSaveMcpServer, onDeleteMcpServer, onSetM
     );
   }
 
+  function startNew(transport: McpTransport = "stdio") {
+    setEditing({ key: "new", draft: { ...draftFrom(), transport } });
+    setExpanded(undefined);
+    setError(undefined);
+  }
+
+  const enabled = servers.filter((server) => server.enabled).length;
+  const pill = servers.length === 0 ? "No servers"
+    : enabled === 0 ? "All off"
+    : enabled === servers.length ? `${enabled} ${enabled === 1 ? "server" : "servers"} on`
+    : `${enabled} of ${servers.length} on`;
+  const creating = editing?.key === "new";
+
   return (
     <div className="settings-scroll subagents-settings mcp-settings">
-      <div className="section-heading-row">
-        <div>
-          <h3>Servers</h3>
+      <div className="settings-page">
+        <SettingsHero
+          label="MCP servers overview"
+          stage={<McpStage servers={servers.length} lit={enabled} />}
+          live={enabled > 0}
+          pill={pill}
+          title={`Plug more tools into ${agentName}`}
+          action={(
+            <button type="button" className="secondary-button compact" disabled={busy || creating} onClick={() => startNew()}>
+              <Icon name="plus" /> New server
+            </button>
+          )}
+        >
           <p>
-            The agent gets the tools of every server that&rsquo;s switched on, in every chat. A server starts when a chat sends its first
-            message, and changes apply to running chats from their next message. Read-only tools also work in Plan mode.
+            An MCP server hands the agent tools of its own: your issue tracker, a database, a design file. Switched-on servers
+            join every chat when it sends its first message.
           </p>
-        </div>
-        <div className="row-actions">
-          <button
-            type="button"
-            className="secondary-button"
-            disabled={busy || editing?.key === "new"}
-            onClick={() => { setEditing({ key: "new", draft: draftFrom() }); setExpanded(undefined); }}
-          >
-            <Icon name="plus" /> New server
-          </button>
-        </div>
+        </SettingsHero>
+        {error && <div className="error-banner" role="alert">{error}</div>}
+
+        {editing?.key === "new" && (
+          <section className="settings-block mcp-new" style={stagger(1)} aria-labelledby="mcp-new-title">
+            <h3 className="settings-block-title" id="mcp-new-title">New server</h3>
+            <ServerEditor
+              draft={editing.draft}
+              busy={busy}
+              onChange={(draft) => setEditing({ key: "new", draft })}
+              onSave={() => void saveDraft()}
+              onCancel={() => { setEditing(undefined); setError(undefined); }}
+            />
+          </section>
+        )}
+
+        {servers.length === 0 && !creating && (
+          <section className="settings-block" style={stagger(1)} aria-labelledby="mcp-empty-title">
+            <h3 className="settings-block-title" id="mcp-empty-title">No servers yet</h3>
+            <p className="settings-block-sub">A server&rsquo;s README usually gives a command to run or a URL to connect to. Start with whichever yours has.</p>
+            <div className="mcp-starts">
+              {STARTS.map((start) => (
+                <button type="button" className="mcp-start" key={start.transport} disabled={busy} onClick={() => startNew(start.transport)}>
+                  <span className="mcp-start-mark" aria-hidden="true"><Icon name={start.icon} /></span>
+                  <span className="mcp-start-text">
+                    <strong>{start.title}</strong>
+                    <span>{start.detail}</span>
+                  </span>
+                  <code aria-hidden="true">{start.kind}</code>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {servers.length > 0 && (
+          <section className="settings-block mcp-servers" style={stagger(creating ? 2 : 1)} aria-labelledby="mcp-servers-title">
+            <h3 className="settings-block-title" id="mcp-servers-title">Servers</h3>
+            <p className="settings-block-sub">
+              Changes apply to running chats from their next message. Tools a server marks read-only also work in Plan mode.
+            </p>
+            <div className="subagent-group">{servers.map(renderServer)}</div>
+          </section>
+        )}
       </div>
-      {error && <div className="error-banner subagents-error" role="alert">{error}</div>}
-      {editing?.key === "new" && (
-        <article className="subagent-setting mcp-server open new">
-          <ServerEditor
-            draft={editing.draft}
-            busy={busy}
-            onChange={(draft) => setEditing({ key: "new", draft })}
-            onSave={() => void saveDraft()}
-            onCancel={() => { setEditing(undefined); setError(undefined); }}
-          />
-        </article>
-      )}
-      {servers.length === 0 && editing?.key !== "new" && (
-        <div className="model-empty">No MCP servers yet. Add one to give the agent its tools.</div>
-      )}
-      {servers.length > 0 && <section className="subagent-group" aria-label="MCP servers">{servers.map(renderServer)}</section>}
 
       {deleting && (
         <ConfirmDialog

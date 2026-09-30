@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bashExploreKind, diffStats, displayAgentName, editStats, exploreKind, groupTools, parseSubagentDetails, pendingSubagentDetails, pruneDisabledTools, sameToolCatalog, subagentDetailsFor, summarizeTool } from "./tool-utils";
+import { bashExploreKind, diffStats, displayAgentName, editStats, exploreKind, firstSentence, groupTools, parseSubagentDetails, pendingSubagentDetails, pruneDisabledTools, sameToolCatalog, subagentDetailsFor, summarizeTool } from "./tool-utils";
 import type { NormalizedBlock, NormalizedMessage, ToolCatalogEntry } from "./types";
 
 function call(toolName: string, args: unknown): NormalizedBlock {
@@ -131,6 +131,14 @@ describe("tool catalogue", () => {
     expect(sameToolCatalog([builtin("grep")], [builtin("grep")])).toBe(true);
     expect(sameToolCatalog([builtin("grep")], [builtin("grep", false)])).toBe(false);
     expect(sameToolCatalog([builtin("grep")], [])).toBe(false);
+  });
+
+  it("keeps a description's opening sentence for Settings, without splitting inside names", () => {
+    expect(firstSentence("Search file contents for a pattern. Respects .gitignore. Output is truncated."))
+      .toBe("Search file contents for a pattern.");
+    expect(firstSentence("Reads\n  package.json files! Then more.")).toBe("Reads package.json files!");
+    expect(firstSentence("  No full stop at all  ")).toBe("No full stop at all");
+    expect(firstSentence("")).toBe("");
   });
 });
 

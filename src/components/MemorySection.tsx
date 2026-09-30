@@ -5,7 +5,8 @@ import type {
   SaveMemoryInput
 } from "../types";
 import { formatRelativeTime } from "../chat-utils";
-import { Icon } from "./Icons";
+import { Icon, type IconName } from "./Icons";
+import { SettingsHero, stagger } from "./SettingsHero";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 import { Select } from "./ui/Select";
 
@@ -18,6 +19,46 @@ const MEMORY_TYPES: { value: MemoryType; label: string; hint: string }[] = [
   { value: "project", label: "Project", hint: "Ongoing work, decisions, deadlines" },
   { value: "reference", label: "Reference", hint: "Where information lives outside the project" }
 ];
+
+/** How memory works, for the page with no project yet. */
+const MEMORY_STEPS: { icon: IconName; title: string; detail: string }[] = [
+  { icon: "comment", title: "You mention something worth keeping", detail: "A preference, a correction, a decision with a tricky edge." },
+  { icon: "memory", title: "The agent saves a small note", detail: "Kept on this Mac with WackCode's data, never inside the project." },
+  { icon: "brain", title: "Later chats recall it", detail: "Only when the note looks relevant to what you ask." }
+];
+
+/**
+ * The hero's little stage: a fresh note is filed onto a small stack, its lines appear and a
+ * bookmark ribbon drops onto it; then it settles away for the next. Rests dashed and dimmed while
+ * memory is off. Pure decoration; the pill says the same in words. The loop lives in styles.css,
+ * which stills it under reduced motion.
+ */
+function MemoryStage({ live }: { live: boolean }) {
+  const lines = [{ y: 43, width: 50 }, { y: 53, width: 42 }, { y: 63, width: 50 }, { y: 73, width: 28 }];
+  return (
+    <svg className={`settings-stage memory-stage ${live ? "live" : ""}`} viewBox="0 0 160 110" aria-hidden="true">
+      <rect className="memory-stage-card" x="44" y="16" width="76" height="82" rx="9" transform="rotate(-9 82 57)" />
+      <rect className="memory-stage-card" x="44" y="16" width="76" height="82" rx="9" transform="rotate(6 82 57)" />
+      <g className="memory-stage-note">
+        <rect className="memory-stage-card top" x="42" y="14" width="76" height="82" rx="9" />
+        <rect className="memory-stage-title" x="53" y="27" width="30" height="5" rx="2.5" />
+        {lines.map((line, index) => (
+          <rect
+            key={line.y}
+            className="memory-stage-line"
+            x="53"
+            y={line.y}
+            width={line.width}
+            height="4"
+            rx="2"
+            style={{ "--k": index } as React.CSSProperties}
+          />
+        ))}
+        <path className="memory-stage-ribbon" d="M96 14h12v21l-6-5-6 5z" />
+      </g>
+    </svg>
+  );
+}
 
 /** What Settings › Memory can do; SettingsPage wires each one to `api`. Keep them stable. */
 export interface MemoryActions {
@@ -69,11 +110,14 @@ function nameSuggestion(type: MemoryType, title: string): string {
 
 /**
  * Settings › Memory. Every project the agent has saved notes for, one directory per repository
- * (worktrees share it), listed exactly as a chat loads them. The master switch and the
+ * (worktrees share it), listed exactly as a chat loads them. A project with notes gets its own
+ * card; projects still waiting for one share a card, one row each. The master switch and the
  * per-project switches apply to running chats on their next turn; file edits do too, because
  * the worker re-reads the directory before every run.
  */
-export function MemorySection({ onList, onRead, onSave, onDelete, onRemoveProject, onSetProjectEnabled, onReveal, onFindFile, onSetEnabled }: MemoryActions) {
+export function MemorySection({
+  agentName = "WackCode", onList, onRead, onSave, onDelete, onRemoveProject, onSetProjectEnabled, onReveal, onFindFile, onSetEnabled
+}: MemoryActions & { agentName?: string }) {
   const reduce = useReducedMotion();
   const [overview, setOverview] = useState<MemoriesOverview>();
   const [loading, setLoading] = useState(true);
@@ -207,114 +251,188 @@ export function MemorySection({ onList, onRead, onSave, onDelete, onRemoveProjec
     );
   }
 
-  function renderProject(project: MemoryProject) {
+  function renderFolderActions(project: MemoryProject) {
     return (
-      <section className="subagent-group" aria-label={`Memory for ${project.name}`} key={project.key}>
-        <div className="skill-group-head">
-          <h4>{project.name}</h4>
-          <span className="skill-group-path" title={`${project.path} · ${project.dir}`}>
-            {project.path} · {project.entries.length} {project.entries.length === 1 ? "note" : "notes"}
-          </span>
-          <span className="row-actions memory-project-actions">
-            <button type="button" className="ghost-button skill-reveal" disabled={busy} onClick={() => void apply(() => onReveal(project.dir))}>
-              Show in Finder
-            </button>
-            <button type="button" className="secondary-button memory-new" disabled={busy} onClick={() => void openEditor(project)}>
-              <Icon name="plus" /> New memory
-            </button>
-            {renderToggle(project.key, project.enabled, `Use memory in ${project.name}`, (next) => onSetProjectEnabled(project.key, next))}
-            <button
-              type="button"
-              className="ghost-button memory-remove"
-              aria-label={`Delete ${project.name}'s memory folder`}
-              title="Delete this memory folder"
-              disabled={busy}
-              onClick={() => setRemoving(project)}
-            >
-              <Icon name="trash" />
-            </button>
-          </span>
+      <span className="memory-project-actions">
+        <button
+          type="button"
+          className="command-icon-button memory-reveal"
+          aria-label={`Show ${project.name}'s memory folder in Finder`}
+          disabled={busy}
+          onClick={() => void apply(() => onReveal(project.dir))}
+        >
+          <Icon name="folder" />
+        </button>
+        <button
+          type="button"
+          className="command-icon-button"
+          aria-label={`Delete ${project.name}'s memory folder`}
+          disabled={busy}
+          onClick={() => setRemoving(project)}
+        >
+          <Icon name="trash" />
+        </button>
+        {renderToggle(project.key, project.enabled, `Use memory in ${project.name}`, (next) => onSetProjectEnabled(project.key, next))}
+      </span>
+    );
+  }
+
+  function renderProject(project: MemoryProject, index: number) {
+    const count = project.entries.length;
+    const kinds = MEMORY_TYPES
+      .map((type) => ({ ...type, count: project.entries.filter((entry) => entry.kind === type.value).length }))
+      .filter((type) => type.count > 0);
+    return (
+      <section
+        className={`settings-block memory-project ${project.enabled && overview?.enabled ? "" : "off"}`}
+        style={stagger(index)}
+        aria-label={`Memory for ${project.name}`}
+        key={project.key}
+      >
+        <header className="memory-project-head">
+          <span className="memory-project-mono" aria-hidden="true">{project.name.charAt(0).toUpperCase()}</span>
+          <div className="memory-project-title">
+            <h3 className="settings-block-title">{project.name}</h3>
+            <span className="memory-project-path" title={`${project.path} · ${project.dir}`}>
+              {project.path} · {count} {count === 1 ? "note" : "notes"}
+            </span>
+          </div>
+          {renderFolderActions(project)}
+        </header>
+        <ul className="memory-kinds" aria-label={`${project.name}'s notes by type`}>
+          {kinds.map((kind) => (
+            <li key={kind.value} data-type={kind.value}><i aria-hidden="true" />{kind.count} {kind.label.toLowerCase()}</li>
+          ))}
+        </ul>
+        <div className="command-list">
+          <AnimatePresence initial={false}>
+            {project.entries.map((entry) => renderEntry(entry, project))}
+          </AnimatePresence>
         </div>
-        {project.entries.length === 0 ? (
-          <div className="package-empty memory-empty">
-            <span className="package-empty-icon"><Icon name="memory" /></span>
-            <h4>No memories yet</h4>
-            <p>The agent saves a note here when something is worth keeping for future chats — a preference, a correction, a decision. It decides; you can edit or delete what it writes.</p>
-          </div>
-        ) : (
-          <div className="command-list">
-            <AnimatePresence initial={false}>
-              {project.entries.map((entry) => renderEntry(entry, project))}
-            </AnimatePresence>
-          </div>
-        )}
+        <button type="button" className="memory-add" disabled={busy} onClick={() => void openEditor(project)}>
+          <Icon name="plus" /> New memory
+        </button>
       </section>
     );
   }
 
+  /** Projects without a note yet share one card, so an empty folder costs a row, not a page. */
+  function renderWaiting(projects: MemoryProject[], index: number) {
+    return (
+      <section className="settings-block memory-waiting" style={stagger(index)} aria-labelledby="memory-waiting-title">
+        <h3 className="settings-block-title" id="memory-waiting-title">Waiting for a first note</h3>
+        <p className="settings-block-sub">
+          The agent saves a note when something is worth keeping for future chats: a preference, a correction, a decision.
+          It decides; you can edit or delete what it writes, or write one yourself.
+        </p>
+        <ul className="memory-waiting-list">
+          {projects.map((project) => (
+            <li key={project.key} className={project.enabled && overview?.enabled ? "" : "off"} aria-label={`Memory for ${project.name}`}>
+              <span className="memory-project-mono" aria-hidden="true">{project.name.charAt(0).toUpperCase()}</span>
+              <div className="memory-waiting-text">
+                <strong>{project.name}</strong>
+                <span title={`${project.path} · ${project.dir}`}>{project.path}</span>
+              </div>
+              <button
+                type="button"
+                className="ghost-button memory-write"
+                aria-label={`New memory in ${project.name}`}
+                disabled={busy}
+                onClick={() => void openEditor(project)}
+              >
+                <Icon name="plus" /> Write one
+              </button>
+              {renderFolderActions(project)}
+            </li>
+          ))}
+        </ul>
+      </section>
+    );
+  }
+
+  const projects = overview?.projects ?? [];
+  const noted = projects.filter((project) => project.entries.length > 0);
+  const waiting = projects.filter((project) => project.entries.length === 0);
+  const total = noted.reduce((sum, project) => sum + project.entries.length, 0);
+  const on = overview?.enabled ?? false;
+  const pill = !overview ? "Reading…" : !on ? "Off" : total === 0 ? "No notes yet" : `${total} ${total === 1 ? "note" : "notes"}`;
+
   return (
     <div className="settings-scroll subagents-settings commands-settings memory-settings">
-      {view.kind === "list" && (
-        <div className="section-heading-row">
-          <div>
-            <h3>Memory</h3>
-            <p>
-              Notes the agent keeps for itself, per project — small things AGENTS.md files don&rsquo;t say, like a
-              correction or a decision with a tricky edge. A one-line index of titles rides along in every chat;
-              the agent reads a note&rsquo;s full text only when it looks relevant. Switches apply to running chats
-              from their next message.
-            </p>
-          </div>
-          <div className="row-actions">
-            {overview && renderToggle("memory-master", overview.enabled, "Memory", async (next) => { await onSetEnabled(next); setOverview((current) => current ? { ...current, enabled: next } : current); })}
-          </div>
-        </div>
-      )}
-      {error && <div className="error-banner subagents-error" role="alert">{error}</div>}
-      {view.kind === "list" && (loading && !overview ? (
-        <div className="model-empty">Reading your memories…</div>
-      ) : !overview || overview.projects.length === 0 ? (
-        <div className="package-empty memory-first-empty">
-          <span className="package-empty-icon"><Icon name="memory" /></span>
-          <h4>No memories yet</h4>
+      <div className="settings-page">
+        <SettingsHero
+          label="Memory overview"
+          stage={<MemoryStage live={on} />}
+          live={on}
+          pill={pill}
+          title={`What ${agentName} remembers`}
+          action={overview && (
+            <span className="settings-hero-switch">
+              <span aria-hidden="true">Use memory</span>
+              {renderToggle("memory-master", on, "Use memory", async (next) => { await onSetEnabled(next); setOverview((current) => current ? { ...current, enabled: next } : current); })}
+            </span>
+          )}
+        >
           <p>
-            Open a chat in a project and ask it to remember something. Each repository gets its own folder of
-            notes here — shared by every worktree, machine-local, never inside the project.
+            Notes the agent keeps for itself, per project. Chats carry an index of their titles and read a note only when it
+            looks relevant. Switches apply from a chat&rsquo;s next message.
           </p>
-        </div>
-      ) : (
-        <>
-          {!overview.enabled && (
-            <div className="package-notice" role="status">
-              Memory is switched off. The agent keeps nothing and its memory tools are withdrawn from every chat.
-            </div>
-          )}
-          {overview.projects.map(renderProject)}
-        </>
-      ))}
-      {view.kind === "edit" && (
-        <MemoryEditor
-          draft={view.draft}
-          project={view.project}
-          isNew={!view.path}
-          issue={memoryDraftIssue(view.draft, takenNames, view.original)}
-          busy={busy}
-          onChange={(draft) => setView({ ...view, draft })}
-          onCancel={() => { setView({ kind: "list" }); setError(undefined); }}
-          onSave={() => void apply(
-            () => onSave({
-              path: view.path,
-              dir: view.dir,
-              name: view.draft.name.trim(),
-              memoryType: view.draft.memoryType,
-              title: view.draft.title.trim(),
-              description: view.draft.description.trim(),
-              body: view.draft.body
-            }),
-            () => setView({ kind: "list" })
-          )}
-        />
-      )}
+        </SettingsHero>
+        {error && <div className="error-banner" role="alert">{error}</div>}
+        {view.kind === "list" && overview && !on && (
+          <div className="package-notice" role="status">
+            Memory is switched off. The agent keeps nothing and its memory tools are withdrawn from every chat.
+          </div>
+        )}
+        {view.kind === "list" && (loading && !overview ? (
+          <section className="settings-block memory-loading" style={stagger(1)}>Reading your memories…</section>
+        ) : projects.length === 0 ? (
+          <section className="settings-block" style={stagger(1)} aria-labelledby="memory-empty-title">
+            <h3 className="settings-block-title" id="memory-empty-title">No memories yet</h3>
+            <p className="settings-block-sub">
+              Open a chat in a project and ask it to remember something. Each repository gets its own folder of notes here,
+              shared by every worktree, machine-local, never inside the project.
+            </p>
+            <ol className="memory-steps">
+              {MEMORY_STEPS.map((step, index) => (
+                <li key={step.title}>
+                  <span className="memory-step-mark" aria-hidden="true"><Icon name={step.icon} /><b>{index + 1}</b></span>
+                  <strong>{step.title}</strong>
+                  <span>{step.detail}</span>
+                </li>
+              ))}
+            </ol>
+          </section>
+        ) : (
+          <>
+            {noted.map((project, index) => renderProject(project, index + 1))}
+            {waiting.length > 0 && renderWaiting(waiting, noted.length + 1)}
+          </>
+        ))}
+        {view.kind === "edit" && (
+          <MemoryEditor
+            draft={view.draft}
+            project={view.project}
+            isNew={!view.path}
+            issue={memoryDraftIssue(view.draft, takenNames, view.original)}
+            busy={busy}
+            onChange={(draft) => setView({ ...view, draft })}
+            onCancel={() => { setView({ kind: "list" }); setError(undefined); }}
+            onSave={() => void apply(
+              () => onSave({
+                path: view.path,
+                dir: view.dir,
+                name: view.draft.name.trim(),
+                memoryType: view.draft.memoryType,
+                title: view.draft.title.trim(),
+                description: view.draft.description.trim(),
+                body: view.draft.body
+              }),
+              () => setView({ kind: "list" })
+            )}
+          />
+        )}
+      </div>
 
       {deleting && (
         <ConfirmDialog
@@ -386,6 +504,10 @@ function MemoryEditor({ draft, project, isNew, issue, busy, onChange, onCancel, 
       transition={reduce ? { duration: 0 } : { duration: 0.25, ease: EASE }}
     >
       <div className="subagent-editor">
+        <div>
+          <h3 className="settings-block-title">{isNew ? "New memory" : "Edit memory"}</h3>
+          <p className="settings-block-sub memory-editor-sub">In {project}&rsquo;s memory folder. Chats pick it up from their next message.</p>
+        </div>
         <div className="form-grid">
           <label>
             <span>Type <small>What kind of note this is; the index groups by it.</small></span>
@@ -439,7 +561,6 @@ function MemoryEditor({ draft, project, isNew, issue, busy, onChange, onCancel, 
         </div>
         {shownIssue && <p className="subagent-issue command-editor-issue" role="status">{shownIssue}</p>}
         <div className="subagent-editor-actions">
-          <small className="subagent-hint">Saved to {project}&rsquo;s memory</small>
           <span className="subagent-editor-spacer" />
           <button type="button" className="secondary-button" disabled={busy} onClick={onCancel}>Cancel</button>
           <button type="button" className="primary-button" disabled={busy || Boolean(issue)} onClick={onSave}>

@@ -90,9 +90,12 @@ function renderTools(overrides: { disabled?: string[]; onSetDisabledTools?: (nex
 }
 
 describe("SettingsPage tools section", () => {
-  it("groups built-ins separately from package tools", () => {
+  it("groups Pi's tools by what they do, apart from package tools", () => {
     renderTools();
-    expect(screen.getByRole("heading", { name: "Built-in" })).toBeInTheDocument();
+    const looking = screen.getByRole("region", { name: "Looking around" });
+    expect(within(looking).getByText("Read files")).toBeInTheDocument();
+    expect(within(looking).getByText("Find files by name")).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Making changes" })).getByText("Run commands")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "npm:pi-web-access" })).toBeInTheDocument();
   });
 
@@ -114,7 +117,14 @@ describe("SettingsPage tools section", () => {
     const find = screen.getByRole("switch", { name: "find" });
     expect(find).toBeDisabled();
     expect(find).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByText("Requires fd, which is not installed")).toBeInTheDocument();
+    expect(screen.getByText(/Needs fd, which isn't installed/)).toBeInTheDocument();
+    expect(screen.getByText("brew install fd")).toBeInTheDocument();
+  });
+
+  it("opens the sections where the app's own tools are set up", () => {
+    renderTools();
+    fireEvent.click(screen.getByRole("button", { name: /^Built-ins/ }));
+    expect(screen.getByRole("heading", { level: 2, name: "Packages" })).toBeInTheDocument();
   });
 
   it("surfaces a failed save instead of silently reverting", async () => {
@@ -571,7 +581,7 @@ describe("SettingsPage MCP servers", () => {
 
     fireEvent.click(within(nav).getByRole("button", { name: "MCP servers" }));
     expect(screen.getByRole("heading", { level: 2, name: "MCP servers" })).toBeInTheDocument();
-    expect(screen.getByText(/No MCP servers yet/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "No servers yet" })).toBeInTheDocument();
 
     fireEvent.click(within(nav).getByRole("button", { name: "Packages" }));
     fireEvent.click(within(screen.getByRole("switch", { name: "MCP servers" }).closest("article")!).getByRole("button", { name: /Configure/ }));

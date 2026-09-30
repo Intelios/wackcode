@@ -469,6 +469,16 @@ export function groupTools(catalog: ToolCatalogEntry[]): ToolGroup[] {
 }
 
 /**
+ * A tool description's opening sentence, for Settings › Tools. Descriptions are written for the
+ * model and go on to limits and usage rules; the first sentence is usually what the tool does.
+ */
+export function firstSentence(text: string): string {
+  const trimmed = text.trim().replace(/\s+/g, " ");
+  const match = /^.+?[.!?](?=\s|$)/.exec(trimmed);
+  return match ? match[0] : trimmed;
+}
+
+/**
  * Drop names that are no longer in the catalogue. A denylist referencing a removed package's
  * tool is harmless but accumulates, and showing a stale count in Settings is confusing.
  */

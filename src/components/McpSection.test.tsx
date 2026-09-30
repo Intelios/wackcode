@@ -34,8 +34,10 @@ function renderSection(servers: McpServerRecord[] = [github, remote], testResult
 describe("McpSection", () => {
   it("adds a stdio server with one argument per line and a secret variable, then tests it", async () => {
     const actions = renderSection([]);
-    expect(screen.getByText(/No MCP servers yet/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "No servers yet" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /New server/ }));
+    // The empty state gives way to the editor.
+    expect(screen.queryByRole("heading", { name: "No servers yet" })).not.toBeInTheDocument();
     const add = screen.getByRole("button", { name: "Add server" });
     expect(add).toBeDisabled();
 
@@ -55,6 +57,26 @@ describe("McpSection", () => {
       headers: [], env: [{ name: "API_TOKEN", value: "s3cret" }]
     });
     await waitFor(() => expect(actions.onTestMcpServer).toHaveBeenCalledWith("mcp-new"));
+  });
+
+  it("starts a server from the empty state with the transport its tile names", () => {
+    renderSection([]);
+    fireEvent.click(screen.getByRole("button", { name: /A server at a URL/ }));
+    expect(screen.getByRole("radio", { name: "HTTP" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByPlaceholderText("https://example.com/mcp")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: /A command on your Mac/ }));
+    expect(screen.getByRole("radio", { name: "stdio" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("says in the hero how many servers are switched on", () => {
+    renderSection();
+    const hero = screen.getByRole("region", { name: "MCP servers overview" });
+    expect(within(hero).getByText("1 of 2 on")).toBeInTheDocument();
+    expect(within(hero).getByRole("heading", { name: "Plug more tools into WackCode" })).toBeInTheDocument();
+    cleanup();
+    renderSection([]);
+    expect(within(screen.getByRole("region", { name: "MCP servers overview" })).getByText("No servers")).toBeInTheDocument();
   });
 
   it("keeps a saved header when its value is left blank, and needs a valid timeout", async () => {

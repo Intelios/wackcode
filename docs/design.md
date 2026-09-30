@@ -38,6 +38,7 @@ Test a new surface in at least the default, Mono and one colourful preset, with 
 - **Primitives** (`src/components/ui/`): `ConfirmDialog` (use `danger` for destructive actions), `Menu` / `MenuButton`, `Popover`, `Select`, `Tooltip`, `Checkbox` (a native checkbox, tri-state, with a drawn tick), `ImageLightbox`, and `useConfirmAction` (the sidebar's two-click "Delete?" arm).
 - **Buttons** (`styles.css`): `.primary-button`, `.secondary-button`, `.danger-button` (add `.compact` for dense rows), `.icon-button`, `.ghost-button`, `.text-button`, `.panel-button` in the chat header.
 - **Icons** (`Icons.tsx`): one hand-drawn set on a 24px grid, 1.8 stroke, round caps, `currentColor`. Add a path and a name to `IconName`; don't pull in an icon library.
+- **Settings pages** take the finished shape: a centred `.settings-page` column that opens with `SettingsHero` (an illustrated stage whose loop shows the page's state, a status pill, the page's main switch or action) and continues in solid `.settings-block` cards. Tools, MCP servers and Memory use the shared parts; Computer use and Prompts have the same shape in their own classes. An empty state explains the feature and offers the ways in, rather than one grey line.
 - **The agent asking the user** (questions, extension dialogs, the computer-use access card) renders inline above the composer (`InlineDialog`), not as a modal. Live status (goal loop, computer use) goes in a banner above the composer.
 
 ## Interaction and accessibility

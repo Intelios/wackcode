@@ -54,6 +54,7 @@ const MEMORY_ACTIONS: Omit<MemoryActions, "onSetEnabled"> = {
   onRead: api.readMemory,
   onSave: api.saveMemory,
   onDelete: api.deleteMemory,
+  onRemoveProject: api.removeMemoryProject,
   onSetProjectEnabled: api.setProjectMemoryEnabled,
   onReveal: api.revealPath,
   onFindFile: api.findMemoryInFinder

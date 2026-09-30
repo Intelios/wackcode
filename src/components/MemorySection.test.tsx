@@ -39,6 +39,7 @@ function renderSection(start: MemoriesOverview = overview) {
     onRead: vi.fn().mockResolvedValue({ body: "Protocol edits need pnpm test:worker." }),
     onSave: vi.fn().mockResolvedValue(change()),
     onDelete: vi.fn().mockResolvedValue(change()),
+    onRemoveProject: vi.fn().mockResolvedValue(change({ enabled: true, projects: [] })),
     onSetProjectEnabled: vi.fn().mockResolvedValue(change()),
     onReveal: vi.fn().mockResolvedValue(undefined),
     onFindFile: vi.fn().mockResolvedValue(undefined),
@@ -100,6 +101,15 @@ describe("Settings › Memory", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Move to Trash" }));
     await waitFor(() =>
       expect(actions.onDelete).toHaveBeenCalledWith("/app data/memory/wackcode-abc123456789/user_prefers.md"));
+  });
+
+  it("removes a project's whole folder through the confirm dialog", async () => {
+    const actions = renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Delete wackcode's memory folder" }));
+    expect(await screen.findByText(/2 notes move to the Trash with the folder/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Move to Trash" }));
+    await waitFor(() =>
+      expect(actions.onRemoveProject).toHaveBeenCalledWith("/app data/memory/wackcode-abc123456789"));
   });
 
   it("saves a new note under the name derived from its title", async () => {

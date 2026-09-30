@@ -449,15 +449,16 @@ pub fn delete_skill(home: &Path, path: &str) -> Result<(), String> {
         Some(folder) if is_skill_md && folder != library => folder.to_path_buf(),
         _ => file,
     };
-    move_to_trash(&target)
+    move_to_trash(&target, "skill")
 }
 
-pub(crate) fn move_to_trash(path: &Path) -> Result<(), String> {
+/// `what` names the thing in the user-facing error, so each caller's sentence stays true.
+pub(crate) fn move_to_trash(path: &Path, what: &str) -> Result<(), String> {
     use objc2_foundation::{NSFileManager, NSString, NSURL};
     let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
     NSFileManager::defaultManager()
         .trashItemAtURL_resultingItemURL_error(&url, None)
-        .map_err(|error| format!("Could not move the skill to the Trash: {}", error.localizedDescription()))
+        .map_err(|error| format!("Could not move the {what} to the Trash: {}", error.localizedDescription()))
 }
 
 /// The instructions and the folder's other files, for the editor.

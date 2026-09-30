@@ -412,7 +412,21 @@ pub fn update(root: &Path, path: &str, name: &str, kind: &str, title: &str, desc
 
 /// Move a note file to the Trash.
 pub fn delete(root: &Path, path: &str) -> Result<(), String> {
-    crate::skills::move_to_trash(&memory_file(path, root)?)
+    crate::skills::move_to_trash(&memory_file(path, root)?, "memory")
+}
+
+/// Move one project's whole memory folder to the Trash: the directory Settings' scan reported,
+/// re-checked to be a real folder directly under the memory root. Returns its key so the
+/// config's per-project switch can leave `wackcode.json` with it — otherwise a removed
+/// project's key would linger there forever.
+pub fn remove_project(dir: &str, root: &Path) -> Result<String, String> {
+    let folder = project_dir(dir, root)?;
+    let key = folder
+        .file_name()
+        .and_then(|name| key_of_dir(&name.to_string_lossy()))
+        .ok_or_else(|| "That memory folder is not recognised.".to_string())?;
+    crate::skills::move_to_trash(&folder, "memory folder")?;
+    Ok(key)
 }
 
 /// A note file `open -R` may point at: the same guard as an edit, minus the is-file check's
@@ -590,5 +604,24 @@ mod tests {
         set_project_disabled(&mut config, "abc123456789", true).unwrap();
         assert!(config.disabled_projects.is_empty());
         assert!(set_project_disabled(&mut config, "not-a-key", true).is_err());
+    }
+
+    #[test]
+    fn removes_a_project_folder_and_returns_its_key() {
+        let (temp, root) = root();
+        fs::create_dir_all(&root).unwrap();
+        // The folder a scan of a removed project reports: `<label>-<key>` under the memory root.
+        let folder = root.join(dir_name("abc123456789", "Old Project"));
+        create(&folder, "feedback_note", "feedback", "T", "", "b").unwrap();
+        assert_eq!(remove_project(folder.to_str().unwrap(), &root).unwrap(), "abc123456789");
+        assert!(!folder.exists());
+        // Only a directory the scan itself could list goes: nothing outside the memory root…
+        assert!(remove_project("/etc", &root).is_err());
+        // …and nothing whose name does not carry a key.
+        let loose = root.join("not-a-key");
+        fs::create_dir_all(&loose).unwrap();
+        assert!(remove_project(loose.to_str().unwrap(), &root).is_err());
+        assert!(loose.exists());
+        let _ = temp;
     }
 }

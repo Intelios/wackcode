@@ -3662,6 +3662,7 @@ label > span small.mcp-invalid { color: var(--warning); }
 .memory-settings .section-heading-row { margin-bottom: 18px; }
 .memory-project-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .memory-new { white-space: nowrap; }
+.memory-remove:hover { color: var(--danger); background: var(--danger-bg); }
 .memory-when { color: var(--text-faint); font-size: 10.5px; }
 /* The four kinds of note, told apart at a glance with the theme's own hues. */
 .memory-type-badge { text-transform: capitalize; }

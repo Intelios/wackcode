@@ -146,6 +146,7 @@ pub fn run() {
             commands::read_memory,
             commands::save_memory,
             commands::delete_memory,
+            commands::remove_memory_project,
             commands::set_memory_config,
             commands::set_project_memory_enabled,
             commands::find_memory_in_finder,

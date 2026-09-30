@@ -156,6 +156,8 @@ export const api = {
   saveMemory: (input: SaveMemoryInput) => invoke<MemoriesChange>("save_memory", { input }),
   /** Moves the note's file to the Trash. */
   deleteMemory: (path: string) => invoke<MemoriesChange>("delete_memory", { path }),
+  /** Moves a whole project's memory folder — notes and all — to the Trash. */
+  removeMemoryProject: (dir: string) => invoke<MemoriesChange>("remove_memory_project", { dir }),
   setMemoryConfig: (input: MemoryConfig) => invoke<MemoryConfig>("set_memory_config", { input }),
   setProjectMemoryEnabled: (key: string, enabled: boolean) =>
     invoke<MemoriesChange>("set_project_memory_enabled", { key, enabled }),

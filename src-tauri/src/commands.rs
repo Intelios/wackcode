@@ -1734,6 +1734,23 @@ pub async fn delete_memory(app: AppHandle, path: String) -> Result<MemoriesChang
     memory_changed(&app).await
 }
 
+/// Move a whole project's memory folder — notes and all — to the Trash. The folder a removed
+/// project leaves behind has no other way out of Settings; a project still added gets a fresh
+/// empty folder back on its next run.
+#[tauri::command]
+pub async fn remove_memory_project(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    dir: String,
+) -> Result<MemoriesChange, String> {
+    let key = memory::remove_project(&dir, &memory::dir(&app)?)?;
+    state.mutate(|data| {
+        data.memory.disabled_projects.retain(|entry| entry != &key);
+        Ok(())
+    })?;
+    memory_changed(&app).await
+}
+
 /// Show one note in Finder, selected inside its project's memory folder.
 #[tauri::command]
 pub fn find_memory_in_finder(app: AppHandle, path: String) -> Result<(), String> {

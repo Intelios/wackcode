@@ -25,6 +25,8 @@ export interface MemoryActions {
   onRead: (path: string) => Promise<MemoryDocument>;
   onSave: (input: SaveMemoryInput) => Promise<MemoriesChange>;
   onDelete: (path: string) => Promise<MemoriesChange>;
+  /** Moves a whole project's folder — notes and all — to the Trash. */
+  onRemoveProject: (dir: string) => Promise<MemoriesChange>;
   onSetProjectEnabled: (key: string, enabled: boolean) => Promise<MemoriesChange>;
   /** Opens the project's memory folder itself. */
   onReveal: (path: string) => Promise<void>;
@@ -71,7 +73,7 @@ function nameSuggestion(type: MemoryType, title: string): string {
  * per-project switches apply to running chats on their next turn; file edits do too, because
  * the worker re-reads the directory before every run.
  */
-export function MemorySection({ onList, onRead, onSave, onDelete, onSetProjectEnabled, onReveal, onFindFile, onSetEnabled }: MemoryActions) {
+export function MemorySection({ onList, onRead, onSave, onDelete, onRemoveProject, onSetProjectEnabled, onReveal, onFindFile, onSetEnabled }: MemoryActions) {
   const reduce = useReducedMotion();
   const [overview, setOverview] = useState<MemoriesOverview>();
   const [loading, setLoading] = useState(true);
@@ -79,6 +81,7 @@ export function MemorySection({ onList, onRead, onSave, onDelete, onSetProjectEn
   const [error, setError] = useState<string>();
   const [view, setView] = useState<View>({ kind: "list" });
   const [deleting, setDeleting] = useState<{ entry: MemoryEntry; project: string }>();
+  const [removing, setRemoving] = useState<MemoryProject>();
   const [opening, setOpening] = useState<string>();
 
   useEffect(() => {
@@ -220,6 +223,16 @@ export function MemorySection({ onList, onRead, onSave, onDelete, onSetProjectEn
               <Icon name="plus" /> New memory
             </button>
             {renderToggle(project.key, project.enabled, `Use memory in ${project.name}`, (next) => onSetProjectEnabled(project.key, next))}
+            <button
+              type="button"
+              className="ghost-button memory-remove"
+              aria-label={`Delete ${project.name}'s memory folder`}
+              title="Delete this memory folder"
+              disabled={busy}
+              onClick={() => setRemoving(project)}
+            >
+              <Icon name="trash" />
+            </button>
           </span>
         </div>
         {project.entries.length === 0 ? (
@@ -316,6 +329,27 @@ export function MemorySection({ onList, onRead, onSave, onDelete, onSetProjectEn
             setDeleting(undefined);
           }}
           onCancel={() => setDeleting(undefined)}
+        />
+      )}
+
+      {removing && (
+        <ConfirmDialog
+          title={`Delete “${removing.name}”’s memory?`}
+          body={
+            removing.entries.length > 0
+              ? `Its ${removing.entries.length} ${removing.entries.length === 1 ? "note moves" : "notes move"} to the Trash with the folder.`
+                + " If this project is still added, a fresh empty folder appears the next time the agent saves a note."
+              : "The folder is removed. If this project is still added, a fresh empty folder appears the next time the agent saves a note."
+          }
+          confirmLabel="Move to Trash"
+          danger
+          onConfirm={async () => {
+            const change = await onRemoveProject(removing.dir);
+            setOverview(change.overview);
+            setView({ kind: "list" });
+            setRemoving(undefined);
+          }}
+          onCancel={() => setRemoving(undefined)}
         />
       )}
     </div>

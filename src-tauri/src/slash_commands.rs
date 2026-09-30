@@ -217,7 +217,7 @@ pub fn update(dir: &Path, path: &str, name: &str, description: &str, hint: &str,
 
 /// Move a command file to the Trash.
 pub fn delete(dir: &Path, path: &str) -> Result<(), String> {
-    crate::skills::move_to_trash(&command_file(path, dir)?)
+    crate::skills::move_to_trash(&command_file(path, dir)?, "command")
 }
 
 /// The template's body, for the editor.

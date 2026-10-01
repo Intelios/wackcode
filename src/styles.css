@@ -1157,7 +1157,7 @@ button.reasoning-toggle.at-max .reasoning-toggle-label {
 /* ── UI primitives ─────────────────────────────────── */
 .popover {
   background: var(--wc-elevated); border: 1px solid var(--border-bright); border-radius: 10px;
-  box-shadow: var(--shadow-pop); overflow: hidden; animation: pop-in .12s var(--ease);
+  box-shadow: var(--shadow-pop); overflow: hidden auto; animation: pop-in .12s var(--ease);
 }
 .context-menu {
   position: fixed; z-index: 300; max-width: calc(100vw - 16px);

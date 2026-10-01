@@ -25,30 +25,20 @@ export function Popover({ anchor, open, onClose, side = "bottom", align = "start
       if (!anchorEl || !panel) return;
       const rect = anchorEl.getBoundingClientRect();
       const panelRect = panel.getBoundingClientRect();
+      // Full content height in layout px: ignores an earlier maxHeight clamp and the pop-in scale.
+      const height = panel.scrollHeight + panel.offsetHeight - panel.clientHeight;
       const margin = 8;
       const spaceBelow = window.innerHeight - (rect.bottom + offset) - margin;
       const spaceAbove = rect.top - offset - margin;
 
-      let top: number;
-      let maxHeight: number | undefined;
-
-      if (side === "bottom") {
-        if (spaceBelow < 120 && spaceAbove > spaceBelow) {
-          top = Math.max(margin, rect.top - panelRect.height - offset);
-          maxHeight = Math.max(100, spaceAbove);
-        } else {
-          top = rect.bottom + offset;
-          maxHeight = Math.max(100, spaceBelow);
-        }
-      } else {
-        if (spaceAbove < 120 && spaceBelow > spaceAbove) {
-          top = rect.bottom + offset;
-          maxHeight = Math.max(100, spaceBelow);
-        } else {
-          top = Math.max(margin, rect.top - panelRect.height - offset);
-          maxHeight = Math.max(100, spaceAbove);
-        }
-      }
+      // Open on the preferred side when the panel fits there, else on whichever side has more room.
+      const fitsBelow = height <= spaceBelow;
+      const fitsAbove = height <= spaceAbove;
+      const below = side === "bottom"
+        ? fitsBelow || (!fitsAbove && spaceBelow >= spaceAbove)
+        : !fitsAbove && (fitsBelow || spaceBelow > spaceAbove);
+      const maxHeight = Math.max(100, below ? spaceBelow : spaceAbove);
+      const top = below ? rect.bottom + offset : Math.max(margin, rect.top - Math.min(height, maxHeight) - offset);
 
       let left = align === "end" ? rect.right - panelRect.width : align === "center" ? rect.left + rect.width / 2 - panelRect.width / 2 : rect.left;
       left = Math.max(margin, Math.min(left, window.innerWidth - panelRect.width - margin));

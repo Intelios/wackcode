@@ -40,6 +40,7 @@
   "bundle": {
     "active": true,
     "targets": ["app"],
+    "icon": ["icons/icon.icns", "icons/icon.png"],
     "externalBin": ["binaries/wackcode-node"],
     "resources": ["resources/worker", "resources/npm"],
     "copyright": "Copyright © 2026 Jack",

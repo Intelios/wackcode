@@ -27,6 +27,10 @@ use tokio::{
 
 const PROVIDER_ENVIRONMENT_KEYS: &[&str] = &[
     "ANTHROPIC_API_KEY",
+    // Anthropic workload identity federation (Pi 0.99.2+): an env-sourced credential route.
+    "ANTHROPIC_FEDERATION_RULE_ID",
+    "ANTHROPIC_ORGANIZATION_ID",
+    "ANTHROPIC_IDENTITY_TOKEN_FILE",
     "OPENAI_API_KEY",
     "OPENROUTER_API_KEY",
     "GEMINI_API_KEY",

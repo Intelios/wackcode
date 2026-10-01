@@ -872,8 +872,8 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .composer-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px 8px 10px; gap: 8px; }
 .composer-left { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .composer-right { display: flex; align-items: center; gap: 10px; }
-.composer-stats { display: grid; place-items: center; width: 26px; height: 26px; border: 0; background: transparent; padding: 0; border-radius: 7px; cursor: pointer; }
-.composer-stats:hover, .composer-stats.active { background: var(--surface); }
+.composer-stats { display: grid; place-items: center; flex: 0 0 auto; width: 28px; height: 28px; border: 0; background: transparent; padding: 0; border-radius: 7px; cursor: pointer; transition: background .12s var(--ease); }
+.composer-stats:hover, .composer-stats.active { background: var(--surface-hover); }
 .composer-stats .context-ring { transition: transform 0.25s var(--ease); }
 .composer-stats:hover .context-ring, .composer-stats.active .context-ring { transform: scale(1.12); }
 .composer-header { max-width: 760px; margin: 0 auto 8px; }

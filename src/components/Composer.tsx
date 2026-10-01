@@ -568,6 +568,7 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
                   popoverSide={popoverSide}
                   onConfigure={onConfigure}
                 />
+                {stats && <ContextPanel stats={stats} popoverSide={popoverSide} />}
                 <ReasoningToggle
                   providers={providers}
                   providerId={providerId}
@@ -582,7 +583,6 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
             )}
           </div>
           <div className="composer-right">
-            {stats && <ContextPanel stats={stats} />}
             {busy ? (
               <Tooltip label={status === "stopping" ? "Stopping…" : "Stop"}>
                 <button type="button" className="send-button stop" onClick={onStop} disabled={status === "stopping"} aria-label="Stop">

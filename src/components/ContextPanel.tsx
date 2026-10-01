@@ -35,7 +35,7 @@ export function ContextRing({ percent, size = 16, children }: { percent: number 
   );
 }
 
-export function ContextPanel({ stats }: { stats: Stats }) {
+export function ContextPanel({ stats, popoverSide = "top" }: { stats: Stats; popoverSide?: "top" | "bottom" }) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -73,7 +73,7 @@ export function ContextPanel({ stats }: { stats: Stats }) {
       >
         <ContextRing percent={percent} />
       </button>
-      <Popover anchor={triggerRef} open={open} onClose={() => setOpen(false)} side="top" align="end" className="context-pop">
+      <Popover anchor={triggerRef} open={open} onClose={() => setOpen(false)} side={popoverSide} align="center" offset={12} className="context-pop">
         <div className="context-panel" role="dialog" aria-label="Context window" onMouseEnter={show} onMouseLeave={scheduleHide}>
           <div className="context-hero">
             <ContextRing percent={percent} size={42}>

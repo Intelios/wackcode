@@ -37,6 +37,8 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: 24
+          # Its automatic cache looks for pnpm, which isn't installed until the next step.
+          package-manager-cache: false
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4

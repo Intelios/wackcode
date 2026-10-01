@@ -41,6 +41,7 @@ type SnapshotView = {
     to: { providerId: string; modelId: string };
   }>;
   modelMissing?: boolean;
+  modelIssue?: string;
   tree?: { leafId: string | null; undo?: string };
   runTimings?: Array<{ userMessageId: string; durationMs: number }>;
   activeRun?: { runId: string; startedAt: number };
@@ -1049,6 +1050,7 @@ describe("Pi worker integration", () => {
     });
     cleanup.push(() => degraded.worker.shutdown());
     expect(degraded.ready.snapshot?.modelMissing).toBe(true);
+    expect(degraded.ready.snapshot?.modelIssue).toBe("This chat's model is no longer configured. Pick another to continue.");
     expect(degraded.ready.snapshot?.messages.some((message) => message.role === "assistant")).toBe(true);
     expect(degraded.worker.outputs.filter((output) => output.type === "worker_error")).toEqual([]);
     expect(provider.requests).toHaveLength(servedRequests);
@@ -1073,6 +1075,7 @@ describe("Pi worker integration", () => {
     });
     cleanup.push(() => repaired.worker.shutdown());
     expect(repaired.ready.snapshot?.modelMissing).toBeUndefined();
+    expect(repaired.ready.snapshot?.modelIssue).toBeUndefined();
     expect(repaired.ready.snapshot?.modelSwitches).toMatchObject([{
       from: { providerId: "provider-missing-model-task", modelId: "shared-model" },
       to: { providerId: "provider-missing-model-task", modelId: "alternate-model" }

@@ -817,6 +817,8 @@ export interface SessionSnapshot {
   model?: { provider: string; id: string; name?: string };
   /** True while the session runs on the stand-in for a model that left its connection. */
   modelMissing?: true;
+  /** With `modelMissing`: why, as a sentence the chat shows (the connection may be what failed). */
+  modelIssue?: string;
   tools: ToolCatalogEntry[];
   activeTools: string[];
   planState?: PlanState;

@@ -23,7 +23,9 @@ export function modelDefinition(model: WorkerModel): Record<string, unknown> {
   );
   return {
     id: model.id,
-    name: model.name,
+    // Settings lets a name stay blank (the ID shows instead), but Pi rejects a blank name and
+    // with it the whole models.json, so every model on the connection would vanish.
+    name: model.name.trim() || model.id,
     reasoning: model.reasoning,
     // Pi's own capability flag. Without "image", Pi replaces images with an "image omitted"
     // placeholder before the request is built, and `read` stops returning image content.
@@ -84,6 +86,27 @@ export async function findModel(runtime: ModelRuntime, provider: WorkerProvider,
   return provider.kind === "subscription"
     ? (await runtime.getAvailable(provider.id)).find((model) => model.id === modelId)
     : runtime.getModel(provider.id, modelId);
+}
+
+/** Shown wherever the user tries to make a model-less chat do model work. */
+export const MODEL_MISSING_MESSAGE = "This chat's model is no longer configured. Pick another to continue.";
+
+/**
+ * Why `findModel` came back empty. Pi drops a connection whose configuration it rejects, which
+ * makes every model on it look deleted; that case names the connection and Pi's reason instead
+ * of blaming the model. The reason loses its file path and the connection's internal ID.
+ */
+export function missingModelMessage(runtime: ModelRuntime, provider: WorkerProvider): string {
+  const error = runtime.getError();
+  if (!error) return MODEL_MISSING_MESSAGE;
+  const reason = error.split("\n")
+    .map((line) => line.trim().replace(/^- /, ""))
+    .filter((line) => line && !line.startsWith("File:"))
+    .join(" ")
+    .replaceAll(`providers.${provider.id}.`, "")
+    .replaceAll(provider.id, provider.name)
+    .slice(0, 300);
+  return `${provider.name} couldn't be loaded (${reason}). Fix it in Settings › Providers, or pick another model.`;
 }
 
 /**

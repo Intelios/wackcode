@@ -2597,7 +2597,7 @@ export default function App() {
             {selectedModelGone && (
               <div className="model-missing-notice" role="status">
                 <span>!</span>
-                This chat's model is no longer configured. Pick another to continue.
+                {runtime?.snapshot?.modelIssue ?? "This chat's model is no longer configured. Pick another to continue."}
               </div>
             )}
             {runtime?.notices?.map((entry, index) => (

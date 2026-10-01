@@ -15,7 +15,7 @@ import { runGoalVerification } from "./builtin/goal/verify.js";
 import type { BuiltinHost, SubagentOutcome } from "./builtin/host.js";
 import { normalizeMessage as normalizeSavedMessage, textFromContent, THUMBNAIL_OPTIONS, THUMBNAIL_RESULT_TOOLS } from "./message-normalization.js";
 import { SUBAGENT_TOOL_NAME } from "./builtin/subagents/types.js";
-import { createModelRuntime, findModel, missingModelPlaceholder, workerSettings, type PiModel } from "./model-runtime.js";
+import { createModelRuntime, findModel, MODEL_MISSING_MESSAGE, missingModelMessage, missingModelPlaceholder, workerSettings, type PiModel } from "./model-runtime.js";
 import { promptOverrides, setPromptOverrides } from "./prompt-overrides.js";
 import { SubagentRunner } from "./subagent-runner.js";
 import { SubagentStreams, isSubagentTranscript } from "./subagent-stream.js";
@@ -99,6 +99,8 @@ let piModule: PiModule | undefined;
 let modelRuntime: ModelRuntime | undefined;
 /** The stand-in session model while the chat's configured model is gone; see `missingModelPlaceholder`. */
 let missingModel: PiModel | undefined;
+/** Why `missingModel` stands in: the sentence the snapshot and every refused run carry. */
+let missingModelReason = MODEL_MISSING_MESSAGE;
 let activeRun: {
   runId: string;
   startedAt: number;
@@ -617,7 +619,7 @@ function getSnapshot(rev: number): SessionSnapshot {
     thinkingLevel: session.thinkingLevel as ThinkingLevel,
     availableThinkingLevels: session.getAvailableThinkingLevels() as ThinkingLevel[],
     model: model ? { provider: model.provider, id: model.id, name: model.name } : undefined,
-    ...(chatModelMissing() ? { modelMissing: true } : {}),
+    ...(chatModelMissing() ? { modelMissing: true, modelIssue: missingModelReason } : {}),
     tools: toolCatalog(),
     activeTools: session.getActiveToolNames(),
     planState: builtins.planMode.getState(),
@@ -978,9 +980,6 @@ function refreshUserCommands(): boolean {
   return true;
 }
 
-/** Shown wherever the user tries to make a model-less chat do model work. */
-const MODEL_MISSING_MESSAGE = "This chat's model is no longer configured. Pick another to continue.";
-
 /**
  * True while the session runs on the stand-in for a model that left its connection: the chat
  * reads (transcript, tree, checkpoints) but nothing that needs the model may run. Identity, not
@@ -1011,6 +1010,7 @@ async function initialize(command: InitCommand): Promise<void> {
   // picks another model (which respawns the worker through `configure_task`).
   const selectedModel = await findModel(modelRuntime, command.provider, command.modelId);
   missingModel = selectedModel ? undefined : missingModelPlaceholder(command.provider, command.modelId);
+  if (!selectedModel) missingModelReason = missingModelMessage(modelRuntime, command.provider);
   const sessionModel = selectedModel ?? missingModel;
   subagentRunner = new SubagentRunner({
     pi,
@@ -1336,7 +1336,7 @@ async function runPrompt(
   commandPresentation?: CommandPresentation
 ): Promise<PromptOutcome> {
   if (!session || !taskId) throw new Error("Worker is not initialized");
-  if (chatModelMissing()) throw new Error(MODEL_MISSING_MESSAGE);
+  if (chatModelMissing()) throw new Error(missingModelReason);
   stopRequested = false;
   continuingGoalRunId = undefined;
   let outcome: PromptOutcome = "failed";
@@ -1544,7 +1544,7 @@ async function handle(command: WorkerCommand): Promise<void> {
       }
       return;
     } else if (command.type === "compact") {
-      if (chatModelMissing()) throw new Error(MODEL_MISSING_MESSAGE);
+      if (chatModelMissing()) throw new Error(missingModelReason);
       if (session.sessionManager.getBranch().filter((entry) => entry.type === "message" && entry.message.role === "user").length < 2) {
         throw new Error("There is not enough conversation to compact yet.");
       }

@@ -757,7 +757,15 @@ export default function App() {
             }
           }));
         } else if (payload.state === "idle" || payload.state === "interrupted") {
-          patchRuntime(taskId, { activeRun: undefined, activity: undefined, liveToolText: {}, liveToolDetails: {} });
+          setRuntimes((current) => ({
+            ...current,
+            [taskId]: {
+              ...current[taskId], activeRun: undefined, activity: undefined, liveToolText: {}, liveToolDetails: {},
+              // A crashed worker cannot send the child's final frame. Keep its transcript, but
+              // stop live reasoning timers along with the parent run.
+              ...(current[taskId]?.subagentView ? { subagentView: { ...current[taskId].subagentView, live: false } } : {})
+            }
+          }));
         }
       } else if (payload.type === "run_finished") {
         // The native menu owns recent-run outcomes; the transcript already reflects the result.

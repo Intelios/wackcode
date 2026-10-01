@@ -87,6 +87,34 @@ describe("Transcript thinking", () => {
     expect(screen.getByText("Weighing the options")).toBeInTheDocument();
   });
 
+  it("passes the worker's block start to the live timer and switches to the measured final duration", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const view = render(<Transcript messages={[user]} running partial={streamed([{ type: "thinking", text: "", startedAt: 8_000 }])} />);
+    expect(screen.getByRole("button", { name: "Thinking… 2s" })).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(3_000));
+    expect(screen.getByRole("button", { name: "Thinking… 5s" })).toBeInTheDocument();
+    view.rerender(<Transcript messages={[user]} running partial={streamed([
+      { type: "thinking", text: "Done", durationMs: 5_100 }, { type: "text", text: "Answer" }
+    ])} />);
+    expect(screen.getByRole("button", { name: "Thought for 5s" })).toBeInTheDocument();
+    expect(screen.queryByText("Thinking…")).not.toBeInTheDocument();
+  });
+
+  it("stops an unfinished thinking timer when the run is interrupted, without losing the reasoning", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const partial = streamed([{ type: "thinking", text: "Unfinished reasoning", startedAt: 8_000 }]);
+    const view = render(<Transcript messages={[user]} running partial={partial} />);
+    expect(screen.getByRole("button", { name: "Thinking… 2s" })).toBeInTheDocument();
+    view.rerender(<Transcript messages={[user]} running={false} partial={partial} />);
+    fireEvent.click(screen.getByRole("button", { name: "Reasoning" }));
+    expect(screen.getByText("Unfinished reasoning")).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(3_000));
+    expect(screen.queryByText("Thinking…")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reasoning" })).toBeInTheDocument();
+  });
+
   it("labels saved reasoning with its duration, and without one when it was never clocked", () => {
     const message = (id: string, timestamp: number, durationMs?: number): NormalizedMessage => ({
       id, role: "assistant", timestamp, blocks: [{ type: "thinking", text: "Hmm", ...(durationMs === undefined ? {} : { durationMs }) }, { type: "text", text: "Done" }]

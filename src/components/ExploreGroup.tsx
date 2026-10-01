@@ -18,10 +18,11 @@ interface ExploreGroupProps {
   group: Group;
   results: Map<string, NormalizedBlock>;
   liveToolText?: Record<string, string>;
+  running: boolean;
 }
 
 /** A run of read-only tool calls folded into one row (`explore-utils.ts`). Starts collapsed. */
-export function ExploreGroup({ group, results, liveToolText }: ExploreGroupProps) {
+export function ExploreGroup({ group, results, liveToolText, running }: ExploreGroupProps) {
   const expanded = useContext(ExploreExpansion);
   const [open, setOpen] = useState(() => expanded?.has(group.key) === true);
   const activity = exploreActivity(group, results);
@@ -54,7 +55,7 @@ export function ExploreGroup({ group, results, liveToolText }: ExploreGroupProps
           {group.items.map((item) => {
             const { block } = item;
             if (block.type === "thinking") {
-              return <ThinkingRow key={item.key} text={block.text ?? ""} durationMs={block.durationMs} live={item.streaming && block.durationMs === undefined} expansionKey={item.key} />;
+              return <ThinkingRow key={item.key} text={block.text ?? ""} durationMs={block.durationMs} startedAt={block.startedAt} live={running && item.streaming && block.durationMs === undefined} expansionKey={item.key} />;
             }
             const result = block.toolCallId ? results.get(block.toolCallId) : undefined;
             const liveText = block.toolCallId ? liveToolText?.[block.toolCallId] : undefined;

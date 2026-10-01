@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedMessage, SubagentStreamFrame, SubagentTranscript } from "./protocol.js";
+import { normalizeMessage } from "./message-normalization.js";
+import type { ThinkingDurations } from "./run-timing.js";
 import {
   MAX_TOOL_OUTPUT_CHARS,
   SubagentStreams,
@@ -13,20 +15,10 @@ import {
 type RawBlock = { type: string; text?: string; thinking?: string; name?: string; id?: string; arguments?: unknown };
 type RawMessage = { role: string; content: RawBlock[]; toolCallId?: string; toolName?: string };
 
-/** Stands in for the worker's normalizer (index.ts), which can't be imported without starting a worker. */
-function normalize(raw: unknown, position: number): NormalizedMessage | undefined {
-  const message = raw as RawMessage;
-  const role = message.role === "toolResult" ? "tool" : message.role;
-  if (role !== "assistant" && role !== "tool" && role !== "user" && role !== "system") return undefined;
-  return {
-    id: `${role}-${position}`,
-    role,
-    blocks: message.content.map((block) =>
-      block.type === "toolCall" ? { type: "tool-call" as const, toolName: block.name, toolCallId: block.id, arguments: block.arguments }
-        : role === "tool" ? { type: "tool-result" as const, text: block.text, toolCallId: message.toolCallId, toolName: message.toolName }
-          : block.type === "thinking" ? { type: "thinking" as const, text: block.thinking }
-            : { type: "text" as const, text: block.text })
-  };
+/** The shared worker normalizer, with shorter positional ids for these fixtures. */
+function normalize(raw: unknown, position: number, thinking?: ThinkingDurations, starts?: Array<number | null>): NormalizedMessage | undefined {
+  const message = normalizeMessage(raw, position, thinking, () => ({ type: "image" }), starts);
+  return message ? { ...message, id: `${message.role}-${position}` } : undefined;
 }
 
 const assistant = (text: string): RawMessage => ({ role: "assistant", content: [{ type: "text", text }] });
@@ -50,13 +42,14 @@ describe("sanitizeMessage", () => {
 
   it("redacts every place a child's words or a tool's output appear", () => {
     const clean = sanitizeMessage(message("a", "assistant", [
-      { type: "thinking", text: "the key is sk-secret" },
+      { type: "thinking", text: "the key is sk-secret", startedAt: 1_000 },
       { type: "text", text: "using sk-secret" },
       { type: "tool-call", toolName: "bash", toolCallId: "c1", arguments: { command: "echo sk-secret", nested: ["sk-secret", 3] } },
       { type: "image", imageId: "image-1", thumbnail: "data:image/png;base64,AAAA" }
     ]), redact);
     expect(JSON.stringify(clean)).not.toContain("sk-secret");
     expect(clean.blocks.map((block) => block.type)).toEqual(["thinking", "text", "tool-call"]);
+    expect(clean.blocks[0].startedAt).toBe(1_000);
     expect(clean.blocks[2].arguments).toEqual({ command: "echo [credential redacted]", nested: ["[credential redacted]", 3] });
   });
 
@@ -187,6 +180,58 @@ describe("SubagentStreams", () => {
     streams.watch(target);
     expect(frames.at(-1)).toMatchObject({ rev: 0, reset: true, live: false });
     expect(frames.at(-1)?.upserts).toBe(transcript?.messages);
+  });
+
+  it("streams stable thinking starts, drops them on close, and saves only durations", () => {
+    vi.setSystemTime(1_000);
+    const messages: RawMessage[] = [];
+    const child = streams.child(target);
+    child.started(() => messages);
+    streams.watch(target);
+    const first: RawMessage = { role: "assistant", content: [{ type: "thinking", thinking: "sk-secret reasoning" }] };
+    child.event({ type: "message_start", message: first });
+    child.event({ type: "message_update", message: first, assistantMessageEvent: { type: "thinking_start", contentIndex: 0 } });
+    vi.advanceTimersByTime(10);
+    const open = frames.at(-1)?.partial;
+    expect(open?.blocks).toEqual([{ type: "thinking", text: "[credential redacted] reasoning", startedAt: 1_000 }]);
+
+    vi.setSystemTime(1_200);
+    child.event({ type: "message_update", message: first, assistantMessageEvent: { type: "thinking_delta", contentIndex: 0 } });
+    child.event({ type: "message_update", message: first, assistantMessageEvent: { type: "thinking_start", contentIndex: 0 } });
+    // Identical starts and text do not emit redundant frames.
+    const count = frames.length;
+    vi.advanceTimersByTime(10);
+    expect(frames).toHaveLength(count);
+
+    vi.setSystemTime(1_500);
+    first.content.push({ type: "text", text: "Answer" });
+    child.event({ type: "message_update", message: first, assistantMessageEvent: { type: "text_start", contentIndex: 1 } });
+    vi.advanceTimersByTime(10);
+    expect(frames.at(-1)?.partial?.blocks[0]).toEqual({ type: "thinking", text: "[credential redacted] reasoning", durationMs: 500 });
+    messages.push(first);
+    child.event({ type: "message_end", message: first });
+    vi.advanceTimersByTime(10);
+    expect(frames.at(-1)?.partial).toBeNull();
+    expect(frames.at(-1)?.upserts[0].blocks[0]).toEqual({ type: "thinking", text: "[credential redacted] reasoning", durationMs: 500 });
+
+    vi.setSystemTime(2_000);
+    const next: RawMessage = { role: "assistant", content: [{ type: "thinking", thinking: "More" }] };
+    child.event({ type: "message_start", message: next });
+    child.event({ type: "message_update", message: next, assistantMessageEvent: { type: "thinking_delta", contentIndex: 0 } });
+    vi.advanceTimersByTime(10);
+    expect(frames.at(-1)?.partial?.blocks).toEqual([{ type: "thinking", text: "More", startedAt: 2_000 }]);
+    expect(frames.at(-1)?.upserts).toEqual([]);
+    // The previous frame was not mutated as the reasoning ended or the next message began.
+    expect(open?.blocks[0].startedAt).toBe(1_000);
+
+    vi.setSystemTime(2_300);
+    messages.push(next);
+    child.event({ type: "message_end", message: next });
+    child.ended([...messages]);
+    const transcript = child.finish();
+    expect(frames.at(-1)).toMatchObject({ partial: null, live: false });
+    expect(transcript?.messages.map((message) => message.blocks[0].durationMs)).toEqual([500, 300]);
+    expect(transcript?.messages.flatMap((message) => message.blocks).every((block) => !Object.hasOwn(block, "startedAt"))).toBe(true);
   });
 
   it("serves a saved transcript, and only ever streams the watched child", () => {

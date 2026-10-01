@@ -24,7 +24,7 @@ export function textFromContent(content: unknown): string {
     .join("");
 }
 
-function normalizeBlocks(content: unknown, role: string, thinking: ThinkingDurations | undefined, imageBlock: ImageNormalizer): NormalizedBlock[] {
+function normalizeBlocks(content: unknown, role: string, thinking: ThinkingDurations | undefined, imageBlock: ImageNormalizer, starts?: Array<number | null>): NormalizedBlock[] {
   if (typeof content === "string") {
     return [{ type: role === "toolResult" ? "tool-result" : "text", text: content }];
   }
@@ -42,8 +42,15 @@ function normalizeBlocks(content: unknown, role: string, thinking: ThinkingDurat
     // (`normalizeMessage`).
     if (block.type === "image") return role === "toolResult" ? [] : [imageBlock(block)];
     if (block.type === "thinking") {
-      const durationMs = thinking?.[thought++];
-      return [{ type: "thinking", text: String(block.thinking ?? block.text ?? ""), ...(typeof durationMs === "number" ? { durationMs } : {}) }];
+      const durationMs = thinking?.[thought];
+      const startedAt = starts?.[thought];
+      thought += 1;
+      // A closed duration wins over any stale live start; completed blocks never keep a timer.
+      return [{
+        type: "thinking",
+        text: String(block.thinking ?? block.text ?? ""),
+        ...(typeof durationMs === "number" ? { durationMs } : typeof startedAt === "number" ? { startedAt } : {})
+      }];
     }
     if (block.type === "toolCall") {
       return [{
@@ -57,13 +64,13 @@ function normalizeBlocks(content: unknown, role: string, thinking: ThinkingDurat
   });
 }
 
-export function normalizeMessage(message: unknown, index: number, thinking: ThinkingDurations | undefined, imageBlock: ImageNormalizer): NormalizedMessage | undefined {
+export function normalizeMessage(message: unknown, index: number, thinking: ThinkingDurations | undefined, imageBlock: ImageNormalizer, starts?: Array<number | null>): NormalizedMessage | undefined {
   if (!message || typeof message !== "object") return undefined;
   const raw = message as Record<string, unknown>;
   const rawRole = String(raw.role ?? "system");
   const role = rawRole === "toolResult" ? "tool" : rawRole;
   if (role !== "user" && role !== "assistant" && role !== "tool" && role !== "system") return undefined;
-  const blocks = normalizeBlocks(raw.content, rawRole, thinking, imageBlock);
+  const blocks = normalizeBlocks(raw.content, rawRole, thinking, imageBlock, starts);
   if (rawRole === "toolResult") {
     // An image-only result still has to mark its call as finished.
     if (blocks.length === 0) blocks.push({ type: "tool-result", text: "" });

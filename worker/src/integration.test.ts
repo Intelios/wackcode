@@ -19,7 +19,7 @@ type SnapshotView = {
     timestamp?: number;
     blocks: Array<{
       type: string; text?: string; toolName?: string; toolCallId?: string; details?: unknown; imageId?: string; thumbnail?: string; mimeType?: string;
-      durationMs?: number; images?: Array<{ imageId: string; thumbnail?: string }>;
+      durationMs?: number; startedAt?: number; images?: Array<{ imageId: string; thumbnail?: string }>;
     }>;
     entryId?: string;
     versions?: { index: number; total: number; previous?: string; next?: string; group: string };
@@ -1303,34 +1303,51 @@ describe("built-in extensions", () => {
     cleanup.push(() => rm(workspace, { recursive: true, force: true }));
     const first = await initializeWorker(provider.baseUrl, "think-secret", workspace, "think-task");
     cleanup.push(() => first.worker.shutdown());
-    first.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "think-run", message: "Think first." });
-    await first.worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === "think-run");
-
     type Message = SnapshotView["messages"][number];
     const thinkingOf = (message: Message | undefined) => message?.blocks.find((block) => block.type === "thinking");
+    const promptStartedAt = Date.now();
+    first.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "think-run", message: "Think first." });
+    const live = await first.worker.waitFor((output) => output.type === "partial"
+      && typeof thinkingOf((output as unknown as { message?: Message }).message)?.startedAt === "number");
+    const liveBlock = thinkingOf((live as unknown as { message: Message }).message);
+    expect(liveBlock?.startedAt).toBeGreaterThanOrEqual(promptStartedAt);
+    expect(liveBlock?.startedAt).toBeLessThanOrEqual(Date.now());
+    expect(liveBlock).not.toHaveProperty("durationMs");
+    await first.worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === "think-run");
     const partials = first.worker.outputs
       .filter((output) => output.type === "partial")
       .map((output) => (output as unknown as { message: Message }).message);
-    // While the model reasons, the block has no duration yet.
-    expect(partials.some((message) => thinkingOf(message) && !message.blocks.some((block) => block.type === "text") && thinkingOf(message)?.durationMs === undefined)).toBe(true);
+    // While the model reasons, each delta retains the same live start and has no duration yet.
+    const reasoning = partials.filter((message) => thinkingOf(message) && !message.blocks.some((block) => block.type === "text"));
+    expect(reasoning.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(reasoning.map((message) => thinkingOf(message)?.startedAt))).toEqual(new Set([liveBlock?.startedAt]));
+    expect(reasoning.every((message) => thinkingOf(message)?.durationMs === undefined)).toBe(true);
     // Once the answer starts, the streamed block already carries how long the reasoning took.
     const answering = partials.find((message) => message.blocks.some((block) => block.type === "text" && block.text));
     const streamedDuration = thinkingOf(answering)?.durationMs;
     expect(streamedDuration).toBeGreaterThanOrEqual(300);
+    expect(thinkingOf(answering)).not.toHaveProperty("startedAt");
 
     // The saved message keeps the same duration, and the timestamp that ties it to its partial.
     const saved = first.worker.view?.messages.find((message) => message.role === "assistant");
     expect(thinkingOf(saved)?.durationMs).toBe(streamedDuration);
     expect(saved?.timestamp).toBe(answering?.timestamp);
+    expect(thinkingOf(saved)).not.toHaveProperty("startedAt");
 
     const sessionFile = first.worker.view?.sessionFile;
     expect(sessionFile).toBeTruthy();
+    const entries = (await readFile(sessionFile as string, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    const persistedThinking = entries.find((entry) => entry.customType === "wackcode-run-timing")?.data.thinking;
+    expect(Object.values(persistedThinking ?? {})).toEqual([[streamedDuration]]);
+    for (const entry of entries) if (entry.message) expect(JSON.stringify(entry.message)).not.toContain('"startedAt"');
+    await expectSavedHistory(first.worker.view!);
     await first.worker.shutdown();
     const restored = await initializeWorker(provider.baseUrl, "think-secret", workspace, "think-task", sessionFile);
     cleanup.push(() => restored.worker.shutdown());
     const reopened = restored.ready.snapshot?.messages.find((message) => message.role === "assistant");
     expect(thinkingOf(reopened)?.text).toBe("Let me work this out.");
     expect(thinkingOf(reopened)?.durationMs).toBe(streamedDuration);
+    expect(thinkingOf(reopened)).not.toHaveProperty("startedAt");
   });
 
   it("registers the built-in tools as wackcode sources that ignore the denylist", async () => {

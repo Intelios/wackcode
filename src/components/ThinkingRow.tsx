@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { formatRunDuration, thinkingPreview } from "../chat-utils";
 import { useSmoothText } from "../hooks/useSmoothText";
 import { Markdown } from "./Markdown";
@@ -17,6 +17,8 @@ interface ThinkingRowProps {
   text: string;
   /** How long the model reasoned, measured by the worker. Absent for blocks that were never clocked. */
   durationMs?: number;
+  /** This block's start timestamp from the worker, so a remount never resets its live timer. */
+  startedAt?: number;
   /** True while the model is still producing this block. */
   live?: boolean;
   /** Identifies the block in both the streamed and the saved message. */
@@ -25,6 +27,17 @@ interface ThinkingRowProps {
 
 function formatDuration(ms: number): string {
   return ms < 1000 ? "<1s" : formatRunDuration(ms);
+}
+
+/** Only the elapsed label ticks; the reasoning body and preview need not re-render each second. */
+function ThinkingElapsed({ startedAt }: { startedAt: number }) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [startedAt]);
+  return <span className="thinking-elapsed">{formatDuration(Math.max(0, now - startedAt))}</span>;
 }
 
 function ThinkingBody({ text, live }: { text: string; live: boolean }) {
@@ -36,7 +49,7 @@ function ThinkingBody({ text, live }: { text: string; live: boolean }) {
   );
 }
 
-export function ThinkingRow({ text, durationMs, live = false, expansionKey }: ThinkingRowProps) {
+export function ThinkingRow({ text, durationMs, startedAt, live = false, expansionKey }: ThinkingRowProps) {
   const expanded = useContext(ThinkingExpansion);
   const [open, setOpen] = useState(() => expansionKey !== undefined && expanded?.has(expansionKey) === true);
   const previewEnabled = useContext(ThinkingPreviewEnabled);
@@ -58,6 +71,7 @@ export function ThinkingRow({ text, durationMs, live = false, expansionKey }: Th
         {live
           ? <span className="thinking-shimmer">Thinking…</span>
           : <span>{durationMs !== undefined ? `Thought for ${formatDuration(durationMs)}` : "Reasoning"}</span>}
+        {live && startedAt !== undefined && <>{" "}<ThinkingElapsed startedAt={startedAt} /></>}
         {/* Keyed so each new line fades in rather than swapping in place. */}
         {preview && <span className="thinking-preview" key={preview}><span aria-hidden="true">·</span> {preview}</span>}
         <Icon name="chevron" className="tool-chevron" />

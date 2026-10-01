@@ -833,6 +833,8 @@ export interface NormalizedBlock {
   thumbnail?: string;
   /** Thinking blocks: how long the model reasoned. Absent while it still is, and when never clocked. */
   durationMs?: number;
+  /** Thinking blocks: this block's epoch-ms start timestamp, only while open; never persisted. */
+  startedAt?: number;
   toolName?: string;
   toolCallId?: string;
   arguments?: unknown;

@@ -47,7 +47,7 @@ export interface SubagentStreamsOptions {
   /** Send one frame of the watched child's transcript to the host. */
   emit(frame: SubagentStreamFrame): void;
   /** The worker's own message normalizer, so the panel renders a child exactly like the chat. */
-  normalize(raw: unknown, position: number, thinking?: ThinkingDurations): NormalizedMessage | undefined;
+  normalize(raw: unknown, position: number, thinking?: ThinkingDurations, starts?: Array<number | null>): NormalizedMessage | undefined;
   /** A redactor over the worker's current secrets. Taken once per frame, not once per string. */
   redactor(): Redact;
   /** A finished call's saved transcript, read from the chat's session. */
@@ -327,7 +327,7 @@ export class SubagentStreams {
   private partialOf(child: Child, redact: Redact): NormalizedMessage | null {
     const streaming = child.streaming;
     if (!streaming || child.ended) return null;
-    const normalized = this.options.normalize(streaming, child.read?.().length ?? 0, child.clock.live(streaming));
+    const normalized = this.options.normalize(streaming, child.read?.().length ?? 0, child.clock.live(streaming), child.clock.liveStarts(streaming));
     return normalized ? sanitizeMessage(normalized, redact) : null;
   }
 

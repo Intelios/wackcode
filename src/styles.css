@@ -536,7 +536,8 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .thinking-icon { width: 13px; height: 13px; color: var(--wc-accent); opacity: .8; }
 .thinking-head .tool-chevron { width: 11px; height: 11px; transition: transform .15s var(--ease); }
 .thinking-row.open .thinking-head .tool-chevron { transform: rotate(90deg); }
-.thinking-head > span { flex-shrink: 0; }
+.thinking-head > span, .thinking-head > svg { flex-shrink: 0; }
+.thinking-elapsed { font-variant-numeric: tabular-nums; min-width: 3ch; color: var(--text-dim); }
 .thinking-head > .thinking-preview {
   flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
   color: var(--text-dim); opacity: .8; animation: thinking-preview-in .22s var(--ease);

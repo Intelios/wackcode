@@ -208,7 +208,7 @@ const subagentStreams = new SubagentStreams({
   emit: (frame) => {
     if (taskId) send({ type: "subagent_stream", taskId, ...frame });
   },
-  normalize: (raw, position, thinking) => normalizeMessage(raw, position, thinking),
+  normalize: (raw, position, thinking, starts) => normalizeMessage(raw, position, thinking, starts),
   redactor: () => {
     const secrets = credentialSecrets();
     return (text) => redactWith(secrets, text);
@@ -453,8 +453,8 @@ function imageBlock(block: Record<string, unknown>, options = THUMBNAIL_OPTIONS)
   return { type: "image", mimeType, imageId: preview.id, thumbnail: preview.url };
 }
 
-function normalizeMessage(message: unknown, index: number, thinking?: ThinkingDurations): NormalizedMessage | undefined {
-  const normalized = normalizeSavedMessage(message, index, thinking, imageBlock);
+function normalizeMessage(message: unknown, index: number, thinking?: ThinkingDurations, starts?: Array<number | null>): NormalizedMessage | undefined {
+  const normalized = normalizeSavedMessage(message, index, thinking, imageBlock, starts);
   if (normalized && message && typeof message === "object") {
     for (const block of normalized.blocks) {
       if (block.type === "image" && block.imageId) imageOwners.set(block.imageId, message);
@@ -587,7 +587,13 @@ function getSnapshot(rev: number): SessionSnapshot {
   const path = session.sessionManager.getBranch() as EntryLike[];
   const entries = session.sessionManager.getEntries() as EntryLike[];
   const index = treeIndex(entries);
-  const messages = transcriptMessages(session.messages, path, index, savedThinking(entries), { normalize: normalizeMessage, cache: normalizedCache, streamingMessage, durations: (raw) => thinkingClock.durations(raw) });
+  const messages = transcriptMessages(session.messages, path, index, savedThinking(entries), {
+    normalize: normalizeMessage,
+    cache: normalizedCache,
+    streamingMessage,
+    durations: (raw) => raw === streamingMessage ? thinkingClock.live(raw) : thinkingClock.durations(raw),
+    starts: (raw) => thinkingClock.liveStarts(raw)
+  });
   const messagePositions = new Map<string, number>();
   messages.forEach((message, position) => {
     if (message.entryId) messagePositions.set(message.entryId, position);
@@ -802,7 +808,7 @@ function flushPartial(): void {
     partialTimer = undefined;
   }
   if (!taskId || pendingPartial === undefined) return;
-  const message = normalizeMessage(pendingPartial, 0, thinkingClock.live(pendingPartial));
+  const message = normalizeMessage(pendingPartial, 0, thinkingClock.live(pendingPartial), thinkingClock.liveStarts(pendingPartial));
   pendingPartial = undefined;
   if (message) send({ type: "partial", taskId, message });
 }

@@ -34,13 +34,16 @@ function visibleRole(raw: unknown): NormalizedMessage["role"] | undefined {
  * Each message's normalized form is cached by its raw object and reused verbatim while the
  * entry id, position, and derived tree annotations hold steady, so unchanged messages keep
  * their object identity across emissions and the diff against the last sent state is
- * O(changes). Cached objects are never mutated; any change rebuilds from scratch.
+ * O(changes). Cached objects are never mutated; any change rebuilds from scratch. The streaming
+ * row is never cached, so neither its unfinished content nor live thinking starts survive it.
  */
 export function transcriptMessages(rawMessages: unknown[], path: EntryLike[], index: TreeIndex, thinking: Map<string, ThinkingDurations>, options: {
-  normalize: (raw: unknown, position: number, thinking?: ThinkingDurations) => NormalizedMessage | undefined;
+  normalize: (raw: unknown, position: number, thinking?: ThinkingDurations, starts?: Array<number | null>) => NormalizedMessage | undefined;
   cache: WeakMap<object, CachedMessage>;
   streamingMessage?: unknown;
   durations?: (raw: unknown) => ThinkingDurations | undefined;
+  /** Live-only thinking starts: called solely for `streamingMessage`, never an older row. */
+  starts?: (raw: unknown) => Array<number | null> | undefined;
 }): NormalizedMessage[] {
   const { cache: normalizedCache, streamingMessage, normalize: normalizeMessage } = options;
   const entryIds = new Map<unknown, string>();
@@ -92,7 +95,8 @@ export function transcriptMessages(rawMessages: unknown[], path: EntryLike[], in
   }
 
   return rows.map((row): NormalizedMessage | null => {
-    const cached = row.raw === streamingMessage ? undefined : normalizedCache.get(row.raw as object);
+    const isStreaming = row.raw === streamingMessage;
+    const cached = isStreaming ? undefined : normalizedCache.get(row.raw as object);
     if (
       cached
       && cached.entryId === row.entryId
@@ -106,7 +110,8 @@ export function transcriptMessages(rawMessages: unknown[], path: EntryLike[], in
     }
     // Clocked by this worker, or saved with an earlier run.
     const durations = options.durations?.(row.raw) ?? (row.entryId ? thinking.get(row.entryId) : undefined);
-    const message = normalizeMessage(row.raw, row.position, durations);
+    const starts = isStreaming ? options.starts?.(row.raw) : undefined;
+    const message = normalizeMessage(row.raw, row.position, durations, starts);
     if (!message) return null;
     if (row.entryId) {
       message.entryId = row.entryId;
@@ -116,15 +121,17 @@ export function transcriptMessages(rawMessages: unknown[], path: EntryLike[], in
     if (row.checkpoint) message.checkpoint = row.checkpoint;
     if (row.commandPresentation) message.commandPresentation = row.commandPresentation;
     if (row.turn) message.turn = row.turn;
-    normalizedCache.set(row.raw as object, {
-      message,
-      entryId: row.entryId,
-      position: row.position,
-      versions: row.versions,
-      checkpoint: row.checkpoint,
-      commandPresentation: row.commandPresentation,
-      turn: row.turn
-    });
+    if (!isStreaming) {
+      normalizedCache.set(row.raw as object, {
+        message,
+        entryId: row.entryId,
+        position: row.position,
+        versions: row.versions,
+        checkpoint: row.checkpoint,
+        commandPresentation: row.commandPresentation,
+        turn: row.turn
+      });
+    }
     return message;
   }).filter((message): message is NormalizedMessage => message !== null);
 }

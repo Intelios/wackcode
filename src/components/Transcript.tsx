@@ -196,7 +196,7 @@ function renderBlock(
 ): ReactNode {
   if (block.type === "thinking") {
     // A streamed block is still being written until the worker has clocked its end.
-    return <ThinkingRow text={block.text ?? ""} durationMs={block.durationMs} live={streaming === true && block.durationMs === undefined} expansionKey={key} />;
+    return <ThinkingRow text={block.text ?? ""} durationMs={block.durationMs} startedAt={block.startedAt} live={running && streaming === true && block.durationMs === undefined} expansionKey={key} />;
   }
   if (block.type === "tool-call") {
     const result = block.toolCallId ? results.get(block.toolCallId) : undefined;
@@ -244,7 +244,7 @@ function renderSlots(
     if (slot.type === "explore") {
       return (
         <div key={`explore:${slot.group.key}`} className="block-slot">
-          <ExploreGroup group={slot.group} results={results} liveToolText={liveToolText} />
+          <ExploreGroup group={slot.group} results={results} liveToolText={liveToolText} running={running} />
         </div>
       );
     }

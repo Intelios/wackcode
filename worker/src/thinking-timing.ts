@@ -5,7 +5,8 @@ import { RUN_TIMING_ENTRY_TYPE, type ThinkingDurations } from "./run-timing.js";
  * so the worker clocks every block of the streaming message from its `thinking_start` stream
  * event to its `thinking_end`, and keeps the result against the finished message object (the
  * one Pi stores on its session entry). The run's timing entry persists them by assistant entry
- * id, so they survive a restart and travel with a fork.
+ * id, so they survive a restart and travel with a fork. Open start timestamps are live-only:
+ * they let the renderer clock a block while it is being written, and are never persisted.
  */
 export class ThinkingClock {
   /** Content index -> start time, for thinking blocks of the streaming message still being written. */
@@ -41,6 +42,11 @@ export class ThinkingClock {
   /** The streaming message's durations so far; a block still being written has none yet. */
   live(message: unknown): ThinkingDurations {
     return ordinal(message, this.closed);
+  }
+
+  /** The streaming message's open start timestamps (epoch ms), in thinking-block order. */
+  liveStarts(message: unknown): Array<number | null> {
+    return ordinal(message, this.open);
   }
 
   /** The streaming message ended as `message`: every block still open ends now. */
@@ -80,17 +86,17 @@ export class ThinkingClock {
   }
 }
 
-/** Durations by content index, as one entry per thinking block in content order. */
-function ordinal(message: unknown, byIndex: Map<number, number>): ThinkingDurations {
+/** Values by content index, as one entry per thinking block in content order. */
+function ordinal(message: unknown, byIndex: Map<number, number>): Array<number | null> {
   const content = message && typeof message === "object" ? (message as { content?: unknown }).content : undefined;
   if (!Array.isArray(content)) return [];
-  const durations: ThinkingDurations = [];
+  const values: Array<number | null> = [];
   content.forEach((block, index) => {
     if (block && typeof block === "object" && (block as { type?: unknown }).type === "thinking") {
-      durations.push(byIndex.get(index) ?? null);
+      values.push(byIndex.get(index) ?? null);
     }
   });
-  return durations;
+  return values;
 }
 
 interface SessionEntryLike {

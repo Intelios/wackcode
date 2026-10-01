@@ -280,6 +280,22 @@ pub fn fingerprint(
     .map_err(|error| error.to_string())
 }
 
+/** Returns whether runtime interruption must be emitted, even if saving metadata fails. */
+fn record_worker_crash(state: &MetadataState, task_id: &str, message: &str) -> bool {
+    let mut interrupted = false;
+    let _ = state.mutate(|data| {
+        if let Some(task) = data.tasks.iter_mut().find(|task| task.id == task_id) {
+            if matches!(task.status, TaskStatus::Running | TaskStatus::Stopping) {
+                task.status = TaskStatus::Interrupted;
+                interrupted = true;
+            }
+            task.last_error = Some(message.to_string());
+        }
+        Ok(())
+    });
+    interrupted
+}
+
 pub async fn ensure_worker(
     app: &AppHandle,
     task: &TaskRecord,
@@ -408,6 +424,10 @@ pub async fn ensure_worker_with(
         let _status = child.wait().await;
         let _ = stdout_reader.await;
         let _ = stderr_reader.await;
+        // Serialize ownership checks, metadata and terminal events with prompt dispatch. A
+        // replacement that acquired the lock first has already removed this PID; if we acquire
+        // it first, no new run can start until its predecessor's interruption has been emitted.
+        let _task_guard = crate::commands::task_lock(&app_for_process, &task_id).lock_owned().await;
         let stderr_message = stderr_tail.lock().await.trim().to_string();
         // Intentional shutdown paths remove the process from the registry before
         // signaling it. Any process that exits while still registered is a crash,
@@ -433,15 +453,15 @@ pub async fn ensure_worker_with(
                     redact_and_limit(&stderr_message)
                 )
             };
-            let _ = app_for_process.state::<MetadataState>().mutate(|data| {
-                if let Some(task) = data.tasks.iter_mut().find(|task| task.id == task_id) {
-                    if matches!(task.status, TaskStatus::Running | TaskStatus::Stopping) {
-                        task.status = TaskStatus::Interrupted;
-                    }
-                    task.last_error = Some(message.clone());
-                }
-                Ok(())
-            });
+            let interrupted = record_worker_crash(&app_for_process.state::<MetadataState>(), &task_id, &message);
+            // A dead worker cannot send a final snapshot. Mirror the terminal run state so the
+            // renderer stops both the chat's and its watched sub-agent's live thinking timers.
+            if interrupted {
+                let _ = app_for_process.emit(
+                    "worker-event",
+                    json!({ "type": "run_state", "taskId": task_id, "state": "interrupted" }),
+                );
+            }
             let _ = app_for_process.emit(
                 "worker-event",
                 json!({
@@ -1521,6 +1541,48 @@ pub(crate) fn redact_and_limit(message: &str) -> String {
 mod tests {
     use super::*;
     use crate::models::{PackageResourceRecord, ProviderRecord};
+
+    fn crash_metadata(directory: &std::path::Path, status: TaskStatus, writable: bool) -> MetadataState {
+        let task = TaskRecord {
+            id: "task".into(), project_id: None, name: "Task".into(),
+            auto_title_eligible: false, auto_title_attempt_id: None,
+            workspace_path: "/tmp/project".into(), worktree_path: None, branch: None,
+            uses_worktree: false, provider_id: "provider".into(), model_id: "model".into(),
+            thinking_level: "off".into(), session_file: None, status,
+            mode: TaskMode::Build, archived: false, archived_at: None, last_error: None,
+            created_at: "now".into(), updated_at: "now".into(),
+        };
+        MetadataState {
+            data: Mutex::new(crate::models::AppData { tasks: vec![task], ..Default::default() }),
+            data_path: if writable { directory.join("wackcode.json") } else { directory.join("missing/wackcode.json") },
+            secrets: crate::secrets::SecretStore::load(directory).unwrap(),
+        }
+    }
+
+    #[test]
+    fn a_worker_crash_interrupts_active_runs_even_when_metadata_cannot_be_saved() {
+        for status in [TaskStatus::Running, TaskStatus::Stopping] {
+            for writable in [true, false] {
+                let directory = tempfile::tempdir().unwrap();
+                let state = crash_metadata(directory.path(), status.clone(), writable);
+                assert!(record_worker_crash(&state, "task", "Worker stopped."));
+                let data = state.data.lock().unwrap();
+                assert_eq!(data.tasks[0].status, TaskStatus::Interrupted);
+                assert_eq!(data.tasks[0].last_error.as_deref(), Some("Worker stopped."));
+                assert_eq!(state.data_path.exists(), writable);
+            }
+        }
+    }
+
+    #[test]
+    fn an_idle_worker_crash_does_not_emit_a_run_interruption() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = crash_metadata(directory.path(), TaskStatus::Idle, true);
+        assert!(!record_worker_crash(&state, "task", "Worker stopped."));
+        let data = state.data.lock().unwrap();
+        assert_eq!(data.tasks[0].status, TaskStatus::Idle);
+        assert_eq!(data.tasks[0].last_error.as_deref(), Some("Worker stopped."));
+    }
 
     fn package(source: &str, trusted: bool, resources: &[(&str, bool)]) -> PackageRecord {
         PackageRecord {

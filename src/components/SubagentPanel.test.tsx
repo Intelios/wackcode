@@ -1,9 +1,12 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedMessage, SubagentDetails, SubagentResult, SubagentView } from "../types";
 import { SubagentPanel, siblingLabels } from "./SubagentPanel";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 function child(overrides: Partial<SubagentResult> = {}): SubagentResult {
   return {
@@ -49,6 +52,21 @@ describe("SubagentPanel", () => {
     expect(screen.getByText("$0.01")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Close SubAgent panel" }));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("ticks live thinking and stops an unfinished timer with the watched stream", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const partial: NormalizedMessage = { id: "partial", role: "assistant", blocks: [{ type: "thinking", text: "Unfinished", startedAt: 8_000 }] };
+    const props = { toolCallId: "call-1", index: 0, details: details([child()]), onSelect: vi.fn(), onClose: vi.fn(), onRetry: vi.fn() };
+    const view = render(<SubagentPanel {...props} live stream={stream({ partial })} />);
+    expect(screen.getByRole("button", { name: "Thinking… 2s" })).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(3_000));
+    expect(screen.getByRole("button", { name: "Thinking… 5s" })).toBeInTheDocument();
+    view.rerender(<SubagentPanel {...props} live={false} stream={stream({ partial, live: false })} />);
+    expect(screen.getByRole("button", { name: "Reasoning" })).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(3_000));
+    expect(screen.queryByText("Thinking…")).not.toBeInTheDocument();
   });
 
   it("waits in the queue, then warms up before its first step", () => {

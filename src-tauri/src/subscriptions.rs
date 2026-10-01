@@ -3,7 +3,7 @@ use chrono::Utc;
 use nix::{sys::signal::{killpg, Signal}, unistd::Pid};
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf, process::Stdio, sync::{Arc, Mutex}};
+use std::{collections::HashMap, fs, os::unix::fs::PermissionsExt, path::PathBuf, process::Stdio, sync::{Arc, Mutex}};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, process::{ChildStdin, Command}, sync::Mutex as AsyncMutex};
 use uuid::Uuid;
@@ -83,12 +83,76 @@ pub fn list_subscription_providers() -> Vec<SubscriptionProviderInfo> {
     PROVIDERS.iter().map(|(id, name, guidance)| SubscriptionProviderInfo { id, name, guidance }).collect()
 }
 
-fn entry_path(app: &AppHandle) -> Result<PathBuf, String> {
+fn entry_path(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
     if cfg!(debug_assertions) {
-        Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist/subscription-auth.js"))
+        Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist").join(name))
     } else {
-        Ok(app.path().resource_dir().map_err(|error| error.to_string())?.join("resources/worker/dist/subscription-auth.js"))
+        Ok(app.path().resource_dir().map_err(|error| error.to_string())?.join("resources/worker/dist").join(name))
     }
+}
+
+/// Re-list every signed-in subscription's models, so the ones a Pi update adds reach the picker
+/// without a fresh sign-in. The renderer calls this once at launch. `subscription-models.js` is
+/// offline and never refreshes a token, so this adds no traffic on launch. Returns the providers
+/// whose list changed.
+#[tauri::command]
+pub async fn refresh_subscription_models(app: AppHandle, state: State<'_, MetadataState>) -> Result<Vec<ProviderRecord>, String> {
+    let signing_in = app.state::<SubscriptionState>().current.lock().map_err(|_| "Subscription login lock was poisoned".to_string())?
+        .as_ref().map(|login| login.provider_id.clone());
+    let (targets, seen) = {
+        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        let mut targets = Vec::new();
+        let mut seen = HashMap::new();
+        for provider in &data.providers {
+            if provider.kind != ProviderKind::Subscription || signing_in.as_deref() == Some(provider.id.as_str()) || !has_credential(&app, &provider.id) { continue; }
+            targets.push(json!({ "providerId": provider.id, "authPath": auth_path(&app, &provider.id)? }));
+            seen.insert(provider.id.clone(), provider.updated_at.clone());
+        }
+        (targets, seen)
+    };
+    if targets.is_empty() { return Ok(Vec::new()); }
+    let mut command = Command::new(worker::node_executable_path()?);
+    command.arg(entry_path(&app, "subscription-models.js")?)
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
+        .kill_on_drop(true)
+        .env("PI_TELEMETRY", "0").env("PI_SKIP_VERSION_CHECK", "1").env("PI_OFFLINE", "1");
+    worker::strip_provider_env(&mut command);
+    let mut child = command.spawn().map_err(|error| format!("Could not refresh subscription models: {error}"))?;
+    let mut stdin = child.stdin.take().ok_or_else(|| "Could not refresh subscription models".to_string())?;
+    let input = serde_json::to_vec(&json!({ "providers": targets })).map_err(|error| error.to_string())?;
+    stdin.write_all(&input).await.map_err(|_| "Could not refresh subscription models".to_string())?;
+    drop(stdin);
+    let output = tokio::time::timeout(std::time::Duration::from_secs(15), child.wait_with_output()).await
+        .map_err(|_| "Refreshing subscription models timed out".to_string())?
+        .map_err(|error| format!("Could not refresh subscription models: {error}"))?;
+    if !output.status.success() || output.stdout.len() > 2_000_000 {
+        return Err("Could not refresh subscription models".into());
+    }
+    let listed: HashMap<String, Vec<ModelRecord>> = serde_json::from_slice(&output.stdout)
+        .map_err(|_| "Pi returned an invalid model list".to_string())?;
+    // Look before writing, so an unchanged list never rewrites wackcode.json.
+    let stale = {
+        let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        !apply_listed_models(&mut data.providers.clone(), listed.clone(), &seen).is_empty()
+    };
+    if !stale { return Ok(Vec::new()); }
+    let changed = state.mutate(|data| Ok(apply_listed_models(&mut data.providers, listed, &seen)))?;
+    // Sub-agents check their model against these lists.
+    if !changed.is_empty() { worker::broadcast_subagents(&app).await?; }
+    Ok(changed)
+}
+
+/// Store each listed subscription's fresh models and return the records that changed. `seen` is
+/// each provider's `updated_at` when its list was read: a sign-in or sign-out since then set the
+/// list itself, so that provider is skipped.
+fn apply_listed_models(providers: &mut [ProviderRecord], mut listed: HashMap<String, Vec<ModelRecord>>, seen: &HashMap<String, String>) -> Vec<ProviderRecord> {
+    providers.iter_mut().filter_map(|provider| {
+        let models = listed.remove(&provider.id)?;
+        if provider.kind != ProviderKind::Subscription || seen.get(&provider.id) != Some(&provider.updated_at) { return None; }
+        if models.len() > 1_000 || provider.models == models { return None; }
+        provider.models = models;
+        Some(provider.clone())
+    }).collect()
 }
 
 #[tauri::command]
@@ -145,7 +209,7 @@ pub async fn start_subscription_login(app: AppHandle, state: State<'_, MetadataS
         return Err("Subscription credential path must be a regular file".into());
     }
     let mut command = Command::new(worker::node_executable_path()?);
-    command.arg(entry_path(&app)?)
+    command.arg(entry_path(&app, "subscription-auth.js")?)
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
         .kill_on_drop(true)
         .env("PI_TELEMETRY", "0").env("PI_SKIP_VERSION_CHECK", "1").env("PI_OFFLINE", "1")
@@ -347,6 +411,41 @@ mod tests {
         symlink(&target, &link).unwrap();
         assert!(!has_credential_at(&link, "openai-codex"));
         assert_eq!(fs::metadata(target).unwrap().permissions().mode() & 0o777, original_mode);
+    }
+
+    #[test]
+    fn a_relisted_model_list_replaces_only_untouched_subscriptions() {
+        let model = |id: &str| ModelRecord {
+            id: id.into(), name: id.into(), context_window: Some(1), max_tokens: Some(1), reasoning: false,
+            thinking_levels: vec!["off".into()], thinking_level_map: Default::default(), vision: false, api_format: None,
+        };
+        let provider = |id: &str, kind: ProviderKind| ProviderRecord {
+            id: id.into(), name: id.into(), kind, base_url: String::new(), api_format: String::new(),
+            models: vec![model("old")], created_at: "t0".into(), updated_at: "t0".into(),
+            has_api_key: false, connected: true, enabled: true,
+        };
+        let mut providers = vec![
+            provider("openai-codex", ProviderKind::Subscription),
+            provider("github-copilot", ProviderKind::Subscription),
+            provider("xai", ProviderKind::Subscription),
+            provider("custom", ProviderKind::Custom),
+        ];
+        // Copilot signed in again while the list was read, so its own sign-in owns the list.
+        providers[1].updated_at = "t1".into();
+        let seen = providers.iter().map(|provider| (provider.id.clone(), "t0".to_string())).collect();
+        let listed = HashMap::from([
+            ("openai-codex".to_string(), vec![model("old"), model("new")]),
+            ("github-copilot".to_string(), vec![model("new")]),
+            ("xai".to_string(), vec![model("old")]),
+            ("custom".to_string(), vec![model("new")]),
+        ]);
+
+        let changed = apply_listed_models(&mut providers, listed, &seen);
+
+        assert_eq!(changed.iter().map(|provider| provider.id.as_str()).collect::<Vec<_>>(), ["openai-codex"]);
+        assert_eq!(providers[0].models, [model("old"), model("new")]);
+        assert_eq!(providers[0].updated_at, "t0");
+        for untouched in &providers[1..] { assert_eq!(untouched.models, [model("old")]); }
     }
 
     #[test]

@@ -115,6 +115,7 @@ pub fn run() {
             subscriptions::cancel_subscription_login,
             subscriptions::sign_out_subscription,
             subscriptions::open_subscription_auth_url,
+            subscriptions::refresh_subscription_models,
             commands::set_tool_config,
             commands::set_appearance_config,
             commands::choose_background_image,

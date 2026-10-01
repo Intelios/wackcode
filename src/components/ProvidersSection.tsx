@@ -1204,7 +1204,7 @@ function SubscriptionDetail({ provider, guidance, onBack, onConnect, onSignOut, 
         <section className="settings-block" style={stagger(1)} aria-labelledby="subscription-signin-title">
           <h3 className="settings-block-title" id="subscription-signin-title">Sign-in</h3>
           {guidance && <p className="settings-block-sub">{guidance}</p>}
-          <p className="settings-block-sub">Pi manages this provider&rsquo;s models and refreshes its credential when you send a request. Sign in again if authentication fails.</p>
+          <p className="settings-block-sub">Pi manages this provider&rsquo;s models, and the list updates each time WackCode opens. Pi refreshes the credential when you send a request. Sign in again if authentication fails.</p>
           {provider.id === "anthropic" && (
             <button type="button" className="text-button subscription-guidance" onClick={() => void onOpenAuthUrl(ANTHROPIC_GUIDANCE).catch((reason) => setError(String(reason)))}>
               Review Anthropic&rsquo;s billing guidance

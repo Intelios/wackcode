@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { JsonLineDecoder } from "./framing.js";
-import { SubscriptionAuthFlow } from "./subscription-auth-flow.js";
+import { SUBSCRIPTION_PROVIDER_IDS, SubscriptionAuthFlow } from "./subscription-auth-flow.js";
 
 process.env.PI_TELEMETRY = "0";
 process.env.PI_SKIP_VERSION_CHECK = "1";
@@ -12,12 +12,11 @@ type Input =
   | { type: "response"; promptId: string; value?: string; cancelled?: boolean }
   | { type: "cancel" };
 
-const allowed = new Set(["openai-codex", "github-copilot", "anthropic", "xai", "meta", "kimi-coding"]);
 const flow = new SubscriptionAuthFlow((event) => process.stdout.write(`${JSON.stringify(event)}\n`));
 let started = false;
 
 async function start(providerId: string, authPath: string): Promise<void> {
-  if (started || !allowed.has(providerId)) {
+  if (started || !SUBSCRIPTION_PROVIDER_IDS.has(providerId)) {
     process.stdout.write(`${JSON.stringify({ type: "error", message: "This subscription provider is unavailable." })}\n`);
     return;
   }

@@ -82,6 +82,8 @@ export const api = {
   cancelSubscriptionLogin: (loginId: string) => invoke<void>("cancel_subscription_login", { loginId }),
   signOutSubscription: (providerId: string) => invoke<ProviderRecord>("sign_out_subscription", { providerId }),
   openSubscriptionAuthUrl: (url: string) => invoke<void>("open_subscription_auth_url", { url }),
+  /** Re-lists signed-in subscriptions' models offline; returns only the providers that changed. */
+  refreshSubscriptionModels: () => invoke<ProviderRecord[]>("refresh_subscription_models"),
   setToolConfig: (disabled: string[]) => invoke<ToolConfig>("set_tool_config", { input: { disabled } }),
   setAppearanceConfig: (input: AppearanceConfig) => invoke<AppearanceConfig>("set_appearance_config", { input }),
   browserState: (taskId: string) => invoke<BrowserState>("browser_state", { taskId }),

@@ -6,6 +6,31 @@ import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 type LoginRuntime = Pick<ModelRuntime, "getProvider" | "login" | "getAvailable">;
 
+/** Mirrors `PROVIDERS` in `subscriptions.rs`. */
+export const SUBSCRIPTION_PROVIDER_IDS: ReadonlySet<string> = new Set(["openai-codex", "github-copilot", "anthropic", "xai", "meta", "kimi-coding"]);
+
+/**
+ * The models a signed-in subscription may use, as the records Settings stores. Offline: Pi filters
+ * its bundled catalogue by the stored credential and never refreshes a token to do it. Shared by
+ * sign-in and the launch-time re-list (`subscription-models.ts`), so both store identical records.
+ */
+export async function subscriptionModels(runtime: Pick<ModelRuntime, "getAvailable">, providerId: string, signal?: AbortSignal) {
+  const models = await runtime.getAvailable(providerId, { signal });
+  return models.map((model) => {
+    const thinkingLevels = getSupportedThinkingLevels(model);
+    return {
+      id: model.id,
+      name: model.name,
+      contextWindow: model.contextWindow,
+      maxTokens: model.maxTokens,
+      reasoning: model.reasoning,
+      thinkingLevels,
+      thinkingLevelMap: Object.fromEntries(thinkingLevels.map((level) => [level, model.thinkingLevelMap?.[level] ?? (level === "off" ? null : level)])),
+      vision: model.input.includes("image")
+    };
+  });
+}
+
 /** The private NDJSON bridge for one Pi OAuth login. No credential object leaves this class. */
 export class SubscriptionAuthFlow {
   readonly controller = new AbortController();
@@ -57,23 +82,7 @@ export class SubscriptionAuthFlow {
       if (!provider?.auth.oauth?.isSubscription) throw new Error("Unsupported provider");
       await runtime.login(providerId, "oauth", { signal: this.controller.signal, prompt: this.prompt, notify: this.notify });
       await chmod(authPath, 0o600);
-      const models = await runtime.getAvailable(providerId, { signal: this.controller.signal });
-      this.send({
-        type: "complete",
-        models: models.map((model) => {
-          const thinkingLevels = getSupportedThinkingLevels(model);
-          return {
-            id: model.id,
-            name: model.name,
-            contextWindow: model.contextWindow,
-            maxTokens: model.maxTokens,
-            reasoning: model.reasoning,
-            thinkingLevels,
-            thinkingLevelMap: Object.fromEntries(thinkingLevels.map((level) => [level, model.thinkingLevelMap?.[level] ?? (level === "off" ? null : level)])),
-            vision: model.input.includes("image")
-          };
-        })
-      });
+      this.send({ type: "complete", models: await subscriptionModels(runtime, providerId, this.controller.signal) });
     } catch {
       this.send(this.controller.signal.aborted
         ? { type: "cancelled" }

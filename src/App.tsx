@@ -659,6 +659,15 @@ export default function App() {
         : payload.data.projects[0]?.id ?? null;
       setDraft({ projectId, useWorktree: false });
       if (payload.data.providers.length === 0) openSettings();
+      // A Pi update brings new subscription models; pick them up without asking for a sign-in.
+      // Only the list moves, and a failure keeps the last known one.
+      void api.refreshSubscriptionModels().then((changed) => {
+        if (!active || changed.length === 0) return;
+        setData((current) => ({ ...current, providers: current.providers.map((provider) => {
+          const fresh = changed.find((item) => item.id === provider.id);
+          return fresh ? { ...provider, models: fresh.models } : provider;
+        }) }));
+      }).catch(() => undefined);
     }).catch((reason) => setGlobalError(String(reason))).finally(() => active && setBooting(false));
     return () => { active = false; };
   }, []);

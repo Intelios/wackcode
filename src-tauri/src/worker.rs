@@ -267,6 +267,11 @@ pub fn fingerprint(
     // the chat's worker still warm.
     let mut provider = provider.clone();
     provider.enabled = true;
+    // A subscription's worker asks Pi for its models; the stored list only feeds the pickers, and
+    // `refresh_subscription_models` rewrites it at launch while a chat may already be running.
+    if provider.kind == ProviderKind::Subscription {
+        provider.models.clear();
+    }
     serde_json::to_string(&json!({
         "provider": provider,
         "modelId": model_id,
@@ -1659,6 +1664,37 @@ mod tests {
         assert_eq!(
             fingerprint(&provider(), "m", &resources).unwrap(),
             fingerprint(&off, "m", &resources).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_subscriptions_relisted_models_never_respawn_its_workers() {
+        let resources = resource_paths(&[]);
+        let model = |id: &str| crate::models::ModelRecord {
+            id: id.into(),
+            name: id.into(),
+            context_window: Some(1),
+            max_tokens: Some(1),
+            reasoning: false,
+            thinking_levels: vec!["off".into()],
+            thinking_level_map: Default::default(),
+            vision: false,
+            api_format: None,
+        };
+        let mut subscription = provider();
+        subscription.kind = ProviderKind::Subscription;
+        let mut relisted = subscription.clone();
+        relisted.models = vec![model("new")];
+        assert_eq!(
+            fingerprint(&subscription, "m", &resources).unwrap(),
+            fingerprint(&relisted, "m", &resources).unwrap()
+        );
+        // A custom connection's models are its models.json, so they still respawn.
+        let mut custom = provider();
+        custom.models = vec![model("new")];
+        assert_ne!(
+            fingerprint(&provider(), "m", &resources).unwrap(),
+            fingerprint(&custom, "m", &resources).unwrap()
         );
     }
 

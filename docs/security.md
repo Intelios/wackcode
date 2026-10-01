@@ -35,6 +35,7 @@ Never add a network origin silently; call it out explicitly and update `README.m
 - User skill folders reach a worker only as the absolute roots `skills::payload` names (`~/.agents/skills`, then folders the user switched on). A project's own skill folders never load. Settings writes only inside `~/.agents/skills`.
 - User commands (Settings › Commands) reach a worker only as `<app data>/commands` via `slash_commands::payload`, and Settings writes only inside it.
 - Paths the renderer sends back for skills and commands are checked canonically against those folders (no symlink escapes); deletes go to the Trash.
+- At launch, `subscription-models.js` re-lists each signed-in subscription's models from Pi's bundled catalogue. It runs offline in a stripped-env process, never refreshes a token, and prints only model metadata.
 - Settings' command list comes from `commands-scan.js`, which executes trusted extension code in a keyless, stripped-env, offline process, like `skills-scan.js`.
 - Project context files such as `AGENTS.md` load on purpose.
 

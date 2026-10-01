@@ -9,7 +9,7 @@
   Bring your own model. No account, no backend, no telemetry.
 </p>
 
-<p align="center">macOS 12+ · Apple Silicon · Tauri 2, React and Rust</p>
+<p align="center">macOS 12+ · Apple Silicon · Tauri 2, React and Rust. (Windows support coming soon)</p>
 
 ![WackCode's new-chat screen: the sidebar lists projects and their chats, and the centred composer offers the project, its branch, a Local/Worktree toggle, the model picker and the Build/Plan switch.](docs/images/hero.png)
 
@@ -246,10 +246,6 @@ The one exception is your skills, which WackCode writes to `~/.agents/skills` so
 WackCode keeps a local, usage-only ledger that TokenTrail reads to chart your token use and estimated cost. It's on by default; switch it off in **Settings › Integrations**.
 
 Each record holds token counts, the provider and model, project and workspace paths, opaque chat and request IDs, timing, purpose (chat, sub-agent, title, compaction, goal check, commit message, and so on) and outcome. Records **never** contain prompts, responses, chat titles, credentials, endpoint URLs or tool arguments. The ledger lives in `usage/v1/` in WackCode's application-data folder, is kept when chats are deleted, and is never sent anywhere. Cost figures are API-equivalent estimates, not your actual subscription spend. The format is documented in the [v1 contract](docs/wackcode-usage-v1.md).
-
-## What WackCode isn't
-
-WackCode is an early (0.1) project with a deliberately focused scope. It won't gain an embedded code editor, approval prompts for each tool call (computer use's per-app card is the one exception), automatic merging, notarization, auto-updates, or support for other platforms.
 
 ## Development
 

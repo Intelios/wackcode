@@ -295,6 +295,7 @@ mod tests {
             models: vec![ModelRecord {
                 id: "small".into(), name: "Small".into(), context_window: Some(128_000), max_tokens: Some(8_192),
                 reasoning: true, thinking_levels: vec!["off".into(), "low".into()], thinking_level_map: BTreeMap::new(), vision: false,
+                api_format: None,
             }],
             created_at: "now".into(), updated_at: "now".into(), has_api_key: true, connected: true,
             enabled: true,

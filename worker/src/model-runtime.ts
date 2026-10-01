@@ -33,7 +33,10 @@ export function modelDefinition(model: WorkerModel): Record<string, unknown> {
     contextWindow: model.contextWindow,
     maxTokens: model.maxTokens,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    ...(model.reasoning ? { thinkingLevelMap } : {})
+    ...(model.reasoning ? { thinkingLevelMap } : {}),
+    // Pi takes a model's own `api` over the provider's, so one gateway can serve each model
+    // over the API it actually speaks.
+    ...(model.api ? { api: model.api } : {})
   };
 }
 

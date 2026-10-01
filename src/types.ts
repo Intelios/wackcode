@@ -88,6 +88,11 @@ export interface ModelRecord {
   thinkingLevelMap: Partial<Record<ThinkingLevel, string | null>>;
   /** Accepts image input (Pi's `input: ["text", "image"]`). Off until the user confirms it. */
   vision: boolean;
+  /**
+   * Replaces the connection's API format for this model alone, for gateways that serve some
+   * models over another API at the same URL. Absent follows the connection.
+   */
+  apiFormat?: ApiFormat;
 }
 
 /** Settings-only metadata from the Pi version bundled with WackCode. */

@@ -19,6 +19,7 @@ const API_FORMATS: { value: ApiFormat; label: string }[] = [
   { value: "openai-completions", label: "Chat Completions compatible" },
   { value: "openai-responses", label: "Responses compatible" }
 ];
+const FORMAT_NAMES: Record<ApiFormat, string> = { "openai-completions": "Chat Completions", "openai-responses": "Responses" };
 const ANTHROPIC_GUIDANCE = "https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account";
 /** A discovery with more new IDs than this starts with nothing ticked, and gets a filter. */
 const FOUND_PRESELECT_LIMIT = 10;
@@ -83,8 +84,7 @@ function hostOf(url: string): string {
 const initialOf = (name: string) => (name.trim().charAt(0) || "?").toUpperCase();
 
 function formatLabel(provider: ProviderRecord): string {
-  if (provider.kind === "subscription") return "Subscription";
-  return provider.apiFormat === "openai-responses" ? "Responses" : "Chat Completions";
+  return provider.kind === "subscription" ? "Subscription" : FORMAT_NAMES[provider.apiFormat];
 }
 
 /** What a connection's status dot says, in the `package-state` tones. */
@@ -695,6 +695,7 @@ function ConnectionEditor({
                     <ModelRow
                       key={key}
                       model={model}
+                      connectionFormat={draft.apiFormat}
                       open={open.has(key)}
                       catalog={builtinModels}
                       catalogLoading={catalogLoading}
@@ -760,6 +761,7 @@ function ConnectionEditor({
 
 interface RowProps {
   model: ModelRecord;
+  connectionFormat: ApiFormat;
   open: boolean;
   catalog: BuiltinModelSuggestion[];
   catalogLoading: boolean;
@@ -771,7 +773,7 @@ interface RowProps {
 }
 
 /** One model: a line saying what it is and what it can do, which opens into its settings. */
-function ModelRow({ model, open, catalog, catalogLoading, catalogError, reduce, onToggle, onChange, onRemove }: RowProps) {
+function ModelRow({ model, connectionFormat, open, catalog, catalogLoading, catalogError, reduce, onToggle, onChange, onRemove }: RowProps) {
   const ready = modelIsReady(model);
   const label = model.name || model.id || "New model";
   return (
@@ -789,6 +791,7 @@ function ModelRow({ model, open, catalog, catalogLoading, catalogError, reduce, 
             )}
             {model.reasoning && <span className="subagent-badge">Reasoning</span>}
             {model.vision && <span className="subagent-badge">Vision</span>}
+            {model.apiFormat && model.apiFormat !== connectionFormat && <span className="subagent-badge">{FORMAT_NAMES[model.apiFormat]}</span>}
           </span>
         </button>
         <button type="button" className="command-icon-button" aria-label={`Remove ${label}`} onClick={onRemove}>
@@ -802,7 +805,7 @@ function ModelRow({ model, open, catalog, catalogLoading, catalogError, reduce, 
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.2, ease: EASE }}
         >
-          <ModelEditor model={model} catalog={catalog} catalogLoading={catalogLoading} catalogError={catalogError} onChange={onChange} />
+          <ModelEditor model={model} connectionFormat={connectionFormat} catalog={catalog} catalogLoading={catalogLoading} catalogError={catalogError} onChange={onChange} />
         </motion.div>
       )}
     </li>
@@ -811,13 +814,14 @@ function ModelRow({ model, open, catalog, catalogLoading, catalogError, reduce, 
 
 interface ModelEditorProps {
   model: ModelRecord;
+  connectionFormat: ApiFormat;
   catalog: BuiltinModelSuggestion[];
   catalogLoading: boolean;
   catalogError?: string;
   onChange: (patch: Partial<ModelRecord>) => void;
 }
 
-function ModelEditor({ model, catalog, catalogLoading, catalogError, onChange }: ModelEditorProps) {
+function ModelEditor({ model, connectionFormat, catalog, catalogLoading, catalogError, onChange }: ModelEditorProps) {
   const [advanced, setAdvanced] = useState(false);
   const label = model.name || model.id || "this model";
 
@@ -840,6 +844,21 @@ function ModelEditor({ model, catalog, catalogLoading, catalogError, onChange }:
       <div className="model-editor-grid">
         <label><span>Model ID</span><input value={model.id} onChange={(event) => onChange({ id: event.target.value })} placeholder="provider/model-id" spellCheck={false} /></label>
         <label><span>Display name</span><input value={model.name} onChange={(event) => onChange({ name: event.target.value })} placeholder={model.id || "Model name"} /></label>
+        {/* Some gateways serve a few models over another API at the same URL; blank follows the connection. */}
+        <label>
+          <span>API format</span>
+          <Select
+            className="settings-select"
+            matchWidth
+            value={model.apiFormat ?? ""}
+            onChange={(value) => onChange({ apiFormat: value ? (value as ApiFormat) : undefined })}
+            options={[
+              { value: "", label: "Same as connection", hint: FORMAT_NAMES[connectionFormat] },
+              ...API_FORMATS.map(({ value }) => ({ value, label: FORMAT_NAMES[value] }))
+            ]}
+            aria-label={`API format for ${label}`}
+          />
+        </label>
       </div>
       <ModelSuggestionSearch
         modelLabel={model.name || model.id || "this model"}

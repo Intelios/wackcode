@@ -569,13 +569,14 @@ pub async fn broadcast(app: &AppHandle, value: &Value) -> Result<(), String> {
 }
 
 /// A connection as the worker's protocol describes it. Only models with confirmed limits are
-/// sent: Pi cannot run a model without them.
+/// sent: Pi cannot run a model without them. A model's own API format rides as its `api`, which
+/// Pi prefers over the connection's.
 pub fn worker_provider_json(provider: &ProviderRecord) -> Value {
     let models: Vec<Value> = provider
         .models
         .iter()
         .filter_map(|model| {
-            Some(json!({
+            let mut entry = json!({
                 "id": model.id,
                 "name": model.name,
                 "contextWindow": model.context_window?,
@@ -584,7 +585,11 @@ pub fn worker_provider_json(provider: &ProviderRecord) -> Value {
                 "thinkingLevels": model.thinking_levels,
                 "thinkingLevelMap": model.thinking_level_map,
                 "vision": model.vision,
-            }))
+            });
+            if let Some(api) = &model.api_format {
+                entry["api"] = json!(api);
+            }
+            Some(entry)
         })
         .collect();
     json!({
@@ -1550,6 +1555,27 @@ mod tests {
             connected: true,
             enabled: true,
         }
+    }
+
+    #[test]
+    fn a_models_own_api_format_reaches_the_worker_only_when_set() {
+        let model = |id: &str, api_format: Option<&str>| crate::models::ModelRecord {
+            id: id.into(),
+            name: id.into(),
+            context_window: Some(8_000),
+            max_tokens: Some(1_000),
+            reasoning: false,
+            thinking_levels: vec!["off".into()],
+            thinking_level_map: Default::default(),
+            vision: false,
+            api_format: api_format.map(Into::into),
+        };
+        let mut provider = provider();
+        provider.models = vec![model("glm", None), model("muse", Some("openai-responses"))];
+        let json = worker_provider_json(&provider);
+        assert_eq!(json["api"], "openai-completions");
+        assert!(json["models"][0].get("api").is_none());
+        assert_eq!(json["models"][1]["api"], "openai-responses");
     }
 
     #[test]

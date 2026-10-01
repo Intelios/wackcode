@@ -43,7 +43,9 @@ export function applyBuiltinModelSuggestion(model: ModelRecord, suggestion: Buil
     reasoning: suggestion.reasoning,
     thinkingLevels: [...suggestion.thinkingLevels],
     thinkingLevelMap: { ...suggestion.thinkingLevelMap },
-    vision: suggestion.vision
+    vision: suggestion.vision,
+    // The catalogue entry may come from another provider's API, so the user's choice stands.
+    ...(model.apiFormat ? { apiFormat: model.apiFormat } : {})
   };
 }
 

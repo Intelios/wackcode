@@ -161,7 +161,7 @@ pub async fn save_provider(
 ) -> Result<ProviderRecord, String> {
     let name = required(&input.name, "Connection name")?;
     let base_url = validate_base_url(&input.base_url)?;
-    if input.api_format != "openai-completions" && input.api_format != "openai-responses" {
+    if !API_FORMATS.contains(&input.api_format.as_str()) {
         return Err("Choose a supported OpenAI-compatible API format".into());
     }
     validate_models(&input.models)?;
@@ -4591,12 +4591,22 @@ fn view_task_and_provider(
     Ok((task, provider))
 }
 
+/// The APIs a custom connection, or one of its models, may speak.
+const API_FORMATS: [&str; 2] = ["openai-completions", "openai-responses"];
+
 fn validate_models(models: &[ModelRecord]) -> Result<(), String> {
     let mut ids = HashSet::new();
     for model in models {
         required(&model.id, "Model ID")?;
         if !ids.insert(model.id.trim()) {
             return Err(format!("Model ID is duplicated: {}", model.id));
+        }
+        if model
+            .api_format
+            .as_deref()
+            .is_some_and(|format| !API_FORMATS.contains(&format))
+        {
+            return Err(format!("Choose a supported API format for {}", model.id));
         }
         if model.context_window.is_some_and(|value| value == 0) {
             return Err("Context limits must be positive".into());
@@ -5279,8 +5289,33 @@ mod tests {
             thinking_levels: vec!["off".into()],
             thinking_level_map: std::collections::BTreeMap::from([("off".into(), None)]),
             vision: false,
+            api_format: None,
         }];
         assert!(validate_models(&models).is_ok());
+    }
+
+    #[test]
+    fn a_model_may_override_its_connections_api_format_only_with_a_supported_one() {
+        let model = |api_format: Option<&str>| ModelRecord {
+            id: "muse".into(),
+            name: "Muse".into(),
+            context_window: Some(8_000),
+            max_tokens: Some(1_000),
+            reasoning: false,
+            thinking_levels: vec!["off".into()],
+            thinking_level_map: Default::default(),
+            vision: false,
+            api_format: api_format.map(Into::into),
+        };
+        assert!(validate_models(&[model(Some("openai-responses"))]).is_ok());
+        assert!(validate_models(&[model(Some("anthropic-messages"))])
+            .unwrap_err()
+            .contains("muse"));
+        // Absent on disk means "follow the connection", and stays absent when written back.
+        let json = r#"{"id":"m","name":"M","contextWindow":8000,"maxTokens":1000,"reasoning":false,"thinkingLevels":["off"],"thinkingLevelMap":{"off":null},"vision":false}"#;
+        let old: ModelRecord = serde_json::from_str(json).unwrap();
+        assert_eq!(old.api_format, None);
+        assert!(!serde_json::to_string(&old).unwrap().contains("apiFormat"));
     }
 
     fn image(mime_type: &str, data: &str) -> ImageContent {
@@ -5321,6 +5356,7 @@ mod tests {
             thinking_levels: vec!["off".into()],
             thinking_level_map: Default::default(),
             vision,
+            api_format: None,
         };
         let provider = ProviderRecord {
             id: "p".into(),
@@ -5373,6 +5409,7 @@ mod tests {
                 thinking_levels: vec!["off".into()],
                 thinking_level_map: Default::default(),
                 vision: false,
+                api_format: None,
             }],
             created_at: "now".into(),
             updated_at: "now".into(),

@@ -106,6 +106,26 @@ describe("Settings › Providers", () => {
     await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ id: "p1", name: "Renamed" })));
   });
 
+  it("lets one model speak another API than its connection, and back again", async () => {
+    const { onSave } = renderProviders(undefined, "p1");
+    fireEvent.click(screen.getByRole("button", { name: /^Big Model/ }));
+    const format = screen.getByRole("button", { name: "API format for Big Model" });
+    expect(format).toHaveTextContent("Same as connection");
+
+    fireEvent.click(format);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Responses" }));
+    expect(screen.getByRole("button", { name: /^Big Model/ })).toHaveTextContent("Responses");
+    fireEvent.click(screen.getByRole("button", { name: "Save connection" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    const [big, raw] = onSave.mock.calls[0][0].models as ModelRecord[];
+    expect(big.apiFormat).toBe("openai-responses");
+    expect(raw.apiFormat).toBeUndefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "API format for Big Model" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Same as connection/ }));
+    expect(screen.getByRole("button", { name: /^Big Model/ })).not.toHaveTextContent("Responses");
+  });
+
   it("lets you pick which discovered models to add, leaving out the ones already there", async () => {
     const { onDiscover, onSave } = renderProviders(undefined, "p1", ["vendor/big-model", "vendor/new-a", "vendor/new-b"]);
     fireEvent.click(screen.getByRole("button", { name: "Fetch models" }));

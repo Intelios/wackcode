@@ -195,7 +195,7 @@ The app lands in `src-tauri/target/release/bundle/macos/WackCode.app`; drag it i
 
 Open **Settings › Providers** (<kbd>⌘ ,</kbd>) and either:
 
-- **Add a connection:** any OpenAI-compatible endpoint (Chat Completions or Responses) with its API key. Fetch the provider's model list and pick the models you want, then let Pi's built-in catalogue fill in context limits and reasoning settings, or enter them yourself.
+- **Add a connection:** any OpenAI-compatible endpoint (Chat Completions or Responses) with its API key. Fetch the provider's model list and pick the models you want, then let Pi's built-in catalogue fill in context limits and reasoning settings, or enter them yourself. A model can use the other API format when a gateway serves it that way.
 - **Sign in with a subscription:** OpenAI Codex (ChatGPT Plus/Pro), GitHub Copilot, Anthropic, xAI, Meta, or Kimi For Coding. Check your provider's terms for third-party apps.
 
 Then press <kbd>⌘ O</kbd> to add a project, pick a model in the composer, and send your first message. Try `/init` to have the agent write an `AGENTS.md` for your project.

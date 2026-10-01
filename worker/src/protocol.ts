@@ -124,6 +124,8 @@ export interface WorkerModel {
   thinkingLevelMap: Partial<Record<ThinkingLevel, string | null>>;
   /** Accepts image input; becomes Pi's `input: ["text", "image"]`. */
   vision?: boolean;
+  /** This model's own API, preferred by Pi over the connection's `api`. Absent follows the connection. */
+  api?: ApiFormat;
 }
 
 export interface WorkerProvider {

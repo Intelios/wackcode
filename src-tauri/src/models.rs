@@ -20,6 +20,12 @@ pub struct ModelRecord {
     /// for its own "image omitted" placeholder before the request leaves the worker.
     #[serde(default)]
     pub vision: bool,
+    /// Replaces the connection's `api_format` for this model alone, for gateways that serve some
+    /// models over another API at the same base URL (OpenCode Go answers a Muse model sent to
+    /// Chat Completions with `ModelProtocolUnsupported`). None follows the connection; it is left
+    /// out of the JSON so older records, and the worker fingerprint they produce, stay unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_format: Option<String>,
 }
 
 /// Local Pi catalogue metadata offered in Settings; never persisted with a connection.

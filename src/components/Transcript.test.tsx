@@ -555,6 +555,66 @@ describe("Transcript scroll rail", () => {
     expect(screen.getByRole("navigation", { name: "Conversation timeline" })).toBeInTheDocument();
   });
 
+  it("stops following on a gentle upward wheel while the assistant is working", async () => {
+    const messages = [user("u1", "Keep working")];
+    const view = render(<Transcript messages={messages} running />);
+    const scroller = await overflow(view.container);
+    scroller.scrollTop = 1_500;
+    fireEvent.scroll(scroller);
+
+    fireEvent.wheel(scroller, { deltaY: -4 });
+    expect(screen.getByRole("button", { name: "Jump to latest" })).toHaveClass("detached");
+    scroller.scrollTop = 1_496;
+    fireEvent.scroll(scroller);
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 2_030 });
+    view.rerender(<Transcript messages={messages} running activity="tool_execution_update" />);
+    expect(scroller.scrollTop).toBe(1_496);
+    expect(screen.getByRole("button", { name: "Jump to latest" })).toHaveClass("detached");
+  });
+
+  it("releases follow mode before a smooth timeline jump starts", async () => {
+    const messages = [user("u1", "First task"), user("u2", "Second task")];
+    const view = render(<Transcript messages={messages} running />);
+    const scroller = await overflow(view.container);
+    scroller.scrollTop = 1_500;
+    fireEvent.scroll(scroller);
+    await flushFrame();
+    // Native smooth scrolling starts later, after the click and possibly another chunk.
+    const scrollTo = vi.fn();
+    Object.defineProperty(scroller, "scrollTo", { configurable: true, value: scrollTo });
+    fireEvent.click(screen.getByRole("button", { name: "Turn 1: First task" }));
+    expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: "smooth" });
+    expect(screen.getByRole("button", { name: "Jump to latest" })).toHaveClass("detached");
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 2_100 });
+    view.rerender(<Transcript messages={messages} running activity="tool_execution_update" />);
+    expect(scroller.scrollTop).toBe(1_500);
+  });
+
+  it("does not snap to the bottom when a scrub reverses direction nearby", async () => {
+    const messages = [user("u1", "Keep working")];
+    const view = render(<Transcript messages={messages} running />);
+    const scroller = await overflow(view.container);
+    scroller.scrollTop = 1_500;
+    fireEvent.scroll(scroller);
+    const rail = view.container.querySelector<HTMLElement>(".scroll-rail")!;
+    Object.defineProperty(rail, "clientHeight", { configurable: true, value: 400 });
+    vi.spyOn(rail, "getBoundingClientRect").mockReturnValue({ top: 0, height: 400 } as DOMRect);
+    fireEvent.scroll(scroller);
+    await flushFrame();
+
+    fireEvent.pointerDown(rail, { clientY: 350 });
+    fireEvent.pointerMove(rail, { clientY: 330 });
+    fireEvent.scroll(scroller);
+    expect(scroller.scrollTop).toBe(1_400);
+    fireEvent.pointerMove(rail, { clientY: 340 });
+    fireEvent.scroll(scroller);
+    expect(scroller.scrollTop).toBe(1_450);
+    view.rerender(<Transcript messages={messages} running activity="tool_execution_update" />);
+    expect(scroller.scrollTop).toBe(1_450);
+    expect(screen.getByRole("button", { name: "Jump to latest" })).toHaveClass("detached");
+    fireEvent.pointerUp(rail, { clientY: 340 });
+  });
+
   it("marks the running turn's tick live", async () => {
     const startedAt = 1_000;
     const { container } = render(<Transcript

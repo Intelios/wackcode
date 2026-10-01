@@ -26,6 +26,8 @@ interface Props {
   liveTurnId?: string;
   /** Whether the viewport is off the bottom — the end cap lights up as a call to action. */
   detached?: boolean;
+  /** Releases bottom-pinning before a timeline jump or scrub starts. */
+  onNavigate?: () => void;
   /** Scrolls to the latest message and re-pins follow mode. */
   onJumpToLatest?: () => void;
 }
@@ -49,7 +51,7 @@ function sameMetrics(a: Metrics, b: Metrics): boolean {
  * stays the single owner of bottom-pinning. The rail is always mounted (even
  * empty) so its height can be measured before the transcript overflows.
  */
-export function ScrollRail({ target, turns, liveTurnId, detached, onJumpToLatest }: Props) {
+export function ScrollRail({ target, turns, liveTurnId, detached, onNavigate, onJumpToLatest }: Props) {
   const reduced = useReducedMotion();
   const railRef = useRef<HTMLDivElement>(null);
   const lineRef = useRef<HTMLDivElement | null>(null);
@@ -162,12 +164,14 @@ export function ScrollRail({ target, turns, liveTurnId, detached, onJumpToLatest
     const el = target.current;
     if (!el || !metrics) return;
     const top = scrollTopForRailPoint(railY(event), metrics.railHeight, metrics.scrollHeight, metrics.clientHeight);
+    onNavigate?.();
     scrollElementTo(el, top, smooth);
   };
 
   const onRailDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!metrics) return;
     event.preventDefault();
+    onNavigate?.();
     wake();
     event.currentTarget.setPointerCapture?.(event.pointerId);
     setScrubbing(true);
@@ -196,6 +200,7 @@ export function ScrollRail({ target, turns, liveTurnId, detached, onJumpToLatest
     if (!el || !metrics) return;
     const top = metrics.tops[index];
     if (Number.isNaN(top)) return;
+    onNavigate?.();
     scrollElementTo(el, scrollTopFor(top, metrics.scrollHeight, metrics.clientHeight), !reduced);
   };
 

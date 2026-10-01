@@ -479,7 +479,7 @@ function activityLabel(activity?: string): string {
 }
 
 export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, runTimings = [], liveToolText, liveToolDetails, planState, onPlanAction, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind }: Props) {
-  const { ref, onScroll, detached, jumpToLatest } = useFollowScroll();
+  const { ref, onScroll, onWheel, detached, pauseFollowing, jumpToLatest } = useFollowScroll();
   const [editingId, setEditingId] = useState<string>();
   const [expandedThinking] = useState(() => new Set<string>());
   const latest = useMemo(() => latestTurn(messages), [messages]);
@@ -576,7 +576,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
 
   return (
     <div className="transcript-zone">
-      <div className="conversation-scroll" ref={ref} onScroll={onScroll}>
+      <div className="conversation-scroll" ref={ref} onScroll={onScroll} onWheel={onWheel}>
         <ThinkingExpansion.Provider value={expandedThinking}>
           <ExploreExpansion.Provider value={expandedGroups}>
             <div className="transcript">
@@ -639,7 +639,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
           </ExploreExpansion.Provider>
         </ThinkingExpansion.Provider>
       </div>
-      <ScrollRail target={ref} turns={turns} liveTurnId={liveTurnId} detached={detached} onJumpToLatest={jumpToLatest} />
+      <ScrollRail target={ref} turns={turns} liveTurnId={liveTurnId} detached={detached} onNavigate={pauseFollowing} onJumpToLatest={jumpToLatest} />
     </div>
   );
 }

@@ -2,7 +2,10 @@
  * The model-facing guidance for the todo tool. Adapted from `@juicesharp/rpiv-todo`
  * v2.11.0 (MIT) `todo.ts` (the `DEFAULT_PROMPT_SNIPPET` / `DEFAULT_PROMPT_GUIDELINES`
  * there); the behavioral rules are kept verbatim — they encode why the tool exists:
- * keeping the agent honest about multi-step progress.
+ * keeping the agent honest about multi-step progress — except the final line, a
+ * WackCode addition telling the model several `todo` calls may share one response
+ * (the agent loop applies them in emission order), so creating a list isn't one
+ * turn per task.
  */
 export const TODO_PROMPT_SNIPPET = "Manage a task list to track multi-step progress";
 
@@ -15,4 +18,5 @@ export const TODO_PROMPT_GUIDELINES: string[] = [
   "Use blockedBy to express dependencies (A is blocked by B). On create, pass blockedBy as the initial set. On update, use addBlockedBy / removeBlockedBy (additive merge — do not resend the full array). Cycles are rejected.",
   "list hides tombstoned (deleted) tasks by default; pass includeDeleted:true to see them. Pass status to filter by a single status.",
   "Subject must be short and imperative (e.g. 'Research existing tool'); description is for long-form detail. activeForm is a present-continuous label shown while in_progress.",
+  "You can emit several `todo` calls in one response — create all known tasks at once instead of one per turn. A task created in the same batch can't be referenced by id (e.g. as a blockedBy target) until the next turn.",
 ];

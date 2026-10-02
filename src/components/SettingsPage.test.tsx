@@ -33,6 +33,8 @@ const noSubagents: SubagentConfig = { enabled: false, trigger: "on_request", max
 const defaultAppearance: AppearanceConfig = DEFAULT_APPEARANCE;
 const defaultPrompts: PromptConfig = {};
 
+const noFavorites = { favoriteModels: [], onSetFavorite: vi.fn().mockResolvedValue(undefined) };
+
 afterEach(() => {
   cleanup();
   vi.mocked(api.listBuiltinModels).mockReset().mockResolvedValue([]);
@@ -49,7 +51,7 @@ it("shows subscription guidance before sign-in and reconnect", async () => {
     onRefresh: vi.fn().mockResolvedValue(undefined), onInstall: vi.fn(), onTrust: vi.fn(),
     onSearch: vi.fn().mockResolvedValue([]), onRemove: vi.fn(), onUpdate: vi.fn(), onSetResources: vi.fn()
   };
-  const { rerender } = render(<SettingsPage {...props} providers={[]} />);
+  const { rerender } = render(<SettingsPage {...noFavorites} {...props} providers={[]} />);
   fireEvent.click(screen.getByRole("button", { name: /Sign in with a subscription/ }));
   expect(await screen.findByText("Claude usage may be billed separately.")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
@@ -59,7 +61,7 @@ it("shows subscription guidance before sign-in and reconnect", async () => {
     id: "anthropic", name: "Anthropic", kind: "subscription", baseUrl: "", apiFormat: "",
     models: [], createdAt: "now", updatedAt: "now", hasApiKey: false, connected: true
   };
-  rerender(<SettingsPage {...props} providers={[provider]} connectedSubscriptionId="anthropic" />);
+  rerender(<SettingsPage {...noFavorites} {...props} providers={[provider]} connectedSubscriptionId="anthropic" />);
   expect(screen.getByText("Claude usage may be billed separately.")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
   expect(onConnectSubscription).toHaveBeenLastCalledWith("anthropic");
@@ -75,7 +77,7 @@ const catalog: ToolCatalogEntry[] = [
 function renderTools(overrides: { disabled?: string[]; onSetDisabledTools?: (next: string[]) => Promise<void> } = {}) {
   const onSetDisabledTools = overrides.onSetDisabledTools ?? vi.fn().mockResolvedValue(undefined);
   render(
-    <SettingsPage
+    <SettingsPage {...noFavorites}
       providers={[]}
       packages={[]}
       toolCatalog={catalog}
@@ -177,7 +179,7 @@ const testProviders: ProviderRecord[] = [
 describe("SettingsPage sidebar navigation", () => {
   it("renders providers subnav directly under the Providers button and before Packages/Tools", () => {
     render(
-      <SettingsPage
+      <SettingsPage {...noFavorites}
         providers={testProviders}
         packages={[]}
         toolCatalog={catalog}
@@ -222,7 +224,7 @@ describe("SettingsPage sidebar navigation", () => {
 
   it("toggles provider subnav animation state and aria attributes when switching sections", () => {
     const { container } = render(
-      <SettingsPage
+      <SettingsPage {...noFavorites}
         providers={testProviders}
         packages={[]}
         toolCatalog={catalog}
@@ -271,7 +273,7 @@ describe("SettingsPage sidebar navigation", () => {
   it("calls onClose when clicking the settings back button containing icon and Settings label", () => {
     const onClose = vi.fn();
     render(
-      <SettingsPage
+      <SettingsPage {...noFavorites}
         providers={testProviders}
         packages={[]}
         toolCatalog={catalog}
@@ -305,7 +307,7 @@ describe("SettingsPage sidebar navigation", () => {
 describe("SettingsPage about", () => {
   function renderPage() {
     render(
-      <SettingsPage
+      <SettingsPage {...noFavorites}
         providers={[]}
         packages={[]}
         toolCatalog={catalog}
@@ -357,7 +359,7 @@ describe("SettingsPage model capabilities", () => {
     };
     const onSave = vi.fn().mockImplementation(async (input) => ({ ...provider, models: input.models }));
     render(
-      <SettingsPage
+      <SettingsPage {...noFavorites}
         providers={[provider]}
         packages={[]}
         toolCatalog={catalog}
@@ -394,7 +396,7 @@ describe("SettingsPage model capabilities", () => {
 describe("SettingsPage provider enable switch", () => {
   function renderProviderSettings(provider: ProviderRecord, onSetProviderEnabled = vi.fn().mockResolvedValue(undefined)) {
     const view = render(
-      <SettingsPage
+      <SettingsPage {...noFavorites}
         providers={[provider]}
         packages={[]}
         toolCatalog={catalog}
@@ -431,7 +433,7 @@ describe("SettingsPage provider enable switch", () => {
     // The switch rewrites `providers` live; only the saved record's flag changed, so the
     // in-progress rename must survive it.
     expect(screen.getByLabelText("Name", { selector: "input" })).toHaveValue("Renamed");
-    rerender(<SettingsPage providers={[{ ...provider, enabled: false }]} packages={[]} toolCatalog={catalog} disabledTools={[]} appDataPath="/tmp/wackcode" onClose={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onSetProviderEnabled={onSetProviderEnabled} onConnectSubscription={vi.fn()} onSignOutSubscription={vi.fn()} onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()} onRefresh={vi.fn().mockResolvedValue(undefined)} onInstall={vi.fn()} onTrust={vi.fn()} onSearch={vi.fn().mockResolvedValue([])} onRemove={vi.fn()} onUpdate={vi.fn()} onSetResources={vi.fn()} />);
+    rerender(<SettingsPage {...noFavorites} providers={[{ ...provider, enabled: false }]} packages={[]} toolCatalog={catalog} disabledTools={[]} appDataPath="/tmp/wackcode" onClose={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onSetProviderEnabled={onSetProviderEnabled} onConnectSubscription={vi.fn()} onSignOutSubscription={vi.fn()} onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()} onRefresh={vi.fn().mockResolvedValue(undefined)} onInstall={vi.fn()} onTrust={vi.fn()} onSearch={vi.fn().mockResolvedValue([])} onRemove={vi.fn()} onUpdate={vi.fn()} onSetResources={vi.fn()} />);
     expect(screen.getByLabelText("Name", { selector: "input" })).toHaveValue("Renamed");
     expect(screen.getByRole("switch", { name: "Use Entrim AI" })).toHaveAttribute("aria-checked", "false");
   });
@@ -454,7 +456,7 @@ const flashSuggestion: BuiltinModelSuggestion = {
 function renderModelSettings(provider: ProviderRecord = testProviders[0]) {
   const onSave = vi.fn().mockImplementation(async (input) => ({ ...provider, models: input.models }));
   const view = render(
-    <SettingsPage
+    <SettingsPage {...noFavorites}
       providers={[provider]} packages={[]} toolCatalog={catalog} disabledTools={[]}
       appDataPath="/tmp/wackcode" onClose={vi.fn()} onSave={onSave} onDelete={vi.fn()} onSetProviderEnabled={vi.fn()}
       onConnectSubscription={vi.fn()} onSignOutSubscription={vi.fn()}
@@ -552,7 +554,7 @@ describe("SettingsPage sub-agents", () => {
       onSearch: vi.fn().mockResolvedValue([]), onRemove: vi.fn(), onUpdate: vi.fn(), onSetResources: vi.fn()
     };
     const subagents: SubagentConfig = { ...noSubagents, enabled };
-    const view = render(<SettingsPage {...props} subagents={subagents} />);
+    const view = render(<SettingsPage {...noFavorites} {...props} subagents={subagents} />);
     return { ...view, props, subagents };
   }
 
@@ -564,13 +566,13 @@ describe("SettingsPage sub-agents", () => {
     fireEvent.click(await screen.findByRole("switch", { name: "Sub-agents" }));
     await waitFor(() => expect(props.onSetSubagents).toHaveBeenCalledWith({ ...subagents, enabled: true }));
 
-    rerender(<SettingsPage {...props} subagents={{ ...subagents, enabled: true }} />);
+    rerender(<SettingsPage {...noFavorites} {...props} subagents={{ ...subagents, enabled: true }} />);
     fireEvent.click(within(screen.getByRole("switch", { name: "Sub-agents" }).closest("article")!).getByRole("button", { name: /Configure/ }));
     expect(screen.getByRole("heading", { name: "Helpers WackCode can hand work to" })).toBeInTheDocument();
     expect(within(nav).getByRole("button", { name: /Sub-agents/ })).toHaveClass("active");
 
     // Switched off elsewhere while its page is open: back to Packages, where the switch lives.
-    rerender(<SettingsPage {...props} subagents={subagents} />);
+    rerender(<SettingsPage {...noFavorites} {...props} subagents={subagents} />);
     expect(screen.queryByRole("heading", { name: "Helpers WackCode can hand work to" })).not.toBeInTheDocument();
     expect(within(nav).getByRole("button", { name: /Packages/ })).toHaveClass("active");
   });
@@ -579,7 +581,7 @@ describe("SettingsPage sub-agents", () => {
     const { rerender, props, subagents } = renderPage(false);
     const onSetComputerUse = vi.fn().mockResolvedValue(undefined);
     const off = { enabled: false, neverAllow: [] };
-    rerender(<SettingsPage {...props} subagents={subagents} computerUse={off} computerUseSupported onSetComputerUse={onSetComputerUse} />);
+    rerender(<SettingsPage {...noFavorites} {...props} subagents={subagents} computerUse={off} computerUseSupported onSetComputerUse={onSetComputerUse} />);
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
     expect(within(nav).queryByRole("button", { name: /Computer use/ })).not.toBeInTheDocument();
     fireEvent.click(within(nav).getByRole("button", { name: /Packages/ }));
@@ -594,7 +596,7 @@ describe("SettingsPage sub-agents", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Turn on anyway" }));
     await waitFor(() => expect(onSetComputerUse).toHaveBeenCalledWith({ enabled: true, neverAllow: [] }));
 
-    rerender(<SettingsPage {...props} subagents={subagents} computerUse={{ enabled: true, neverAllow: [] }} computerUseSupported onSetComputerUse={onSetComputerUse} />);
+    rerender(<SettingsPage {...noFavorites} {...props} subagents={subagents} computerUse={{ enabled: true, neverAllow: [] }} computerUseSupported onSetComputerUse={onSetComputerUse} />);
     expect(within(nav).getByRole("button", { name: /Computer use/ })).toHaveClass("active");
     expect(screen.getByRole("heading", { name: "Apps it never uses" })).toBeInTheDocument();
     fireEvent.change(screen.getByRole("textbox", { name: "Bundle id to never allow" }), { target: { value: "com.example.Secret" } });
@@ -604,7 +606,7 @@ describe("SettingsPage sub-agents", () => {
 
   it("keeps the computer use switch off on Macs that can't run it", async () => {
     const { rerender, props, subagents } = renderPage(false);
-    rerender(<SettingsPage {...props} subagents={subagents} computerUse={{ enabled: false, neverAllow: [] }} computerUseSupported={false} onSetComputerUse={vi.fn()} />);
+    rerender(<SettingsPage {...noFavorites} {...props} subagents={subagents} computerUse={{ enabled: false, neverAllow: [] }} computerUseSupported={false} onSetComputerUse={vi.fn()} />);
     fireEvent.click(within(screen.getByRole("navigation", { name: "Settings sections" })).getByRole("button", { name: /Packages/ }));
     const toggle = await screen.findByRole("switch", { name: "Computer use" });
     expect(toggle).toBeDisabled();
@@ -614,12 +616,12 @@ describe("SettingsPage sub-agents", () => {
   it("switches Web Fetch through the tool denylist, keeping the rest of it", async () => {
     const { rerender, props, subagents } = renderPage(false);
     props.onSetDisabledTools.mockResolvedValue(undefined);
-    rerender(<SettingsPage {...props} subagents={subagents} disabledTools={["bash"]} />);
+    rerender(<SettingsPage {...noFavorites} {...props} subagents={subagents} disabledTools={["bash"]} />);
     fireEvent.click(within(screen.getByRole("navigation", { name: "Settings sections" })).getByRole("button", { name: /Packages/ }));
     fireEvent.click(await screen.findByRole("switch", { name: "Web Fetch" }));
     await waitFor(() => expect(props.onSetDisabledTools).toHaveBeenCalledWith(["bash", "web_fetch"]));
 
-    rerender(<SettingsPage {...props} subagents={subagents} disabledTools={["bash", "web_fetch"]} />);
+    rerender(<SettingsPage {...noFavorites} {...props} subagents={subagents} disabledTools={["bash", "web_fetch"]} />);
     expect(screen.getByRole("switch", { name: "Web Fetch" })).toHaveAttribute("aria-checked", "false");
     fireEvent.click(screen.getByRole("switch", { name: "Web Fetch" }));
     await waitFor(() => expect(props.onSetDisabledTools).toHaveBeenLastCalledWith(["bash"]));
@@ -633,7 +635,7 @@ describe("SettingsPage MCP servers", () => {
       onSetMcpServerTools: vi.fn(), onTestMcpServer: vi.fn()
     };
     render(
-      <SettingsPage
+      <SettingsPage {...noFavorites}
         providers={[]} packages={[]} toolCatalog={[]} disabledTools={[]} appDataPath="/tmp/wackcode"
         onClose={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onSetProviderEnabled={vi.fn()} onConnectSubscription={vi.fn()} onSignOutSubscription={vi.fn()}
         onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
@@ -658,7 +660,7 @@ describe("SettingsPage MCP servers", () => {
 describe("SettingsPage appearance section", () => {
   function renderAppearance(appearance: AppearanceConfig, onSetAppearance = vi.fn().mockResolvedValue(undefined)) {
     render(
-      <SettingsPage
+      <SettingsPage {...noFavorites}
         providers={[]} packages={[]} toolCatalog={[]} disabledTools={[]} appDataPath="/tmp/wackcode"
         onClose={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onSetProviderEnabled={vi.fn()} onConnectSubscription={vi.fn()} onSignOutSubscription={vi.fn()}
         onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()}

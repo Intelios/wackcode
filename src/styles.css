@@ -1130,6 +1130,21 @@ button.reasoning-toggle.at-max .reasoning-toggle-label {
 .picker-provider-count { font-size: 11px; color: var(--text-faint); margin-right: 2px; flex: 0 0 auto; }
 .picker-provider-item .picker-chevron { width: 11px; height: 11px; color: var(--text-faint); }
 .picker-provider-item:hover .picker-chevron { color: var(--text-soft); }
+.picker-favorites-entry .picker-provider-name { flex: 1; }
+.picker-provider-divider { height: 1px; margin: 4px 6px; background: var(--border); }
+.picker-model-row { display: flex; align-items: center; gap: 2px; }
+.picker-model-select { flex: 1; min-width: 0; width: auto; }
+.picker-model-row.favorite .picker-model-select { height: 42px; }
+.picker-model-label { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+.picker-model-label > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker-model-provider { font-size: 10.5px; color: var(--text-faint); }
+.picker-favorite-btn { width: 26px; height: 26px; flex: 0 0 auto; color: var(--text-faint); }
+.picker-favorite-btn svg { width: 14px; height: 14px; transition: fill .12s var(--ease), color .12s var(--ease); }
+.picker-favorite-btn:hover, .picker-favorite-btn:focus-visible, .picker-favorite-btn.is-favorite { color: var(--wc-accent); }
+.picker-favorite-btn.is-favorite svg { fill: currentColor; }
+.picker-favorite-btn:disabled { opacity: .5; cursor: default; }
+.picker-empty { display: flex; flex-direction: column; gap: 5px; padding: 12px 8px; font-size: 12px; line-height: 1.5; color: var(--text-dim); }
+.picker-empty strong { font-weight: 600; color: var(--text-soft); }
 
 /* branch picker: the trigger's name slides when the checkout switches */
 .branch-trigger .select-chevron { width: 9px; height: 9px; color: var(--text-faint); flex: 0 0 auto; }

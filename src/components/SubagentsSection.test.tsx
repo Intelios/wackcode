@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AutoTitleConfig, ProviderRecord, SubagentConfig, SubagentRecord } from "../types";
 import { SubagentsSection } from "./SubagentsSection";
 
+const noFavorites = { favoriteModels: [], onSetFavorite: vi.fn().mockResolvedValue(undefined) };
+
 afterEach(cleanup);
 
 const scout: SubagentRecord = {
@@ -34,7 +36,7 @@ function renderSection(
   const onSetAutoTitle = vi.fn().mockResolvedValue(undefined);
   const onOpenProviders = vi.fn();
   render(
-    <SubagentsSection
+    <SubagentsSection {...noFavorites}
       config={{ ...config, ...overrides }}
       providers={providers}
       onChange={onChange}
@@ -48,6 +50,30 @@ function renderSection(
 }
 
 describe("SubagentsSection", () => {
+  it("uses the same favourites in built-in, custom-agent and automatic-title model pickers", () => {
+    const reference = { providerId: provider.id, modelId: "mini" };
+    const onSetFavorite = vi.fn().mockResolvedValue(undefined);
+    const onChange = vi.fn();
+    const onSetAutoTitle = vi.fn();
+    render(<SubagentsSection
+      config={{ ...config, agents: [scout, docs].map((agent) => ({ ...agent, model: { ...reference, thinkingLevel: "off" } })) }}
+      providers={[provider]} favoriteModels={[reference]} onSetFavorite={onSetFavorite}
+      onChange={onChange} autoTitle={{ ...reference, enabled: false }} onSetAutoTitle={onSetAutoTitle} onOpenProviders={vi.fn()}
+    />);
+    for (const name of [/^scout/, /^docs/, /^auto-titles/]) {
+      fireEvent.click(screen.getByRole("button", { name }));
+      fireEvent.click(screen.getByRole("button", { name: "Mini" }));
+      fireEvent.click(screen.getByRole("button", { name: "Back to providers" }));
+      fireEvent.click(screen.getByRole("button", { name: "Favourites 1" }));
+      expect(screen.getByRole("button", { name: "Mini (Cheap)" })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Remove Mini (Cheap) from favourites" }));
+      fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    }
+    expect(onSetFavorite.mock.calls).toEqual([[reference, false], [reference, false], [reference, false]]);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onSetAutoTitle).not.toHaveBeenCalled();
+  });
+
   it("sets when to delegate and how many run at once with one click each", async () => {
     const { onChange } = renderSection();
     const when = screen.getByRole("radiogroup", { name: "When to use sub-agents" });
@@ -148,7 +174,7 @@ describe("SubagentsSection", () => {
     expect(onChange.mock.calls[0][0].agents.map((agent: SubagentRecord) => agent.name)).toEqual(["scout"]);
 
     cleanup();
-    render(<SubagentsSection config={config} providers={[provider]} onChange={vi.fn().mockRejectedValue("There is already a sub-agent called scout.")} autoTitle={noAutoTitle} onSetAutoTitle={vi.fn()} onOpenProviders={vi.fn()} />);
+    render(<SubagentsSection {...noFavorites} config={config} providers={[provider]} onChange={vi.fn().mockRejectedValue("There is already a sub-agent called scout.")} autoTitle={noAutoTitle} onSetAutoTitle={vi.fn()} onOpenProviders={vi.fn()} />);
     fireEvent.click(screen.getByRole("switch", { name: "Use docs" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("There is already a sub-agent called scout.");
   });
@@ -188,7 +214,7 @@ describe("SubagentsSection auto titles", () => {
   it("keeps the existing setting when a save fails and shows the error", async () => {
     const onSetAutoTitle = vi.fn().mockRejectedValue(new Error("Could not save"));
     render(
-      <SubagentsSection
+      <SubagentsSection {...noFavorites}
         config={config} providers={[titleModelProvider]} onChange={vi.fn()}
         autoTitle={{ enabled: false, providerId: "p", modelId: "small" }}
         onSetAutoTitle={onSetAutoTitle} onOpenProviders={vi.fn()}

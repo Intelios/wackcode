@@ -793,12 +793,23 @@ pub struct WindowState {
     pub y: Option<i32>,
 }
 
+/// A favourite belongs to one connection, even when another connection serves the same model.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FavoriteModelRef {
+    pub provider_id: String,
+    pub model_id: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppData {
     pub version: u32,
     #[serde(default)]
     pub providers: Vec<ProviderRecord>,
+    /// Picker preference only; keeping this outside providers leaves worker fingerprints alone.
+    #[serde(default)]
+    pub favorite_models: Vec<FavoriteModelRef>,
     #[serde(default)]
     pub projects: Vec<ProjectRecord>,
     #[serde(default)]
@@ -842,6 +853,7 @@ impl Default for AppData {
         Self {
             version: DATA_VERSION,
             providers: Vec::new(),
+            favorite_models: Vec::new(),
             projects: Vec::new(),
             tasks: Vec::new(),
             diff_comments: std::collections::HashMap::new(),

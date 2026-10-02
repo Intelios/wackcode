@@ -67,7 +67,7 @@ fn save_to_path(path: &Path, data: &AppData) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::TaskRecord;
+    use crate::models::{FavoriteModelRef, TaskRecord};
 
     #[test]
     fn metadata_round_trip_has_no_secrets() {
@@ -96,7 +96,26 @@ mod tests {
         let data: AppData = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert!(data.tool_config.disabled.is_empty());
         assert!(data.tool_catalog.is_empty());
+        assert!(data.favorite_models.is_empty());
         assert!(data.appearance.thinking_preview);
+    }
+
+    #[test]
+    fn favorite_model_references_survive_relaunch_even_without_available_providers() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("wackcode.json");
+        let data = AppData {
+            favorite_models: vec![
+                FavoriteModelRef { provider_id: "p".into(), model_id: "same".into() },
+                FavoriteModelRef { provider_id: "q".into(), model_id: "same".into() },
+            ],
+            ..AppData::default()
+        };
+        save_to_path(&path, &data).unwrap();
+        let content = fs::read_to_string(path).unwrap();
+        assert!(content.contains("favoriteModels"));
+        let reloaded: AppData = serde_json::from_str(&content).unwrap();
+        assert_eq!(reloaded.favorite_models, data.favorite_models);
     }
 
     #[test]

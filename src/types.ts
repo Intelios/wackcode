@@ -756,6 +756,8 @@ export interface WindowState {
 export interface AppData {
   version: number;
   providers: ProviderRecord[];
+  /** Picker preference only: never part of a provider or a worker's configuration. */
+  favoriteModels: ModelRef[];
   projects: ProjectRecord[];
   tasks: TaskRecord[];
   diffComments: Record<string, DiffComment[]>;

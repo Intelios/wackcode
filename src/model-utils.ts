@@ -99,6 +99,25 @@ export function modelIsReady(model: ModelRecord): boolean {
   return Boolean(model.id.trim() && model.contextWindow && model.maxTokens);
 }
 
+export interface FavoriteModelEntry {
+  provider: ProviderRecord;
+  model: ModelRecord;
+}
+
+/** Resolve current names and availability without discarding saved favourites. */
+export function favoriteModelEntries(providers: ProviderRecord[], favorites: readonly ModelRef[]): FavoriteModelEntry[] {
+  const keys = new Set(favorites.map((reference) => JSON.stringify([reference.providerId, reference.modelId])));
+  return providers
+    .filter((provider) => provider.enabled !== false && provider.connected)
+    .flatMap((provider) => provider.models
+      .filter((model) => modelIsReady(model) && keys.has(JSON.stringify([provider.id, model.id])))
+      .map((model) => ({ provider, model })))
+    .sort((left, right) => (left.model.name || left.model.id).localeCompare(right.model.name || right.model.id)
+      || left.provider.name.localeCompare(right.provider.name)
+      || left.provider.id.localeCompare(right.provider.id)
+      || left.model.id.localeCompare(right.model.id));
+}
+
 /** Current friendly name for a persisted model reference; old/deleted models fall back to ID. */
 export function modelDisplayName(providers: ProviderRecord[], reference: ModelRef): string {
   return providers.find((provider) => provider.id === reference.providerId)

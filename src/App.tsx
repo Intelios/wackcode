@@ -18,6 +18,7 @@ import { PINNED_PROJECTS_KEY, busyChatsInCheckout, includedFiles, linkableChats,
 import { useGitMode } from "./hooks/useGitMode";
 import { EMPTY_DRAFT, useComposerDrafts } from "./hooks/useComposerDrafts";
 import { useModelMemory } from "./hooks/useModelMemory";
+import { useModelFavorites } from "./hooks/useModelFavorites";
 import { DEFAULT_APPEARANCE, applyTheme, cacheTheme } from "./theme";
 import { AssistantNameContext, agentName } from "./agentName";
 import { Backdrop } from "./components/Backdrop";
@@ -44,6 +45,7 @@ import type {
   GitDiffSection,
   GitTarget,
   ImageContent,
+  ModelRef,
   McpServerRecord,
   NormalizedMessage,
   PackageRecord,
@@ -104,6 +106,7 @@ import { ThinkingPreviewEnabled } from "./components/ThinkingRow";
 const emptyData: AppData = {
   version: 1,
   providers: [],
+  favoriteModels: [],
   projects: [],
   tasks: [],
   diffComments: {},
@@ -275,6 +278,10 @@ export default function App() {
   const [accessRequests, setAccessRequests] = useState<ComputerAccessRequest[]>([]);
   const [booting, setBooting] = useState(true);
   const [globalError, setGlobalError] = useState<string>();
+  const receiveFavoriteModels = useCallback((favoriteModels: ModelRef[]) => {
+    setData((current) => ({ ...current, favoriteModels }));
+  }, []);
+  const { favoriteSaving, setModelFavorite } = useModelFavorites(receiveFavoriteModels, setGlobalError);
   const [subscriptionLogin, setSubscriptionLogin] = useState<SubscriptionLoginState>();
   const pendingSubscriptionCancel = useRef(false);
   const [connectedSubscriptionId, setConnectedSubscriptionId] = useState<string>();
@@ -2555,6 +2562,9 @@ export default function App() {
       {settingsOpen ? (
         <SettingsPage
           providers={data.providers}
+          favoriteModels={data.favoriteModels}
+          favoriteSaving={favoriteSaving}
+          onSetFavorite={setModelFavorite}
           packages={data.packages}
           toolCatalog={data.toolCatalog}
           disabledTools={data.toolConfig.disabled}
@@ -2887,6 +2897,9 @@ export default function App() {
               modelId={selectedTask?.modelId ?? draftChoice?.modelId}
               thinkingLevel={selectedTask?.thinkingLevel ?? draftChoice?.thinkingLevel}
               providers={configuredProviders}
+              favoriteModels={data.favoriteModels}
+              favoriteSaving={favoriteSaving}
+              onSetFavorite={setModelFavorite}
               stats={selectedTask ? runtime?.snapshot?.stats : undefined}
               popoverSide={selectedTask ? "top" : "bottom"}
               header={!selectedTask ? (

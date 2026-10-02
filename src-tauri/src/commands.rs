@@ -1,9 +1,9 @@
 use crate::{
     backgrounds, checkpoints, files, git, glass, mcp,
     models::{
-        AppearanceConfig, AppInfo, AutoTitleConfig, BackdropMode, BootstrapPayload, BuiltinModelSuggestion,
+        AppData, AppearanceConfig, AppInfo, AutoTitleConfig, BackdropMode, BootstrapPayload, BuiltinModelSuggestion,
         CheckpointChange, CheckpointRef, CreateTaskInput, DiffComment, ExportPlanInput,
-        ExtensionUiResponseInput, ForkTaskInput, GitBranches, GitChangeFile, GitChanges,
+        ExtensionUiResponseInput, FavoriteModelRef, ForkTaskInput, GitBranches, GitChangeFile, GitChanges,
         GitCheckoutResult, GitCommitFiles, GitGeneratedMessage, GitLogPage, GitPrInfo,
         GitPublishInfo, GitPullResult, GitRevertResult, GitSyncStatus, GitUndoResult, ImageContent,
         InstallPackageInput,
@@ -336,6 +336,45 @@ pub async fn set_provider_enabled(
     })?;
     worker::broadcast_subagents(&app).await?;
     Ok(record)
+}
+
+/// Display preferences never edit a provider, broadcast worker settings, or restart a chat.
+#[tauri::command]
+pub fn set_model_favorite(
+    state: State<'_, MetadataState>,
+    provider_id: String,
+    model_id: String,
+    favorite: bool,
+) -> Result<Vec<FavoriteModelRef>, String> {
+    state.mutate(|data| {
+        update_model_favorite(data, FavoriteModelRef { provider_id, model_id }, favorite)?;
+        Ok(data.favorite_models.clone())
+    })
+}
+
+fn update_model_favorite(
+    data: &mut AppData,
+    reference: FavoriteModelRef,
+    favorite: bool,
+) -> Result<(), String> {
+    if favorite {
+        // Existing references survive temporary catalogue/sign-in changes. Removing an old
+        // reference must also work after its provider or model has disappeared.
+        if data.favorite_models.contains(&reference) {
+            return Ok(());
+        }
+        let exists = data.providers.iter().any(|provider| {
+            provider.id == reference.provider_id
+                && provider.models.iter().any(|model| model.id == reference.model_id)
+        });
+        if !exists {
+            return Err("This model is no longer configured. Choose another model to favourite.".into());
+        }
+        data.favorite_models.push(reference);
+    } else {
+        data.favorite_models.retain(|item| item != &reference);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -5105,6 +5144,35 @@ mod tests {
     use super::*;
 
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn favorites_belong_to_the_connection_and_never_edit_its_worker_configuration() {
+        let providers: Vec<Value> = ["p", "q"].iter().map(|id| json!({
+            "id": id, "name": id, "baseUrl": "https://example.test/v1",
+            "apiFormat": "openai-completions", "createdAt": "now", "updatedAt": "now",
+            "models": [{ "id": "same", "name": "Same model", "contextWindow": 100, "maxTokens": 10 }]
+        })).collect();
+        let mut data: AppData = serde_json::from_value(json!({ "version": 1, "providers": providers })).unwrap();
+        let before = serde_json::to_value(&data.providers).unwrap();
+        let first = FavoriteModelRef { provider_id: "p".into(), model_id: "same".into() };
+        let second = FavoriteModelRef { provider_id: "q".into(), model_id: "same".into() };
+        update_model_favorite(&mut data, first.clone(), true).unwrap();
+        update_model_favorite(&mut data, first.clone(), true).unwrap();
+        update_model_favorite(&mut data, second.clone(), true).unwrap();
+        assert_eq!(data.favorite_models, vec![first.clone(), second.clone()]);
+        update_model_favorite(&mut data, first, false).unwrap();
+        assert_eq!(data.favorite_models, vec![second.clone()]);
+        assert_eq!(serde_json::to_value(&data.providers).unwrap(), before);
+
+        data.providers.clear();
+        // A retained reference remains valid, and may be removed after catalogue changes.
+        update_model_favorite(&mut data, second.clone(), true).unwrap();
+        update_model_favorite(&mut data, second, false).unwrap();
+        assert!(data.favorite_models.is_empty());
+        assert!(update_model_favorite(&mut data,
+            FavoriteModelRef { provider_id: "missing".into(), model_id: "same".into() }, true).is_err());
+        assert!(data.favorite_models.is_empty());
+    }
 
     #[test]
     fn pr_urls_stay_in_the_selected_repository() {

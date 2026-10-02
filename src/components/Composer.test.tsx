@@ -5,6 +5,8 @@ import { composeFileSection, type FileAttachment } from "../attachment-utils";
 import { Composer } from "./Composer";
 import { useComposerDrafts } from "../hooks/useComposerDrafts";
 
+const noFavorites = { favoriteModels: [], onSetFavorite: vi.fn().mockResolvedValue(undefined) };
+
 afterEach(cleanup);
 
 const providers: ProviderRecord[] = [{
@@ -42,8 +44,8 @@ function renderComposer(modelId: string, onSend: (message: string, images: Image
     onStop: vi.fn(),
     onOpenSettings: vi.fn()
   };
-  const view = render(<Composer {...props} modelId={modelId} />);
-  return { ...view, onSend, rerenderWith: (next: string) => view.rerender(<Composer {...props} modelId={next} />) };
+  const view = render(<Composer {...noFavorites} {...props} modelId={modelId} />);
+  return { ...view, onSend, rerenderWith: (next: string) => view.rerender(<Composer {...noFavorites} {...props} modelId={next} />) };
 }
 
 function attach(...files: File[]) {
@@ -147,13 +149,13 @@ describe("Composer seed", () => {
       onStop: vi.fn(),
       onOpenSettings: vi.fn()
     };
-    const view = render(<Composer {...props} seed={{ text: "Rewound request", nonce: 1 }} />);
+    const view = render(<Composer {...noFavorites} {...props} seed={{ text: "Rewound request", nonce: 1 }} />);
     const area = screen.getByRole("textbox");
     expect(area).toHaveValue("Rewound request");
     fireEvent.change(area, { target: { value: "Rewound request, tweaked" } });
-    view.rerender(<Composer {...props} seed={{ text: "Rewound request", nonce: 1 }} />);
+    view.rerender(<Composer {...noFavorites} {...props} seed={{ text: "Rewound request", nonce: 1 }} />);
     expect(area).toHaveValue("Rewound request, tweaked");
-    view.rerender(<Composer {...props} seed={{ text: "Another", nonce: 2 }} />);
+    view.rerender(<Composer {...noFavorites} {...props} seed={{ text: "Another", nonce: 2 }} />);
     expect(area).toHaveValue("Another");
   });
 
@@ -170,7 +172,7 @@ describe("Composer seed", () => {
       onOpenSettings: vi.fn()
     };
     const seeded = composeFileSection("Rewound request", [{ name: "notes.txt", text: "hi" }]);
-    render(<Composer {...props} seed={{ text: seeded, nonce: 1 }} />);
+    render(<Composer {...noFavorites} {...props} seed={{ text: seeded, nonce: 1 }} />);
     expect(screen.getByRole("textbox")).toHaveValue("Rewound request");
     expect(screen.getByText("notes.txt")).toBeInTheDocument();
   });
@@ -190,14 +192,14 @@ describe("Composer comet and frozen", () => {
   };
 
   it("adds the comet class when comet is set", () => {
-    const { container } = render(<Composer {...base} comet />);
+    const { container } = render(<Composer {...noFavorites} {...base} comet />);
     expect(container.querySelector(".composer")).toHaveClass("comet");
-    const plain = render(<Composer {...base} />);
+    const plain = render(<Composer {...noFavorites} {...base} />);
     expect(plain.container.querySelector(".composer")).not.toHaveClass("comet");
   });
 
   it("shows the frozen text read-only instead of the draft", () => {
-    render(<Composer {...base} frozen="Off it goes" />);
+    render(<Composer {...noFavorites} {...base} frozen="Off it goes" />);
     const area = screen.getByRole("textbox");
     expect(area).toHaveValue("Off it goes");
     expect(area).toHaveAttribute("readonly");
@@ -212,7 +214,7 @@ describe("Composer slash commands", () => {
     const onCommand = vi.fn().mockResolvedValue(true);
     const onLiteral = vi.fn().mockResolvedValue(true);
     const onRequestCommands = vi.fn();
-    render(<Composer status="idle" providers={providers} providerId="p" modelId="sees" thinkingLevel="off"
+    render(<Composer {...noFavorites} status="idle" providers={providers} providerId="p" modelId="sees" thinkingLevel="off"
       onConfigure={vi.fn()} onSend={vi.fn().mockResolvedValue(true)} onStop={vi.fn()} onOpenSettings={vi.fn()}
       commands={[command]} onCommand={onCommand} onLiteral={onLiteral} onRequestCommands={onRequestCommands} {...extra} />);
     return { onCommand, onLiteral, onRequestCommands };
@@ -437,7 +439,7 @@ describe("Composer slash commands", () => {
 describe("Composer queueing while the agent is working", () => {
   function setup(extra: Partial<React.ComponentProps<typeof Composer>> = {}) {
     const onSend = vi.fn().mockResolvedValue(true);
-    render(<Composer status="running" providers={providers} providerId="p" modelId="sees" thinkingLevel="off"
+    render(<Composer {...noFavorites} status="running" providers={providers} providerId="p" modelId="sees" thinkingLevel="off"
       onConfigure={vi.fn()} onSend={onSend} onStop={vi.fn()} onOpenSettings={vi.fn()} {...extra} />);
     return { onSend, area: screen.getByRole("textbox") };
   }
@@ -553,7 +555,7 @@ describe("Composer @ file mentions", () => {
   function setup(extra: Partial<React.ComponentProps<typeof Composer>> = {}) {
     const onSend = vi.fn().mockResolvedValue(true);
     const onRequestMentions = vi.fn();
-    render(<Composer status="idle" providers={providers} providerId="p" modelId="sees" thinkingLevel="off"
+    render(<Composer {...noFavorites} status="idle" providers={providers} providerId="p" modelId="sees" thinkingLevel="off"
       onConfigure={vi.fn()} onSend={onSend} onStop={vi.fn()} onOpenSettings={vi.fn()}
       mentionFiles={files} onRequestMentions={onRequestMentions} {...extra} />);
     return { onSend, onRequestMentions, area: screen.getByRole("textbox") };
@@ -629,7 +631,7 @@ describe("Composer per-chat drafts", () => {
 
   function Harness({ chat, ...props }: { chat: string } & Partial<React.ComponentProps<typeof Composer>>) {
     const drafts = useComposerDrafts();
-    return <Composer {...base} {...props} draftState={drafts.forChat(chat)} />;
+    return <Composer {...noFavorites} {...base} {...props} draftState={drafts.forChat(chat)} />;
   }
 
   it("keeps text, images and files with each chat without remounting the composer", async () => {

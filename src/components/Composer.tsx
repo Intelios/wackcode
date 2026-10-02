@@ -7,7 +7,7 @@ import { activeSlashCommand } from "../command-utils";
 import { EMPTY_DRAFT, type ComposerDraft, type ComposerDraftState } from "../hooks/useComposerDrafts";
 import { Icon } from "./Icons";
 import { ContextPanel } from "./ContextPanel";
-import { ModelPicker, ReasoningToggle } from "./ModelPicker";
+import { ModelPicker, ReasoningToggle, type ModelFavoritesProps } from "./ModelPicker";
 import { ModeToggle } from "./ModeToggle";
 import { Tooltip } from "./ui/Tooltip";
 import { ImageLightbox } from "./ui/ImageLightbox";
@@ -33,7 +33,7 @@ export function argHintNote(command: SlashCommand | undefined): string | undefin
   return qualifier ? `${hint} — ${qualifier}` : hint;
 }
 
-interface ComposerProps {
+interface ComposerProps extends ModelFavoritesProps {
   status: TaskStatus;
   /** App-owned draft for the selected chat; the composer stays mounted across selection. */
   draftState?: ComposerDraftState;
@@ -87,7 +87,7 @@ interface ComposerProps {
   agentName?: string;
 }
 
-export function Composer({ draftState, status, providerId, modelId, thinkingLevel, providers, stats, header, placeholder, popoverSide = "top", mode, onModeChange, onConfigure, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, mentionFiles, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, queuedMessages, onDequeue, onStop, onOpenSettings, disabled, seed, comet, frozen, agentName = "Pi" }: ComposerProps) {
+export function Composer({ draftState, status, providerId, modelId, thinkingLevel, providers, favoriteModels, favoriteSaving, onSetFavorite, stats, header, placeholder, popoverSide = "top", mode, onModeChange, onConfigure, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, mentionFiles, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, queuedMessages, onDequeue, onStop, onOpenSettings, disabled, seed, comet, frozen, agentName = "Pi" }: ComposerProps) {
   const [localDraft, setLocalDraft] = useState<ComposerDraft>(EMPTY_DRAFT);
   const value = draftState?.value ?? localDraft;
   const updateDraft = draftState?.update ?? setLocalDraft;
@@ -600,6 +600,9 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
                 />
                 <ModelPicker
                   providers={providers}
+                  favoriteModels={favoriteModels}
+                  favoriteSaving={favoriteSaving}
+                  onSetFavorite={onSetFavorite}
                   providerId={providerId}
                   modelId={modelId}
                   disabled={busy}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyBuiltinModelSuggestion, autoTitleModelIssue, chatModelGone, defaultModelChoice, formatTokens, mergeDiscoveredModels, modelDisplayName, pickThinkingLevel, searchBuiltinModels, subagentModelIssue } from "./model-utils";
+import { applyBuiltinModelSuggestion, autoTitleModelIssue, chatModelGone, defaultModelChoice, favoriteModelEntries, formatTokens, mergeDiscoveredModels, modelDisplayName, pickThinkingLevel, searchBuiltinModels, subagentModelIssue } from "./model-utils";
 import type { BuiltinModelSuggestion, ModelRecord, ProviderRecord } from "./types";
 
 const flash: BuiltinModelSuggestion = {
@@ -8,6 +8,39 @@ const flash: BuiltinModelSuggestion = {
   thinkingLevels: ["off", "low", "high", "max"],
   thinkingLevelMap: { off: null, low: "low", high: "high", max: "max" }, vision: true
 };
+
+describe("favoriteModelEntries", () => {
+  const model = (id: string, name = id): ModelRecord => ({
+    id, name, contextWindow: 100, maxTokens: 10, reasoning: false,
+    thinkingLevels: ["off"], thinkingLevelMap: {}, vision: false
+  });
+  const provider = (id: string, name: string, models: ModelRecord[]): ProviderRecord => ({
+    id, name, models, kind: "custom", baseUrl: "", apiFormat: "openai-completions",
+    createdAt: "", updatedAt: "", hasApiKey: true, connected: true
+  });
+
+  it("sorts current display names, provider names and IDs without duplicating saved references", () => {
+    const providers = [provider("z", "Zulu", [model("same", "Alpha"), model("last", "Zulu")]),
+      provider("b", "Beta", [model("b", "Alpha"), model("a", "Alpha")]),
+      provider("a", "Beta", [model("same", "Alpha")])];
+    const favorites = providers.flatMap((p) => p.models.map((m) => ({ providerId: p.id, modelId: m.id })));
+    expect(favoriteModelEntries(providers, [...favorites, favorites[0]])
+      .map(({ provider: p, model: m }) => [p.id, m.id])).toEqual([["a", "same"], ["b", "a"], ["b", "b"], ["z", "same"], ["z", "last"]]);
+    expect(favoriteModelEntries(providers, [{ providerId: "z", modelId: "same" }])).toHaveLength(1);
+  });
+
+  it("hides disabled, disconnected, missing and unready models, then resolves restored names", () => {
+    const available = provider("p", "Provider", [model("same", "Old name")]);
+    const favorites = [{ providerId: "p", modelId: "same" }, { providerId: "missing", modelId: "gone" }];
+    for (const unavailable of [{ ...available, enabled: false }, { ...available, connected: false },
+      { ...available, models: [] }, { ...available, models: [{ ...model("same"), contextWindow: null }] }]) {
+      expect(favoriteModelEntries([unavailable], favorites)).toEqual([]);
+    }
+    expect(favorites).toHaveLength(2);
+    expect(favoriteModelEntries([{ ...available, name: "Renamed provider", models: [model("same", "New name")] }], favorites)[0])
+      .toMatchObject({ provider: { name: "Renamed provider" }, model: { name: "New name" } });
+  });
+});
 
 describe("defaultModelChoice", () => {
   const provider: ProviderRecord = {

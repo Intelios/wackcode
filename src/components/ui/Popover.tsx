@@ -45,9 +45,14 @@ export function Popover({ anchor, open, onClose, side = "bottom", align = "start
       setStyle({ position: "fixed", top, left, maxHeight, minWidth: matchWidth ? rect.width : undefined, zIndex: 150 });
     };
     reposition();
+    // Sliding pickers can grow when a provider list changes to the taller favourites rows.
+    // Keep the preferred side anchored as content changes, including after an async save.
+    const resizeObserver = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(reposition);
+    if (panelRef.current) resizeObserver?.observe(panelRef.current);
     window.addEventListener("resize", reposition);
     window.addEventListener("scroll", reposition, true);
     return () => {
+      resizeObserver?.disconnect();
       window.removeEventListener("resize", reposition);
       window.removeEventListener("scroll", reposition, true);
     };

@@ -17,6 +17,7 @@ import { PromptsSection } from "./PromptsSection";
 import { ProvidersSection, type ConnectionMethod } from "./ProvidersSection";
 import { SkillsSection, type SkillActions } from "./SkillsSection";
 import { SubagentsSection } from "./SubagentsSection";
+import type { ModelFavoritesProps } from "./ModelPicker";
 import { ToolsSection } from "./ToolsSection";
 import { AppearanceSection } from "./AppearanceSection";
 import { DuckMark } from "./DuckMark";
@@ -95,7 +96,7 @@ const SECTIONS: Section[] = [
   { id: "prompts", label: "Prompts", icon: "pencil" }
 ];
 
-interface Props extends PackageActions {
+interface Props extends PackageActions, ModelFavoritesProps {
   providers: ProviderRecord[];
   packages: PackageRecord[];
   toolCatalog: ToolCatalogEntry[];
@@ -138,7 +139,7 @@ interface Props extends PackageActions {
 }
 
 export function SettingsPage({
-  providers, packages, toolCatalog, disabledTools, appDataPath,
+  providers, favoriteModels, favoriteSaving, onSetFavorite, packages, toolCatalog, disabledTools, appDataPath,
   onClose, onSave, onDelete, onSetProviderEnabled, onConnectSubscription, onSignOutSubscription, connectedSubscriptionId, onSetDisabledTools,
   subagents, onSetSubagents, computerUse = COMPUTER_USE_OFF, computerUseSupported = false, onSetComputerUse, autoTitle, onSetAutoTitle, appearance, glassSupported, onSetAppearance, onPreviewAppearance, backgroundImageUrl, onChooseBackgroundImage, onRemoveBackgroundImage, prompts, onSetPrompts, onCommandsChanged, memory, onSetMemory, mcp, mcpActions, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
 }: Props) {
@@ -394,6 +395,9 @@ export function SettingsPage({
           <SubagentsSection
             config={subagents}
             providers={providers}
+            favoriteModels={favoriteModels}
+            favoriteSaving={favoriteSaving}
+            onSetFavorite={onSetFavorite}
             onChange={onSetSubagents}
             webFetchEnabled={!disabledTools.includes(WEB_FETCH_TOOL_NAME)}
             autoTitle={autoTitle}

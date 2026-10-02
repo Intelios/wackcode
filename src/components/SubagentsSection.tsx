@@ -13,12 +13,12 @@ import {
 } from "../types";
 import { DuckMark } from "./DuckMark";
 import { Icon, type IconName } from "./Icons";
-import { ModelPicker, ReasoningToggle } from "./ModelPicker";
+import { ModelPicker, ReasoningToggle, type ModelFavoritesProps } from "./ModelPicker";
 import { RobotMark } from "./RobotMark";
 import { SettingsHero, stagger } from "./SettingsHero";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 
-interface Props {
+interface Props extends ModelFavoritesProps {
   config: SubagentConfig;
   providers: ProviderRecord[];
   /** Saves the whole configuration; rejects with a user-facing message. */
@@ -119,7 +119,7 @@ function modelSummary(model: SubagentModel | null, providers: ProviderRecord[]):
   return `${provider?.name ?? "Missing connection"} · ${name}${level}`;
 }
 
-interface ModelFieldProps {
+interface ModelFieldProps extends ModelFavoritesProps {
   agentName: string;
   model: SubagentModel | null;
   providers: ProviderRecord[];
@@ -128,7 +128,7 @@ interface ModelFieldProps {
 }
 
 /** "Chat's model", or a model of the agent's own from any connected provider. */
-function ModelField({ agentName, model, providers, disabled, onChange }: ModelFieldProps) {
+function ModelField({ agentName, model, providers, favoriteModels, favoriteSaving, onSetFavorite, disabled, onChange }: ModelFieldProps) {
   const usable = useMemo(() => providers.filter((provider) => provider.enabled !== false && provider.connected && provider.models.some(modelIsReady)), [providers]);
 
   function choose(patch: { providerId?: string; modelId?: string; thinkingLevel?: ThinkingLevel }) {
@@ -161,7 +161,7 @@ function ModelField({ agentName, model, providers, disabled, onChange }: ModelFi
         </div>
         {model && (
           <>
-            <ModelPicker providers={usable} providerId={model.providerId} modelId={model.modelId} disabled={disabled} popoverSide="bottom" onConfigure={choose} />
+            <ModelPicker providers={usable} favoriteModels={favoriteModels} favoriteSaving={favoriteSaving} onSetFavorite={onSetFavorite} providerId={model.providerId} modelId={model.modelId} disabled={disabled} popoverSide="bottom" onConfigure={choose} />
             <ReasoningToggle
               providers={usable}
               providerId={model.providerId}
@@ -181,7 +181,7 @@ function ModelField({ agentName, model, providers, disabled, onChange }: ModelFi
   );
 }
 
-interface EditorProps {
+interface EditorProps extends ModelFavoritesProps {
   draft: AgentDraft;
   providers: ProviderRecord[];
   busy: boolean;
@@ -194,7 +194,7 @@ interface EditorProps {
 }
 
 /** Name, description, instructions, tools and model of a custom agent. */
-function AgentEditor({ draft, providers, busy, isNew, onChange, onSave, onCancel, onDelete, webFetchEnabled }: EditorProps) {
+function AgentEditor({ draft, providers, favoriteModels, favoriteSaving, onSetFavorite, busy, isNew, onChange, onSave, onCancel, onDelete, webFetchEnabled }: EditorProps) {
   const toggleTool = (tool: string) =>
     onChange({ ...draft, tools: draft.tools.includes(tool) ? draft.tools.filter((item) => item !== tool) : [...draft.tools, tool] });
   const setReadOnly = (readOnly: boolean) =>
@@ -262,7 +262,7 @@ function AgentEditor({ draft, providers, busy, isNew, onChange, onSave, onCancel
           <span>Can edit files <small>{draft.readOnly ? "Read-only: allowed in Plan mode, and runs in parallel" : "Can run in parallel on separate files; can't run in Plan mode"}</small></span>
         </label>
       </div>
-      <ModelField agentName={draft.name || "New agent"} model={draft.model} providers={providers} disabled={busy} onChange={(model) => onChange({ ...draft, model })} />
+      <ModelField agentName={draft.name || "New agent"} model={draft.model} providers={providers} favoriteModels={favoriteModels} favoriteSaving={favoriteSaving} onSetFavorite={onSetFavorite} disabled={busy} onChange={(model) => onChange({ ...draft, model })} />
       <div className="subagent-editor-actions">
         {onDelete && <button type="button" className="danger-button" disabled={busy} onClick={onDelete}>Delete</button>}
         <span className="subagent-editor-spacer" />
@@ -280,7 +280,7 @@ function AgentEditor({ draft, providers, busy, isNew, onChange, onSave, onCancel
   );
 }
 
-interface AutoTitleCardProps {
+interface AutoTitleCardProps extends ModelFavoritesProps {
   config: AutoTitleConfig;
   providers: ProviderRecord[];
   busy: boolean;
@@ -294,7 +294,7 @@ interface AutoTitleCardProps {
  * Automatic titles as an agent card: WackCode runs it on a new chat's first prompt rather
  * than the model calling it, so it needs its own model and has no tools or instructions.
  */
-function AutoTitleCard({ config, providers, busy, open, onToggleOpen, onSave, onOpenProviders }: AutoTitleCardProps) {
+function AutoTitleCard({ config, providers, favoriteModels, favoriteSaving, onSetFavorite, busy, open, onToggleOpen, onSave, onOpenProviders }: AutoTitleCardProps) {
   const available = providers.filter((provider) => provider.enabled !== false && provider.connected && provider.models.some(modelIsReady));
   const provider = providers.find((item) => item.id === config.providerId);
   const record = provider?.models.find((item) => item.id === config.modelId);
@@ -346,7 +346,7 @@ function AutoTitleCard({ config, providers, busy, open, onToggleOpen, onSave, on
             <span className="subagent-field-label">Model</span>
             <div className="subagent-model-row">
               {available.length > 0 ? (
-                <ModelPicker providers={available} providerId={config.providerId ?? ""} modelId={config.modelId ?? ""} disabled={busy} popoverSide="bottom" onConfigure={choose} />
+                <ModelPicker providers={available} favoriteModels={favoriteModels} favoriteSaving={favoriteSaving} onSetFavorite={onSetFavorite} providerId={config.providerId ?? ""} modelId={config.modelId ?? ""} disabled={busy} popoverSide="bottom" onConfigure={choose} />
               ) : (
                 <button type="button" className="secondary-button" onClick={onOpenProviders}>Add a connection</button>
               )}
@@ -376,7 +376,8 @@ function AutoTitleCard({ config, providers, busy, open, onToggleOpen, onSave, on
  * Packages). Switches and model choices save at once; a custom agent's text is edited as a
  * draft and saved explicitly.
  */
-export function SubagentsSection({ config, providers, onChange, webFetchEnabled = true, autoTitle, onSetAutoTitle, onOpenProviders, agentName = "WackCode" }: Props) {
+export function SubagentsSection({ config, providers, favoriteModels, favoriteSaving, onSetFavorite, onChange, webFetchEnabled = true, autoTitle, onSetAutoTitle, onOpenProviders, agentName = "WackCode" }: Props) {
+  const favorites = { favoriteModels, favoriteSaving, onSetFavorite };
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [expanded, setExpanded] = useState<string>();
@@ -457,6 +458,7 @@ export function SubagentsSection({ config, providers, onChange, webFetchEnabled 
       return (
         <article className="subagent-setting open" key={agent.id}>
           <AgentEditor
+            {...favorites}
             draft={editing.draft}
             providers={providers}
             busy={busy}
@@ -498,7 +500,7 @@ export function SubagentsSection({ config, providers, onChange, webFetchEnabled 
         {issue && <p className="subagent-issue">{issue} It will refuse to run until you pick another model.</p>}
         {open && (
           <div className="subagent-setting-body">
-            <ModelField agentName={agent.name} model={agent.model} providers={providers} disabled={busy} onChange={(model) => updateAgent(agent.id, { model })} />
+            <ModelField {...favorites} agentName={agent.name} model={agent.model} providers={providers} disabled={busy} onChange={(model) => updateAgent(agent.id, { model })} />
             <div className="subagent-tools-field">
               <span className="subagent-field-label">Tools</span>
               <div className="subagent-tool-list">{agent.tools.join(", ") || "None"}</div>
@@ -610,6 +612,7 @@ export function SubagentsSection({ config, providers, onChange, webFetchEnabled 
         {editing?.key === "new" && (
           <article className="subagent-setting open new">
             <AgentEditor
+              {...favorites}
               draft={editing.draft}
               providers={providers}
               busy={busy}
@@ -641,6 +644,7 @@ export function SubagentsSection({ config, providers, onChange, webFetchEnabled 
           <h3 className="settings-block-title" id="subagents-auto-title">Automatic</h3>
           <p className="settings-block-sub">WackCode runs this one itself; the model can never call it.</p>
           <AutoTitleCard
+            {...favorites}
             config={autoTitle}
             providers={providers}
             busy={busy}

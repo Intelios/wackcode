@@ -1,10 +1,17 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import type { ProviderRecord, ThinkingLevel } from "../types";
-import { modelIsReady } from "../model-utils";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import type { ModelRef, ProviderRecord, ThinkingLevel } from "../types";
+import { favoriteModelEntries, modelIsReady } from "../model-utils";
 import { Icon } from "./Icons";
 import { Popover } from "./ui/Popover";
 
-export interface ModelPickerProps {
+export interface ModelFavoritesProps {
+  favoriteModels: readonly ModelRef[];
+  favoriteSaving?: boolean;
+  /** App saves the shared preference and reports any failure. Never selects the model. */
+  onSetFavorite: (reference: ModelRef, favorite: boolean) => Promise<void>;
+}
+
+export interface ModelPickerProps extends ModelFavoritesProps {
   providers: ProviderRecord[];
   providerId?: string;
   modelId?: string;
@@ -45,15 +52,25 @@ export function ModelPicker({
   providerId,
   modelId,
   disabled,
+  favoriteModels,
+  favoriteSaving,
+  onSetFavorite,
   popoverSide = "top",
   onConfigure
 }: ModelPickerProps) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const pickerId = useId();
+  const favoritesButtonRef = useRef<HTMLButtonElement>(null);
+  const collectionButtonRef = useRef<HTMLButtonElement | null>(null);
+  const backButtonRef = useRef<HTMLButtonElement>(null);
+  const modelListRef = useRef<HTMLDivElement>(null);
+  const removedFavoriteFocus = useRef<{ key: string; index: number } | null>(null);
 
   const validProviders = useMemo(() => {
-    return providers.filter((item) => item.models.some(modelIsReady));
+    return providers.filter((item) => item.enabled !== false && item.connected && item.models.some(modelIsReady));
   }, [providers]);
+  const favorites = useMemo(() => favoriteModelEntries(validProviders, favoriteModels), [validProviders, favoriteModels]);
 
   const currentProvider = validProviders.find((item) => item.id === providerId);
   const currentModel = currentProvider?.models.find((item) => item.id === modelId && modelIsReady(item));
@@ -63,17 +80,18 @@ export function ModelPicker({
     return currentProvider?.id ?? validProviders[0]?.id ?? "";
   });
 
-  const [view, setView] = useState<"providers" | "models">(() => {
+  const [view, setView] = useState<"providers" | "models" | "favorites">(() => {
     return currentProvider ? "models" : "providers";
   });
 
   function handleOpen() {
     if (!open) {
+      collectionButtonRef.current = null;
       if (currentProvider) {
         setActiveProviderId(currentProvider.id);
         setView("models");
-      } else if (validProviders.length > 0) {
-        setActiveProviderId(validProviders[0].id);
+      } else {
+        setActiveProviderId(validProviders[0]?.id ?? "");
         setView("providers");
       }
     }
@@ -81,7 +99,33 @@ export function ModelPicker({
   }
 
   const activeProvider = validProviders.find((p) => p.id === activeProviderId) ?? validProviders[0];
-  const activeModels = activeProvider ? activeProvider.models.filter(modelIsReady) : [];
+  const entries = useMemo(() => view === "favorites" ? favorites
+    : activeProvider?.models.filter(modelIsReady).map((model) => ({ provider: activeProvider, model })) ?? [],
+  [view, favorites, activeProvider]);
+
+  // A panel sliding off screen is inert. Move focus to the newly visible navigation control.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const target = view === "providers"
+      ? (collectionButtonRef.current?.isConnected ? collectionButtonRef.current : favoritesButtonRef.current)
+      : backButtonRef.current;
+    target?.focus({ preventScroll: true });
+  }, [open, view]);
+
+  useLayoutEffect(() => {
+    const removed = removedFavoriteFocus.current;
+    if (!open || view !== "favorites") {
+      removedFavoriteFocus.current = null;
+      return;
+    }
+    if (!removed || entries.some(({ provider, model }) => JSON.stringify([provider.id, model.id]) === removed.key)) return;
+    removedFavoriteFocus.current = null;
+    // Don't steal focus if the user moved elsewhere while the save was pending.
+    if (document.activeElement !== document.body) return;
+    const buttons = modelListRef.current?.querySelectorAll<HTMLButtonElement>(".picker-model-select");
+    const target = buttons?.[Math.min(removed.index, buttons.length - 1)] ?? backButtonRef.current;
+    target?.focus({ preventScroll: true });
+  }, [open, view, entries]);
 
   return (
     <>
@@ -90,8 +134,9 @@ export function ModelPicker({
         type="button"
         className="model-pill"
         disabled={disabled}
-        aria-haspopup="listbox"
+        aria-haspopup="dialog"
         aria-expanded={open}
+        aria-controls={open ? pickerId : undefined}
         onClick={handleOpen}
       >
         <span className="model-pill-name">{label}</span>
@@ -108,12 +153,29 @@ export function ModelPicker({
         align="start"
         className="model-picker-pop"
       >
-        <div className="picker-viewport">
-          <div className={`picker-panels ${view === "models" ? "show-models" : "show-providers"}`}>
+        <div id={pickerId} className="picker-viewport" role="dialog" aria-label="Choose model">
+          <div className={`picker-panels ${view === "providers" ? "show-providers" : "show-models"}`}>
             {/* Panel 1: Provider selection */}
-            <div className="picker-panel picker-panel-providers">
+            <div className="picker-panel picker-panel-providers" inert={view !== "providers"} aria-hidden={view !== "providers"}>
               <div className="picker-heading">Providers</div>
               <div className="picker-list">
+                <button
+                  ref={favoritesButtonRef}
+                  type="button"
+                  className="picker-item picker-provider-item picker-favorites-entry"
+                  aria-label={`Favourites ${favorites.length}`}
+                  tabIndex={view === "providers" ? 0 : -1}
+                  onClick={(event) => {
+                    collectionButtonRef.current = event.currentTarget;
+                    setView("favorites");
+                  }}
+                >
+                  <Icon name="star" />
+                  <span className="picker-provider-name">Favourites</span>
+                  <span className="picker-provider-count">{favorites.length}</span>
+                  <Icon name="chevron" className="picker-chevron" />
+                </button>
+                <div className="picker-provider-divider" />
                 {validProviders.map((item) => {
                   const readyCount = item.models.filter(modelIsReady).length;
                   const isSelected = item.id === (currentProvider?.id ?? activeProviderId);
@@ -122,7 +184,9 @@ export function ModelPicker({
                       type="button"
                       key={item.id}
                       className={`picker-item picker-provider-item ${isSelected ? "selected" : ""}`}
-                      onClick={() => {
+                      tabIndex={view === "providers" ? 0 : -1}
+                      onClick={(event) => {
+                        collectionButtonRef.current = event.currentTarget;
                         setActiveProviderId(item.id);
                         setView("models");
                       }}
@@ -136,35 +200,77 @@ export function ModelPicker({
               </div>
             </div>
 
-            {/* Panel 2: Model list for active provider */}
-            <div className="picker-panel picker-panel-models">
+            {/* Panel 2: An actual provider's models, or the shared favourites collection. */}
+            <div className="picker-panel picker-panel-models" inert={view === "providers"} aria-hidden={view === "providers"}>
               <div className="picker-header">
                 <button
+                  ref={backButtonRef}
                   type="button"
                   className="picker-back-btn"
+                  tabIndex={view === "providers" ? -1 : 0}
                   onClick={() => setView("providers")}
                   aria-label="Back to providers"
                 >
                   <Icon name="back" />
-                  <span className="picker-back-title">{activeProvider?.name ?? "Providers"}</span>
+                  <span className="picker-back-title">{view === "favorites" ? "Favourites" : activeProvider?.name ?? "Providers"}</span>
                 </button>
               </div>
-              <div className="picker-list">
-                {activeModels.map((entry) => {
-                  const isSelected = activeProvider?.id === providerId && entry.id === modelId;
+              <div className="picker-list" ref={modelListRef}>
+                {view === "favorites" && entries.length === 0 && (
+                  <div className="picker-empty" role="status">
+                    <strong>{favoriteModels.length ? "No favourites available" : "No favourites yet"}</strong>
+                    <span>{favoriteModels.length
+                      ? "Enable or reconnect a provider, or star another model."
+                      : "Star a model in any provider to add it here."}</span>
+                  </div>
+                )}
+                {entries.map(({ provider, model }, index) => {
+                  const reference = { providerId: provider.id, modelId: model.id };
+                  const key = JSON.stringify([provider.id, model.id]);
+                  const name = model.name || model.id;
+                  const isSelected = provider.id === providerId && model.id === modelId;
+                  const isFavorite = favoriteModels.some((item) => item.providerId === provider.id && item.modelId === model.id);
+                  const starLabel = isFavorite ? `Remove ${name} (${provider.name}) from favourites` : `Add ${name} (${provider.name}) to favourites`;
                   return (
-                    <button
-                      type="button"
-                      key={entry.id}
-                      className={`picker-item ${isSelected ? "selected" : ""}`}
-                      onClick={() => {
-                        onConfigure({ providerId: activeProvider.id, modelId: entry.id });
-                        setOpen(false);
-                      }}
-                    >
-                      <span>{entry.name || entry.id}</span>
-                      {isSelected && <Icon name="check" />}
-                    </button>
+                    <div key={key} className={`picker-model-row${view === "favorites" ? " favorite" : ""}`}>
+                      <button
+                        type="button"
+                        className={`picker-item picker-model-select${isSelected ? " selected" : ""}`}
+                        aria-label={view === "favorites" ? `${name} (${provider.name})` : undefined}
+                        tabIndex={view === "providers" ? -1 : 0}
+                        aria-pressed={isSelected}
+                        onClick={() => {
+                          onConfigure(reference);
+                          setOpen(false);
+                          triggerRef.current?.focus({ preventScroll: true });
+                        }}
+                      >
+                        <span className="picker-model-label">
+                          <span>{name}</span>
+                          {view === "favorites" && <span className="picker-model-provider">{provider.name}</span>}
+                        </span>
+                        {isSelected && <Icon name="check" />}
+                      </button>
+                      <button
+                        type="button"
+                        className={`icon-button picker-favorite-btn${isFavorite ? " is-favorite" : ""}`}
+                        tabIndex={view === "providers" ? -1 : 0}
+                        aria-label={starLabel}
+                        aria-pressed={isFavorite}
+                        title={starLabel}
+                        disabled={favoriteSaving}
+                        onClick={(event) => {
+                          if (view === "favorites" && isFavorite && document.activeElement === event.currentTarget) {
+                            removedFavoriteFocus.current = { key, index };
+                          }
+                          void onSetFavorite(reference, !isFavorite).catch(() => {
+                            removedFavoriteFocus.current = null;
+                          });
+                        }}
+                      >
+                        <Icon name="star" />
+                      </button>
+                    </div>
                   );
                 })}
               </div>

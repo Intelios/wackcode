@@ -137,7 +137,7 @@ In the composer, type `@` to mention a file or folder, and paste, drop or attach
 - Six preset themes (WackCode, Midnight, Grape, Rosé, Ember, Mono), or your own accent and background colours. Code highlighting, diffs and the terminal all follow them, and colours that would be hard to read are adjusted automatically.
 - A solid background, your own image (clear on the welcome screen, dimmed and blurred behind chats), or **Liquid Glass** on macOS 26.
 - Your agent's name: call it anything you like instead of "WackCode".
-- Optional message bubbles, thinking previews, and grouping of the agent's file reads and searches into one "Explored" row.
+- Optional message bubbles, a live thinking stream, and grouping of the agent's file reads and searches into one "Explored" row.
 
 ### Keyboard shortcuts
 

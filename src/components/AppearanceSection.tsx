@@ -45,7 +45,7 @@ const CHAT_OPTIONS: { key: "thinkingPreview" | "messageBubbles" | "groupExplorat
   {
     key: "thinkingPreview",
     label: "Thinking preview",
-    description: () => "Show a one-line gist of the model's reasoning beside “Thinking…”. Only models that stream their reasoning show one.",
+    description: () => "Show the model's reasoning flowing beside “Thinking…” as it streams. Only models that stream their reasoning show one.",
     preview: "thinking"
   },
   {
@@ -352,7 +352,12 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrl, 
                         <span className="mini-thinking">
                           <PonderingDuck live className="mini-thinking-icon" />
                           <span className="mini-thinking-label">Thinking…</span>
-                          {on && <span className="mini-thinking-gist">weighing two approaches</span>}
+                          {on && (
+                            <span className="thinking-stream">
+                              <span className="thinking-stream-text">weighing two approaches, the second keeps the</span>
+                              <span className="thinking-stream-caret" />
+                            </span>
+                          )}
                         </span>
                         <span className="mini-msg mini-assistant flat">Done — the tests pass.</span>
                       </>

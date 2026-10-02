@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ThinkingPreviewEnabled, ThinkingRow } from "./ThinkingRow";
 import { ExploreGroup } from "./ExploreGroup";
@@ -13,21 +13,33 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+// Reduced motion makes useSmoothText reveal deltas at once, so each rerender updates synchronously.
+function stubReducedMotion() {
+  vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+}
+
 describe("ThinkingRow live timer", () => {
   it("ticks even without new reasoning deltas and keeps its start across rerenders and remounts", () => {
-    const view = render(<ThinkingRow text="" live startedAt={10_000} />);
+    // Previews off: the stream's enter/exit animation holds its own timers, which would
+    // muddy the count this test asserts. The timer beside a stream is covered below.
+    const row = (text: string) => (
+      <ThinkingPreviewEnabled.Provider value={false}>
+        <ThinkingRow text={text} live startedAt={10_000} />
+      </ThinkingPreviewEnabled.Provider>
+    );
+    const view = render(row(""));
     expect(screen.getByRole("button", { name: "Thinking… <1s" })).toBeInTheDocument();
     act(() => vi.advanceTimersByTime(3_000));
     expect(screen.getByRole("button", { name: "Thinking… 3s" })).toBeInTheDocument();
 
-    view.rerender(<ThinkingRow text="Still reasoning" live startedAt={10_000} />);
+    view.rerender(row("Still reasoning"));
     act(() => vi.advanceTimersByTime(2_000));
     expect(screen.getByRole("button", { name: "Thinking… 5s" })).toBeInTheDocument();
 
     view.unmount();
     expect(vi.getTimerCount()).toBe(0);
     act(() => vi.advanceTimersByTime(4_000));
-    render(<ThinkingRow text="Still reasoning" live startedAt={10_000} />);
+    render(row("Still reasoning"));
     expect(screen.getByRole("button", { name: "Thinking… 9s" })).toBeInTheDocument();
   });
 
@@ -43,9 +55,45 @@ describe("ThinkingRow live timer", () => {
     expect(screen.getByRole("button", { name: "Thinking… 3s" })).toHaveAttribute("aria-expanded", "true");
   });
 
-  it("keeps the timer beside the collapsed preview", () => {
+  it("keeps the timer beside the collapsed stream, outside the accessible name", () => {
     render(<ThinkingRow text="Checking both approaches. Now I compare" live startedAt={8_000} />);
-    expect(screen.getByRole("button", { name: /Thinking… 2s.*Checking both approaches\./ })).toBeInTheDocument();
+    const row = screen.getByRole("button", { name: "Thinking… 2s" });
+    expect(within(row).getByText(/Checking both approaches\./)).toBeInTheDocument();
+    expect(row.querySelector(".thinking-stream")).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("flows the reasoning tail past headings instead of latching them", () => {
+    // Reduced motion reveals each rerender's new text at once instead of via rAF frames.
+    stubReducedMotion();
+    const view = render(<ThinkingRow text="**Exploring the code**" live startedAt={8_000} />);
+    expect(view.container.querySelector(".thinking-stream-text")).toHaveTextContent("Exploring the code");
+    view.rerender(<ThinkingRow text={"**Exploring the code**\n\nI read App.tsx. Now I check"} live startedAt={8_000} />);
+    expect(view.container.querySelector(".thinking-stream-text")).toHaveTextContent("Exploring the code · I read App.tsx. Now I check");
+  });
+
+  it("hides the stream when opened, finished or switched off, and drops the streaming class", async () => {
+    // Real timers: the live elapsed clock starts ticking, harmless here, and the exit
+    // animation can actually finish (the file's fake timers stall it).
+    vi.useRealTimers();
+    const view = render(<ThinkingRow text="Checking both approaches." live startedAt={8_000} />);
+    expect(view.container.querySelector(".thinking-row")).toHaveClass("streaming");
+    fireEvent.click(screen.getByRole("button", { name: /Thinking…/ }));
+    // Opening hides the stream at once; its exit animation then removes the element.
+    await waitFor(() => expect(view.container.querySelector(".thinking-stream")).toBeNull());
+    expect(view.container.querySelector(".thinking-row")).not.toHaveClass("streaming");
+    view.unmount();
+
+    const done = render(<ThinkingRow text="Checking both approaches." durationMs={4_200} />);
+    expect(done.container.querySelector(".thinking-stream")).toBeNull();
+    done.unmount();
+
+    const off = render(
+      <ThinkingPreviewEnabled.Provider value={false}>
+        <ThinkingRow text="Checking both approaches." live startedAt={8_000} />
+      </ThinkingPreviewEnabled.Provider>
+    );
+    expect(off.container.querySelector(".thinking-stream")).toBeNull();
+    expect(off.container.querySelector(".thinking-row")).not.toHaveClass("streaming");
   });
 
   it("resets for a new block and formats minutes and hours", () => {
@@ -122,11 +170,6 @@ describe("ThinkingRow body scroll", () => {
       grow: (by: number) => { contentHeight += by; },
       scroll: (to: number) => { el.scrollTop = to; fireEvent.scroll(el); }
     };
-  }
-
-  // Reduced motion makes useSmoothText reveal deltas at once, so each rerender pins synchronously.
-  function stubReducedMotion() {
-    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
   }
 
   const reasoning = (length: number) => `Reasoning. ${"and more ".repeat(length)}`;

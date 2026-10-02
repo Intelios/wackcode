@@ -73,7 +73,8 @@ describe("Transcript thinking", () => {
     const row = screen.getByRole("button", { name: "Thinking…" });
     expect(row).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(row);
-    expect(screen.getByText("Weighing the options")).toBeInTheDocument();
+    // Scoped: the stream keeps its copy of the text until its exit animation finishes.
+    expect(within(screen.getByRole("region", { name: "Reasoning" })).getByText("Weighing the options")).toBeInTheDocument();
 
     // The answer has started: the worker has clocked the reasoning, though the message still streams.
     const answering = streamed([{ type: "thinking", text: "Weighing the options", durationMs: 4_200 }, { type: "text", text: "Because" }]);
@@ -109,7 +110,7 @@ describe("Transcript thinking", () => {
     expect(screen.getByRole("button", { name: "Thinking… 2s" })).toBeInTheDocument();
     view.rerender(<Transcript messages={[user]} running={false} partial={partial} />);
     fireEvent.click(screen.getByRole("button", { name: "Reasoning" }));
-    expect(screen.getByText("Unfinished reasoning")).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Reasoning" })).getByText("Unfinished reasoning")).toBeInTheDocument();
     act(() => vi.advanceTimersByTime(3_000));
     expect(screen.queryByText("Thinking…")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reasoning" })).toBeInTheDocument();
@@ -135,19 +136,21 @@ describe("Transcript thinking preview", () => {
   });
   const reasoning = "I read the config. Now I check the tes";
 
-  it("shows the latest finished sentence beside a live row", () => {
+  it("streams the reasoning tail beside a live row, unfinished words included", () => {
     render(<Transcript messages={[user]} running partial={thinking(reasoning)} />);
-    expect(screen.getByText("I read the config.")).toBeInTheDocument();
-    expect(screen.queryByText(/check the tes/)).not.toBeInTheDocument();
+    expect(screen.getByText("I read the config. Now I check the tes")).toBeInTheDocument();
   });
 
-  it("hides it once the reasoning is clocked, while expanded, and when switched off", () => {
+  it("hides it once the reasoning is clocked, while expanded, and when switched off", async () => {
     const view = render(<Transcript messages={[user]} running partial={thinking(reasoning)} />);
     fireEvent.click(screen.getByRole("button", { name: /Thinking…/ }));
-    expect(screen.queryByText("I read the config.")).not.toBeInTheDocument();
+    // The stream animates out when the row opens.
+    await waitFor(() => expect(view.container.querySelector(".thinking-stream")).toBeNull());
 
     view.rerender(<Transcript messages={[user]} running partial={thinking(reasoning, 3_000)} />);
     expect(screen.getByRole("button", { name: "Thought for 3s" })).toBeInTheDocument();
+    // The stream animates out once the block is clocked.
+    await waitFor(() => expect(view.container.querySelector(".thinking-stream")).toBeNull());
     cleanup();
 
     render(
@@ -156,7 +159,7 @@ describe("Transcript thinking preview", () => {
       </ThinkingPreviewEnabled.Provider>
     );
     expect(screen.getByRole("button", { name: "Thinking…" })).toBeInTheDocument();
-    expect(screen.queryByText("I read the config.")).not.toBeInTheDocument();
+    expect(screen.queryByText("I read the config. Now I check the tes")).not.toBeInTheDocument();
   });
 });
 

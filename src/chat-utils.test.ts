@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applySnapshotDelta, applySubagentFrame, displayPath, formatRelativeTime, formatRunDuration, formatTokens, isPlanMode, mergeMessages, nextMode, pendingSubagentView, planButtonTarget, sameGoalState, samePlanState, sameTodoState, sortedArchived, thinkingPreview, titleFromPrompt, validateInitCommand } from "./chat-utils";
+import { applySnapshotDelta, applySubagentFrame, displayPath, formatRelativeTime, formatRunDuration, formatTokens, isPlanMode, mergeMessages, nextMode, pendingSubagentView, planButtonTarget, sameGoalState, samePlanState, sameTodoState, sortedArchived, thinkingStream, titleFromPrompt, validateInitCommand } from "./chat-utils";
 import type { GoalState, NormalizedMessage, SessionSnapshot, SnapshotDelta, SubagentStreamFrame } from "./types";
 
 describe("titleFromPrompt", () => {
@@ -308,36 +308,25 @@ describe("applySnapshotDelta", () => {
   });
 });
 
-describe("thinkingPreview", () => {
-  it("shows nothing until a sentence is finished", () => {
-    expect(thinkingPreview("")).toBeUndefined();
-    expect(thinkingPreview("The user wants a new settings pa")).toBeUndefined();
+describe("thinkingStream", () => {
+  it("shows nothing until reasoning exists, and keeps a partial tail", () => {
+    expect(thinkingStream("")).toBeUndefined();
+    expect(thinkingStream("The user wants a new settings pa")).toBe("The user wants a new settings pa");
   });
 
-  it("uses the latest finished sentence and ignores the unfinished tail", () => {
-    expect(thinkingPreview("First I read the file. Then I check the tests. Now the st")).toBe("Then I check the tests.");
-    expect(thinkingPreview("One thought.\nA whole line without a stop\nstill writ")).toBe("A whole line without a stop");
-  });
-
-  it("does not split on dots inside words", () => {
-    expect(thinkingPreview("Open src/App.tsx and read it. Nex")).toBe("Open src/App.tsx and read it.");
-  });
-
-  it("prefers the latest heading over sentences", () => {
+  it("keeps flowing text instead of latching a heading", () => {
     const text = "**Exploring the code**\n\nI read App.tsx.\n\n**Planning the settings page**\n\nIt needs a toggle. Also";
-    expect(thinkingPreview(text)).toBe("Planning the settings page");
-    expect(thinkingPreview("## Checking tests\nThey pass. ")).toBe("Checking tests");
-    expect(thinkingPreview("Done. \n## Checking te")).toBe("Done.");
+    expect(thinkingStream(text)).toBe("Exploring the code · I read App.tsx. · Planning the settings page · It needs a toggle. Also");
+    expect(thinkingStream("## Checking tests\nThey pass.")).toBe("Checking tests They pass.");
   });
 
   it("strips markdown and collapses whitespace", () => {
-    expect(thinkingPreview("- Use `thinkingPreview`   in **ThinkingRow**. Then")).toBe("Use thinkingPreview in ThinkingRow.");
+    expect(thinkingStream("- Use `thinkingStream`   in **ThinkingRow**. Then")).toBe("Use thinkingStream in ThinkingRow. Then");
   });
 
-  it("caps long lines", () => {
-    const preview = thinkingPreview(`${"word ".repeat(80)}end. `);
-    expect(preview).toHaveLength(200);
-    expect(preview?.endsWith("…")).toBe(true);
+  it("keeps only the tail", () => {
+    const text = `${"word ".repeat(80)}end. `;
+    expect(thinkingStream(text)).toBe(text.trim().slice(-200));
   });
 });
 

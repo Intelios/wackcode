@@ -92,55 +92,32 @@ export function sortedArchived(tasks: TaskRecord[]): TaskRecord[] {
     .sort((a, b) => archivedAt(b) - archivedAt(a));
 }
 
-const THINKING_PREVIEW_MAX = 200;
-const BOLD_HEADING = /^\s*(?:\*\*|__)(.+?)(?:\*\*|__)[\s:.]*$/;
-const HASH_HEADING = /^\s*#{1,6}\s+(.+)$/;
+const THINKING_STREAM_MAX = 200;
 
-function plainPreviewText(text: string): string {
-  return text
+/** A reasoning line with its markdown stripped: heading/bullet/quote markers and inline emphasis. */
+function plainStreamLine(line: string): string {
+  return line
     .replace(/^\s*(?:#{1,6}|[-*+]|>|\d+\.)\s+/, "")
     .replace(/\*\*|__|`/g, "")
-    .replace(/\s+/g, " ")
     .trim();
 }
 
-function capPreview(text: string): string {
-  return text.length > THINKING_PREVIEW_MAX ? `${text.slice(0, THINKING_PREVIEW_MAX - 1).trimEnd()}…` : text;
-}
-
 /**
- * A one-line gist of streaming reasoning: the latest heading when the model writes them (Claude
- * and OpenAI reasoning summaries open each section with one), otherwise the latest finished
- * sentence. The unfinished tail is ignored so the line only changes when a thought completes.
+ * The collapsed thinking row's live stream: the reasoning text itself flattened onto one line,
+ * markdown removed. Blank-line breaks become a middot so section headings (Claude and OpenAI
+ * summaries open each section with one) read inline rather than latching the row — a heading is
+ * just the next thing the stream flows past. Only the tail is returned: the row right-anchors the
+ * text and fades the left edge, so early reasoning scrolls off as new words arrive.
  */
-export function thinkingPreview(text: string): string | undefined {
-  const lines = text.split("\n");
-  // The last line is still being written unless the text ends with a newline.
-  const lastComplete = text.endsWith("\n") ? lines.length - 1 : lines.length - 2;
-  let heading: string | undefined;
-  let sentence: string | undefined;
-  lines.forEach((line, index) => {
-    const complete = index <= lastComplete;
-    const bold = BOLD_HEADING.exec(line);
-    const hash = complete ? HASH_HEADING.exec(line) : null;
-    const title = bold?.[1] ?? hash?.[1];
-    if (title && plainPreviewText(title)) {
-      heading = plainPreviewText(title);
-      return;
-    }
-    const boundary = /[.!?:]+\s+/g;
-    let start = 0;
-    for (let match = boundary.exec(line); match; match = boundary.exec(line)) {
-      const end = match.index + match[0].length;
-      const candidate = plainPreviewText(line.slice(start, end));
-      if (candidate) sentence = candidate;
-      start = end;
-    }
-    const rest = plainPreviewText(line.slice(start));
-    if (complete && rest) sentence = rest;
-  });
-  const preview = heading ?? sentence;
-  return preview ? capPreview(preview) : undefined;
+export function thinkingStream(text: string): string | undefined {
+  const stream = text
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.split("\n").map(plainStreamLine).filter(Boolean).join(" "))
+    .filter(Boolean)
+    .join(" · ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return stream ? stream.slice(-THINKING_STREAM_MAX) : undefined;
 }
 
 function sameNumberList(a: number[] | undefined, b: number[] | undefined): boolean {

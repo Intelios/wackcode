@@ -5,6 +5,14 @@ function prefersReducedMotion(): boolean {
 }
 
 /**
+ * True where motion is positively allowed: the preference is queryable (a real browser — jsdom
+ * has no matchMedia, so tests get the still end state) and the user hasn't reduced it.
+ */
+export function motionAllowed(): boolean {
+  return typeof matchMedia === "function" && !matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+/**
  * Animates `target` toward full length a few characters per frame so streamed
  * text flows in instead of popping. When `active` is false (or the user prefers
  * reduced motion) the full text is returned immediately.

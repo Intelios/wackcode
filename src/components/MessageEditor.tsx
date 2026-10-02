@@ -1,7 +1,8 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState, useCallback } from "react";
 import type { NormalizedBlock } from "../types";
 import type { FileAttachment } from "../attachment-utils";
 import { Icon } from "./Icons";
+import { ImageLightbox } from "./ui/ImageLightbox";
 
 interface Props {
   /** The message's own words, without the generated attached-files section. */
@@ -13,17 +14,24 @@ interface Props {
   /** Whether the chat's model accepts images. */
   vision: boolean;
   modelName?: string;
+  /** Resolves one of the message's images to its full-size URL, for the lightbox. */
+  loadImage?: (index: number) => Promise<string | undefined>;
   /** Resolves false when the send did not go through; the editor then stays open. */
   onSend: (text: string, files: FileAttachment[], removeImages: number[]) => Promise<boolean>;
   onCancel: () => void;
 }
 
 /** Edits a sent message in place. Sending makes the edit a new version of the message. */
-export function MessageEditor({ text, images, files, vision, modelName, onSend, onCancel }: Props) {
+export function MessageEditor({ text, images, files, vision, modelName, loadImage, onSend, onCancel }: Props) {
   const [draft, setDraft] = useState(text);
   const [removed, setRemoved] = useState<number[]>([]);
   const [removedFiles, setRemovedFiles] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
+  const [shown, setShown] = useState<{ index: number; thumbnail: string } | null>(null);
+  const loadShown = useCallback(
+    () => (loadImage && shown ? loadImage(shown.index) : Promise.resolve(undefined)),
+    [loadImage, shown]
+  );
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const kept = images.filter((_, index) => !removed.includes(index));
   const keptFiles = files.filter((_, index) => !removedFiles.includes(index));
@@ -58,7 +66,11 @@ export function MessageEditor({ text, images, files, vision, modelName, onSend, 
           {images.map((image, index) => removed.includes(index) ? null : (
             <div className="attachment-thumb" key={image.imageId ?? index}>
               {image.thumbnail
-                ? <img src={image.thumbnail} alt={`Attached image ${index + 1}`} />
+                ? (
+                  <button type="button" className="attachment-open" aria-label={`Open attached image ${index + 1}`} onClick={() => image.thumbnail && setShown({ index, thumbnail: image.thumbnail })}>
+                    <img src={image.thumbnail} alt={`Attached image ${index + 1}`} />
+                  </button>
+                )
                 : <div className="image-pending" role="img" aria-label={`Attached image ${index + 1}`}><Icon name="image" /></div>}
               <button type="button" className="attachment-remove" aria-label={`Remove image ${index + 1}`} onClick={() => setRemoved((current) => [...current, index])}>
                 <Icon name="close" />
@@ -107,6 +119,7 @@ export function MessageEditor({ text, images, files, vision, modelName, onSend, 
           {busy ? "Sending…" : "Send"}
         </button>
       </div>
+      {shown && <ImageLightbox preview={shown.thumbnail} load={loadShown} alt={`Attached image ${shown.index + 1}`} onClose={() => setShown(null)} />}
     </div>
   );
 }

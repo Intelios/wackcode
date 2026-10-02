@@ -125,7 +125,7 @@ Auto chat titles live here too: switch on the `auto-titles` agent with a small, 
 | **Tools** | Switch any of the agent's tools off. | Settings › Tools |
 | **Prompts** | Customise the system prompt and the Plan / Ultra Plan instructions, and restore the originals at any time. | Settings › Prompts |
 
-In the composer, type `@` to mention a file or folder, and paste, drop or attach files: text files are sent inside your message, and images go to models that support them.
+In the composer, type `@` to mention a file or folder, and paste, drop or attach files: text files are sent inside your message, and images go to models that support them. Click any image to see it full size.
 
 ![Settings › Packages: installed packages, then a card for each built-in (Plan Mode, Ask User Questions, Todo List, Sub-agents, Browser preview, Computer use, Web Fetch, Memory) with its tools and switches.](docs/images/settings.png)
 

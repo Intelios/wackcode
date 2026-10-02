@@ -390,6 +390,13 @@ export default function App() {
     return api.toolImage(taskId, toolCallId, index).then((image) => image ? `data:${image.mimeType};base64,${image.data}` : undefined);
   }, []);
 
+  /** Full-size attachments for the transcript's lightbox, from the open chat's session. */
+  const loadMessageImage = useCallback((entryId: string, index: number) => {
+    const taskId = selectedTaskRef.current;
+    if (!taskId) return Promise.resolve(undefined);
+    return api.messageImage(taskId, entryId, index).then((image) => image ? `data:${image.mimeType};base64,${image.data}` : undefined);
+  }, []);
+
   const handleComputerAccess = useCallback((request: ComputerAccessRequest, decision: ComputerAccessDecision) => {
     setAccessRequests((current) => current.filter((entry) => entry.requestId !== request.requestId));
     void api.computerUseRespondAccess(request.taskId, request.requestId, decision)
@@ -2627,6 +2634,7 @@ export default function App() {
               modelName={selectedModel?.name || selectedModel?.id}
               onMessageAction={onMessageAction}
               onUndoRewind={runtime?.snapshot?.tree?.undo ? onUndoRewind : undefined}
+              loadImage={loadMessageImage}
             />
             </ToolImageSource.Provider>
             </SubagentPanelLink.Provider>

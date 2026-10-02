@@ -232,6 +232,7 @@ pub fn run() {
             terminal::close_terminal,
             menu_bar::take_menu_navigation,
             commands::tool_image,
+            commands::message_image,
             computer_use::computer_use_status,
             computer_use::computer_use_request_permission,
             computer_use::computer_use_open_settings,

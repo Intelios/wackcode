@@ -47,7 +47,7 @@ The transcript reaches the host as a full `snapshot`, then as `snapshot_delta`s 
 - Normalized messages are cached by Pi's own message objects. An unchanged message reuses the *same* normalized object, which keeps the diff O(changes) and lets the renderer memoize transcript rows by identity. Never mutate a cached object.
 - A delta is an optimization, never a requirement: when a change can't be expressed as "remove these ids, then replace or append these messages", `diffMessages` (`delta.ts`) returns undefined and a full snapshot goes out. Compaction forces a full snapshot. Keep that fallback.
 - A new field that changes mid-run needs `SnapshotDelta` (worker) and `applySnapshotDelta` (`src/chat-utils.ts`) updates.
-- Snapshots carry small image previews, never originals; the lightbox fetches the original with `tool_image`.
+- Snapshots carry small image previews, never originals; the lightbox fetches the original with `tool_image`, or `message_image` for one the user attached to a message.
 
 ## Tools
 

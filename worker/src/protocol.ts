@@ -675,6 +675,13 @@ export type WorkerCommand =
    * for the transcript's lightbox. Bypasses the command queue once the session exists.
    */
   | { id: string; type: "tool_image"; toolCallId: string; index?: number }
+  /**
+   * The original image a user message attached (answered with an `ImageContent` or null), for
+   * the transcript's lightbox. Keyed by the message's session entry and the image's position
+   * among its message's images, the same keys the transcript renders with. Bypasses the command
+   * queue once the session exists, like `tool_image`.
+   */
+  | { id: string; type: "message_image"; entryId: string; index?: number }
   | {
       id: string;
       type: "extension_ui_response";

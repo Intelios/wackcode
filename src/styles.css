@@ -395,6 +395,20 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
   border: 1px solid var(--border); background: var(--surface-raised); object-fit: cover;
 }
 .message-images .image-pending { display: grid; place-items: center; width: 120px; height: 90px; color: var(--text-faint); }
+/* Each attached image opens full size (ui/ImageLightbox), with the same hover lift as a
+   screenshot thumbnail (`.tool-image`). */
+.message-images .message-image {
+  display: block; padding: 0; border: 0; background: none; line-height: 0; cursor: zoom-in;
+}
+.message-images .message-image img {
+  transition: transform .18s var(--ease), border-color .18s var(--ease), box-shadow .18s var(--ease);
+}
+.message-images .message-image:hover img { transform: translateY(-1px); border-color: var(--wc-accent-line); box-shadow: 0 6px 18px rgb(0 0 0 / 22%); }
+.message-images .message-image:focus-visible { outline: 2px solid color-mix(in srgb, var(--wc-accent) 70%, transparent); outline-offset: 2px; border-radius: 10px; }
+@media (prefers-reduced-motion: reduce) {
+  .message-images .message-image img { transition: none; }
+  .message-images .message-image:hover img { transform: none; }
+}
 /* Attached text files (attachment-utils' generated section): a chip per file, opening to the
    exact text the model received. */
 .message-files { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; max-width: 78%; }
@@ -909,6 +923,17 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .composer-attachments { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px 0; }
 .attachment-thumb { position: relative; width: 56px; height: 56px; }
 .attachment-thumb img { width: 100%; height: 100%; object-fit: cover; border-radius: 8px; border: 1px solid var(--border-bright); display: block; }
+/* The thumb itself opens the image full size (ui/ImageLightbox); the ✕ removes it. */
+.attachment-open {
+  display: block; width: 100%; height: 100%; padding: 0; border: 0; background: none; cursor: zoom-in;
+}
+.attachment-open img { transition: transform .18s var(--ease), border-color .18s var(--ease); }
+.attachment-open:hover img { transform: translateY(-1px); border-color: var(--wc-accent-line); }
+.attachment-open:focus-visible { outline: 2px solid color-mix(in srgb, var(--wc-accent) 70%, transparent); outline-offset: 2px; border-radius: 8px; }
+@media (prefers-reduced-motion: reduce) {
+  .attachment-open img { transition: none; }
+  .attachment-open:hover img { transform: none; }
+}
 .attachment-remove {
   position: absolute; top: -6px; right: -6px; display: grid; place-items: center; width: 18px; height: 18px; padding: 0;
   border-radius: 50%; border: 1px solid var(--border-bright); background: var(--surface-hover); color: var(--text-soft); cursor: pointer;

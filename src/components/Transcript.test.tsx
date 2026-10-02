@@ -685,3 +685,44 @@ describe("Transcript scroll rail", () => {
     expect(scrollTo).toHaveBeenCalledWith({ top: 750, behavior: "smooth" });
   });
 });
+
+describe("Transcript attached images", () => {
+  const attached = (): NormalizedMessage => ({
+    id: "u1", entryId: "entry-1", role: "user",
+    blocks: [
+      { type: "image", imageId: "image-1", mimeType: "image/png", thumbnail: "data:image/png;base64,dGh1bWIx" },
+      { type: "image", imageId: "image-2", mimeType: "image/png", thumbnail: "data:image/png;base64,dGh1bWIy" },
+      { type: "text", text: "Look at these" }
+    ]
+  });
+
+  it("opens a sent image full size in the lightbox, and Escape closes it", async () => {
+    const loadImage = vi.fn(async () => "data:image/png;base64,b3JpZ2luYWw=");
+    render(<Transcript messages={[attached()]} running={false} loadImage={loadImage} />);
+    fireEvent.click(screen.getByRole("button", { name: "Open attached image 2" }));
+    const dialog = screen.getByRole("dialog", { name: "Attached image 2" });
+    await waitFor(() => expect(dialog.querySelector("img")?.getAttribute("src")).toBe("data:image/png;base64,b3JpZ2luYWw="));
+    // The original is fetched for the exact message and position that were clicked.
+    expect(loadImage).toHaveBeenCalledWith("entry-1", 1);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("opens the preview alone when no original can come back", () => {
+    render(<Transcript messages={[attached()]} running={false} />);
+    fireEvent.click(screen.getByRole("button", { name: "Open attached image 1" }));
+    expect(screen.getByRole("dialog", { name: "Attached image 1" }).querySelector("img")?.getAttribute("src")).toBe("data:image/png;base64,dGh1bWIx");
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("opens a kept image from the edit box too", async () => {
+    const loadImage = vi.fn(async () => "data:image/png;base64,b3JpZ2luYWw=");
+    render(<Transcript messages={[attached()]} running={false} actionsEnabled onMessageAction={vi.fn().mockResolvedValue(false)} loadImage={loadImage} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open attached image 1" }));
+    const dialog = screen.getByRole("dialog", { name: "Attached image 1" });
+    await waitFor(() => expect(dialog.querySelector("img")?.getAttribute("src")).toBe("data:image/png;base64,b3JpZ2luYWw="));
+    expect(loadImage).toHaveBeenCalledWith("entry-1", 0);
+  });
+});

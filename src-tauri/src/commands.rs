@@ -2283,6 +2283,39 @@ pub async fn tool_image(
     .await
 }
 
+/// The original image a user message attached, for the transcript's lightbox. Keyed by the
+/// message's session entry and the image's position among its images, the keys the transcript
+/// renders with. The worker reads its own session, bypassing its prompt queue, so this works
+/// mid-run; like `tool_image`, the chat's lock covers only starting its worker.
+#[tauri::command]
+pub async fn message_image(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    task_id: String,
+    entry_id: String,
+    index: Option<u32>,
+) -> Result<Value, String> {
+    if entry_id.is_empty() || entry_id.len() > 256 {
+        return Err("That message is not in this chat.".into());
+    }
+    let (task, provider) = task_and_provider(&state, &task_id)?;
+    let api_key = credential_for(&app, &state, &provider)?;
+    {
+        let lock = task_lock(&app, &task_id);
+        let _guard = lock.lock().await;
+        worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
+    }
+    worker::request(
+        &app,
+        &task_id,
+        json!({
+            "id": Uuid::new_v4().to_string(), "type": "message_image", "entryId": entry_id, "index": index.unwrap_or(0)
+        }),
+        REQUEST_TIMEOUT,
+    )
+    .await
+}
+
 #[tauri::command]
 pub async fn list_draft_commands(
     app: AppHandle,

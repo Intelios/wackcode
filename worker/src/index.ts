@@ -1505,6 +1505,9 @@ async function handle(command: WorkerCommand): Promise<void> {
     } else if (command.type === "tool_image") {
       respond(command.id, toolResultImage(command.toolCallId, command.index ?? 0));
       return;
+    } else if (command.type === "message_image") {
+      respond(command.id, userMessageImage(command.entryId, command.index ?? 0));
+      return;
     } else if (command.type === "execute_command") {
       const entry = commandCatalog.find((candidate) => candidate.item.id === command.commandId);
       if (!entry) {
@@ -1874,7 +1877,7 @@ function closeMcpServers(): Promise<void> {
 }
 
 /** Commands the host sends with `worker::request` and whose failures it reports itself. */
-const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "list_commands", "execute_command", "init_agents", "compact", "dequeue", "queue_message", "goal_control", "watch_subagent", "tool_image"]);
+const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "list_commands", "execute_command", "init_agents", "compact", "dequeue", "queue_message", "goal_control", "watch_subagent", "tool_image", "message_image"]);
 
 /**
  * The original of a screenshot tool result's image, for the transcript's lightbox. Only the
@@ -1892,6 +1895,22 @@ function toolResultImage(toolCallId: string, index: number): ImageContent | null
     return image && typeof image.data === "string" && typeof image.mimeType === "string" ? { type: "image", data: image.data, mimeType: image.mimeType } : null;
   }
   return null;
+}
+
+/**
+ * The original of an image the user attached to a sent message, for the transcript's lightbox.
+ * Keyed by the message's session entry id and the image's position among the message's images —
+ * the keys the transcript renders with — because snapshots carry only thumbnails and the
+ * preview's worker-local id says nothing across a restart.
+ */
+function userMessageImage(entryId: string, index: number): ImageContent | null {
+  if (!session) return null;
+  const entry = session.sessionManager.getEntry(entryId) as EntryLike | undefined;
+  if (!isUserMessage(entry)) return null;
+  const content = (entry?.message as Record<string, unknown> | undefined)?.content;
+  if (!Array.isArray(content)) return null;
+  const image = (content as Record<string, unknown>[]).filter((block) => block?.type === "image")[index];
+  return image && typeof image.data === "string" && typeof image.mimeType === "string" ? { type: "image", data: image.data, mimeType: image.mimeType } : null;
 }
 
 /**
@@ -1964,9 +1983,9 @@ function safeError(error: unknown): string {
  * agent settles, so anything that has to reach the running run (an abort, a steer) or the
  * user's pending messages deadlocks behind it. Goal pause/resume/clear bypass too — they act
  * on a live loop; only "set" queues, since starting a run behind another run is exactly what
- * the queue is for. Watching a sub-agent and fetching a lightbox screenshot only read the
- * session, but the panel opens on a child while the call running it holds the queue, so they
- * bypass as well.
+ * the queue is for. Watching a sub-agent and fetching a lightbox image (a screenshot result's
+ * original, or one the user attached) only read the session, but the panel opens on a child
+ * while the call running it holds the queue, so they bypass as well.
  */
 function bypassesQueue(command: WorkerCommand): boolean {
   switch (command.type) {
@@ -1978,6 +1997,7 @@ function bypassesQueue(command: WorkerCommand): boolean {
     case "dequeue":
     case "watch_subagent":
     case "tool_image":
+    case "message_image":
       return true;
     case "goal_control":
       return command.action !== "set";

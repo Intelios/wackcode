@@ -754,3 +754,17 @@ describe("Composer per-chat drafts", () => {
     expect(screen.getByRole("textbox")).toHaveValue("Rewound A, edited");
   });
 });
+
+describe("Composer attachment previews", () => {
+  it("opens an attached image full size in the lightbox, and Escape closes it", async () => {
+    renderComposer("sees");
+    attach(png());
+    await screen.findByAltText("Attached image 1");
+    fireEvent.click(screen.getByRole("button", { name: "Open attached image 1" }));
+    // The picked file is already in memory at full size, so the lightbox needs no fetch.
+    const dialog = screen.getByRole("dialog", { name: "Attached image 1" });
+    expect(dialog.querySelector("img")?.getAttribute("src")).toMatch(/^data:image\/png;base64,/);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});

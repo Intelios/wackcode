@@ -1983,6 +1983,51 @@ describe("image attachments", () => {
     expect(user?.blocks.find((block) => block.type === "text")?.text).toBe("What is in this image?");
   });
 
+  it("serves the lightbox the original of a sent image by entry and position", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-message-image-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "message-image-task", undefined, undefined, undefined, undefined, true
+    );
+    cleanup.push(() => worker.shutdown());
+    // Wider than the 512px transcript preview (so the preview is a resized copy), yet within
+    // Pi's 2000px inline limit (so the session keeps the exact bytes the model received).
+    const first = solidPng(600, 30);
+    const second = solidPng(640, 24);
+    worker.send({
+      id: crypto.randomUUID(), type: "prompt", runId: "message-image-run", message: "Two for you.",
+      images: [
+        { type: "image", data: first, mimeType: "image/png" },
+        { type: "image", data: second, mimeType: "image/png" }
+      ]
+    });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    await worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) =>
+      message.role === "user" && message.blocks.filter((block) => block.type === "image").length === 2
+      && message.blocks.filter((block) => block.type === "image").every((block) => Boolean(block.thumbnail))) === true);
+    const user = worker.view?.messages.find((message) => message.role === "user");
+    expect(user?.entryId).toBeTruthy();
+
+    async function request(command: Record<string, unknown>): Promise<Output> {
+      const id = crypto.randomUUID();
+      worker.send({ id, ...command });
+      return worker.waitFor((output) => output.type === "response" && output.id === id);
+    }
+
+    // Each image comes back at its own position, while snapshots keep carrying previews alone.
+    const zero = await request({ type: "message_image", entryId: user?.entryId, index: 0 });
+    expect(zero.result).toEqual({ type: "image", data: first, mimeType: "image/png" });
+    const one = await request({ type: "message_image", entryId: user?.entryId, index: 1 });
+    expect(one.result).toEqual({ type: "image", data: second, mimeType: "image/png" });
+    expect(JSON.stringify(worker.view)).not.toContain(second);
+
+    // A wrong position or entry finds nothing instead of another image.
+    expect((await request({ type: "message_image", entryId: user?.entryId, index: 2 })).result).toBeNull();
+    expect((await request({ type: "message_image", entryId: "missing", index: 0 })).result).toBeNull();
+  });
+
   it("lets Pi swap the image for its placeholder when the model has no vision", async () => {
     const provider = await startMockProvider();
     cleanup.push(provider.close);

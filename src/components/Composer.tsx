@@ -10,6 +10,7 @@ import { ContextPanel } from "./ContextPanel";
 import { ModelPicker, ReasoningToggle } from "./ModelPicker";
 import { ModeToggle } from "./ModeToggle";
 import { Tooltip } from "./ui/Tooltip";
+import { ImageLightbox } from "./ui/ImageLightbox";
 
 /** Matches `--ease` in styles.css. */
 const EASE: [number, number, number, number] = [0.33, 1, 0.68, 1];
@@ -110,6 +111,8 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
   /** Where the `@` token Escape closed starts; it stays closed until that `@` goes away. */
   const [mentionDismissedAt, setMentionDismissedAt] = useState<number>();
   const [dragging, setDragging] = useState(false);
+  /** The attachment the lightbox is showing; its own data URL is already full size. */
+  const [shownImage, setShownImage] = useState<{ index: number; url: string } | null>(null);
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -470,7 +473,9 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
           <div className="composer-attachments">
             {attachments.map((image, index) => (
               <div className="attachment-thumb" key={index}>
-                <img src={imageDataUrl(image)} alt={`Attached image ${index + 1}`} />
+                <button type="button" className="attachment-open" aria-label={`Open attached image ${index + 1}`} onClick={() => setShownImage({ index, url: imageDataUrl(image) })}>
+                  <img src={imageDataUrl(image)} alt={`Attached image ${index + 1}`} />
+                </button>
                 <button type="button" className="attachment-remove" aria-label={`Remove image ${index + 1}`} onClick={() => removeAttachment(index)}>
                   <Icon name="close" />
                 </button>
@@ -632,6 +637,7 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
           </div>
         </div>
       </motion.div>
+      {shownImage && <ImageLightbox preview={shownImage.url} alt={`Attached image ${shownImage.index + 1}`} onClose={() => setShownImage(null)} />}
     </div>
   );
 }

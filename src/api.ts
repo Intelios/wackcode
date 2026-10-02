@@ -109,6 +109,8 @@ export const api = {
   computerUseListApps: () => invoke<{ name: string; bundleId: string }[]>("computer_use_list_apps"),
   /** The original image of a screenshot tool result, or null when it's gone. */
   toolImage: (taskId: string, toolCallId: string, index = 0) => invoke<ImageContent | null>("tool_image", { taskId, toolCallId, index }),
+  /** The original image a sent message attached, or null when it's gone. */
+  messageImage: (taskId: string, entryId: string, index = 0) => invoke<ImageContent | null>("message_image", { taskId, entryId, index }),
   browserReset: (taskId: string) => invoke<BrowserState>("browser_reset", { taskId }),
   browserReturnFromPopup: (taskId: string) => invoke<BrowserState>("browser_return_from_popup", { taskId }),
   /** Opens the native picker in Rust; null when the user cancels. */

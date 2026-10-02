@@ -21,6 +21,7 @@ import { SubagentGroup } from "./SubagentChip";
 import { ThinkingExpansion, ThinkingRow } from "./ThinkingRow";
 import { OrphanResult, ToolRow } from "./ToolRow";
 import { useContextMenu } from "./ui/ContextMenu";
+import { ImageLightbox } from "./ui/ImageLightbox";
 import { Popover } from "./ui/Popover";
 import { Tooltip } from "./ui/Tooltip";
 
@@ -47,7 +48,12 @@ interface Props {
   onMessageAction?: (action: MessageAction) => Promise<boolean> | void;
   /** Offered right after a rewind. */
   onUndoRewind?: () => void;
+  /** Resolves a sent message's attached image to its full-size URL, for the lightbox. */
+  loadImage?: MessageImageLoader;
 }
+
+/** How the transcript fetches the full-size original of one of a sent message's images. */
+export type MessageImageLoader = (entryId: string, index: number) => Promise<string | undefined>;
 
 export interface DisplayModelSwitch {
   id: string;
@@ -356,6 +362,30 @@ function FileChip({ file }: { file: FileAttachment }) {
   );
 }
 
+/** A sent message's attached images; each opens full size in the lightbox. */
+function MessageImages({ images, entryId, loadImage }: { images: NormalizedBlock[]; entryId?: string; loadImage?: MessageImageLoader }) {
+  const [shown, setShown] = useState<{ index: number; image: NormalizedBlock } | null>(null);
+  const loadShown = useCallback(
+    () => (loadImage && entryId && shown ? loadImage(entryId, shown.index) : Promise.resolve(undefined)),
+    [loadImage, entryId, shown]
+  );
+  return (
+    <div className="message-images">
+      {images.map((image, index) => image.thumbnail
+        ? (
+          <button key={image.imageId ?? index} type="button" className="message-image" onClick={() => setShown({ index, image })} aria-label={`Open attached image ${index + 1}`}>
+            <img src={image.thumbnail} alt={`Attached image ${index + 1}`} />
+          </button>
+        )
+        : <div key={image.imageId ?? index} className="image-pending" role="img" aria-label={`Attached image ${index + 1}`}><Icon name="image" /></div>
+      )}
+      {shown?.image.thumbnail && (
+        <ImageLightbox preview={shown.image.thumbnail} load={loadShown} alt={`Attached image ${shown.index + 1}`} onClose={() => setShown(null)} />
+      )}
+    </div>
+  );
+}
+
 interface MessageProps {
   message: NormalizedMessage;
   /** What the message renders: its blocks, minus those an exploration group folded away. */
@@ -375,9 +405,10 @@ interface MessageProps {
   vision: boolean;
   modelName?: string;
   onAction: (action: LocalAction) => Promise<boolean> | void;
+  loadImage?: MessageImageLoader;
 }
 
-const Message = memo(function Message({ message, slots, results, liveToolText, liveToolDetails, live, running, planState, onPlanAction, actionsEnabled, retry, editing, vision, modelName, onAction }: MessageProps) {
+const Message = memo(function Message({ message, slots, results, liveToolText, liveToolDetails, live, running, planState, onPlanAction, actionsEnabled, retry, editing, vision, modelName, onAction, loadImage }: MessageProps) {
   const contextMenu = useContextMenu();
   if (message.role === "user") {
     const images = message.blocks.filter((block) => block.type === "image");
@@ -393,6 +424,7 @@ const Message = memo(function Message({ message, slots, results, liveToolText, l
             files={files}
             vision={vision}
             modelName={modelName}
+            loadImage={loadImage && message.entryId ? (index) => loadImage(message.entryId!, index) : undefined}
             onCancel={() => void onAction({ type: "cancel-edit" })}
             onSend={async (edited, keptFiles, removeImages) => (await onAction({ type: "edit", message, text: edited, files: keptFiles, removeImages })) === true}
           />
@@ -408,14 +440,7 @@ const Message = memo(function Message({ message, slots, results, liveToolText, l
     }
     return (
       <div className="msg user" onContextMenu={(event) => contextMenu(event, items.map((item) => ({ label: item.label, icon: <Icon name={item.icon} />, onSelect: item.onClick })), "Message menu")} data-turn={message.versions ? message.versions.group : message.id}>
-        {images.length > 0 && (
-          <div className="message-images">
-            {images.map((image, index) => image.thumbnail
-              ? <img key={image.imageId ?? index} src={image.thumbnail} alt={`Attached image ${index + 1}`} />
-              : <div key={image.imageId ?? index} className="image-pending" role="img" aria-label={`Attached image ${index + 1}`}><Icon name="image" /></div>
-            )}
-          </div>
-        )}
+        {images.length > 0 && <MessageImages images={images} entryId={message.entryId} loadImage={loadImage} />}
         {files.length > 0 && (
           <div className="message-files">
             {files.map((file, index) => <FileChip key={index} file={file} />)}
@@ -453,7 +478,8 @@ const Message = memo(function Message({ message, slots, results, liveToolText, l
   prev.sig === next.sig && prev.live === next.live && prev.running === next.running
   && prev.planState === next.planState && prev.onPlanAction === next.onPlanAction
   && prev.actionsEnabled === next.actionsEnabled && prev.retry === next.retry && prev.editing === next.editing
-  && prev.vision === next.vision && prev.modelName === next.modelName && prev.onAction === next.onAction);
+  && prev.vision === next.vision && prev.modelName === next.modelName && prev.onAction === next.onAction
+  && prev.loadImage === next.loadImage);
 
 function turnMenu(message: NormalizedMessage, actionsEnabled: boolean, retry: boolean, onAction: MessageProps["onAction"]): MessageActionItem[] {
   const items: MessageActionItem[] = [];
@@ -478,7 +504,7 @@ function activityLabel(activity?: string): string {
   return "Working…";
 }
 
-export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, runTimings = [], liveToolText, liveToolDetails, planState, onPlanAction, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind }: Props) {
+export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, runTimings = [], liveToolText, liveToolDetails, planState, onPlanAction, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind, loadImage }: Props) {
   const { ref, onScroll, onWheel, detached, pauseFollowing, jumpToLatest } = useFollowScroll();
   const [editingId, setEditingId] = useState<string>();
   const [expandedThinking] = useState(() => new Set<string>());
@@ -614,6 +640,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
                       vision={vision}
                       modelName={modelName}
                       onAction={handleAction}
+                      loadImage={loadImage}
                     />
                     {message.role === "user" && message.id === activeUserId && (
                       <RunDuration startedAt={activeRun?.startedAt} />

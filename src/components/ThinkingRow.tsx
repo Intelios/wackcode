@@ -43,7 +43,7 @@ function ThinkingElapsed({ startedAt }: { startedAt: number }) {
 function ThinkingBody({ text, live }: { text: string; live: boolean }) {
   const shown = useSmoothText(text, live);
   return (
-    <div className="thinking-body">
+    <div className="thinking-body" role="region" aria-label="Reasoning" tabIndex={0}>
       <Markdown streaming={live}>{shown}</Markdown>
     </div>
   );

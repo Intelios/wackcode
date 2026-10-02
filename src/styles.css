@@ -552,7 +552,9 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 }
 @keyframes thinking-preview-in { from { opacity: 0; } to { opacity: .8; } }
 .thinking-body {
-  margin: 6px 0 4px 20px; padding-left: 12px; border-left: 1px solid var(--border);
+  /* Keep the collapse button within reach; the complete reasoning scrolls inside this body. */
+  max-height: min(320px, 40vh); overflow: auto; overscroll-behavior: contain;
+  margin: 6px 0 4px 20px; padding: 0 8px 0 12px; border-left: 1px solid var(--border);
   color: var(--text-dim); font-size: 12.5px; line-height: 1.6;
 }
 .thinking-body > :first-child { margin-top: 0; } .thinking-body > :last-child { margin-bottom: 0; }

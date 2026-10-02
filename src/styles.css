@@ -578,10 +578,17 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .tool-row-icon { width: 13px; height: 13px; color: var(--text-dim); flex: 0 0 auto; }
 .tool-row-verb { color: var(--text-soft); font-weight: 550; flex: 0 0 auto; }
 .tool-row.error .tool-row-verb { color: var(--danger); }
-.tool-row-subject {
+/* `code.` qualifies so this ties `.msg.assistant code` and wins by order: plain type, not the prose pill. */
+.tool-row code.tool-row-subject {
+  display: inline-flex; align-items: baseline; min-width: 0; overflow: hidden;
+  padding: 0; border: 0; background: none;
   font-family: "SFMono-Regular", Consolas, monospace; font-size: 11.5px; color: var(--text-dim);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
 }
+.tool-row-subject-dir, .tool-row-subject-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The directory shrinks and ellipsizes first so the file name stays visible. */
+.tool-row-subject-dir { flex: 0 1 auto; color: var(--text-faint); }
+.tool-row-subject-name { color: var(--text-soft); }
+.has-dir .tool-row-subject-name { flex: 0 0 auto; max-width: 100%; }
 .tool-row-stats { display: inline-flex; gap: 5px; flex: 0 0 auto; }
 .tool-row-stats em { font-style: normal; font-family: "SFMono-Regular", monospace; font-size: 10.5px; }
 .tool-row-stats .add { color: #a8d883; } .tool-row-stats .del { color: #e3a2a2; }
@@ -1885,6 +1892,11 @@ button.compact.primary:hover:not(:disabled) { background: var(--wc-accent-hover)
 .settings-nav-item { width: 100%; height: 32px; display: flex; align-items: center; gap: 9px; border: 0; background: transparent; color: var(--text-soft); border-radius: 7px; padding: 0 9px; cursor: pointer; text-align: left; font-size: 12.5px; }
 .settings-nav-item:hover { background: var(--surface); color: var(--text); }
 .settings-nav-item.active { background: var(--surface-hover); color: var(--text); }
+/* The settings sidebar's footer stacks full-width actions (Data folder, About) instead of the
+   chat sidebar's square tiles; About marks itself open like a nav item does. */
+.settings-sidebar-footer { flex-direction: column; align-items: stretch; padding: 8px; }
+.settings-sidebar-footer .sidebar-action.active { background: var(--surface-hover); color: var(--text); }
+.settings-sidebar-footer .sidebar-action .duck-mark { color: var(--wc-accent); }
 .settings-subnav-wrapper {
   display: grid;
   grid-template-rows: 0fr;
@@ -4463,3 +4475,60 @@ label > span small.mcp-invalid { color: var(--warning); }
   .memory-project-mono, .memory-add { transition: none; }
 }
 .memory-name-field input { font-size: 12px; }
+
+/* ── Settings › About (AboutSection.tsx) ── */
+/* A Settings page (SettingsHero): the duck presents its spec card — version, engine, machine —
+   then cards of facts, in the well-on-card rows the other pages use. */
+
+/* Stage: the duck stands on its tile and the card's lines fill in one after another. Rests
+   dim like the sibling stages; the accent arrives when the page has something to show. */
+.about-stage-tile { fill: var(--wc-well); stroke: var(--border-bright); stroke-width: 1.5; transition: stroke .3s var(--ease); }
+.about-stage .duck-mark { color: var(--text-faint); transform-box: fill-box; transform-origin: 50% 85%; transition: color .3s var(--ease); }
+.about-stage-card { fill: var(--wc-well); stroke: var(--border-bright); stroke-width: 1.4; stroke-dasharray: 4 3; transition: stroke .3s var(--ease); }
+.about-stage-dot { fill: var(--border-bright); }
+.about-stage-line { fill: var(--border-bright); transform-box: fill-box; transform-origin: left center; }
+.about-stage.live .about-stage-card { stroke-dasharray: none; stroke: var(--wc-accent-line); }
+.about-stage.live .about-stage-tile { stroke: var(--wc-accent-line); }
+.about-stage.live .duck-mark { color: var(--wc-accent); animation: duck-bob 1.6s ease-in-out infinite alternate; }
+.about-stage.live .about-stage-line { fill: var(--wc-accent); animation: about-stage-line 6s var(--ease) calc(var(--k) * .16s) infinite backwards; }
+@keyframes about-stage-line {
+  0%, 12% { opacity: 0; transform: scaleX(.3); }
+  20%, 86% { opacity: 1; transform: none; }
+  94%, 100% { opacity: 0; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .about-stage.live .duck-mark, .about-stage.live .about-stage-line { animation: none; }
+  .about-stage.live .about-stage-line { fill: var(--wc-accent); opacity: 1; }
+}
+
+/* The Versions card: one plain label and one mono fact per row. */
+.about-rows { list-style: none; margin: 12px 0 0; padding: 0; border: 1px solid var(--border); border-radius: 10px; background: var(--wc-well); overflow: hidden; }
+.about-row { display: flex; align-items: center; gap: 11px; padding: 9px 10px 9px 12px; }
+.about-row + .about-row { border-top: 1px solid var(--border); }
+.about-row-label { flex: 0 0 auto; color: var(--text-dim); font-size: 11.5px; }
+.about-row-value { flex: 1; min-width: 0; text-align: right; color: var(--text-soft); font: 11.5px "SFMono-Regular", Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The build flavour, a pill like the hero's; a development build is the accent case. */
+.about-build-badge {
+  display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px 0 8px; border-radius: 999px;
+  border: 1px solid var(--border-bright); background: var(--wc-well); color: var(--text-soft);
+  font-size: 10.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+}
+.about-build-badge i { width: 6px; height: 6px; border-radius: 50%; background: var(--text-faint); }
+.about-build-badge.dev { color: var(--wc-accent-text); border-color: var(--wc-accent-line-soft); background: var(--wc-accent-tint); }
+.about-build-badge.dev i { background: var(--wc-accent); }
+
+/* A path or URL with what it is above it, the shape Integrations uses for the ledger. */
+.about-path { margin-top: 2px; display: flex; align-items: center; gap: 12px; padding: 9px 10px 9px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--wc-well); }
+.about-path > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.about-path span { color: var(--text-dim); font-size: 10.5px; }
+.about-path code { color: var(--text-faint); font: 10.5px "SFMono-Regular", Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The library card: one big number per tile. */
+.about-stats { list-style: none; margin: 12px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+.about-stats li { display: flex; flex-direction: column; gap: 2px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 11px; background: var(--wc-well); }
+.about-stats strong { font-size: 18px; letter-spacing: -.02em; }
+.about-stats span { color: var(--text-dim); font-size: 10.5px; }
+/* `.package-error` carries the 36px indent of an error inside a card with a left icon; page-level
+   alerts sit flush like Integrations' do. */
+.about-settings .package-error { margin: 8px 0 0; }

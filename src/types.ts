@@ -822,6 +822,27 @@ export interface BootstrapPayload {
   computerUseSupported?: boolean;
 }
 
+/** Settings › About: this copy of the app and everything it bundles. Mirrors `AppInfo` in `models.rs`. */
+export interface AppInfo {
+  appVersion: string;
+  /** "development" or "installed". */
+  build: "development" | "installed";
+  appPath: string;
+  /** The bundled Pi agent, from `runtime-lock.json`. */
+  piVersion: string;
+  /** The bundled Node runtime, from `runtime-lock.json`. */
+  nodeVersion: string;
+  /** e.g. "macOS 15.3". */
+  osVersion: string;
+  /** e.g. "Apple Silicon (arm64)". */
+  chip: string;
+  projectCount: number;
+  chatCount: number;
+  archivedCount: number;
+  /** Chat worker processes alive right now. */
+  activeWorkers: number;
+}
+
 export interface NormalizedBlock {
   type: "text" | "thinking" | "tool-call" | "tool-result" | "image";
   text?: string;

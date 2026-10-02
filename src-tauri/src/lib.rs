@@ -102,6 +102,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap,
+            commands::app_info,
             usage::usage_status,
             usage::set_usage_recording,
             commands::save_provider,

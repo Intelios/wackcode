@@ -1377,6 +1377,32 @@ pub struct BootstrapPayload {
     pub computer_use_supported: bool,
 }
 
+/// Settings › About: this copy of the app and what it bundles. Runtime-only, never stored;
+/// mirrors `AppInfo` in `src/types.ts`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppInfo {
+    /// From `tauri.conf.json` via `package_info`, the one place the version is written.
+    pub app_version: String,
+    /// "development" or "installed"; the same signal `computer_use_status` reports.
+    pub build: String,
+    /// The running .app's executable, so a bug report can say which copy it came from.
+    pub app_path: String,
+    /// Baked by `build.rs` from `runtime-lock.json`, the contract `prepare:runtime` enforces.
+    pub pi_version: String,
+    pub node_version: String,
+    /// e.g. "macOS 15.3", from `NSProcessInfo`.
+    pub os_version: String,
+    /// e.g. "Apple Silicon (arm64)".
+    pub chip: String,
+    pub project_count: usize,
+    /// Chats that are not archived.
+    pub chat_count: usize,
+    pub archived_count: usize,
+    /// Chat worker processes alive right now.
+    pub active_workers: usize,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitChangeFile {

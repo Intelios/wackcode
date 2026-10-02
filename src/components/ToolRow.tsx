@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useId, useMemo, useState } from
 import { highlightDiffLines, languageForPath } from "../highlight";
 import { editArgumentDiff, focusedEditDiff } from "../edit-preview";
 import type { NormalizedBlock } from "../types";
-import { mcpToolParts, summarizeTool } from "../tool-utils";
+import { mcpToolParts, splitPathSubject, summarizeTool } from "../tool-utils";
 import { Icon, type IconName } from "./Icons";
 import { ImageLightbox } from "./ui/ImageLightbox";
 import { CopyButton } from "./ui/CopyButton";
@@ -158,6 +158,8 @@ export function ToolRow({ call, result, liveText, running }: ToolRowProps) {
   const failed = result?.isError === true;
   const pending = running && !result;
   const shownResult = result ?? (pending && liveText ? { type: "tool-result" as const, text: liveText } : undefined);
+  /** Only real file paths get a dir/name split; commands, patterns and URLs are left whole. */
+  const pathParts = summary.kind === "read" || summary.kind === "edit" || summary.kind === "write" ? splitPathSubject(summary.subject) : undefined;
   const expandable = Boolean(shownResult?.text || (result?.details as Record<string, unknown> | undefined)?.diff || summary.kind === "write" || summary.kind === "other");
 
   return (
@@ -165,7 +167,12 @@ export function ToolRow({ call, result, liveText, running }: ToolRowProps) {
       <button type="button" className="tool-row-head" onClick={() => expandable && setOpen((value) => !value)} disabled={!expandable} aria-expanded={open}>
         <Icon name={TOOL_ICONS[call.toolName ?? ""] ?? (mcpToolParts(call.toolName ?? "") ? "plug" : "terminal")} className="tool-row-icon" />
         <span className="tool-row-verb">{pending ? summary.activeVerb : summary.doneVerb}</span>
-        {summary.subject && <code className="tool-row-subject" title={summary.subject}>{summary.subject}</code>}
+        {summary.subject && (
+          <code className={`tool-row-subject ${pathParts?.dir ? "has-dir" : ""}`} title={summary.subject}>
+            {pathParts?.dir && <span className="tool-row-subject-dir">{pathParts.dir}</span>}
+            <span className="tool-row-subject-name">{pathParts ? pathParts.name : summary.subject}</span>
+          </code>
+        )}
         {(summary.additions || summary.deletions) ? (
           <span className="tool-row-stats">
             {summary.additions ? <em className="add">+{summary.additions}</em> : null}

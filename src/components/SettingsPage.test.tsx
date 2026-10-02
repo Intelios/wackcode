@@ -7,6 +7,11 @@ import { SettingsPage } from "./SettingsPage";
 
 vi.mock("../api", () => ({ api: {
   revealPath: vi.fn().mockResolvedValue(undefined),
+  appInfo: vi.fn().mockResolvedValue({
+    appVersion: "1.0.5", build: "development", appPath: "/Applications/WackCode.app/Contents/MacOS/wackcode",
+    piVersion: "0.99.2", nodeVersion: "24.18.0", osVersion: "macOS 15.3", chip: "Apple Silicon (arm64)",
+    projectCount: 1, chatCount: 2, archivedCount: 0, activeWorkers: 0
+  }),
   listBuiltinModels: vi.fn().mockResolvedValue([]),
   listSubscriptionProviders: vi.fn().mockResolvedValue([]),
   computerUseStatus: vi.fn().mockResolvedValue({ supported: true, accessibility: true, screenRecording: false, hotkeyAvailable: true, devBuild: false }),
@@ -16,6 +21,8 @@ vi.mock("../api", () => ({ api: {
   computerUseRelaunch: vi.fn().mockResolvedValue(undefined),
   computerUseListApps: vi.fn().mockResolvedValue([{ name: "Notes", bundleId: "com.apple.Notes" }])
 } }));
+
+vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ writeText: vi.fn().mockResolvedValue(undefined) }));
 
 /** Opens a connection from the Settings sidebar, where each one is listed under Providers. */
 function openConnection(name: string) {
@@ -291,6 +298,49 @@ describe("SettingsPage sidebar navigation", () => {
     expect(backBtn).toHaveTextContent("Settings");
     fireEvent.click(backBtn);
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe("SettingsPage about", () => {
+  function renderPage() {
+    render(
+      <SettingsPage
+        providers={[]}
+        packages={[]}
+        toolCatalog={catalog}
+        disabledTools={[]}
+        appDataPath="/tmp/wackcode"
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+        onDelete={vi.fn()}
+        onSetProviderEnabled={vi.fn()}
+        onConnectSubscription={vi.fn()}
+        onSignOutSubscription={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
+        onRefresh={vi.fn().mockResolvedValue(undefined)}
+        onInstall={vi.fn()}
+        onTrust={vi.fn()}
+        onSearch={vi.fn().mockResolvedValue([])}
+        onRemove={vi.fn()}
+        onUpdate={vi.fn()}
+        onSetResources={vi.fn()}
+      />
+    );
+  }
+
+  it("opens About from the sidebar footer, not the nav, and a nav click switches away", async () => {
+    renderPage();
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    // About is the app's own page, so it stays out of the agent-feature nav.
+    expect(within(nav).queryByRole("button", { name: "About" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "About" }));
+    expect(screen.getByRole("heading", { name: "About" })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "About overview" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "About" })).toHaveClass("active");
+    fireEvent.click(within(nav).getByRole("button", { name: "Appearance" }));
+    expect(screen.getByRole("heading", { name: "Appearance" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "About" })).not.toHaveClass("active");
   });
 });
 

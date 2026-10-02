@@ -167,6 +167,12 @@ impl WorkerState {
             .collect())
     }
 
+    /// How many chat workers are alive right now; Settings › About shows it. A poisoned lock
+    /// is not worth failing the whole page over, so it reads as zero.
+    pub fn count(&self) -> usize {
+        self.workers.lock().map(|workers| workers.len()).unwrap_or(0)
+    }
+
     pub fn remove(&self, task_id: &str) -> Result<Option<WorkerProcess>, String> {
         Ok(self
             .workers

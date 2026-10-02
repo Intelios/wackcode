@@ -2,6 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   AutoTitleConfig,
   AppearanceConfig,
+  AppInfo,
   BootstrapPayload,
   BuiltinModelSuggestion,
   BrowserState,
@@ -69,6 +70,8 @@ import type {
 
 export const api = {
   bootstrap: () => invoke<BootstrapPayload>("bootstrap"),
+  /** Settings › About: versions, build flavour and local counts, in one read. */
+  appInfo: () => invoke<AppInfo>("app_info"),
   takeMenuNavigation: () => invoke<string | null>("take_menu_navigation"),
   saveProvider: (input: SaveProviderInput) => invoke<ProviderRecord>("save_provider", { input }),
   setProviderEnabled: (providerId: string, enabled: boolean) => invoke<ProviderRecord>("set_provider_enabled", { providerId, enabled }),
@@ -296,7 +299,9 @@ export const api = {
   setDiffComments: (taskId: string, comments: DiffComment[]) => invoke<DiffComment[]>("set_diff_comments", { taskId, comments }),
   listWorkspaceFiles: (taskId?: string, projectId?: string) => invoke<WorkspaceFiles>("list_workspace_files", { taskId, projectId }),
   revealTask: (taskId: string) => invoke<void>("reveal_task", { taskId }),
-  revealPath: (path: string) => invoke<void>("reveal_path", { path }),
+  /** `select` shows the item selected in its folder (`open -R`) instead of opening it — for
+   *  executables such as the running app, which plain `open` would launch. */
+  revealPath: (path: string, select = false) => invoke<void>("reveal_path", { path, select }),
   /** The GUI editors installed on this Mac (VS Code, Zed, …), for Git mode's picker. */
   listEditors: () => invoke<string[]>("list_editors"),
   openInEditor: (target: GitTarget, editor: string) => invoke<void>("open_in_editor", { ...target, editor }),

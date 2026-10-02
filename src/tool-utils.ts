@@ -118,6 +118,17 @@ export function displayUrl(value: string): string {
   }
 }
 
+/**
+ * A path subject (`displayPath` output) as a dim directory tail and the name to anchor on.
+ * `dir` keeps its trailing slash; anything without a slash stays a single `name`.
+ */
+export function splitPathSubject(path: string): { dir: string; name: string } {
+  const slash = path.lastIndexOf("/");
+  const name = slash >= 0 ? path.slice(slash + 1) : path;
+  if (slash < 0 || !name) return { dir: "", name: path };
+  return { dir: path.slice(0, slash + 1), name };
+}
+
 /** An MCP tool's name, `mcp__<server slug>__<tool>`, split into its parts (see the worker's `mcpToolName`). */
 export function mcpToolParts(name: string): { server: string; tool: string } | undefined {
   const match = /^mcp__([a-z0-9_]+?)__(.+)$/.exec(name);

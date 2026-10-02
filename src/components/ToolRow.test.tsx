@@ -140,6 +140,22 @@ describe("ToolRow", () => {
     expect(document.querySelector(".tool-diff .deletion .hljs")).toBeNull();
   });
 
+  it("dims the directory and anchors the file name on path subjects", () => {
+    render(<ToolRow call={{ ...editCall, toolName: "read", arguments: { path: "src-tauri/src/models.rs" } }} />);
+    const subject = document.querySelector(".tool-row-subject")!;
+    expect(subject).toHaveClass("has-dir");
+    expect(subject.querySelector(".tool-row-subject-dir")?.textContent).toBe("src-tauri/src/");
+    expect(subject.querySelector(".tool-row-subject-name")?.textContent).toBe("models.rs");
+  });
+
+  it("leaves non-path subjects whole", () => {
+    render(<ToolRow call={{ ...editCall, toolName: "bash", arguments: { command: "cd src && pnpm test" } }} />);
+    const subject = document.querySelector(".tool-row-subject")!;
+    expect(subject).not.toHaveClass("has-dir");
+    expect(subject.querySelector(".tool-row-subject-dir")).toBeNull();
+    expect(subject.querySelector(".tool-row-subject-name")?.textContent).toBe("cd src && pnpm test");
+  });
+
   it("falls back to plain diff text without a language", () => {
     const noLangCall = { ...editCall, arguments: { path: "artifact.unknownext" } };
     render(<ToolRow call={noLangCall} result={editResult} />);

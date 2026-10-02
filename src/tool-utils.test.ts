@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bashExploreKind, diffStats, displayAgentName, editStats, exploreKind, firstSentence, groupTools, parseSubagentDetails, pendingSubagentDetails, pruneDisabledTools, sameToolCatalog, subagentDetailsFor, summarizeTool } from "./tool-utils";
+import { bashExploreKind, diffStats, displayAgentName, editStats, exploreKind, firstSentence, groupTools, parseSubagentDetails, pendingSubagentDetails, pruneDisabledTools, sameToolCatalog, splitPathSubject, subagentDetailsFor, summarizeTool } from "./tool-utils";
 import type { NormalizedBlock, NormalizedMessage, ToolCatalogEntry } from "./types";
 
 function call(toolName: string, args: unknown): NormalizedBlock {
@@ -79,6 +79,20 @@ describe("summarizeTool", () => {
   it("falls back gracefully for unknown tools", () => {
     const summary = summarizeTool(call("mcp_deploy", {}));
     expect(summary.doneVerb).toBe("mcp_deploy");
+  });
+});
+
+describe("splitPathSubject", () => {
+  it.each([
+    ["src-tauri/src/models.rs", "src-tauri/src/", "models.rs"],
+    ["App.tsx", "", "App.tsx"],
+    ["…/src/main.ts", "…/src/", "main.ts"],
+    ["~/project/README.md", "~/project/", "README.md"],
+    ["src/", "", "src/"],
+    ["/", "", "/"],
+    ["", "", ""]
+  ])("splits %s", (path, dir, name) => {
+    expect(splitPathSubject(path)).toEqual({ dir, name });
   });
 });
 

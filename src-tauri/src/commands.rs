@@ -1,7 +1,7 @@
 use crate::{
     backgrounds, checkpoints, files, git, glass, mcp,
     models::{
-        AppearanceConfig, AutoTitleConfig, BackdropMode, BootstrapPayload, BuiltinModelSuggestion,
+        AppearanceConfig, AppInfo, AutoTitleConfig, BackdropMode, BootstrapPayload, BuiltinModelSuggestion,
         CheckpointChange, CheckpointRef, CreateTaskInput, DiffComment, ExportPlanInput,
         ExtensionUiResponseInput, ForkTaskInput, GitBranches, GitChangeFile, GitChanges,
         GitCheckoutResult, GitCommitFiles, GitGeneratedMessage, GitLogPage, GitPrInfo,
@@ -150,6 +150,65 @@ pub fn bootstrap(
             .into_owned(),
         glass_supported: glass::is_supported(),
         computer_use_supported: crate::computer_use::supported(),
+    })
+}
+
+/// `NSOperatingSystemVersion` as Apple writes it: "15.3", with the patch only when it exists
+/// ("12.0.1"). Pure, so the formatter has tests without a process-info call.
+fn format_os_version(major: isize, minor: isize, patch: isize) -> String {
+    if patch > 0 {
+        format!("macOS {major}.{minor}.{patch}")
+    } else {
+        format!("macOS {major}.{minor}")
+    }
+}
+
+/// The chip line in Settings › About. The app is Apple Silicon–only today, but the label stays
+/// honest about whatever it ends up running on.
+fn chip_label(arch: &str) -> String {
+    if arch == "aarch64" {
+        "Apple Silicon (arm64)".into()
+    } else {
+        arch.to_string()
+    }
+}
+
+/// Settings › About: this copy of the app and everything it bundles, in one read. The section
+/// polls it so the live-worker count stays current. Read-only; joins no worker state machine.
+#[tauri::command]
+pub fn app_info(app: AppHandle, state: State<'_, MetadataState>) -> Result<AppInfo, String> {
+    // Scoped, so the metadata lock is gone before the worker lock is taken (the order
+    // `ensure_worker` uses; the two never nest).
+    let (project_count, chat_count, archived_count) = {
+        let data = state
+            .data
+            .lock()
+            .map_err(|_| "Metadata lock was poisoned".to_string())?;
+        (
+            data.projects.len(),
+            data.tasks.iter().filter(|task| !task.archived).count(),
+            data.tasks.iter().filter(|task| task.archived).count(),
+        )
+    };
+    let os_version = {
+        let version = objc2_foundation::NSProcessInfo::processInfo().operatingSystemVersion();
+        format_os_version(version.majorVersion, version.minorVersion, version.patchVersion)
+    };
+    Ok(AppInfo {
+        app_version: app.package_info().version.to_string(),
+        build: if cfg!(debug_assertions) { "development" } else { "installed" }.into(),
+        app_path: std::env::current_exe()
+            .map_err(|error| format!("WackCode could not find its own app folder: {error}"))?
+            .to_string_lossy()
+            .into_owned(),
+        pi_version: env!("WACKCODE_PI_VERSION").into(),
+        node_version: env!("WACKCODE_NODE_VERSION").into(),
+        os_version,
+        chip: chip_label(std::env::consts::ARCH),
+        project_count,
+        chat_count,
+        archived_count,
+        active_workers: app.state::<worker::WorkerState>().count(),
     })
 }
 
@@ -4302,10 +4361,30 @@ fn ensure_openable(path: &str) -> Result<(), String> {
     }
 }
 
+/// `open -R` can only select a file or folder in Finder, never a URL, so the selection reveal
+/// refuses one up front with a sentence instead of macOS's generic failure.
+fn ensure_selectable(path: &str) -> Result<(), String> {
+    match url_scheme(path) {
+        None => Ok(()),
+        Some(_) => Err("Only a file or folder can be revealed this way".into()),
+    }
+}
+
 #[tauri::command]
-pub fn reveal_path(path: String) -> Result<(), String> {
+pub fn reveal_path(path: String, select: Option<bool>) -> Result<(), String> {
     ensure_openable(&path)?;
-    let status = Command::new("open")
+    // `select` reveals the item selected in its folder (`open -R`, the way Memory's finder
+    // does) instead of opening it — required for an executable such as the running app itself,
+    // where plain `open` would launch a second copy.
+    let select = select.unwrap_or(false);
+    if select {
+        ensure_selectable(&path)?;
+    }
+    let mut command = Command::new("open");
+    if select {
+        command.arg("-R");
+    }
+    let status = command
         .arg(&path)
         .status()
         .map_err(|error| error.to_string())?;
@@ -5028,6 +5107,28 @@ mod tests {
         ] {
             assert!(ensure_openable(refused).is_err(), "{refused} should be refused");
         }
+    }
+
+    #[test]
+    fn os_versions_read_like_apple_writes_them() {
+        assert_eq!(format_os_version(15, 3, 1), "macOS 15.3.1");
+        // No patch: Apple writes "15.3", not "15.3.0".
+        assert_eq!(format_os_version(15, 3, 0), "macOS 15.3");
+        // The app's own floor: macOS 12.0.
+        assert_eq!(format_os_version(12, 0, 0), "macOS 12.0");
+    }
+
+    #[test]
+    fn chip_labels_name_apple_silicon_only_there() {
+        assert_eq!(chip_label("aarch64"), "Apple Silicon (arm64)");
+        // Anything else says what it is rather than guessing.
+        assert_eq!(chip_label("x86_64"), "x86_64");
+    }
+
+    #[test]
+    fn selection_reveal_takes_files_and_folders_only() {
+        assert!(ensure_selectable("/Applications/WackCode.app/Contents/MacOS/wackcode").is_ok());
+        assert!(ensure_selectable("https://github.com/Intelios/wackcode").is_err());
     }
 
     #[test]

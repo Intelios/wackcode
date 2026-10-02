@@ -5,6 +5,7 @@ import { modelIsReady } from "../model-utils";
 import { BROWSER_TOOL_NAMES, WEB_FETCH_TOOL_NAME } from "../tool-utils";
 import type { AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CommandsConfig, ComputerUseConfig, McpConfig, MemoryConfig, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ToolCatalogEntry } from "../types";
 import { Icon, type IconName } from "./Icons";
+import { AboutSection } from "./AboutSection";
 import { CommandsSection, type SlashCommandActions } from "./CommandsSection";
 import { MemorySection, type MemoryActions } from "./MemorySection";
 import { ComputerUseSection, type ComputerUseActions } from "./ComputerUseSection";
@@ -18,6 +19,7 @@ import { SkillsSection, type SkillActions } from "./SkillsSection";
 import { SubagentsSection } from "./SubagentsSection";
 import { ToolsSection } from "./ToolsSection";
 import { AppearanceSection } from "./AppearanceSection";
+import { DuckMark } from "./DuckMark";
 import { Tooltip } from "./ui/Tooltip";
 
 /** Settings › Skills talks to Rust directly, like the rest of this page; `api`'s functions are stable. */
@@ -67,7 +69,7 @@ const COMPUTER_USE_ACTIONS: ComputerUseActions = {
 };
 const COMPUTER_USE_OFF: ComputerUseConfig = { enabled: false, neverAllow: [] };
 
-type SectionId = "providers" | "packages" | "skills" | "commands" | "memory" | "tools" | "mcp" | "appearance" | "prompts" | "subagents" | "computer_use" | "integrations";
+type SectionId = "providers" | "packages" | "skills" | "commands" | "memory" | "tools" | "mcp" | "appearance" | "prompts" | "subagents" | "computer_use" | "integrations" | "about";
 
 interface Section {
   id: SectionId;
@@ -240,9 +242,14 @@ export function SettingsPage({
             </Fragment>
           ))}
         </nav>
-        <div className="sidebar-footer">
+        <div className="sidebar-footer settings-sidebar-footer">
           <button type="button" className="sidebar-action" title={appDataPath} onClick={() => void api.revealPath(appDataPath).catch(() => undefined)}>
             <Icon name="folder" /> Data folder
+          </button>
+          {/* Not a nav section: About is the app's own page, so it lives in the footer with the
+              Data folder rather than between the agent's features. */}
+          <button type="button" className={`sidebar-action ${section === "about" ? "active" : ""}`} onClick={() => setSection("about")}>
+            <DuckMark /> About
           </button>
         </div>
       </aside>
@@ -250,7 +257,7 @@ export function SettingsPage({
       <main className="workspace settings-workspace">
         <header className="settings-page-head">
           <div>
-            <h2>{selectedSection?.label}</h2>
+            <h2>{section === "about" ? "About" : selectedSection?.label}</h2>
           </div>
           <button type="button" className="secondary-button" onClick={onClose}>Done</button>
         </header>
@@ -382,6 +389,7 @@ export function SettingsPage({
             onCancel={() => setComputerSetup(false)}
           />
         )}
+        {section === "about" && <AboutSection />}
         {section === "subagents" && (
           <SubagentsSection
             config={subagents}

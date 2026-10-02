@@ -1,5 +1,17 @@
 import type { SlashCommand } from "./types";
 
+/** The slash token under the caret, bounded by whitespace; paths and URLs aren't commands. */
+export function activeSlashCommand(text: string, caret: number): { start: number; end: number; query: string } | null {
+  const match = /(?:^|\s)(\/[^\s]*)$/.exec(text.slice(0, caret));
+  if (!match) return null;
+  const start = caret - match[1].length;
+  let end = caret;
+  while (end < text.length && !/\s/.test(text[end])) end += 1;
+  // A second slash makes this a path, even when the caret is in its first segment.
+  if (text.slice(start + 1, end).includes("/")) return null;
+  return { start, end, query: text.slice(start + 1, caret) };
+}
+
 /**
  * WackCode's own slash commands, run by the app itself rather than a worker. The Settings
  * "WackCode" group renders this same list, so the two always agree. The picker's resolved

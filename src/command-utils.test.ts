@@ -1,5 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { APP_SLASH_COMMANDS, expandCommandPreview, validateCommandBody, validateCommandName } from "./command-utils";
+import { activeSlashCommand, APP_SLASH_COMMANDS, expandCommandPreview, validateCommandBody, validateCommandName } from "./command-utils";
+
+describe("activeSlashCommand", () => {
+  it("finds commands at the caret after prose and on later lines", () => {
+    expect(activeSlashCommand("/he", 3)).toEqual({ start: 0, end: 3, query: "he" });
+    expect(activeSlashCommand("Please /he world", 10)).toEqual({ start: 7, end: 10, query: "he" });
+    expect(activeSlashCommand("First line\n\t/skill:pdf", 21)).toEqual({ start: 12, end: 22, query: "skill:pd" });
+  });
+
+  it("replaces the whole token when the caret is inside it", () => {
+    expect(activeSlashCommand("Try /hello now", 7)).toEqual({ start: 4, end: 10, query: "he" });
+    expect(activeSlashCommand("/hello world", 12)).toBeNull();
+    expect(activeSlashCommand("Try /hello", 4)).toBeNull();
+  });
+
+  it("ignores URLs, path segments and double slashes", () => {
+    for (const text of ["https://example.com/he", "src/hello", "@src/hello", "/tmp/hello", "//hello"]) {
+      expect(activeSlashCommand(text, text.length)).toBeNull();
+    }
+    expect(activeSlashCommand("See /tmp/hello", 8)).toBeNull();
+  });
+});
 
 describe("validateCommandName", () => {
   it("accepts prompt-template style names and refuses the rest", () => {

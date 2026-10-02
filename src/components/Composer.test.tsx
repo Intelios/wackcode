@@ -245,6 +245,53 @@ describe("Composer slash commands", () => {
     await waitFor(() => expect(onLiteral).toHaveBeenCalledWith("/unknown", [], []));
   });
 
+  it.each(["Please /he", "First line\nPlease /he"])("completes an inline command in %j and runs the existing text as arguments", async (text) => {
+    const { onCommand, onRequestCommands } = setup();
+    const area = screen.getByRole("textbox");
+    const prefix = text.slice(0, -3);
+    fireEvent.change(area, { target: { value: text, selectionStart: text.length } });
+    expect(onRequestCommands).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("option", { name: /hello/ })).toBeInTheDocument();
+    fireEvent.keyDown(area, { key: "Tab" });
+    expect(area).toHaveValue(`/hello ${prefix}`);
+    expect(screen.queryByRole("listbox", { name: "Slash commands" })).not.toBeInTheDocument();
+    await waitFor(() => expect(area).toHaveProperty("selectionStart", `/hello ${prefix}`.length));
+    fireEvent.keyDown(area, { key: "Enter" });
+    await waitFor(() => expect(onCommand).toHaveBeenCalledWith("hello", prefix.trim(), []));
+  });
+
+  it("follows the caret into a command and keeps text on both sides when selected", async () => {
+    const { onCommand, onRequestCommands } = setup({ commandsReady: true });
+    const area = screen.getByRole("textbox");
+    fireEvent.change(area, { target: { value: "Please /hello world", selectionStart: 19 } });
+    expect(screen.queryByRole("listbox", { name: "Slash commands" })).not.toBeInTheDocument();
+    fireEvent.select(area, { target: { selectionStart: 10, selectionEnd: 10 } });
+    expect(onRequestCommands).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("option", { name: /hello/ }));
+    expect(area).toHaveValue("/hello Please world");
+    await waitFor(() => expect(area).toHaveProperty("selectionStart", 14));
+    fireEvent.keyDown(area, { key: "Enter" });
+    await waitFor(() => expect(onCommand).toHaveBeenCalledWith("hello", "Please world", []));
+  });
+
+  it("dismisses only the current slash token and opens for another", () => {
+    setup();
+    const area = screen.getByRole("textbox");
+    fireEvent.change(area, { target: { value: "Please /he", selectionStart: 10 } });
+    fireEvent.keyDown(area, { key: "Escape" });
+    fireEvent.select(area, { target: { selectionStart: 9, selectionEnd: 9 } });
+    expect(screen.queryByRole("listbox", { name: "Slash commands" })).not.toBeInTheDocument();
+    fireEvent.change(area, { target: { value: "Please /he then /he", selectionStart: 19 } });
+    expect(screen.getByRole("option", { name: /hello/ })).toBeInTheDocument();
+  });
+
+  it.each(["https://example.com/he", "src/hello", "See /tmp/hello", "//hello"])("doesn't offer commands inside %j", (text) => {
+    const { onRequestCommands } = setup();
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: text, selectionStart: text.length } });
+    expect(screen.queryByRole("listbox", { name: "Slash commands" })).not.toBeInTheDocument();
+    expect(onRequestCommands).not.toHaveBeenCalled();
+  });
+
   it("keeps a command and its attachments after validation fails", async () => {
     const onCommand = vi.fn().mockRejectedValue(new Error("Enter a name after /name."));
     setup({

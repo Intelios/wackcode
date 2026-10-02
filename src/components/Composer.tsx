@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 import type { ImageContent, ProviderRecord, SessionSnapshot, SlashCommand, TaskMode, TaskStatus, ThinkingLevel } from "../types";
 import { attachFiles, filesFrom, imageDataUrl, splitFileSection, type FileAttachment } from "../attachment-utils";
 import { activeMention, mentionValue, rankMentions, type MentionSuggestion } from "../mention-utils";
+import { activeSlashCommand } from "../command-utils";
 import { EMPTY_DRAFT, type ComposerDraft, type ComposerDraftState } from "../hooks/useComposerDrafts";
 import { Icon } from "./Icons";
 import { ContextPanel } from "./ContextPanel";
@@ -102,7 +103,7 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
   const setFiles = (next: SetStateAction<FileAttachment[]>) => setField("files", next);
   const [attachNotice, setAttachNotice] = useState<string>();
   const [slashNotice, setSlashNotice] = useState<string>();
-  const [slashOpen, setSlashOpen] = useState(draft.startsWith("/"));
+  const [slashDismissedAt, setSlashDismissedAt] = useState<number>();
   const [slashIndex, setSlashIndex] = useState(0);
   const [caret, setCaret] = useState(draft.length);
   const [mentionIndex, setMentionIndex] = useState(0);
@@ -122,8 +123,9 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
   const tokenEnd = draft.search(/\s/);
   const commandEnd = tokenEnd < 0 ? draft.length : tokenEnd;
   const commandToken = draft.startsWith("/") ? draft.slice(1, commandEnd) : "";
-  const suggestions = commands.filter((command) => command.name.toLowerCase().includes(commandToken.toLowerCase()));
-  const showCommands = slashOpen && draft.startsWith("/") && caret <= commandEnd && !disabled;
+  const slash = activeSlashCommand(draft, caret);
+  const suggestions = commands.filter((command) => command.name.toLowerCase().includes(slash?.query.toLowerCase() ?? ""));
+  const showCommands = slash !== null && slash.start !== slashDismissedAt && !disabled && frozen === undefined;
   // Once a command with a hint is selected but before any argument is typed, surface it inline.
   // `insertCommand` leaves the caret after the trailing space, so this keys off the draft being
   // a bare command token — not where the caret sits.
@@ -140,15 +142,20 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
   );
   const mentionStart = showMentions ? mention.start : undefined;
   useEffect(() => { if (mentionStart !== undefined) onRequestMentions?.(); }, [mentionStart]);
+  const slashStart = showCommands ? slash.start : undefined;
   useEffect(() => {
-    if (showCommands && commandsReady === false && !commandsLoading && !commandsError) onRequestCommands?.();
-  }, [showCommands, commandsReady, commandsLoading, commandsError, draftKey]);
+    if (slashStart !== undefined && commandsReady !== true && !commandsLoading && !commandsError) onRequestCommands?.();
+  }, [slashStart, commandsReady, commandsLoading, commandsError, draftKey]);
+  // Opening a new token also refreshes a cached catalogue, as typing a leading slash did.
+  useEffect(() => {
+    if (slashStart !== undefined && commandsReady === true && !commandsLoading && !commandsError) onRequestCommands?.();
+  }, [slashStart, draftKey]);
 
   // Picker state and notices belong to the visible composer, never to the previous chat.
   useLayoutEffect(() => {
     setAttachNotice(undefined);
     setSlashNotice(undefined);
-    setSlashOpen(draft.startsWith("/"));
+    setSlashDismissedAt(undefined);
     setSlashIndex(0);
     setCaret(draft.length);
     setMentionIndex(0);
@@ -208,7 +215,7 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
     if (!message || status !== "running" || blockedByModel) return;
     if (!literal && filesVsCommand(message)) {
       setSlashNotice("Remove attached files before running this command.");
-      setSlashOpen(false);
+      setSlashDismissedAt(slash?.start);
       return;
     }
     const images = attachments;
@@ -231,7 +238,7 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
     if (!message || blockedByModel) return;
     if (filesVsCommand(message)) {
       setSlashNotice("Remove attached files before running this command.");
-      setSlashOpen(false);
+      setSlashDismissedAt(slash?.start);
       return;
     }
     if (busy) {
@@ -248,14 +255,14 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
             const ok = await onCommand("goal", goalMatch[2], []);
             if (ok) updateDraft((current) => current === value ? EMPTY_DRAFT : current);
             if (activeDraftKey.current === draftKey) {
-              if (ok) { setSlashNotice(undefined); setSlashOpen(false); }
+              if (ok) { setSlashNotice(undefined); setSlashDismissedAt(slash?.start); }
               else setSlashNotice("That command could not run. Try again.");
             }
           } catch (reason) { if (activeDraftKey.current === draftKey) setSlashNotice(String(reason)); }
           return;
         }
         setSlashNotice(`Wait for ${agentName} to finish before running /${/^\/([^\s]+)/.exec(message)?.[1]}.`);
-        setSlashOpen(false);
+        setSlashDismissedAt(slash?.start);
         return;
       }
       await queueDraft("steer");
@@ -271,7 +278,7 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
       const known = commands.some((command) => command.name === name);
       if (!known) {
         setSlashNotice(`Unknown command /${name}. You can send it as a message.`);
-        setSlashOpen(false);
+        setSlashDismissedAt(slash?.start);
         return;
       }
       const selected = commands.find((command) => command.name === name);
@@ -283,7 +290,7 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
         const ok = await onCommand(name, args, images);
         if (ok) updateDraft((current) => current === value ? EMPTY_DRAFT : current);
         if (activeDraftKey.current === draftKey) {
-          if (ok) { setSlashNotice(undefined); setSlashOpen(false); }
+          if (ok) { setSlashNotice(undefined); setSlashDismissedAt(slash?.start); }
           else setSlashNotice("That command could not run. Try again.");
         }
       } catch (reason) { if (activeDraftKey.current === draftKey) setSlashNotice(String(reason)); }
@@ -303,12 +310,18 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
   }
 
   function insertCommand(name: string) {
-    const suffix = draft.slice(commandEnd).trimStart();
-    const next = `/${name} ${suffix}`;
+    if (!slash) return;
+    // Pi dispatches only a leading command. Move the chosen token there, keeping the
+    // surrounding draft as arguments and the caret at the original insertion point.
+    const prefix = draft.slice(0, slash.start).trimStart();
+    const suffix = draft.slice(slash.end).trimStart();
+    const next = `/${name} ${prefix}${suffix}`;
+    const position = name.length + 2 + prefix.length;
     setDraft(next);
-    setSlashOpen(false);
+    setCaret(position);
+    setSlashDismissedAt(0);
     setSlashNotice(undefined);
-    requestAnimationFrame(() => { if (activeDraftKey.current !== draftKey) return; areaRef.current?.focus(); areaRef.current?.setSelectionRange(name.length + 2, name.length + 2); });
+    requestAnimationFrame(() => { if (activeDraftKey.current !== draftKey) return; areaRef.current?.focus(); areaRef.current?.setSelectionRange(position, position); });
   }
 
   function insertMention(entry: MentionSuggestion) {
@@ -493,8 +506,7 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
             setMentionIndex(0);
             setMentionDismissedAt((at) => at !== undefined && value[at] === "@" ? at : undefined);
             setSlashNotice(undefined);
-            setSlashOpen(value.startsWith("/"));
-            if (value.startsWith("/") && !draft.startsWith("/")) onRequestCommands?.();
+            setSlashDismissedAt(undefined);
           }}
           onClick={(event) => setCaret(event.currentTarget.selectionStart)}
           onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
@@ -511,7 +523,7 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
               if (event.key === "ArrowDown" && suggestions.length) { event.preventDefault(); setSlashIndex((index) => (index + 1) % suggestions.length); return; }
               if (event.key === "ArrowUp" && suggestions.length) { event.preventDefault(); setSlashIndex((index) => (index - 1 + suggestions.length) % suggestions.length); return; }
               if ((event.key === "Tab" || event.key === "Enter") && suggestions.length && !event.shiftKey) { event.preventDefault(); insertCommand(suggestions[Math.min(slashIndex, suggestions.length - 1)].name); return; }
-              if (event.key === "Escape") { event.preventDefault(); setSlashOpen(false); return; }
+              if (event.key === "Escape") { event.preventDefault(); setSlashDismissedAt(slash.start); return; }
             }
             if (showMentions && !event.nativeEvent.isComposing) {
               const count = mentionSuggestions.length;

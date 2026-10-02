@@ -883,10 +883,19 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 /* On send the comet charges around the ring before the composer glides away. */
 .composer.comet.frozen::before { animation-duration: .7s; }
 .composer.frozen { pointer-events: none; }
-.composer textarea {
+.composer-input { position: relative; }
+/* Mirror the textarea's metrics exactly: only the command's colour changes, so
+   native caret, selection, wrapping and IME editing keep their usual geometry. */
+.composer textarea, .composer-highlight {
   width: 100%; min-height: 42px; max-height: 200px; resize: none; border: 0; outline: 0;
   background: transparent; color: var(--text); padding: 13px 15px 6px; line-height: 1.5; font-size: 13.5px;
+  white-space: pre-wrap; overflow-wrap: break-word;
 }
+.composer textarea { position: relative; display: block; }
+.composer-highlight { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.composer-command { color: var(--wc-accent); }
+.composer-input.highlighted textarea { color: transparent; caret-color: var(--text); }
+.composer-input.highlighted textarea::selection { color: var(--text); }
 .composer textarea::placeholder { color: var(--wc-placeholder); }
 .composer-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px 8px 10px; gap: 8px; }
 .composer-left { display: flex; align-items: center; gap: 6px; min-width: 0; }

@@ -111,6 +111,7 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
   const [mentionDismissedAt, setMentionDismissedAt] = useState<number>();
   const [dragging, setDragging] = useState(false);
   const areaRef = useRef<HTMLTextAreaElement>(null);
+  const highlightRef = useRef<HTMLDivElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const seedNonces = useRef(new Map<string, number>());
   const fileRef = useRef<HTMLInputElement>(null);
@@ -123,6 +124,10 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
   const tokenEnd = draft.search(/\s/);
   const commandEnd = tokenEnd < 0 ? draft.length : tokenEnd;
   const commandToken = draft.startsWith("/") ? draft.slice(1, commandEnd) : "";
+  const composerText = frozen ?? draft;
+  const leadingCommand = /^(\s*)\/([^\s]+)/.exec(composerText);
+  const highlightedCommand = leadingCommand && commands.some((command) => command.name === leadingCommand[2])
+    ? leadingCommand : null;
   const slash = activeSlashCommand(draft, caret);
   const suggestions = commands.filter((command) => command.name.toLowerCase().includes(slash?.query.toLowerCase() ?? ""));
   const showCommands = slash !== null && slash.start !== slashDismissedAt && !disabled && frozen === undefined;
@@ -171,7 +176,17 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
     if (!area) return;
     area.style.height = "auto";
     area.style.height = `${Math.min(area.scrollHeight, 200)}px`;
-  }, [draft, frozen]);
+    syncHighlightScroll();
+  }, [draft, frozen, highlightedCommand?.[0]]);
+
+  // Keep the decorative text aligned with native editing, including caret-driven scrolling.
+  function syncHighlightScroll() {
+    const area = areaRef.current;
+    const highlight = highlightRef.current;
+    if (!area || !highlight) return;
+    highlight.scrollTop = area.scrollTop;
+    highlight.scrollLeft = area.scrollLeft;
+  }
 
   // The composer lives in an overlay layer; the chat view reserves space for it
   // through --composer-h on .workspace.
@@ -488,59 +503,65 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
             >{argNote}</motion.div>
           )}
         </AnimatePresence>
-        <textarea
-          ref={areaRef}
-          aria-controls={showCommands ? "slash-command-list" : showMentions ? "mention-list" : undefined}
-          aria-expanded={showCommands || showMentions}
-          aria-activedescendant={showCommands && suggestions.length ? `slash-option-${Math.min(slashIndex, suggestions.length - 1)}`
-            : showMentions && mentionSuggestions.length ? `mention-option-${Math.min(mentionIndex, mentionSuggestions.length - 1)}` : undefined}
-          value={frozen ?? draft}
-          rows={1}
-          readOnly={frozen !== undefined}
-          onChange={(event) => {
-            if (frozen !== undefined) return;
-            const value = event.target.value;
-            setDraft(value);
-            setCaret(event.target.selectionStart);
-            setSlashIndex(0);
-            setMentionIndex(0);
-            setMentionDismissedAt((at) => at !== undefined && value[at] === "@" ? at : undefined);
-            setSlashNotice(undefined);
-            setSlashDismissedAt(undefined);
-          }}
-          onClick={(event) => setCaret(event.currentTarget.selectionStart)}
-          onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
-          onPaste={(event) => {
-            // Rich-text apps put an image rendition next to copied text; that is a text paste.
-            if (event.clipboardData.types.includes("text/plain")) return;
-            const picked = filesFrom(event.clipboardData);
-            if (picked.length === 0) return;
-            event.preventDefault();
-            void addFiles(picked);
-          }}
-          onKeyDown={(event) => {
-            if (showCommands && !event.nativeEvent.isComposing) {
-              if (event.key === "ArrowDown" && suggestions.length) { event.preventDefault(); setSlashIndex((index) => (index + 1) % suggestions.length); return; }
-              if (event.key === "ArrowUp" && suggestions.length) { event.preventDefault(); setSlashIndex((index) => (index - 1 + suggestions.length) % suggestions.length); return; }
-              if ((event.key === "Tab" || event.key === "Enter") && suggestions.length && !event.shiftKey) { event.preventDefault(); insertCommand(suggestions[Math.min(slashIndex, suggestions.length - 1)].name); return; }
-              if (event.key === "Escape") { event.preventDefault(); setSlashDismissedAt(slash.start); return; }
-            }
-            if (showMentions && !event.nativeEvent.isComposing) {
-              const count = mentionSuggestions.length;
-              if (event.key === "ArrowDown" && count) { event.preventDefault(); setMentionIndex((index) => (index + 1) % count); return; }
-              if (event.key === "ArrowUp" && count) { event.preventDefault(); setMentionIndex((index) => (index - 1 + count) % count); return; }
-              if ((event.key === "Tab" || event.key === "Enter") && count && !event.shiftKey) { event.preventDefault(); insertMention(mentionSuggestions[Math.min(mentionIndex, count - 1)]); return; }
-              if (event.key === "Escape") { event.preventDefault(); setMentionDismissedAt(mention.start); return; }
-            }
-            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+        <div className={`composer-input${highlightedCommand ? " highlighted" : ""}`}>
+          {highlightedCommand && <div ref={highlightRef} className="composer-highlight" aria-hidden="true">
+            {highlightedCommand[1]}<span className="composer-command">/{highlightedCommand[2]}</span>{composerText.slice(highlightedCommand[0].length)}{"\n"}
+          </div>}
+          <textarea
+            ref={areaRef}
+            aria-controls={showCommands ? "slash-command-list" : showMentions ? "mention-list" : undefined}
+            aria-expanded={showCommands || showMentions}
+            aria-activedescendant={showCommands && suggestions.length ? `slash-option-${Math.min(slashIndex, suggestions.length - 1)}`
+              : showMentions && mentionSuggestions.length ? `mention-option-${Math.min(mentionIndex, mentionSuggestions.length - 1)}` : undefined}
+            value={composerText}
+            rows={1}
+            readOnly={frozen !== undefined}
+            onChange={(event) => {
+              if (frozen !== undefined) return;
+              const value = event.target.value;
+              setDraft(value);
+              setCaret(event.target.selectionStart);
+              setSlashIndex(0);
+              setMentionIndex(0);
+              setMentionDismissedAt((at) => at !== undefined && value[at] === "@" ? at : undefined);
+              setSlashNotice(undefined);
+              setSlashDismissedAt(undefined);
+            }}
+            onClick={(event) => setCaret(event.currentTarget.selectionStart)}
+            onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
+            onScroll={syncHighlightScroll}
+            onPaste={(event) => {
+              // Rich-text apps put an image rendition next to copied text; that is a text paste.
+              if (event.clipboardData.types.includes("text/plain")) return;
+              const picked = filesFrom(event.clipboardData);
+              if (picked.length === 0) return;
               event.preventDefault();
-              if (event.altKey) { void queueDraft("follow_up"); return; }
-              void send();
-            }
-          }}
-          placeholder={placeholder ?? (providers.length === 0 ? "Connect a provider to start…" : busy ? `${agentName} is working — ⏎ steers the run, ⌥⏎ queues for after…` : mode === "plan" ? `Describe the work — in Plan mode ${agentName} inspects and proposes a plan without changing files…` : mode === "ultraplan" ? `Describe the work — in Ultra Plan ${agentName} interviews you one question at a time…` : `Ask ${agentName} to inspect, change, or run something…`)}
-          disabled={disabled || providers.length === 0}
-        />
+              void addFiles(picked);
+            }}
+            onKeyDown={(event) => {
+              if (showCommands && !event.nativeEvent.isComposing) {
+                if (event.key === "ArrowDown" && suggestions.length) { event.preventDefault(); setSlashIndex((index) => (index + 1) % suggestions.length); return; }
+                if (event.key === "ArrowUp" && suggestions.length) { event.preventDefault(); setSlashIndex((index) => (index - 1 + suggestions.length) % suggestions.length); return; }
+                if ((event.key === "Tab" || event.key === "Enter") && suggestions.length && !event.shiftKey) { event.preventDefault(); insertCommand(suggestions[Math.min(slashIndex, suggestions.length - 1)].name); return; }
+                if (event.key === "Escape") { event.preventDefault(); setSlashDismissedAt(slash.start); return; }
+              }
+              if (showMentions && !event.nativeEvent.isComposing) {
+                const count = mentionSuggestions.length;
+                if (event.key === "ArrowDown" && count) { event.preventDefault(); setMentionIndex((index) => (index + 1) % count); return; }
+                if (event.key === "ArrowUp" && count) { event.preventDefault(); setMentionIndex((index) => (index - 1 + count) % count); return; }
+                if ((event.key === "Tab" || event.key === "Enter") && count && !event.shiftKey) { event.preventDefault(); insertMention(mentionSuggestions[Math.min(mentionIndex, count - 1)]); return; }
+                if (event.key === "Escape") { event.preventDefault(); setMentionDismissedAt(mention.start); return; }
+              }
+              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                if (event.altKey) { void queueDraft("follow_up"); return; }
+                void send();
+              }
+            }}
+            placeholder={placeholder ?? (providers.length === 0 ? "Connect a provider to start…" : busy ? `${agentName} is working — ⏎ steers the run, ⌥⏎ queues for after…` : mode === "plan" ? `Describe the work — in Plan mode ${agentName} inspects and proposes a plan without changing files…` : mode === "ultraplan" ? `Describe the work — in Ultra Plan ${agentName} interviews you one question at a time…` : `Ask ${agentName} to inspect, change, or run something…`)}
+            disabled={disabled || providers.length === 0}
+          />
+        </div>
         <div className="composer-toolbar">
           <div className="composer-left">
             {providers.length === 0 ? (

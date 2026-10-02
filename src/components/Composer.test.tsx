@@ -234,6 +234,47 @@ describe("Composer slash commands", () => {
     await waitFor(() => expect(onCommand).toHaveBeenCalledWith("hello", "world", []));
   });
 
+  it("keeps the completed command highlighted while editing and sending multiline arguments", async () => {
+    const { onCommand } = setup({ commands: [{ id: "app:goal", name: "goal", description: "Set a goal", source: "app", sourceLabel: "WackCode", argumentHint: "<objective>" }] });
+    const area = screen.getByRole("textbox");
+    fireEvent.change(area, { target: { value: "/go", selectionStart: 3 } });
+    fireEvent.keyDown(area, { key: "Enter" });
+    expect(area).toHaveValue("/goal ");
+    const highlight = area.parentElement!.querySelector(".composer-highlight")!;
+    expect(highlight).toHaveAttribute("aria-hidden", "true");
+    expect(highlight.querySelector(".composer-command")).toHaveTextContent("/goal");
+    expect(screen.getByRole("note")).toHaveTextContent("<objective>");
+
+    const text = "/goal Fix the bug\nthen verify /goal is just argument text";
+    fireEvent.change(area, { target: { value: text, selectionStart: text.length } });
+    await waitFor(() => expect(screen.queryByRole("note")).not.toBeInTheDocument());
+    expect(highlight.textContent).toBe(`${text}\n`);
+    expect(highlight.querySelectorAll(".composer-command")).toHaveLength(1);
+    fireEvent.select(area, { target: { selectionStart: 9, selectionEnd: 12 } });
+    expect(area).toHaveProperty("selectionStart", 9);
+    fireEvent.scroll(area, { target: { scrollTop: 80 } });
+    expect(highlight.scrollTop).toBe(80);
+    fireEvent.keyDown(area, { key: "Enter" });
+    await waitFor(() => expect(onCommand).toHaveBeenCalledWith("goal", "Fix the bug\nthen verify /goal is just argument text", []));
+    expect(area).toHaveValue("");
+    expect(area.parentElement!.querySelector(".composer-highlight")).toBeNull();
+  });
+
+  it("highlights only a recognised leading command and updates when its name is edited", () => {
+    setup({ commands: [command, { id: "skill:pdf", name: "skill:pdf", description: "Read PDFs", source: "skill", sourceLabel: "PDF" }] });
+    const area = screen.getByRole("textbox");
+    for (const text of ["/he argument", "/unknown argument", "Please /hello", "/hello/file", "https://example.com/hello"]) {
+      fireEvent.change(area, { target: { value: text, selectionStart: text.length } });
+      expect(area.parentElement!.querySelector(".composer-highlight")).toBeNull();
+    }
+    for (const text of ["/hello argument", "  /hello argument", "/skill:pdf report.pdf"]) {
+      fireEvent.change(area, { target: { value: text, selectionStart: text.length } });
+      expect(area.parentElement!.querySelector(".composer-command")).toHaveTextContent(text.trim().split(" ")[0]);
+    }
+    fireEvent.change(area, { target: { value: "ordinary message", selectionStart: 16 } });
+    expect(area.parentElement).not.toHaveClass("highlighted");
+  });
+
   it("keeps unknown slash text until Send as message is chosen", async () => {
     const { onLiteral, onCommand } = setup();
     const area = screen.getByRole("textbox");

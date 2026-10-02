@@ -359,14 +359,15 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .icon-button:hover { background: var(--surface-hover); border-color: var(--border); color: var(--text); }
 .icon-button svg { width: 16px; height: 16px; }
 .panel-button {
-  height: 30px; display: flex; align-items: center; gap: 7px; border: 1px solid var(--border);
-  border-radius: 7px; background: transparent; color: var(--text-soft); cursor: pointer; padding: 0 10px; font-size: 12px;
+  position: relative; width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid var(--border);
+  border-radius: 7px; background: transparent; color: var(--text-soft); cursor: pointer; padding: 0;
   transition: .12s var(--ease);
 }
 .panel-button:hover { border-color: var(--border-bright); color: var(--text); background: var(--surface); }
 .panel-button.active { background: var(--surface-hover); color: var(--text); border-color: var(--border-bright); }
 .panel-button svg { width: 14px; height: 14px; }
 .changes-badge { font-style: normal; font-size: 10px; font-weight: 700; color: var(--wc-on-accent); background: var(--wc-accent); border-radius: 999px; padding: 1px 6px; }
+.panel-button .changes-badge { position: absolute; top: -5px; right: -5px; padding: 1px 4px; }
 .shared-notice { min-height: 32px; padding: 6px 22px; display: flex; align-items: center; gap: 7px; background: #2c2515; border-bottom: 1px solid #493b20; color: #d9c491; font-size: 12px; }
 .shared-notice > span { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--warning); color: #211805; font-weight: 800; font-size: 10px; }
 
@@ -2607,7 +2608,7 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 /* The header button's telltale while the shell is out of sight: a blinking block caret that
    pulses while it works and falls to a dim underscore once the shell has exited. */
 .terminal-caret {
-  flex: 0 0 auto; width: 7px; height: 12px; margin-left: 2px; border-radius: 1.5px;
+  position: absolute; right: 3px; bottom: 3px; width: 5px; height: 8px; border-radius: 1.5px;
   background: var(--wc-accent); animation: terminal-caret 1.15s steps(1) infinite;
 }
 .terminal-caret.busy { animation: terminal-caret-busy 1.5s var(--ease) infinite; }

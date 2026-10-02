@@ -3,6 +3,7 @@ import type { GitBranches, GitCheckoutKind, ProjectRecord, TaskRecord, TerminalE
 import { BranchPicker } from "./BranchPicker";
 import { Icon } from "./Icons";
 import { MenuButton } from "./ui/MenuButton";
+import { Tooltip } from "./ui/Tooltip";
 import { chatMenu } from "./chat-menu";
 import { useContextMenu } from "./ui/ContextMenu";
 import type { TaskAction } from "./Sidebar";
@@ -68,28 +69,35 @@ export function ChatHeader({ task, project, git, onListBranches, onCheckoutBranc
         </div>
       </div>
       <div className="header-actions">
-        <button type="button" className={`panel-button ${browserOpen ? "active" : ""}`} onClick={onToggleBrowser}>
-          <Icon name="browser" /> Browser
-        </button>
-        <button type="button" className={`panel-button ${changesOpen ? "active" : ""}`} onClick={onToggleChanges}>
-          <Icon name="panel" /> Changes{changesCount ? <em className="changes-badge">{changesCount}</em> : null}
-        </button>
-        <button
-          type="button"
-          className={`panel-button ${terminalOpen ? "active" : ""}`}
-          onClick={onToggleTerminal}
-          title="Terminal — ⌘⇧T"
-        >
-          <Icon name="terminal" /> Terminal
-          {/* A blinking caret marks a shell running out of sight; it pulses while it works and
-              dims when the shell has exited. */}
-          {terminal && !terminalOpen && (
-            <em
-              className={`terminal-caret ${terminal.exit ? "exited" : terminal.busy ? "busy" : ""}`}
-              aria-hidden="true"
-            />
-          )}
-        </button>
+        <Tooltip label="Browser" side="bottom">
+          <button type="button" className={`panel-button ${browserOpen ? "active" : ""}`} onClick={onToggleBrowser} aria-label="Browser" aria-pressed={browserOpen}>
+            <Icon name="browser" />
+          </button>
+        </Tooltip>
+        <Tooltip label={<>Changes <kbd>⌘⇧C</kbd></>} side="bottom">
+          <button type="button" className={`panel-button ${changesOpen ? "active" : ""}`} onClick={onToggleChanges} aria-label={changesCount ? `Changes (${changesCount})` : "Changes"} aria-pressed={changesOpen}>
+            <Icon name="panel" />{changesCount ? <em className="changes-badge" aria-hidden="true">{changesCount}</em> : null}
+          </button>
+        </Tooltip>
+        <Tooltip label={<>Terminal <kbd>⌘⇧T</kbd></>} side="bottom">
+          <button
+            type="button"
+            className={`panel-button ${terminalOpen ? "active" : ""}`}
+            onClick={onToggleTerminal}
+            aria-label="Terminal"
+            aria-pressed={terminalOpen}
+          >
+            <Icon name="terminal" />
+            {/* A blinking caret marks a shell running out of sight; it pulses while it works and
+                dims when the shell has exited. */}
+            {terminal && !terminalOpen && (
+              <em
+                className={`terminal-caret ${terminal.exit ? "exited" : terminal.busy ? "busy" : ""}`}
+                aria-hidden="true"
+              />
+            )}
+          </button>
+        </Tooltip>
         <MenuButton label="Chat menu" items={menu} />
       </div>
     </header>

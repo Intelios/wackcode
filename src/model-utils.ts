@@ -1,5 +1,25 @@
 import type { AutoTitleConfig, BuiltinModelSuggestion, ModelRecord, ModelRef, ProviderRecord, SubagentModel, ThinkingLevel } from "./types";
 
+/** Renderer preference only; existing chats keep their own model settings. */
+export interface ModelChoice extends ModelRef {
+  thinkingLevel: ThinkingLevel;
+}
+
+/** Restore a usable choice, or fall back to the first available configured model. */
+export function defaultModelChoice(providers: ProviderRecord[], remembered?: ModelChoice): ModelChoice | undefined {
+  const available = providers.filter((provider) => provider.enabled !== false && provider.connected);
+  const provider = remembered && available.find((item) => item.id === remembered.providerId);
+  const model = provider?.models.find((item) => item.id === remembered?.modelId && modelIsReady(item));
+  if (provider && model) {
+    return { providerId: provider.id, modelId: model.id, thinkingLevel: pickThinkingLevel(model, remembered?.thinkingLevel) };
+  }
+  for (const candidate of available) {
+    const first = candidate.models.find(modelIsReady);
+    if (first) return { providerId: candidate.id, modelId: first.id, thinkingLevel: pickThinkingLevel(first) };
+  }
+  return undefined;
+}
+
 function words(value: string): string[] {
   return value.toLowerCase().normalize("NFKD").match(/[\p{L}\p{N}]+/gu) ?? [];
 }

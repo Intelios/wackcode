@@ -5,7 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { api } from "./api";
-import { chatModelGone, modelDisplayName, modelIsReady, pickThinkingLevel } from "./model-utils";
+import { chatModelGone, modelDisplayName, modelIsReady, pickThinkingLevel, type ModelChoice } from "./model-utils";
 import { titleFromPrompt, samePlanState, sameTodoState, sameGoalState, applySnapshotDelta, applySubagentFrame, pendingSubagentView, validateInitCommand, nextMode, isPlanMode } from "./chat-utils";
 import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix } from "./tree-utils";
 import { composeFileSection, splitFileSection, type FileAttachment } from "./attachment-utils";
@@ -16,6 +16,7 @@ import { performChatNavigation, withoutResolvedDialog } from "./menu-navigation"
 import { PINNED_PROJECTS_KEY, busyChatsInCheckout, includedFiles, linkableChats, resolveLinkedChat } from "./git-mode";
 import { useGitMode } from "./hooks/useGitMode";
 import { EMPTY_DRAFT, useComposerDrafts } from "./hooks/useComposerDrafts";
+import { useModelMemory } from "./hooks/useModelMemory";
 import { DEFAULT_APPEARANCE, applyTheme, cacheTheme } from "./theme";
 import { AssistantNameContext, agentName } from "./agentName";
 import { Backdrop } from "./components/Backdrop";
@@ -125,9 +126,7 @@ function commentsPrompt(comments: DiffComment[], mode: TaskMode): string {
   return `${instruction}\n\n${list}`;
 }
 
-const LAST_MODEL_KEY = "wackcode:lastModel";
 const LAST_PROJECT_KEY = "wackcode:lastProject";
-const NO_PROJECT_MODEL_KEY = "none";
 /** Which durable view the side panel shows ("changes" | "terminal" | null = closed). */
 const PANEL_VIEW_KEY = "wackcode:sidePanel";
 /** The pre-Terminal flag, still read once to migrate it into `PANEL_VIEW_KEY`. */
@@ -147,12 +146,6 @@ function rememberedPanelKind(): PanelViewKind | null {
 function rememberedPanelView(): SidePanelView | null {
   const kind = rememberedPanelKind();
   return kind ? durableView(kind) : null;
-}
-
-interface ModelChoice {
-  providerId: string;
-  modelId: string;
-  thinkingLevel: ThinkingLevel;
 }
 
 interface Draft {
@@ -279,7 +272,6 @@ export default function App() {
   const [subscriptionLogin, setSubscriptionLogin] = useState<SubscriptionLoginState>();
   const pendingSubscriptionCancel = useRef(false);
   const [connectedSubscriptionId, setConnectedSubscriptionId] = useState<string>();
-  const [lastModels, setLastModels] = useState<Record<string, ModelChoice>>(() => loadJSON(LAST_MODEL_KEY, {}));
   const [draft, setDraft] = useState<Draft>();
   /** The file list behind `@` mentions, for one chat (`task:<id>`) or draft project (`project:<id>`). */
   const [mentions, setMentions] = useState<{ source: string; files?: string[]; truncated?: boolean; loading: boolean; error?: string }>();
@@ -974,28 +966,7 @@ export default function App() {
     setData((current) => ({ ...current, providers: current.providers.map((item) => item.id === providerId ? provider : item) }));
   }
 
-  const rememberModel = useCallback((projectId: string | null, choice: ModelChoice) => {
-    setLastModels((current) => {
-      const next = { ...current, [projectId ?? NO_PROJECT_MODEL_KEY]: choice };
-      localStorage.setItem(LAST_MODEL_KEY, JSON.stringify(next));
-      return next;
-    });
-  }, []);
-
-  const defaultChoice = useCallback((projectId: string | null): ModelChoice | undefined => {
-    const remembered = lastModels[projectId ?? NO_PROJECT_MODEL_KEY];
-    const rememberedProvider = remembered && configuredProviders.find((item) => item.id === remembered.providerId);
-    const rememberedModel = rememberedProvider?.models.find((model) => model.id === remembered.modelId && modelIsReady(model));
-    if (rememberedProvider && rememberedModel) {
-      const levels = rememberedModel.thinkingLevels.length ? rememberedModel.thinkingLevels : (["off"] as ThinkingLevel[]);
-      return { providerId: remembered.providerId, modelId: remembered.modelId, thinkingLevel: levels.includes(remembered.thinkingLevel) ? remembered.thinkingLevel : levels.includes("medium") ? "medium" : levels[0] };
-    }
-    const first = configuredProviders[0];
-    const model = first?.models.find(modelIsReady);
-    if (!first || !model) return undefined;
-    const levels = model.thinkingLevels.length ? model.thinkingLevels : (["off"] as ThinkingLevel[]);
-    return { providerId: first.id, modelId: model.id, thinkingLevel: levels.includes("medium") ? "medium" : levels[0] };
-  }, [configuredProviders, lastModels]);
+  const { rememberModel, defaultChoice } = useModelMemory(configuredProviders);
 
   const draftProject = data.projects.find((project) => project.id === draft?.projectId);
   const draftChoice = draft ? draft.choice ?? defaultChoice(draft.projectId) : undefined;
@@ -1183,6 +1154,7 @@ export default function App() {
         // The display name gives a command-opened chat its "/name args" stand-in title.
         await api.executeCommand({ taskId: id, commandId: command.id, args, startedAt, images, name });
       }
+      rememberModel(task);
       clearPreparedDraft();
       return true;
     } catch (reason) {
@@ -1441,7 +1413,7 @@ export default function App() {
     try {
       const updated = await api.configureTask({ taskId: selectedTask.id, providerId, modelId, thinkingLevel });
       setData((current) => ({ ...current, tasks: current.tasks.map((task) => task.id === updated.id ? updated : task) }));
-      rememberModel(updated.projectId, { providerId, modelId, thinkingLevel });
+      rememberModel(updated);
       // Refresh the saved snapshot's model metadata after a switch. The durable transcript
       // divider is recorded when the next worker starts; viewing history stays read-only.
       if (modelChanged) await api.openTask(updated.id);
@@ -1451,16 +1423,16 @@ export default function App() {
   }
 
   function configureDraft(patch: Partial<Pick<TaskRecord, "providerId" | "modelId" | "thinkingLevel">>) {
-    setDraft((current) => {
-      const base = current?.choice ?? defaultChoice(current?.projectId ?? null);
-      const providerId = patch.providerId ?? base?.providerId;
-      const provider = configuredProviders.find((item) => item.id === providerId);
-      const modelId = patch.modelId ?? (patch.providerId ? provider?.models.find(modelIsReady)?.id : base?.modelId);
-      const model = provider?.models.find((item) => item.id === modelId);
-      const thinkingLevel = pickThinkingLevel(model, patch.thinkingLevel, base?.thinkingLevel);
-      if (!providerId || !modelId || !thinkingLevel) return current;
-      return { projectId: current?.projectId ?? null, useWorktree: current?.useWorktree ?? false, choice: { providerId, modelId, thinkingLevel }, mode: current?.mode };
-    });
+    const base = draft?.choice ?? defaultChoice(draft?.projectId ?? null);
+    const providerId = patch.providerId ?? base?.providerId;
+    const provider = configuredProviders.find((item) => item.id === providerId);
+    const modelId = patch.modelId ?? (patch.providerId ? provider?.models.find(modelIsReady)?.id : base?.modelId);
+    const model = provider?.models.find((item) => item.id === modelId);
+    const thinkingLevel = pickThinkingLevel(model, patch.thinkingLevel, base?.thinkingLevel);
+    if (!providerId || !modelId) return;
+    const choice = { providerId, modelId, thinkingLevel };
+    rememberModel(choice);
+    setDraft((current) => ({ projectId: current?.projectId ?? null, useWorktree: current?.useWorktree ?? false, choice, mode: current?.mode }));
   }
 
   async function sendPrompt(message: string, options: { images?: ImageContent[]; files?: FileAttachment[]; mode?: TaskMode; literal?: boolean; queue?: "steer" | "follow_up" } = {}): Promise<boolean> {
@@ -1505,7 +1477,7 @@ export default function App() {
       // `fromSelectedId` is the selection the handoff began under: the freeze holds until
       // selection switches to the new task (after api.prompt resolves) or truly moves away.
       setTransitioning({ message, taskId: task.id, fromSelectedId: selectedTaskId });
-      rememberModel(active.projectId, choice);
+      rememberModel(task);
       localStorage.setItem(LAST_PROJECT_KEY, JSON.stringify(active.projectId));
       const mode = modeOverride ?? active.mode ?? "build";
       if (!pendingSlash) setData((current) => ({ ...current, tasks: [...current.tasks, task] }));
@@ -1556,6 +1528,7 @@ export default function App() {
       if (!behavior) return false;
       try {
         await api.queueMessage({ taskId: task.id, behavior, message: sent, images, ...(literal ? { literal: true } : {}) });
+        rememberModel(task);
         return true;
       } catch (reason) {
         patchRuntime(task.id, { error: String(reason) });
@@ -1580,6 +1553,7 @@ export default function App() {
         images,
         literal
       });
+      rememberModel(task);
       return true;
     } catch (reason) {
       patchTask(task.id, { status: "idle" });
@@ -1650,7 +1624,7 @@ export default function App() {
     if (!choice) { openSettings(); return undefined; }
     const task = await api.createTask({ projectId, useWorktree: false, name, ...choice });
     setData((current) => ({ ...current, tasks: [...current.tasks, task] }));
-    rememberModel(projectId, choice);
+    rememberModel(choice);
     git.actions.setPicked(task.id);
     return task;
   }
@@ -1914,6 +1888,7 @@ export default function App() {
           modelId: task.modelId,
           thinkingLevel: task.thinkingLevel
         });
+        rememberModel(task);
         if (restore) void refreshChanges(task.id);
       } catch (reason) {
         patchTask(task.id, { status: "idle" });

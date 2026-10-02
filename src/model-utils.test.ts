@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyBuiltinModelSuggestion, autoTitleModelIssue, chatModelGone, formatTokens, mergeDiscoveredModels, modelDisplayName, pickThinkingLevel, searchBuiltinModels, subagentModelIssue } from "./model-utils";
+import { applyBuiltinModelSuggestion, autoTitleModelIssue, chatModelGone, defaultModelChoice, formatTokens, mergeDiscoveredModels, modelDisplayName, pickThinkingLevel, searchBuiltinModels, subagentModelIssue } from "./model-utils";
 import type { BuiltinModelSuggestion, ModelRecord, ProviderRecord } from "./types";
 
 const flash: BuiltinModelSuggestion = {
@@ -8,6 +8,42 @@ const flash: BuiltinModelSuggestion = {
   thinkingLevels: ["off", "low", "high", "max"],
   thinkingLevelMap: { off: null, low: "low", high: "high", max: "max" }, vision: true
 };
+
+describe("defaultModelChoice", () => {
+  const provider: ProviderRecord = {
+    id: "p", name: "Provider", kind: "custom", baseUrl: "", apiFormat: "openai-completions",
+    createdAt: "", updatedAt: "", hasApiKey: true, connected: true,
+    models: [{ id: "m", name: "Model", contextWindow: 10, maxTokens: 5, reasoning: true,
+      thinkingLevels: ["low", "medium", "high"], thinkingLevelMap: {}, vision: false }]
+  };
+  const remembered = { providerId: "p", modelId: "m", thinkingLevel: "high" as const };
+  const fallback = { ...provider, id: "fallback" };
+
+  it("prefers the remembered model over provider ordering", () => {
+    expect(defaultModelChoice([fallback, provider], remembered)).toEqual(remembered);
+  });
+
+  it("falls back when the model or provider is removed, incomplete, disabled or signed out", () => {
+    for (const unavailable of [
+      [], [{ ...provider, models: [] }],
+      [{ ...provider, models: [{ ...provider.models[0], contextWindow: null }] }],
+      [{ ...provider, enabled: false }], [{ ...provider, connected: false }]
+    ]) {
+      expect(defaultModelChoice([...unavailable, fallback], remembered)?.providerId).toBe("fallback");
+    }
+    expect(defaultModelChoice([provider], { ...remembered, modelId: "removed" })).toEqual({ ...remembered, thinkingLevel: "medium" });
+  });
+
+  it("adjusts unsupported reasoning and handles models with no reasoning levels", () => {
+    expect(defaultModelChoice([provider], { ...remembered, thinkingLevel: "max" })?.thinkingLevel).toBe("medium");
+    expect(defaultModelChoice([{ ...provider, models: [{ ...provider.models[0], thinkingLevels: [] }] }], remembered)?.thinkingLevel).toBe("off");
+  });
+
+  it("returns no choice when no model can run", () => {
+    expect(defaultModelChoice([], remembered)).toBeUndefined();
+    expect(defaultModelChoice([{ ...provider, connected: false }])).toBeUndefined();
+  });
+});
 
 describe("mergeDiscoveredModels", () => {
   it("keeps configured models and adds unknown IDs without inventing limits", () => {

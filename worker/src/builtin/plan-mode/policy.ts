@@ -276,12 +276,20 @@ function shellWords(segment: string): string[] | undefined {
 }
 
 function hasSafeArguments(command: string, args: string[]) {
-  const forbidden = new Set(["-i", "--in-place", "--fix", "--write", "-delete", "--delete"]);
+  // Global only because every command that offers them mutates: `--fix` rewrites files,
+  // `--write` writes output, `find -delete` unlinks — and no allow-listed read-only command
+  // takes any of them. sed's in-place flags (`-i`, `--in-place`) are deliberately NOT here:
+  // for grep/rg/fd/diff/sort/uniq/file a bare `-i` only toggles case-insensitivity. They are
+  // scoped to `sed` in the check below, which also catches combined forms like `-ni`.
+  const forbidden = new Set(["--fix", "--write", "-delete", "--delete"]);
   if (args.some((argument) => forbidden.has(argument))) return false;
   if (
     command === "sed" &&
     args.some(
-      (argument) => argument.startsWith("--in-place=") || (/^-[^-]+/.test(argument) && argument.slice(1).includes("i")),
+      (argument) =>
+        argument === "--in-place" ||
+        argument.startsWith("--in-place=") ||
+        (/^-[^-]+/.test(argument) && argument.slice(1).includes("i")),
     )
   ) {
     return false;

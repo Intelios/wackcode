@@ -73,6 +73,11 @@ describe("plan-mode tool policy", () => {
       "ls -la",
       "cat src/index.ts | head -20",
       "rg 'fn main' src/",
+      // Case-insensitive `-i` is a read flag everywhere except sed; regression test for the
+      // reported Plan mode false positive.
+      'grep -n -i "motion\\|animat\\|reduced" docs/design.md',
+      "rg -i pattern src/",
+      "git grep -i pattern",
       "git status",
       "git log --oneline -5",
       "git diff HEAD~1",
@@ -100,6 +105,7 @@ describe("plan-mode tool policy", () => {
       "pnpm add lodash",
       "find . -exec rm {} ;",
       "sed -i 's/a/b/' file",
+      "sed --in-place 's/a/b/' file",
       "FOO=bar echo hi",
       "ls $(whoami)",
       "ls `pwd`",

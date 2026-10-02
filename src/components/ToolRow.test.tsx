@@ -23,6 +23,38 @@ const editResult: NormalizedBlock = {
 };
 
 describe("ToolRow", () => {
+  it("shows changes instead of full-file arguments when an edit has no saved diff", () => {
+    const oldText = Array.from({ length: 120 }, (_, i) => `const line${i + 1} = 1;`).join("\n");
+    const newText = oldText.replace("line110 = 1", "line110 = 2");
+    const call = { ...editCall, arguments: { path: "src/app.ts", edits: [{ oldText, newText }] } };
+    render(<ToolRow call={call} result={{ ...editResult, details: undefined }} />);
+    fireEvent.click(screen.getByRole("button", { name: /Edited/ }));
+    const preview = document.querySelector(".tool-diff")!;
+    expect(preview.textContent).toContain("-const line110 = 1;");
+    expect(preview.textContent).toContain("+const line110 = 2;");
+    expect(preview.textContent).not.toContain("const line1 = 1;");
+    expect(preview.textContent).not.toContain("oldText");
+    expect(preview.querySelector(".addition .hljs-keyword")).not.toBeNull();
+  });
+
+  it("focuses long saved diffs while copying the complete original", async () => {
+    const diff = `@@ -1,100 +1,100 @@\n${" unchanged\n".repeat(100)}-old\n+new`;
+    const copy = vi.fn().mockResolvedValue(undefined);
+    render(<CopyText.Provider value={copy}><ToolRow call={editCall} result={{ ...editResult, details: { diff } }} /></CopyText.Provider>);
+    fireEvent.click(screen.getByRole("button", { name: /Edited/ }));
+    expect(document.querySelector(".tool-diff")?.textContent?.match(/unchanged/g)).toHaveLength(3);
+    fireEvent.click(screen.getByRole("button", { name: "Copy diff" }));
+    expect(copy).toHaveBeenCalledWith(diff);
+    await screen.findByText("Copied to clipboard.");
+  });
+
+  it("keeps failed edits as errors instead of showing unapplied changes", () => {
+    render(<ToolRow call={{ ...editCall, arguments: { oldText: "old", newText: "new" } }} result={{ ...editResult, isError: true, text: "Text was not found", details: undefined }} />);
+    fireEvent.click(screen.getByRole("button", { name: /Edited/ }));
+    expect(screen.getByText("Text was not found")).toBeInTheDocument();
+    expect(document.querySelector(".tool-diff")).toBeNull();
+  });
+
   it.each(["bash", "read", "grep", "custom_tool"])("expands and copies the full %s result from its preview", async (toolName) => {
     const text = Array.from({ length: 65 }, (_, i) => `line ${i + 1}`).join("\n");
     const copy = vi.fn().mockResolvedValue(undefined);

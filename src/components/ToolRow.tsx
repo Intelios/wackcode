@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useId, useMemo, useState } from "react";
 import { highlightDiffLines, languageForPath } from "../highlight";
+import { editArgumentDiff, focusedEditDiff } from "../edit-preview";
 import type { NormalizedBlock } from "../types";
 import { mcpToolParts, summarizeTool } from "../tool-utils";
 import { Icon, type IconName } from "./Icons";
@@ -61,7 +62,7 @@ function ToolImages({ call, result }: { call: NormalizedBlock; result: Normalize
 }
 
 function DiffLines({ diff, path }: { diff: string; path?: string }) {
-  const lines = diff.split("\n");
+  const lines = useMemo(() => focusedEditDiff(diff).split("\n"), [diff]);
   const classes = lines.map((line) =>
     line.startsWith("+") && !line.startsWith("+++") ? "addition"
       : line.startsWith("-") && !line.startsWith("---") ? "deletion"
@@ -110,11 +111,15 @@ function ToolDetail({ call, result }: { call: NormalizedBlock; result?: Normaliz
   const args = (call.arguments ?? {}) as Record<string, unknown>;
   const details = (result?.details ?? {}) as Record<string, unknown>;
 
-  if (summary.kind === "edit" && typeof details.diff === "string" && details.diff) {
+  const editDiff = useMemo(() => summary.kind === "edit" && !result?.isError
+    ? (typeof details.diff === "string" && details.diff) || editArgumentDiff(args)
+    : undefined, [summary.kind, result?.isError, details.diff, args]);
+
+  if (editDiff) {
     return (
       <div className="tool-detail">
-        <div className="tool-text-toolbar"><CopyButton text={details.diff} label="Copy diff" /></div>
-        <DiffLines diff={details.diff} path={typeof args.path === "string" ? args.path : undefined} />
+        <div className="tool-text-toolbar"><CopyButton text={editDiff} label="Copy diff" /></div>
+        <DiffLines diff={editDiff} path={typeof args.path === "string" ? args.path : undefined} />
       </div>
     );
   }

@@ -642,7 +642,7 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 }
 .tool-command { color: var(--text) !important; }
 .tool-diff { white-space: pre; }
-.tool-diff span { display: block; min-width: max-content; }
+.tool-diff > span { display: block; min-width: max-content; }
 .tool-diff .addition { color: #b7d9a1; } .tool-diff .deletion { color: #e3a2a2; }
 .tool-diff .hunk { color: #9aaed2; } .tool-diff .heading { color: var(--wc-code-heading); font-weight: 650; }
 .orphan-group { margin: 2px 0; }
@@ -1454,9 +1454,9 @@ button.compact.primary:hover:not(:disabled) { background: var(--wc-accent-hover)
 .panel-empty strong { color: var(--text-soft); font-size: 13px; }
 .clean-check { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; color: var(--wc-accent); border: 1px solid var(--wc-accent-ring); font-size: 16px; margin-bottom: 4px; }
 
-/* Transcript tool diffs (ToolRow) keep the plain-text renderer. */
+/* Transcript tool diffs: only line wrappers are blocks; syntax tokens stay inline. */
 .diff-view { margin: 0; padding: 10px 0 30px; font: 10px/1.55 "SFMono-Regular", Consolas, monospace; color: var(--text-soft); background: var(--wc-well); tab-size: 2; }
-.diff-view span { display: block; padding: 0 11px; min-width: max-content; }
+.diff-view > span { display: block; padding: 0 11px; min-width: max-content; }
 .diff-view .addition { color: #b7d9a1; background: rgb(66 116 52 / 16%); }
 .diff-view .deletion { color: #e3a2a2; background: rgb(139 55 55 / 16%); }
 .diff-view .hunk { color: #9aaed2; background: rgb(55 73 111 / 13%); }

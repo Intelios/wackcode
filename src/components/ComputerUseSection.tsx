@@ -47,6 +47,7 @@ interface StepsProps {
 /** The two macOS permissions, each with its live state and the way to grant it. */
 export function ComputerUsePermissionSteps({ status, actions, onError, onRelaunch }: StepsProps) {
   const [asked, setAsked] = useState<Record<Pane, boolean>>({ accessibility: false, screenRecording: false });
+  const [requesting, setRequesting] = useState<Pane>();
   return (
     <ol className="computer-permissions">
       {STEPS.map((step, index) => {
@@ -60,8 +61,11 @@ export function ComputerUsePermissionSteps({ status, actions, onError, onRelaunc
             <div className="computer-permission-text">
               <strong>{step.title}</strong>
               <span>{step.detail}</span>
-              {!granted && asked[step.pane] && step.pane === "screenRecording" && (
-                <small>Already switched on? macOS applies Screen Recording only after WackCode reopens.</small>
+              {!granted && asked[step.pane] && (
+                <small>
+                  {step.pane === "accessibility" && "If WackCode isn't listed, use + in System Settings to add the WackCode.app you're running. "}
+                  Already switched on? Quit and reopen WackCode so macOS can apply the new approval.
+                </small>
               )}
             </div>
             <div className="computer-permission-actions">
@@ -69,17 +73,20 @@ export function ComputerUsePermissionSteps({ status, actions, onError, onRelaunc
                 <span className="computer-permission-state" role="status"><i aria-hidden="true" />Allowed</span>
               ) : (
                 <>
-                  {asked[step.pane] && step.pane === "screenRecording" && (
+                  {asked[step.pane] && (
                     <button type="button" className="secondary-button compact" onClick={onRelaunch}>Quit &amp; Reopen</button>
                   )}
                   <button
                     type="button"
                     className="primary-button compact"
-                    disabled={!status?.supported}
+                    disabled={!status?.supported || !!requesting}
                     onClick={() => {
-                      setAsked((current) => ({ ...current, [step.pane]: true }));
+                      setRequesting(step.pane);
                       const request = asked[step.pane] ? actions.onOpenSettings(step.pane) : actions.onRequestPermission(step.pane);
-                      void request.catch((reason) => onError(String(reason)));
+                      void request
+                        .then(() => setAsked((current) => ({ ...current, [step.pane]: true })))
+                        .catch((reason) => onError(String(reason)))
+                        .finally(() => setRequesting(undefined));
                     }}
                   >
                     {asked[step.pane] ? "Open System Settings" : "Allow…"}
@@ -213,8 +220,11 @@ export function ComputerUseSection({ config, actions, agentName = "WackCode", on
               </p>
             )}
             <p>
-              Switched on in System Settings but still not allowed here? macOS forgets approvals when WackCode is rebuilt or updated.{" "}
-              <button type="button" className="text-button" onClick={() => setConfirm("reset")}>Reset WackCode's permissions</button> and allow them again.
+              Switched on in System Settings but still not allowed here? Click Allow… above to replace an approval from an older WackCode build.
+              Only that permission is renewed. If it's still unavailable after allowing it, quit and reopen WackCode.
+            </p>
+            <p>
+              To start over with both permissions, <button type="button" className="text-button" onClick={() => setConfirm("reset")}>Reset WackCode's permissions</button> and allow them again.
             </p>
           </div>
         </section>

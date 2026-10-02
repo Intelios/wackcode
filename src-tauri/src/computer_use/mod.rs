@@ -976,21 +976,24 @@ pub async fn computer_use_status(app: AppHandle) -> ComputerUseStatus {
     ComputerUseStatus { supported, accessibility, screen_recording, hotkey_available, dev_build: cfg!(debug_assertions) }
 }
 
-/// Shows macOS's own prompt (which also lists WackCode in the pane) and opens the pane.
+/// Renews a denied permission for this build, shows macOS's prompt and opens the pane.
 #[tauri::command]
-pub fn computer_use_request_permission(pane: permissions::Pane) -> Result<(), String> {
+pub async fn computer_use_request_permission(app: AppHandle, pane: permissions::Pane) -> Result<(), String> {
     if !permissions::is_supported() {
         return Err("Computer use needs macOS 14 or later.".into());
     }
-    match pane {
-        permissions::Pane::Accessibility => {
-            permissions::request_accessibility();
-        }
-        permissions::Pane::ScreenRecording => {
-            permissions::request_screen_recording();
-        }
-    }
-    permissions::open_pane(pane)
+    let granted = match pane {
+        permissions::Pane::Accessibility => permissions::accessibility(),
+        permissions::Pane::ScreenRecording => permissions::screen_recording_preflight() && capture::probe().await,
+    };
+    // The effective ScreenCaptureKit check is asynchronous, but the macOS permission UI must
+    // still be requested on the app's main thread, as it was with the synchronous command.
+    let identifier = app.config().identifier.clone();
+    let (reply, result) = oneshot::channel();
+    app.run_on_main_thread(move || {
+        let _ = reply.send(permissions::request(pane, &identifier, granted));
+    }).map_err(|_| "The macOS permission request couldn't be opened.".to_string())?;
+    result.await.map_err(|_| "The macOS permission request was cancelled.".to_string())?
 }
 
 #[tauri::command]
@@ -1003,7 +1006,7 @@ pub fn computer_use_reset_permissions(app: AppHandle) -> Result<(), String> {
     permissions::reset(&app.config().identifier)
 }
 
-/// Screen Recording applies only to a fresh process.
+/// Rechecks macOS approvals in a fresh process when their cached state hasn't caught up.
 #[tauri::command]
 pub fn computer_use_relaunch(app: AppHandle) {
     crate::cleanup_before_exit(&app);

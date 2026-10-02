@@ -102,7 +102,7 @@ export const api = {
     invoke<void>("browser_navigation", { input: { taskId, action } }),
   browserSetControl: (taskId: string, userControl: boolean) => invoke<BrowserState>("browser_set_control", { taskId, userControl }),
   computerUseStatus: () => invoke<ComputerUseStatus>("computer_use_status"),
-  /** Shows macOS's own permission prompt (listing WackCode in the pane) and opens the pane. */
+  /** Renews only the requested, denied permission for this build, then prompts and opens its pane. */
   computerUseRequestPermission: (pane: "accessibility" | "screenRecording") => invoke<void>("computer_use_request_permission", { pane }),
   computerUseOpenSettings: (pane: "accessibility" | "screenRecording") => invoke<void>("computer_use_open_settings", { pane }),
   computerUseResetPermissions: () => invoke<void>("computer_use_reset_permissions"),

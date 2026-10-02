@@ -214,7 +214,7 @@ It's still an agent with real access to your Mac, so a few things are worth know
 
 - **It's not a sandbox.** The agent's tools, and any stdio MCP servers you add, run with your account's permissions. A project folder or worktree is a working directory, not a boundary. Switch off any tool you don't want in **Settings › Tools**.
 - **Packages are ordinary code.** An installed extension can read and write your files, run commands, use the network, and read your API keys. WackCode shows where a package comes from and asks before its first install. Only install what you trust.
-- **Computer use permissions cover all of WackCode.** Once you grant Accessibility and Screen Recording, anything WackCode runs (the agent's shell commands, MCP servers, extensions) can use them too; only the computer-use tools ask per app. **Settings › Computer use › Reset WackCode's permissions** removes both. Because the app is signed ad hoc, macOS forgets these grants whenever you rebuild it, so reset and allow them again.
+- **Computer use permissions cover all of WackCode.** Once you grant Accessibility and Screen Recording, anything WackCode runs (the agent's shell commands, MCP servers, extensions) can use them too; only the computer-use tools ask per app. Because the app is signed ad hoc, rebuilding can leave an old approval switched on in System Settings that no longer applies. **Settings › Computer use › Allow…** renews just the unavailable permission for the current build; **Quit & Reopen** lets macOS apply it in a fresh process if needed. **Reset WackCode's permissions** removes both approvals.
 
 <details>
 <summary><strong>Everything WackCode connects to</strong></summary>

@@ -11,8 +11,8 @@ interface Props {
 
 /**
  * Switching computer use on: what it does, the two macOS permissions with their live state,
- * and only then the switch. Screen Recording needs a relaunch, so reopening saves the setting
- * first.
+ * and only then the switch. Either approval can need a fresh process, so reopening saves the
+ * setting first.
  */
 export function ComputerUseSetupDialog({ actions, agentName, onEnable, onCancel }: Props) {
   const { status } = useComputerUseStatus(actions.onStatus, 1000);

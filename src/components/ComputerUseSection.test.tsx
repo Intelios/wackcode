@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ComputerUseStatus } from "../types";
 import { ComputerUseSection, type ComputerUseActions } from "./ComputerUseSection";
@@ -66,5 +66,44 @@ describe("ComputerUseSection", () => {
     const calls = vi.mocked(actions.onStatus).mock.calls.length;
     fireEvent.click(screen.getByRole("button", { name: /Recheck/ }));
     await waitFor(() => expect(vi.mocked(actions.onStatus).mock.calls.length).toBeGreaterThan(calls));
+  });
+
+  it("requests only Accessibility and offers a relaunch when its approval hasn't taken effect", async () => {
+    const { actions } = setup({ accessibility: false });
+    fireEvent.click(await screen.findByRole("button", { name: "Allow…" }));
+    await screen.findByRole("button", { name: "Open System Settings" });
+    expect(actions.onRequestPermission).toHaveBeenCalledExactlyOnceWith("accessibility");
+    expect(actions.onResetPermissions).not.toHaveBeenCalled();
+    expect(screen.getAllByText("Allowed")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Quit & Reopen" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Quit and reopen WackCode?" });
+    expect(actions.onRelaunch).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Quit & Reopen" }));
+    await waitFor(() => expect(actions.onRelaunch).toHaveBeenCalledOnce());
+  });
+
+  it("allows a failed permission request to be retried", async () => {
+    const { actions } = setup({ accessibility: false });
+    vi.mocked(actions.onRequestPermission).mockRejectedValueOnce("The Accessibility permission couldn't be reset.");
+    fireEvent.click(await screen.findByRole("button", { name: "Allow…" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("couldn't be reset");
+    const retry = screen.getByRole("button", { name: "Allow…" });
+    await waitFor(() => expect(retry).toBeEnabled());
+    expect(screen.queryByRole("button", { name: "Open System Settings" })).toBeNull();
+    fireEvent.click(retry);
+    await screen.findByRole("button", { name: "Open System Settings" });
+    expect(actions.onRequestPermission).toHaveBeenCalledTimes(2);
+    expect(actions.onOpenSettings).not.toHaveBeenCalled();
+  });
+
+  it("shows the live approval after the renewed permission is granted", async () => {
+    const { actions } = setup({ accessibility: false });
+    fireEvent.click(await screen.findByRole("button", { name: "Allow…" }));
+    await screen.findByRole("button", { name: "Open System Settings" });
+    vi.mocked(actions.onStatus).mockResolvedValue(base);
+    fireEvent.click(screen.getByRole("button", { name: /Recheck/ }));
+    expect(await screen.findByText("Ready")).toBeInTheDocument();
+    expect(screen.getAllByText("Allowed")).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "Quit & Reopen" })).toBeNull();
   });
 });

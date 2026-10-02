@@ -516,7 +516,11 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .msg.assistant code, .stream-text code { font-family: "SFMono-Regular", Consolas, monospace; font-size: .88em; color: var(--wc-accent-code); background: var(--wc-code-bg); border: 1px solid var(--wc-code-border); border-radius: 4px; padding: 1px 5px; }
 .msg.assistant pre, .stream-text pre { margin: 12px 0; border: 1px solid var(--border); background: var(--wc-well); border-radius: 8px; padding: 12px 14px; overflow-x: auto; }
 .msg.assistant pre code, .stream-text pre code { padding: 0; border: 0; background: none; color: var(--wc-code-text); }
-/* Source actions sit above the scrollable text, so long lines never hide the copy button. */
+/* Source actions sit above the scrollable text, so long lines never hide the copy button.
+   Copy shows only where copying means something — code fences, and agent-authored tool content
+   (commands, written files, diffs) — never on plain results or arguments. Idle buttons hide
+   until their surface is hovered or the button itself is focused (it stays in the tab order),
+   and stay put while they still have feedback to show. */
 .code-block { margin: 12px 0; min-width: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--wc-well); overflow: hidden; }
 .code-block-toolbar, .tool-text-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--text-dim); font-size: 11px; }
 .code-block-toolbar { padding: 5px 8px 5px 14px; border-bottom: 1px solid var(--border); }
@@ -526,10 +530,15 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 }
 .code-block pre code { padding: 0; border: 0; background: none; color: var(--wc-code-text); font-family: "SFMono-Regular", Consolas, monospace; font-size: .88em; }
 .copy-control { margin-left: auto; display: inline-flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+/* A floating control overlays its surface's top-right corner, reserving no toolbar row. */
+.copy-control-floating { position: absolute; top: 6px; right: 8px; z-index: 1; margin-left: 0; }
 .copy-button.secondary-button.compact { height: 24px; padding: 3px 7px; gap: 5px; font-size: 11px; }
 .copy-button.secondary-button.compact svg { width: 12px; height: 12px; }
 .copy-feedback { color: var(--text-soft); font-size: 11px; }
 .copy-feedback:empty { display: none; }
+.code-block .copy-control, .tool-detail .copy-control { opacity: 0; transition: opacity .12s var(--ease); }
+.code-block:hover .copy-control, .tool-detail:hover .copy-control,
+.copy-control:focus-within, .copy-control.copy-control-revealed { opacity: 1; }
 /* Syntax highlighting: highlight.js token classes map onto the accent-derived --wc-code-* tokens
    (the `syntax` recipe in theme.ts). No highlight.js theme CSS is shipped — plain text between
    tokens inherits the code colour above, so languages or classes we don't map still read fine. */
@@ -708,7 +717,8 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 /* The rule lines up under the group's icon. */
 .explore-body { margin: 1px 0 5px 6px; padding-left: 13px; border-left: 1px solid var(--border); }
 .explore-body > .thinking-row { margin: 2.5px 0; }
-.tool-detail { margin: 2px 0 7px 20px; }
+.tool-detail { position: relative; margin: 2px 0 7px 20px; }
+.tool-text { position: relative; }
 .tool-text-toolbar { padding: 3px 0 0; }
 .tool-text-count { font-variant-numeric: tabular-nums; }
 .tool-detail pre, .tool-diff {

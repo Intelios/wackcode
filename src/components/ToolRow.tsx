@@ -80,27 +80,29 @@ function DiffLines({ diff, path }: { diff: string; path?: string }) {
 }
 
 /** Preview limits only affect rendering: expansion and copying always use the source text. */
-function ToolText({ text, label = "output", maxLines = 60, command = false }: {
-  text: string; label?: string; maxLines?: number; command?: boolean;
+function ToolText({ text, label = "output", maxLines = 60, command = false, copy = false }: {
+  text: string; label?: string; maxLines?: number; command?: boolean; copy?: boolean;
 }) {
   const [all, setAll] = useState(false);
   const id = useId();
   const lines = useMemo(() => text.split("\n"), [text]);
   const truncated = lines.length > maxLines;
   const preview = truncated && !all ? lines.slice(-maxLines).join("\n") : text;
+  // The toolbar exists only for the truncation controls, and copy (where offered at all) rides
+  // in it; untruncated text has no row at all, so copy floats over the corner on hover instead.
   return (
     <div className="tool-text">
-      <div className="tool-text-toolbar">
-        {truncated && (
-          <>
-            <span className="tool-text-count">{all ? `All ${lines.length} lines` : `Last ${maxLines} of ${lines.length} lines`}</span>
-            <button type="button" className="text-button" aria-expanded={all} aria-controls={id} onClick={() => setAll((value) => !value)}>
-              {all ? "Show less" : "Show all"}
-            </button>
-          </>
-        )}
-        <CopyButton text={text} label={`Copy ${label}`} />
-      </div>
+      {truncated ? (
+        <div className="tool-text-toolbar">
+          <span className="tool-text-count">{all ? `All ${lines.length} lines` : `Last ${maxLines} of ${lines.length} lines`}</span>
+          <button type="button" className="text-button" aria-expanded={all} aria-controls={id} onClick={() => setAll((value) => !value)}>
+            {all ? "Show less" : "Show all"}
+          </button>
+          {copy && <CopyButton text={text} label={`Copy ${label}`} />}
+        </div>
+      ) : copy ? (
+        <CopyButton text={text} label={`Copy ${label}`} floating />
+      ) : null}
       <pre id={id} className={command ? "tool-command" : undefined}>{command ? "$ " : ""}{preview}</pre>
     </div>
   );
@@ -118,7 +120,7 @@ function ToolDetail({ call, result }: { call: NormalizedBlock; result?: Normaliz
   if (editDiff) {
     return (
       <div className="tool-detail">
-        <div className="tool-text-toolbar"><CopyButton text={editDiff} label="Copy diff" /></div>
+        <CopyButton text={editDiff} label="Copy diff" floating />
         <DiffLines diff={editDiff} path={typeof args.path === "string" ? args.path : undefined} />
       </div>
     );
@@ -126,13 +128,14 @@ function ToolDetail({ call, result }: { call: NormalizedBlock; result?: Normaliz
   if (summary.kind === "bash") {
     return (
       <div className="tool-detail">
-        <ToolText text={String(args.command ?? "")} label="command" command />
+        {/* Copy follows what the agent authored — the command — never the output it got back. */}
+        <ToolText text={String(args.command ?? "")} label="command" command copy />
         {result?.text && <ToolText text={result.text} />}
       </div>
     );
   }
   if (summary.kind === "write" && typeof args.content === "string") {
-    return <div className="tool-detail"><ToolText text={args.content} label="file content" maxLines={80} /></div>;
+    return <div className="tool-detail"><ToolText text={args.content} label="file content" maxLines={80} copy /></div>;
   }
   if (summary.kind === "search") {
     return <div className="tool-detail">{result?.text ? <ToolText text={result.text} /> : <pre>No matches</pre>}</div>;

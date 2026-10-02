@@ -55,7 +55,7 @@ describe("ToolRow", () => {
     expect(document.querySelector(".tool-diff")).toBeNull();
   });
 
-  it.each(["bash", "read", "grep", "custom_tool"])("expands and copies the full %s result from its preview", async (toolName) => {
+  it.each(["bash", "read", "grep", "custom_tool"])("expands the full %s result from its preview, without a copy button on plain output", (toolName) => {
     const text = Array.from({ length: 65 }, (_, i) => `line ${i + 1}`).join("\n");
     const copy = vi.fn().mockResolvedValue(undefined);
     const call = { ...editCall, toolName, arguments: { command: "ls", path: "file.ts" } };
@@ -63,14 +63,16 @@ describe("ToolRow", () => {
     fireEvent.click(screen.getAllByRole("button")[0]);
     expect(screen.getByText("Last 60 of 65 lines")).toBeInTheDocument();
     expect(document.querySelector(".tool-text:last-child pre")?.textContent).toBe(text.split("\n").slice(-60).join("\n"));
-    fireEvent.click(screen.getByRole("button", { name: "Copy output" }));
-    expect(copy).toHaveBeenCalledWith(text);
-    expect(await screen.findByText("Copied to clipboard.")).toBeInTheDocument();
+    // Output and arguments are not content the agent authored for reuse: no copy button —
+    // selecting the text still reaches the clipboard through the context menu.
+    expect(screen.queryByRole("button", { name: "Copy output" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy arguments" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Show all" }));
     expect(document.querySelector(".tool-text:last-child pre")?.textContent).toBe(text);
     expect(screen.getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true");
     fireEvent.click(screen.getByRole("button", { name: "Show less" }));
     expect(screen.getByRole("button", { name: "Show all" })).toHaveAttribute("aria-expanded", "false");
+    expect(copy).not.toHaveBeenCalled();
   });
 
   it("expands written content beyond 80 lines and copies it exactly", async () => {
@@ -85,30 +87,23 @@ describe("ToolRow", () => {
     await screen.findByText("Copied to clipboard.");
   });
 
-  it("keeps expanded live output complete as new lines arrive", async () => {
-    const copy = vi.fn().mockResolvedValue(undefined);
+  it("keeps expanded live output complete as new lines arrive", () => {
     const call = { ...editCall, toolName: "bash", arguments: { command: "ls" } };
     const text = "streamed\n".repeat(65);
-    const view = render(<CopyText.Provider value={copy}><ToolRow call={call} running liveText={text} /></CopyText.Provider>);
+    const view = render(<ToolRow call={call} running liveText={text} />);
     fireEvent.click(screen.getByRole("button", { name: /Running/ }));
     fireEvent.click(screen.getByRole("button", { name: "Show all" }));
-    view.rerender(<CopyText.Provider value={copy}><ToolRow call={call} running liveText={text + "new line"} /></CopyText.Provider>);
+    view.rerender(<ToolRow call={call} running liveText={text + "new line"} />);
     expect(document.querySelector(".tool-text:last-child pre")?.textContent).toBe(text + "new line");
-    fireEvent.click(screen.getByRole("button", { name: "Copy output" }));
-    expect(copy).toHaveBeenCalledWith(text + "new line");
-    await screen.findByText("Copied to clipboard.");
   });
 
-  it("expands and copies unmatched results too", async () => {
+  it("expands unmatched results without offering to copy them", () => {
     const text = "orphan line\n".repeat(65);
-    const copy = vi.fn().mockResolvedValue(undefined);
-    render(<CopyText.Provider value={copy}><OrphanResult block={{ type: "tool-result", text }} /></CopyText.Provider>);
+    render(<OrphanResult block={{ type: "tool-result", text }} />);
     fireEvent.click(screen.getByRole("button", { name: "Tool result" }));
     fireEvent.click(screen.getByRole("button", { name: "Show all" }));
     expect(document.querySelector("pre")?.textContent).toBe(text);
-    fireEvent.click(screen.getByRole("button", { name: "Copy output" }));
-    expect(copy).toHaveBeenCalledWith(text);
-    await screen.findByText("Copied to clipboard.");
+    expect(screen.queryByRole("button", { name: "Copy output" })).toBeNull();
   });
 
   it("copies the original diff including markers and whitespace", async () => {

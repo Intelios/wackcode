@@ -1,8 +1,8 @@
 /**
  * Shared react-markdown component overrides, used by `Markdown.tsx` for the transcript, plans,
  * sub-agent output and thinking rows. `pre` is where syntax highlighting happens: the fenced
- * block's `code` child is re-rendered from highlight.js tokens (src/highlight.ts), with a copy
- * action using the original text. Inline code needs no override at all. The img override is
+ * block's `code` child is re-rendered from highlight.js tokens (src/highlight.ts), with a
+ * hover-revealed copy action using the original text. Inline code needs no override at all. The img override is
  * the original from Markdown.tsx; the a override intercepts clicks (the webview cannot open
  * links itself) and routes http(s) URLs
  * through `api.revealPath`.

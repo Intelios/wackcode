@@ -42,26 +42,43 @@ export function BrowserPanel({ taskId, state, visible: shown, expanded, onState,
   useEffect(() => {
     const element = surface.current;
     if (!element) return;
-    let timer: number | undefined;
+    let frame: number | undefined;
     const hide = () => void api.browserPresent({ taskId, visible: false, x: 0, y: 0, width: 1, height: 1 }).catch(() => {});
     const place = () => {
-      window.clearTimeout(timer);
+      if (frame !== undefined) window.cancelAnimationFrame(frame);
       hide();
       if (!visible) return;
-      // Keep the native page below moving React chrome while the drawer or resizer settles.
-      timer = window.setTimeout(() => {
-        const bounds = element.getBoundingClientRect();
+      // The drawer and page slides can move this fixed-size surface without resizing it.
+      // Keep the native page parked until its full rectangle has stopped moving, rather than
+      // measuring once after a delay that may expire partway through an animation.
+      let bounds = element.getBoundingClientRect();
+      let stillSince = performance.now();
+      const settle = (now: number) => {
+        const next = element.getBoundingClientRect();
+        if (next.x !== bounds.x || next.y !== bounds.y || next.width !== bounds.width || next.height !== bounds.height) {
+          bounds = next;
+          stillSince = now;
+        }
+        if (now - stillSince < 140) {
+          frame = window.requestAnimationFrame(settle);
+          return;
+        }
+        frame = undefined;
         if (bounds.width < 1 || bounds.height < 1) return;
         void api.browserPresent({ taskId, visible: true, x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height })
           .then(onState).catch((reason) => setError(String(reason)));
-      }, 140);
+      };
+      frame = window.requestAnimationFrame(settle);
     };
     const observer = new ResizeObserver(place);
     observer.observe(element);
+    // The outer drawer's width changes even when this surface keeps the final content width.
+    const drawer = element.closest(".side-panel");
+    if (drawer) observer.observe(drawer);
     window.addEventListener("resize", place);
     place();
     return () => {
-      window.clearTimeout(timer);
+      if (frame !== undefined) window.cancelAnimationFrame(frame);
       observer.disconnect();
       window.removeEventListener("resize", place);
       hide();

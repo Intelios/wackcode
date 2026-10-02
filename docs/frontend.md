@@ -81,6 +81,10 @@ another launch. Switching between chats in one checkout reuses the same session.
 
 A native child `WKWebView` per chat (`browser.rs`), placed over `.browser-surface` by `BrowserPanel` through `browserPresent`. Hidden views stay attached, so a background chat's agent can keep using its page. Pages get an ephemeral data store and no Tauri capabilities.
 
+The native page stays parked while the surface's full rectangle settles. Observe both the
+surface and the outer drawer: opening animates the drawer's width while its content keeps its
+final size, so a surface-only resize observer misses the position change.
+
 ## Scroll rail
 
 `.conversation-scroll`'s native scrollbar stays hidden; `ScrollRail` replaces it with a turn timeline. Two things are load-bearing: `.conversation-scroll`'s `position: relative`, and the `data-turn` markers on `.msg.user`. Tick offsets come from `offsetTop`, which must resolve in scroll-content coordinates.

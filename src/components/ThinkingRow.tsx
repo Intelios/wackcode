@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { formatRunDuration, thinkingPreview } from "../chat-utils";
+import { useFollowScroll } from "../hooks/useFollowScroll";
 import { useSmoothText } from "../hooks/useSmoothText";
 import { Markdown } from "./Markdown";
 import { Icon } from "./Icons";
@@ -42,8 +43,12 @@ function ThinkingElapsed({ startedAt }: { startedAt: number }) {
 
 function ThinkingBody({ text, live }: { text: string; live: boolean }) {
   const shown = useSmoothText(text, live);
+  // Opens at the newest reasoning and, while live, stays pinned there so the
+  // stream can be watched as it arrives. Scrolling up reads earlier text
+  // without being yanked; only returning to the bottom resumes following.
+  const { ref, onScroll, onWheel } = useFollowScroll();
   return (
-    <div className="thinking-body" role="region" aria-label="Reasoning" tabIndex={0}>
+    <div ref={ref} onScroll={onScroll} onWheel={onWheel} className="thinking-body" role="region" aria-label="Reasoning" tabIndex={0}>
       <Markdown streaming={live}>{shown}</Markdown>
     </div>
   );

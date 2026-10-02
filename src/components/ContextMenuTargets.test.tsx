@@ -12,7 +12,7 @@ import { MenuButton } from "./ui/MenuButton";
 
 afterEach(cleanup);
 
-const project: ProjectRecord = { id: "p", name: "Project", path: "/code", gitRoot: "/code", gitHasHead: true, branch: "main", createdAt: "now" };
+const project: ProjectRecord = { id: "p", name: "Project", path: "/code", gitRoot: "/code", gitHasHead: true, runCommand: null, branch: "main", createdAt: "now" };
 const chat: TaskRecord = {
   id: "other", projectId: "p", name: "Background chat", workspacePath: "/code", worktreePath: null, branch: null, usesWorktree: false,
   autoTitleEligible: false, autoTitleAttemptId: null, providerId: "prov", modelId: "m", thinkingLevel: "off", sessionFile: "session.json", status: "idle",

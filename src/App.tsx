@@ -10,7 +10,8 @@ import { titleFromPrompt, samePlanState, sameTodoState, sameGoalState, applySnap
 import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix } from "./tree-utils";
 import { composeFileSection, splitFileSection, type FileAttachment } from "./attachment-utils";
 import { displayAgentName, hasSubagentCall, pruneDisabledTools, sameToolCatalog, subagentDetailsFor } from "./tool-utils";
-import { CHANGES_VIEW, TERMINAL_VIEW, durableView, rememberedView, toggleView, viewForChat, viewKey, type PanelViewKind, type SidePanelView } from "./side-panel";
+import { CHANGES_VIEW, TERMINAL_VIEW, RUN_VIEW, durableView, rememberedView, toggleView, viewForChat, viewKey, type PanelViewKind, type SidePanelView } from "./side-panel";
+import { applyRunEvent, EMPTY_RUN_REGISTRY } from "./run-state";
 import { APP_SLASH_COMMANDS } from "./command-utils";
 import { performChatNavigation, withoutResolvedDialog } from "./menu-navigation";
 import { PINNED_PROJECTS_KEY, busyChatsInCheckout, includedFiles, linkableChats, resolveLinkedChat } from "./git-mode";
@@ -50,6 +51,8 @@ import type {
   ProjectRecord,
   ProviderRecord,
   RestoreResult,
+  RunEvent,
+  RunInfo,
   SaveProviderInput,
   SlashCommand,
   SubagentConfig,
@@ -70,6 +73,7 @@ import { GitCommitView } from "./components/GitCommitView";
 import { GitToolbar } from "./components/GitToolbar";
 import { GitActivity, GitNoticeCard, GitWorkspace } from "./components/GitWorkspace";
 import { RepoSwitcher } from "./components/RepoSwitcher";
+import { RunPanel } from "./components/RunPanel";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { SidePanel } from "./components/SidePanel";
 import { SubagentPanelLink } from "./components/SubagentChip";
@@ -138,7 +142,7 @@ const COLLAPSED_PROJECTS_KEY = "wackcode:collapsedProjects";
 /** The durable view the panel should come back to — the stored pick, or the migrated Changes flag. */
 function rememberedPanelKind(): PanelViewKind | null {
   const stored = loadJSON<PanelViewKind | null | undefined>(PANEL_VIEW_KEY, undefined);
-  if (stored === "changes" || stored === "terminal") return stored;
+  if (stored === "changes" || stored === "terminal" || stored === "run") return stored;
   if (stored === null) return null;
   return loadJSON<boolean>(CHANGES_OPEN_KEY, false) ? "changes" : null;
 }
@@ -232,6 +236,8 @@ export default function App() {
   const browserRestoreWidth = useRef(430);
   /** Live terminal sessions by chat id — powers the header's caret hint while the panel is hidden. */
   const [terminals, setTerminals] = useState<Record<string, { sessionId: string; busy: boolean; exit: { code: number; signal: string | null } | null }>>({});
+  const [runs, setRuns] = useState(EMPTY_RUN_REGISTRY);
+  const [runFolder, setRunFolder] = useState<{ taskId: string; workspacePath: string; cwd: string }>();
   /** Bumped to watch the shown sub-agent again (a failed watch, a gap, a restarted worker). */
   const [watchNonce, setWatchNonce] = useState(0);
   /** The chat whose worker streams a sub-agent to the panel, so it can be told to stop. */
@@ -282,6 +288,8 @@ export default function App() {
   const selectedTask = data.tasks.find((task) => task.id === selectedTaskId);
   const composerDraftKey = selectedTask ? `task:${selectedTask.id}` : `new:${draftEpoch.current}`;
   const selectedProject = data.projects.find((project) => project.id === selectedTask?.projectId);
+  const selectedRun = selectedTask && !selectedTask.archived ? runs.sessions[runFolder?.workspacePath === selectedTask.workspacePath
+    ? runFolder.cwd : selectedTask.workspacePath] : undefined;
   const runtime = selectedTaskId ? runtimes[selectedTaskId] : undefined;
   const sharedWorkers = selectedTask ? data.tasks.filter((task) => !task.archived && task.id !== selectedTask.id && task.workspacePath === selectedTask.workspacePath && task.status === "running") : [];
   // The worker's latest plan_state is the freshest mode signal; the record (or the draft's
@@ -622,6 +630,53 @@ export default function App() {
     });
     return () => { unlisten.then((fn) => fn()); };
   }, []);
+
+  useEffect(() => {
+    const unlisten = listen<RunEvent>("run-event", ({ payload }) => setRuns((current) => applyRunEvent(current, payload)));
+    return () => { void unlisten.then((stop) => stop()); };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedTask?.projectId || selectedTask.archived) { setRunFolder(undefined); return; }
+    let disposed = false;
+    const taskId = selectedTask.id;
+    const workspacePath = selectedTask.workspacePath;
+    void api.getRun(taskId).then((lookup) => {
+      if (disposed) return;
+      setRunFolder({ taskId, workspacePath, cwd: lookup.cwd });
+      setRuns((current) => applyRunEvent(current, lookup.run ? { type: "changed", run: lookup.run }
+        : { type: "removed", cwd: lookup.cwd, sessionId: "", generation: lookup.generation }));
+    }).catch((reason) => { if (!disposed) setGlobalError(String(reason)); });
+    return () => { disposed = true; };
+  }, [selectedTask?.id, selectedTask?.workspacePath, selectedTask?.projectId, selectedTask?.archived]);
+
+  async function launchRun(taskId: string) {
+    const run = await api.startRun(taskId);
+    setRuns((current) => applyRunEvent(current, { type: "changed", run }));
+    if (selectedTaskRef.current === taskId) {
+      const task = data.tasks.find((item) => item.id === taskId);
+      if (task) setRunFolder({ taskId, workspacePath: task.workspacePath, cwd: run.cwd });
+      showRunOutput();
+    }
+  }
+
+  async function stopRun(run: RunInfo) {
+    const stopped = await api.stopRun(run.sessionId);
+    setRuns((current) => applyRunEvent(current, { type: "changed", run: stopped }));
+  }
+
+  function showRunOutput() {
+    if (browserExpanded) {
+      setPanelWidth(browserRestoreWidth.current);
+      setBrowserExpanded(false);
+    }
+    setSidePanel(RUN_VIEW);
+  }
+
+  async function saveRunCommand(projectId: string, command: string) {
+    const project = await api.saveProjectRunCommand(projectId, command);
+    setData((current) => ({ ...current, projects: current.projects.map((item) => item.id === projectId ? { ...item, runCommand: project.runCommand } : item) }));
+  }
 
   // Rewinding past a call takes its chips away, and the panel follows.
   useEffect(() => {
@@ -2577,6 +2632,11 @@ export default function App() {
               <ChatHeader
               task={selectedTask}
               project={selectedProject}
+              run={selectedRun}
+              onSaveRunCommand={(command) => selectedProject ? saveRunCommand(selectedProject.id, command) : Promise.reject("Choose a project first.")}
+              onRun={() => launchRun(selectedTask.id)}
+              onStopRun={() => selectedRun ? stopRun(selectedRun) : Promise.resolve()}
+              onShowRunOutput={showRunOutput}
               git={changes ? (changes.isGit ? { branch: changes.branch } : undefined) : selectedTask.branch ? { branch: selectedTask.branch } : undefined}
               onListBranches={() => api.gitBranches({ taskId: selectedTask.id })}
               onCheckoutBranch={(name, kind) => checkoutBranch({ taskId: selectedTask.id }, name, kind)}
@@ -2876,6 +2936,7 @@ export default function App() {
         width={panelWidth}
         onWidthChange={setPanelWidth}
         label={panelView?.kind === "browser" ? "Browser"
+          : panelView?.kind === "run" ? "Run"
           : panelView?.kind === "terminal" ? "Terminal"
           : shownSubagent
             ? `SubAgent ${displayAgentName(shownSubagentCall?.details.results[shownSubagent.index]?.agent ?? "")}`.trim()
@@ -2901,6 +2962,11 @@ export default function App() {
             closeSidePanel();
           }}
         />
+      ) : view.kind === "run" ? (
+        <RunPanel run={selectedRun} appearance={data.appearance} configured={Boolean(!selectedTask.archived && selectedProject?.runCommand)}
+          onRun={() => void launchRun(selectedTask.id).catch((reason) => setGlobalError(String(reason)))}
+          onStop={() => { if (selectedRun) void stopRun(selectedRun).catch((reason) => setGlobalError(String(reason))); }}
+          onClose={closeSidePanel} />
       ) : view.kind === "terminal" ? (
         <TerminalPanel key={selectedTask.id} taskId={selectedTask.id} appearance={data.appearance} onClose={closeSidePanel} />
       ) : view.kind === "subagent" ? (

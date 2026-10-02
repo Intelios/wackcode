@@ -7,8 +7,8 @@ import { ProjectBar } from "./ProjectBar";
 afterEach(cleanup);
 
 const projects: ProjectRecord[] = [
-  { id: "p1", name: "TokenTrail", path: "/code/tokentrail", gitRoot: "/code/tokentrail", gitHasHead: true, branch: "master", createdAt: "now" },
-  { id: "p2", name: "scratch-nogit", path: "/tmp/scratch-nogit", gitRoot: null, gitHasHead: false, branch: null, createdAt: "now" }
+  { id: "p1", name: "TokenTrail", path: "/code/tokentrail", gitRoot: "/code/tokentrail", gitHasHead: true, runCommand: null, branch: "master", createdAt: "now" },
+  { id: "p2", name: "scratch-nogit", path: "/tmp/scratch-nogit", gitRoot: null, gitHasHead: false, runCommand: null, branch: null, createdAt: "now" }
 ];
 
 function Harness({ initialProjectId = "p1", worktreeable = true }: { initialProjectId?: string | null; worktreeable?: boolean }) {

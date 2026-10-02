@@ -1957,6 +1957,7 @@ pub fn add_project(state: State<'_, MetadataState>, path: String) -> Result<Proj
             .root
             .map(|root| root.to_string_lossy().into_owned()),
         git_has_head: git_info.has_head,
+        run_command: None,
         branch: git::current_branch(&canonical),
         created_at: Utc::now().to_rfc3339(),
     };
@@ -3280,6 +3281,8 @@ pub async fn archive_task(
         task.updated_at = Utc::now().to_rfc3339();
         Ok(task.clone())
     })?;
+    app.state::<crate::run_command::RunState>()
+        .release_workspace(&state, &task.workspace_path, false).await?;
     crate::menu_bar::remove_chat(&app, &task_id);
     Ok(task)
 }
@@ -3376,6 +3379,8 @@ pub async fn delete_task(
             .and_then(|project| project.git_root.clone());
         Ok((task, git_root))
     })?;
+    app.state::<crate::run_command::RunState>()
+        .release_workspace(&state, &task.workspace_path, task.worktree_path.is_some()).await?;
     cleanup_task_files(&app, &task, git_root.as_deref());
     crate::menu_bar::remove_chat(&app, &task_id);
     Ok(())
@@ -3387,6 +3392,7 @@ pub async fn convert_task_to_worktree(
     state: State<'_, MetadataState>,
     task_id: String,
 ) -> Result<TaskRecord, String> {
+    let _task = task_lock(&app, &task_id).lock_owned().await;
     let (task, project) = {
         let data = state
             .data
@@ -3457,6 +3463,8 @@ pub async fn convert_task_to_worktree(
     // The workspace moved to a worktree; a shell parked in the old folder must not linger.
     app.state::<terminal::TerminalState>()
         .kill_for_task(&app, &task_id);
+    app.state::<crate::run_command::RunState>()
+        .release_workspace(&state, &task.workspace_path, false).await?;
     Ok(updated)
 }
 
@@ -3518,6 +3526,8 @@ pub async fn remove_project(
         Ok(())
     })?;
     for task in &tasks {
+        app.state::<crate::run_command::RunState>()
+            .release_workspace(&state, &task.workspace_path, task.worktree_path.is_some()).await?;
         cleanup_task_files(&app, task, git_root.as_deref());
     }
     for task in &tasks {

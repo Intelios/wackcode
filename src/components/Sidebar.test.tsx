@@ -7,7 +7,7 @@ import { NO_PROJECT_KEY, Sidebar, type TaskAction } from "./Sidebar";
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 const projects: ProjectRecord[] = [
-  { id: "p1", name: "TokenTrail", path: "/code/tokentrail", gitRoot: "/code/tokentrail", gitHasHead: true, branch: "master", createdAt: "now" }
+  { id: "p1", name: "TokenTrail", path: "/code/tokentrail", gitRoot: "/code/tokentrail", gitHasHead: true, runCommand: null, branch: "master", createdAt: "now" }
 ];
 
 function task(id: string, projectId: string | null, name: string): TaskRecord {
@@ -463,9 +463,9 @@ describe("Sidebar bulk actions", () => {
 
 describe("Sidebar pinning and Git mode", () => {
   const many: ProjectRecord[] = [
-    { id: "p1", name: "Alpha", path: "/code/alpha", gitRoot: "/code/alpha", gitHasHead: true, branch: "main", createdAt: "now" },
-    { id: "p2", name: "Beta", path: "/code/beta", gitRoot: "/code/beta", gitHasHead: true, branch: "main", createdAt: "now" },
-    { id: "p3", name: "Gamma", path: "/code/gamma", gitRoot: "/code/gamma", gitHasHead: true, branch: "main", createdAt: "now" }
+    { id: "p1", name: "Alpha", path: "/code/alpha", gitRoot: "/code/alpha", gitHasHead: true, runCommand: null, branch: "main", createdAt: "now" },
+    { id: "p2", name: "Beta", path: "/code/beta", gitRoot: "/code/beta", gitHasHead: true, runCommand: null, branch: "main", createdAt: "now" },
+    { id: "p3", name: "Gamma", path: "/code/gamma", gitRoot: "/code/gamma", gitHasHead: true, runCommand: null, branch: "main", createdAt: "now" }
   ];
 
   function PinHarness({ pinned = [], git, onProjectAction = () => undefined, onToggleGit = () => undefined }: {

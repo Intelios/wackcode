@@ -13,7 +13,10 @@ use crate::models::{
     OpenTerminalInput, ResizeTerminalInput, TaskRecord, TerminalExit, TerminalFrame, TerminalInfo, WriteTerminalInput,
 };
 use crate::storage::MetadataState;
-use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
+use crate::pty_output::{append_scrollback, read_output, size};
+#[cfg(test)]
+use crate::pty_output::{split_utf8, SCROLLBACK_BYTES};
+use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty};
 use serde_json::json;
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
@@ -25,10 +28,6 @@ use std::time::Duration;
 use tauri::{ipc::Channel, AppHandle, Emitter, State};
 use uuid::Uuid;
 
-/// Bytes kept per session for reattach replay — a few hundred lines of typical output.
-const SCROLLBACK_BYTES: usize = 256 * 1024;
-/// Reads this large keep IPC chatter low without delaying a keystroke's echo.
-const READ_CHUNK: usize = 16 * 1024;
 /// How often the busy poll asks the PTY which process group owns its foreground.
 const BUSY_POLL: Duration = Duration::from_millis(750);
 
@@ -47,9 +46,7 @@ struct Core {
 
 impl Core {
     fn push(&mut self, data: &[u8]) {
-        self.bytes.extend(data);
-        let excess = self.bytes.len().saturating_sub(SCROLLBACK_BYTES);
-        self.bytes.drain(..excess);
+        append_scrollback(&mut self.bytes, data);
         if let Some(sink) = &self.sink {
             let _ = sink.send(TerminalFrame::Output { data: String::from_utf8_lossy(data).into_owned() });
         }
@@ -81,32 +78,6 @@ struct Session {
 #[derive(Default)]
 pub struct TerminalState {
     sessions: Mutex<HashMap<String, Arc<Session>>>,
-}
-
-fn size(cols: u16, rows: u16) -> PtySize {
-    PtySize { rows: rows.clamp(2, 500), cols: cols.clamp(2, 500), pixel_width: 0, pixel_height: 0 }
-}
-
-/// What the reader hands to `Core::push`: complete UTF-8 text, with any codepoint split across
-/// reads held back for next time. Invalid bytes decode to U+FFFD so nothing is skipped.
-fn split_utf8(buffer: &[u8]) -> (String, Vec<u8>) {
-    match std::str::from_utf8(buffer) {
-        Ok(text) => (text.to_string(), Vec::new()),
-        Err(error) => {
-            let boundary = error.valid_up_to();
-            let mut text = String::from_utf8_lossy(&buffer[..boundary]).into_owned();
-            match error.error_len() {
-                // Incomplete sequence at the end: keep it for the next chunk.
-                None => (text, buffer[boundary..].to_vec()),
-                Some(invalid) => {
-                    text.push('\u{FFFD}');
-                    let (rest, tail) = split_utf8(&buffer[boundary + invalid..]);
-                    text.push_str(&rest);
-                    (text, tail)
-                }
-            }
-        }
-    }
 }
 
 fn emit(app: &AppHandle, value: serde_json::Value) {
@@ -155,30 +126,15 @@ fn spawn_session(cwd: &Path, cols: u16, rows: u16) -> Result<Arc<Session>, Strin
 
 /// The blocking read loop: append to scrollback and stream to the attached sink inside one
 /// lock. EOF (shell exit or a closed master) reaps the child and reports the exit once.
-fn start_reader(app: &AppHandle, task_id: &str, session: &Arc<Session>, mut reader: Box<dyn Read + Send>) {
+fn start_reader(app: &AppHandle, task_id: &str, session: &Arc<Session>, reader: Box<dyn Read + Send>) {
     let app = app.clone();
     let task_id = task_id.to_string();
     let session = session.clone();
     let session_id = session.id.clone();
     thread::spawn(move || {
-        let mut chunk = [0u8; READ_CHUNK];
-        // Bytes of a UTF-8 codepoint split across two reads, decoded on the next one.
-        let mut tail: Vec<u8> = Vec::new();
-        loop {
-            let Ok(read) = reader.read(&mut chunk) else { break };
-            if read == 0 { break; }
-            let mut pending = std::mem::take(&mut tail);
-            pending.extend_from_slice(&chunk[..read]);
-            let (text, rest) = split_utf8(&pending);
-            tail = rest;
-            if !text.is_empty() {
-                session.core.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(text.as_bytes());
-            }
-        }
-        if !tail.is_empty() {
-            let text = String::from_utf8_lossy(&tail).into_owned();
+        read_output(reader, |text| {
             session.core.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(text.as_bytes());
-        }
+        });
         let status = session.child.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).wait().ok()
             .map(|status| TerminalStatus::Exited { code: status.exit_code() as i32, signal: status.signal().map(str::to_string) })
             .unwrap_or(TerminalStatus::Exited { code: -1, signal: None });

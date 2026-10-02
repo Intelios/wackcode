@@ -43,6 +43,9 @@ import type {
   ProviderRecord,
   QuestionAnswer,
   RestoreResult,
+  RunInfo,
+  RunLookup,
+  RunFrame,
   SaveMcpServerInput,
   SaveProviderInput,
   SaveSkillInput,
@@ -307,6 +310,18 @@ export const api = {
   /** The GUI editors installed on this Mac (VS Code, Zed, …), for Git mode's picker. */
   listEditors: () => invoke<string[]>("list_editors"),
   openInEditor: (target: GitTarget, editor: string) => invoke<void>("open_in_editor", { ...target, editor }),
+  saveProjectRunCommand: (projectId: string, command: string) => invoke<ProjectRecord>("save_project_run_command", { projectId, command }),
+  startRun: (taskId: string) => invoke<RunInfo>("start_run", { taskId }),
+  stopRun: (sessionId: string) => invoke<RunInfo>("stop_run", { sessionId }),
+  getRun: (taskId: string) => invoke<RunLookup>("get_run", { taskId }),
+  attachRun: (sessionId: string, attachmentId: string, cols: number, rows: number, onFrame: (frame: RunFrame) => void) => {
+    const on_frame = new Channel<RunFrame>();
+    on_frame.onmessage = onFrame;
+    return invoke<RunInfo>("attach_run", { sessionId, attachmentId, cols, rows, onFrame: on_frame });
+  },
+  detachRun: (sessionId: string, attachmentId: string) => invoke<void>("detach_run", { sessionId, attachmentId }),
+  writeRun: (sessionId: string, data: string) => invoke<void>("write_run", { sessionId, data }),
+  resizeRun: (sessionId: string, cols: number, rows: number) => invoke<void>("resize_run", { sessionId, cols, rows }),
   // Terminal output rides a Channel, not React state: PTY bytes stream straight into xterm.
   openTerminal: (taskId: string, cols: number, rows: number, onFrame: (frame: TerminalFrame) => void) => {
     const on_frame = new Channel<TerminalFrame>();

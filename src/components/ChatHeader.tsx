@@ -1,5 +1,6 @@
 import { useState } from "react";
-import type { GitBranches, GitCheckoutKind, ProjectRecord, TaskRecord, TerminalExit } from "../types";
+import type { GitBranches, GitCheckoutKind, ProjectRecord, RunInfo, TaskRecord, TerminalExit } from "../types";
+import { RunButton } from "./RunButton";
 import { BranchPicker } from "./BranchPicker";
 import { Icon } from "./Icons";
 import { MenuButton } from "./ui/MenuButton";
@@ -11,6 +12,11 @@ import type { TaskAction } from "./Sidebar";
 
 interface ChatHeaderProps {
   task: TaskRecord;
+  run?: RunInfo;
+  onSaveRunCommand: (command: string) => Promise<void>;
+  onRun: () => Promise<void>;
+  onStopRun: () => Promise<void>;
+  onShowRunOutput: () => void;
   project?: ProjectRecord;
   /** The chat's checkout when it is a Git repository; `branch` is null on a detached HEAD. */
   git?: { branch: string | null };
@@ -29,7 +35,7 @@ interface ChatHeaderProps {
   onCheckoutBranch: (name: string, kind: GitCheckoutKind) => Promise<void>;
 }
 
-export function ChatHeader({ task, project, git, onListBranches, onCheckoutBranch, changesCount, changesOpen, browserOpen, onToggleChanges, onToggleBrowser, terminal, terminalOpen, onToggleTerminal, onRename, onTaskAction }: ChatHeaderProps) {
+export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStopRun, onShowRunOutput, git, onListBranches, onCheckoutBranch, changesCount, changesOpen, browserOpen, onToggleChanges, onToggleBrowser, terminal, terminalOpen, onToggleTerminal, onRename, onTaskAction }: ChatHeaderProps) {
   const contextMenu = useContextMenu();
   const [renaming, setRenaming] = useState(false);
   const [value, setValue] = useState(task.name);
@@ -69,6 +75,8 @@ export function ChatHeader({ task, project, git, onListBranches, onCheckoutBranc
         </div>
       </div>
       <div className="header-actions">
+        {project && !task.archived && <RunButton key={task.id} project={project} workspacePath={task.workspacePath} run={run}
+          onSave={onSaveRunCommand} onRun={onRun} onStop={onStopRun} onShowOutput={onShowRunOutput} />}
         <Tooltip label="Browser" side="bottom">
           <button type="button" className={`panel-button ${browserOpen ? "active" : ""}`} onClick={onToggleBrowser} aria-label="Browser" aria-pressed={browserOpen}>
             <Icon name="browser" />

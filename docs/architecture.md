@@ -19,7 +19,7 @@ How WackCode's processes fit together, where state lives, and the rules that kee
 
 Each chat worker runs one Pi session in-process. Sub-agents are in-memory child sessions inside the same worker (`subagent-runner.ts`), not separate processes. Helpers are short-lived and do one job each. The dev app runs them from `worker/dist/`; the bundle runs `resources/worker/dist/` on a pinned Node runtime (`runtime-lock.json`).
 
-Native subsystems live in Rust and never in a worker: the per-chat browser (`browser.rs`, a child `WKWebView`), the terminal (`terminal.rs`), computer use (`computer_use/`), the window backdrop (`glass.rs`), and the menu bar duck (`menu_bar.rs`). A worker asks for browser and computer work over the protocol (`browser_request`, `computer_request`); the host does it and enforces the rules.
+Native subsystems live in Rust and never in a worker: the per-chat browser (`browser.rs`, a child `WKWebView`), the terminal (`terminal.rs`), project commands (`run_command.rs`), computer use (`computer_use/`), the window backdrop (`glass.rs`), and the menu bar duck (`menu_bar.rs`). A worker asks for browser and computer work over the protocol (`browser_request`, `computer_request`); the host does it and enforces the rules.
 
 ## Where state lives
 
@@ -53,6 +53,27 @@ The renderer keeps only UI conveniences in `localStorage` (`wackcode:*` keys suc
 2. Register it in `generate_handler!` in `lib.rs`.
 3. Add one typed wrapper in `src/api.ts`.
 4. Add any new plugin permission in `src-tauri/capabilities/default.json`.
+
+## Project Run lifecycle
+
+`RunState` owns one foreground command per canonical workspace folder, separate from chat
+terminals and workers. The registry lock serializes starts; the task lock prevents a launch
+from racing archive/delete/worktree conversion. Commands and working folders are immutable
+runtime snapshots. Only the project's nullable command is persisted, via `MetadataState::mutate`.
+
+Commands run on a PTY through the user's interactive login shell, with the whole command as
+one argument. `pty_output.rs` shares UTF-8 decoding, bounded scrollback and PTY sizing with
+manual terminals. A separate child waiter reports completion independently of PTY EOF.
+Stop signals the foreground process group, then escalates to TERM after two seconds and KILL
+after another second for remaining job/shell groups on the run's PTY, including background
+jobs the foreground command is waiting for. Detached sessions are excluded. The run remains Stopping until cleanup
+finishes, preventing a second launch from overlapping shutdown.
+
+Hiding a panel/window or switching chats keeps a run alive. Archive, delete and moving a chat
+release the old folder only when no unarchived project chat still uses it. Worktree deletion
+stops its run before deleting files. Project removal and app quit also clean up runs; quit
+stops independent checkouts in parallel. Configuration survives restart, sessions/output do
+not. Commands must remain in the foreground; detached daemons are outside this lifecycle.
 
 ## Worker lifecycle (`worker.rs`)
 

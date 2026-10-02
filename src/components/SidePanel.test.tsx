@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CHANGES_VIEW, TERMINAL_VIEW, type SidePanelView } from "../side-panel";
+import { CHANGES_VIEW, TERMINAL_VIEW, RUN_VIEW, type SidePanelView } from "../side-panel";
 import { SidePanel } from "./SidePanel";
 
 afterEach(cleanup);
@@ -11,6 +11,7 @@ const content = (view: SidePanelView) => (
   <p>{view.kind === "changes" ? "Changes view"
     : view.kind === "browser" ? "Browser view"
     : view.kind === "terminal" ? "Terminal view"
+    : view.kind === "run" ? "Run view"
     : `SubAgent view ${view.index}`}</p>
 );
 
@@ -37,6 +38,10 @@ describe("SidePanel", () => {
     expect(screen.getByRole("complementary", { name: "Terminal" })).toBeInTheDocument();
     expect(screen.getByText("Terminal view")).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText("Changes view")).not.toBeInTheDocument());
+
+    view.rerender(panel(RUN_VIEW, "Run"));
+    expect(screen.getByText("Run view")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("Terminal view")).not.toBeInTheDocument());
 
     view.rerender(panel(scout, "SubAgent Scout"));
     expect(screen.getByText("SubAgent view 0")).toBeInTheDocument();

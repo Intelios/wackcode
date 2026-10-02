@@ -6,7 +6,7 @@ import {
 import type { GitChangeFile, GitSyncStatus, ProjectRecord, TaskRecord } from "./types";
 
 function project(id: string, gitRoot: string | null = `/repo/${id}`): ProjectRecord {
-  return { id, name: id, path: `/repo/${id}`, gitRoot, gitHasHead: true, branch: "main", createdAt: "2026-01-01T00:00:00Z" };
+  return { id, name: id, path: `/repo/${id}`, gitRoot, gitHasHead: true, runCommand: null, branch: "main", createdAt: "2026-01-01T00:00:00Z" };
 }
 
 function task(id: string, patch: Partial<TaskRecord> = {}): TaskRecord {

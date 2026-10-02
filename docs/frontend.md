@@ -5,9 +5,9 @@
 ## State and data flow
 
 - **`App.tsx`** owns all cross-cutting state: `data` (the `AppData` from `bootstrap`) and each chat's runtime. Update it immutably through `patchTask`, `patchRuntime` and `setData`.
-- **Events:** `App.tsx` is the only place that listens to Tauri events: `worker-event`, `terminal-event`, `subscription-login-event` and `native-chat-navigation` (the menu bar). A worker protocol change ends in its `worker-event` switch; see [worker.md](worker.md#protocol-changes).
+- **Events:** `App.tsx` is the only place that listens to Tauri events: `worker-event`, `terminal-event`, `run-event`, `subscription-login-event` and `native-chat-navigation` (the menu bar). A worker protocol change ends in its `worker-event` switch; see [worker.md](worker.md#protocol-changes).
 - **`api.ts`** is the only bridge to Rust: one typed `invoke` wrapper per command. Terminal output arrives on a `Channel`, not an event.
-- **Components are presentational.** The exceptions call `api` directly because they wrap one self-contained surface: `SettingsPage.tsx` (and `IntegrationsSection.tsx`, `AboutSection.tsx`), `BrowserPanel.tsx` (positions the native web view), `TerminalPanel.tsx` (streams the PTY) and `markdown-components.tsx` (its link override routes http(s) clicks through `revealPath`; the webview cannot open links itself). Don't add more without the same reason.
+- **Components are presentational.** The exceptions call `api` directly because they wrap one self-contained surface: `SettingsPage.tsx` (and `IntegrationsSection.tsx`, `AboutSection.tsx`), `BrowserPanel.tsx` (positions the native web view), `TerminalPanel.tsx` and `RunPanel.tsx` (stream their PTYs) and `markdown-components.tsx` (its link override routes http(s) clicks through `revealPath`; the webview cannot open links itself). Don't add more without the same reason.
 
 ## Context menus
 
@@ -35,10 +35,10 @@ Rewind seeds are consumed once per chat so returning to it cannot overwrite late
 
 ## Side panel
 
-`SidePanel` shows one `SidePanelView` (`src/side-panel.ts`) at a time: Changes, Browser, Terminal, or one sub-agent's transcript.
+`SidePanel` shows one `SidePanelView` (`src/side-panel.ts`) at a time: Changes, Browser, Terminal, Run, or one sub-agent's transcript.
 
 - A new view is a union member, a component `SidePanel` renders, and a trigger that opens it (`toggleView`).
-- Changes and Terminal are durable: which one is showing is remembered across chats and launches (`wackcode:sidePanel`). Browser and sub-agent views belong to one chat and fall back to the remembered durable view when the chat changes.
+- Changes, Terminal and Run are durable: which one is showing is remembered across chats and launches (`wackcode:sidePanel`). Run follows the selected checkout and restoring it never launches a command. Browser and sub-agent views belong to one chat and fall back to the remembered durable view when the chat changes.
 - Sub-agent transcripts reach the panel only through `watch_subagent` frames, never through snapshots.
 
 ## Git mode
@@ -62,6 +62,20 @@ The user's own shell, in `src-tauri/src/terminal.rs`. The agent never sees it.
 - It is not a worker: it never joins the worker fingerprint and the idle reaper never kills it. It dies only via `kill_for_task` (delete, archive, worktree conversion), when the user ends it, or via `terminate_all` on app exit.
 - Output streams over a `Channel<TerminalFrame>` straight into xterm, never through React state. A ~256 KiB scrollback ring buffer replays on reattach; one lock orders replay and live output so nothing is lost or duplicated.
 - `App.tsx` owns the `terminal-event` listener that drives the header's caret. After a restart, stale frames are filtered out by `sessionId`.
+
+## Project Run commands
+
+The chat header's split Run/Stop control saves one nullable `ProjectRecord.runCommand` through
+`save_project_run_command`. The editor lives beside the button; edits affect only the next run.
+`App` owns launch/stop callbacks, the `run-event` listener and checkout lookup. `run-state.ts`
+reconciles events and invoke replies by generation/revision, retaining removal watermarks so
+late output-state events cannot resurrect a retired session.
+
+`RunPanel` attaches xterm to an existing run with a unique attachment id. Output goes directly
+from a Channel to xterm, never through React. Session and attachment ids guard stale frames;
+detaching a superseded attachment does not disconnect the current one. Input, resize and
+screen clearing work like the manual Terminal. A finished/stopped run keeps its screen until
+another launch. Switching between chats in one checkout reuses the same session.
 
 ## Browser preview
 

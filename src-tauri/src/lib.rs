@@ -11,6 +11,8 @@ mod mcp;
 mod memory;
 mod menu_bar;
 mod models;
+mod pty_output;
+mod run_command;
 mod secrets;
 mod shell_env;
 mod skill_archive;
@@ -46,6 +48,7 @@ pub fn run() {
         .manage(subscriptions::SubscriptionState::default())
         .manage(worker::ManagerState::default())
         .manage(terminal::TerminalState::default())
+        .manage(run_command::RunState::default())
         .manage(menu_bar::MenuBarState::default())
         .setup(|app| {
             let state = MetadataState::load(&app.handle())?;
@@ -230,6 +233,14 @@ pub fn run() {
             terminal::detach_terminal,
             terminal::restart_terminal,
             terminal::close_terminal,
+            run_command::save_project_run_command,
+            run_command::start_run,
+            run_command::stop_run,
+            run_command::get_run,
+            run_command::attach_run,
+            run_command::detach_run,
+            run_command::write_run,
+            run_command::resize_run,
             menu_bar::take_menu_navigation,
             commands::tool_image,
             commands::message_image,
@@ -267,6 +278,7 @@ pub(crate) fn cleanup_before_exit(app: &tauri::AppHandle) {
     app.state::<browser::BrowserManager>().dispose_all();
     computer_use::dispose_all(app);
     app.state::<terminal::TerminalState>().terminate_all();
+    app.state::<run_command::RunState>().terminate_all();
     app.state::<subscriptions::SubscriptionState>()
         .terminate_all();
 }

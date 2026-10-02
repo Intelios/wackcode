@@ -310,6 +310,7 @@ export interface ProjectRecord {
   path: string;
   gitRoot: string | null;
   gitHasHead: boolean;
+  runCommand: string | null;
   branch: string | null;
   createdAt: string;
 }
@@ -1381,3 +1382,20 @@ export type TerminalEvent =
   | { type: "terminal_busy"; taskId: string; sessionId: string; busy: boolean }
   | { type: "terminal_exited"; taskId: string; sessionId: string; code: number; signal: string | null }
   | { type: "terminal_closed"; taskId: string; sessionId: string };
+
+export type RunStatus = "running" | "stopping" | "finished" | "failed" | "stopped";
+/** Runtime-only snapshot of a command, shared by canonical checkout folder. */
+export interface RunInfo {
+  sessionId: string;
+  generation: number;
+  revision: number;
+  cwd: string;
+  command: string;
+  status: RunStatus;
+  exit: TerminalExit | null;
+}
+export interface RunLookup { cwd: string; generation: number; run: RunInfo | null }
+export interface RunFrame { sessionId: string; attachmentId: string; data: string }
+export type RunEvent =
+  | { type: "changed"; run: RunInfo }
+  | { type: "removed"; cwd: string; sessionId: string; generation: number };

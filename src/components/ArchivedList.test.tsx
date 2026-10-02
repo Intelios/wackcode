@@ -7,7 +7,7 @@ import { ArchivedList, type ArchivedTaskAction } from "./ArchivedList";
 afterEach(cleanup);
 
 const projects: ProjectRecord[] = [
-  { id: "p1", name: "TokenTrail", path: "/code/tokentrail", gitRoot: "/code/tokentrail", gitHasHead: true, branch: "master", createdAt: "now" }
+  { id: "p1", name: "TokenTrail", path: "/code/tokentrail", gitRoot: "/code/tokentrail", gitHasHead: true, runCommand: null, branch: "master", createdAt: "now" }
 ];
 
 function task(id: string, extra: Partial<TaskRecord> = {}): TaskRecord {

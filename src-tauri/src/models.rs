@@ -705,6 +705,8 @@ pub struct ProjectRecord {
     pub path: String,
     pub git_root: Option<String>,
     pub git_has_head: bool,
+    #[serde(default)]
+    pub run_command: Option<String>,
     #[serde(default, skip_deserializing)]
     pub branch: Option<String>,
     pub created_at: String,
@@ -1697,4 +1699,46 @@ pub struct ResizeTerminalInput {
     pub task_id: String,
     pub cols: u16,
     pub rows: u16,
+}
+
+/// A foreground project command. Generation orders replacements; revision orders its states.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum RunStatus { Running, Stopping, Finished, Failed, Stopped }
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunInfo {
+    pub session_id: String,
+    pub generation: u64,
+    pub revision: u64,
+    pub cwd: String,
+    pub command: String,
+    pub status: RunStatus,
+    pub exit: Option<TerminalExit>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum RunEvent {
+    Changed { run: RunInfo },
+    #[serde(rename_all = "camelCase")]
+    Removed { cwd: String, session_id: String, generation: u64 },
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunLookup {
+    pub generation: u64,
+    pub cwd: String,
+    pub run: Option<RunInfo>,
+}
+
+/// Output is bound to both the run and the panel attachment receiving it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunFrame {
+    pub session_id: String,
+    pub attachment_id: String,
+    pub data: String,
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CHANGES_VIEW, TERMINAL_VIEW, rememberedView, sameView, swapDirection, swapKey, toggleView, viewForChat, viewKey, type SidePanelView } from "./side-panel";
+import { CHANGES_VIEW, TERMINAL_VIEW, RUN_VIEW, rememberedView, sameView, swapDirection, swapKey, toggleView, viewForChat, viewKey, type SidePanelView } from "./side-panel";
 
 const scout: SidePanelView = { kind: "subagent", taskId: "chat-1", toolCallId: "call-1", index: 0 };
 const sibling: SidePanelView = { kind: "subagent", taskId: "chat-1", toolCallId: "call-1", index: 1 };
@@ -30,6 +30,8 @@ describe("side panel views", () => {
   });
 
   it("slides durable views in header order", () => {
+    expect(swapDirection(RUN_VIEW, CHANGES_VIEW)).toBe(1);
+    expect(swapDirection(CHANGES_VIEW, RUN_VIEW)).toBe(-1);
     expect(swapDirection(CHANGES_VIEW, TERMINAL_VIEW)).toBe(1);
     expect(swapDirection(TERMINAL_VIEW, CHANGES_VIEW)).toBe(-1);
     expect(swapDirection(TERMINAL_VIEW, scout)).toBe(1);
@@ -49,6 +51,7 @@ describe("side panel views", () => {
   it("remembers durable views and closing, but not task-bound views", () => {
     expect(rememberedView(CHANGES_VIEW)).toBe("changes");
     expect(rememberedView(TERMINAL_VIEW)).toBe("terminal");
+    expect(rememberedView(RUN_VIEW)).toBe("run");
     expect(rememberedView(null)).toBeNull();
     expect(rememberedView(scout)).toBeUndefined();
     expect(rememberedView(browser)).toBeUndefined();
@@ -62,6 +65,8 @@ describe("side panel views", () => {
     expect(viewForChat(browser, "chat-2", "terminal")).toBe(TERMINAL_VIEW);
     expect(viewForChat(browser, "chat-2", null)).toBeNull();
     expect(viewForChat(TERMINAL_VIEW, "chat-2", null)).toBe(TERMINAL_VIEW);
+    expect(viewForChat(RUN_VIEW, "chat-2", null)).toBe(RUN_VIEW);
+    expect(viewForChat(browser, "chat-2", "run")).toBe(RUN_VIEW);
     expect(viewForChat(CHANGES_VIEW, "chat-2", null)).toBe(CHANGES_VIEW);
     expect(viewForChat(null, "chat-2", "terminal")).toBeNull();
   });

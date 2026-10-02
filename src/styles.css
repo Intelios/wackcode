@@ -368,6 +368,29 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .panel-button svg { width: 14px; height: 14px; }
 .changes-badge { font-style: normal; font-size: 10px; font-weight: 700; color: var(--wc-on-accent); background: var(--wc-accent); border-radius: 999px; padding: 1px 6px; }
 .panel-button .changes-badge { position: absolute; top: -5px; right: -5px; padding: 1px 4px; }
+
+/* A project command launches from the header; the chevron keeps setup within reach. */
+.project-run-control { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 7px; background: var(--wc-accent-tint); }
+.project-run-control .panel-button { border: 0; background: transparent; color: var(--wc-accent-text); }
+.project-run-control .project-run-main { display: flex; align-items: center; justify-content: center; width: auto; min-width: 62px; padding: 0 9px; gap: 6px; border-radius: 6px 0 0 6px; font-size: 11.5px; font-weight: 650; }
+.project-run-icon { display: inline-flex; }
+.project-run-control .project-run-more { width: 24px; border-left: 1px solid var(--border); border-radius: 0 6px 6px 0; }
+.project-run-more svg { width: 11px; height: 11px; transform: rotate(90deg); }
+.project-run-control.running { background: var(--danger-bg); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
+.project-run-control.running .panel-button { color: var(--danger); }
+.project-run-control .panel-button:hover:not(:disabled) { background: var(--surface-hover); }
+.run-command-editor { width: min(365px, calc(100vw - 32px)); padding: 14px; display: flex; flex-direction: column; gap: 9px; }
+.run-editor-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; margin-bottom: 2px; }
+.run-editor-heading > span { color: var(--text-dim); font-size: 11px; }
+.run-editor-heading strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.run-command-editor label { color: var(--text-soft); font-size: 11.5px; font-weight: 600; }
+.run-command-input { width: 100%; height: 34px; padding: 0 9px; border: 1px solid var(--border-bright); border-radius: 6px; color: var(--text); background: var(--wc-input); font: 12px "SFMono-Regular", Consolas, monospace; }
+.run-command-folder, .run-panel-folder { display: flex; align-items: center; gap: 6px; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); font: 10.5px "SFMono-Regular", Consolas, monospace; }
+.run-command-folder svg, .run-panel-folder svg { flex-shrink: 0; width: 12px; height: 12px; }
+.run-command-help { margin: 0; color: var(--text-dim); font-size: 11.5px; line-height: 1.5; }
+.run-command-error { margin: 0; color: var(--danger); font-size: 11.5px; line-height: 1.5; }
+.run-editor-actions { display: flex; align-items: center; gap: 7px; padding-top: 5px; }
+.run-editor-spacer { flex: 1; }
 .shared-notice { min-height: 32px; padding: 6px 22px; display: flex; align-items: center; gap: 7px; background: #2c2515; border-bottom: 1px solid #493b20; color: #d9c491; font-size: 12px; }
 .shared-notice > span { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--warning); color: #211805; font-weight: 800; font-size: 10px; }
 
@@ -2701,6 +2724,16 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   .terminal-caret, .terminal-caret.busy { animation: none; }
   .terminal-pill.running .terminal-pill-dot { animation: none; }
 }
+
+/* Run shares the terminal palette, with a separate checkout-owned session. */
+.run-panel-meta { flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 7px 13px; border-bottom: 1px solid var(--border); background: var(--wc-panel); }
+.run-panel .terminal-screen { min-width: 0; }
+.run-panel-folder { flex: 1; }
+.run-panel-folder > span { overflow: hidden; text-overflow: ellipsis; }
+.run-panel .panel-title h3 { font-family: "SFMono-Regular", Consolas, monospace; font-size: 11.5px; }
+.run-panel .terminal-pill { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-pill.run-failed { color: var(--danger); }
+.terminal-pill.run-failed .terminal-pill-dot { background: var(--danger); }
 
 /* ── ask_user_question card ────────────────────────── */
 .question-tabs { display: flex; gap: 4px; margin: 4px 0 10px; }

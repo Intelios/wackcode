@@ -6,7 +6,7 @@ import { RepoSwitcher } from "./RepoSwitcher";
 afterEach(cleanup);
 
 function project(id: string, name: string, gitRoot: string | null = `/code/${name}`): ProjectRecord {
-  return { id, name, path: `/code/${name}`, gitRoot, gitHasHead: true, branch: "main", createdAt: "now" };
+  return { id, name, path: `/code/${name}`, gitRoot, gitHasHead: true, runCommand: null, branch: "main", createdAt: "now" };
 }
 
 const projects = [project("a", "alpha"), project("b", "beta"), project("c", "gamma"), project("d", "notes", null)];

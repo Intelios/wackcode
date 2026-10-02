@@ -54,6 +54,7 @@ import {
   type TreeIndex
 } from "./tree.js";
 import {
+  type AutoTitleRequest,
   type CheckpointRef,
   type CommandPresentation,
   type GoalState,
@@ -1331,6 +1332,19 @@ function promptFailed(messages: readonly unknown[]): boolean {
   return lastAssistant?.stopReason === "error" || lastAssistant?.stopReason === "aborted";
 }
 
+/**
+ * Starts a chat's one auto-title request when its opening run carries one. Every way a chat
+ * can begin funnels through here — a plain prompt, a slash command (the expanded line), /init
+ * (the generated prompt), /goal (the objective) — so `source` is always the text the run actually
+ * opens with. Refuses, like the run below it, while the chat has no usable model.
+ */
+function startAutoTitle(request: AutoTitleRequest, source: string): void {
+  if (chatModelMissing() || !piModule || !workerAgentDir || !modelRuntime) return;
+  activeTitleCredential = request.apiKey;
+  activeTitleAuth = request.authPath ? { providerId: request.provider.id, authPath: request.authPath } : undefined;
+  builtins.autoTitle.start(request, source, piModule, workerAgentDir, activeProviderId ?? "", modelRuntime);
+}
+
 async function runPrompt(
   commandId: string,
   runId: string,
@@ -1501,6 +1515,8 @@ async function handle(command: WorkerCommand): Promise<void> {
       }
       if (entry.item.source === "extension" && command.images?.length) throw new Error("Extension commands cannot include images.");
       const line = await expandCatalogCommand(entry, command.args);
+      // A slash command can be a chat's opening run: its title chance labels the expanded line.
+      if (command.autoTitle) startAutoTitle(command.autoTitle, line);
       const producesPrompt = entry.item.source !== "extension";
       await runPrompt(
         command.id,
@@ -1517,6 +1533,8 @@ async function handle(command: WorkerCommand): Promise<void> {
       if (builtins.planMode.getState().mode !== "build") throw new Error("Switch to Build mode before running /init.");
       if (!workspacePath) throw new Error("The workspace is not available for /init.");
       const target = await prepareInitAgents(workspacePath);
+      // /init can be a chat's opening run: its title chance labels the generated prompt.
+      if (command.autoTitle) startAutoTitle(command.autoTitle, target.prompt);
       const outcome = await runPrompt(
         command.id,
         command.runId,
@@ -1579,12 +1597,7 @@ async function handle(command: WorkerCommand): Promise<void> {
       // A mode recorded on the task (or chosen for a draft) is applied before the prompt so
       // the first message of a plan-mode task arrives with the contract already in place.
       if (command.mode) builtins.planMode.setMode(command.mode);
-      // The prompt below refuses a model-less chat, so its auto-title must not start either.
-      if (command.autoTitle && !chatModelMissing() && piModule && workerAgentDir && modelRuntime) {
-        activeTitleCredential = command.autoTitle.apiKey;
-        activeTitleAuth = command.autoTitle.authPath ? { providerId: command.autoTitle.provider.id, authPath: command.autoTitle.authPath } : undefined;
-        builtins.autoTitle.start(command.autoTitle, command.message, piModule, workerAgentDir, activeProviderId ?? "", modelRuntime);
-      }
+      if (command.autoTitle) startAutoTitle(command.autoTitle, command.message);
       await runPrompt(command.id, command.runId, runStartedAt(command.startedAt), command.message, command.images, command.checkpoint, command.literal);
       return;
     } else if (command.type === "resend") {
@@ -1605,6 +1618,8 @@ async function handle(command: WorkerCommand): Promise<void> {
         if (builtins.planMode.getState().mode !== "build") {
           throw new Error("Goal loops don't run while a planning mode is on. Switch to Build first.");
         }
+        // /goal can be a chat's opening run: its title chance labels the objective, the user's own words.
+        if (command.autoTitle) startAutoTitle(command.autoTitle, objective);
         const kickoff = builtins.goal.start(objective);
         await runPrompt(
           command.id,

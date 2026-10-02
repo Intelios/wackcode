@@ -137,7 +137,7 @@ export interface WorkerProvider {
   models: WorkerModel[];
 }
 
-/** Credentials for the one title request, supplied only on the first prompt over stdin. */
+/** Credentials for the one title request, supplied only on the command that opens a chat's first run (a prompt, slash command, /init or /goal) over stdin. */
 export interface AutoTitleRequest {
   attemptId: string;
   provider: WorkerProvider;
@@ -562,8 +562,27 @@ export interface NavigateResult {
 export type WorkerCommand =
   | InitCommand
   | { id: string; type: "list_commands" }
-  | { id: string; type: "execute_command"; commandId: string; args: string; runId: string; startedAt?: number; checkpoint?: CheckpointRef | null; images?: ImageContent[] }
-  | { id: string; type: "init_agents"; runId: string; startedAt?: number; checkpoint?: CheckpointRef | null }
+  | {
+      id: string;
+      type: "execute_command";
+      commandId: string;
+      args: string;
+      runId: string;
+      startedAt?: number;
+      checkpoint?: CheckpointRef | null;
+      images?: ImageContent[];
+      /** The chat's one title chance when this command is its opening run; the worker titles from the expanded line. */
+      autoTitle?: AutoTitleRequest | null;
+    }
+  | {
+      id: string;
+      type: "init_agents";
+      runId: string;
+      startedAt?: number;
+      checkpoint?: CheckpointRef | null;
+      /** The chat's one title chance when /init is its opening run; the worker titles from the generated prompt. */
+      autoTitle?: AutoTitleRequest | null;
+    }
   | { id: string; type: "compact"; runId: string; startedAt?: number; instructions?: string }
   | {
       id: string;
@@ -625,6 +644,8 @@ export type WorkerCommand =
       runId?: string;
       startedAt?: number;
       checkpoint?: CheckpointRef | null;
+      /** "set" only: the chat's one title chance when the goal opens the chat; the worker titles from the objective. */
+      autoTitle?: AutoTitleRequest | null;
     }
   | { id: string; type: "snapshot" }
   /**

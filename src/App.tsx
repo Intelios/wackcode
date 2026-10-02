@@ -1180,7 +1180,8 @@ export default function App() {
       else {
         const command = runtime?.slashCommands?.find((entry) => entry.name === name) ?? draftCommand;
         if (!command) throw new Error("That command changed. Open the command list and try again.");
-        await api.executeCommand({ taskId: id, commandId: command.id, args, startedAt, images });
+        // The display name gives a command-opened chat its "/name args" stand-in title.
+        await api.executeCommand({ taskId: id, commandId: command.id, args, startedAt, images, name });
       }
       clearPreparedDraft();
       return true;

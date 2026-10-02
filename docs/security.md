@@ -22,7 +22,7 @@ Never add a network origin silently; call it out explicitly and update `README.m
 ## Credentials
 
 - API keys and MCP header/env values (`mcp:<id>`) persist only in `secrets.json` (0600). OAuth credentials live only in per-provider 0600 `auth.json` files, never in the Pi CLI's own auth file.
-- A worker receives credentials only over its stdin (`init`, `set_subagents`, `set_mcp`, the first prompt's `autoTitle`), and only the auth paths it needs.
+- A worker receives credentials only over its stdin (`init`, `set_subagents`, `set_mcp`, a first run's `autoTitle`), and only the auth paths it needs.
 - Credentials never go in argv, env vars, `wackcode.json`, Tauri events, or the renderer. The one exception is an MCP env value, which becomes its own stdio server's environment.
 - Workers get the login-shell environment (`shell_env.rs`) with provider keys stripped afterwards (`strip_provider_env`). Keep that stripping in every process that inherits it.
 - Keep both redaction layers: `safeError` in the worker and `redact_and_limit` in Rust.

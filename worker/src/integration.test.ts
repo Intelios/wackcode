@@ -721,6 +721,62 @@ describe("Pi worker integration", () => {
     expect(worker.outputs.some((output) => output.type === "worker_error")).toBe(false);
   });
 
+  it("titles a chat whose opening run is a slash command, /init or /goal", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-title-command-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const prompt = join(workspace, "review.md");
+    await writeFile(prompt, "---\ndescription: Review this work\n---\nReview $ARGUMENTS\n");
+    const resources = { extensions: [], skills: [], prompts: [prompt], themes: [] };
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "title-command-task", undefined, undefined, resources);
+    cleanup.push(() => worker.shutdown());
+    const titleProvider = {
+      id: "title-provider", name: "Title provider", kind: "custom", baseUrl: provider.baseUrl,
+      api: "openai-completions", models: [{ id: "shared-model", name: "Small title model",
+        contextWindow: 16_384, maxTokens: 1_024, reasoning: false, thinkingLevels: ["off"], thinkingLevelMap: {} }]
+    };
+
+    // A template command's expansion is the opening message the title labels.
+    const listedId = crypto.randomUUID();
+    worker.send({ id: listedId, type: "list_commands" });
+    const listed = await worker.waitFor((output) => output.type === "response" && output.id === listedId);
+    const commands = listed.result as unknown as Array<{ id: string; source: string }>;
+    const review = commands.find((entry) => entry.source === "prompt")!;
+    const commandId = crypto.randomUUID();
+    worker.send({ id: commandId, type: "execute_command", commandId: review.id, args: '"the staged diff"', runId: "title-command",
+      autoTitle: { attemptId: "cmd", provider: titleProvider, modelId: "shared-model", apiKey: "title-secret" } });
+    const accepted = await worker.waitFor((output) => output.type === "response" && output.id === commandId);
+    expect(accepted.success).toBe(true);
+    const commandTitle = await worker.waitFor((output) => output.type === "title_result" && output.attemptId === "cmd");
+    expect(commandTitle.title).toBe("Short Chat Title");
+    const commandSource = provider.requests.find((request) => request.authorization === "Bearer title-secret")!;
+    expect(commandSource.text).toContain("Review the staged diff");
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "title-command" && output.state === "idle");
+
+    // /init titles from the generated prompt it opens with.
+    const initId = crypto.randomUUID();
+    worker.send({ id: initId, type: "init_agents", runId: "title-init",
+      autoTitle: { attemptId: "init", provider: titleProvider, modelId: "shared-model", apiKey: "title-secret" } });
+    const initAccepted = await worker.waitFor((output) => output.type === "response" && output.id === initId);
+    expect(initAccepted.success).toBe(true);
+    const initTitle = await worker.waitFor((output) => output.type === "title_result" && output.attemptId === "init");
+    expect(initTitle.title).toBe("Short Chat Title");
+    const initSource = provider.requests.filter((request) => request.authorization === "Bearer title-secret")[1];
+    expect(initSource.text).toContain("Initialize project instructions");
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "title-init" && output.state === "idle");
+
+    // /goal titles from the objective itself, not the kickoff prompt wrapped around it.
+    worker.send({ id: crypto.randomUUID(), type: "goal_control", action: "set", objective: "goal: polish the README", runId: "title-goal", startedAt: Date.now(),
+      autoTitle: { attemptId: "goal", provider: titleProvider, modelId: "shared-model", apiKey: "title-secret" } });
+    const goalTitle = await worker.waitFor((output) => output.type === "title_result" && output.attemptId === "goal");
+    expect(goalTitle.title).toBe("Short Chat Title");
+    const goalSource = provider.requests.filter((request) => request.authorization === "Bearer title-secret")[2];
+    expect(goalSource.text).toContain("goal: polish the README");
+    expect(goalSource.text).not.toContain("Work on it now");
+    await worker.waitFor((output) => output.type === "goal_state" && output.goal?.phase === "complete");
+  });
+
   it("answers an extension dialog raised mid-prompt, and keeps a broken extension non-fatal", async () => {
     const provider = await startMockProvider();
     cleanup.push(provider.close);

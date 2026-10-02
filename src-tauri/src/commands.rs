@@ -2142,6 +2142,9 @@ pub struct ExecuteCommandInput {
     started_at: u64,
     #[serde(default)]
     images: Vec<crate::models::ImageContent>,
+    /// The command's display name, so a chat this command opens gets a "/name args" stand-in title.
+    #[serde(default)]
+    name: Option<String>,
 }
 
 /// Stream one sub-agent's transcript to the side panel as `subagent_stream` events, starting with
@@ -2291,6 +2294,14 @@ pub async fn execute_command(
     if !input.images.is_empty() {
         require_vision(&provider, &task.model_id)?;
     }
+    // A slash command can be a chat's opening run, so it takes the same one title chance a
+    // plain prompt would; the worker titles from the expanded line once it resolves.
+    let (title_attempt, title_config) = begin_auto_title(
+        &app,
+        &state,
+        &input.task_id,
+        &command_opening(input.name.as_deref(), &input.args),
+    )?;
     let api_key = credential_for(&app, &state, &provider)?;
     worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
     set_status(&state, &task.id, TaskStatus::Running)?;
@@ -2299,13 +2310,14 @@ pub async fn execute_command(
         Err(_) => None,
     };
     let run_id = Uuid::new_v4().to_string();
+    let auto_title = finish_auto_title(&app, &state, &task.id, title_attempt, &title_config);
     let result = worker::request(
         &app,
         &task.id,
         json!({
             "id": Uuid::new_v4().to_string(), "type": "execute_command", "commandId": command_id,
             "args": input.args, "startedAt": input.started_at, "runId": run_id,
-            "images": input.images, "checkpoint": checkpoint
+            "images": input.images, "checkpoint": checkpoint, "autoTitle": auto_title
         }),
         REQUEST_TIMEOUT,
     )
@@ -2332,6 +2344,8 @@ pub async fn init_agents(
         return Err("Wait for this chat to finish before running /init.".into());
     }
     validate_init_agents_task(task.project_id.as_deref(), task.mode)?;
+    // /init can be a chat's opening run too; the worker titles from the generated prompt.
+    let (title_attempt, title_config) = begin_auto_title(&app, &state, &task_id, "/init")?;
     let api_key = credential_for(&app, &state, &provider)?;
     worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
     set_status(&state, &task.id, TaskStatus::Running)?;
@@ -2340,12 +2354,13 @@ pub async fn init_agents(
         Err(_) => None,
     };
     let run_id = Uuid::new_v4().to_string();
+    let auto_title = finish_auto_title(&app, &state, &task.id, title_attempt, &title_config);
     let result = worker::request(
         &app,
         &task.id,
         json!({
             "id": Uuid::new_v4().to_string(), "type": "init_agents",
-            "startedAt": started_at, "runId": run_id, "checkpoint": checkpoint
+            "startedAt": started_at, "runId": run_id, "checkpoint": checkpoint, "autoTitle": auto_title
         }),
         REQUEST_TIMEOUT,
     )
@@ -2428,6 +2443,9 @@ pub async fn goal_control(
                 "Goal loops don't run while a planning mode is on. Switch to Build first.".into(),
             );
         }
+        // /goal can be a chat's opening run too; the worker titles from the objective.
+        let (title_attempt, title_config) =
+            begin_auto_title(&app, &state, &task_id, &objective)?;
         let api_key = credential_for(&app, &state, &provider)?;
         worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
         set_status(&state, &task.id, TaskStatus::Running)?;
@@ -2436,9 +2454,11 @@ pub async fn goal_control(
             Err(_) => None,
         };
         let run_id = Uuid::new_v4().to_string();
+        let auto_title = finish_auto_title(&app, &state, &task.id, title_attempt, &title_config);
         let result = worker::request(&app, &task.id, json!({
             "id": Uuid::new_v4().to_string(), "type": "goal_control", "action": "set",
-            "objective": objective, "startedAt": started_at, "runId": run_id, "checkpoint": checkpoint
+            "objective": objective, "startedAt": started_at, "runId": run_id, "checkpoint": checkpoint,
+            "autoTitle": auto_title
         }), REQUEST_TIMEOUT).await;
         if let Err(error) = result {
             let _ = set_status(&state, &task.id, TaskStatus::Idle);
@@ -2475,36 +2495,8 @@ pub async fn prompt(
     let _guard = lock.lock().await;
     let _checkout = checkout_dispatch_guard(&app, &state, &input.task_id).await;
     // A chat gets one chance, consumed durably even when the extension is off or dispatch fails.
-    // This also moves the free fallback rename out of the renderer's asynchronous path.
-    let (title_attempt, title_config, fallback_name) = state.mutate(|data| {
-        let config = data.auto_title.clone();
-        let titles_active = auto_titles_active(&config, &data.subagents);
-        let task = data
-            .tasks
-            .iter_mut()
-            .find(|task| task.id == input.task_id)
-            .ok_or_else(|| "Chat not found".to_string())?;
-        let first = task.auto_title_eligible;
-        if first && task.name == "New chat" {
-            task.name = limit(
-                &message.split_whitespace().collect::<Vec<_>>().join(" "),
-                48,
-            );
-        }
-        let attempt = consume_auto_title_eligibility(task, titles_active);
-        Ok((
-            attempt,
-            config,
-            if first { Some(task.name.clone()) } else { None },
-        ))
-    })?;
-    if let Some(name) = fallback_name {
-        let _ = app.emit(
-            "worker-event",
-            json!({ "type": "title_changed", "taskId": input.task_id, "name": name }),
-        );
-        let _ = crate::menu_bar::refresh(&app);
-    }
+    let (title_attempt, title_config) =
+        begin_auto_title(&app, &state, &input.task_id, &message)?;
     let configured = configure_task(
         app.clone(),
         state.clone(),
@@ -2557,43 +2549,7 @@ pub async fn prompt(
     let started_at = input
         .started_at
         .unwrap_or_else(|| Utc::now().timestamp_millis() as u64);
-    let had_title_attempt = title_attempt.is_some();
-    let auto_title = title_attempt.and_then(|attempt_id| {
-        let data = state.data.lock().ok()?;
-        let provider = data
-            .providers
-            .iter()
-            .find(|item| Some(item.id.as_str()) == title_config.provider_id.as_deref())?;
-        let model_id = title_config.model_id.as_deref()?;
-        if !provider.enabled || !provider.connected || validate_selected_model(provider, model_id).is_err() {
-            return None;
-        }
-        let credential = credential_for(&app, &state, provider).ok()?;
-        let auth_path = if provider.kind == ProviderKind::Subscription {
-            Some(
-                subscriptions::auth_path(&app, &provider.id)
-                    .ok()?
-                    .to_string_lossy()
-                    .into_owned(),
-            )
-        } else {
-            None
-        };
-        Some(
-            json!({ "attemptId": attempt_id, "provider": worker::worker_provider_json(provider),
-            "modelId": model_id, "apiKey": credential, "authPath": auth_path }),
-        )
-    });
-    if had_title_attempt && auto_title.is_none() {
-        let _ = state.mutate(|data| {
-            if let Some(task) = data.tasks.iter_mut().find(|task| task.id == input.task_id) {
-                task.auto_title_attempt_id = None;
-            }
-            Ok(())
-        });
-        let _ = app.emit("worker-event", json!({ "type": "extension_notice", "taskId": input.task_id,
-            "message": "Automatic title could not be generated. Check its model connection in Settings.", "level": "warning" }));
-    }
+    let auto_title = finish_auto_title(&app, &state, &configured.id, title_attempt, &title_config);
     let sent = worker::send(&app, &configured.id, &json!({
         "id": Uuid::new_v4().to_string(), "type": "prompt", "runId": run_id, "message": message,
         "startedAt": started_at, "mode": configured.mode, "images": input.images, "checkpoint": checkpoint,
@@ -2685,6 +2641,109 @@ fn consume_auto_title_eligibility(task: &mut TaskRecord, enabled: bool) -> Optio
     let id = Uuid::new_v4().to_string();
     task.auto_title_attempt_id = Some(id.clone());
     Some(id)
+}
+
+/// Takes a chat's one auto-title chance as a run begins: a still-default "New chat" is renamed
+/// to the opening line (the free fallback rename, kept out of the renderer's asynchronous
+/// path), then eligibility is consumed durably — even when the extension is off or dispatch
+/// later fails. Every path that can open a chat's first run calls this (a plain prompt, a
+/// slash command, /init, /goal), so the chance is spent where the conversation began.
+fn begin_auto_title(
+    app: &AppHandle,
+    state: &State<'_, MetadataState>,
+    task_id: &str,
+    opening: &str,
+) -> Result<(Option<String>, AutoTitleConfig), String> {
+    let (attempt, config, fallback_name) = state.mutate(|data| {
+        let config = data.auto_title.clone();
+        let titles_active = auto_titles_active(&config, &data.subagents);
+        let task = data
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == task_id)
+            .ok_or_else(|| "Chat not found".to_string())?;
+        let first = task.auto_title_eligible;
+        let stand_in = opening.split_whitespace().collect::<Vec<_>>().join(" ");
+        if first && task.name == "New chat" && !stand_in.is_empty() {
+            task.name = limit(&stand_in, 48);
+        }
+        let attempt = consume_auto_title_eligibility(task, titles_active);
+        Ok((
+            attempt,
+            config,
+            if first { Some(task.name.clone()) } else { None },
+        ))
+    })?;
+    if let Some(name) = fallback_name {
+        let _ = app.emit(
+            "worker-event",
+            json!({ "type": "title_changed", "taskId": task_id, "name": name }),
+        );
+        let _ = crate::menu_bar::refresh(app);
+    }
+    Ok((attempt, config))
+}
+
+/// Turns a consumed attempt into the worker's autoTitle payload just before the run is sent:
+/// the title model's connection and credential, or — when that model cannot run — a cleared
+/// attempt and the warning that says why no title is coming.
+fn finish_auto_title(
+    app: &AppHandle,
+    state: &State<'_, MetadataState>,
+    task_id: &str,
+    attempt: Option<String>,
+    config: &AutoTitleConfig,
+) -> Option<Value> {
+    let had_attempt = attempt.is_some();
+    let auto_title = attempt.and_then(|attempt_id| {
+        let data = state.data.lock().ok()?;
+        let provider = data
+            .providers
+            .iter()
+            .find(|item| Some(item.id.as_str()) == config.provider_id.as_deref())?;
+        let model_id = config.model_id.as_deref()?;
+        if !provider.enabled || !provider.connected || validate_selected_model(provider, model_id).is_err() {
+            return None;
+        }
+        let credential = credential_for(app, state, provider).ok()?;
+        let auth_path = if provider.kind == ProviderKind::Subscription {
+            Some(
+                subscriptions::auth_path(app, &provider.id)
+                    .ok()?
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        } else {
+            None
+        };
+        Some(
+            json!({ "attemptId": attempt_id, "provider": worker::worker_provider_json(provider),
+            "modelId": model_id, "apiKey": credential, "authPath": auth_path }),
+        )
+    });
+    if had_attempt && auto_title.is_none() {
+        let _ = state.mutate(|data| {
+            if let Some(task) = data.tasks.iter_mut().find(|task| task.id == task_id) {
+                task.auto_title_attempt_id = None;
+            }
+            Ok(())
+        });
+        let _ = app.emit("worker-event", json!({ "type": "extension_notice", "taskId": task_id,
+            "message": "Automatic title could not be generated. Check its model connection in Settings.", "level": "warning" }));
+    }
+    auto_title
+}
+
+/// The stand-in sidebar name for a slash-command run: "/name args", or just the args when the
+/// display name did not travel with the command. Can come back blank; `begin_auto_title`
+/// then leaves the chat's default name alone.
+fn command_opening(name: Option<&str>, args: &str) -> String {
+    let name = name.map(str::trim).filter(|value| !value.is_empty());
+    match (name, args.trim()) {
+        (Some(name), "") => format!("/{name}"),
+        (Some(name), args) => format!("/{name} {args}"),
+        (None, args) => args.to_string(),
+    }
 }
 
 /// Send a message again as a new version of itself: unchanged (retry) or with new text (edit).
@@ -5118,6 +5177,16 @@ mod tests {
             Some(attempt.as_str())
         );
         assert!(consume_auto_title_eligibility(&mut task, true).is_none());
+    }
+
+    #[test]
+    fn command_opening_builds_the_stand_in_line() {
+        assert_eq!(command_opening(Some("review"), "the diff"), "/review the diff");
+        assert_eq!(command_opening(Some("  init  "), ""), "/init");
+        assert_eq!(command_opening(Some("goal"), " ship it "), "/goal ship it");
+        assert_eq!(command_opening(None, "just args"), "just args");
+        assert_eq!(command_opening(Some("   "), "args"), "args");
+        assert_eq!(command_opening(None, ""), "");
     }
 
     #[test]

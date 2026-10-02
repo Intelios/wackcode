@@ -134,6 +134,9 @@ function ProvidersStage({ live }: { live: boolean }) {
   const models = [50, 36, 44];
   return (
     <svg className={`settings-stage providers-stage ${live ? "live" : ""}`} viewBox="0 0 160 110" aria-hidden="true">
+      <rect className="providers-stage-plate" x="18" y="22" width="46" height="66" rx="11" />
+      <path className="providers-stage-hole" d="M41 41.5a5.5 5.5 0 0 1 2.8 10.2l1.4 8.3h-8.4l1.4-8.3A5.5 5.5 0 0 1 41 41.5z" />
+      {/* Paint the key over the lock face: its inserted tip lands inside the hole at x=42. */}
       <g className="providers-stage-key">
         <path className="providers-stage-shaft" d="M104 50H64M70 50v6M77 50v4" />
         <g className="providers-stage-bow">
@@ -141,8 +144,6 @@ function ProvidersStage({ live }: { live: boolean }) {
           <circle cx="116" cy="50" r="4" />
         </g>
       </g>
-      <rect className="providers-stage-plate" x="18" y="22" width="46" height="66" rx="11" />
-      <path className="providers-stage-hole" d="M41 41.5a5.5 5.5 0 0 1 2.8 10.2l1.4 8.3h-8.4l1.4-8.3A5.5 5.5 0 0 1 41 41.5z" />
       <circle className="providers-stage-led" cx="41" cy="76" r="2.6" />
       {models.map((width, index) => (
         <rect key={index} className="providers-stage-model" x="78" y={70 + index * 9} width={width} height="4" rx="2" style={{ "--k": index } as React.CSSProperties} />

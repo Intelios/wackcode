@@ -115,6 +115,61 @@ describe("plan-mode tool policy", () => {
     expect(findBlockedCommandSegment("cat a | grep b")).toBeUndefined();
   });
 
+  it("lets read-only agents run named test scripts and local test runners", () => {
+    for (const command of [
+      "pnpm test:web",
+      "pnpm test:worker",
+      "pnpm test:rust",
+      "pnpm run test:unit -- --runInBand",
+      "pnpm --dir worker test",
+      "pnpm -C 'test fixture' run test:unit",
+      "pnpm --dir=worker test:integration",
+      "pnpm --filter '@app/core' test",
+      "pnpm -F '@app/core' run test:unit",
+      "pnpm -r test",
+      "pnpm -w check",
+      "pnpm exec vitest run src/example.test.ts",
+      "pnpm --dir worker exec jest --runInBand",
+      "pnpm exec tsc --noEmit",
+      "npm run test:unit -- --runInBand",
+      "npm --prefix worker test",
+      "npm --workspace '@app/core' run test:unit",
+      "python3 -m pytest tests/",
+      "cargo test --manifest-path src-tauri/Cargo.toml",
+    ]) {
+      expect(isSafeCommand(command), command).toBe(true);
+      expect(readOnlyDecision("bash", { command }, "/project"), command).toBeUndefined();
+    }
+  });
+
+  it("keeps test command support limited to checks, without shell escapes or arbitrary execution", () => {
+    for (const command of [
+      "pnpm run build",
+      "pnpm run testevil",
+      "pnpm run test:",
+      "pnpm --dir worker add lodash",
+      "pnpm --dir",
+      "pnpm --dir= test",
+      "pnpm --dir --filter test",
+      "pnpm --unknown test",
+      "pnpm exec rm keep.txt",
+      "pnpm exec node script.js",
+      "pnpm exec cargo build",
+      "pnpm exec tsc --noEmit --incremental",
+      "pnpm dlx vitest run",
+      "npm exec vitest run",
+      "npm --prefix worker audit fix",
+      "python3 -m other_module",
+      "pnpm test:web --fix",
+      "pnpm test:web && rm keep.txt",
+      "pnpm test:web > result.txt",
+      "pnpm test:web $(touch keep.txt)",
+    ]) {
+      expect(isSafeCommand(command), command).toBe(false);
+      expect(readOnlyDecision("bash", { command }, "/project"), command).toMatchObject({ block: true });
+    }
+  });
+
   it("permits reviewed gh read paths only when they return --json", () => {
     const safe = { gh: ["pr view", "issue list"] };
     expect(isSafeCommand("gh pr view 12 --json title,body", safe)).toBe(true);

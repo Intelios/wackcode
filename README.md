@@ -105,7 +105,7 @@ Git mode works on a project's own folder. A chat that runs in a worktree keeps i
 Switch on sub-agents in **Settings › Packages** and the agent can hand self-contained tasks to helpers with their own context windows, one at a time or several in parallel (up to 8; 4 by default). WackCode ships three roles:
 
 - **Scout:** read-only reconnaissance, including reading docs on the web.
-- **Reviewer:** read-only code review.
+- **Reviewer:** read-only code review, with tests and checks to verify the changes.
 - **Worker:** makes edits.
 
 You can add your own roles and give each one its own model. Each helper appears as a chip in the chat; click it to watch its reasoning, tool calls and answer live in the side panel, along with its token use and cost. Sub-agents are off by default and only used when you ask, because every one costs extra model usage.

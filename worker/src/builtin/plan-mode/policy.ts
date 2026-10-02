@@ -375,7 +375,7 @@ function isSafeStructuredCommand(
   args: string[],
   safeSubcommands: SafeSubcommands,
   workingDirectory?: string,
-) {
+): boolean {
   if (command === "git") return isSafeGitCommand(args, safeSubcommands, workingDirectory);
   if (command === "gh") return isSafeGhCommand(args, safeSubcommands);
 
@@ -391,6 +391,7 @@ function isSafeStructuredCommand(
   }
   if (["node", "python", "python3", "tsc", "biome", "ruff", "ty"].includes(command)) {
     if (args.includes("--version")) return true;
+    if ((command === "python" || command === "python3") && args[0] === "-m" && args[1] === "pytest") return true;
     return (
       command === "tsc" &&
       args.includes("--noEmit") &&
@@ -406,17 +407,54 @@ function isSafeStructuredCommand(
     );
   }
   if (command === "npm" || command === "pnpm") {
-    const subcommandArgs = subcommandIndex >= 0 ? args.slice(subcommandIndex + 1) : [];
-    if (subcommand === "audit" && subcommandArgs.includes("fix")) return false;
-    if (["list", "ls", "view", "info", "search", "outdated", "audit", "test"].includes(subcommand ?? "")) {
-      return true;
-    }
-    return subcommand === "run" && ["test", "check", "typecheck", "lint"].includes(subcommandArgs[0] ?? "");
+    return isSafePackageManagerCommand(command, args, safeSubcommands, workingDirectory);
   }
   if (["cargo", "go", "pytest", "vitest", "jest"].includes(command)) {
     return ["test", "check"].includes(subcommand ?? "") || ["pytest", "vitest", "jest"].includes(command);
   }
   return false;
+}
+
+/** Test scripts may be named `test:web` or `test:unit`, and monorepos select a package before
+ * the command. Consume only known selectors so a directory/filter isn't mistaken for the
+ * script. These scripts, like `test`, can write test artifacts; this is not a sandbox.
+ * `pnpm exec` only permits local check/test runners, never arbitrary executables or dlx. */
+function isSafePackageManagerCommand(
+  command: "npm" | "pnpm",
+  args: string[],
+  safeSubcommands: SafeSubcommands,
+  workingDirectory?: string,
+): boolean {
+  const selectors = command === "pnpm" ? ["--dir", "-C", "--filter", "-F"] : ["--prefix", "--workspace", "-w"];
+  const flags = command === "pnpm" ? ["--silent", "-s", "--recursive", "-r", "--workspace-root", "-w"] : ["--silent", "-s"];
+  let index = 0;
+  while (args[index]?.startsWith("-")) {
+    const option = args[index];
+    if (selectors.includes(option)) {
+      const value = args[index + 1];
+      if (!value || value.startsWith("-")) return false;
+      index += 2;
+    } else if (selectors.some((selector) => option.startsWith(`${selector}=`) && option.length > selector.length + 1)) {
+      index += 1;
+    } else if (flags.includes(option)) {
+      index += 1;
+    } else {
+      return false;
+    }
+  }
+  const action = args[index];
+  const actionArgs = args.slice(index + 1);
+  const isCheckScript = (name: string | undefined) =>
+    name !== undefined && (/^test(?::[A-Za-z0-9][\w:.-]*)?$/.test(name) || ["check", "typecheck", "lint"].includes(name));
+  if (action === "run") return isCheckScript(actionArgs[0]);
+  if (isCheckScript(action)) return true;
+  if (command === "pnpm" && action === "exec") {
+    const runner = actionArgs[0];
+    if (!runner || !["vitest", "jest", "pytest", "tsc", "cargo", "go"].includes(runner)) return false;
+    return isSafeStructuredCommand(runner, actionArgs.slice(1), safeSubcommands, workingDirectory);
+  }
+  if (action === "audit" && actionArgs.includes("fix")) return false;
+  return ["list", "ls", "view", "info", "search", "outdated", "audit"].includes(action ?? "");
 }
 
 function isSafeGitCommand(args: string[], safeSubcommands: SafeSubcommands, workingDirectory?: string) {

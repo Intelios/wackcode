@@ -457,6 +457,8 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
             ] })]
         : lastUserText.startsWith("subagent guard")
           ? [toolCall("subagent", { agent: "scout", task: "child-rm: tidy up" })]
+        : lastUserText.startsWith("subagent test: ")
+          ? [toolCall("subagent", { agent: "reviewer", task: `child-test: ${lastUserText.slice("subagent test: ".length)}` })]
         : lastUserText.startsWith("subagent plan")
           ? [toolCall("subagent", { agent: "worker", task: "child-write: planned" })]
         : lastUserText.startsWith("subagent fetch")
@@ -474,6 +476,8 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
           ? [toolCall("web_fetch", { url: lastUserText.slice("child-fetch: ".length) })]
         : lastUserText.startsWith("child-rm")
           ? [toolCall("bash", { command: "rm -f keep.txt" })]
+        : lastUserText.startsWith("child-test: ")
+          ? [toolCall("bash", { command: lastUserText.slice("child-test: ".length) })]
         : lastUserText.startsWith("child-write: ")
           ? [toolCall("write", { path: `${lastUserText.slice("child-write: ".length)}.txt`, content: "from a sub-agent\n" })]
           : [toolCall("write", { path: `${suffix}.txt`, content: `changed by ${suffix}\n` })];
@@ -2959,6 +2963,43 @@ describe("sub-agents", () => {
     expect(subagentResult(worker)?.details.results.map((child) => child.status)).toEqual(["aborted", "aborted", "aborted", "aborted"]);
     expect(provider.requests.filter((request) => request.text.startsWith("child-wait")).map((request) => request.text).sort()).toEqual(["child-wait: 0", "child-wait: 1"]);
     expect(worker.outputs.filter((output) => output.type === "worker_error")).toEqual([]);
+  });
+
+  it.each([
+    { mode: "build" as TaskMode, passes: true },
+    { mode: "build" as TaskMode, passes: false },
+    { mode: "plan" as TaskMode, passes: true },
+  ])("lets the reviewer run a named test script in $mode and receive its result (passes=$passes)", async ({ mode, passes }) => {
+    const reviewer = { ...scout, name: "reviewer", prompt: "REVIEWER-PROMPT-MARKER. Run relevant tests." };
+    const { provider, workspace, worker } = await start(`subagents-test-${mode}-${passes}`, {
+      subagents: config({ agents: [reviewer] }),
+    }, mode);
+    const fixture = join(workspace, "test fixture");
+    await mkdir(fixture);
+    await writeFile(join(fixture, "package.json"), JSON.stringify({
+      private: true, scripts: { "test:unit": "node --test --test-reporter=tap fixture.test.mjs" },
+    }));
+    await writeFile(join(fixture, "fixture.test.mjs"), `
+      import test from 'node:test';
+      import assert from 'node:assert/strict';
+      test('reviewer-test-evidence', () => assert.equal(${passes}, true));
+    `);
+    const command = "pnpm --dir 'test fixture' run test:unit";
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: `subagent test: ${command}` });
+    await worker.waitFor((output) => emitted(output) && subagentResult(worker) !== undefined);
+
+    const requests = childRequests(provider, "REVIEWER-PROMPT-MARKER");
+    expect(requests).toHaveLength(2);
+    expect(offered(requests[0])).toContain("bash");
+    expect(offered(requests[0])).not.toContain("write");
+    expect(offered(requests[0])).not.toContain("edit");
+    const messages = requests[1].body.messages as Array<{ role: string; content?: string }>;
+    const result = messages.find((message) => message.role === "tool")?.content ?? "";
+    expect(result).toContain("reviewer-test-evidence");
+    expect(result).not.toContain("This sub-agent is read-only");
+    if (passes) expect(result).toContain("# fail 0");
+    else expect(result).toContain("Command exited with code 1");
+    expect(subagentResult(worker)?.details.results[0].activity).toEqual([{ tool: "bash", subject: command }]);
   });
 
   it("blocks a read-only sub-agent's mutating command, and refuses editing agents in Plan mode", async () => {

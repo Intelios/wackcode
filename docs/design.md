@@ -4,7 +4,7 @@ The principles are in [AGENTS.md](../AGENTS.md#design). This is how to follow th
 
 ## Character
 
-WackCode is a dark, compact macOS workspace with a lime accent (`#c2ee4a` on `#111310` by default), a duck mascot (the app icon and the menu bar; `DuckMark` bobs as if afloat on the boot screen), and a robot for sub-agents (`RobotMark`). Ultra Plan gets its own warm, fiery treatment so it never reads as ordinary Plan. New surfaces should feel like they belong to this cast rather than to a component library.
+WackCode is a dark, compact macOS workspace with a lime accent (`#c2ee4a` on `#111310` by default), a duck mascot (the app icon and the menu bar; `DuckMark` bobs as if afloat on the boot screen and ponders — head tilting, bubbles rising — beside reasoning rows in `PonderingDuck`), and a robot for sub-agents (`RobotMark`). Ultra Plan gets its own warm, fiery treatment so it never reads as ordinary Plan. New surfaces should feel like they belong to this cast rather than to a component library.
 
 ## Type
 

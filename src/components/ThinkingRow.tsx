@@ -3,6 +3,7 @@ import { formatRunDuration, thinkingPreview } from "../chat-utils";
 import { useFollowScroll } from "../hooks/useFollowScroll";
 import { useSmoothText } from "../hooks/useSmoothText";
 import { Markdown } from "./Markdown";
+import { PonderingDuck } from "./PonderingDuck";
 import { Icon } from "./Icons";
 
 /**
@@ -72,7 +73,7 @@ export function ThinkingRow({ text, durationMs, startedAt, live = false, expansi
   return (
     <div className={`thinking-row ${open ? "open" : ""}`}>
       <button type="button" className="thinking-head" onClick={toggle} aria-expanded={open}>
-        <Icon name="spark" className="thinking-icon" />
+        <PonderingDuck live={live} className="thinking-icon" />
         {live
           ? <span className="thinking-shimmer">Thinking…</span>
           : <span>{durationMs !== undefined ? `Thought for ${formatDuration(durationMs)}` : "Reasoning"}</span>}

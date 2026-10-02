@@ -68,6 +68,14 @@ describe("ThinkingRow live timer", () => {
     expect(screen.getByRole("button", { name: "Thought for 4s" })).toBeInTheDocument();
   });
 
+  it("animates its duck mark only while live", () => {
+    const view = render(<ThinkingRow text="" live startedAt={8_000} />);
+    const duck = () => document.querySelector(".ponder-duck");
+    expect(duck()).toHaveClass("live");
+    view.rerender(<ThinkingRow text="" durationMs={4_200} />);
+    expect(duck()).not.toHaveClass("live");
+  });
+
   it("uses the block's original start when an exploration group is opened later", () => {
     render(<ExploreGroup group={{ key: "read-a", items: [
       { key: "a", block: { type: "tool-call", toolName: "read", arguments: { path: "a.ts" } }, live: false, streaming: false },

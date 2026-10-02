@@ -3,6 +3,7 @@ import { DEFAULT_ACCENT, DEFAULT_BACKGROUND, THEME_PRESETS, clampBackground, res
 import { DEFAULT_AGENT_NAME, agentName } from "../agentName";
 import type { AppearanceConfig, BackdropMode, GlassStyle } from "../types";
 import { Icon } from "./Icons";
+import { PonderingDuck } from "./PonderingDuck";
 import { BackdropCropEditor } from "./BackdropCropEditor";
 import { Tooltip } from "./ui/Tooltip";
 
@@ -349,7 +350,7 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrl, 
                     ) : (
                       <>
                         <span className="mini-thinking">
-                          <Icon name="spark" className="mini-thinking-icon" />
+                          <PonderingDuck live className="mini-thinking-icon" />
                           <span className="mini-thinking-label">Thinking…</span>
                           {on && <span className="mini-thinking-gist">weighing two approaches</span>}
                         </span>

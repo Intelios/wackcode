@@ -580,6 +580,38 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 }
 .thinking-head:hover { color: var(--text-soft); }
 .thinking-icon { width: 13px; height: 13px; color: var(--wc-accent); opacity: .8; }
+
+/* The reasoning row's mark (PonderingDuck.tsx): the duck's head tilts side to side while it
+   thinks and thought bubbles trail up-right and pop; at rest the duck is upright and the trail
+   stays as a faint ghost, so the icon still reads as thinking rather than a random duck.
+   `overflow: visible` lets the top bubble poke a little above the 13px box without moving the row. */
+.ponder-duck { overflow: visible; }
+.ponder-duck .ponder-body, .ponder-duck .ponder-bubble { transform-box: fill-box; }
+.ponder-duck .ponder-body { transform-origin: 50% 85%; }
+.ponder-duck .ponder-bubble { transform-origin: center; fill: currentColor; opacity: .5; }
+.ponder-duck.live .ponder-body { animation: ponder-tilt 2.6s ease-in-out infinite; }
+/* `backwards` fills the keyframe's hidden start through each bubble's stagger delay. */
+.ponder-duck.live .ponder-bubble { animation: ponder-bubble 2.6s ease-out infinite backwards; }
+.ponder-duck.live .ponder-bubble:nth-child(2) { animation-delay: .45s; }
+.ponder-duck.live .ponder-bubble:nth-child(3) { animation-delay: .9s; }
+/* A puzzled head-cock: hold a tilt, swing through to the other side, hold, come back. */
+@keyframes ponder-tilt {
+  0%, 30% { transform: rotate(-9deg); }
+  50%, 80% { transform: rotate(7deg) translateY(-.4px); }
+  100% { transform: rotate(-9deg); }
+}
+@keyframes ponder-bubble {
+  0% { opacity: 0; transform: scale(.2); }
+  25% { opacity: .95; transform: scale(1); }
+  70% { opacity: .95; transform: translateY(-1.2px) scale(1); }
+  82% { opacity: 0; transform: translateY(-1.6px) scale(1.5); }
+  100% { opacity: 0; transform: scale(.2); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ponder-duck, .ponder-duck .ponder-body, .ponder-duck .ponder-bubble { animation: none; }
+  /* Still end state: live rows keep their bubbles so live and rest stay distinguishable. */
+  .ponder-duck.live .ponder-bubble { opacity: .9; }
+}
 .thinking-head .tool-chevron { width: 11px; height: 11px; transition: transform .15s var(--ease); }
 .thinking-row.open .thinking-head .tool-chevron { transform: rotate(90deg); }
 .thinking-head > span, .thinking-head > svg { flex-shrink: 0; }
@@ -3213,7 +3245,7 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   border: 1px solid color-mix(in srgb, var(--wc-accent) 22%, var(--border));
 }
 .mini-thinking { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--text-dim); min-width: 0; }
-.mini-thinking-icon { width: 11px; height: 11px; color: var(--wc-accent); opacity: .8; flex: 0 0 auto; }
+.mini-thinking-icon { width: 11px; height: 11px; color: var(--wc-accent); opacity: .8; flex: 0 0 auto; overflow: visible; }
 .mini-thinking-label { flex: 0 0 auto; }
 .mini-thinking-gist { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; opacity: .8; }
 .mini-tool { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--text-dim); min-width: 0; }

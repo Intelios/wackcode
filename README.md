@@ -32,7 +32,7 @@ Everything runs locally. Your conversations go straight from your Mac to the mod
 
 ### Chats, projects and worktrees
 
-Add a project folder with <kbd>⌘ O</kbd> and start a chat with <kbd>⌘ N</kbd>. A new chat opens as a draft where you pick the project and choose **Local** (work in the folder itself) or **Worktree** (work in a separate Git worktree, so parallel chats don't collide). A chat can also run without a project, in its own scratch folder.
+Add a project folder with <kbd>⌘ O</kbd> and start a chat with <kbd>⌘ N</kbd>. A new chat opens as a draft where you pick the project from a searchable list (pinned projects first, and you can pin from the list) and choose **Local** (work in the folder itself) or **Worktree** (work in a separate Git worktree, so parallel chats don't collide). A chat can also run without a project, in its own scratch folder.
 
 Each chat keeps its unsent text and attachments while the app is running. Switch chats or open a new one with <kbd>⌘ N</kbd>, then return to pick up your draft.
 

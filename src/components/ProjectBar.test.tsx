@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ProjectRecord } from "../types";
 import { ProjectBar } from "./ProjectBar";
@@ -11,6 +11,8 @@ const projects: ProjectRecord[] = [
   { id: "p2", name: "scratch-nogit", path: "/tmp/scratch-nogit", gitRoot: null, gitHasHead: false, runCommand: null, branch: null, createdAt: "now" }
 ];
 
+const noPins = new Set<string>();
+
 function Harness({ initialProjectId = "p1", worktreeable = true }: { initialProjectId?: string | null; worktreeable?: boolean }) {
   const [projectId, setProjectId] = useState<string | null>(initialProjectId);
   const [useWorktree, setUseWorktree] = useState(false);
@@ -20,7 +22,9 @@ function Harness({ initialProjectId = "p1", worktreeable = true }: { initialProj
       projects={list}
       projectId={projectId}
       useWorktree={useWorktree}
+      pinned={noPins}
       onSelectProject={setProjectId}
+      onSetPinned={() => undefined}
       onToggleWorktree={setUseWorktree}
       onAddProject={() => undefined}
       onListBranches={async () => ({ current: "master", branches: [] })}
@@ -36,14 +40,16 @@ describe("ProjectBar", () => {
     expect(screen.getByText("master")).toBeInTheDocument();
   });
 
-  it("lists projects, No project, and Add folder in the picker", () => {
+  it("lists projects, No project, and Add project in the picker", () => {
     const selected: (string | null)[] = [];
     render(
       <ProjectBar
         projects={projects}
         projectId="p1"
         useWorktree={false}
+        pinned={noPins}
         onSelectProject={(id) => selected.push(id)}
+        onSetPinned={() => undefined}
         onToggleWorktree={() => undefined}
         onAddProject={() => undefined}
         onListBranches={async () => ({ current: "master", branches: [] })}
@@ -51,8 +57,18 @@ describe("ProjectBar", () => {
       />
     );
     fireEvent.click(screen.getByRole("button", { name: /TokenTrail/ }));
-    fireEvent.click(screen.getByText("No project"));
+    const dialog = screen.getByRole("dialog", { name: "Choose project" });
+    expect(within(dialog).getByText("scratch-nogit")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: /Add project/ })).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByText("No project"));
     expect(selected).toEqual([null]);
+  });
+
+  it("switches the trigger to the chosen project", () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: /Switch project/ }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Choose project" })).getByText("scratch-nogit"));
+    expect(screen.getByRole("button", { name: /Switch project/ })).toHaveAccessibleName("Project: scratch-nogit. Switch project");
   });
 
   it("shows No project and hides the branch when no project is selected", () => {

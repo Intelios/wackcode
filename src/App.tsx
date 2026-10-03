@@ -88,6 +88,7 @@ import { Composer } from "./components/Composer";
 import { Icon } from "./components/Icons";
 import { DuckMark } from "./components/DuckMark";
 import { ProjectBar } from "./components/ProjectBar";
+import { TextSwap } from "./components/TextSwap";
 import type { McpActions } from "./components/McpSection";
 import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar, NO_PROJECT_KEY, type ProjectAction, type TaskAction } from "./components/Sidebar";
@@ -2899,7 +2900,9 @@ export default function App() {
                   animate={{ opacity: 1, transition: { duration: 0.25, ease: EASE } }}
                   exit={{ opacity: 0, y: -56, transition: { duration: 0.22, ease: EASE } }}
                 >
-                  {draftProject ? `What should we build in ${draftProject.name}?` : "What should we build?"}
+                  {draftProject
+                    ? <>What should we build in <TextSwap key={composerDraftKey} text={draftProject.name} swapKey={draftProject.id} variant="rise" />?</>
+                    : "What should we build?"}
                 </motion.h1>
               )}
             </AnimatePresence>
@@ -2923,7 +2926,9 @@ export default function App() {
                   projects={data.projects}
                   projectId={draft?.projectId ?? null}
                   useWorktree={draft?.useWorktree ?? false}
+                  pinned={pinnedProjects}
                   onSelectProject={setDraftProject}
+                  onSetPinned={setProjectPinned}
                   onToggleWorktree={setDraftWorktree}
                   onAddProject={() => void addProject()}
                   onListBranches={listProjectBranches}

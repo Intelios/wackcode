@@ -26,6 +26,10 @@ updates capture their originating key, so a delayed send, file read or queue res
 change another chat's draft. Deleting a chat removes its draft; app exit discards all drafts.
 Rewind seeds are consumed once per chat so returning to it cannot overwrite later edits.
 
+## New-chat project picker
+
+`ProjectBar` (the composer's `header` on the welcome screen) hosts `ProjectPicker`, `BranchPicker` and the Local/Worktree toggle. The picker reads and writes the same `pinnedProjects` set as the sidebar and Git mode's `RepoSwitcher`, so a pin made anywhere shows everywhere; it never keeps its own copy. Its display rules (`shortPath`, `monogram`, search) are pure functions in `project-display.ts`. ⌘O stays a global shortcut in `App`; the picker's footer only calls `onAddProject`.
+
 ## Attachments
 
 - Images ride `images` through `api.ts` to the worker, and reach only models with Vision on.

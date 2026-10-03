@@ -13,6 +13,7 @@ import type { MenuEntry } from "./ui/Menu";
 import { MenuButton } from "./ui/MenuButton";
 import { Tooltip } from "./ui/Tooltip";
 import { useConfirmAction } from "./ui/useConfirmAction";
+import { TextSwap } from "./TextSwap";
 
 export type TaskAction = "rename" | "worktree" | "fork" | "reveal" | "copy" | "archive" | "unarchive" | "delete" | "delete-direct";
 export type ProjectAction = "reveal" | "remove" | "pin" | "unpin";
@@ -32,6 +33,8 @@ interface SidebarProps {
   archivedOpen: boolean;
   /** Task IDs that have a pending extension dialog waiting for a response. */
   pendingDialogTaskIds: ReadonlySet<string>;
+  /** Per-chat nonce bumping when the title model names it: the row's name crossfades. */
+  titlePulses: Record<string, number>;
   /** Group keys (project ids or NO_PROJECT_KEY) whose chats are hidden. */
   collapsedProjectIds: ReadonlySet<string>;
   onSelectTask: (id: string) => void;
@@ -60,7 +63,7 @@ const pageVariants = {
   exit: ({ direction, reduce }: { direction: 1 | -1; reduce: boolean }) => (reduce ? { opacity: 0 } : { opacity: 0, x: -16 * direction })
 };
 
-export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, archivedOpen, pendingDialogTaskIds, collapsedProjectIds, onSelectTask, onNewChat, onNewDraft, onAddProject, onToggleArchived, onToggleProjectCollapsed, onOpenSettings, onTaskAction, onProjectAction, onRenameTask, onArchiveAll, onDeleteAllArchived, git, onToggleGit }: SidebarProps) {
+export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, archivedOpen, pendingDialogTaskIds, titlePulses, collapsedProjectIds, onSelectTask, onNewChat, onNewDraft, onAddProject, onToggleArchived, onToggleProjectCollapsed, onOpenSettings, onTaskAction, onProjectAction, onRenameTask, onArchiveAll, onDeleteAllArchived, git, onToggleGit }: SidebarProps) {
   const contextMenu = useContextMenu();
   const [renamingId, setRenamingId] = useState<string>();
   const [renameValue, setRenameValue] = useState("");
@@ -153,7 +156,7 @@ export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, arc
         <span className={`task-status ${task.lastError ? "error" : task.status}`} />
         <span className="task-details">
           <span className="task-label">
-            <span className="task-name">{task.name}</span>
+            <span className="task-name"><TextSwap text={task.name} swapKey={titlePulses[task.id] ?? 0} variant="row" /></span>
             {pendingDialogTaskIds.has(task.id) && <span className="sidebar-question-dot" title="Waiting for your answer" />}
           </span>
           <span className="task-meta">

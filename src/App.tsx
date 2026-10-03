@@ -239,6 +239,9 @@ export default function App() {
   const browserRestoreWidth = useRef(430);
   /** Live terminal sessions by chat id — powers the header's caret hint while the panel is hidden. */
   const [terminals, setTerminals] = useState<Record<string, { sessionId: string; busy: boolean; exit: { code: number; signal: string | null } | null }>>({});
+  /** Per-chat nonce bumped when the title model names it — drives the header's swipe + glint
+   *  and the sidebar row's crossfade (TextSwap keys on it). */
+  const [titlePulses, setTitlePulses] = useState<Record<string, number>>({});
   const [runs, setRuns] = useState(EMPTY_RUN_REGISTRY);
   const [runFolder, setRunFolder] = useState<{ taskId: string; workspacePath: string; cwd: string }>();
   /** Bumped to watch the shown sub-agent again (a failed watch, a gap, a restarted worker). */
@@ -749,6 +752,12 @@ export default function App() {
       if (payload.type === "usage_record") return;
       if (payload.type === "title_changed") {
         patchTask(taskId, { name: payload.name });
+        // Only the model's title animates: the opening-line stand-in and manual renames
+        // update instantly. Same tick → the pulse and the name land in one render, so the
+        // exiting span still shows the old name.
+        if (payload.source === "auto") {
+          setTitlePulses((current) => ({ ...current, [taskId]: (current[taskId] ?? 0) + 1 }));
+        }
         return;
       }
       if (payload.type === "ready" || payload.type === "snapshot") {
@@ -2174,6 +2183,11 @@ export default function App() {
       delete next[taskId];
       return next;
     });
+    setTitlePulses((current) => {
+      const next = { ...current };
+      delete next[taskId];
+      return next;
+    });
     selectAfterRemoval(taskId);
   }
 
@@ -2615,6 +2629,7 @@ export default function App() {
         selectedTaskId={selectedTaskId}
         archivedOpen={archivedOpen}
         pendingDialogTaskIds={pendingDialogTaskIds}
+        titlePulses={titlePulses}
         collapsedProjectIds={collapsedProjects}
         onSelectTask={selectTask}
         onNewChat={(project) => { closeGit(); openDraft(project?.id ?? null); }}
@@ -2660,6 +2675,7 @@ export default function App() {
               onToggleTerminal={toggleTerminal}
               onRename={(name) => void renameTask(selectedTask.id, name)}
               onTaskAction={(task, action) => void taskAction(task, action)}
+              titlePulse={titlePulses[selectedTask.id] ?? 0}
               />
             </motion.div>
             {sharedWorkers.length > 0 && <div className="shared-notice"><span>!</span><strong>{sharedWorkers[0].name}</strong> is also running in this folder. File edits are shared.</div>}

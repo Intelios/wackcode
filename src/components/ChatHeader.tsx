@@ -5,6 +5,7 @@ import { BranchPicker } from "./BranchPicker";
 import { Icon } from "./Icons";
 import { MenuButton } from "./ui/MenuButton";
 import { Tooltip } from "./ui/Tooltip";
+import { TextSwap } from "./TextSwap";
 import { chatMenu } from "./chat-menu";
 import { useContextMenu } from "./ui/ContextMenu";
 import type { TaskAction } from "./Sidebar";
@@ -31,11 +32,13 @@ interface ChatHeaderProps {
   onToggleTerminal: () => void;
   onRename: (name: string) => void;
   onTaskAction: (task: TaskRecord, action: TaskAction) => void;
+  /** Bumps when the title model names the chat: the title swipes to the new name and glints. */
+  titlePulse?: number;
   onListBranches: () => Promise<GitBranches>;
   onCheckoutBranch: (name: string, kind: GitCheckoutKind) => Promise<void>;
 }
 
-export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStopRun, onShowRunOutput, git, onListBranches, onCheckoutBranch, changesCount, changesOpen, browserOpen, onToggleChanges, onToggleBrowser, terminal, terminalOpen, onToggleTerminal, onRename, onTaskAction }: ChatHeaderProps) {
+export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStopRun, onShowRunOutput, git, onListBranches, onCheckoutBranch, changesCount, changesOpen, browserOpen, onToggleChanges, onToggleBrowser, terminal, terminalOpen, onToggleTerminal, onRename, onTaskAction, titlePulse = 0 }: ChatHeaderProps) {
   const contextMenu = useContextMenu();
   const [renaming, setRenaming] = useState(false);
   const [value, setValue] = useState(task.name);
@@ -65,7 +68,11 @@ export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStop
             }}
           />
         ) : (
-          <h1 onDoubleClick={() => { setValue(task.name); setRenaming(true); }} title="Double-click to rename">{task.name}</h1>
+          <h1 onDoubleClick={() => { setValue(task.name); setRenaming(true); }} title="Double-click to rename">
+            {/* Keyed by task.id so switching chats remounts it (initial={false} → no swap);
+                only the model's auto-title bumps the pulse and gets the swipe + glint. */}
+            <TextSwap key={task.id} text={task.name} swapKey={titlePulse} variant="title" swappedClassName="title-glint" />
+          </h1>
         )}
         <div className="workspace-meta">
           <button type="button" title={task.workspacePath} onClick={() => onTaskAction(task, "reveal")}>

@@ -1096,7 +1096,8 @@ export interface UsageStatus {
 
 export type WorkerEvent =
   | { type: "usage_record"; taskId: string; record: UsageRecord }
-  | { type: "title_changed"; taskId: string; name: string }
+  /** A name change under the chat: "opening" is the first-run stand-in, "auto" the title model's. */
+  | { type: "title_changed"; taskId: string; name: string; source: "auto" | "opening" }
   | { type: "ready" | "snapshot"; taskId: string; snapshot: SessionSnapshot }
   | { type: "snapshot_delta"; taskId: string; delta: SnapshotDelta }
   | { type: "partial"; taskId: string; message: NormalizedMessage }

@@ -2809,7 +2809,7 @@ fn begin_auto_title(
     if let Some(name) = fallback_name {
         let _ = app.emit(
             "worker-event",
-            json!({ "type": "title_changed", "taskId": task_id, "name": name }),
+            crate::worker::title_changed_event(task_id, &name, "opening"),
         );
         let _ = crate::menu_bar::refresh(app);
     }

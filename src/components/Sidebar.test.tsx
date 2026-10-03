@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProjectRecord, TaskRecord } from "../types";
 import { NO_PROJECT_KEY, Sidebar, type TaskAction } from "./Sidebar";
@@ -18,7 +18,7 @@ function task(id: string, projectId: string | null, name: string): TaskRecord {
   };
 }
 
-function Harness({ tasks, pendingDialogTaskIds = new Set<string>(), archivedOpen = false, onSelectTask = () => undefined }: { tasks: TaskRecord[]; pendingDialogTaskIds?: ReadonlySet<string>; archivedOpen?: boolean; onSelectTask?: (id: string) => void }) {
+function Harness({ tasks, pendingDialogTaskIds = new Set<string>(), archivedOpen = false, onSelectTask = () => undefined, titlePulses = {} }: { tasks: TaskRecord[]; pendingDialogTaskIds?: ReadonlySet<string>; archivedOpen?: boolean; onSelectTask?: (id: string) => void; titlePulses?: Record<string, number> }) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   return (
     <Sidebar
@@ -26,6 +26,7 @@ function Harness({ tasks, pendingDialogTaskIds = new Set<string>(), archivedOpen
       tasks={tasks}
       archivedOpen={archivedOpen}
       pendingDialogTaskIds={pendingDialogTaskIds}
+      titlePulses={titlePulses}
       collapsedProjectIds={collapsed}
       onSelectTask={onSelectTask}
       onNewChat={() => undefined}
@@ -127,6 +128,22 @@ describe("Sidebar order, timestamps and search", () => {
   });
 });
 
+describe("Sidebar title echo", () => {
+  it("crossfades the row's name when its chat's title pulse bumps", async () => {
+    const { rerender } = render(<Harness tasks={[task("t1", "p1", "Old name")]} titlePulses={{}} />);
+    rerender(<Harness tasks={[task("t1", "p1", "Generated title")]} titlePulses={{ t1: 1 }} />);
+    await waitFor(() => expect(screen.queryByText("Old name")).toBeNull());
+    expect(screen.getByRole("button", { name: "Generated title" })).toBeInTheDocument();
+  });
+
+  it("updates the row's name instantly when no pulse changed", () => {
+    const { rerender } = render(<Harness tasks={[task("t1", "p1", "Old name")]} titlePulses={{}} />);
+    rerender(<Harness tasks={[task("t1", "p1", "Renamed chat")]} titlePulses={{}} />);
+    expect(screen.getByRole("button", { name: "Renamed chat" })).toBeInTheDocument();
+    expect(screen.queryByText("Old name")).toBeNull();
+  });
+});
+
 describe("Sidebar collapsible projects", () => {
   it("hides a project's chats when its heading is clicked and shows a count", () => {
     render(<Harness tasks={[task("t1", "p1", "Refactor parser"), task("t2", null, "Loose chat")]} />);
@@ -156,6 +173,7 @@ describe("Sidebar collapsible projects", () => {
           tasks={[task("t1", "p1", "Refactor parser")]}
           archivedOpen={false}
           pendingDialogTaskIds={new Set<string>()}
+          titlePulses={{}}
           collapsedProjectIds={collapsed}
           onSelectTask={() => undefined}
           onNewChat={(project) => newChat.push(project?.id ?? null)}
@@ -209,6 +227,7 @@ describe("Sidebar collapsible projects", () => {
           tasks={[task("t2", null, "Loose chat")]}
           archivedOpen={false}
           pendingDialogTaskIds={new Set<string>()}
+          titlePulses={{}}
           collapsedProjectIds={new Set([NO_PROJECT_KEY])}
           onSelectTask={() => undefined}
           onNewChat={() => undefined}
@@ -243,6 +262,7 @@ describe("Sidebar footer tiles", () => {
         tasks={tasks}
         archivedOpen={archivedOpen}
         pendingDialogTaskIds={new Set<string>()}
+        titlePulses={{}}
         collapsedProjectIds={new Set()}
         onSelectTask={() => undefined}
         onNewChat={() => undefined}
@@ -303,6 +323,7 @@ describe("Sidebar task actions", () => {
         tasks={tasks}
         archivedOpen={false}
         pendingDialogTaskIds={new Set<string>()}
+        titlePulses={{}}
         collapsedProjectIds={new Set()}
         onSelectTask={() => undefined}
         onNewChat={() => undefined}
@@ -418,6 +439,7 @@ describe("Sidebar bulk actions", () => {
         tasks={tasks}
         archivedOpen={archivedOpen}
         pendingDialogTaskIds={new Set<string>()}
+        titlePulses={{}}
         collapsedProjectIds={new Set()}
         onSelectTask={() => undefined}
         onNewChat={() => undefined}
@@ -481,6 +503,7 @@ describe("Sidebar pinning and Git mode", () => {
         tasks={[task("t1", "p1", "Alpha chat")]}
         archivedOpen={false}
         pendingDialogTaskIds={new Set()}
+        titlePulses={{}}
         collapsedProjectIds={new Set()}
         onSelectTask={() => undefined}
         onNewChat={() => undefined}

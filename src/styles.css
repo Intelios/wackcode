@@ -253,7 +253,7 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 }
 .task-item.renaming { padding: 2px 6px 2px 9px; }
 .task-item.renaming input { height: 26px; font-size: 13px; padding: 0 6px; }
-.task-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; flex: 1; font-size: 13px; }
+.task-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; flex: 1; font-size: 13px; position: relative; }
 .task-details { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .task-label { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .task-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; min-height: 14px; color: var(--text-dim); font-size: 11px; }
@@ -342,7 +342,23 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .task-title { min-width: 0; flex: 1; }
 .task-title h1 {
   font-size: 14px; line-height: 20px; letter-spacing: -.2px; margin: 0 0 2px; font-weight: 600;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 4px; position: relative;
+}
+/* Keyed text swaps: the old span slides or fades out while the new one enters in place.
+   The wrapper clips and anchors the popLayout-exiting span; the span carries the ellipsis. */
+.text-swap { display: inline-flex; min-width: 0; max-width: 100%; overflow: hidden; position: relative; }
+.text-swap-text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* One accent sheen passing through the auto-title's letters, resting identically to plain
+   text at both ends so it never needs cleaning up. Same technique as .command-word. */
+.title-glint {
+  background: linear-gradient(110deg, var(--text) 42%, var(--wc-accent-glint) 50%, var(--text) 58%);
+  background-size: 260% 100%; -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: title-glint-sweep .8s var(--ease) .25s both;
+}
+@keyframes title-glint-sweep { from { background-position: 100% 0; } to { background-position: 0 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .title-glint { animation: none; -webkit-text-fill-color: currentColor; }
 }
 .title-input { height: 26px; font-size: 14px; font-weight: 600; letter-spacing: -.2px; padding: 0 6px; margin: 0 0 2px -7px; max-width: 420px; }
 .workspace-meta { display: flex; gap: 12px; align-items: center; min-width: 0; color: var(--text-dim); font-size: 11px; }

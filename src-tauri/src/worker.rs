@@ -1308,7 +1308,7 @@ fn handle_worker_line(
         if let Some(title) = title {
             let _ = app.emit(
                 "worker-event",
-                json!({ "type": "title_changed", "taskId": task_id, "name": title }),
+                title_changed_event(task_id, &title, "auto"),
             );
         } else {
             let _ = app.emit("worker-event", json!({ "type": "extension_notice", "taskId": task_id,
@@ -1476,6 +1476,13 @@ fn spawn_native_request(app: &AppHandle, task_id: &str, worker_pid: u32, channel
     });
 }
 
+/// The worker-event payload for a chat's name changing under it: `opening` is the free
+/// first-run stand-in from the opening line, `auto` the title model's result — the renderer
+/// animates only the latter.
+pub fn title_changed_event(task_id: &str, name: &str, source: &str) -> Value {
+    json!({ "type": "title_changed", "taskId": task_id, "name": name, "source": source })
+}
+
 fn normalize_auto_title(raw: &str) -> Option<String> {
     let compact = raw.split_whitespace().collect::<Vec<_>>().join(" ");
     let trimmed = compact
@@ -1497,7 +1504,15 @@ fn normalize_auto_title(raw: &str) -> Option<String> {
 
 #[cfg(test)]
 mod auto_title_tests {
-    use super::normalize_auto_title;
+    use super::{normalize_auto_title, title_changed_event};
+
+    #[test]
+    fn title_changed_event_carries_its_source() {
+        assert_eq!(
+            title_changed_event("t1", "Hello", "auto"),
+            serde_json::json!({ "type": "title_changed", "taskId": "t1", "name": "Hello", "source": "auto" })
+        );
+    }
 
     #[test]
     fn trims_model_wrapping_and_rejects_blank_output() {

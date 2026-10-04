@@ -2652,13 +2652,14 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .subagent-chip-open { flex: 0 0 auto; width: 13px; height: 13px; color: var(--text-faint); transition: color .16s var(--ease); }
 .subagent-chip:hover .subagent-chip-open { color: var(--text-soft); }
 .subagent-chip.selected .subagent-chip-open { color: var(--wc-accent); }
-/* A sheen crossing the top edge while the child works, and a ring that pings once as the panel
-   opens on the chip. */
+/* A sheen gliding along the top edge while the child works, and a ring that pings once as the
+   panel opens on the chip. The sheen ping-pongs: each leg turns around just past the far edge
+   (alternate) with ease-in-out, so it sweeps right then back left with no restart jump. */
 .subagent-chip::before, .subagent-chip::after { content: ""; position: absolute; pointer-events: none; }
 .subagent-chip.running::before {
   left: 12px; right: 12px; top: -1px; height: 1px; opacity: .8;
   background: linear-gradient(90deg, transparent, var(--wc-accent), transparent) no-repeat;
-  background-size: 35% 100%; animation: subagent-sheen 2.2s var(--ease) infinite;
+  background-size: 35% 100%; animation: subagent-sheen 2.2s ease-in-out infinite alternate;
 }
 .subagent-chip::after { inset: -1px; border-radius: inherit; opacity: 0; }
 .subagent-chip.selected::after { animation: subagent-ping .6s var(--ease); }

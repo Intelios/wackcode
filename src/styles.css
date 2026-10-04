@@ -604,12 +604,12 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
   color: var(--text-dim); cursor: pointer; padding: 2px 6px 2px 0; font-size: 12.5px; border-radius: 5px;
 }
 .thinking-head:hover { color: var(--text-soft); }
-.thinking-icon { width: 13px; height: 13px; color: var(--wc-accent); opacity: .8; }
+.thinking-icon { width: 16px; height: 16px; color: var(--wc-accent); opacity: .8; }
 
 /* The reasoning row's mark (PonderingDuck.tsx): the duck's head tilts side to side while it
    thinks and thought bubbles trail up-right and pop; at rest the duck is upright and the trail
    stays as a faint ghost, so the icon still reads as thinking rather than a random duck.
-   `overflow: visible` lets the top bubble poke a little above the 13px box without moving the row. */
+   `overflow: visible` lets the top bubble poke a little above the 16px box without moving the row. */
 .ponder-duck { overflow: visible; }
 .ponder-duck .ponder-body, .ponder-duck .ponder-bubble { transform-box: fill-box; }
 .ponder-duck .ponder-body { transform-origin: 50% 85%; }

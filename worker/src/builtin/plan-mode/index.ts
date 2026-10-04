@@ -1,5 +1,5 @@
 /**
- * Built-in Plan mode extension — a Codex-style read-only planning mode. Forked from
+ * Built-in Plan mode extension — planning is read-only by default. Forked from
  * `@narumitw/pi-plan-mode` v0.58.3 (MIT) and adapted to WackCode: mode transitions come from
  * the app's composer toggle (via `PlanModeController`) instead of `/plan` menus, and the
  * completed plan is reviewed in the desktop UI rather than Pi's TUI. The shell/tool policy,
@@ -10,7 +10,7 @@
  * interview instead of a few questions. Policy, completion and review are shared.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { PlanState, TaskMode } from "../../protocol.js";
+import type { ExecutionPolicyConfig, PlanState, TaskMode } from "../../protocol.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../ask-user-question.js";
 import type { BuiltinHost } from "../host.js";
 import { MEMORY_TOOL_NAMES } from "../memory/index.js";
@@ -38,6 +38,8 @@ import {
   findBlockedCommandSegment,
   readCommand,
 } from "./policy.js";
+import { DEFAULT_EXECUTION_POLICY } from "../../execution-policy.js";
+import { reconcilePlanningAccess } from "./access.js";
 import type { PlanVariant } from "./prompt.js";
 import { invalidPlanMessage, latestAssistantText, parseProposedPlan } from "./proposed-plan.js";
 import { PLAN_STATE_ENTRY_TYPE, PLAN_STATE_VERSION, restorePlanState, type PersistedPlanState } from "./state.js";
@@ -52,13 +54,13 @@ export interface PlanModeController {
   setMode(mode: TaskMode): PlanState;
 }
 
-/** How Plan mode tells MCP tools apart: they may run while planning only when marked read-only. */
+/** How restricted planning tells MCP tools apart: only tools marked read-only may run. */
 export interface PlanModeMcpTools {
   owns(toolName: string): boolean;
   isReadOnly(toolName: string): boolean;
 }
 
-export function createPlanModeExtension(host: BuiltinHost, mcpTools?: PlanModeMcpTools) {
+export function createPlanModeExtension(host: BuiltinHost, mcpTools?: PlanModeMcpTools, executionPolicy: () => ExecutionPolicyConfig = () => DEFAULT_EXECUTION_POLICY) {
   let pi: ExtensionAPI | undefined;
   /** The planning variant in force, or undefined in Build mode. */
   let active: PlanVariant | undefined;
@@ -163,7 +165,7 @@ export function createPlanModeExtension(host: BuiltinHost, mcpTools?: PlanModeMc
       // Built-in helpers always pass while planning. `todo` mutates only its own in-memory
       // list, never the workspace, so tracking a task list during planning stays on the
       // right side of the read-only policy. `subagent` refuses any agent that can edit files
-      // while Plan mode is on, and read-only children run under this same shell policy.
+      // while restricted planning is on; read-only children use this same shell policy.
       // `web_fetch` only reads a public page. Memory notes live outside the workspace, and a
       // correction heard during planning is exactly what should outlive the session, so the
       // memory tools stay available. Computer use may list apps and look at a window
@@ -186,7 +188,7 @@ export function createPlanModeExtension(host: BuiltinHost, mcpTools?: PlanModeMc
           ? { block: true, reason: "plan_mode_complete is only available while Plan mode is active." }
           : undefined;
       }
-      if (helper) return undefined;
+      if (executionPolicy().unrestrictedPlanning || helper) return undefined;
       if (event.toolName === BROWSER_OPEN_TOOL_NAME || event.toolName === BROWSER_ACT_TOOL_NAME) {
         return { block: true, reason: `Plan mode may inspect an existing browser page but cannot ${event.toolName === BROWSER_OPEN_TOOL_NAME ? "open or navigate it" : "interact with it"}.` };
       }
@@ -248,8 +250,12 @@ export function createPlanModeExtension(host: BuiltinHost, mcpTools?: PlanModeMc
     });
 
     pi.on("context", (event) => {
-      if (!active && !contractsRelevant) return undefined;
-      return { messages: reconcileModeContract(event.messages, active ?? "normal") };
+      const messages = active || contractsRelevant
+        ? reconcileModeContract(event.messages, active ?? "normal")
+        : event.messages;
+      // Access guidance is rebuilt in context only, never appended to the session branch.
+      const current = reconcilePlanningAccess(messages, active !== undefined && executionPolicy().unrestrictedPlanning);
+      return current === event.messages ? undefined : { messages: current };
     });
 
     // Weaker models sometimes answer with a prose <proposed_plan> block instead of the tool.

@@ -47,8 +47,14 @@ describe("SubAgent chips", () => {
 
     render(<SubagentGroup toolCallId="call-1" live details={details([child({ agent: "worker", readOnly: false, status: "queued" })])} />);
     const worker = screen.getByRole("button", { name: /^SubAgent Worker, queued/ });
+    expect(worker).toHaveAccessibleName(/Access: can edit files/);
     expect(within(worker).getByText("edits")).toBeInTheDocument();
     expect(within(worker).getByText("Queued")).toBeInTheDocument();
+    cleanup();
+    render(<SubagentGroup toolCallId="call-2" live details={details([child({ readOnly: false })])} />);
+    const unlocked = screen.getByRole("button", { name: /^SubAgent Scout, working/ });
+    expect(within(unlocked).getByText("edits")).toBeInTheDocument();
+    expect(unlocked).toHaveAccessibleName(/Access: can edit files/);
   });
 
   it("say how a finished call's children ended", () => {

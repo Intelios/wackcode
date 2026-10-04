@@ -95,7 +95,7 @@ function SubagentChip({ toolCallId, index, result, live }: ChipProps) {
     <motion.button
       type="button"
       className={`subagent-chip ${status} ${selected ? "selected" : ""}`}
-      aria-label={`SubAgent ${role}, ${STATUS_WORDS[status].toLowerCase()}: ${result.task}`}
+      aria-label={`SubAgent ${role}, ${STATUS_WORDS[status].toLowerCase()}: ${result.task}. Access: ${result.readOnly ? "read-only" : "can edit files"}.`}
       aria-expanded={selected}
       aria-controls="side-panel"
       disabled={!onOpen}

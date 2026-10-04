@@ -2,6 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   AutoTitleConfig,
   AppearanceConfig,
+  ExecutionPolicyConfig,
   AppInfo,
   BootstrapPayload,
   BuiltinModelSuggestion,
@@ -127,6 +128,7 @@ export const api = {
   setAutoTitleConfig: (input: AutoTitleConfig) => invoke<AutoTitleConfig>("set_auto_title_config", { input }),
   usageStatus: () => invoke<import("./types").UsageStatus>("usage_status"),
   setUsageRecording: (enabled: boolean) => invoke<boolean>("set_usage_recording", { enabled }),
+  setExecutionPolicyConfig: (input: ExecutionPolicyConfig) => invoke<ExecutionPolicyConfig>("set_execution_policy_config", { input }),
   setPromptConfig: (input: PromptConfig) => invoke<PromptConfig>("set_prompt_config", { input }),
   saveMcpServer: (input: SaveMcpServerInput) => invoke<McpServerRecord>("save_mcp_server", { input }),
   deleteMcpServer: (serverId: string) => invoke<void>("delete_mcp_server", { serverId }),

@@ -15,6 +15,7 @@ export function Tooltip({ label, side = "top", disabled = false, children }: Too
 
   const show = () => {
     if (disabled || !label) return;
+    if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => {
       const rect = wrapRef.current?.getBoundingClientRect();
       if (!rect) return;
@@ -39,8 +40,10 @@ export function Tooltip({ label, side = "top", disabled = false, children }: Too
     }
   }, [disabled]);
 
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+
   return (
-    <span ref={wrapRef} className="tooltip-wrap" onMouseEnter={show} onMouseLeave={hide} onMouseDown={hide}>
+    <span ref={wrapRef} className="tooltip-wrap" onMouseEnter={show} onMouseLeave={hide} onMouseDown={hide} onFocus={show} onBlur={hide}>
       {children}
       {style && !disabled && createPortal(<span className="tooltip" style={style} role="tooltip">{label}</span>, document.body)}
     </span>

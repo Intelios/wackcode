@@ -2,6 +2,14 @@
 
 These are product guarantees, not implementation details: `README.md` promises them to users. Don't weaken any of them. If a change seems to need to, stop and raise it instead.
 
+## Read-only policies
+
+Plan / Ultra Plan and read-only sub-agents enforce inspection-only shell commands and block editing tools by default. This is a behavioral policy, not a filesystem sandbox: even allowed tests can run project hooks or write caches.
+
+Settings › Tools has two explicit, app-wide overrides, both off by default and confirmed with a danger dialog on every enable. They persist until disabled and apply between turns without stopping active runs. Removing planning restrictions gives the parent its normal enabled tools, including trusted package tools, MCP and permitted browser/computer actions; plan review and approval still apply. Removing child restrictions gives normally read-only roles edit/write and unrestricted bash, filtered through tool switches. Read-only planning still restricts those children and refuses editing roles.
+
+These overrides allow changes outside the project and unrestricted shell commands with the user's permissions. They do not change credential handling, package trust, Pi lockdown, computer-use controls, or the child extension/tool inventory. Child prompts retain custom instructions and explicit task constraints.
+
 ## Network
 
 No telemetry, account, backend, updater, automatic model discovery, or traffic on launch or on a timer. The app contacts only:

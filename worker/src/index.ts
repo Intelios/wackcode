@@ -16,6 +16,7 @@ import type { BuiltinHost, SubagentOutcome } from "./builtin/host.js";
 import { normalizeMessage as normalizeSavedMessage, textFromContent, THUMBNAIL_OPTIONS, THUMBNAIL_RESULT_TOOLS } from "./message-normalization.js";
 import { SUBAGENT_TOOL_NAME } from "./builtin/subagents/types.js";
 import { createModelRuntime, findModel, MODEL_MISSING_MESSAGE, missingModelMessage, missingModelPlaceholder, workerSettings, type PiModel } from "./model-runtime.js";
+import { sameExecutionPolicy } from "./execution-policy.js";
 import { promptOverrides, setPromptOverrides } from "./prompt-overrides.js";
 import { SubagentRunner } from "./subagent-runner.js";
 import { SubagentStreams, isSubagentTranscript } from "./subagent-stream.js";
@@ -57,6 +58,7 @@ import {
   type AutoTitleRequest,
   type CheckpointRef,
   type CommandPresentation,
+  type ExecutionPolicyConfig,
   type GoalState,
   type ImageContent,
   type InitCommand,
@@ -629,6 +631,7 @@ function getSnapshot(rev: number): SessionSnapshot {
     ...(chatModelMissing() ? { modelMissing: true, modelIssue: missingModelReason } : {}),
     tools: toolCatalog(),
     activeTools: session.getActiveToolNames(),
+    executionPolicy: builtins.getExecutionPolicy(),
     planState: builtins.planMode.getState(),
     todoState: builtins.todo.getState(),
     goalState: builtins.goal.getState()
@@ -671,6 +674,7 @@ interface EmittedState {
   sessionFile?: string;
   runTimings: RunTiming[];
   activeRun?: { runId: string; startedAt: number };
+  executionPolicy?: ExecutionPolicyConfig;
   planState?: PlanState;
   todoState?: TodoState;
   goalState?: GoalState;
@@ -689,6 +693,7 @@ function recordEmitted(snapshot: SessionSnapshot): void {
     sessionFile: snapshot.sessionFile,
     runTimings: snapshot.runTimings,
     activeRun: snapshot.activeRun,
+    executionPolicy: snapshot.executionPolicy,
     planState: snapshot.planState,
     todoState: snapshot.todoState,
     goalState: snapshot.goalState,
@@ -723,6 +728,7 @@ function emitBoundary(): void {
     emitSnapshot();
     return;
   }
+  const executionPolicy = sameExecutionPolicy(emitted.executionPolicy, snapshot.executionPolicy) ? undefined : snapshot.executionPolicy;
   const planState = samePlanState(emitted.planState, snapshot.planState) ? undefined : snapshot.planState;
   const todoState = sameTodoState(emitted.todoState, snapshot.todoState) ? undefined : snapshot.todoState;
   const goalState = sameGoalState(emitted.goalState, snapshot.goalState) ? undefined : snapshot.goalState ?? null;
@@ -735,7 +741,7 @@ function emitBoundary(): void {
     : snapshot.activeRun ?? null;
   if (
     diff.upserts.length === 0 && diff.removed.length === 0
-    && planState === undefined && todoState === undefined && goalState === undefined
+    && executionPolicy === undefined && planState === undefined && todoState === undefined && goalState === undefined
     && runTimings === undefined && modelSwitches === undefined
     && sessionFile === undefined && activeRun === undefined
     && sameStats(emitted.stats, snapshot.stats) && sameTree(emitted.tree, snapshot.tree)
@@ -755,6 +761,7 @@ function emitBoundary(): void {
       tree: snapshot.tree,
       stats: snapshot.stats,
       ...(sessionFile !== undefined ? { sessionFile } : {}),
+      ...(executionPolicy !== undefined ? { executionPolicy } : {}),
       ...(planState !== undefined ? { planState } : {}),
       ...(todoState !== undefined ? { todoState } : {}),
       ...(goalState !== undefined ? { goalState } : {})
@@ -1029,6 +1036,7 @@ async function initialize(command: InitCommand): Promise<void> {
     parentThinkingLevel: () => (session?.thinkingLevel ?? command.thinkingLevel) as ThinkingLevel,
     safeError
   });
+  builtins.configureExecutionPolicy(command.executionPolicy);
   applySubagents(command.subagents ?? null);
   builtins.mcp.configure(command.mcp ?? []);
   builtins.computerUse.configure(command.computerUse?.enabled === true);
@@ -1813,6 +1821,11 @@ async function handle(command: WorkerCommand): Promise<void> {
       // Queued, so the tools never vanish under a running call; the host has already stopped
       // any computer-use work of this chat and cleared its grants when it was switched off.
       builtins.computerUse.configure(command.enabled);
+      applyDisabledTools();
+      emitSnapshot();
+    } else if (command.type === "set_execution_policy") {
+      // Serial queue: permissions and role guidance cannot change beneath an active run.
+      builtins.configureExecutionPolicy(command.executionPolicy);
       applyDisabledTools();
       emitSnapshot();
     } else if (command.type === "set_prompts") {

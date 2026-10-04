@@ -3,7 +3,7 @@ import { api } from "../api";
 import { agentName } from "../agentName";
 import { modelIsReady } from "../model-utils";
 import { BROWSER_TOOL_NAMES, WEB_FETCH_TOOL_NAME } from "../tool-utils";
-import type { AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CommandsConfig, ComputerUseConfig, McpConfig, MemoryConfig, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ToolCatalogEntry } from "../types";
+import type { ExecutionPolicyConfig, AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CommandsConfig, ComputerUseConfig, McpConfig, MemoryConfig, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ToolCatalogEntry } from "../types";
 import { Icon, type IconName } from "./Icons";
 import { AboutSection } from "./AboutSection";
 import { CommandsSection, type SlashCommandActions } from "./CommandsSection";
@@ -101,6 +101,8 @@ interface Props extends PackageActions, ModelFavoritesProps {
   packages: PackageRecord[];
   toolCatalog: ToolCatalogEntry[];
   disabledTools: string[];
+  executionPolicy?: ExecutionPolicyConfig;
+  onSetExecutionPolicy?: (config: ExecutionPolicyConfig) => Promise<void>;
   appDataPath: string;
   onClose: () => void;
   onSave: (input: SaveProviderInput) => Promise<ProviderRecord>;
@@ -139,7 +141,7 @@ interface Props extends PackageActions, ModelFavoritesProps {
 }
 
 export function SettingsPage({
-  providers, favoriteModels, favoriteSaving, onSetFavorite, packages, toolCatalog, disabledTools, appDataPath,
+  executionPolicy, onSetExecutionPolicy, providers, favoriteModels, favoriteSaving, onSetFavorite, packages, toolCatalog, disabledTools, appDataPath,
   onClose, onSave, onDelete, onSetProviderEnabled, onConnectSubscription, onSignOutSubscription, connectedSubscriptionId, onSetDisabledTools,
   subagents, onSetSubagents, computerUse = COMPUTER_USE_OFF, computerUseSupported = false, onSetComputerUse, autoTitle, onSetAutoTitle, appearance, glassSupported, onSetAppearance, onPreviewAppearance, backgroundImageUrl, onChooseBackgroundImage, onRemoveBackgroundImage, prompts, onSetPrompts, onCommandsChanged, memory, onSetMemory, mcp, mcpActions, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
 }: Props) {
@@ -353,6 +355,8 @@ export function SettingsPage({
         )}
         {section === "tools" && (
           <ToolsSection
+            executionPolicy={executionPolicy}
+            onSetExecutionPolicy={onSetExecutionPolicy}
             catalog={toolCatalog}
             disabled={disabledTools}
             packages={packages}
@@ -373,7 +377,7 @@ export function SettingsPage({
             onRemoveImage={onRemoveBackgroundImage}
           />
         )}
-        {section === "prompts" && <PromptsSection config={prompts} agentName={agentName(appearance)} onChange={onSetPrompts} />}
+        {section === "prompts" && <PromptsSection unrestrictedPlanning={executionPolicy?.unrestrictedPlanning} config={prompts} agentName={agentName(appearance)} onChange={onSetPrompts} />}
         {section === "mcp" && mcpActions && <McpSection servers={mcp?.servers ?? []} agentName={agentName(appearance)} {...mcpActions} />}
         {section === "computer_use" && onSetComputerUse && (
           <ComputerUseSection config={computerUse} actions={COMPUTER_USE_ACTIONS} agentName={agentName(appearance)} onChange={onSetComputerUse} />
@@ -393,6 +397,7 @@ export function SettingsPage({
         {section === "about" && <AboutSection />}
         {section === "subagents" && (
           <SubagentsSection
+            executionPolicy={executionPolicy}
             config={subagents}
             providers={providers}
             favoriteModels={favoriteModels}

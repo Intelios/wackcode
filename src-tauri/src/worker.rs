@@ -478,7 +478,7 @@ pub async fn ensure_worker_with(
         }
     });
 
-    let (disabled_tools, resources, prompts) = {
+    let (disabled_tools, resources, prompts, execution_policy) = {
         let state = app.state::<MetadataState>();
         let data = state
             .data
@@ -488,6 +488,7 @@ pub async fn ensure_worker_with(
             data.tool_config.disabled.clone(),
             resource_paths(&data.packages),
             data.prompts.clone(),
+            data.execution_policy.clone(),
         )
     };
 
@@ -519,6 +520,7 @@ pub async fn ensure_worker_with(
         // Custom built-in prompts (Settings → Prompts); `{}` when every prompt is at its default.
         // Deliberately not part of the fingerprint: changes reach workers live via set_prompts.
         "prompts": prompts,
+        "executionPolicy": execution_policy,
         // Enabled MCP servers with their header/env values. Live too, via set_mcp.
         "mcp": mcp_payload(app)?,
         // The user's own skill folders (Settings › Skills). Live too, via set_skills.

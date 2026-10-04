@@ -19,7 +19,7 @@ export function subagentDescription(agents: SubagentSpec[]): string {
 }
 
 /** Guideline bullets. Pi appends them flat, so each one names the tool. */
-export function subagentGuidelines(trigger: SubagentTrigger): string[] {
+export function subagentGuidelines(trigger: SubagentTrigger, readOnlyPlanning = true): string[] {
   const when =
     trigger === "auto"
       ? `Use ${SUBAGENT_TOOL_NAME} when a task clearly benefits from delegation, such as broad codebase exploration, an independent review, or several separate investigations at once. Do small or tightly coupled work yourself: every sub-agent costs extra model usage.`
@@ -29,6 +29,8 @@ export function subagentGuidelines(trigger: SubagentTrigger): string[] {
     `${SUBAGENT_TOOL_NAME} children cannot see this conversation. Put every file path, requirement, constraint and piece of context they need into each task.`,
     `Use the tasks parameter of ${SUBAGENT_TOOL_NAME} for independent work that can run at the same time; assign distinct files to editing children. Run dependent tasks or edits to the same files sequentially, waiting for each result before starting the next.`,
     `${SUBAGENT_TOOL_NAME} returns each child's final answer. Check important claims before relying on them, and summarize the results for the user instead of pasting them.`,
-    `In Plan mode, ${SUBAGENT_TOOL_NAME} only runs read-only sub-agents.`,
+    readOnlyPlanning
+      ? `In read-only Plan or Ultra Plan mode, ${SUBAGENT_TOOL_NAME} only runs read-only sub-agents.`
+      : `${SUBAGENT_TOOL_NAME} follows each role's effective access shown above. During Plan or Ultra Plan, editing children may support planning but must not implement the finished plan before approval.`,
   ];
 }

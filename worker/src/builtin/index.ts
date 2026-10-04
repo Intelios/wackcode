@@ -15,6 +15,8 @@ import { type GoalController, createGoalExtension } from "./goal/index.js";
 import { type MemoryController, createMemoryExtension } from "./memory/index.js";
 import type { BuiltinHost } from "./host.js";
 import { type McpController, createMcpExtension } from "./mcp/index.js";
+import type { ExecutionPolicyConfig } from "../protocol.js";
+import { DEFAULT_EXECUTION_POLICY, normalizeExecutionPolicy } from "../execution-policy.js";
 import { type PlanModeController, createPlanModeExtension } from "./plan-mode/index.js";
 import { type SubagentsController, createSubagentsExtension } from "./subagents/index.js";
 import { type TodoHandle, createTodoExtension } from "./todo/index.js";
@@ -31,6 +33,8 @@ export interface BuiltinExtensions {
   factories: InlineExtension[];
   /** Switches the plan-mode extension between Build, Plan and Ultra Plan. */
   planMode: PlanModeController;
+  configureExecutionPolicy(policy?: ExecutionPolicyConfig): void;
+  getExecutionPolicy(): ExecutionPolicyConfig;
   /** Read access to the todo list so snapshots can seed the panel. */
   todo: TodoHandle;
   /** Applies the user's sub-agent settings and says when its tool must stay off. */
@@ -47,15 +51,20 @@ export interface BuiltinExtensions {
 }
 
 export function createBuiltinExtensions(host: BuiltinHost): BuiltinExtensions {
+  let policy = DEFAULT_EXECUTION_POLICY;
+  let subagents: ReturnType<typeof createSubagentsExtension> | undefined;
   const mcp = createMcpExtension(host);
-  const planMode = createPlanModeExtension(host, {
+  const planMode = createPlanModeExtension({ ...host, publishPlanState(state) {
+    subagents?.controller.refresh();
+    host.publishPlanState(state);
+  } }, {
     owns: (name) => mcp.controller.serverOf(name) !== undefined,
     isReadOnly: (name) => mcp.controller.isReadOnlyTool(name),
-  });
+  }, () => policy);
   const todo = createTodoExtension(host);
   // One instance for the chat and its sub-agents, so they share its page cache.
   const webFetch: InlineExtension = { name: "wackcode-web-fetch", factory: createWebFetchExtension(), hidden: true };
-  const subagents = createSubagentsExtension(host, () => planMode.controller.getState().mode, webFetch);
+  subagents = createSubagentsExtension(host, () => planMode.controller.getState().mode, webFetch, () => policy);
   const autoTitle = createAutoTitleExtension(host);
   const goal = createGoalExtension(host, () => planMode.controller.getState().mode !== "build");
   const memory = createMemoryExtension();
@@ -81,6 +90,11 @@ export function createBuiltinExtensions(host: BuiltinHost): BuiltinExtensions {
       { name: "wackcode-mcp", factory: mcp.factory, hidden: true },
     ],
     planMode: planMode.controller,
+    getExecutionPolicy: () => policy,
+    configureExecutionPolicy(next) {
+      policy = normalizeExecutionPolicy(next);
+      subagents?.controller.refresh();
+    },
     todo: todo.handle,
     subagents: subagents.controller,
     autoTitle: autoTitle.controller,

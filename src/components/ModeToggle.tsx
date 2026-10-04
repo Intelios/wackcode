@@ -11,8 +11,8 @@ interface ModeToggleProps {
 }
 
 /**
- * The Build/Plan composer toggle. Plan mode is read-only: the agent explores and asks
- * questions, then submits a plan for review instead of editing. Clicking Plan again switches
+ * The Build/Plan composer toggle. Plan mode is read-only by default: the agent explores and
+ * asks questions, then submits a plan for review. Clicking Plan again switches
  * to Ultra Plan, where the agent interviews the user in depth before planning, and back.
  * ⇧Tab cycles all three.
  *

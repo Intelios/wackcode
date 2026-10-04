@@ -225,6 +225,7 @@ pub fn runtime_payload(
         if !names.insert(agent.name.clone()) { continue; }
         let mut entry = json!({
             "name": agent.name,
+            "builtin": agent.builtin,
             "description": agent.description,
             "prompt": agent.prompt,
             "tools": agent.tools,

@@ -95,12 +95,13 @@ function PromptStage({ live }: { live: boolean }) {
 
 interface Props {
   config: PromptConfig;
+  unrestrictedPlanning?: boolean;
   /** The persona's name from Settings › Appearance; the app's own copy never calls the agent "Pi". */
   agentName: string;
   onChange: (config: PromptConfig) => Promise<void>;
 }
 
-export function PromptsSection({ config, agentName, onChange }: Props) {
+export function PromptsSection({ unrestrictedPlanning, config, agentName, onChange }: Props) {
   const reduceMotion = useReducedMotion();
   const [expanded, setExpanded] = useState<PromptKey[]>([]);
   const [editingKey, setEditingKey] = useState<PromptKey>();
@@ -157,6 +158,7 @@ export function PromptsSection({ config, agentName, onChange }: Props) {
             </p>
           </div>
         </section>
+        {unrestrictedPlanning && <p className="execution-policy-warning">Planning read-only restrictions are off in Settings › Tools. The app adds current access guidance after these instructions; plan review and approval still apply.</p>}
         {PROMPTS.map((spec, index) => {
           const customized = typeof config[spec.key] === "string";
           const editing = editingKey === spec.key;

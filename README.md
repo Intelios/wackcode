@@ -22,7 +22,7 @@ Everything runs locally. Your conversations go straight from your Mac to the mod
 - **Many chats at once.** Each chat runs its own agent in the background, in your project folder, a Git worktree, or a scratch folder.
 - **Steer instead of waiting.** Type while the agent works: <kbd>Enter</kbd> redirects the current run, and <kbd>⌥ Enter</kbd> queues a message for after it.
 - **Nothing is lost.** Retry, edit, rewind or fork from any message. Checkpoints can put your files back too.
-- **Plan before building.** Plan mode keeps the agent read-only until you approve a plan; Ultra Plan interviews you first.
+- **Plan before building.** Plan mode is read-only by default until you approve a plan; Ultra Plan interviews you first.
 - **Review and ship.** A built-in diff view with line comments, generated commit messages, push, and GitHub PRs, plus Git mode: a GitHub Desktop–style view for reading big diffs, committing, and syncing.
 - **Sees what it builds.** A shared browser preview for web apps, and optional computer use for native Mac and iOS Simulator apps.
 - **Extensible.** MCP servers, Agent Skills, your own slash commands, Pi packages, per-project memory, and sub-agents.
@@ -60,12 +60,14 @@ Instead of a scrollbar, the transcript has a timeline: a tick for each of your m
 
 Press <kbd>⇧ Tab</kbd> or use the Build/Plan toggle to switch modes:
 
-- **Plan** keeps the agent read-only. It inspects the project, asks a few questions, and proposes a plan you can approve, revise, save as `PLAN.md`, or discard.
+- **Plan** keeps the agent read-only by default. It inspects the project, asks a few questions, and proposes a plan you can approve, revise, save as `PLAN.md`, or discard.
 - **Ultra Plan** is a "grill me" interview. The agent asks as many questions as it needs, one at a time, with its recommended answer first, before it writes the plan. Press **Write the plan now** whenever you've said enough. Expect more model usage.
 
 For longer jobs, `/goal <objective>` starts a goal loop: the agent works a round, a separate check decides whether the objective is met, and if not, the next step becomes the next round. It pauses itself after three rounds without progress and stops at 25.
 
 ![An Ultra Plan question above the composer: multiple-choice answers with the recommended one first, an Other option, and a Write the plan now button. The composer's mode switch shows Ultra Plan with its flame.](docs/images/plan-mode.png)
+
+**Settings › Tools** offers two separate overrides for read-only restrictions: one for Plan / Ultra Plan and one for normally read-only sub-agents. Both are off by default and require a danger confirmation each time you enable them. They allow file changes and unrestricted shell commands on your device, including outside the project, and are not recommended. Planning still submits a plan for your approval; read-only planning remains the ceiling for sub-agents.
 
 ### Review and ship
 
@@ -105,8 +107,8 @@ Git mode works on a project's own folder. A chat that runs in a worktree keeps i
 
 Switch on sub-agents in **Settings › Packages** and the agent can hand self-contained tasks to helpers with their own context windows, one at a time or several in parallel (up to 8; 4 by default). WackCode ships three roles:
 
-- **Scout:** read-only reconnaissance, including reading docs on the web.
-- **Reviewer:** read-only code review, with tests and checks to verify the changes.
+- **Scout:** read-only reconnaissance by default, including reading docs on the web.
+- **Reviewer:** read-only code review by default, with tests and checks to verify the changes.
 - **Worker:** makes edits.
 
 You can add your own roles and give each one its own model. Each helper appears as a chip in the chat; click it to watch its reasoning, tool calls and answer live in the side panel, along with its token use and cost. Sub-agents are off by default and only used when you ask, because every one costs extra model usage.

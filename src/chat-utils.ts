@@ -7,7 +7,7 @@ export function validateInitCommand(args: string, projectId: string | null, mode
   if (isPlanMode(mode)) throw new Error("Switch to Build mode before running /init.");
 }
 
-/** Plan and Ultra Plan are both the read-only planning mode. */
+/** Plan and Ultra Plan are both planning modes; their access policy is a separate setting. */
 export function isPlanMode(mode: TaskMode | undefined): boolean {
   return mode === "plan" || mode === "ultraplan";
 }
@@ -183,6 +183,7 @@ export function applySnapshotDelta(snapshot: SessionSnapshot, delta: SnapshotDel
     activeRun,
     tree: delta.tree ?? snapshot.tree,
     stats: delta.stats ?? snapshot.stats,
+    executionPolicy: delta.executionPolicy ?? snapshot.executionPolicy,
     planState: delta.planState === undefined || samePlanState(snapshot.planState, delta.planState) ? snapshot.planState : delta.planState,
     todoState: delta.todoState === undefined || sameTodoState(snapshot.todoState, delta.todoState) ? snapshot.todoState : delta.todoState,
     goalState: delta.goalState === undefined

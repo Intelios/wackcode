@@ -3,12 +3,18 @@ export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhi
 export type TaskStatus = "idle" | "running" | "stopping" | "interrupted" | "error";
 
 /**
- * The agent's working mode. "plan" is the read-only, plan-first mode; "ultraplan" is the same
- * read-only mode with an exhaustive, one-question-at-a-time interview before the plan.
+ * The agent's working mode. "plan" is the plan-first mode, read-only by default; "ultraplan" is the same
+ * planning mode with an exhaustive, one-question-at-a-time interview before the plan.
  */
 export type TaskMode = "build" | "plan" | "ultraplan";
 
-/** Plan mode state published by the worker's built-in plan-mode extension. */
+/** App-wide, opt-in overrides of the app's read-only policies. */
+export interface ExecutionPolicyConfig {
+  unrestrictedSubagents: boolean;
+  unrestrictedPlanning: boolean;
+}
+
+/** Plan mode state published by the built-in plan-mode extension. */
 export interface PlanState {
   mode: TaskMode;
   /** "ready" once the agent has submitted a complete plan; cleared by revision or leaving Plan mode. */
@@ -769,6 +775,7 @@ export interface AppData {
   recordUsage?: boolean;
   appearance: AppearanceConfig;
   prompts: PromptConfig;
+  executionPolicy?: ExecutionPolicyConfig;
   mcp: McpConfig;
   skills?: SkillsConfig;
   commands?: CommandsConfig;
@@ -1027,6 +1034,8 @@ export interface SessionSnapshot {
   modelIssue?: string;
   tools: ToolCatalogEntry[];
   activeTools: string[];
+  /** Policy actually applied by this worker, including while a saved change is queued. */
+  executionPolicy?: ExecutionPolicyConfig;
   planState?: PlanState;
   todoState?: TodoState;
   goalState?: GoalState;
@@ -1055,6 +1064,8 @@ export interface SnapshotDelta {
   };
   stats: SessionSnapshot["stats"];
   sessionFile?: string;
+  /** Policy actually applied by this worker, including while a saved change is queued. */
+  executionPolicy?: ExecutionPolicyConfig;
   planState?: PlanState;
   todoState?: TodoState;
   /** null clears the goal; absent leaves it unchanged. */

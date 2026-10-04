@@ -19,6 +19,8 @@ Opening a cold chat emits a saved-history snapshot without starting a worker; op
 
 A plain send is echoed while it travels: the composer has already cleared, and the real message can sit behind a worker respawn, a workspace checkpoint and MCP servers connecting. `promptTask`/`sendPrompt` set `runtime.pendingMessage` (`pendingEchoMessage`); the transcript appends it through `withPendingEcho` until a user message of the run arrives or the run settles (`run_state` idle/interrupted, or a rejected prompt, clears it). The hero send hides the echo while its frozen-composer handoff still shows the text. Everything else reads the worker's snapshot only — queued sends, commands and resends deliberately have no echo.
 
+The composer’s access indicator reads the worker’s applied `executionPolicy` while a run is active and the saved app policy when idle. A mismatch shows “Applies next turn”; restoring restrictions does not hide the active warning early. Cold history carries no policy: a new worker always receives current Settings, never permissions from session history.
+
 ## Composer drafts
 
 `App` keeps in-memory text, image and file drafts by chat id through `useComposerDrafts`.

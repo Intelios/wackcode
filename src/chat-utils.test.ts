@@ -223,6 +223,13 @@ describe("applySnapshotDelta", () => {
     return { upserts: [], removed: [], tree: { leafId: null }, stats, ...partial };
   }
 
+  it("replaces applied execution policy in a delta and retains it when omitted", () => {
+    const base = { ...snapshot([], 1), executionPolicy: { unrestrictedSubagents: false, unrestrictedPlanning: false } };
+    const policy = { unrestrictedSubagents: true, unrestrictedPlanning: true };
+    expect(applySnapshotDelta(base, delta({ rev: 2, executionPolicy: policy })).executionPolicy).toBe(policy);
+    expect(applySnapshotDelta(base, delta({ rev: 2 })).executionPolicy).toBe(base.executionPolicy);
+  });
+
   it("appends upserts with unknown ids and replaces known ones in place", () => {
     const a = message("a");
     const b = message("b");

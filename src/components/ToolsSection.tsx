@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import { firstSentence, groupTools } from "../tool-utils";
-import type { PackageRecord, ToolCatalogEntry } from "../types";
+import { DEFAULT_EXECUTION_POLICY } from "../execution-policy";
+import { ExecutionPolicySettings } from "./ExecutionPolicySettings";
+import type { ExecutionPolicyConfig, PackageRecord, ToolCatalogEntry } from "../types";
 import { Icon, type IconName } from "./Icons";
 import { SettingsHero, stagger } from "./SettingsHero";
 
@@ -142,6 +144,8 @@ function ToolRow({ tool, title, detail, icon, needs, mono = false, enabled, busy
 }
 
 interface Props {
+  executionPolicy?: ExecutionPolicyConfig;
+  onSetExecutionPolicy?: (config: ExecutionPolicyConfig) => Promise<void>;
   catalog: ToolCatalogEntry[];
   disabled: string[];
   /** Installed packages, to name a package tool's group by its display name. */
@@ -160,7 +164,7 @@ interface Props {
  * WackCode's built-in tools and MCP tools have their own settings (`groupTools` leaves them out),
  * so the page ends by pointing to them.
  */
-export function ToolsSection({ catalog, disabled, packages, agentName = "WackCode", onSetDisabled, onOpen, mcpAvailable = false }: Props) {
+export function ToolsSection({ executionPolicy = DEFAULT_EXECUTION_POLICY, onSetExecutionPolicy, catalog, disabled, packages, agentName = "WackCode", onSetDisabled, onOpen, mcpAvailable = false }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const disabledSet = useMemo(() => new Set(disabled), [disabled]);
@@ -221,6 +225,8 @@ export function ToolsSection({ catalog, disabled, packages, agentName = "WackCod
         </SettingsHero>
         {error && <div className="error-banner" role="alert">{error}</div>}
 
+        <ExecutionPolicySettings config={executionPolicy} onChange={onSetExecutionPolicy} />
+
         {catalog.length === 0 ? (
           <section className="settings-block" style={stagger(++order)}>
             <div className="package-empty tools-empty">
@@ -242,8 +248,8 @@ export function ToolsSection({ catalog, disabled, packages, agentName = "WackCod
               <section className="settings-block" style={stagger(++order)} aria-labelledby="tools-change">
                 <h3 className="settings-block-title" id="tools-change">Making changes</h3>
                 <p className="settings-block-sub">
-                  These change your files or run programs on your Mac. Plan mode holds edit and write back, and lets bash run
-                  read-only commands only.
+                  These change your files or run programs on your Mac. Plan and Ultra Plan hold edit and write back and limit bash
+                  to read-only commands unless you remove planning restrictions above.
                 </p>
                 <ul className="tool-cards">{piRows(changing)}</ul>
                 {handsOff && (
@@ -268,7 +274,7 @@ export function ToolsSection({ catalog, disabled, packages, agentName = "WackCod
                 <h3 className="settings-block-title">{packageName(group.id)}</h3>
                 <p className="settings-block-sub">
                   {group.id !== "other" && <><code>{group.id}</code> · </>}
-                  From a package you installed. Package tools are held back in Plan mode.
+                  From a package you installed. Package tools are held back while planning unless you remove planning restrictions above.
                 </p>
                 <ul className="tool-cards">
                   {group.tools.map((tool) => row(tool, { title: tool.name, detail: firstSentence(tool.description), icon: "spark", mono: true }))}

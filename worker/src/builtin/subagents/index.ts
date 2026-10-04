@@ -11,7 +11,7 @@
  * kept out of the active set (`inactiveTools`), so turning it on or off never restarts a chat.
  */
 import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-agent";
-import type { SubagentRuntimeConfig, SubagentSpec, TaskMode } from "../../protocol.js";
+import type { ExecutionPolicyConfig, SubagentRuntimeConfig, SubagentSpec, TaskMode } from "../../protocol.js";
 import type { BuiltinHost, SubagentOutcome } from "../host.js";
 import {
   MAX_CARD_OUTPUT,
@@ -27,6 +27,8 @@ import {
   summarizeActivity,
   truncate,
 } from "./details.js";
+import { DEFAULT_EXECUTION_POLICY, isReadOnlyPlanning } from "../../execution-policy.js";
+import { resolveSubagentSpec } from "./access.js";
 import { readOnlyGuard } from "./guard.js";
 import { SUBAGENT_PROMPT_SNIPPET, subagentDescription, subagentGuidelines } from "./prompt.js";
 import { runScheduled } from "./scheduler.js";
@@ -39,6 +41,8 @@ export interface SubagentsController {
   configure(config: SubagentRuntimeConfig | null): void;
   /** Tools that must stay out of the active set right now. */
   inactiveTools(): string[];
+  /** Refresh model guidance after an access or mode change. */
+  refresh(): void;
 }
 
 function errorText(error: unknown): string {
@@ -49,7 +53,7 @@ function errorText(error: unknown): string {
  * `webFetch` is the parent's own Web Fetch extension. A child whose tools include `web_fetch`
  * loads it too, so both share one page cache and one address policy.
  */
-export function createSubagentsExtension(host: BuiltinHost, currentMode: () => TaskMode, webFetch: InlineExtension) {
+export function createSubagentsExtension(host: BuiltinHost, currentMode: () => TaskMode, webFetch: InlineExtension, executionPolicy: () => ExecutionPolicyConfig = () => DEFAULT_EXECUTION_POLICY) {
   let config: SubagentRuntimeConfig | null = null;
   let pi: ExtensionAPI | undefined;
   /** The rendered definition last registered. Re-registering changes the system prompt, which
@@ -77,8 +81,10 @@ export function createSubagentsExtension(host: BuiltinHost, currentMode: () => T
     const parsed = normalizeSubagentParams(params);
     if (!parsed.ok) throw new Error(parsed.error);
     const specs = specsFor(current, parsed.tasks.map((task) => task.agent));
-    // Ultra Plan is Plan mode too: both keep the workspace read-only.
-    if (currentMode() !== "build") {
+    const mode = currentMode();
+    const policy = executionPolicy();
+    // A read-only planning parent remains the ceiling even with the child override on.
+    if (isReadOnlyPlanning(mode, policy)) {
       const editors = [...new Set(specs.filter((spec) => !spec.readOnly).map((spec) => spec.name))];
       if (editors.length > 0) {
         throw new Error(
@@ -89,7 +95,7 @@ export function createSubagentsExtension(host: BuiltinHost, currentMode: () => T
 
     // From here on nothing throws: a thrown error would replace the result, losing both the
     // card and the usage the children already spent.
-    const items = parsed.tasks.map((input, index) => ({ input, spec: specs[index] }));
+    const items = parsed.tasks.map((input, index) => ({ input, spec: resolveSubagentSpec(specs[index], mode, policy) }));
     const details = createDetails(parsed.mode, items.map((item) => ({ input: item.input, readOnly: item.spec.readOnly })));
     const outputs: (string | undefined)[] = [];
     const updates = createThrottle(() =>
@@ -180,13 +186,13 @@ export function createSubagentsExtension(host: BuiltinHost, currentMode: () => T
 
   const register = () => {
     if (!pi) return;
-    const agents = config?.agents ?? [];
+    const agents = (config?.agents ?? []).map((spec) => resolveSubagentSpec(spec, currentMode(), executionPolicy()));
     const definition = {
       name: SUBAGENT_TOOL_NAME,
       label: SUBAGENT_TOOL_LABEL,
       description: subagentDescription(agents),
       promptSnippet: SUBAGENT_PROMPT_SNIPPET,
-      promptGuidelines: subagentGuidelines(config?.trigger ?? "on_request"),
+      promptGuidelines: subagentGuidelines(config?.trigger ?? "on_request", isReadOnlyPlanning(currentMode(), executionPolicy())),
       parameters: subagentParams(agents.map((agent) => agent.name)),
     };
     const key = JSON.stringify(definition);
@@ -216,6 +222,7 @@ export function createSubagentsExtension(host: BuiltinHost, currentMode: () => T
   };
 
   const controller: SubagentsController = {
+    refresh: register,
     configure(next) {
       config = next;
       register();

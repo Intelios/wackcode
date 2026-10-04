@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode, type SetStateAction } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import type { ImageContent, ProviderRecord, SessionSnapshot, SlashCommand, TaskMode, TaskStatus, ThinkingLevel } from "../types";
+import { DEFAULT_EXECUTION_POLICY } from "../execution-policy";
+import { ExecutionPolicyNotice } from "./ExecutionPolicyNotice";
+import type { ExecutionPolicyConfig, ImageContent, ProviderRecord, SessionSnapshot, SlashCommand, TaskMode, TaskStatus, ThinkingLevel } from "../types";
 import { attachFiles, filesFrom, imageDataUrl, splitFileSection, type FileAttachment } from "../attachment-utils";
 import { activeMention, mentionValue, rankMentions, type MentionSuggestion } from "../mention-utils";
 import { activeSlashCommand } from "../command-utils";
@@ -47,6 +49,10 @@ interface ComposerProps extends ModelFavoritesProps {
   popoverSide?: "top" | "bottom";
   /** The Build/Plan toggle; omit onModeChange to hide it. */
   mode?: TaskMode;
+  executionPolicy?: ExecutionPolicyConfig;
+  appliedExecutionPolicy?: ExecutionPolicyConfig;
+  subagentsEnabled?: boolean;
+  appliedSubagentsEnabled?: boolean;
   onModeChange?: (mode: TaskMode) => void;
   onConfigure: (patch: { providerId?: string; modelId?: string; thinkingLevel?: ThinkingLevel }) => void;
   /** Resolves false when the send failed; the composer then restores the draft and attachments.
@@ -87,7 +93,7 @@ interface ComposerProps extends ModelFavoritesProps {
   agentName?: string;
 }
 
-export function Composer({ draftState, status, providerId, modelId, thinkingLevel, providers, favoriteModels, favoriteSaving, onSetFavorite, stats, header, placeholder, popoverSide = "top", mode, onModeChange, onConfigure, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, mentionFiles, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, queuedMessages, onDequeue, onStop, onOpenSettings, disabled, seed, comet, frozen, agentName = "Pi" }: ComposerProps) {
+export function Composer({ draftState, status, providerId, modelId, thinkingLevel, providers, favoriteModels, favoriteSaving, onSetFavorite, stats, header, placeholder, popoverSide = "top", mode, executionPolicy = DEFAULT_EXECUTION_POLICY, appliedExecutionPolicy, subagentsEnabled = false, appliedSubagentsEnabled, onModeChange, onConfigure, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, mentionFiles, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, queuedMessages, onDequeue, onStop, onOpenSettings, disabled, seed, comet, frozen, agentName = "Pi" }: ComposerProps) {
   const [localDraft, setLocalDraft] = useState<ComposerDraft>(EMPTY_DRAFT);
   const value = draftState?.value ?? localDraft;
   const updateDraft = draftState?.update ?? setLocalDraft;
@@ -563,7 +569,7 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
                 void send();
               }
             }}
-            placeholder={placeholder ?? (providers.length === 0 ? "Connect a provider to start…" : busy ? `${agentName} is working — ⏎ steers the run, ⌥⏎ queues for after…` : mode === "plan" ? `Describe the work — in Plan mode ${agentName} inspects and proposes a plan without changing files…` : mode === "ultraplan" ? `Describe the work — in Ultra Plan ${agentName} interviews you one question at a time…` : `Ask ${agentName} to inspect, change, or run something…`)}
+            placeholder={placeholder ?? (providers.length === 0 ? "Connect a provider to start…" : busy ? `${agentName} is working — ⏎ steers the run, ⌥⏎ queues for after…` : mode === "plan" ? `Describe the work — in Plan mode ${agentName} inspects and proposes a plan for your approval…` : mode === "ultraplan" ? `Describe the work — in Ultra Plan ${agentName} interviews you one question at a time…` : `Ask ${agentName} to inspect, change, or run something…`)}
             disabled={disabled || providers.length === 0}
           />
         </div>
@@ -619,7 +625,10 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
                   popoverSide={popoverSide}
                   onConfigure={onConfigure}
                 />
-                {onModeChange && <ModeToggle mode={mode ?? "build"} disabled={busy} onChange={onModeChange} />}
+                {onModeChange && <>
+                  <ModeToggle mode={mode ?? "build"} disabled={busy} onChange={onModeChange} />
+                  <ExecutionPolicyNotice saved={executionPolicy} applied={appliedExecutionPolicy} running={busy} mode={mode ?? "build"} subagentsEnabled={subagentsEnabled} appliedSubagentsEnabled={appliedSubagentsEnabled} />
+                </>}
               </>
             )}
           </div>

@@ -128,6 +128,7 @@ pub fn run() {
             commands::set_subagent_config,
             commands::set_auto_title_config,
             commands::set_prompt_config,
+            commands::set_execution_policy_config,
             commands::save_mcp_server,
             commands::delete_mcp_server,
             commands::set_mcp_server_enabled,

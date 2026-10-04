@@ -4,10 +4,16 @@ export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 export type ApiFormat = "openai-completions" | "openai-responses";
 
 /**
- * The agent's working mode. "plan" is the read-only, plan-first mode; "ultraplan" is the same
- * read-only mode with an exhaustive, one-question-at-a-time interview before the plan.
+ * The agent's working mode. "plan" is the plan-first mode, read-only by default; "ultraplan" is the same
+ * planning mode with an exhaustive, one-question-at-a-time interview before the plan.
  */
 export type TaskMode = "build" | "plan" | "ultraplan";
+
+/** App-wide, opt-in overrides of the app's read-only policies. */
+export interface ExecutionPolicyConfig {
+  unrestrictedSubagents: boolean;
+  unrestrictedPlanning: boolean;
+}
 
 /** Plan mode state published by the built-in plan-mode extension. */
 export interface PlanState {
@@ -159,6 +165,8 @@ export interface SubagentModelChoice {
 export interface SubagentSpec {
   /** The name the model calls it by, e.g. "scout". */
   name: string;
+  /** Shipped roles have app-owned access instructions; custom instructions remain intact. */
+  builtin?: boolean;
   description: string;
   /** Appended to Pi's system prompt for the child. */
   prompt: string;
@@ -436,6 +444,8 @@ export interface InitCommand {
   subagents?: SubagentRuntimeConfig | null;
   /** Custom built-in prompt texts from Settings; absent means every prompt stays at its default. */
   prompts?: PromptOverrides;
+  /** Absent on older hosts: both read-only overrides stay off. */
+  executionPolicy?: ExecutionPolicyConfig;
   /** Enabled MCP servers. Nothing connects until the chat's first run. */
   mcp?: McpServerSpec[];
   /** The user's own skill folders. Absent: none, only package skills load. */
@@ -661,6 +671,7 @@ export type WorkerCommand =
   | { id: string; type: "set_tools"; disabledTools: string[] }
   | { id: string; type: "set_subagents"; subagents: SubagentRuntimeConfig | null }
   | { id: string; type: "set_prompts"; prompts: PromptOverrides }
+  | { id: string; type: "set_execution_policy"; executionPolicy: ExecutionPolicyConfig }
   | { id: string; type: "set_mcp"; servers: McpServerSpec[] }
   | { id: string; type: "set_skills"; skills: UserSkillsPayload }
   | { id: string; type: "set_commands"; commands: UserCommandsPayload }
@@ -853,6 +864,8 @@ export interface SessionSnapshot {
   modelIssue?: string;
   tools: ToolCatalogEntry[];
   activeTools: string[];
+  /** Policy actually applied by this worker, including while a saved change is queued. */
+  executionPolicy?: ExecutionPolicyConfig;
   planState?: PlanState;
   todoState?: TodoState;
   goalState?: GoalState;
@@ -881,6 +894,8 @@ export interface SnapshotDelta {
   };
   stats: SessionSnapshot["stats"];
   sessionFile?: string;
+  /** Policy actually applied by this worker, including while a saved change is queued. */
+  executionPolicy?: ExecutionPolicyConfig;
   planState?: PlanState;
   todoState?: TodoState;
   /** Present only when it changed; null clears the goal, absent leaves it unchanged. */

@@ -52,6 +52,8 @@ Everything is under the app data directory (`~/Library/Application Support/com.w
 
 The renderer keeps only UI conveniences in `localStorage` (`wackcode:*` keys such as the last model, the side panel's view and width, collapsed and pinned projects, and Git mode's last repository and diff layout).
 
+`MetadataState::mutate` restores the previous execution policy on a failed operation or write, while holding the lock. Failed override saves cannot silently change permissions. Other runtime state, such as a worker crash interruption, intentionally remains updated even when saving fails.
+
 ## Shared types
 
 - A type that crosses layers changes in `src-tauri/src/models.rs`, `src/types.ts` and, if the worker sees it, `worker/src/protocol.ts` together.
@@ -90,7 +92,7 @@ not. Commands must remain in the foreground; detached daemons are outside this l
 
 - **History:** `open_task` asks an existing worker for its live snapshot; otherwise `history.rs` reads the saved session through a keyless, read-only helper. It holds the task lock through emission, never needs a connection or workspace, and never starts a worker.
 - **Spawn:** any command that talks to a chat's worker goes through `ensure_worker`, which starts one if needed. Never assume a worker is running.
-- **Fingerprint:** provider, model and the trusted package resources resolved at spawn. When it changes, the worker is killed and respawned, even mid-run. Settings that apply live (tools, prompts, sub-agents, MCP, skills, commands, memory, computer use, a provider's on/off switch) travel in `init` and in `set_*` commands and must stay out of the fingerprint.
+- **Fingerprint:** provider, model and the trusted package resources resolved at spawn. When it changes, the worker is killed and respawned, even mid-run. Settings that apply live (tools, prompts, execution policy, sub-agents, MCP, skills, commands, memory, computer use, a provider's on/off switch) travel in `init` and in `set_*` commands and must stay out of the fingerprint.
 - **Idle reaper:** stops a worker 15 minutes after its last output, never the open chat (`SelectedTask`) and never the newest four. It takes the chat's task lock and re-checks status, so it can't race a run.
 - **Stopping vs crashing:** intentional stops remove the worker from the registry *before* signalling, so any exit while still registered is reported as a crash. `killpg` takes down the worker's whole process group, including stdio MCP servers.
 

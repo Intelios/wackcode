@@ -199,7 +199,7 @@ describe("Transcript sub-agent calls", () => {
 
   it("shows a SubAgent chip from the call's arguments, then live progress, then the final result", () => {
     const view = render(<Transcript messages={[call]} running />);
-    const chip = screen.getByRole("button", { name: "SubAgent Scout, queued: Map the worker" });
+    const chip = screen.getByRole("button", { name: /^SubAgent Scout, queued: Map the worker\./ });
     expect(within(chip).getByText("SubAgent")).toBeInTheDocument();
     expect(within(chip).getByText("Scout")).toBeInTheDocument();
     expect(within(chip).getByText("Map the worker")).toBeInTheDocument();
@@ -207,7 +207,7 @@ describe("Transcript sub-agent calls", () => {
 
     const live = { v: 1, mode: "single", results: [{ agent: "scout", task: "Map the worker", readOnly: true, status: "running", activity: [{ tool: "read", subject: "worker/src/index.ts" }], usage }] };
     view.rerender(<Transcript messages={[call]} running liveToolDetails={{ "call-1": live }} />);
-    expect(screen.getByRole("button", { name: /^SubAgent Scout, working/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^SubAgent Scout, working/ })).toHaveAccessibleName(/Access: read-only/);
     expect(screen.getByText("Reading")).toBeInTheDocument();
     expect(screen.getByText("index.ts")).toBeInTheDocument();
 

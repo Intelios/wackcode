@@ -37,9 +37,13 @@ impl MetadataState {
     pub fn mutate<T>(&self, operation: impl FnOnce(&mut AppData) -> Result<T, String>) -> Result<T, String> {
         let result = {
             let mut data = self.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
-            let result = operation(&mut data)?;
-            save_to_path(&self.data_path, &data)?;
-            result
+            // Access permissions must remain at their saved value on failure. Other state,
+            // such as a worker crash interruption, intentionally survives a failed save.
+            let previous_policy = data.execution_policy.clone();
+            let result = operation(&mut data)
+                .and_then(|result| save_to_path(&self.data_path, &data).map(|_| result));
+            if result.is_err() { data.execution_policy = previous_policy; }
+            result?
         };
         Ok(result)
     }
@@ -86,6 +90,37 @@ mod tests {
         assert!(content.contains("subagents"));
         assert!(!content.contains("apiKey"));
         assert!(!content.contains("authPath"));
+    }
+
+    #[test]
+    fn execution_policy_persists_and_failed_saves_leave_effective_settings_unchanged() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = MetadataState {
+            data: Mutex::new(AppData::default()),
+            data_path: directory.path().join("wackcode.json"),
+            secrets: SecretStore::load(directory.path()).unwrap(),
+        };
+        let enabled = crate::models::ExecutionPolicyConfig {
+            unrestricted_planning: true, unrestricted_subagents: true,
+        };
+        state.mutate(|data| { data.execution_policy = enabled.clone(); Ok(()) }).unwrap();
+        let reloaded: AppData = serde_json::from_str(&fs::read_to_string(&state.data_path).unwrap()).unwrap();
+        assert_eq!(reloaded.execution_policy, enabled);
+
+        // A directory in place of the temporary file makes the next write fail deterministically.
+        fs::create_dir(state.data_path.with_extension("json.tmp")).unwrap();
+        assert!(state.mutate(|data| {
+            data.execution_policy = crate::models::ExecutionPolicyConfig::default(); Ok(())
+        }).is_err());
+        assert_eq!(state.data.lock().unwrap().execution_policy, enabled);
+        let disk: AppData = serde_json::from_str(&fs::read_to_string(&state.data_path).unwrap()).unwrap();
+        assert_eq!(disk.execution_policy, enabled);
+
+        fs::remove_dir(state.data_path.with_extension("json.tmp")).unwrap();
+        state.mutate(|data| { data.execution_policy = crate::models::ExecutionPolicyConfig::default(); Ok(()) }).unwrap();
+        fs::create_dir(state.data_path.with_extension("json.tmp")).unwrap();
+        assert!(state.mutate(|data| { data.execution_policy = enabled.clone(); Ok(()) }).is_err());
+        assert_eq!(state.data.lock().unwrap().execution_policy, crate::models::ExecutionPolicyConfig::default());
     }
 
     #[test]

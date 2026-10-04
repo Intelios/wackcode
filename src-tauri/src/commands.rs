@@ -3,7 +3,7 @@ use crate::{
     models::{
         AppData, AppearanceConfig, AppInfo, AutoTitleConfig, BackdropMode, BootstrapPayload, BuiltinModelSuggestion,
         CheckpointChange, CheckpointRef, CreateTaskInput, DiffComment, ExportPlanInput,
-        ExtensionUiResponseInput, FavoriteModelRef, ForkTaskInput, GitBranches, GitChangeFile, GitChanges,
+        ExecutionPolicyConfig, ExtensionUiResponseInput, FavoriteModelRef, ForkTaskInput, GitBranches, GitChangeFile, GitChanges,
         GitCheckoutResult, GitCommitFiles, GitGeneratedMessage, GitLogPage, GitPrInfo,
         GitPublishInfo, GitPullResult, GitRevertResult, GitSyncStatus, GitUndoResult, ImageContent,
         InstallPackageInput,
@@ -1158,6 +1158,24 @@ pub async fn remove_background_image(
         None,
     );
     glass::sync(&app, &config)?;
+    Ok(config)
+}
+
+/// Read-only overrides are queued between runs and never enter the worker fingerprint.
+#[tauri::command]
+pub async fn set_execution_policy_config(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    input: ExecutionPolicyConfig,
+) -> Result<ExecutionPolicyConfig, String> {
+    let config = state.mutate(|data| {
+        data.execution_policy = input.clone();
+        Ok(input.clone())
+    })?;
+    worker::broadcast(&app, &json!({
+        "id": Uuid::new_v4().to_string(),
+        "type": "set_execution_policy", "executionPolicy": config
+    })).await?;
     Ok(config)
 }
 

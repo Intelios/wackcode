@@ -4,6 +4,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { DEFAULT_EXECUTION_POLICY } from "./execution-policy";
 import { api } from "./api";
 import { chatModelGone, modelDisplayName, modelIsReady, pickThinkingLevel, type ModelChoice } from "./model-utils";
 import { titleFromPrompt, samePlanState, sameTodoState, sameGoalState, applySnapshotDelta, applySubagentFrame, pendingSubagentView, pendingEchoMessage, withPendingEcho, validateInitCommand, nextMode, isPlanMode } from "./chat-utils";
@@ -33,6 +34,7 @@ import type {
   PromptConfig,
   CheckpointChange,
   CheckpointRef,
+  ExecutionPolicyConfig,
   ExtensionNotice,
   ExtensionUIRequest,
   ComputerAccessDecision,
@@ -118,6 +120,7 @@ const emptyData: AppData = {
   autoTitle: { enabled: false, providerId: null, modelId: null },
   appearance: DEFAULT_APPEARANCE,
   prompts: {},
+  executionPolicy: DEFAULT_EXECUTION_POLICY,
   mcp: { servers: [] }
 };
 
@@ -130,7 +133,7 @@ const NO_COMMENTS: DiffComment[] = [];
 /** Pending diff comments as a prompt: fix them in Build, plan the fixes otherwise. */
 function commentsPrompt(comments: DiffComment[], mode: TaskMode): string {
   const list = comments.map((comment) => `${comment.path}:${comment.line} (${comment.layer}, ${comment.side}; ${comment.revision}): ${comment.text}\nSource: ${comment.excerpt}`).join("\n\n");
-  const instruction = mode === "build" ? "Address these diff comments in the workspace, then explain what changed." : "Plan how to address these diff comments. Keep the workspace read-only.";
+  const instruction = mode === "build" ? "Address these diff comments in the workspace, then explain what changed." : "Plan how to address these diff comments. Do not implement the proposed fixes before approval.";
   return `${instruction}\n\n${list}`;
 }
 
@@ -1398,6 +1401,11 @@ export default function App() {
     setData((current) => ({ ...current, appearance: saved }));
   }
 
+  async function setExecutionPolicy(config: ExecutionPolicyConfig) {
+    const saved = await api.setExecutionPolicyConfig(config);
+    setData((current) => ({ ...current, executionPolicy: saved }));
+  }
+
   async function setPrompts(config: PromptConfig) {
     const previous = data.prompts;
     setData((current) => ({ ...current, prompts: config }));
@@ -2582,6 +2590,8 @@ export default function App() {
           backgroundImageUrl={backgroundImageUrl}
           onChooseBackgroundImage={chooseBackgroundImage}
           onRemoveBackgroundImage={removeBackgroundImage}
+          executionPolicy={data.executionPolicy ?? DEFAULT_EXECUTION_POLICY}
+          onSetExecutionPolicy={setExecutionPolicy}
           prompts={data.prompts}
           onSetPrompts={setPrompts}
           onCommandsChanged={commandsChanged}
@@ -2918,6 +2928,10 @@ export default function App() {
               agentName={agentName(data.appearance)}
               mode={currentMode}
               disabled={selectedTask ? pendingDialogTaskIds.has(selectedTask.id) : false}
+              executionPolicy={data.executionPolicy ?? DEFAULT_EXECUTION_POLICY}
+              appliedExecutionPolicy={runtime?.snapshot?.executionPolicy}
+              subagentsEnabled={data.subagents.enabled}
+              appliedSubagentsEnabled={runtime?.snapshot?.activeTools.includes("subagent")}
               onModeChange={(mode) => void setTaskMode(mode)}
               onConfigure={selectedTask ? (patch) => void configure(patch) : configureDraft}
               onSend={(message, images, files, queue) => sendPrompt(message, { images, files, queue })}

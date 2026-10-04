@@ -5,6 +5,7 @@ import {
   READ_ONLY_SUBAGENT_TOOLS,
   SUBAGENT_TOOLS,
   type AutoTitleConfig,
+  type ExecutionPolicyConfig,
   type ProviderRecord,
   type SubagentConfig,
   type SubagentModel,
@@ -20,6 +21,7 @@ import { ConfirmDialog } from "./ui/ConfirmDialog";
 
 interface Props extends ModelFavoritesProps {
   config: SubagentConfig;
+  executionPolicy?: ExecutionPolicyConfig;
   providers: ProviderRecord[];
   /** Saves the whole configuration; rejects with a user-facing message. */
   onChange: (config: SubagentConfig) => Promise<void>;
@@ -259,7 +261,7 @@ function AgentEditor({ draft, providers, favoriteModels, favoriteSaving, onSetFa
           >
             <span />
           </button>
-          <span>Can edit files <small>{draft.readOnly ? "Read-only: allowed in Plan mode, and runs in parallel" : "Can run in parallel on separate files; can't run in Plan mode"}</small></span>
+          <span>Can edit files by default <small>{draft.readOnly ? "Read-only by default: allowed in Plan mode, and runs in parallel" : "Can run in parallel on separate files; planning requires the override in Settings › Tools"}</small></span>
         </label>
       </div>
       <ModelField agentName={draft.name || "New agent"} model={draft.model} providers={providers} favoriteModels={favoriteModels} favoriteSaving={favoriteSaving} onSetFavorite={onSetFavorite} disabled={busy} onChange={(model) => onChange({ ...draft, model })} />
@@ -376,7 +378,7 @@ function AutoTitleCard({ config, providers, favoriteModels, favoriteSaving, onSe
  * Packages). Switches and model choices save at once; a custom agent's text is edited as a
  * draft and saved explicitly.
  */
-export function SubagentsSection({ config, providers, favoriteModels, favoriteSaving, onSetFavorite, onChange, webFetchEnabled = true, autoTitle, onSetAutoTitle, onOpenProviders, agentName = "WackCode" }: Props) {
+export function SubagentsSection({ executionPolicy, config, providers, favoriteModels, favoriteSaving, onSetFavorite, onChange, webFetchEnabled = true, autoTitle, onSetAutoTitle, onOpenProviders, agentName = "WackCode" }: Props) {
   const favorites = { favoriteModels, favoriteSaving, onSetFavorite };
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -454,6 +456,8 @@ export function SubagentsSection({ config, providers, favoriteModels, favoriteSa
   function renderAgent(agent: SubagentRecord) {
     const open = expanded === agent.id;
     const issue = subagentModelIssue(agent.model, providers);
+    const unlocked = agent.readOnly && executionPolicy?.unrestrictedSubagents;
+    const tools = unlocked ? [...new Set([...agent.tools, "edit", "write"])] : agent.tools;
     if (editing?.key === agent.id) {
       return (
         <article className="subagent-setting open" key={agent.id}>
@@ -479,7 +483,7 @@ export function SubagentsSection({ config, providers, favoriteModels, favoriteSa
             <Icon name="chevron" />
             <span className="subagent-setting-name">{agent.name}</span>
             <span className="subagent-badge">{agent.builtin ? "Built-in" : "Custom"}</span>
-            <span className={`subagent-badge ${agent.readOnly ? "" : "edits"}`}>{agent.readOnly ? "Read-only" : "Edits files"}</span>
+            <span className={`subagent-badge ${unlocked || !agent.readOnly ? "edits" : ""}`}>{unlocked ? "Read-only off" : agent.readOnly ? "Read-only" : "Edits files"}</span>
           </button>
           <span className={`subagent-model-summary ${issue ? "warning" : ""}`} title={issue}>
             {modelSummary(agent.model, providers)}
@@ -497,14 +501,17 @@ export function SubagentsSection({ config, providers, favoriteModels, favoriteSa
           </button>
         </div>
         <p className="subagent-setting-description">{agent.description}</p>
+        {unlocked && <p className="execution-policy-warning subagent-access-note">Read-only by default. Settings › Tools currently allows edits and unrestricted shell commands, subject to enabled tools. Read-only Plan / Ultra Plan still restricts this agent.</p>}
+        {!agent.readOnly && executionPolicy?.unrestrictedPlanning && <small className="subagent-hint">Can also run in Plan / Ultra Plan while planning restrictions are off.</small>}
         {issue && <p className="subagent-issue">{issue} It will refuse to run until you pick another model.</p>}
         {open && (
           <div className="subagent-setting-body">
             <ModelField {...favorites} agentName={agent.name} model={agent.model} providers={providers} disabled={busy} onChange={(model) => updateAgent(agent.id, { model })} />
             <div className="subagent-tools-field">
               <span className="subagent-field-label">Tools</span>
-              <div className="subagent-tool-list">{agent.tools.join(", ") || "None"}</div>
-              <WebFetchOffHint tools={agent.tools} webFetchEnabled={webFetchEnabled} />
+              <div className="subagent-tool-list">{tools.join(", ") || "None"}</div>
+              {unlocked && <small className="subagent-hint">The override adds edit/write at runtime. Settings › Tools can still switch them off; saved tools and instructions stay intact.</small>}
+              <WebFetchOffHint tools={tools} webFetchEnabled={webFetchEnabled} />
             </div>
             <div className="subagent-prompt-field">
               <span className="subagent-field-label">Instructions</span>

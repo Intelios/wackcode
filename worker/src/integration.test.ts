@@ -7,7 +7,7 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it } from "vitest";
 import { readSavedSession } from "./saved-session.js";
-import type { SessionSnapshot, TaskMode } from "./protocol.js";
+import type { ExecutionPolicyConfig, SessionSnapshot, TaskMode } from "./protocol.js";
 
 interface Checkpoint { id: string; head?: string }
 
@@ -47,6 +47,7 @@ type SnapshotView = {
   activeRun?: { runId: string; startedAt: number };
   tools?: Array<{ name: string; description: string; source: { kind: string; packageId?: string }; available: boolean; unavailableReason?: string }>;
   activeTools?: string[];
+  executionPolicy?: ExecutionPolicyConfig;
   planState?: { mode: string; phase: string; plan?: string };
   todoState?: { tasks: Array<{ id: number; subject: string; status: string }> };
   goalState?: {
@@ -127,6 +128,7 @@ interface Output {
     activeRun?: { runId: string; startedAt: number } | null;
     tree?: SnapshotView["tree"];
     sessionFile?: string;
+    executionPolicy?: ExecutionPolicyConfig;
     planState?: SnapshotView["planState"];
     todoState?: SnapshotView["todoState"];
     goalState?: SnapshotView["goalState"] | null;
@@ -185,6 +187,7 @@ class WorkerHarness {
         activeRun: output.delta.activeRun === undefined ? this.view.activeRun : output.delta.activeRun ?? undefined,
         tree: output.delta.tree ?? this.view.tree,
         sessionFile: output.delta.sessionFile ?? this.view.sessionFile,
+        executionPolicy: output.delta.executionPolicy ?? this.view.executionPolicy,
         planState: output.delta.planState ?? this.view.planState,
         todoState: output.delta.todoState ?? this.view.todoState,
         goalState: output.delta.goalState === undefined ? this.view.goalState : output.delta.goalState ?? undefined,
@@ -416,9 +419,10 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
     response.end("data: [DONE]\n\n");
     return;
   }
-  // "mcp:" prompts call their tool once per prompt, so one chat can make several calls.
+  // These scripts call their tool once per prompt, so one chat can make several calls.
   const answeredSinceUser = messages.slice(messages.map((message) => message.role).lastIndexOf("user") + 1).some((message) => message.role === "tool");
-  if (lastUserText.startsWith("mcp: ") ? !answeredSinceUser : !hasToolResult) {
+  const repeatable = lastUserText.startsWith("mcp: ") || lastUserText.startsWith("subagent ") || lastUserText.startsWith("finish plan");
+  if (repeatable ? !answeredSinceUser : !hasToolResult) {
     const toolCall = (name: string, args: Record<string, unknown>) => ({
       index: 0, id: `call-${suffix}`, type: "function",
       function: { name, arguments: JSON.stringify(args) }
@@ -446,6 +450,8 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
         ? [toolCall(lastUserText.slice(5).split(" ")[0], JSON.parse(lastUserText.slice(5).split(" ").slice(1).join(" ") || "{}"))]
         : lastUserText.startsWith("stream tool")
           ? [toolCall("bash", { command: "printf 'first line\\n'; sleep 0.3; printf 'second line\\n'" })]
+        : lastUserText.startsWith("subagent access: ")
+          ? [toolCall("subagent", JSON.parse(lastUserText.slice("subagent access: ".length)))]
         : lastUserText.startsWith("subagent single")
           ? [toolCall("subagent", { agent: "scout", task: "child-ls: look around" })]
         : lastUserText.startsWith("subagent parallel")
@@ -474,6 +480,8 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
           ? [toolCall("ls", { path: "." })]
         : lastUserText.startsWith("child-fetch: ")
           ? [toolCall("web_fetch", { url: lastUserText.slice("child-fetch: ".length) })]
+        : lastUserText.startsWith("child-shell: ")
+          ? [toolCall("bash", { command: lastUserText.slice("child-shell: ".length) })]
         : lastUserText.startsWith("child-rm")
           ? [toolCall("bash", { command: "rm -f keep.txt" })]
         : lastUserText.startsWith("child-test: ")
@@ -1694,6 +1702,111 @@ describe("built-in extensions", () => {
 });
 
 describe("Plan mode", () => {
+  it.each(["plan", "ultraplan"] as const)("applies and withdraws unrestricted %s access without persisting guidance", async (mode) => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const fixture = await mkdtemp(join(tmpdir(), "wackcode-plan-access-"));
+    cleanup.push(() => rm(fixture, { recursive: true, force: true }));
+    const workspace = join(fixture, "project");
+    await mkdir(workspace);
+    const enabled = { unrestrictedSubagents: false, unrestrictedPlanning: true };
+    const { worker, ready } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "plan-access", undefined, undefined, undefined, mode, undefined, { executionPolicy: enabled });
+    cleanup.push(() => worker.shutdown());
+    expect(ready.snapshot?.executionPolicy).toEqual(enabled);
+    const run = async (runId: string, message: string) => {
+      worker.send({ id: crypto.randomUUID(), type: "prompt", runId, message });
+      await worker.waitFor((o) => o.type === "run_state" && o.runId === runId && o.state === "idle");
+    };
+    await run("write", 'mcp: write {"path":"unlocked.txt","content":"changed"}');
+    expect(await readFile(join(workspace, "unlocked.txt"), "utf8")).toBe("changed");
+    const outside = join(fixture, "outside.txt");
+    await run("outside", `mcp: write ${JSON.stringify({ path: outside, content: "outside the project" })}`);
+    expect(await readFile(outside, "utf8")).toBe("outside the project");
+    await run("shell", 'mcp: bash {"command":"printf shell > shell.txt"}');
+    expect(await readFile(join(workspace, "shell.txt"), "utf8")).toBe("shell");
+    await run("complete", "finish plan");
+    expect(worker.view?.planState).toMatchObject({ mode, phase: "ready" });
+    for (const request of provider.requests) {
+      expect(JSON.stringify(request.body.messages).match(/WACKCODE CURRENT PLANNING ACCESS POLICY/g)).toHaveLength(1);
+    }
+    const saved = await readFile(worker.view!.sessionFile!, "utf8");
+    expect(saved).not.toContain("wackcode-execution-policy");
+    expect(saved).not.toContain("WACKCODE CURRENT PLANNING ACCESS POLICY");
+    worker.send({ id: crypto.randomUUID(), type: "set_execution_policy", executionPolicy: { unrestrictedPlanning: false, unrestrictedSubagents: false } });
+    await worker.waitFor((o) => o.type === "snapshot" && o.snapshot?.executionPolicy?.unrestrictedPlanning === false);
+    const before = provider.requests.length;
+    await run("restricted", 'mcp: write {"path":"blocked.txt","content":"blocked"}');
+    await expect(readFile(join(workspace, "blocked.txt"), "utf8")).rejects.toThrow();
+    expect(JSON.stringify(provider.requests[before].body.messages)).not.toContain("WACKCODE CURRENT PLANNING ACCESS POLICY");
+    // Rewinding into an unrestricted turn restores conversation state, never its permissions.
+    const original = worker.view!.messages.find((message) => message.role === "user")!;
+    const rewindId = crypto.randomUUID();
+    worker.send({ id: rewindId, type: "navigate", entryId: original.entryId, target: "before", kind: "rewind" });
+    expect((await worker.waitFor((o) => o.type === "response" && o.id === rewindId)).success).toBe(true);
+    expect(worker.view?.executionPolicy).toEqual({ unrestrictedPlanning: false, unrestrictedSubagents: false });
+    await run("after-rewind", 'mcp: write {"path":"rewound.txt","content":"blocked"}');
+    await expect(readFile(join(workspace, "rewound.txt"), "utf8")).rejects.toThrow();
+    expect(JSON.stringify(provider.requests.at(-1)!.body.messages)).not.toContain("WACKCODE CURRENT PLANNING ACCESS POLICY");
+    const sessionFile = worker.view!.sessionFile;
+    await worker.shutdown();
+    const restarted = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "plan-access", sessionFile, undefined, undefined, mode);
+    cleanup.push(() => restarted.worker.shutdown());
+    expect(restarted.ready.snapshot?.executionPolicy).toEqual({ unrestrictedPlanning: false, unrestrictedSubagents: false });
+    expect(restarted.ready.snapshot?.planState?.mode).toBe(mode);
+  });
+
+  it.each(["plan", "ultraplan"] as const)("allows enabled package, browser and computer actions in unrestricted %s, retaining their own controls", async (mode) => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-plan-tools-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const trusted = join(workspace, "trusted.ts");
+    await writeFile(trusted, `export default function(pi: any) { pi.registerTool({ name: "trusted_tool", label: "Trusted", description: "Explicitly loaded fixture", parameters: { type: "object", properties: {} }, async execute() { return { content: [{ type: "text", text: "trusted tool ran" }] }; } }); }`);
+    await mkdir(join(workspace, ".pi", "extensions"), { recursive: true });
+    await writeFile(join(workspace, ".pi", "extensions", "untrusted.ts"), `throw new Error("Untrusted project extension loaded");`);
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "plan-tools", undefined, undefined,
+      { extensions: [trusted], skills: [], prompts: [], themes: [] }, mode, undefined,
+      { executionPolicy: { unrestrictedPlanning: true, unrestrictedSubagents: false }, computerUse: { enabled: true } });
+    cleanup.push(() => worker.shutdown());
+    const run = async (runId: string, message: string, native?: "browser" | "computer") => {
+      const mark = worker.outputs.length;
+      const before = provider.requests.length;
+      worker.send({ id: crypto.randomUUID(), type: "prompt", runId, message });
+      if (native) {
+        const request = await worker.waitFor((o) => worker.outputs.indexOf(o) >= mark && o.type === `${native}_request`);
+        // The native access boundary can still refuse an action; no real app/browser is operated.
+        worker.send({ id: crypto.randomUUID(), type: `${native}_response`, requestId: request.requestId, success: false, error: "Fixture access denied by native controls." });
+      }
+      await worker.waitFor((o) => o.type === "run_state" && o.runId === runId && o.state === "idle");
+      return provider.requests.slice(before);
+    };
+    const installed = await run("package", "mcp: trusted_tool {}");
+    expect(JSON.stringify(installed.at(-1)!.body.messages)).toContain("trusted tool ran");
+    for (const [id, message, native] of [
+      ["browser-open", 'mcp: browser_open {"url":"http://localhost/fixture"}', "browser"],
+      ["browser-act", 'mcp: browser_act {"kind":"reload"}', "browser"],
+      ["computer-open", 'mcp: computer_open {"app":"TextEdit"}', "computer"],
+      ["computer-act", 'mcp: computer_act {"app":"TextEdit","stateId":"s1","actions":[{"kind":"press","ref":"e1-0"}]}', "computer"],
+    ] as const) {
+      const requests = await run(id, message, native);
+      expect(JSON.stringify(requests.at(-1)!.body.messages)).toContain("Fixture access denied by native controls.");
+    }
+    const mark = worker.outputs.length;
+    worker.send({ id: crypto.randomUUID(), type: "set_tools", disabledTools: ["trusted_tool", "browser_act"] });
+    worker.send({ id: crypto.randomUUID(), type: "set_computer_use", enabled: false });
+    await worker.waitFor((o) => worker.outputs.indexOf(o) >= mark && o.type === "snapshot" && !o.snapshot?.activeTools?.includes("computer_act"));
+    const disabled = await run("disabled", "mcp: trusted_tool {}");
+    const offered = (disabled[0].body.tools as Array<{ function: { name: string } }>).map((tool) => tool.function.name);
+    for (const name of ["trusted_tool", "browser_act", "computer_act", "computer_open"]) expect(offered).not.toContain(name);
+    expect(worker.outputs.some((o) => o.type === "worker_error")).toBe(false);
+    const initId = crypto.randomUUID();
+    worker.send({ id: initId, type: "init_agents", runId: "init-refused" });
+    expect(await worker.waitFor((o) => o.type === "response" && o.id === initId)).toMatchObject({ success: false, error: expect.stringContaining("Build mode") });
+    const goalId = crypto.randomUUID();
+    worker.send({ id: goalId, type: "goal_control", action: "set", objective: "Implement the fixture", runId: "goal-refused" });
+    expect(await worker.waitFor((o) => o.type === "response" && o.id === goalId)).toMatchObject({ success: false, error: expect.stringContaining("Switch to Build first") });
+  });
+
   it("publishes plan_state on mode changes and blocks mutating tools while planning", async () => {
     const provider = await startMockProvider();
     cleanup.push(provider.close);
@@ -2811,7 +2924,7 @@ describe("sub-agents", () => {
   type Details = {
     v: number;
     mode: string;
-    results: Array<{ agent: string; task: string; status: string; model?: string; output?: string; error?: string; activity: Array<{ tool: string; subject: string }>; usage: { input: number; output: number; turns: number } }>;
+    results: Array<{ agent: string; task: string; readOnly: boolean; status: string; model?: string; output?: string; error?: string; activity: Array<{ tool: string; subject: string }>; usage: { input: number; output: number; turns: number } }>;
   };
 
   function subagentResult(worker: WorkerHarness): (ToolResultBlock & { details: Details }) | undefined {
@@ -2835,6 +2948,80 @@ describe("sub-agents", () => {
     cleanup.push(() => worker.shutdown());
     return { provider, workspace, worker, ready };
   }
+
+  const accessCases = (["build", "plan", "ultraplan"] as TaskMode[]).flatMap((mode) =>
+    [false, true].flatMap((unrestrictedPlanning) => [false, true].map((unrestrictedSubagents) => ({
+      mode, unrestrictedPlanning, unrestrictedSubagents,
+    }))));
+
+  it.each(accessCases)("enforces child access in $mode (plan=$unrestrictedPlanning, children=$unrestrictedSubagents)", async ({ mode, unrestrictedPlanning, unrestrictedSubagents }) => {
+    const agents = [
+      { ...scout, builtin: true },
+      { ...scout, name: "reviewer", builtin: true },
+      { ...scout, name: "custom", builtin: false },
+      editor,
+      { ...editor, name: "custom-editor", builtin: false },
+    ];
+    const policy = { unrestrictedPlanning, unrestrictedSubagents };
+    const { provider, workspace, worker, ready } = await start(`access-${mode}-${unrestrictedPlanning}-${unrestrictedSubagents}`, {
+      subagents: config({ agents }), executionPolicy: policy,
+    }, mode);
+    expect(ready.snapshot?.executionPolicy).toEqual(policy);
+    for (const role of agents) {
+      const runId = `access-${role.name}`;
+      const file = `access-${role.name}.txt`;
+      worker.send({ id: crypto.randomUUID(), type: "prompt", runId, message: `subagent access: ${JSON.stringify({ agent: role.name, task: `child-write: access-${role.name}` })}` });
+      await worker.waitFor((o) => o.type === "run_state" && o.state === "idle" && o.runId === runId);
+      const ceiling = mode !== "build" && !unrestrictedPlanning;
+      const canWrite = !ceiling && (!role.readOnly || unrestrictedSubagents);
+      if (canWrite) expect(await readFile(join(workspace, file), "utf8")).toBe("from a sub-agent\n");
+      else await expect(readFile(join(workspace, file), "utf8")).rejects.toThrow();
+      const block = worker.view?.messages.flatMap((m) => m.blocks).filter((b) => b.toolName === "subagent" && b.type === "tool-result").at(-1);
+      const details = block?.details as Details | undefined;
+      if (ceiling && !role.readOnly) expect(block?.text).toContain("Plan mode only runs read-only sub-agents");
+      else expect(details?.results[0].readOnly).toBe(role.readOnly && !canWrite);
+    }
+    expect(provider.requests.length).toBeGreaterThan(0);
+  });
+
+  it("allows unrestricted child shell commands, while retaining global tool switches", async () => {
+    const { workspace, worker } = await start("subagents-unrestricted-shell", {
+      subagents: config(), executionPolicy: { unrestrictedPlanning: true, unrestrictedSubagents: true },
+    }, "plan");
+    await writeFile(join(workspace, "keep.txt"), "fixture");
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "shell", message: "subagent guard" });
+    await worker.waitFor((o) => o.type === "run_state" && o.runId === "shell" && o.state === "idle");
+    await expect(readFile(join(workspace, "keep.txt"), "utf8")).rejects.toThrow();
+    worker.send({ id: crypto.randomUUID(), type: "set_tools", disabledTools: ["write", "bash"] });
+    await worker.waitFor((o) => o.type === "snapshot" && o.snapshot?.activeTools?.includes("write") === false);
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "disabled", message: `subagent access: ${JSON.stringify({ agent: "scout", task: "child-write: disabled" })}` });
+    await worker.waitFor((o) => o.type === "run_state" && o.runId === "disabled" && o.state === "idle");
+    await expect(readFile(join(workspace, "disabled.txt"), "utf8")).rejects.toThrow();
+  });
+
+  it.each([false, true])("queues child override changes until the active turn finishes (initial=%s)", async (initial) => {
+    const active = { unrestrictedPlanning: false, unrestrictedSubagents: initial };
+    const next = { unrestrictedPlanning: false, unrestrictedSubagents: !initial };
+    const { provider, worker, workspace } = await start("subagents-queued-access", { subagents: config(), executionPolicy: active });
+    const barrier = provider.holdChildren(1);
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "active", message: 'subagent access: {"agent":"scout","task":"child-write: active"}' });
+    await barrier.arrived;
+    const mark = worker.outputs.length;
+    worker.send({ id: crypto.randomUUID(), type: "set_execution_policy", executionPolicy: next });
+    expect(worker.view?.executionPolicy).toEqual(active);
+    barrier.release();
+    await worker.waitFor((o) => worker.outputs.indexOf(o) >= mark && o.type === "snapshot" && o.snapshot?.executionPolicy?.unrestrictedSubagents === !initial);
+    expect(subagentResult(worker)?.details.results[0].readOnly).toBe(!initial);
+    if (initial) expect(await readFile(join(workspace, "active.txt"), "utf8")).toContain("from a sub-agent");
+    else await expect(readFile(join(workspace, "active.txt"), "utf8")).rejects.toThrow();
+    expect(worker.child.exitCode).toBeNull();
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "next", message: 'subagent access: {"agent":"scout","task":"child-write: next"}' });
+    await worker.waitFor((o) => o.type === "run_state" && o.runId === "next" && o.state === "idle");
+    const block = worker.view?.messages.flatMap((m) => m.blocks).filter((b) => b.toolName === "subagent" && b.type === "tool-result").at(-1);
+    expect((block?.details as Details).results[0].readOnly).toBe(initial);
+    if (!initial) expect(await readFile(join(workspace, "next.txt"), "utf8")).toContain("from a sub-agent");
+    else await expect(readFile(join(workspace, "next.txt"), "utf8")).rejects.toThrow();
+  });
 
   it("keeps the tool off until switched on, and applies settings live without a restart", async () => {
     const { worker, ready } = await start("subagents-toggle", {});
@@ -3366,17 +3553,27 @@ describe("MCP servers", () => {
     expect(toolResult(provider.requests[second + 1])).toContain("over sse");
   });
 
-  it("times out a tool that never answers, and Plan mode allows only tools the server marks read-only", async () => {
+  it.each(["plan", "ultraplan"] as const)("times out tools and enforces MCP access in %s with overrides and server switches", async (mode) => {
     const { provider, worker } = await start("mcp-plan", [stdioServer({ timeoutMs: 1_000 })]);
     const hung = await runPrompt(worker, provider, "mcp: mcp__mock__hang {}");
     expect(toolResult(provider.requests[hung + 1])).toContain("did not respond within 1000 ms");
 
-    worker.send({ id: crypto.randomUUID(), type: "set_mode", mode: "plan" });
-    await worker.waitFor((output) => output.type === "plan_state" && output.mode === "plan");
+    worker.send({ id: crypto.randomUUID(), type: "set_mode", mode });
+    await worker.waitFor((output) => output.type === "plan_state" && output.mode === mode);
     const peek = await runPrompt(worker, provider, "mcp: mcp__mock__peek {}");
     expect(toolResult(provider.requests[peek + 1])).toContain("peeked");
     const echo = await runPrompt(worker, provider, "mcp: mcp__mock__echo {\"text\":\"hi\"}");
     expect(toolResult(provider.requests[echo + 1])).toContain("its MCP server doesn't mark it read-only");
+
+    worker.send({ id: crypto.randomUUID(), type: "set_execution_policy", executionPolicy: { unrestrictedPlanning: true, unrestrictedSubagents: false } });
+    await worker.waitFor((o) => o.type === "snapshot" && o.snapshot?.executionPolicy?.unrestrictedPlanning === true);
+    const unlocked = await runPrompt(worker, provider, 'mcp: mcp__mock__echo {"text":"unrestricted"}');
+    expect(toolResult(provider.requests[unlocked + 1])).toContain("unrestricted");
+    const mark = worker.outputs.length;
+    worker.send({ id: crypto.randomUUID(), type: "set_mcp", servers: [stdioServer({ disabledTools: ["echo"] })] });
+    await worker.waitFor((o) => worker.outputs.indexOf(o) >= mark && o.type === "snapshot");
+    const disabled = await runPrompt(worker, provider, 'mcp: mcp__mock__echo {"text":"disabled"}');
+    expect(offeredTools(provider.requests[disabled])).not.toContain("mcp__mock__echo");
   });
 
   it("reports a server that can't start once, without holding up later runs or leaking its secrets", async () => {

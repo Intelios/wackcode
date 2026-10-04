@@ -24,7 +24,7 @@ Commands run one at a time on a serial queue, and a prompt holds the queue until
 
 Before the first `init` settles there is no session to act on, so a bypass command is held on `initSettled` rather than bounced with "Worker is not initialized": the host sends `init` and the first prompt back to back, and a stop or a follow-up sent in that window must survive it. The gate opens one macrotask later — after the microtasks queued behind `init` have run — so a held stop finds the just-started first run live and stops it through the ordinary path, and a held follow-up finds a streaming session to queue onto.
 
-Settings pushed with `set_*` (tools, prompts, sub-agents, MCP, skills, commands, memory, computer use) deliberately **queue**, so a run never sees its tools, prompt or skills change under it. They apply from the next message; nothing respawns.
+Settings pushed with `set_*` (tools, prompts, execution policy, sub-agents, MCP, skills, commands, memory, computer use) deliberately **queue**, so a run never sees its tools, prompt or skills change under it. They apply from the next message; nothing respawns.
 
 ## Model-less chats
 
@@ -74,6 +74,10 @@ A built-in that iterates past one run queues its next turn from its `agent_settl
 - Modes are `build`, `plan` and `ultraplan`. Plan and Ultra Plan both count as planning: test `mode !== "build"` (`isPlanMode` in the frontend), never `mode === "plan"`.
 - The Plan contract must stay **byte-identical**: saved chats recognise it by exact text, and an edit makes every existing Plan chat re-append it. The test pins its hash; don't just update the hash.
 - Custom prompts (Settings › Prompts) layer on top of the built-ins. Keep the Settings defaults in `src/promptDefaults.ts` aligned with the worker's prompt builders.
+
+- `executionPolicy` arrives in `init` and queued `set_execution_policy`, outside the fingerprint. Both overrides default off. Snapshots and deltas report the applied policy so a saved change never mislabels an active run.
+- Removing planning restrictions bypasses only the read-only tool policy; completion, interview, approval and Build-only workflow gates remain. `access.ts` adds transient guidance after contract reconciliation, never a session entry or a change to the canonical prompt.
+- Resolve a child from its saved role and the policy once per call. Normally read-only roles gain edit/write and unrestricted bash only with the child override and without a read-only planning parent. Editing roles remain refused by read-only planning. Disabled tools and the child-only tool inventory still apply. Result `readOnly` records that call's effective policy; saved roles and custom instructions stay intact.
 
 ## Memory
 

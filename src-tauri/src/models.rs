@@ -550,6 +550,16 @@ impl Default for AppearanceConfig {
     }
 }
 
+/// App-wide overrides of the app's read-only policies, both off until explicitly enabled.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionPolicyConfig {
+    #[serde(default)]
+    pub unrestricted_subagents: bool,
+    #[serde(default)]
+    pub unrestricted_planning: bool,
+}
+
 /// User-customized built-in prompt texts (Settings → Prompts). An absent field means the
 /// shipped default is in force. Plain text in `wackcode.json`: none of it is a credential.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -764,7 +774,7 @@ impl Default for TaskStatus {
     }
 }
 
-/// The agent's working mode. `Plan` is the read-only, plan-first mode and `UltraPlan`
+/// The agent's working mode. `Plan` is the plan-first mode, read-only by default and `UltraPlan`
 /// (`"ultraplan"`) the same mode with an exhaustive interview; the worker's built-in plan-mode
 /// extension enforces both. The record mirrors the worker's `plan_state` events and is the
 /// durable hint the UI uses before a worker reports in.
@@ -869,6 +879,8 @@ pub struct AppData {
     #[serde(default)]
     pub prompts: PromptConfig,
     #[serde(default)]
+    pub execution_policy: ExecutionPolicyConfig,
+    #[serde(default)]
     pub mcp: McpConfig,
     #[serde(default)]
     pub skills: SkillsConfig,
@@ -901,6 +913,7 @@ impl Default for AppData {
             record_usage: true,
             appearance: AppearanceConfig::default(),
             prompts: PromptConfig::default(),
+            execution_policy: ExecutionPolicyConfig::default(),
             mcp: McpConfig::default(),
             skills: SkillsConfig::default(),
             commands: CommandsConfig::default(),
@@ -1789,4 +1802,22 @@ pub struct RunFrame {
     pub session_id: String,
     pub attachment_id: String,
     pub data: String,
+}
+
+#[cfg(test)]
+mod execution_policy_tests {
+    use super::*;
+
+    #[test]
+    fn old_metadata_keeps_read_only_defaults_and_explicit_overrides_round_trip() {
+        let old: AppData = serde_json::from_value(serde_json::json!({ "version": DATA_VERSION })).unwrap();
+        assert_eq!(old.execution_policy, ExecutionPolicyConfig::default());
+        let partial: ExecutionPolicyConfig = serde_json::from_value(serde_json::json!({ "unrestrictedPlanning": true })).unwrap();
+        assert!(partial.unrestricted_planning);
+        assert!(!partial.unrestricted_subagents);
+        let mut data = old;
+        data.execution_policy = ExecutionPolicyConfig { unrestricted_planning: true, unrestricted_subagents: true };
+        let saved: AppData = serde_json::from_slice(&serde_json::to_vec(&data).unwrap()).unwrap();
+        assert_eq!(saved.execution_policy, data.execution_policy);
+    }
 }

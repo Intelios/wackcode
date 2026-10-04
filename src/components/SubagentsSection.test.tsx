@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AutoTitleConfig, ProviderRecord, SubagentConfig, SubagentRecord } from "../types";
+import type { AutoTitleConfig, ExecutionPolicyConfig, ProviderRecord, SubagentConfig, SubagentRecord } from "../types";
 import { SubagentsSection } from "./SubagentsSection";
 
 const noFavorites = { favoriteModels: [], onSetFavorite: vi.fn().mockResolvedValue(undefined) };
@@ -30,7 +30,8 @@ function renderSection(
   overrides: Partial<SubagentConfig> = {},
   providers: ProviderRecord[] = [provider],
   webFetchEnabled = true,
-  autoTitle: AutoTitleConfig = noAutoTitle
+  autoTitle: AutoTitleConfig = noAutoTitle,
+  executionPolicy?: ExecutionPolicyConfig
 ) {
   const onChange = vi.fn().mockResolvedValue(undefined);
   const onSetAutoTitle = vi.fn().mockResolvedValue(undefined);
@@ -38,6 +39,7 @@ function renderSection(
   render(
     <SubagentsSection {...noFavorites}
       config={{ ...config, ...overrides }}
+      executionPolicy={executionPolicy}
       providers={providers}
       onChange={onChange}
       webFetchEnabled={webFetchEnabled}
@@ -50,6 +52,22 @@ function renderSection(
 }
 
 describe("SubagentsSection", () => {
+  it("previews effective access while preserving saved role tools and instructions", async () => {
+    const { onChange } = renderSection({}, [provider], true, noAutoTitle, { unrestrictedPlanning: true, unrestrictedSubagents: true });
+    expect(screen.getAllByText("Read-only off")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: /^scout/ }));
+    expect(screen.getByText("read, grep, find, ls, bash, edit, write")).toBeInTheDocument();
+    expect(screen.getByText(scout.prompt)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("switch", { name: "Use scout" }));
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    expect(onChange.mock.calls[0][0].agents[0]).toEqual({ ...scout, enabled: false });
+    cleanup();
+    renderSection();
+    expect(screen.queryByText("Read-only off")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /^scout/ }));
+    expect(screen.getByText(scout.tools.join(", "))).toBeInTheDocument();
+  });
+
   it("uses the same favourites in built-in, custom-agent and automatic-title model pickers", () => {
     const reference = { providerId: provider.id, modelId: "mini" };
     const onSetFavorite = vi.fn().mockResolvedValue(undefined);

@@ -1,4 +1,5 @@
-import type { GoalState, NormalizedMessage, PlanState, SessionSnapshot, SnapshotDelta, SubagentStreamFrame, SubagentTarget, SubagentView, TaskMode, TaskRecord, TodoState } from "./types";
+import { imageDataUrl } from "./attachment-utils";
+import type { GoalState, ImageContent, NormalizedBlock, NormalizedMessage, PlanState, SessionSnapshot, SnapshotDelta, SubagentStreamFrame, SubagentTarget, SubagentView, TaskMode, TaskRecord, TaskRuntime, TodoState } from "./types";
 
 export function validateInitCommand(args: string, projectId: string | null, mode: TaskMode): void {
   if (args.trim()) throw new Error("/init does not accept arguments.");
@@ -207,6 +208,38 @@ export function mergeMessages(messages: NormalizedMessage[], upserts: Normalized
     else next.push(upsert);
   }
   return next;
+}
+
+/**
+ * The optimistic echo of a message just sent: what the transcript shows until the worker's
+ * snapshot carries the real one. A send can sit behind a worker respawn, a workspace
+ * checkpoint and MCP servers connecting before the worker records the message, and the
+ * composer has already cleared — without the echo the bubble simply pops in late. The echo
+ * reuses the sent text (attached files ride it, `splitFileSection` reads them back out) and
+ * previews images from the composer's own copies; ids and entry ids belong to the real message,
+ * so transcript actions (which are disabled while the run is active anyway) never see it.
+ */
+export function pendingEchoMessage(sent: string, images: ImageContent[] | undefined, startedAt: number): NormalizedMessage {
+  const blocks: NormalizedBlock[] = [];
+  if (sent) blocks.push({ type: "text", text: sent });
+  for (const image of images ?? []) blocks.push({ type: "image", mimeType: image.mimeType, thumbnail: imageDataUrl(image) });
+  return { id: `pending:${startedAt}`, role: "user", timestamp: startedAt, blocks };
+}
+
+/**
+ * The transcript's message list: the snapshot's, plus the pending echo while the run it opened
+ * has no user message of its own yet. The same arrival test the transcript uses for the active
+ * turn (`timestamp >= activeRun.startedAt`): the worker timestamps the real message when it
+ * records it, always after `startedAt`. Returns the snapshot's array itself when there is
+ * nothing to append, keeping its identity for the memoized rows.
+ */
+export function withPendingEcho(runtime: TaskRuntime | undefined): NormalizedMessage[] {
+  const pending = runtime?.pendingMessage;
+  const messages = runtime?.snapshot?.messages ?? [];
+  if (!pending) return messages;
+  const arrived = messages.some((message) => message.role === "user" && message.timestamp !== undefined
+    && message.timestamp >= (pending.timestamp ?? Number.NEGATIVE_INFINITY));
+  return arrived ? messages : [...messages, pending];
 }
 
 /** The side panel's copy of a sub-agent it has just started watching, before the first frame. */

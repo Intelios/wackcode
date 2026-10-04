@@ -1130,6 +1130,10 @@ export interface TaskRuntime {
   slashCommandsError?: string;
   snapshot?: SessionSnapshot;
   partial?: NormalizedMessage;
+  /** The message just sent, shown in the transcript until the worker's snapshot records it.
+   *  Set at send time; cleared when the run settles. `withPendingEcho` hides it once the real
+   *  user message arrives, so the worker's session stays authoritative. */
+  pendingMessage?: NormalizedMessage;
   /** Active prompt clock. The worker event supplies the run id after accepting the prompt. */
   activeRun?: { runId?: string; startedAt: number };
   activity?: string;

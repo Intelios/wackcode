@@ -6,7 +6,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { api } from "./api";
 import { chatModelGone, modelDisplayName, modelIsReady, pickThinkingLevel, type ModelChoice } from "./model-utils";
-import { titleFromPrompt, samePlanState, sameTodoState, sameGoalState, applySnapshotDelta, applySubagentFrame, pendingSubagentView, validateInitCommand, nextMode, isPlanMode } from "./chat-utils";
+import { titleFromPrompt, samePlanState, sameTodoState, sameGoalState, applySnapshotDelta, applySubagentFrame, pendingSubagentView, pendingEchoMessage, withPendingEcho, validateInitCommand, nextMode, isPlanMode } from "./chat-utils";
 import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix } from "./tree-utils";
 import { composeFileSection, splitFileSection, type FileAttachment } from "./attachment-utils";
 import { displayAgentName, hasSubagentCall, pruneDisabledTools, sameToolCatalog, subagentDetailsFor } from "./tool-utils";
@@ -832,6 +832,9 @@ export default function App() {
             ...current,
             [taskId]: {
               ...current[taskId], activeRun: undefined, activity: undefined, liveToolText: {}, liveToolDetails: {},
+              // The run settled: whatever it was still echoing has either long since arrived or
+              // was never recorded (a refused or stopped run) — either way the echo is over.
+              pendingMessage: undefined,
               // A crashed worker cannot send the child's final frame. Keep its transcript, but
               // stop live reasoning timers along with the parent run.
               ...(current[taskId]?.subagentView ? { subagentView: { ...current[taskId].subagentView, live: false } } : {})
@@ -1561,7 +1564,7 @@ export default function App() {
       const mode = modeOverride ?? active.mode ?? "build";
       if (!pendingSlash) setData((current) => ({ ...current, tasks: [...current.tasks, task] }));
       patchTask(task.id, { status: "running", lastError: null, mode });
-      patchRuntime(task.id, { error: undefined, activity: "starting", activeRun: { startedAt } });
+      patchRuntime(task.id, { error: undefined, activity: "starting", activeRun: { startedAt }, pendingMessage: pendingEchoMessage(sent, images, startedAt) });
       try {
         await api.prompt({
           taskId: task.id,
@@ -1578,7 +1581,7 @@ export default function App() {
         // Stay on the hero; returning false restores the draft in the composer.
         setTransitioning(undefined);
         patchTask(task.id, { status: "idle" });
-        patchRuntime(task.id, { error: String(reason), activeRun: undefined });
+        patchRuntime(task.id, { error: String(reason), activeRun: undefined, pendingMessage: undefined });
         return false;
       }
       // Selection happens after api.prompt so open_task's ensure_worker finds the
@@ -1617,7 +1620,7 @@ export default function App() {
     const startedAt = Date.now();
     const ownMode = task.id === selectedTask?.id ? currentMode : runtimes[task.id]?.planState?.mode ?? task.mode;
     patchTask(task.id, { status: "running", lastError: null });
-    patchRuntime(task.id, { error: undefined, activity: "starting", activeRun: { startedAt } });
+    patchRuntime(task.id, { error: undefined, activity: "starting", activeRun: { startedAt }, pendingMessage: pendingEchoMessage(sent, images, startedAt) });
     try {
       await api.prompt({
         taskId: task.id,
@@ -1636,7 +1639,7 @@ export default function App() {
       return true;
     } catch (reason) {
       patchTask(task.id, { status: "idle" });
-      patchRuntime(task.id, { error: String(reason), activeRun: undefined });
+      patchRuntime(task.id, { error: String(reason), activeRun: undefined, pendingMessage: undefined });
       return false;
     }
   }
@@ -2705,7 +2708,11 @@ export default function App() {
             <SubagentPanelLink.Provider value={subagentLink}>
             <ToolImageSource.Provider value={loadToolImage}>
             <Transcript
-              messages={runtime?.snapshot?.messages ?? []}
+              messages={transitioning?.taskId === selectedTask.id
+                // The hero send still carries this text in the frozen composer; the echo takes
+                // over only once that handoff has cleared (arrival or its timeout).
+                ? (runtime?.snapshot?.messages ?? [])
+                : withPendingEcho(runtime)}
               modelSwitches={displayModelSwitches}
               partial={runtime?.partial}
               running={selectedTask.status === "running" || selectedTask.status === "stopping"}

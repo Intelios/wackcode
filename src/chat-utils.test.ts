@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { applySnapshotDelta, applySubagentFrame, displayPath, formatRelativeTime, formatRunDuration, formatTokens, isPlanMode, mergeMessages, nextMode, pendingSubagentView, planButtonTarget, sameGoalState, samePlanState, sameTodoState, sortedArchived, thinkingStream, titleFromPrompt, validateInitCommand } from "./chat-utils";
-import type { GoalState, NormalizedMessage, SessionSnapshot, SnapshotDelta, SubagentStreamFrame } from "./types";
+import { applySnapshotDelta, applySubagentFrame, displayPath, formatRelativeTime, formatRunDuration, formatTokens, isPlanMode, mergeMessages, nextMode, pendingEchoMessage, pendingSubagentView, planButtonTarget, sameGoalState, samePlanState, sameTodoState, sortedArchived, thinkingStream, titleFromPrompt, validateInitCommand, withPendingEcho } from "./chat-utils";
+import type { GoalState, ImageContent, NormalizedMessage, SessionSnapshot, SnapshotDelta, SubagentStreamFrame, TaskRuntime } from "./types";
 
 describe("titleFromPrompt", () => {
   it("uses the first non-empty line", () => {
@@ -327,6 +327,51 @@ describe("thinkingStream", () => {
   it("keeps only the tail", () => {
     const text = `${"word ".repeat(80)}end. `;
     expect(thinkingStream(text)).toBe(text.trim().slice(-200));
+  });
+});
+
+describe("the pending echo of a just-sent message", () => {
+  const images: ImageContent[] = [{ type: "image", data: "AAAA", mimeType: "image/png" }];
+
+  it("carries the sent text and image previews, keyed by the run's start", () => {
+    const echo = pendingEchoMessage("Ship it", images, 1_000);
+    expect(echo).toEqual({
+      id: "pending:1000",
+      role: "user",
+      timestamp: 1_000,
+      blocks: [
+        { type: "text", text: "Ship it" },
+        { type: "image", mimeType: "image/png", thumbnail: "data:image/png;base64,AAAA" }
+      ]
+    });
+    expect(pendingEchoMessage("", undefined, 2_000).blocks).toEqual([]);
+  });
+
+  it("appends the echo until a user message of the run arrives, then hands back the snapshot's list", () => {
+    const history: NormalizedMessage[] = [
+      { id: "old-user", role: "user", timestamp: 500, blocks: [{ type: "text", text: "Before" }] },
+      { id: "old-answer", role: "assistant", timestamp: 600, blocks: [] }
+    ];
+    const runtime: TaskRuntime = {
+      snapshot: { messages: history } as SessionSnapshot,
+      pendingMessage: pendingEchoMessage("Ship it", undefined, 1_000)
+    };
+    // Older user messages never satisfy the arrival test, so the echo shows.
+    const shown = withPendingEcho(runtime);
+    expect(shown.map((message) => message.id)).toEqual(["old-user", "old-answer", "pending:1000"]);
+    expect(shown[0]).toBe(history[0]);
+
+    // The worker records the real message at or after the run's start: same array, no echo.
+    const arrived: NormalizedMessage = { id: "real", role: "user", timestamp: 1_000, blocks: [{ type: "text", text: "Ship it" }] };
+    const settled: TaskRuntime = { ...runtime, snapshot: { messages: [...history, arrived] } as SessionSnapshot };
+    expect(withPendingEcho(settled)).toBe(settled.snapshot!.messages);
+  });
+
+  it("returns the snapshot's list untouched with no echo and for an empty runtime", () => {
+    const history: NormalizedMessage[] = [{ id: "only", role: "assistant", blocks: [] }];
+    const runtime: TaskRuntime = { snapshot: { messages: history } as SessionSnapshot };
+    expect(withPendingEcho(runtime)).toBe(history);
+    expect(withPendingEcho(undefined)).toEqual([]);
   });
 });
 

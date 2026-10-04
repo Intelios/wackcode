@@ -34,6 +34,32 @@ describe("Transcript model switches", () => {
   });
 });
 
+describe("Transcript pending echo", () => {
+  it("shows a just-sent message as the active turn while the run has no recorded message yet", () => {
+    const startedAt = 1_000;
+    const echo: NormalizedMessage = {
+      id: `pending:${startedAt}`,
+      role: "user",
+      timestamp: startedAt,
+      blocks: [{ type: "text", text: "Ship it" }]
+    };
+    const history: NormalizedMessage[] = [
+      { id: "u", role: "user", timestamp: 500, blocks: [{ type: "text", text: "Hello" }] },
+      { id: "a", role: "assistant", blocks: [{ type: "text", text: "Hi" }] }
+    ];
+    const { container } = render(<Transcript messages={[...history, echo]} running activeRun={{ startedAt }} activity="starting" />);
+    const transcript = container.querySelector(".transcript");
+    const rows = Array.from(transcript?.children ?? []).map((entry) => entry.textContent?.trim() ?? "");
+    expect(rows.slice(0, 3)).toEqual(["Hello", "Hi", "Ship it"]);
+    // The echo is the active turn: the run's clock chip sits under it, not as a bare row.
+    expect(rows[3]).toMatch(/^Working for/);
+    expect(rows).toContain("Working…");
+    // No message actions offer retry or edit while the run is live (actionsEnabled stays off
+    // for a running chat).
+    expect(screen.queryByRole("button", { name: /retry/i })).toBeNull();
+  });
+});
+
 describe("Transcript tool output", () => {
   it("keeps live output collapsed, replaces updates, then shows the final result", () => {
     const call: NormalizedMessage = {

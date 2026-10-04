@@ -311,7 +311,7 @@ pub fn menu_titles(app: &AXUIElement) -> Vec<String> {
 }
 
 /// Presses the menu-bar item at `path` (e.g. File › Save As…) without opening the menus.
-pub fn press_menu(app: &AXUIElement, path: &[String]) -> Result<(), String> {
+pub fn press_menu(app: &AXUIElement, path: &[String], before_press: &dyn Fn(&Element)) -> Result<(), String> {
     let mut container = element(app, "AXMenuBar").ok_or("This app has no menu bar that Accessibility can reach.")?;
     for (depth, wanted) in path.iter().enumerate() {
         let wanted_normalized = normalize_title(wanted);
@@ -327,6 +327,7 @@ pub fn press_menu(app: &AXUIElement, path: &[String]) -> Result<(), String> {
             if boolean(&item, "AXEnabled") == Some(false) {
                 return Err(format!("The menu item “{wanted}” is disabled."));
             }
+            before_press(&item);
             return perform(&item, "AXPress").map_err(|error| describe_error(error, "choosing the menu item"));
         }
         // A menu bar item or submenu item holds its menu as its only child.

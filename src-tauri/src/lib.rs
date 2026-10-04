@@ -251,6 +251,7 @@ pub fn run() {
             computer_use::computer_use_reset_permissions,
             computer_use::computer_use_relaunch,
             computer_use::set_computer_use_config,
+            computer_use::computer_use_cursor_appearance,
             computer_use::computer_use_respond_access,
             computer_use::computer_use_list_apps,
         ])

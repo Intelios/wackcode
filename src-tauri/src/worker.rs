@@ -921,8 +921,10 @@ pub fn start_idle_reaper(app: AppHandle) -> tauri::async_runtime::JoinHandle<()>
     })
 }
 
+// Tauri's mode chooses resources. A packaged `build --debug` still needs its bundled Node
+// and scripts; Rust's debug assertions do not mean a dev server or a shell PATH is available.
 fn worker_entry_path(app: &AppHandle) -> Result<PathBuf, String> {
-    if cfg!(debug_assertions) {
+    if tauri::is_dev() {
         Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist/index.js"))
     } else {
         Ok(app
@@ -934,7 +936,7 @@ fn worker_entry_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn manager_entry_path(app: &AppHandle) -> Result<PathBuf, String> {
-    if cfg!(debug_assertions) {
+    if tauri::is_dev() {
         Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist/manager.js"))
     } else {
         Ok(app
@@ -946,7 +948,7 @@ fn manager_entry_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 pub(crate) fn mcp_probe_entry_path(app: &AppHandle) -> Result<PathBuf, String> {
-    if cfg!(debug_assertions) {
+    if tauri::is_dev() {
         Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist/mcp-probe.js"))
     } else {
         Ok(app
@@ -958,7 +960,7 @@ pub(crate) fn mcp_probe_entry_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 pub(crate) fn skills_scan_entry_path(app: &AppHandle) -> Result<PathBuf, String> {
-    if cfg!(debug_assertions) {
+    if tauri::is_dev() {
         Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist/skills-scan.js"))
     } else {
         Ok(app
@@ -971,7 +973,7 @@ pub(crate) fn skills_scan_entry_path(app: &AppHandle) -> Result<PathBuf, String>
 
 /// The keyless scan Settings › Commands runs (`commands-scan.js`; see `slash_commands.rs`).
 pub(crate) fn commands_scan_entry_path(app: &AppHandle) -> Result<PathBuf, String> {
-    if cfg!(debug_assertions) {
+    if tauri::is_dev() {
         Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist/commands-scan.js"))
     } else {
         Ok(app
@@ -983,7 +985,7 @@ pub(crate) fn commands_scan_entry_path(app: &AppHandle) -> Result<PathBuf, Strin
 }
 
 fn catalog_entry_path(app: &AppHandle) -> Result<PathBuf, String> {
-    if cfg!(debug_assertions) {
+    if tauri::is_dev() {
         Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist/catalog.js"))
     } else {
         Ok(app
@@ -1031,7 +1033,7 @@ pub async fn list_builtin_models(app: &AppHandle) -> Result<Vec<BuiltinModelSugg
 /// pointed at this copy instead. Falls back to bare `npm` when the staged copy is absent.
 fn npm_command(app: &AppHandle) -> Option<Vec<String>> {
     let node = node_executable_path().ok()?;
-    let cli = if cfg!(debug_assertions) {
+    let cli = if tauri::is_dev() {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/npm/bin/npm-cli.js")
     } else {
         app.path()
@@ -1225,7 +1227,7 @@ pub fn package_dir(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 pub(crate) fn node_executable_path() -> Result<PathBuf, String> {
-    if cfg!(debug_assertions) {
+    if tauri::is_dev() {
         Ok(std::env::var_os("WACKCODE_NODE_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("node")))

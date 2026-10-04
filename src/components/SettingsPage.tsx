@@ -68,7 +68,7 @@ const COMPUTER_USE_ACTIONS: ComputerUseActions = {
   onRelaunch: api.computerUseRelaunch,
   onListApps: api.computerUseListApps
 };
-const COMPUTER_USE_OFF: ComputerUseConfig = { enabled: false, neverAllow: [] };
+const COMPUTER_USE_OFF: ComputerUseConfig = { enabled: false, showAgentCursor: true, neverAllow: [] };
 
 type SectionId = "providers" | "packages" | "skills" | "commands" | "memory" | "tools" | "mcp" | "appearance" | "prompts" | "subagents" | "computer_use" | "integrations" | "about";
 

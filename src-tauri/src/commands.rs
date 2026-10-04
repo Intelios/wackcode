@@ -3286,6 +3286,7 @@ fn export_plan_to_workspace(workspace: &str, content: &str) -> Result<String, St
 
 #[tauri::command]
 pub async fn stop_task(app: AppHandle, task_id: String) -> Result<(), String> {
+    crate::computer_use::stop_cursor(&app, &task_id);
     worker::send(
         &app,
         &task_id,

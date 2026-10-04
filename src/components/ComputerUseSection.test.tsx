@@ -17,11 +17,18 @@ function setup(status: Partial<ComputerUseStatus> = {}, neverAllow: string[] = [
     onListApps: vi.fn().mockResolvedValue([{ name: "Notes", bundleId: "com.apple.Notes" }])
   };
   const onChange = vi.fn().mockResolvedValue(undefined);
-  render(<ComputerUseSection config={{ enabled: true, neverAllow }} actions={actions} agentName="Nova" onChange={onChange} />);
+  render(<ComputerUseSection config={{ enabled: true, showAgentCursor: true, neverAllow }} actions={actions} agentName="Nova" onChange={onChange} />);
   return { actions, onChange };
 }
 
 describe("ComputerUseSection", () => {
+  it("can hide the agent cursor without changing access or computer use", async () => {
+    const { onChange } = setup({}, ["com.example.Secret"]);
+    const checkbox = screen.getByRole("checkbox", { name: "Show agent cursor" });
+    expect(checkbox).toBeChecked();
+    fireEvent.click(checkbox);
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ enabled: true, showAgentCursor: false, neverAllow: ["com.example.Secret"] }));
+  });
   it("says it is ready once both permissions are allowed", async () => {
     setup();
     expect(await screen.findByText("Ready")).toBeInTheDocument();
@@ -54,10 +61,10 @@ describe("ComputerUseSection", () => {
     const { onChange } = setup({}, ["com.apple.Notes"]);
     expect(await screen.findByText("Notes")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Allow asking for Notes again" }));
-    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ enabled: true, neverAllow: [] }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ enabled: true, showAgentCursor: true, neverAllow: [] }));
     fireEvent.change(screen.getByRole("textbox", { name: "Bundle id to never allow" }), { target: { value: "com.example.Secret" } });
     fireEvent.keyDown(screen.getByRole("textbox", { name: "Bundle id to never allow" }), { key: "Enter" });
-    await waitFor(() => expect(onChange).toHaveBeenLastCalledWith({ enabled: true, neverAllow: ["com.apple.Notes", "com.example.Secret"] }));
+    await waitFor(() => expect(onChange).toHaveBeenLastCalledWith({ enabled: true, showAgentCursor: true, neverAllow: ["com.apple.Notes", "com.example.Secret"] }));
   });
 
   it("rechecks the permissions on demand", async () => {

@@ -20,6 +20,7 @@ import { EMPTY_DRAFT, useComposerDrafts } from "./hooks/useComposerDrafts";
 import { useModelMemory } from "./hooks/useModelMemory";
 import { useModelFavorites } from "./hooks/useModelFavorites";
 import { DEFAULT_APPEARANCE, applyTheme, cacheTheme } from "./theme";
+import { computerCursorAppearance } from "./computer-cursor";
 import { AssistantNameContext, agentName } from "./agentName";
 import { Backdrop } from "./components/Backdrop";
 import type {
@@ -1360,8 +1361,9 @@ export default function App() {
     if (booting) return;
     // Image mode without a stored image (it failed to import) looks like Solid, not a hole.
     const appearance = data.appearance.backdrop === "image" && !data.appearance.backgroundImage ? { ...data.appearance, backdrop: "solid" as const } : data.appearance;
-    applyTheme(appearance);
+    const theme = applyTheme(appearance);
     cacheTheme(appearance);
+    void api.computerUseCursorAppearance(computerCursorAppearance(appearance, theme)).catch(() => undefined);
   }, [booting, data.appearance]);
 
   /** Live preview while a colour picker or slider is being dragged; nothing is saved. */
@@ -2568,7 +2570,7 @@ export default function App() {
           onSetDisabledTools={setDisabledTools}
           subagents={data.subagents}
           onSetSubagents={setSubagents}
-          computerUse={data.computerUse ?? { enabled: false, neverAllow: [] }}
+          computerUse={data.computerUse ?? { enabled: false, showAgentCursor: true, neverAllow: [] }}
           computerUseSupported={computerUseSupported}
           onSetComputerUse={setComputerUse}
           autoTitle={data.autoTitle}

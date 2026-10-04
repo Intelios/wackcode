@@ -638,14 +638,50 @@ pub const DEFAULT_SUBAGENT_CONCURRENCY: u32 = 4;
 
 /// The computer-use built-in (`computer_use/`). Off by default. Which apps a chat may use is
 /// never stored: grants live in memory per chat until the app quits.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ComputerUseConfig {
     #[serde(default)]
     pub enabled: bool,
+    #[serde(default = "default_show_agent_cursor")]
+    pub show_agent_cursor: bool,
     /// Bundle ids the user never wants the agent to use, on top of the built-in block list.
     #[serde(default)]
     pub never_allow: Vec<String>,
+}
+
+fn default_show_agent_cursor() -> bool { true }
+
+#[cfg(test)]
+mod computer_use_config_tests {
+    use super::ComputerUseConfig;
+    #[test]
+    fn cursor_defaults_on_for_new_and_existing_installations() {
+        assert!(ComputerUseConfig::default().show_agent_cursor);
+        let old: ComputerUseConfig = serde_json::from_str(r#"{"enabled":true,"neverAllow":["com.example.Secret"]}"#).unwrap();
+        assert!(old.show_agent_cursor);
+        assert!(old.enabled);
+        assert_eq!(old.never_allow, ["com.example.Secret"]);
+        let off: ComputerUseConfig = serde_json::from_str(r#"{"enabled":true,"showAgentCursor":false}"#).unwrap();
+        assert!(!off.show_agent_cursor);
+        assert_eq!(serde_json::to_value(off).unwrap()["showAgentCursor"], false);
+    }
+}
+
+impl Default for ComputerUseConfig {
+    fn default() -> Self { Self { enabled: false, show_agent_cursor: true, never_allow: Vec::new() } }
+}
+
+/// Runtime-only resolved renderer tokens for the native computer-use cursor.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerCursorAppearance {
+    pub agent_name: String,
+    pub accent: String,
+    pub outline: String,
+    pub surface: String,
+    pub text: String,
+    pub muted_text: String,
 }
 
 fn default_subagent_concurrency() -> u32 {

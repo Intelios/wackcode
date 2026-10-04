@@ -157,4 +157,17 @@ mod tests {
         // Without skipping it, our own overlay would cover everything.
         assert_eq!(topmost_owner(&windows, (10.0, 10.0), 42, 100, &[], describe), HitOwner::Own);
     }
+
+    #[test]
+    fn overlay_exemption_is_a_window_number_not_an_app_exemption() {
+        let bounds = rect(0.0, 0.0, 800.0, 600.0);
+        let overlay = WindowEntry { number: 99, pid: 100, bounds };
+        let own_window = WindowEntry { number: 3, pid: 100, bounds };
+        let blocked = WindowEntry { number: 4, pid: 7, bounds };
+        let target = WindowEntry { number: 1, pid: 42, bounds };
+        let describe = |_| ("Terminal".to_string(), true);
+        assert_eq!(topmost_owner(&[overlay.clone(), own_window, target.clone()], (10.0, 10.0), 42, 100, &[99], describe), HitOwner::Own);
+        assert_eq!(topmost_owner(&[overlay.clone(), blocked, target.clone()], (10.0, 10.0), 42, 100, &[99], describe), HitOwner::Blocked("Terminal".into()));
+        assert_eq!(topmost_owner(&[overlay, target], (10.0, 10.0), 42, 100, &[99], describe), HitOwner::Target);
+    }
 }

@@ -58,6 +58,7 @@ Off by default. Rust `computer_use/` is the security boundary; the worker's tool
 - Secure text fields are never read or typed into.
 - All AX handles live on the engine thread (`engine.rs`).
 - Sub-agents never get computer tools, and `computer_response` bypasses the worker's queue like `browser_response`.
+- The agent cursor is decoration: it ignores mouse input and has no accessibility children or hit-test target. Only its exact registered window number is skipped by pointer hit tests, never WackCode's other windows. Its coordinates stay in Rust, its labels never contain typed text or key contents, and single-window captures continue to exclude it. Showing it never activates an app or moves the system pointer.
 
 ## Browser preview
 

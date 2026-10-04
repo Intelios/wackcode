@@ -18,8 +18,19 @@ How WackCode's processes fit together, where state lives, and the rules that kee
 | Subscription models, at launch | `worker/src/subscription-models.ts` | Reads the signed-in `auth.json` files Rust names | Never; static catalogue, no token refresh |
 
 Each chat worker runs one Pi session in-process. Sub-agents are in-memory child sessions inside the same worker (`subagent-runner.ts`), not separate processes. Helpers are short-lived and do one job each. The dev app runs them from `worker/dist/`; the bundle runs `resources/worker/dist/` on a pinned Node runtime (`runtime-lock.json`).
+Resource selection follows Tauri's development mode, so a packaged debug build also uses
+the bundled runtime and scripts when opened from Finder.
 
 Native subsystems live in Rust and never in a worker: the per-chat browser (`browser.rs`, a child `WKWebView`), the terminal (`terminal.rs`), project commands (`run_command.rs`), computer use (`computer_use/`), the window backdrop (`glass.rs`), and the menu bar duck (`menu_bar.rs`). A worker asks for browser and computer work over the protocol (`browser_request`, `computer_request`); the host does it and enforces the rules.
+
+Computer use's agent cursor is a native, nonactivating AppKit panel, drawn on the main thread.
+The engine publishes only dispatched action kinds and screen-point geometry; AX handles stay
+on its thread. One latest action owns the marker globally, guarded by run generation, action
+sequence and cancellation token. Covered targets hide it; moved targets invalidate it. Stop
+and disposal retire ownership before queued UI callbacks run. After 600 ms it keeps the
+completed action label (“Clicked”, “Typed”, etc.) in a subdued, compact name pill. The renderer supplies resolved
+persona/theme tokens via `computer_use_cursor_appearance`; these and `showAgentCursor` are
+cosmetic settings and never reach the worker or its fingerprint.
 
 ## Where state lives
 

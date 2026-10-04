@@ -780,8 +780,20 @@ export interface AppData {
 /** The computer-use built-in. Off by default; per-app grants are never stored. */
 export interface ComputerUseConfig {
   enabled: boolean;
+  /** A separate desktop marker for dispatched actions; takes effect without restarting. */
+  showAgentCursor: boolean;
   /** Bundle ids the agent may never use, on top of the built-in block list. */
   neverAllow: string[];
+}
+
+/** Resolved theme tokens for the native cursor; runtime-only and never sent to a worker. */
+export interface ComputerCursorAppearance {
+  agentName: string;
+  accent: string;
+  outline: string;
+  surface: string;
+  text: string;
+  mutedText: string;
 }
 
 /** Live permission state from `computer_use_status`. */

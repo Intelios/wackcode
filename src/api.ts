@@ -9,6 +9,7 @@ import type {
   CheckpointChange,
   CheckpointRef,
   ComputerAccessDecision,
+  ComputerCursorAppearance,
   ComputerUseConfig,
   ComputerUseStatus,
   GitChangeFile,
@@ -108,6 +109,7 @@ export const api = {
   computerUseResetPermissions: () => invoke<void>("computer_use_reset_permissions"),
   computerUseRelaunch: () => invoke<void>("computer_use_relaunch"),
   setComputerUseConfig: (input: ComputerUseConfig) => invoke<ComputerUseConfig>("set_computer_use_config", { input }),
+  computerUseCursorAppearance: (input: ComputerCursorAppearance) => invoke<void>("computer_use_cursor_appearance", { input }),
   /** Answers an access card. "never" also adds the app to Settings' list and returns the new settings. */
   computerUseRespondAccess: (taskId: string, requestId: string, decision: ComputerAccessDecision) =>
     invoke<ComputerUseConfig | null>("computer_use_respond_access", { taskId, requestId, decision }),

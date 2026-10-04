@@ -3740,6 +3740,9 @@ span.model-row-main { cursor: default; padding-left: 13px; }
 .computer-block-title { margin: 0 0 12px; font-size: 14px; }
 .computer-block-title + .computer-block-sub { margin-top: -8px; }
 .computer-block-sub { margin: 0 0 12px; color: var(--text-dim); font-size: 11.5px; }
+.computer-cursor-setting { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.computer-cursor-setting p:first-child { margin: 0 0 5px; font-size: 12px; color: var(--text); }
+.computer-cursor-setting .computer-block-sub { margin-bottom: 0; line-height: 1.5; }
 .computer-block .error-banner { margin-top: 10px; }
 
 .computer-permissions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }

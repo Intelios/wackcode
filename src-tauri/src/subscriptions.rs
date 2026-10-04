@@ -84,7 +84,7 @@ pub fn list_subscription_providers() -> Vec<SubscriptionProviderInfo> {
 }
 
 fn entry_path(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
-    if cfg!(debug_assertions) {
+    if tauri::is_dev() {
         Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist").join(name))
     } else {
         Ok(app.path().resource_dir().map_err(|error| error.to_string())?.join("resources/worker/dist").join(name))

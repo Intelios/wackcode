@@ -12,7 +12,7 @@ pub async fn read(
     task: &TaskRecord,
     context_window: Option<u64>,
 ) -> Result<Value, String> {
-    let reader = if cfg!(debug_assertions) {
+    let reader = if tauri::is_dev() {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist/session-reader.js")
     } else {
         app.path()

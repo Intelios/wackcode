@@ -15,6 +15,7 @@
 mod apps;
 mod ax;
 mod capture;
+mod cursor;
 mod engine;
 mod geometry;
 mod input;
@@ -78,6 +79,7 @@ pub struct ComputerUseManager {
     operations: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
     engine: OnceLock<Engine>,
     own: OwnIdentity,
+    cursor: cursor::Cursor,
 }
 
 impl Default for ComputerUseManager {
@@ -87,6 +89,7 @@ impl Default for ComputerUseManager {
             operations: Mutex::new(HashMap::new()),
             engine: OnceLock::new(),
             own: OwnIdentity::current(),
+            cursor: cursor::Cursor::default(),
         }
     }
 }
@@ -120,6 +123,7 @@ impl ComputerUseManager {
                 }
             }
         }
+        self.cursor.wake();
     }
 
     /// Stops everything a chat has in flight; returns the replies of its open cards to cancel
@@ -171,8 +175,11 @@ pub async fn execute_agent_request(app: AppHandle, task_id: String, request_id: 
     let manager = app.state::<ComputerUseManager>();
     let parsed = request::parse(&request)?;
     let operation = manager.operation(&task_id);
-    let _guard = operation.lock().await;
+    // Capture ownership before waiting on the operation lock. A request queued in an old run
+    // may still settle later, but cannot acquire the next run's visual generation.
     let token = StopToken::default();
+    let cursor = manager.cursor.session(&task_id, token.clone());
+    let _guard = operation.lock().await;
     {
         let mut inner = manager.lock()?;
         if inner.cancelled.remove(&request_id) {
@@ -180,10 +187,11 @@ pub async fn execute_agent_request(app: AppHandle, task_id: String, request_id: 
         }
         inner.requests.insert(request_id.clone(), (task_id.clone(), token.clone()));
     }
-    let result = match tokio::time::timeout(OPERATION_TIMEOUT, run(&app, &manager, &task_id, parsed, &token)).await {
+    let result = match tokio::time::timeout(OPERATION_TIMEOUT, run(&app, &manager, &task_id, parsed, &token, cursor)).await {
         Ok(result) => result,
         Err(_) => {
             token.stop();
+            manager.cursor.wake();
             Err("The computer-use action took too long and was stopped.".into())
         }
     };
@@ -196,7 +204,7 @@ pub async fn execute_agent_request(app: AppHandle, task_id: String, request_id: 
     result
 }
 
-async fn run(app: &AppHandle, manager: &ComputerUseManager, task_id: &str, request: ComputerRequest, token: &StopToken) -> Result<Value, String> {
+async fn run(app: &AppHandle, manager: &ComputerUseManager, task_id: &str, request: ComputerRequest, token: &StopToken, cursor: Option<cursor::Session>) -> Result<Value, String> {
     let settings = config(app);
     if !settings.enabled {
         return Err("Computer use is switched off in Settings › Packages.".into());
@@ -207,11 +215,13 @@ async fn run(app: &AppHandle, manager: &ComputerUseManager, task_id: &str, reque
     if !permissions::accessibility() {
         return Err("WackCode doesn't have Accessibility permission, which computer use needs. Ask the user to allow it in Settings › Computer use.".into());
     }
+    manager.cursor.set_enabled(app, settings.show_agent_cursor);
     match request {
         ComputerRequest::Apps => list_apps(manager, task_id, settings).await,
-        ComputerRequest::Open { app: query } => open(app, manager, task_id, &query, settings, token).await,
+        ComputerRequest::Open { app: query } => open(app, manager, task_id, &query, settings, token, cursor).await,
         ComputerRequest::Snapshot { app: query, window } => {
             let target = running_target(app, manager, task_id, &query, settings, token).await?;
+            if let (Some(cursor), Some(pid)) = (&cursor, target.pid) { cursor.target_app(pid); }
             begin_session(app, manager, task_id, &target.name);
             snapshot(manager, task_id, target, window).await
         }
@@ -220,14 +230,16 @@ async fn run(app: &AppHandle, manager: &ComputerUseManager, task_id: &str, reque
                 return Err("WackCode doesn't have Screen Recording permission, so it can't capture windows. Use computer_snapshot, or ask the user to allow it in Settings › Computer use.".into());
             }
             let target = running_target(app, manager, task_id, &query, settings, token).await?;
+            if let (Some(cursor), Some(pid)) = (&cursor, target.pid) { cursor.target_app(pid); }
             begin_session(app, manager, task_id, &target.name);
             screenshot(manager, task_id, target, window).await
         }
         ComputerRequest::Act { app: query, state_id, actions, expect } => {
             let never_allow = settings.never_allow.clone();
             let target = running_target(app, manager, task_id, &query, settings, token).await?;
+            if let (Some(cursor), Some(pid)) = (&cursor, target.pid) { cursor.target_app(pid); }
             begin_session(app, manager, task_id, &target.name);
-            act(manager, task_id, target, state_id, actions, expect, never_allow, token.clone()).await
+            act(manager, task_id, target, state_id, actions, expect, never_allow, token.clone(), cursor).await
         }
     }
 }
@@ -371,7 +383,7 @@ async fn list_apps(manager: &ComputerUseManager, task_id: &str, settings: Comput
     Ok(json!({ "apps": apps }))
 }
 
-async fn open(app: &AppHandle, manager: &ComputerUseManager, task_id: &str, query: &str, settings: ComputerUseConfig, token: &StopToken) -> Result<Value, String> {
+async fn open(app: &AppHandle, manager: &ComputerUseManager, task_id: &str, query: &str, settings: ComputerUseConfig, token: &StopToken, cursor: Option<cursor::Session>) -> Result<Value, String> {
     let resolved = resolve_target(app, manager, task_id, query, &settings, token, true).await?;
     let (identity, launched) = match resolved {
         apps::Resolved::Running(running) => (running.identity(), false),
@@ -385,6 +397,7 @@ async fn open(app: &AppHandle, manager: &ComputerUseManager, task_id: &str, quer
     };
     begin_session(app, manager, task_id, &identity.name);
     let pid = identity.pid.ok_or("The app has no process.")?;
+    if let Some(cursor) = &cursor { cursor.target_app(pid); }
     let deadline = Instant::now() + if launched { LAUNCH_WINDOW_WAIT } else { Duration::ZERO };
     let windows = loop {
         let windows = manager
@@ -528,6 +541,8 @@ struct ActContext<'a> {
     foreground: Option<input::Foreground>,
     never_allow: Vec<String>,
     token: StopToken,
+    cursor: Option<cursor::Session>,
+    feedback: Option<cursor::Feedback>,
 }
 
 impl ActContext<'_> {
@@ -579,17 +594,44 @@ impl ActContext<'_> {
         self.token.is_stopped()
     }
 
+    /// Visual geometry is best-effort and cannot make an otherwise valid AX action fail.
+    fn visual_point(&self, window: &ax::Element, point: (f64, f64)) -> Option<cursor::Target> {
+        let frame = ax::frame(window)?;
+        if !point.0.is_finite() || !point.1.is_finite() || !frame.contains(point.0, point.1) { return None; }
+        Some(cursor::Target { pid: self.pid, window: input::window_number(window, self.pid)?, frame, point })
+    }
+
+    fn show_element(&self, element: &ax::Element) {
+        if let Some(feedback) = &self.feedback {
+            let target = ax::frame(element).filter(|frame| frame.width > 0.0 && frame.height > 0.0).and_then(|frame| {
+                let window = ax::element(element, "AXWindow").unwrap_or_else(|| self.observation.window.clone());
+                self.visual_point(&window, frame.center())
+            });
+            feedback.at(target);
+        }
+    }
+
+    fn pointer(&mut self, point: (f64, f64)) -> Result<&mut input::Foreground, String> {
+        let target = self.visual_point(&self.observation.window, point);
+        let feedback = self.feedback.clone().zip(target);
+        let foreground = self.foreground()?;
+        foreground.set_feedback(feedback);
+        Ok(foreground)
+    }
+
     /// Runs one action; `Ok((via, note))`.
     fn perform(&mut self, action: &Action) -> Result<(&'static str, Option<String>), String> {
         match action {
             Action::Press { target } => {
                 let element = self.element(target)?;
+                self.show_element(&element);
                 press(&element)?;
                 Ok(("ax", None))
             }
             Action::Click { target, button, count } => {
                 if let (Target::Ref(reference), 1) = (target, *count) {
                     let element = self.element(reference)?;
+                    self.show_element(&element);
                     let background = match button {
                         Button::Left => press(&element).is_ok(),
                         Button::Right => ax::perform(&element, "AXShowMenu").is_ok(),
@@ -606,7 +648,7 @@ impl ActContext<'_> {
                     Button::Middle => input::Button::Middle,
                 };
                 let count = *count;
-                self.foreground()?.click(point, button, count)?;
+                self.pointer(point)?.click(point, button, count)?;
                 Ok(("foreground", None))
             }
             Action::SetText { target, text } => {
@@ -614,6 +656,7 @@ impl ActContext<'_> {
                 if ax::is_secure(&element) {
                     return Err("That's a secure text field; computer use never types into one.".into());
                 }
+                self.show_element(&element);
                 ax::set_string(&element, "AXValue", text).map_err(|error| ax::describe_error(error, "setting the text"))?;
                 let note = (ax::string(&element, "AXValue").as_deref() != Some(text.as_str())).then(|| "the field reads back a different value".to_string());
                 Ok(("ax", note))
@@ -626,6 +669,7 @@ impl ActContext<'_> {
                 if element.as_ref().is_some_and(|element| ax::is_secure(element)) || ax::focused_is_secure(&self.app_element) {
                     return Err("A secure text field has focus; computer use never types into one.".into());
                 }
+                if let Some(element) = &element { self.show_element(element); }
                 if let Some(element) = &element {
                     if target.is_some() {
                         let _ = ax::set_bool(element, "AXFocused", true);
@@ -643,30 +687,32 @@ impl ActContext<'_> {
                 if ax::focused_is_secure(&self.app_element) {
                     return Err("A secure text field has focus; computer use won't press keys into it.".into());
                 }
+                if let Some(element) = ax::element(&self.app_element, "AXFocusedUIElement") { self.show_element(&element); }
                 input::key_to_pid(self.pid, chord)?;
                 Ok(("pid", Some("some apps ignore keys while in the background; verify, or use menu".into())))
             }
             Action::Scroll { target, dx, dy } => {
                 if let Target::Ref(reference) = target {
                     let element = self.element(reference)?;
+                    self.show_element(&element);
                     if ax::scroll(&element, *dx, *dy)? {
                         return Ok(("ax", None));
                     }
                 }
                 let point = self.point(target)?;
                 let (dx, dy) = (*dx, *dy);
-                self.foreground()?.scroll(point, dx, dy)?;
+                self.pointer(point)?.scroll(point, dx, dy)?;
                 Ok(("foreground", None))
             }
             Action::Drag { from, to } => {
                 let from = self.pixel(from.0, from.1)?;
                 let to = self.pixel(to.0, to.1)?;
                 let token = self.token.clone();
-                self.foreground()?.drag(from, to, &move || token.is_stopped())?;
+                self.pointer(from)?.drag(from, to, &move || token.is_stopped())?;
                 Ok(("foreground", None))
             }
             Action::Menu { path } => {
-                ax::press_menu(&self.app_element, path)?;
+                ax::press_menu(&self.app_element, path, &|element| self.show_element(element))?;
                 Ok(("ax", None))
             }
             Action::Raise => {
@@ -738,6 +784,7 @@ async fn act(
     expect: Option<Expect>,
     never_allow: Vec<String>,
     token: StopToken,
+    cursor: Option<cursor::Session>,
 ) -> Result<Value, String> {
     let task = task_id.to_string();
     let own_pid = manager.own.pid;
@@ -759,6 +806,8 @@ async fn act(
                 foreground: None,
                 never_allow,
                 token,
+                cursor,
+                feedback: None,
             };
             let mut results = Vec::new();
             let mut all_ok = true;
@@ -768,7 +817,18 @@ async fn act(
                     results.push(json!({ "index": index, "kind": action.kind(), "ok": false, "error": STOPPED }));
                     break;
                 }
-                match context.perform(action) {
+                let kind = match action {
+                    Action::Click { .. } => cursor::Kind::Clicking,
+                    Action::Drag { .. } => cursor::Kind::Dragging,
+                    Action::Scroll { .. } => cursor::Kind::Scrolling,
+                    Action::SetText { .. } | Action::TypeText { .. } => cursor::Kind::Typing,
+                    Action::Menu { .. } => cursor::Kind::Menu,
+                    _ => cursor::Kind::Pressing,
+                };
+                context.feedback = context.cursor.as_ref().map(|cursor| cursor.begin(kind));
+                let result = context.perform(action);
+                if let Some(feedback) = &context.feedback { feedback.finish(result.is_ok()); }
+                match result {
                     Ok((via, note)) => results.push(json!({ "index": index, "kind": action.kind(), "ok": true, "via": via, "note": note })),
                     Err(error) => {
                         all_ok = false;
@@ -843,6 +903,7 @@ fn begin_session(app: &AppHandle, manager: &ComputerUseManager, task_id: &str, a
 
 fn end_session(app: &AppHandle, task_id: &str) {
     let manager = app.state::<ComputerUseManager>();
+    manager.cursor.end_run(task_id);
     let (ended, unregister) = match manager.lock() {
         Ok(mut inner) => {
             let ended = inner.sessions.remove(task_id).is_some();
@@ -865,6 +926,9 @@ fn end_session(app: &AppHandle, task_id: &str) {
 
 /// The chat's run ended: its session ends with it.
 pub fn on_run_state(app: &AppHandle, task_id: &str, state: &str) {
+    let manager = app.state::<ComputerUseManager>();
+    if state == "running" { manager.cursor.start_run(app, task_id); }
+    if state == "stopping" { manager.cursor.end_run(task_id); }
     if matches!(state, "idle" | "interrupted") {
         end_session(app, task_id);
     }
@@ -877,6 +941,11 @@ pub fn on_worker_stopped(app: &AppHandle, task_id: &str) {
     let replies = manager.lock().map(|mut inner| ComputerUseManager::stop_chat(&mut inner, task_id)).unwrap_or_default();
     cancel_replies(replies);
     end_session(app, task_id);
+}
+
+/// Retire the visual immediately when Stop is clicked, before an abort reaches the worker.
+pub fn stop_cursor(app: &AppHandle, task_id: &str) {
+    app.state::<ComputerUseManager>().cursor.end_run(task_id);
 }
 
 /// The chat was archived, deleted or moved to a worktree.
@@ -915,6 +984,7 @@ pub async fn emergency_stop(app: &AppHandle, source: &str) {
         }
         Err(_) => return,
     };
+    for task in &tasks { manager.cursor.end_run(task); }
     cancel_replies(replies);
     for task in &tasks {
         let _ = crate::commands::stop_task(app.clone(), task.clone()).await;
@@ -937,6 +1007,7 @@ async fn disable(app: &AppHandle) {
 
 pub fn dispose_all(app: &AppHandle) {
     let manager = app.state::<ComputerUseManager>();
+    manager.cursor.shutdown();
     let unregister = match manager.lock() {
         Ok(mut inner) => {
             for (_, token) in inner.requests.values() {
@@ -963,7 +1034,7 @@ pub struct ComputerUseStatus {
     accessibility: bool,
     screen_recording: bool,
     hotkey_available: bool,
-    /// Dev builds are launched from a shell, so macOS credits permissions to whatever started them.
+    /// Development builds may need their ad-hoc approvals renewed after recompilation.
     dev_build: bool,
 }
 
@@ -1015,17 +1086,25 @@ pub fn computer_use_relaunch(app: AppHandle) {
 
 #[tauri::command]
 pub async fn set_computer_use_config(app: AppHandle, input: ComputerUseConfig) -> Result<ComputerUseConfig, String> {
-    let config = ComputerUseConfig { enabled: input.enabled, never_allow: policy::validate_never_allow(&input.never_allow)? };
+    let config = ComputerUseConfig { enabled: input.enabled, show_agent_cursor: input.show_agent_cursor, never_allow: policy::validate_never_allow(&input.never_allow)? };
     let was_enabled = config_enabled(&app);
     app.state::<MetadataState>().mutate(|data| {
         data.computer_use = config.clone();
         Ok(())
     })?;
+    app.state::<ComputerUseManager>().cursor.set_enabled(&app, config.enabled && config.show_agent_cursor);
     if was_enabled && !config.enabled {
         disable(&app).await;
     }
     crate::worker::broadcast_computer_use(&app).await?;
     Ok(config)
+}
+
+#[tauri::command]
+pub fn computer_use_cursor_appearance(app: AppHandle, input: cursor::CursorAppearance) -> Result<(), String> {
+    input.validate()?;
+    app.state::<ComputerUseManager>().cursor.appearance(&app, input);
+    Ok(())
 }
 
 fn config_enabled(app: &AppHandle) -> bool {

@@ -24,6 +24,10 @@ Pure logic belongs in a colocated `*.test.ts` next to a small module (`chat-util
 - **Don't restart between tests.** Frontend edits hot-reload; Rust edits rebuild and relaunch the app automatically; worker edits need `pnpm build:worker` and then a new chat.
 - **Drive** the window by its bundle id, `com.wackcode.desktop`.
 - **Bundled build:** only when a test needs the bundled worker and resources, use `pnpm build:desktop:debug` and its `.app`, and never while the dev app is running.
+- The minimal dev bundle is signed and verified after packaging. Its ad-hoc signature changes
+  when Rust is rebuilt, so computer-use approvals may need renewing then. For permission and
+  relaunch testing, use the bundled debug app: it has its own frontend and starts normally
+  through Finder without the dev server.
 
 ## Models
 

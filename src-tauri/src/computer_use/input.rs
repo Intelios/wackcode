@@ -7,6 +7,7 @@
 
 use super::apps;
 use super::ax::{self, Element};
+use super::cursor;
 use super::geometry::{self, HitOwner, Rect, WindowEntry};
 use super::keys::{self, Chord};
 use objc2_core_foundation::{CFArray, CFBoolean, CFDictionary, CFNumber, CFRetained, CFString, CFType, CGPoint, CGRect};
@@ -128,7 +129,7 @@ pub fn window_number(window: &Element, pid: i32) -> Option<u32> {
     })
 }
 
-fn screen_locked() -> bool {
+pub(super) fn screen_locked() -> bool {
     let Some(session) = CGSessionCopyCurrentDictionary() else { return false };
     // SAFETY: the session dictionary is keyed by strings.
     let session: &CFDictionary<CFString, CFType> = unsafe { session.cast_unchecked() };
@@ -183,6 +184,7 @@ pub struct Foreground {
     held: Option<Button>,
     source: CFRetained<CGEventSource>,
     blocked: BlockCheck,
+    feedback: Option<(cursor::Feedback, cursor::Target)>,
 }
 
 impl Foreground {
@@ -220,6 +222,7 @@ impl Foreground {
             source: source()?,
             blocked,
             window,
+            feedback: None,
         };
         if foreground.previous_front != Some(target_pid) {
             set_frontmost(target_pid);
@@ -241,7 +244,7 @@ impl Foreground {
     fn check(&self, point: (f64, f64)) -> Result<(), String> {
         let windows = window_list();
         let blocked = &self.blocked;
-        let owner = geometry::topmost_owner(&windows, point, self.target_pid, self.own_pid, &[], |pid| {
+        let owner = geometry::topmost_owner(&windows, point, self.target_pid, self.own_pid, &cursor::overlay_windows(), |pid| {
             let (name, bundle_id) = apps::name_of(pid);
             let is_blocked = blocked(bundle_id.as_deref());
             (name, is_blocked)
@@ -278,8 +281,15 @@ impl Foreground {
         Ok(())
     }
 
+    pub fn set_feedback(&mut self, feedback: Option<(cursor::Feedback, cursor::Target)>) { self.feedback = feedback; }
+
+    fn show_point(&self, point: (f64, f64)) {
+        if let Some((feedback, target)) = &self.feedback { feedback.at(Some(cursor::Target { point, ..*target })); }
+    }
+
     pub fn click(&mut self, point: (f64, f64), button: Button, count: u8) -> Result<(), String> {
         self.check(point)?;
+        self.show_point(point);
         let at = CGPoint::new(point.0, point.1);
         let (down, up, _, cg_button) = button.events();
         self.post(CGEventType::MouseMoved, at, cg_button, 0)?;
@@ -298,6 +308,7 @@ impl Foreground {
     pub fn drag(&mut self, from: (f64, f64), to: (f64, f64), stopped: &dyn Fn() -> bool) -> Result<(), String> {
         self.check(from)?;
         self.check(to)?;
+        self.show_point(from);
         let (down, up, dragged, cg_button) = Button::Left.events();
         let start = CGPoint::new(from.0, from.1);
         self.post(CGEventType::MouseMoved, start, cg_button, 0)?;
@@ -312,6 +323,7 @@ impl Foreground {
             let t = f64::from(step) / f64::from(STEPS);
             let point = CGPoint::new(from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t);
             self.post(dragged, point, cg_button, 1)?;
+            self.show_point((point.x, point.y));
             sleep(Duration::from_millis(14));
         }
         self.post(up, CGPoint::new(to.0, to.1), cg_button, 1)?;
@@ -322,6 +334,7 @@ impl Foreground {
     /// Scrolls by `dx`/`dy` steps (positive dy scrolls down) with the pointer at `point`.
     pub fn scroll(&mut self, point: (f64, f64), dx: f64, dy: f64) -> Result<(), String> {
         self.check(point)?;
+        self.show_point(point);
         let at = CGPoint::new(point.0, point.1);
         self.post(CGEventType::MouseMoved, at, CGMouseButton::Left, 0)?;
         sleep(Duration::from_millis(20));

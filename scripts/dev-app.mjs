@@ -9,6 +9,9 @@
 // Running the same binary from a bundle carrying tauri.conf.json's identifier fixes that and
 // changes nothing else: debug builds find the worker, Node and the frontend (Vite's devUrl) from
 // the source tree, never relative to the executable.
+// The linker's signature covers a bare executable, not this bundle. Sign the completed app so
+// its Info.plist, resources and executable have a valid, matching identity for macOS permissions.
+// The ad-hoc requirement still changes on a rebuild; restarting an unchanged build does not.
 //
 // Usage: node scripts/dev-app.mjs <cargo args> [-- <app args>]
 
@@ -89,4 +92,13 @@ const target = path.join(contents, "MacOS", binaryName);
 const staged = `${target}.tmp`;
 copyFileSync(executable, staged, constants.COPYFILE_FICLONE);
 renameSync(staged, target);
+
+for (const args of [
+  ["--force", "--sign", "-", "--identifier", config.identifier, bundle],
+  ["--verify", "--strict", bundle],
+]) {
+  const signed = spawnSync("/usr/bin/codesign", args, { stdio: ["ignore", "ignore", "inherit"] });
+  if (signed.error) fail(`Could not sign the dev app: ${signed.error.message}`);
+  if (signed.status !== 0) fail("The dev app's code signature could not be verified.");
+}
 process.stdout.write(target);

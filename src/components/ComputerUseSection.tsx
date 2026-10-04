@@ -5,6 +5,7 @@ import { DuckMark } from "./DuckMark";
 import { Icon, type IconName } from "./Icons";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 import { Select } from "./ui/Select";
+import { Checkbox } from "./ui/Checkbox";
 
 type Pane = "accessibility" | "screenRecording";
 
@@ -177,6 +178,14 @@ export function ComputerUseSection({ config, actions, agentName = "WackCode", on
     finally { setBusy(false); }
   }
 
+  async function setCursor(showAgentCursor: boolean) {
+    setBusy(true);
+    setError(undefined);
+    try { await onChange({ ...config, showAgentCursor }); }
+    catch (reason) { setError(String(reason)); }
+    finally { setBusy(false); }
+  }
+
   function add(bundleId: string) {
     const id = bundleId.trim();
     if (!id || config.neverAllow.some((entry) => entry.toLowerCase() === id.toLowerCase())) return;
@@ -216,7 +225,7 @@ export function ComputerUseSection({ config, actions, agentName = "WackCode", on
           <div className="computer-trouble">
             {status?.devBuild && (
               <p>
-                This is a development build. macOS credits these permissions to whatever launched it (your terminal, for example), not to WackCode.
+                This is a development build. Recompiling changes its code signature, so macOS may require a fresh approval. A normal restart keeps the same build.
               </p>
             )}
             <p>
@@ -230,6 +239,17 @@ export function ComputerUseSection({ config, actions, agentName = "WackCode", on
         </section>
 
         <section className="computer-block" style={step(2)}>
+          <h3 className="computer-block-title">Agent cursor</h3>
+          <div className="computer-cursor-setting">
+            <div>
+              <p>Show agent cursor</p>
+              <p className="computer-block-sub">See where {agentName} acts, with a marker at its last action until the run ends.</p>
+            </div>
+            <Checkbox label="Show agent cursor" checked={config.showAgentCursor} disabled={busy} onChange={(checked) => void setCursor(checked)} />
+          </div>
+        </section>
+
+        <section className="computer-block" style={step(3)}>
           <h3 className="computer-block-title">Stop shortcut</h3>
           <div className="computer-stop">
             <Keycaps available={status?.hotkeyAvailable !== false} />
@@ -246,7 +266,7 @@ export function ComputerUseSection({ config, actions, agentName = "WackCode", on
           )}
         </section>
 
-        <section className="computer-block" style={step(3)}>
+        <section className="computer-block" style={step(4)}>
           <h3 className="computer-block-title">Apps it never uses</h3>
           <p className="computer-block-sub">Refused before anything is asked.</p>
           <ul className="computer-blocked" aria-label="Always blocked">

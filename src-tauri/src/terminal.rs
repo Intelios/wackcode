@@ -17,6 +17,7 @@ use crate::pty_output::{append_scrollback, read_output, size};
 #[cfg(test)]
 use crate::pty_output::{split_utf8, SCROLLBACK_BYTES};
 use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty};
+#[cfg(test)]
 use serde_json::json;
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
@@ -25,7 +26,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::{ipc::Channel, AppHandle, Emitter, State};
+use tauri::{ipc::Channel, State};
 use uuid::Uuid;
 
 /// How often the busy poll asks the PTY which process group owns its foreground.
@@ -54,8 +55,8 @@ impl Core {
 }
 
 struct Session {
-    /// Sessions are keyed by chat in the map, but restart replaces them; events carry this id
-    /// so the renderer can drop a late frame meant for a shell that no longer exists.
+    /// Sessions are keyed by chat in the map, but restart replaces them; this id names the
+    /// current shell in `TerminalInfo`.
     id: String,
     core: Mutex<Core>,
     child: Mutex<Box<dyn Child + Send + Sync>>,
@@ -78,10 +79,6 @@ struct Session {
 #[derive(Default)]
 pub struct TerminalState {
     sessions: Mutex<HashMap<String, Arc<Session>>>,
-}
-
-fn emit(app: &AppHandle, value: serde_json::Value) {
-    let _ = app.emit("terminal-event", value);
 }
 
 fn spawn_session(cwd: &Path, cols: u16, rows: u16) -> Result<Arc<Session>, String> {
@@ -126,11 +123,8 @@ fn spawn_session(cwd: &Path, cols: u16, rows: u16) -> Result<Arc<Session>, Strin
 
 /// The blocking read loop: append to scrollback and stream to the attached sink inside one
 /// lock. EOF (shell exit or a closed master) reaps the child and reports the exit once.
-fn start_reader(app: &AppHandle, task_id: &str, session: &Arc<Session>, reader: Box<dyn Read + Send>) {
-    let app = app.clone();
-    let task_id = task_id.to_string();
+fn start_reader(session: &Arc<Session>, reader: Box<dyn Read + Send>) {
     let session = session.clone();
-    let session_id = session.id.clone();
     thread::spawn(move || {
         read_output(reader, |text| {
             session.core.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(text.as_bytes());
@@ -142,19 +136,14 @@ fn start_reader(app: &AppHandle, task_id: &str, session: &Arc<Session>, reader: 
         let mut core = session.core.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if let TerminalStatus::Exited { code, signal } = status {
             if let Some(sink) = &core.sink { let _ = sink.send(TerminalFrame::Exit { code: Some(code), signal: signal.clone() }); }
-            emit(&app, json!({ "type": "terminal_exited", "taskId": task_id, "sessionId": session_id, "code": code, "signal": signal }));
         }
         core.sink = None;
     });
 }
 
 /// Polls the PTY's foreground process group; anything other than the shell's own group means a
-/// command is running. Transitions emit a global event so the header can hint at work in a
-/// terminal that isn't on screen, and also reach the panel over the channel.
-fn start_busy_poller(app: &AppHandle, task_id: &str, session: &Arc<Session>) {
-    let app = app.clone();
-    let task_id = task_id.to_string();
-    let session_id = session.id.clone();
+/// command is running. Transitions reach the panel over the channel.
+fn start_busy_poller(session: &Arc<Session>) {
     let session = Arc::downgrade(session);
     tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(BUSY_POLL);
@@ -167,7 +156,6 @@ fn start_busy_poller(app: &AppHandle, task_id: &str, session: &Arc<Session>) {
                 .and_then(|master| master.as_ref().and_then(|master| master.process_group_leader()))
                 .is_some_and(|leader| leader >= 0 && leader as u32 != session.pid);
             if busy != session.busy.swap(busy, Ordering::Relaxed) {
-                emit(&app, json!({ "type": "terminal_busy", "taskId": task_id, "sessionId": session_id, "busy": busy }));
                 let core = session.core.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 if let Some(sink) = &core.sink { let _ = sink.send(TerminalFrame::Busy { busy }); }
             }
@@ -208,10 +196,9 @@ fn kill(session: &Arc<Session>) {
 impl TerminalState {
     /// The chat went away or its folder moved (delete, archive, worktree): its shell goes too.
     /// The idle-worker reaper never calls this — a user's idle shell is cheap to keep.
-    pub fn kill_for_task(&self, app: &AppHandle, task_id: &str) {
+    pub fn kill_for_task(&self, task_id: &str) {
         let session = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(task_id);
         if let Some(session) = session {
-            emit(app, json!({ "type": "terminal_closed", "taskId": task_id, "sessionId": session.id }));
             kill(&session);
         }
     }
@@ -234,7 +221,6 @@ fn attach(session: &Arc<Session>, on_frame: Channel<TerminalFrame>) {
 }
 
 fn open(
-    app: &AppHandle,
     state: &State<'_, TerminalState>,
     task: &TaskRecord,
     input: &OpenTerminalInput,
@@ -259,7 +245,6 @@ fn open(
                 let reader = session.master.lock().map_err(|_| "Terminal lock was poisoned".to_string())?
                     .as_ref().and_then(|master| master.try_clone_reader().ok())
                     .ok_or_else(|| "Could not read from the terminal".to_string())?;
-                emit(app, json!({ "type": "terminal_started", "taskId": input.task_id, "sessionId": session.id, "shell": session.shell, "cwd": session.cwd }));
                 sessions.insert(input.task_id.clone(), session.clone());
                 (session, Some(reader))
             }
@@ -268,8 +253,8 @@ fn open(
     let (session, reader) = spawned;
     let fresh = reader.is_some();
     if let Some(reader) = reader {
-        start_reader(app, &input.task_id, &session, reader);
-        start_busy_poller(app, &input.task_id, &session);
+        start_reader(&session, reader);
+        start_busy_poller(&session);
     }
     attach(&session, on_frame);
     Ok(info_for(&session, fresh))
@@ -277,7 +262,6 @@ fn open(
 
 #[tauri::command]
 pub fn open_terminal(
-    app: AppHandle,
     state: State<'_, MetadataState>,
     terminals: State<'_, TerminalState>,
     input: OpenTerminalInput,
@@ -286,7 +270,7 @@ pub fn open_terminal(
     let task = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?
         .tasks.iter().find(|task| task.id == input.task_id).cloned()
         .ok_or_else(|| "Chat not found".to_string())?;
-    open(&app, &terminals, &task, &input, on_frame)
+    open(&terminals, &task, &input, on_frame)
 }
 
 #[tauri::command]
@@ -318,22 +302,21 @@ pub fn detach_terminal(terminals: State<'_, TerminalState>, task_id: String) -> 
 
 #[tauri::command]
 pub fn restart_terminal(
-    app: AppHandle,
     state: State<'_, MetadataState>,
     terminals: State<'_, TerminalState>,
     input: OpenTerminalInput,
     on_frame: Channel<TerminalFrame>,
 ) -> Result<TerminalInfo, String> {
-    terminals.kill_for_task(&app, &input.task_id);
+    terminals.kill_for_task(&input.task_id);
     let task = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?
         .tasks.iter().find(|task| task.id == input.task_id).cloned()
         .ok_or_else(|| "Chat not found".to_string())?;
-    open(&app, &terminals, &task, &input, on_frame)
+    open(&terminals, &task, &input, on_frame)
 }
 
 #[tauri::command]
-pub fn close_terminal(app: AppHandle, terminals: State<'_, TerminalState>, task_id: String) -> Result<(), String> {
-    terminals.kill_for_task(&app, &task_id);
+pub fn close_terminal(terminals: State<'_, TerminalState>, task_id: String) -> Result<(), String> {
+    terminals.kill_for_task(&task_id);
     Ok(())
 }
 

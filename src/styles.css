@@ -2826,17 +2826,6 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .terminal-pill.running .terminal-pill-dot { background: var(--wc-accent); animation: pulse 1.8s infinite; }
 .terminal-pill.stopped { color: var(--text-dim); }
 
-/* The header button's telltale while the shell is out of sight: a blinking block caret that
-   pulses while it works and falls to a dim underscore once the shell has exited. */
-.terminal-caret {
-  position: absolute; right: 3px; bottom: 3px; width: 5px; height: 8px; border-radius: 1.5px;
-  background: var(--wc-accent); animation: terminal-caret 1.15s steps(1) infinite;
-}
-.terminal-caret.busy { animation: terminal-caret-busy 1.5s var(--ease) infinite; }
-.terminal-caret.exited { width: 9px; height: 2.5px; border-radius: 1px; background: var(--text-faint); animation: none; }
-@keyframes terminal-caret { 0%, 52% { opacity: 1; } 53%, 100% { opacity: .18; } }
-@keyframes terminal-caret-busy { 0%, 100% { opacity: 1; transform: scaleY(1); } 50% { opacity: .55; transform: scaleY(.7); } }
-
 .terminal-body { position: relative; flex: 1; min-height: 0; display: flex; background: var(--wc-well); overflow: hidden; }
 /* Host padding insets xterm: the fit addon reads this box's content size, so padding here —
    not on .xterm — is what leaves breathing room around the scroll region. */
@@ -2873,7 +2862,6 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 @media (prefers-reduced-motion: reduce) {
   .terminal-screen { transition: none; }
   .terminal-screen.power-on, .terminal-screen.power-on::after { animation: none; }
-  .terminal-caret, .terminal-caret.busy { animation: none; }
   .terminal-pill.running .terminal-pill-dot { animation: none; }
 }
 

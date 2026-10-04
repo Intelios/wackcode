@@ -1367,7 +1367,7 @@ export interface TerminalExit {
 
 /** What `openTerminal` returns when the panel attaches (`terminal.rs`). */
 export interface TerminalInfo {
-  /** Identifies this shell; a restart's late events carry the old id and are ignored. */
+  /** Identifies this shell; a restart gets a new one. */
   sessionId: string;
   shell: string;
   cwd: string;
@@ -1382,13 +1382,6 @@ export type TerminalFrame =
   | { type: "output"; data: string }
   | { type: "exit"; code: number | null; signal: string | null }
   | { type: "busy"; busy: boolean };
-
-/** `terminal-event` broadcasts so the header can hint at a hidden session's state. */
-export type TerminalEvent =
-  | { type: "terminal_started"; taskId: string; sessionId: string; shell: string; cwd: string }
-  | { type: "terminal_busy"; taskId: string; sessionId: string; busy: boolean }
-  | { type: "terminal_exited"; taskId: string; sessionId: string; code: number; signal: string | null }
-  | { type: "terminal_closed"; taskId: string; sessionId: string };
 
 export type RunStatus = "running" | "stopping" | "finished" | "failed" | "stopped";
 /** Runtime-only snapshot of a command, shared by canonical checkout folder. */

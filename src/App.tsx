@@ -63,7 +63,6 @@ import type {
   TaskMode,
   TaskRecord,
   TaskRuntime,
-  TerminalEvent,
   ThinkingLevel,
   WorkerEvent
 } from "./types";
@@ -238,8 +237,6 @@ export default function App() {
   const [browsers, setBrowsers] = useState<Record<string, BrowserState>>({});
   const [browserExpanded, setBrowserExpanded] = useState(false);
   const browserRestoreWidth = useRef(430);
-  /** Live terminal sessions by chat id — powers the header's caret hint while the panel is hidden. */
-  const [terminals, setTerminals] = useState<Record<string, { sessionId: string; busy: boolean; exit: { code: number; signal: string | null } | null }>>({});
   /** Per-chat nonce bumped when the title model names it — drives the header's swipe + glint
    *  and the sidebar row's crossfade (TextSwap keys on it). */
   const [titlePulses, setTitlePulses] = useState<Record<string, number>>({});
@@ -615,32 +612,6 @@ export default function App() {
   useEffect(() => {
     if (resync) setWatchNonce((nonce) => nonce + 1);
   }, [resync]);
-
-  // Terminal sessions live in Rust; these events keep the header's caret hint honest while the
-  // panel is hidden or the chat is in the background. Events carry a sessionId: a restart's
-  // late busy/exit events for the old shell are ignored.
-  useEffect(() => {
-    const unlisten = listen<TerminalEvent>("terminal-event", ({ payload }) => {
-      if (payload.type === "terminal_closed") {
-        setTerminals((current) => {
-          const { [payload.taskId]: _removed, ...rest } = current;
-          return rest;
-        });
-      } else if (payload.type === "terminal_started") {
-        setTerminals((current) => ({ ...current, [payload.taskId]: { sessionId: payload.sessionId, busy: false, exit: null } }));
-      } else {
-        setTerminals((current) => {
-          const session = current[payload.taskId];
-          if (session?.sessionId !== payload.sessionId) return current;
-          const next = payload.type === "terminal_busy"
-            ? { ...session, busy: payload.busy }
-            : { ...session, busy: false, exit: { code: payload.code, signal: payload.signal } };
-          return { ...current, [payload.taskId]: next };
-        });
-      }
-    });
-    return () => { unlisten.then((fn) => fn()); };
-  }, []);
 
   useEffect(() => {
     const unlisten = listen<RunEvent>("run-event", ({ payload }) => setRuns((current) => applyRunEvent(current, payload)));
@@ -2674,7 +2645,6 @@ export default function App() {
               browserOpen={panelView?.kind === "browser"}
               onToggleChanges={toggleChanges}
               onToggleBrowser={toggleBrowser}
-              terminal={terminals[selectedTask.id]}
               terminalOpen={panelView?.kind === "terminal"}
               onToggleTerminal={toggleTerminal}
               onRename={(name) => void renameTask(selectedTask.id, name)}

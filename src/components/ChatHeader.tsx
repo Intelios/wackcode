@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { GitBranches, GitCheckoutKind, ProjectRecord, RunInfo, TaskRecord, TerminalExit } from "../types";
+import type { GitBranches, GitCheckoutKind, ProjectRecord, RunInfo, TaskRecord } from "../types";
 import { RunButton } from "./RunButton";
 import { BranchPicker } from "./BranchPicker";
 import { Icon } from "./Icons";
@@ -26,8 +26,6 @@ interface ChatHeaderProps {
   browserOpen: boolean;
   onToggleChanges: () => void;
   onToggleBrowser: () => void;
-  /** The chat's terminal session, if one is running — drives the button's caret hint. */
-  terminal?: { busy: boolean; exit: TerminalExit | null };
   terminalOpen: boolean;
   onToggleTerminal: () => void;
   onRename: (name: string) => void;
@@ -38,7 +36,7 @@ interface ChatHeaderProps {
   onCheckoutBranch: (name: string, kind: GitCheckoutKind) => Promise<void>;
 }
 
-export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStopRun, onShowRunOutput, git, onListBranches, onCheckoutBranch, changesCount, changesOpen, browserOpen, onToggleChanges, onToggleBrowser, terminal, terminalOpen, onToggleTerminal, onRename, onTaskAction, titlePulse = 0 }: ChatHeaderProps) {
+export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStopRun, onShowRunOutput, git, onListBranches, onCheckoutBranch, changesCount, changesOpen, browserOpen, onToggleChanges, onToggleBrowser, terminalOpen, onToggleTerminal, onRename, onTaskAction, titlePulse = 0 }: ChatHeaderProps) {
   const contextMenu = useContextMenu();
   const [renaming, setRenaming] = useState(false);
   const [value, setValue] = useState(task.name);
@@ -103,14 +101,6 @@ export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStop
             aria-pressed={terminalOpen}
           >
             <Icon name="terminal" />
-            {/* A blinking caret marks a shell running out of sight; it pulses while it works and
-                dims when the shell has exited. */}
-            {terminal && !terminalOpen && (
-              <em
-                className={`terminal-caret ${terminal.exit ? "exited" : terminal.busy ? "busy" : ""}`}
-                aria-hidden="true"
-              />
-            )}
           </button>
         </Tooltip>
         <MenuButton label="Chat menu" items={menu} />

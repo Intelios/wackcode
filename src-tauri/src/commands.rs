@@ -3307,7 +3307,7 @@ pub async fn archive_task(
         .dispose(&task_id);
     crate::computer_use::dispose(&app, &task_id);
     app.state::<terminal::TerminalState>()
-        .kill_for_task(&app, &task_id);
+        .kill_for_task(&task_id);
     let task = state.mutate(|data| {
         let task = data
             .tasks
@@ -3398,7 +3398,7 @@ pub async fn delete_task(
         .dispose(&task_id);
     crate::computer_use::dispose(&app, &task_id);
     app.state::<terminal::TerminalState>()
-        .kill_for_task(&app, &task_id);
+        .kill_for_task(&task_id);
     let (task, git_root) = state.mutate(|data| {
         let index = data
             .tasks
@@ -3501,7 +3501,7 @@ pub async fn convert_task_to_worktree(
     worker::terminate_worker(&app, &task_id, true).await?;
     // The workspace moved to a worktree; a shell parked in the old folder must not linger.
     app.state::<terminal::TerminalState>()
-        .kill_for_task(&app, &task_id);
+        .kill_for_task(&task_id);
     app.state::<crate::run_command::RunState>()
         .release_workspace(&state, &task.workspace_path, false).await?;
     Ok(updated)
@@ -3537,7 +3537,7 @@ pub async fn remove_project(
         worker::terminate_worker(&app, &task.id, true).await?;
         crate::computer_use::dispose(&app, &task.id);
         app.state::<terminal::TerminalState>()
-            .kill_for_task(&app, &task.id);
+            .kill_for_task(&task.id);
     }
     let (git_root, removed) = {
         let data = state

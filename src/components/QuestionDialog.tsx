@@ -24,8 +24,10 @@ function isAnswered(draft: Draft | undefined): boolean {
  * The questionnaire raised by the built-in ask_user_question tool: one card per question,
  * preset options with descriptions, and a free-form "Other". Rendered inline above the
  * composer — the extension is blocked inside the run awaiting a reply, so cancelling always
- * sends an explicit `cancelled`. In Ultra Plan (`offerWrapUp`) it also offers "Write the plan
- * now", which ends the interview and has the agent submit its plan.
+ * sends an explicit `cancelled`. Picking an option only records the answer: moving on is a
+ * deliberate "Next" (or a tab click), so there's time to reconsider before advancing.
+ * In Ultra Plan (`offerWrapUp`) it also offers "Write the plan now", which ends the interview
+ * and has the agent submit its plan.
  */
 export function QuestionCard({ request, onRespond }: Props) {
   const questions = request.questions;
@@ -53,7 +55,6 @@ export function QuestionCard({ request, onRespond }: Props) {
       return;
     }
     update({ selected: [label], custom: "" });
-    if (!last) setTab(tab + 1);
   }
 
   function submit() {
@@ -143,7 +144,7 @@ export function QuestionCard({ request, onRespond }: Props) {
         {last ? (
           <button type="button" className="primary-button" disabled={!allAnswered} onClick={submit}>Submit</button>
         ) : (
-          <button type="button" className="primary-button" onClick={() => setTab(tab + 1)}>Next</button>
+          <button type="button" className="primary-button" disabled={!isAnswered(draft)} onClick={() => setTab(tab + 1)}>Next</button>
         )}
       </div>
     </div>

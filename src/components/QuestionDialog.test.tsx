@@ -39,8 +39,9 @@ describe("QuestionCard", () => {
     const onRespond = vi.fn();
     render(<QuestionCard request={request} onRespond={onRespond} />);
 
-    // Single-select answers then auto-advances to the next question.
+    // Picking an answer stays on the question; advancing is a deliberate Next.
     fireEvent.click(screen.getByText("Postgres"));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
     fireEvent.click(screen.getByText("UI"));
     fireEvent.click(screen.getByText("Rust"));
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
@@ -53,10 +54,14 @@ describe("QuestionCard", () => {
     });
   });
 
-  it("keeps Submit disabled until every question has an answer", () => {
+  it("keeps Next and Submit disabled until their questions have answers", () => {
     const onRespond = vi.fn();
     render(<QuestionCard request={request} onRespond={onRespond} />);
+    const next = screen.getByRole("button", { name: "Next" });
+    expect(next).toBeDisabled();
     fireEvent.click(screen.getByText("SQLite"));
+    expect(next).toBeEnabled();
+    fireEvent.click(next);
     expect(screen.getByRole("button", { name: "Submit" })).toBeDisabled();
     fireEvent.click(screen.getByText("Worker"));
     expect(screen.getByRole("button", { name: "Submit" })).toBeEnabled();

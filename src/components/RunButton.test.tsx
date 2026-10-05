@@ -46,6 +46,9 @@ describe("Run control", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(actions.onSave).toHaveBeenCalledWith("pnpm test"));
     expect(actions.onRun).not.toHaveBeenCalled();
+    // onSave resolving is not yet the button re-enabling: it stays disabled while the save's
+    // pending state clears, and jsdom drops clicks on disabled buttons.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     await waitFor(() => expect(actions.onStop).toHaveBeenCalledOnce());
   });

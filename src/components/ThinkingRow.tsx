@@ -1,4 +1,4 @@
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, motion, type Transition } from "motion/react";
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { formatThinkingDuration, thinkingStream } from "../chat-utils";
 import { useFollowScroll } from "../hooks/useFollowScroll";
@@ -19,6 +19,22 @@ export const ThinkingPreviewEnabled = createContext(true);
 
 /** Settings → Appearance → Thinking timer: whole seconds unless the user picks tenths. */
 export const ThinkingTimerPrecision = createContext<Precision>("second");
+
+/** Matches `--ease` in styles.css. */
+const EASE: [number, number, number, number] = [0.33, 1, 0.68, 1];
+
+/** The body's unfurl timings: height and drift run together; the fade leads in… */
+const REVEAL_OPEN: Transition = {
+  height: { duration: 0.26, ease: EASE },
+  y: { duration: 0.26, ease: EASE },
+  opacity: { duration: 0.18, ease: EASE }
+};
+/** …and leads out, so collapsing text reads as leaving rather than being squashed. */
+const REVEAL_EXIT: Transition = {
+  height: { duration: 0.22, ease: EASE },
+  y: { duration: 0.22, ease: EASE },
+  opacity: { duration: 0.14, ease: EASE }
+};
 
 interface ThinkingRowProps {
   text: string;
@@ -118,7 +134,25 @@ export function ThinkingRow({ text, durationMs, startedAt, live = false, expansi
           )}
         <Icon name="chevron" className="tool-chevron" />
       </button>
-      {open && text && <ThinkingBody text={text} live={live} />}
+      {/* The unfurl: the wrapper clips from zero height while the body drifts down into place
+          (`.thinking-reveal` in styles.css). Where motion isn't allowed, the body simply appears. */}
+      {!animate
+        ? open && text && <ThinkingBody text={text} live={live} />
+        : (
+          <AnimatePresence initial={false}>
+            {open && text && (
+              <motion.div
+                className="thinking-reveal"
+                initial={{ height: 0, opacity: 0, y: -6 }}
+                animate={{ height: "auto", opacity: 1, y: 0 }}
+                exit={{ height: 0, opacity: 0, y: -6, transition: REVEAL_EXIT }}
+                transition={REVEAL_OPEN}
+              >
+                <ThinkingBody text={text} live={live} />
+              </motion.div>
+            )}
+          </AnimatePresence>
+        )}
     </div>
   );
 }

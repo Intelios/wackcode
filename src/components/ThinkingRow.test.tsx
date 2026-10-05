@@ -123,6 +123,24 @@ describe("ThinkingRow live timer", () => {
     expect(off.container.querySelector(".thinking-row")).not.toHaveClass("streaming");
   });
 
+  it("unfurls open, then holds the body through its closing animation", async () => {
+    // Real timers so framer's exit can actually finish; motion allowed so the reveal wrapper runs
+    // (elsewhere the still path mounts and unmounts at once, as every other test here asserts).
+    vi.useRealTimers();
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+    const view = render(<ThinkingRow text="Weighing both approaches." durationMs={4_200} />);
+    const head = screen.getByRole("button", { name: "Thought for 4s" });
+    fireEvent.click(head);
+    const region = screen.getByRole("region", { name: "Reasoning" });
+    expect(view.container.querySelector(".thinking-reveal .thinking-body")).toBe(region);
+
+    fireEvent.click(head);
+    // The body lingers while its exit animation runs, then leaves.
+    expect(screen.getByRole("region", { name: "Reasoning" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Reasoning" })).toBeNull());
+    expect(head).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("resets for a new block and formats minutes and hours", () => {
     const view = render(<ThinkingRow text="" live startedAt={8_000} />);
     view.rerender(<ThinkingRow text="" live startedAt={10_000} />);

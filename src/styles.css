@@ -668,6 +668,11 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
   flex: 0 0 auto; width: 1.5px; height: 1em; margin-left: 2px; border-radius: 1px;
   background: var(--wc-accent); animation: caret-blink .9s steps(2) infinite;
 }
+/* The open/close unfurl (ThinkingRow.tsx): motion animates this wrapper from zero height while
+   the body drifts down into place. `overflow: hidden` also makes a block formatting context, so
+   the body's margins count inside the measured auto height — margin, border and text reveal
+   together with the clip instead of collapsing out of it. */
+.thinking-reveal { overflow: hidden; }
 .thinking-body {
   /* Keep the collapse button within reach; the complete reasoning scrolls inside this body. */
   max-height: min(320px, 40vh); overflow: auto; overscroll-behavior: contain;

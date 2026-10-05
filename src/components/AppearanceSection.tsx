@@ -41,7 +41,7 @@ const TIMER_PRECISIONS: { value: ThinkingTimerPrecision; label: string }[] = [
 
 /** The chat switches each show a miniature of what they change, so the effect is visible
  *  before it is switched on. */
-const CHAT_OPTIONS: { key: "thinkingPreview" | "messageBubbles" | "groupExploration"; label: string; description: (name: string) => string; preview: "bubble" | "thinking" | "explore" }[] = [
+const CHAT_OPTIONS: { key: "thinkingPreview" | "messageBubbles" | "groupExploration" | "collapseCompletedWork"; label: string; description: (name: string) => string; preview: "bubble" | "thinking" | "explore" | "work" }[] = [
   {
     key: "messageBubbles",
     label: "Message bubbles",
@@ -59,6 +59,12 @@ const CHAT_OPTIONS: { key: "thinkingPreview" | "messageBubbles" | "groupExplorat
     label: "Group exploration",
     description: () => "Fold runs of file reads, searches and listings into one “Explored” row you can expand.",
     preview: "explore"
+  },
+  {
+    key: "collapseCompletedWork",
+    label: "Collapse completed work",
+    description: () => "Keep the final reply visible and fold its steps behind “Worked for…”. Live work stays open.",
+    preview: "work"
   }
 ];
 
@@ -334,6 +340,34 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrl, 
                         <span className="mini-msg mini-user">Looks good, ship it</span>
                         {/* Assistant prose: bubbled when the switch is on, flat when it is off. */}
                         <span className={`mini-msg mini-assistant ${on ? "bubbled" : "flat"}`}>Done — the tests pass.</span>
+                      </>
+                    ) : option.preview === "work" ? (
+                      <>
+                        {on ? (
+                          <span className="mini-work">
+                            <Icon name="clock" className="mini-tool-icon" />
+                            <span className="mini-work-label">Worked for 12s</span>
+                            <Icon name="chevron" className="mini-tool-chevron" />
+                          </span>
+                        ) : (
+                          <span className="mini-work-steps">
+                            <span className="mini-thinking">
+                              <PonderingDuck live={false} className="mini-thinking-icon" />
+                              <span>Thought for 2s</span>
+                            </span>
+                            <span className="mini-tool">
+                              <Icon name="pencil" className="mini-tool-icon" />
+                              <span className="mini-tool-verb">Edited</span>
+                              <span className="mini-tool-subject">App.tsx</span>
+                            </span>
+                            <span className="mini-tool">
+                              <Icon name="terminal" className="mini-tool-icon" />
+                              <span className="mini-tool-verb">Ran</span>
+                              <span className="mini-tool-subject">pnpm test</span>
+                            </span>
+                          </span>
+                        )}
+                        <span className="mini-msg mini-assistant flat">Done — the tests pass.</span>
                       </>
                     ) : option.preview === "explore" ? (
                       <>

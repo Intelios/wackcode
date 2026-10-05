@@ -218,7 +218,7 @@ function Body({ result, status, stream, onRetry }: { result: SubagentResult; sta
   const empty = stream.messages.length === 0 && !stream.partial;
   if (empty && (status === "queued" || status === "running")) return <Waiting status={status} />;
   if (stream.missing || empty) return <Summary result={result} legacy={stream.missing} />;
-  return <Transcript messages={stream.messages} partial={stream.partial} running={stream.live} />;
+  return <Transcript messages={stream.messages} partial={stream.partial} running={stream.live} collapseCompletedWork={false} />;
 }
 
 /**

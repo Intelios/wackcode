@@ -5073,6 +5073,7 @@ fn validate_appearance_config(
         thinking_timer_precision: input.thinking_timer_precision,
         message_bubbles: input.message_bubbles,
         group_exploration: input.group_exploration,
+        collapse_completed_work: input.collapse_completed_work,
         accent: colour("accent", input.accent)?,
         background: colour("background", input.background)?,
         backdrop: input.backdrop,
@@ -5445,6 +5446,35 @@ mod tests {
                     .contains("#1a2b3c"),
                 "{bad}"
             );
+        }
+    }
+
+    #[test]
+    fn appearance_completed_work_folding_passes_through_without_changing_other_preferences() {
+        use crate::models::{GlassStyleSetting, ThinkingTimerPrecision};
+        let current = AppearanceConfig {
+            thinking_preview: false,
+            thinking_timer_precision: ThinkingTimerPrecision::Tenth,
+            message_bubbles: true,
+            group_exploration: false,
+            accent: Some("#b69cff".into()),
+            background: Some("#14111b".into()),
+            backdrop: BackdropMode::Image,
+            background_image: Some("kept.png".into()),
+            image_dim: 50,
+            image_blur: 7,
+            image_zoom: 160,
+            image_x: 250,
+            image_y: 750,
+            glass_style: GlassStyleSetting::Clear,
+            glass_tint: 25,
+            agent_name: Some("Nova".into()),
+            ..AppearanceConfig::default()
+        };
+        for collapse_completed_work in [false, true] {
+            let input = AppearanceConfig { collapse_completed_work, ..current.clone() };
+            let config = validate_appearance_config(input.clone(), &current, false).unwrap();
+            assert_eq!(config, input);
         }
     }
 

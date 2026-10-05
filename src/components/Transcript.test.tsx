@@ -24,7 +24,7 @@ describe("Transcript model switches", () => {
       { id: "trailing", at: 2, from: "Claude Sonnet 4", to: "GPT 5" }
     ]} />);
     const transcript = container.querySelector(".transcript");
-    const children = Array.from(transcript?.children ?? []);
+    const children = Array.from(transcript?.querySelectorAll(".msg, .model-switch-divider") ?? []);
     expect(children.map((entry) => entry.textContent?.trim())).toEqual([
       "Hello",
       "Model switched GPT 5 → Claude Sonnet 4",
@@ -49,7 +49,7 @@ describe("Transcript pending echo", () => {
     ];
     const { container } = render(<Transcript messages={[...history, echo]} running activeRun={{ startedAt }} activity="starting" />);
     const transcript = container.querySelector(".transcript");
-    const rows = Array.from(transcript?.children ?? []).map((entry) => entry.textContent?.trim() ?? "");
+    const rows = Array.from(transcript?.querySelectorAll(".msg, .run-duration, .agent-working") ?? []).map((entry) => entry.textContent?.trim() ?? "");
     expect(rows.slice(0, 3)).toEqual(["Hello", "Hi", "Ship it"]);
     // The echo is the active turn: the run's clock chip sits under it, not as a bare row.
     expect(rows[3]).toMatch(/^Working for/);
@@ -109,7 +109,7 @@ describe("Transcript thinking", () => {
 
     // The saved message replaces the streamed one as a separate element, and keeps the row open.
     const saved: NormalizedMessage = { ...answering, id: "entry-assistant", blocks: [answering.blocks[0], { type: "text", text: "Because." }] };
-    view.rerender(<Transcript messages={[user, saved]} running={false} />);
+    view.rerender(<Transcript messages={[user, saved]} running={false} collapseCompletedWork={false} />);
     expect(screen.getByRole("button", { name: "Thought for 4s" })).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("Weighing the options")).toBeInTheDocument();
   });
@@ -146,7 +146,7 @@ describe("Transcript thinking", () => {
     const message = (id: string, timestamp: number, durationMs?: number): NormalizedMessage => ({
       id, role: "assistant", timestamp, blocks: [{ type: "thinking", text: "Hmm", ...(durationMs === undefined ? {} : { durationMs }) }, { type: "text", text: "Done" }]
     });
-    render(<Transcript messages={[user, message("a", 2_000, 400), message("b", 3_000, 75_000), message("c", 4_000)]} running={false} />);
+    render(<Transcript messages={[user, message("a", 2_000, 400), message("b", 3_000, 75_000), message("c", 4_000)]} running={false} collapseCompletedWork={false} />);
     expect(screen.getByRole("button", { name: "Thought for <1s" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Thought for 1m 15s" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reasoning" })).toBeInTheDocument();
@@ -298,10 +298,10 @@ describe("Transcript run durations", () => {
     expect(rows).toHaveLength(2);
     expect(rows[0]).toHaveTextContent("Worked for 1m 2s");
     expect(rows[0].previousElementSibling).toHaveClass("msg", "user");
-    expect(rows[0].nextElementSibling).toHaveClass("msg", "assistant");
+    expect(rows[0].nextElementSibling?.querySelector(".msg.assistant")).toHaveClass("msg", "assistant");
     expect(rows[1]).toHaveTextContent("Worked for 1h 1m 1s");
     expect(rows[1].previousElementSibling).toHaveClass("msg", "user");
-    expect(rows[1].nextElementSibling).toHaveClass("msg", "assistant");
+    expect(rows[1].nextElementSibling?.querySelector(".msg.assistant")).toHaveClass("msg", "assistant");
   });
 
   it("ticks the active duration once a second, then keeps the completed total", () => {
@@ -506,7 +506,7 @@ describe("Transcript exploration groups", () => {
     expect(screen.queryByRole("button", { name: /Explored/ })).not.toBeInTheDocument();
 
     // A later message extends the run, so the earlier message has to re-render with the group.
-    view.rerender(<Transcript messages={[user, first, result("r1"), second, result("g1"), answer]} running={false} />);
+    view.rerender(<Transcript messages={[user, first, result("r1"), second, result("g1"), answer]} running={false} collapseCompletedWork={false} />);
     const head = screen.getByRole("button", { name: "Explored 1 file, 1 search" });
     expect(head).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByRole("button", { name: /one\.ts/ })).not.toBeInTheDocument();

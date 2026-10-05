@@ -455,6 +455,9 @@ pub struct AppearanceConfig {
     /// Fold runs of read-only tool calls into one "Explored" row in the transcript.
     #[serde(default = "default_true")]
     pub group_exploration: bool,
+    /// Fold work steps only after completion; live work stays expanded. On by default.
+    #[serde(default = "default_true")]
+    pub collapse_completed_work: bool,
     /// `#rrggbb`; `None` is WackCode green, so a future default reaches users who never picked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accent: Option<String>,
@@ -547,6 +550,7 @@ impl Default for AppearanceConfig {
             thinking_timer_precision: ThinkingTimerPrecision::Second,
             message_bubbles: false,
             group_exploration: true,
+            collapse_completed_work: true,
             accent: None,
             background: None,
             backdrop: BackdropMode::Solid,

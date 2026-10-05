@@ -125,6 +125,15 @@ describe("SubagentPanel", () => {
     expect(onRetry).toHaveBeenCalled();
   });
 
+  it("keeps completed child transcripts detailed instead of folding their work", () => {
+    const prompt: NormalizedMessage = { id: "u", role: "user", blocks: [{ type: "text", text: "Look around" }] };
+    const reasoning: NormalizedMessage = { id: "work", role: "assistant", blocks: [{ type: "thinking", text: "Inspecting" }, { type: "text", text: "Reading the files" }] };
+    panel({ live: false, details: details([child({ status: "done" })]), stream: stream({ live: false, messages: [prompt, reasoning, answer] }) });
+    expect(screen.getByText("Reading the files")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reasoning" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /work transcript/ })).not.toBeInTheDocument();
+  });
+
   it("ignores a transcript that belongs to another child", () => {
     panel({ stream: stream({ index: 1, messages: [answer] }) });
     expect(screen.queryByText("Sessions are restored in session.ts.")).not.toBeInTheDocument();

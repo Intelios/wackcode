@@ -2,14 +2,15 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useFollowScroll } from "./useFollowScroll";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 function TranscriptScroller({ chunk = 0 }: { chunk?: number }) {
-  const { ref, onScroll, onWheel, detached, jumpToLatest } = useFollowScroll();
+  const { ref, onScroll, onWheel, detached, jumpToLatest, pauseFollowing, keepAnchor } = useFollowScroll();
   return <>
-    <div ref={ref} onScroll={onScroll} onWheel={onWheel} data-testid="scroller">Chunk {chunk}</div>
+    <div ref={ref} onScroll={onScroll} onWheel={onWheel} data-testid="scroller"><span data-testid="anchor">Chunk {chunk}</span></div>
     <output>{detached ? "Reading history" : "Following"}</output>
     <button onClick={jumpToLatest}>Jump to latest</button>
+    <button onClick={() => { pauseFollowing(); keepAnchor(ref.current!.firstElementChild as HTMLElement, 25); }}>Hold anchor</button>
   </>;
 }
 
@@ -40,7 +41,7 @@ function setup(initialHeight = 1_000) {
     fireEvent.scroll(el);
   };
   stream();
-  return { ...view, el, stream, scroll, scrollTo };
+  return { ...view, el, stream, scroll, scrollTo, resize: (growth: number) => { height += growth; } };
 }
 
 describe("useFollowScroll", () => {
@@ -137,6 +138,63 @@ describe("useFollowScroll", () => {
     stream(20);
     expect(el.scrollTop).toBe(720);
     expect(screen.getByText("Reading history")).toBeInTheDocument();
+  });
+
+  it("keeps following size changes between React commits and disconnects its observer", () => {
+    const callbacks: Array<() => void> = [];
+    const disconnect = vi.fn();
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(callback: () => void) { callbacks.push(callback); }
+      observe() {}
+      disconnect = disconnect;
+    });
+    const { el, unmount, resize } = setup();
+    resize(100);
+    act(() => callbacks[callbacks.length - 1]());
+    expect(el.scrollTop).toBe(800);
+    fireEvent.scroll(el);
+    expect(screen.getByText("Following")).toBeInTheDocument();
+    unmount();
+    expect(disconnect).toHaveBeenCalled();
+  });
+
+  it("holds a reading anchor through resize frames, but releases it on real transcript wheel intent", () => {
+    const callbacks: Array<() => void> = [];
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(callback: () => void) { callbacks.push(callback); }
+      observe() {}
+      disconnect() {}
+    });
+    const { el, scroll } = setup();
+    scroll(400);
+    const anchor = screen.getByTestId("anchor");
+    let y = 425;
+    vi.spyOn(anchor, "getBoundingClientRect").mockImplementation(() => ({ top: y - el.scrollTop } as DOMRect));
+    fireEvent.click(screen.getByRole("button", { name: "Hold anchor" }));
+    const frame = () => act(() => callbacks[callbacks.length - 1]());
+    y += 30;
+    frame();
+    expect(el.scrollTop).toBe(430);
+    fireEvent.scroll(el);
+    expect(screen.getByText("Reading history")).toBeInTheDocument();
+
+    const output = document.createElement("pre");
+    output.style.overflowY = "auto";
+    output.scrollTop = 20;
+    el.append(output);
+    fireEvent.wheel(output, { deltaY: -4 });
+    y += 30;
+    frame();
+    expect(el.scrollTop).toBe(460);
+    Object.defineProperties(output, { clientHeight: { value: 100 }, scrollHeight: { value: 200 } });
+    fireEvent.wheel(output, { deltaY: 4 });
+    y += 30;
+    frame();
+    expect(el.scrollTop).toBe(490);
+    fireEvent.wheel(el, { deltaY: 4 });
+    y += 30;
+    frame();
+    expect(el.scrollTop).toBe(490);
   });
 
   it("ignores horizontal wheels and zoom gestures", () => {

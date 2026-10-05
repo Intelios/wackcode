@@ -712,6 +712,27 @@ describe("SettingsPage appearance section", () => {
     await waitFor(() => expect(again.onSetAppearance).toHaveBeenCalledWith({ ...DEFAULT_APPEARANCE, groupExploration: true }));
   });
 
+  it("switches completed-work folding off and back on without resetting other appearance settings", async () => {
+    const appearance: AppearanceConfig = {
+      ...DEFAULT_APPEARANCE, thinkingPreview: false, thinkingTimerPrecision: "tenth", messageBubbles: true,
+      groupExploration: false, accent: "#b69cff", background: "#14111b", backdrop: "image", backgroundImage: "a.png",
+      imageDim: 50, imageBlur: 7, imageZoom: 160, imageX: 250, imageY: 750,
+      glassStyle: "clear", glassTint: 25, agentName: "Nova"
+    };
+    const { onSetAppearance } = renderAppearance(appearance);
+    const toggle = screen.getByRole("switch", { name: "Collapse completed work" });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(toggle);
+    await waitFor(() => expect(onSetAppearance).toHaveBeenCalledWith({ ...appearance, collapseCompletedWork: false }));
+    cleanup();
+
+    const again = renderAppearance({ ...appearance, collapseCompletedWork: false });
+    const off = screen.getByRole("switch", { name: "Collapse completed work" });
+    expect(off).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(off);
+    await waitFor(() => expect(again.onSetAppearance).toHaveBeenCalledWith(appearance));
+  });
+
   it("sets the thinking timer to tenths and back to whole seconds", async () => {
     const { onSetAppearance } = renderAppearance({ ...DEFAULT_APPEARANCE, thinkingTimerPrecision: "second" });
     const group = screen.getByRole("radiogroup", { name: "Thinking timer" });
@@ -727,9 +748,12 @@ describe("SettingsPage appearance section", () => {
     await waitFor(() => expect(again.onSetAppearance).toHaveBeenCalledWith({ ...DEFAULT_APPEARANCE, thinkingTimerPrecision: "second" }));
   });
 
-  it("surfaces a failed save", async () => {
-    renderAppearance({ ...DEFAULT_APPEARANCE, thinkingPreview: true }, vi.fn().mockRejectedValue("Could not save settings."));
-    fireEvent.click(screen.getByRole("switch", { name: "Thinking preview" }));
+  it.each(["Thinking preview", "Collapse completed work"])("surfaces a failed %s save", async (label) => {
+    renderAppearance(DEFAULT_APPEARANCE, vi.fn().mockRejectedValue("Could not save settings."));
+    const toggle = screen.getByRole("switch", { name: label });
+    fireEvent.click(toggle);
     expect(await screen.findByText("Could not save settings.")).toBeInTheDocument();
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    expect(toggle).not.toBeDisabled();
   });
 });

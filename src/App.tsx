@@ -2702,6 +2702,9 @@ export default function App() {
               running={selectedTask.status === "running" || selectedTask.status === "stopping"}
               activeRun={runtime?.activeRun}
               runTimings={runtime?.snapshot?.runTimings}
+              collapseCompletedWork={data.appearance.collapseCompletedWork}
+              scopeKey={selectedTask.id}
+              status={selectedTask.status}
               activity={runtime?.activity}
               liveToolText={runtime?.liveToolText}
               liveToolDetails={runtime?.liveToolDetails}

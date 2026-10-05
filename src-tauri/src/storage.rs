@@ -155,22 +155,75 @@ mod tests {
 
     #[test]
     fn appearance_settings_default_on_and_round_trip() {
+        let data: AppData = serde_json::from_str(r#"{"version":1}"#).unwrap();
+        assert!(data.appearance.collapse_completed_work);
         let data: AppData = serde_json::from_str(r#"{"version":1,"appearance":{}}"#).unwrap();
         assert!(data.appearance.thinking_preview);
         assert!(!data.appearance.message_bubbles);
         assert!(data.appearance.group_exploration);
+        assert!(data.appearance.collapse_completed_work);
         // The thinking timer counts whole seconds until the user picks tenths.
         assert_eq!(data.appearance.thinking_timer_precision, crate::models::ThinkingTimerPrecision::Second);
-        let data: AppData = serde_json::from_str(r#"{"version":1,"appearance":{"thinkingPreview":false,"messageBubbles":true,"groupExploration":false,"thinkingTimerPrecision":"tenth"}}"#).unwrap();
+        let data: AppData = serde_json::from_str(r#"{"version":1,"appearance":{"thinkingPreview":false,"messageBubbles":true,"groupExploration":false,"collapseCompletedWork":false,"thinkingTimerPrecision":"tenth"}}"#).unwrap();
         assert!(!data.appearance.thinking_preview);
         assert!(data.appearance.message_bubbles);
         assert!(!data.appearance.group_exploration);
+        assert!(!data.appearance.collapse_completed_work);
         assert_eq!(data.appearance.thinking_timer_precision, crate::models::ThinkingTimerPrecision::Tenth);
         let saved = serde_json::to_string(&data).unwrap();
         assert!(saved.contains(r#""thinkingPreview":false"#));
         assert!(saved.contains(r#""messageBubbles":true"#));
         assert!(saved.contains(r#""groupExploration":false"#));
+        assert!(saved.contains(r#""collapseCompletedWork":false"#));
         assert!(saved.contains(r#""thinkingTimerPrecision":"tenth""#));
+    }
+
+    #[test]
+    fn appearance_completed_work_folding_defaults_on_and_persists_without_resetting_preferences() {
+        use crate::models::{AppearanceConfig, BackdropMode, GlassStyleSetting, ThinkingTimerPrecision};
+        let mut expected = AppearanceConfig {
+            thinking_preview: false,
+            thinking_timer_precision: ThinkingTimerPrecision::Tenth,
+            message_bubbles: true,
+            group_exploration: false,
+            accent: Some("#b69cff".into()),
+            background: Some("#14111b".into()),
+            backdrop: BackdropMode::Image,
+            background_image: Some("kept.png".into()),
+            image_dim: 50,
+            image_blur: 7,
+            image_zoom: 160,
+            image_x: 250,
+            image_y: 750,
+            glass_style: GlassStyleSetting::Clear,
+            glass_tint: 25,
+            agent_name: Some("Nova".into()),
+            ..AppearanceConfig::default()
+        };
+        assert!(expected.collapse_completed_work);
+        // An older file can have every other preference set, but no completed-work setting.
+        let mut legacy = serde_json::to_value(AppData { appearance: expected.clone(), ..AppData::default() }).unwrap();
+        legacy["appearance"].as_object_mut().unwrap().remove("collapseCompletedWork");
+        let data: AppData = serde_json::from_value(legacy).unwrap();
+        assert_eq!(data.appearance, expected);
+
+        let directory = tempfile::tempdir().unwrap();
+        let state = MetadataState {
+            data: Mutex::new(data),
+            data_path: directory.path().join("wackcode.json"),
+            secrets: SecretStore::load(directory.path()).unwrap(),
+        };
+        for collapse_completed_work in [false, true] {
+            state.mutate(|data| {
+                data.appearance.collapse_completed_work = collapse_completed_work;
+                Ok(())
+            }).unwrap();
+            expected.collapse_completed_work = collapse_completed_work;
+            let content = fs::read_to_string(&state.data_path).unwrap();
+            let reloaded: AppData = serde_json::from_str(&content).unwrap();
+            assert_eq!(reloaded.appearance, expected);
+            assert_eq!(state.data.lock().unwrap().appearance, expected);
+        }
     }
 
     #[test]

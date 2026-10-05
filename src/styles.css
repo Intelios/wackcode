@@ -821,6 +821,23 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 @media (prefers-reduced-motion: reduce) {
   .run-duration.live .clock-hand { animation: none; }
 }
+/* Turn wrappers stay unpositioned: the scroll rail reads user offsetTop in scroller coordinates. */
+.transcript-turn { display: flow-root; }
+/* Preparing the outcome boundary while live must not add message-sized space mid-stream. */
+.transcript-turn.live-partition > .msg.assistant { margin-top: -6px; }
+.transcript-turn.live-partition.split-message .turn-content > .msg:last-child { margin-bottom: 0; }
+.transcript-turn.live-partition.split-message > .msg.assistant { margin-top: 0; }
+.work-disclosure-button { cursor: pointer; font: inherit; text-align: left; }
+.work-disclosure-button:hover, .work-disclosure-button:focus-visible { border-color: var(--wc-accent-line); color: var(--text); }
+.run-duration-chip .work-chevron { width: 11px; height: 11px; margin-left: 3px; transition: transform .2s var(--ease); }
+.work-disclosure.open .work-chevron { transform: rotate(90deg); }
+.work-transcript-region { display: flow-root; }
+.work-transcript-region > .work-transcript-body, .work-transcript-region > .turn-content { overflow: hidden; }
+.work-transcript-body { margin: -6px 0 16px 6px; padding: 2px 0 0 15px; border-left: 1px solid var(--border); }
+.work-transcript-body > .msg:last-child, .work-transcript-body > .orphan-group:last-child { margin-bottom: 8px; }
+@media (prefers-reduced-motion: reduce) {
+  .work-chevron { transition: none; }
+}
 .aborted-label { display: inline-flex; margin-top: 6px; color: var(--warning); font-size: 11px; }
 .message-error { margin-top: 10px; border: 1px solid #5b3030; background: var(--danger-bg); color: #ebb1b1; border-radius: 7px; padding: 9px 11px; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 
@@ -3382,6 +3399,15 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .mini-tool-verb { flex: 0 0 auto; font-weight: 550; color: var(--text-soft); }
 .mini-tool-subject { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .mini-tool-chevron { width: 10px; height: 10px; flex: 0 0 auto; color: var(--text-faint); }
+/* Completed-work miniature: a compact disclosure when on, the finished steps when off.
+   The final reply sits outside either shape and stays visible. */
+.mini-work {
+  display: flex; align-items: center; gap: 5px; padding: 4px 7px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface); color: var(--text-dim); font-size: 10.5px;
+}
+.mini-work-label { color: var(--text-soft); font-weight: 550; }
+.mini-work .mini-tool-chevron { margin-left: auto; }
+.mini-work-steps { display: flex; flex-direction: column; gap: 5px; padding: 1px 0 1px 7px; border-left: 1px solid var(--border); }
 
 /* The agent-name card reuses the chat-preview-card grid; its input takes the corner cell
    where a chat toggle would sit, centred against the two-line description. */

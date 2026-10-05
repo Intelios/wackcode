@@ -25,6 +25,7 @@ export const DEFAULT_APPEARANCE: AppearanceConfig = {
   thinkingTimerPrecision: "second",
   messageBubbles: false,
   groupExploration: true,
+  collapseCompletedWork: true,
   backdrop: "solid",
   imageDim: 65,
   imageBlur: 12,

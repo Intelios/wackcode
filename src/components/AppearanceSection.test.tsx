@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_APPEARANCE, swatchTint } from "../theme";
 import type { AppearanceConfig } from "../types";
@@ -132,6 +132,40 @@ describe("AppearanceSection backdrop", () => {
   it("disables Liquid Glass before macOS 26", () => {
     renderSection({}, { glassSupported: false });
     expect(screen.getByRole("radio", { name: "Liquid Glass" })).toBeDisabled();
+  });
+});
+
+describe("AppearanceSection completed work", () => {
+  it("defaults to folding completed steps and explains that live work stays open", () => {
+    renderSection();
+    const toggle = screen.getByRole("switch", { name: "Collapse completed work" });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    const card = within(toggle.closest(".chat-preview-card")!);
+    expect(card.getByText("Worked for 12s")).toBeInTheDocument();
+    expect(card.queryByText("Thought for 2s")).not.toBeInTheDocument();
+    expect(card.getByText("Done — the tests pass.")).toBeInTheDocument();
+    expect(card.getByText("Keep the final reply visible and fold its steps behind “Worked for…”. Live work stays open.")).toBeInTheDocument();
+  });
+
+  it.each([false, true])("shows the %s miniature and saves the opposite choice without changing other preferences", async (collapseCompletedWork) => {
+    const config: AppearanceConfig = {
+      ...DEFAULT_APPEARANCE, collapseCompletedWork, thinkingPreview: false, groupExploration: false,
+      thinkingTimerPrecision: "tenth", messageBubbles: true, accent: "#b69cff", agentName: "Nova"
+    };
+    const { onChange, onPreview } = renderSection(config);
+    const toggle = screen.getByRole("switch", { name: "Collapse completed work" });
+    expect(toggle).toHaveAttribute("aria-checked", String(collapseCompletedWork));
+    const card = within(toggle.closest(".chat-preview-card")!);
+    if (!collapseCompletedWork) {
+      expect(card.queryByText("Worked for 12s")).not.toBeInTheDocument();
+      expect(card.getByText("Thought for 2s")).toBeInTheDocument();
+      expect(card.getByText("Edited")).toBeInTheDocument();
+      expect(card.getByText("Ran")).toBeInTheDocument();
+    }
+    expect(card.getByText("Done — the tests pass.")).toBeInTheDocument();
+    fireEvent.click(toggle);
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ ...config, collapseCompletedWork: !collapseCompletedWork }));
+    expect(onPreview).not.toHaveBeenCalled();
   });
 });
 

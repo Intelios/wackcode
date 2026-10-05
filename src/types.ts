@@ -598,6 +598,8 @@ export interface AppearanceConfig {
   messageBubbles: boolean;
   /** Fold runs of read-only tool calls into one "Explored" row in the transcript. */
   groupExploration: boolean;
+  /** Fold work steps only after completion; live work stays expanded. On by default. */
+  collapseCompletedWork: boolean;
   /** `#rrggbb`; absent is WackCode green. */
   accent?: string | null;
   /** `#rrggbb` as displayed (already darkened for readability); absent is the default. */

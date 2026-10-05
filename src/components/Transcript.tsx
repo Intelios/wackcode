@@ -1,10 +1,11 @@
 import { Fragment, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { CommandPresentation, NormalizedBlock, NormalizedMessage, PlanState, RunTiming } from "../types";
+import type { CommandPresentation, NormalizedBlock, NormalizedMessage, PlanState, RunTiming, TaskStatus } from "../types";
 import { AssistantNameContext } from "../agentName";
 import { useFollowScroll } from "../hooks/useFollowScroll";
 import { useSmoothText } from "../hooks/useSmoothText";
 import { formatRunDuration, isPlanMode } from "../chat-utils";
 import { blockKey, layoutTranscript, type TranscriptSlot } from "../explore-utils";
+import { completedPlan, layoutWorkTurns, type WorkRow } from "../completed-work";
 import { splitFileSection, type FileAttachment } from "../attachment-utils";
 import { splitMentions } from "../mention-utils";
 import { SUBAGENT_TOOL_NAME, parseSubagentDetails, pendingSubagentDetails } from "../tool-utils";
@@ -24,6 +25,7 @@ import { useContextMenu } from "./ui/ContextMenu";
 import { ImageLightbox } from "./ui/ImageLightbox";
 import { Popover } from "./ui/Popover";
 import { Tooltip } from "./ui/Tooltip";
+import { WorkTurn } from "./WorkTurn";
 
 interface Props {
   messages: NormalizedMessage[];
@@ -33,6 +35,12 @@ interface Props {
   activity?: string;
   activeRun?: { runId?: string; startedAt: number };
   runTimings?: RunTiming[];
+  /** Settings › Appearance; sub-agent inspection transcripts opt out. */
+  collapseCompletedWork?: boolean;
+  /** Scope transient disclosures to this chat, without remounting its transcript. */
+  scopeKey?: string;
+  /** Protect the trailing diagnostics after a worker crash or refused run. */
+  status?: TaskStatus;
   liveToolText?: Record<string, string>;
   /** Structured progress of in-flight tools that report it (sub-agent chips). */
   liveToolDetails?: Record<string, unknown>;
@@ -176,16 +184,10 @@ function RunDuration({ startedAt, durationMs }: { startedAt?: number; durationMs
 
 function ModelSwitchDivider({ entry }: { entry: DisplayModelSwitch }) {
   return (
-    <div className="model-switch-divider">
+    <div className="model-switch-divider" data-transcript-anchor={`switch:${entry.id}`}>
       <span>Model switched <strong>{entry.from}</strong> <span className="model-switch-arrow">→</span> <strong>{entry.to}</strong></span>
     </div>
   );
-}
-
-/** The plan text a plan_mode_complete result carries, or undefined if it isn't one. */
-function completedPlan(result?: NormalizedBlock): string | undefined {
-  const details = result?.details as { plan?: unknown } | undefined;
-  return typeof details?.plan === "string" && details.plan.trim() ? details.plan : undefined;
 }
 
 function renderBlock(
@@ -314,14 +316,15 @@ function signature(
  * its external inputs moves: the result block answering one of its tool calls, or that call's
  * live stream text, or what its exploration groups hold.
  */
-const signatureCache = new WeakMap<NormalizedMessage, { deps: unknown[]; sig: string }>();
+const signatureCache = new WeakMap<NormalizedMessage, Map<string, { deps: unknown[]; sig: string }>>();
 
 function cachedSignature(
   message: NormalizedMessage,
   slots: TranscriptSlot[],
   results: Map<string, NormalizedBlock>,
   liveToolText?: Record<string, string>,
-  liveToolDetails?: Record<string, unknown>
+  liveToolDetails?: Record<string, unknown>,
+  variant = "full"
 ): string {
   const deps: unknown[] = [];
   const pushInputs = (block: NormalizedBlock) => {
@@ -337,12 +340,14 @@ function cachedSignature(
       pushInputs(item.block);
     }
   }
-  const cached = signatureCache.get(message);
+  const variants = signatureCache.get(message) ?? new Map<string, { deps: unknown[]; sig: string }>();
+  const cached = variants.get(variant);
   if (cached && cached.deps.length === deps.length && cached.deps.every((dep, index) => dep === deps[index])) {
     return cached.sig;
   }
   const sig = signature(message, slots, results, liveToolText, liveToolDetails);
-  signatureCache.set(message, { deps, sig });
+  variants.set(variant, { deps, sig });
+  signatureCache.set(message, variants);
   return sig;
 }
 
@@ -398,6 +403,10 @@ interface MessageProps {
   planState?: PlanState;
   onPlanAction?: (action: PlanAction) => void;
   sig: string;
+  /** A split work slice must not duplicate its original message's terminal footer/menu. */
+  turnActions?: boolean;
+  /** Work and outcome slices of one message must not share a scrolling anchor. */
+  anchorPart?: "work" | "outcome";
   actionsEnabled: boolean;
   /** Offer Retry on this message: it ends (or, unanswered, is) the latest turn. */
   retry: boolean;
@@ -408,8 +417,9 @@ interface MessageProps {
   loadImage?: MessageImageLoader;
 }
 
-const Message = memo(function Message({ message, slots, results, liveToolText, liveToolDetails, live, running, planState, onPlanAction, actionsEnabled, retry, editing, vision, modelName, onAction, loadImage }: MessageProps) {
+const Message = memo(function Message({ message, slots, results, liveToolText, liveToolDetails, live, running, planState, onPlanAction, actionsEnabled, retry, editing, vision, modelName, onAction, loadImage, turnActions = true, anchorPart }: MessageProps) {
   const contextMenu = useContextMenu();
+  const scrollAnchor = `message:${message.id}${anchorPart ? `:${anchorPart}` : ""}`;
   if (message.role === "user") {
     const images = message.blocks.filter((block) => block.type === "image");
     // The message text carries attached files in its generated section; the transcript shows
@@ -417,7 +427,7 @@ const Message = memo(function Message({ message, slots, results, liveToolText, l
     const { text, files } = splitFileSection(messageText(message));
     if (editing) {
       return (
-        <div className="msg user editing" data-turn={message.versions ? message.versions.group : message.id}>
+        <div className="msg user editing" data-transcript-anchor={scrollAnchor} data-turn={message.versions ? message.versions.group : message.id}>
           <MessageEditor
             text={text}
             images={images}
@@ -439,7 +449,7 @@ const Message = memo(function Message({ message, slots, results, liveToolText, l
       items.push({ id: "rewind", label: "Rewind to here", icon: "rewind", onClick: () => void onAction({ type: "rewind", message }) });
     }
     return (
-      <div className="msg user" onContextMenu={(event) => contextMenu(event, items.map((item) => ({ label: item.label, icon: <Icon name={item.icon} />, onSelect: item.onClick })), "Message menu")} data-turn={message.versions ? message.versions.group : message.id}>
+      <div className="msg user" data-transcript-anchor={scrollAnchor} onContextMenu={(event) => contextMenu(event, items.map((item) => ({ label: item.label, icon: <Icon name={item.icon} />, onSelect: item.onClick })), "Message menu")} data-turn={message.versions ? message.versions.group : message.id}>
         {images.length > 0 && <MessageImages images={images} entryId={message.entryId} loadImage={loadImage} />}
         {files.length > 0 && (
           <div className="message-files">
@@ -461,21 +471,21 @@ const Message = memo(function Message({ message, slots, results, liveToolText, l
   }
   if (message.role === "system") {
     const text = message.blocks.map((block) => block.text ?? "").join("\n").trim();
-    return text ? <div className="msg system">{text}</div> : null;
+    return text ? <div className="msg system" data-transcript-anchor={scrollAnchor}>{text}</div> : null;
   }
   const failed = message.stopReason === "error" || message.stopReason === "aborted";
   // Everything it had belongs to an exploration group an earlier message shows.
-  if (slots.length === 0 && !failed && !message.turn) return null;
+  if (slots.length === 0 && !failed && !(turnActions && message.turn)) return null;
   return (
-    <div className="msg assistant" onContextMenu={(event) => contextMenu(event, turnMenu(message, actionsEnabled && Boolean(message.turn), retry, onAction).map((item) => ({ label: item.label, icon: <Icon name={item.icon} />, onSelect: item.onClick })), "Message menu")}>
+    <div className="msg assistant" data-transcript-anchor={scrollAnchor} onContextMenu={(event) => contextMenu(event, turnMenu(message, actionsEnabled && turnActions && Boolean(message.turn), retry, onAction).map((item) => ({ label: item.label, icon: <Icon name={item.icon} />, onSelect: item.onClick })), "Message menu")}>
       {renderSlots(message, slots, results, liveToolText, liveToolDetails, live, planState, onPlanAction, running)}
       {message.stopReason === "error" && <div className="message-error">{message.errorMessage || "The provider rejected the request."}</div>}
       {message.stopReason === "aborted" && <span className="aborted-label">Stopped</span>}
-      {message.turn && <TurnActions message={message} actionsEnabled={actionsEnabled} retry={retry} onAction={onAction} />}
+      {turnActions && message.turn && <TurnActions message={message} actionsEnabled={actionsEnabled} retry={retry} onAction={onAction} />}
     </div>
   );
 }, (prev, next) =>
-  prev.sig === next.sig && prev.live === next.live && prev.running === next.running
+  prev.sig === next.sig && prev.live === next.live && prev.running === next.running && prev.turnActions === next.turnActions && prev.anchorPart === next.anchorPart
   && prev.planState === next.planState && prev.onPlanAction === next.onPlanAction
   && prev.actionsEnabled === next.actionsEnabled && prev.retry === next.retry && prev.editing === next.editing
   && prev.vision === next.vision && prev.modelName === next.modelName && prev.onAction === next.onAction
@@ -504,8 +514,10 @@ function activityLabel(activity?: string): string {
   return "Working…";
 }
 
-export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, runTimings = [], liveToolText, liveToolDetails, planState, onPlanAction, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind, loadImage }: Props) {
-  const { ref, onScroll, onWheel, detached, pauseFollowing, jumpToLatest } = useFollowScroll();
+export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, runTimings = [], collapseCompletedWork = true, scopeKey = "", status, liveToolText, liveToolDetails, planState, onPlanAction, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind, loadImage }: Props) {
+  const scroll = useFollowScroll();
+  const { ref, onScroll, onWheel, detached, pauseFollowing, jumpToLatest } = scroll;
+  const [expandedWork, setExpandedWork] = useState(() => new Set<string>());
   const [editingId, setEditingId] = useState<string>();
   const [expandedThinking] = useState(() => new Set<string>());
   const latest = useMemo(() => latestTurn(messages), [messages]);
@@ -576,6 +588,28 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
     <ModelSwitchDivider key={entry.id} entry={entry} />
   ));
 
+  const workTurns = useMemo(() => layoutWorkTurns(messages, {
+    layout, results, callIds, switchPositions: new Set(switchesByPosition.keys()),
+    running, activeRun, partial, status, settledUserIds: new Set(timingsByMessage.keys())
+  }), [messages, layout, results, callIds, switchesByPosition, running, activeRun, partial, status, timingsByMessage]);
+
+  const renderMessage = (message: NormalizedMessage, slots = layout.messages.get(message.id) ?? NO_SLOTS, turnActions = true, anchorPart?: "work" | "outcome") => (
+    <Message message={message} slots={slots} results={results} liveToolText={liveToolText} liveToolDetails={liveToolDetails}
+      live={running && message.id === lastAssistantId} running={running} planState={planState} onPlanAction={onPlanAction}
+      sig={cachedSignature(message, slots, results, liveToolText, liveToolDetails, anchorPart)} turnActions={turnActions} anchorPart={anchorPart}
+      actionsEnabled={actionsEnabled} retry={message.id === (latest?.answer ?? latest?.user)?.id}
+      editing={editingId === message.id} vision={vision} modelName={modelName} onAction={handleAction} loadImage={loadImage} />
+  );
+  const renderOrphans = (message: NormalizedMessage, blocks = message.blocks.filter((block) => !block.toolCallId || !callIds.has(block.toolCallId))) =>
+    blocks.length > 0 ? <div className="orphan-group" data-transcript-anchor={`message:${message.id}`}>
+      {blocks.map((block, index) => <OrphanResult key={block.toolCallId ?? index} block={block} />)}
+    </div> : null;
+  const renderRows = (rows: WorkRow[], part?: "work" | "outcome") => rows.map((row) => row.type === "switches"
+    ? <Fragment key={`switch:${row.position}`}>{renderSwitches(row.position)}</Fragment>
+    : <Fragment key={messages[row.index].id}>{row.type === "orphans"
+      ? renderOrphans(messages[row.index], row.blocks) : renderMessage(messages[row.index], row.slots, row.actions, part)}</Fragment>);
+  const firstUserIndex = workTurns.keys().next().value ?? messages.length;
+
   const waiting = running && (!partial || partial.blocks.length === 0);
   const label = activityLabel(activity);
 
@@ -607,49 +641,37 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
           <ExploreExpansion.Provider value={expandedGroups}>
             <div className="transcript">
               {messages.map((message, messageIndex) => {
-                if (message.role === "tool") {
-                  const orphans = message.blocks.filter((block) => !block.toolCallId || !callIds.has(block.toolCallId));
-                  return (
-                    <Fragment key={message.id}>
-                      {renderSwitches(messageIndex)}
-                      {orphans.length > 0 && <div className="orphan-group">{orphans.map((block, index) => <OrphanResult key={index} block={block} />)}</div>}
-                    </Fragment>
-                  );
-                }
-                // Every version of a user message shares one element, so the switcher keeps focus.
-                const key = message.role === "user" && message.versions ? message.versions.group : message.id;
-                const slots = layout.messages.get(message.id) ?? NO_SLOTS;
-                const retry = message.id === (latest?.answer ?? latest?.user)?.id;
-                return (
-                  <Fragment key={key}>
-                    {renderSwitches(messageIndex)}
-                    <Message
-                      message={message}
-                      slots={slots}
-                      results={results}
-                      liveToolText={liveToolText}
-                      liveToolDetails={liveToolDetails}
-                      live={running && message.id === lastAssistantId}
-                      running={running}
-                      planState={planState}
-                      onPlanAction={onPlanAction}
-                      sig={cachedSignature(message, slots, results, liveToolText, liveToolDetails)}
-                      actionsEnabled={actionsEnabled}
-                      retry={retry}
-                      editing={editingId === message.id}
-                      vision={vision}
-                      modelName={modelName}
-                      onAction={handleAction}
-                      loadImage={loadImage}
-                    />
-                    {message.role === "user" && message.id === activeUserId && (
-                      <RunDuration startedAt={activeRun?.startedAt} />
-                    )}
-                    {message.role === "user" && message.id !== activeUserId && timingsByMessage.has(message.id) && (
-                      <RunDuration durationMs={timingsByMessage.get(message.id)} />
-                    )}
+                const turn = workTurns.get(messageIndex);
+                if (!turn) return messageIndex < firstUserIndex ? (
+                  <Fragment key={message.id}>{renderSwitches(messageIndex)}
+                    {message.role === "tool" ? renderOrphans(message) : renderMessage(message)}
                   </Fragment>
-                );
+                ) : null;
+                // The logical version key preserves focus on the user's version switcher.
+                // The disclosure preference uses the actual entry/outcome instead.
+                const key = message.versions?.group ?? message.id;
+                const expansionKey = JSON.stringify([scopeKey, turn.key]);
+                const duration = message.id === activeUserId ? <RunDuration startedAt={activeRun?.startedAt} />
+                  : timingsByMessage.has(message.id) ? <RunDuration durationMs={timingsByMessage.get(message.id)} /> : null;
+                return <Fragment key={key}>
+                  {renderSwitches(messageIndex)}
+                  <WorkTurn turn={turn} scopeKey={scopeKey} user={renderMessage(message)} duration={duration} durationMs={timingsByMessage.get(message.id)}
+                    enabled={collapseCompletedWork} open={expandedWork.has(expansionKey)} renderRows={renderRows} scroll={scroll}
+                    onAutoCollapse={() => setExpandedWork((current) => {
+                      if (!current.has(expansionKey)) return current;
+                      const next = new Set(current);
+                      next.delete(expansionKey);
+                      return next;
+                    })}
+                    onToggle={() => {
+                      pauseFollowing();
+                      setExpandedWork((current) => {
+                        const next = new Set(current);
+                        if (next.has(expansionKey)) next.delete(expansionKey); else next.add(expansionKey);
+                        return next;
+                      });
+                    }} />
+                </Fragment>;
               })}
               {renderSwitches(messages.length)}
               {activeRun && !activeUserId && <RunDuration startedAt={activeRun.startedAt} />}

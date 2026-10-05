@@ -21,6 +21,28 @@ A plain send is echoed while it travels: the composer has already cleared, and t
 
 The composer’s access indicator reads the worker’s applied `executionPolicy` while a run is active and the saved app policy when idle. A mismatch shows “Applies next turn”; restoring restrictions does not hide the active warning early. Cold history carries no policy: a new worker always receives current Settings, never permissions from session history.
 
+## Completed-work folding
+
+`completed-work.ts` projects each user turn into work and outcome slots without changing the
+normalized messages or their block indices. `turn` identifies the latest assistant, not run
+completion: all user turns at/after `activeRun.startedAt` stay open, including steering turns.
+Only settled successful turns with both work and a final answer/plan fold. Missing timings use
+“View work”; interrupted, failed, unfinished, tool-only and system-notice turns stay detailed.
+The latest successful PlanCard and terminal actions remain outside the fold. The Appearance
+preference defaults on; sub-agent inspection transcripts explicitly opt out.
+
+`WorkTurn` deliberately uses `getSnapshotBeforeUpdate` to capture a reading/focus anchor before
+an automatic collapse removes it, including React focus events from work-owned screenshot
+portals. Automatic completion always collapses, even during inspection. Manual toggles pause
+following and hold the disclosure; automatic folds retain bottom-pinning or hold the surviving
+reading row (the disclosure when that row disappears). `useFollowScroll` reconciles anchors on
+content resize so motion's height changes between commits do not yank the viewport. User
+scrolling releases the anchor. Work/outcome slices must have distinct `data-transcript-anchor`
+keys and signature-cache variants. Turn wrappers stay **unpositioned**, so user `offsetTop`
+still resolves in scroller coordinates for the rail. Closed bodies unmount after their reduced-
+motion-aware exit. Disclosure choices are transient, keyed by chat and actual entry/outcome,
+never shared by sibling versions; only the app-wide preference persists.
+
 ## Composer drafts
 
 `App` keeps in-memory text, image and file drafts by chat id through `useComposerDrafts`.

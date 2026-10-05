@@ -2,6 +2,7 @@ import { createContext, useContext, useState } from "react";
 import type { NormalizedBlock } from "../types";
 import { exploreActivity, exploreCounts, exploreLabel, type ExploreGroup as Group } from "../explore-utils";
 import { Icon } from "./Icons";
+import { OrbitSpinner } from "./OrbitSpinner";
 import { ThinkingRow } from "./ThinkingRow";
 import { ToolRow } from "./ToolRow";
 
@@ -46,7 +47,7 @@ export function ExploreGroup({ group, results, liveToolText, running }: ExploreG
         {" "}<span className="explore-summary"><span aria-hidden="true">·</span> {activity ?? exploreLabel(counts)}</span>
         {!activity && counts.failed > 0 && <>{" "}<span className="tool-row-failed">{counts.failed} failed</span></>}
         {" "}<span className="tool-row-status">
-          {activity && <span className="tool-spinner" aria-label="Running" />}
+          <OrbitSpinner active={Boolean(activity)} failed={!activity && counts.failed > 0} />
           <Icon name="chevron" className="tool-chevron" />
         </span>
       </button>

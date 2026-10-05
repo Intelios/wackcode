@@ -4,6 +4,7 @@ import { editArgumentDiff, focusedEditDiff } from "../edit-preview";
 import type { NormalizedBlock } from "../types";
 import { mcpToolParts, splitPathSubject, summarizeTool } from "../tool-utils";
 import { Icon, type IconName } from "./Icons";
+import { OrbitSpinner } from "./OrbitSpinner";
 import { ImageLightbox } from "./ui/ImageLightbox";
 import { CopyButton } from "./ui/CopyButton";
 
@@ -184,7 +185,7 @@ export function ToolRow({ call, result, liveText, running }: ToolRowProps) {
         ) : null}
         {failed && <span className="tool-row-failed">failed</span>}
         <span className="tool-row-status">
-          {pending && <span className="tool-spinner" aria-label="Running" />}
+          <OrbitSpinner active={Boolean(pending)} failed={failed} />
           {expandable && <Icon name="chevron" className="tool-chevron" />}
         </span>
       </button>

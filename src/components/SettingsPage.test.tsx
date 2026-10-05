@@ -712,6 +712,21 @@ describe("SettingsPage appearance section", () => {
     await waitFor(() => expect(again.onSetAppearance).toHaveBeenCalledWith({ ...DEFAULT_APPEARANCE, groupExploration: true }));
   });
 
+  it("sets the thinking timer to tenths and back to whole seconds", async () => {
+    const { onSetAppearance } = renderAppearance({ ...DEFAULT_APPEARANCE, thinkingTimerPrecision: "second" });
+    const group = screen.getByRole("radiogroup", { name: "Thinking timer" });
+    expect(within(group).getByRole("radio", { name: "1s" })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(within(group).getByRole("radio", { name: "0.1s" }));
+    await waitFor(() => expect(onSetAppearance).toHaveBeenCalledWith({ ...DEFAULT_APPEARANCE, thinkingTimerPrecision: "tenth" }));
+    cleanup();
+
+    const again = renderAppearance({ ...DEFAULT_APPEARANCE, thinkingTimerPrecision: "tenth" });
+    const switched = screen.getByRole("radiogroup", { name: "Thinking timer" });
+    expect(within(switched).getByRole("radio", { name: "0.1s" })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(within(switched).getByRole("radio", { name: "1s" }));
+    await waitFor(() => expect(again.onSetAppearance).toHaveBeenCalledWith({ ...DEFAULT_APPEARANCE, thinkingTimerPrecision: "second" }));
+  });
+
   it("surfaces a failed save", async () => {
     renderAppearance({ ...DEFAULT_APPEARANCE, thinkingPreview: true }, vi.fn().mockRejectedValue("Could not save settings."));
     fireEvent.click(screen.getByRole("switch", { name: "Thinking preview" }));

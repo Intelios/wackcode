@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { DEFAULT_ACCENT, DEFAULT_BACKGROUND, THEME_PRESETS, clampBackground, resolveTheme, swatchTint } from "../theme";
 import { DEFAULT_AGENT_NAME, agentName } from "../agentName";
-import type { AppearanceConfig, BackdropMode, GlassStyle } from "../types";
+import type { AppearanceConfig, BackdropMode, GlassStyle, ThinkingTimerPrecision } from "../types";
 import { Icon } from "./Icons";
 import { PonderingDuck } from "./PonderingDuck";
 import { BackdropCropEditor } from "./BackdropCropEditor";
@@ -31,6 +31,12 @@ const BACKDROPS: { value: BackdropMode; label: string; note: string }[] = [
 const GLASS_STYLES: { value: GlassStyle; label: string; note: string }[] = [
   { value: "frosted", label: "Frosted", note: "Heavier blur" },
   { value: "clear", label: "Clear", note: "More desktop" }
+];
+
+/** The Chat group's thinking timer choice (ThinkingRow.tsx counts from it). */
+const TIMER_PRECISIONS: { value: ThinkingTimerPrecision; label: string }[] = [
+  { value: "second", label: "1s" },
+  { value: "tenth", label: "0.1s" }
 ];
 
 /** The chat switches each show a miniature of what they change, so the effect is visible
@@ -381,6 +387,27 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrl, 
                 </div>
               );
             })}
+          </div>
+          <div className="tool-setting appearance-setting">
+            <div className="tool-setting-text">
+              <span className="tool-setting-name">Thinking timer</span>
+              <span className="tool-setting-description">Count the time beside “Thinking…” in whole seconds or tenths. Finished thoughts match: “Thought for 4.2s”.</span>
+            </div>
+            <div className="segmented" role="radiogroup" aria-label="Thinking timer">
+              {TIMER_PRECISIONS.map((option) => (
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={config.thinkingTimerPrecision === option.value}
+                  key={option.value}
+                  className={`segmented-option ${config.thinkingTimerPrecision === option.value ? "selected" : ""}`}
+                  disabled={busy}
+                  onClick={() => void save({ ...config, thinkingTimerPrecision: option.value })}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
           </div>
         </section>
 

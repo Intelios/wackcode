@@ -22,6 +22,7 @@ export const DEFAULT_BACKGROUND = "#111310";
 /** Mirrors `AppearanceConfig::default()` in models.rs. */
 export const DEFAULT_APPEARANCE: AppearanceConfig = {
   thinkingPreview: true,
+  thinkingTimerPrecision: "second",
   messageBubbles: false,
   groupExploration: true,
   backdrop: "solid",

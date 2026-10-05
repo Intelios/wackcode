@@ -159,14 +159,18 @@ mod tests {
         assert!(data.appearance.thinking_preview);
         assert!(!data.appearance.message_bubbles);
         assert!(data.appearance.group_exploration);
-        let data: AppData = serde_json::from_str(r#"{"version":1,"appearance":{"thinkingPreview":false,"messageBubbles":true,"groupExploration":false}}"#).unwrap();
+        // The thinking timer counts whole seconds until the user picks tenths.
+        assert_eq!(data.appearance.thinking_timer_precision, crate::models::ThinkingTimerPrecision::Second);
+        let data: AppData = serde_json::from_str(r#"{"version":1,"appearance":{"thinkingPreview":false,"messageBubbles":true,"groupExploration":false,"thinkingTimerPrecision":"tenth"}}"#).unwrap();
         assert!(!data.appearance.thinking_preview);
         assert!(data.appearance.message_bubbles);
         assert!(!data.appearance.group_exploration);
+        assert_eq!(data.appearance.thinking_timer_precision, crate::models::ThinkingTimerPrecision::Tenth);
         let saved = serde_json::to_string(&data).unwrap();
         assert!(saved.contains(r#""thinkingPreview":false"#));
         assert!(saved.contains(r#""messageBubbles":true"#));
         assert!(saved.contains(r#""groupExploration":false"#));
+        assert!(saved.contains(r#""thinkingTimerPrecision":"tenth""#));
     }
 
     #[test]

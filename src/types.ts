@@ -592,6 +592,8 @@ export interface McpTestResult {
 export interface AppearanceConfig {
   /** One-line gist of the reasoning beside a live "Thinking…" row. */
   thinkingPreview: boolean;
+  /** How the thinking timer counts: whole seconds (`1s`) or tenths (`1.1s`). */
+  thinkingTimerPrecision: ThinkingTimerPrecision;
   /** Assistant prose in a bubble like the user's; the user's bubble always shows. */
   messageBubbles: boolean;
   /** Fold runs of read-only tool calls into one "Explored" row in the transcript. */
@@ -622,6 +624,8 @@ export interface AppearanceConfig {
 /** What sits behind the app's panels. Exclusive: glass shows the desktop an image would cover. */
 export type BackdropMode = "solid" | "image" | "glass";
 export type GlassStyle = "frosted" | "clear";
+/** How the thinking timer counts, in Settings → Appearance. Mirrors the Rust enum. */
+export type ThinkingTimerPrecision = "second" | "tenth";
 
 /**
  * User-customized built-in prompt texts (Settings → Prompts). Mirrors `PromptConfig` in

@@ -5070,6 +5070,7 @@ fn validate_appearance_config(
     };
     let config = AppearanceConfig {
         thinking_preview: input.thinking_preview,
+        thinking_timer_precision: input.thinking_timer_precision,
         message_bubbles: input.message_bubbles,
         group_exploration: input.group_exploration,
         accent: colour("accent", input.accent)?,

@@ -1,5 +1,5 @@
 import { imageDataUrl } from "./attachment-utils";
-import type { GoalState, ImageContent, NormalizedBlock, NormalizedMessage, PlanState, SessionSnapshot, SnapshotDelta, SubagentStreamFrame, SubagentTarget, SubagentView, TaskMode, TaskRecord, TaskRuntime, TodoState } from "./types";
+import type { GoalState, ImageContent, NormalizedBlock, NormalizedMessage, PlanState, SessionSnapshot, SnapshotDelta, SubagentStreamFrame, SubagentTarget, SubagentView, TaskMode, TaskRecord, TaskRuntime, ThinkingTimerPrecision, TodoState } from "./types";
 
 export function validateInitCommand(args: string, projectId: string | null, mode: TaskMode): void {
   if (args.trim()) throw new Error("/init does not accept arguments.");
@@ -60,6 +60,22 @@ export function formatRunDuration(durationMs: number): string {
   if (hours > 0) return `${hours}h ${minutes}m ${remainder}s`;
   if (minutes > 0) return `${minutes}m ${remainder}s`;
   return `${remainder}s`;
+}
+
+/** The thinking row's elapsed time: `formatRunDuration`, or the same counting tenths when the
+ *  timer is set to them (Settings → Appearance). A span shorter than one tick reads "<1s"/"<0.1s". */
+export function formatThinkingDuration(durationMs: number, precision: ThinkingTimerPrecision): string {
+  const ms = Math.max(0, durationMs);
+  if (precision === "second") return ms < 1000 ? "<1s" : formatRunDuration(ms);
+  if (ms < 100) return "<0.1s";
+  // Integer tenths, so a minute's seconds never split across a float boundary.
+  const tenths = Math.floor(ms / 100);
+  const hours = Math.floor(tenths / 36_000);
+  const minutes = Math.floor((tenths % 36_000) / 600);
+  const seconds = ((tenths % 600) / 10).toFixed(1);
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];

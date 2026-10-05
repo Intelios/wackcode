@@ -104,7 +104,7 @@ import type { PlanAction } from "./components/PlanCard";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { SubscriptionLoginDialog } from "./components/SubscriptionLoginDialog";
 import { ExploreGroupingEnabled } from "./components/ExploreGroup";
-import { ThinkingPreviewEnabled } from "./components/ThinkingRow";
+import { ThinkingPreviewEnabled, ThinkingTimerPrecision } from "./components/ThinkingRow";
 
 const emptyData: AppData = {
   version: 1,
@@ -206,9 +206,11 @@ function ChatContexts({ appearance, children }: { appearance: AppearanceConfig; 
   return (
     <AssistantNameContext.Provider value={agentName(appearance)}>
       <ThinkingPreviewEnabled.Provider value={appearance.thinkingPreview}>
-        <ExploreGroupingEnabled.Provider value={appearance.groupExploration}>
-          <CopyText.Provider value={writeText}>{children}</CopyText.Provider>
-        </ExploreGroupingEnabled.Provider>
+        <ThinkingTimerPrecision.Provider value={appearance.thinkingTimerPrecision}>
+          <ExploreGroupingEnabled.Provider value={appearance.groupExploration}>
+            <CopyText.Provider value={writeText}>{children}</CopyText.Provider>
+          </ExploreGroupingEnabled.Provider>
+        </ThinkingTimerPrecision.Provider>
       </ThinkingPreviewEnabled.Provider>
     </AssistantNameContext.Provider>
   );

@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ThinkingPreviewEnabled, ThinkingRow } from "./ThinkingRow";
+import { ThinkingPreviewEnabled, ThinkingRow, ThinkingTimerPrecision } from "./ThinkingRow";
 import { ExploreGroup } from "./ExploreGroup";
 
 beforeEach(() => {
@@ -41,6 +41,33 @@ describe("ThinkingRow live timer", () => {
     act(() => vi.advanceTimersByTime(4_000));
     render(row("Still reasoning"));
     expect(screen.getByRole("button", { name: "Thinking… 9s" })).toBeInTheDocument();
+  });
+
+  it("counts in tenths when the timer is set to them (Settings → Appearance)", () => {
+    const tenths = (
+      <ThinkingPreviewEnabled.Provider value={false}>
+        <ThinkingTimerPrecision.Provider value="tenth">
+          <ThinkingRow text="" live startedAt={10_000} />
+        </ThinkingTimerPrecision.Provider>
+      </ThinkingPreviewEnabled.Provider>
+    );
+    const view = render(tenths);
+    expect(screen.getByRole("button", { name: "Thinking… <0.1s" })).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(150));
+    expect(screen.getByRole("button", { name: "Thinking… 0.1s" })).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(1_000));
+    expect(screen.getByRole("button", { name: "Thinking… 1.1s" })).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(64_050));
+    expect(screen.getByRole("button", { name: "Thinking… 1m 5.2s" })).toBeInTheDocument();
+    // The worker's final duration honours the same choice.
+    view.rerender(
+      <ThinkingPreviewEnabled.Provider value={false}>
+        <ThinkingTimerPrecision.Provider value="tenth">
+          <ThinkingRow text="" durationMs={4_200} />
+        </ThinkingTimerPrecision.Provider>
+      </ThinkingPreviewEnabled.Provider>
+    );
+    expect(screen.getByRole("button", { name: "Thought for 4.2s" })).toBeInTheDocument();
   });
 
   it("stays visible while expanded and when thinking previews are disabled", () => {

@@ -446,6 +446,9 @@ pub struct AppearanceConfig {
     /// One-line gist of the reasoning beside a live "Thinking…" row.
     #[serde(default = "default_true")]
     pub thinking_preview: bool,
+    /// How the elapsed time beside a live "Thinking…" row counts: whole seconds or tenths.
+    #[serde(default)]
+    pub thinking_timer_precision: ThinkingTimerPrecision,
     /// Assistant prose in a bubble like the user's; the user's bubble always shows.
     #[serde(default)]
     pub message_bubbles: bool,
@@ -508,6 +511,15 @@ pub enum GlassStyleSetting {
     Clear,
 }
 
+/// How the thinking timer counts: whole seconds (`1s`) or tenths (`1.1s`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ThinkingTimerPrecision {
+    #[default]
+    Second,
+    Tenth,
+}
+
 fn default_image_dim() -> u8 {
     65
 }
@@ -532,6 +544,7 @@ impl Default for AppearanceConfig {
     fn default() -> Self {
         Self {
             thinking_preview: true,
+            thinking_timer_precision: ThinkingTimerPrecision::Second,
             message_bubbles: false,
             group_exploration: true,
             accent: None,

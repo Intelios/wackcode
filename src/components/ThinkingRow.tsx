@@ -1,8 +1,9 @@
 import { AnimatePresence, motion } from "motion/react";
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { formatRunDuration, thinkingStream } from "../chat-utils";
+import { formatThinkingDuration, thinkingStream } from "../chat-utils";
 import { useFollowScroll } from "../hooks/useFollowScroll";
 import { motionAllowed, useSmoothText } from "../hooks/useSmoothText";
+import type { ThinkingTimerPrecision as Precision } from "../types";
 import { Markdown } from "./Markdown";
 import { PonderingDuck } from "./PonderingDuck";
 import { Icon } from "./Icons";
@@ -16,6 +17,9 @@ export const ThinkingExpansion = createContext<Set<string> | undefined>(undefine
 /** Settings → Appearance → Thinking preview. On unless a provider says otherwise. */
 export const ThinkingPreviewEnabled = createContext(true);
 
+/** Settings → Appearance → Thinking timer: whole seconds unless the user picks tenths. */
+export const ThinkingTimerPrecision = createContext<Precision>("second");
+
 interface ThinkingRowProps {
   text: string;
   /** How long the model reasoned, measured by the worker. Absent for blocks that were never clocked. */
@@ -28,19 +32,17 @@ interface ThinkingRowProps {
   expansionKey?: string;
 }
 
-function formatDuration(ms: number): string {
-  return ms < 1000 ? "<1s" : formatRunDuration(ms);
-}
-
-/** Only the elapsed label ticks; the reasoning body and preview need not re-render each second. */
+/** Only the elapsed label ticks; the reasoning body and preview need not re-render each tick. */
 function ThinkingElapsed({ startedAt }: { startedAt: number }) {
+  const precision = useContext(ThinkingTimerPrecision);
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    // Tenths count in 100 ms steps; whole seconds settle for one render a second.
+    const timer = window.setInterval(() => setNow(Date.now()), precision === "tenth" ? 100 : 1000);
     return () => window.clearInterval(timer);
-  }, [startedAt]);
-  return <span className="thinking-elapsed">{formatDuration(Math.max(0, now - startedAt))}</span>;
+  }, [startedAt, precision]);
+  return <span className={precision === "tenth" ? "thinking-elapsed precise" : "thinking-elapsed"}>{formatThinkingDuration(Math.max(0, now - startedAt), precision)}</span>;
 }
 
 function ThinkingBody({ text, live }: { text: string; live: boolean }) {
@@ -70,6 +72,7 @@ export function ThinkingRow({ text, durationMs, startedAt, live = false, expansi
   const expanded = useContext(ThinkingExpansion);
   const [open, setOpen] = useState(() => expansionKey !== undefined && expanded?.has(expansionKey) === true);
   const previewEnabled = useContext(ThinkingPreviewEnabled);
+  const precision = useContext(ThinkingTimerPrecision);
   // Same rule useSmoothText uses: only animate where the motion preference can be queried and
   // isn't reduced — elsewhere (tests, no matchMedia) the stream appears and leaves instantly.
   const animate = motionAllowed();
@@ -93,7 +96,7 @@ export function ThinkingRow({ text, durationMs, startedAt, live = false, expansi
         <PonderingDuck live={live} className="thinking-icon" />
         {live
           ? <span className="thinking-shimmer">Thinking…</span>
-          : <span>{durationMs !== undefined ? `Thought for ${formatDuration(durationMs)}` : "Reasoning"}</span>}
+          : <span>{durationMs !== undefined ? `Thought for ${formatThinkingDuration(durationMs, precision)}` : "Reasoning"}</span>}
         {live && startedAt !== undefined && <>{" "}<ThinkingElapsed startedAt={startedAt} /></>}
         {/* Hidden from AT: a per-frame-changing name is noise; the full reasoning is one click away. */}
         {!animate

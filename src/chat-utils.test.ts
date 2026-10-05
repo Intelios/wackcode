@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applySnapshotDelta, applySubagentFrame, displayPath, formatRelativeTime, formatRunDuration, formatTokens, isPlanMode, mergeMessages, nextMode, pendingEchoMessage, pendingSubagentView, planButtonTarget, sameGoalState, samePlanState, sameTodoState, sortedArchived, thinkingStream, titleFromPrompt, validateInitCommand, withPendingEcho } from "./chat-utils";
+import { applySnapshotDelta, applySubagentFrame, displayPath, formatRelativeTime, formatRunDuration, formatThinkingDuration, formatTokens, isPlanMode, mergeMessages, nextMode, pendingEchoMessage, pendingSubagentView, planButtonTarget, sameGoalState, samePlanState, sameTodoState, sortedArchived, thinkingStream, titleFromPrompt, validateInitCommand, withPendingEcho } from "./chat-utils";
 import type { GoalState, ImageContent, NormalizedMessage, SessionSnapshot, SnapshotDelta, SubagentStreamFrame, TaskRuntime } from "./types";
 
 describe("titleFromPrompt", () => {
@@ -82,6 +82,32 @@ describe("formatRunDuration", () => {
 
   it("clamps negative values to zero", () => {
     expect(formatRunDuration(-1)).toBe("0s");
+  });
+});
+
+describe("formatThinkingDuration", () => {
+  it("counts whole seconds like the run duration, with ‘<1s’ below the first tick", () => {
+    expect(formatThinkingDuration(0, "second")).toBe("<1s");
+    expect(formatThinkingDuration(999, "second")).toBe("<1s");
+    expect(formatThinkingDuration(1_000, "second")).toBe("1s");
+    expect(formatThinkingDuration(4_200, "second")).toBe("4s");
+    expect(formatThinkingDuration(75_000, "second")).toBe("1m 15s");
+    expect(formatThinkingDuration(60 * 60_000 + 24 * 60_000 + 20_000, "second")).toBe("1h 24m 20s");
+  });
+
+  it("counts tenths, still folding them into minutes and hours", () => {
+    expect(formatThinkingDuration(99, "tenth")).toBe("<0.1s");
+    expect(formatThinkingDuration(100, "tenth")).toBe("0.1s");
+    expect(formatThinkingDuration(1_150, "tenth")).toBe("1.1s");
+    expect(formatThinkingDuration(4_200, "tenth")).toBe("4.2s");
+    expect(formatThinkingDuration(59_940, "tenth")).toBe("59.9s");
+    expect(formatThinkingDuration(75_300, "tenth")).toBe("1m 15.3s");
+    expect(formatThinkingDuration(3_600_000 + 60_000 + 4_500, "tenth")).toBe("1h 1m 4.5s");
+  });
+
+  it("clamps negative values to zero", () => {
+    expect(formatThinkingDuration(-1, "second")).toBe("<1s");
+    expect(formatThinkingDuration(-1, "tenth")).toBe("<0.1s");
   });
 });
 

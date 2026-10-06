@@ -60,6 +60,94 @@ describe("Transcript pending echo", () => {
   });
 });
 
+describe("Transcript compaction", () => {
+  const user: NormalizedMessage = { id: "u", entryId: "u", role: "user", timestamp: 1_000, blocks: [{ type: "text", text: "Keep working" }] };
+  const answer: NormalizedMessage = { id: "a", role: "assistant", blocks: [{ type: "thinking", text: "Earlier reasoning" }, { type: "text", text: "Earlier answer" }], turn: { userEntryId: "u", endEntryId: "a" } };
+  const marker: NormalizedMessage = { id: "c", entryId: "c", role: "system", blocks: [], compaction: { summary: "## Next steps\nContinue implementing the feature.", tokensBefore: 34_000, estimatedTokensAfter: 8_000 } };
+
+  it("keeps the live clock under its prompt through compaction and continuation, then settles it", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(5_000);
+    const { container, rerender } = render(<Transcript messages={[user, answer]} running activeRun={{ runId: "r", startedAt: 1_000 }} compaction={{ reason: "overflow" }} />);
+    expect(screen.getByRole("status")).toHaveTextContent("Compacting context…");
+    // The shimmer row is replaced by the stage while compaction runs.
+    expect(container.querySelector(".compacting-stage")).not.toBeNull();
+    expect(container.querySelector(".agent-working")).toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent("context overflowed");
+    rerender(<Transcript messages={[user, answer, marker]} running activeRun={{ runId: "r", startedAt: 1_000 }} activity="compaction_end" />);
+    // The stage plays its collapse finale before unmounting, so for ~600ms both statuses exist.
+    expect(container.querySelector(".compacting-stage.ending")).not.toBeNull();
+    expect(screen.queryByText("Compacting context…")).toBeInTheDocument();
+    act(() => { vi.advanceTimersByTime(700); });
+    expect(screen.getByRole("status")).toHaveTextContent("Working…");
+    expect(screen.queryByText("Compacting context…")).not.toBeInTheDocument();
+    const rows = [...container.querySelectorAll(".msg.user, .run-duration, .msg.assistant, .compaction-row")];
+    expect(rows[0]).toHaveTextContent("Keep working");
+    expect(rows[1]).toHaveTextContent("Working for 4s");
+    expect(rows.at(-1)).toHaveClass("compaction-row");
+    expect(container.querySelectorAll(".run-duration")).toHaveLength(1);
+
+    rerender(<Transcript messages={[user, answer, marker]} running={false} runTimings={[{ userMessageId: "u", durationMs: 5_000 }]} />);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByText("Working for", { exact: false })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Worked for 5s/ })).toBeInTheDocument();
+  });
+
+  it("shows manual compaction status without creating an unanchored work timer", () => {
+    vi.useFakeTimers();
+    const view = render(<Transcript messages={[user, answer]} running compaction={{ reason: "manual" }} />);
+    expect(screen.getByRole("status")).toHaveTextContent("Compacting context…");
+    expect(screen.queryByText("Working for", { exact: false })).not.toBeInTheDocument();
+    view.rerender(<Transcript messages={[user, answer, marker]} running={false} />);
+    act(() => { vi.advanceTimersByTime(700); });
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Context compacted. Show summary" })).toBeInTheDocument();
+    // Even a clock received before its user message must never occupy the response tail.
+    view.rerender(<Transcript messages={[user, answer]} running activeRun={{ startedAt: 2_000 }} />);
+    expect(screen.queryByText("Working for", { exact: false })).not.toBeInTheDocument();
+  });
+
+  it("keeps a completed compaction outside folded work and exposes its summary and estimated counts", () => {
+    render(<Transcript messages={[user, answer, marker]} running={false} scopeKey="one" />);
+    expect(screen.queryByText("Earlier reasoning")).not.toBeInTheDocument();
+    const disclosure = screen.getByRole("button", { name: "Context compacted. Show summary" });
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("region", { name: "Compaction summary" })).not.toBeInTheDocument();
+    expect(disclosure).toHaveTextContent("34,000 → ≈8,000 tokens");
+    fireEvent.click(disclosure);
+    const summary = screen.getByRole("region", { name: "Compaction summary" });
+    expect(summary).toHaveTextContent("Context before34,000 tokens");
+    expect(summary).toHaveTextContent("Estimated context after≈8,000 tokens");
+    expect(within(summary).getByRole("heading", { name: "Next steps" })).toBeInTheDocument();
+    expect(summary).toHaveTextContent("Continue implementing the feature.");
+    fireEvent.click(screen.getByRole("button", { name: /View work/ }));
+    expect(screen.getByRole("region", { name: "Compaction summary" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reasoning" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Context compacted. Hide summary" }));
+    expect(screen.queryByRole("region", { name: "Compaction summary" })).not.toBeInTheDocument();
+  });
+
+  it("preserves chronological detail for a turn compacted between tools and its answer", () => {
+    const work: NormalizedMessage = { id: "work", role: "assistant", blocks: [{ type: "thinking", text: "Before compaction" }] };
+    const { container } = render(<Transcript messages={[user, work, marker, answer]} running={false} />);
+    const rows = [...container.querySelectorAll(".thinking-row, .compaction-row, .msg.assistant")];
+    expect(rows.findIndex((row) => row.classList.contains("compaction-row"))).toBeLessThan(rows.findIndex((row) => row.textContent?.includes("Earlier answer")));
+    expect(screen.queryByRole("button", { name: /View work/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Context compacted. Show summary" })).toBeInTheDocument();
+  });
+
+  it("scopes summary disclosures to a chat while snapshots and navigation preserve their state", () => {
+    const view = render(<Transcript messages={[user, answer, marker]} running={false} scopeKey="one" />);
+    fireEvent.click(screen.getByRole("button", { name: "Context compacted. Show summary" }));
+    view.rerender(<Transcript messages={[user, answer, { ...marker }]} running={false} scopeKey="one" />);
+    expect(screen.getByRole("region", { name: "Compaction summary" })).toBeInTheDocument();
+    view.rerender(<Transcript messages={[user, answer, marker]} running={false} scopeKey="two" />);
+    expect(screen.queryByRole("region", { name: "Compaction summary" })).not.toBeInTheDocument();
+    view.rerender(<Transcript messages={[user, answer, marker]} running={false} scopeKey="one" />);
+    expect(screen.getByRole("region", { name: "Compaction summary" })).toBeInTheDocument();
+  });
+});
+
 describe("Transcript tool output", () => {
   it("keeps live output collapsed, replaces updates, then shows the final result", () => {
     const call: NormalizedMessage = {

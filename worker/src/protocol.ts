@@ -785,6 +785,13 @@ export interface NormalizedMessage {
   commandPresentation?: CommandPresentation;
   /** The last assistant message of each turn. */
   turn?: TurnInfo;
+  /** A display-only boundary; the model still receives Pi's compacted projection. */
+  compaction?: {
+    summary: string;
+    tokensBefore: number;
+    /** Estimate of the model context at this boundary, not a provider usage reading. */
+    estimatedTokensAfter?: number;
+  };
 }
 
 /** A completed prompt duration attached to the user message that started it. */
@@ -840,6 +847,8 @@ export interface SessionSnapshot {
   modelSwitches: ModelSwitch[];
   runTimings: RunTiming[];
   activeRun?: { runId: string; startedAt: number };
+  /** Present only while compaction is running; separate from the prompt's clock. */
+  compaction?: { reason: "manual" | "threshold" | "overflow" };
   /** Where the conversation currently ends in the session tree. */
   tree: {
     leafId: string | null;
@@ -888,6 +897,8 @@ export interface SnapshotDelta {
   modelSwitches?: ModelSwitch[];
   /** null clears the active run; absent leaves it unchanged. */
   activeRun?: { runId: string; startedAt: number } | null;
+  /** null ends compaction; absent leaves it unchanged. */
+  compaction?: SessionSnapshot["compaction"] | null;
   tree: {
     leafId: string | null;
     undo?: string;
@@ -925,7 +936,7 @@ export type WorkerOutput =
   | { type: "snapshot"; taskId: string; snapshot: SessionSnapshot }
   | { type: "snapshot_delta"; taskId: string; delta: SnapshotDelta }
   | { type: "partial"; taskId: string; message: NormalizedMessage }
-  | { type: "run_state"; taskId: string; runId?: string; startedAt?: number; state: "running" | "idle" | "stopping" | "interrupted" }
+  | { type: "run_state"; taskId: string; runId?: string; startedAt?: number; operation?: "compaction"; state: "running" | "idle" | "stopping" | "interrupted" }
   | { type: "run_finished"; taskId: string; runId: string; outcome: "completed" | "stopped" | "failed" }
   | { type: "queue_state"; taskId: string; steering: string[]; followUp: string[] }
   | { type: "activity"; taskId: string; event: string; detail?: unknown }

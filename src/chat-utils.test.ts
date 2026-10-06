@@ -249,6 +249,17 @@ describe("applySnapshotDelta", () => {
     return { upserts: [], removed: [], tree: { leafId: null }, stats, ...partial };
   }
 
+  it("keeps the prompt clock across compaction and clears compaction status on its end delta", () => {
+    const base = { ...snapshot([message("a")], 1), activeRun: { runId: "r", startedAt: 5 } };
+    const compacting = applySnapshotDelta(base, delta({ rev: 2, compaction: { reason: "overflow" } }));
+    expect(compacting.compaction).toEqual({ reason: "overflow" });
+    expect(compacting.activeRun).toBe(base.activeRun);
+    expect(applySnapshotDelta(compacting, delta({ rev: 3 })).compaction).toBe(compacting.compaction);
+    const resumed = applySnapshotDelta(compacting, delta({ rev: 3, compaction: null }));
+    expect(resumed.compaction).toBeUndefined();
+    expect(resumed.activeRun).toBe(base.activeRun);
+  });
+
   it("replaces applied execution policy in a delta and retains it when omitted", () => {
     const base = { ...snapshot([], 1), executionPolicy: { unrestrictedSubagents: false, unrestrictedPlanning: false } };
     const policy = { unrestrictedSubagents: true, unrestrictedPlanning: true };

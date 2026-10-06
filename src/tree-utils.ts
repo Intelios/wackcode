@@ -7,7 +7,7 @@ import type { CheckpointChange, NormalizedMessage, TaskRecord } from "./types";
 
 /** Rewinding the first message leaves only Pi's system entry, which the transcript never shows. */
 export function hasVisibleMessages(messages: NormalizedMessage[]): boolean {
-  return messages.some((message) => message.role === "user" || message.role === "assistant");
+  return messages.some((message) => message.role === "user" || message.role === "assistant" || message.compaction);
 }
 
 /** The text of a message, for copying. */

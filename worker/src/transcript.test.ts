@@ -58,6 +58,7 @@ describe("transcriptMessages live thinking", () => {
 
     clock.end(streaming, 2_500);
     streamingMessage = undefined;
+    path.push({ type: "message", id: "finished", parentId: "unclocked", message: streaming });
     starts.mockClear();
     const finished = snapshot();
     expect(starts).not.toHaveBeenCalled();
@@ -81,5 +82,49 @@ describe("transcriptMessages live thinking", () => {
     });
     expect(starts).not.toHaveBeenCalled();
     expect(messages[0].blocks).toEqual([{ type: "thinking", text: "Saved", durationMs: 600 }]);
+  });
+});
+
+describe("transcript history across compaction", () => {
+  it("keeps entry identities, prompt anchors and timing annotations when model context drops a user", () => {
+    const user = { role: "user", content: "Keep working", timestamp: 1_000 };
+    const assistant = { role: "assistant", content: [{ type: "text", text: "Earlier work" }] };
+    const path: EntryLike[] = [
+      { type: "message", id: "u", parentId: null, message: user },
+      { type: "message", id: "a", parentId: "u", message: assistant }
+    ];
+    const cache = new WeakMap<object, CachedMessage>();
+    const before = transcriptMessages([user, assistant], path, buildTreeIndex(path), new Map(), { normalize, cache });
+    const compaction = { type: "compaction", id: "c", parentId: "a", timestamp: "2026-10-06T10:00:00Z", summary: "Continue the work", firstKeptEntryId: "a", tokensBefore: 30_000 };
+    path.push(compaction);
+    const compactionTokensAfter = vi.fn(() => 8_000);
+    const after = () => transcriptMessages([assistant], path, buildTreeIndex(path), new Map(), { normalize, cache, compactionTokensAfter });
+    const compacted = after();
+    expect(compacted.map((message) => message.id)).toEqual(["u", "a", "c"]);
+    expect(compacted[0]).toBe(before[0]);
+    expect(compacted[1]).toBe(before[1]);
+    expect(compacted[1].turn?.userEntryId).toBe("u");
+    expect(compacted[2].compaction).toEqual({ summary: "Continue the work", tokensBefore: 30_000, estimatedTokensAfter: 8_000 });
+    expect(after()[2]).toBe(compacted[2]);
+    expect(compactionTokensAfter).toHaveBeenCalledExactlyOnceWith(compaction);
+  });
+
+  it("applies context edits and omissions throughout the branch without duplicating projected clones", () => {
+    const user = { role: "user", content: "Original", timestamp: 1_000 };
+    const failed = { role: "assistant", content: [{ type: "text", text: "Discarded attempt" }] };
+    const path: EntryLike[] = [
+      { type: "message", id: "u", parentId: null, message: user },
+      { type: "message", id: "failed", parentId: "u", message: failed },
+      { type: "context_edit", id: "omit", parentId: "failed", targetId: "failed", replacement: null } as EntryLike,
+      { type: "context_edit", id: "edit", parentId: "omit", targetId: "u", replacement: { content: "Edited" } } as EntryLike
+    ];
+    const cache = new WeakMap<object, CachedMessage>();
+    const render = () => transcriptMessages([{ ...user, content: "Edited" }], path, buildTreeIndex(path), new Map(), { normalize, cache });
+    const messages = render();
+    expect(messages).toEqual([expect.objectContaining({ id: "u", entryId: "u", blocks: [{ type: "text", text: "Edited" }] })]);
+    expect(render()[0]).toBe(messages[0]);
+    path.push({ type: "context_edit", id: "edit2", parentId: "edit", targetId: "u", replacement: { content: "Edited again" } } as EntryLike);
+    expect(render()[0].blocks).toEqual([{ type: "text", text: "Edited again" }]);
+    expect(messages[0].blocks).toEqual([{ type: "text", text: "Edited" }]);
   });
 });

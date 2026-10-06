@@ -1,8 +1,9 @@
 import { Fragment, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { CommandPresentation, NormalizedBlock, NormalizedMessage, PlanState, RunTiming, TaskStatus } from "../types";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import type { CommandPresentation, NormalizedBlock, NormalizedMessage, PlanState, RunTiming, SessionSnapshot, TaskStatus } from "../types";
 import { AssistantNameContext } from "../agentName";
 import { useFollowScroll } from "../hooks/useFollowScroll";
-import { useSmoothText } from "../hooks/useSmoothText";
+import { motionAllowed, useSmoothText } from "../hooks/useSmoothText";
 import { formatRunDuration, isPlanMode } from "../chat-utils";
 import { blockKey, layoutTranscript, type TranscriptSlot } from "../explore-utils";
 import { completedPlan, layoutWorkTurns, type WorkRow } from "../completed-work";
@@ -26,6 +27,8 @@ import { ImageLightbox } from "./ui/ImageLightbox";
 import { Popover } from "./ui/Popover";
 import { Tooltip } from "./ui/Tooltip";
 import { WorkTurn } from "./WorkTurn";
+import { CompactionRow } from "./CompactionRow";
+import { CompactingStage } from "./CompactingStage";
 
 interface Props {
   messages: NormalizedMessage[];
@@ -34,6 +37,7 @@ interface Props {
   running: boolean;
   activity?: string;
   activeRun?: { runId?: string; startedAt: number };
+  compaction?: SessionSnapshot["compaction"];
   runTimings?: RunTiming[];
   /** Settings › Appearance; sub-agent inspection transcripts opt out. */
   collapseCompletedWork?: boolean;
@@ -511,18 +515,24 @@ function TurnActions({ message, actionsEnabled, retry, onAction }: Pick<MessageP
 function activityLabel(activity?: string): string {
   if (!activity) return "Working…";
   if (activity.startsWith("tool_execution")) return "";
-  if (activity.startsWith("compaction")) return "Compacting context…";
   if (activity === "mcp_connect_start") return "Starting MCP servers…";
   if (activity.startsWith("auto_retry") || activity.startsWith("summarization_retry")) return "Retrying…";
   return "Working…";
 }
 
-export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, runTimings = [], collapseCompletedWork = true, scopeKey = "", status, liveToolText, liveToolDetails, planState, onPlanAction, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind, loadImage }: Props) {
+export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, compaction, runTimings = [], collapseCompletedWork = true, scopeKey = "", status, liveToolText, liveToolDetails, planState, onPlanAction, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind, loadImage }: Props) {
   const scroll = useFollowScroll();
   const { ref, onScroll, onWheel, detached, pauseFollowing, jumpToLatest } = scroll;
   const [expandedWork, setExpandedWork] = useState(() => new Set<string>());
+  const [expandedCompactions, setExpandedCompactions] = useState(() => new Set<string>());
   const [editingId, setEditingId] = useState<string>();
   const [expandedThinking] = useState(() => new Set<string>());
+  const reduced = useReducedMotion() ?? false;
+  const animateUi = !reduced && motionAllowed();
+  // Set after the render where the stage was mounted, so a boundary arriving the very next
+  // render animates in — boundaries that were already saved on load never do.
+  const stageWasLive = useRef(false);
+  useEffect(() => { stageWasLive.current = Boolean(compaction); });
   const latest = useMemo(() => latestTurn(messages), [messages]);
 
   // Stable for the memoized messages: `onMessageAction` is expected to be stable too.
@@ -596,7 +606,26 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
     running, activeRun, partial, status, settledUserIds: new Set(timingsByMessage.keys())
   }), [messages, layout, results, callIds, switchesByPosition, running, activeRun, partial, status, timingsByMessage]);
 
-  const renderMessage = (message: NormalizedMessage, slots = layout.messages.get(message.id) ?? NO_SLOTS, turnActions = true, anchorPart?: "work" | "outcome") => (
+  const renderCompaction = (message: NormalizedMessage) => {
+    const key = JSON.stringify([scopeKey, message.id]);
+    const row = <CompactionRow message={message} open={expandedCompactions.has(key)} onToggle={() => {
+      pauseFollowing();
+      setExpandedCompactions((current) => {
+        const next = new Set(current);
+        if (next.has(key)) next.delete(key); else next.add(key);
+        return next;
+      });
+    }} />;
+    // When the live stage is handing off to this freshly-saved boundary, the row pops in a
+    // beat after the well's collapse so the shrink-into-row reads as one motion.
+    const arrivesAfterStage = message.id === messages[messages.length - 1]?.id
+      && stageWasLive.current && animateUi;
+    return arrivesAfterStage
+      ? <motion.div initial={{ opacity: 0, scale: .97 }} animate={{ opacity: 1, scale: 1 }}
+        transition={{ delay: .45, duration: .3, ease: [0.33, 1, 0.68, 1] }}>{row}</motion.div>
+      : row;
+  };
+  const renderMessage = (message: NormalizedMessage, slots = layout.messages.get(message.id) ?? NO_SLOTS, turnActions = true, anchorPart?: "work" | "outcome") => message.compaction ? renderCompaction(message) : (
     <Message message={message} slots={slots} results={results} liveToolText={liveToolText} liveToolDetails={liveToolDetails}
       live={running && message.id === lastAssistantId} running={running} planState={planState} onPlanAction={onPlanAction}
       sig={cachedSignature(message, slots, results, liveToolText, liveToolDetails, anchorPart)} turnActions={turnActions} anchorPart={anchorPart}
@@ -610,11 +639,12 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
   const renderRows = (rows: WorkRow[], part?: "work" | "outcome") => rows.map((row) => row.type === "switches"
     ? <Fragment key={`switch:${row.position}`}>{renderSwitches(row.position)}</Fragment>
     : <Fragment key={messages[row.index].id}>{row.type === "orphans"
-      ? renderOrphans(messages[row.index], row.blocks) : renderMessage(messages[row.index], row.slots, row.actions, part)}</Fragment>);
+      ? renderOrphans(messages[row.index], row.blocks) : row.type === "compaction"
+        ? renderCompaction(messages[row.index]) : renderMessage(messages[row.index], row.slots, row.actions, part)}</Fragment>);
   const firstUserIndex = workTurns.keys().next().value ?? messages.length;
 
-  const waiting = running && (!partial || partial.blocks.length === 0);
-  const label = activityLabel(activity);
+  const waiting = running && (Boolean(compaction) || !partial || partial.blocks.length === 0);
+  const label = compaction ? "Compacting context…" : activityLabel(activity);
 
   const rewindBar = onUndoRewind && actionsEnabled ? (
     <div className="rewind-bar" role="status">
@@ -677,14 +707,17 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
                 </Fragment>;
               })}
               {renderSwitches(messages.length)}
-              {activeRun && !activeUserId && <RunDuration startedAt={activeRun.startedAt} />}
               {partial && layout.partial?.length ? (
                 <div className="msg assistant streaming">
                   {renderSlots(partial, layout.partial, results, liveToolText, liveToolDetails, true, planState, onPlanAction, running, true)}
                 </div>
               ) : null}
-              {waiting && label && (
-                <div className="agent-working"><span className="thinking-shimmer">{label}</span></div>
+              {/* AnimatePresence must outlive the stage for its collapse exit to play. */}
+              <AnimatePresence>
+                {compaction ? <CompactingStage key="compacting" reason={compaction.reason} /> : null}
+              </AnimatePresence>
+              {!compaction && waiting && label && (
+                <div className="agent-working" role="status"><span className="thinking-shimmer">{label}</span></div>
               )}
               {rewindBar}
             </div>

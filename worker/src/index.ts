@@ -1,4 +1,4 @@
-import { transcriptMessages, type CachedMessage } from "./transcript.js";
+import { transcriptEntries, transcriptMessages, type CachedMessage } from "./transcript.js";
 import { spawnSync } from "node:child_process";
 import { setUsagePublisher, trackSession, withUsage } from "./usage.js";
 import { existsSync } from "node:fs";
@@ -6,7 +6,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 // Type-only: erased at build time, so Pi still loads solely through the dynamic import in initialize().
-import type { PromptTemplate, ResourceLoader } from "@earendil-works/pi-coding-agent";
+import type { PromptTemplate, ResourceLoader, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { SWITCHABLE_BUILTIN_TOOLS, createBuiltinExtensions } from "./builtin/index.js";
 import { BROWSER_TOOL_NAMES } from "./builtin/browser.js";
 import { COMPUTER_TOOL_NAMES } from "./builtin/computer-use/params.js";
@@ -110,6 +110,8 @@ let activeRun: {
   previousUserEntryIds: Set<string>;
   finalized: boolean;
 } | undefined;
+let compaction: SessionSnapshot["compaction"];
+let manualCompactionAborted = false;
 let activeCredential: string | undefined;
 let activeAuthPath: string | undefined;
 let activeProviderId: string | undefined;
@@ -456,12 +458,12 @@ function imageBlock(block: Record<string, unknown>, options = THUMBNAIL_OPTIONS)
   return { type: "image", mimeType, imageId: preview.id, thumbnail: preview.url };
 }
 
-function normalizeMessage(message: unknown, index: number, thinking?: ThinkingDurations, starts?: Array<number | null>): NormalizedMessage | undefined {
+function normalizeMessage(message: unknown, index: number, thinking?: ThinkingDurations, starts?: Array<number | null>, cacheKey: unknown = message): NormalizedMessage | undefined {
   const normalized = normalizeSavedMessage(message, index, thinking, imageBlock, starts);
-  if (normalized && message && typeof message === "object") {
+  if (normalized && cacheKey && typeof cacheKey === "object") {
     for (const block of normalized.blocks) {
-      if (block.type === "image" && block.imageId) imageOwners.set(block.imageId, message);
-      for (const image of block.images ?? []) imageOwners.set(image.imageId, message);
+      if (block.type === "image" && block.imageId) imageOwners.set(block.imageId, cacheKey);
+      for (const image of block.images ?? []) imageOwners.set(image.imageId, cacheKey);
     }
   }
   return normalized;
@@ -595,7 +597,9 @@ function getSnapshot(rev: number): SessionSnapshot {
     cache: normalizedCache,
     streamingMessage,
     durations: (raw) => raw === streamingMessage ? thinkingClock.live(raw) : thinkingClock.durations(raw),
-    starts: (raw) => thinkingClock.liveStarts(raw)
+    starts: (raw) => thinkingClock.liveStarts(raw),
+    compactionTokensAfter: (entry) => piModule?.buildSessionProjection(entries as SessionEntry[], entry.id).messages
+      .reduce((sum, message) => sum + piModule!.estimateTokens(message), 0)
   });
   const messagePositions = new Map<string, number>();
   messages.forEach((message, position) => {
@@ -618,6 +622,7 @@ function getSnapshot(rev: number): SessionSnapshot {
     modelSwitches,
     runTimings: runTimingsCache.value,
     activeRun: activeRun ? { runId: activeRun.runId, startedAt: activeRun.startedAt } : undefined,
+    compaction,
     tree: { leafId: leaf?.id ?? null, undo: undoTarget(leaf) },
     stats: {
       tokens: stats.tokens,
@@ -674,6 +679,7 @@ interface EmittedState {
   sessionFile?: string;
   runTimings: RunTiming[];
   activeRun?: { runId: string; startedAt: number };
+  compaction?: SessionSnapshot["compaction"];
   executionPolicy?: ExecutionPolicyConfig;
   planState?: PlanState;
   todoState?: TodoState;
@@ -693,6 +699,7 @@ function recordEmitted(snapshot: SessionSnapshot): void {
     sessionFile: snapshot.sessionFile,
     runTimings: snapshot.runTimings,
     activeRun: snapshot.activeRun,
+    compaction: snapshot.compaction,
     executionPolicy: snapshot.executionPolicy,
     planState: snapshot.planState,
     todoState: snapshot.todoState,
@@ -739,11 +746,12 @@ function emitBoundary(): void {
     && emitted.activeRun?.startedAt === snapshot.activeRun?.startedAt
     ? undefined
     : snapshot.activeRun ?? null;
+  const compaction = emitted.compaction?.reason === snapshot.compaction?.reason ? undefined : snapshot.compaction ?? null;
   if (
     diff.upserts.length === 0 && diff.removed.length === 0
     && executionPolicy === undefined && planState === undefined && todoState === undefined && goalState === undefined
     && runTimings === undefined && modelSwitches === undefined
-    && sessionFile === undefined && activeRun === undefined
+    && sessionFile === undefined && activeRun === undefined && compaction === undefined
     && sameStats(emitted.stats, snapshot.stats) && sameTree(emitted.tree, snapshot.tree)
   ) return;
   snapshotRev += 1;
@@ -758,6 +766,7 @@ function emitBoundary(): void {
       ...(runTimings !== undefined ? { runTimings } : {}),
       ...(modelSwitches !== undefined ? { modelSwitches } : {}),
       ...(activeRun !== undefined ? { activeRun } : {}),
+      ...(compaction !== undefined ? { compaction } : {}),
       tree: snapshot.tree,
       stats: snapshot.stats,
       ...(sessionFile !== undefined ? { sessionFile } : {}),
@@ -1176,6 +1185,18 @@ async function initialize(command: InitCommand): Promise<void> {
     const value = event as unknown as Record<string, unknown>;
     const eventType = String(value.type ?? "event");
     const eventMessage = value.message as Record<string, unknown> | undefined;
+    if (eventType === "compaction_start") {
+      const reason = value.reason;
+      compaction = { reason: reason === "manual" || reason === "overflow" ? reason : "threshold" };
+      scheduleSnapshot();
+    } else if (eventType === "compaction_end") {
+      compaction = undefined;
+      if (value.reason === "manual") manualCompactionAborted = value.aborted === true;
+      if (value.aborted === true) notice("Context compaction stopped.", "info");
+      else if (!value.result && value.reason !== "manual" && typeof value.errorMessage === "string") {
+        notice(safeError(value.errorMessage), "warning");
+      }
+    }
     if (eventType === "message_start" && eventMessage?.role === "user") {
       const text = textFromContent(eventMessage.content);
       const pendingIndex = pendingQueuedPresentations.findIndex((pending) => pending.text === text);
@@ -1206,7 +1227,8 @@ async function initialize(command: InitCommand): Promise<void> {
       eventType.startsWith("auto_retry_") ||
       eventType.startsWith("summarization_retry_")
     ) {
-      send({ type: "activity", taskId: command.taskId, event: eventType, detail: value });
+      send({ type: "activity", taskId: command.taskId, event: eventType, detail: eventType.startsWith("compaction_")
+        ? { reason: value.reason, aborted: value.aborted, willRetry: value.willRetry } : value });
     } else if (eventType === "queue_update") {
       // Pi's pending steering/follow-up lists, for the composer's queue row. The lists are
       // the worker's own UI view: entries leave them the moment the loop delivers them.
@@ -1584,19 +1606,20 @@ async function handle(command: WorkerCommand): Promise<void> {
         throw new Error("There is not enough conversation to compact yet.");
       }
       compacting = true;
+      manualCompactionAborted = false;
       stopRequested = false;
       let compactOutcome: PromptOutcome = "completed";
-      send({ type: "run_state", taskId, runId: command.runId, startedAt: runStartedAt(command.startedAt), state: "running" });
+      send({ type: "run_state", taskId, runId: command.runId, startedAt: runStartedAt(command.startedAt), operation: "compaction", state: "running" });
       response(command.id, true);
       try {
         await session.compact(command.instructions || undefined);
-        if (!stopRequested) notice("Conversation compacted.", "info");
       } catch (error) {
-        compactOutcome = stopRequested ? "stopped" : "failed";
-        if (!stopRequested) send({ type: "worker_error", taskId, message: safeError(error) });
+        compactOutcome = stopRequested || manualCompactionAborted ? "stopped" : "failed";
+        if (compactOutcome === "failed") send({ type: "worker_error", taskId, message: safeError(error) });
       } finally {
         if (stopRequested) compactOutcome = "stopped";
         compacting = false;
+        compaction = undefined;
         stopRequested = false;
         forceFullSnapshot = true;
         emitSnapshot();
@@ -1899,7 +1922,7 @@ const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "
  */
 function toolResultImage(toolCallId: string, index: number): ImageContent | null {
   if (!session) return null;
-  const messages = session.messages as unknown as Record<string, unknown>[];
+  const messages = transcriptEntries(session.sessionManager.getBranch()).map((entry) => entry.raw) as Record<string, unknown>[];
   for (let position = messages.length - 1; position >= 0; position -= 1) {
     const message = messages[position];
     if (message?.role !== "toolResult" || message.toolCallId !== toolCallId) continue;
@@ -1918,9 +1941,10 @@ function toolResultImage(toolCallId: string, index: number): ImageContent | null
  */
 function userMessageImage(entryId: string, index: number): ImageContent | null {
   if (!session) return null;
-  const entry = session.sessionManager.getEntry(entryId) as EntryLike | undefined;
-  if (!isUserMessage(entry)) return null;
-  const content = (entry?.message as Record<string, unknown> | undefined)?.content;
+  const entry = transcriptEntries(session.sessionManager.getBranch()).find((entry) => entry.entryId === entryId);
+  const message = entry?.raw as Record<string, unknown> | undefined;
+  if (message?.role !== "user") return null;
+  const content = message.content;
   if (!Array.isArray(content)) return null;
   const image = (content as Record<string, unknown>[]).filter((block) => block?.type === "image")[index];
   return image && typeof image.data === "string" && typeof image.mimeType === "string" ? { type: "image", data: image.data, mimeType: image.mimeType } : null;
@@ -1932,7 +1956,7 @@ function userMessageImage(entryId: string, index: number): ImageContent | null {
  */
 function savedSubagentTranscript(target: SubagentTarget): SubagentTranscript | undefined {
   if (!session) return undefined;
-  const messages = session.messages as unknown as Record<string, unknown>[];
+  const messages = transcriptEntries(session.sessionManager.getBranch()).map((entry) => entry.raw) as Record<string, unknown>[];
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message?.role !== "toolResult" || message.toolCallId !== target.toolCallId) continue;

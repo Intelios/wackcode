@@ -750,7 +750,7 @@ export default function App() {
           const goalState = sameGoalState(runtime?.goalState, snapshot.goalState) ? runtime?.goalState : snapshot.goalState;
           return {
             ...current,
-            [taskId]: { ...runtime, snapshot, activeRun: snapshot.activeRun, planState, todoState, goalState, partial: undefined, error: undefined,
+            [taskId]: { ...runtime, snapshot, activeRun: snapshot.activeRun, compaction: snapshot.compaction, planState, todoState, goalState, partial: undefined, error: undefined,
               // A fresh worker never has anything queued; queue_state events are authoritative after this.
               queued: undefined,
               ...(payload.type === "ready" ? {
@@ -777,7 +777,7 @@ export default function App() {
           const snapshot = applySnapshotDelta(previous, payload.delta);
           return {
             ...current,
-            [taskId]: { ...runtime, snapshot, activeRun: snapshot.activeRun, planState: snapshot.planState, todoState: snapshot.todoState, goalState: snapshot.goalState, partial: undefined, error: undefined }
+            [taskId]: { ...runtime, snapshot, activeRun: snapshot.activeRun, compaction: snapshot.compaction, planState: snapshot.planState, todoState: snapshot.todoState, goalState: snapshot.goalState, partial: undefined, error: undefined }
           };
         });
         const delta = payload.delta;
@@ -798,7 +798,9 @@ export default function App() {
             ...current,
             [taskId]: {
               ...current[taskId],
-              activeRun: { runId: payload.runId, startedAt: payload.startedAt ?? current[taskId]?.activeRun?.startedAt ?? Date.now() },
+              activeRun: payload.operation === "compaction" ? undefined
+                : { runId: payload.runId, startedAt: payload.startedAt ?? current[taskId]?.activeRun?.startedAt ?? Date.now() },
+              compaction: payload.operation === "compaction" ? { reason: "manual" } : undefined,
               activity: undefined,
               liveToolText: {},
               liveToolDetails: {}
@@ -808,7 +810,7 @@ export default function App() {
           setRuntimes((current) => ({
             ...current,
             [taskId]: {
-              ...current[taskId], activeRun: undefined, activity: undefined, liveToolText: {}, liveToolDetails: {},
+              ...current[taskId], activeRun: undefined, compaction: undefined, activity: undefined, liveToolText: {}, liveToolDetails: {},
               // The run settled: whatever it was still echoing has either long since arrived or
               // was never recorded (a refused or stopped run) — either way the echo is over.
               pendingMessage: undefined,
@@ -821,7 +823,12 @@ export default function App() {
       } else if (payload.type === "run_finished") {
         // The native menu owns recent-run outcomes; the transcript already reflects the result.
       } else if (payload.type === "activity") {
-        patchRuntime(taskId, { activity: payload.event });
+        patchRuntime(taskId, {
+          activity: payload.event === "compaction_end" ? undefined : payload.event,
+          ...(payload.event === "compaction_start" ? { compaction: {
+            reason: payload.detail?.reason === "manual" || payload.detail?.reason === "overflow" ? payload.detail.reason : "threshold"
+          } } : payload.event === "compaction_end" ? { compaction: undefined } : {})
+        });
         const callId = payload.detail?.toolCallId;
         const liveText = payload.detail?.text;
         const liveDetails = payload.detail?.details;
@@ -1203,7 +1210,8 @@ export default function App() {
       }
       const startedAt = Date.now();
       patchTask(id, { status: "running", lastError: null });
-      patchRuntime(id, { error: undefined, activity: "starting", activeRun: { startedAt }, slashCommandsError: undefined });
+      patchRuntime(id, { error: undefined, activity: "starting", activeRun: name === "compact" ? undefined : { startedAt },
+        compaction: name === "compact" ? { reason: "manual" } : undefined, slashCommandsError: undefined });
       if (name === "compact") await api.compactTask(id, args, startedAt);
       else if (name === "init") await api.initAgents(id, startedAt);
       else if (name === "goal") await api.goalControl(id, "set", args.trim(), startedAt);
@@ -1218,7 +1226,7 @@ export default function App() {
       return true;
     } catch (reason) {
       patchTask(id, { status: "idle" });
-      patchRuntime(id, { activeRun: undefined, slashCommandsError: String(reason) });
+      patchRuntime(id, { activeRun: undefined, compaction: undefined, activity: undefined, slashCommandsError: String(reason) });
       throw reason;
     }
   }
@@ -2722,6 +2730,7 @@ export default function App() {
               partial={runtime?.partial}
               running={selectedTask.status === "running" || selectedTask.status === "stopping"}
               activeRun={runtime?.activeRun}
+              compaction={runtime?.compaction}
               runTimings={runtime?.snapshot?.runTimings}
               collapseCompletedWork={data.appearance.collapseCompletedWork}
               scopeKey={selectedTask.id}

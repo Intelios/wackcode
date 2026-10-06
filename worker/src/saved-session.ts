@@ -1,14 +1,14 @@
 /**
  * Read-only projection of a saved Pi session. This never creates an AgentSession, loads
- * resources, resolves a model, or reads credentials. Pi's pinned tree/compaction projection
- * and WackCode's live normalizer are shared so cold history cannot acquire different rules.
+ * resources, resolves a model, or reads credentials. Display history shares the live branch
+ * projection; context statistics still use Pi's pinned compaction-aware model projection.
  * Migrations happen in memory only; opening history must never rewrite the session file.
  */
 import { readFile } from "node:fs/promises";
 import type { FileEntry, SessionEntry, SessionProjection } from "@earendil-works/pi-coding-agent";
 import type { NormalizedBlock, SessionSnapshot, TaskMode, ThinkingLevel } from "./protocol.js";
 import { normalizeMessage, THUMBNAIL_OPTIONS } from "./message-normalization.js";
-import { transcriptMessages } from "./transcript.js";
+import { transcriptEntries, transcriptMessages } from "./transcript.js";
 import { buildTreeIndex, modelSwitchesOnPath, undoTarget, type EntryLike } from "./tree.js";
 import { resolveRunTimings } from "./run-timing.js";
 import { resolveThinkingDurations } from "./thinking-timing.js";
@@ -76,12 +76,18 @@ export async function readSavedSession(options: SavedSessionOptions): Promise<Se
       } catch { /* An unreadable image must not hide the rest of the transcript. */ }
     }
   };
-  for (const message of context?.messages ?? []) {
+  for (const entry of transcriptEntries(path)) {
+    const message = entry.raw as { role?: string; content?: unknown; toolName?: string };
     if (message.role === "user") await prepare(message.content);
     else if (message.role === "toolResult" && (message.toolName === "browser_screenshot" || message.toolName === "computer_screenshot")) await prepare(message.content, 64 * 1024, 480);
   }
-  const messages = transcriptMessages(context?.messages ?? [], path as EntryLike[], index, resolveThinkingDurations(entries), {
-    normalize: (raw, position, thinking) => normalizeMessage(raw, position, thinking, imageBlock), cache: new WeakMap()
+  const tokenHelpers = path.some((entry) => entry.type === "compaction")
+    ? await import(new URL("core/compaction/compaction.js", piBase()).href) as Pick<Pi, "estimateTokens"> : undefined;
+  const projectionHelpers = await sessionHelpers();
+  const messages = transcriptMessages([], path as EntryLike[], index, resolveThinkingDurations(entries), {
+    normalize: (raw, position, thinking) => normalizeMessage(raw, position, thinking, imageBlock), cache: new WeakMap(),
+    compactionTokensAfter: (entry) => tokenHelpers && projectionHelpers.buildSessionProjection(entries, entry.id).messages
+      .reduce((sum, message) => sum + tokenHelpers.estimateTokens(message), 0)
   });
   const positions = new Map(messages.flatMap((message, position) => message.entryId ? [[message.entryId, position] as const] : []));
   const users = messages.filter((message) => message.role === "user" && message.entryId);

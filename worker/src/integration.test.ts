@@ -33,6 +33,7 @@ type SnapshotView = {
       nextAction?: string;
     };
     turn?: { userEntryId: string; endEntryId: string; after?: Checkpoint };
+    compaction?: { summary: string; tokensBefore: number; estimatedTokensAfter?: number };
   }>;
   modelSwitches?: Array<{
     id: string;
@@ -45,6 +46,7 @@ type SnapshotView = {
   tree?: { leafId: string | null; undo?: string };
   runTimings?: Array<{ userMessageId: string; durationMs: number }>;
   activeRun?: { runId: string; startedAt: number };
+  compaction?: SessionSnapshot["compaction"];
   tools?: Array<{ name: string; description: string; source: { kind: string; packageId?: string }; available: boolean; unavailableReason?: string }>;
   activeTools?: string[];
   executionPolicy?: ExecutionPolicyConfig;
@@ -84,6 +86,7 @@ interface Output {
   taskId?: string;
   runId?: string;
   startedAt?: number;
+  operation?: "compaction";
   state?: string;
   steering?: string[];
   followUp?: string[];
@@ -126,6 +129,7 @@ interface Output {
     runTimings?: SnapshotView["runTimings"];
     modelSwitches?: SnapshotView["modelSwitches"];
     activeRun?: { runId: string; startedAt: number } | null;
+    compaction?: SessionSnapshot["compaction"] | null;
     tree?: SnapshotView["tree"];
     sessionFile?: string;
     executionPolicy?: ExecutionPolicyConfig;
@@ -184,6 +188,7 @@ class WorkerHarness {
         messages,
         modelSwitches: output.delta.modelSwitches ?? this.view.modelSwitches,
         runTimings: output.delta.runTimings ?? this.view.runTimings,
+        compaction: output.delta.compaction === undefined ? this.view.compaction : output.delta.compaction ?? undefined,
         activeRun: output.delta.activeRun === undefined ? this.view.activeRun : output.delta.activeRun ?? undefined,
         tree: output.delta.tree ?? this.view.tree,
         sessionFile: output.delta.sessionFile ?? this.view.sessionFile,
@@ -250,6 +255,12 @@ async function startMockProvider(): Promise<MockProvider> {
     const authorization = String(request.headers.authorization ?? "");
     const text = userTextOf(body);
     requests.push({ authorization, body, at: Date.now(), text });
+    if (authorization === "Bearer overflow-secret" && text === "Overflow fixture"
+      && requests.filter((entry) => entry.text === text).length === 1) {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "Context length exceeded" } }));
+      return;
+    }
     // Test-controlled barrier: requests stay open until the test observes all expected children.
     if (childGate && text.startsWith("child-") && hasToolMessage(body) === childGate.afterTools) {
       if (--childGate.remaining === 0) childGate.arrive();
@@ -1321,6 +1332,143 @@ describe("Pi worker integration", () => {
     expect(trailing?.stopReason).toBe("aborted");
     expect(trailing?.errorMessage).toBeUndefined();
     expect(worker.view?.messages.some((message) => message.stopReason === "error")).toBe(false);
+  });
+});
+
+describe("compaction continuity", () => {
+  async function start(reason: "threshold" | "overflow" = "threshold") {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-compaction-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const sessionFile = join(workspace, "history.jsonl");
+    const timestamp = Date.now() - 60_000;
+    const input = reason === "overflow" ? 28 : 55_000;
+    const usage = { input, output: 4, cacheRead: 0, cacheWrite: 0, totalTokens: input + 4, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+    const assistant = (id: string, parentId: string) => ({ type: "message", id, parentId, timestamp: new Date(timestamp).toISOString(), message: { role: "assistant", content: [{ type: "text", text: id }], api: "openai-completions", provider: "provider-compaction", model: "shared-model", usage, stopReason: "stop", timestamp } });
+    const image = solidPng(24, 24);
+    const oldText = "Compacted source prompt. " + "Earlier context. ".repeat(8_000);
+    const entries = [
+      { type: "session", version: 3, id: "compaction-session", cwd: workspace, timestamp: new Date(timestamp).toISOString() },
+      { type: "message", id: "initial-user", parentId: null, message: { role: "user", timestamp, content: "Initial task." } },
+      assistant("initial-answer", "initial-user"),
+      { type: "message", id: "old-user", parentId: "initial-answer", message: { role: "user", timestamp, content: [{ type: "text", text: oldText }, { type: "image", data: solidPng(12, 12), mimeType: "image/png" }] } },
+      assistant("old-answer", "old-user"),
+      { type: "context_edit", id: "image-edit", parentId: "old-answer", targetId: "old-user", replacement: { content: [{ type: "text", text: oldText }, { type: "image", data: image, mimeType: "image/png" }] } },
+      { type: "custom", id: "old-timing", parentId: "image-edit", customType: "wackcode-run-timing", data: { version: 1, runId: "old", userMessageEntryId: "old-user", startedAt: timestamp - 3_000, endedAt: timestamp, durationMs: 3_000 } },
+      { type: "message", id: "latest-user", parentId: "old-timing", message: { role: "user", timestamp, content: "Latest source prompt." } },
+      assistant("latest-answer", "latest-user"),
+      { type: "custom", id: "latest-timing", parentId: "latest-answer", customType: "wackcode-run-timing", data: { version: 1, runId: "latest", userMessageEntryId: "latest-user", startedAt: timestamp - 2_000, endedAt: timestamp, durationMs: 2_000 } }
+    ];
+    await writeFile(sessionFile, entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+    const extension = join(workspace, "compact.ts");
+    await writeFile(extension, `export default function (pi: any) {
+      pi.on("session_before_compact", async (event: any) => {
+        if (event.customInstructions === "wait") await new Promise((resolve) => event.signal.addEventListener("abort", resolve, { once: true }));
+        if (event.reason !== "manual") await new Promise((resolve) => setTimeout(resolve, 120));
+        return { compaction: { summary: "## Goal\\nContinue the fixture.\\n\\n## Next steps\\nComplete the task.", firstKeptEntryId: "latest-answer", tokensBefore: event.preparation.tokensBefore } };
+      });
+    }\n`);
+    const resources = { extensions: [extension], skills: [], prompts: [], themes: [] };
+    const command = initCommand(provider.baseUrl, reason === "overflow" ? "overflow-secret" : "alpha-secret", workspace, "compaction", sessionFile, undefined, resources, "build", true);
+    command.provider.models[0].contextWindow = 65_536;
+    const worker = new WorkerHarness(workspace);
+    cleanup.push(() => worker.shutdown());
+    worker.send(command);
+    await worker.waitFor((output) => output.type === "ready");
+    return { worker, provider, workspace, sessionFile, image, resources, command };
+  }
+
+  it("keeps manual compaction history, timings and images in live, restored and offline transcripts", async () => {
+    const { worker, provider, workspace, sessionFile, image, resources, command } = await start();
+    await worker.waitFor((output) => emitted(output) && output.view?.messages.find((message) => message.id === "old-user")?.blocks.some((block) => block.type === "image" && block.thumbnail !== undefined) === true);
+    const before = worker.view!;
+    const id = crypto.randomUUID();
+    worker.send({ id, type: "compact", runId: "manual", instructions: "" });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "manual" && output.state === "idle");
+    const compacted = worker.view!;
+    expect(worker.outputs.find((output) => output.type === "run_state" && output.runId === "manual" && output.state === "running")?.operation).toBe("compaction");
+    expect(compacted.activeRun).toBeUndefined();
+    expect(compacted.compaction).toBeUndefined();
+    expect(worker.outputs.filter((output) => output.type === "worker_error").map((output) => output.message)).toEqual([]);
+    expect(compacted.messages.filter((message) => !message.compaction)).toEqual(before.messages);
+    expect(compacted.runTimings).toEqual(before.runTimings);
+    const marker = compacted.messages.find((message) => message.compaction);
+    expect(marker?.compaction).toMatchObject({ summary: expect.stringContaining("Continue the fixture"), tokensBefore: expect.any(Number), estimatedTokensAfter: expect.any(Number) });
+    expect(provider.requests).toHaveLength(0);
+    const imageId = crypto.randomUUID();
+    worker.send({ id: imageId, type: "message_image", entryId: "old-user", index: 0 });
+    expect((await worker.waitFor((output) => output.type === "response" && output.id === imageId)).result).toEqual({ type: "image", mimeType: "image/png", data: image });
+    await expectSavedHistory(compacted);
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "continue", message: "Continue after compaction" });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "continue" && output.state === "idle");
+    expect(JSON.stringify(provider.requests[0].body)).not.toContain("Compacted source prompt");
+    expect(JSON.stringify(provider.requests[0].body)).not.toContain("Latest source prompt");
+    expect(JSON.stringify(provider.requests[0].body)).toContain("Continue the fixture");
+    expect(worker.view?.messages.find((message) => message.id === marker?.id)?.compaction).toEqual(marker?.compaction);
+    expect(worker.view?.runTimings).toHaveLength(3);
+    await expectSavedHistory(worker.view!);
+    const final = worker.view!;
+    await worker.shutdown();
+    const restored = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "compaction", sessionFile, undefined, resources, "build", true, { provider: command.provider });
+    cleanup.push(() => restored.worker.shutdown());
+    await restored.worker.waitFor((output) => emitted(output) && output.view?.messages.find((message) => message.id === "old-user")?.blocks.some((block) => block.type === "image" && block.thumbnail !== undefined) === true);
+    expect(restored.worker.view?.messages).toEqual(final.messages);
+    expect(restored.worker.view?.runTimings).toEqual(final.runTimings);
+  });
+
+  it("retains an automatic compaction boundary while the prompt resumes and settles", async () => {
+    const { worker, provider } = await start();
+    const startedAt = Date.now();
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "automatic", startedAt, message: "Resume the fixture" });
+    const compacting = await worker.waitFor((output) => emitted(output) && output.view?.compaction?.reason === "threshold");
+    expect(compacting.view?.activeRun).toEqual({ runId: "automatic", startedAt });
+    const finished = await worker.waitFor((output) => output.type === "run_state" && output.runId === "automatic" && output.state === "idle");
+    expect(finished.view?.compaction).toBeUndefined();
+    expect(finished.view?.activeRun).toBeUndefined();
+    expect(finished.view?.messages.filter((message) => message.role === "user").map((message) => message.id)).toContain("old-user");
+    expect(finished.view?.messages.filter((message) => message.compaction)).toHaveLength(1);
+    expect(finished.view?.runTimings).toHaveLength(3);
+    expect(JSON.stringify(provider.requests[0].body)).not.toContain("Compacted source prompt");
+    await expectSavedHistory(finished.view!);
+  });
+
+  it("continues the same run after overflow compaction without resurrecting the omitted error attempt", async () => {
+    const { worker, provider } = await start("overflow");
+    const startedAt = Date.now();
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "overflow", startedAt, message: "Overflow fixture" });
+    const compacting = await worker.waitFor((output) => emitted(output) && output.view?.compaction?.reason === "overflow");
+    expect(compacting.view?.activeRun).toEqual({ runId: "overflow", startedAt });
+    const finished = await worker.waitFor((output) => output.type === "run_state" && output.runId === "overflow" && output.state === "idle");
+    expect(finished.view?.messages.filter((message) => message.role === "user").map((message) => message.id)).toContain("old-user");
+    expect(finished.view?.messages.find((message) => message.blocks.some((block) => block.text === "Overflow fixture"))?.timestamp).toBeGreaterThanOrEqual(startedAt);
+    expect(finished.view?.messages.some((message) => message.stopReason === "error")).toBe(false);
+    expect(finished.view?.messages.filter((message) => message.compaction)).toHaveLength(1);
+    expect(finished.view?.runTimings).toHaveLength(3);
+    expect(finished.view?.compaction).toBeUndefined();
+    expect(finished.view?.activeRun).toBeUndefined();
+    expect(provider.requests.length).toBeGreaterThan(1);
+    expect(JSON.stringify(provider.requests[1].body)).not.toContain("Compacted source prompt");
+    await expectSavedHistory(finished.view!);
+  });
+
+  it("ends compaction status on cancellation and failure without adding a successful marker", async () => {
+    const { worker } = await start();
+    worker.send({ id: crypto.randomUUID(), type: "compact", runId: "stopped-compact", instructions: "wait" });
+    await worker.waitFor((output) => emitted(output) && output.view?.compaction?.reason === "manual");
+    worker.send({ id: crypto.randomUUID(), type: "abort" });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "stopped-compact" && output.state === "idle");
+    expect(worker.view?.compaction).toBeUndefined();
+    expect(worker.view?.messages.some((message) => message.compaction)).toBe(false);
+    expect(worker.outputs.some((output) => output.type === "extension_notice" && output.message === "Context compaction stopped.")).toBe(true);
+    expect(worker.outputs.some((output) => output.type === "worker_error")).toBe(false);
+    worker.send({ id: crypto.randomUUID(), type: "compact", runId: "completed-compact", instructions: "" });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "completed-compact" && output.state === "idle");
+    worker.send({ id: crypto.randomUUID(), type: "compact", runId: "failed-compact", instructions: "" });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "failed-compact" && output.state === "idle");
+    expect(worker.view?.compaction).toBeUndefined();
+    expect(worker.outputs.find((output) => output.type === "run_finished" && output.runId === "failed-compact")).toMatchObject({ outcome: "failed" });
+    expect(worker.view?.messages.filter((message) => message.compaction)).toHaveLength(1);
   });
 });
 

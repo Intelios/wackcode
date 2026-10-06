@@ -24,7 +24,7 @@ interface SessionEntryLike {
   data?: unknown;
 }
 
-/** Map timing records to user messages still visible on Pi's active, compaction-aware branch. */
+/** Map timing records to user messages on the displayed branch, including compacted history. */
 export function resolveRunTimings(
   branch: unknown[],
   visibleUserEntryIds: string[],

@@ -43,6 +43,15 @@ still resolves in scroller coordinates for the rail. Closed bodies unmount after
 motion-aware exit. Disclosure choices are transient, keyed by chat and actual entry/outcome,
 never shared by sibling versions; only the app-wide preference persists.
 
+Compaction boundaries stay inspectable outside completed-work folds. A boundary after the
+answer accompanies the outcome; a turn compacted mid-work retains its chronological detail.
+Summary disclosure choices are transient and scoped to the chat and entry id. Live compaction
+status is separate from the prompt clock; a clock renders only under its user message, never
+as an unanchored row at the response tail. While compaction runs the tail shows
+`CompactingStage`, a canvas gravity well that escalates through calm/busy/dramatic acts at
+20s/60s (with a rare duck cameo) and collapses into the newly-saved boundary row when it
+finishes; the status line under it carries the trigger reason and a wall-clock elapsed timer.
+
 ## Composer drafts
 
 `App` keeps in-memory text, image and file drafts by chat id through `useComposerDrafts`.

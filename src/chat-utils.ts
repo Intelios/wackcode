@@ -197,6 +197,7 @@ export function applySnapshotDelta(snapshot: SessionSnapshot, delta: SnapshotDel
     sessionFile: delta.sessionFile ?? snapshot.sessionFile,
     runTimings: delta.runTimings ?? snapshot.runTimings,
     activeRun,
+    compaction: delta.compaction === undefined ? snapshot.compaction : delta.compaction ?? undefined,
     tree: delta.tree ?? snapshot.tree,
     stats: delta.stats ?? snapshot.stats,
     executionPolicy: delta.executionPolicy ?? snapshot.executionPolicy,

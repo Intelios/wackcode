@@ -33,8 +33,9 @@ Saved history opens without a model or worker. When a worker starts for a chat w
 ## Saved history
 
 `session-reader.ts` opens saved history without a chat worker. It shares the live message
-normalizer and transcript annotations, and uses the pinned Pi session projection for compaction
-and branch context. It receives only a host-owned session path and chat metadata, runs with a
+normalizer and transcript annotations. Display history follows the whole current branch,
+including compaction boundaries; Pi's compacted projection still governs model context and
+context statistics. Both views honor context edits and omissions. It receives only a host-owned session path and chat metadata, runs with a
 cleared environment (only PATH and offline flags remain), never loads extensions or credentials,
 and never rewrites the file (legacy migrations happen in memory). Cold snapshots use revision 0; a new worker's
 full ready snapshot establishes its own delta chain. Ready workers remain authoritative; a
@@ -48,6 +49,11 @@ The transcript reaches the host as a full `snapshot`, then as `snapshot_delta`s 
 - A delta is an optimization, never a requirement: when a change can't be expressed as "remove these ids, then replace or append these messages", `diffMessages` (`delta.ts`) returns undefined and a full snapshot goes out. Compaction forces a full snapshot. Keep that fallback.
 - A new field that changes mid-run needs `SnapshotDelta` (worker) and `applySnapshotDelta` (`src/chat-utils.ts`) updates.
 - Snapshots carry small image previews, never originals; the lightbox fetches the original with `tool_image`, or `message_image` for one the user attached to a message.
+- Compaction rows use Pi's saved entry ids and summaries. Their after-count estimates Pi's
+  projection at that entry, so later messages cannot change an old boundary's count. Screenshots
+  and saved sub-agent transcripts remain fetchable throughout the displayed branch.
+- `compaction` is live snapshot/delta state, cleared on every compaction end. Manual compaction's
+  `run_state` has `operation: "compaction"`; it never starts a prompt clock or records a turn duration.
 
 ## Tools
 

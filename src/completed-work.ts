@@ -11,6 +11,7 @@ import type { TranscriptLayout, TranscriptSlot } from "./explore-utils";
 export type WorkRow =
   | { type: "message"; index: number; slots: TranscriptSlot[]; actions: boolean }
   | { type: "orphans"; index: number; blocks: NormalizedBlock[] }
+  | { type: "compaction"; index: number }
   | { type: "switches"; position: number };
 
 export interface WorkTurn {
@@ -72,6 +73,10 @@ export function layoutWorkTurns(messages: NormalizedMessage[], options: Options)
     for (let index = userIndex + 1; index < endIndex; index += 1) {
       const message = messages[index];
       if (switchPositions.has(index)) body.push({ type: "switches", position: index });
+      if (message.compaction) {
+        body.push({ type: "compaction", index });
+        continue;
+      }
       if (message.role === "tool") {
         const blocks = message.blocks.filter((block) => !block.toolCallId || !callIds.has(block.toolCallId));
         if (blocks.length) body.push({ type: "orphans", index, blocks });
@@ -108,6 +113,9 @@ export function layoutWorkTurns(messages: NormalizedMessage[], options: Options)
     };
     turns.set(userIndex, turn);
     if (staleAnnotation || systemNotice || unfinishedCall || !answer || failed(answer)) return;
+    // A turn split by compaction keeps its chronological detail. A compaction AFTER the
+    // answer can accompany the outcome without ever disappearing inside the work fold.
+    if (body.some((row) => row.type === "compaction" && row.index < terminal)) return;
 
     let lastCall = -1;
     answer.blocks.forEach((block, index) => { if (block.type === "tool-call") lastCall = index; });
@@ -120,6 +128,7 @@ export function layoutWorkTurns(messages: NormalizedMessage[], options: Options)
     const visible = (index: number, slot: TranscriptSlot) => slot.type === "block"
       && ((index === terminal && textIndices.has(slot.index)) || (index === plan?.index && slot.index === plan.block));
     for (const row of body) {
+      if (row.type === "compaction") { outcome.push(row); continue; }
       if (row.type !== "message") { work.push(row); continue; }
       const outcomeSlots = row.slots.filter((slot) => visible(row.index, slot));
       const workSlots = row.slots.filter((slot) => !visible(row.index, slot));

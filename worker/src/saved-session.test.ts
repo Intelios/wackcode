@@ -32,7 +32,7 @@ describe("saved history without a worker", () => {
     expect(await readFile(sessionFile, "utf8")).toBe(original);
   });
 
-  it("uses Pi's compaction and context-edit projection", async () => {
+  it("preserves compacted history and entry ids while honoring context edits", async () => {
     const sessionFile = await fixture([
       header, user("old", null, "Summarized"), user("kept", "old", "Original"),
       { type: "compaction", id: "compact", parentId: "kept", summary: "Earlier work", firstKeptEntryId: "kept", tokensBefore: 10, timestamp: header.timestamp },
@@ -40,7 +40,11 @@ describe("saved history without a worker", () => {
       user("new", "edit", "Continue")
     ]);
     const history = await readSavedSession({ ...options, sessionFile });
-    expect(history.messages.flatMap((message) => message.blocks.map((block) => block.text))).toEqual(["Changed in context", "Continue"]);
+    expect(history.messages.flatMap((message) => message.blocks.map((block) => block.text))).toEqual(["Summarized", "Changed in context", "Continue"]);
+    expect(history.messages.map((message) => message.id)).toEqual(["old", "kept", "compact", "new"]);
+    expect(history.messages[2].compaction).toEqual({ summary: "Earlier work", tokensBefore: 10, estimatedTokensAfter: expect.any(Number) });
+    const after = history.messages[2].compaction?.estimatedTokensAfter;
+    expect((await readSavedSession({ ...options, sessionFile })).messages[2].compaction?.estimatedTokensAfter).toBe(after);
   });
 
   it("keeps the context meter unknown after compaction until another answer has usage", async () => {

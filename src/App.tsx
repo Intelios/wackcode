@@ -2956,8 +2956,6 @@ export default function App() {
               disabled={selectedTask ? pendingDialogTaskIds.has(selectedTask.id) : false}
               executionPolicy={data.executionPolicy ?? DEFAULT_EXECUTION_POLICY}
               appliedExecutionPolicy={runtime?.snapshot?.executionPolicy}
-              subagentsEnabled={data.subagents.enabled}
-              appliedSubagentsEnabled={runtime?.snapshot?.activeTools.includes("subagent")}
               onModeChange={(mode) => void setTaskMode(mode)}
               onConfigure={selectedTask ? (patch) => void configure(patch) : configureDraft}
               onSend={(message, images, files, queue) => sendPrompt(message, { images, files, queue })}

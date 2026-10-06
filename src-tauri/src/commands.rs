@@ -3532,17 +3532,14 @@ pub async fn remove_project(
     state: State<'_, MetadataState>,
     project_id: String,
 ) -> Result<(), String> {
+    // Removing a project deletes every chat in it; active ones are stopped first. The
+    // frontend's danger confirm is the only guard, so its copy must mention the chats.
     let tasks: Vec<TaskRecord> =
         {
             let data = state
                 .data
                 .lock()
                 .map_err(|_| "Metadata lock was poisoned".to_string())?;
-            if data.tasks.iter().any(|task| {
-                task.project_id.as_deref() == Some(project_id.as_str()) && !task.archived
-            }) {
-                return Err("This project still has chats. Delete or archive them first.".into());
-            }
             if !data.projects.iter().any(|project| project.id == project_id) {
                 return Err("Project not found".into());
             }
@@ -3554,6 +3551,8 @@ pub async fn remove_project(
         };
     for task in &tasks {
         worker::terminate_worker(&app, &task.id, true).await?;
+        app.state::<crate::browser::BrowserManager>()
+            .dispose(&task.id);
         crate::computer_use::dispose(&app, &task.id);
         app.state::<terminal::TerminalState>()
             .kill_for_task(&task.id);

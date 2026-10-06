@@ -2287,18 +2287,39 @@ export default function App() {
     } else if (action === "reveal") {
       try { await api.revealPath(project.path); } catch (reason) { setGlobalError(String(reason)); }
     } else if (action === "remove") {
+      const chats = data.tasks.filter((task) => task.projectId === project.id);
+      const running = chats.filter((task) => task.status === "running" || task.status === "stopping").length;
+      const worktrees = chats.some((task) => task.usesWorktree);
+      let body = chats.length === 0
+        ? "The project is removed from WackCode. Files on disk are not touched."
+        : chats.length === 1
+          ? "This removes the project and its 1 chat, with its saved session. Files on disk are not touched."
+          : `This removes the project and its ${chats.length} chats, with their saved sessions. Files on disk are not touched.`;
+      if (worktrees) body += " Chats on a git worktree lose that worktree, including any uncommitted changes inside it.";
+      if (running > 0) body += ` ${running === 1 ? "1 chat is" : `${running} chats are`} still working and will be stopped.`;
       setConfirm({
         title: `Remove “${project.name}”?`,
-        body: "The project is removed from WackCode along with its archived chats' sessions. Files on disk are not touched.",
+        body,
         confirmLabel: "Remove",
         danger: true,
         run: async () => {
           await api.removeProject(project.id);
+          for (const chat of chats) composerDrafts.remove(`task:${chat.id}`);
           setData((current) => ({
             ...current,
             projects: current.projects.filter((item) => item.id !== project.id),
             tasks: current.tasks.filter((task) => task.projectId !== project.id)
           }));
+          setRuntimes((current) => {
+            const next = { ...current };
+            for (const chat of chats) delete next[chat.id];
+            return next;
+          });
+          setTitlePulses((current) => {
+            const next = { ...current };
+            for (const chat of chats) delete next[chat.id];
+            return next;
+          });
           setDraft((current) => current && current.projectId === project.id ? { ...current, projectId: null, useWorktree: false } : current);
           setProjectPinned(project.id, false);
           if (gitRef.current.view?.projectId === project.id) closeGit();

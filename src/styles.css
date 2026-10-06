@@ -659,9 +659,10 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .thinking-row.open .thinking-head .tool-chevron { transform: rotate(90deg); }
 .thinking-head > span, .thinking-head > svg { flex-shrink: 0; }
 .thinking-elapsed { font-variant-numeric: tabular-nums; min-width: 3ch; color: var(--text-dim); }
-/* Tenths (Settings → Appearance → Thinking timer) render one digit wider, and hold that width
-   so the streaming tail doesn't shift left on every 100 ms tick. */
-.thinking-elapsed.precise { min-width: 5ch; }
+/* Tenths (Settings → Appearance → Thinking timer) count total seconds, reaching six
+   characters at 100s: hold that width so the streaming tail only shifts left when a
+   fourth digit arrives (~16.7 min). */
+.thinking-elapsed.precise { min-width: 6ch; }
 /* While streaming, the head stretches so the reasoning tail fills the row and the chevron pins
    to the far right; finished rows keep the hugging inline layout. */
 .thinking-row.streaming .thinking-head { display: flex; width: 100%; }

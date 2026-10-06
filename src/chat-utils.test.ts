@@ -95,14 +95,14 @@ describe("formatThinkingDuration", () => {
     expect(formatThinkingDuration(60 * 60_000 + 24 * 60_000 + 20_000, "second")).toBe("1h 24m 20s");
   });
 
-  it("counts tenths, still folding them into minutes and hours", () => {
+  it("counts tenths as total seconds, never folding into minutes", () => {
     expect(formatThinkingDuration(99, "tenth")).toBe("<0.1s");
     expect(formatThinkingDuration(100, "tenth")).toBe("0.1s");
     expect(formatThinkingDuration(1_150, "tenth")).toBe("1.1s");
     expect(formatThinkingDuration(4_200, "tenth")).toBe("4.2s");
     expect(formatThinkingDuration(59_940, "tenth")).toBe("59.9s");
-    expect(formatThinkingDuration(75_300, "tenth")).toBe("1m 15.3s");
-    expect(formatThinkingDuration(3_600_000 + 60_000 + 4_500, "tenth")).toBe("1h 1m 4.5s");
+    expect(formatThinkingDuration(75_300, "tenth")).toBe("75.3s");
+    expect(formatThinkingDuration(3_600_000 + 60_000 + 4_500, "tenth")).toBe("3664.5s");
   });
 
   it("clamps negative values to zero", () => {

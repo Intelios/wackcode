@@ -58,7 +58,7 @@ describe("ThinkingRow live timer", () => {
     act(() => vi.advanceTimersByTime(1_000));
     expect(screen.getByRole("button", { name: "Thinking… 1.1s" })).toBeInTheDocument();
     act(() => vi.advanceTimersByTime(64_050));
-    expect(screen.getByRole("button", { name: "Thinking… 1m 5.2s" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Thinking… 65.2s" })).toBeInTheDocument();
     // The worker's final duration honours the same choice.
     view.rerender(
       <ThinkingPreviewEnabled.Provider value={false}>

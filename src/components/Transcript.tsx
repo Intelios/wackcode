@@ -491,9 +491,10 @@ const Message = memo(function Message({ message, slots, results, liveToolText, l
   && prev.vision === next.vision && prev.modelName === next.modelName && prev.onAction === next.onAction
   && prev.loadImage === next.loadImage);
 
+// No Copy here: while a run streams only Copy would fill this row, and the hidden row still
+// reserved height — a visible gap above the live stream. Copy stays on user bubbles and `/copy`.
 function turnMenu(message: NormalizedMessage, actionsEnabled: boolean, retry: boolean, onAction: MessageProps["onAction"]): MessageActionItem[] {
   const items: MessageActionItem[] = [];
-  if (messageText(message)) items.push({ id: "copy", label: "Copy", icon: "copy", onClick: () => void onAction({ type: "copy", message }) });
   if (actionsEnabled) {
     if (retry) items.push({ id: "retry", label: "Retry", icon: "refresh", onClick: () => void onAction({ type: "retry", message }) });
     items.push({ id: "fork", label: "Fork from here", icon: "branch", onClick: () => void onAction({ type: "fork", message }) });
@@ -501,6 +502,8 @@ function turnMenu(message: NormalizedMessage, actionsEnabled: boolean, retry: bo
   return items;
 }
 
+// With no items this row renders nothing (MessageActions returns null), so a mid-run turn
+// footer costs no space; retry/fork appear under the settled answer as before.
 function TurnActions({ message, actionsEnabled, retry, onAction }: Pick<MessageProps, "message" | "actionsEnabled" | "retry" | "onAction">) {
   return <MessageActions align="start" items={turnMenu(message, actionsEnabled, retry, onAction)} />;
 }

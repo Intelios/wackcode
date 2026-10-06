@@ -358,7 +358,10 @@ describe("Transcript message actions", () => {
     expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Fork from here" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Previous version" })).toBeDisabled();
-    expect(screen.getAllByRole("button", { name: "Copy" })).toHaveLength(2);
+    // Only the user bubble still offers Copy; assistant answers don't, so a running turn
+    // reserves no hidden action row between its last step and the live stream.
+    expect(screen.getAllByRole("button", { name: "Copy" })).toHaveLength(1);
+    expect(screen.getByText("Done.").closest(".msg")!.querySelector(".message-actions")).toBeNull();
   });
 
   it("edits a message in place and closes the editor once the edit is sent", async () => {

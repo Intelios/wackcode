@@ -138,9 +138,6 @@ describe("Transcript completed work", () => {
     fireEvent.click(reveal());
     expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(1);
     expect(screen.getAllByRole("button", { name: "Fork from here" })).toHaveLength(1);
-    const outcome = screen.getByText("Done. Tests pass.").closest(".msg")!;
-    fireEvent.click(within(outcome as HTMLElement).getByRole("button", { name: "Copy" }));
-    expect(onMessageAction).toHaveBeenLastCalledWith({ type: "copy", message: answer });
   });
 
   it("keeps plan-only outcomes and their review actions visible while folding exploration", () => {

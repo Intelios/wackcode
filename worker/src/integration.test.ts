@@ -150,6 +150,8 @@ class WorkerHarness {
   /** The transcript state after applying every snapshot and delta seen so far. */
   view: SnapshotView | undefined;
   stderr = "";
+  /** Observe lifecycle frames synchronously, before a waiter can check cleanup too late. */
+  onOutput?: (output: Output) => void;
   private waiters: Array<() => void> = [];
 
   constructor(cwd: string) {
@@ -165,6 +167,7 @@ class WorkerHarness {
       // Predicates must see the state as of the output they are matched against, not the
       // newest state, or an early output can satisfy a condition produced by a later one.
       output.view = this.view;
+      this.onOutput?.(output);
       for (const notify of this.waiters.splice(0)) notify();
     });
     this.child.stderr.on("data", (chunk: Buffer) => { this.stderr += chunk.toString("utf8"); });
@@ -239,12 +242,14 @@ interface MockProvider {
   close: () => Promise<void>;
   waitForSlowRequest: () => Promise<void>;
   holdChildren: (count: number, afterTools?: boolean) => { arrived: Promise<void>; release: () => void };
+  holdRequest: (matches: (request: MockProvider["requests"][number]) => boolean) => { arrived: Promise<void>; release: () => void };
 }
 
 async function startMockProvider(): Promise<MockProvider> {
   const requests: MockProvider["requests"] = [];
   const verdicts: string[] = [];
   let childGate: { afterTools: boolean; remaining: number; arrive: () => void; released: Promise<void>; release: () => void } | undefined;
+  let requestGate: { matches: (request: MockProvider["requests"][number]) => boolean; consumed: boolean; arrive: () => void; released: Promise<void>; release: () => void } | undefined;
   let slowRequestResolve: (() => void) | undefined;
   const slowRequest = new Promise<void>((resolvePromise) => { slowRequestResolve = resolvePromise; });
   const server = createServer(async (request, response) => {
@@ -253,7 +258,15 @@ async function startMockProvider(): Promise<MockProvider> {
     const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
     const authorization = String(request.headers.authorization ?? "");
     const text = userTextOf(body);
-    requests.push({ authorization, body, at: Date.now(), text });
+    const entry = { authorization, body, at: Date.now(), text };
+    requests.push(entry);
+    // Hold the MODEL request after a shell yield, not the original bash tool call.
+    if (requestGate && !requestGate.consumed && requestGate.matches(entry)) {
+      const gate = requestGate;
+      gate.consumed = true;
+      gate.arrive();
+      await gate.released;
+    }
     if (authorization === "Bearer overflow-secret" && text === "Overflow fixture"
       && requests.filter((entry) => entry.text === text).length === 1) {
       response.writeHead(400, { "content-type": "application/json" });
@@ -302,8 +315,17 @@ async function startMockProvider(): Promise<MockProvider> {
       childGate = { afterTools, remaining: count, arrive, released, release };
       return { arrived, release };
     },
+    holdRequest: (matches) => {
+      let arrive!: () => void;
+      let release!: () => void;
+      const arrived = new Promise<void>((resolve) => { arrive = resolve; });
+      const released = new Promise<void>((resolve) => { release = resolve; });
+      requestGate = { matches, consumed: false, arrive, released, release };
+      return { arrived, release };
+    },
     close: () => new Promise<void>((resolvePromise, reject) => {
       childGate?.release();
+      requestGate?.release();
       server.closeAllConnections();
       server.close((error) => error ? reject(error) : resolvePromise());
     })
@@ -323,6 +345,64 @@ function userTextOf(body: Record<string, unknown>): string {
 
 function hasToolMessage(body: Record<string, unknown>): boolean {
   return Array.isArray(body.messages) && (body.messages as Array<{ role?: string }>).some((message) => message.role === "tool");
+}
+
+type ProviderMessage = {
+  role?: string;
+  content?: unknown;
+  tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>;
+};
+
+function messagesAfterUser(body: Record<string, unknown>): ProviderMessage[] {
+  const messages = (body.messages ?? []) as ProviderMessage[];
+  return messages.slice(messages.map((message) => message.role).lastIndexOf("user") + 1);
+}
+
+function toolResultContents(body: Record<string, unknown>): string[] {
+  return messagesAfterUser(body).filter((message) => message.role === "tool").map((message) =>
+    typeof message.content === "string" ? message.content
+      : Array.isArray(message.content) ? (message.content as Array<{ type?: string; text?: string }>)
+        .filter((part) => part.type === "text").map((part) => part.text ?? "").join("\n") : "");
+}
+
+function toolCallsOf(body: Record<string, unknown>) {
+  return messagesAfterUser(body).flatMap((message) => message.tool_calls ?? []).map((call) => ({
+    id: call.id, name: call.function.name, args: JSON.parse(call.function.arguments) as Record<string, unknown>,
+  }));
+}
+
+interface ShellJobScript {
+  command: string;
+  yieldTimeout?: number;
+  timeout?: number;
+  actions: Array<{ action: "status" | "wait" | "stop"; waitSeconds?: number }>;
+}
+
+function shellJobPrompt(script: ShellJobScript, child = false): string {
+  return `${child ? "child-shell-job" : "shell job"}: ${JSON.stringify(script)}`;
+}
+
+function shellJobScriptOf(text: string): ShellJobScript | undefined {
+  // Only the goal's kickoff runs a shell; the continuation should find the old job gone.
+  if (text.startsWith("The user has set a goal.")) text = /<objective>\n([\s\S]*?)\n<\/objective>/.exec(text)?.[1] ?? "";
+  const prefix = ["shell job: ", "child-shell-job: "].find((candidate) => text.startsWith(candidate));
+  return prefix ? JSON.parse(text.slice(prefix.length)) as ShellJobScript : undefined;
+}
+
+const RUNNING_SHELL_JOB = /Job ([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}) is still running/i;
+
+function nextShellJobCall(script: ShellJobScript, results: string[]): { name: string; args: Record<string, unknown> } | undefined {
+  if (!results.length) return {
+    name: "bash", args: { command: script.command, yieldTimeout: script.yieldTimeout ?? 0.03, ...(script.timeout === undefined ? {} : { timeout: script.timeout }) },
+  };
+  // The provider sees CONTENT, not details.shellJob. A blocked/fast bash has no running id.
+  const jobId = RUNNING_SHELL_JOB.exec(results[0])?.[1];
+  if (!jobId) return undefined;
+  const last = script.actions.at(-1);
+  const action = script.actions[results.length - 1]
+    // Repeat only a final wait while still running, with a finite budget of short check-ins.
+    ?? (results.length < 30 && last?.action === "wait" && RUNNING_SHELL_JOB.test(results.at(-1) ?? "") ? last : undefined);
+  return action ? { name: "bash_job", args: { jobId, ...action } } : undefined;
 }
 
 function streamAgentResponse(response: ServerResponse<IncomingMessage>, authorization: string, body: Record<string, unknown>, verdicts: string[]): void {
@@ -432,12 +512,16 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
   // These scripts call their tool once per prompt, so one chat can make several calls.
   const answeredSinceUser = messages.slice(messages.map((message) => message.role).lastIndexOf("user") + 1).some((message) => message.role === "tool");
   const repeatable = lastUserText.startsWith("mcp: ") || lastUserText.startsWith("subagent ") || lastUserText.startsWith("finish plan");
-  if (repeatable ? !answeredSinceUser : !hasToolResult) {
+  const shellScript = shellJobScriptOf(lastUserText);
+  const shellResults = shellScript ? toolResultContents(body) : [];
+  const shellCall = shellScript ? nextShellJobCall(shellScript, shellResults) : undefined;
+  if (shellScript ? shellCall !== undefined : repeatable ? !answeredSinceUser : !hasToolResult) {
     const toolCall = (name: string, args: Record<string, unknown>) => ({
-      index: 0, id: `call-${suffix}`, type: "function",
+      index: 0, id: shellScript ? `call-shell-${suffix}-${shellResults.length}` : `call-${suffix}`, type: "function",
       function: { name, arguments: JSON.stringify(args) }
     });
-    const calls = lastUserText.startsWith("Initialize project instructions")
+    const calls = shellCall ? [toolCall(shellCall.name, shellCall.args)]
+      : lastUserText.startsWith("Initialize project instructions")
       ? [toolCall("write", { path: "AGENTS.md", content: "# Fixture guidance\n\nRun `pnpm test`.\n" })]
       : lastUserText.startsWith("ask:")
       ? [toolCall("ask_user_question", {
@@ -932,11 +1016,12 @@ describe("Pi worker integration", () => {
     cleanup.push(() => worker.shutdown());
 
     // Every tool Pi ships is in the registry, including the three the worker never used to
-    // enable, plus WackCode's eighteen built-in extension tools.
+    // enable, plus WackCode's nineteen built-in extension tools.
     const names = (ready.snapshot?.tools ?? []).map((tool) => tool.name).sort();
     expect(names).toEqual([
       "ask_user_question",
       "bash",
+      "bash_job",
       "browser_act",
       "browser_console",
       "browser_open",
@@ -990,6 +1075,7 @@ describe("Pi worker integration", () => {
       type: "set_tools",
       disabledTools: [
         "bash",
+        "bash_job", // Always-on management survives the bash denylist.
         "grep",
         "ls",
         "find",
@@ -1001,13 +1087,13 @@ describe("Pi worker integration", () => {
         "browser_console"
       ]
     });
-    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.length === 6);
-    // `find`/`grep` availability varies by host, so assert the five that never depend on a binary.
+    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.length === 7);
+    // `find`/`grep` availability varies by host; the companion stays on even without bash.
     const beforeSecondRun = provider.requests.length;
     worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-2", message: "Again." });
     await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.snapshot === undefined && provider.requests.length > beforeSecondRun);
 
-    expect(offered(provider.requests[beforeSecondRun])).toEqual(["ask_user_question", "edit", "plan_mode_complete", "read", "todo", "write"]);
+    expect(offered(provider.requests[beforeSecondRun])).toEqual(["ask_user_question", "bash_job", "edit", "plan_mode_complete", "read", "todo", "write"]);
     expect(worker.child.exitCode).toBeNull();
   });
 
@@ -1336,6 +1422,175 @@ describe("Pi worker integration", () => {
   });
 });
 
+describe("shell job check-ins", () => {
+  type ShellJob = { id: string; status: string; elapsedSeconds: number; quietSeconds: number; outputBytes: number; newOutputBytes: number };
+  const shellResults = (worker: WorkerHarness) => (worker.view?.messages ?? []).flatMap((message) => {
+    const blocks = message.blocks.filter((block) => block.type === "tool-result" && ["bash", "bash_job"].includes(block.toolName ?? ""));
+    // One result can normalize to several blocks (output + job summary), each repeating details.
+    return blocks.length ? [{ ...blocks[0], text: blocks.map((block) => block.text ?? "").join("\n") }] : [];
+  });
+  const jobOf = (block: ReturnType<typeof shellResults>[number]) => (block.details as { shellJob?: ShellJob } | undefined)?.shellJob;
+  const sleepingShell = "printf '%s\\n' $$ > shell.pid; sleep 60 & printf '%s\\n' $! > child.pid; printf 'started\\n'; wait";
+
+  function alive(pid: number): boolean {
+    try { process.kill(pid, 0); return true; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return false; throw error; }
+  }
+
+  async function pidAt(workspace: string, file: string): Promise<number> {
+    const read = async () => Number(await readFile(join(workspace, file), "utf8"));
+    await expect.poll(read, { timeout: 2_000, interval: 10 }).toBeGreaterThan(1);
+    return read();
+  }
+
+  async function start(taskId: string) {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), `wackcode-${taskId}-`));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker, ready } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, taskId);
+    // A failed assertion at a held model request must not leave a detached shell behind.
+    cleanup.push(async () => { worker.send({ id: crypto.randomUUID(), type: "abort" }); await worker.shutdown(); });
+    return { provider, workspace, worker, ready };
+  }
+
+  function holdAfter(provider: MockProvider, message: string, results: number) {
+    const barrier = provider.holdRequest((request) => !request.text.startsWith("<goal>")
+      && request.text.includes(message) && toolResultContents(request.body).length === results);
+    cleanup.push(async () => { barrier.release(); });
+    return barrier;
+  }
+
+  it("returns control to the model with a live job, then completes that same execution through status/wait", async () => {
+    const { provider, workspace, worker, ready } = await start("shell-check-in");
+    expect(ready.snapshot?.tools?.find((tool) => tool.name === "bash")?.source.kind).toBe("builtin");
+    const message = shellJobPrompt({
+      command: "printf 'once\\n' >> executions.txt; printf '%s\\n' $$ > shell.pid; printf 'started\\n'; while [ ! -e finish ]; do sleep 0.01; done; printf 'finished\\n'",
+      timeout: 600, yieldTimeout: 0.03, actions: [{ action: "status" }, { action: "wait", waitSeconds: 0.1 }],
+    });
+    const yielded = holdAfter(provider, message, 1);
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "shell-run", message });
+    await yielded.arrived;
+    const request = provider.requests.at(-1)!;
+    const content = toolResultContents(request.body)[0];
+    const jobId = RUNNING_SHELL_JOB.exec(content)?.[1];
+    expect(jobId).toBeTruthy();
+    expect(content).toContain("it has NOT completed");
+    expect(messagesAfterUser(request.body).find((entry) => entry.role === "tool")).not.toHaveProperty("details");
+    const pid = await pidAt(workspace, "shell.pid");
+    expect(alive(pid)).toBe(true);
+    expect(worker.outputs.some((output) => output.type === "run_state" && output.state === "idle")).toBe(false);
+
+    const inspected = holdAfter(provider, message, 2);
+    yielded.release();
+    await inspected.arrived;
+    expect(toolResultContents(provider.requests.at(-1)!.body)[1]).toContain(`Job ${jobId} is still running`);
+    expect(alive(pid)).toBe(true);
+    await writeFile(join(workspace, "finish"), "go");
+    inspected.release();
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "shell-run" && output.state === "idle", 5_000);
+
+    const results = shellResults(worker);
+    const jobs = results.map(jobOf);
+    expect(jobs[0]?.status).toBe("running");
+    expect(jobs[1]?.status).toBe("running");
+    expect(jobs.every((job) => job?.id === jobId)).toBe(true);
+    expect(jobs.at(-1)).toMatchObject({
+      status: "completed", elapsedSeconds: expect.any(Number), quietSeconds: expect.any(Number),
+      outputBytes: Buffer.byteLength("started\nfinished\n"), newOutputBytes: expect.any(Number),
+    });
+    expect(jobs.reduce((total, job) => total + (job?.newOutputBytes ?? 0), 0)).toBe(jobs.at(-1)?.outputBytes);
+    expect(results.at(-1)?.text).toContain("started\nfinished");
+    const calls = toolCallsOf(provider.requests.at(-1)!.body);
+    expect(calls.filter((call) => call.name === "bash")).toHaveLength(1);
+    expect(calls.filter((call) => call.name === "bash_job").map((call) => call.args.jobId)).toEqual(jobs.slice(1).map(() => jobId));
+    expect(new Set(calls.map((call) => call.id)).size).toBe(calls.length);
+    expect(await readFile(join(workspace, "executions.txt"), "utf8")).toBe("once\n");
+    expect(alive(pid)).toBe(false);
+    expect(worker.outputs.filter((output) => output.type === "worker_error")).toEqual([]);
+  });
+
+  it("lets the model stop a yielded process group and inspect its stopped result", async () => {
+    const { provider, workspace, worker } = await start("shell-model-stop");
+    const message = shellJobPrompt({ command: sleepingShell, actions: [
+      { action: "status" }, { action: "stop", waitSeconds: 0.1 }, { action: "status" },
+    ] });
+    const yielded = holdAfter(provider, message, 1);
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "model-stop", message });
+    await yielded.arrived;
+    const pids = await Promise.all([pidAt(workspace, "shell.pid"), pidAt(workspace, "child.pid")]);
+    expect(pids.map(alive)).toEqual([true, true]);
+    yielded.release();
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "model-stop" && output.state === "idle", 5_000);
+    const results = shellResults(worker);
+    expect(results.map((block) => jobOf(block)?.status)).toEqual(["running", "running", "stopped", "stopped"]);
+    expect(new Set(results.map((block) => jobOf(block)?.id)).size).toBe(1);
+    expect(results[2]).toMatchObject({ isError: false, text: expect.stringContaining("stopped") });
+    expect(pids.map(alive)).toEqual([false, false]);
+    expect(toolCallsOf(provider.requests.at(-1)!.body).map((call) => call.name)).toEqual(["bash", "bash_job", "bash_job", "bash_job"]);
+    expect(worker.outputs.filter((output) => output.type === "worker_error")).toEqual([]);
+  });
+
+  it("keeps the original execution timeout hard after the model receives a check-in", async () => {
+    const { provider, workspace, worker } = await start("shell-hard-timeout");
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "deadline", message: shellJobPrompt({
+      command: "printf 'before deadline\\n'; sleep 60; touch deadline-escaped.txt",
+      timeout: 0.2, yieldTimeout: 0.03, actions: [{ action: "wait", waitSeconds: 0.1 }],
+    }) });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "deadline" && output.state === "idle", 5_000);
+    const results = shellResults(worker);
+    expect(jobOf(results[0])?.status).toBe("running");
+    expect(jobOf(results.at(-1)!)?.status).toBe("failed");
+    expect(results.at(-1)).toMatchObject({ isError: true, text: expect.stringContaining("Command timed out after 0.2 seconds") });
+    expect(results.at(-1)?.text).toContain("before deadline");
+    expect(new Set(results.map((block) => jobOf(block)?.id)).size).toBe(1);
+    expect(toolCallsOf(provider.requests.at(-1)!.body).filter((call) => call.name === "bash")).toHaveLength(1);
+    await expect(readFile(join(workspace, "deadline-escaped.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each(["Stop", "normal settle", "goal continuation"] as const)("cleans the yielded shell AND its descendants before lifecycle frames on %s", async (ending) => {
+    const { provider, workspace, worker } = await start(`shell-cleanup-${ending.replaceAll(" ", "-")}`);
+    const message = shellJobPrompt({ command: sleepingShell, actions: [] });
+    const yielded = holdAfter(provider, message, 1);
+    if (ending === "goal continuation") {
+      provider.verdicts.push('{"passed":false,"reason":"one more round","nextAction":"Confirm cleanup"}');
+      worker.send({ id: crypto.randomUUID(), type: "goal_control", action: "set", runId: "cleanup", objective: message });
+    } else worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "cleanup", message });
+    await yielded.arrived;
+    const pids = await Promise.all([pidAt(workspace, "shell.pid"), pidAt(workspace, "child.pid")]);
+    expect(pids.map(alive)).toEqual([true, true]);
+    expect(RUNNING_SHELL_JOB.test(toolResultContents(provider.requests.at(-1)!.body)[0])).toBe(true);
+    const observed: Array<{ type: string; alive: boolean[] }> = [];
+    worker.onOutput = (output) => {
+      if (output.type === "run_finished" || (output.type === "run_state" && output.state === "idle")
+        || (output.type === "goal_state" && output.goal?.phase === "verifying")) {
+        observed.push({ type: output.type, alive: pids.map(alive) });
+      }
+    };
+    if (ending === "Stop") worker.send({ id: crypto.randomUUID(), type: "abort" });
+    else yielded.release();
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle", 5_000);
+    // Sampled as each frame arrived, not after an extra sleep that could mask late cleanup.
+    expect(observed.filter((entry) => entry.type === "run_state")).toEqual([{ type: "run_state", alive: [false, false] }]);
+    expect(observed.every((entry) => entry.alive.every((running) => !running))).toBe(true);
+    const finished = worker.outputs.find((output) => output.type === "run_finished" && output.runId === "cleanup");
+    expect(finished).toMatchObject({ outcome: ending === "Stop" ? "stopped" : "completed" });
+    if (ending === "Stop") {
+      expect(worker.outputs.some((output) => output.type === "run_state" && output.state === "stopping")).toBe(true);
+      expect(provider.requests).toHaveLength(2); // The second model request is STILL held.
+      yielded.release();
+    }
+    if (ending === "goal continuation") {
+      expect(observed.filter((entry) => entry.type === "goal_state")).toHaveLength(2);
+      const completed = worker.outputs.find((output) => output.type === "goal_state" && output.goal?.phase === "complete");
+      expect(completed?.goal).toMatchObject({ phase: "complete", iteration: 2 });
+      expect(provider.requests.some((request) => request.text.startsWith("Goal continuation"))).toBe(true);
+    }
+    expect(worker.outputs.filter((output) => output.type === "worker_error")).toEqual([]);
+    expect(worker.child.exitCode).toBeNull();
+  });
+});
+
 describe("compaction continuity", () => {
   async function start(reason: "threshold" | "overflow" = "threshold") {
     const provider = await startMockProvider();
@@ -1575,7 +1830,7 @@ describe("built-in extensions", () => {
     // Even a denylist that names them cannot switch built-in tools off.
     const { worker, ready } = await initializeWorker(
       provider.baseUrl, "alpha-secret", workspace, "builtin-task", undefined,
-      ["ask_user_question", "plan_mode_complete", "todo"]
+      ["ask_user_question", "plan_mode_complete", "todo", "bash_job"]
     );
     cleanup.push(() => worker.shutdown());
 
@@ -1587,6 +1842,8 @@ describe("built-in extensions", () => {
     expect(complete?.source.kind).toBe("wackcode");
     expect(todo?.source.kind).toBe("wackcode");
     expect(catalog.find((tool) => tool.name === "web_fetch")?.source.kind).toBe("wackcode");
+    expect(catalog.find((tool) => tool.name === "bash_job")?.source.kind).toBe("wackcode");
+    expect(ready.snapshot?.activeTools).toContain("bash_job");
     expect(ready.snapshot?.activeTools).toContain("ask_user_question");
     expect(ready.snapshot?.activeTools).toContain("plan_mode_complete");
     expect(ready.snapshot?.activeTools).toContain("todo");
@@ -3227,6 +3484,93 @@ describe("sub-agents", () => {
     expect(offered(requests[0])).not.toContain("web_fetch");
   });
 
+  it("adds the shell companion only for children whose role and global switches allow bash", async () => {
+    const { provider, worker, ready } = await start("subagents-shell-companion", {
+      subagents: config({ agents: [{ ...scout, tools: ["read", "ls"] }] }),
+    });
+    const run = async (runId: string) => {
+      const before = provider.requests.length;
+      worker.send({ id: crypto.randomUUID(), type: "prompt", runId, message: "subagent single" });
+      await worker.waitFor((output) => output.type === "run_state" && output.runId === runId && output.state === "idle");
+      return provider.requests.slice(before).filter((request) => request.text.startsWith("child-"))[0];
+    };
+    expect(offered(await run("without-bash"))).toEqual(["ls", "read"]);
+    const rosterId = crypto.randomUUID();
+    worker.send({ id: rosterId, type: "set_subagents", subagents: config() });
+    await worker.waitFor((output) => output.type === "response" && output.id === rosterId && output.success === true);
+    const roleTools = (ready.snapshot?.tools ?? []).filter((tool) => tool.available && scout.tools.includes(tool.name)).map((tool) => tool.name);
+    expect(offered(await run("with-bash"))).toEqual([...roleTools, "bash_job"].sort());
+    const toolsId = crypto.randomUUID();
+    worker.send({ id: toolsId, type: "set_tools", disabledTools: ["bash"] });
+    await worker.waitFor((output) => output.type === "response" && output.id === toolsId && output.success === true);
+    expect(offered(await run("disabled-bash"))).toEqual(roleTools.filter((name) => name !== "bash").sort());
+    // The parent companion is always on; that must not smuggle it into a bash-less child.
+    expect(worker.view?.activeTools).toContain("bash_job");
+  });
+
+  it.each(["build", "plan"] as const)("lets a read-only child check in and finish a named test in %s with private job ownership", async (mode) => {
+    const reviewer = { ...scout, name: "reviewer", prompt: "REVIEWER-CHECK-IN-MARKER. Run relevant tests." };
+    const { provider, workspace, worker } = await start(`subagents-shell-${mode}`, { subagents: config({ agents: [reviewer] }) }, mode);
+    const fixture = join(workspace, "test fixture");
+    await mkdir(fixture);
+    await writeFile(join(fixture, "package.json"), JSON.stringify({
+      private: true, scripts: { "test:unit": "node --test --test-reporter=tap fixture.test.mjs" },
+    }));
+    await writeFile(join(fixture, "fixture.test.mjs"), `
+      import test from 'node:test';
+      import { appendFileSync, existsSync } from 'node:fs';
+      test('read-only-shell-check-in-evidence', async () => {
+        appendFileSync('executions.txt', 'once\\n');
+        while (!existsSync('finish')) await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+    `);
+    const command = "pnpm --dir 'test fixture' run test:unit";
+    const task = shellJobPrompt({ command, yieldTimeout: 0.03, actions: [{ action: "status" }, { action: "wait", waitSeconds: 0.1 }] }, true);
+    const yielded = provider.holdRequest((request) => request.text === task && toolResultContents(request.body).length === 1);
+    cleanup.push(async () => { yielded.release(); worker.send({ id: crypto.randomUUID(), type: "abort" }); });
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "child-check-in", message: `subagent access: ${JSON.stringify({ agent: "reviewer", task })}` });
+    await yielded.arrived;
+    const firstResult = toolResultContents(provider.requests.at(-1)!.body)[0];
+    const jobId = RUNNING_SHELL_JOB.exec(firstResult)?.[1];
+    expect(jobId).toBeTruthy();
+    expect(offered(provider.requests.at(-1)!)).toContain("bash_job");
+    expect(offered(provider.requests.at(-1)!)).not.toContain("write");
+    await writeFile(join(fixture, "finish"), "go");
+    yielded.release();
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "child-check-in" && output.state === "idle", 5_000);
+    const requests = provider.requests.filter((request) => request.text === task);
+    const final = toolResultContents(requests.at(-1)!.body).at(-1)!;
+    expect(final).toContain(`Job ${jobId} completed`);
+    expect(final).toContain("read-only-shell-check-in-evidence");
+    expect(final).toContain("# fail 0");
+    expect(final).not.toContain("This sub-agent is read-only");
+    const calls = toolCallsOf(requests.at(-1)!.body);
+    expect(calls.filter((call) => call.name === "bash")).toHaveLength(1);
+    expect(calls.filter((call) => call.name === "bash_job").every((call) => call.args.jobId === jobId)).toBe(true);
+    expect(await readFile(join(fixture, "executions.txt"), "utf8")).toBe("once\n");
+    expect(subagentResult(worker)?.details.results[0]).toMatchObject({ status: "done", readOnly: true });
+
+    // An id visible in the provider transcript is still NOT owned by the parent session.
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "foreign-job", message: `mcp: bash_job ${JSON.stringify({ jobId, action: "status" })}` });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "foreign-job" && output.state === "idle");
+    expect(toolResultContents(provider.requests.at(-1)!.body)[0]).toContain("no longer available in this session");
+
+    const blockedTask = shellJobPrompt({ command: "touch blocked-child.txt", actions: [{ action: "wait", waitSeconds: 0 }] }, true);
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "guard", message: `subagent access: ${JSON.stringify({ agent: "reviewer", task: blockedTask })}` });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "guard" && output.state === "idle");
+    const blocked = provider.requests.filter((request) => request.text === blockedTask).at(-1)!;
+    expect(toolResultContents(blocked.body)[0]).toContain("This sub-agent is read-only");
+    expect(toolCallsOf(blocked.body).map((call) => call.name)).toEqual(["bash"]);
+    await expect(readFile(join(workspace, "blocked-child.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    if (mode === "plan") {
+      worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "parent-guard", message: shellJobPrompt({ command: "touch blocked-parent.txt", actions: [] }) });
+      await worker.waitFor((output) => output.type === "run_state" && output.runId === "parent-guard" && output.state === "idle");
+      expect(toolResultContents(provider.requests.at(-1)!.body)[0]).toContain("Plan mode only allows read-only shell commands");
+      await expect(readFile(join(workspace, "blocked-parent.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    }
+    expect(worker.outputs.filter((output) => output.type === "worker_error")).toEqual([]);
+  });
+
   it("runs a sub-agent in its own in-process session and records its card and usage", async () => {
     const { provider, worker, ready } = await start("subagents-single", { subagents: config() });
     expect(ready.snapshot?.activeTools).toContain("subagent");
@@ -3255,7 +3599,8 @@ describe("sub-agents", () => {
     for (const request of requests) {
       expect(request.authorization).toBe("Bearer alpha-secret");
       const tools = offered(request);
-      expect(tools).toContain("ls");
+      const roleTools = (ready.snapshot?.tools ?? []).filter((tool) => tool.available && scout.tools.includes(tool.name)).map((tool) => tool.name);
+      expect(tools).toEqual([...roleTools, "bash_job"].sort());
       for (const hidden of ["edit", "write", "subagent", "todo", "ask_user_question", "plan_mode_complete"]) {
         expect(tools).not.toContain(hidden);
       }
@@ -3372,6 +3717,7 @@ describe("sub-agents", () => {
     const requests = childRequests(provider, "REVIEWER-PROMPT-MARKER");
     expect(requests).toHaveLength(2);
     expect(offered(requests[0])).toContain("bash");
+    expect(offered(requests[0])).toContain("bash_job");
     expect(offered(requests[0])).not.toContain("write");
     expect(offered(requests[0])).not.toContain("edit");
     const messages = requests[1].body.messages as Array<{ role: string; content?: string }>;

@@ -66,6 +66,13 @@ const BUILTIN_EXTENSIONS: readonly BuiltinExtension[] = [
     icon: "checklist"
   },
   {
+    name: "Shell check-ins",
+    description:
+      "Long commands return control to the agent within 60 seconds, with their output so far. It can check progress, wait again or stop the same job instead of getting stuck. Stop also ends jobs that have already checked in; unfinished jobs are cleaned up when the agent's run ends.",
+    tools: ["bash_job"],
+    icon: "terminal"
+  },
+  {
     name: "Sub-agents",
     description:
       "Lets the agent hand self-contained tasks to sub-agents with their own context window, one at a time or several in parallel. Off by default: every sub-agent is extra model usage.",

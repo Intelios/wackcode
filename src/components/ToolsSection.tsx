@@ -40,7 +40,7 @@ const PI_TOOLS: PiTool[] = [
   { name: "ls", group: "look", title: "List folders", detail: "Shows what's in a folder, hidden files included.", icon: "folder" },
   { name: "edit", group: "change", title: "Edit files", detail: "Changes part of a file by replacing exact text, leaving the rest untouched.", icon: "quill" },
   { name: "write", group: "change", title: "Write files", detail: "Creates a file, or replaces one whole, making any folders it needs.", icon: "filePlus" },
-  { name: "bash", group: "change", title: "Run commands", detail: "Runs shell commands in the chat's folder, like tests, builds, git and installs, with your permissions.", icon: "terminal" }
+  { name: "bash", group: "change", title: "Run commands", detail: "Runs shell commands in the chat's folder, like tests, builds, git and installs, with your permissions. Long commands check in within 60 seconds so the agent can inspect progress, wait or stop them.", icon: "terminal" }
 ];
 
 const ELSEWHERE: { id: ToolsElsewhere; icon: IconName; title: string; detail: string }[] = [

@@ -63,12 +63,34 @@ The transcript reaches the host as a full `snapshot`, then as `snapshot_delta`s 
 - MCP tools (`mcp__<server>__<tool>`) have their own per-server and per-tool switches and stay out while their server is off or unreachable. Keep the built-in and MCP switch rules separate.
 - `powershell` is removed from the registry; `grep`/`find` are reported unavailable when ripgrep/fd are missing (the worker is offline and can't download them).
 
+### Shell check-ins
+
+`builtin/bash-jobs.ts` wraps Pi's shell tool as an SDK override (`customTools`), preserving the
+ordinary bash denylist and Plan-mode policy. SDK overrides win over extension tools of the same
+name. Pi still owns process spawning, the shell environment, UTF-8 output, truncation/spill files
+and process-group cancellation.
+
+A bash call waits at most 60 seconds (`yieldTimeout` may shorten it, never lengthen it). If still
+running it returns output, an opaque session-local job id and progress metadata; `bash_job`
+inspects, waits for up to another 60 seconds, or stops that same job. `timeout` remains an optional
+hard execution deadline. Output does not reset the check-in clock. Raw output byte counts and
+time since the last output distinguish active and silent jobs, and updates only reach an active
+wait, never a tool that has yielded. There are at most eight live jobs and 32 retained results.
+
+Jobs belong to one agent run. Their original abort signal remains linked after yielding; Stop
+and shutdown explicitly stop all jobs too. The first built-in's `agent_settled` handler cleans
+up unfinished jobs before the host reports idle or the goal loop starts another round. Job ids
+are ephemeral, not restored from history. Each child has a private manager and automatically
+gets `bash_job` only when its filtered tool list includes bash; this companion cannot execute
+shell text or target an arbitrary process. Read-only guards still check the original command.
+The user's Terminal and project Run processes are separate and unchanged.
+
 ## Built-in extensions (`worker/src/builtin/`)
 
-WackCode's own extensions load as inline factories, so they bypass the package trust gate by construction. They are: `ask-user-question`, `auto-title`, `browser`, `computer-use`, `goal`, `mcp`, `memory`, `plan-mode`, `subagents`, `todo`, `web-fetch`.
+WackCode's own extensions load as inline factories, so they bypass the package trust gate by construction. They are: `ask-user-question`, `auto-title`, `bash-jobs`, `browser`, `computer-use`, `goal`, `mcp`, `memory`, `plan-mode`, `subagents`, `todo`, `web-fetch`.
 
 - Adding or renaming one also updates `BUILTIN_EXTENSIONS` in `src/components/PackagesSection.tsx`, which shows them so nobody installs a duplicate package.
-- Sub-agents never get browser, computer-use, MCP or memory tools, or skills. A child session loads nothing but its role's tool allowlist and the extensions the built-in hands it.
+- Sub-agents never get browser, computer-use, MCP or memory tools, or skills. A child session loads its role's tool allowlist, its own shell check-in extension and the extensions the built-in hands it.
 - Sub-agent transcripts are saved on the `subagent` result's `details` but kept out of snapshots (`withoutTranscripts` in `normalizeMessage`) and live card updates (`snapshotDetails`). The side panel gets them only through `watch_subagent` frames.
 
 ## Multi-run loops (`/goal`)

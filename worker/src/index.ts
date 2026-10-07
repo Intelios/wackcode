@@ -1124,6 +1124,9 @@ async function initialize(command: InitCommand): Promise<void> {
     model: sessionModel,
     thinkingLevel: command.thinkingLevel,
     excludeTools: UNSUPPORTED_TOOLS,
+    // SDK overrides win over package tools named bash, so no extension can accidentally
+    // replace the harness's bounded waits. It remains an ordinary denylist-controlled tool.
+    customTools: [builtins.bashJobs.tool(command.cwd)],
     sessionManager,
     settingsManager,
     resourceLoader: withAppLayers(resourceLoader),
@@ -1472,7 +1475,7 @@ async function stopActiveRun(): Promise<void> {
   }
   const stoppedRunId = activeRun?.runId ?? continuingGoalRunId;
   send({ type: "run_state", taskId, runId: stoppedRunId, startedAt: activeRun?.startedAt, state: "stopping" });
-  await session.abort();
+  await Promise.all([session.abort(), builtins.bashJobs.stopAll()]);
   const didNotSettle = stoppedRunId !== undefined && activeRun?.runId === stoppedRunId;
   finalizeActiveRun();
   activeRun = undefined;
@@ -1897,7 +1900,7 @@ async function handle(command: WorkerCommand): Promise<void> {
       emitSnapshot();
     } else if (command.type === "shutdown") {
       cancelPendingNativeRequests(true);
-      await subagentRunner?.abortAll();
+      await Promise.all([subagentRunner?.abortAll(), builtins.bashJobs.stopAll()]);
       if (!session.isIdle) await session.abort();
       session.dispose();
       await closeMcpServers();
@@ -2117,7 +2120,7 @@ process.on("SIGTERM", () => {
     try {
       builtins.autoTitle.abort();
       cancelPendingNativeRequests(true);
-      await subagentRunner?.abortAll();
+      await Promise.all([subagentRunner?.abortAll(), builtins.bashJobs.stopAll()]);
       if (session && !session.isIdle) await session.abort();
       session?.dispose();
       await closeMcpServers();

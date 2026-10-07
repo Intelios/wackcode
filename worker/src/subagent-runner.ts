@@ -13,6 +13,7 @@ import { trackSession } from "./usage.js";
 import type { Usage } from "@earendil-works/pi-ai";
 import type { SubagentOutcome, SubagentRunRequest } from "./builtin/host.js";
 import { addUsage, emptyUsage } from "./builtin/subagents/details.js";
+import { BASH_JOB_TOOL_NAME, createBashJobsExtension } from "./builtin/bash-jobs.js";
 import {
   type ModelRuntime,
   type PiModel,
@@ -154,6 +155,10 @@ export class SubagentRunner {
 
     const resolved = await this.resolveModel(request);
     const settingsManager = workerSettings(pi);
+    // Private job ownership per child: one child can never inspect or stop another's commands.
+    // bash_job accompanies an allowed bash, without widening the role's command allowlist.
+    const bashJobs = createBashJobsExtension();
+    const tools = request.tools.includes("bash") ? [...request.tools, BASH_JOB_TOOL_NAME] : request.tools;
     // Every no* flag stays on: a child loads nothing from settings, packages or the project's
     // own .pi/, only the extensions the built-in passed (e.g. the read-only guard). The role
     // prompt goes through the override hook, not `appendSystemPrompt`, which would read a file
@@ -167,7 +172,7 @@ export class SubagentRunner {
       noPromptTemplates: true,
       noThemes: true,
       noContextFiles: false,
-      extensionFactories: request.extensions,
+      extensionFactories: [{ name: "wackcode-bash-jobs", factory: bashJobs.factory, hidden: true }, ...request.extensions],
       appendSystemPromptOverride: (base) => [...base, request.spec.prompt],
     });
     await resourceLoader.reload();
@@ -179,7 +184,8 @@ export class SubagentRunner {
       modelRuntime: resolved.runtime,
       model: resolved.model,
       thinkingLevel: resolved.thinkingLevel,
-      tools: request.tools,
+      tools,
+      customTools: [bashJobs.controller.tool(cwd)],
       sessionManager: pi.SessionManager.inMemory(cwd),
       settingsManager,
       resourceLoader,
@@ -215,6 +221,7 @@ export class SubagentRunner {
       thrown = error;
     } finally {
       signal?.removeEventListener("abort", onAbort);
+      await bashJobs.controller.stopAll();
       unsubscribe();
       this.live.delete(child);
     }

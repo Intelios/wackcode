@@ -162,13 +162,13 @@ describe("PackagesSection built-ins", () => {
   it("lists the compiled-in extensions as always on, without dead switches, even with no packages", () => {
     renderSection([]);
     expect(screen.getByRole("heading", { name: "Built-ins" })).toBeInTheDocument();
-    for (const name of ["Plan Mode", "Ask User Questions", "Todo List"]) {
+    for (const name of ["Plan Mode", "Ask User Questions", "Todo List", "Shell check-ins"]) {
       const card = screen.getByRole("article", { name });
       expect(within(card).getByText("Always on")).toBeInTheDocument();
       expect(within(card).queryByRole("switch")).toBeNull();
     }
     // Their tools can never be switched individually, so they are listed by name.
-    for (const tool of ["plan_mode_complete", "ask_user_question", "todo"]) {
+    for (const tool of ["plan_mode_complete", "ask_user_question", "todo", "bash_job"]) {
       expect(screen.getByText(tool)).toBeInTheDocument();
       expect(screen.queryByRole("switch", { name: tool })).toBeNull();
     }

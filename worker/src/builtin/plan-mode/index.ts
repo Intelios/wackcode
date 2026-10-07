@@ -16,6 +16,7 @@ import type { BuiltinHost } from "../host.js";
 import { MEMORY_TOOL_NAMES } from "../memory/index.js";
 import { TODO_TOOL_NAME } from "../todo/types.js";
 import { WEB_FETCH_TOOL_NAME } from "../web-fetch/index.js";
+import { BASH_JOB_TOOL_NAME } from "../bash-jobs.js";
 import { BROWSER_ACT_TOOL_NAME, BROWSER_CONSOLE_TOOL_NAME, BROWSER_OPEN_TOOL_NAME, BROWSER_SCREENSHOT_TOOL_NAME, BROWSER_SNAPSHOT_TOOL_NAME } from "../browser.js";
 import { COMPUTER_ACT_TOOL_NAME, COMPUTER_APPS_TOOL_NAME, COMPUTER_OPEN_TOOL_NAME, COMPUTER_SCREENSHOT_TOOL_NAME, COMPUTER_SNAPSHOT_TOOL_NAME } from "../computer-use/params.js";
 import {
@@ -175,6 +176,8 @@ export function createPlanModeExtension(host: BuiltinHost, mcpTools?: PlanModeMc
         event.toolName === PLAN_MODE_COMPLETE_TOOL_NAME ||
         event.toolName === TODO_TOOL_NAME ||
         event.toolName === SUBAGENT_TOOL_NAME ||
+        // Only manages this session's commands, already admitted by the bash policy.
+        event.toolName === BASH_JOB_TOOL_NAME ||
         event.toolName === WEB_FETCH_TOOL_NAME ||
         (MEMORY_TOOL_NAMES as readonly string[]).includes(event.toolName) ||
         event.toolName === BROWSER_SNAPSHOT_TOOL_NAME ||

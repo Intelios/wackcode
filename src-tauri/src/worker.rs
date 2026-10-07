@@ -1,7 +1,7 @@
 use crate::{
     models::{
         BuiltinModelSuggestion, PackageRecord, ProviderKind, ProviderRecord, TaskMode, TaskRecord,
-        TaskStatus, ToolCatalogEntry,
+        ParentActivity, TaskStatus, ToolCatalogEntry, WorkActivity,
     },
     storage::MetadataState,
     subscriptions,
@@ -1242,6 +1242,20 @@ pub(crate) fn node_executable_path() -> Result<PathBuf, String> {
     }
 }
 
+/// Activity is independent of parent settlement: editing children still own the checkout.
+fn run_status(value: &Value) -> Option<TaskStatus> {
+    match value.get("state").and_then(Value::as_str) {
+        Some("running") => Some(TaskStatus::Running),
+        Some("stopping") => Some(TaskStatus::Stopping),
+        Some("interrupted") => Some(TaskStatus::Interrupted),
+        Some("idle") => Some(if value.get("workActivity").cloned()
+            .and_then(|activity| serde_json::from_value::<WorkActivity>(activity).ok())
+            .is_some_and(|activity| activity.parent != ParentActivity::Idle || activity.subagents > 0 || activity.pending_results > 0)
+            { TaskStatus::Running } else { TaskStatus::Idle }),
+        _ => None,
+    }
+}
+
 fn handle_worker_line(
     app: &AppHandle,
     task_id: &str,
@@ -1381,13 +1395,7 @@ fn handle_worker_line(
             }
         }
     } else if event_type == "run_state" {
-        let next = match value.get("state").and_then(Value::as_str) {
-            Some("running") => Some(TaskStatus::Running),
-            Some("stopping") => Some(TaskStatus::Stopping),
-            Some("interrupted") => Some(TaskStatus::Interrupted),
-            Some("idle") => Some(TaskStatus::Idle),
-            _ => None,
-        };
+        let next = run_status(&value);
         if let Some(next) = next {
             if let Ok(mut data) = app.state::<MetadataState>().data.lock() {
                 if let Some(task) = data.tasks.iter_mut().find(|task| task.id == task_id) {
@@ -1579,6 +1587,22 @@ pub(crate) fn redact_and_limit(message: &str) -> String {
 mod tests {
     use super::*;
     use crate::models::{PackageResourceRecord, ProviderRecord};
+
+    #[test]
+    fn background_work_keeps_git_and_reaper_guards_busy_after_parent_settlement() {
+        for (parent, children, results) in [("idle", 1, 0), ("idle", 0, 1), ("waiting", 0, 0)] {
+            assert_eq!(run_status(&json!({ "state": "idle", "workActivity": {
+                "parent": parent, "subagents": children, "pendingResults": results
+            } })), Some(TaskStatus::Running));
+        }
+        assert_eq!(run_status(&json!({ "state": "idle", "workActivity": {
+            "parent": "idle", "subagents": 0, "pendingResults": 0
+        } })), Some(TaskStatus::Idle));
+        assert_eq!(run_status(&json!({ "state": "idle" })), Some(TaskStatus::Idle));
+        assert_eq!(run_status(&json!({ "state": "stopping", "workActivity": {
+            "parent": "idle", "subagents": 1, "pendingResults": 0
+        } })), Some(TaskStatus::Stopping));
+    }
 
     fn crash_metadata(directory: &std::path::Path, status: TaskStatus, writable: bool) -> MetadataState {
         let task = TaskRecord {

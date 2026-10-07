@@ -24,7 +24,7 @@ export interface SubagentRunRequest {
   tools: string[];
   /** Child-only extensions, e.g. the read-only guard. Nothing else ever loads in a child. */
   extensions: InlineExtension[];
-  /** The parent run's abort signal. */
+  /** The child's own abort signal, linked to the parent only for blocking delegation. */
   signal: AbortSignal | undefined;
   observer: SubagentObserver;
 }
@@ -73,6 +73,14 @@ export interface BuiltinHost {
   recordCommandPresentation(presentation: CommandPresentation): void;
   /** Desktop messages waiting outside Pi's own boundary queues take priority over a goal loop. */
   hasQueuedMessages?(): boolean;
+  /** Includes pending result delivery, so terminal workflows never outrun their helpers. */
+  hasOutstandingSubagents?(): boolean;
+  /** Job progress/completion schedules snapshots and safe parent result delivery. */
+  subagentsChanged?(): void;
+  /** Background usage is attributed once, independently of status/wait tool calls. */
+  recordSubagentUsage?(usage: Usage, spec: SubagentSpec): void;
+  /** Capture a child's model/runtime when admitted, before it waits for a scheduler slot. */
+  prepareSubagent?(request: SubagentRunRequest): { run(): Promise<SubagentOutcome>; dispose(): void };
   /**
    * Run the goal loop's completion verifier: one no-tools `completeSimple` on the chat's own
    * model, implemented by the worker which owns the model runtime. Never rejects — failures

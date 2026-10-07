@@ -233,6 +233,22 @@ describe("Transcript completed work", () => {
     fireEvent.click(button);
     expect(screen.queryByText("Checking the change")).not.toBeInTheDocument();
   });
+
+  it("keeps a background child accessible after parent settlement with reduced motion", () => {
+    vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: query.includes("reduced-motion"), addListener: vi.fn(), removeListener: vi.fn() })));
+    const onOpen = vi.fn();
+    const launch: NormalizedMessage = { id: "launch", role: "assistant", blocks: [{ type: "tool-call", toolCallId: "bg", toolName: "subagent", arguments: { agent: "scout", task: "Inspect sessions", background: true } }] };
+    const started: NormalizedMessage = { id: "started", role: "tool", blocks: [{ type: "tool-result", toolCallId: "bg", toolName: "subagent", details: { v: 1, mode: "single", background: true, results: [{ jobId: "job", agent: "scout", task: "Inspect sessions", readOnly: true, status: "running", activity: [], usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 } }] } }] };
+    render(<SubagentPanelLink.Provider value={{ onOpen }}><Transcript messages={[user, launch, started, answer]} running={false} /></SubagentPanelLink.Provider>);
+    expect(screen.queryByRole("button", { name: /Show work transcript/ })).not.toBeInTheDocument();
+    const chip = screen.getByRole("button", { name: /SubAgent Scout, working/ });
+    act(() => chip.focus());
+    expect(chip).toHaveFocus();
+    expect(chip.tagName).toBe("BUTTON");
+    fireEvent.click(chip);
+    expect(onOpen).toHaveBeenCalledWith("bg", 0);
+    expect(screen.getByText("Done. Tests pass.")).toBeInTheDocument();
+  });
 });
 
 function scrollerGeometry(container: HTMLElement, readingAnswer = false) {

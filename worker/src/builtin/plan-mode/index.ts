@@ -137,6 +137,7 @@ export function createPlanModeExtension(host: BuiltinHost, mcpTools?: PlanModeMc
         "Submit a decision-ready plan only while Plan mode is active, and call it alone as the final action. Never call for ordinary planning requests, roadmaps, checklists, or plan-file work.",
       parameters: PLAN_MODE_COMPLETE_PARAMS,
       async execute(_toolCallId, params: unknown) {
+        if (host.hasOutstandingSubagents?.()) throw new Error("Wait for or stop outstanding sub-agents with subagent_job before submitting the plan.");
         if (!active) {
           throw new Error("plan_mode_complete is only available while Plan mode is active.");
         }
@@ -175,7 +176,7 @@ export function createPlanModeExtension(host: BuiltinHost, mcpTools?: PlanModeMc
         event.toolName === ASK_USER_QUESTION_TOOL_NAME ||
         event.toolName === PLAN_MODE_COMPLETE_TOOL_NAME ||
         event.toolName === TODO_TOOL_NAME ||
-        event.toolName === SUBAGENT_TOOL_NAME ||
+        event.toolName === SUBAGENT_TOOL_NAME || event.toolName === "subagent_job" ||
         // Only manages this session's commands, already admitted by the bash policy.
         event.toolName === BASH_JOB_TOOL_NAME ||
         event.toolName === WEB_FETCH_TOOL_NAME ||

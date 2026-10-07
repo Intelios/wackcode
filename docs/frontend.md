@@ -64,7 +64,7 @@ updates capture their originating key, so a delayed send, file read or queue res
 change another chat's draft. Deleting a chat removes its draft; app exit discards all drafts.
 Rewind seeds are consumed once per chat so returning to it cannot overwrite later edits.
 
-Running sends (Enter, ⌥Enter or Queue beside Stop) wait for the active work to finish. Each
+Running sends (Enter, ⌥Enter or Queue beside Stop) wait for the active parent run to finish. When `workActivity.parent` is idle and background children remain, the composer shows Send beside Stop: a queued send starts immediately alongside those children. Aggregate status remains running so Git, history and workspace actions stay protected. Background chips follow child lifetime independently of the launch tool; active chips stay outside completed-work folds, and earlier parent answers remain visible beside later continuations. Each
 queued row has an explicit Steer action: it interrupts the active work and sends that worker
 id next, keeping the rest queued. `queue_state.messages` supplies stable `{ id, text }` rows;
 the worker retains their full payloads and images. Queue/run events are authoritative: full

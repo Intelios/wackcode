@@ -15,6 +15,7 @@ import { resolveThinkingDurations } from "./thinking-timing.js";
 import { restorePlanState, PLAN_STATE_ENTRY_TYPE } from "./builtin/plan-mode/state.js";
 import { replayFromBranch } from "./builtin/todo/state.js";
 import { restoreGoalState } from "./builtin/goal/state.js";
+import { backgroundCalls, interruptedDetails, projectBackgroundCards } from "./builtin/subagents/state.js";
 
 type Pi = typeof import("@earendil-works/pi-coding-agent");
 // Import the data-only module, bypassing Pi's CLI/SDK entry point. These paths are part of
@@ -84,11 +85,14 @@ export async function readSavedSession(options: SavedSessionOptions): Promise<Se
   const tokenHelpers = path.some((entry) => entry.type === "compaction")
     ? await import(new URL("core/compaction/compaction.js", piBase()).href) as Pick<Pi, "estimateTokens"> : undefined;
   const projectionHelpers = await sessionHelpers();
-  const messages = transcriptMessages([], path as EntryLike[], index, resolveThinkingDurations(entries), {
+  const baseMessages = transcriptMessages([], path as EntryLike[], index, resolveThinkingDurations(entries), {
     normalize: (raw, position, thinking) => normalizeMessage(raw, position, thinking, imageBlock), cache: new WeakMap(),
     compactionTokensAfter: (entry) => tokenHelpers && projectionHelpers.buildSessionProjection(entries, entry.id).messages
       .reduce((sum, message) => sum + tokenHelpers.estimateTokens(message), 0)
   });
+  const cards = backgroundCalls(path);
+  for (const [id, call] of cards) cards.set(id, { ...call, details: interruptedDetails(call.details) });
+  const messages = projectBackgroundCards(baseMessages, cards, new WeakMap());
   const positions = new Map(messages.flatMap((message, position) => message.entryId ? [[message.entryId, position] as const] : []));
   const users = messages.filter((message) => message.role === "user" && message.entryId);
   const plan = restorePlanState(path);
@@ -106,6 +110,7 @@ export async function readSavedSession(options: SavedSessionOptions): Promise<Se
   tokens.total = tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite;
   return {
     rev: 0, sessionId: header?.id ?? options.taskId,
+    workActivity: { parent: "idle", subagents: 0, pendingResults: 0 },
     ...(options.sessionFile ? { sessionFile: options.sessionFile } : {}), messages,
     modelSwitches: modelSwitchesOnPath(path as EntryLike[], positions),
     runTimings: resolveRunTimings(path, users.map((message) => message.entryId!), users.map((message) => message.id)),

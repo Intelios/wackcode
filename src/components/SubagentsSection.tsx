@@ -560,7 +560,7 @@ export function SubagentsSection({ executionPolicy, config, providers, favoriteM
           )}
         >
           <p>
-            A sub-agent works on one self-contained task in its own context window and hands back its answer. Each one is extra
+            A sub-agent works on one self-contained task in its own context window. The main agent can wait for its answer or continue alongside it, then wait when needed. Each one is extra
             model usage, billed like any other request.
           </p>
         </SettingsHero>
@@ -613,7 +613,7 @@ export function SubagentsSection({ executionPolicy, config, providers, favoriteM
               </button>
             ))}
           </div>
-          <small className="subagent-hint subagent-usage-hint">Per request, for all agents. Give parallel editing agents separate files.</small>
+          <small className="subagent-hint subagent-usage-hint">Per chat, across foreground and background jobs. Give the main agent and editing helpers separate files.</small>
         </section>
 
         {editing?.key === "new" && (

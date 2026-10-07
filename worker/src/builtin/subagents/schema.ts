@@ -8,7 +8,7 @@ export interface SubagentTaskInput {
 export type SubagentMode = "single" | "parallel";
 
 type NormalizeResult =
-  | { ok: true; mode: SubagentMode; tasks: SubagentTaskInput[] }
+  | { ok: true; mode: SubagentMode; tasks: SubagentTaskInput[]; background?: true }
   | { ok: false; error: string };
 
 /**
@@ -30,6 +30,7 @@ export function subagentParams(agentNames: string[]) {
     type: "object",
     additionalProperties: false,
     properties: {
+      background: { type: "boolean", description: "Return immediately with job IDs while children continue. Defaults to false (wait for all results). Use subagent_job to inspect, wait for or stop background children." },
       agent: { ...agent, description: "Single mode: the sub-agent to run, by name." },
       task: { ...task, description: `Single mode: ${task.description}` },
       tasks: {
@@ -59,6 +60,8 @@ function text(value: unknown): string {
 /** Exactly one mode: `agent` + `task`, or `tasks`. */
 export function normalizeSubagentParams(input: unknown): NormalizeResult {
   if (!isRecord(input)) return { ok: false, error: "subagent needs either agent and task, or tasks." };
+  if (input.background !== undefined && typeof input.background !== "boolean") return { ok: false, error: "background must be a boolean." };
+  const background = input.background === true ? { background: true as const } : {};
   const single = input.agent !== undefined || input.task !== undefined;
   const parallel = input.tasks !== undefined;
   if (single && parallel) {
@@ -78,10 +81,10 @@ export function normalizeSubagentParams(input: unknown): NormalizeResult {
       if (!agent || !task) return { ok: false, error: `tasks[${index}] needs both agent and task.` };
       tasks.push({ agent, task });
     }
-    return { ok: true, mode: "parallel", tasks };
+    return { ok: true, mode: "parallel", tasks, ...background };
   }
   const agent = text(input.agent);
   const task = text(input.task);
   if (!agent || !task) return { ok: false, error: "subagent needs either agent and task, or tasks." };
-  return { ok: true, mode: "single", tasks: [{ agent, task }] };
+  return { ok: true, mode: "single", tasks: [{ agent, task }], ...background };
 }

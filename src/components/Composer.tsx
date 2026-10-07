@@ -38,6 +38,8 @@ export function argHintNote(command: SlashCommand | undefined): string | undefin
 
 interface ComposerProps extends ModelFavoritesProps {
   status: TaskStatus;
+  /** The parent has settled; sends start immediately alongside remaining children. */
+  backgroundWorking?: boolean;
   /** App-owned draft for the selected chat; the composer stays mounted across selection. */
   draftState?: ComposerDraftState;
   providerId?: string;
@@ -93,7 +95,7 @@ interface ComposerProps extends ModelFavoritesProps {
   agentName?: string;
 }
 
-export function Composer({ draftState, status, providerId, modelId, thinkingLevel, providers, favoriteModels, favoriteSaving, onSetFavorite, stats, header, placeholder, popoverSide = "top", mode, executionPolicy = DEFAULT_EXECUTION_POLICY, appliedExecutionPolicy, onModeChange, onConfigure, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, mentionFiles, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, queuedMessages, onSteer, onDequeue, onStop, onOpenSettings, disabled, seed, comet, frozen, agentName = DEFAULT_AGENT_NAME }: ComposerProps) {
+export function Composer({ draftState, status, backgroundWorking = false, providerId, modelId, thinkingLevel, providers, favoriteModels, favoriteSaving, onSetFavorite, stats, header, placeholder, popoverSide = "top", mode, executionPolicy = DEFAULT_EXECUTION_POLICY, appliedExecutionPolicy, onModeChange, onConfigure, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, mentionFiles, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, queuedMessages, onSteer, onDequeue, onStop, onOpenSettings, disabled, seed, comet, frozen, agentName = DEFAULT_AGENT_NAME }: ComposerProps) {
   const [localDraft, setLocalDraft] = useState<ComposerDraft>(EMPTY_DRAFT);
   const value = draftState?.value ?? localDraft;
   const updateDraft = draftState?.update ?? setLocalDraft;
@@ -130,6 +132,7 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
   const [pendingQueueKeys, setPendingQueueKeys] = useState<ReadonlySet<string>>(() => new Set());
   const queuePending = pendingQueueKeys.has(draftKey);
   const busy = status === "running" || status === "stopping";
+  const queueButton = busy && !backgroundWorking;
   const model = providers.find((provider) => provider.id === providerId)?.models.find((item) => item.id === modelId);
   const vision = model?.vision === true;
   const noVisionMessage = `${model?.name || model?.id || "This model"} doesn't accept images. Turn on Vision for it in Settings.`;
@@ -602,7 +605,7 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
                 void send();
               }
             }}
-            placeholder={placeholder ?? (providers.length === 0 ? "Connect a provider to start…" : status === "stopping" ? `${agentName} is stopping — keep your next message here…` : busy ? `${agentName} is working — ⏎ queues for after…` : mode === "plan" ? `Describe the work — in Plan mode ${agentName} inspects and proposes a plan for your approval…` : mode === "ultraplan" ? `Describe the work — in Ultra Plan ${agentName} interviews you one question at a time…` : `Ask ${agentName} to inspect, change, or run something…`)}
+            placeholder={placeholder ?? (providers.length === 0 ? "Connect a provider to start…" : status === "stopping" ? `${agentName} is stopping — keep your next message here…` : queueButton ? `${agentName} is working — ⏎ queues for after…` : mode === "plan" ? `Describe the work — in Plan mode ${agentName} inspects and proposes a plan for your approval…` : mode === "ultraplan" ? `Describe the work — in Ultra Plan ${agentName} interviews you one question at a time…` : `Ask ${agentName} to inspect, change, or run something…`)}
             disabled={disabled || providers.length === 0}
           />
         </div>
@@ -673,10 +676,10 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
                 </button>
               </Tooltip>
             )}
-            <Tooltip label={status === "stopping" ? `Wait for ${agentName} to stop` : busy ? `Queue for after ${agentName} finishes (⏎)` : "Send (⏎)"}>
-              <button type="button" className={`send-button${busy ? " queue" : ""}`} onClick={() => void send()} disabled={disabled || frozen !== undefined || providers.length === 0 || status === "stopping" || !draft.trim() || blockedByModel} aria-label={busy ? "Queue message" : "Send message"}>
+            <Tooltip label={status === "stopping" ? `Wait for ${agentName} to stop` : queueButton ? `Queue for after ${agentName} finishes (⏎)` : "Send (⏎)"}>
+              <button type="button" className={`send-button${queueButton ? " queue" : ""}`} onClick={() => void send()} disabled={disabled || frozen !== undefined || providers.length === 0 || status === "stopping" || !draft.trim() || blockedByModel} aria-label={queueButton ? "Queue message" : "Send message"}>
                 <Icon name="send" />
-                {busy && <span>Queue</span>}
+                {queueButton && <span>Queue</span>}
               </button>
             </Tooltip>
           </div>

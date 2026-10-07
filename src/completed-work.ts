@@ -76,6 +76,7 @@ export function layoutWorkTurns(messages: NormalizedMessage[], options: Options)
     let skill: { index: number; block: number; id: string } | undefined;
     let systemNotice = false;
     let unfinishedCall = false;
+    let backgroundDelegation = false;
 
     for (let index = userIndex + 1; index < endIndex; index += 1) {
       const message = messages[index];
@@ -98,6 +99,11 @@ export function layoutWorkTurns(messages: NormalizedMessage[], options: Options)
           if (block.type !== "tool-call") return;
           const result = block.toolCallId ? results.get(block.toolCallId) : undefined;
           if (!result) unfinishedCall = true;
+          if (block.toolName === "subagent" && result?.details) {
+            const card = result.details as { background?: boolean; results?: Array<{ status: string }> };
+            if (card.background) backgroundDelegation = true;
+            if (card.background && card.results?.some((child) => child.status === "running" || child.status === "queued")) unfinishedCall = true;
+          }
           if (block.toolName === "plan_mode_complete" && completedPlan(result)) {
             plan = { index, block: blockIndex, id: block.toolCallId ?? `${identity(message)}:${blockIndex}` };
           }
@@ -135,8 +141,13 @@ export function layoutWorkTurns(messages: NormalizedMessage[], options: Options)
 
     const work: WorkRow[] = [];
     const outcome: WorkRow[] = [];
+    // A background continuation adds a later answer. Keep the parent's earlier answer visible
+    // beside it instead of folding that settled response into technical work.
+    const earlierAnswers = new Set(backgroundDelegation ? body.flatMap((row) => row.type === "message"
+      && row.index < terminal && messages[row.index].role === "assistant"
+      && !messages[row.index].blocks.some((block) => block.type === "tool-call") ? [row.index] : []) : []);
     const visible = (index: number, slot: TranscriptSlot) => slot.type === "block"
-      && ((index === terminal && textIndices.has(slot.index)) || (index === plan?.index && slot.index === plan.block) || (index === skill?.index && slot.index === skill.block));
+      && ((index === terminal && textIndices.has(slot.index)) || (earlierAnswers.has(index) && messages[index].blocks[slot.index]?.type === "text") || (index === plan?.index && slot.index === plan.block) || (index === skill?.index && slot.index === skill.block));
     for (const row of body) {
       if (row.type === "compaction") { outcome.push(row); continue; }
       if (row.type !== "message") { work.push(row); continue; }

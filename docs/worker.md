@@ -20,7 +20,8 @@ Commands run one at a time on a serial queue, and a prompt holds the queue until
 - `abort`, `extension_ui_response`, `browser_response`, `computer_response`: answers the running run is waiting on.
 - `queue_message`, `dequeue`: the user's steering and follow-up messages.
 - `goal_control` except `set`: pause, resume and clear act on a live loop. `set` starts a run, so it queues.
-- `watch_subagent`, `tool_image`: read-only peeks; the panel opens on a child while the call running it holds the queue.
+- `watch_subagent`, `tool_image`: read-only peeks; the panel opens on a child during blocking or background delegation.
+- `set_subagents` when disabling: cancels children even if the parent is blocked waiting for them.
 
 Before the first `init` settles there is no session to act on, so a bypass command is held on `initSettled` rather than bounced with "Worker is not initialized": the host sends `init` and the first prompt back to back, and a stop or a follow-up sent in that window must survive it. The gate opens one macrotask later — after the microtasks queued behind `init` have run — so a held stop finds the just-started first run live and stops it through the ordinary path, and a held follow-up finds a streaming session to queue onto.
 
@@ -91,7 +92,35 @@ WackCode's own extensions load as inline factories, so they bypass the package t
 
 - Adding or renaming one also updates `BUILTIN_EXTENSIONS` in `src/components/PackagesSection.tsx`, which shows them so nobody installs a duplicate package.
 - Sub-agents never get browser, computer-use, MCP or memory tools, or skills. A child session loads its role's tool allowlist, its own shell check-in extension and the extensions the built-in hands it.
-- Sub-agent transcripts are saved on the `subagent` result's `details` but kept out of snapshots (`withoutTranscripts` in `normalizeMessage`) and live card updates (`snapshotDetails`). The side panel gets them only through `watch_subagent` frames.
+- Foreground sub-agent transcripts are saved on the `subagent` result's `details` but kept out of snapshots (`withoutTranscripts` in `normalizeMessage`) and live card updates (`snapshotDetails`). The side panel gets them only through `watch_subagent` frames.
+
+### Background sub-agents
+
+`subagent` defaults to blocking; `background: true` returns child job IDs immediately.
+`subagent_job` inspects, waits for, or stops selected IDs (omitted IDs capture all outstanding
+children at invocation time). One chat-wide scheduler admits at most eight unfinished children,
+with the configured concurrency shared across all launches. Children capture their role, tools,
+policy, model and connection before waiting for a slot. Settings affect subsequent launches;
+disabling the feature cancels outstanding jobs. Captured credentials remain in redaction until
+the final output and transcript have been sanitized.
+
+Background jobs own their signals and never update a launch tool after it returns. The worker
+coalesces completed results into hidden `wackcode-subagent-results` custom messages, steering a
+streaming parent at a safe tool boundary or starting a continuation on the serial queue after
+settlement. Explicit waits reserve their targets and consume results without an extra automatic
+continuation. Stop cancels jobs, shell processes and queued result delivery, including while the
+parent is idle. User messages can start alongside children; explicit Steer keeps its cancellation
+behaviour. Goal verification, plan submission and skill preview wait for outstanding children
+and result delivery.
+
+`workActivity` accompanies run-state, snapshots and deltas: parent activity is separate from
+aggregate busy status. The host keeps Git/reaper/history guards busy while children remain.
+Background cards and capped transcripts are stored as versioned `wackcode-subagent-background`
+custom entries linked to the launch tool ID. Live and cold projections overlay the original
+immutable tool result on the current branch. Unfinished cold cards become interrupted; opening
+history or restarting a worker never relaunches them. Only watched transcripts stream. Completed
+background usage is appended once as Pi usage entries; status/wait calls carry no extra usage,
+and the published usage ledger is unchanged.
 
 ## Multi-run loops (`/goal`)
 

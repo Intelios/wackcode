@@ -484,6 +484,19 @@ describe("Composer queueing while the agent is working", () => {
     expect(area).toHaveValue("");
   });
 
+  it("shows Send beside Stop when only background children remain, with mouse and keyboard delivery", async () => {
+    const { onSend, area } = setup({ backgroundWorking: true });
+    expect(area).toHaveAttribute("placeholder", "Ask WackCode to inspect, change, or run something…");
+    expect(screen.queryByRole("button", { name: "Queue message" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
+    fireEvent.change(area, { target: { value: "Continue alongside the helpers" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("Continue alongside the helpers", [], [], true));
+    fireEvent.change(area, { target: { value: "Another message" } });
+    fireEvent.keyDown(area, { key: "Enter" });
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("Another message", [], [], true));
+  });
+
   it("leaves ⇧Enter to insert a newline instead of queueing", () => {
     const { onSend, area } = setup();
     fireEvent.change(area, { target: { value: "First line" } });

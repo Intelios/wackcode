@@ -780,7 +780,7 @@ export default function App() {
           const goalState = sameGoalState(runtime?.goalState, snapshot.goalState) ? runtime?.goalState : snapshot.goalState;
           return {
             ...current,
-            [taskId]: { ...runtime, snapshot, activeRun: snapshot.activeRun, compaction: snapshot.compaction, planState, todoState, goalState, partial: undefined, error: undefined,
+            [taskId]: { ...runtime, snapshot, activeRun: snapshot.activeRun, workActivity: snapshot.workActivity, compaction: snapshot.compaction, planState, todoState, goalState, partial: undefined, error: undefined,
               ...(payload.type === "ready" ? {
                 // Only a fresh worker resets the queue; full snapshots leave queue_state authoritative.
                 queued: [],
@@ -807,7 +807,7 @@ export default function App() {
           const snapshot = applySnapshotDelta(previous, payload.delta);
           return {
             ...current,
-            [taskId]: { ...runtime, snapshot, activeRun: snapshot.activeRun, compaction: snapshot.compaction, planState: snapshot.planState, todoState: snapshot.todoState, goalState: snapshot.goalState, partial: undefined, error: undefined }
+            [taskId]: { ...runtime, snapshot, activeRun: snapshot.activeRun, workActivity: snapshot.workActivity, compaction: snapshot.compaction, planState: snapshot.planState, todoState: snapshot.todoState, goalState: snapshot.goalState, partial: undefined, error: undefined }
           };
         });
         const delta = payload.delta;
@@ -823,7 +823,10 @@ export default function App() {
         // that in wackcode.json, and clearing more here would desync the two.
         patchTask(taskId, { status: payload.state, ...(payload.state === "running" ? { lastError: null, updatedAt: new Date().toISOString() } : {}) });
         if (payload.state === "idle" || payload.state === "interrupted") gitRef.current.onWorkerActivity(taskId);
-        if (payload.state === "running") {
+        patchRuntime(taskId, { workActivity: payload.workActivity });
+        if (payload.state === "running" && payload.workActivity?.parent === "idle") {
+          patchRuntime(taskId, { activeRun: undefined, activity: undefined, partial: undefined, pendingMessage: undefined });
+        } else if (payload.state === "running" && (payload.runId !== undefined || payload.operation !== undefined || payload.workActivity === undefined)) {
           setRuntimes((current) => ({
             ...current,
             [taskId]: {
@@ -2818,7 +2821,7 @@ export default function App() {
                 : withPendingEcho(runtime)}
               modelSwitches={displayModelSwitches}
               partial={runtime?.partial}
-              running={selectedTask.status === "running" || selectedTask.status === "stopping"}
+              running={(selectedTask.status === "running" || selectedTask.status === "stopping") && runtime?.workActivity?.parent !== "idle"}
               activeRun={runtime?.activeRun}
               compaction={runtime?.compaction}
               runTimings={runtime?.snapshot?.runTimings}
@@ -3031,6 +3034,7 @@ export default function App() {
               comet={!selectedTask || transitioning !== undefined}
               frozen={transitioning?.message}
               status={selectedTask?.status ?? "idle"}
+              backgroundWorking={selectedTask?.status === "running" && runtime?.workActivity?.parent === "idle"}
               providerId={selectedTask?.providerId ?? draftChoice?.providerId}
               modelId={selectedTask?.modelId ?? draftChoice?.modelId}
               thinkingLevel={selectedTask?.thinkingLevel ?? draftChoice?.thinkingLevel}

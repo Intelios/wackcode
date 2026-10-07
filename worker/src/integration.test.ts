@@ -46,6 +46,7 @@ type SnapshotView = {
   tree?: { leafId: string | null; undo?: string };
   runTimings?: Array<{ userMessageId: string; durationMs: number }>;
   activeRun?: { runId: string; startedAt: number };
+  workActivity?: SessionSnapshot["workActivity"];
   compaction?: SessionSnapshot["compaction"];
   tools?: Array<{ name: string; description: string; source: { kind: string; packageId?: string }; available: boolean; unavailableReason?: string }>;
   activeTools?: string[];
@@ -88,6 +89,7 @@ interface Output {
   runId?: string;
   startedAt?: number;
   operation?: "compaction";
+  workActivity?: SessionSnapshot["workActivity"];
   state?: string;
   messages?: Array<{ id: string; text: string }>;
   message?: string;
@@ -129,6 +131,7 @@ interface Output {
     runTimings?: SnapshotView["runTimings"];
     modelSwitches?: SnapshotView["modelSwitches"];
     activeRun?: { runId: string; startedAt: number } | null;
+    workActivity?: SessionSnapshot["workActivity"];
     compaction?: SessionSnapshot["compaction"] | null;
     tree?: SnapshotView["tree"];
     sessionFile?: string;
@@ -193,6 +196,7 @@ class WorkerHarness {
         runTimings: output.delta.runTimings ?? this.view.runTimings,
         compaction: output.delta.compaction === undefined ? this.view.compaction : output.delta.compaction ?? undefined,
         activeRun: output.delta.activeRun === undefined ? this.view.activeRun : output.delta.activeRun ?? undefined,
+        workActivity: output.delta.workActivity ?? this.view.workActivity,
         tree: output.delta.tree ?? this.view.tree,
         sessionFile: output.delta.sessionFile ?? this.view.sessionFile,
         executionPolicy: output.delta.executionPolicy ?? this.view.executionPolicy,
@@ -279,6 +283,11 @@ async function startMockProvider(): Promise<MockProvider> {
     if (childGate && text.startsWith("child-") && hasToolMessage(body) === childGate.afterTools) {
       if (--childGate.remaining === 0) childGate.arrive();
       await childGate.released;
+    }
+    if (text.startsWith("child-fail:")) {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "Fixture child failure." } }));
+      return;
     }
     if (authorization === "Bearer title-fail-secret") {
       response.writeHead(429, { "content-type": "application/json" });
@@ -539,15 +548,23 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
   // These scripts call their tool once per prompt, so one chat can make several calls.
   const answeredSinceUser = messages.slice(messages.map((message) => message.role).lastIndexOf("user") + 1).some((message) => message.role === "tool");
   const repeatable = lastUserText.startsWith("mcp: ") || lastUserText.startsWith("subagent ") || lastUserText.startsWith("finish plan");
+  const backgroundText = lastUserText.startsWith("The user has set a goal.")
+    ? /<objective>\n([^\n]+)\n<\/objective>/.exec(lastUserText)?.[1] ?? lastUserText : lastUserText;
+  const backgroundScript = backgroundText.startsWith("subagent background: ")
+    ? JSON.parse(backgroundText.slice("subagent background: ".length)) as { tag: string; launch: Record<string, unknown>; next?: { name: string; args: Record<string, unknown> } } : undefined;
+  const backgroundResults = backgroundScript ? toolResultContents(body) : [];
+  const backgroundCall = backgroundScript ? backgroundResults.length === 0 ? { name: "subagent", args: { ...backgroundScript.launch, background: true } }
+    : backgroundResults.length === 1 ? backgroundScript.next : undefined : undefined;
   const shellScript = shellJobScriptOf(lastUserText);
   const shellResults = shellScript ? toolResultContents(body) : [];
   const shellCall = shellScript ? nextShellJobCall(shellScript, shellResults) : undefined;
-  if (shellScript ? shellCall !== undefined : repeatable ? !answeredSinceUser : !hasToolResult) {
+  if (backgroundScript ? backgroundCall !== undefined : shellScript ? shellCall !== undefined : repeatable ? !answeredSinceUser : !hasToolResult) {
     const toolCall = (name: string, args: Record<string, unknown>) => ({
-      index: 0, id: shellScript ? `call-shell-${suffix}-${shellResults.length}` : `call-${suffix}`, type: "function",
+      index: 0, id: backgroundScript ? `call-background-${backgroundScript.tag}-${backgroundResults.length}` : shellScript ? `call-shell-${suffix}-${shellResults.length}` : `call-${suffix}`, type: "function",
       function: { name, arguments: JSON.stringify(args) }
     });
-    const calls = shellCall ? [toolCall(shellCall.name, shellCall.args)]
+    const calls = backgroundCall ? [toolCall(backgroundCall.name, backgroundCall.args)]
+      : shellCall ? [toolCall(shellCall.name, shellCall.args)]
       : lastUserText.startsWith("Initialize project instructions")
       ? [toolCall("write", { path: "AGENTS.md", content: "# Fixture guidance\n\nRun `pnpm test`.\n" })]
       : lastUserText.startsWith("ask:")
@@ -1070,6 +1087,7 @@ describe("Pi worker integration", () => {
       "read",
       "skill_creator",
       "subagent",
+      "subagent_job",
       "todo",
       "web_fetch",
       "write"
@@ -1081,7 +1099,7 @@ describe("Pi worker integration", () => {
     // Sub-agents, computer use and memory are the built-ins that stay off until the user (or
     // the host's memory payload) switches them on; this test sends no memory payload.
     const expectedActive = catalog
-      .filter((tool) => tool.available && tool.name !== "find" && tool.name !== "subagent" && !tool.name.startsWith("computer_") && !tool.name.startsWith("memory_"))
+      .filter((tool) => tool.available && tool.name !== "find" && !tool.name.startsWith("subagent") && !tool.name.startsWith("computer_") && !tool.name.startsWith("memory_"))
       .map((tool) => tool.name)
       .sort();
     expect(ready.snapshot?.activeTools?.sort()).toEqual(expectedActive);
@@ -3358,7 +3376,8 @@ describe("sub-agents", () => {
   type Details = {
     v: number;
     mode: string;
-    results: Array<{ agent: string; task: string; readOnly: boolean; status: string; model?: string; output?: string; error?: string; activity: Array<{ tool: string; subject: string }>; usage: { input: number; output: number; turns: number } }>;
+    background?: boolean;
+    results: Array<{ jobId?: string; agent: string; task: string; readOnly: boolean; status: string; model?: string; output?: string; error?: string; activity: Array<{ tool: string; subject: string }>; usage: { input: number; output: number; turns: number } }>;
   };
 
   function subagentResult(worker: WorkerHarness): (ToolResultBlock & { details: Details }) | undefined {
@@ -3382,6 +3401,212 @@ describe("sub-agents", () => {
     cleanup.push(() => worker.shutdown());
     return { provider, workspace, worker, ready };
   }
+
+  async function request(worker: WorkerHarness, command: Record<string, unknown>): Promise<Output> {
+    const id = crypto.randomUUID();
+    worker.send({ id, ...command });
+    return worker.waitFor((output) => output.type === "response" && output.id === id);
+  }
+
+  const backgroundPrompt = (tag: string, launch: Record<string, unknown>, next?: { name: string; args: Record<string, unknown> }) => `subagent background: ${JSON.stringify({ tag, launch, next })}`;
+  const parentRequests = (provider: MockProvider) => provider.requests.filter((request) => !JSON.stringify(request.body.messages).includes("SCOUT-PROMPT-MARKER") && !JSON.stringify(request.body.messages).includes("WORKER-PROMPT-MARKER"));
+  const backgroundResultText = (provider: MockProvider) => parentRequests(provider).filter((request) => JSON.stringify(request.body.messages).includes("Job "));
+
+  it("the live UI mock launches once, settles the parent, and resumes once without a launch loop", async () => {
+    const mock = spawn(process.execPath, [resolve("../scripts/mock-provider.mjs")], { env: { ...process.env, WACKCODE_MOCK_PORT: "0", WACKCODE_MOCK_DELAY_MS: "1000" }, stdio: ["ignore", "pipe", "pipe"] });
+    cleanup.push(async () => { mock.kill("SIGKILL"); });
+    const baseUrl = await new Promise<string>((resolve, reject) => {
+      mock.once("error", reject);
+      mock.once("exit", () => reject(new Error("UI mock exited before startup")));
+      mock.stdout.on("data", (data: Buffer) => { const match = /http:\/\/127\.0\.0\.1:\d+\/v1/.exec(data.toString()); if (match) resolve(match[0]); });
+    });
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-live-mock-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(baseUrl, "mock-only-no-credential", workspace, "live-mock", undefined, undefined, undefined, undefined, undefined, { subagents: config({ agents: [editor] }) });
+    cleanup.push(() => worker.shutdown());
+    const launches = () => worker.view?.messages.flatMap((message) => message.blocks).filter((block) => block.type === "tool-call" && block.toolName === "subagent") ?? [];
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "live-mock-stop", message: "background fixture until stopped" });
+    await worker.waitFor((output) => output.workActivity?.parent === "idle" && output.workActivity.subagents === 1);
+    expect(launches()).toHaveLength(1);
+    worker.send({ id: crypto.randomUUID(), type: "abort" });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "live-mock-finish", message: "background fixture" });
+    await worker.waitFor((output) => output.workActivity?.parent === "idle" && output.workActivity.subagents === 1 && launches().length === 2);
+    await worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) => message.blocks.some((block) => block.text === "The background child finished; its result has arrived.")) === true);
+    expect(launches()).toHaveLength(2);
+    expect(worker.outputs.filter((output) => output.type === "worker_error")).toEqual([]);
+  });
+
+  it("answers before background children finish, does parent work, then automatically resumes with each result and durable cards", async () => {
+    const { provider, workspace, worker } = await start("subagents-background", { subagents: config() });
+    const gate = provider.holdChildren(2, true);
+    const prompt = backgroundPrompt("work", { tasks: [{ agent: "worker", task: "child-write: background-one" }, { agent: "scout", task: "child-ls: background-two" }] }, { name: "write", args: { path: "parent.txt", content: "parent continued" } });
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "background-work", message: prompt });
+    await gate.arrived;
+    await worker.waitFor((output) => output.type === "run_state" && output.workActivity?.parent === "idle" && output.workActivity.subagents === 2);
+    expect(await readFile(join(workspace, "parent.txt"), "utf8")).toBe("parent continued");
+    expect(await readFile(join(workspace, "background-one.txt"), "utf8")).toBe("from a sub-agent\n");
+    expect(subagentResult(worker)?.details.background).toBe(true);
+    expect(subagentResult(worker)?.details.results.map((child) => child.status)).toEqual(["running", "running"]);
+    expect(worker.outputs.filter((output) => output.type === "run_state" && output.state === "idle")).toEqual([]);
+    const launch = worker.view?.messages.find((message) => message.blocks.some((block) => block.toolName === "subagent" && block.type === "tool-call"));
+    expect(launch).toBeDefined();
+    const refused = await request(worker, { type: "navigate", kind: "rewind", entryId: launch!.entryId });
+    expect(refused.success).toBe(false);
+    expect(refused.error).toContain("sub-agents");
+    gate.release();
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    await worker.waitFor((output) => emitted(output) && output.view?.messages.filter((message) => message.blocks.some((block) => block.text === "Finished alpha.")).length! >= 2);
+    expect(subagentResult(worker)?.details.results.map((child) => child.status)).toEqual(["done", "done"]);
+    expect(backgroundResultText(provider).length).toBeGreaterThan(0);
+    const persisted = await readFile(worker.view!.sessionFile!, "utf8");
+    expect(persisted).toContain('"customType":"wackcode-subagent-background"');
+    expect(persisted).toContain('"customType":"wackcode-subagent-results"');
+    const delivered = persisted.split("\n").filter((line) => line.includes('"customType":"wackcode-subagent-results"')).map((line) => JSON.parse(line));
+    expect(delivered.flatMap((entry) => entry.details.jobIds)).toHaveLength(2);
+    expect(JSON.stringify(worker.view)).not.toContain('"transcript"');
+    await expectSavedHistory(worker.view!);
+    worker.send({ id: crypto.randomUUID(), type: "watch_subagent", target: { toolCallId: "call-background-work-0", index: 0 } });
+    const transcript = await worker.waitFor((output) => output.type === "subagent_stream" && output.toolCallId === "call-background-work-0" && output.reset === true);
+    expect(transcript.live).toBe(false);
+    expect(JSON.stringify(transcript.upserts)).toContain("background-one.txt");
+  });
+
+  it("an explicit wait owns completed results, including failures, without an extra automatic continuation", async () => {
+    const { provider, worker } = await start("subagents-background-wait", { subagents: config() });
+    const gate = provider.holdChildren(2);
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "background-wait", message: backgroundPrompt("wait", { tasks: [{ agent: "scout", task: "child-ls: wait-target" }, { agent: "worker", task: "child-fail: wait-target" }] }, { name: "subagent_job", args: { action: "wait" } }) });
+    await gate.arrived;
+    await worker.waitFor((output) => output.workActivity?.parent === "waiting");
+    gate.release();
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    expect(subagentResult(worker)?.details.results.map((child) => child.status)).toEqual(["done", "failed"]);
+    const finalRequest = parentRequests(provider).at(-1)!;
+    const results = toolResultContents(finalRequest.body);
+    expect(results.at(-1)).toContain("Fixture child failure.");
+    expect(backgroundResultText(provider)).toHaveLength(1); // The wait's tool result contains Job IDs.
+    const persisted = await readFile(worker.view!.sessionFile!, "utf8");
+    expect(persisted).not.toContain('"customType":"wackcode-subagent-results"');
+    expect(worker.outputs.filter((output) => output.type === "worker_error")).toEqual([]);
+  });
+
+  it("delivers a child completion once at an active parent's next safe boundary", async () => {
+    const { provider, worker } = await start("subagents-background-active", { subagents: config() });
+    const child = provider.holdChildren(1, true);
+    const parent = provider.holdRequest((entry) => entry.text.startsWith("subagent background:") && hasToolMessage(entry.body));
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "background-active", message: backgroundPrompt("active", { agent: "scout", task: "child-ls: active-parent" }) });
+    await Promise.all([child.arrived, parent.arrived]);
+    child.release();
+    await worker.waitFor((output) => output.workActivity?.parent === "running" && output.workActivity.pendingResults === 1);
+    parent.release();
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    const saved = await readFile(worker.view!.sessionFile!, "utf8");
+    const deliveries = saved.split("\n").filter((line) => line.includes('"customType":"wackcode-subagent-results"')).map((line) => JSON.parse(line));
+    expect(deliveries.flatMap((entry) => entry.details.jobIds)).toHaveLength(1);
+    expect(subagentResult(worker)?.details.results[0].status).toBe("done");
+    expect(worker.outputs.filter((output) => output.type === "worker_error")).toEqual([]);
+  });
+
+  it("refuses terminal plans while a background helper is outstanding", async () => {
+    const { provider, worker } = await start("subagents-background-plan", { subagents: config() }, "plan");
+    const child = provider.holdChildren(1);
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "background-plan", message: backgroundPrompt("plan", { agent: "scout", task: "child-ls: before-plan" }, { name: "plan_mode_complete", args: { plan: "# Finished plan" } }) });
+    await child.arrived;
+    await worker.waitFor((output) => output.workActivity?.parent === "idle" && output.workActivity.subagents === 1);
+    expect(worker.view?.messages.flatMap((message) => message.blocks).find((block) => block.type === "tool-result" && block.toolName === "plan_mode_complete")?.text).toContain("sub-agents");
+    expect(worker.outputs.some((output) => output.type === "plan_state" && output.phase === "ready")).toBe(false);
+    child.release();
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+  });
+
+  it("defers goal verification until background results have reached the parent", async () => {
+    const { provider, worker } = await start("subagents-background-goal", { subagents: config() });
+    const child = provider.holdChildren(1);
+    worker.send({ id: crypto.randomUUID(), type: "goal_control", action: "set", objective: backgroundPrompt("goal", { agent: "scout", task: "child-ls: goal-helper" }), runId: "background-goal", startedAt: Date.now() });
+    await child.arrived;
+    await worker.waitFor((output) => output.workActivity?.parent === "idle" && output.workActivity.subagents === 1);
+    expect(provider.requests.filter((entry) => entry.text.startsWith("<goal>"))).toHaveLength(0);
+    child.release();
+    await worker.waitFor((output) => output.type === "goal_state" && output.goal?.phase === "complete");
+    const verdicts = provider.requests.filter((entry) => entry.text.startsWith("<goal>"));
+    expect(verdicts).toHaveLength(1);
+    expect(JSON.stringify(verdicts[0].body.messages)).toContain("goal-helper");
+    expect(JSON.stringify(verdicts[0].body.messages)).toContain("Job ");
+  });
+
+  it("captures queued children's settings and keeps removed credentials redacted until cleanup", async () => {
+    const second = await startMockProvider();
+    cleanup.push(second.close);
+    const providerConfig = { provider: { id: "second-connection", name: "Second connection", kind: "custom", baseUrl: second.baseUrl, api: "openai-completions", models: [{ id: "small-model", name: "Small model", contextWindow: 8_192, maxTokens: 256, reasoning: false, thinkingLevels: ["off"], thinkingLevelMap: { off: null } }] }, apiKey: "second-secret" };
+    const agents = [{ ...scout, model: { providerId: "second-connection", modelId: "small-model", thinkingLevel: "off" } }];
+    const { provider, worker } = await start("subagents-background-settings", { subagents: config({ maxConcurrency: 1, agents, providers: [providerConfig] }) });
+    const child = second.holdRequest((entry) => entry.text.startsWith("child-ls:"));
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "background-settings", message: backgroundPrompt("settings", { tasks: [0, 1].map((index) => ({ agent: "scout", task: `child-ls: leak second-secret ${index}` })) }) });
+    await child.arrived;
+    await worker.waitFor((output) => output.workActivity?.parent === "idle" && output.workActivity.subagents === 2);
+    const change = await request(worker, { type: "set_subagents", subagents: config({ maxConcurrency: 1 }) });
+    expect(change.success).toBe(true);
+    child.release();
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    expect(childRequests(provider, "SCOUT-PROMPT-MARKER")).toHaveLength(0);
+    expect(second.requests).toHaveLength(4);
+    expect(second.requests.every((entry) => entry.authorization === "Bearer second-secret" && entry.body.model === "small-model")).toBe(true);
+    expect(subagentResult(worker)?.details.results.every((child) => child.status === "done" && !child.output?.includes("second-secret"))).toBe(true);
+    worker.send({ id: crypto.randomUUID(), type: "watch_subagent", target: { toolCallId: "call-background-settings-0", index: 1 } });
+    const transcript = await worker.waitFor((output) => output.type === "subagent_stream" && output.toolCallId === "call-background-settings-0" && output.reset === true);
+    expect(JSON.stringify(transcript.upserts)).not.toContain("second-secret");
+  });
+
+  it("runs a new user message alongside background children, then cancels everything from a parent-idle Stop", async () => {
+    const { provider, workspace, worker } = await start("subagents-background-stop", { subagents: config({ maxConcurrency: 1 }) });
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "background-stop", message: backgroundPrompt("stop", { tasks: [0, 1, 2].map((index) => ({ agent: "worker", task: `child-wait: background-${index}` })) }) });
+    await provider.waitForSlowRequest();
+    await worker.waitFor((output) => output.type === "run_state" && output.workActivity?.parent === "idle" && output.workActivity.subagents === 3);
+    const queued = await request(worker, { type: "queue_message", message: 'mcp: write {"path":"new-user.txt","content":"handled immediately"}' });
+    expect(queued.success).toBe(true);
+    await worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) => message.role === "user" && message.blocks.some((block) => block.text?.includes("new-user.txt"))) === true);
+    await worker.waitFor((output) => output.type === "run_state" && output.workActivity?.parent === "idle" && output.workActivity.subagents === 3 && worker.outputs.indexOf(output) > worker.outputs.indexOf(queued));
+    expect(await readFile(join(workspace, "new-user.txt"), "utf8")).toBe("handled immediately");
+    worker.send({ id: crypto.randomUUID(), type: "abort" });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    await worker.waitFor((output) => emitted(output) && subagentResult(worker)?.details.results.every((child) => child.status === "aborted") === true);
+    expect(worker.outputs.some((output) => output.type === "run_finished" && output.runId === "background-stop" && output.outcome === "stopped")).toBe(true);
+    expect(provider.requests.filter((entry) => entry.text.startsWith("child-wait:"))).toHaveLength(1);
+    expect(backgroundResultText(provider)).toHaveLength(0);
+    expect(worker.outputs.filter((output) => output.type === "worker_error")).toEqual([]);
+  });
+
+  it("disabling sub-agents cancels a blocked wait without queueing behind it or resuming later", async () => {
+    const { provider, worker } = await start("subagents-background-disable", { subagents: config({ maxConcurrency: 1 }) });
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "background-disable", message: backgroundPrompt("disable", { tasks: [0, 1].map((index) => ({ agent: "worker", task: `child-wait: disable-${index}` })) }, { name: "subagent_job", args: { action: "wait" } }) });
+    await provider.waitForSlowRequest();
+    await worker.waitFor((output) => output.workActivity?.parent === "waiting");
+    expect((await request(worker, { type: "set_subagents", subagents: null })).success).toBe(true);
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    expect(subagentResult(worker)?.details.results.every((child) => child.status === "aborted")).toBe(true);
+    expect(provider.requests.filter((entry) => entry.text.startsWith("child-wait:"))).toHaveLength(1);
+    expect(await readFile(worker.view!.sessionFile!, "utf8")).not.toContain('"customType":"wackcode-subagent-results"');
+    expect(worker.view?.activeTools).not.toContain("subagent");
+    expect(worker.view?.activeTools).not.toContain("subagent_job");
+  });
+
+  it("cold history interrupts live jobs, and a restarted worker never relaunches them", async () => {
+    const { provider, worker, workspace } = await start("subagents-background-restart", { subagents: config() });
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "restart-child", message: backgroundPrompt("restart", { agent: "scout", task: "child-wait: restart" }) });
+    await provider.waitForSlowRequest();
+    await worker.waitFor((output) => output.workActivity?.parent === "idle" && output.workActivity.subagents === 1);
+    const cold = await readSavedSession({ sessionFile: worker.view!.sessionFile, taskId: "restart", mode: "build", thinkingLevel: "off" });
+    const card = cold.messages.flatMap((message) => message.blocks).find((block) => block.type === "tool-result" && block.toolName === "subagent");
+    expect((card?.details as Details).results[0].status).toBe("interrupted");
+    const path = worker.view!.sessionFile;
+    await worker.shutdown();
+    const reopened = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "background-reopened", path, undefined, undefined, undefined, undefined, { subagents: config() });
+    cleanup.push(() => reopened.worker.shutdown());
+    expect(provider.requests.filter((entry) => entry.text === "child-wait: restart")).toHaveLength(1);
+    expect(reopened.ready.snapshot?.workActivity).toEqual({ parent: "idle", subagents: 0, pendingResults: 0 });
+    const restored = reopened.ready.snapshot?.messages.flatMap((message) => message.blocks).find((block) => block.type === "tool-result" && block.toolName === "subagent");
+    expect((restored?.details as Details).results[0].status).toBe("interrupted");
+  });
 
   const accessCases = (["build", "plan", "ultraplan"] as TaskMode[]).flatMap((mode) =>
     [false, true].flatMap((unrestrictedPlanning) => [false, true].map((unrestrictedSubagents) => ({

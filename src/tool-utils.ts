@@ -518,7 +518,7 @@ export function sameToolCatalog(left: ToolCatalogEntry[], right: ToolCatalogEntr
 }
 
 
-const SUBAGENT_STATUSES: SubagentStatus[] = ["queued", "running", "done", "failed", "aborted"];
+const SUBAGENT_STATUSES: SubagentStatus[] = ["queued", "running", "done", "failed", "aborted", "interrupted"];
 
 function num(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
@@ -538,6 +538,7 @@ function subagentResult(value: unknown): SubagentResult | undefined {
       })
     : [];
   return {
+    ...(typeof entry.jobId === "string" ? { jobId: entry.jobId } : {}),
     agent: entry.agent,
     task: entry.task,
     readOnly: entry.readOnly === true,
@@ -571,7 +572,7 @@ export function parseSubagentDetails(value: unknown): SubagentDetails | undefine
   if (details.v !== 1 || !Array.isArray(details.results) || details.results.length === 0) return undefined;
   const results = details.results.map(subagentResult);
   if (results.some((result) => !result)) return undefined;
-  return { v: 1, mode: details.mode === "parallel" ? "parallel" : "single", results: results as SubagentResult[] };
+  return { v: 1, ...(details.background === true ? { background: true } : {}), mode: details.mode === "parallel" ? "parallel" : "single", results: results as SubagentResult[] };
 }
 
 /**
@@ -666,7 +667,7 @@ export function subagentDetailsFor(
       if (block.toolCallId !== toolCallId || block.toolName !== SUBAGENT_TOOL_NAME) continue;
       if (block.type === "tool-result") {
         const details = parseSubagentDetails(block.details);
-        return details ? { details, finished: true } : undefined;
+        return details ? { details, finished: !details.background || !details.results.some((child) => child.status === "queued" || child.status === "running") } : undefined;
       }
       if (block.type === "tool-call") call = block;
     }

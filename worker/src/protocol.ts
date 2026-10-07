@@ -246,7 +246,7 @@ export interface SubagentRuntimeConfig {
   providers: SubagentProvider[];
 }
 
-export type SubagentStatus = "queued" | "running" | "done" | "failed" | "aborted";
+export type SubagentStatus = "queued" | "running" | "done" | "failed" | "aborted" | "interrupted";
 
 /** One tool call a child made, summarized for the card. */
 export interface SubagentActivity {
@@ -264,6 +264,8 @@ export interface SubagentUsage {
 }
 
 export interface SubagentResult {
+  /** Session-local job handle; present on background launches. */
+  jobId?: string;
   agent: string;
   task: string;
   readOnly: boolean;
@@ -298,8 +300,16 @@ export interface SubagentTranscript {
 /** The `subagent` tool's result details: what the transcript card renders, live and after a reload. */
 export interface SubagentDetails {
   v: 1;
+  background?: true;
   mode: "single" | "parallel";
   results: SubagentResult[];
+}
+
+/** Aggregate work stays busy after the parent settles while children continue. */
+export interface WorkActivity {
+  parent: "running" | "waiting" | "idle";
+  subagents: number;
+  pendingResults: number;
 }
 
 /** One child of one `subagent` call: the tool call's id and the child's position in it. */
@@ -916,6 +926,7 @@ export interface SessionSnapshot {
   modelSwitches: ModelSwitch[];
   runTimings: RunTiming[];
   activeRun?: { runId: string; startedAt: number };
+  workActivity?: WorkActivity;
   /** Present only while compaction is running; separate from the prompt's clock. */
   compaction?: { reason: "manual" | "threshold" | "overflow" };
   /** Where the conversation currently ends in the session tree. */
@@ -968,6 +979,7 @@ export interface SnapshotDelta {
   modelSwitches?: ModelSwitch[];
   /** null clears the active run; absent leaves it unchanged. */
   activeRun?: { runId: string; startedAt: number } | null;
+  workActivity?: WorkActivity;
   /** null ends compaction; absent leaves it unchanged. */
   compaction?: SessionSnapshot["compaction"] | null;
   tree: {
@@ -1015,7 +1027,7 @@ export type WorkerOutput =
   | { type: "snapshot"; taskId: string; snapshot: SessionSnapshot }
   | { type: "snapshot_delta"; taskId: string; delta: SnapshotDelta }
   | { type: "partial"; taskId: string; message: NormalizedMessage }
-  | { type: "run_state"; taskId: string; runId?: string; startedAt?: number; operation?: "compaction"; state: "running" | "idle" | "stopping" | "interrupted" }
+  | { type: "run_state"; taskId: string; runId?: string; startedAt?: number; operation?: "compaction"; workActivity?: WorkActivity; state: "running" | "idle" | "stopping" | "interrupted" }
   | { type: "run_finished"; taskId: string; runId: string; outcome: "completed" | "stopped" | "failed" }
   | { type: "queue_state"; taskId: string; messages: QueuedMessage[] }
   | { type: "activity"; taskId: string; event: string; detail?: unknown }

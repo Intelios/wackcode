@@ -204,6 +204,7 @@ export function createSkillCreatorExtension(host: BuiltinHost, deps: SkillCreato
     if (!deps.isBuildMode()) throw new Error("Switch to Build mode before using the skill creator.");
     const parsed = normalizeSkillCreatorParams(params);
     if (!parsed.ok) throw new Error(parsed.error);
+    if (parsed.value.action === "preview" && host.hasOutstandingSubagents?.()) throw new Error("Wait for or stop outstanding sub-agents with subagent_job before previewing the skill.");
     if (!commandRunActive && !state) {
       throw new Error("The skill_creator tool only works inside a /skill-creator workflow. Start one with /skill-creator, or ask the user to.");
     }

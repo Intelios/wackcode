@@ -73,6 +73,8 @@ export class SubagentRunner {
   /** Runtimes for connections other than the chat's, built on first use. */
   private runtimes = new Map<string, Promise<ModelRuntime>>();
   private readonly live = new Set<AgentSession>();
+  /** Queued/running children keep the credentials they captured redacted after Settings changes. */
+  private readonly retained = new Map<SubagentRunRequest, SubagentProvider>();
 
   constructor(private readonly context: SubagentRunnerContext) {}
 
@@ -90,14 +92,14 @@ export class SubagentRunner {
   credentials(): { apiKeys: string[]; stored: { providerId: string; authPath: string }[] } {
     const apiKeys: string[] = [];
     const stored: { providerId: string; authPath: string }[] = [];
-    for (const entry of this.providers.values()) {
+    for (const entry of [...this.providers.values(), ...this.retained.values()]) {
       if (entry.apiKey) apiKeys.push(entry.apiKey);
       if (entry.authPath) stored.push({ providerId: entry.provider.id, authPath: entry.authPath });
     }
     return { apiKeys, stored };
   }
 
-  /** Stop every running child (worker shutdown). The parent's abort signal normally does this. */
+  /** Stop every running child on worker shutdown, in addition to the job manager's signals. */
   async abortAll(): Promise<void> {
     await Promise.allSettled([...this.live].map((child) => child.abort()));
   }
@@ -146,14 +148,27 @@ export class SubagentRunner {
     };
   }
 
-  async run(request: SubagentRunRequest, transcript?: ChildTranscriptHooks): Promise<SubagentOutcome> {
+  prepare(request: SubagentRunRequest): { run(transcript?: ChildTranscriptHooks): Promise<SubagentOutcome>; dispose(): void } {
+    const provider = request.spec.model && this.providers.get(request.spec.model.providerId);
+    if (provider) this.retained.set(request, provider);
+    const resolved = this.resolveModel(request);
+    // It may reject while queued; observe it now, and report the same failure when scheduled.
+    void resolved.catch(() => undefined);
+    return {
+      dispose: () => { this.retained.delete(request); },
+      // The host releases AFTER redacting the output and capturing the final transcript.
+      run: (transcript) => this.run(request, transcript, resolved),
+    };
+  }
+
+  async run(request: SubagentRunRequest, transcript?: ChildTranscriptHooks, prepared?: Promise<ResolvedModel>): Promise<SubagentOutcome> {
     const { pi, cwd, agentDir, safeError } = this.context;
     const { signal, observer } = request;
     const usage: Usage = emptyUsage();
     let turns = 0;
     if (signal?.aborted) return { status: "aborted", output: "", usage, turns };
 
-    const resolved = await this.resolveModel(request);
+    const resolved = await (prepared ?? this.resolveModel(request));
     const settingsManager = workerSettings(pi);
     // Private job ownership per child: one child can never inspect or stop another's commands.
     // bash_job accompanies an allowed bash, without widening the role's command allowlist.

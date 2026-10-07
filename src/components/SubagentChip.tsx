@@ -23,8 +23,8 @@ export interface SubagentPanelLinkValue {
 export const SubagentPanelLink = createContext<SubagentPanelLinkValue>({});
 
 /**
- * A child's status as its chip and panel show it. `live` is whether its call is still running:
- * a child that was running or queued when the call ended was stopped with it.
+ * A child's status as its chip and panel show it. Background cards keep `live` independent
+ * of their launch tool result; foreground cards still settle with the blocking call.
  */
 export function childStatus(result: SubagentResult, live: boolean): RobotStatus {
   if (live && (result.status === "running" || result.status === "queued")) return result.status;
@@ -138,7 +138,7 @@ function SubagentChip({ toolCallId, index, result, live }: ChipProps) {
 interface GroupProps {
   toolCallId: string;
   details: SubagentDetails;
-  /** The call is still running: children marked running are live, not interrupted. */
+  /** The child jobs are live, even if a background launch has already returned. */
   live: boolean;
 }
 

@@ -1,5 +1,6 @@
 export const SUBAGENT_TOOL_NAME = "subagent";
 export const SUBAGENT_TOOL_LABEL = "Sub-agents";
+export const SUBAGENT_JOB_TOOL_NAME = "subagent_job";
 
 /** Tasks one parallel call may carry. */
 export const MAX_PARALLEL_TASKS = 8;

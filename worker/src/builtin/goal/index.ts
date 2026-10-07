@@ -13,6 +13,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { GoalState } from "../../protocol.js";
 import type { BuiltinHost } from "../host.js";
+import { BACKGROUND_SUBAGENT_MESSAGE } from "../subagents/state.js";
 import { goalContinuationPrompt, goalKickoffPrompt } from "./prompt.js";
 import {
   DEFAULT_MAX_ITERATIONS,
@@ -48,6 +49,8 @@ const TERMINAL_PHASES: ReadonlySet<GoalState["phase"]> = new Set(["complete", "s
 
 interface SessionEntryLike {
   type?: string;
+  customType?: string;
+  content?: unknown;
   message?: { role?: string; content?: unknown; toolName?: string };
 }
 
@@ -70,6 +73,10 @@ export function renderTranscriptSlice(branch: Iterable<unknown>): string {
   let total = 0;
   for (const raw of branch) {
     const entry = raw as SessionEntryLike;
+    if (entry?.type === "custom_message" && entry.customType === BACKGROUND_SUBAGENT_MESSAGE) {
+      lines.push(`[tool subagent results] ${messageText(entry.content).slice(0, 600)}`);
+      continue;
+    }
     if (entry?.type !== "message") continue;
     const message = entry.message;
     if (!message?.role) continue;
@@ -257,7 +264,7 @@ export function createGoalExtension(host: BuiltinHost, isPlanning: () => boolean
       if (!goal || goal.phase !== "active" || !round) return;
       // Planning modes never loop; a queued steer/follow-up or an open dialog means the
       // user's own input drives the next turn.
-      if (isPlanning() || uiPromptOpen || ctx.hasPendingMessages() || host.hasQueuedMessages?.()) return;
+      if (isPlanning() || uiPromptOpen || ctx.hasPendingMessages() || host.hasQueuedMessages?.() || host.hasOutstandingSubagents?.()) return;
       const lastAssistant = [...round].reverse().find((message) => message.role === "assistant");
       const stopReason = lastAssistant?.stopReason;
       if (stopReason === "aborted") { goal.phase = "paused"; goal.note = "Stopped by user."; persist(); emit(); return; }

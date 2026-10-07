@@ -15,6 +15,7 @@ import { runGoalVerification } from "./builtin/goal/verify.js";
 import { buildSkillCreatorPrompt } from "./builtin/skill-creator/guide.js";
 import type { BuiltinHost, SubagentOutcome } from "./builtin/host.js";
 import { normalizeMessage as normalizeSavedMessage, textFromContent, THUMBNAIL_OPTIONS, THUMBNAIL_RESULT_TOOLS } from "./message-normalization.js";
+import { BACKGROUND_SUBAGENT_MESSAGE, backgroundCalls, interruptedDetails, projectBackgroundCards } from "./builtin/subagents/state.js";
 import { SUBAGENT_TOOL_NAME } from "./builtin/subagents/types.js";
 import { createModelRuntime, findModel, MODEL_MISSING_MESSAGE, missingModelMessage, missingModelPlaceholder, workerSettings, type PiModel } from "./model-runtime.js";
 import { sameExecutionPolicy } from "./execution-policy.js";
@@ -262,6 +263,24 @@ const builtinHost: BuiltinHost = {
   },
   recordCommandPresentation: (presentation) => recordCommandPresentation(presentation),
   hasQueuedMessages: () => messageQueue.hasPending,
+  hasOutstandingSubagents: () => hasSubagentWork(),
+  subagentsChanged: () => { scheduleSnapshot(); scheduleBackgroundResults(); },
+  recordSubagentUsage: (usage, spec) => {
+    if (session) session.sessionManager.appendUsage("subagent", spec.model?.providerId ?? session.model?.provider ?? "", spec.model?.modelId ?? session.model?.id ?? "", usage);
+  },
+  prepareSubagent: (request) => {
+    if (!subagentRunner) throw new Error("Worker is not initialized");
+    const run = subagentRunner.prepare(request);
+    return { dispose: run.dispose, run: async () => {
+      const stream = subagentStreams.child({ toolCallId: request.toolCallId, index: request.index });
+      try {
+        const outcome = await run.run(stream);
+        const transcript = stream.finish();
+        return { ...outcome, output: builtinHost.redact(outcome.output), ...(transcript ? { transcript } : {}) };
+      } catch (error) { stream.finish(); throw new Error(safeError(error)); }
+      finally { run.dispose(); }
+    } };
+  },
   runGoalVerification: (input, signal) => {
     // The verifier shares the chat's connection and model — like auto-title it is cheap
     // background judgement, never a second model to configure.
@@ -303,9 +322,9 @@ const builtins = createBuiltinExtensions(builtinHost, {
  * Apply the user's sub-agent settings. Credentials stay with the runner; the extension only
  * sees the roster it renders into the tool and the settings it schedules with.
  */
-function applySubagents(config: SubagentRuntimeConfig | null): void {
+async function applySubagents(config: SubagentRuntimeConfig | null): Promise<void> {
+  await builtins.subagents.configure(config ? { ...config, providers: [] } : null);
   subagentRunner?.setProviders(config?.providers ?? []);
-  builtins.subagents.configure(config ? { ...config, providers: [] } : null);
 }
 
 // Pi registers a `powershell` base tool on every platform. WackCode is macOS-only, so keep it
@@ -353,7 +372,88 @@ const normalizedCache = new WeakMap<object, CachedMessage>();
 const imageOwners = new Map<string, object>();
 
 function send(output: WorkerOutput): void {
+  if (output.type === "run_finished") {
+    if (output.outcome === "completed" && hasSubagentWork()) { backgroundFinishedRunId ??= output.runId; return; }
+    if (backgroundFinishedRunId && !hasSubagentWork()) { output = { ...output, runId: backgroundFinishedRunId }; backgroundFinishedRunId = undefined; }
+  }
+  if (output.type === "run_state") {
+    const activity = workActivity();
+    output = { ...output, workActivity: activity,
+      // A settled parent may still have editing children or result delivery outstanding.
+      state: stoppingRun ? "stopping" : output.state === "idle" && hasSubagentWork() ? "running" : output.state };
+    lastWorkActivity = JSON.stringify(activity);
+    lastRunState = output.state;
+  }
   process.stdout.write(`${JSON.stringify(output)}\n`);
+}
+
+let lastWorkActivity = "";
+let lastRunState: string | undefined;
+let backgroundTimer: ReturnType<typeof setTimeout> | undefined;
+let backgroundContinuationScheduled = false;
+let backgroundShutdown = false;
+let stoppingRun = false;
+let backgroundFinishedRunId: string | undefined;
+const backgroundResultDeliveries = new Set<string>();
+
+function hasSubagentWork(): boolean { return builtins.subagents.hasWork() || backgroundResultDeliveries.size > 0; }
+
+function workActivity(): NonNullable<SessionSnapshot["workActivity"]> {
+  return {
+    parent: builtins.subagents.waiting() ? "waiting" : activeRun || session?.isStreaming || session?.isCompacting || builtins.goal.willContinue() ? "running" : "idle",
+    subagents: builtins.subagents.activeCount(),
+    pendingResults: builtins.subagents.pendingCount() + backgroundResultDeliveries.size,
+  };
+}
+
+/** Never use the serial queue to deliver to a streaming parent: that queue awaits it. */
+function scheduleBackgroundResults(): void {
+  if (backgroundTimer || backgroundShutdown) return;
+  backgroundTimer = setTimeout(() => {
+    backgroundTimer = undefined;
+    if (!session || !taskId || stoppingRun || stopRequested || backgroundShutdown) return;
+    const activity = workActivity();
+    const state = activity.parent !== "idle" || hasSubagentWork() ? "running" : "idle";
+    if (JSON.stringify(activity) !== lastWorkActivity || state !== lastRunState) send({ type: "run_state", taskId, state });
+    if (!builtins.subagents.pendingCount() || builtins.subagents.waiting()) return;
+    if (session.isStreaming) {
+      const results = builtins.subagents.takeResults();
+      if (results) {
+        for (const id of results.jobIds) backgroundResultDeliveries.add(id);
+        void session.sendCustomMessage({ customType: BACKGROUND_SUBAGENT_MESSAGE, content: results.text, display: false, details: { v: 1, jobIds: results.jobIds } }, { deliverAs: "steer", triggerTurn: true }).catch((error) => {
+          for (const id of results.jobIds) backgroundResultDeliveries.delete(id);
+          notice(safeError(error), "error");
+        });
+      }
+      return;
+    }
+    if (backgroundContinuationScheduled) return;
+    backgroundContinuationScheduled = true;
+    const generation = stopGeneration;
+    commandQueue = commandQueue.then(async () => {
+      backgroundContinuationScheduled = false;
+      if (!session || !taskId || stoppingRun || stopRequested || backgroundShutdown || generation !== stopGeneration || chatModelMissing()) return;
+      // Accepted user input takes priority. Its run will receive these same results safely.
+      if (messageQueue.hasRunnable) { scheduleQueuedPrompt(); return; }
+      if (!session.isIdle) { scheduleBackgroundResults(); return; }
+      const results = builtins.subagents.takeResults();
+      if (!results) return;
+      for (const id of results.jobIds) backgroundResultDeliveries.add(id);
+      const runId = crypto.randomUUID();
+      const startedAt = Date.now();
+      activeRun = { runId, startedAt, finalized: false, previousUserEntryIds: new Set(session.sessionManager.getBranch().filter((entry) => entry.type === "message" && entry.message.role === "user").map((entry) => entry.id)) };
+      send({ type: "run_state", taskId, runId, startedAt, state: "running" });
+      try {
+        await session.sendCustomMessage({ customType: BACKGROUND_SUBAGENT_MESSAGE, content: results.text, display: false, details: { v: 1, jobIds: results.jobIds } }, { triggerTurn: true });
+      } finally {
+        for (const id of results.jobIds) backgroundResultDeliveries.delete(id);
+        if (activeRun?.runId === runId) { finalizeActiveRun(); activeRun = undefined; send({ type: "run_state", taskId, runId, state: "idle" }); }
+        emitBoundary();
+        scheduleQueuedPrompt();
+        scheduleBackgroundResults();
+      }
+    }).catch((error) => { notice(safeError(error), "error"); scheduleBackgroundResults(); });
+  }, 0);
 }
 
 function response(id: string, success: boolean, error?: string): void {
@@ -588,6 +688,7 @@ let treeCache: { count: number; index: TreeIndex } | undefined;
 let runTimingsCache: { count: number; value: RunTiming[] } | undefined;
 // Saved thinking durations by assistant entry id. They ride run-timing entries, so they too
 // change only when the session gains entries.
+const backgroundCardCache = new WeakMap<object, { details: import("./protocol.js").SubagentDetails; message: NormalizedMessage }>();
 let savedThinkingCache: { count: number; value: Map<string, ThinkingDurations> } | undefined;
 
 function savedThinking(entries: EntryLike[]): Map<string, ThinkingDurations> {
@@ -609,7 +710,7 @@ function getSnapshot(rev: number): SessionSnapshot {
   const path = session.sessionManager.getBranch() as EntryLike[];
   const entries = session.sessionManager.getEntries() as EntryLike[];
   const index = treeIndex(entries);
-  const messages = transcriptMessages(session.messages, path, index, savedThinking(entries), {
+  const baseMessages = transcriptMessages(session.messages, path, index, savedThinking(entries), {
     normalize: normalizeMessage,
     cache: normalizedCache,
     streamingMessage,
@@ -618,6 +719,10 @@ function getSnapshot(rev: number): SessionSnapshot {
     compactionTokensAfter: (entry) => piModule?.buildSessionProjection(entries as SessionEntry[], entry.id).messages
       .reduce((sum, message) => sum + piModule!.estimateTokens(message), 0)
   });
+  const cards = backgroundCalls(path);
+  for (const [id, call] of cards) cards.set(id, { ...call, details: interruptedDetails(call.details) });
+  for (const call of builtins.subagents.calls()) cards.set(call.toolCallId, call);
+  const messages = projectBackgroundCards(baseMessages, cards, backgroundCardCache);
   const messagePositions = new Map<string, number>();
   messages.forEach((message, position) => {
     if (message.entryId) messagePositions.set(message.entryId, position);
@@ -639,6 +744,7 @@ function getSnapshot(rev: number): SessionSnapshot {
     modelSwitches,
     runTimings: runTimingsCache.value,
     activeRun: activeRun ? { runId: activeRun.runId, startedAt: activeRun.startedAt } : undefined,
+    workActivity: workActivity(),
     compaction,
     tree: { leafId: leaf?.id ?? null, undo: undoTarget(leaf) },
     stats: {
@@ -698,6 +804,7 @@ interface EmittedState {
   runTimings: RunTiming[];
   activeRun?: { runId: string; startedAt: number };
   compaction?: SessionSnapshot["compaction"];
+  workActivity?: SessionSnapshot["workActivity"];
   executionPolicy?: ExecutionPolicyConfig;
   planState?: PlanState;
   todoState?: TodoState;
@@ -719,6 +826,7 @@ function recordEmitted(snapshot: SessionSnapshot): void {
     runTimings: snapshot.runTimings,
     activeRun: snapshot.activeRun,
     compaction: snapshot.compaction,
+    workActivity: snapshot.workActivity,
     executionPolicy: snapshot.executionPolicy,
     planState: snapshot.planState,
     todoState: snapshot.todoState,
@@ -768,12 +876,13 @@ function emitBoundary(): void {
     ? undefined
     : snapshot.activeRun ?? null;
   const compaction = emitted.compaction?.reason === snapshot.compaction?.reason ? undefined : snapshot.compaction ?? null;
+  const workActivity = JSON.stringify(emitted.workActivity) === JSON.stringify(snapshot.workActivity) ? undefined : snapshot.workActivity;
   if (
     diff.upserts.length === 0 && diff.removed.length === 0
     && executionPolicy === undefined && planState === undefined && todoState === undefined && goalState === undefined
     && skillCreator === undefined
     && runTimings === undefined && modelSwitches === undefined
-    && sessionFile === undefined && activeRun === undefined && compaction === undefined
+    && sessionFile === undefined && activeRun === undefined && compaction === undefined && workActivity === undefined
     && sameStats(emitted.stats, snapshot.stats) && sameTree(emitted.tree, snapshot.tree)
   ) return;
   snapshotRev += 1;
@@ -789,6 +898,7 @@ function emitBoundary(): void {
       ...(modelSwitches !== undefined ? { modelSwitches } : {}),
       ...(activeRun !== undefined ? { activeRun } : {}),
       ...(compaction !== undefined ? { compaction } : {}),
+      ...(workActivity !== undefined ? { workActivity } : {}),
       tree: snapshot.tree,
       stats: snapshot.stats,
       ...(sessionFile !== undefined ? { sessionFile } : {}),
@@ -1069,7 +1179,7 @@ async function initialize(command: InitCommand): Promise<void> {
     safeError
   });
   builtins.configureExecutionPolicy(command.executionPolicy);
-  applySubagents(command.subagents ?? null);
+  await applySubagents(command.subagents ?? null);
   builtins.mcp.configure(command.mcp ?? []);
   builtins.computerUse.configure(command.computerUse?.enabled === true);
   // Before any contract can be published: the plan-mode extension composes each contract from
@@ -1173,7 +1283,7 @@ async function initialize(command: InitCommand): Promise<void> {
     await session.bindExtensions({
       uiContext: createExtensionUIContext() as never,
       mode: "rpc",
-      abortHandler: () => { stopRequested = true; void session?.abort(); },
+      abortHandler: () => { void stopActiveRun(); },
       commandContextActions: {
         waitForIdle: async () => { if (!session?.isIdle) throw new Error("Wait for the current run to finish."); },
         newSession: async () => { throw new Error("An extension cannot create a WackCode chat."); },
@@ -1260,6 +1370,13 @@ async function initialize(command: InitCommand): Promise<void> {
         send({ type: "worker_error", taskId: command.taskId, message: safeError(failed.errorMessage) });
       }
     }
+    if (eventType === "message_end") {
+      const message = value.message as { customType?: string; details?: { jobIds?: string[] } } | undefined;
+      if (message?.customType === BACKGROUND_SUBAGENT_MESSAGE) {
+        for (const id of message.details?.jobIds ?? []) backgroundResultDeliveries.delete(id);
+        scheduleSnapshot();
+      }
+    }
     if ((value.message as { role?: unknown } | undefined)?.role === "assistant") {
       if (eventType === "message_start") thinkingClock.begin();
       else if (eventType === "message_update") thinkingClock.update(value.assistantMessageEvent);
@@ -1333,7 +1450,7 @@ function runStartedAt(requested: number | undefined): number {
 
 function requireSettled(): void {
   if (!session) throw new Error("Worker is not initialized");
-  if (session.isStreaming || session.isCompacting) throw new Error("Wait for the current run to finish first.");
+  if (session.isStreaming || session.isCompacting || hasSubagentWork()) throw new Error("Wait for the current run and its sub-agents to finish first.");
 }
 
 function appendMarker(customType: string, data: unknown): void {
@@ -1446,6 +1563,7 @@ async function runPrompt(
   stopRequested = false;
   emitBoundary();
   scheduleQueuedPrompt();
+  scheduleBackgroundResults();
   return outcome;
 }
 
@@ -1479,6 +1597,9 @@ function scheduleQueuedPrompt(): void {
 /** Shared cancellation path for Stop and instant Steer, including native requests and goals. */
 async function stopActiveRun(): Promise<void> {
   if (!session || !taskId) throw new Error("Worker is not initialized");
+  stoppingRun = true;
+  backgroundResultDeliveries.clear();
+  session.clearQueue();
   builtins.autoTitle.abort();
   cancelPendingNativeRequests();
   builtins.goal.userStop();
@@ -1489,16 +1610,19 @@ async function stopActiveRun(): Promise<void> {
   mcpWait?.abort();
   if (compacting) {
     session.abortCompaction();
+    await builtins.subagents.stopAll();
+    stoppingRun = false;
     send({ type: "run_state", taskId, state: "stopping" });
     return;
   }
-  const stoppedRunId = activeRun?.runId ?? continuingGoalRunId;
+  const stoppedRunId = activeRun?.runId ?? continuingGoalRunId ?? backgroundFinishedRunId;
   send({ type: "run_state", taskId, runId: stoppedRunId, startedAt: activeRun?.startedAt, state: "stopping" });
-  await Promise.all([session.abort(), builtins.bashJobs.stopAll()]);
+  await Promise.all([session.abort(), builtins.subagents.stopAll(), builtins.bashJobs.stopAll()]);
+  stoppingRun = false;
   const didNotSettle = stoppedRunId !== undefined && activeRun?.runId === stoppedRunId;
   finalizeActiveRun();
   activeRun = undefined;
-  if (didNotSettle) send({ type: "run_finished", taskId, runId: stoppedRunId, outcome: "stopped" });
+  if (stoppedRunId && (didNotSettle || backgroundFinishedRunId)) send({ type: "run_finished", taskId, runId: stoppedRunId, outcome: "stopped" });
   if (!steeringHandoff) send({ type: "run_state", taskId, runId: stoppedRunId, state: "idle" });
   emitSnapshot();
 }
@@ -1698,6 +1822,7 @@ async function handle(command: WorkerCommand): Promise<void> {
       }
       return;
     } else if (command.type === "compact") {
+      requireSettled();
       if (chatModelMissing()) throw new Error(missingModelReason);
       if (session.sessionManager.getBranch().filter((entry) => entry.type === "message" && entry.message.role === "user").length < 2) {
         throw new Error("There is not enough conversation to compact yet.");
@@ -1902,9 +2027,9 @@ async function handle(command: WorkerCommand): Promise<void> {
       applyDisabledTools();
       emitSnapshot();
     } else if (command.type === "set_subagents") {
-      // Queued like any command, so the roster never changes under a running call. A changed
-      // roster re-registers the tool, which leaves the active set alone: re-apply it.
-      applySubagents(command.subagents);
+      // Roster updates queue for subsequent launches. Disabling bypasses the queue to stop
+      // children even when the parent is blocked in subagent_job wait.
+      await applySubagents(command.subagents);
       applyDisabledTools();
       emitSnapshot();
     } else if (command.type === "set_computer_use") {
@@ -1949,8 +2074,9 @@ async function handle(command: WorkerCommand): Promise<void> {
       applyDisabledTools();
       emitSnapshot();
     } else if (command.type === "shutdown") {
+      backgroundShutdown = true;
       cancelPendingNativeRequests(true);
-      await Promise.all([subagentRunner?.abortAll(), builtins.bashJobs.stopAll()]);
+      await Promise.all([builtins.subagents.stopAll(true), subagentRunner?.abortAll(), builtins.bashJobs.stopAll()]);
       if (!session.isIdle) await session.abort();
       session.dispose();
       await closeMcpServers();
@@ -1989,7 +2115,8 @@ const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "
  */
 function toolResultImage(toolCallId: string, index: number): ImageContent | null {
   if (!session) return null;
-  const messages = transcriptEntries(session.sessionManager.getBranch()).map((entry) => entry.raw) as Record<string, unknown>[];
+  const path = session.sessionManager.getBranch();
+  const messages = transcriptEntries(path).map((entry) => entry.raw) as Record<string, unknown>[];
   for (let position = messages.length - 1; position >= 0; position -= 1) {
     const message = messages[position];
     if (message?.role !== "toolResult" || message.toolCallId !== toolCallId) continue;
@@ -2023,6 +2150,9 @@ function userMessageImage(entryId: string, index: number): ImageContent | null {
  */
 function savedSubagentTranscript(target: SubagentTarget): SubagentTranscript | undefined {
   if (!session) return undefined;
+  const card = backgroundCalls(session.sessionManager.getBranch()).get(target.toolCallId);
+  const saved = card?.details.results[target.index]?.transcript;
+  if (isSubagentTranscript(saved)) return saved;
   const messages = transcriptEntries(session.sessionManager.getBranch()).map((entry) => entry.raw) as Record<string, unknown>[];
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -2093,6 +2223,8 @@ function safeError(error: unknown): string {
  */
 function bypassesQueue(command: WorkerCommand): boolean {
   switch (command.type) {
+    case "set_subagents":
+      return command.subagents === null;
     case "abort":
     case "browser_response":
     case "computer_response":
@@ -2169,9 +2301,10 @@ process.stdin.resume();
 process.on("SIGTERM", () => {
   void (async () => {
     try {
+      backgroundShutdown = true;
       builtins.autoTitle.abort();
       cancelPendingNativeRequests(true);
-      await Promise.all([subagentRunner?.abortAll(), builtins.bashJobs.stopAll()]);
+      await Promise.all([builtins.subagents.stopAll(true), subagentRunner?.abortAll(), builtins.bashJobs.stopAll()]);
       if (session && !session.isIdle) await session.abort();
       session?.dispose();
       await closeMcpServers();

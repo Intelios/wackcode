@@ -736,7 +736,7 @@ export interface AutoTitleConfig {
   modelId: string | null;
 }
 
-export type SubagentStatus = "queued" | "running" | "done" | "failed" | "aborted";
+export type SubagentStatus = "queued" | "running" | "done" | "failed" | "aborted" | "interrupted";
 
 /**
  * One sub-agent in a `subagent` call, as its chip and panel render it. Mirrors
@@ -744,6 +744,8 @@ export type SubagentStatus = "queued" | "running" | "done" | "failed" | "aborted
  * streams it to the side panel instead (`watch_subagent`).
  */
 export interface SubagentResult {
+  /** Session-local job handle; present on background launches. */
+  jobId?: string;
   agent: string;
   task: string;
   readOnly: boolean;
@@ -761,8 +763,16 @@ export interface SubagentResult {
 /** The `subagent` tool's result details, live and after a reload. */
 export interface SubagentDetails {
   v: 1;
+  background?: true;
   mode: "single" | "parallel";
   results: SubagentResult[];
+}
+
+/** Mirrors worker/protocol.ts and the Rust host's aggregate work guard. */
+export interface WorkActivity {
+  parent: "running" | "waiting" | "idle";
+  subagents: number;
+  pendingResults: number;
 }
 
 /** One child of one `subagent` call: its tool call and position. Mirrors `SubagentWatchTarget` in models.rs. */
@@ -1071,6 +1081,7 @@ export interface SessionSnapshot {
   modelSwitches: ModelSwitch[];
   runTimings: RunTiming[];
   activeRun?: { runId: string; startedAt: number };
+  workActivity?: WorkActivity;
   /** Present only while compaction is running; separate from the prompt's clock. */
   compaction?: { reason: "manual" | "threshold" | "overflow" };
   /** Where the conversation currently ends in the session tree. */
@@ -1123,6 +1134,7 @@ export interface SnapshotDelta {
   modelSwitches?: ModelSwitch[];
   /** null clears the active run; absent leaves it unchanged. */
   activeRun?: { runId: string; startedAt: number } | null;
+  workActivity?: WorkActivity;
   /** null ends compaction; absent leaves it unchanged. */
   compaction?: SessionSnapshot["compaction"] | null;
   tree: {
@@ -1200,7 +1212,7 @@ export type WorkerEvent =
   | { type: "ready" | "snapshot"; taskId: string; snapshot: SessionSnapshot }
   | { type: "snapshot_delta"; taskId: string; delta: SnapshotDelta }
   | { type: "partial"; taskId: string; message: NormalizedMessage }
-  | { type: "run_state"; taskId: string; runId?: string; startedAt?: number; operation?: "compaction"; state: TaskStatus }
+  | { type: "run_state"; taskId: string; runId?: string; startedAt?: number; operation?: "compaction"; workActivity?: WorkActivity; state: TaskStatus }
   | { type: "run_finished"; taskId: string; runId: string; outcome: "completed" | "stopped" | "failed" }
   | { type: "queue_state"; taskId: string; messages: QueuedMessage[] }
   | { type: "activity"; taskId: string; event: string; detail?: Record<string, unknown> }
@@ -1224,6 +1236,7 @@ export type WorkerEvent =
   | { type: "computer_state"; taskId: string; computer: ComputerState };
 
 export interface TaskRuntime {
+  workActivity?: WorkActivity;
   slashCommands?: SlashCommand[];
   slashCommandsLoading?: boolean;
   slashCommandsError?: string;

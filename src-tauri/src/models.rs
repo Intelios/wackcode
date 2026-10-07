@@ -622,6 +622,23 @@ pub struct SubagentWatchTarget {
     pub index: u32,
 }
 
+/// Mirrors the worker/renderer WorkActivity. Runtime only; never permissions from history.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkActivity {
+    pub parent: ParentActivity,
+    pub subagents: u32,
+    pub pending_results: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ParentActivity {
+    Running,
+    Waiting,
+    Idle,
+}
+
 /// One agent the `subagent` tool can launch. Built-in records are refreshed from the shipped
 /// definitions on every load (see `subagents.rs`); only `enabled` and `model` are the user's.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

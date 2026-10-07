@@ -110,6 +110,7 @@ const STATUS_WORDS: Record<SubagentResult["status"], string> = {
   done: "completed",
   failed: "failed",
   aborted: "stopped",
+  interrupted: "interrupted",
 };
 
 function describeFailure(result: SubagentResult): string {

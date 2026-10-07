@@ -17,7 +17,7 @@ How WackCode's processes fit together, where state lives, and the rules that kee
 | Model catalogue | `worker/src/catalog.ts` | Never | Never; static catalogue |
 | Subscription models, at launch | `worker/src/subscription-models.ts` | Reads the signed-in `auth.json` files Rust names | Never; static catalogue, no token refresh |
 
-Each chat worker runs one Pi session in-process. Sub-agents are in-memory child sessions inside the same worker (`subagent-runner.ts`), not separate processes. Helpers are short-lived and do one job each. The dev app runs them from `worker/dist/`; the bundle runs `resources/worker/dist/` on a pinned Node runtime (`runtime-lock.json`).
+Each chat worker runs one Pi session in-process. Sub-agents are in-memory child sessions inside the same worker (`subagent-runner.ts`), not separate processes. Helpers do one job each. A background child outlives its parent run, but remains owned by the chat worker: aggregate chat status stays busy until children and their result continuations finish. Stop and worker shutdown cancel all children; jobs never restart automatically. The dev app runs them from `worker/dist/`; the bundle runs `resources/worker/dist/` on a pinned Node runtime (`runtime-lock.json`).
 Resource selection follows Tauri's development mode, so a packaged debug build also uses
 the bundled runtime and scripts when opened from Finder.
 

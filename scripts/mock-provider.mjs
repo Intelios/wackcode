@@ -35,7 +35,23 @@ const server = createServer(async (request, response) => {
     return;
   }
   const hasToolResult = messages.at(-1)?.role === "tool";
-  if (!hasToolResult) {
+  const prompt = textOf(latestUser?.content);
+  const background = prompt.toLowerCase().includes("background fixture");
+  const child = prompt.startsWith("background-fixture-child");
+  if (child) {
+    response.write(": background child working\n\n");
+    if (prompt.includes("until stopped")) return;
+    await new Promise((resolve) => setTimeout(resolve, Number(process.env.WACKCODE_MOCK_DELAY_MS ?? 25_000)));
+    if (response.destroyed) return;
+  }
+  const subagent = body.tools?.find((tool) => tool.function?.name === "subagent");
+  const roles = subagent?.function.parameters.properties.agent.enum ?? [];
+  // Chat Completions tool replies have tool_call_id but may omit name. Match the actual
+  // assistant call so the fixture never repeats a launch after either success or rejection.
+  const backgroundLaunched = messages.slice(messages.lastIndexOf(latestUser) + 1).some((message) => message.role === "assistant" && message.tool_calls?.some((call) => call.function?.name === "subagent"));
+  const resultsArrived = prompt.includes("Job ");
+  const backgroundLaunch = background && subagent && !backgroundLaunched && !resultsArrived;
+  if (backgroundLaunch || (!background && !child && !resultsArrived && !hasToolResult && body.tools?.length)) {
     send(response, {
       id: "fixture-tool",
       object: "chat.completion.chunk",
@@ -47,11 +63,13 @@ const server = createServer(async (request, response) => {
           role: "assistant",
           tool_calls: [{
             index: 0,
-            id: "fixture-write",
+            id: `fixture-tool-${messages.length}`,
             type: "function",
             function: {
-              name: "write",
-              arguments: JSON.stringify({ path: "wackcode-live.txt", content: "Edited through WackCode and Pi.\n" })
+              name: backgroundLaunch ? "subagent" : "write",
+              arguments: JSON.stringify(backgroundLaunch
+                ? { agent: roles.includes("worker") ? "worker" : roles[0], task: `background-fixture-child${prompt.includes("until stopped") ? " until stopped" : ""}`, background: true }
+                : { path: "wackcode-live.txt", content: "Edited through WackCode and Pi.\n" })
             }
           }]
         },
@@ -72,7 +90,7 @@ const server = createServer(async (request, response) => {
       object: "chat.completion.chunk",
       created: 2,
       model: body.model,
-      choices: [{ index: 0, delta: { role: "assistant", content: "Created `wackcode-live.txt`." }, finish_reason: null }]
+      choices: [{ index: 0, delta: { role: "assistant", content: child ? "Background fixture child completed." : resultsArrived ? "The background child finished; its result has arrived." : background ? "I launched a background helper and finished my own work. You can send another message while it runs." : "Created `wackcode-live.txt`." }, finish_reason: null }]
     });
     send(response, {
       id: "fixture-done",
@@ -87,7 +105,7 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
-  process.stdout.write(`WackCode mock provider listening at http://127.0.0.1:${port}/v1\n`);
+  process.stdout.write(`WackCode mock provider listening at http://127.0.0.1:${server.address().port}/v1\n`);
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {

@@ -14,6 +14,7 @@ export function subagentDescription(agents: SubagentSpec[]): string {
     "Run a sub-agent: a separate agent with its own fresh context window that works in this same workspace and returns only its final answer.",
     `Single mode: pass agent and task. Parallel mode: pass tasks (up to ${MAX_PARALLEL_TASKS}) to run independent tasks at the same time.`,
     "All sub-agents, including those that edit files, run concurrently up to the configured limit in the same workspace.",
+    "By default this call waits for all children. Set background: true to return job IDs immediately and continue your own independent work. Completed background results arrive automatically; subagent_job can inspect, wait for or stop them.",
     `Available sub-agents:\n${roster}`,
   ].join("\n");
 }
@@ -29,6 +30,7 @@ export function subagentGuidelines(trigger: SubagentTrigger, readOnlyPlanning = 
     `${SUBAGENT_TOOL_NAME} children cannot see this conversation. Put every file path, requirement, constraint and piece of context they need into each task.`,
     `Use the tasks parameter of ${SUBAGENT_TOOL_NAME} for independent work that can run at the same time; assign distinct files to editing children. Run dependent tasks or edits to the same files sequentially, waiting for each result before starting the next.`,
     `${SUBAGENT_TOOL_NAME} returns each child's final answer. Check important claims before relying on them, and summarize the results for the user instead of pasting them.`,
+    `${SUBAGENT_TOOL_NAME}: choose blocking delegation when you need the answer immediately; choose background: true when you have independent work to do. Assign distinct files to yourself and editing children. Use subagent_job action wait when you need their results; never relaunch a job just to check it. You may answer while children work and continue when results arrive. Finish or stop children before submitting a plan or skill preview.`,
     readOnlyPlanning
       ? `In read-only Plan or Ultra Plan mode, ${SUBAGENT_TOOL_NAME} only runs read-only sub-agents.`
       : `${SUBAGENT_TOOL_NAME} follows each role's effective access shown above. During Plan or Ultra Plan, editing children may support planning but must not implement the finished plan before approval.`,

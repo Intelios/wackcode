@@ -107,13 +107,15 @@ Git mode works on a project's own folder. A chat that runs in a worktree keeps i
 
 ### Sub-agents
 
-Switch on sub-agents in **Settings › Packages** and the agent can hand self-contained tasks to helpers with their own context windows, one at a time or several in parallel (up to 8; 4 by default). WackCode ships three roles:
+Switch on sub-agents in **Settings › Packages** and the agent can hand self-contained tasks to helpers with their own context windows, one at a time or several in parallel (up to 8 unfinished helpers per chat; 4 running at once by default). WackCode ships three roles:
 
 - **Scout:** read-only reconnaissance by default, including reading docs on the web.
 - **Reviewer:** read-only code review by default, with tests and checks to verify the changes.
 - **Worker:** makes edits.
 
 You can add your own roles and give each one its own model. Each helper appears as a chip in the chat; click it to watch its reasoning, tool calls and answer live in the side panel, along with its token use and cost. Sub-agents are off by default and only used when you ask, because every one costs extra model usage.
+
+The main agent chooses whether to wait for helpers or keep working alongside them. It can inspect, wait for, or stop background helpers when needed. If it answers first, it continues as their results arrive; you can send another message while helpers work, and Stop cancels all of them.
 
 Auto chat titles live here too: switch on the `auto-titles` agent with a small, cheap model, and each new chat gets a proper title from its first message.
 
@@ -273,4 +275,4 @@ WackCode is built on [Pi](https://www.npmjs.com/package/@earendil-works/pi-codin
 
 - Plan mode and the question dialog, from [`@narumitw/pi-plan-mode`](https://www.npmjs.com/package/@narumitw/pi-plan-mode).
 - The todo list, from [`@juicesharp/rpiv-todo`](https://www.npmjs.com/package/@juicesharp/rpiv-todo).
-- The sub-agent roles, from Pi's `examples/extensions/subagent` (© Mario Zechner), with the foreground model of `pi-subagents`.
+- The sub-agent roles, from Pi's `examples/extensions/subagent` (© Mario Zechner), with the foreground model of `pi-subagents` and WackCode’s background job lifecycle.

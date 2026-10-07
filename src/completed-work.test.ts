@@ -14,6 +14,16 @@ const answer = assistant("a", [text("Finished")], { stopReason: "stop", turn: { 
 const progress = assistant("p", [text("Checking the tests"), call()], { stopReason: "toolUse" });
 const history = () => [user(), progress, result(), answer];
 
+it("keeps running background chips discoverable after the parent answers and preserves both answers after continuation", () => {
+  const launch = assistant("launch", [call("background", "subagent")]);
+  const running = result("background", { toolName: "subagent", details: { v: 1, background: true, results: [{ status: "running" }] } });
+  const initial = assistant("initial", [text("My work is ready; the helper is still working.")]);
+  expect(project([user(), launch, running, initial]).get(0)?.folded).toBeUndefined();
+  const completed = result("background", { toolName: "subagent", details: { v: 1, background: true, results: [{ status: "done" }] } });
+  const turn = project([user(), launch, completed, initial, answer]).get(0)!;
+  expect(turn.folded?.outcome.filter((row) => row.type === "message").map((row) => row.index)).toEqual([3, 4]);
+});
+
 function project(messages: NormalizedMessage[], extra: Partial<Parameters<typeof layoutWorkTurns>[1]> = {}) {
   const results = new Map<string, NormalizedBlock>();
   const callIds = new Set<string>();

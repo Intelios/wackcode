@@ -248,7 +248,7 @@ function renderBlock(
       const details = result
         ? parseSubagentDetails(result.details)
         : live ? parseSubagentDetails(liveDetails) ?? pendingSubagentDetails(block) : undefined;
-      if (details && block.toolCallId) return <SubagentGroup toolCallId={block.toolCallId} details={details} live={live && !result} />;
+      if (details && block.toolCallId) return <SubagentGroup toolCallId={block.toolCallId} details={details} live={Boolean(details.background) || (live && !result)} />;
     }
     if (block.toolName === SKILL_CREATOR_TOOL_NAME && result) {
       // A finished preview result is the review card; while it runs the plain tool row shows

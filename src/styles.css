@@ -2136,12 +2136,14 @@ button.compact.primary:hover:not(:disabled) { background: var(--wc-accent-hover)
 /* ── Modals ────────────────────────────────────────── */
 .modal-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: rgb(3 4 3 / 68%); backdrop-filter: blur(8px); }
 /* A screenshot at full size (ui/ImageLightbox.tsx). */
-.image-lightbox { cursor: zoom-out; }
-.image-lightbox-figure { position: relative; margin: 0; cursor: default; }
+.image-lightbox { cursor: zoom-out; overflow: hidden; }
+.image-lightbox-figure { position: relative; margin: 0; cursor: zoom-in; touch-action: none; user-select: none; }
+.image-lightbox-figure.zoomed { cursor: zoom-out; }
+.image-lightbox-figure.panning { cursor: grabbing; }
 .image-lightbox-figure img {
   display: block; max-width: min(92vw, 1600px); max-height: 86vh; border-radius: 10px;
   border: 1px solid var(--border-bright); box-shadow: 0 24px 70px rgb(0 0 0 / 45%); background: var(--wc-well);
-  transition: filter .35s var(--ease);
+  transition: filter .35s var(--ease); -webkit-user-drag: none;
 }
 .image-lightbox-figure img.preview { filter: blur(3px) saturate(.9); }
 .image-lightbox-close {

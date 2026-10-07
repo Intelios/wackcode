@@ -1134,6 +1134,13 @@ export interface UsageStatus {
   enabled: boolean; path: string; hasHistory: boolean; error: string | null; pending: number; dropped: number; lastWritten: number | null;
 }
 
+/** One pending message, identified by the worker; its full payload stays in the worker. */
+export interface QueuedMessage {
+  id: string;
+  /** May include the generated attached-files section. */
+  text: string;
+}
+
 export type WorkerEvent =
   | { type: "usage_record"; taskId: string; record: UsageRecord }
   /** A name change under the chat: "opening" is the first-run stand-in, "auto" the title model's. */
@@ -1143,7 +1150,7 @@ export type WorkerEvent =
   | { type: "partial"; taskId: string; message: NormalizedMessage }
   | { type: "run_state"; taskId: string; runId?: string; startedAt?: number; operation?: "compaction"; state: TaskStatus }
   | { type: "run_finished"; taskId: string; runId: string; outcome: "completed" | "stopped" | "failed" }
-  | { type: "queue_state"; taskId: string; steering: string[]; followUp: string[] }
+  | { type: "queue_state"; taskId: string; messages: QueuedMessage[] }
   | { type: "activity"; taskId: string; event: string; detail?: Record<string, unknown> }
   | { type: "worker_error"; taskId?: string; message: string }
   | { type: "browser_state"; taskId: string; browser: BrowserState; reveal: boolean }
@@ -1193,8 +1200,8 @@ export interface TaskRuntime {
   goalState?: GoalState;
   /** The transcript of the sub-agent shown in the side panel, while one is. */
   subagentView?: SubagentView;
-  /** Messages queued on the running prompt: steering delivers at the next boundary, followUp after the run. */
-  queued?: { steer: string[]; followUp: string[] };
+  /** Worker-owned messages waiting for the active work to finish; Steer selects one to send next. */
+  queued?: QueuedMessage[];
   /** The most recent file restore, offered for undo until dismissed. */
   lastRestore?: { count: number; undo: CheckpointRef };
   /** Computer use in this chat, while a run is using it. */

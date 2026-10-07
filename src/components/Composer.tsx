@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode, type SetStateAction } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { DEFAULT_EXECUTION_POLICY } from "../execution-policy";
+import { DEFAULT_AGENT_NAME } from "../agentName";
 import { ExecutionPolicyNotice } from "./ExecutionPolicyNotice";
-import type { ExecutionPolicyConfig, ImageContent, ProviderRecord, SessionSnapshot, SlashCommand, TaskMode, TaskStatus, ThinkingLevel } from "../types";
+import type { ExecutionPolicyConfig, ImageContent, ProviderRecord, QueuedMessage, SessionSnapshot, SlashCommand, TaskMode, TaskStatus, ThinkingLevel } from "../types";
 import { attachFiles, filesFrom, imageDataUrl, splitFileSection, type FileAttachment } from "../attachment-utils";
 import { activeMention, mentionValue, rankMentions, type MentionSuggestion } from "../mention-utils";
 import { activeSlashCommand } from "../command-utils";
@@ -54,10 +55,9 @@ interface ComposerProps extends ModelFavoritesProps {
   onModeChange?: (mode: TaskMode) => void;
   onConfigure: (patch: { providerId?: string; modelId?: string; thinkingLevel?: ThinkingLevel }) => void;
   /** Resolves false when the send failed; the composer then restores the draft and attachments.
-   *  Attached text files travel as `files` and join the message text at the wire; `queue` is set
-   *  while a run is in progress: "steer" redirects it at the next boundary, "follow_up" queues
-   *  for after it. */
-  onSend: (message: string, images: ImageContent[], files: FileAttachment[], queue?: "steer" | "follow_up") => Promise<boolean>;
+   * Attached text files travel as `files` and join the message text at the wire; `queue` is true
+   * while running so the message waits for the active work to finish. */
+  onSend: (message: string, images: ImageContent[], files: FileAttachment[], queue?: boolean) => Promise<boolean>;
   commands?: SlashCommand[];
   commandsReady?: boolean;
   commandsLoading?: boolean;
@@ -73,8 +73,10 @@ interface ComposerProps extends ModelFavoritesProps {
   /** Called whenever a new `@` token opens, so the list is fresh. Omit to turn mentions off. */
   onRequestMentions?: () => void;
   /** Messages queued on the running prompt, shown between the transcript and the draft. */
-  queuedMessages?: { steer: string[]; followUp: string[] };
-  /** Takes the queued messages back out of Pi; resolves with their texts for the draft. */
+  queuedMessages?: QueuedMessage[];
+  /** Interrupts active work and sends this worker-owned entry next. App reports failures. */
+  onSteer?: (messageId: string) => Promise<boolean>;
+  /** Takes all queued messages back out of the worker; resolves with their texts for the draft. */
   onDequeue?: () => Promise<string[] | undefined>;
   onStop: () => void;
   onOpenSettings: () => void;
@@ -87,11 +89,11 @@ interface ComposerProps extends ModelFavoritesProps {
   comet?: boolean;
   /** Shows this text read-only instead of the draft while the hero composer hands off to the docked one. */
   frozen?: string;
-  /** The persona name in the built-in placeholder and busy copy; absent keeps the historical "Pi". */
+  /** The configured persona name in the built-in placeholder and busy copy. */
   agentName?: string;
 }
 
-export function Composer({ draftState, status, providerId, modelId, thinkingLevel, providers, favoriteModels, favoriteSaving, onSetFavorite, stats, header, placeholder, popoverSide = "top", mode, executionPolicy = DEFAULT_EXECUTION_POLICY, appliedExecutionPolicy, onModeChange, onConfigure, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, mentionFiles, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, queuedMessages, onDequeue, onStop, onOpenSettings, disabled, seed, comet, frozen, agentName = "Pi" }: ComposerProps) {
+export function Composer({ draftState, status, providerId, modelId, thinkingLevel, providers, favoriteModels, favoriteSaving, onSetFavorite, stats, header, placeholder, popoverSide = "top", mode, executionPolicy = DEFAULT_EXECUTION_POLICY, appliedExecutionPolicy, onModeChange, onConfigure, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, mentionFiles, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, queuedMessages, onSteer, onDequeue, onStop, onOpenSettings, disabled, seed, comet, frozen, agentName = DEFAULT_AGENT_NAME }: ComposerProps) {
   const [localDraft, setLocalDraft] = useState<ComposerDraft>(EMPTY_DRAFT);
   const value = draftState?.value ?? localDraft;
   const updateDraft = draftState?.update ?? setLocalDraft;
@@ -122,6 +124,11 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
   const wrapRef = useRef<HTMLDivElement>(null);
   const seedNonces = useRef(new Map<string, number>());
   const fileRef = useRef<HTMLInputElement>(null);
+  // Queue actions are single-flight per chat, including when selection leaves and returns.
+  // The ref guards same-tick repeats; state disables controls without changing worker-owned rows.
+  const queueActionLocks = useRef(new Set<string>());
+  const [pendingQueueKeys, setPendingQueueKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const queuePending = pendingQueueKeys.has(draftKey);
   const busy = status === "running" || status === "stopping";
   const model = providers.find((provider) => provider.id === providerId)?.models.find((item) => item.id === modelId);
   const vision = model?.vision === true;
@@ -230,11 +237,11 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
     return files.length > 0 && message.startsWith("/");
   }
 
-  /** Queue the draft on the running prompt. Enter steers (delivered at the run's next
-   *  boundary); ⌥Enter and "Send as message" queue it for after the run, raw or expanded. */
-  async function queueDraft(behavior: "steer" | "follow_up", literal = false) {
+  /** Every running send queues for after the active work, raw or command-expanded.
+   * Steer is a separate action on a stable queued-message id. */
+  async function queueDraft(literal = false) {
     const message = draft.trim();
-    if (!message || status !== "running" || blockedByModel) return;
+    if (!message || status !== "running" || disabled || frozen !== undefined || providers.length === 0 || blockedByModel) return;
     if (!literal && filesVsCommand(message)) {
       setSlashNotice("Remove attached files before running this command.");
       setSlashDismissedAt(slash?.start);
@@ -244,7 +251,7 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
     const keptFiles = files;
     updateDraft(EMPTY_DRAFT);
     setAttachNotice(undefined);
-    const ok = literal && onLiteral ? await onLiteral(message, images, keptFiles) : await onSend(message, images, keptFiles, behavior);
+    const ok = literal && onLiteral ? await onLiteral(message, images, keptFiles) : await onSend(message, images, keptFiles, true);
     if (!ok) {
       updateDraft((current) => ({
         text: current.text ? `${message}\n\n${current.text}` : message,
@@ -255,7 +262,7 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
   }
 
   async function send() {
-    if (frozen !== undefined) return;
+    if (frozen !== undefined || disabled || providers.length === 0 || status === "stopping") return;
     const message = draft.trim();
     if (!message || blockedByModel) return;
     if (filesVsCommand(message)) {
@@ -287,7 +294,7 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
         setSlashDismissedAt(slash?.start);
         return;
       }
-      await queueDraft("steer");
+      await queueDraft();
       return;
     }
     const images = attachments;
@@ -361,8 +368,8 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
   }
 
   async function sendLiteral() {
-    if (!onLiteral) return;
-    if (busy) return void queueDraft("steer", true);
+    if (!onLiteral || disabled || frozen !== undefined || providers.length === 0 || status === "stopping" || !draft.trim() || blockedByModel) return;
+    if (busy) return void queueDraft(true);
     const ok = await onLiteral(draft.trim(), attachments, files);
     if (ok) {
       updateDraft((current) => current === value ? EMPTY_DRAFT : current);
@@ -391,27 +398,49 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
     setAttachNotice(undefined);
   }
 
-  /** Take the queued messages back out of Pi and into the draft, keeping anything typed since.
-   *  Their attached files come back out of the generated section and into the tray. */
+  async function changeQueue(action: () => Promise<void>) {
+    if (disabled || frozen !== undefined || status === "stopping" || queueActionLocks.current.has(draftKey)) return;
+    queueActionLocks.current.add(draftKey);
+    setPendingQueueKeys(new Set(queueActionLocks.current));
+    try {
+      await action();
+    } catch (reason) {
+      // App normally reports failures through its runtime and resolves false/undefined.
+      // A rejected callback still leaves the queue and draft intact and releases the controls.
+      if (activeDraftKey.current === draftKey) setAttachNotice(String(reason));
+    } finally {
+      queueActionLocks.current.delete(draftKey);
+      setPendingQueueKeys(new Set(queueActionLocks.current));
+    }
+  }
+
+  async function steerQueued(messageId: string) {
+    if (!onSteer || status !== "running") return;
+    await changeQueue(async () => { await onSteer(messageId); });
+  }
+
+  /** Restore all queued texts to their originating draft, keeping newer typing and files.
+   * Queue-state events remove the rows; the generated file sections return to the tray. */
   async function restoreQueued() {
-    const texts = await onDequeue?.();
-    if (!texts || texts.length === 0) return;
-    if (activeDraftKey.current === draftKey) setSlashNotice(undefined);
-    const parts = texts.map((text) => splitFileSection(text));
-    const restoredFiles = parts.flatMap((part) => part.files);
-    if (restoredFiles.length > 0) setFiles((current) => [...current, ...restoredFiles]);
-    const restored = parts.map((part) => part.text).filter(Boolean).join("\n\n");
-    if (restored) setDraft((current) => (current.trim() ? `${current}\n\n${restored}` : restored));
-    requestAnimationFrame(() => { if (activeDraftKey.current === draftKey) areaRef.current?.focus(); });
+    if (!onDequeue) return;
+    await changeQueue(async () => {
+      const texts = await onDequeue();
+      if (!texts || texts.length === 0) return;
+      if (activeDraftKey.current === draftKey) setSlashNotice(undefined);
+      const parts = texts.map((text) => splitFileSection(text));
+      const restoredFiles = parts.flatMap((part) => part.files);
+      if (restoredFiles.length > 0) setFiles((current) => [...current, ...restoredFiles]);
+      const restored = parts.map((part) => part.text).filter(Boolean).join("\n\n");
+      if (restored) setDraft((current) => (current.trim() ? `${current}\n\n${restored}` : restored));
+      requestAnimationFrame(() => { if (activeDraftKey.current === draftKey) areaRef.current?.focus(); });
+    });
   }
 
   const acceptsDrop = (event: DragEvent) => !disabled && providers.length > 0 && event.dataTransfer.types.includes("Files");
 
-  // The queued chip shows the words, not the generated section their files travel in.
-  const queuedEntries = [
-    ...(queuedMessages?.steer ?? []).map((text) => ({ kind: "steer" as const, text: splitFileSection(text).text })),
-    ...(queuedMessages?.followUp ?? []).map((text) => ({ kind: "followUp" as const, text: splitFileSection(text).text }))
-  ];
+  // Show the words, not generated file sections. Never reconstruct a steered payload from them.
+  const queuedEntries = (queuedMessages ?? []).map((entry) => ({ ...entry, text: splitFileSection(entry.text).text }));
+  const queueActionsDisabled = disabled || frozen !== undefined || status === "stopping" || queuePending;
 
   return (
     <div
@@ -462,13 +491,20 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
         </div>}
         {queuedEntries.length > 0 && (
           <div className="composer-queue" role="list" aria-label="Queued messages">
-            {queuedEntries.map((entry, index) => (
-              <div className="queued-message" role="listitem" key={`${entry.kind}-${index}`}>
-                <span className={`queued-tag ${entry.kind}`}>{entry.kind === "steer" ? "Steering" : "Queued"}</span>
+            {queuedEntries.map((entry) => (
+              <div className="queued-message" role="listitem" key={entry.id}>
+                <span className="queued-tag">Queued</span>
                 <span className="queued-text">{entry.text}</span>
-                <button type="button" className="queued-remove" aria-label="Restore queued messages to the composer" onClick={() => void restoreQueued()}>
-                  <Icon name="close" />
-                </button>
+                <Tooltip label={`Interrupt ${agentName} and send this next. Keep other messages queued.`}>
+                  <button type="button" className="secondary-button compact queued-steer" disabled={queueActionsDisabled || status !== "running" || !onSteer} onClick={() => void steerQueued(entry.id)}>
+                    Steer
+                  </button>
+                </Tooltip>
+                <Tooltip label="Restore all queued messages to the composer">
+                  <button type="button" className="queued-remove" aria-label="Restore queued messages to the composer" disabled={queueActionsDisabled || !onDequeue} onClick={() => void restoreQueued()}>
+                    <Icon name="close" />
+                  </button>
+                </Tooltip>
               </div>
             ))}
           </div>
@@ -499,7 +535,7 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
         {(attachNotice || blockedByModel) && (
           <div className="attachment-notice" role="status">{blockedByModel ? `${noVisionMessage} Or remove the images to send.` : attachNotice}</div>
         )}
-        {slashNotice && <div className="attachment-notice" role="status">{slashNotice} <button type="button" onClick={() => void sendLiteral()}>Send as message</button></div>}
+        {slashNotice && <div className="attachment-notice" role="status">{slashNotice} <button type="button" disabled={disabled || frozen !== undefined || status === "stopping" || blockedByModel || !onLiteral} onClick={() => void sendLiteral()}>Send as message</button></div>}
         <AnimatePresence initial={false}>
           {argNote && (
             <motion.div
@@ -563,11 +599,10 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
               }
               if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
-                if (event.altKey) { void queueDraft("follow_up"); return; }
                 void send();
               }
             }}
-            placeholder={placeholder ?? (providers.length === 0 ? "Connect a provider to start…" : busy ? `${agentName} is working — ⏎ steers the run, ⌥⏎ queues for after…` : mode === "plan" ? `Describe the work — in Plan mode ${agentName} inspects and proposes a plan for your approval…` : mode === "ultraplan" ? `Describe the work — in Ultra Plan ${agentName} interviews you one question at a time…` : `Ask ${agentName} to inspect, change, or run something…`)}
+            placeholder={placeholder ?? (providers.length === 0 ? "Connect a provider to start…" : status === "stopping" ? `${agentName} is stopping — keep your next message here…` : busy ? `${agentName} is working — ⏎ queues for after…` : mode === "plan" ? `Describe the work — in Plan mode ${agentName} inspects and proposes a plan for your approval…` : mode === "ultraplan" ? `Describe the work — in Ultra Plan ${agentName} interviews you one question at a time…` : `Ask ${agentName} to inspect, change, or run something…`)}
             disabled={disabled || providers.length === 0}
           />
         </div>
@@ -631,19 +666,19 @@ export function Composer({ draftState, status, providerId, modelId, thinkingLeve
             )}
           </div>
           <div className="composer-right">
-            {busy ? (
+            {busy && (
               <Tooltip label={status === "stopping" ? "Stopping…" : "Stop"}>
-                <button type="button" className="send-button stop" onClick={onStop} disabled={status === "stopping"} aria-label="Stop">
+                <button type="button" className="send-button stop" onClick={onStop} disabled={disabled || frozen !== undefined || status === "stopping"} aria-label="Stop">
                   <Icon name="stop" />
                 </button>
               </Tooltip>
-            ) : (
-              <Tooltip label="Send (⏎)">
-                <button type="button" className="send-button" onClick={() => void send()} disabled={!draft.trim() || blockedByModel} aria-label="Send message">
-                  <Icon name="send" />
-                </button>
-              </Tooltip>
             )}
+            <Tooltip label={status === "stopping" ? `Wait for ${agentName} to stop` : busy ? `Queue for after ${agentName} finishes (⏎)` : "Send (⏎)"}>
+              <button type="button" className={`send-button${busy ? " queue" : ""}`} onClick={() => void send()} disabled={disabled || frozen !== undefined || providers.length === 0 || status === "stopping" || !draft.trim() || blockedByModel} aria-label={busy ? "Queue message" : "Send message"}>
+                <Icon name="send" />
+                {busy && <span>Queue</span>}
+              </button>
+            </Tooltip>
           </div>
         </div>
       </motion.div>

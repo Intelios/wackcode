@@ -234,20 +234,19 @@ export const api = {
     images?: ImageContent[];
     literal?: boolean;
   }) => invoke<string>("prompt", { input }),
-  /**
-   * Queue a message on a chat's running prompt: "steer" delivers at the run's next boundary,
-   * "follow_up" waits for the run to finish. The worker runs it as a fresh prompt if the run
-   * has already settled.
-   */
+  /** Queue a message for after the active work; if it has settled, start a fresh prompt. */
   queueMessage: (input: {
     taskId: string;
-    behavior: "steer" | "follow_up";
     message: string;
     images?: ImageContent[];
     /** Sent raw, without command, skill or template expansion. */
     literal?: boolean;
   }) => invoke<void>("queue_message", { input }),
-  /** Take the queued messages back out of Pi's pending lists, for the composer. */
+  /** Interrupt active work and send this queued message next, keeping the rest queued.
+   * An already-delivered id is a successful no-op. The worker retains the full payload. */
+  steerMessage: (input: { taskId: string; messageId: string; startedAt: number }) =>
+    invoke<void>("steer_message", { input }),
+  /** Take the queued messages back out of the worker's pending lists, for the composer. */
   dequeueMessages: (taskId: string) => invoke<{ steering: string[]; followUp: string[] }>("dequeue_messages", { taskId }),
   /** Send a message again as a new version: unchanged (retry) or with new text (edit). */
   resendMessage: (input: {

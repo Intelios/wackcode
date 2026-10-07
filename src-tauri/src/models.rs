@@ -999,13 +999,12 @@ pub struct PromptInput {
     pub literal: bool,
 }
 
-/// Queue a message on a chat's running prompt: "steer" delivers it at the run's next boundary,
-/// "follow_up" holds it until the run finishes.
+/// Queue a message after the chat's active work. The worker retains its full payload until
+/// delivery, explicit steering by id, or restoration to the composer.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueMessageInput {
     pub task_id: String,
-    pub behavior: String,
     pub message: String,
     /// Images attached to this message, forwarded verbatim to the worker.
     #[serde(default)]
@@ -1015,7 +1014,17 @@ pub struct QueueMessageInput {
     pub literal: bool,
 }
 
-/// The texts Pi's pending-message queues held when they were cleared, for the composer to take back.
+/// Promote one queued message by id, interrupting active work without resending its payload.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SteerMessageInput {
+    pub task_id: String,
+    pub message_id: String,
+    #[serde(default)]
+    pub started_at: Option<u64>,
+}
+
+/// The cleared worker queue texts, including Pi's pending lists, for the composer to take back.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueuedMessages {

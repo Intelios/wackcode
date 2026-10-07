@@ -1,6 +1,6 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ImageContent, ProviderRecord } from "../types";
+import type { ImageContent, ProviderRecord, QueuedMessage } from "../types";
 import { composeFileSection, type FileAttachment } from "../attachment-utils";
 import { Composer } from "./Composer";
 import { useComposerDrafts } from "../hooks/useComposerDrafts";
@@ -437,61 +437,155 @@ describe("Composer slash commands", () => {
 });
 
 describe("Composer queueing while the agent is working", () => {
+  const queuedMessages: QueuedMessage[] = [
+    { id: "worker:first", text: "Try the other approach" },
+    // Same words, different payload and stable id: dispatch must never use text or position.
+    { id: "worker:selected", text: composeFileSection("Try the other approach", [{ name: "queued.txt", text: "Keep this payload" }]) },
+    { id: "worker:last", text: "Then run the tests" }
+  ];
+
   function setup(extra: Partial<React.ComponentProps<typeof Composer>> = {}) {
-    const onSend = vi.fn().mockResolvedValue(true);
-    render(<Composer {...noFavorites} status="running" providers={providers} providerId="p" modelId="sees" thinkingLevel="off"
-      onConfigure={vi.fn()} onSend={onSend} onStop={vi.fn()} onOpenSettings={vi.fn()} {...extra} />);
-    return { onSend, area: screen.getByRole("textbox") };
+    const props = {
+      status: "running" as const, providers, providerId: "p", modelId: "sees", thinkingLevel: "off" as const,
+      onConfigure: vi.fn(), onSend: vi.fn().mockResolvedValue(true), onStop: vi.fn(), onOpenSettings: vi.fn(),
+      ...extra
+    };
+    const view = render(<Composer {...noFavorites} {...props} />);
+    return { ...view, onSend: props.onSend, area: screen.getByRole("textbox"),
+      rerenderWith: (next: Partial<React.ComponentProps<typeof Composer>>) => view.rerender(<Composer {...noFavorites} {...props} {...next} />) };
   }
 
-  it("steers with Enter instead of refusing to send", async () => {
+  it("queues for after the active work with Enter", async () => {
     const { onSend, area } = setup();
     fireEvent.change(area, { target: { value: "Try the other approach" } });
     fireEvent.keyDown(area, { key: "Enter" });
-    await waitFor(() => expect(onSend).toHaveBeenCalledWith("Try the other approach", [], [], "steer"));
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("Try the other approach", [], [], true));
     expect(area).toHaveValue("");
   });
 
-  it("queues a follow-up on ⌥Enter for after the run", async () => {
-    const { onSend, area } = setup();
+  it.each(["running", "idle"] as const)("uses ⌥Enter as ordinary send while %s", async (status) => {
+    const { onSend, area } = setup({ status });
     fireEvent.change(area, { target: { value: "Then run the tests" } });
     fireEvent.keyDown(area, { key: "Enter", altKey: true });
-    await waitFor(() => expect(onSend).toHaveBeenCalledWith("Then run the tests", [], [], "follow_up"));
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("Then run the tests", [], [], ...(status === "running" ? [true] : [])));
+    expect(area).toHaveValue("");
   });
 
-  it("keeps the draft while the run is stopping", () => {
-    const { onSend, area } = setup({ status: "stopping" });
+  it("shows a mouse-accessible Queue button beside Stop while running", async () => {
+    const { onSend, area } = setup();
+    const queue = screen.getByRole("button", { name: "Queue message" });
+    expect(queue).toHaveTextContent("Queue");
+    expect(queue).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
+    fireEvent.change(area, { target: { value: "Run the tests next" } });
+    expect(queue).toBeEnabled();
+    fireEvent.click(queue);
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("Run the tests next", [], [], true));
+    expect(area).toHaveValue("");
+  });
+
+  it("leaves ⇧Enter to insert a newline instead of queueing", () => {
+    const { onSend, area } = setup();
+    fireEvent.change(area, { target: { value: "First line" } });
+    expect(fireEvent.keyDown(area, { key: "Enter", shiftKey: true })).toBe(true);
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("keeps the draft and disables send, steer and recovery while stopping", () => {
+    const onSteer = vi.fn().mockResolvedValue(true);
+    const onDequeue = vi.fn().mockResolvedValue(["Try the other approach"]);
+    const { onSend, area } = setup({ status: "stopping", queuedMessages, onSteer, onDequeue });
     fireEvent.change(area, { target: { value: "Hold this" } });
     fireEvent.keyDown(area, { key: "Enter" });
+    fireEvent.keyDown(area, { key: "Enter", altKey: true });
+    expect(screen.getByRole("button", { name: "Stop" })).toBeDisabled();
+    const queue = screen.getByRole("button", { name: "Queue message" });
+    expect(queue).toBeDisabled();
+    fireEvent.click(queue);
+    for (const button of screen.getAllByRole("button", { name: /^(Steer|Restore queued messages to the composer)$/ })) {
+      expect(button).toBeDisabled();
+      fireEvent.click(button);
+    }
     expect(onSend).not.toHaveBeenCalled();
+    expect(onSteer).not.toHaveBeenCalled();
+    expect(onDequeue).not.toHaveBeenCalled();
     expect(area).toHaveValue("Hold this");
   });
 
-  it("restores the draft when the queue request fails", async () => {
+  it("restores text, images and files when the queue request fails", async () => {
     const onSend = vi.fn().mockResolvedValue(false);
     const { area } = setup({ onSend });
+    attach(png(), txt("notes.txt", "Keep this"));
+    await screen.findByText("notes.txt");
     fireEvent.change(area, { target: { value: "Try again later" } });
-    fireEvent.keyDown(area, { key: "Enter" });
-    await waitFor(() => expect(onSend).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "Queue message" }));
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("Try again later", [{ type: "image", mimeType: "image/png", data: "iVBORw==" }], [{ name: "notes.txt", text: "Keep this" }], true));
     expect(area).toHaveValue("Try again later");
+    expect(await screen.findByAltText("Attached image 1")).toBeInTheDocument();
+    expect(screen.getByText("notes.txt")).toBeInTheDocument();
   });
 
-  it("queues app commands as refused but unknown slash text as a message", async () => {
+  it.each([false, true])("refuses app commands but queues unknown slash text (⌥ held: %s)", async (altKey) => {
     const compact = { id: "app:compact", name: "compact", description: "Summarize", source: "app" as const, sourceLabel: "WackCode" };
     const { onSend, area } = setup({ commands: [compact] });
-    // Escape closes the command picker, so Enter queues instead of completing the command.
+    // Escape closes the command picker, so Enter sends instead of completing the command.
     fireEvent.change(area, { target: { value: "/compact" } });
     fireEvent.keyDown(area, { key: "Escape" });
-    fireEvent.keyDown(area, { key: "Enter" });
-    expect(await screen.findByRole("status")).toHaveTextContent("Wait for Pi to finish before running /compact.");
+    fireEvent.keyDown(area, { key: "Enter", altKey });
+    expect(await screen.findByRole("status")).toHaveTextContent("Wait for WackCode to finish before running /compact.");
     expect(onSend).not.toHaveBeenCalled();
 
     fireEvent.change(area, { target: { value: "/not-a-command" } });
-    fireEvent.keyDown(area, { key: "Enter" });
-    await waitFor(() => expect(onSend).toHaveBeenCalledWith("/not-a-command", [], [], "steer"));
+    fireEvent.keyDown(area, { key: "Enter", altKey });
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("/not-a-command", [], [], true));
   });
 
-  it("lets /goal pause reach a live run but holds a bare /goal back", async () => {
+  it.each(["skill", "prompt", "custom"] as const)("queues a %s command for expansion rather than dispatching it immediately", async (source) => {
+    const command = { id: `${source}:review`, name: "review", source, sourceLabel: "Fixture" };
+    const onCommand = vi.fn().mockResolvedValue(true);
+    const { onSend, area } = setup({ commands: [command], onCommand });
+    fireEvent.change(area, { target: { value: "/review the changes" } });
+    fireEvent.click(screen.getByRole("button", { name: "Queue message" }));
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("/review the changes", [], [], true));
+    expect(onCommand).not.toHaveBeenCalled();
+  });
+
+  it("holds command files back but queues a literal send with its files and images", async () => {
+    const onLiteral = vi.fn().mockResolvedValue(true);
+    const { onSend, area } = setup({ onLiteral });
+    attach(png(), txt("notes.txt", "Keep this"));
+    await screen.findByText("notes.txt");
+    fireEvent.change(area, { target: { value: "/unknown raw" } });
+    fireEvent.click(screen.getByRole("button", { name: "Queue message" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Remove attached files before running this command.");
+    expect(onSend).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Send as message" }));
+    await waitFor(() => expect(onLiteral).toHaveBeenCalledWith("/unknown raw", [{ type: "image", mimeType: "image/png", data: "iVBORw==" }], [{ name: "notes.txt", text: "Keep this" }]));
+    expect(area).toHaveValue("");
+    expect(screen.queryByText("notes.txt")).not.toBeInTheDocument();
+    expect(screen.queryByAltText("Attached image 1")).not.toBeInTheDocument();
+  });
+
+  it("does not dispatch literal sends or live app commands once stopping", () => {
+    const goal = { id: "app:goal", name: "goal", source: "app" as const, sourceLabel: "WackCode" };
+    const onCommand = vi.fn().mockResolvedValue(true);
+    const onLiteral = vi.fn().mockResolvedValue(true);
+    const { onSend, area, rerenderWith } = setup({ commands: [goal], onCommand, onLiteral });
+    fireEvent.change(area, { target: { value: "/goal ship it" } });
+    fireEvent.click(screen.getByRole("button", { name: "Queue message" }));
+    rerenderWith({ status: "stopping" });
+    const literal = screen.getByRole("button", { name: "Send as message" });
+    expect(literal).toBeDisabled();
+    fireEvent.click(literal);
+    fireEvent.change(area, { target: { value: "/goal pause" } });
+    fireEvent.keyDown(area, { key: "Enter" });
+    fireEvent.keyDown(area, { key: "Enter", altKey: true });
+    expect(onSend).not.toHaveBeenCalled();
+    expect(onLiteral).not.toHaveBeenCalled();
+    expect(onCommand).not.toHaveBeenCalled();
+  });
+
+  it("lets /goal pause reach a live run but holds a new /goal back", async () => {
     const goal = { id: "app:goal", name: "goal", description: "Iterate", source: "app" as const, sourceLabel: "WackCode" };
     const onCommand = vi.fn().mockResolvedValue(true);
     const { onSend, area } = setup({ commands: [goal], onCommand });
@@ -502,10 +596,9 @@ describe("Composer queueing while the agent is working", () => {
     expect(area).toHaveValue("");
     expect(onSend).not.toHaveBeenCalled();
 
-    // A new goal can't start mid-run — it is refused like every other app command.
     fireEvent.change(area, { target: { value: "/goal ship it" } });
     fireEvent.keyDown(area, { key: "Enter" });
-    expect(await screen.findByRole("status")).toHaveTextContent("Wait for Pi to finish before running /goal.");
+    expect(await screen.findByRole("status")).toHaveTextContent("Wait for WackCode to finish before running /goal.");
     expect(onSend).not.toHaveBeenCalled();
     expect(onCommand).toHaveBeenCalledTimes(1);
   });
@@ -513,38 +606,125 @@ describe("Composer queueing while the agent is working", () => {
   it("speaks the chosen agent name in the busy notice and placeholders", async () => {
     const compact = { id: "app:compact", name: "compact", description: "Summarize", source: "app" as const, sourceLabel: "WackCode" };
     const { area } = setup({ commands: [compact], agentName: "Nova" });
-    expect(area).toHaveAttribute("placeholder", "Nova is working — ⏎ steers the run, ⌥⏎ queues for after…");
+    expect(area).toHaveAttribute("placeholder", "Nova is working — ⏎ queues for after…");
     fireEvent.change(area, { target: { value: "/compact" } });
     fireEvent.keyDown(area, { key: "Escape" });
     fireEvent.keyDown(area, { key: "Enter" });
     expect(await screen.findByRole("status")).toHaveTextContent("Wait for Nova to finish before running /compact.");
   });
 
-  it("lists queued messages and restores them into the draft", async () => {
-    const onDequeue = vi.fn().mockResolvedValue(["Steered note", "Later note"]);
-    const { area } = setup({
-      queuedMessages: { steer: ["Steered note"], followUp: ["Later note"] },
-      onDequeue
-    });
+  it("dispatches the selected stable id, leaving the queue and draft authoritative", async () => {
+    const onSteer = vi.fn().mockResolvedValue(true);
+    const onDequeue = vi.fn();
+    const { onSend, area, rerenderWith } = setup({ queuedMessages, onSteer, onDequeue });
+    fireEvent.change(area, { target: { value: "Unsent draft" } });
+    attach(txt("draft.txt", "Still in the draft"));
+    await screen.findByText("draft.txt");
     const list = screen.getByRole("list", { name: "Queued messages" });
-    expect(list).toHaveTextContent("Steered note");
+    const rows = within(list).getAllByRole("listitem");
+    expect(rows).toHaveLength(3);
+    expect(within(list).getAllByRole("button", { name: "Steer" })).toHaveLength(3);
+    fireEvent.click(within(rows[1]).getByRole("button", { name: "Steer" }));
+    await waitFor(() => expect(onSteer).toHaveBeenCalledWith("worker:selected"));
+    expect(onSteer).toHaveBeenCalledTimes(1);
+    expect(onSend).not.toHaveBeenCalled();
+    expect(onDequeue).not.toHaveBeenCalled();
+    expect(within(list).getAllByRole("listitem")).toHaveLength(3);
+    expect(area).toHaveValue("Unsent draft");
+    expect(screen.getByText("draft.txt")).toBeInTheDocument();
+    expect(list).not.toHaveTextContent("attached-files");
+
+    // Only a worker queue_state changing the props removes the selected row.
+    rerenderWith({ queuedMessages: [queuedMessages[0], queuedMessages[2]] });
+    expect(within(list).getAllByRole("listitem")).toEqual([rows[0], rows[2]]);
+    expect(rows[0]).toHaveTextContent("Try the other approach");
+    expect(rows[2]).toHaveTextContent("Then run the tests");
+  });
+
+  it("keeps Steer visible and keyboard-focusable with an informative persona-aware tooltip", async () => {
+    const onSteer = vi.fn().mockResolvedValue(true);
+    setup({ queuedMessages: [queuedMessages[0]], onSteer, agentName: "Nova" });
+    const steer = screen.getByRole("button", { name: "Steer" });
+    expect(steer).toBeVisible();
+    expect(steer).toHaveAttribute("type", "button");
+    act(() => steer.focus());
+    expect(steer).toHaveFocus();
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Interrupt Nova and send this next. Keep other messages queued.");
+    fireEvent.click(steer); // A native button also activates on Enter/Space when focused.
+    await waitFor(() => expect(onSteer).toHaveBeenCalledWith("worker:first"));
+  });
+
+  it("disables duplicate steering and recovery until the steer request settles", async () => {
+    const pending = deferred<boolean>();
+    const onSteer = vi.fn().mockReturnValue(pending.promise);
+    const onDequeue = vi.fn();
+    setup({ queuedMessages, onSteer, onDequeue });
+    const steers = screen.getAllByRole("button", { name: "Steer" });
+    const restores = screen.getAllByRole("button", { name: "Restore queued messages to the composer" });
+    fireEvent.click(steers[1]);
+    for (const button of [...steers, ...restores]) {
+      expect(button).toBeDisabled();
+      fireEvent.click(button);
+    }
+    expect(onSteer).toHaveBeenCalledTimes(1);
+    expect(onDequeue).not.toHaveBeenCalled();
+    expect(screen.getAllByRole("listitem")).toHaveLength(3);
+    await act(async () => pending.resolve(true));
+    for (const button of [...steers, ...restores]) expect(button).toBeEnabled();
+    expect(screen.getAllByRole("listitem")).toHaveLength(3);
+  });
+
+  it("keeps all queued messages and newer typing when steering fails, and permits retry", async () => {
+    const pending = deferred<boolean>();
+    const onSteer = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(true);
+    const { area } = setup({ queuedMessages, onSteer });
+    fireEvent.click(screen.getAllByRole("button", { name: "Steer" })[1]);
+    fireEvent.change(area, { target: { value: "Newer draft" } });
+    await act(async () => pending.resolve(false));
+    expect(screen.getAllByRole("listitem")).toHaveLength(3);
+    expect(area).toHaveValue("Newer draft");
+    const steer = screen.getAllByRole("button", { name: "Steer" })[1];
+    expect(steer).toBeEnabled();
+    fireEvent.click(steer);
+    await waitFor(() => expect(onSteer).toHaveBeenCalledTimes(2));
+    expect(onSteer).toHaveBeenLastCalledWith("worker:selected");
+  });
+
+  it("releases the controls without losing queue or draft when a steering callback rejects", async () => {
+    const onSteer = vi.fn().mockRejectedValue(new Error("Could not steer. Try again."));
+    const { area } = setup({ queuedMessages, onSteer });
+    fireEvent.change(area, { target: { value: "Keep my draft" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Steer" })[0]);
+    expect(await screen.findByRole("status")).toHaveTextContent("Could not steer. Try again.");
+    expect(screen.getAllByRole("listitem")).toHaveLength(3);
+    expect(screen.getAllByRole("button", { name: "Steer" })[0]).toBeEnabled();
+    expect(area).toHaveValue("Keep my draft");
+  });
+
+  it("lists queued messages and restores them all into the draft", async () => {
+    const onDequeue = vi.fn().mockResolvedValue(["First note", "Later note"]);
+    const { area } = setup({
+      queuedMessages: [{ id: "first", text: "First note" }, { id: "later", text: "Later note" }], onDequeue
+    });
+    fireEvent.change(area, { target: { value: "Existing draft" } });
+    const list = screen.getByRole("list", { name: "Queued messages" });
+    expect(list).toHaveTextContent("First note");
     expect(list).toHaveTextContent("Later note");
-    expect(screen.getAllByRole("listitem")[0]).toHaveTextContent("Steering");
+    expect(within(list).getAllByRole("listitem")[0]).toHaveTextContent("Queued");
     fireEvent.click(screen.getAllByRole("button", { name: "Restore queued messages to the composer" })[0]);
-    await waitFor(() => expect(onDequeue).toHaveBeenCalled());
-    expect(area).toHaveValue("Steered note\n\nLater note");
+    await waitFor(() => expect(area).toHaveValue("Existing draft\n\nFirst note\n\nLater note"));
+    expect(onDequeue).toHaveBeenCalledTimes(1);
   });
 
   it("shows only the words of a queued message and restores its files into the tray", async () => {
-    const composed = composeFileSection("Steered note", [{ name: "notes.txt", text: "hi" }]);
+    const composed = composeFileSection("Queued note", [{ name: "notes.txt", text: "hi" }]);
     const onDequeue = vi.fn().mockResolvedValue([composed]);
-    const { area } = setup({ queuedMessages: { steer: [composed], followUp: [] }, onDequeue });
+    const { area } = setup({ queuedMessages: [{ id: "with-files", text: composed }], onDequeue });
     const list = screen.getByRole("list", { name: "Queued messages" });
-    expect(list).toHaveTextContent("Steered note");
+    expect(list).toHaveTextContent("Queued note");
     expect(list).not.toHaveTextContent("attached-files");
     fireEvent.click(screen.getByRole("button", { name: "Restore queued messages to the composer" }));
-    await waitFor(() => expect(onDequeue).toHaveBeenCalled());
-    expect(area).toHaveValue("Steered note");
+    await waitFor(() => expect(area).toHaveValue("Queued note"));
     expect(await screen.findByText("notes.txt")).toBeInTheDocument();
   });
 });
@@ -683,7 +863,7 @@ describe("Composer per-chat drafts", () => {
     attach(txt("a.txt", "A"));
     await screen.findByText("a.txt");
     fireEvent.keyDown(area, { key: "Enter" });
-    expect(onSend).toHaveBeenCalledWith("Send from A", [], [{ name: "a.txt", text: "A" }], ...(status === "running" ? ["steer"] : []));
+    expect(onSend).toHaveBeenCalledWith("Send from A", [], [{ name: "a.txt", text: "A" }], ...(status === "running" ? [true] : []));
     expect(area).toHaveValue("");
     fireEvent.change(area, { target: { value: "Newer A note" } });
     view.rerender(<Harness chat="task:b" status={status} onSend={onSend} />);
@@ -694,6 +874,65 @@ describe("Composer per-chat drafts", () => {
     view.rerender(<Harness chat="task:a" status={status} onSend={onSend} />);
     expect(area).toHaveValue("Send from A\n\nNewer A note");
     expect(screen.getByText("a.txt")).toBeInTheDocument();
+  });
+
+  it("restores a failed literal queue to its chat with files and newer typing", async () => {
+    const pending = deferred<boolean>();
+    const onLiteral = vi.fn().mockReturnValue(pending.promise);
+    const props = { status: "running" as const, onLiteral };
+    const view = render(<Harness chat="task:a" {...props} />);
+    const area = screen.getByRole("textbox");
+    fireEvent.change(area, { target: { value: "/unknown raw" } });
+    attach(txt("a.txt", "A"));
+    await screen.findByText("a.txt");
+    fireEvent.keyDown(area, { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "Send as message" }));
+    expect(onLiteral).toHaveBeenCalledWith("/unknown raw", [], [{ name: "a.txt", text: "A" }]);
+    expect(area).toHaveValue("");
+    fireEvent.change(area, { target: { value: "Newer A note" } });
+    view.rerender(<Harness chat="task:b" {...props} />);
+    fireEvent.change(area, { target: { value: "Keep B" } });
+    await act(async () => pending.resolve(false));
+    expect(area).toHaveValue("Keep B");
+    expect(screen.queryByText("a.txt")).not.toBeInTheDocument();
+    view.rerender(<Harness chat="task:a" {...props} />);
+    expect(area).toHaveValue("/unknown raw\n\nNewer A note");
+    expect(screen.getByText("a.txt")).toBeInTheDocument();
+  });
+
+  it("keeps pending steering locks and drafts with their originating chats", async () => {
+    const a = deferred<boolean>();
+    const b = deferred<boolean>();
+    const propsA = { status: "running" as const, onSteer: vi.fn().mockReturnValue(a.promise), queuedMessages: [{ id: "queued-a", text: "Queued A" }] };
+    const propsB = { status: "running" as const, onSteer: vi.fn().mockReturnValue(b.promise), queuedMessages: [{ id: "queued-b", text: "Queued B" }] };
+    const view = render(<Harness chat="task:a" {...propsA} />);
+    const area = screen.getByRole("textbox");
+    fireEvent.change(area, { target: { value: "Draft A" } });
+    attach(txt("a.txt", "A"));
+    await screen.findByText("a.txt");
+    fireEvent.click(screen.getByRole("button", { name: "Steer" }));
+    expect(propsA.onSteer).toHaveBeenCalledWith("queued-a");
+
+    view.rerender(<Harness chat="task:b" {...propsB} />);
+    fireEvent.change(area, { target: { value: "Draft B" } });
+    expect(screen.getByRole("button", { name: "Steer" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Steer" }));
+    expect(propsB.onSteer).toHaveBeenCalledWith("queued-b");
+    view.rerender(<Harness chat="task:a" {...propsA} />);
+    expect(screen.getByRole("button", { name: "Steer" })).toBeDisabled();
+    await act(async () => a.resolve(false));
+    expect(screen.getByRole("button", { name: "Steer" })).toBeEnabled();
+    expect(area).toHaveValue("Draft A");
+    expect(screen.getByText("a.txt")).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Queued messages" })).toHaveTextContent("Queued A");
+
+    view.rerender(<Harness chat="task:b" {...propsB} />);
+    expect(screen.getByRole("button", { name: "Steer" })).toBeDisabled();
+    expect(area).toHaveValue("Draft B");
+    expect(screen.queryByText("a.txt")).not.toBeInTheDocument();
+    await act(async () => b.resolve(true));
+    expect(screen.getByRole("button", { name: "Steer" })).toBeEnabled();
+    expect(screen.getByRole("list", { name: "Queued messages" })).toHaveTextContent("Queued B");
   });
 
   it("clears only the sending chat when a slash command finishes after navigation", async () => {
@@ -733,7 +972,7 @@ describe("Composer per-chat drafts", () => {
 
   it("restores queued messages to their chat even after selection changes", async () => {
     const pending = deferred<string[] | undefined>();
-    const props = { onDequeue: vi.fn().mockReturnValue(pending.promise), queuedMessages: { steer: ["Queued A"], followUp: [] } };
+    const props = { onDequeue: vi.fn().mockReturnValue(pending.promise), queuedMessages: [{ id: "queued-a", text: "Queued A" }] };
     const view = render(<Harness chat="task:a" {...props} />);
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "Draft A" } });
     fireEvent.click(screen.getByRole("button", { name: "Restore queued messages to the composer" }));

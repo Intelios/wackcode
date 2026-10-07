@@ -61,6 +61,14 @@ updates capture their originating key, so a delayed send, file read or queue res
 change another chat's draft. Deleting a chat removes its draft; app exit discards all drafts.
 Rewind seeds are consumed once per chat so returning to it cannot overwrite later edits.
 
+Running sends (Enter, ⌥Enter or Queue beside Stop) wait for the active work to finish. Each
+queued row has an explicit Steer action: it interrupts the active work and sends that worker
+id next, keeping the rest queued. `queue_state.messages` supplies stable `{ id, text }` rows;
+the worker retains their full payloads and images. Queue/run events are authoritative: full
+snapshots don't clear the queue, and steering never optimistically removes a row, changes run
+status or adds a pending echo. Queue actions are single-flight per draft key, and no sends or
+queue actions dispatch while stopping. App captures the originating task id for async errors.
+
 ## New-chat project picker
 
 `ProjectBar` (the composer's `header` on the welcome screen) hosts `ProjectPicker`, `BranchPicker` and the Local/Worktree toggle. The picker reads and writes the same `pinnedProjects` set as the sidebar and Git mode's `RepoSwitcher`, so a pin made anywhere shows everywhere; it never keeps its own copy. Its display rules (`shortPath`, `monogram`, search) are pure functions in `project-display.ts`. ⌘O stays a global shortcut in `App`; the picker's footer only calls `onAddProject`.

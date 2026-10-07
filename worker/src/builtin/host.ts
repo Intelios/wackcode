@@ -69,6 +69,8 @@ export interface BuiltinHost {
   publishGoalState(state: GoalState | null): void;
   /** Persist UI-only provenance immediately before a command-generated user message. */
   recordCommandPresentation(presentation: CommandPresentation): void;
+  /** Desktop messages waiting outside Pi's own boundary queues take priority over a goal loop. */
+  hasQueuedMessages?(): boolean;
   /**
    * Run the goal loop's completion verifier: one no-tools `completeSimple` on the chat's own
    * model, implemented by the worker which owns the model runtime. Never rejects — failures

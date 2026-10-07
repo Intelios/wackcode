@@ -31,6 +31,7 @@ import {
   sameTree
 } from "./delta.js";
 import { JsonLineDecoder } from "./framing.js";
+import { MessageQueue } from "./message-queue.js";
 import { inspectInitAgentsResult, prepareInitAgents } from "./init-agents.js";
 import { RUN_TIMING_ENTRY_TYPE, RUN_TIMING_VERSION, resolveRunTimings, type ThinkingDurations } from "./run-timing.js";
 import { ThinkingClock, resolveThinkingDurations } from "./thinking-timing.js";
@@ -190,11 +191,13 @@ let userCommandsPayload: UserCommandsPayload | undefined;
 let userCommands: PromptTemplate[] = [];
 let userCommandsKey = commandsSignature([], []);
 const pendingDialogs = new Map<string, (response: DialogResponse) => void>();
-interface PendingQueuedPresentation {
-  text: string;
-  presentation: CommandPresentation;
-}
-const pendingQueuedPresentations: PendingQueuedPresentation[] = [];
+const messageQueue = new MessageQueue();
+let queuedPromptScheduled = false;
+/** Queue edits serialize with each other, but never behind the prompt they must interrupt. */
+let queueControls = Promise.resolve();
+/** An explicit Stop wins over a Steer awaiting tool cleanup. */
+let stopGeneration = 0;
+let steeringHandoff = false;
 
 interface DialogResponse {
   value?: string;
@@ -249,6 +252,7 @@ const builtinHost: BuiltinHost = {
     scheduleSnapshot();
   },
   recordCommandPresentation: (presentation) => recordCommandPresentation(presentation),
+  hasQueuedMessages: () => messageQueue.hasPending,
   runGoalVerification: (input, signal) => {
     // The verifier shares the chat's connection and model — like auto-title it is cheap
     // background judgement, never a second model to configure.
@@ -1197,14 +1201,6 @@ async function initialize(command: InitCommand): Promise<void> {
         notice(safeError(value.errorMessage), "warning");
       }
     }
-    if (eventType === "message_start" && eventMessage?.role === "user") {
-      const text = textFromContent(eventMessage.content);
-      const pendingIndex = pendingQueuedPresentations.findIndex((pending) => pending.text === text);
-      if (pendingIndex >= 0) {
-        recordCommandPresentation(pendingQueuedPresentations[pendingIndex].presentation);
-        pendingQueuedPresentations.splice(pendingIndex, 1);
-      }
-    }
     if (eventType === "tool_execution_start" || eventType === "tool_execution_update" || eventType === "tool_execution_end") {
       send({
         type: "activity",
@@ -1229,15 +1225,6 @@ async function initialize(command: InitCommand): Promise<void> {
     ) {
       send({ type: "activity", taskId: command.taskId, event: eventType, detail: eventType.startsWith("compaction_")
         ? { reason: value.reason, aborted: value.aborted, willRetry: value.willRetry } : value });
-    } else if (eventType === "queue_update") {
-      // Pi's pending steering/follow-up lists, for the composer's queue row. The lists are
-      // the worker's own UI view: entries leave them the moment the loop delivers them.
-      send({
-        type: "queue_state",
-        taskId: command.taskId,
-        steering: [...(value.steering as readonly string[] ?? [])],
-        followUp: [...(value.followUp as readonly string[] ?? [])]
-      });
     }
     // A Stop during a tool call still lets Pi start the next model request, which fails at once
     // on the aborted signal ("This operation was aborted"). That is the stop, not a failure.
@@ -1278,9 +1265,6 @@ async function initialize(command: InitCommand): Promise<void> {
       scheduleSnapshot();
     }
     if (eventType === "agent_settled") {
-      // Anything left did not match the user message Pi actually delivered (for example, an
-      // extension input handler rewrote it). Never let stale provenance attach to a later run.
-      pendingQueuedPresentations.length = 0;
       const settledRunId = activeRun?.runId;
       finalizeActiveRun();
       activeRun = undefined;
@@ -1304,7 +1288,11 @@ async function initialize(command: InitCommand): Promise<void> {
             outcome: stopRequested ? "stopped" : promptFailed(messages) ? "failed" : "completed"
           });
         }
-        send({ type: "run_state", taskId: command.taskId, runId: settledRunId, state: "idle" });
+        // Desktop follow-ups start fresh runs on the serial queue. Keep the chat busy across
+        // that handoff, just as for goal rounds, rather than briefly enabling idle-only actions.
+        if (!steeringHandoff && !messageQueue.hasRunnable) {
+          send({ type: "run_state", taskId: command.taskId, runId: settledRunId, state: "idle" });
+        }
       }
       // Pi persists a just-settled message right around the settle event, so its entry id can
       // arrive one emission late. A trailing re-check picks it up — and sends nothing at all
@@ -1388,6 +1376,7 @@ async function runPrompt(
   if (!session || !taskId) throw new Error("Worker is not initialized");
   if (chatModelMissing()) throw new Error(missingModelReason);
   stopRequested = false;
+  messageQueue.resume();
   continuingGoalRunId = undefined;
   let outcome: PromptOutcome = "failed";
   const previousUserEntryIds = new Set(session.sessionManager.getBranch()
@@ -1434,7 +1423,62 @@ async function runPrompt(
   }
   stopRequested = false;
   emitBoundary();
+  scheduleQueuedPrompt();
   return outcome;
+}
+
+function emitQueueState(): void {
+  if (taskId) send({ type: "queue_state", taskId, messages: messageQueue.view() });
+}
+
+/**
+ * A queued message starts only after the current prompt (including abort cleanup) releases
+ * the serial queue. Never await this from a bypass command. Stop leaves the queue paused;
+ * Steer promotes its id before stopping so no other queued message can overtake it.
+ */
+function scheduleQueuedPrompt(): void {
+  if (queuedPromptScheduled || !messageQueue.hasRunnable) return;
+  queuedPromptScheduled = true;
+  commandQueue = commandQueue.then(async () => {
+    queuedPromptScheduled = false;
+    const next = messageQueue.take();
+    if (!next) return;
+    emitQueueState();
+    await runPrompt(
+      crypto.randomUUID(), next.runId ?? crypto.randomUUID(), runStartedAt(next.startedAt),
+      next.text, next.images, next.checkpoint, next.literal, next.presentation
+    );
+  }).catch((error) => {
+    send({ type: "worker_error", taskId, message: safeError(error) });
+    if (taskId) send({ type: "run_state", taskId, state: "idle" });
+  });
+}
+
+/** Shared cancellation path for Stop and instant Steer, including native requests and goals. */
+async function stopActiveRun(): Promise<void> {
+  if (!session || !taskId) throw new Error("Worker is not initialized");
+  builtins.autoTitle.abort();
+  cancelPendingNativeRequests();
+  builtins.goal.userStop();
+  activeTitleCredential = undefined;
+  activeTitleAuth = undefined;
+  stopRequested = true;
+  cancelPendingDialogs();
+  mcpWait?.abort();
+  if (compacting) {
+    session.abortCompaction();
+    send({ type: "run_state", taskId, state: "stopping" });
+    return;
+  }
+  const stoppedRunId = activeRun?.runId ?? continuingGoalRunId;
+  send({ type: "run_state", taskId, runId: stoppedRunId, startedAt: activeRun?.startedAt, state: "stopping" });
+  await session.abort();
+  const didNotSettle = stoppedRunId !== undefined && activeRun?.runId === stoppedRunId;
+  finalizeActiveRun();
+  activeRun = undefined;
+  if (didNotSettle) send({ type: "run_finished", taskId, runId: stoppedRunId, outcome: "stopped" });
+  if (!steeringHandoff) send({ type: "run_state", taskId, runId: stoppedRunId, state: "idle" });
+  emitSnapshot();
 }
 
 /**
@@ -1694,92 +1738,62 @@ async function handle(command: WorkerCommand): Promise<void> {
         builtins.goal.clear();
       }
     } else if (command.type === "abort") {
-      builtins.autoTitle.abort();
-      cancelPendingNativeRequests();
-      // Stop pauses a live goal rather than ending it — the user resumes with /goal resume.
-      builtins.goal.userStop();
-      activeTitleCredential = undefined;
-      activeTitleAuth = undefined;
-      stopRequested = true;
-      cancelPendingDialogs();
-      mcpWait?.abort();
-      if (compacting) {
-        session.abortCompaction();
-        send({ type: "run_state", taskId, state: "stopping" });
+      ++stopGeneration;
+      messageQueue.pause();
+      await stopActiveRun();
+    } else if (command.type === "queue_message") {
+      if (!command.message.trim()) throw new Error("Message is required");
+      if (chatModelMissing()) throw new Error(missingModelReason);
+      const generation = stopGeneration;
+      const queuedPresentation = command.literal ? undefined : await queuedCommandPresentation(command.message);
+      const name = /^\/([^\s]+)/.exec(command.message)?.[1];
+      if (!command.literal && !queuedPresentation && name && (
+        commandCatalog.some((entry) => entry.item.name === name && entry.item.source === "extension") ||
+        session.extensionRunner.getRegisteredCommands().some((entry) => entry.invocationName === name)
+      )) {
+        throw new Error(`Extension command "/${name}" cannot be queued. Wait for the current run to finish.`);
+      }
+      messageQueue.enqueue({
+        id: command.id,
+        text: queuedPresentation?.text ?? command.message,
+        images: command.images,
+        literal: command.literal === true || queuedPresentation !== undefined,
+        presentation: queuedPresentation?.presentation
+      });
+      // A Stop arriving during command expansion still wins; it never throws away this input.
+      if (generation === stopGeneration) messageQueue.resume();
+      emitQueueState();
+      scheduleQueuedPrompt();
+    } else if (command.type === "steer_message") {
+      if (chatModelMissing()) throw new Error(missingModelReason);
+      // Look up only pending ids. A click racing natural delivery must not repeat the message
+      // or interrupt the run that has already picked it up.
+      if (!messageQueue.promote(command.messageId, {
+        runId: command.runId, startedAt: command.startedAt, checkpoint: command.checkpoint
+      })) {
+        response(command.id, true);
         return;
       }
-      const stoppedRunId = activeRun?.runId ?? continuingGoalRunId;
-      send({ type: "run_state", taskId, runId: stoppedRunId, startedAt: activeRun?.startedAt, state: "stopping" });
-      await session.abort();
-      const didNotSettle = stoppedRunId !== undefined && activeRun?.runId === stoppedRunId;
-      finalizeActiveRun();
-      activeRun = undefined;
-      if (didNotSettle) send({ type: "run_finished", taskId, runId: stoppedRunId, outcome: "stopped" });
-      send({ type: "run_state", taskId, runId: stoppedRunId, state: "idle" });
-      emitSnapshot();
-    } else if (command.type === "queue_message") {
-      // Reached with the command queue held by a running prompt, so this must never await it.
-      if (!command.message.trim()) throw new Error("Message is required");
-      const queuedPresentation = command.literal ? undefined : await queuedCommandPresentation(command.message);
-      if (session.isStreaming) {
-        const prepared = await prepareImages(command.images);
-        if (queuedPresentation) pendingQueuedPresentations.push(queuedPresentation);
-        try {
-          if (command.literal) {
-            // "Send as message": queue the text raw, without command, skill or template expansion.
-            await session.sendUserMessage(
-              [{ type: "text", text: command.message }, ...prepared],
-              { deliverAs: command.behavior === "follow_up" ? "followUp" : "steer" }
-            );
-          } else if (queuedPresentation) {
-            // This is the exact catalog entry selected by the desktop, including namespaced
-            // collision names Pi itself does not know. Input handlers still run before queueing.
-            await session.prompt(queuedPresentation.text, {
-              ...(prepared.length > 0 ? { images: prepared } : {}),
-              expandPromptTemplates: false,
-              streamingBehavior: command.behavior === "follow_up" ? "followUp" : "steer"
-            });
-          } else if (command.behavior === "follow_up") {
-            // Expands skills and templates; throws on extension commands, which cannot be queued.
-            await session.followUp(command.message, prepared.length > 0 ? prepared : undefined);
-          } else {
-            await session.steer(command.message, prepared.length > 0 ? prepared : undefined);
-          }
-        } catch (error) {
-          if (queuedPresentation) {
-            const index = pendingQueuedPresentations.indexOf(queuedPresentation);
-            if (index >= 0) pendingQueuedPresentations.splice(index, 1);
-          }
-          throw error;
-        }
-        // The queue's new contents ride the session's queue_update event.
-      } else {
-        // The run settled (or never started) between the host's check and now: a steered
-        // message with no run to ride would sit in the queue until some later run delivered
-        // it mid-flight, so run it as a fresh prompt on the serial queue instead. The prompt
-        // answers this same id once the run starts, so nothing responds here.
-        commandQueue = commandQueue.then(async () => {
-          await runPrompt(
-            command.id,
-            crypto.randomUUID(),
-            runStartedAt(undefined),
-            queuedPresentation?.text ?? command.message,
-            command.images,
-            undefined,
-            command.literal === true || queuedPresentation !== undefined,
-            queuedPresentation?.presentation
-          );
-        }).catch((error) => {
-          send({ type: "worker_error", taskId, message: safeError(error) });
-        });
-        return;
+      const generation = stopGeneration;
+      messageQueue.pause();
+      emitQueueState();
+      steeringHandoff = true;
+      try {
+        await stopActiveRun();
+      } finally {
+        steeringHandoff = false;
+      }
+      if (generation === stopGeneration) {
+        messageQueue.resume();
+        scheduleQueuedPrompt();
+      } else if (!activeRun) {
+        send({ type: "run_state", taskId, state: "idle" });
       }
     } else if (command.type === "dequeue") {
-      // Clearing only empties Pi's pending lists, so it is safe mid-run; the host restores the
-      // texts to the composer. Images are not returned by Pi and drop out of the restored draft.
+      const texts = messageQueue.clear();
       const cleared = session.clearQueue();
-      pendingQueuedPresentations.length = 0;
-      respond(command.id, cleared);
+      emitQueueState();
+      respond(command.id, { steering: cleared.steering, followUp: [...texts, ...cleared.followUp] });
       return;
     } else if (command.type === "snapshot") {
       emitSnapshot();
@@ -1913,7 +1927,7 @@ function closeMcpServers(): Promise<void> {
 }
 
 /** Commands the host sends with `worker::request` and whose failures it reports itself. */
-const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "list_commands", "execute_command", "init_agents", "compact", "dequeue", "queue_message", "goal_control", "watch_subagent", "tool_image", "message_image"]);
+const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "list_commands", "execute_command", "init_agents", "compact", "dequeue", "queue_message", "steer_message", "goal_control", "watch_subagent", "tool_image", "message_image"]);
 
 /**
  * The original of a screenshot tool result's image, for the transcript's lightbox. Only the
@@ -2031,6 +2045,7 @@ function bypassesQueue(command: WorkerCommand): boolean {
     case "computer_response":
     case "extension_ui_response":
     case "queue_message":
+    case "steer_message":
     case "dequeue":
     case "watch_subagent":
     case "tool_image":
@@ -2074,6 +2089,14 @@ process.stdin.on("data", (chunk: Buffer) => {
         // abort finds it live — and stops it through the same path as any other stop — while a
         // held follow-up finds a streaming session to queue onto instead of starting fresh.
         .finally(() => { setTimeout(release, 0); });
+      continue;
+    }
+    if (command.type === "queue_message" || command.type === "steer_message" || command.type === "dequeue") {
+      // Serialise queue edits independently of prompts; expansion can await disk I/O, and a
+      // Steer must see every previously accepted message before it interrupts the run.
+      queueControls = queueControls.then(() => initSettled).then(() => handle(command)).catch((error) => {
+        send({ type: "worker_error", taskId, message: safeError(error) });
+      });
       continue;
     }
     if (bypassesQueue(command)) {

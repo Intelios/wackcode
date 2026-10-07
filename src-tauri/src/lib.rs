@@ -188,6 +188,7 @@ pub fn run() {
             commands::goal_control,
             commands::prompt,
             commands::queue_message,
+            commands::steer_message,
             commands::dequeue_messages,
             commands::resend_message,
             commands::navigate_task,

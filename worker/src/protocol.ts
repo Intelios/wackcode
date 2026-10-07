@@ -636,12 +636,19 @@ export type WorkerCommand =
   | {
       id: string;
       type: "queue_message";
-      /** "steer" delivers at the run's next boundary; "follow_up" waits for the run to finish. */
-      behavior: "steer" | "follow_up";
       message: string;
       /** Sent raw (no command/skill/template expansion) — the composer's "Send as message". */
       literal?: boolean;
       images?: ImageContent[];
+    }
+  | {
+      id: string;
+      type: "steer_message";
+      /** Stable desktop queue id; already-delivered messages are a successful no-op. */
+      messageId: string;
+      runId: string;
+      startedAt?: number;
+      checkpoint?: CheckpointRef | null;
     }
   | { id: string; type: "dequeue" }
   | {
@@ -927,6 +934,12 @@ export type ExtensionUIRequest =
       offerWrapUp?: true;
     };
 
+/** One desktop-queued message; attachments and command provenance stay in the worker. */
+export interface QueuedMessage {
+  id: string;
+  text: string;
+}
+
 export type WorkerOutput =
   | { type: "usage_record"; taskId: string; record: import("./usage.js").UsageRecord }
   | { type: "title_result"; taskId: string; attemptId: string; title?: string }
@@ -938,7 +951,7 @@ export type WorkerOutput =
   | { type: "partial"; taskId: string; message: NormalizedMessage }
   | { type: "run_state"; taskId: string; runId?: string; startedAt?: number; operation?: "compaction"; state: "running" | "idle" | "stopping" | "interrupted" }
   | { type: "run_finished"; taskId: string; runId: string; outcome: "completed" | "stopped" | "failed" }
-  | { type: "queue_state"; taskId: string; steering: string[]; followUp: string[] }
+  | { type: "queue_state"; taskId: string; messages: QueuedMessage[] }
   | { type: "activity"; taskId: string; event: string; detail?: unknown }
   | { type: "worker_error"; taskId?: string; message: string }
   | { type: "browser_request"; taskId: string; requestId: string; request: Record<string, unknown> }

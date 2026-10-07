@@ -17,7 +17,7 @@ use crate::{
         SetPackageResourcesInput, SetTaskModeInput, SetToolConfigInput, SkillDocument,
         SkillFolderKind, SkillFolderRecord, SkillSearchPage, SkillsChange, SkillsOverview,
         SlashCommand, SlashCommandDocument, SlashCommandsChange, SlashCommandsOverview,
-        SubagentConfig, SubagentWatchTarget, TaskMode, TaskRecord, TaskStatus, ToolConfig,
+        SteerMessageInput, SubagentConfig, SubagentWatchTarget, TaskMode, TaskRecord, TaskStatus, ToolConfig,
         WorkspaceFiles,
     },
     memory, skills, slash_commands,
@@ -2712,47 +2712,80 @@ pub async fn prompt(
     Ok(run_id)
 }
 
-/// Queue a message on a chat's running prompt. Enter while Pi is working steers the run (the
-/// message is delivered at its next boundary); a follow-up waits for the run to finish. The
-/// worker decides: if the run has just settled anyway, the message starts a fresh run instead,
-/// so this never refuses just because the run ended between the renderer's check and here.
+/// Queue a message after the chat's active work. A run settling between the renderer's check
+/// and this command is fine: the worker starts queued work when it can. Wait for acceptance
+/// (not completion), so command or extension failures return the message to the draft.
 #[tauri::command]
 pub async fn queue_message(
     app: AppHandle,
     state: State<'_, MetadataState>,
     input: QueueMessageInput,
 ) -> Result<(), String> {
-    let behavior = queue_behavior(&input.behavior)?;
     let message = required(&input.message, "Message")?;
     validate_images(&input.images)?;
     let lock = task_lock(&app, &input.task_id);
     let _guard = lock.lock().await;
-    let task = find_task(&state, &input.task_id)?;
-    if matches!(task.status, TaskStatus::Stopping) {
-        return Err("Pi is stopping — wait for it to finish.".into());
+    let (task, provider) = task_and_provider(&state, &input.task_id)?;
+    refuse_stopping(&task)?;
+    if !input.images.is_empty() {
+        require_vision(&provider, &task.model_id)?;
     }
-    // A running chat's worker exists by definition; an idle one may still hold a worker, whose
-    // queue-message fallback runs the message as a fresh prompt.
-    worker::send(
+    let api_key = credential_for(&app, &state, &provider)?;
+    worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
+    worker::request(
         &app,
         &task.id,
-        &json!({
-            "id": Uuid::new_v4().to_string(), "type": "queue_message", "behavior": behavior,
+        json!({
+            "id": Uuid::new_v4().to_string(), "type": "queue_message",
             "message": message, "literal": input.literal, "images": input.images
         }),
+        REQUEST_TIMEOUT,
     )
-    .await
+    .await?;
+    Ok(())
 }
 
-fn queue_behavior(behavior: &str) -> Result<&str, String> {
-    match behavior {
-        "steer" | "follow_up" => Ok(behavior),
-        _ => Err("Unknown way to queue a message.".into()),
-    }
+/// Interrupt active work and promote one queued message; the worker keeps its original text,
+/// images and literal flag, and leaves the rest of the queue intact. An already-delivered id
+/// is a successful no-op. Only worker events change status, even if this request is rejected.
+#[tauri::command]
+pub async fn steer_message(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    input: SteerMessageInput,
+) -> Result<(), String> {
+    // Retire the visual before waiting for locks, a checkpoint or the worker's interruption.
+    crate::computer_use::stop_cursor(&app, &input.task_id);
+    let lock = task_lock(&app, &input.task_id);
+    let _guard = lock.lock().await;
+    let (task, provider) = task_and_provider(&state, &input.task_id)?;
+    refuse_stopping(&task)?;
+    let _checkout = checkout_dispatch_guard(&app, &state, &task.id).await;
+    let api_key = credential_for(&app, &state, &provider)?;
+    worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
+    let checkpoint = match checkpoint_location(&app, &state, &task) {
+        Ok(location) => snapshot_quietly(&app, &task.id, &location).await,
+        Err(_) => None,
+    };
+    let started_at = input
+        .started_at
+        .unwrap_or_else(|| Utc::now().timestamp_millis() as u64);
+    worker::request(
+        &app,
+        &task.id,
+        json!({
+            "id": Uuid::new_v4().to_string(), "type": "steer_message",
+            "messageId": input.message_id, "runId": Uuid::new_v4().to_string(),
+            "startedAt": started_at, "checkpoint": checkpoint
+        }),
+        REQUEST_TIMEOUT,
+    )
+    .await?;
+    Ok(())
 }
 
-/// Take the chat's queued messages back out of Pi's pending lists and return their texts for
-/// the composer. Images cannot be returned and drop out of the restored draft.
+/// Take the chat's queued messages back out of the worker and return their texts for the
+/// composer. Images cannot be returned and drop out of the restored draft.
 #[tauri::command]
 pub async fn dequeue_messages(
     app: AppHandle,
@@ -4625,6 +4658,13 @@ fn refuse_busy(task: &TaskRecord) -> Result<(), String> {
     Ok(())
 }
 
+fn refuse_stopping(task: &TaskRecord) -> Result<(), String> {
+    if matches!(task.status, TaskStatus::Stopping) {
+        return Err("This chat is stopping — wait for it to finish.".into());
+    }
+    Ok(())
+}
+
 /// Where a chat's checkpoints live and which folder they cover.
 #[derive(Clone)]
 struct CheckpointLocation {
@@ -5327,15 +5367,69 @@ mod tests {
     }
 
     #[test]
-    fn queue_behaviors_are_limited_and_pi_camel_case_parses_back() {
-        assert_eq!(queue_behavior("steer").unwrap(), "steer");
-        assert_eq!(queue_behavior("follow_up").unwrap(), "follow_up");
-        assert!(queue_behavior("later").is_err());
-        // Pi's clearQueue answers camelCase ("followUp"); the host hands it to the composer.
+    fn queue_inputs_need_no_behavior_and_default_optional_payload() {
+        let input: QueueMessageInput =
+            serde_json::from_value(json!({ "taskId": "t", "message": "  next  " })).unwrap();
+        assert_eq!(input.task_id, "t");
+        assert_eq!(required(&input.message, "Message").unwrap(), "next");
+        assert!(input.images.is_empty());
+        assert!(!input.literal);
+        assert!(required(" \n ", "Message").is_err());
+        let attached: QueueMessageInput = serde_json::from_value(json!({
+            "taskId": "t", "message": "/review", "literal": true,
+            "images": [{ "type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png" }]
+        })).unwrap();
+        assert!(attached.literal);
+        assert_eq!(attached.images.len(), 1);
+        assert_eq!(attached.images[0].data, "iVBORw0KGgo=");
+        validate_images(&attached.images).unwrap();
+    }
+
+    #[test]
+    fn steer_inputs_use_queued_ids_and_optional_client_start_times() {
+        let input: SteerMessageInput =
+            serde_json::from_value(json!({ "taskId": "t", "messageId": "queued-id" })).unwrap();
+        assert_eq!(input.task_id, "t");
+        assert_eq!(input.message_id, "queued-id");
+        assert_eq!(input.started_at, None);
+        let timed: SteerMessageInput = serde_json::from_value(json!({
+            "taskId": "t", "messageId": "queued-id", "startedAt": 1_700_000_000_000_u64
+        })).unwrap();
+        assert_eq!(timed.started_at, Some(1_700_000_000_000));
+        let untimed: SteerMessageInput = serde_json::from_value(json!({
+            "taskId": "t", "messageId": "queued-id", "startedAt": null
+        })).unwrap();
+        assert_eq!(untimed.started_at, None);
+        assert!(serde_json::from_value::<SteerMessageInput>(json!({ "taskId": "t" })).is_err());
+        assert!(serde_json::from_value::<SteerMessageInput>(json!({
+            "taskId": "t", "messageId": "queued-id", "startedAt": -1
+        })).is_err());
+    }
+
+    #[test]
+    fn queue_and_steer_allow_running_or_settled_chats_but_refuse_stopping() {
+        let mut task: TaskRecord = serde_json::from_value(json!({
+            "id": "t", "name": "Chat", "workspacePath": "/tmp", "usesWorktree": false,
+            "providerId": "p", "modelId": "m", "thinkingLevel": "off",
+            "createdAt": "now", "updatedAt": "now"
+        })).unwrap();
+        for status in [TaskStatus::Running, TaskStatus::Idle, TaskStatus::Interrupted, TaskStatus::Error] {
+            task.status = status;
+            refuse_stopping(&task).unwrap();
+        }
+        task.status = TaskStatus::Stopping;
+        assert_eq!(refuse_stopping(&task).unwrap_err(), "This chat is stopping — wait for it to finish.");
+    }
+
+    #[test]
+    fn queued_message_restoration_keeps_camel_case_and_legacy_defaults() {
         let cleared: QueuedMessages =
             serde_json::from_str(r#"{"steering":["a"],"followUp":["b"]}"#).unwrap();
         assert_eq!(cleared.steering, vec!["a".to_string()]);
         assert_eq!(cleared.follow_up, vec!["b".to_string()]);
+        assert_eq!(serde_json::to_value(cleared).unwrap(), json!({ "steering": ["a"], "followUp": ["b"] }));
+        let legacy: QueuedMessages = serde_json::from_str(r#"{"steering":["a"]}"#).unwrap();
+        assert!(legacy.follow_up.is_empty());
     }
 
     #[test]

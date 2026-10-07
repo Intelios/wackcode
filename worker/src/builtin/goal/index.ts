@@ -257,7 +257,7 @@ export function createGoalExtension(host: BuiltinHost, isPlanning: () => boolean
       if (!goal || goal.phase !== "active" || !round) return;
       // Planning modes never loop; a queued steer/follow-up or an open dialog means the
       // user's own input drives the next turn.
-      if (isPlanning() || uiPromptOpen || ctx.hasPendingMessages()) return;
+      if (isPlanning() || uiPromptOpen || ctx.hasPendingMessages() || host.hasQueuedMessages?.()) return;
       const lastAssistant = [...round].reverse().find((message) => message.role === "assistant");
       const stopReason = lastAssistant?.stopReason;
       if (stopReason === "aborted") { goal.phase = "paused"; goal.note = "Stopped by user."; persist(); emit(); return; }

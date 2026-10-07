@@ -20,7 +20,7 @@ Everything runs locally. Your conversations go straight from your Mac to the mod
 ## Highlights
 
 - **Many chats at once.** Each chat runs its own agent in the background, in your project folder, a Git worktree, or a scratch folder.
-- **Steer instead of waiting.** Type while the agent works: <kbd>Enter</kbd> redirects the current run, and <kbd>⌥ Enter</kbd> queues a message for after it.
+- **Queue first, steer when needed.** Send while the agent works to queue a message for after it. Click **Steer** on any queued message to interrupt and send it next, keeping the rest queued.
 - **Nothing is lost.** Retry, edit, rewind or fork from any message. Checkpoints can put your files back too.
 - **Plan before building.** Plan mode is read-only by default until you approve a plan; Ultra Plan interviews you first.
 - **Review and ship.** A built-in diff view with line comments, generated commit messages, push, and GitHub PRs, plus Git mode: a GitHub Desktop–style view for reading big diffs, committing, and syncing.
@@ -40,9 +40,11 @@ Chats keep working when you switch away, and even when you close the window: Wac
 
 <p align="center"><img src="docs/images/menu-bar.png" width="568" alt="The menu bar duck's menu, listing an active chat marked Working, with Open WackCode and Quit WackCode."></p>
 
-### Steer the run, never lose work
+### Queue first, steer when needed
 
-While the agent works you can keep typing. <kbd>Enter</kbd> **steers**: your message reaches the agent before its next step, so you can correct course without stopping it. <kbd>⌥ Enter</kbd> **queues** the message for after the run. Pending messages sit above the composer until the agent picks them up, and you can pull them back out.
+While the agent works you can keep typing. <kbd>Enter</kbd> or the **Queue** button beside **Stop** sends your message after the active work finishes. Pending messages sit above the composer, and you can pull them all back into your draft.
+
+Need to change course now? Click **Steer** on the queued message you want next. It interrupts the active work and sends that message next; the others stay queued. <kbd>⌥ Enter</kbd> does the same as <kbd>Enter</kbd>, and <kbd>⇧ Enter</kbd> adds a new line.
 
 Every conversation is a tree, so changing course never throws anything away:
 
@@ -149,8 +151,8 @@ In the composer, type `@` to mention a file or folder, and paste, drop or attach
 | <kbd>⌘ O</kbd> | Add a project |
 | <kbd>⌘ ,</kbd> | Settings |
 | <kbd>⇧ Tab</kbd> | Cycle Build → Plan → Ultra Plan |
-| <kbd>Enter</kbd> / <kbd>⇧ Enter</kbd> | Send (or steer a running chat) / new line |
-| <kbd>⌥ Enter</kbd> | Queue a message for after the current run |
+| <kbd>Enter</kbd> / <kbd>⌥ Enter</kbd> | Send, or queue for after the active work in a running chat |
+| <kbd>⇧ Enter</kbd> | New line |
 | <kbd>⌘ ⇧ C</kbd> | Show or hide Changes |
 | <kbd>⌘ ⇧ G</kbd> | Enter or leave Git mode |
 | <kbd>⌘ ⇧ T</kbd> | Show or hide the Terminal |

@@ -751,9 +751,9 @@ export default function App() {
           return {
             ...current,
             [taskId]: { ...runtime, snapshot, activeRun: snapshot.activeRun, compaction: snapshot.compaction, planState, todoState, goalState, partial: undefined, error: undefined,
-              // A fresh worker never has anything queued; queue_state events are authoritative after this.
-              queued: undefined,
               ...(payload.type === "ready" ? {
+                // Only a fresh worker resets the queue; full snapshots leave queue_state authoritative.
+                queued: [],
                 slashCommands: undefined,
                 slashCommandsError: undefined,
                 // Nor is it streaming a sub-agent: the panel watches again.
@@ -786,7 +786,7 @@ export default function App() {
       } else if (payload.type === "partial") {
         patchRuntime(taskId, { partial: payload.message });
       } else if (payload.type === "queue_state") {
-        patchRuntime(taskId, { queued: { steer: [...payload.steering], followUp: [...payload.followUp] } });
+        patchRuntime(taskId, { queued: [...payload.messages] });
       } else if (payload.type === "run_state") {
         // A run starting makes the chat the most recently active, which Git mode's linked
         // chat follows. Only "running" clears the saved error — the host mirrors exactly
@@ -1508,7 +1508,7 @@ export default function App() {
     setDraft((current) => ({ projectId: current?.projectId ?? null, useWorktree: current?.useWorktree ?? false, choice, mode: current?.mode }));
   }
 
-  async function sendPrompt(message: string, options: { images?: ImageContent[]; files?: FileAttachment[]; mode?: TaskMode; literal?: boolean; queue?: "steer" | "follow_up" } = {}): Promise<boolean> {
+  async function sendPrompt(message: string, options: { images?: ImageContent[]; files?: FileAttachment[]; mode?: TaskMode; literal?: boolean; queue?: boolean } = {}): Promise<boolean> {
     const { images, files = [], mode: modeOverride, literal, queue } = options;
     // Attached text files travel inside the message text; the composer's own words stay `message`
     // (the frozen hand-off and the chat's stand-in title show those).
@@ -1589,18 +1589,16 @@ export default function App() {
    * Send an already-composed message to an existing chat, selected or not (Git mode prompts its
    * linked chat without leaving). The mode defaults to the chat's own.
    */
-  async function promptTask(task: TaskRecord, sent: string, options: { images?: ImageContent[]; mode?: TaskMode; literal?: boolean; queue?: "steer" | "follow_up" } = {}): Promise<boolean> {
+  async function promptTask(task: TaskRecord, sent: string, options: { images?: ImageContent[]; mode?: TaskMode; literal?: boolean; queue?: boolean } = {}): Promise<boolean> {
     const { images, mode: modeOverride, literal, queue } = options;
     const status = data.tasks.find((item) => item.id === task.id)?.status ?? task.status;
     if (status === "stopping") return false;
     if (status === "running") {
-      // While Pi works, a message queues onto the run: steering delivers it at the run's next
-      // boundary, a follow-up waits for the run to finish. Sends that cannot queue — the
-      // programmatic ones (plan approval, reviews) and a stopped run — still refuse.
-      const behavior = queue ?? (literal ? "steer" : undefined);
-      if (!behavior) return false;
+      // Composer sends and literal messages wait for the active work to finish. Other
+      // programmatic sends (such as plan approval) still refuse; Steer is an explicit action.
+      if (queue !== true && !literal) return false;
       try {
-        await api.queueMessage({ taskId: task.id, behavior, message: sent, images, ...(literal ? { literal: true } : {}) });
+        await api.queueMessage({ taskId: task.id, message: sent, images, ...(literal ? { literal: true } : {}) });
         rememberModel(task);
         return true;
       } catch (reason) {
@@ -2145,15 +2143,30 @@ export default function App() {
     catch (reason) { patchRuntime(selectedTask.id, { error: String(reason) }); }
   }
 
-  /** Take the queued messages back out of Pi and hand their texts to the composer. */
-  async function dequeueMessages(): Promise<string[] | undefined> {
-    if (!selectedTask) return undefined;
+  /** Select by worker id, never by displayed text (which omits attached-file payloads).
+   * Queue/run events own the handoff; no optimistic status, queue removal or pending echo. */
+  async function steerMessage(messageId: string): Promise<boolean> {
+    if (!selectedTask || selectedTask.status === "stopping") return false;
+    const taskId = selectedTask.id;
     try {
-      const cleared = await api.dequeueMessages(selectedTask.id);
+      await api.steerMessage({ taskId, messageId, startedAt: Date.now() });
+      return true;
+    } catch (reason) {
+      patchRuntime(taskId, { error: String(reason) });
+      return false;
+    }
+  }
+
+  /** Take the queued messages back out of the worker and hand their texts to the composer. */
+  async function dequeueMessages(): Promise<string[] | undefined> {
+    if (!selectedTask || selectedTask.status === "stopping") return undefined;
+    const taskId = selectedTask.id;
+    try {
+      const cleared = await api.dequeueMessages(taskId);
       const texts = [...cleared.steering, ...cleared.followUp];
       return texts.length > 0 ? texts : undefined;
     } catch (reason) {
-      patchRuntime(selectedTask.id, { error: String(reason) });
+      patchRuntime(taskId, { error: String(reason) });
       return undefined;
     }
   }
@@ -2981,6 +2994,7 @@ export default function App() {
               onRequestMentions={() => void requestMentions()}
               onCommand={sendSlash}
               queuedMessages={runtime?.queued}
+              onSteer={steerMessage}
               onDequeue={dequeueMessages}
               draftState={composerDrafts.forChat(composerDraftKey)}
               seed={selectedTask && composerSeed?.taskId === selectedTask.id ? composerSeed : undefined}

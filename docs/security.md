@@ -41,6 +41,7 @@ Never add a network origin silently; call it out explicitly and update `README.m
 - The worker keeps Pi's telemetry, version check, network model refresh and all auto-discovery disabled: every `no*` flag stays `true`, and the worker runs with `PI_OFFLINE`.
 - Packages load only from explicit paths Rust passes for trusted packages, so a project's own `.pi/` never runs.
 - User skill folders reach a worker only as the absolute roots `skills::payload` names (`~/.agents/skills`, then folders the user switched on). A project's own skill folders never load. Settings writes only inside `~/.agents/skills`.
+- `/skill-creator` drafts live under `agent/<task>/skill-creator/` in app data, never in a skill root, so a draft never loads as a skill. Publication is a user action (`publish_skill_draft`): it re-verifies the reviewed revision and writes `~/.agents/skills` under the shared library lock. The agent's own tools never write the library.
 - User commands (Settings › Commands) reach a worker only as `<app data>/commands` via `slash_commands::payload`, and Settings writes only inside it.
 - Paths the renderer sends back for skills and commands are checked canonically against those folders (no symlink escapes); deletes go to the Trash.
 - At launch, `subscription-models.js` re-lists each signed-in subscription's models from Pi's bundled catalogue. It runs offline in a stripped-env process, never refreshes a token, and prints only model metadata.

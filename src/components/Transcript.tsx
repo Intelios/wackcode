@@ -1,6 +1,6 @@
 import { Fragment, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import type { CommandPresentation, NormalizedBlock, NormalizedMessage, PlanState, RunTiming, SessionSnapshot, TaskStatus } from "../types";
+import type { CommandPresentation, NormalizedBlock, NormalizedMessage, PlanState, RunTiming, SessionSnapshot, SkillDraftStatus, TaskStatus } from "../types";
 import { AssistantNameContext } from "../agentName";
 import { useFollowScroll } from "../hooks/useFollowScroll";
 import { motionAllowed, useSmoothText } from "../hooks/useSmoothText";
@@ -9,7 +9,7 @@ import { blockKey, layoutTranscript, type TranscriptSlot } from "../explore-util
 import { completedPlan, layoutWorkTurns, type WorkRow } from "../completed-work";
 import { splitFileSection, type FileAttachment } from "../attachment-utils";
 import { splitMentions } from "../mention-utils";
-import { SUBAGENT_TOOL_NAME, parseSubagentDetails, pendingSubagentDetails } from "../tool-utils";
+import { SUBAGENT_TOOL_NAME, SKILL_CREATOR_TOOL_NAME, parseSkillPreviewDetails, parseSubagentDetails, pendingSubagentDetails } from "../tool-utils";
 import { hasVisibleMessages, latestTurn, messageText } from "../tree-utils";
 import { ExploreExpansion, ExploreGroup, ExploreGroupingEnabled } from "./ExploreGroup";
 import { Icon } from "./Icons";
@@ -18,6 +18,7 @@ import { MessageActions, type MessageActionItem } from "./MessageActions";
 import { MessageEditor } from "./MessageEditor";
 import { PlanCard, type PlanAction } from "./PlanCard";
 import { ScrollRail } from "./ScrollRail";
+import { SkillDraftCard, type SkillDraftAction } from "./SkillDraftCard";
 import { turnExcerpt, type RailTurn } from "../scroll-rail";
 import { SubagentGroup } from "./SubagentChip";
 import { ThinkingExpansion, ThinkingRow } from "./ThinkingRow";
@@ -51,6 +52,15 @@ interface Props {
   /** Latest Plan mode state; PlanCards use it to know which proposal is awaiting a decision. */
   planState?: PlanState;
   onPlanAction?: (action: PlanAction) => void;
+  /** The skill-creator review cards: draft publication states, the owning chat, and their actions. */
+  skillDrafts?: Record<string, SkillDraftStatus>;
+  /** Drafts with a save in flight. */
+  skillDraftsSaving?: ReadonlySet<string>;
+  /** The chat the transcript renders; a preview owned by another chat cannot be saved here. */
+  taskId?: string;
+  onSkillAction?: (action: SkillDraftAction) => void;
+  /** The draft's full SKILL.md body, on demand. */
+  loadSkillDocument?: (draftId: string) => Promise<string | undefined>;
   /** Retry, edit, rewind, version switching and fork are offered only while this is true. */
   actionsEnabled?: boolean;
   /** Whether the chat's model accepts images, for editing a message that has some. */
@@ -62,6 +72,17 @@ interface Props {
   onUndoRewind?: () => void;
   /** Resolves a sent message's attached image to its full-size URL, for the lightbox. */
   loadImage?: MessageImageLoader;
+}
+
+/** How the tool-related cards and their actions reach every rendered block. */
+interface SkillCardContext {
+  /** The newest preview's tool-call id on this branch; only that card is actionable. */
+  latestId: string | undefined;
+  drafts?: Record<string, SkillDraftStatus>;
+  saving?: ReadonlySet<string>;
+  taskId?: string;
+  onAction?: (action: SkillDraftAction) => void;
+  loadDocument?: (draftId: string) => Promise<string | undefined>;
 }
 
 /** How the transcript fetches the full-size original of one of a sent message's images. */
@@ -204,6 +225,7 @@ function renderBlock(
   planState: PlanState | undefined,
   onPlanAction: ((action: PlanAction) => void) | undefined,
   running: boolean,
+  skillCard: SkillCardContext | undefined,
   streaming?: boolean
 ): ReactNode {
   if (block.type === "thinking") {
@@ -228,6 +250,25 @@ function renderBlock(
         : live ? parseSubagentDetails(liveDetails) ?? pendingSubagentDetails(block) : undefined;
       if (details && block.toolCallId) return <SubagentGroup toolCallId={block.toolCallId} details={details} live={live && !result} />;
     }
+    if (block.toolName === SKILL_CREATOR_TOOL_NAME && result) {
+      // A finished preview result is the review card; while it runs the plain tool row shows
+      // progress, and a refused preview (no parseable details) keeps its error visible there.
+      const preview = result.isError ? undefined : parseSkillPreviewDetails(result.details);
+      if (preview) {
+        return (
+          <SkillDraftCard
+            details={preview}
+            status={skillCard?.drafts?.[preview.draftId]}
+            current={skillCard !== undefined && block.toolCallId === skillCard.latestId}
+            owned={!skillCard?.taskId || preview.ownerTaskId === skillCard.taskId}
+            busy={running}
+            saving={skillCard?.saving?.has(preview.draftId)}
+            onAction={skillCard?.onAction}
+            loadDocument={skillCard?.loadDocument}
+          />
+        );
+      }
+    }
     return <ToolRow call={block} result={result} liveText={liveText} running={live && !result} />;
   }
   if (block.type === "tool-result") {
@@ -250,6 +291,7 @@ function renderSlots(
   planState: PlanState | undefined,
   onPlanAction: ((action: PlanAction) => void) | undefined,
   running: boolean,
+  skillCard: SkillCardContext | undefined,
   streaming?: boolean
 ): ReactNode {
   return slots.map((slot) => {
@@ -263,7 +305,7 @@ function renderSlots(
     const block = message.blocks[slot.index];
     return (
       <div key={block.toolCallId ?? slot.index} className="block-slot">
-        {renderBlock(block, blockKey(message, slot.index), results, liveToolText, liveToolDetails, live, planState, onPlanAction, running, streaming)}
+        {renderBlock(block, blockKey(message, slot.index), results, liveToolText, liveToolDetails, live, planState, onPlanAction, running, skillCard, streaming)}
       </div>
     );
   });
@@ -406,6 +448,7 @@ interface MessageProps {
   running: boolean;
   planState?: PlanState;
   onPlanAction?: (action: PlanAction) => void;
+  skillCard: SkillCardContext | undefined;
   sig: string;
   /** A split work slice must not duplicate its original message's terminal footer/menu. */
   turnActions?: boolean;
@@ -421,7 +464,7 @@ interface MessageProps {
   loadImage?: MessageImageLoader;
 }
 
-const Message = memo(function Message({ message, slots, results, liveToolText, liveToolDetails, live, running, planState, onPlanAction, actionsEnabled, retry, editing, vision, modelName, onAction, loadImage, turnActions = true, anchorPart }: MessageProps) {
+const Message = memo(function Message({ message, slots, results, liveToolText, liveToolDetails, live, running, planState, onPlanAction, skillCard, actionsEnabled, retry, editing, vision, modelName, onAction, loadImage, turnActions = true, anchorPart }: MessageProps) {
   const contextMenu = useContextMenu();
   const scrollAnchor = `message:${message.id}${anchorPart ? `:${anchorPart}` : ""}`;
   if (message.role === "user") {
@@ -482,7 +525,7 @@ const Message = memo(function Message({ message, slots, results, liveToolText, l
   if (slots.length === 0 && !failed && !(turnActions && message.turn)) return null;
   return (
     <div className="msg assistant" data-transcript-anchor={scrollAnchor} onContextMenu={(event) => contextMenu(event, turnMenu(message, actionsEnabled && turnActions && Boolean(message.turn), retry, onAction).map((item) => ({ label: item.label, icon: <Icon name={item.icon} />, onSelect: item.onClick })), "Message menu")}>
-      {renderSlots(message, slots, results, liveToolText, liveToolDetails, live, planState, onPlanAction, running)}
+      {renderSlots(message, slots, results, liveToolText, liveToolDetails, live, planState, onPlanAction, running, skillCard)}
       {message.stopReason === "error" && <div className="message-error">{message.errorMessage || "The provider rejected the request."}</div>}
       {message.stopReason === "aborted" && <span className="aborted-label">Stopped</span>}
       {turnActions && message.turn && <TurnActions message={message} actionsEnabled={actionsEnabled} retry={retry} onAction={onAction} />}
@@ -491,6 +534,7 @@ const Message = memo(function Message({ message, slots, results, liveToolText, l
 }, (prev, next) =>
   prev.sig === next.sig && prev.live === next.live && prev.running === next.running && prev.turnActions === next.turnActions && prev.anchorPart === next.anchorPart
   && prev.planState === next.planState && prev.onPlanAction === next.onPlanAction
+  && prev.skillCard === next.skillCard
   && prev.actionsEnabled === next.actionsEnabled && prev.retry === next.retry && prev.editing === next.editing
   && prev.vision === next.vision && prev.modelName === next.modelName && prev.onAction === next.onAction
   && prev.loadImage === next.loadImage);
@@ -520,7 +564,7 @@ function activityLabel(activity?: string): string {
   return "Working…";
 }
 
-export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, compaction, runTimings = [], collapseCompletedWork = true, scopeKey = "", status, liveToolText, liveToolDetails, planState, onPlanAction, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind, loadImage }: Props) {
+export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, compaction, runTimings = [], collapseCompletedWork = true, scopeKey = "", status, liveToolText, liveToolDetails, planState, onPlanAction, skillDrafts, skillDraftsSaving, taskId, onSkillAction, loadSkillDocument, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind, loadImage }: Props) {
   const scroll = useFollowScroll();
   const { ref, onScroll, onWheel, detached, pauseFollowing, jumpToLatest } = scroll;
   const [expandedWork, setExpandedWork] = useState(() => new Set<string>());
@@ -560,6 +604,31 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
     }
     return { results: resultMap, callIds: calls };
   }, [messages]);
+
+  // The newest preview on the branch is the one awaiting a decision; earlier ones stay
+  // readable but inert. Derived from the messages alone, so navigation recomputes it.
+  const latestSkillPreviewId = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message.role !== "assistant") continue;
+      for (let block = message.blocks.length - 1; block >= 0; block -= 1) {
+        const entry = message.blocks[block];
+        if (entry.type !== "tool-call" || entry.toolName !== SKILL_CREATOR_TOOL_NAME || !entry.toolCallId) continue;
+        const result = results.get(entry.toolCallId);
+        if (result && !result.isError && parseSkillPreviewDetails(result.details)) return entry.toolCallId;
+      }
+    }
+    return undefined;
+  }, [messages, results]);
+
+  const skillCard = useMemo<SkillCardContext>(() => ({
+    latestId: latestSkillPreviewId,
+    drafts: skillDrafts,
+    saving: skillDraftsSaving,
+    taskId,
+    onAction: onSkillAction,
+    loadDocument: loadSkillDocument,
+  }), [latestSkillPreviewId, skillDrafts, skillDraftsSaving, taskId, onSkillAction, loadSkillDocument]);
 
   const lastAssistantId = useMemo(() => [...messages].reverse().find((message) => message.role === "assistant")?.id, [messages]);
 
@@ -627,7 +696,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
   };
   const renderMessage = (message: NormalizedMessage, slots = layout.messages.get(message.id) ?? NO_SLOTS, turnActions = true, anchorPart?: "work" | "outcome") => message.compaction ? renderCompaction(message) : (
     <Message message={message} slots={slots} results={results} liveToolText={liveToolText} liveToolDetails={liveToolDetails}
-      live={running && message.id === lastAssistantId} running={running} planState={planState} onPlanAction={onPlanAction}
+      live={running && message.id === lastAssistantId} running={running} planState={planState} onPlanAction={onPlanAction} skillCard={skillCard}
       sig={cachedSignature(message, slots, results, liveToolText, liveToolDetails, anchorPart)} turnActions={turnActions} anchorPart={anchorPart}
       actionsEnabled={actionsEnabled} retry={message.id === (latest?.answer ?? latest?.user)?.id}
       editing={editingId === message.id} vision={vision} modelName={modelName} onAction={handleAction} loadImage={loadImage} />
@@ -709,7 +778,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
               {renderSwitches(messages.length)}
               {partial && layout.partial?.length ? (
                 <div className="msg assistant streaming">
-                  {renderSlots(partial, layout.partial, results, liveToolText, liveToolDetails, true, planState, onPlanAction, running, true)}
+                  {renderSlots(partial, layout.partial, results, liveToolText, liveToolDetails, true, planState, onPlanAction, running, skillCard, true)}
                 </div>
               ) : null}
               {/* AnimatePresence must outlive the stage for its collapse exit to play. */}

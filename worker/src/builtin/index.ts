@@ -19,6 +19,7 @@ import { type McpController, createMcpExtension } from "./mcp/index.js";
 import type { ExecutionPolicyConfig } from "../protocol.js";
 import { DEFAULT_EXECUTION_POLICY, normalizeExecutionPolicy } from "../execution-policy.js";
 import { type PlanModeController, createPlanModeExtension } from "./plan-mode/index.js";
+import { type SkillCreatorController, createSkillCreatorExtension } from "./skill-creator/index.js";
 import { type SubagentsController, createSubagentsExtension } from "./subagents/index.js";
 import { type TodoHandle, createTodoExtension } from "./todo/index.js";
 import { WEB_FETCH_TOOL_NAME, createWebFetchExtension } from "./web-fetch/index.js";
@@ -51,9 +52,11 @@ export interface BuiltinExtensions {
   mcp: McpController;
   /** Computer use: off until the user switches it on, and inactive while off. */
   computerUse: ComputerUseController;
+  /** The /skill-creator workflow: branch state plus the tool's availability. */
+  skillCreator: SkillCreatorController;
 }
 
-export function createBuiltinExtensions(host: BuiltinHost): BuiltinExtensions {
+export function createBuiltinExtensions(host: BuiltinHost, options: { commandEnabled?: (appKey: string) => boolean } = {}): BuiltinExtensions {
   let policy = DEFAULT_EXECUTION_POLICY;
   let subagents: ReturnType<typeof createSubagentsExtension> | undefined;
   const bashJobs = createBashJobsExtension();
@@ -74,6 +77,10 @@ export function createBuiltinExtensions(host: BuiltinHost): BuiltinExtensions {
   const memory = createMemoryExtension();
   const browser: InlineExtension = { name: "wackcode-browser", factory: createBrowserExtension(host), hidden: true };
   const computerUse = createComputerUseExtension(host);
+  const skillCreator = createSkillCreatorExtension(host, {
+    commandEnabled: () => options.commandEnabled?.("app:skill-creator") ?? true,
+    isBuildMode: () => planMode.controller.getState().mode === "build",
+  });
   return {
     factories: [
       // First: clean up foreground jobs before the goal loop can launch another round.
@@ -93,6 +100,7 @@ export function createBuiltinExtensions(host: BuiltinHost): BuiltinExtensions {
       webFetch,
       browser,
       { name: "wackcode-computer-use", factory: computerUse.factory, hidden: true },
+      { name: "wackcode-skill-creator", factory: skillCreator.factory, hidden: true },
       { name: "wackcode-mcp", factory: mcp.factory, hidden: true },
     ],
     bashJobs: bashJobs.controller,
@@ -109,5 +117,6 @@ export function createBuiltinExtensions(host: BuiltinHost): BuiltinExtensions {
     memory: memory.controller,
     mcp: mcp.controller,
     computerUse: computerUse.controller,
+    skillCreator: skillCreator.controller,
   };
 }

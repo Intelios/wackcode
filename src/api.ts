@@ -218,6 +218,11 @@ export const api = {
   listCommands: (taskId: string) => invoke<SlashCommand[]>("list_commands", { taskId }),
   executeCommand: (input: { taskId: string; commandId: string; args: string; startedAt: number; images?: ImageContent[]; name?: string }) => invoke<string>("execute_command", { input }),
   initAgents: (taskId: string, startedAt: number) => invoke<string>("init_agents", { taskId, startedAt }),
+  startSkillCreator: (taskId: string, request: string, startedAt: number) => invoke<string>("start_skill_creator", { taskId, request, startedAt }),
+  publishSkillDraft: (taskId: string, draftId: string, revision: string) =>
+    invoke<{ path: string; name: string; overwritten: boolean }>("publish_skill_draft", { taskId, draftId, revision }),
+  skillDraftStatus: (taskId: string) => invoke<import("./types").SkillDraftStatus[]>("skill_draft_status", { taskId }),
+  readSkillDraft: (taskId: string, draftId: string) => invoke<import("./types").SkillDocument>("read_skill_draft", { taskId, draftId }),
   compactTask: (taskId: string, instructions: string, startedAt: number) => invoke<string>("compact_task", { taskId, instructions, startedAt }),
   goalControl: (taskId: string, action: "set" | "pause" | "resume" | "clear", objective?: string, startedAt?: number) =>
     invoke<string>("goal_control", { taskId, action, objective, startedAt }),

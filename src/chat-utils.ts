@@ -203,7 +203,12 @@ export function applySnapshotDelta(snapshot: SessionSnapshot, delta: SnapshotDel
       ? snapshot.goalState
       : delta.goalState === null
         ? undefined
-        : sameGoalState(snapshot.goalState, delta.goalState) ? snapshot.goalState : delta.goalState
+        : sameGoalState(snapshot.goalState, delta.goalState) ? snapshot.goalState : delta.goalState,
+    skillCreator: delta.skillCreator === undefined
+      ? snapshot.skillCreator
+      : delta.skillCreator === null
+        ? undefined
+        : delta.skillCreator,
   };
 }
 

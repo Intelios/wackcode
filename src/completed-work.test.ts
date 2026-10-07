@@ -100,6 +100,20 @@ describe("completed work layout", () => {
     expect(project([user(), assistant("plan", [call("plan", "plan_mode_complete")]), result("plan")]).get(0)?.folded).toBeUndefined();
   });
 
+  it("keeps skill-creator previews as the outcome of their turn, not folded work", () => {
+    const previewDetails = { v: 1, source: "skill_creator_preview", ownerTaskId: "t", draftId: "d", revision: "r", name: "pdf-tools", description: "Pdfs.", manual: false, target: "new", bodyPreview: "Do it", bodyTruncated: false, files: [], fileCount: 1, totalBytes: 8, warnings: [] };
+    const messages = [user(), progress, result(),
+      assistant("draft", [call("draft", "skill_creator")], { turn: { userEntryId: "u", endEntryId: "draft-result" } }),
+      result("draft", { details: previewDetails })];
+    const turn = project(messages).get(0)!;
+    expect(turn.folded).toBeDefined();
+    expect(slots(turn, "outcome")).toEqual([[3, 0, true]]);
+    expect(slots(turn, "work")).toContainEqual([1, 0, false]);
+    // A preview without a valid result is ordinary work, never a card outcome.
+    expect(project([user(), assistant("draft", [call("draft", "skill_creator")]), result("draft")]).get(0)?.folded).toBeUndefined();
+    expect(project([user(), assistant("draft", [call("draft", "skill_creator")]), result("draft", { details: previewDetails, isError: true })]).get(0)?.folded).toBeUndefined();
+  });
+
   it("keeps orphan results and switch positions ordered without duplicating paired results", () => {
     const messages = [user(), progress, result(), result("orphan"), answer];
     const turn = project(messages, { switchPositions: new Set([1, 3, 5]) }).get(0)!;

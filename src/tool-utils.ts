@@ -1,8 +1,10 @@
-import type { NormalizedBlock, NormalizedMessage, SubagentDetails, SubagentResult, SubagentStatus, ToolCatalogEntry } from "./types";
+import type { NormalizedBlock, NormalizedMessage, SkillPreviewDetails, SubagentDetails, SubagentResult, SubagentStatus, ToolCatalogEntry } from "./types";
 import { displayPath } from "./chat-utils";
 
 /** The built-in sub-agents tool. Its calls render as SubAgent chips rather than a tool row. */
 export const SUBAGENT_TOOL_NAME = "subagent";
+/** The built-in skill-creator tool; its preview results render as the review card. */
+export const SKILL_CREATOR_TOOL_NAME = "skill_creator";
 /** The one WackCode built-in tool the user can switch off, through the tool denylist. */
 export const WEB_FETCH_TOOL_NAME = "web_fetch";
 /** Browser preview is one grouped switch even though the extension exposes five tools. */
@@ -570,6 +572,47 @@ export function parseSubagentDetails(value: unknown): SubagentDetails | undefine
   const results = details.results.map(subagentResult);
   if (results.some((result) => !result)) return undefined;
   return { v: 1, mode: details.mode === "parallel" ? "parallel" : "single", results: results as SubagentResult[] };
+}
+
+/**
+ * A `skill_creator` preview's versioned details. Invalid or foreign shapes render as an
+ * ordinary tool row instead — the result is authoritative, like a plan card's.
+ */
+export function parseSkillPreviewDetails(value: unknown): SkillPreviewDetails | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const details = value as Record<string, unknown>;
+  const text = (key: string) => (typeof details[key] === "string" ? details[key] as string : undefined);
+  const ownerTaskId = text("ownerTaskId");
+  const draftId = text("draftId");
+  const revision = text("revision");
+  const name = text("name");
+  const description = text("description");
+  const bodyPreview = text("bodyPreview");
+  const target = details.target;
+  if (details.v !== 1 || details.source !== "skill_creator_preview") return undefined;
+  if (!ownerTaskId || !draftId || !revision || !name || !description || bodyPreview === undefined) return undefined;
+  if (target !== "new" && target !== "library-update" && target !== "library-copy") return undefined;
+  if (!Array.isArray(details.files) || !details.files.every((file) => typeof file === "string")) return undefined;
+  if (!Array.isArray(details.warnings) || !details.warnings.every((warning) => typeof warning === "string")) return undefined;
+  return {
+    v: 1,
+    source: "skill_creator_preview",
+    ownerTaskId,
+    draftId,
+    revision,
+    name,
+    description,
+    manual: details.manual === true,
+    ...(text("argumentHint") ? { argumentHint: text("argumentHint") } : {}),
+    target,
+    ...(text("originLabel") ? { originLabel: text("originLabel") } : {}),
+    bodyPreview,
+    bodyTruncated: details.bodyTruncated === true,
+    files: details.files as string[],
+    fileCount: typeof details.fileCount === "number" ? details.fileCount : (details.files as string[]).length,
+    totalBytes: typeof details.totalBytes === "number" ? details.totalBytes : 0,
+    warnings: details.warnings as string[],
+  };
 }
 
 /** A card for a call that has not reported progress yet, built from its arguments. */

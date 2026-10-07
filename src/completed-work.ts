@@ -1,5 +1,6 @@
 import type { NormalizedBlock, NormalizedMessage, TaskStatus } from "./types";
 import type { TranscriptLayout, TranscriptSlot } from "./explore-utils";
+import { SKILL_CREATOR_TOOL_NAME, parseSkillPreviewDetails } from "./tool-utils";
 
 /**
  * Presentation only: each user starts a turn on the visible session branch. The worker's
@@ -32,6 +33,11 @@ export function completedPlan(result?: NormalizedBlock): string | undefined {
   if (result?.isError) return undefined;
   const details = result?.details as { plan?: unknown } | undefined;
   return typeof details?.plan === "string" && details.plan.trim() ? details.plan : undefined;
+}
+
+/** Same rule for skill-creator previews: only a finished, valid result is a review card. */
+export function completedSkillDraft(result?: NormalizedBlock): boolean {
+  return !result?.isError && parseSkillPreviewDetails(result?.details) !== undefined;
 }
 
 interface Options {
@@ -67,6 +73,7 @@ export function layoutWorkTurns(messages: NormalizedMessage[], options: Options)
     let terminal = -1;
     let annotated = -1;
     let plan: { index: number; block: number; id: string } | undefined;
+    let skill: { index: number; block: number; id: string } | undefined;
     let systemNotice = false;
     let unfinishedCall = false;
 
@@ -94,6 +101,9 @@ export function layoutWorkTurns(messages: NormalizedMessage[], options: Options)
           if (block.toolName === "plan_mode_complete" && completedPlan(result)) {
             plan = { index, block: blockIndex, id: block.toolCallId ?? `${identity(message)}:${blockIndex}` };
           }
+          if (block.toolName === SKILL_CREATOR_TOOL_NAME && completedSkillDraft(result) && block.toolCallId) {
+            skill = { index, block: blockIndex, id: block.toolCallId };
+          }
         });
       }
     }
@@ -108,7 +118,7 @@ export function layoutWorkTurns(messages: NormalizedMessage[], options: Options)
     const answer = terminal >= 0 ? messages[terminal] : undefined;
     const turn: WorkTurn = {
       userIndex, userKey: identity(user), endIndex,
-      key: JSON.stringify([identity(user), answer ? identity(answer) : null, plan?.id ?? null]),
+      key: JSON.stringify([identity(user), answer ? identity(answer) : null, plan?.id ?? null, skill?.id ?? null]),
       body
     };
     turns.set(userIndex, turn);
@@ -121,19 +131,19 @@ export function layoutWorkTurns(messages: NormalizedMessage[], options: Options)
     answer.blocks.forEach((block, index) => { if (block.type === "tool-call") lastCall = index; });
     const textIndices = new Set(answer.blocks.flatMap((block, index) =>
       index > lastCall && block.type === "text" && block.text?.trim() ? [index] : []));
-    if (!textIndices.size && !plan) return;
+    if (!textIndices.size && !plan && !skill) return;
 
     const work: WorkRow[] = [];
     const outcome: WorkRow[] = [];
     const visible = (index: number, slot: TranscriptSlot) => slot.type === "block"
-      && ((index === terminal && textIndices.has(slot.index)) || (index === plan?.index && slot.index === plan.block));
+      && ((index === terminal && textIndices.has(slot.index)) || (index === plan?.index && slot.index === plan.block) || (index === skill?.index && slot.index === skill.block));
     for (const row of body) {
       if (row.type === "compaction") { outcome.push(row); continue; }
       if (row.type !== "message") { work.push(row); continue; }
       const outcomeSlots = row.slots.filter((slot) => visible(row.index, slot));
       const workSlots = row.slots.filter((slot) => !visible(row.index, slot));
       if (workSlots.length) work.push({ ...row, slots: workSlots, actions: false });
-      // Keep the terminal footer even if a plan card, not this message, is the outcome.
+      // Keep the terminal footer even if a plan or skill card, not this message, is the outcome.
       if (outcomeSlots.length || (row.index === terminal && answer.turn)) {
         outcome.push({ ...row, slots: outcomeSlots, actions: row.index === terminal });
       }

@@ -1268,18 +1268,26 @@ fn handle_worker_line(
         }
         return;
     }
-    if event_type == "browser_cancel" || event_type == "computer_cancel" {
+    if event_type == "browser_cancel" || event_type == "computer_cancel" || event_type == "skill_creator_cancel" {
         if let Some(request_id) = value.get("requestId").and_then(Value::as_str) {
             if event_type == "browser_cancel" {
                 app.state::<crate::browser::BrowserManager>().cancel(request_id);
-            } else {
+            } else if event_type == "computer_cancel" {
                 app.state::<crate::computer_use::ComputerUseManager>().cancel(request_id);
             }
+            // skill-creator operations are short filesystem jobs; there is nothing to cancel
+            // host-side — the worker already rejected its own promise.
         }
         return;
     }
-    if event_type == "browser_request" || event_type == "computer_request" {
-        let channel = if event_type == "browser_request" { NativeChannel::Browser } else { NativeChannel::Computer };
+    if event_type == "browser_request" || event_type == "computer_request" || event_type == "skill_creator_request" {
+        let channel = if event_type == "browser_request" {
+            NativeChannel::Browser
+        } else if event_type == "computer_request" {
+            NativeChannel::Computer
+        } else {
+            NativeChannel::SkillCreator
+        };
         spawn_native_request(app, task_id, worker_pid, channel, &value);
         return;
     }
@@ -1438,6 +1446,7 @@ fn handle_worker_line(
 enum NativeChannel {
     Browser,
     Computer,
+    SkillCreator,
 }
 
 /// Runs a worker's request to a native subsystem (the browser preview or computer use) and
@@ -1458,6 +1467,10 @@ fn spawn_native_request(app: &AppHandle, task_id: &str, worker_pid: u32, channel
             NativeChannel::Computer => (
                 crate::computer_use::execute_agent_request(request_app.clone(), request_task.clone(), request_id.clone(), request).await,
                 "computer_response",
+            ),
+            NativeChannel::SkillCreator => (
+                crate::skill_creator::execute_agent_request(&request_app, &request_task, request).await,
+                "skill_creator_response",
             ),
         };
         // A restarted worker owns the same chat id but a different generation. Never let it

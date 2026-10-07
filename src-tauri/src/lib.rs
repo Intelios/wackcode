@@ -16,6 +16,7 @@ mod run_command;
 mod secrets;
 mod shell_env;
 mod skill_archive;
+mod skill_creator;
 mod skills;
 mod slash_commands;
 mod storage;
@@ -184,6 +185,10 @@ pub fn run() {
             commands::list_commands,
             commands::execute_command,
             commands::init_agents,
+            commands::start_skill_creator,
+            commands::publish_skill_draft,
+            commands::skill_draft_status,
+            commands::read_skill_draft,
             commands::compact_task,
             commands::goal_control,
             commands::prompt,

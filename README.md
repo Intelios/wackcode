@@ -123,7 +123,7 @@ Auto chat titles live here too: switch on the `auto-titles` agent with a small, 
 |---|---|---|
 | **MCP servers** | Adds tools from local (stdio) or remote (HTTP/SSE) MCP servers. Each server and each tool has its own switch. Remote servers use a token header; OAuth sign-in isn't supported. | Settings › MCP servers |
 | **Skills** | Agent Skills (`SKILL.md` folders) in `~/.agents/skills`, the same folder Codex, OpenCode and the Pi CLI read. Write, edit or import them (ZIP, folder or `.md`), switch on skill folders from Claude Code, Codex, Pi or OpenCode, or browse pi.dev's catalogue. | Settings › Skills |
-| **Commands** | Type `/` for commands from packages, skills and your own prompt templates, which take arguments like `$1` and `$ARGUMENTS`. Built in: `/init` (write or improve an `AGENTS.md`), `/compact`, `/new`, `/name`, `/copy`, `/goal`. | Settings › Commands |
+| **Commands** | Type `/` for commands from packages, skills and your own prompt templates, which take arguments like `$1` and `$ARGUMENTS`. Built in: `/init` (write or improve an `AGENTS.md`), `/skill-creator` (build or improve an Agent Skill with the agent, then review and save it), `/compact`, `/new`, `/name`, `/copy`, `/goal`. | Settings › Commands |
 | **Memory** | The agent keeps short notes per project (your preferences, corrections, ongoing decisions) and recalls them in later chats. Every note is a file you can read, edit or delete. | Settings › Memory |
 | **Web Fetch** | Lets the agent read a public web page by URL, returned as Markdown. It never reaches `localhost` or your local network. On by default. | Settings › Packages |
 | **Packages** | Install Pi packages (extensions, prompt templates, skills) from npm or Git. | Settings › Packages |

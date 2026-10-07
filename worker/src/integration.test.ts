@@ -56,6 +56,7 @@ type SnapshotView = {
     objective: string; phase: string; iteration: number; maxIterations: number; noProgress: number;
     lastReason?: string; lastNextAction?: string; note?: string;
   };
+  skillCreator?: { draftId: string; name: string; revision?: string };
   stats?: { tokens: { input: number; output: number; total: number }; cost: number; contextUsage?: SessionSnapshot["stats"]["contextUsage"]; contextBreakdown?: SessionSnapshot["stats"]["contextBreakdown"] };
 };
 
@@ -198,6 +199,7 @@ class WorkerHarness {
         planState: output.delta.planState ?? this.view.planState,
         todoState: output.delta.todoState ?? this.view.todoState,
         goalState: output.delta.goalState === undefined ? this.view.goalState : output.delta.goalState ?? undefined,
+        skillCreator: output.delta.skillCreator === undefined ? this.view.skillCreator : output.delta.skillCreator ?? undefined,
         stats: output.delta.stats ?? this.view.stats
       };
     }
@@ -505,6 +507,31 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
     send({
       id: "init-unchanged", object: "chat.completion.chunk", created: 1, model: "shared-model",
       choices: [{ index: 0, delta: {}, finish_reason: "stop" }]
+    });
+    response.end("data: [DONE]\n\n");
+    return;
+  }
+  // The /skill-creator guide: prepare first, then preview once the draft exists (its id rides
+  // the prepare tool result). "skill preview again" scripts a feedback turn's preview.
+  if (lastUserText.startsWith("You are helping the user create or improve an Agent Skill") || lastUserText === "skill preview again") {
+    const results = lastUserText === "skill preview again"
+      ? (Array.isArray(body.messages) ? body.messages as Array<{ role?: string }> : []).filter((message) => message.role === "tool")
+          .map((message) => typeof (message as { content?: unknown }).content === "string" ? (message as { content: string }).content : "")
+          .join("\n")
+      : toolResultContents(body).join("\n");
+    const draftId = /\n([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\n?$/.exec(results)?.[1]
+      ?? /Draft workspace ready: [^\n]*skill-creator\/([0-9a-f-]{36})/.exec(results)?.[1];
+    const call = draftId
+      ? { index: 0, id: `skill-preview-${suffix}`, type: "function", function: { name: "skill_creator", arguments: JSON.stringify({ action: "preview", draftId }) } }
+      : { index: 0, id: `skill-prepare-${suffix}`, type: "function", function: { name: "skill_creator", arguments: JSON.stringify({ action: "prepare", name: "greeting-skill" }) } };
+    send({
+      id: `skill-creator-${suffix}`, object: "chat.completion.chunk", created: 1, model: "shared-model",
+      choices: [{ index: 0, delta: { role: "assistant", tool_calls: [call] }, finish_reason: null }]
+    });
+    send({
+      id: `skill-creator-${suffix}`, object: "chat.completion.chunk", created: 1, model: "shared-model",
+      choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+      usage: { prompt_tokens: 20, completion_tokens: 8, total_tokens: 28 }
     });
     response.end("data: [DONE]\n\n");
     return;
@@ -1016,7 +1043,7 @@ describe("Pi worker integration", () => {
     cleanup.push(() => worker.shutdown());
 
     // Every tool Pi ships is in the registry, including the three the worker never used to
-    // enable, plus WackCode's nineteen built-in extension tools.
+    // enable, plus WackCode's built-in extension tools.
     const names = (ready.snapshot?.tools ?? []).map((tool) => tool.name).sort();
     expect(names).toEqual([
       "ask_user_question",
@@ -1041,6 +1068,7 @@ describe("Pi worker integration", () => {
       "memory_save",
       "plan_mode_complete",
       "read",
+      "skill_creator",
       "subagent",
       "todo",
       "web_fetch",
@@ -1087,13 +1115,13 @@ describe("Pi worker integration", () => {
         "browser_console"
       ]
     });
-    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.length === 7);
+    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.length === 8);
     // `find`/`grep` availability varies by host; the companion stays on even without bash.
     const beforeSecondRun = provider.requests.length;
     worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-2", message: "Again." });
     await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.snapshot === undefined && provider.requests.length > beforeSecondRun);
 
-    expect(offered(provider.requests[beforeSecondRun])).toEqual(["ask_user_question", "bash_job", "edit", "plan_mode_complete", "read", "todo", "write"]);
+    expect(offered(provider.requests[beforeSecondRun])).toEqual(["ask_user_question", "bash_job", "edit", "plan_mode_complete", "read", "skill_creator", "todo", "write"]);
     expect(worker.child.exitCode).toBeNull();
   });
 
@@ -4476,5 +4504,91 @@ describe("message queueing", () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain("planning mode");
     expect(provider.requests).toHaveLength(0);
+  });
+
+  it("runs /skill-creator through prepare and a terminating preview card", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-skill-creator-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker, ready } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "skill-creator-task");
+    cleanup.push(() => worker.shutdown());
+    expect(ready.snapshot?.tools?.some((tool) => tool.name === "skill_creator")).toBe(true);
+    expect(ready.snapshot?.skillCreator).toBeUndefined();
+
+    // The harness stands in for the Rust host: it answers the worker's skill_creator requests,
+    // creating the managed draft under the task's agent dir like `skill_creator.rs` would.
+    const agentDir = join(workspace, ".agent", "skill-creator-task");
+    const revision = "f".repeat(64);
+    let draftId = "";
+    const answer = (request: Output) => {
+      const payload = request.request ?? {};
+      if (payload.op === "prepare") {
+        draftId = crypto.randomUUID();
+        const draftRoot = join(agentDir, "skill-creator", draftId);
+        const skillDir = join(draftRoot, "skill");
+        void mkdir(skillDir, { recursive: true }).then(() =>
+          writeFile(join(skillDir, "SKILL.md"), "---\nname: greeting-skill\ndescription: Write a short friendly greeting.\n---\n\nGreet the user warmly.\n"));
+        worker.send({ id: crypto.randomUUID(), type: "skill_creator_response", requestId: request.requestId, success: true,
+          result: { draftId, draftRoot, skillDir, evalsDir: join(draftRoot, "evals"), name: "greeting-skill" } });
+      } else {
+        worker.send({ id: crypto.randomUUID(), type: "skill_creator_response", requestId: request.requestId, success: true,
+          result: { draftId: String(payload.draftId ?? draftId), revision, name: "greeting-skill", description: "Write a short friendly greeting.",
+            manual: false, target: "new", bodyPreview: "Greet the user warmly.", bodyTruncated: false, files: [], fileCount: 1, totalBytes: 96, warnings: [] } });
+      }
+    };
+    const answered = new Set<string>();
+    const answerRequests = (async () => {
+      for (let round = 0; round < 2; round += 1) {
+        const request = await worker.waitFor((output) =>
+          output.type === "skill_creator_request" && !answered.has(output.requestId ?? ""));
+        answered.add(request.requestId ?? "");
+        answer(request);
+      }
+    })();
+
+    worker.send({ id: crypto.randomUUID(), type: "skill_creator", request: "make a greeting skill", runId: "skill-creator-run", startedAt: Date.now() });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === "skill-creator-run");
+    await answerRequests;
+
+    // Two model turns: the guide prompt (prepare), then the authoring turn (preview). The
+    // preview's terminate:true ends the run without a third request.
+    expect(provider.requests).toHaveLength(2);
+    expect(provider.requests[0].text).toContain("create or improve an Agent Skill");
+    expect(JSON.stringify(provider.requests[0].body.tools)).toContain("skill_creator");
+    // Both native requests were answered on the queue-bypassing channel.
+    const requests = worker.outputs.filter((output) => output.type === "skill_creator_request");
+    expect(requests).toHaveLength(2);
+    expect(requests[0].request?.op).toBe("prepare");
+    expect(requests[1].request?.op).toBe("preview");
+
+    // The card's details landed in the transcript, carried by the tool result.
+    const details = worker.view?.messages.flatMap((message) => message.blocks)
+      .filter((block) => block.type === "tool-result" && block.toolName === "skill_creator" && block.details !== undefined)
+      .at(-1);
+    expect(details?.isError).toBeFalsy();
+    expect(details?.details).toMatchObject({ v: 1, source: "skill_creator_preview", ownerTaskId: "skill-creator-task", revision });
+    // The command-generated prompt is labelled, and the workflow state reached the snapshot.
+    const prompt = worker.view?.messages.find((message) => message.commandPresentation?.id === "app:skill-creator");
+    expect(prompt?.blocks.some((block) => block.type === "text" && block.text?.includes("make a greeting skill"))).toBe(true);
+    // The state publish is debounced behind the run's own emissions; wait for it explicitly.
+    await worker.waitFor((output) => output.view?.skillCreator !== undefined);
+    expect(worker.view?.skillCreator).toEqual({ draftId, name: "greeting-skill", revision });
+
+    // A feedback turn (an ordinary prompt, no command run) still previews: the workflow entry
+    // carries the draft.
+    const followUpAnswer = worker.waitFor((output) =>
+      output.type === "skill_creator_request" && !answered.has(output.requestId ?? ""))
+      .then((request) => {
+        answered.add(request.requestId ?? "");
+        worker.send({ id: crypto.randomUUID(), type: "skill_creator_response", requestId: request.requestId, success: true,
+          result: { draftId, revision, name: "greeting-skill", description: "Warmer.", manual: true, target: "new",
+            bodyPreview: "Warmer.", bodyTruncated: false, files: [], fileCount: 1, totalBytes: 96, warnings: [] } });
+      });
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "feedback-run", message: "skill preview again" });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === "feedback-run");
+    await followUpAnswer;
+    expect(worker.view?.skillCreator).toMatchObject({ draftId, name: "greeting-skill", revision });
+    expect(worker.child.exitCode).toBeNull();
   });
 });

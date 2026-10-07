@@ -61,8 +61,8 @@ describe("CommandsSection", () => {
   it("counts switched-on commands in the hero, across the app's, yours and packages'", async () => {
     renderSection();
     const hero = screen.getByRole("region", { name: "Commands overview" });
-    // Six of WackCode's, two of yours (one off), two from the package.
-    expect(await within(hero).findByText("9 of 10 on")).toBeInTheDocument();
+    // Seven of WackCode's, two of yours (one off), two from the package.
+    expect(await within(hero).findByText("10 of 11 on")).toBeInTheDocument();
   });
 
   it("walks through a command in the empty state, in the agent's name, and opens the editor from it", async () => {

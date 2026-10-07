@@ -61,6 +61,54 @@ export interface GoalState {
   note?: string;
 }
 
+/** The /skill-creator workflow's branch state, while one is active. */
+export interface SkillCreatorState {
+  /** The managed draft (`agent/<task>/skill-creator/<draftId>/`) this branch is working on. */
+  draftId: string;
+  /** The skill's name as prepared. */
+  name: string;
+  /** The latest previewed revision awaiting the user, when one has been previewed. */
+  revision?: string;
+}
+
+/**
+ * The versioned details a `skill_creator` preview result carries. Bounded by contract: the
+ * body is a preview and the full skill stays on disk, read through the host on demand.
+ */
+export interface SkillPreviewDetails {
+  v: 1;
+  source: "skill_creator_preview";
+  /** The chat whose managed workspace holds the draft; a forked chat can read but not save it. */
+  ownerTaskId: string;
+  draftId: string;
+  revision: string;
+  name: string;
+  description: string;
+  manual: boolean;
+  argumentHint?: string;
+  target: "new" | "library-update" | "library-copy";
+  originLabel?: string;
+  bodyPreview: string;
+  bodyTruncated: boolean;
+  files: string[];
+  fileCount: number;
+  totalBytes: number;
+  warnings: string[];
+}
+
+/** One draft's publication state, from the host that owns the managed workspace. */
+export interface SkillDraftStatus {
+  draftId: string;
+  name: string;
+  draftRoot: string;
+  /** drafting · ready (a review the draft still matches) · stale · saved · unknown. */
+  state: "drafting" | "ready" | "saved" | "stale" | "unknown";
+  revision?: string;
+  /** The installed library path, once saved. */
+  path?: string;
+  overwritten: boolean;
+}
+
 /** One option in an ask_user_question question. */
 export interface AskQuestionOption {
   label: string;
@@ -1054,6 +1102,8 @@ export interface SessionSnapshot {
   planState?: PlanState;
   todoState?: TodoState;
   goalState?: GoalState;
+  /** The /skill-creator workflow on this branch, while one is active. */
+  skillCreator?: SkillCreatorState;
 }
 
 /**
@@ -1087,6 +1137,8 @@ export interface SnapshotDelta {
   todoState?: TodoState;
   /** null clears the goal; absent leaves it unchanged. */
   goalState?: GoalState | null;
+  /** null clears the workflow; absent leaves it unchanged. */
+  skillCreator?: SkillCreatorState | null;
 }
 
 /** A question an extension asked, mirrored from the worker protocol. */
@@ -1198,6 +1250,10 @@ export interface TaskRuntime {
   todoState?: TodoState;
   /** Latest goal-loop state from the worker's built-in goal extension. */
   goalState?: GoalState;
+  /** Draft publication states for this chat's skill-creator cards, hydrated from the host. */
+  skillDrafts?: Record<string, SkillDraftStatus>;
+  /** The `draftId:revision` the hydration last ran for; a new preview re-hydrates. */
+  skillDraftsKey?: string;
   /** The transcript of the sub-agent shown in the side panel, while one is. */
   subagentView?: SubagentView;
   /** Worker-owned messages waiting for the active work to finish; Steer selects one to send next. */

@@ -8,6 +8,7 @@ import type {
   PlanState,
   RunTiming,
   SessionSnapshot,
+  SkillCreatorState,
   TodoState,
   TurnInfo
 } from "./protocol.js";
@@ -62,6 +63,12 @@ export function sameGoalState(a: GoalState | undefined, b: GoalState | undefined
     && a.lastReason === b.lastReason
     && a.lastNextAction === b.lastNextAction
     && a.note === b.note;
+}
+
+export function sameSkillCreatorState(a: SkillCreatorState | undefined, b: SkillCreatorState | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.draftId === b.draftId && a.name === b.name && a.revision === b.revision;
 }
 
 export function sameVersions(a: MessageVersions | undefined, b: MessageVersions | undefined): boolean {

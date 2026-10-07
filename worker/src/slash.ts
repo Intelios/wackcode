@@ -1,5 +1,5 @@
 /** The names the desktop itself owns; a package or user command that takes one is renamed. */
-export const APP_COMMAND_NAMES = ["compact", "init", "new", "name", "copy", "goal"];
+export const APP_COMMAND_NAMES = ["compact", "init", "new", "name", "copy", "goal", "skill-creator"];
 
 /**
  * One slash command's stable identity, shared by the catalog's `SlashCommand.id`, the Settings

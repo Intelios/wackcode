@@ -78,6 +78,55 @@ export interface GoalState {
 /** What `goal_control` asks the worker to do with the chat's goal. */
 export type GoalAction = "set" | "pause" | "resume" | "clear";
 
+/**
+ * The `/skill-creator` workflow's branch-scoped state. One `wackcode-skill-creator` session
+ * entry per transition carries it (latest on the branch wins), so a rewind to before the
+ * draft removes the workflow exactly like a goal entry. The renderer only needs it for
+ * awareness; the review card itself reads the `skill_creator` tool result's details and the
+ * host's draft status.
+ */
+export interface SkillCreatorState {
+  /** The managed draft (`agent/<task>/skill-creator/<draftId>/`) this branch is working on. */
+  draftId: string;
+  /** The skill's name as prepared. */
+  name: string;
+  /** The latest previewed revision awaiting the user, when one has been previewed. */
+  revision?: string;
+}
+
+/**
+ * The versioned details a `skill_creator` preview result carries. Small by contract: details
+ * ride every snapshot and the session file, so the body is a bounded preview and the full
+ * skill stays on disk, read through the host on demand.
+ */
+export interface SkillPreviewDetails {
+  v: 1;
+  source: "skill_creator_preview";
+  /** The chat whose managed workspace holds the draft; a forked chat can read but not save it. */
+  ownerTaskId: string;
+  draftId: string;
+  /** SHA-256 over the draft's sorted files at review time; saving refuses any other revision. */
+  revision: string;
+  name: string;
+  description: string;
+  /** `disable-model-invocation: true`: only `/skill:name` uses it. */
+  manual: boolean;
+  argumentHint?: string;
+  /** Where the skill will be installed: a new folder, or a copy into the shared library. */
+  target: "new" | "library-update" | "library-copy";
+  /** The folder or package label the draft started from, when improving an existing skill. */
+  originLabel?: string;
+  /** The draft's `SKILL.md` body, truncated for the card; full body read on demand. */
+  bodyPreview: string;
+  bodyTruncated: boolean;
+  /** Supporting files relative to the skill folder (bounded list). */
+  files: string[];
+  fileCount: number;
+  totalBytes: number;
+  /** Validation warnings that did not stop the preview. */
+  warnings: string[];
+}
+
 /** One option in an ask_user_question question. */
 export interface AskQuestionOption {
   /** Short choice label (1-5 words). */
@@ -593,6 +642,17 @@ export type WorkerCommand =
       /** The chat's one title chance when /init is its opening run; the worker titles from the generated prompt. */
       autoTitle?: AutoTitleRequest | null;
     }
+  | {
+      id: string;
+      type: "skill_creator";
+      /** The user's request after /skill-creator: may be empty (the agent interviews first). */
+      request: string;
+      runId: string;
+      startedAt?: number;
+      checkpoint?: CheckpointRef | null;
+      /** The chat's one title chance when /skill-creator opens it; the worker titles from the request. */
+      autoTitle?: AutoTitleRequest | null;
+    }
   | { id: string; type: "compact"; runId: string; startedAt?: number; instructions?: string }
   | {
       id: string;
@@ -688,6 +748,8 @@ export type WorkerCommand =
   | { id: string; type: "browser_response"; requestId: string; success: false; error: string }
   | { id: string; type: "computer_response"; requestId: string; success: true; result: unknown }
   | { id: string; type: "computer_response"; requestId: string; success: false; error: string }
+  | { id: string; type: "skill_creator_response"; requestId: string; success: true; result: unknown }
+  | { id: string; type: "skill_creator_response"; requestId: string; success: false; error: string }
   /**
    * The original image of a screenshot tool result (answered with an `ImageContent` or null),
    * for the transcript's lightbox. Bypasses the command queue once the session exists.
@@ -885,6 +947,8 @@ export interface SessionSnapshot {
   planState?: PlanState;
   todoState?: TodoState;
   goalState?: GoalState;
+  /** The /skill-creator workflow on this branch, while one is active. */
+  skillCreator?: SkillCreatorState;
 }
 
 /**
@@ -918,6 +982,8 @@ export interface SnapshotDelta {
   todoState?: TodoState;
   /** Present only when it changed; null clears the goal, absent leaves it unchanged. */
   goalState?: GoalState | null;
+  /** Present only when it changed; null clears the workflow, absent leaves it unchanged. */
+  skillCreator?: SkillCreatorState | null;
 }
 
 /** An extension asking the user something. Mirrors Pi's own RPC dialog surface. */
@@ -958,6 +1024,9 @@ export type WorkerOutput =
   | { type: "browser_cancel"; taskId: string; requestId: string }
   | { type: "computer_request"; taskId: string; requestId: string; request: Record<string, unknown> }
   | { type: "computer_cancel"; taskId: string; requestId: string }
+  /** The skill-creator built-in asking its host to prepare/preview a managed draft. */
+  | { type: "skill_creator_request"; taskId: string; requestId: string; request: Record<string, unknown> }
+  | { type: "skill_creator_cancel"; taskId: string; requestId: string }
   | ({ type: "extension_ui_request"; taskId: string; requestId: string } & ExtensionUIRequest)
   | { type: "extension_ui_resolved"; taskId: string; requestId: string; cancelled: boolean }
   | { type: "extension_notice"; taskId: string; message: string; level: "info" | "warning" | "error" }

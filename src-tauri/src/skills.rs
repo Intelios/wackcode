@@ -20,11 +20,21 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Stdio,
+    sync::OnceLock,
     time::Duration,
 };
 use tauri::{AppHandle, Manager};
 use tokio::{io::AsyncWriteExt, process::Command};
 use uuid::Uuid;
+
+/// Serializes every mutation of `~/.agents/skills` (Settings saves, deletes, imports and
+/// copies, plus /skill-creator publication) so two of them can never interleave their
+/// check-then-commit. Held only around the mutation itself, never across a scan.
+static LIBRARY_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
+pub async fn library_guard() -> tokio::sync::MutexGuard<'static, ()> {
+    LIBRARY_LOCK.get_or_init(|| tokio::sync::Mutex::new(())).lock().await
+}
 
 pub const LIBRARY_ID: &str = "library";
 const CUSTOM_PREFIX: &str = "custom:";
@@ -617,6 +627,18 @@ struct ScanLine {
     packages: Vec<ScannedGroup>,
     #[serde(default)]
     error: Option<String>,
+}
+
+/// One folder scanned on its own (Pi's own parse of whatever it holds). Used by the
+/// skill-creator's preview, which validates a draft with the same loader a chat will use.
+pub async fn scan_single_folder(app: &AppHandle, folder: &Folder) -> Result<(Vec<ScannedSkill>, Vec<String>), String> {
+    let scanned = run_scan(app, &[folder.clone()], &[], &[]).await?;
+    let group = scanned.folders.iter().find(|group| group.id == folder.id);
+    let skills = group.map(|group| group.skills.clone()).unwrap_or_default();
+    let diagnostics = group
+        .map(|group| group.diagnostics.iter().map(|diagnostic| diagnostic.message.clone()).collect())
+        .unwrap_or_default();
+    Ok((skills, diagnostics))
 }
 
 #[derive(Debug, Deserialize)]

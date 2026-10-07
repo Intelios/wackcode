@@ -1,6 +1,6 @@
 import type { Usage } from "@earendil-works/pi-ai";
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
-import type { AskQuestion, CommandPresentation, GoalState, PlanState, QuestionAnswer, SubagentSpec, SubagentTranscript, TodoState } from "../protocol.js";
+import type { AskQuestion, CommandPresentation, GoalState, PlanState, QuestionAnswer, SkillCreatorState, SubagentSpec, SubagentTranscript, TodoState } from "../protocol.js";
 import type { GoalVerdict, GoalVerifyInput } from "./goal/verify.js";
 
 /** What a running child reports while it works. */
@@ -63,6 +63,8 @@ export interface BuiltinHost {
   ): Promise<QuestionAnswer[] | "wrap_up" | undefined>;
   /** Publish Plan mode state so the desktop can render the toggle and review card. */
   publishPlanState(state: PlanState): void;
+  /** Publish the /skill-creator workflow's branch state (null clears it). */
+  publishSkillCreatorState(state: SkillCreatorState | null): void;
   /** Publish the todo list so the desktop can render the panel above the composer. */
   publishTodoState(state: TodoState): void;
   /** Publish goal-loop state so the desktop can render the banner (null clears it). */
@@ -91,8 +93,13 @@ export interface BuiltinHost {
   notice(message: string, level: "info" | "warning" | "error"): void;
   /** The chat's workspace folder, once the worker is initialized. */
   workspace(): string | undefined;
+  /** This chat's id, for card details that must stay bound to their owning chat. */
+  taskId(): string | undefined;
   /** Send one browser operation to the native host. The host owns the per-chat WebKit view. */
   browser(request: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>;
+  /** Send one skill-creator operation (prepare/preview) to the native host, which owns the
+   *  managed draft workspace, validation and publication receipts. */
+  skillCreator(request: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>;
   /**
    * Send one computer-use operation to the native host, which owns capture, input, the per-app
    * grants and the access card. Rejects when the host refuses or the signal aborts.

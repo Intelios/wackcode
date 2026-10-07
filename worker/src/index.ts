@@ -12,6 +12,7 @@ import { BROWSER_TOOL_NAMES } from "./builtin/browser.js";
 import { COMPUTER_TOOL_NAMES } from "./builtin/computer-use/params.js";
 import { GOAL_VERIFIER_SYSTEM } from "./builtin/goal/prompt.js";
 import { runGoalVerification } from "./builtin/goal/verify.js";
+import { buildSkillCreatorPrompt } from "./builtin/skill-creator/guide.js";
 import type { BuiltinHost, SubagentOutcome } from "./builtin/host.js";
 import { normalizeMessage as normalizeSavedMessage, textFromContent, THUMBNAIL_OPTIONS, THUMBNAIL_RESULT_TOOLS } from "./message-normalization.js";
 import { SUBAGENT_TOOL_NAME } from "./builtin/subagents/types.js";
@@ -26,6 +27,7 @@ import {
   sameModelSwitches,
   samePlanState,
   sameRunTimings,
+  sameSkillCreatorState,
   sameStats,
   sameTodoState,
   sameTree
@@ -72,6 +74,7 @@ import {
   type QuestionAnswer,
   type RunTiming,
   type SessionSnapshot,
+  type SkillCreatorState,
   type SlashCommand,
   type SubagentRuntimeConfig,
   type SubagentTarget,
@@ -133,8 +136,8 @@ let disabledTools = new Set<string>();
 let subagentRunner: SubagentRunner | undefined;
 /** Aborts the wait for MCP servers at the start of a run, when the user presses Stop. */
 let mcpWait: AbortController | undefined;
-/** Which native host subsystem a request goes to: the per-chat browser or computer use. */
-type NativeChannel = "browser" | "computer";
+/** Which native host subsystem a request goes to: the per-chat browser, computer use, or the skill-creator's managed drafts. */
+type NativeChannel = "browser" | "computer" | "skill_creator";
 interface PendingNativeRequest {
   channel: NativeChannel;
   resolve(value: unknown): void;
@@ -147,10 +150,12 @@ const pendingNativeRequests = new Map<string, PendingNativeRequest>();
 const NATIVE_CANCELLED: Record<NativeChannel, string> = {
   browser: "Browser action cancelled.",
   computer: "Computer use was stopped.",
+  skill_creator: "The skill-creator action was stopped.",
 };
 const NATIVE_WORKER_STOPPED: Record<NativeChannel, string> = {
   browser: "Browser action cancelled because the worker stopped.",
   computer: "Computer use was stopped because the chat's worker stopped.",
+  skill_creator: "The skill-creator action was stopped because the chat's worker stopped.",
 };
 
 /** Rejects every pending native request and tells the host, which stops the work it can. */
@@ -244,6 +249,10 @@ const builtinHost: BuiltinHost = {
   publishPlanState: (state) => {
     if (taskId) send({ type: "plan_state", taskId, ...state });
   },
+  publishSkillCreatorState: (state) => {
+    // The snapshot is the renderer's view of the workflow; a state change forces its emission.
+    scheduleSnapshot();
+  },
   publishTodoState: (state) => {
     if (taskId) send({ type: "todo_state", taskId, tasks: state.tasks });
   },
@@ -280,11 +289,15 @@ const builtinHost: BuiltinHost = {
   redact: (text) => redactCredentials(text),
   notice: (message, level) => notice(safeError(message), level),
   workspace: () => workspacePath,
+  taskId: () => taskId,
   browser: (request, signal) => nativeRequest("browser", request, signal),
   computer: (request, signal) => nativeRequest("computer", request, signal),
+  skillCreator: (request, signal) => nativeRequest("skill_creator", request, signal),
   supportsVision: () => Boolean((session?.model?.input as string[] | undefined)?.includes("image")),
 };
-const builtins = createBuiltinExtensions(builtinHost);
+const builtins = createBuiltinExtensions(builtinHost, {
+  commandEnabled: (appKey) => !(userCommandsPayload?.disabled ?? []).includes(appKey),
+});
 
 /**
  * Apply the user's sub-agent settings. Credentials stay with the runner; the extension only
@@ -559,7 +572,7 @@ function toolCatalog(): ToolCatalogEntry[] {
 // switches too (Settings › MCP servers), and stay out while their server is off or unreachable.
 function applyDisabledTools(): void {
   if (!session) return;
-  const inactive = new Set([...builtins.subagents.inactiveTools(), ...builtins.mcp.inactiveTools(), ...builtins.computerUse.inactiveTools(), ...builtins.memory.inactiveTools()]);
+  const inactive = new Set([...builtins.subagents.inactiveTools(), ...builtins.mcp.inactiveTools(), ...builtins.computerUse.inactiveTools(), ...builtins.memory.inactiveTools(), ...builtins.skillCreator.inactiveTools()]);
   session.setActiveToolsByName(
     toolCatalog()
       .filter((tool) => tool.available && !inactive.has(tool.name))
@@ -643,7 +656,8 @@ function getSnapshot(rev: number): SessionSnapshot {
     executionPolicy: builtins.getExecutionPolicy(),
     planState: builtins.planMode.getState(),
     todoState: builtins.todo.getState(),
-    goalState: builtins.goal.getState()
+    goalState: builtins.goal.getState(),
+    skillCreator: builtins.skillCreator.getState()
   };
 }
 
@@ -688,6 +702,7 @@ interface EmittedState {
   planState?: PlanState;
   todoState?: TodoState;
   goalState?: GoalState;
+  skillCreator?: SkillCreatorState;
   stats: SessionSnapshot["stats"];
   tree: SessionSnapshot["tree"];
 }
@@ -708,6 +723,7 @@ function recordEmitted(snapshot: SessionSnapshot): void {
     planState: snapshot.planState,
     todoState: snapshot.todoState,
     goalState: snapshot.goalState,
+    skillCreator: snapshot.skillCreator,
     stats: snapshot.stats,
     tree: snapshot.tree
   };
@@ -743,6 +759,7 @@ function emitBoundary(): void {
   const planState = samePlanState(emitted.planState, snapshot.planState) ? undefined : snapshot.planState;
   const todoState = sameTodoState(emitted.todoState, snapshot.todoState) ? undefined : snapshot.todoState;
   const goalState = sameGoalState(emitted.goalState, snapshot.goalState) ? undefined : snapshot.goalState ?? null;
+  const skillCreator = sameSkillCreatorState(emitted.skillCreator, snapshot.skillCreator) ? undefined : snapshot.skillCreator ?? null;
   const runTimings = sameRunTimings(emitted.runTimings, snapshot.runTimings) ? undefined : snapshot.runTimings;
   const modelSwitches = sameModelSwitches(emitted.modelSwitches, snapshot.modelSwitches) ? undefined : snapshot.modelSwitches;
   const sessionFile = emitted.sessionFile === snapshot.sessionFile ? undefined : snapshot.sessionFile;
@@ -754,6 +771,7 @@ function emitBoundary(): void {
   if (
     diff.upserts.length === 0 && diff.removed.length === 0
     && executionPolicy === undefined && planState === undefined && todoState === undefined && goalState === undefined
+    && skillCreator === undefined
     && runTimings === undefined && modelSwitches === undefined
     && sessionFile === undefined && activeRun === undefined && compaction === undefined
     && sameStats(emitted.stats, snapshot.stats) && sameTree(emitted.tree, snapshot.tree)
@@ -777,7 +795,8 @@ function emitBoundary(): void {
       ...(executionPolicy !== undefined ? { executionPolicy } : {}),
       ...(planState !== undefined ? { planState } : {}),
       ...(todoState !== undefined ? { todoState } : {}),
-      ...(goalState !== undefined ? { goalState } : {})
+      ...(goalState !== undefined ? { goalState } : {}),
+      ...(skillCreator !== undefined ? { skillCreator } : {})
     }
   });
 }
@@ -1568,7 +1587,7 @@ async function handle(command: WorkerCommand): Promise<void> {
       await initialize(command);
     } else if (!session || !taskId) {
       throw new Error("Worker is not initialized");
-    } else if (command.type === "browser_response" || command.type === "computer_response") {
+    } else if (command.type === "browser_response" || command.type === "computer_response" || command.type === "skill_creator_response") {
       const pending = pendingNativeRequests.get(command.requestId);
       if (!pending) return;
       pendingNativeRequests.delete(command.requestId);
@@ -1645,6 +1664,37 @@ async function handle(command: WorkerCommand): Promise<void> {
         }
       } catch (error) {
         send({ type: "worker_error", taskId, message: safeError(error) });
+      }
+      return;
+    } else if (command.type === "skill_creator") {
+      if (builtins.planMode.getState().mode !== "build") throw new Error("Switch to Build mode before running /skill-creator.");
+      if ((userCommandsPayload?.disabled ?? []).includes("app:skill-creator")) {
+        throw new Error("That command is switched off in Settings › Commands.");
+      }
+      if (!workerAgentDir) throw new Error("The workspace is not available for /skill-creator.");
+      if (chatModelMissing()) throw new Error(missingModelReason);
+      const prompt = buildSkillCreatorPrompt(command.request, builtinHost);
+      // /skill-creator can be a chat's opening run: its title chance labels the user's request.
+      if (command.autoTitle) startAutoTitle(command.autoTitle, command.request.trim() || "/skill-creator");
+      // The tool may prepare a draft before any workflow entry exists, so the run is marked live.
+      builtins.skillCreator.setCommandRun(true);
+      let outcome: PromptOutcome;
+      try {
+        outcome = await runPrompt(
+          command.id,
+          command.runId,
+          runStartedAt(command.startedAt),
+          prompt,
+          undefined,
+          command.checkpoint,
+          true,
+          { id: "app:skill-creator", name: "skill-creator", arguments: command.request.trim(), kind: "command" }
+        );
+      } finally {
+        builtins.skillCreator.setCommandRun(false);
+      }
+      if (outcome === "failed" && taskId) {
+        notice("The skill-creator run failed. Check the transcript, then run /skill-creator again.", "warning");
       }
       return;
     } else if (command.type === "compact") {
@@ -1915,7 +1965,7 @@ async function handle(command: WorkerCommand): Promise<void> {
     if (!REQUEST_COMMANDS.has(command.type)) send({ type: "worker_error", taskId, message: safeError(error) });
     // The host marks a chat running before it sends a prompt; one refused before it started
     // must say it is idle again. (A run that did start reports its own end.)
-    if (taskId && (command.type === "prompt" || command.type === "resend" || command.type === "execute_command" || command.type === "init_agents" || command.type === "compact" || (command.type === "goal_control" && command.action === "set")) && activeRun?.runId !== command.runId) {
+    if (taskId && (command.type === "prompt" || command.type === "resend" || command.type === "execute_command" || command.type === "init_agents" || command.type === "skill_creator" || command.type === "compact" || (command.type === "goal_control" && command.action === "set")) && activeRun?.runId !== command.runId) {
       send({ type: "run_state", taskId, runId: command.runId, state: "idle" });
     }
   }
@@ -1930,7 +1980,7 @@ function closeMcpServers(): Promise<void> {
 }
 
 /** Commands the host sends with `worker::request` and whose failures it reports itself. */
-const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "list_commands", "execute_command", "init_agents", "compact", "dequeue", "queue_message", "steer_message", "goal_control", "watch_subagent", "tool_image", "message_image"]);
+const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "list_commands", "execute_command", "init_agents", "skill_creator", "compact", "dequeue", "queue_message", "steer_message", "goal_control", "watch_subagent", "tool_image", "message_image"]);
 
 /**
  * The original of a screenshot tool result's image, for the transcript's lightbox. Only the
@@ -2046,6 +2096,7 @@ function bypassesQueue(command: WorkerCommand): boolean {
     case "abort":
     case "browser_response":
     case "computer_response":
+    case "skill_creator_response":
     case "extension_ui_response":
     case "queue_message":
     case "steer_message":

@@ -28,7 +28,10 @@ normalized messages or their block indices. `turn` identifies the latest assista
 completion: all user turns at/after `activeRun.startedAt` stay open, including steering turns.
 Only settled successful turns with both work and a final answer/plan fold. Missing timings use
 “View work”; interrupted, failed, unfinished, tool-only and system-notice turns stay detailed.
-The latest successful PlanCard and terminal actions remain outside the fold. The Appearance
+The latest successful PlanCard and terminal actions remain outside the fold. Skill-creator
+review cards do too: a `skill_creator` preview result renders as the `SkillDraftCard` (the
+newest one on the branch actionable; older ones inert), with its publication state hydrated
+from the host and its Save publishing through Rust, never the agent. The Appearance
 preference defaults on; sub-agent inspection transcripts explicitly opt out.
 
 `WorkTurn` deliberately uses `getSnapshotBeforeUpdate` to capture a reading/focus anchor before

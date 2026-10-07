@@ -10,7 +10,7 @@ import { chatModelGone, modelDisplayName, modelIsReady, pickThinkingLevel, type 
 import { titleFromPrompt, samePlanState, sameTodoState, sameGoalState, applySnapshotDelta, applySubagentFrame, pendingSubagentView, pendingEchoMessage, withPendingEcho, validateInitCommand, nextMode, isPlanMode } from "./chat-utils";
 import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix } from "./tree-utils";
 import { composeFileSection, splitFileSection, type FileAttachment } from "./attachment-utils";
-import { displayAgentName, hasSubagentCall, pruneDisabledTools, sameToolCatalog, subagentDetailsFor } from "./tool-utils";
+import { displayAgentName, hasSubagentCall, pruneDisabledTools, sameToolCatalog, subagentDetailsFor, parseSkillPreviewDetails, SKILL_CREATOR_TOOL_NAME } from "./tool-utils";
 import { CHANGES_VIEW, TERMINAL_VIEW, RUN_VIEW, durableView, rememberedView, toggleView, viewForChat, viewKey, type PanelViewKind, type SidePanelView } from "./side-panel";
 import { applyRunEvent, EMPTY_RUN_REGISTRY } from "./run-state";
 import { APP_SLASH_COMMANDS } from "./command-utils";
@@ -101,6 +101,7 @@ import { GoalBanner } from "./components/GoalBanner";
 import { ComputerUseBanner } from "./components/ComputerUseBanner";
 import { InlineDialog, type ExtensionUIResponse } from "./components/InlineDialog";
 import type { PlanAction } from "./components/PlanCard";
+import type { SkillDraftAction } from "./components/SkillDraftCard";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { SubscriptionLoginDialog } from "./components/SubscriptionLoginDialog";
 import { ExploreGroupingEnabled } from "./components/ExploreGroup";
@@ -272,6 +273,8 @@ export default function App() {
   const [gitPrRequest, setGitPrRequest] = useState(0);
   const [confirm, setConfirm] = useState<ConfirmState>();
   const [restoreDialog, setRestoreDialog] = useState<RestoreDialogState>();
+  /** Skill drafts with a save in flight, so their card buttons disable while publishing. */
+  const [skillDraftsSaving, setSkillDraftsSaving] = useState<ReadonlySet<string>>(new Set());
   const composerDrafts = useComposerDrafts();
   /** Rewind requests are consumed once by their chat, including across selection changes. */
   const [composerSeed, setComposerSeed] = useState<{ taskId: string; text: string; nonce: number }>();
@@ -418,6 +421,33 @@ export default function App() {
     if (!taskId) return Promise.resolve(undefined);
     return api.messageImage(taskId, entryId, index).then((image) => image ? `data:${image.mimeType};base64,${image.data}` : undefined);
   }, []);
+
+  /** A skill draft's full SKILL.md body, for the open chat's review card. */
+  const loadSkillDocument = useCallback((draftId: string) => {
+    const taskId = selectedTaskRef.current;
+    if (!taskId) return Promise.resolve(undefined);
+    return api.readSkillDraft(taskId, draftId).then((document) => document?.body).catch(() => undefined);
+  }, []);
+
+  // Review cards hydrate their publication state from the host keyed to the newest preview on
+  // the branch — so a chat open, a later preview in the same session, and a branch switch all
+  // re-hydrate, while a failed hydration clears its key so the next snapshot retries.
+  const latestSkillDraft = useMemo(() => {
+    const messages = runtime?.snapshot?.messages ?? [];
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      for (const block of messages[index].blocks) {
+        if (block.type === "tool-result" && block.toolName === SKILL_CREATOR_TOOL_NAME && !block.isError) {
+          const details = parseSkillPreviewDetails(block.details);
+          if (details) return `${details.draftId}:${details.revision}`;
+        }
+      }
+    }
+    return undefined;
+  }, [runtime?.snapshot]);
+  useEffect(() => {
+    if (!selectedTask || !latestSkillDraft || runtime?.skillDraftsKey === latestSkillDraft) return;
+    void refreshSkillDrafts(selectedTask.id, latestSkillDraft);
+  }, [selectedTask, latestSkillDraft, runtime?.skillDraftsKey]);
 
   const handleComputerAccess = useCallback((request: ComputerAccessRequest, decision: ComputerAccessDecision) => {
     setAccessRequests((current) => current.filter((entry) => entry.requestId !== request.requestId));
@@ -1167,6 +1197,7 @@ export default function App() {
       if (isPlanMode(currentMode)) throw new Error("Goal loops don't run while a planning mode is on. Switch to Build first.");
     }
     if (name === "init") validateInitCommand(args, selectedTask?.projectId ?? draft?.projectId ?? null, currentMode);
+    if (name === "skill-creator" && isPlanMode(currentMode)) throw new Error("Switch to Build mode before running /skill-creator.");
     // Commands that act on the current chat have nothing to act on from the draft hero and must
     // not create one; /new just resets the draft. A command that starts work (/init, /goal,
     // a skill, template or extension command) creates the chat here — keystrokes never do.
@@ -1214,6 +1245,7 @@ export default function App() {
         compaction: name === "compact" ? { reason: "manual" } : undefined, slashCommandsError: undefined });
       if (name === "compact") await api.compactTask(id, args, startedAt);
       else if (name === "init") await api.initAgents(id, startedAt);
+      else if (name === "skill-creator") await api.startSkillCreator(id, args, startedAt);
       else if (name === "goal") await api.goalControl(id, "set", args.trim(), startedAt);
       else {
         const command = runtime?.slashCommands?.find((entry) => entry.name === name) ?? draftCommand;
@@ -1884,6 +1916,49 @@ export default function App() {
     }
   }
 
+  /** The skill-draft review card's actions: publish a reviewed revision, or reveal the draft. */
+  async function skillDraftAction(action: SkillDraftAction) {
+    if (!selectedTask) return;
+    if (action.type === "reveal") {
+      try { await api.revealPath(action.draftRoot); } catch (reason) { setGlobalError(String(reason)); }
+      return;
+    }
+    setSkillDraftsSaving((current) => new Set(current).add(action.draftId));
+    try {
+      const result = await api.publishSkillDraft(selectedTask.id, action.draftId, action.revision);
+      appendNotice(selectedTask.id, {
+        message: result.overwritten ? `Updated ${result.path}. The new version loads from your next message.` : `Saved ${result.path}. Available from your next message.`,
+        level: "info"
+      });
+      // Refresh the card's publication state and drop the cached `/` catalog so the picker
+      // refetches (the new skill rides the queued set_skills broadcast to the worker).
+      patchRuntime(selectedTask.id, { slashCommands: undefined, slashCommandsError: undefined });
+      await refreshSkillDrafts(selectedTask.id, `${action.draftId}:${action.revision}`);
+    } catch (reason) {
+      appendNotice(selectedTask.id, { message: String(reason), level: "error" });
+    } finally {
+      setSkillDraftsSaving((current) => {
+        const next = new Set(current);
+        next.delete(action.draftId);
+        return next;
+      });
+    }
+  }
+
+  /** Hydrate (or refresh) the selected chat's draft publication states from the host. */
+  async function refreshSkillDrafts(taskId: string, key: string) {
+    try {
+      const statuses = await api.skillDraftStatus(taskId);
+      patchRuntime(taskId, {
+        skillDraftsKey: key,
+        skillDrafts: Object.fromEntries(statuses.map((status) => [status.draftId, status]))
+      });
+    } catch {
+      // The cards show their unhydrated state; the next snapshot event retries.
+      patchRuntime(taskId, { skillDraftsKey: undefined });
+    }
+  }
+
   /** Open the restore dialog; resolves true once a choice has run, false when closed without one. */
   function chooseFiles(state: Omit<RestoreDialogState, "onClose">): Promise<boolean> {
     return new Promise((resolve) => {
@@ -2123,10 +2198,11 @@ export default function App() {
   }
 
   // Stable identities for the memoized transcript: the latest handlers are read through refs.
-  const handlers = useRef({ messageAction, planAction, undoRewind: () => undefined as void });
+  const handlers = useRef({ messageAction, planAction, skillDraftAction, undoRewind: () => undefined as void });
   handlers.current = {
     messageAction,
     planAction,
+    skillDraftAction,
     undoRewind: () => {
       const undo = runtime?.snapshot?.tree?.undo;
       if (undo) void moveInTree(undo, "undo");
@@ -2134,6 +2210,7 @@ export default function App() {
   };
   const onMessageAction = useCallback((action: MessageAction) => handlers.current.messageAction(action), []);
   const onPlanAction = useCallback((action: PlanAction) => void handlers.current.planAction(action), []);
+  const onSkillDraftAction = useCallback((action: SkillDraftAction) => void handlers.current.skillDraftAction(action), []);
   const onUndoRewind = useCallback(() => handlers.current.undoRewind(), []);
 
   async function stopTask() {
@@ -2753,6 +2830,11 @@ export default function App() {
               liveToolDetails={runtime?.liveToolDetails}
               planState={runtime?.planState}
               onPlanAction={onPlanAction}
+              skillDrafts={runtime?.skillDrafts}
+              skillDraftsSaving={skillDraftsSaving}
+              taskId={selectedTask.id}
+              onSkillAction={onSkillDraftAction}
+              loadSkillDocument={loadSkillDocument}
               actionsEnabled={!selectedBusy && !pendingDialogTaskIds.has(selectedTask.id)}
               vision={selectedModel?.vision === true}
               modelName={selectedModel?.name || selectedModel?.id}

@@ -87,7 +87,7 @@ The user's Terminal and project Run processes are separate and unchanged.
 
 ## Built-in extensions (`worker/src/builtin/`)
 
-WackCode's own extensions load as inline factories, so they bypass the package trust gate by construction. They are: `ask-user-question`, `auto-title`, `bash-jobs`, `browser`, `computer-use`, `goal`, `mcp`, `memory`, `plan-mode`, `subagents`, `todo`, `web-fetch`.
+WackCode's own extensions load as inline factories, so they bypass the package trust gate by construction. They are: `ask-user-question`, `auto-title`, `bash-jobs`, `browser`, `computer-use`, `goal`, `mcp`, `memory`, `plan-mode`, `skill-creator`, `subagents`, `todo`, `web-fetch`.
 
 - Adding or renaming one also updates `BUILTIN_EXTENSIONS` in `src/components/PackagesSection.tsx`, which shows them so nobody installs a duplicate package.
 - Sub-agents never get browser, computer-use, MCP or memory tools, or skills. A child session loads its role's tool allowlist, its own shell check-in extension and the extensions the built-in hands it.
@@ -96,6 +96,15 @@ WackCode's own extensions load as inline factories, so they bypass the package t
 ## Multi-run loops (`/goal`)
 
 A built-in that iterates past one run queues its next turn from its `agent_settled` handler via `pi.sendUserMessage`. The run is already inactive there, so this starts a fresh nested run. The worker suppresses `run_state: idle` while `willContinue()` is true, so the chat never flashes idle between rounds. The verifier is a separate no-tools call on the chat's own model.
+
+## Skill creator (`/skill-creator`)
+
+A guided workflow for creating and improving Agent Skills (Anthropic's skill-creator inspired the loop; the guide and tooling are WackCode's own). The `skill_creator` worker command starts a Build-mode run on the bundled guide prompt (`builtin/skill-creator/guide.ts`); the model then works through one sequential tool, `skill_creator`:
+
+- `prepare` asks the host (`skill_creator_request`, answered by `skill_creator_response`; both bypass the prompt queue like the browser channel) to create a managed draft under `agent/<task>/skill-creator/<draft-id>/`, snapshotting an existing skill into `original/` when improving one. The draft identity persists as a `wackcode-skill-creator` session entry, so the workflow is branch-scoped: a rewind to before it removes it (`session_tree`/`session_compact` re-derive the state), and the snapshot mirrors it in `skillCreator`.
+- `preview` has the host validate the draft with Pi's own keyless skill scan, hash it, and write an immutable review snapshot. The result carries versioned `details` (`SkillPreviewDetails`, hard-capped like the sub-agent card's) and `terminate: true`, so the review card is the turn's outcome; the desktop renders it from the tool result like a Plan card, and only the newest preview on the branch is actionable.
+
+The tool exists only while the workflow is active on the branch (or the command's run is live), is Build-only, and is withheld while `/skill-creator` is switched off (its `app:` key in the command denylist drives `inactiveTools`). The agent never writes into `~/.agents/skills`: publication is the card's native Save button (`publish_skill_draft` in Rust), which re-verifies the reviewed revision under the shared skill-library lock (`skills::library_guard`, also held by Settings' save/delete/import/copy), commits with exclusive rename (new skills) or `RENAME_SWAP` (folder updates), and journals a receipt that `skill_draft_status` reconciles after an interrupted save. `set_skills` then carries the new skill to live workers on their next turn.
 
 ## Planning modes
 
@@ -116,7 +125,7 @@ A built-in that iterates past one run queues its next turn from its `agent_settl
 ## Slash commands and skills
 
 - A command's key (`commandKey` in `worker/src/slash.ts`) must stay identical across the Settings denylist, `commands-scan.ts` and the worker's catalog.
-- WackCode owns six names (`APP_COMMAND_NAMES`: `/init`, `/compact`, `/new`, `/name`, `/copy`, `/goal`). The first entry to claim any other name wins it; a later clash is renamed `<source>:<name>` (`resolveCommandNames`), and a switched-off command frees its name.
+- WackCode owns seven names (`APP_COMMAND_NAMES`: `/init`, `/compact`, `/new`, `/name`, `/copy`, `/goal`, `/skill-creator`). The first entry to claim any other name wins it; a later clash is renamed `<source>:<name>` (`resolveCommandNames`), and a switched-off command frees its name.
 - Skill and command folders are re-read before every run, so edits on disk apply from the next message. Where they may load from is a security rule; see [security.md](security.md#pi-lockdown).
 
 ## Errors and redaction

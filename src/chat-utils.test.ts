@@ -350,6 +350,16 @@ describe("applySnapshotDelta", () => {
     expect(cleared.goalState).toBeUndefined();
     expect(cleared.messages[0]).toBe(a);
   });
+
+  it("applies skill-creator state: absent keeps, null clears", () => {
+    const workflow = { draftId: "d-1", name: "pdf-tools", revision: "r-1" };
+    const base = { ...snapshot([message("a")], 1), skillCreator: workflow };
+    expect(applySnapshotDelta(base, delta({ rev: 2 })).skillCreator).toBe(workflow);
+    expect(applySnapshotDelta(base, delta({ rev: 2, skillCreator: workflow })).skillCreator).toBe(workflow);
+    const replaced = applySnapshotDelta(base, delta({ rev: 2, skillCreator: { draftId: "d-2", name: "other" } }));
+    expect(replaced.skillCreator).toEqual({ draftId: "d-2", name: "other" });
+    expect(applySnapshotDelta(base, delta({ rev: 2, skillCreator: null })).skillCreator).toBeUndefined();
+  });
 });
 
 describe("thinkingStream", () => {

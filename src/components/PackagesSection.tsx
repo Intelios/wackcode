@@ -133,6 +133,13 @@ const BUILTIN_EXTENSIONS: readonly BuiltinExtension[] = [
       "Keeps the agent iterating until the goal is verified: /goal <objective> starts a loop, and after every round a separate no-tools check on the chat's own model decides whether the objective is met or supplies the next action. Pauses itself after 3 rounds without progress and stops at 25 rounds; /goal pause, resume and clear control it.",
     tools: [],
     icon: "flame"
+  },
+  {
+    name: "Skill creator",
+    description:
+      "Powers /skill-creator: the agent interviews you, drafts a portable Agent Skill in a private workspace, can try it on realistic examples, and shows a review card you save to Your skills with one click. Nothing installs until you save.",
+    tools: ["skill_creator"],
+    icon: "book"
   }
 ];
 

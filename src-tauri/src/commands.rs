@@ -1417,28 +1417,32 @@ pub async fn save_skill(
     let hint = skills::validate_hint(&input.argument_hint)?;
     let body = skills::validate_body(&input.body)?;
     let home = skills::home_dir(&app)?;
-    match input.path.as_deref() {
-        None => {
-            skills::create_skill(&home, &name, &description, input.manual, &hint, &body)?;
-        }
-        Some(path) => {
-            let saved =
-                skills::update_skill(&home, path, &name, &description, input.manual, &hint, &body)?
-                    .display()
-                    .to_string();
-            if saved != path {
-                // A renamed skill keeps its switch.
-                state.mutate(|data| {
-                    for entry in data
-                        .skills
-                        .disabled
-                        .iter_mut()
-                        .filter(|entry| entry.as_str() == path)
-                    {
-                        *entry = saved.clone();
-                    }
-                    Ok(())
-                })?;
+    {
+        // The lock covers only the write; the fresh overview scan runs after it is released.
+        let _guard = skills::library_guard().await;
+        match input.path.as_deref() {
+            None => {
+                skills::create_skill(&home, &name, &description, input.manual, &hint, &body)?;
+            }
+            Some(path) => {
+                let saved =
+                    skills::update_skill(&home, path, &name, &description, input.manual, &hint, &body)?
+                        .display()
+                        .to_string();
+                if saved != path {
+                    // A renamed skill keeps its switch.
+                    state.mutate(|data| {
+                        for entry in data
+                            .skills
+                            .disabled
+                            .iter_mut()
+                            .filter(|entry| entry.as_str() == path)
+                        {
+                            *entry = saved.clone();
+                        }
+                        Ok(())
+                    })?;
+                }
             }
         }
     }
@@ -1452,11 +1456,14 @@ pub async fn delete_skill(
     state: State<'_, MetadataState>,
     path: String,
 ) -> Result<SkillsChange, String> {
-    skills::delete_skill(&skills::home_dir(&app)?, &path)?;
-    state.mutate(|data| {
-        data.skills.disabled.retain(|entry| entry != &path);
-        Ok(())
-    })?;
+    {
+        let _guard = skills::library_guard().await;
+        skills::delete_skill(&skills::home_dir(&app)?, &path)?;
+        state.mutate(|data| {
+            data.skills.disabled.retain(|entry| entry != &path);
+            Ok(())
+        })?;
+    }
     skills_changed(&app, None).await
 }
 
@@ -1651,13 +1658,19 @@ pub async fn import_skill(app: AppHandle, kind: String) -> Result<Option<SkillsC
     if found.is_empty() {
         return Err("No skills were found there. A skill is a folder with a SKILL.md file that has a name and a description.".into());
     }
-    let note = tauri::async_runtime::spawn_blocking(move || {
-        // Move staging into the blocking job as well: cancellation must not delete it mid-copy.
-        let _extracted = extracted;
-        skills::import_scanned(&home, &found)
-    })
-    .await
-    .map_err(|error| format!("Could not import the skills: {error}"))??;
+    let home = skills::home_dir(&app)?;
+    // Keep the library lock across the copy so a /skill-creator publish cannot interleave it.
+    let note = {
+        let _guard = skills::library_guard().await;
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            // Move staging into the blocking job as well: cancellation must not delete it mid-copy.
+            let _extracted = extracted;
+            skills::import_scanned(&home, &found)
+        })
+        .await
+        .map_err(|error| format!("Could not import the skills: {error}"))??;
+        result
+    };
     Ok(Some(skills_changed(&app, note).await?))
 }
 
@@ -1679,12 +1692,15 @@ pub async fn copy_skill_to_library(app: AppHandle, path: String) -> Result<Skill
         )
         .find(|skill| skill.file_path == path)
         .ok_or_else(|| "That skill is no longer there.".to_string())?;
-    skills::copy_into_library(
+    let _guard = skills::library_guard().await;
+    let copied = skills::copy_into_library(
         &skills::home_dir(&app)?,
         &skill.name,
         Path::new(&skill.file_path),
         Path::new(&skill.base_dir),
-    )?;
+    );
+    drop(_guard);
+    copied?;
     skills_changed(&app, None).await
 }
 
@@ -2559,6 +2575,121 @@ pub async fn compact_task(
         return Err(error);
     }
     Ok(run_id)
+}
+
+/// `/skill-creator <request>`: start the guided workflow. Like /init it runs a real Build-mode
+/// turn, so it takes the same locks, checkpoint and one title chance a prompt would.
+#[tauri::command]
+pub async fn start_skill_creator(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    task_id: String,
+    request: String,
+    started_at: u64,
+) -> Result<String, String> {
+    if request.len() > 100_000 {
+        return Err("That request is too long.".into());
+    }
+    let lock = task_lock(&app, &task_id);
+    let _guard = lock.lock().await;
+    let _checkout = checkout_dispatch_guard(&app, &state, &task_id).await;
+    let (task, provider) = task_and_provider(&state, &task_id)?;
+    if matches!(task.status, TaskStatus::Running | TaskStatus::Stopping) {
+        return Err("Wait for this chat to finish before running /skill-creator.".into());
+    }
+    if task.mode != TaskMode::Build {
+        return Err("Switch to Build mode before running /skill-creator.".into());
+    }
+    // /skill-creator can be a chat's opening run too; the worker titles from the request.
+    let (title_attempt, title_config) = begin_auto_title(
+        &app,
+        &state,
+        &task_id,
+        &command_opening(Some("skill-creator"), &request),
+    )?;
+    let api_key = credential_for(&app, &state, &provider)?;
+    worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
+    set_status(&state, &task.id, TaskStatus::Running)?;
+    let checkpoint = match checkpoint_location(&app, &state, &task) {
+        Ok(location) => snapshot_quietly(&app, &task.id, &location).await,
+        Err(_) => None,
+    };
+    let run_id = Uuid::new_v4().to_string();
+    let auto_title = finish_auto_title(&app, &state, &task.id, title_attempt, &title_config);
+    let result = worker::request(
+        &app,
+        &task.id,
+        json!({
+            "id": Uuid::new_v4().to_string(), "type": "skill_creator", "request": request,
+            "startedAt": started_at, "runId": run_id, "checkpoint": checkpoint, "autoTitle": auto_title
+        }),
+        REQUEST_TIMEOUT,
+    )
+    .await;
+    if let Err(error) = result {
+        let _ = set_status(&state, &task.id, TaskStatus::Idle);
+        return Err(error);
+    }
+    Ok(run_id)
+}
+
+/// Save a reviewed skill draft into the shared library — the review card's Save button. The
+/// chat must be idle and in Build mode; the skill creator validates the reviewed revision
+/// again under the library lock before anything is written. Needs no model and no worker.
+#[tauri::command]
+pub async fn publish_skill_draft(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    task_id: String,
+    draft_id: String,
+    revision: String,
+) -> Result<crate::skill_creator::PublishSkillDraftResult, String> {
+    let lock = task_lock(&app, &task_id);
+    let _guard = lock.lock().await;
+    let task = {
+        let data = state
+            .data
+            .lock()
+            .map_err(|_| "Metadata lock was poisoned".to_string())?;
+        data.tasks
+            .iter()
+            .find(|task| task.id == task_id)
+            .cloned()
+            .ok_or_else(|| "That chat no longer exists.".to_string())?
+    };
+    if matches!(task.status, TaskStatus::Running | TaskStatus::Stopping) {
+        return Err("Wait for this chat to finish before saving the skill.".into());
+    }
+    if task.mode != TaskMode::Build {
+        return Err("Switch to Build mode before saving the skill.".into());
+    }
+    let result = crate::skill_creator::publish(&app, &task_id, &draft_id, &revision).await?;
+    // The skill is saved; reaching live chats is best-effort. A worker that misses the
+    // broadcast picks the new skill up at its next spawn (it travels in `init`), and the
+    // renderer invalidates its slash-command cache on success.
+    let _ = worker::broadcast_skills(&app).await;
+    let _ = worker::broadcast_commands(&app).await;
+    Ok(result)
+}
+
+/// Every draft this chat owns, with its latest review and publication state, for the review
+/// cards' hydration. Reconciles interrupted commits; never starts a worker.
+#[tauri::command]
+pub async fn skill_draft_status(
+    app: AppHandle,
+    task_id: String,
+) -> Result<Vec<crate::skill_creator::SkillDraftStatus>, String> {
+    crate::skill_creator::status(&app, &task_id)
+}
+
+/// A draft's current SKILL.md document, for the review card's full-instructions view.
+#[tauri::command]
+pub async fn read_skill_draft(
+    app: AppHandle,
+    task_id: String,
+    draft_id: String,
+) -> Result<SkillDocument, String> {
+    crate::skill_creator::read_document(&app, &task_id, &draft_id)
 }
 
 /// `/goal` control: "set" starts the loop with a first run (idle chats only — it behaves like

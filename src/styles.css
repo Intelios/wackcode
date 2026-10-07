@@ -650,6 +650,31 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
   82% { opacity: 0; transform: translateY(-1.6px) scale(1.5); }
   100% { opacity: 0; transform: scale(.2); }
 }
+/* The bead rides the rail top to bottom, fading in and out at the ends so it never pops. */
+@keyframes rail-travel {
+  0% { top: 0; opacity: 0; }
+  12% { opacity: 1; }
+  88% { opacity: 1; }
+  100% { top: calc(100% - 4px); opacity: 0; }
+}
+/* The settling beat: the bead departs down the rest of the rail and dissolves. */
+@keyframes rail-settle {
+  from { top: 55%; opacity: .9; }
+  to { top: calc(100% - 4px); opacity: 0; }
+}
+/* Fresh ink cooling to the wet body's resting colour, glow and all. */
+@keyframes ink-settle {
+  from {
+    color: color-mix(in srgb, var(--wc-accent) 55%, var(--text));
+    text-shadow: 0 0 7px color-mix(in srgb, var(--wc-accent) 45%, transparent);
+  }
+  to { color: var(--text-soft); text-shadow: none; }
+}
+/* The head's label remounts when the block finishes (ThinkingRow.tsx keys it on `live`), easing
+   in so "Thinking… 12s" hands over to "Thought for 12s". The live shimmer keeps its own
+   animation, so only the settled label eases. */
+.thinking-label:not(.thinking-shimmer) { animation: label-in .28s var(--ease) both; }
+@keyframes label-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) {
   .ponder-duck, .ponder-duck .ponder-body, .ponder-duck .ponder-bubble { animation: none; }
   /* Still end state: live rows keep their bubbles so live and rest stay distinguishable. */
@@ -687,18 +712,47 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
   flex: 0 0 auto; width: 1.5px; height: 1em; margin-left: 2px; border-radius: 1px;
   background: var(--wc-accent); animation: caret-blink .9s steps(2) infinite;
 }
-/* The open/close unfurl (ThinkingRow.tsx): motion animates this wrapper from zero height while
+/* The unfurl (ThinkingRow.tsx): motion animates this wrapper from zero height while
    the body drifts down into place. `overflow: hidden` also makes a block formatting context, so
-   the body's margins count inside the measured auto height — margin, border and text reveal
+   the frame's margins count inside the measured auto height — margin, border and text reveal
    together with the clip instead of collapsing out of it. */
 .thinking-reveal { overflow: hidden; }
+/* The frame (ThinkingRow.tsx) owns the rail so it stays put while the body scrolls beneath it.
+   While live, the rail takes an accent tint and a bead travels down it in step with the duck's
+   tilt — a droplet of the composer's comet; when the block finishes, the tint eases back and
+   `settling` walks the bead off the rail's end. */
+.thinking-frame {
+  position: relative; margin: 6px 0 4px 22px;
+  border-left: 1px solid var(--border); transition: border-color .6s var(--ease);
+}
+.thinking-frame.live { border-left-color: color-mix(in srgb, var(--wc-accent) 45%, var(--border)); }
+.thinking-frame::before {
+  content: ""; position: absolute; left: -2.5px; top: 0; width: 4px; height: 4px; border-radius: 50%;
+  background: var(--wc-accent); box-shadow: 0 0 6px 1px color-mix(in srgb, var(--wc-accent) 65%, transparent);
+  opacity: 0;
+}
+.thinking-frame.live::before { animation: rail-travel 2.6s ease-in-out infinite; }
+.thinking-frame.settling::before { animation: rail-settle .45s var(--ease) both; }
 .thinking-body {
   /* Keep the collapse button within reach; the complete reasoning scrolls inside this body. */
   max-height: min(320px, 40vh); overflow: auto; overscroll-behavior: contain;
-  margin: 6px 0 4px 22px; padding: 0 8px 0 12px; border-left: 1px solid var(--border);
-  color: var(--text-dim); font-size: 12.5px; line-height: 1.6;
+  padding: 0 8px 0 12px; color: var(--text-dim); font-size: 12.5px; line-height: 1.6;
+  /* While the model thinks the ink is wet: the whole body reads a step brighter, and dries to
+     its settled dim when the block finishes (`.thinking-frame.live` below owns the wet colour). */
+  transition: color .8s var(--ease);
 }
+.thinking-frame.live .thinking-body { color: var(--text-soft); }
 .thinking-body > :first-child { margin-top: 0; } .thinking-body > :last-child { margin-bottom: 0; }
+/* Fresh ink (markdown-components.tsx): a newly written word mounts as a span at the write
+   head's colour — bright, accent-tinted, with a soft glow — and cools to the wet body's
+   resting colour as the next words arrive. The span mounts once per word, so the animation
+   runs with it; when the body finishes, the spans drop out and the whole body dries to dim. */
+.ink-fresh { animation: ink-settle 1.9s var(--ease) both; }
+/* The write head's caret: the open body's counterpart of the collapsed tail's caret. */
+.ink-caret {
+  display: inline-block; width: 1.5px; height: 1em; margin-left: 2px; border-radius: 1px;
+  background: var(--wc-accent); vertical-align: -.12em; animation: caret-blink .9s steps(2) infinite;
+}
 .thinking-shimmer {
   background: linear-gradient(90deg, var(--text-dim) 30%, var(--text) 50%, var(--text-dim) 70%);
   background-size: 220% 100%;
@@ -2436,6 +2490,14 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   /* Still end state: the write head stays as a solid bar; the stream text itself is already instant. */
   .thinking-stream-caret { animation: none; }
   .thinking-shimmer { animation: none; background: none; color: var(--text-dim); -webkit-text-fill-color: var(--text-dim); }
+  /* Still end states: the tinted rail alone marks a live row (the bead stays hidden), the wet
+     body colour stands without transition, ink renders settled, the caret rests as a solid
+     bar, and the finished label appears without its ease. */
+  .thinking-frame::before { animation: none; opacity: 0; }
+  .thinking-body { transition: none; }
+  .ink-fresh { animation: none; color: inherit; text-shadow: none; }
+  .ink-caret { animation: none; }
+  .thinking-label:not(.thinking-shimmer) { animation: none; }
   .reasoning-panel.at-max .reasoning-fill { animation: none; }
   .reasoning-panel.at-max .reasoning-fill::after { animation: none; opacity: .4; transform: translateX(60%) skewX(-14deg); }
   .reasoning-max-fx span { animation: none; opacity: .6; transform: none; }

@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, type Transition } from "motion/react";
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { formatThinkingDuration, thinkingStream } from "../chat-utils";
 import { useFollowScroll } from "../hooks/useFollowScroll";
 import { motionAllowed, useSmoothText } from "../hooks/useSmoothText";
@@ -61,15 +61,23 @@ function ThinkingElapsed({ startedAt }: { startedAt: number }) {
   return <span className={precision === "tenth" ? "thinking-elapsed precise" : "thinking-elapsed"}>{formatThinkingDuration(Math.max(0, now - startedAt), precision)}</span>;
 }
 
-function ThinkingBody({ text, live }: { text: string; live: boolean }) {
+/** The settling beat after a live block finishes (styles.css walks the rail bead off its end). */
+const SETTLE_MS = 900;
+
+function ThinkingBody({ text, live, settling, animate }: { text: string; live: boolean; settling: boolean; animate: boolean }) {
   const shown = useSmoothText(text, live);
   // Opens at the newest reasoning and, while live, stays pinned there so the
   // stream can be watched as it arrives. Scrolling up reads earlier text
   // without being yanked; only returning to the bottom resumes following.
   const { ref, onScroll, onWheel } = useFollowScroll();
+  // The frame owns the rail and its bead, outside the scrolling body, so the bead rides a
+  // fixed track while the text scrolls beneath it. Fresh ink exists only where motion is
+  // positively allowed: reduced motion and tests (no matchMedia) render plain text nodes.
   return (
-    <div ref={ref} onScroll={onScroll} onWheel={onWheel} className="thinking-body" role="region" aria-label="Reasoning" tabIndex={0}>
-      <Markdown streaming={live}>{shown}</Markdown>
+    <div className={`thinking-frame ${live ? "live" : ""} ${settling ? "settling" : ""}`}>
+      <div ref={ref} onScroll={onScroll} onWheel={onWheel} className="thinking-body" role="region" aria-label="Reasoning" tabIndex={0}>
+        <Markdown streaming={live} freshInk={live && animate}>{shown}</Markdown>
+      </div>
     </div>
   );
 }
@@ -106,13 +114,32 @@ export function ThinkingRow({ text, durationMs, startedAt, live = false, expansi
     else expanded?.delete(expansionKey);
   };
 
+  // The settling beat: when a live block finishes in place, hold `settling` briefly so the
+  // rail eases back and its bead departs instead of everything snapping to rest. Only a body
+  // that is open with text when the block finishes can show the beat; a row that mounts
+  // already finished (history, or the saved message replacing the streamed one) never settles
+  // — `wasLive` starts false for it. The timer runs its course unwatched rather than being
+  // cancelled by a collapse, so `settling` always clears.
+  const wasLive = useRef(live);
+  const [settling, setSettling] = useState(false);
+  useEffect(() => {
+    const finished = wasLive.current && !live;
+    wasLive.current = live;
+    if (!finished || !open || !text) return;
+    setSettling(true);
+    const timer = window.setTimeout(() => setSettling(false), SETTLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [live]);
+
   return (
     <div className={`thinking-row ${open ? "open" : ""} ${showStream ? "streaming" : ""}`}>
       <button type="button" className="thinking-head" onClick={toggle} aria-expanded={open}>
         <PonderingDuck live={live} className="thinking-icon" />
+        {/* `key` remounts the label when the block finishes, so it eases in (styles.css)
+            rather than snapping from "Thinking… 12s" to "Thought for 12s". */}
         {live
-          ? <span className="thinking-shimmer">Thinking…</span>
-          : <span>{durationMs !== undefined ? `Thought for ${formatThinkingDuration(durationMs, precision)}` : "Reasoning"}</span>}
+          ? <span key="live" className="thinking-shimmer">Thinking…</span>
+          : <span key="done" className="thinking-label">{durationMs !== undefined ? `Thought for ${formatThinkingDuration(durationMs, precision)}` : "Reasoning"}</span>}
         {live && startedAt !== undefined && <>{" "}<ThinkingElapsed startedAt={startedAt} /></>}
         {/* Hidden from AT: a per-frame-changing name is noise; the full reasoning is one click away. */}
         {!animate
@@ -137,7 +164,7 @@ export function ThinkingRow({ text, durationMs, startedAt, live = false, expansi
       {/* The unfurl: the wrapper clips from zero height while the body drifts down into place
           (`.thinking-reveal` in styles.css). Where motion isn't allowed, the body simply appears. */}
       {!animate
-        ? open && text && <ThinkingBody text={text} live={live} />
+        ? open && text && <ThinkingBody text={text} live={live} settling={settling} animate={animate} />
         : (
           <AnimatePresence initial={false}>
             {open && text && (
@@ -148,7 +175,7 @@ export function ThinkingRow({ text, durationMs, startedAt, live = false, expansi
                 exit={{ height: 0, opacity: 0, y: -6, transition: REVEAL_EXIT }}
                 transition={REVEAL_OPEN}
               >
-                <ThinkingBody text={text} live={live} />
+                <ThinkingBody text={text} live={live} settling={settling} animate={animate} />
               </motion.div>
             )}
           </AnimatePresence>

@@ -13,7 +13,7 @@
  * tail and always highlights.
  */
 
-import type { ReactNode } from "react";
+import { Children, type ReactNode } from "react";
 import type { Element, ElementContent } from "hast";
 import type { Components } from "react-markdown";
 import { api } from "./api";
@@ -23,6 +23,11 @@ import { CopyButton } from "./components/ui/CopyButton";
 interface ComponentsOptions {
   /** Content of the trailing unterminated fence while streaming; undefined once settled. */
   streamingTail?: string;
+  /** Fresh ink (a live thinking body): word-split the source's final block so newly written
+   *  words can cool from the write head's colour to settled ink (`.ink-fresh` in styles.css).
+   *  `sourceLength` is the markdown source's length with trailing whitespace trimmed, so the
+   *  last block still owns the write head while the source ends in newlines. */
+  freshInk?: { sourceLength: number };
 }
 
 /**
@@ -107,9 +112,31 @@ function classNameOfCode(node: Element): string | undefined {
   return joined || undefined;
 }
 
+/** True when `node` is the source's final block — where the write head currently sits. */
+function isWriteHead(node: Element | undefined, sourceLength: number): boolean {
+  const end = node?.position?.end.offset;
+  return end !== undefined && end >= sourceLength;
+}
+
+/**
+ * Splits a block's string children into one `.ink-fresh` span per word; inline elements
+ * (`strong`, `code`, links…) pass through untouched. Keys are split indices, so a word
+ * appended to a growing string mounts a new span without remounting earlier ones — each
+ * word's ink-settle animation runs exactly once, while it is being written. Whitespace stays
+ * as raw text between spans so wrapping and copy behave exactly as the plain paragraph.
+ */
+function inkWords(children: ReactNode): ReactNode {
+  return Children.map(children, (child) => {
+    if (typeof child !== "string") return child;
+    return child.split(/(\s+)/).map((part, index) =>
+      part && !/^\s+$/.test(part) ? <span className="ink-fresh" key={index}>{part}</span> : part
+    );
+  });
+}
+
 export function markdownComponents(options: ComponentsOptions = {}): Components {
   const streamingTail = options.streamingTail;
-  return {
+  const base: Components = {
     pre: ({ node, children }) => <CodePre node={node} streamingTail={streamingTail}>{children}</CodePre>,
     img: ({ alt }) => <span className="blocked-image">[Remote image blocked{alt ? `: ${alt}` : ""}]</span>,
     a: ({ href, children: linkChildren }) => (
@@ -129,6 +156,22 @@ export function markdownComponents(options: ComponentsOptions = {}): Components 
       >
         {linkChildren}
       </a>
+    )
+  };
+  // Word-splitting exists only for a live thinking body; every other markdown render keeps
+  // default paragraph and list rendering.
+  const ink = options.freshInk?.sourceLength;
+  if (ink === undefined) return base;
+  return {
+    ...base,
+    // The write head's paragraph also carries the blinking ink caret (`.ink-caret` in
+    // styles.css), the open body's counterpart of the collapsed tail's caret. A final list
+    // item gets it through its own last paragraph, which the p override covers.
+    p: ({ node, children }) => isWriteHead(node, ink)
+      ? <p>{inkWords(children)}<span className="ink-caret" aria-hidden="true" /></p>
+      : <p>{children}</p>,
+    li: ({ node, className, children }) => (
+      <li className={className}>{isWriteHead(node, ink) ? inkWords(children) : children}</li>
     )
   };
 }

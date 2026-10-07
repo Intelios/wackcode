@@ -261,3 +261,55 @@ describe("ThinkingRow body scroll", () => {
     expect(region.scrollTop).toBe(540);
   });
 });
+
+describe("ThinkingRow ink and rail", () => {
+  // Motion positively allowed: matchMedia exists and reports no reduced preference, so the
+  // body takes the fresh-ink path. Fake timers are fine here — useSmoothText shows a same-length
+  // rerender at once, and the body mounts with its full first text.
+  function stubMotion() {
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+  }
+
+  it("frames a live body with a living rail and fresh ink, then settles when the block finishes", () => {
+    stubMotion();
+    const view = render(<ThinkingRow text="Weighing both approaches" live startedAt={8_000} />);
+    fireEvent.click(screen.getByRole("button", { name: /Thinking…/ }));
+    expect(view.container.querySelector(".thinking-frame")).toHaveClass("live");
+    const region = screen.getByRole("region", { name: "Reasoning" });
+    expect(region.querySelectorAll(".ink-fresh").length).toBeGreaterThan(0);
+    expect(region.querySelector(".ink-caret")).not.toBeNull();
+
+    view.rerender(<ThinkingRow text="Weighing both approaches" durationMs={4_200} />);
+    const frame = view.container.querySelector(".thinking-frame");
+    expect(frame).not.toHaveClass("live");
+    expect(frame).toHaveClass("settling");
+    // Finished means settled ink: the word spans and caret drop out of the tree at once.
+    expect(screen.getByRole("region", { name: "Reasoning" }).querySelectorAll(".ink-fresh, .ink-caret")).toHaveLength(0);
+    act(() => vi.advanceTimersByTime(900));
+    expect(view.container.querySelector(".thinking-frame")).not.toHaveClass("settling");
+    view.unmount();
+    // No bare getTimerCount here: with motion allowed, motion/react schedules its own
+    // animation timers under fake timers, which the settle assertions above already cover.
+  });
+
+  it("never settles a row that mounts already finished", () => {
+    stubMotion();
+    const view = render(<ThinkingRow text="Earlier reasoning" durationMs={4_200} />);
+    fireEvent.click(screen.getByRole("button", { name: "Thought for 4s" }));
+    expect(view.container.querySelector(".thinking-frame")).not.toHaveClass("settling");
+    act(() => vi.advanceTimersByTime(5_000));
+    expect(view.container.querySelector(".thinking-frame")).not.toHaveClass("settling");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps the body plain where motion is not positively allowed", () => {
+    // Reduced motion: the tinted rail and wet colour still mark the live row, but words render
+    // as plain text with no caret.
+    stubReducedMotion();
+    const view = render(<ThinkingRow text="Plain reasoning here" live startedAt={8_000} />);
+    fireEvent.click(screen.getByRole("button", { name: /Thinking…/ }));
+    expect(view.container.querySelector(".thinking-frame")).toHaveClass("live");
+    const region = screen.getByRole("region", { name: "Reasoning" });
+    expect(region.querySelectorAll(".ink-fresh, .ink-caret")).toHaveLength(0);
+  });
+});

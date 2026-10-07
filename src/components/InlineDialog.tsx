@@ -1,4 +1,5 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ComputerAccessDecision, ComputerAccessRequest, ExtensionUIRequest, QuestionAnswer } from "../types";
 import { ComputerAccessCard } from "./ComputerAccessCard";
 import { QuestionCard } from "./QuestionDialog";
@@ -36,12 +37,17 @@ interface InlineDialogProps {
  * global key listeners.
  */
 export function InlineDialog({ requests, accessRequests = [], selectedTaskId, agentName = "WackCode", onRespond, onAccess }: InlineDialogProps) {
+  const reduced = useReducedMotion();
+  const responded = useRef<string | null>(null);
   const access = onAccess ? accessRequests.find((entry) => entry.taskId === selectedTaskId) : undefined;
   const request = access ? undefined : requests.find((entry) => entry.taskId === selectedTaskId);
 
   const handleRespond = useCallback(
     (response: ExtensionUIResponse) => {
-      if (request) onRespond(request, response);
+      if (request && responded.current !== request.requestId) {
+        responded.current = request.requestId;
+        onRespond(request, response);
+      }
     },
     [request, onRespond]
   );
@@ -71,15 +77,20 @@ export function InlineDialog({ requests, accessRequests = [], selectedTaskId, ag
       </div>
     );
   }
-  if (!request) return null;
-
   return (
-    <div className="inline-dialog-wrap">
-      {request.method === "questions" ? (
-        <QuestionCard key={request.requestId} request={request} onRespond={handleRespond} />
-      ) : (
-        <ExtensionCard key={request.requestId} request={request} onRespond={handleRespond} />
+    <AnimatePresence initial={false}>
+      {request && (
+        <motion.div key={`${selectedTaskId}:${request.requestId}`} className="inline-dialog-wrap question-presence-wrap"
+          initial={{ opacity: 0 }} animate={{ opacity: 1, height: "auto" }}
+          exit={{ opacity: 0, height: 0, paddingBottom: 0 }}
+          transition={{ duration: reduced ? 0 : 0.26 }}>
+          {request.method === "questions" ? (
+            <QuestionCard request={request} onRespond={handleRespond} />
+          ) : (
+            <ExtensionCard request={request} onRespond={handleRespond} />
+          )}
+        </motion.div>
       )}
-    </div>
+    </AnimatePresence>
   );
 }

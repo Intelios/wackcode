@@ -38,7 +38,7 @@ const PI_TOOLS: PiTool[] = [
     needs: { name: "fd", install: "brew install fd" }
   },
   { name: "ls", group: "look", title: "List folders", detail: "Shows what's in a folder, hidden files included.", icon: "folder" },
-  { name: "edit", group: "change", title: "Edit files", detail: "Changes part of a file by replacing exact text, leaving the rest untouched.", icon: "pencil" },
+  { name: "edit", group: "change", title: "Edit files", detail: "Changes part of a file by replacing exact text, leaving the rest untouched.", icon: "quill" },
   { name: "write", group: "change", title: "Write files", detail: "Creates a file, or replaces one whole, making any folders it needs.", icon: "filePlus" },
   { name: "bash", group: "change", title: "Run commands", detail: "Runs shell commands in the chat's folder, like tests, builds, git and installs, with your permissions.", icon: "terminal" }
 ];

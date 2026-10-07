@@ -5,6 +5,8 @@ import type { NormalizedBlock } from "../types";
 import { mcpToolParts, splitPathSubject, summarizeTool } from "../tool-utils";
 import { Icon, type IconName } from "./Icons";
 import { OrbitSpinner } from "./OrbitSpinner";
+import { QuillMark } from "./QuillMark";
+import { RollingNumber } from "./RollingNumber";
 import { ImageLightbox } from "./ui/ImageLightbox";
 import { CopyButton } from "./ui/CopyButton";
 
@@ -16,8 +18,6 @@ export const ToolImageSource = createContext<((toolCallId: string, index: number
 
 const TOOL_ICONS: Record<string, IconName> = {
   read: "file",
-  edit: "pencil",
-  write: "file",
   bash: "terminal",
   grep: "search",
   find: "search",
@@ -169,7 +169,13 @@ export function ToolRow({ call, result, liveText, running }: ToolRowProps) {
   return (
     <div className={`tool-row ${open ? "open" : ""} ${failed ? "error" : ""}`}>
       <button type="button" className="tool-row-head" onClick={() => expandable && setOpen((value) => !value)} disabled={!expandable} aria-expanded={open}>
-        <Icon name={TOOL_ICONS[call.toolName ?? ""] ?? (mcpToolParts(call.toolName ?? "") ? "plug" : "terminal")} className="tool-row-icon" />
+        {/* Edits and writes get the quill mark — it writes while the tool runs, then rests —
+            every other row keeps its static tool icon. */}
+        {summary.kind === "edit" || summary.kind === "write" ? (
+          <QuillMark live={Boolean(pending)} className="tool-row-icon" />
+        ) : (
+          <Icon name={TOOL_ICONS[call.toolName ?? ""] ?? (mcpToolParts(call.toolName ?? "") ? "plug" : "terminal")} className="tool-row-icon" />
+        )}
         <span className="tool-row-verb">{pending ? summary.activeVerb : summary.doneVerb}</span>
         {summary.subject && (
           <code className={`tool-row-subject ${pathParts?.dir ? "has-dir" : ""}`} title={summary.subject}>
@@ -179,8 +185,8 @@ export function ToolRow({ call, result, liveText, running }: ToolRowProps) {
         )}
         {(summary.additions || summary.deletions) ? (
           <span className="tool-row-stats">
-            {summary.additions ? <em className="add">+{summary.additions}</em> : null}
-            {summary.deletions ? <em className="del">−{summary.deletions}</em> : null}
+            {summary.additions ? <em className="add"><RollingNumber prefix="+" value={summary.additions} /></em> : null}
+            {summary.deletions ? <em className="del"><RollingNumber prefix="−" value={summary.deletions} /></em> : null}
           </span>
         ) : null}
         {failed && <span className="tool-row-failed">failed</span>}

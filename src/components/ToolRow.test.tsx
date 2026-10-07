@@ -106,6 +106,32 @@ describe("ToolRow", () => {
     expect(screen.queryByRole("button", { name: "Copy output" })).toBeNull();
   });
 
+  it("shows the quill mark for edits and writes, live only while the tool runs", () => {
+    const { rerender } = render(<ToolRow call={editCall} running />);
+    const quill = document.querySelector(".quill-mark")!;
+    expect(quill).toHaveClass("live");
+    rerender(<ToolRow call={editCall} result={editResult} />);
+    expect(document.querySelector(".quill-mark")).not.toHaveClass("live");
+    render(<ToolRow call={{ ...editCall, toolName: "write", arguments: { path: "file.ts", content: "line" } }} />);
+    expect(document.querySelectorAll(".quill-mark")).toHaveLength(2);
+  });
+
+  it("keeps static icons for other tools", () => {
+    render(<ToolRow call={{ ...editCall, toolName: "bash", arguments: { command: "ls" } }} result={{ ...editResult, details: undefined }} />);
+    expect(document.querySelector(".quill-mark")).toBeNull();
+    expect(document.querySelector(".tool-row-icon")).not.toBeNull();
+  });
+
+  it("rolls the line-count stats with signed accessible labels", () => {
+    const { rerender } = render(<ToolRow call={editCall} result={editResult} />);
+    expect(document.querySelector(".tool-row-stats .add .rolling-number")).toHaveAttribute("aria-label", "+1");
+    expect(document.querySelector(".tool-row-stats .del .rolling-number")).toHaveAttribute("aria-label", "\u22121");
+    const bigger = { ...editResult, details: { diff: "@@\n-a\n-b\n+c\n+d\n+e\n" } };
+    rerender(<ToolRow call={editCall} result={bigger} />);
+    expect(document.querySelector(".tool-row-stats .add .rolling-number")).toHaveAttribute("aria-label", "+3");
+    expect(document.querySelector(".tool-row-stats .del .rolling-number")).toHaveAttribute("aria-label", "\u22122");
+  });
+
   it("copies the original diff including markers and whitespace", async () => {
     const copy = vi.fn().mockResolvedValue(undefined);
     render(<CopyText.Provider value={copy}><ToolRow call={editCall} result={editResult} /></CopyText.Provider>);

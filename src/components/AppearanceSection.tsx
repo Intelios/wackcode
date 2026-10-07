@@ -356,7 +356,7 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrl, 
                               <span>Thought for 2s</span>
                             </span>
                             <span className="mini-tool">
-                              <Icon name="pencil" className="mini-tool-icon" />
+                              <Icon name="quill" className="mini-tool-icon" />
                               <span className="mini-tool-verb">Edited</span>
                               <span className="mini-tool-subject">App.tsx</span>
                             </span>

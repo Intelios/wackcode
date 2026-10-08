@@ -1,6 +1,9 @@
 //! Native menu accelerators reach the renderer even while a child WKWebView owns
 //! keyboard focus. They are app-local (never global shortcuts). App owns navigation
 //! and synchronizes availability; this module never creates or stops a worker.
+//!
+//! The Go menu's Code and Chat items switch area the same way. They are always enabled: the
+//! renderer decides whether a switch is possible (it refuses while a dialog is open).
 use serde::Deserialize;
 use std::sync::Mutex;
 use tauri::{
@@ -78,6 +81,13 @@ pub fn setup(app: &AppHandle) -> Result<(), String> {
         items.push((command, item));
     }
     menu.append(&submenu).map_err(|e| e.to_string())?;
+    let go = Submenu::new(app, "Go", true).map_err(|e| e.to_string())?;
+    for (command, title, accelerator) in AREA_COMMANDS {
+        let item = MenuItem::with_id(app, format!("{PREFIX}{command}"), title, true, Some(accelerator))
+            .map_err(|e| format!("Could not create the Go menu: {e}"))?;
+        go.append(&item).map_err(|e| e.to_string())?;
+    }
+    menu.append(&go).map_err(|e| e.to_string())?;
     app.set_menu(menu).map_err(|e| e.to_string())?;
     app.manage(TabMenuState {
         items,
@@ -87,6 +97,10 @@ pub fn setup(app: &AppHandle) -> Result<(), String> {
         let Some(command) = event.id().as_ref().strip_prefix(PREFIX) else {
             return;
         };
+        if is_area_command(command) {
+            let _ = app.emit("native-tab-action", command);
+            return;
+        }
         let state = app.state::<TabMenuState>();
         let Ok(availability) = state.availability.lock() else {
             return;
@@ -100,6 +114,17 @@ pub fn setup(app: &AppHandle) -> Result<(), String> {
         }
     });
     Ok(())
+}
+
+/// The Go menu: command, title, accelerator. The renderer handles the same keys itself when
+/// its own webview has focus (`App.tsx`), matching on the physical digit.
+const AREA_COMMANDS: [(&str, &str, &str); 2] = [
+    ("area-code", "Code", "Cmd+Alt+1"),
+    ("area-chat", "Chat", "Cmd+Alt+2"),
+];
+
+fn is_area_command(command: &str) -> bool {
+    AREA_COMMANDS.iter().any(|(name, _, _)| *name == command)
 }
 
 fn action_enabled(command: &str, input: &TabMenuAvailability) -> bool {
@@ -160,6 +185,17 @@ pub fn set_chat_tab_menu(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn area_switches_are_their_own_commands_and_never_collide_with_tab_shortcuts() {
+        assert!(is_area_command("area-code"));
+        assert!(is_area_command("area-chat"));
+        for command in ["new", "close", "reopen", "next", "select-1", "area-", "area-git"] {
+            assert!(!is_area_command(command), "{command}");
+        }
+        // Cmd+1..9 select tabs; the areas take the Alt layer of the same digits.
+        assert!(AREA_COMMANDS.iter().all(|(_, _, accelerator)| accelerator.starts_with("Cmd+Alt+")));
+    }
+
     #[test]
     fn shortcuts_follow_workspace_and_modal_availability() {
         let mut state = TabMenuAvailability::default();

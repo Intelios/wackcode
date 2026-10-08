@@ -8,6 +8,8 @@ import { join } from "node:path";
 // Type-only: erased at build time, so Pi still loads solely through the dynamic import in initialize().
 import type { PromptTemplate, ResourceLoader, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { SWITCHABLE_BUILTIN_TOOLS, createBuiltinExtensions } from "./builtin/index.js";
+import { chatToolAllowed } from "./builtin/chat-mode/policy.js";
+import { DEFAULT_CHAT_PROMPT, buildChatGuide, chatGuideDate } from "./builtin/chat-mode/prompt.js";
 import { BROWSER_TOOL_NAMES } from "./builtin/browser.js";
 import { COMPUTER_TOOL_NAMES } from "./builtin/computer-use/params.js";
 import { GOAL_VERIFIER_SYSTEM } from "./builtin/goal/prompt.js";
@@ -102,6 +104,12 @@ type ModelRuntime = Awaited<ReturnType<PiModule["ModelRuntime"]["create"]>>;
 
 let taskId: string | undefined;
 let workspacePath: string | undefined;
+// A Chat mode chat (`init.kind`): its own prompt, a reduced set of built-ins and tools, and file
+// tools confined to the scratchpad. Fixed for the worker's life. Everything that differs is
+// decided here, in the worker, so an app-wide `set_*` broadcast can never widen such a chat.
+let chatKind = false;
+// The guide last served to Pi, so a run can tell when it went stale (a new day, a tool change).
+let servedChatGuide: string | undefined;
 let session: AgentSession | undefined;
 let piModule: PiModule | undefined;
 let modelRuntime: ModelRuntime | undefined;
@@ -316,7 +324,16 @@ const builtinHost: BuiltinHost = {
 };
 const builtins = createBuiltinExtensions(builtinHost, {
   commandEnabled: (appKey) => !(userCommandsPayload?.disabled ?? []).includes(appKey),
+  isChat: () => chatKind,
 });
+
+// Coding-only settings the host broadcasts to every worker. A Chat mode chat has none of the
+// features behind them, so they are acknowledged and dropped.
+const CHAT_IGNORED_COMMANDS = new Set<WorkerCommand["type"]>(["set_subagents", "set_computer_use", "set_skills", "set_commands", "set_execution_policy"]);
+
+function refuseInChat(what: string): void {
+  if (chatKind) throw new Error(`${what} isn't available in Chat mode.`);
+}
 
 /**
  * Apply the user's sub-agent settings. Credentials stay with the runner; the extension only
@@ -489,6 +506,8 @@ function respond(id: string, result: unknown): void {
 
 function refreshCommandCatalog(): SlashCommand[] {
   if (!session) throw new Error("Worker is not initialized");
+  // Chat mode offers only the app's own commands, which the renderer handles.
+  if (chatKind) return [];
   // A file dropped in the commands folder directly joins the picker without waiting for a run.
   refreshUserCommands();
   const disabled = new Set(userCommandsPayload?.disabled ?? []);
@@ -692,15 +711,29 @@ function toolCatalog(): ToolCatalogEntry[] {
 // computer use, which have their own settings, say which of their tools must stay out while
 // off. MCP tools have their own
 // switches too (Settings › MCP servers), and stay out while their server is off or unreachable.
+// A Chat mode chat narrows all of that to its allowlist; the chat guard enforces it at call time.
+function activeToolNames(): string[] {
+  const inactive = new Set([...builtins.subagents.inactiveTools(), ...builtins.mcp.inactiveTools(), ...builtins.computerUse.inactiveTools(), ...builtins.memory.inactiveTools(), ...builtins.skillCreator.inactiveTools()]);
+  return toolCatalog()
+    .filter((tool) => tool.available && !inactive.has(tool.name))
+    .filter((tool) => !disabledTools.has(tool.name) || tool.source.kind === "mcp" || (tool.source.kind === "wackcode" && !SWITCHABLE_BUILTIN_TOOLS.has(tool.name)))
+    .filter((tool) => !chatKind || chatToolAllowed(tool.name, tool.source.kind))
+    .map((tool) => tool.name);
+}
+
 function applyDisabledTools(): void {
   if (!session) return;
-  const inactive = new Set([...builtins.subagents.inactiveTools(), ...builtins.mcp.inactiveTools(), ...builtins.computerUse.inactiveTools(), ...builtins.memory.inactiveTools(), ...builtins.skillCreator.inactiveTools()]);
-  session.setActiveToolsByName(
-    toolCatalog()
-      .filter((tool) => tool.available && !inactive.has(tool.name))
-      .filter((tool) => !disabledTools.has(tool.name) || tool.source.kind === "mcp" || (tool.source.kind === "wackcode" && !SWITCHABLE_BUILTIN_TOOLS.has(tool.name)))
-      .map((tool) => tool.name)
-  );
+  session.setActiveToolsByName(activeToolNames());
+}
+
+/** Chat mode's app-owned guide for the tools active right now (`builtin/chat-mode/prompt.ts`). */
+function chatGuide(): string {
+  const activeTools = new Set(activeToolNames());
+  return buildChatGuide({
+    activeTools,
+    hasMcpTools: [...activeTools].some((name) => builtins.mcp.serverOf(name) !== undefined),
+    today: chatGuideDate(),
+  });
 }
 
 // Rebuilt only when the session gains entries: snapshots are sent at every message boundary.
@@ -1097,29 +1130,43 @@ async function prepareImages(images: ImageContent[] | undefined): Promise<ImageC
  *
  * Pi reads the wrapper on every system-prompt rebuild and for `/skill:name`, so `set_prompts`,
  * `set_skills`, `set_commands` and `set_memory` apply on the next turn without a respawn.
+ *
+ * A Chat mode chat gets a different prompt altogether, built here rather than by flipping a
+ * loader flag: the chat persona replaces Pi's (which also drops Pi's tool, rules and docs
+ * sections), context files, skills and prompt templates are served empty, and the app's own tool
+ * guide is appended ahead of the memory index. Pi still adds the cwd, which is the scratchpad.
  */
 function withAppLayers(loader: ResourceLoader): ResourceLoader {
   return {
     getExtensions: () => loader.getExtensions(),
-    getSkills: () => mergeSkills(userSkills, loader.getSkills()),
+    getSkills: () => chatKind ? { skills: [], diagnostics: [] } : mergeSkills(userSkills, loader.getSkills()),
     getPrompts: () => {
+      if (chatKind) return { prompts: [], diagnostics: [] };
       const loaded = loader.getPrompts();
       const disabled = new Set(userCommandsPayload?.disabled ?? []);
       const prompts = loaded.prompts.filter((template) => !disabled.has(commandKey("prompt", template.filePath)));
       return { prompts: mergePrompts(userCommands, prompts), diagnostics: loaded.diagnostics };
     },
     getThemes: () => loader.getThemes(),
-    getAgentsFiles: () => loader.getAgentsFiles(),
-    getSystemPrompt: () => promptOverrides().systemPrompt ?? loader.getSystemPrompt(),
-    getSystemPromptSource: () => loader.getSystemPromptSource(),
+    // Pi walks every ancestor of the cwd for these, so a scratch folder would otherwise pick up
+    // an AGENTS.md or CLAUDE.md sitting in the user's home folder.
+    getAgentsFiles: () => chatKind ? { agentsFiles: [] } : loader.getAgentsFiles(),
+    getSystemPrompt: () => chatKind
+      ? promptOverrides().chatPrompt ?? DEFAULT_CHAT_PROMPT
+      : promptOverrides().systemPrompt ?? loader.getSystemPrompt(),
+    getSystemPromptSource: () => chatKind ? undefined : loader.getSystemPromptSource(),
     getAppendSystemPrompt: () => {
       const memory = builtins.memory.appendPrompt();
+      if (chatKind) {
+        servedChatGuide = chatGuide();
+        return memory ? [servedChatGuide, memory] : [servedChatGuide];
+      }
       return memory ? [...loader.getAppendSystemPrompt(), memory] : loader.getAppendSystemPrompt();
     },
     getAppendSystemPromptSources: () => {
       const path = builtins.memory.sourcePath();
       const memory = builtins.memory.appendPrompt();
-      const base = loader.getAppendSystemPromptSources();
+      const base = chatKind ? [] : loader.getAppendSystemPromptSources();
       return path && memory ? [...base, { path }] : base;
     },
     extendResources: (paths) => loader.extendResources(paths),
@@ -1172,6 +1219,7 @@ async function initialize(command: InitCommand): Promise<void> {
   if (session) throw new Error("Worker is already initialized");
   taskId = command.taskId;
   workspacePath = command.cwd;
+  chatKind = command.kind === "chat";
   activeCredential = command.apiKey;
   activeAuthPath = command.authPath;
   activeProviderId = command.provider.id;
@@ -1190,7 +1238,8 @@ async function initialize(command: InitCommand): Promise<void> {
   missingModel = selectedModel ? undefined : missingModelPlaceholder(command.provider, command.modelId);
   if (!selectedModel) missingModelReason = missingModelMessage(modelRuntime, command.provider);
   const sessionModel = selectedModel ?? missingModel;
-  subagentRunner = new SubagentRunner({
+  // A Chat mode chat never runs sub-agents, so it holds no runner and none of their credentials.
+  if (!chatKind) subagentRunner = new SubagentRunner({
     pi,
     cwd: command.cwd,
     agentDir: command.agentDir,
@@ -1200,17 +1249,17 @@ async function initialize(command: InitCommand): Promise<void> {
     parentThinkingLevel: () => (session?.thinkingLevel ?? command.thinkingLevel) as ThinkingLevel,
     safeError
   });
-  builtins.configureExecutionPolicy(command.executionPolicy);
-  await applySubagents(command.subagents ?? null);
+  builtins.configureExecutionPolicy(chatKind ? undefined : command.executionPolicy);
+  if (!chatKind) await applySubagents(command.subagents ?? null);
   builtins.mcp.configure(command.mcp ?? []);
-  builtins.computerUse.configure(command.computerUse?.enabled === true);
+  builtins.computerUse.configure(!chatKind && command.computerUse?.enabled === true);
   // Before any contract can be published: the plan-mode extension composes each contract from
   // the current overrides, and the restored session's reconcile runs right after creation.
   setPromptOverrides(command.prompts);
   // Before the session exists, so its first system prompt already lists them.
-  userSkillsPayload = command.skills;
+  userSkillsPayload = chatKind ? undefined : command.skills;
   refreshUserSkills();
-  userCommandsPayload = command.commands;
+  userCommandsPayload = chatKind ? undefined : command.commands;
   refreshUserCommands();
   // Same timing: the first system prompt already carries this project's memory index.
   builtins.memory.configure(command.memory ?? null);
@@ -1249,7 +1298,8 @@ async function initialize(command: InitCommand): Promise<void> {
   // Every no* flag stays true: nothing is ever auto-discovered from settings or a project's
   // own .pi/ directory. The additional*Paths below are the sole load route, and the host only
   // puts paths there for packages the user installed and trusted.
-  const resources = command.resources;
+  // A Chat mode chat loads no package at all: an extension could register tools and hooks.
+  const resources = chatKind ? undefined : command.resources;
   const resourceLoader = new pi.DefaultResourceLoader({
     cwd: command.cwd,
     agentDir: command.agentDir,
@@ -1265,7 +1315,7 @@ async function initialize(command: InitCommand): Promise<void> {
     additionalThemePaths: resources?.themes ?? [],
     // WackCode's own extensions (ask_user_question, Plan mode, todo). Factories are not paths, so
     // they bypass the package trust machinery by construction and load even with noExtensions.
-    extensionFactories: builtins.factories
+    extensionFactories: chatKind ? builtins.chatFactories : builtins.factories
   });
   await resourceLoader.reload();
   const created = await pi.createAgentSession({
@@ -1274,10 +1324,12 @@ async function initialize(command: InitCommand): Promise<void> {
     modelRuntime,
     model: sessionModel,
     thinkingLevel: command.thinkingLevel,
-    excludeTools: UNSUPPORTED_TOOLS,
+    // `excludeTools` takes a tool out of the registry on every refresh, so a Chat mode chat has
+    // no shell to re-activate. (It is not the `tools:` allowlist, which would erase extension tools.)
+    excludeTools: chatKind ? [...UNSUPPORTED_TOOLS, "bash"] : UNSUPPORTED_TOOLS,
     // SDK overrides win over package tools named bash, so no extension can accidentally
     // replace the harness's bounded waits. It remains an ordinary denylist-controlled tool.
-    customTools: [builtins.bashJobs.tool(command.cwd)],
+    customTools: chatKind ? [] : [builtins.bashJobs.tool(command.cwd)],
     sessionManager,
     settingsManager,
     resourceLoader: withAppLayers(resourceLoader),
@@ -1329,7 +1381,7 @@ async function initialize(command: InitCommand): Promise<void> {
   // The task record's mode wins over whatever the restored session says — it carries the
   // user's latest explicit choice (e.g. toggled while no worker was running). The restored
   // plan itself still comes from the session.
-  if (command.mode && builtins.planMode.getState().mode !== command.mode) {
+  if (!chatKind && command.mode && builtins.planMode.getState().mode !== command.mode) {
     try {
       builtins.planMode.setMode(command.mode);
     } catch (error) {
@@ -1560,7 +1612,9 @@ async function runPrompt(
       const skillsChanged = refreshUserSkills();
       const commandsChanged = refreshUserCommands();
       const memoryChanged = builtins.memory.refresh();
-      if (skillsChanged || commandsChanged || memoryChanged) applyDisabledTools();
+      // Chat mode's guide names today's date and the active tools; rebuild when either moved.
+      const guideChanged = chatKind && chatGuide() !== servedChatGuide;
+      if (skillsChanged || commandsChanged || memoryChanged || guideChanged) applyDisabledTools();
       recordCheckpoint(checkpoint);
       // A null marker prevents an edited version from inheriting the command marker that sits
       // on the shared branch immediately above it.
@@ -1745,6 +1799,8 @@ async function handle(command: WorkerCommand): Promise<void> {
       if (command.success) pending.resolve(command.result);
       else pending.reject(new Error(command.error));
       return;
+    } else if (chatKind && CHAT_IGNORED_COMMANDS.has(command.type)) {
+      // Falls through to the plain acknowledgement below.
     } else if (command.type === "list_commands") {
       respond(command.id, refreshCommandCatalog());
       return;
@@ -1755,6 +1811,7 @@ async function handle(command: WorkerCommand): Promise<void> {
       respond(command.id, userMessageImage(command.entryId, command.index ?? 0));
       return;
     } else if (command.type === "execute_command") {
+      refuseInChat("That command");
       const entry = commandCatalog.find((candidate) => candidate.item.id === command.commandId);
       if (!entry) {
         if ((userCommandsPayload?.disabled ?? []).includes(command.commandId)) {
@@ -1779,6 +1836,7 @@ async function handle(command: WorkerCommand): Promise<void> {
       );
       return;
     } else if (command.type === "init_agents") {
+      refuseInChat("/init");
       if (builtins.planMode.getState().mode !== "build") throw new Error("Switch to Build mode before running /init.");
       if (!workspacePath) throw new Error("The workspace is not available for /init.");
       const target = await prepareInitAgents(workspacePath);
@@ -1817,6 +1875,7 @@ async function handle(command: WorkerCommand): Promise<void> {
       }
       return;
     } else if (command.type === "skill_creator") {
+      refuseInChat("/skill-creator");
       if (builtins.planMode.getState().mode !== "build") throw new Error("Switch to Build mode before running /skill-creator.");
       if ((userCommandsPayload?.disabled ?? []).includes("app:skill-creator")) {
         throw new Error("That command is switched off in Settings › Commands.");
@@ -1882,7 +1941,7 @@ async function handle(command: WorkerCommand): Promise<void> {
     } else if (command.type === "prompt") {
       // A mode recorded on the task (or chosen for a draft) is applied before the prompt so
       // the first message of a plan-mode task arrives with the contract already in place.
-      if (command.mode) builtins.planMode.setMode(command.mode);
+      if (command.mode && !chatKind) builtins.planMode.setMode(command.mode);
       if (command.autoTitle) startAutoTitle(command.autoTitle, command.message);
       await runPrompt(command.id, command.runId, runStartedAt(command.startedAt), command.message, command.images, command.checkpoint, command.literal);
       return;
@@ -1896,6 +1955,7 @@ async function handle(command: WorkerCommand): Promise<void> {
       respond(command.id, result);
       return;
     } else if (command.type === "goal_control") {
+      refuseInChat("/goal");
       // "set" rides the serial queue (it is a run, like prompt); pause/resume/clear bypass it
       // so they reach a live run — the bypass split happens in the stdin dispatch below.
       if (command.action === "set") {
@@ -2041,6 +2101,7 @@ async function handle(command: WorkerCommand): Promise<void> {
       session.setThinkingLevel(command.level);
       emitSnapshot();
     } else if (command.type === "set_mode") {
+      refuseInChat("Plan mode");
       if (session.isStreaming) throw new Error("Wait for the current run before changing mode");
       builtins.planMode.setMode(command.mode);
       emitSnapshot();

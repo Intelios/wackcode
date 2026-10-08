@@ -384,7 +384,7 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
   /** Images need the model's Vision; text files ride the message text and always attach. */
   async function addFiles(picked: File[]) {
     if (picked.length === 0) return;
-    const result = await attachFiles({ images: attachments, files }, picked, { vision, noVisionMessage });
+    const result = await attachFiles({ images: attachments, files }, picked, { vision, noVisionMessage, mentions: Boolean(onRequestMentions) });
     setAttachments(result.images);
     setFiles(result.files);
     if (activeDraftKey.current === draftKey) setAttachNotice(result.error);

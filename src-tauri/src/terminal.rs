@@ -226,6 +226,10 @@ fn open(
     input: &OpenTerminalInput,
     on_frame: Channel<TerminalFrame>,
 ) -> Result<TerminalInfo, String> {
+    // Chat mode has no shell, for the agent or beside it.
+    if task.kind == crate::models::TaskKind::Chat {
+        return Err("The terminal isn't available in Chat mode.".into());
+    }
     // The map stays locked across spawn so two racing opens can't each start a shell; the
     // guard drops when this block ends, before attach touches the channel.
     let spawned = {

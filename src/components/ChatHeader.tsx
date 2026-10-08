@@ -51,6 +51,8 @@ export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStop
   }
 
   const menu = chatMenu(task, project, () => { setValue(task.name); setRenaming(true); }, onTaskAction);
+  // A Chat mode chat has a scratchpad and a browser, and none of the project chrome.
+  const chat = task.kind === "chat";
 
   return (
     <header className="workspace-header">
@@ -75,10 +77,16 @@ export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStop
           </h1>
         )}
         <div className="workspace-meta">
-          <button type="button" title={task.workspacePath} onClick={() => onTaskAction(task, "reveal")}>
-            <Icon name="folder" /> {task.projectId === null ? "No project" : task.workspacePath.split("/").filter(Boolean).slice(-2).join("/") || task.workspacePath}
-          </button>
-          {git && <BranchPicker key={task.id} branch={git.branch} variant="meta" onLoad={onListBranches} onCheckout={onCheckoutBranch} />}
+          {chat ? (
+            <button type="button" title="Open this chat's scratchpad folder in Finder" aria-label="Reveal scratchpad" onClick={() => onTaskAction(task, "reveal")}>
+              <Icon name="folder" /> Scratchpad
+            </button>
+          ) : (
+            <button type="button" title={task.workspacePath} onClick={() => onTaskAction(task, "reveal")}>
+              <Icon name="folder" /> {task.projectId === null ? "No project" : task.workspacePath.split("/").filter(Boolean).slice(-2).join("/") || task.workspacePath}
+            </button>
+          )}
+          {git && !chat && <BranchPicker key={task.id} branch={git.branch} variant="meta" onLoad={onListBranches} onCheckout={onCheckoutBranch} />}
         </div>
       </div>
       <div className="header-actions">
@@ -89,27 +97,31 @@ export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStop
             <Icon name="browser" />
           </button>
         </Tooltip>
-        <Tooltip label={<>Changes <kbd>⌘⇧C</kbd></>} side="bottom">
-          <button type="button" className={`panel-button ${changesOpen ? "active" : ""}`} onClick={onToggleChanges} aria-label={changesCount ? `Changes (${changesCount})` : "Changes"} aria-pressed={changesOpen}>
-            <Icon name="panel" />{changesCount ? <em className="changes-badge" aria-hidden="true">{changesCount}</em> : null}
-          </button>
-        </Tooltip>
-        <Tooltip label={<>Terminal <kbd>⌘⇧T</kbd></>} side="bottom">
-          <button
-            type="button"
-            className={`panel-button ${terminalOpen ? "active" : ""}`}
-            onClick={onToggleTerminal}
-            aria-label="Terminal"
-            aria-pressed={terminalOpen}
-          >
-            <Icon name="terminal" />
-          </button>
-        </Tooltip>
-        <Tooltip label="Games" side="bottom">
-          <button type="button" className={`panel-button ${gamesOpen ? "active" : ""}`} onClick={onToggleGames} aria-label="Games" aria-pressed={gamesOpen}>
-            <Icon name="gamepad" />
-          </button>
-        </Tooltip>
+        {!chat && (
+          <>
+            <Tooltip label={<>Changes <kbd>⌘⇧C</kbd></>} side="bottom">
+              <button type="button" className={`panel-button ${changesOpen ? "active" : ""}`} onClick={onToggleChanges} aria-label={changesCount ? `Changes (${changesCount})` : "Changes"} aria-pressed={changesOpen}>
+                <Icon name="panel" />{changesCount ? <em className="changes-badge" aria-hidden="true">{changesCount}</em> : null}
+              </button>
+            </Tooltip>
+            <Tooltip label={<>Terminal <kbd>⌘⇧T</kbd></>} side="bottom">
+              <button
+                type="button"
+                className={`panel-button ${terminalOpen ? "active" : ""}`}
+                onClick={onToggleTerminal}
+                aria-label="Terminal"
+                aria-pressed={terminalOpen}
+              >
+                <Icon name="terminal" />
+              </button>
+            </Tooltip>
+            <Tooltip label="Games" side="bottom">
+              <button type="button" className={`panel-button ${gamesOpen ? "active" : ""}`} onClick={onToggleGames} aria-label="Games" aria-pressed={gamesOpen}>
+                <Icon name="gamepad" />
+              </button>
+            </Tooltip>
+          </>
+        )}
         <MenuButton label="Chat menu" items={menu} />
       </div>
     </header>

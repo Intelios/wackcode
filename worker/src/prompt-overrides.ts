@@ -15,6 +15,7 @@ let overrides: PromptOverrides = {};
 export function setPromptOverrides(next: PromptOverrides | null | undefined): void {
   overrides = {
     systemPrompt: nonEmpty(next?.systemPrompt),
+    chatPrompt: nonEmpty(next?.chatPrompt),
     planPrompt: nonEmpty(next?.planPrompt),
     ultraPlanPrompt: nonEmpty(next?.ultraPlanPrompt)
   };

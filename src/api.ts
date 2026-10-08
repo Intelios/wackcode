@@ -65,6 +65,7 @@ import type {
   SubagentConfig,
   SubagentTarget,
   SubscriptionProviderInfo,
+  TaskKind,
   TaskMode,
   TaskRecord,
   TerminalFrame,
@@ -191,6 +192,8 @@ export const api = {
   }) => invoke<PackageRecord[]>("set_package_resources", { input }),
   addProject: (path: string) => invoke<ProjectRecord>("add_project", { path }),
   createTask: (input: {
+    /** Omitted: a coding chat. "chat" takes no project and no worktree. */
+    kind?: TaskKind;
     projectId?: string | null;
     name?: string;
     useWorktree?: boolean;

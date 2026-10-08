@@ -2,11 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { orderProjects, sidebarPageDirection, type SidebarPage } from "../git-mode";
+import { areaDirection, type Area } from "../areas";
 import { formatRelativeTime } from "../chat-utils";
-import { matchingChats, newestChats } from "../sidebar-utils";
+import { groupByRecency, matchingChats, newestChats } from "../sidebar-utils";
 import type { ProjectRecord, TaskRecord } from "../types";
 import { Icon } from "./Icons";
 import { ArchivedList } from "./ArchivedList";
+import { AreaSwitch } from "./AreaSwitch";
 import { chatMenu } from "./chat-menu";
 import { useContextMenu } from "./ui/ContextMenu";
 import type { MenuEntry } from "./ui/Menu";
@@ -27,6 +29,12 @@ interface SidebarProps {
   projects: ProjectRecord[];
   /** Pinned projects float to the top (and to the top of Git mode's repository switcher). */
   pinnedProjectIds: ReadonlySet<string>;
+  /** The area on screen. Code lists chats by project; Chat lists them by when they were last used. */
+  area: Area;
+  /** The other area has a chat waiting on an answer. */
+  areaAttention?: Area;
+  onSwitchArea: (area: Area) => void;
+  /** This area's chats only. */
   tasks: TaskRecord[];
   selectedTaskId?: string;
   /** While open, the Archived view replaces the chat list; the footer tile and the header ✕ toggle it. */
@@ -56,14 +64,15 @@ interface SidebarProps {
   onToggleGit: (() => void) | null;
 }
 
-/** Pages slide by their order (chats, archived, git): forward enters from the right. */
+/** Pages slide by their order (chats, archived, git): forward enters from the right. A change
+ *  of area slides the same way, by the areas' order in the switch. */
 const pageVariants = {
   enter: ({ direction, reduce }: { direction: 1 | -1; reduce: boolean }) => (reduce ? { opacity: 0 } : { opacity: 0, x: 16 * direction }),
   center: { opacity: 1, x: 0 },
   exit: ({ direction, reduce }: { direction: 1 | -1; reduce: boolean }) => (reduce ? { opacity: 0 } : { opacity: 0, x: -16 * direction })
 };
 
-export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, archivedOpen, pendingDialogTaskIds, titlePulses, collapsedProjectIds, onSelectTask, onNewChat, onNewDraft, onAddProject, onToggleArchived, onToggleProjectCollapsed, onOpenSettings, onTaskAction, onProjectAction, onRenameTask, onArchiveAll, onDeleteAllArchived, git, onToggleGit }: SidebarProps) {
+export function Sidebar({ projects, pinnedProjectIds, area, areaAttention, onSwitchArea, tasks, selectedTaskId, archivedOpen, pendingDialogTaskIds, titlePulses, collapsedProjectIds, onSelectTask, onNewChat, onNewDraft, onAddProject, onToggleArchived, onToggleProjectCollapsed, onOpenSettings, onTaskAction, onProjectAction, onRenameTask, onArchiveAll, onDeleteAllArchived, git, onToggleGit }: SidebarProps) {
   const contextMenu = useContextMenu();
   const [renamingId, setRenamingId] = useState<string>();
   const [renameValue, setRenameValue] = useState("");
@@ -80,8 +89,9 @@ export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, arc
   const page: SidebarPage = git ? "git" : archivedOpen ? "archived" : "chats";
   // The direction is fixed when the page changes and held through the swap: App re-renders
   // often, and recomputing it mid-animation would send the incoming page in from the wrong side.
-  const swap = useRef<{ page: SidebarPage; direction: 1 | -1 }>({ page, direction: 1 });
-  if (swap.current.page !== page) swap.current = { page, direction: sidebarPageDirection(swap.current.page, page) };
+  const swap = useRef<{ page: SidebarPage; area: Area; direction: 1 | -1 }>({ page, area, direction: 1 });
+  if (swap.current.area !== area) swap.current = { page, area, direction: areaDirection(swap.current.area, area) };
+  else if (swap.current.page !== page) swap.current = { page, area, direction: sidebarPageDirection(swap.current.page, page) };
   const direction = swap.current.direction;
   const archivedTasks = tasks.filter((task) => task.archived);
   const hasArchived = archivedTasks.length > 0;
@@ -90,6 +100,7 @@ export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, arc
   const openTasks = useMemo(() => newestChats(matchingTasks.filter((task) => !task.archived)), [matchingTasks]);
   // Archived chats never appear inline; they live in the Archived view only.
   const looseTasks = openTasks.filter((task) => task.projectId === null);
+  const recencyGroups = useMemo(() => area === "chat" ? groupByRecency(openTasks, now) : [], [area, openTasks, now]);
   const isCollapsed = (key: string) => !searching && collapsedProjectIds.has(key);
 
   function startRename(task: TaskRecord) {
@@ -118,8 +129,10 @@ export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, arc
   function renderTask(task: TaskRecord) {
     const isConfirmingArchive = confirming?.taskId === task.id && (confirming.action === "archive" || confirming.action === "unarchive");
     const isConfirmingDelete = confirming?.taskId === task.id && confirming.action === "delete";
-    const age = formatRelativeTime(task.createdAt, now);
-    const createdLabel = age ? `Created ${new Date(task.createdAt).toLocaleString()}` : undefined;
+    // The Chat area orders by last use, so that is the time its rows show.
+    const stamp = area === "chat" ? task.lastActivityAt ?? task.createdAt : task.createdAt;
+    const age = formatRelativeTime(stamp, now);
+    const createdLabel = age ? `${area === "chat" && task.lastActivityAt ? "Last active" : "Created"} ${new Date(stamp).toLocaleString()}` : undefined;
 
     return renamingId === task.id ? (
       <div className="task-item renaming" key={task.id}>
@@ -161,7 +174,7 @@ export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, arc
           </span>
           <span className="task-meta">
             {age && (
-              <time dateTime={task.createdAt} title={createdLabel} aria-label={createdLabel}>
+              <time dateTime={stamp} title={createdLabel} aria-label={createdLabel}>
                 {age}
               </time>
             )}
@@ -246,7 +259,25 @@ export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, arc
     );
   }
 
-  const chatList = (
+  // Chat mode has no projects: one flat list, most recently used first, in calendar groups.
+  const recencyList = (
+    <>
+      {searching && openTasks.length === 0 && (
+        <div className="sidebar-empty" role="status">No chats match your search.</div>
+      )}
+      {!searching && openTasks.length === 0 && (
+        <div className="sidebar-empty">Ask anything. A chat here has no project: just a model, a few tools and a scratchpad.</div>
+      )}
+      {recencyGroups.map((group) => (
+        <section className="project-group open recency-group" key={group.key} aria-label={group.label}>
+          <h2 className="recency-heading">{group.label}</h2>
+          {group.tasks.map((task) => renderTask(task))}
+        </section>
+      ))}
+    </>
+  );
+
+  const chatList = area === "chat" ? recencyList : (
     <>
       {searching && openTasks.length === 0 && (
         <div className="sidebar-empty" role="status">No chats match your search.</div>
@@ -309,6 +340,7 @@ export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, arc
     <aside className={`sidebar${git ? " git" : ""}`}>
       <div className="titlebar-drag" data-tauri-drag-region />
       <div className="sidebar-top">
+        <AreaSwitch area={area} attention={areaAttention} onSwitch={onSwitchArea} />
         {git ? git.top : archivedOpen ? (
           <div className="archived-header">
             <h2 className="archived-heading">Archived</h2>
@@ -359,10 +391,10 @@ export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, arc
           </div>
         )}
       </div>
-      <nav className={`project-list${git ? " git-list" : ""}`} aria-label={git ? "Git changes" : archivedOpen ? "Archived chats" : "Projects and chats"}>
+      <nav className={`project-list${git ? " git-list" : ""}`} aria-label={git ? "Git changes" : archivedOpen ? "Archived chats" : area === "chat" ? "Chats" : "Projects and chats"}>
         <AnimatePresence initial={false} mode="wait" custom={{ direction, reduce }}>
           <motion.div
-            key={page}
+            key={`${area}:${page}`}
             className={`sidebar-page${page === "git" ? " git-page" : ""}`}
             custom={{ direction, reduce }}
             variants={pageVariants}
@@ -386,23 +418,28 @@ export function Sidebar({ projects, pinnedProjectIds, tasks, selectedTaskId, arc
         </AnimatePresence>
       </nav>
       <div className="sidebar-footer">
-        <Tooltip label={<>Add project <kbd>⌘O</kbd></>}>
-          <button type="button" className="sidebar-tile" onClick={onAddProject} aria-label="Add project">
-            <Icon name="folder" />
-          </button>
-        </Tooltip>
-        <Tooltip label={onToggleGit ? <>{git ? "Exit Git mode" : "Git mode"} <kbd>⌘⇧G</kbd></> : "Add a project to use Git mode"}>
-          <button
-            type="button"
-            className={`sidebar-tile git-tile${git ? " active" : ""}`}
-            onClick={onToggleGit ?? undefined}
-            disabled={!onToggleGit}
-            aria-label="Git mode"
-            aria-pressed={Boolean(git)}
-          >
-            <Icon name="git" />
-          </button>
-        </Tooltip>
+        {/* Projects and Git mode belong to the Code area. */}
+        {area === "code" && (
+          <>
+            <Tooltip label={<>Add project <kbd>⌘O</kbd></>}>
+              <button type="button" className="sidebar-tile" onClick={onAddProject} aria-label="Add project">
+                <Icon name="folder" />
+              </button>
+            </Tooltip>
+            <Tooltip label={onToggleGit ? <>{git ? "Exit Git mode" : "Git mode"} <kbd>⌘⇧G</kbd></> : "Add a project to use Git mode"}>
+              <button
+                type="button"
+                className={`sidebar-tile git-tile${git ? " active" : ""}`}
+                onClick={onToggleGit ?? undefined}
+                disabled={!onToggleGit}
+                aria-label="Git mode"
+                aria-pressed={Boolean(git)}
+              >
+                <Icon name="git" />
+              </button>
+            </Tooltip>
+          </>
+        )}
         {hasArchived && (
           <Tooltip label={archivedOpen ? "Hide archived" : "Show archived"}>
             <button

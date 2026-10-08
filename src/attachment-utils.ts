@@ -46,7 +46,12 @@ export function filesFrom(source: DataTransfer | FileList | null | undefined): F
  * other readable file goes through as text. Files that don't fit are skipped and explained,
  * never silently dropped.
  */
-export async function attachFiles(existing: AttachmentState, picked: File[], options: { vision: boolean; noVisionMessage: string }): Promise<AttachResult> {
+export async function attachFiles(existing: AttachmentState, picked: File[], options: {
+  vision: boolean;
+  noVisionMessage: string;
+  /** Whether `@` mentions exist where this composer is; false in Chat mode, which has no workspace to point into. */
+  mentions?: boolean;
+}): Promise<AttachResult> {
   const images = [...existing.images];
   const files = [...existing.files];
   const problems: string[] = [];
@@ -85,7 +90,7 @@ export async function attachFiles(existing: AttachmentState, picked: File[], opt
     try {
       text = await readFileText(file);
     } catch {
-      problems.push(`${name} isn't a text file or a PNG, JPEG, GIF, or WebP image. Put it in the workspace and mention its path with @ instead.`);
+      problems.push(`${name} isn't a text file or a PNG, JPEG, GIF, or WebP image.${options.mentions === false ? "" : " Put it in the workspace and mention its path with @ instead."}`);
       continue;
     }
     if (totalBytes + text.length > MAX_FILE_TOTAL_BYTES) {

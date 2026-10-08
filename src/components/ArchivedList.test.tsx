@@ -14,7 +14,7 @@ function task(id: string, extra: Partial<TaskRecord> = {}): TaskRecord {
   return {
     id, projectId: "p1", name: `Chat ${id}`, autoTitleEligible: false, autoTitleAttemptId: null, workspacePath: "/tmp", worktreePath: null, branch: null, usesWorktree: false,
     providerId: "prov", modelId: "m", thinkingLevel: "off", sessionFile: null, status: "idle",
-    mode: "build", archived: true, archivedAt: "2020-06-15T12:00:00", lastError: null, createdAt: "now", updatedAt: "now",
+    mode: "build", archived: true, archivedAt: "2020-06-15T12:00:00", lastError: null, kind: "code", lastActivityAt: null, createdAt: "now", updatedAt: "now",
     ...extra
   };
 }

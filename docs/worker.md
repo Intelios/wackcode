@@ -88,7 +88,7 @@ The user's Terminal and project Run processes are separate and unchanged.
 
 ## Built-in extensions (`worker/src/builtin/`)
 
-WackCode's own extensions load as inline factories, so they bypass the package trust gate by construction. They are: `ask-user-question`, `auto-title`, `bash-jobs`, `browser`, `computer-use`, `goal`, `mcp`, `memory`, `plan-mode`, `skill-creator`, `subagents`, `todo`, `web-fetch`.
+WackCode's own extensions load as inline factories, so they bypass the package trust gate by construction. They are: `ask-user-question`, `auto-title`, `bash-jobs`, `browser`, `computer-use`, `goal`, `mcp`, `memory`, `plan-mode`, `skill-creator`, `subagents`, `todo`, `web-fetch`, and `chat-mode`, a guard with no tools of its own that only Chat mode chats load.
 
 - Adding or renaming one also updates `BUILTIN_EXTENSIONS` in `src/components/PackagesSection.tsx`, which shows them so nobody installs a duplicate package.
 - Sub-agents never get browser, computer-use, MCP or memory tools, or skills. A child session loads its role's tool allowlist, its own shell check-in extension and the extensions the built-in hands it.
@@ -135,6 +135,19 @@ A guided workflow for creating and improving Agent Skills (Anthropic's skill-cre
 - `preview` has the host validate the draft with Pi's own keyless skill scan, hash it, and write an immutable review snapshot. The result carries versioned `details` (`SkillPreviewDetails`, hard-capped like the sub-agent card's) and `terminate: true`, so the review card is the turn's outcome; the desktop renders it from the tool result like a Plan card, and only the newest preview on the branch is actionable.
 
 The tool exists only while the workflow is active on the branch (or the command's run is live), is Build-only, and is withheld while `/skill-creator` is switched off (its `app:` key in the command denylist drives `inactiveTools`). The agent never writes into `~/.agents/skills`: publication is the card's native Save button (`publish_skill_draft` in Rust), which re-verifies the reviewed revision under the shared skill-library lock (`skills::library_guard`, also held by Settings' save/delete/import/copy), commits with exclusive rename (new skills) or `RENAME_SWAP` (folder updates), and journals a receipt that `skill_draft_status` reconciles after an interrupted save. `set_skills` then carries the new skill to live workers on their next turn.
+
+## Chat mode (`init.kind === "chat"`)
+
+A Chat mode chat is the same worker with a different prompt and far fewer tools. Everything that differs is decided in the worker (`chatKind` in `index.ts`), so an app-wide `set_*` broadcast can never widen such a chat. Read `builtin/chat-mode/` before changing any of it.
+
+- **Built-ins:** `chatFactories` instead of `factories`: ask, auto-title, memory, web-fetch, browser, MCP and the guard. The built-ins it leaves out still have controllers, which report their resting state. They are created at module scope, before `init`, so this is a second list chosen at session creation and not a runtime switch.
+- **Registry:** `excludeTools` also drops `bash`, and no shell tool is registered. (`excludeTools` is not the `tools:` allowlist, which stays forbidden.) Package resources are ignored.
+- **Active set:** `activeToolNames()` adds the allowlist (`chatToolAllowed`) on top of the usual rules. The user's denylist and MCP switches still narrow it.
+- **Enforcement:** the guard's `tool_call` hook blocks anything off the allowlist and any file-tool path outside the scratchpad, fail-closed. The active set alone is not enforcement: a navigation restores the transcript's declared tools.
+- **Paths:** `confine` mirrors Pi's own path resolution, which Pi does not export, then compares real paths. It rewrites an allowed `path` to the scratchpad-relative spelling it checked. A Pi upgrade that changes how file tools resolve a path must update it; `policy.test.ts` pins the cases.
+- **Prompt:** built in `withAppLayers`, without flipping a loader flag. The chat persona replaces Pi's, which also drops Pi's tool, rules and docs sections; context files, skills and prompt templates are served empty; the app's guide (`buildChatGuide`) is appended ahead of the memory index; Pi still adds the cwd, which is the scratchpad.
+- **The guide carries what `promptGuidelines` cannot.** Pi drops every tool's guidelines once a custom prompt is set, so the rule that fetched content is data, not instructions, lives in the guide. It is rebuilt at run start when the date or the active tools moved.
+- **Commands:** the catalogue is empty; `execute_command`, `init_agents`, `skill_creator`, `goal_control` and `set_mode` are refused, and the coding-only `set_*` broadcasts are acknowledged and dropped. A typed `/goal` reaches the model as plain text.
 
 ## Planning modes
 

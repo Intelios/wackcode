@@ -9,6 +9,12 @@ export type ApiFormat = "openai-completions" | "openai-responses" | "anthropic-m
  */
 export type TaskMode = "build" | "plan" | "ultraplan";
 
+/**
+ * Which area a chat belongs to. "chat" is Chat mode: its own prompt, a reduced tool set and file
+ * tools confined to the scratch folder (`builtin/chat-mode/`). Fixed for the chat's life.
+ */
+export type TaskKind = "code" | "chat";
+
 /** App-wide, opt-in overrides of the app's read-only policies. */
 export interface ExecutionPolicyConfig {
   unrestrictedSubagents: boolean;
@@ -345,8 +351,13 @@ export interface SubagentStreamFrame extends SubagentTarget {
  * replaced mid-session with `set_prompts`, and every consumer reads them per use.
  */
 export interface PromptOverrides {
-  /** Replaces Pi's default system-prompt persona; the tool/rules/context sections still follow. */
+  /**
+   * Replaces Pi's default system-prompt persona in a coding chat. Pi then leaves out its own
+   * tool list, rules and docs sections; project context, skills and the cwd still follow.
+   */
   systemPrompt?: string;
+  /** Replaces Chat mode's persona. The app's own tool guide always follows it. */
+  chatPrompt?: string;
   /** Replaces the Plan-mode contract body (the marker line is always the app's own). */
   planPrompt?: string;
   /** Replaces the Ultra Plan contract body (the marker line is always the app's own). */
@@ -468,6 +479,8 @@ export interface InitCommand {
   id: string;
   type: "init";
   taskId: string;
+  /** Absent on older hosts: a coding chat. */
+  kind?: TaskKind;
   cwd: string;
   agentDir: string;
   sessionDir: string;

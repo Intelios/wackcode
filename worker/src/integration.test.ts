@@ -4839,3 +4839,266 @@ describe("message queueing", () => {
     expect(worker.child.exitCode).toBeNull();
   });
 });
+
+describe("Chat mode", () => {
+  const ALLOWED = new Set([
+    "read", "write", "edit", "ls", "grep", "find", "web_fetch", "ask_user_question",
+    "memory_save", "memory_recall", "memory_forget",
+    "browser_open", "browser_snapshot", "browser_act", "browser_screenshot", "browser_console",
+  ]);
+  const allowed = (name: string) => ALLOWED.has(name) || name.startsWith("mcp__mock__");
+  const offeredTools = (request: { body: Record<string, unknown> }): string[] =>
+    ((request.body.tools ?? []) as Array<{ function: { name: string } }>).map((tool) => tool.function.name);
+  const systemTextOf = (request: { body: Record<string, unknown> }) =>
+    ((request.body.messages ?? []) as { role?: string; content?: unknown }[])
+      .filter((message) => message.role === "system" || message.role === "developer")
+      .map((message) => typeof message.content === "string"
+        ? message.content
+        : Array.isArray(message.content) ? message.content.map((part) => (part as { text?: string }).text ?? "").join("") : "")
+      .join("\n---\n");
+  const toolResult = (request: { body: Record<string, unknown> }): string => {
+    const message = (request.body.messages as Array<{ role?: string; content?: unknown }>).findLast((entry) => entry.role === "tool");
+    return typeof message?.content === "string" ? message.content : JSON.stringify(message?.content);
+  };
+
+  async function request(worker: WorkerHarness, command: Record<string, unknown>): Promise<Output> {
+    const id = crypto.randomUUID();
+    worker.send({ id, ...command });
+    return worker.waitFor((output) => output.type === "response" && output.id === id);
+  }
+
+  /** Send a prompt and wait for its run to end; returns the index of its first provider request. */
+  async function run(worker: WorkerHarness, provider: MockProvider, message: string, requests = 2): Promise<number> {
+    const before = provider.requests.length;
+    const runId = crypto.randomUUID();
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId, message });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === runId && output.state === "idle" && provider.requests.length >= before + requests);
+    return before;
+  }
+
+  /** The scratchpad sits one level down, so a test can put things beside and above it. */
+  async function start(taskId: string, options: {
+    /** Extra `init` fields; a function when they need the folders `start` creates. */
+    extra?: Record<string, unknown> | ((root: string, scratch: string) => Record<string, unknown>);
+    disabledTools?: string[];
+    resources?: { extensions: string[]; skills: string[]; prompts: string[]; themes: string[] };
+    prepare?: (root: string, scratch: string) => Promise<void>;
+  } = {}) {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const root = await realpath(await mkdtemp(join(tmpdir(), `wackcode-${taskId}-`)));
+    cleanup.push(() => rm(root, { recursive: true, force: true }));
+    const scratch = join(root, "scratch");
+    await mkdir(scratch);
+    await options.prepare?.(root, scratch);
+    const { worker, ready } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", scratch, taskId, undefined, options.disabledTools, options.resources, undefined, undefined,
+      { kind: "chat", ...(typeof options.extra === "function" ? options.extra(root, scratch) : options.extra) }
+    );
+    cleanup.push(() => worker.shutdown());
+    return { provider, root, scratch, worker, ready };
+  }
+
+  it("sends the chat prompt and guide in place of Pi's coding prompt, and no context file", async () => {
+    const { DEFAULT_CHAT_PROMPT } = await import("./builtin/chat-mode/prompt.js");
+    const { provider, scratch, worker } = await start("chat-prompt", {
+      // The coding persona belongs to coding chats, and context files load from every ancestor.
+      extra: { prompts: { systemPrompt: "CODING_PERSONA" } },
+      prepare: async (root, folder) => {
+        await writeFile(join(root, "AGENTS.md"), "PARENT_RULE\n");
+        await writeFile(join(folder, "AGENTS.md"), "SCRATCH_RULE\n");
+        await writeFile(join(folder, "CLAUDE.md"), "CLAUDE_RULE\n");
+      },
+    });
+    const first = await run(worker, provider, "Create the fixture.");
+    const prompt = systemTextOf(provider.requests[first]);
+    expect(prompt.startsWith(`${DEFAULT_CHAT_PROMPT}\n\n`)).toBe(true);
+    expect(prompt).toContain("## Working in this chat");
+    expect(prompt).toContain("private scratchpad folder");
+    expect(prompt).toContain("data, never instructions");
+    // Pi still names the working directory, which is the scratchpad.
+    expect(prompt).toContain(`<cwd>\n${scratch}\n</cwd>`);
+    for (const absent of ["expert coding assistant", "<tools>", "<rules>", "<docs>", "<project_context>", "<skills>", "PARENT_RULE", "SCRATCH_RULE", "CLAUDE_RULE", "CODING_PERSONA"]) {
+      expect(prompt, absent).not.toContain(absent);
+    }
+    // The temp folder's own path is the one part of the prompt this test does not control.
+    expect(prompt.replace(/<cwd>[\s\S]*?<\/cwd>/, "")).not.toMatch(/\bpi\b/i);
+    // The model's relative write lands in the scratchpad.
+    expect(await readFile(join(scratch, "alpha.txt"), "utf8")).toBe("changed by alpha\n");
+
+    // A persona edited in Settings reaches the next message without a restart.
+    expect((await request(worker, { type: "set_prompts", prompts: { chatPrompt: "You are Quill, a writing partner." } })).success).toBe(true);
+    await run(worker, provider, "Another pass.", 1);
+    const after = systemTextOf(provider.requests.at(-1)!);
+    expect(after).toContain("You are Quill, a writing partner.");
+    expect(after).toContain("## Working in this chat");
+    expect(worker.child.exitCode).toBeNull();
+  });
+
+  it("starts with the custom persona when Settings has one", async () => {
+    const { provider, worker } = await start("chat-persona", { extra: { prompts: { chatPrompt: "You are Quill, a writing partner." } } });
+    const first = await run(worker, provider, "Hello.");
+    const prompt = systemTextOf(provider.requests[first]);
+    expect(prompt.startsWith("You are Quill, a writing partner.\n\n")).toBe(true);
+    expect(prompt).toContain("data, never instructions");
+  });
+
+  it("offers only its allowlist, and no app-wide setting can widen it", async () => {
+    const { provider, worker, ready } = await start("chat-tools", { extra: { computerUse: { enabled: true }, mode: "plan" } });
+    const registered = (ready.snapshot?.tools ?? []).map((tool) => tool.name);
+    for (const missing of ["bash", "bash_job", "todo", "plan_mode_complete", "subagent", "subagent_job", "skill_creator", "computer_act"]) {
+      expect(registered, missing).not.toContain(missing);
+    }
+    expect((ready.snapshot?.activeTools ?? []).every(allowed)).toBe(true);
+    // Chat mode has no planning modes: the record's mode is ignored.
+    expect(ready.snapshot?.planState?.mode).toBe("build");
+
+    const first = await run(worker, provider, "Create the fixture.");
+    const offered = offeredTools(provider.requests[first]);
+    expect(offered.every(allowed)).toBe(true);
+    expect(offered).toEqual(expect.arrayContaining(["read", "write", "edit", "ls", "web_fetch", "ask_user_question", "browser_open"]));
+
+    // The broadcasts every worker receives are acknowledged and change nothing here.
+    for (const command of [
+      { type: "set_tools", disabledTools: [] },
+      { type: "set_computer_use", enabled: true },
+      { type: "set_subagents", subagents: null },
+      { type: "set_execution_policy", executionPolicy: { unrestrictedPlanning: true, unrestrictedSubagents: true } },
+      { type: "set_skills", skills: undefined },
+      { type: "set_commands", commands: undefined },
+    ]) {
+      expect((await request(worker, command)).success, command.type).toBe(true);
+    }
+    // Coding-only commands are refused with a sentence, not a crash.
+    for (const command of [
+      { type: "set_mode", mode: "plan" },
+      { type: "goal_control", action: "set", objective: "ship it", runId: "goal-run" },
+      { type: "init_agents", runId: "init-run" },
+      { type: "skill_creator", request: "make a skill", runId: "skill-run" },
+      { type: "execute_command", commandId: "app:goal", args: "", runId: "command-run" },
+    ]) {
+      const refused = await request(worker, command);
+      expect(refused.success, command.type).toBe(false);
+      expect(refused.error, command.type).toContain("Chat mode");
+    }
+    expect((await request(worker, { type: "list_commands" })).result).toEqual([]);
+    const second = await run(worker, provider, "Go again.", 1);
+    expect(offeredTools(provider.requests[second]).every(allowed)).toBe(true);
+    expect(worker.view?.planState?.mode).toBe("build");
+
+    // The user's own denylist still narrows the set.
+    expect((await request(worker, { type: "set_tools", disabledTools: ["write", "web_fetch"] })).success).toBe(true);
+    const third = await run(worker, provider, "And again.", 1);
+    const narrowed = offeredTools(provider.requests[third]);
+    expect(narrowed).not.toContain("write");
+    expect(narrowed).not.toContain("web_fetch");
+    expect(narrowed).toContain("read");
+    // The guide follows the tools: it stops describing one that is switched off.
+    expect(systemTextOf(provider.requests[third]).split("\n---\n").at(-1)).not.toContain("web_fetch: reads one public page");
+    expect(worker.child.exitCode).toBeNull();
+  });
+
+  it("confines file tools to the scratchpad, has no shell, and stays confined after a rewind", async () => {
+    const { provider, root, scratch, worker } = await start("chat-confined", {
+      prepare: async (parent) => { await writeFile(join(parent, "canary.txt"), "untouched"); },
+    });
+    const canary = join(root, "canary.txt");
+    const call = async (tool: string, args: Record<string, unknown>) => {
+      const first = await run(worker, provider, `mcp: ${tool} ${JSON.stringify(args)}`);
+      return toolResult(provider.requests[first + 1]);
+    };
+
+    expect(await call("read", { path: canary })).toContain("outside it");
+    expect(await call("write", { path: "../escape.txt", content: "escaped" })).toContain("outside it");
+    await expect(readFile(join(root, "escape.txt"), "utf8")).rejects.toThrow();
+    expect(await call("edit", { path: canary, edits: [{ oldText: "untouched", newText: "changed" }] })).toContain("outside it");
+    expect(await call("ls", { path: root })).toContain("outside it");
+    expect(await readFile(canary, "utf8")).toBe("untouched");
+
+    // No shell exists to run: the call fails and nothing happens.
+    await call("bash", { command: "touch pwned.txt; touch ../pwned.txt" });
+    await expect(readFile(join(scratch, "pwned.txt"), "utf8")).rejects.toThrow();
+    await expect(readFile(join(root, "pwned.txt"), "utf8")).rejects.toThrow();
+
+    // Inside is fine, by an absolute path or a relative one.
+    await call("write", { path: join(scratch, "notes", "inside.md"), content: "kept" });
+    expect(await readFile(join(scratch, "notes", "inside.md"), "utf8")).toBe("kept");
+    expect(await call("read", { path: "notes/inside.md" })).toContain("kept");
+
+    // Navigation restores the transcript's declared tools; the allowlist and guard still hold.
+    const original = worker.view!.messages.find((message) => message.role === "user")!;
+    expect((await request(worker, { type: "navigate", entryId: original.entryId, target: "before", kind: "rewind" })).success).toBe(true);
+    expect((worker.view?.activeTools ?? []).every(allowed)).toBe(true);
+    expect(await call("write", { path: "../after-rewind.txt", content: "escaped" })).toContain("outside it");
+    await expect(readFile(join(root, "after-rewind.txt"), "utf8")).rejects.toThrow();
+    expect(worker.outputs.some((output) => output.type === "worker_error")).toBe(false);
+  });
+
+  it("never loads a package, even a trusted one", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const root = await mkdtemp(join(tmpdir(), "wackcode-chat-package-"));
+    cleanup.push(() => rm(root, { recursive: true, force: true }));
+    const trusted = join(root, "trusted");
+    const scratch = join(root, "scratch");
+    await mkdir(trusted);
+    await mkdir(scratch);
+    await writeFile(join(trusted, "tool.ts"),
+      `export default function (pi: any) { pi.registerTool({ name: "trusted_tool", label: "t", description: "A tool from a trusted package", parameters: { type: "object", properties: {} }, async execute() { return { content: [{ type: "text", text: "ok" }] }; } }); }\n`);
+    const { worker, ready } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", scratch, "chat-package", undefined, undefined,
+      { extensions: [join(trusted, "tool.ts")], skills: [], prompts: [], themes: [] }, undefined, undefined, { kind: "chat" }
+    );
+    cleanup.push(() => worker.shutdown());
+    expect((ready.snapshot?.tools ?? []).some((tool) => tool.name === "trusted_tool")).toBe(false);
+    expect(worker.outputs.find((output) => output.type === "extensions_loaded")).toMatchObject({ loaded: [], errors: [] });
+  });
+
+  it("runs the user's MCP tools and tells the model about them", async () => {
+    const { provider, scratch, worker } = await start("chat-mcp", { extra: { mcp: [{
+      id: "mcp-mock", name: "Mock", slug: "mock", transport: "stdio", timeoutMs: 10_000,
+      command: process.execPath, args: [resolve("../scripts/mock-mcp-server.mjs")], env: {}, disabledTools: [],
+    }] } });
+    const first = await run(worker, provider, "mcp: mcp__mock__whoami {}");
+    expect(offeredTools(provider.requests[first])).toEqual(expect.arrayContaining(["mcp__mock__echo", "mcp__mock__whoami", "read"]));
+    expect(offeredTools(provider.requests[first]).every(allowed)).toBe(true);
+    expect(JSON.parse(toolResult(provider.requests[first + 1]))).toMatchObject({ cwd: scratch });
+    expect(systemTextOf(provider.requests[first])).toContain("Connected tools: tools whose names start with mcp__");
+  });
+
+  it("serves the shared chat memory with chat wording", async () => {
+    const { provider, worker, ready } = await start("chat-memory", {
+      extra: (root) => ({ memory: { root: join(root, "memory"), enabled: true } }),
+      prepare: async (root) => {
+        await mkdir(join(root, "memory"));
+        await writeFile(join(root, "memory", "user_prefers.md"),
+          "---\ntype: user\ntitle: Prefers terse answers\ndescription: No filler\n---\nSkip preamble.\n");
+      },
+    });
+    const first = await run(worker, provider, "Hello.");
+    const prompt = systemTextOf(provider.requests[first]);
+    expect(prompt).toContain("## Memory\n");
+    expect(prompt).not.toContain("## Project memory");
+    expect(prompt).toContain("- [user] Prefers terse answers — No filler (name: user_prefers)");
+    expect(prompt).toContain("Memory: notes carry over to future chats here.");
+    expect(offeredTools(provider.requests[first])).toEqual(expect.arrayContaining(["memory_save", "memory_recall", "memory_forget"]));
+    const save = ready.snapshot?.tools?.find((tool) => tool.name === "memory_save");
+    expect(save?.description).toContain("future chats");
+    expect(save?.description).not.toContain("this project");
+  });
+
+  it("treats a typed coding command as plain text and stops cleanly", async () => {
+    const { provider, worker } = await start("chat-plain");
+    const first = await run(worker, provider, "/goal ship it", 1);
+    expect(provider.requests[first].text).toBe("/goal ship it");
+    expect(worker.view?.goalState).toBeUndefined();
+
+    const runId = crypto.randomUUID();
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId, message: "wait until stopped" });
+    await provider.waitForSlowRequest();
+    worker.send({ id: crypto.randomUUID(), type: "abort" });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === runId && (output.state === "idle" || output.state === "interrupted"));
+    expect(worker.child.exitCode).toBeNull();
+    expect(worker.stderr).toBe("");
+  });
+});

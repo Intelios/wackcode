@@ -129,24 +129,48 @@ fn root_label(workspace: &Path) -> String {
 pub fn root_for(app: &AppHandle, workspace: &Path) -> Result<PathBuf, String> {
     let key = workspace_key(workspace);
     let root = dir(app)?.join(dir_name(&key, &root_label(workspace)));
+    let origin = workspace.canonicalize().unwrap_or_else(|_| workspace.to_path_buf());
+    ensure_root(root, &origin.to_string_lossy())
+}
+
+/// Chat mode's one store, shared by every chat in it. A fixed key in the same `<name>-<12 hex>`
+/// shape as a project's, so Settings › Memory lists, switches off and removes it like any other.
+/// Keyed per workspace instead, every chat's scratch folder would get a store of its own that
+/// nothing ever cleaned up.
+pub const CHAT_MEMORY_KEY: &str = "c4a7c4a7c4a7";
+const CHAT_MEMORY_NAME: &str = "Chat";
+/// What Settings shows where a project's store shows its folder.
+const CHAT_MEMORY_ORIGIN: &str = "Every Chat mode chat";
+
+fn chat_dir_name() -> String {
+    dir_name(CHAT_MEMORY_KEY, CHAT_MEMORY_NAME)
+}
+
+fn chat_root(app: &AppHandle) -> Result<PathBuf, String> {
+    ensure_root(dir(app)?.join(chat_dir_name()), CHAT_MEMORY_ORIGIN)
+}
+
+fn ensure_root(root: PathBuf, origin_root: &str) -> Result<PathBuf, String> {
     let origin = root.join("origin.json");
     if !origin.exists() {
         fs::create_dir_all(&root).map_err(|error| format!("Could not create the memory folder: {error}"))?;
-        let payload = json!({ "root": workspace.canonicalize().unwrap_or_else(|_| workspace.to_path_buf()) });
-        let bytes = serde_json::to_vec(&payload).map_err(|error| error.to_string())?;
+        let bytes = serde_json::to_vec(&json!({ "root": origin_root })).map_err(|error| error.to_string())?;
         // Best-effort: a missing origin only costs Settings its label, not the memory.
         let _ = fs::write(&origin, bytes);
     }
     Ok(root)
 }
 
-/// The `memory` value for `init` and `set_memory`: the chat's project directory plus the
-/// effective on/off after the global and per-project switches. Deliberately never part of the
+/// The `memory` value for `init` and `set_memory`: the chat's project directory (or Chat mode's
+/// shared one) plus the effective on/off after the global and per-project switches. Deliberately never part of the
 /// worker fingerprint — a toggle must not respawn a chat.
 pub fn payload(app: &AppHandle, task: &TaskRecord) -> Result<Value, String> {
     let workspace = Path::new(&task.workspace_path);
-    let root = root_for(app, workspace)?;
-    let key = workspace_key(workspace);
+    let (root, key) = if task.kind == crate::models::TaskKind::Chat {
+        (chat_root(app)?, CHAT_MEMORY_KEY.to_string())
+    } else {
+        (root_for(app, workspace)?, workspace_key(workspace))
+    };
     let enabled = {
         let state = app.state::<crate::storage::MetadataState>();
         let data = state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
@@ -331,7 +355,12 @@ pub fn overview(app: &AppHandle) -> Result<MemoriesOverview, String> {
         .iter()
         .map(|project| (workspace_key(Path::new(&project.path)), project.name.clone()))
         .collect();
-    let name_of_key = |key: &str| known_names.iter().find(|(candidate, _)| candidate == key).map(|(_, name)| name.clone());
+    let name_of_key = |key: &str| {
+        if key == CHAT_MEMORY_KEY {
+            return Some(CHAT_MEMORY_NAME.to_string());
+        }
+        known_names.iter().find(|(candidate, _)| candidate == key).map(|(_, name)| name.clone())
+    };
 
     let mut listed: Vec<MemoryProject> = Vec::new();
     if let Ok(directories) = fs::read_dir(&root) {
@@ -476,6 +505,21 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("memory");
         (temp, path)
+    }
+
+    #[test]
+    fn chat_mode_has_one_store_that_settings_can_list_like_a_project() {
+        // Settings › Memory only lists, switches and removes `<name>-<12 hex>` folders.
+        assert_eq!(chat_dir_name(), "chat-c4a7c4a7c4a7");
+        assert_eq!(key_of_dir(&chat_dir_name()).as_deref(), Some(CHAT_MEMORY_KEY));
+        let (_temp, base) = root();
+        let store = ensure_root(base.join(chat_dir_name()), CHAT_MEMORY_ORIGIN).unwrap();
+        let origin: Origin = serde_json::from_str(&fs::read_to_string(store.join("origin.json")).unwrap()).unwrap();
+        assert_eq!(origin.root, CHAT_MEMORY_ORIGIN);
+        // A second call finds it there and leaves it alone.
+        assert_eq!(ensure_root(base.join(chat_dir_name()), "something else").unwrap(), store);
+        let origin: Origin = serde_json::from_str(&fs::read_to_string(store.join("origin.json")).unwrap()).unwrap();
+        assert_eq!(origin.root, CHAT_MEMORY_ORIGIN);
     }
 
     #[test]

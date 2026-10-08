@@ -37,6 +37,8 @@ const server = createServer(async (request, response) => {
   const hasToolResult = messages.at(-1)?.role === "tool";
   const prompt = textOf(latestUser?.content);
   const background = prompt.toLowerCase().includes("background fixture");
+  // Chat mode's confinement check: the write aims one folder above the workspace.
+  const escape = prompt.toLowerCase().includes("escape fixture");
   const child = prompt.startsWith("background-fixture-child");
   if (child) {
     response.write(": background child working\n\n");
@@ -69,6 +71,7 @@ const server = createServer(async (request, response) => {
               name: backgroundLaunch ? "subagent" : "write",
               arguments: JSON.stringify(backgroundLaunch
                 ? { agent: roles.includes("worker") ? "worker" : roles[0], task: `background-fixture-child${prompt.includes("until stopped") ? " until stopped" : ""}`, background: true }
+                : escape ? { path: "../wackcode-escape.txt", content: "Written outside the workspace.\n" }
                 : { path: "wackcode-live.txt", content: "Edited through WackCode and Pi.\n" })
             }
           }]
@@ -90,7 +93,7 @@ const server = createServer(async (request, response) => {
       object: "chat.completion.chunk",
       created: 2,
       model: body.model,
-      choices: [{ index: 0, delta: { role: "assistant", content: child ? "Background fixture child completed." : resultsArrived ? "The background child finished; its result has arrived." : background ? "I launched a background helper and finished my own work. You can send another message while it runs." : "Created `wackcode-live.txt`." }, finish_reason: null }]
+      choices: [{ index: 0, delta: { role: "assistant", content: child ? "Background fixture child completed." : resultsArrived ? "The background child finished; its result has arrived." : background ? "I launched a background helper and finished my own work. You can send another message while it runs." : escape ? "I tried to write `../wackcode-escape.txt`, outside the workspace." : "Created `wackcode-live.txt`." }, finish_reason: null }]
     });
     send(response, {
       id: "fixture-done",

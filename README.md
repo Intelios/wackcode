@@ -27,6 +27,7 @@ Everything runs locally. Your conversations go straight from your Mac to the mod
 - **Review and ship.** A built-in diff view with line comments, generated commit messages, push, and GitHub PRs, plus Git mode: a GitHub Desktop–style view for reading big diffs, committing, and syncing.
 - **Sees what it builds.** A shared browser preview for web apps, and optional computer use for native Mac and iOS Simulator apps.
 - **Extensible.** MCP servers, Agent Skills, your own slash commands, Pi packages, per-project memory, and sub-agents.
+- **Just chat, too.** A separate Chat area turns the same connections into a general-purpose chat, with no project and no coding tools.
 - **Yours.** Themes, image backdrops, Liquid Glass, and your agent's name.
 
 ## Features
@@ -42,6 +43,20 @@ Turn on **Settings › Appearance › Chat tabs** to keep chats from any project
 Chats keep working when you switch away, and even when you close the window: WackCode stays in the menu bar, where the duck lists chats that are working or waiting for you. An idle chat's background process stops after 15 minutes. Saved history opens directly from disk, even without a working model connection; the agent starts again when you send it work. Archive finished chats to tidy the sidebar; the Archived view lets you restore or delete them.
 
 <p align="center"><img src="docs/images/menu-bar.png" width="568" alt="The menu bar duck's menu, listing an active chat marked Working, with Open WackCode and Quit WackCode."></p>
+
+### Chat mode
+
+The **Code | Chat** switch at the top of the sidebar (<kbd>⌥ ⌘ 1</kbd> / <kbd>⌥ ⌘ 2</kbd>) moves between the coding agent and Chat mode: an ordinary chat with any of your connections, handy for models whose API has no chat interface of its own. Each area keeps its own chats, its own open chat or unsent draft, its own tabs, and remembers its own model.
+
+- **No project.** Chats are listed by when you last used them. There is no Build/Plan toggle, Git, terminal or Changes panel.
+- **Its own prompt.** A plain assistant persona replaces the coding prompt. Edit it in **Settings › Prompts**; WackCode adds a short guide after it, written from the tools that are switched on.
+- **A small tool set:** reading a web page you link to, the shared browser, memory (one store for all your Chat mode chats, listed as **Chat** in Settings › Memory), your MCP servers, and asking you a question. There is no shell, no sub-agents, no computer use, no skills and no packages. Chat mode has no web search of its own; an MCP server or the browser can supply one.
+- **A scratchpad.** Each chat has a private folder for files it makes. Its file tools work only inside that folder; **Scratchpad** in the chat header opens it in Finder, and you can drop text files and images in for it to read. The folder is deleted with the chat.
+- Messages, attachments, retry, edit, rewind, fork, queueing and compaction work as they do in Code.
+
+The scratchpad limit applies to the agent's own file tools. MCP servers and the browser are not confined by it, so switch on only the ones you would trust in any chat.
+
+If you go back to a WackCode build from before Chat mode, don't open your Chat mode chats there: an older build doesn't know they are different and would run them as coding chats.
 
 ### Queue first, steer when needed
 
@@ -156,6 +171,7 @@ In the composer, type `@` to mention a file or folder, and paste, drop or attach
 | <kbd>⌘ N</kbd> | New chat |
 | <kbd>⌘ O</kbd> | Add a project |
 | <kbd>⌘ ,</kbd> | Settings |
+| <kbd>⌥ ⌘ 1</kbd> / <kbd>⌥ ⌘ 2</kbd> | Switch to Code / Chat |
 | <kbd>⇧ Tab</kbd> | Cycle Build → Plan → Ultra Plan |
 | <kbd>Enter</kbd> / <kbd>⌥ Enter</kbd> | Send, or queue for after the active work in a running chat |
 | <kbd>⇧ Enter</kbd> | New line |

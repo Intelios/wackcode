@@ -589,6 +589,9 @@ pub struct PromptConfig {
     /// Replaces Pi's default system-prompt persona; the assembled sections still follow it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
+    /// Replaces Chat mode's persona; the app's own tool guide always follows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_prompt: Option<String>,
     /// Replaces the Plan-mode contract body (the marker line stays the app's own).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_prompt: Option<String>,
@@ -830,10 +833,30 @@ impl Default for TaskMode {
     }
 }
 
+/// Which area of the app a chat belongs to. `Code` is the coding agent; `Chat` is Chat mode: no
+/// project, a scratch folder as its workspace, its own prompt and a reduced tool set that the
+/// worker enforces (`worker/src/builtin/chat-mode/`). Fixed at creation and inherited by forks,
+/// so it never needs to be part of the worker fingerprint.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskKind {
+    Code,
+    Chat,
+}
+
+impl Default for TaskKind {
+    fn default() -> Self {
+        Self::Code
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskRecord {
     pub id: String,
+    /// Chats saved before Chat mode existed deserialize as `Code`.
+    #[serde(default)]
+    pub kind: TaskKind,
     pub project_id: Option<String>,
     pub name: String,
     /// Legacy chats and forks deserialize as ineligible. Consumed before the first prompt.
@@ -862,6 +885,10 @@ pub struct TaskRecord {
     pub last_error: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// When the chat last started a run; the Chat area orders by it. `updated_at` also moves on
+    /// a rename, an archive or a model change, so it cannot. Absent until the first run.
+    #[serde(default)]
+    pub last_activity_at: Option<String>,
 }
 
 /// The main window's last normal-mode geometry in logical points, recorded from resize and
@@ -989,6 +1016,8 @@ pub struct SaveProviderInput {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateTaskInput {
+    #[serde(default)]
+    pub kind: TaskKind,
     #[serde(default)]
     pub project_id: Option<String>,
     #[serde(default)]

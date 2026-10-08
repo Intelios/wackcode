@@ -75,11 +75,12 @@ export function TerminalPanel({ taskId, appearance, onClose }: TerminalPanelProp
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
-    // The app's own shortcuts (⌘N, ⌘O, ⌘,, ⌘⇧C, ⌘⇧T, ⌘⇧G) keep working while the shell has focus;
+    // The app's own shortcuts (⌘N, ⌘O, ⌘,, ⌘⇧C, ⌘⇧T, ⌘⇧G, ⌥⌘1, ⌥⌘2) keep working while the shell has focus;
     // everything else belongs to it. Mirrors the keydown list in App.tsx.
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== "keydown") return true;
       const key = event.key.toLowerCase();
+      if (event.metaKey && event.altKey && (event.code === "Digit1" || event.code === "Digit2")) return false;
       if (event.metaKey || event.ctrlKey) {
         if (key === "n" || key === "o" || key === "," || (event.shiftKey && (key === "c" || key === "t" || key === "g"))) return false;
       }

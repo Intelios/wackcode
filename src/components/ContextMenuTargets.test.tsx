@@ -16,7 +16,7 @@ const project: ProjectRecord = { id: "p", name: "Project", path: "/code", gitRoo
 const chat: TaskRecord = {
   id: "other", projectId: "p", name: "Background chat", workspacePath: "/code", worktreePath: null, branch: null, usesWorktree: false,
   autoTitleEligible: false, autoTitleAttemptId: null, providerId: "prov", modelId: "m", thinkingLevel: "off", sessionFile: "session.json", status: "idle",
-  mode: "build", archived: false, archivedAt: null, lastError: null, createdAt: "now", updatedAt: "now"
+  mode: "build", archived: false, archivedAt: null, lastError: null, kind: "code", lastActivityAt: null, createdAt: "now", updatedAt: "now"
 };
 function menus(children: ReactNode) {
   return <ContextMenuProvider scope="test" items={[]} copyText={vi.fn()} readText={vi.fn()} openLink={vi.fn()} onError={vi.fn()}>{children}</ContextMenuProvider>;
@@ -25,7 +25,7 @@ function menus(children: ReactNode) {
 describe("context menu targets", () => {
   it("acts on a background chat without selecting it, and dispatches Delete through confirmation", () => {
     const action = vi.fn(); const select = vi.fn();
-    render(menus(<Sidebar projects={[project]} tasks={[chat]} selectedTaskId="selected" pinnedProjectIds={new Set()} pendingDialogTaskIds={new Set()} titlePulses={{}} collapsedProjectIds={new Set()}
+    render(menus(<Sidebar area="code" onSwitchArea={() => undefined} projects={[project]} tasks={[chat]} selectedTaskId="selected" pinnedProjectIds={new Set()} pendingDialogTaskIds={new Set()} titlePulses={{}} collapsedProjectIds={new Set()}
       archivedOpen={false} onSelectTask={select} onTaskAction={action} onNewChat={vi.fn()} onNewDraft={vi.fn()} onAddProject={vi.fn()} onToggleArchived={vi.fn()}
       onToggleProjectCollapsed={vi.fn()} onOpenSettings={vi.fn()} onProjectAction={vi.fn()} onRenameTask={vi.fn()} onArchiveAll={vi.fn()} onDeleteAllArchived={vi.fn()} onToggleGit={null} />));
     const row = screen.getByRole("button", { name: "Background chat" });

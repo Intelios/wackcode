@@ -51,6 +51,7 @@ export function RunPanel({ run, appearance, configured, onRun, onStop, onClose }
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== "keydown") return true;
       const key = event.key.toLowerCase();
+      if (event.metaKey && event.altKey && (event.code === "Digit1" || event.code === "Digit2")) return false;
       return !((event.metaKey || event.ctrlKey) && (key === "n" || key === "o" || key === "," || (event.shiftKey && ["c", "t", "g"].includes(key))));
     });
     term.open(host);

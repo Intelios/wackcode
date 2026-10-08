@@ -153,7 +153,7 @@ export function parseMemory(name: string, text: string): MemoryNote | undefined 
  * decide what to recall. Details stay out of it — `memory_recall` reads the body on demand —
  * so even a large project costs the prompt one line per note. Undefined when there is nothing.
  */
-export function memoryIndex(notes: readonly MemoryNote[]): string | undefined {
+export function memoryIndex(notes: readonly MemoryNote[], scope: "project" | "chat" = "project"): string | undefined {
   if (notes.length === 0) return undefined;
   const order = new Map(MEMORY_TYPES.map((type, index) => [type, index]));
   const sorted = [...notes].sort((a, b) =>
@@ -169,9 +169,9 @@ export function memoryIndex(notes: readonly MemoryNote[]): string | undefined {
     if (lines.length === 0) break;
   }
   return [
-    "## Project memory",
+    scope === "chat" ? "## Memory" : "## Project memory",
     "",
-    "Notes saved from earlier conversations in this project, one line each. When one is relevant to the current request, read its full text with memory_recall; otherwise leave it alone.",
+    `Notes saved from earlier ${scope === "chat" ? "chats" : "conversations in this project"}, one line each. When one is relevant to the current request, read its full text with memory_recall; otherwise leave it alone.`,
     "",
     ...lines,
     ...(truncated ? ["", `[… ${sorted.length - lines.length} more notes are not listed; recall them by name if you know it, and prune stale notes with memory_forget.]`] : []),

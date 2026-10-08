@@ -21,7 +21,8 @@ vi.mock("./api", () => ({ api: {
   watchSubagent: vi.fn().mockResolvedValue(undefined), archiveTask: vi.fn(), deleteTask: vi.fn().mockResolvedValue(undefined),
   goalControl: vi.fn().mockResolvedValue(undefined), browserState: vi.fn(), browserPresent: vi.fn()
 } }));
-vi.mock("./components/SettingsPage", () => ({ SettingsPage: (props: { appearance: typeof DEFAULT_APPEARANCE; onSetAppearance: (value: typeof DEFAULT_APPEARANCE) => void; onClose: () => void }) => <>
+vi.mock("./components/SettingsPage", () => ({ SettingsPage: (props: { appearance: typeof DEFAULT_APPEARANCE; toolCatalog: { name: string }[]; onSetAppearance: (value: typeof DEFAULT_APPEARANCE) => void; onClose: () => void }) => <>
+  <output aria-label="Tool catalogue">{props.toolCatalog.map((tool) => tool.name).join(",")}</output>
   <button onClick={() => props.onSetAppearance({ ...props.appearance, chatTabs: !props.appearance.chatTabs })}>Toggle tabs</button>
   <button onClick={props.onClose}>Close settings</button>
 </> }));
@@ -34,7 +35,7 @@ const provider: ProviderRecord = {
 };
 const task = (id: string): TaskRecord => ({ id, projectId: null, name: `Chat ${id}`, workspacePath: `/tmp/${id}`, worktreePath: null,
   branch: null, usesWorktree: false, providerId: "p", modelId: "first", thinkingLevel: "off", sessionFile: null, status: "idle", mode: "build",
-  archived: false, archivedAt: null, lastError: null, createdAt: "2026-01-01", updatedAt: "2026-01-01", autoTitleEligible: false, autoTitleAttemptId: null });
+  archived: false, archivedAt: null, lastError: null, kind: "code", lastActivityAt: null, createdAt: "2026-01-01", updatedAt: "2026-01-01", autoTitleEligible: false, autoTitleAttemptId: null });
 function bootstrap(enabled = true) {
   const data: AppData = { version: 1, providers: [provider], favoriteModels: [], projects: [], tasks: [task("a"), task("b")], diffComments: {},
     toolConfig: { disabled: [] }, toolCatalog: [], packages: [], subagents: { enabled: false, trigger: "on_request", maxConcurrency: 4, agents: [] },
@@ -323,5 +324,132 @@ describe("App tab workspace", () => {
     chat("a");
     await waitFor(() => expect(screen.queryByRole("complementary", { name: "SubAgent Scout" })).toBeNull());
     expect(vi.mocked(api.watchSubagent).mock.calls.filter(([id, target]) => id === "a" && target)).toHaveLength(watches);
+  });
+});
+
+describe("App areas", () => {
+  const chatTask = (id: string, name: string): TaskRecord => ({ ...task(id), kind: "chat", name });
+  const tool = (name: string) => ({ name, description: "", source: { kind: "builtin" as const }, available: true });
+  function boot(tasks: TaskRecord[], enabled = false) {
+    const data: AppData = { version: 1, providers: [provider], favoriteModels: [], projects: [], tasks, diffComments: {},
+      toolConfig: { disabled: [] }, toolCatalog: [], packages: [], subagents: { enabled: false, trigger: "on_request", maxConcurrency: 4, agents: [] },
+      autoTitle: { enabled: false, providerId: null, modelId: null }, appearance: { ...DEFAULT_APPEARANCE, chatTabs: enabled }, prompts: {}, mcp: { servers: [] } };
+    vi.mocked(api.bootstrap).mockResolvedValue({ data, appDataPath: "/tmp", glassSupported: false, computerUseSupported: false });
+    return render(<App />);
+  }
+  const area = (name: "Code" | "Chat") => screen.getByRole("button", { name });
+  const enter = (name: "Code" | "Chat") => fireEvent.click(area(name));
+
+  it("keeps each area's chats apart and brings back the draft that was left behind", async () => {
+    boot([task("a"), chatTask("c", "Trip plan")]);
+    await screen.findByRole("button", { name: "Settings" });
+    expect(area("Code")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Chat a" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Trip plan" })).toBeNull();
+    type("Half a thought");
+
+    enter("Chat");
+    expect(area("Chat")).toHaveAttribute("aria-pressed", "true");
+    expect(await screen.findByRole("heading", { name: "What's on your mind?" })).toBeInTheDocument();
+    // The sidebar's page slides out before the other area's slides in.
+    expect(await screen.findByRole("button", { name: "Trip plan" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Chat a" })).toBeNull();
+    // No project, no planning modes, no Git.
+    for (const name of ["Add project", "Git mode"]) expect(screen.queryByRole("button", { name })).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Plan" })).toBeNull();
+    expect(input()).toHaveValue("");
+    type("Chat draft");
+
+    enter("Code");
+    expect(input()).toHaveValue("Half a thought");
+    expect(screen.getByRole("radio", { name: "Plan" })).toBeInTheDocument();
+    enter("Chat");
+    expect(input()).toHaveValue("Chat draft");
+  });
+
+  it("returns to the chat each area had open", async () => {
+    boot([task("a"), chatTask("c", "Trip plan")]);
+    await screen.findByRole("button", { name: "Settings" });
+    chat("a");
+    await waitFor(() => expect(api.openTask).toHaveBeenCalledWith("a"));
+    enter("Chat");
+    fireEvent.click(await screen.findByRole("button", { name: "Trip plan" }));
+    await waitFor(() => expect(api.openTask).toHaveBeenCalledWith("c"));
+    expect(screen.getByRole("heading", { name: "Trip plan" })).toBeInTheDocument();
+    enter("Code");
+    expect(screen.getByRole("heading", { name: "Chat a" })).toBeInTheDocument();
+    enter("Chat");
+    expect(screen.getByRole("heading", { name: "Trip plan" })).toBeInTheDocument();
+  });
+
+  it("creates a Chat mode chat with no project, in Build, and never asks Git about it", async () => {
+    vi.mocked(api.createTask).mockResolvedValue(chatTask("made", "Hello there"));
+    boot([task("a")]);
+    await screen.findByRole("button", { name: "Settings" });
+    enter("Chat");
+    type("Hello there"); fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(api.prompt).toHaveBeenCalled());
+    expect(api.createTask).toHaveBeenCalledWith({ kind: "chat", name: "Hello there", providerId: "p", modelId: "first", thinkingLevel: "off" });
+    expect(vi.mocked(api.prompt).mock.calls[0][0]).toMatchObject({ taskId: "made", mode: "build" });
+    await waitFor(() => expect(api.openTask).toHaveBeenCalledWith("made"));
+    expect(api.gitChanges).not.toHaveBeenCalledWith({ taskId: "made" });
+    expect(api.setTaskMode).not.toHaveBeenCalled();
+    // The chat lands in the Chat list, and the header offers the scratchpad and the browser only.
+    expect(await screen.findByRole("button", { name: "Reveal scratchpad" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Browser" })).toBeInTheDocument();
+    for (const name of ["Changes", "Terminal", "Games"]) expect(screen.queryByRole("button", { name })).toBeNull();
+    enter("Code");
+    expect(screen.queryByRole("button", { name: "Hello there" })).toBeNull();
+  });
+
+  it("switches with ⌥⌘1 and ⌥⌘2, and leaves the Code shortcuts alone in Chat", async () => {
+    boot([task("a")]);
+    await screen.findByRole("button", { name: "Settings" });
+    // ⌥ changes the character the key reports; the physical digit is what counts.
+    fireEvent.keyDown(window, { code: "Digit2", key: "™", metaKey: true, altKey: true });
+    expect(area("Chat")).toHaveAttribute("aria-pressed", "true");
+    fireEvent.keyDown(window, { key: "G", metaKey: true, shiftKey: true });
+    expect(area("Chat")).toHaveAttribute("aria-pressed", "true");
+    fireEvent.keyDown(window, { code: "Digit1", key: "¡", metaKey: true, altKey: true });
+    expect(area("Code")).toHaveAttribute("aria-pressed", "true");
+    await native("area-chat");
+    expect(area("Chat")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("opens a chat picked from the tray menu in its own area", async () => {
+    boot([task("a"), chatTask("c", "Trip plan")]);
+    await screen.findByRole("button", { name: "Settings" });
+    vi.mocked(api.takeMenuNavigation).mockResolvedValueOnce("c");
+    await act(async () => events.get("native-chat-navigation")?.({ payload: { taskId: "c" } }));
+    await waitFor(() => expect(area("Chat")).toHaveAttribute("aria-pressed", "true"));
+    expect(screen.getByRole("heading", { name: "Trip plan" })).toBeInTheDocument();
+  });
+
+  it("gives each area its own tab bar", async () => {
+    boot([task("a"), chatTask("c", "Trip plan")], true);
+    await screen.findByRole("tablist");
+    chat("a");
+    await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
+    enter("Chat");
+    // A fresh draft tab; Code's two are not in this bar.
+    await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+    expect(screen.getByRole("tab")).toHaveAccessibleName(/New chat/);
+    fireEvent.click(await screen.findByRole("button", { name: "Trip plan" }));
+    await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
+    enter("Code");
+    await waitFor(() => expect(screen.getByRole("tab", { name: /Chat a/ })).toHaveAttribute("aria-selected", "true"));
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect(screen.queryByRole("tab", { name: /Trip plan/ })).toBeNull();
+    enter("Chat");
+    await waitFor(() => expect(screen.getByRole("tab", { name: /Trip plan/ })).toHaveAttribute("aria-selected", "true"));
+  });
+
+  it("never lets a Chat mode chat's reduced tool list replace the catalogue Settings prunes against", async () => {
+    boot([task("a"), chatTask("c", "Trip plan")]);
+    await screen.findByRole("button", { name: "Settings" });
+    await worker({ type: "snapshot", taskId: "a", snapshot: { ...snapshot([]), tools: [tool("read"), tool("bash")] } });
+    await worker({ type: "snapshot", taskId: "c", snapshot: { ...snapshot([]), tools: [tool("read")] } });
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect(screen.getByRole("status", { name: "Tool catalogue" })).toHaveTextContent("read,bash");
   });
 });

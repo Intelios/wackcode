@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activeSlashCommand, APP_SLASH_COMMANDS, expandCommandPreview, validateCommandBody, validateCommandName } from "./command-utils";
+import { activeSlashCommand, APP_SLASH_COMMANDS, appCommandsFor, expandCommandPreview, validateCommandBody, validateCommandName } from "./command-utils";
 
 describe("activeSlashCommand", () => {
   it("finds commands at the caret after prose and on later lines", () => {
@@ -63,5 +63,15 @@ describe("APP_SLASH_COMMANDS", () => {
     expect(hints.get("init")).toBeUndefined();
     expect(hints.get("new")).toBeUndefined();
     expect(hints.get("copy")).toBeUndefined();
+  });
+});
+
+describe("appCommandsFor", () => {
+  it("offers every app command in the Code area", () => {
+    expect(appCommandsFor("code")).toEqual(APP_SLASH_COMMANDS);
+  });
+
+  it("offers only the commands that need no project or coding agent in Chat mode", () => {
+    expect(appCommandsFor("chat").map((command) => command.name)).toEqual(["compact", "new", "name", "copy"]);
   });
 });

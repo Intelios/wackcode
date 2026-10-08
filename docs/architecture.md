@@ -42,9 +42,9 @@ Everything is under the app data directory (`~/Library/Application Support/com.w
 | `secrets.json` (0600) | API keys, and MCP header/env values keyed `mcp:<id>`. |
 | `subscriptions/<id>/auth.json` (0600) | OAuth credentials, one file per subscription provider. |
 | `sessions/<task>/`, `agent/<task>/` | A chat's Pi session files and Pi agent directory. |
-| `scratch/<task>/` | Workspace for chats without a project. |
+| `scratch/<task>/` | Workspace for chats without a project, and every Chat mode chat's scratchpad. Deleted with the chat. |
 | `checkpoints/<task>/` | The chat's shadow Git repository (see below). |
-| `memory/<name>-<key>/` | Project memory notes, one directory per repository shared by its worktrees. |
+| `memory/<name>-<key>/` | Project memory notes, one directory per repository shared by its worktrees. Chat mode's one shared store is `memory/chat-<CHAT_MEMORY_KEY>/` (`memory.rs`): the same shape, so Settings lists it like a project's. |
 | `commands/` | The user's slash commands. |
 | `pi/` | Installed packages: Pi's `settings.json` plus `npm/` and `git/`. |
 | `backgrounds/` | Validated copies of chosen background images; the only asset-protocol scope. |
@@ -53,6 +53,19 @@ Everything is under the app data directory (`~/Library/Application Support/com.w
 The renderer keeps only UI conveniences in `localStorage` (`wackcode:*` keys such as the last model, the side panel's view and width, collapsed and pinned projects, and Git mode's last repository and diff layout).
 
 `MetadataState::mutate` restores the previous execution policy on a failed operation or write, while holding the lock. Failed override saves cannot silently change permissions. Other runtime state, such as a worker crash interruption, intentionally remains updated even when saving fails.
+
+## Chat kinds
+
+`TaskRecord.kind` is `code` (the default, and every chat saved before Chat mode) or `chat`. It is set at creation, inherited by forks, and never changes, so it stays out of the worker fingerprint.
+
+A `chat` task never has a project or a worktree (`validate_task_kind`). The host sends its kind in `init`, and treats it differently in a handful of places, all in `worker.rs` and `commands.rs`:
+
+- **Init payload:** no package resources (`resources_for`, used for the fingerprint too), no sub-agents, skills, commands, computer use or mode.
+- **Broadcasts:** coding-only settings go through `broadcast_coding`, which skips Chat mode workers. The sub-agent payload carries other connections' credentials, so this one is a rule, not a tidy-up.
+- **Mirrors:** a Chat mode worker's snapshot never updates `tool_catalog` (Settings › Tools prunes the saved denylist against it, and a reduced registry would switch coding tools back on) or the task's `mode`.
+- **Refusals:** `refuse_chat` guards the coding-only commands and `task_workspace`, which every task-targeted Git command resolves through. The worker refuses the same things on its side.
+
+`last_activity_at` is stamped from each run's own `startedAt`, which every `running` frame repeats. The Chat area orders by it; `updated_at` also moves on a rename, an archive or a model change.
 
 ## Shared types
 

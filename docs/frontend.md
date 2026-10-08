@@ -125,6 +125,19 @@ queue actions dispatch while stopping. App captures the originating task id for 
 - Sub-agent transcripts reach the panel only through `watch_subagent` frames, never through snapshots.
 - **Games** (`GamesPanel`, one entry per game in its `GAMES` list): each game is a pure simulation under `src/games/` plus a component that owns its canvas and rAF loop. The panel's page remounts on every view or tab switch, so a run in progress lives in `games/session.ts` and comes back paused. Quack Survivors also autosaves through `games/save.ts` (a versioned `localStorage` envelope, normalised on the way back out), so a run survives quitting the app; pausing offers **Save & quit**, which hands you back to the chat. Best scores are a `localStorage` convenience (`games/scores.ts`, with a one-time fallback to a game's pre-rename key). The panel takes only the open chat's `status`, so streaming never re-renders it.
 
+## Areas
+
+The app has two peer areas, Code and Chat (`src/areas.ts`). `App` holds which one is on screen in `area`, and `enterArea` is the only way it changes.
+
+- **A chat belongs to one area for life** (`taskArea`, from `TaskRecord.kind`). Every list is built from one area's chats (`areaTasks`, `codeTasks`): the sidebar, Archived, Git mode's linked chats, the tab bar. Opening a chat from anywhere else (the tray menu) enters its area first, in `selectTask`.
+- **Switching parks, never abandons.** With tabs, both areas' tabs live in one store, each tagged with its `area`; `switchTabArea` parks the open tab and restores the other area's. Without tabs, `parkedViews` holds each area's chat or unsent draft. One store rather than two because a send finishing or a chat binding must find its tab after the user has switched area.
+- **A draft's kind is the area on screen when the send starts**, captured before anything is awaited. It is not a `ChatDraft` field: draft edits rebuild that object field by field and would drop it.
+- **The Chat area leaves things out by not passing them:** the composer gets no `header`, `onModeChange` or `onRequestMentions`, and only `appCommandsFor("chat")`. `ChatHeader`, `chatMenu` and `ArchivedList` read `task.kind`.
+- **Its side panel is the browser only.** `panelView` is null for anything else there, and the remembered durable view stays Code's: the persistence effect skips Chat.
+- **Never call Git for a Chat mode chat** (`refreshChanges` returns early) and never take its snapshot's tool list as the catalogue; see the host's matching rules in [architecture.md](architecture.md).
+- **The switch** (`AreaSwitch`) lives inside `.sidebar-top`. Don't add a child to `.sidebar`: the Settings rebuild animation addresses its children by position.
+- **⌥⌘1 / ⌥⌘2** are matched on `event.code`, because ⌥ changes `event.key`. The native Go menu sends the same commands (`area-code`, `area-chat`) through `native-tab-action`, so they work while a browser page has focus.
+
 ## Git mode
 
 A full-window Git client over the chat view, for one project's own folder (worktree chats keep their changes in the Changes panel). `useGitMode` (`src/hooks/`) holds its state per project and is called by `App`, so it may call `api`; `src/git-mode.ts` holds the pure rules (which project it opens on, the linked chat, the sync button's next action, the remote's web page, the checkbox arithmetic). The `Git*` components and `RepoSwitcher` are presentational.

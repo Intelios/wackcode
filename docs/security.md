@@ -36,6 +36,22 @@ Never add a network origin silently; call it out explicitly and update `README.m
 - Keep both redaction layers: `safeError` in the worker and `redact_and_limit` in Rust.
 - The macOS Keychain backend was removed on purpose; don't bring it back.
 
+## Chat mode's scratchpad
+
+A Chat mode chat's file tools (`read`, `write`, `edit`, `ls`, `grep`, `find`) are confined to its scratch folder, and it has no shell. The worker enforces this at call time (`worker/src/builtin/chat-mode/`), fail-closed, comparing real paths so `..`, `~`, absolute paths and symlinks out of the folder are all refused.
+
+This is a behavioral policy, not a filesystem sandbox, and `README.md` says so. It does not cover:
+
+- **MCP servers**, which run with the user's login-shell environment and do whatever their tools do.
+- **The browser**, which loads what it is pointed at.
+- **A hard link** placed inside the scratchpad, which the path check cannot tell from a file.
+
+Don't describe it as more than this, and don't add a tool to Chat mode's allowlist (`policy.ts`) that can reach the filesystem or run a process without routing its paths through `confine`.
+
+Chat mode is also where the app has no permission prompts by design: there is nothing to approve, because there is no path outside the scratchpad to ask about. Keep it that way (see `AGENTS.md`).
+
+A Chat mode worker loads no package, even a trusted one, and receives no sub-agent settings: that payload carries other connections' credentials.
+
 ## Pi lockdown
 
 - The worker keeps Pi's telemetry, version check, network model refresh and all auto-discovery disabled: every `no*` flag stays `true`, and the worker runs with `PI_OFFLINE`.

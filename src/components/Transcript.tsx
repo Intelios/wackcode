@@ -77,6 +77,8 @@ interface Props {
   onUndoRewind?: () => void;
   /** Resolves a sent message's attached image to its full-size URL, for the lightbox. */
   loadImage?: MessageImageLoader;
+  /** What an empty chat says. Absent: the coding agent's invitation. */
+  empty?: { title: string; body: string };
 }
 
 /** How the tool-related cards and their actions reach every rendered block. */
@@ -569,7 +571,7 @@ function activityLabel(activity?: string): string {
   return "Working…";
 }
 
-export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, compaction, runTimings = [], collapseCompletedWork = true, scopeKey = "", viewState, historyReady = true, status, liveToolText, liveToolDetails, planState, onPlanAction, skillDrafts, skillDraftsSaving, taskId, onSkillAction, loadSkillDocument, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind, loadImage }: Props) {
+export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, compaction, runTimings = [], collapseCompletedWork = true, scopeKey = "", viewState, historyReady = true, status, liveToolText, liveToolDetails, planState, onPlanAction, skillDrafts, skillDraftsSaving, taskId, onSkillAction, loadSkillDocument, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind, loadImage, empty }: Props) {
   const scroll = useFollowScroll(viewState, historyReady);
   const { ref, onScroll, onWheel, detached, pauseFollowing, jumpToLatest } = scroll;
   const [expandedWork, setExpandedWork] = useState(() => viewState?.work ?? new Set<string>());
@@ -745,8 +747,8 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
       <div className="transcript-zone">
         <div className="conversation-scroll">
           <div className="conversation-empty">
-            <h2>What should we build?</h2>
-            <p>Describe the change, bug, or question — {assistantName} can read this project, run commands, and edit files.</p>
+            <h2>{empty?.title ?? "What should we build?"}</h2>
+            <p>{empty?.body ?? <>Describe the change, bug, or question — {assistantName} can read this project, run commands, and edit files.</>}</p>
             {rewindBar}
           </div>
         </div>

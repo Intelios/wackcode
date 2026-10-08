@@ -9,7 +9,7 @@ function task(id: string, name: string): TaskRecord {
   return {
     id, projectId: "p1", name, autoTitleEligible: false, autoTitleAttemptId: null, workspacePath: "/tmp", worktreePath: null,
     branch: null, usesWorktree: false, providerId: "p", modelId: "m", thinkingLevel: "off", sessionFile: null,
-    status: "idle", mode: "build", archived: false, archivedAt: null, lastError: null, createdAt: "now", updatedAt: "now"
+    status: "idle", mode: "build", archived: false, archivedAt: null, lastError: null, kind: "code", lastActivityAt: null, createdAt: "now", updatedAt: "now"
   };
 }
 
@@ -86,5 +86,25 @@ describe("ChatHeader panel buttons", () => {
     expect(p.onToggleGames).toHaveBeenCalledOnce();
     rerender(<ChatHeader {...p} gamesOpen />);
     expect(screen.getByRole("button", { name: "Games" })).toHaveAttribute("aria-pressed", "true");
+  });
+});
+
+describe("ChatHeader in Chat mode", () => {
+  it("offers the scratchpad and the browser, and none of a project's chrome", () => {
+    const p = props({ ...task("c1", "Trip plan"), kind: "chat", projectId: null, workspacePath: "/data/scratch/c1" });
+    render(<ChatHeader {...p} git={{ branch: "main" }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Reveal scratchpad" }));
+    expect(p.onTaskAction).toHaveBeenCalledWith(p.task, "reveal");
+    expect(screen.getByRole("button", { name: "Browser" })).toBeInTheDocument();
+    for (const name of ["Changes", "Terminal", "Games"]) expect(screen.queryByRole("button", { name })).toBeNull();
+    // Neither the folder's path nor a branch: a scratchpad is not a checkout.
+    expect(screen.queryByText(/scratch\/c1/)).toBeNull();
+    expect(screen.queryByText("main")).toBeNull();
+  });
+
+  it("keeps the project chrome for a coding chat", () => {
+    render(<ChatHeader {...props(task("t1", "Fix the build"))} />);
+    for (const name of ["Browser", "Changes", "Terminal", "Games"]) expect(screen.getByRole("button", { name })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reveal scratchpad" })).toBeNull();
   });
 });

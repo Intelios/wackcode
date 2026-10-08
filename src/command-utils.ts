@@ -1,3 +1,4 @@
+import type { Area } from "./areas";
 import type { SlashCommand } from "./types";
 
 /** The slash token under the caret, bounded by whitespace; paths and URLs aren't commands. */
@@ -29,6 +30,14 @@ export const APP_SLASH_COMMANDS: SlashCommand[] = [
   { id: "app:goal", name: "goal", description: "Keep iterating until the goal is verified. /goal pause, resume, clear control it.", source: "app", sourceLabel: "WackCode", argumentHint: "<objective>" },
   { id: "app:skill-creator", name: "skill-creator", description: "Create or improve an Agent Skill, then review and save it", source: "app", sourceLabel: "WackCode", argumentHint: "[request]" }
 ];
+
+/** The app commands that make sense without a project or a coding agent. */
+const CHAT_APP_COMMANDS: ReadonlySet<string> = new Set(["app:compact", "app:new", "app:name", "app:copy"]);
+
+/** The app's own commands one area offers. Chat mode has no /init, /goal or /skill-creator. */
+export function appCommandsFor(area: Area, commands: SlashCommand[] = APP_SLASH_COMMANDS): SlashCommand[] {
+  return area === "chat" ? commands.filter((command) => CHAT_APP_COMMANDS.has(command.id)) : commands;
+}
 
 export const COMMAND_NAME_MAX = 64;
 export const COMMAND_DESCRIPTION_MAX = 1_024;

@@ -2,7 +2,7 @@
  * Built-in memory tools: the per-project notes described in `store.ts`. The host names the
  * project's memory directory (under the app's own data, never the workspace) and switches the
  * feature on or off; everything else lives in ordinary files the user can audit and edit in
- * Settings › Memory.
+ * Settings › Memory. Chat mode chats share one such directory between them (`MemoryScope`).
  *
  * Three tools, one job each: `memory_save` writes (or updates) a note, `memory_recall` reads
  * notes in full, `memory_forget` retires one. The system prompt gets only the generated index
@@ -166,7 +166,27 @@ export interface MemoryController {
   inactiveTools(): string[];
 }
 
-export function createMemoryExtension() {
+/**
+ * Which store the notes belong to. A coding chat keeps notes per project; Chat mode keeps one
+ * store for every chat in it. Only the wording differs, never the note format.
+ */
+export type MemoryScope = "project" | "chat";
+
+const WORDING: Record<MemoryScope, { save: string; guideline: string; off: string }> = {
+  project: {
+    save: "Save or update a small note for future conversations in this project. Four kinds: user (the user's role and lasting preferences), feedback (corrections and confirmed approaches), project (ongoing work, decisions, deadlines not derivable from the code or git history), reference (where information lives outside the project).",
+    guideline: "Save a memory only when it would help a future conversation, not every session. Never save what the codebase, AGENTS.md files or the transcript already show, or anything true only of the current task.",
+    off: "Memory is switched off for this project.",
+  },
+  chat: {
+    save: "Save or update a small note for future chats. Four kinds: user (who the user is and their lasting preferences), feedback (corrections and approaches the user confirmed), project (something ongoing the user is working on, with its decisions and dates), reference (where a piece of information lives).",
+    guideline: "Save a memory only when it would help a future chat, not every conversation. Never save what this conversation already shows, or anything true only of the current request.",
+    off: "Memory is switched off in Settings › Memory.",
+  },
+};
+
+/** `scope` is read when the tools register and on each refresh, both after `init`. */
+export function createMemoryExtension(scope: () => MemoryScope = () => "project") {
   let root: string | undefined;
   let enabled = false;
   let servedIndex: string | undefined;
@@ -178,7 +198,7 @@ export function createMemoryExtension() {
     },
     refresh() {
       const previous = servedIndex;
-      servedIndex = enabled && root ? memoryIndex(readNotes(root)) : undefined;
+      servedIndex = enabled && root ? memoryIndex(readNotes(root), scope()) : undefined;
       return servedIndex !== previous;
     },
     appendPrompt() {
@@ -193,19 +213,19 @@ export function createMemoryExtension() {
   };
 
   function factory(pi: ExtensionAPI): void {
+    const wording = WORDING[scope()];
     pi.registerTool({
       name: MEMORY_SAVE_TOOL_NAME,
       label: "Save memory",
-      description:
-        "Save or update a small note for future conversations in this project. Four kinds: user (the user's role and lasting preferences), feedback (corrections and confirmed approaches), project (ongoing work, decisions, deadlines not derivable from the code or git history), reference (where information lives outside the project).",
+      description: wording.save,
       promptSnippet: "keep a small note for future conversations",
       promptGuidelines: [
-        "Save a memory only when it would help a future conversation, not every session. Never save what the codebase, AGENTS.md files or the transcript already show, or anything true only of the current task.",
+        wording.guideline,
         "Updating beats accumulating: pass the existing note's name to rewrite it, and retire notes that no longer hold with memory_forget.",
       ],
       parameters: SAVE_PARAMS,
       async execute(_toolCallId, params: unknown) {
-        if (!enabled || !root) throw new Error("Memory is switched off for this project.");
+        if (!enabled || !root) throw new Error(wording.off);
         const input = params as Record<string, unknown>;
         const type = String(input.type ?? "");
         if (!isMemoryType(type)) throw new Error(`type must be one of ${MEMORY_TYPES.join(", ")}.`);
@@ -238,7 +258,7 @@ export function createMemoryExtension() {
       ],
       parameters: RECALL_PARAMS,
       async execute(_toolCallId, params: unknown) {
-        if (!enabled || !root) throw new Error("Memory is switched off for this project.");
+        if (!enabled || !root) throw new Error(wording.off);
         const raw = (params as { names?: unknown }).names;
         const names = (Array.isArray(raw) ? raw : []).map((name) => String(name).trim()).filter(Boolean).slice(0, MAX_RECALL_NAMES);
         if (names.length === 0) throw new Error("Give memory_recall at least one note name.");
@@ -270,7 +290,7 @@ export function createMemoryExtension() {
       promptGuidelines: [],
       parameters: FORGET_PARAMS,
       async execute(_toolCallId, params: unknown) {
-        if (!enabled || !root) throw new Error("Memory is switched off for this project.");
+        if (!enabled || !root) throw new Error(wording.off);
         const name = String((params as { name?: unknown }).name ?? "").trim();
         if (!name) throw new Error("Give memory_forget the note's name.");
         // A name that could not be a note file (a path, a dot-file) is simply not found.

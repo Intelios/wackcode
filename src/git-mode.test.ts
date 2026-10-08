@@ -13,7 +13,7 @@ function task(id: string, patch: Partial<TaskRecord> = {}): TaskRecord {
   return {
     id, projectId: "p", name: id, autoTitleEligible: false, autoTitleAttemptId: null, workspacePath: "/repo/p",
     worktreePath: null, branch: "main", usesWorktree: false, providerId: "x", modelId: "m", thinkingLevel: "off",
-    sessionFile: null, status: "idle", mode: "build", archived: false, archivedAt: null, lastError: null,
+    sessionFile: null, status: "idle", mode: "build", archived: false, archivedAt: null, lastError: null, kind: "code", lastActivityAt: null,
     createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z", ...patch
   };
 }

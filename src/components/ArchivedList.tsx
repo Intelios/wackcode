@@ -48,7 +48,9 @@ export function ArchivedList({ tasks, projects, selectedTaskId, searching = fals
         {archived.map((task, index) => {
           const isConfirmingUnarchive = confirming?.taskId === task.id && confirming.action === "unarchive";
           const isConfirmingDelete = confirming?.taskId === task.id && confirming.action === "delete";
-          const projectName = task.projectId === null
+          const projectName = task.kind === "chat"
+            ? "Chat"
+            : task.projectId === null
             ? "No project"
             : projects.find((project) => project.id === task.projectId)?.name ?? "No project";
           return (

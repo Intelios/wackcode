@@ -287,13 +287,13 @@ mod tests {
     fn startup_marks_active_tasks_interrupted_without_replaying_them() {
         let mut data = AppData {
             tasks: vec![TaskRecord {
-                id: "task".into(), project_id: Some("project".into()), name: "Running task".into(),
+                id: "task".into(), kind: crate::models::TaskKind::Code, project_id: Some("project".into()), name: "Running task".into(),
                 auto_title_eligible: false, auto_title_attempt_id: None,
                 workspace_path: "/tmp/project".into(), worktree_path: None, branch: None,
                 uses_worktree: false, provider_id: "provider".into(), model_id: "model".into(),
                 thinking_level: "off".into(), session_file: Some("session.jsonl".into()),
                 status: TaskStatus::Running, mode: crate::models::TaskMode::Build, archived: false, archived_at: None, last_error: None,
-                created_at: "now".into(), updated_at: "now".into(),
+                created_at: "now".into(), updated_at: "now".into(), last_activity_at: None,
             }],
             ..AppData::default()
         };
@@ -311,6 +311,13 @@ mod tests {
         assert_eq!(task.project_id, None);
         assert!(!task.auto_title_eligible);
         assert!(task.auto_title_attempt_id.is_none());
+        // A chat saved before Chat mode existed is a coding chat with no recorded activity.
+        assert_eq!(task.kind, crate::models::TaskKind::Code);
+        assert!(task.last_activity_at.is_none());
+        let chat = json.replace("\"id\":\"t\"", "\"id\":\"t\",\"kind\":\"chat\"");
+        let task: TaskRecord = serde_json::from_str(&chat).unwrap();
+        assert_eq!(task.kind, crate::models::TaskKind::Chat);
+        assert_eq!(serde_json::to_value(&task).unwrap()["kind"], "chat");
         let legacy = json.replace("\"projectId\":null", "\"projectId\":\"project-1\"");
         let task: TaskRecord = serde_json::from_str(&legacy).unwrap();
         assert_eq!(task.project_id.as_deref(), Some("project-1"));

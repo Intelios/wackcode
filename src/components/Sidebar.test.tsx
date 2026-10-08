@@ -14,7 +14,7 @@ function task(id: string, projectId: string | null, name: string): TaskRecord {
   return {
     id, projectId, name, autoTitleEligible: false, autoTitleAttemptId: null, workspacePath: "/tmp", worktreePath: null, branch: null, usesWorktree: false,
     providerId: "prov", modelId: "m", thinkingLevel: "off", sessionFile: null, status: "idle",
-    mode: "build", archived: false, archivedAt: null, lastError: null, createdAt: "now", updatedAt: "now"
+    mode: "build", archived: false, archivedAt: null, lastError: null, kind: "code", lastActivityAt: null, createdAt: "now", updatedAt: "now"
   };
 }
 
@@ -22,6 +22,8 @@ function Harness({ tasks, pendingDialogTaskIds = new Set<string>(), archivedOpen
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   return (
     <Sidebar
+      area="code"
+      onSwitchArea={() => undefined}
       projects={projects}
       tasks={tasks}
       archivedOpen={archivedOpen}
@@ -169,6 +171,8 @@ describe("Sidebar collapsible projects", () => {
       const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set(["p1"]));
       return (
         <Sidebar
+          area="code"
+          onSwitchArea={() => undefined}
           projects={projects}
           tasks={[task("t1", "p1", "Refactor parser")]}
           archivedOpen={false}
@@ -223,6 +227,8 @@ describe("Sidebar collapsible projects", () => {
     function LooseHarness() {
       return (
         <Sidebar
+          area="code"
+          onSwitchArea={() => undefined}
           projects={projects}
           tasks={[task("t2", null, "Loose chat")]}
           archivedOpen={false}
@@ -258,6 +264,8 @@ describe("Sidebar footer tiles", () => {
     const [archivedOpen, setArchivedOpen] = useState(false);
     return (
       <Sidebar
+        area="code"
+        onSwitchArea={() => undefined}
         projects={projects}
         tasks={tasks}
         archivedOpen={archivedOpen}
@@ -319,6 +327,8 @@ describe("Sidebar task actions", () => {
   }) {
     return (
       <Sidebar
+        area="code"
+        onSwitchArea={() => undefined}
         projects={projects}
         tasks={tasks}
         archivedOpen={false}
@@ -435,6 +445,8 @@ describe("Sidebar bulk actions", () => {
   }) {
     return (
       <Sidebar
+        area="code"
+        onSwitchArea={() => undefined}
         projects={projects}
         tasks={tasks}
         archivedOpen={archivedOpen}
@@ -498,6 +510,8 @@ describe("Sidebar pinning and Git mode", () => {
   }) {
     return (
       <Sidebar
+        area="code"
+        onSwitchArea={() => undefined}
         projects={many}
         pinnedProjectIds={new Set(pinned)}
         tasks={[task("t1", "p1", "Alpha chat")]}
@@ -559,5 +573,74 @@ describe("Sidebar pinning and Git mode", () => {
   it("disables the Git tile when there is no project to open", () => {
     render(<PinHarness onToggleGit={null} />);
     expect(screen.getByRole("button", { name: "Git mode" })).toBeDisabled();
+  });
+});
+
+describe("Sidebar areas", () => {
+  function AreaHarness({ area, tasks, areaAttention, onSwitchArea = () => undefined }: { area: "code" | "chat"; tasks: TaskRecord[]; areaAttention?: "code" | "chat"; onSwitchArea?: (area: "code" | "chat") => void }) {
+    return (
+      <Sidebar
+        area={area}
+        areaAttention={areaAttention}
+        onSwitchArea={onSwitchArea}
+        projects={projects}
+        tasks={tasks}
+        archivedOpen={false}
+        pendingDialogTaskIds={new Set<string>()}
+        titlePulses={{}}
+        collapsedProjectIds={new Set<string>()}
+        onSelectTask={() => undefined}
+        onNewChat={() => undefined}
+        onNewDraft={() => undefined}
+        onAddProject={() => undefined}
+        onToggleArchived={() => undefined}
+        onToggleProjectCollapsed={() => undefined}
+        onOpenSettings={() => undefined}
+        onTaskAction={() => undefined}
+        onProjectAction={() => undefined}
+        onRenameTask={() => undefined}
+        onArchiveAll={() => undefined}
+        onDeleteAllArchived={() => undefined}
+        pinnedProjectIds={new Set<string>()}
+        onToggleGit={null}
+      />
+    );
+  }
+  const chatTask = (name: string, lastActivityAt: string | null): TaskRecord => ({ ...task(name, null, name), kind: "chat", createdAt: "2020-01-01T12:00:00", lastActivityAt });
+
+  it("shows which area is on screen and asks to switch", () => {
+    const onSwitchArea = vi.fn();
+    render(<AreaHarness area="code" tasks={[]} onSwitchArea={onSwitchArea} />);
+    const group = screen.getByRole("group", { name: "Area" });
+    expect(within(group).getByRole("button", { name: "Code" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(group).getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(within(group).getByRole("button", { name: "Chat" }));
+    expect(onSwitchArea).toHaveBeenCalledWith("chat");
+  });
+
+  it("says when the other area has a chat waiting for an answer", () => {
+    render(<AreaHarness area="code" tasks={[]} areaAttention="chat" />);
+    expect(screen.getByRole("button", { name: "Chat, a chat is waiting for your answer" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Code" })).toBeInTheDocument();
+  });
+
+  it("lists Chat mode chats by last use under calendar headings, with no project chrome", () => {
+    const today = new Date();
+    const earlier = new Date(today.getFullYear() - 1, 0, 1).toISOString();
+    render(<AreaHarness area="chat" tasks={[chatTask("Old recipe", earlier), chatTask("Trip plan", today.toISOString())]} />);
+    const list = screen.getByRole("navigation", { name: "Chats" });
+    expect(within(list).getAllByRole("heading").map((heading) => heading.textContent)).toEqual(["Today", "Earlier"]);
+    expect(within(within(list).getByRole("region", { name: "Today" })).getByRole("button", { name: "Trip plan" })).toBeInTheDocument();
+    expect(within(within(list).getByRole("region", { name: "Earlier" })).getByRole("button", { name: "Old recipe" })).toBeInTheDocument();
+    // Projects and Git mode belong to the Code area.
+    expect(screen.queryByText("No project")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add project" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Git mode" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
+  });
+
+  it("invites a first chat when the Chat area is empty", () => {
+    render(<AreaHarness area="chat" tasks={[]} />);
+    expect(screen.getByText(/A chat here has no project/)).toBeInTheDocument();
   });
 });

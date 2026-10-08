@@ -17,7 +17,7 @@ use crate::{
         SetPackageResourcesInput, SetTaskModeInput, SetToolConfigInput, SkillDocument,
         SkillFolderKind, SkillFolderRecord, SkillSearchPage, SkillsChange, SkillsOverview,
         SlashCommand, SlashCommandDocument, SlashCommandsChange, SlashCommandsOverview,
-        SteerMessageInput, SubagentConfig, SubagentWatchTarget, TaskMode, TaskRecord, TaskStatus, ToolConfig,
+        SteerMessageInput, SubagentConfig, SubagentWatchTarget, TaskKind, TaskMode, TaskRecord, TaskStatus, ToolConfig,
         WorkspaceFiles,
     },
     memory, skills, slash_commands,
@@ -916,7 +916,12 @@ async fn sync_packages(
                 .data
                 .lock()
                 .map_err(|_| "Metadata lock was poisoned".to_string())?;
-            data.tasks.iter().map(|task| task.id.clone()).collect()
+            // A Chat mode worker loads no package, so a resource change never concerns it.
+            data.tasks
+                .iter()
+                .filter(|task| task.kind != TaskKind::Chat)
+                .map(|task| task.id.clone())
+                .collect()
         };
         for task_id in task_ids {
             worker::terminate_worker(app, &task_id, true).await?;
@@ -1172,7 +1177,7 @@ pub async fn set_execution_policy_config(
         data.execution_policy = input.clone();
         Ok(input.clone())
     })?;
-    worker::broadcast(&app, &json!({
+    worker::broadcast_coding(&app, &json!({
         "id": Uuid::new_v4().to_string(),
         "type": "set_execution_policy", "executionPolicy": config
     })).await?;
@@ -2054,6 +2059,7 @@ pub fn create_task(
         .filter(|value| !value.is_empty())
         .unwrap_or("New chat")
         .to_string();
+    validate_task_kind(input.kind, input.project_id.is_some(), input.use_worktree)?;
     let (project, provider) = {
         let data = state
             .data
@@ -2125,6 +2131,7 @@ pub fn create_task(
     let now = Utc::now().to_rfc3339();
     let record = TaskRecord {
         id,
+        kind: input.kind,
         project_id: project.as_ref().map(|project| project.id.clone()),
         name,
         auto_title_eligible: true,
@@ -2144,6 +2151,7 @@ pub fn create_task(
         last_error: None,
         created_at: now.clone(),
         updated_at: now,
+        last_activity_at: None,
     };
     state.mutate(|data| {
         data.tasks.push(record.clone());
@@ -2423,6 +2431,11 @@ pub async fn list_commands(
 ) -> Result<Vec<SlashCommand>, String> {
     let lock = task_lock(&app, &task_id);
     let _guard = lock.lock().await;
+    // Chat mode offers only the app's own commands, which the renderer already has: nothing to
+    // ask a worker for, so none is started.
+    if task_kind(&state, &task_id)? == TaskKind::Chat {
+        return Ok(Vec::new());
+    }
     let (task, provider) = task_and_provider(&state, &task_id)?;
     if matches!(task.status, TaskStatus::Running | TaskStatus::Stopping) {
         return Err("Wait for this chat to finish before loading commands.".into());
@@ -2454,6 +2467,7 @@ pub async fn execute_command(
     let _guard = lock.lock().await;
     let _checkout = checkout_dispatch_guard(&app, &state, &input.task_id).await;
     let (task, provider) = task_and_provider(&state, &input.task_id)?;
+    refuse_chat(&task, "That command")?;
     if matches!(task.status, TaskStatus::Running | TaskStatus::Stopping) {
         return Err("Wait for this chat to finish before running a command.".into());
     }
@@ -2594,6 +2608,7 @@ pub async fn start_skill_creator(
     let _guard = lock.lock().await;
     let _checkout = checkout_dispatch_guard(&app, &state, &task_id).await;
     let (task, provider) = task_and_provider(&state, &task_id)?;
+    refuse_chat(&task, "/skill-creator")?;
     if matches!(task.status, TaskStatus::Running | TaskStatus::Stopping) {
         return Err("Wait for this chat to finish before running /skill-creator.".into());
     }
@@ -2708,6 +2723,7 @@ pub async fn goal_control(
     let _guard = lock.lock().await;
     let _checkout = checkout_dispatch_guard(&app, &state, &task_id).await;
     let (task, provider) = task_and_provider(&state, &task_id)?;
+    refuse_chat(&task, "/goal")?;
     if action == "set" {
         let objective = objective
             .map(|text| text.trim().to_string())
@@ -2792,7 +2808,9 @@ pub async fn prompt(
     // A prompt carries the composer's mode (drafts have no worker yet, so this is also the
     // only way a task's first message can start in Plan mode). The worker's `plan_state`
     // keeps the record in sync afterwards.
-    let configured = match input.mode {
+    // Chat mode has no planning modes: whatever the composer sent, the record stays in Build.
+    let mode = input.mode.filter(|_| configured.kind != TaskKind::Chat);
+    let configured = match mode {
         Some(mode) if mode != configured.mode => state.mutate(|data| {
             let task = data
                 .tasks
@@ -3288,6 +3306,7 @@ pub async fn fork_task(
     let now = Utc::now().to_rfc3339();
     let mut record = TaskRecord {
         id: id.clone(),
+        kind: source.kind,
         project_id: source.project_id.clone(),
         name: name.clone(),
         auto_title_eligible: false,
@@ -3307,6 +3326,7 @@ pub async fn fork_task(
         last_error: None,
         created_at: now.clone(),
         updated_at: now,
+        last_activity_at: None,
     };
     let git_root = project
         .as_ref()
@@ -3415,6 +3435,7 @@ pub async fn set_task_mode(
             .iter_mut()
             .find(|task| task.id == input.task_id)
             .ok_or_else(|| "Task not found".to_string())?;
+        refuse_chat(task, "Plan mode")?;
         if matches!(task.status, TaskStatus::Running | TaskStatus::Stopping) {
             return Err("Wait for this task to stop before changing modes".into());
         }
@@ -3447,11 +3468,13 @@ pub async fn export_plan(
             .data
             .lock()
             .map_err(|_| "Metadata lock was poisoned".to_string())?;
-        data.tasks
+        let task = data
+            .tasks
             .iter()
             .find(|task| task.id == input.task_id)
-            .map(|task| task.workspace_path.clone())
-            .ok_or_else(|| "Task not found".to_string())?
+            .ok_or_else(|| "Task not found".to_string())?;
+        refuse_chat(task, "Plan mode")?;
+        task.workspace_path.clone()
     };
     export_plan_to_workspace(&workspace, &content)
 }
@@ -3852,11 +3875,14 @@ fn task_workspace(state: &MetadataState, task_id: &str) -> Result<PathBuf, Strin
         .data
         .lock()
         .map_err(|_| "Metadata lock was poisoned".to_string())?;
-    data.tasks
+    let task = data
+        .tasks
         .iter()
         .find(|task| task.id == task_id)
-        .map(|task| PathBuf::from(&task.workspace_path))
-        .ok_or("Chat not found".into())
+        .ok_or_else(|| "Chat not found".to_string())?;
+    // Every task-targeted Git command resolves its folder here. A scratchpad is not a checkout.
+    refuse_chat(task, "Git")?;
+    Ok(PathBuf::from(&task.workspace_path))
 }
 
 #[tauri::command]
@@ -4952,6 +4978,36 @@ fn validate_checkpoint_id(checkpoint_id: &str) -> Result<(), String> {
     }
 }
 
+/// Chat mode chats live in a scratch folder: a project or a worktree would hand the reduced
+/// agent a real codebase as its "scratchpad".
+fn validate_task_kind(kind: TaskKind, has_project: bool, use_worktree: bool) -> Result<(), String> {
+    if kind == TaskKind::Chat && (has_project || use_worktree) {
+        return Err("Chat mode chats can't belong to a project.".into());
+    }
+    Ok(())
+}
+
+fn task_kind(state: &MetadataState, task_id: &str) -> Result<TaskKind, String> {
+    state
+        .data
+        .lock()
+        .map_err(|_| "Metadata lock was poisoned".to_string())?
+        .tasks
+        .iter()
+        .find(|task| task.id == task_id)
+        .map(|task| task.kind)
+        .ok_or_else(|| "Task not found".to_string())
+}
+
+/// Coding features a Chat mode chat does not have. The renderer never offers them there; this is
+/// the host's own refusal for anything that asks anyway. The worker refuses again on its side.
+fn refuse_chat(task: &TaskRecord, what: &str) -> Result<(), String> {
+    if task.kind == TaskKind::Chat {
+        return Err(format!("{what} isn't available in Chat mode."));
+    }
+    Ok(())
+}
+
 fn validate_init_agents_task(project_id: Option<&str>, mode: TaskMode) -> Result<(), String> {
     if project_id.is_none() {
         return Err(
@@ -5213,6 +5269,7 @@ fn normalize_override(label: &str, value: Option<String>) -> Result<Option<Strin
 fn validate_prompt_config(input: PromptConfig) -> Result<PromptConfig, String> {
     Ok(PromptConfig {
         system_prompt: normalize_override("default system prompt", input.system_prompt)?,
+        chat_prompt: normalize_override("Chat mode prompt", input.chat_prompt)?,
         plan_prompt: normalize_override("Plan mode prompt", input.plan_prompt)?,
         ultra_plan_prompt: normalize_override("Ultra Plan prompt", input.ultra_plan_prompt)?,
     })
@@ -5826,6 +5883,52 @@ mod tests {
             ..current
         };
         assert!(validate_appearance_config(image, &with_image, true).is_ok());
+    }
+
+    #[test]
+    fn coding_features_are_refused_for_a_chat_mode_chat() {
+        let task = |kind: &str| -> TaskRecord {
+            serde_json::from_value(json!({
+                "id": "t", "kind": kind, "projectId": null, "name": "n", "workspacePath": "/tmp",
+                "usesWorktree": false, "providerId": "p", "modelId": "m", "thinkingLevel": "off",
+                "createdAt": "c", "updatedAt": "u"
+            }))
+            .unwrap()
+        };
+        assert!(refuse_chat(&task("code"), "Git").is_ok());
+        assert_eq!(
+            refuse_chat(&task("chat"), "Git").unwrap_err(),
+            "Git isn't available in Chat mode."
+        );
+    }
+
+    #[test]
+    fn the_chat_prompt_is_trimmed_and_a_blank_one_means_the_default() {
+        let config = validate_prompt_config(PromptConfig {
+            chat_prompt: Some("  Be brief.  ".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(config.chat_prompt.as_deref(), Some("Be brief."));
+        assert_eq!(config.system_prompt, None);
+        let blank = validate_prompt_config(PromptConfig {
+            chat_prompt: Some("   ".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(blank.chat_prompt, None);
+    }
+
+    #[test]
+    fn chat_mode_chats_never_take_a_project_or_a_worktree() {
+        assert!(validate_task_kind(TaskKind::Chat, false, false).is_ok());
+        assert!(validate_task_kind(TaskKind::Code, true, true).is_ok());
+        assert!(validate_task_kind(TaskKind::Code, false, false).is_ok());
+        for (project, worktree) in [(true, false), (false, true), (true, true)] {
+            assert!(validate_task_kind(TaskKind::Chat, project, worktree)
+                .unwrap_err()
+                .contains("project"));
+        }
     }
 
     #[test]

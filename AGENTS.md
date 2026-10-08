@@ -21,9 +21,9 @@ WackCode is a local macOS desktop app for the [Pi coding agent](https://www.npmj
 
 | If you touch… | Read |
 |---|---|
-| Processes, worker lifecycle, locks, Git commands, persistence, types crossing layers, session tree, checkpoints | [docs/architecture.md](docs/architecture.md) |
-| Worker protocol, command queue, tools, built-ins, planning modes, memory, slash commands | [docs/worker.md](docs/worker.md) |
-| Renderer state, snapshots, side panel, Git mode, terminal, scroll rail, attachments, window | [docs/frontend.md](docs/frontend.md) |
+| Processes, worker lifecycle, locks, Git commands, persistence, types crossing layers, chat kinds, session tree, checkpoints | [docs/architecture.md](docs/architecture.md) |
+| Worker protocol, command queue, tools, built-ins, planning modes, Chat mode, memory, slash commands | [docs/worker.md](docs/worker.md) |
+| Renderer state, snapshots, areas (Code / Chat), side panel, Git mode, terminal, scroll rail, attachments, window | [docs/frontend.md](docs/frontend.md) |
 | Network, credentials, packages, skill/command loading, asset protocol, computer use | [docs/security.md](docs/security.md) |
 | Styles, theme, motion, components, icons, copy | [docs/design.md](docs/design.md) |
 | Tests, the dev app, mock servers, real LLMs | [docs/testing.md](docs/testing.md) |
@@ -38,6 +38,7 @@ WackCode is a local macOS desktop app for the [Pi coding agent](https://www.npmj
 - **Tools:** never pass `tools:` to the chat's `createAgentSession`; Pi treats it as a registry filter and erases extension tools. Apply the denylist with `setActiveToolsByName`.
 - **Plan contract** stays byte-identical: saved chats match it by exact text. Don't just update the test's pinned hash.
 - **Checkpoints** never write to the project's own Git repository.
+- **Chat mode** chats (`kind: "chat"`) are a different agent in the same worker: their prompt and tools are decided in the worker, their file tools go through `confine`, and nothing built for coding chats may reach them (Git, the tool catalogue, coding-only broadcasts, the Code area's lists). A new feature that touches every chat must say what it does for this kind.
 
 ## Design
 

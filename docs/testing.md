@@ -33,6 +33,7 @@ Pure logic belongs in a colocated `*.test.ts` next to a small module (`chat-util
 
 - **Real LLMs:** use only the connection named **Testing (AI Agents may use this too)** (under Providers in the composer's model picker), through the app. Never read its key from `secrets.json`. Don't send prompts through any other connection or subscription sign-in: they may cost the owner money.
 - **Deterministic output:** `pnpm mock:provider` serves a Chat Completions endpoint at `http://127.0.0.1:43127/v1`. A prompt containing "wait until stopped" hangs until cancelled, for testing cancellation.
+- "escape fixture" aims the write one folder above the workspace (`../wackcode-escape.txt`). In a Chat mode chat the tool row shows the scratchpad refusal and no file appears.
 - With sub-agents enabled, "background fixture" launches `worker` (or the first available role) for 25 seconds, answers immediately, then resumes with its result. "background fixture until stopped" keeps the child running for Stop tests. Give that role the mock model and disable automatic titles during mock testing. Use a disposable workspace; ordinary fixture prompts write `wackcode-live.txt`.
 
 ## MCP

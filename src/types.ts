@@ -8,6 +8,12 @@ export type TaskStatus = "idle" | "running" | "stopping" | "interrupted" | "erro
  */
 export type TaskMode = "build" | "plan" | "ultraplan";
 
+/**
+ * Which area a chat belongs to. "chat" is Chat mode: no project, a scratch folder as its
+ * workspace, its own prompt and a reduced tool set. Fixed at creation and inherited by forks.
+ */
+export type TaskKind = "code" | "chat";
+
 /** App-wide, opt-in overrides of the app's read-only policies. */
 export interface ExecutionPolicyConfig {
   unrestrictedSubagents: boolean;
@@ -371,6 +377,7 @@ export interface ProjectRecord {
 
 export interface TaskRecord {
   id: string;
+  kind: TaskKind;
   projectId: string | null;
   name: string;
   autoTitleEligible: boolean;
@@ -392,6 +399,8 @@ export interface TaskRecord {
   lastError: string | null;
   createdAt: string;
   updatedAt: string;
+  /** When the chat last started a run; the Chat area orders by it. Null until the first run. */
+  lastActivityAt: string | null;
 }
 
 /** One resource file a package contributes. */
@@ -687,6 +696,8 @@ export type ThinkingTimerPrecision = "second" | "tenth";
 export interface PromptConfig {
   /** Replaces Pi's default system-prompt persona; the assembled sections still follow it. */
   systemPrompt?: string | null;
+  /** Replaces Chat mode's persona; the app's own tool guide always follows it. */
+  chatPrompt?: string | null;
   /** Replaces the Plan-mode contract body (the marker line stays the app's own). */
   planPrompt?: string | null;
   /** Replaces the Ultra Plan contract body (the marker line stays the app's own). */

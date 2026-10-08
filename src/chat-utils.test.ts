@@ -134,7 +134,7 @@ describe("formatRelativeTime", () => {
 });
 
 describe("sortedArchived", () => {
-  const base = { projectId: null, name: "n", autoTitleEligible: false, autoTitleAttemptId: null, workspacePath: "/tmp", worktreePath: null, branch: null, usesWorktree: false, providerId: "p", modelId: "m", thinkingLevel: "off" as const, sessionFile: null, status: "idle" as const, mode: "build" as const, lastError: null, createdAt: "c" };
+  const base = { projectId: null, name: "n", autoTitleEligible: false, autoTitleAttemptId: null, workspacePath: "/tmp", worktreePath: null, branch: null, usesWorktree: false, providerId: "p", modelId: "m", thinkingLevel: "off" as const, sessionFile: null, status: "idle" as const, mode: "build" as const, lastError: null, kind: "code" as const, lastActivityAt: null, createdAt: "c" };
   const task = (id: string, extra: Partial<import("./types").TaskRecord>): import("./types").TaskRecord => ({ ...base, id, archived: true, archivedAt: null, updatedAt: "u", ...extra });
 
   it("orders by archivedAt, newest first", () => {

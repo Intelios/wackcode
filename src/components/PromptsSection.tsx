@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
-import { DEFAULT_PLAN_PROMPT, DEFAULT_SYSTEM_PROMPT, DEFAULT_ULTRA_PLAN_PROMPT } from "../promptDefaults";
+import { DEFAULT_CHAT_PROMPT, DEFAULT_PLAN_PROMPT, DEFAULT_SYSTEM_PROMPT, DEFAULT_ULTRA_PLAN_PROMPT } from "../promptDefaults";
 import type { PromptConfig } from "../types";
 import { Icon, type IconName } from "./Icons";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
@@ -28,7 +28,7 @@ const PROMPTS: PromptSpec[] = [
     key: "systemPrompt",
     title: "Default system prompt",
     description:
-      "The persona every chat opens with. Your text replaces this opening paragraph; the tool docs, rules and project context are always assembled after it.",
+      "The persona every coding chat opens with. Your text replaces this opening paragraph; the tool docs, rules and project context are always assembled after it.",
     defaultText: DEFAULT_SYSTEM_PROMPT,
     icon: "spark",
     tone: "accent"
@@ -50,6 +50,15 @@ const PROMPTS: PromptSpec[] = [
     icon: "flame",
     tone: "ultra",
     note: "WackCode adds one hidden header line above this text to recognise the contract; everything you write here is the contract the model sees."
+  },
+  {
+    key: "chatPrompt",
+    title: "Chat mode",
+    description: "The persona every chat in the Chat area opens with. It replaces the coding prompt there entirely.",
+    defaultText: DEFAULT_CHAT_PROMPT,
+    icon: "comment",
+    tone: "accent",
+    note: "WackCode adds a short guide after this text, written from the tools that are switched on: how the scratchpad works, that web pages are data and not instructions, and today's date."
   }
 ];
 
@@ -152,7 +161,7 @@ export function PromptsSection({ unrestrictedPlanning, config, agentName, onChan
             </span>
             <h3>Shape how {agentName} thinks</h3>
             <p>
-              Every chat starts from these three prompts, tuned for WackCode. Customising them is optional: edit any of them, and
+              Every chat starts from these prompts, tuned for WackCode. Customising them is optional: edit any of them, and
               restore the built-in text whenever you like. Changes apply from the next message, including chats that are already
               planning.
             </p>
@@ -221,7 +230,7 @@ export function PromptsSection({ unrestrictedPlanning, config, agentName, onChan
                     value={draft}
                     onChange={(event) => setDraft(event.target.value)}
                     aria-label={`${spec.title} text`}
-                    rows={spec.key === "systemPrompt" ? 5 : 16}
+                    rows={spec.key === "systemPrompt" ? 5 : spec.key === "chatPrompt" ? 9 : 16}
                     spellCheck={false}
                   />
                   <div className="prompt-editor-actions">

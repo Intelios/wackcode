@@ -13,17 +13,18 @@ import { composeFileSection, splitFileSection, type FileAttachment } from "./att
 import { displayAgentName, hasSubagentCall, pruneDisabledTools, sameToolCatalog, subagentDetailsFor, parseSkillPreviewDetails, SKILL_CREATOR_TOOL_NAME } from "./tool-utils";
 import { CHANGES_VIEW, GAMES_VIEW, TERMINAL_VIEW, RUN_VIEW, durableView, isDurable, rememberedView, toggleView, viewForChat, viewKey, type PanelViewKind, type SidePanelView } from "./side-panel";
 import { applyRunEvent, EMPTY_RUN_REGISTRY } from "./run-state";
-import { APP_SLASH_COMMANDS } from "./command-utils";
+import { APP_SLASH_COMMANDS, appCommandsFor } from "./command-utils";
+import { AREA_KEY, areaDirection, parseArea, taskArea, tasksInArea, type Area } from "./areas";
 import { performChatNavigation, withoutResolvedDialog } from "./menu-navigation";
 import { PINNED_PROJECTS_KEY, busyChatsInCheckout, includedFiles, linkableChats, resolveLinkedChat } from "./git-mode";
 import { useGitMode } from "./hooks/useGitMode";
 import { useComposerDrafts } from "./hooks/useComposerDrafts";
 import { useChatTabs } from "./hooks/useChatTabs";
-import { activateTab, addDraftTab, bindTab, closeTab, cycleTab, draftTab, findTab, openChatTab, patchTab, removeDraftProject, removeTaskTabs, reopenTab, reorderTab, type ChatDraft, type TabPanelState } from "./chat-tabs";
+import { activateTab, addDraftTab, bindTab, closeTab, cycleTab, draftTab, findTab, openChatTab, patchTab, removeDraftProject, removeTaskTabs, reopenTab, reorderTab, switchTabArea, tabsInArea, type ChatDraft, type TabPanelState } from "./chat-tabs";
 import type { TranscriptViewState } from "./transcript-view";
 import { ChatTabBar, type ChatTabItem } from "./components/ChatTabBar";
 import { NavigationScope } from "./components/ui/NavigationScope";
-import { useModelMemory } from "./hooks/useModelMemory";
+import { LAST_CHAT_MODEL_KEY, useModelMemory } from "./hooks/useModelMemory";
 import { useModelFavorites } from "./hooks/useModelFavorites";
 import { DEFAULT_APPEARANCE, applyTheme, cacheTheme } from "./theme";
 import { computerCursorAppearance } from "./computer-cursor";
@@ -168,6 +169,9 @@ function rememberedPanelView(): SidePanelView | null {
 
 type Draft = ChatDraft;
 
+/** An empty Chat mode chat: what it is for, in place of the coding agent's invitation. */
+const CHAT_EMPTY_STATE = { title: "What's on your mind?", body: "Ask a question, think something through, or draft something. Files it makes go in this chat's scratchpad." };
+
 interface ConfirmState {
   title: string;
   body?: string;
@@ -234,6 +238,13 @@ export default function App() {
   const savedAppearance = useRef<AppearanceConfig>(DEFAULT_APPEARANCE);
   const [legacySelectedTaskId, setSelectedTaskId] = useState<string>();
   const tabs = useChatTabs();
+  /** Which of the two peer areas is on screen (`src/areas.ts`). The open tab, the legacy
+   *  selection and the hero draft always belong to it; `enterArea` is the only way it changes. */
+  const [area, setArea] = useState<Area>(() => parseArea(loadJSON<unknown>(AREA_KEY, "code")));
+  const areaRef = useRef(area);
+  areaRef.current = area;
+  /** Without tabs, the chat or draft each area was left on; `enterArea` brings it back. */
+  const parkedViews = useRef<Partial<Record<Area, { taskId?: string; draft?: Draft; composerKey: string }>>>({});
   const tabsEnabled = data.appearance.chatTabs === true;
   const tabsEnabledRef = useRef(tabsEnabled);
   tabsEnabledRef.current = tabsEnabled;
@@ -370,7 +381,19 @@ export default function App() {
     [extensionRequests, accessRequests]
   );
   const selectedBusy = selectedTask?.status === "running" || selectedTask?.status === "stopping";
-  const git = useGitMode({ projects: data.projects, tasks: data.tasks, selectedTask, pinned: pinnedProjects });
+  // Every list an area shows is built from its own chats; a Chat mode chat never reaches Git
+  // mode, the Code sidebar or its archive, and the other way round.
+  const codeTasks = useMemo(() => tasksInArea(data.tasks, "code"), [data.tasks]);
+  const areaTasks = useMemo(() => area === "code" ? codeTasks : tasksInArea(data.tasks, area), [data.tasks, codeTasks, area]);
+  /** Read by long-lived callbacks that only hold a chat's id. */
+  const chatTaskIds = useRef<ReadonlySet<string>>(new Set());
+  chatTaskIds.current = useMemo(() => new Set(data.tasks.filter((task) => task.kind === "chat").map((task) => task.id)), [data.tasks]);
+  /** The other area has a chat waiting on an answer: its inline card only shows once opened. */
+  const areaAttention = useMemo<Area | undefined>(() => {
+    const other: Area = area === "code" ? "chat" : "code";
+    return data.tasks.some((task) => !task.archived && taskArea(task) === other && pendingDialogTaskIds.has(task.id)) ? other : undefined;
+  }, [data.tasks, area, pendingDialogTaskIds]);
+  const git = useGitMode({ projects: data.projects, tasks: codeTasks, selectedTask: area === "code" ? selectedTask : undefined, pinned: pinnedProjects });
   const gitMode = git.view;
   const tabScreensHidden = useRef(false);
   tabScreensHidden.current = settingsOpen || gitMode !== null;
@@ -391,7 +414,7 @@ export default function App() {
   // moves the panel back to the remembered durable view.
   const missingSubagent = sidePanel?.kind === "subagent" && sidePanel.taskId === selectedTaskId && runtime?.snapshot !== undefined
     && !hasSubagentCall(runtime.snapshot.messages, runtime.partial, sidePanel.toolCallId);
-  const panelView = selectedTask?.archived || missingSubagent ? null
+  const panelView = selectedTask?.archived || missingSubagent || (area === "chat" && sidePanel?.kind !== "browser") ? null
     : (sidePanel?.kind === "subagent" || sidePanel?.kind === "browser") && sidePanel.taskId !== selectedTaskId
       ? tabsEnabled ? null : rememberedPanelView() : sidePanel;
   const shownSubagent = panelView?.kind === "subagent" ? panelView : undefined;
@@ -523,6 +546,11 @@ export default function App() {
   }, []);
 
   const reduce = useReducedMotion();
+  // The hero title's own area swap: it leaves and arrives sideways, the way the sidebar slides.
+  // `shownArea` trails `area` by one commit, so the render that changes area sees both.
+  const shownArea = useRef(area);
+  const areaSlide = shownArea.current === area || reduce ? 0 : areaDirection(shownArea.current, area);
+  useEffect(() => { shownArea.current = area; }, [area]);
 
   /** Swapping screens always rebuilds: every open and close routes through these so the
       incoming screen plays its assembly once. */
@@ -573,18 +601,73 @@ export default function App() {
     selectTask(taskId);
   }
 
+  /**
+   * Switch to the other area. What is on screen is parked, not abandoned: the area's open tab,
+   * or without tabs its chat or unsent draft, comes back the next time it is entered. `open`
+   * says a chat is about to be opened there, so no stand-in draft is made first.
+   */
+  function enterArea(next: Area, open = false) {
+    const from = areaRef.current;
+    if (from === next) return;
+    if (settingsOpen) closeSettings();
+    closeGit();
+    setArchivedOpen(false);
+    setTransitioning(undefined);
+    if (!tabsEnabledRef.current) parkedViews.current[from] = { taskId: selectedTaskRef.current, draft: legacyDraft, composerKey: composerKeyRef.current };
+    areaRef.current = next;
+    setArea(next);
+    try { localStorage.setItem(AREA_KEY, JSON.stringify(next)); } catch { /* The switch still happens. */ }
+    tabs.update((state) => switchTabArea(state, from, next));
+    if (tabsEnabledRef.current) {
+      if (!open) ensureTabSelection(); else syncTabSelection();
+      return;
+    }
+    // The durable side-panel view is Code's alone; Chat mode's panel only ever shows its browser.
+    setLegacySidePanel(next === "code" ? rememberedPanelView() : null);
+    setLegacyBrowserExpanded(false);
+    const parked = parkedViews.current[next];
+    const task = parked?.taskId ? data.tasks.find((item) => item.id === parked.taskId && taskArea(item) === next) : undefined;
+    if (task && parked) {
+      composerKeyRef.current = parked.composerKey;
+      setLegacyComposerKey(parked.composerKey);
+      selectedTaskRef.current = task.id;
+      setSelectedTaskId(task.id);
+      setLegacyDraft(undefined);
+    } else if (parked && !parked.taskId && !open) {
+      composerKeyRef.current = parked.composerKey;
+      setLegacyComposerKey(parked.composerKey);
+      selectedTaskRef.current = undefined;
+      setSelectedTaskId(undefined);
+      setLegacyDraft(parked.draft ?? { projectId: lastProjectId(), useWorktree: false });
+    } else {
+      setLegacyComposerKey(undefined);
+      draftEpoch.current += 1;
+      composerKeyRef.current = `new:${draftEpoch.current}`;
+      selectedTaskRef.current = undefined;
+      setSelectedTaskId(undefined);
+      setLegacyDraft({ projectId: lastProjectId(), useWorktree: false });
+    }
+  }
+  const enterAreaRef = useRef(enterArea);
+  enterAreaRef.current = enterArea;
+
   function selectTask(id: string) {
+    // A chat opened from anywhere (the tray menu, a link) brings its own area forward first.
+    const target = data.tasks.find((task) => task.id === id);
+    const crossing = target !== undefined && taskArea(target) !== areaRef.current;
+    if (target && crossing) enterArea(taskArea(target), true);
     performChatNavigation(id, {
       dismissGitMode: () => closeGit(),
       dismissSettings: () => { if (settingsOpen) closeSettings(); },
       abandonDraft: () => {
         if (tabsEnabled) return;
-        if (!selectedTask && ![...tabs.ref.current.tabs, ...tabs.ref.current.closed.map((entry) => entry.tab)].some((tab) => tab.composerKey === composerDraftKey)) composerDrafts.remove(composerDraftKey);
+        // Crossing areas parked the draft that was on screen; only a same-area move abandons it.
+        if (!crossing && !selectedTask && ![...tabs.ref.current.tabs, ...tabs.ref.current.closed.map((entry) => entry.tab)].some((tab) => tab.composerKey === composerDraftKey)) composerDrafts.remove(composerDraftKey);
         draftEpoch.current += 1;
         setLegacyDraft(undefined);
       },
       selectTask: (taskId) => {
-        if (tabsEnabled) tabs.update((state) => openChatTab(state, taskId, true, taskComposerKeys.current.get(taskId)));
+        if (tabsEnabled) tabs.update((state) => openChatTab(state, taskId, true, taskComposerKeys.current.get(taskId), target ? taskArea(target) : areaRef.current));
         else {
           const key = taskComposerKeys.current.get(taskId) ?? [...tabs.ref.current.tabs, ...tabs.ref.current.closed.map((entry) => entry.tab)].find((tab) => tab.taskId === taskId)?.composerKey;
           composerKeyRef.current = key ?? `task:${taskId}`;
@@ -614,16 +697,17 @@ export default function App() {
 
   useEffect(() => { selectedTaskRef.current = selectedTaskId; }, [selectedTaskId]);
   useEffect(() => {
-    if (tabsEnabled) return;
+    // Chat mode's panel is not the durable one: closing its browser must not forget Code's view.
+    if (tabsEnabled || area === "chat") return;
     const remembered = rememberedView(sidePanel);
     if (remembered !== undefined) localStorage.setItem(PANEL_VIEW_KEY, JSON.stringify(remembered));
-  }, [sidePanel, tabsEnabled]);
+  }, [sidePanel, tabsEnabled, area]);
   useEffect(() => { if (!tabsEnabled) localStorage.setItem(PANEL_WIDTH_KEY, JSON.stringify(panelWidth)); }, [panelWidth, tabsEnabled]);
   // Browser and sub-agent views belong to their chat: another chat opens with the remembered
   // durable view. Browser expansion also belongs to the chat being left.
   useEffect(() => {
     if (tabsEnabled) return;
-    setSidePanel((current) => viewForChat(current, selectedTaskId, rememberedPanelKind()));
+    setSidePanel((current) => viewForChat(current, selectedTaskId, areaRef.current === "chat" ? null : rememberedPanelKind()));
     if (browserExpanded) setPanelWidth(browserRestoreWidth);
     setBrowserExpanded(false);
   }, [selectedTaskId]);
@@ -633,8 +717,8 @@ export default function App() {
   // The Archived view closes itself once its last chat leaves (unarchived or deleted):
   // the footer tile that opens it is gone too, so an empty panel would be a dead end.
   useEffect(() => {
-    if (archivedOpen && !data.tasks.some((task) => task.archived)) setArchivedOpen(false);
-  }, [archivedOpen, data.tasks]);
+    if (archivedOpen && !areaTasks.some((task) => task.archived)) setArchivedOpen(false);
+  }, [archivedOpen, areaTasks]);
 
   const toggleProjectCollapsed = useCallback((key: string) => {
     setCollapsedProjects((current) => {
@@ -779,7 +863,8 @@ export default function App() {
   }, [missingSubagent, tabsEnabled, setSidePanel]);
 
   const refreshChanges = useCallback(async (taskId = selectedTaskRef.current) => {
-    if (!taskId) return;
+    // A Chat mode chat's scratchpad is not a checkout; the host would refuse the request.
+    if (!taskId || chatTaskIds.current.has(taskId)) return;
     const request = ++changesRequest.current;
     setChangesLoading(true);
     try {
@@ -866,7 +951,9 @@ export default function App() {
         });
         if (snapshot.planState) patchTask(taskId, { mode: snapshot.planState.mode });
         if (snapshot.sessionFile) patchTask(taskId, { sessionFile: snapshot.sessionFile });
-        const tools = snapshot.tools;
+        // Never from a Chat mode chat: its registry is the reduced one, and Settings › Tools
+        // prunes the saved denylist against this catalogue.
+        const tools = chatTaskIds.current.has(taskId) ? undefined : snapshot.tools;
         if (tools) {
           setData((current) => sameToolCatalog(current.toolCatalog, tools) ? current : { ...current, toolCatalog: tools });
         }
@@ -894,7 +981,13 @@ export default function App() {
         // A run starting makes the chat the most recently active, which Git mode's linked
         // chat follows. Only "running" clears the saved error — the host mirrors exactly
         // that in wackcode.json, and clearing more here would desync the two.
-        patchTask(taskId, { status: payload.state, ...(payload.state === "running" ? { lastError: null, updatedAt: new Date().toISOString() } : {}) });
+        patchTask(taskId, {
+          status: payload.state,
+          ...(payload.state === "running" ? { lastError: null, updatedAt: new Date().toISOString() } : {}),
+          // The host stamps the record the same way: the moment the run started, which every
+          // `running` frame of it repeats. The Chat area orders by this.
+          ...(payload.state === "running" && payload.startedAt !== undefined ? { lastActivityAt: new Date(payload.startedAt).toISOString() } : {})
+        });
         if (payload.state === "idle" || payload.state === "interrupted") gitRef.current.onWorkerActivity(taskId);
         patchRuntime(taskId, { workActivity: payload.workActivity });
         if (payload.state === "running" && payload.workActivity?.parent === "idle") {
@@ -1106,8 +1199,8 @@ export default function App() {
   // filters the rest of the catalog itself.
   const enabledAppCommands = useMemo(() => {
     const disabled = new Set(data.commands?.disabled ?? []);
-    return APP_SLASH_COMMANDS.filter((command) => !disabled.has(command.id));
-  }, [data.commands]);
+    return appCommandsFor(area, APP_SLASH_COMMANDS).filter((command) => !disabled.has(command.id));
+  }, [data.commands, area]);
   // Settings' commands section reports every saved config, keeping `data.commands` (and so the
   // composers) in step. Stable: the section rescans when this changes identity.
   const commandsChanged = useCallback(
@@ -1141,7 +1234,14 @@ export default function App() {
     setData((current) => ({ ...current, providers: current.providers.map((item) => item.id === providerId ? provider : item) }));
   }
 
-  const { rememberModel, defaultChoice } = useModelMemory(configuredProviders);
+  // Each area remembers its own model. Until Chat has one, it starts from Code's.
+  const codeModels = useModelMemory(configuredProviders);
+  const chatModels = useModelMemory(configuredProviders, LAST_CHAT_MODEL_KEY);
+  const defaultChoice = (projectId: string | null) =>
+    areaRef.current === "chat" && chatModels.hasChoice ? chatModels.defaultChoice(null) : codeModels.defaultChoice(areaRef.current === "chat" ? null : projectId);
+  /** A chat record remembers for its own area; a bare choice for the one on screen. */
+  const rememberModel = (choice: ModelChoice & { kind?: TaskRecord["kind"] }) =>
+    ((choice.kind ? taskArea({ kind: choice.kind }) : areaRef.current) === "chat" ? chatModels : codeModels).rememberModel(choice);
 
   function transcriptView(taskId: string): TranscriptViewState {
     let view = transcriptViews.current.get(taskId);
@@ -1179,9 +1279,10 @@ export default function App() {
   }
 
   function ensureTabSelection() {
-    if (!tabs.ref.current.tabs.length && tabsEnabledRef.current) {
+    // The bar is one area's tabs: an area with none gets a fresh draft, whatever the other holds.
+    if (!tabsInArea(tabs.ref.current, areaRef.current).length && tabsEnabledRef.current) {
       const projectId = lastProjectId();
-      tabs.update((state) => addDraftTab(state, draftTab(crypto.randomUUID(), { projectId, useWorktree: false, choice: defaultChoice(projectId) })));
+      tabs.update((state) => addDraftTab(state, draftTab(crypto.randomUUID(), { projectId, useWorktree: false, choice: defaultChoice(projectId) }, undefined, areaRef.current)));
     }
     syncTabSelection();
   }
@@ -1199,14 +1300,21 @@ export default function App() {
   }
 
   function reopenWorkspaceTab() {
-    tabs.update(reopenTab);
+    tabs.update((state) => reopenTab(state, areaRef.current));
     setTransitioning(undefined);
     syncTabSelection();
   }
 
   const tabCommandsAllowed = tabsEnabled && !settingsOpen && !gitMode && !confirm && !restoreDialog && !subscriptionLogin;
+  const areaTabCount = tabsInArea(tabs.state, area).length;
+  const areaCanReopen = tabs.state.closed.some((entry) => entry.tab.area === area);
   const nativeTabAction = useRef<(command: string) => void>(() => undefined);
   nativeTabAction.current = (command) => {
+    // The native menu carries the area switch too, so it works while a browser page has focus.
+    if (command === "area-code" || command === "area-chat") {
+      if (!confirm && !restoreDialog && !subscriptionLogin) enterArea(command === "area-chat" ? "chat" : "code");
+      return;
+    }
     if (command === "new" && !tabsEnabled) {
       if (settingsOpen) closeSettings();
       closeGit(); openDraft(selectedTask ? selectedTask.projectId : draft?.projectId);
@@ -1228,7 +1336,8 @@ export default function App() {
       syncTabSelection(); setTransitioning(undefined);
     } else if (command.startsWith("select-")) {
       const number = Number(command.slice(7));
-      const tab = number === 9 ? workspace.tabs.at(-1) : workspace.tabs[number - 1];
+      const bar = tabsInArea(workspace, areaRef.current);
+      const tab = number === 9 ? bar.at(-1) : bar[number - 1];
       if (tab) selectWorkspaceTab(tab.id);
     }
   };
@@ -1237,9 +1346,9 @@ export default function App() {
     return () => { void subscription.then((stop) => stop()); };
   }, []);
   useEffect(() => {
-    void api.setChatTabMenu({ tabsEnabled, enabled: tabCommandsAllowed, tabCount: tabs.state.tabs.length, canReopen: tabs.state.closed.length > 0 })
+    void api.setChatTabMenu({ tabsEnabled, enabled: tabCommandsAllowed, tabCount: areaTabCount, canReopen: areaCanReopen })
       .catch((reason) => setGlobalError(String(reason)));
-  }, [tabsEnabled, tabCommandsAllowed, tabs.state.tabs.length, tabs.state.closed.length]);
+  }, [tabsEnabled, tabCommandsAllowed, areaTabCount, areaCanReopen]);
 
   function purgeTaskTabs(ids: Set<string>) {
     for (const tab of [...tabs.ref.current.tabs, ...tabs.ref.current.closed.map((entry) => entry.tab)]) {
@@ -1261,7 +1370,7 @@ export default function App() {
     previousTabsEnabled.current = tabsEnabled;
     if (tabsEnabled) {
       if (legacySelectedTaskId) {
-        const next = tabs.update((state) => openChatTab(state, legacySelectedTaskId, true, taskComposerKeys.current.get(legacySelectedTaskId)));
+        const next = tabs.update((state) => openChatTab(state, legacySelectedTaskId, true, taskComposerKeys.current.get(legacySelectedTaskId), areaRef.current));
         if (next.activeId) tabs.update((state) => patchTab(state, next.activeId!, {
           panel: { ...findTab(state, next.activeId!)!.panel, view: legacySidePanel, width: legacyPanelWidth, browserExpanded: legacyBrowserExpanded, browserRestoreWidth: legacyBrowserRestoreWidth }
         }));
@@ -1272,7 +1381,7 @@ export default function App() {
         if (existing) tabs.update((state) => activateTab(patchTab(state, existing.id, { draft: legacyDraft ?? existing.draft }), existing.id));
         else {
           const config = legacyDraft ?? { projectId: lastProjectId(), useWorktree: false };
-          const tab = draftTab(crypto.randomUUID(), { ...config, choice: config.choice ?? defaultChoice(config.projectId) }, key);
+          const tab = draftTab(crypto.randomUUID(), { ...config, choice: config.choice ?? defaultChoice(config.projectId) }, key, areaRef.current);
           tab.sending = draftPreparations.current.has(key) || transitioning?.composerKey === key;
           tabs.update((state) => addDraftTab(state, tab));
         }
@@ -1315,14 +1424,16 @@ export default function App() {
   const draftChoice = draft ? draft.choice ?? defaultChoice(draft.projectId) : undefined;
 
   function lastProjectId(projects = data.projects): string | null {
+    // A Chat mode chat never has a project.
+    if (areaRef.current === "chat") return null;
     const remembered = loadJSON<string | null | undefined>(LAST_PROJECT_KEY, undefined);
     return remembered === null ? null : projects.some((project) => project.id === remembered) ? remembered! : projects[0]?.id ?? null;
   }
 
   function openDraft(projectId?: string | null) {
-    const resolved = projectId === undefined ? lastProjectId() : projectId;
+    const resolved = areaRef.current === "chat" || projectId === undefined ? lastProjectId() : projectId;
     if (tabsEnabled) {
-      tabs.update((state) => addDraftTab(state, draftTab(crypto.randomUUID(), { projectId: resolved, useWorktree: false, choice: defaultChoice(resolved) })));
+      tabs.update((state) => addDraftTab(state, draftTab(crypto.randomUUID(), { projectId: resolved, useWorktree: false, choice: defaultChoice(resolved) }, undefined, areaRef.current)));
       selectedTaskRef.current = undefined;
       setSelectedTaskId(undefined);
       setTransitioning(undefined);
@@ -1362,14 +1473,16 @@ export default function App() {
     const choice = active.choice ?? defaultChoice(active.projectId);
     if (!choice) { openSettings(); return Promise.resolve(undefined); }
     if (origin) tabs.update((state) => patchTab(state, origin, { sending: true, error: undefined }));
+    // The composer on screen belongs to this area; captured now, before anything is awaited.
+    const chat = areaRef.current === "chat";
     const pending = (async () => { try {
-      let task = await api.createTask({
+      let task = await api.createTask(chat ? { kind: "chat", name: "New chat", ...choice } : {
         projectId: active.projectId,
         useWorktree: active.useWorktree && Boolean(draftProject?.gitHasHead),
         name: "New chat",
         ...choice
       });
-      if (active.mode && active.mode !== "build") {
+      if (!chat && active.mode && active.mode !== "build") {
         try { task = await api.setTaskMode(task.id, active.mode); }
         catch (reason) { await api.deleteTask(task.id); throw reason; }
       }
@@ -1808,6 +1921,8 @@ export default function App() {
       const choice = active.choice ?? defaultChoice(active.projectId);
       if (!choice) { openSettings(); return false; }
       const startedAt = Date.now();
+      // The composer on screen belongs to this area; captured now, before anything is awaited.
+      const chat = areaRef.current === "chat";
       const stillHere = () => composerKeyRef.current === key;
       const clearHandoff = () => setTransitioning((current) => current?.composerKey === key ? undefined : current);
       if (origin) tabs.update((state) => patchTab(state, origin, { sending: true, error: undefined }));
@@ -1815,7 +1930,7 @@ export default function App() {
       let task: TaskRecord | undefined;
       const pendingSlash = draftPreparations.current.get(key);
       try {
-        task = pendingSlash ? await pendingSlash : await api.createTask({
+        task = pendingSlash ? await pendingSlash : await api.createTask(chat ? { kind: "chat", name: titleFromPrompt(message), ...choice } : {
           projectId: active.projectId,
           useWorktree: active.useWorktree && Boolean(draftProject?.gitHasHead),
           name: titleFromPrompt(message), ...choice
@@ -1823,8 +1938,9 @@ export default function App() {
         if (!task) return false;
         if (stillHere()) setTransitioning({ message, taskId: task.id, fromSelectedId: selectedTaskId, composerKey: key });
         rememberModel(task);
-        localStorage.setItem(LAST_PROJECT_KEY, JSON.stringify(active.projectId));
-        const mode = modeOverride ?? active.mode ?? "build";
+        if (!chat) localStorage.setItem(LAST_PROJECT_KEY, JSON.stringify(active.projectId));
+        // Chat mode has no planning modes.
+        const mode = chat ? "build" : modeOverride ?? active.mode ?? "build";
         if (!pendingSlash) setData((current) => ({ ...current, tasks: [...current.tasks, task!] }));
         patchTask(task.id, { status: "running", lastError: null, mode });
         patchRuntime(task.id, { error: undefined, activity: "starting", activeRun: { startedAt }, pendingMessage: pendingEchoMessage(sent, images, startedAt) });
@@ -2087,7 +2203,7 @@ export default function App() {
    * is persisted on the record and pushed to the worker (which refuses while a run is active).
    */
   async function setTaskMode(mode: TaskMode) {
-    if (mode === currentMode) return;
+    if (mode === currentMode || areaRef.current === "chat") return;
     if (!selectedTask) {
       setDraft((current) => ({
         projectId: current?.projectId ?? lastProjectId(),
@@ -2384,6 +2500,8 @@ export default function App() {
     const atEnd = !answer || answer.id === latestAnswer?.id;
     const files = task.usesWorktree
       ? "in its own worktree with a copy of the files. Ignored files such as .env or node_modules are not copied."
+      : task.kind === "chat"
+        ? "with its own scratchpad and a copy of the files in it."
       : !task.projectId
         ? "in its own scratch folder with a copy of the files."
         : "in the same folder. Both chats will share its files.";
@@ -2399,7 +2517,7 @@ export default function App() {
         });
         setData((current) => ({ ...current, tasks: [...current.tasks.filter((item) => item.id !== forked.id), forked] }));
         if (composerKeyRef.current === originKey) selectTaskRef.current(forked.id);
-        else if (tabsEnabledRef.current) tabs.update((state) => openChatTab(state, forked.id, false));
+        else if (tabsEnabledRef.current) tabs.update((state) => openChatTab(state, forked.id, false, undefined, taskArea(forked)));
       }
     });
   }
@@ -2542,7 +2660,7 @@ export default function App() {
   }
 
   function archiveAll(projectId: string | null) {
-    const targets = data.tasks.filter((task) => task.projectId === projectId && !task.archived);
+    const targets = codeTasks.filter((task) => task.projectId === projectId && !task.archived);
     if (targets.length === 0) return;
     const groupName = projectId === null ? "No project" : data.projects.find((project) => project.id === projectId)?.name ?? "this project";
     const running = targets.filter((task) => task.status === "running" || task.status === "stopping").length;
@@ -2559,7 +2677,7 @@ export default function App() {
   }
 
   function deleteAllArchived() {
-    const targets = data.tasks.filter((task) => task.archived);
+    const targets = areaTasks.filter((task) => task.archived);
     if (targets.length === 0) return;
     const worktrees = targets.some((task) => task.usesWorktree);
     setConfirm({
@@ -2674,6 +2792,12 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      // ⌥⌘1 / ⌥⌘2 switch area. Matched on the physical key: ⌥ changes what `event.key` reports.
+      if (event.metaKey && event.altKey && !event.ctrlKey && !event.shiftKey && (event.code === "Digit1" || event.code === "Digit2")) {
+        event.preventDefault();
+        nativeTabAction.current(event.code === "Digit2" ? "area-chat" : "area-code");
+        return;
+      }
       // Native menus normally consume these; retain the same route for renderer-delivered
       // keystrokes. Control-Shift-Tab must not also change Build/Plan mode.
       if (tabsEnabled && !event.altKey && ((event.ctrlKey && !event.metaKey && event.key === "Tab") || (event.metaKey && !event.ctrlKey && !event.shiftKey && /^[1-9w]$/i.test(event.key)))) {
@@ -2685,8 +2809,9 @@ export default function App() {
       if (event.key === "Tab" && event.shiftKey) {
         // Inside the terminal the keystroke belongs to the shell, not the mode switcher.
         if (event.target instanceof HTMLElement && event.target.closest(".xterm")) return;
-        // Git mode hides the composer: ⇧Tab keeps its usual job of moving focus back.
-        if (gitMode) return;
+        // Git mode hides the composer: ⇧Tab keeps its usual job of moving focus back. So it does
+        // in Chat mode, which has no modes to cycle.
+        if (gitMode || area === "chat") return;
         const busy = selectedTask && (selectedTask.status === "running" || selectedTask.status === "stopping");
         if (!settingsOpen && !confirm && !restoreDialog && extensionRequests.length === 0 && accessRequests.length === 0 && !busy) {
           event.preventDefault();
@@ -2701,6 +2826,9 @@ export default function App() {
         if (tabsEnabled) { nativeTabAction.current("new"); return; }
         closeGit();
         openDraft(selectedTask ? selectedTask.projectId : draft?.projectId);
+      } else if (area === "chat" && ((key === "o" && !event.shiftKey) || (event.shiftKey && (key === "c" || key === "t" || key === "g")))) {
+        // Projects, Changes, the terminal and Git mode belong to the Code area.
+        event.preventDefault();
       } else if (key === "o" && !event.shiftKey) {
         event.preventDefault();
         void addProject();
@@ -2827,13 +2955,13 @@ export default function App() {
     onReorder: (id: string, index: number) => tabs.update((state) => reorderTab(state, id, index))
   }), [tabs.update]);
 
-  const tabItems: ChatTabItem[] = tabs.state.tabs.map((tab) => {
+  const tabItems: ChatTabItem[] = tabsInArea(tabs.state, area).map((tab) => {
     const task = data.tasks.find((item) => item.id === tab.taskId);
     const choice = task ?? tab.draft?.choice;
     const provider = data.providers.find((item) => item.id === choice?.providerId);
     return {
       id: tab.id, title: task?.name ?? "New chat",
-      project: data.projects.find((item) => item.id === (task?.projectId ?? tab.draft?.projectId))?.name ?? "No project",
+      project: tab.area === "chat" ? "Chat" : data.projects.find((item) => item.id === (task?.projectId ?? tab.draft?.projectId))?.name ?? "No project",
       model: provider?.models.find((item) => item.id === choice?.modelId)?.name ?? choice?.modelId ?? "Choose a model",
       titlePulse: task ? titlePulses[task.id] : undefined,
       status: task && pendingDialogTaskIds.has(task.id) ? "waiting" : tab.error || (task && (task.lastError || runtimes[task.id]?.error)) ? "error"
@@ -2935,21 +3063,21 @@ export default function App() {
   } : undefined;
 
   return (
-    <NavigationScope.Provider value={`${composerDraftKey}:${settingsOpen}:${gitMode?.projectId ?? ""}:${gitMode?.tab ?? ""}`}>
+    <NavigationScope.Provider value={`${area}:${composerDraftKey}:${settingsOpen}:${gitMode?.projectId ?? ""}:${gitMode?.tab ?? ""}`}>
     <ContextMenuProvider
-      scope={`${composerDraftKey}-${settingsOpen}-${gitMode?.projectId ?? ""}-${gitMode?.tab ?? ""}-${panelView?.kind ?? ""}-${selectedBusy}-${gitBusyReason ?? ""}-${archivedOpen}-${Boolean(confirm || restoreDialog || subscriptionLogin)}`}
+      scope={`${area}-${composerDraftKey}-${settingsOpen}-${gitMode?.projectId ?? ""}-${gitMode?.tab ?? ""}-${panelView?.kind ?? ""}-${selectedBusy}-${gitBusyReason ?? ""}-${archivedOpen}-${Boolean(confirm || restoreDialog || subscriptionLogin)}`}
       copyText={writeText}
       readText={readText}
       openLink={api.revealPath}
       onError={setGlobalError}
       items={[
         { label: "New chat", icon: <Icon name="plus" />, hint: "⌘N", disabled: tabsEnabled && !tabCommandsAllowed, onSelect: () => { if (settingsOpen) closeSettings(); closeGit(); openDraft(selectedTask ? selectedTask.projectId : draft?.projectId); } },
-        { label: "Add project…", icon: <Icon name="folder" />, hint: "⌘O", onSelect: () => { void addProject(); } },
-        "separator",
+        ...(area === "code" ? [{ label: "Add project…", icon: <Icon name="folder" />, hint: "⌘O", onSelect: () => { void addProject(); } }] : []),
+        "separator" as const,
         { label: "Settings…", icon: <Icon name="settings" />, hint: "⌘,", onSelect: openSettings }
       ]}
     >
-    <div className={`app-shell${rebuilding ? " rebuild" : ""}${gitMode ? " git-mode" : ""}`}>
+    <div className={`app-shell${rebuilding ? " rebuild" : ""}${gitMode ? " git-mode" : ""}`} data-area={area}>
       {data.appearance.backdrop === "image" && (
         <Backdrop
           imageUrl={backgroundImageUrl}
@@ -3013,7 +3141,10 @@ export default function App() {
       <Sidebar
         projects={data.projects}
         pinnedProjectIds={pinnedProjects}
-        tasks={data.tasks}
+        area={area}
+        areaAttention={areaAttention}
+        onSwitchArea={enterArea}
+        tasks={areaTasks}
         selectedTaskId={selectedTaskId}
         archivedOpen={archivedOpen}
         pendingDialogTaskIds={pendingDialogTaskIds}
@@ -3027,7 +3158,7 @@ export default function App() {
           if (gitMode) { closeGit(); setArchivedOpen(true); } else setArchivedOpen((value) => !value);
         }}
         git={gitSidebar}
-        onToggleGit={data.projects.length > 0 || gitMode ? toggleGit : null}
+        onToggleGit={area === "code" && (data.projects.length > 0 || gitMode) ? toggleGit : null}
         onToggleProjectCollapsed={toggleProjectCollapsed}
         onOpenSettings={openSettings}
         onTaskAction={(task, action) => void taskAction(task, action)}
@@ -3038,7 +3169,7 @@ export default function App() {
       />
 
       <main className={`workspace${tabsEnabled ? " has-chat-tabs" : ""}`}>
-        {tabsEnabled && !gitMode && <ChatTabBar tabs={tabItems} activeId={activeTab?.id} canReopen={tabs.state.closed.length > 0}
+        {tabsEnabled && !gitMode && <ChatTabBar tabs={tabItems} activeId={activeTab?.id} canReopen={areaCanReopen}
           {...tabHandlers} />}
         {tabsEnabled && !selectedTask && activeTab?.error && <div className="error-banner workspace-error" role="alert"><span>{activeTab.error}</span></div>}
         <AnimatePresence initial={false}>
@@ -3129,6 +3260,7 @@ export default function App() {
               onMessageAction={onMessageAction}
               onUndoRewind={runtime?.snapshot?.tree?.undo ? onUndoRewind : undefined}
               loadImage={loadMessageImage}
+              empty={selectedTask.kind === "chat" ? CHAT_EMPTY_STATE : undefined}
             />
             </ToolImageSource.Provider>
             </SubagentPanelLink.Provider>
@@ -3142,17 +3274,21 @@ export default function App() {
               onRespond={handleExtensionRespond}
               onAccess={handleComputerAccess}
             />
-            <ComputerUseBanner computer={runtime?.computer} onStop={() => void stopTask()} />
-            <TodoPanel
-              key={selectedTask.id}
-              tasks={runtime?.todoState?.tasks}
-              busy={selectedTask.status === "running" || selectedTask.status === "stopping"}
-            />
-            <GoalBanner
-              goal={runtime?.goalState}
-              onAction={(action) => void api.goalControl(selectedTask.id, action)
-                .catch((reason) => appendNotice(selectedTask.id, { message: String(reason), level: "warning" }))}
-            />
+            {selectedTask.kind !== "chat" && (
+              <>
+                <ComputerUseBanner computer={runtime?.computer} onStop={() => void stopTask()} />
+                <TodoPanel
+                  key={selectedTask.id}
+                  tasks={runtime?.todoState?.tasks}
+                  busy={selectedTask.status === "running" || selectedTask.status === "stopping"}
+                />
+                <GoalBanner
+                  goal={runtime?.goalState}
+                  onAction={(action) => void api.goalControl(selectedTask.id, action)
+                    .catch((reason) => appendNotice(selectedTask.id, { message: String(reason), level: "warning" }))}
+                />
+              </>
+            )}
           </motion.div>
         ) : configuredProviders.length === 0 ? (
           <div key="empty" className="workspace-empty">
@@ -3301,18 +3437,28 @@ export default function App() {
             data-git={composerPhase}
             inert={gitMode ? true : undefined}
           >
-            <AnimatePresence initial={false} mode="popLayout">
+            <AnimatePresence initial={false} mode="popLayout" custom={area}>
               {!selectedTask && (
                 <motion.h1
-                  key="draft-title"
+                  key={`draft-title-${area}`}
                   className="draft-title"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1, transition: { duration: 0.25, ease: EASE } }}
-                  exit={{ opacity: 0, y: -56, transition: { duration: 0.22, ease: EASE } }}
+                  custom={area}
+                  initial={{ opacity: 0, x: 28 * areaSlide }}
+                  animate={{ opacity: 1, x: 0, transition: { duration: 0.25, ease: EASE } }}
+                  variants={{
+                    // A send lifts the title away; an area switch slides it aside. AnimatePresence
+                    // hands the leaving title the area now on screen, which tells the two apart.
+                    leave: (next: Area) => next !== area && !reduce
+                      ? { opacity: 0, x: -28 * areaDirection(area, next), transition: { duration: 0.2, ease: EASE } }
+                      : { opacity: 0, y: -56, transition: { duration: 0.22, ease: EASE } }
+                  }}
+                  exit="leave"
                 >
-                  {draftProject
-                    ? <>What should we build in <TextSwap key={composerDraftKey} text={draftProject.name} swapKey={draftProject.id} variant="rise" />?</>
-                    : "What should we build?"}
+                  {area === "chat"
+                    ? "What's on your mind?"
+                    : draftProject
+                      ? <>What should we build in <TextSwap key={composerDraftKey} text={draftProject.name} swapKey={draftProject.id} variant="rise" />?</>
+                      : "What should we build?"}
                 </motion.h1>
               )}
             </AnimatePresence>
@@ -3332,7 +3478,7 @@ export default function App() {
               onSetFavorite={setModelFavorite}
               stats={selectedTask ? runtime?.snapshot?.stats : undefined}
               popoverSide={selectedTask ? "top" : "bottom"}
-              header={!selectedTask ? (
+              header={!selectedTask && area === "code" ? (
                 <ProjectBar
                   projects={data.projects}
                   projectId={draft?.projectId ?? null}
@@ -3346,26 +3492,27 @@ export default function App() {
                   onCheckoutBranch={(projectId, name, kind) => checkoutBranch({ projectId }, name, kind)}
                 />
               ) : undefined}
-              placeholder={!selectedTask ? "Describe a task or ask a question…" : undefined}
+              placeholder={area === "chat" ? (selectedTask ? "Reply…" : "Ask anything…") : !selectedTask ? "Describe a task or ask a question…" : undefined}
               agentName={agentName(data.appearance)}
               mode={currentMode}
               disabled={Boolean(selectedTask?.archived || composerTab?.sending) || (selectedTask ? pendingDialogTaskIds.has(selectedTask.id) : false)}
               executionPolicy={data.executionPolicy ?? DEFAULT_EXECUTION_POLICY}
               appliedExecutionPolicy={runtime?.snapshot?.executionPolicy}
-              onModeChange={(mode) => void setTaskMode(mode)}
+              onModeChange={area === "chat" ? undefined : (mode) => void setTaskMode(mode)}
               onConfigure={selectedTask ? (patch) => void configure(patch) : configureDraft}
               onSend={(message, images, files, queue) => sendPrompt(message, { images, files, queue })}
               onLiteral={(message, images, files) => sendPrompt(message, { images, files, literal: true })}
-              commands={[...enabledAppCommands, ...(selectedTask ? runtime?.slashCommands ?? [] : draftCatalog?.commands ?? [])]}
-              commandsReady={selectedTask ? runtime?.slashCommands !== undefined : draftCatalog?.commands !== undefined}
-              commandsLoading={selectedTask ? runtime?.slashCommandsLoading : draftCatalog?.loading}
-              commandsError={selectedTask ? runtime?.slashCommandsError : draftCatalog?.error}
-              onRequestCommands={requestSlashCommands}
+              // Chat mode offers the app's own commands only: nothing to ask a worker for.
+              commands={area === "chat" ? enabledAppCommands : [...enabledAppCommands, ...(selectedTask ? runtime?.slashCommands ?? [] : draftCatalog?.commands ?? [])]}
+              commandsReady={area === "chat" ? true : selectedTask ? runtime?.slashCommands !== undefined : draftCatalog?.commands !== undefined}
+              commandsLoading={area === "chat" ? false : selectedTask ? runtime?.slashCommandsLoading : draftCatalog?.loading}
+              commandsError={area === "chat" ? undefined : selectedTask ? runtime?.slashCommandsError : draftCatalog?.error}
+              onRequestCommands={area === "chat" ? undefined : requestSlashCommands}
               mentionFiles={composerMentions?.files}
               mentionsLoading={composerMentions?.loading}
               mentionsError={composerMentions?.error}
               mentionsTruncated={composerMentions?.truncated}
-              onRequestMentions={() => void requestMentions()}
+              onRequestMentions={area === "chat" ? undefined : () => void requestMentions()}
               onCommand={sendSlash}
               queuedMessages={runtime?.queued}
               onSteer={steerMessage}

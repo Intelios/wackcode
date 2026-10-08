@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_PLAN_PROMPT, DEFAULT_SYSTEM_PROMPT } from "../promptDefaults";
+import { DEFAULT_CHAT_PROMPT, DEFAULT_PLAN_PROMPT, DEFAULT_SYSTEM_PROMPT } from "../promptDefaults";
 import type { PromptConfig } from "../types";
 import { PromptsSection } from "./PromptsSection";
 
@@ -22,11 +22,24 @@ describe("PromptsSection", () => {
     expect(screen.getByText(/restore the built-in text whenever you like/i)).toBeInTheDocument();
     expect(screen.getByText(/including chats that are already planning/i)).toBeInTheDocument();
     expect(within(screen.getByRole("region", { name: "Prompts overview" })).getByText("Built-in")).toBeInTheDocument();
-    expect(screen.getAllByText("Default")).toHaveLength(3);
+    // The coding persona, Plan, Ultra Plan and Chat mode.
+    expect(screen.getAllByText("Default")).toHaveLength(4);
     // Nothing to restore while every prompt is at its default.
     expect(screen.queryByRole("button", { name: "Restore default" })).not.toBeInTheDocument();
     // The default texts are on screen for review, starting with the persona paragraph.
     expect(document.querySelector(".prompt-view")?.textContent).toContain(DEFAULT_SYSTEM_PROMPT);
+  });
+
+  it("offers Chat mode's persona with its own default and says a guide follows it", async () => {
+    const { onChange } = renderPrompts();
+    const card = screen.getByRole("article", { name: "Chat mode" });
+    expect(card.textContent).toContain(DEFAULT_CHAT_PROMPT.split("\n")[0]);
+    customise("Chat mode");
+    expect(screen.getByRole("textbox", { name: "Chat mode text" })).toHaveValue(DEFAULT_CHAT_PROMPT);
+    expect(within(card).getByText(/adds a short guide after this text/i)).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "Chat mode text" }), { target: { value: "You are Quill." } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ chatPrompt: "You are Quill." }));
   });
 
   it("counts customised prompts in the hero", () => {

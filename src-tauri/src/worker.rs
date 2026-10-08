@@ -1,6 +1,6 @@
 use crate::{
     models::{
-        BuiltinModelSuggestion, PackageRecord, ProviderKind, ProviderRecord, TaskMode, TaskRecord,
+        BuiltinModelSuggestion, PackageRecord, ProviderKind, ProviderRecord, TaskKind, TaskMode, TaskRecord,
         ParentActivity, TaskStatus, ToolCatalogEntry, WorkActivity,
     },
     storage::MetadataState,
@@ -60,6 +60,8 @@ type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>>;
 #[derive(Clone)]
 pub struct WorkerProcess {
     pub pid: u32,
+    /// Coding-only settings are never broadcast to a Chat mode worker (`broadcast_coding`).
+    pub kind: TaskKind,
     pub fingerprint: String,
     /// Only a ready session owns live transcript state; a starting/failed init does not.
     pub initialized: bool,
@@ -167,6 +169,18 @@ impl WorkerState {
             .collect())
     }
 
+    /// The running workers of coding chats: every one except Chat mode's.
+    fn coding_task_ids(&self) -> Result<Vec<String>, String> {
+        Ok(self
+            .workers
+            .lock()
+            .map_err(|_| "Worker lock was poisoned".to_string())?
+            .iter()
+            .filter(|(_, worker)| worker.kind != TaskKind::Chat)
+            .map(|(task_id, _)| task_id.clone())
+            .collect())
+    }
+
     /// How many chat workers are alive right now; Settings › About shows it. A poisoned lock
     /// is not worth failing the whole page over, so it reads as zero.
     pub fn count(&self) -> usize {
@@ -260,6 +274,16 @@ pub fn resource_paths(packages: &[PackageRecord]) -> Value {
     Value::Object(grouped)
 }
 
+/// The resources one chat's worker may load. A Chat mode chat loads none: a package's extension
+/// could register tools and hooks there. Used for both `init` and the fingerprint, so installing
+/// or switching a package never respawns a Chat mode worker.
+pub fn resources_for(kind: TaskKind, packages: &[PackageRecord]) -> Value {
+    match kind {
+        TaskKind::Chat => resource_paths(&[]),
+        TaskKind::Code => resource_paths(packages),
+    }
+}
+
 /// A worker is respawned when this changes. Resources are resolved once at spawn time, so they
 /// belong here alongside the provider and model; tool toggles do not, because `set_tools`
 /// applies them live.
@@ -325,7 +349,7 @@ pub async fn ensure_worker_with(
             .data
             .lock()
             .map_err(|_| "Metadata lock was poisoned".to_string())?;
-        fingerprint(provider, &task.model_id, &resource_paths(&data.packages))?
+        fingerprint(provider, &task.model_id, &resources_for(task.kind, &data.packages))?
     };
     if let Some(existing) = worker_state.get(&task.id)? {
         if existing.fingerprint == wanted_fingerprint {
@@ -389,6 +413,7 @@ pub async fn ensure_worker_with(
         task.id.clone(),
         WorkerProcess {
             pid,
+            kind: task.kind,
             fingerprint: wanted_fingerprint,
             initialized: false,
             stdin: Arc::new(AsyncMutex::new(stdin)),
@@ -486,7 +511,7 @@ pub async fn ensure_worker_with(
             .map_err(|_| "Metadata lock was poisoned".to_string())?;
         (
             data.tool_config.disabled.clone(),
-            resource_paths(&data.packages),
+            resources_for(task.kind, &data.packages),
             data.prompts.clone(),
             data.execution_policy.clone(),
         )
@@ -497,10 +522,16 @@ pub async fn ensure_worker_with(
     } else {
         None
     };
+    // A Chat mode chat has no sub-agents, skills, commands, computer use or planning modes. It
+    // is sent none of them: the sub-agent payload in particular carries other connections'
+    // credentials, and a worker gets only what it needs. The worker ignores them regardless.
+    let chat = task.kind == TaskKind::Chat;
     let init = json!({
         "id": uuid::Uuid::new_v4().to_string(),
         "type": "init",
         "taskId": task.id,
+        // Chat mode or the coding agent. Fixed for the chat's life, so not in the fingerprint.
+        "kind": task.kind,
         "cwd": task.workspace_path,
         "agentDir": agent_dir,
         "sessionDir": session_dir,
@@ -514,9 +545,9 @@ pub async fn ensure_worker_with(
         "resources": resources,
         // The record's mode is the durable hint; the worker's plan-mode extension reconciles
         // it with whatever the restored session says. A fork takes the mode its fork point had.
-        "mode": if options.fork_from.is_some() { Value::Null } else { json!(task.mode) },
+        "mode": if chat || options.fork_from.is_some() { Value::Null } else { json!(task.mode) },
         "forkFrom": options.fork_from,
-        "subagents": subagent_payload(app)?,
+        "subagents": if chat { Value::Null } else { subagent_payload(app)? },
         // Custom built-in prompts (Settings → Prompts); `{}` when every prompt is at its default.
         // Deliberately not part of the fingerprint: changes reach workers live via set_prompts.
         "prompts": prompts,
@@ -524,16 +555,16 @@ pub async fn ensure_worker_with(
         // Enabled MCP servers with their header/env values. Live too, via set_mcp.
         "mcp": mcp_payload(app)?,
         // The user's own skill folders (Settings › Skills). Live too, via set_skills.
-        "skills": skills_payload(app)?,
+        "skills": if chat { Value::Null } else { skills_payload(app)? },
         // The user's own commands folder and switched-off keys (Settings › Commands). Live too,
         // via set_commands — deliberately not in the fingerprint, so a toggle never respawns.
-        "commands": commands_payload(app)?,
+        "commands": if chat { Value::Null } else { commands_payload(app)? },
         // This project's memory directory (Settings › Memory) and the effective on/off. Live
         // too, via set_memory; like skills, never in the fingerprint. A memory folder that
         // cannot be created degrades to off rather than blocking the chat from starting.
         "memory": crate::memory::payload(app, task).unwrap_or(Value::Null),
         // Computer use. Live too, via set_computer_use; the host enforces it per request anyway.
-        "computerUse": computer_use_payload(app),
+        "computerUse": if chat { json!({ "enabled": false }) } else { computer_use_payload(app) },
     });
     if options.wait_ready {
         request(app, &task.id, init, INIT_TIMEOUT).await.map(|_| ())
@@ -600,6 +631,15 @@ pub async fn request(
 /// spawn picks it up.
 pub async fn broadcast(app: &AppHandle, value: &Value) -> Result<(), String> {
     for task_id in app.state::<WorkerState>().task_ids()? {
+        let _ = send(app, &task_id, value).await;
+    }
+    Ok(())
+}
+
+/// `broadcast` for settings only coding chats have. Chat mode workers are skipped: they would
+/// ignore the value, and some of these carry credentials they have no use for.
+pub async fn broadcast_coding(app: &AppHandle, value: &Value) -> Result<(), String> {
+    for task_id in app.state::<WorkerState>().coding_task_ids()? {
         let _ = send(app, &task_id, value).await;
     }
     Ok(())
@@ -679,7 +719,7 @@ pub fn subagent_payload(app: &AppHandle) -> Result<Value, String> {
 /// next turn — never a restart, so a running chat is never interrupted by a settings change.
 pub async fn broadcast_subagents(app: &AppHandle) -> Result<(), String> {
     let payload = subagent_payload(app)?;
-    broadcast(app, &json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "set_subagents", "subagents": payload })).await
+    broadcast_coding(app, &json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "set_subagents", "subagents": payload })).await
 }
 
 /// The `computerUse` value for `init` and `set_computer_use`: on only while the user switched it
@@ -692,7 +732,7 @@ pub fn computer_use_payload(app: &AppHandle) -> Value {
 /// Push the computer-use setting to every running worker. Applied between runs; nothing restarts.
 pub async fn broadcast_computer_use(app: &AppHandle) -> Result<(), String> {
     let enabled = computer_use_payload(app)["enabled"].as_bool().unwrap_or(false);
-    broadcast(app, &json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "set_computer_use", "enabled": enabled })).await
+    broadcast_coding(app, &json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "set_computer_use", "enabled": enabled })).await
 }
 
 /// The `mcp` value for `init` and `set_mcp`: every enabled MCP server with its header and
@@ -738,7 +778,7 @@ pub fn skills_payload(app: &AppHandle) -> Result<Value, String> {
 /// Push the skill folders to every running worker. Applied on the next turn; nothing restarts.
 pub async fn broadcast_skills(app: &AppHandle) -> Result<(), String> {
     let payload = skills_payload(app)?;
-    broadcast(
+    broadcast_coding(
         app,
         &json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "set_skills", "skills": payload }),
     )
@@ -762,7 +802,7 @@ pub fn commands_payload(app: &AppHandle) -> Result<Value, String> {
 /// Push the command settings to every running worker. Applied on the next turn; nothing restarts.
 pub async fn broadcast_commands(app: &AppHandle) -> Result<(), String> {
     let payload = commands_payload(app)?;
-    broadcast(app, &json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "set_commands", "commands": payload })).await
+    broadcast_coding(app, &json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "set_commands", "commands": payload })).await
 }
 
 /// Push each chat's memory setting to its own worker. Per worker, not one value for all: the
@@ -1384,7 +1424,11 @@ fn handle_worker_line(
             // The catalogue only exists on a live session, so cache the latest one for the
             // Tools panel to render when no chat is open. Deltas never carry tools — they ride
             // full snapshots, which is where tool-changing commands force one.
-            if let Some(tools) = value.pointer("/snapshot/tools") {
+            // Never from a Chat mode chat: its registry is the reduced one, and Settings › Tools
+            // prunes the saved denylist against this catalogue, which would quietly switch
+            // coding tools back on.
+            let chat = data.tasks.iter().any(|task| task.id == task_id && task.kind == TaskKind::Chat);
+            if let Some(tools) = value.pointer("/snapshot/tools").filter(|_| !chat) {
                 if let Ok(catalog) = serde_json::from_value::<Vec<ToolCatalogEntry>>(tools.clone())
                 {
                     if data.tool_catalog != catalog {
@@ -1399,11 +1443,24 @@ fn handle_worker_line(
         if let Some(next) = next {
             if let Ok(mut data) = app.state::<MetadataState>().data.lock() {
                 if let Some(task) = data.tasks.iter_mut().find(|task| task.id == task_id) {
+                    // Every `running` frame of a run carries the moment it started, so this
+                    // lands once per run and the row stays put while the reply streams. (The
+                    // status cannot say when a run began: the host marks a chat running before
+                    // the worker reports it.)
+                    let started = value
+                        .get("startedAt")
+                        .and_then(Value::as_i64)
+                        .filter(|_| next == TaskStatus::Running)
+                        .and_then(chrono::DateTime::<chrono::Utc>::from_timestamp_millis)
+                        .map(|at| at.to_rfc3339());
                     task.status = next;
                     if event_type == "run_state"
                         && value.get("state").and_then(Value::as_str) == Some("running")
                     {
                         task.last_error = None;
+                    }
+                    if started.is_some() {
+                        task.last_activity_at = started;
                     }
                     task.updated_at = chrono::Utc::now().to_rfc3339();
                     should_save = true;
@@ -1428,7 +1485,8 @@ fn handle_worker_line(
             .and_then(|mode| serde_json::from_value::<TaskMode>(mode).ok());
         if let Some(mode) = mode {
             if let Ok(mut data) = app.state::<MetadataState>().data.lock() {
-                if let Some(task) = data.tasks.iter_mut().find(|task| task.id == task_id) {
+                // A Chat mode chat has no planning modes; its record stays in Build.
+                if let Some(task) = data.tasks.iter_mut().find(|task| task.id == task_id && task.kind != TaskKind::Chat) {
                     if task.mode != mode {
                         task.mode = mode;
                         task.updated_at = chrono::Utc::now().to_rfc3339();
@@ -1606,13 +1664,13 @@ mod tests {
 
     fn crash_metadata(directory: &std::path::Path, status: TaskStatus, writable: bool) -> MetadataState {
         let task = TaskRecord {
-            id: "task".into(), project_id: None, name: "Task".into(),
+            id: "task".into(), kind: crate::models::TaskKind::Code, project_id: None, name: "Task".into(),
             auto_title_eligible: false, auto_title_attempt_id: None,
             workspace_path: "/tmp/project".into(), worktree_path: None, branch: None,
             uses_worktree: false, provider_id: "provider".into(), model_id: "model".into(),
             thinking_level: "off".into(), session_file: None, status,
             mode: TaskMode::Build, archived: false, archived_at: None, last_error: None,
-            created_at: "now".into(), updated_at: "now".into(),
+            created_at: "now".into(), updated_at: "now".into(), last_activity_at: None,
         };
         MetadataState {
             data: Mutex::new(crate::models::AppData { tasks: vec![task], ..Default::default() }),
@@ -1761,6 +1819,22 @@ mod tests {
                 "{kind} leaked from an untrusted package"
             );
         }
+    }
+
+    #[test]
+    fn a_chat_mode_worker_loads_no_package_and_never_respawns_for_one() {
+        let packages = [package("npm:x", true, &[("/pkg/x/a.ts", true)])];
+        assert_eq!(resources_for(TaskKind::Code, &packages), resource_paths(&packages));
+        assert_eq!(resources_for(TaskKind::Chat, &packages), resource_paths(&[]));
+        let provider = provider();
+        assert_eq!(
+            fingerprint(&provider, "m", &resources_for(TaskKind::Chat, &packages)).unwrap(),
+            fingerprint(&provider, "m", &resources_for(TaskKind::Chat, &[])).unwrap()
+        );
+        assert_ne!(
+            fingerprint(&provider, "m", &resources_for(TaskKind::Code, &packages)).unwrap(),
+            fingerprint(&provider, "m", &resources_for(TaskKind::Code, &[])).unwrap()
+        );
     }
 
     #[test]

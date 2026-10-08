@@ -3175,7 +3175,7 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .terminal-pill.run-failed { color: var(--danger); }
 .terminal-pill.run-failed .terminal-pill-dot { background: var(--danger); }
 
-/* ── Games panel (GamesPanel.tsx, SwarmGame.tsx) ──── */
+/* ── Games panel (GamesPanel.tsx, QuackSurvivors.tsx) ──── */
 /* Something to play while a slow model works. The stage is a content surface (`--wc-well`),
    solid over image and Liquid Glass backdrops like the terminal; the canvas draws with colours
    read from the theme (`games/palette.ts`). Screens over it are real buttons. */
@@ -3209,6 +3209,10 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .game-title-duck { width: 54px; height: 54px; color: var(--wc-accent); margin-bottom: 2px; animation: game-duck-bob 2.4s ease-in-out infinite; }
 @keyframes game-duck-bob { 0%, 100% { transform: translateY(0) rotate(-3deg); } 50% { transform: translateY(-5px) rotate(3deg); } }
 .game-title .primary-button { min-width: 120px; margin-top: 6px; }
+/* A saved run waiting: Continue first, its progress under it, then the fresh-start fallback. */
+.game-continue { display: flex; flex-direction: column; align-items: center; gap: 7px; }
+.game-continue .primary-button { min-width: 150px; }
+.game-continue .secondary-button { min-width: 120px; }
 .game-controls { display: flex; flex-direction: column; gap: 6px; margin: 14px 0 0; color: var(--text-dim); font-size: 11.5px; }
 .game-controls div { display: flex; align-items: center; justify-content: center; gap: 8px; }
 .game-controls dt { display: flex; gap: 3px; }
@@ -3219,7 +3223,8 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   font: 600 10px "SFMono-Regular", Consolas, monospace;
 }
 
-/* Level-up: three cards, picked by click or 1/2/3. Solid surfaces, accent on hover and focus. */
+/* Level-up: three cards, picked by click or 1/2/3. Solid surfaces, accent on hover and focus.
+   An evolution card reads as the same choice, a step above: accent border, all pips lit. */
 .game-upgrades { width: min(320px, 100%); display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
 .game-upgrade {
   display: flex; align-items: center; gap: 11px; width: 100%; padding: 11px 12px; text-align: left; cursor: pointer;
@@ -3227,6 +3232,7 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   box-shadow: var(--shadow-pop); transition: border-color .14s var(--ease), background .14s var(--ease), transform .14s var(--ease);
 }
 .game-upgrade:hover, .game-upgrade:focus-visible { border-color: var(--wc-accent-line-soft); background: var(--wc-accent-tint); transform: translateY(-1px); }
+.game-upgrade.evolution { border-color: var(--wc-accent-line); }
 .game-upgrade-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .game-upgrade-text strong { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 650; }
 .game-upgrade-text strong em {

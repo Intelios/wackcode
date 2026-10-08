@@ -4,7 +4,7 @@
  * at the chat. A game saves its live state here and picks it back up, paused, when it mounts.
  * In memory only: a run never outlives the app.
  */
-export type GameId = "swarm";
+export type GameId = "quack";
 
 const runs = new Map<GameId, unknown>();
 

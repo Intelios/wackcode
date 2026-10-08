@@ -3,13 +3,13 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { GameId } from "../games/session";
 import type { TaskStatus } from "../types";
 import { Icon } from "./Icons";
-import { SwarmGame } from "./SwarmGame";
+import { QuackSurvivors } from "./QuackSurvivors";
 
 const TOAST_MS = 9000;
 
 /** The arcade's cabinet. A new game is an entry here and its own module under `src/games/`. */
-const GAMES: { id: GameId; name: string; Component: ComponentType }[] = [
-  { id: "swarm", name: "Swarm", Component: SwarmGame }
+const GAMES: { id: GameId; name: string; Component: ComponentType<{ onLeave?: () => void }> }[] = [
+  { id: "quack", name: "Quack Survivors", Component: QuackSurvivors }
 ];
 
 interface GamesPanelProps {
@@ -75,7 +75,7 @@ export const GamesPanel = memo(function GamesPanel({ status, watchKey, agentName
         </div>
       </header>
       <div className="games-body">
-        <game.Component />
+        <game.Component onLeave={onBackToChat} />
         <AnimatePresence>
           {toast && (
             <motion.div

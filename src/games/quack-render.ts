@@ -1,10 +1,10 @@
 /**
- * Draws a Swarm run (`swarm.ts`) onto a 2D canvas: the arena's dot grid, tokens, the bugs, the
- * duck's weapons, the duck, effects, then the HUD in screen space. The camera keeps the duck
- * centred. Pure drawing: it never mutates the state.
+ * Draws a Quack Survivors run (`quack.ts`) onto a 2D canvas: the arena's dot grid, tokens, spit,
+ * the bugs, the duck's weapons, the duck, effects, then the HUD in screen space. The camera keeps
+ * the duck centred. Pure drawing: it never mutates the state.
  *
  * The weapons borrow the app's own marks: Orbit's beads are `OrbitSpinner`'s, Comet is the
- * send comet, Ping is the tool-landed ring, and the player is `DuckMark`'s silhouette.
+ * send comet, Flock fires the `DuckMark` silhouette, and the player is the duck itself.
  *
  * Reduced motion keeps the game playable but still: no screen shake, no particle bursts, no
  * bobbing or invulnerability blink.
@@ -12,9 +12,9 @@
 import { DUCK_PATH } from "../gravity-well";
 import type { GamePalette } from "./palette";
 import {
-  ENEMIES, PLAYER_RADIUS, WIN_MS, maxHpOf, orbitBeads, xpForLevel,
-  type Enemy, type SwarmState, type Tone
-} from "./swarm";
+  ENEMIES, PLAYER_RADIUS, WIN_MS, emberStats, maxHpOf, orbitBeads, radiusOf, xpForLevel,
+  type Enemy, type QuackState, type Tone
+} from "./quack";
 
 export interface RenderView { w: number; h: number; reduced: boolean }
 
@@ -37,7 +37,7 @@ function toneColor(palette: GamePalette, tone: Tone): string {
   return tone === "accent" ? palette.accent : tone === "danger" ? palette.danger : palette.textSoft;
 }
 
-export function render(ctx: CanvasRenderingContext2D, s: SwarmState | null, palette: GamePalette, view: RenderView): void {
+export function render(ctx: CanvasRenderingContext2D, s: QuackState | null, palette: GamePalette, view: RenderView): void {
   const { w, h, reduced } = view;
   ctx.globalAlpha = 1;
   ctx.fillStyle = palette.well;
@@ -95,9 +95,34 @@ export function render(ctx: CanvasRenderingContext2D, s: SwarmState | null, pale
   }
   ctx.globalAlpha = 1;
 
-  for (const enemy of s.enemies) {
-    if (onScreen(enemy.x, enemy.y, ENEMIES[enemy.kind].radius)) drawEnemy(ctx, enemy, s, palette, reduced);
+  // Mosquito spit: a danger-red dart with a short tail.
+  for (const spit of s.spits) {
+    if (!onScreen(spit.x, spit.y, 20)) continue;
+    const speed = Math.hypot(spit.vx, spit.vy) || 1;
+    const ux = spit.vx / speed;
+    const uy = spit.vy / speed;
+    ctx.strokeStyle = palette.danger;
+    ctx.globalAlpha = 0.5;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(spit.x - ux * 14, spit.y - uy * 14);
+    ctx.lineTo(spit.x, spit.y);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = palette.danger;
+    ctx.beginPath();
+    ctx.moveTo(spit.x + ux * 5, spit.y + uy * 5);
+    ctx.lineTo(spit.x - uy * 3.5, spit.y + ux * 3.5);
+    ctx.lineTo(spit.x + uy * 3.5, spit.y - ux * 3.5);
+    ctx.closePath();
+    ctx.fill();
   }
+
+  for (const enemy of s.enemies) {
+    if (onScreen(enemy.x, enemy.y, ENEMIES[enemy.kind].radius * enemy.scale)) drawEnemy(ctx, enemy, s, palette, reduced);
+  }
+
+  drawEmber(ctx, s, palette, reduced);
 
   // Orbit beads with a soft halo, like the working mark's lead bead.
   for (const bead of orbitBeads(s)) {
@@ -114,6 +139,27 @@ export function render(ctx: CanvasRenderingContext2D, s: SwarmState | null, pale
 
   for (const bolt of s.bolts) {
     if (!onScreen(bolt.x, bolt.y, 40)) continue;
+    if (bolt.kind === "flock") {
+      // A duckling, banking through the swarm.
+      const path = duck();
+      const angle = Math.atan2(bolt.vy, bolt.vx);
+      if (path) {
+        const k = 11 / 256;
+        ctx.save();
+        ctx.translate(bolt.x, bolt.y);
+        ctx.rotate(angle);
+        ctx.scale(k, k);
+        ctx.translate(-134, -129);
+        ctx.fill(path, "evenodd");
+        ctx.restore();
+      } else {
+        ctx.fillStyle = palette.accent;
+        ctx.beginPath();
+        ctx.arc(bolt.x, bolt.y, 5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      continue;
+    }
     const speed = Math.hypot(bolt.vx, bolt.vy) || 1;
     const ux = bolt.vx / speed;
     const uy = bolt.vy / speed;
@@ -146,6 +192,26 @@ export function render(ctx: CanvasRenderingContext2D, s: SwarmState | null, pale
     }
   }
 
+  // Surge arcs: a jagged polyline that flashes and fades.
+  for (const arc of s.arcs) {
+    ctx.globalAlpha = Math.max(0, arc.life / arc.max);
+    ctx.strokeStyle = palette.accent;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(arc.points[0], arc.points[1]);
+    for (let i = 2; i < arc.points.length; i += 2) {
+      // A midpoint jog keeps the line reading as lightning rather than a ruler line.
+      const mx = (arc.points[i - 2] + arc.points[i]) / 2 + Math.sin(s.time * 0.05 + i) * 4;
+      const my = (arc.points[i - 1] + arc.points[i + 1]) / 2 + Math.cos(s.time * 0.05 + i) * 4;
+      ctx.lineTo(mx, my);
+      ctx.lineTo(arc.points[i], arc.points[i + 1]);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
   drawDuck(ctx, s, palette, reduced);
 
   if (!reduced) {
@@ -163,7 +229,8 @@ export function render(ctx: CanvasRenderingContext2D, s: SwarmState | null, pale
   hud(ctx, s, palette, w);
   if (s.banner) {
     ctx.globalAlpha = Math.max(0, Math.min(1, (s.banner.until - s.time) / 500, (s.time - (s.banner.until - 2600)) / 250));
-    ctx.fillStyle = s.banner.text.includes("Segfault") ? palette.danger : palette.text;
+    const urgent = /Segfault|Kernel Panic|rush/.test(s.banner.text);
+    ctx.fillStyle = urgent ? palette.danger : palette.text;
     ctx.font = `700 15px ${FONT}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
@@ -172,8 +239,8 @@ export function render(ctx: CanvasRenderingContext2D, s: SwarmState | null, pale
   }
 }
 
-function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, s: SwarmState, palette: GamePalette, reduced: boolean) {
-  const r = ENEMIES[e.kind].radius;
+function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, s: QuackState, palette: GamePalette, reduced: boolean) {
+  const r = radiusOf(e);
   const angle = Math.atan2(s.player.y - e.y, s.player.x - e.x);
   const wiggle = reduced ? 0 : Math.sin(s.time * 0.022 + e.id * 1.7) * r * 0.22;
   const flash = e.flash > 0;
@@ -201,14 +268,14 @@ function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, s: SwarmState, palet
   }
   ctx.stroke();
 
-  if (e.kind === "gnat") {
+  if (e.kind === "gnat" || e.kind === "mosquito") {
     // Wings: two translucent flickering ovals.
     ctx.fillStyle = palette.textSoft;
     ctx.globalAlpha = 0.3;
-    const flap = reduced ? 1 : 0.6 + Math.abs(Math.sin(s.time * 0.06 + e.id)) * 0.5;
+    const flap = reduced ? 1 : 0.6 + Math.abs(Math.sin(s.time * (e.kind === "mosquito" ? 0.05 : 0.06) + e.id)) * 0.5;
     ctx.beginPath();
-    ctx.ellipse(-r * 0.3, -r * 0.9, r * 0.9 * flap, r * 0.45, -0.4, 0, Math.PI * 2);
-    ctx.ellipse(-r * 0.3, r * 0.9, r * 0.9 * flap, r * 0.45, 0.4, 0, Math.PI * 2);
+    ctx.ellipse(-r * 0.3, -r * 0.9, r * (e.kind === "mosquito" ? 1.5 : 0.9) * flap, r * 0.45, -0.4, 0, Math.PI * 2);
+    ctx.ellipse(-r * 0.3, r * 0.9, r * (e.kind === "mosquito" ? 1.5 : 0.9) * flap, r * 0.45, 0.4, 0, Math.PI * 2);
     ctx.fill();
     ctx.globalAlpha = 1;
   }
@@ -217,22 +284,42 @@ function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, s: SwarmState, palet
   ctx.strokeStyle = e.kind === "segfault" ? palette.danger : palette.textSoft;
   ctx.lineWidth = e.kind === "segfault" ? 2.5 : 1.5;
   ctx.beginPath();
-  ctx.ellipse(-r * 0.1, 0, r * 1.05, r * 0.82, 0, 0, Math.PI * 2);
-  ctx.fill();
-  if (!flash && e.kind !== "segfault") {
-    // A lighter wash over the shell so bugs read against the dark arena.
-    ctx.globalAlpha = 0.4;
-    ctx.fillStyle = palette.textDim;
+  if (e.kind === "mosquito") {
+    // A thin dart of a body with a long stinger.
+    ctx.ellipse(-r * 0.2, 0, r * 1.5, r * 0.42, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.globalAlpha = 1;
-  }
-  ctx.stroke();
-  if (e.kind === "beetle" || e.kind === "segfault") {
-    // The shell's seam.
-    ctx.beginPath();
-    ctx.moveTo(-r * 1.05, 0);
-    ctx.lineTo(r * 0.45, 0);
     ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-r * 1.6, 0);
+    ctx.lineTo(-r * 2.4, 0);
+    ctx.stroke();
+  } else if (e.kind === "splitter") {
+    // Two lobes: the one that divides.
+    ctx.ellipse(-r * 0.42, 0, r * 0.68, r * 0.82, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.ellipse(r * 0.45, 0, r * 0.52, r * 0.62, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  } else {
+    ctx.ellipse(-r * 0.1, 0, r * 1.05, r * 0.82, 0, 0, Math.PI * 2);
+    ctx.fill();
+    if (!flash && e.kind !== "segfault") {
+      // A lighter wash over the shell so bugs read against the dark arena.
+      ctx.globalAlpha = 0.4;
+      ctx.fillStyle = palette.textDim;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+    ctx.stroke();
+    if (e.kind === "beetle" || e.kind === "segfault") {
+      // The shell's seam.
+      ctx.beginPath();
+      ctx.moveTo(-r * 1.05, 0);
+      ctx.lineTo(r * 0.45, 0);
+      ctx.stroke();
+    }
   }
   if (e.kind === "segfault") {
     ctx.save();
@@ -258,7 +345,11 @@ function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, s: SwarmState, palet
   ctx.fill();
   ctx.restore();
 
-  if ((e.kind === "beetle" || e.kind === "segfault") && e.hp < e.maxHp) {
+  // Elites wear a modifier ring and glyph above the bug.
+  if (e.elite) drawElite(ctx, e, s, palette);
+
+  const tough = e.kind === "beetle" || e.kind === "segfault" || e.kind === "splitter" || e.kind === "mosquito" || e.elite;
+  if (tough && e.hp < e.maxHp) {
     const width = r * 2;
     ctx.fillStyle = palette.border;
     ctx.fillRect(e.x - width / 2, e.y - r - 10, width, 3);
@@ -267,7 +358,63 @@ function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, s: SwarmState, palet
   }
 }
 
-function drawDuck(ctx: CanvasRenderingContext2D, s: SwarmState, palette: GamePalette, reduced: boolean) {
+/** The elite marker: an accent ring plus a modifier glyph (swift chevrons, armored plate, burst star). */
+function drawElite(ctx: CanvasRenderingContext2D, e: Enemy, s: QuackState, palette: GamePalette) {
+  const r = radiusOf(e);
+  ctx.save();
+  ctx.translate(e.x, e.y);
+  ctx.strokeStyle = palette.accent;
+  ctx.lineWidth = 1.5;
+  ctx.globalAlpha = 0.9;
+  ctx.beginPath();
+  ctx.arc(0, 0, r + 5, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = palette.accent;
+  ctx.strokeStyle = palette.accent;
+  ctx.lineWidth = 1.6;
+  const g = r + 13;
+  ctx.beginPath();
+  if (e.elite === "swift") {
+    // Two forward chevrons.
+    ctx.moveTo(-4, -g + 4); ctx.lineTo(0, -g); ctx.lineTo(4, -g + 4);
+    ctx.moveTo(-4, -g + 8); ctx.lineTo(0, -g + 4); ctx.lineTo(4, -g + 8);
+    ctx.stroke();
+  } else if (e.elite === "armored") {
+    // A filled plate.
+    ctx.rect(-3.5, -g - 3.5, 7, 7);
+    ctx.fill();
+  } else {
+    // A four-point burst.
+    ctx.moveTo(0, -g - 4.5); ctx.lineTo(1.6, -g - 1.6); ctx.lineTo(4.5, -g); ctx.lineTo(1.6, -g + 1.6);
+    ctx.lineTo(0, -g + 4.5); ctx.lineTo(-1.6, -g + 1.6); ctx.lineTo(-4.5, -g); ctx.lineTo(-1.6, -g - 1.6);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+/** The ember aura: a soft disc of accent light that breathes, drawn under the duck. */
+function drawEmber(ctx: CanvasRenderingContext2D, s: QuackState, palette: GamePalette, reduced: boolean) {
+  const level = s.weapons.ember;
+  if (!level) return;
+  const { radius } = emberStats(level, s.evolved.ember);
+  const p = s.player;
+  const pulse = reduced ? 1 : 1 + Math.sin(s.time * 0.006) * 0.04;
+  ctx.fillStyle = palette.accent;
+  ctx.globalAlpha = 0.1;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, radius * pulse, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 0.35;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, radius * pulse, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
+function drawDuck(ctx: CanvasRenderingContext2D, s: QuackState, palette: GamePalette, reduced: boolean) {
   const p = s.player;
   const bob = reduced ? 0 : Math.sin(s.time * 0.008) * 1.6;
   if (p.invuln > 0) ctx.globalAlpha = reduced ? 0.55 : Math.floor(p.invuln / 80) % 2 ? 0.3 : 1;
@@ -297,7 +444,7 @@ function drawDuck(ctx: CanvasRenderingContext2D, s: SwarmState, palette: GamePal
 }
 
 /** A small danger chevron at the edge pointing toward any Segfault off screen. */
-function bossPointers(ctx: CanvasRenderingContext2D, s: SwarmState, palette: GamePalette, w: number, h: number, ox: number, oy: number) {
+function bossPointers(ctx: CanvasRenderingContext2D, s: QuackState, palette: GamePalette, w: number, h: number, ox: number, oy: number) {
   for (const e of s.enemies) {
     if (e.kind !== "segfault") continue;
     const sx = e.x + ox;
@@ -320,7 +467,7 @@ function bossPointers(ctx: CanvasRenderingContext2D, s: SwarmState, palette: Gam
   }
 }
 
-function hud(ctx: CanvasRenderingContext2D, s: SwarmState, palette: GamePalette, w: number) {
+function hud(ctx: CanvasRenderingContext2D, s: QuackState, palette: GamePalette, w: number) {
   const p = s.player;
   // XP: a thin accent rule along the top edge.
   ctx.fillStyle = palette.border;

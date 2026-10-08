@@ -2,12 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { FALLBACK_PALETTE, readPalette, type GamePalette } from "../games/palette";
 import { bestScore, recordScore } from "../games/scores";
+import { clearSave, readSave, writeSave } from "../games/save";
 import { clearRun, savedRun, saveRun } from "../games/session";
-import { formatClock, render } from "../games/swarm-render";
+import { formatClock, render } from "../games/quack-render";
 import {
-  MAX_LEVEL, STEP_MS, UPGRADE_NAMES, applyUpgrade, createSwarm, score, setView, step, upgradeDetail, upgradeLevel,
-  type Input, type SwarmState, type UpgradeId
-} from "../games/swarm";
+  EVOLUTIONS, MAX_LEVEL, STEP_MS, UPGRADE_NAMES, applyUpgrade, createQuack, score, setView, step, upgradeDetail, upgradeLevel,
+  type Input, type QuackState, type UpgradeId
+} from "../games/quack";
 import { DuckMark } from "./DuckMark";
 
 /** Matches `--ease` in styles.css. */
@@ -23,13 +24,13 @@ const MOVE_KEYS: Record<string, keyof typeof NO_KEYS> = {
 const NO_KEYS = { up: false, down: false, left: false, right: false };
 
 /** Where a fresh mount starts: a run left mid-game comes back paused (or at its open level-up). */
-function resumeScreen(state: SwarmState | undefined): Screen {
+function resumeScreen(state: QuackState | undefined): Screen {
   if (!state || state.phase !== "playing") return "title";
   return state.choices ? "levelup" : "paused";
 }
 
 /**
- * The Swarm game (`games/swarm.ts`) in the Games panel: the canvas, its rAF loop, input, and
+ * Quack Survivors (`games/quack.ts`) in the Games panel: the canvas, its rAF loop, input, and
  * the screens over it (title, paused, level-up, game over) as real buttons.
  *
  * Invariants:
@@ -37,19 +38,21 @@ function resumeScreen(state: SwarmState | undefined): Screen {
  *   from an accumulator (frame time clamped to 50 ms) and draws the HUD on canvas, so `App`'s
  *   streaming re-renders and this loop never touch each other.
  * - The run lives in `games/session.ts`, so leaving the panel or switching chats or tabs pauses
- *   it instead of losing it.
+ *   it instead of losing it, and it autosaves through `games/save.ts` so it also survives a quit.
  * - Keys are read only while the stage has focus, so the composer never steers the duck. Losing
  *   focus, hiding the window and Esc/P all pause; resuming is always explicit.
  * - jsdom's canvas has no context and no rAF loop runs there: everything but drawing still works.
  */
-export function SwarmGame() {
+export function QuackSurvivors({ onLeave }: { onLeave?: () => void } = {}) {
   const reduced = useReducedMotion() ?? false;
   const stageRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const stateRef = useRef<SwarmState | undefined>(savedRun<SwarmState>("swarm"));
+  const stateRef = useRef<QuackState | undefined>(savedRun<QuackState>("quack"));
   const [screen, setScreen] = useState<Screen>(() => resumeScreen(stateRef.current));
   const [result, setResult] = useState<Result>();
-  const [best, setBest] = useState(() => bestScore("swarm"));
+  const [best, setBest] = useState(() => bestScore("quack"));
+  // The saved run, for the title screen's Continue card and its "1:23 · Level 4" line.
+  const [saved, setSaved] = useState<QuackState | null>(() => readSave());
   const keys = useRef({ ...NO_KEYS });
   const pointer = useRef<{ x: number; y: number } | null>(null);
   const size = useRef({ w: 0, h: 0 });
@@ -75,7 +78,8 @@ export function SwarmGame() {
     if (screenRef.current === "playing") setScreen("paused");
   }, []);
 
-  // Canvas sizing follows the panel; the theme is polled once a second like CompactingStage.
+  // Canvas sizing follows the panel; the theme is polled once a second like CompactingStage, and
+  // the same tick carries the throttled autosave.
   useEffect(() => {
     const stage = stageRef.current;
     const canvas = canvasRef.current;
@@ -97,6 +101,10 @@ export function SwarmGame() {
     const poll = window.setInterval(() => {
       palette.current = readPalette(palette.current);
       if (screenRef.current !== "playing") draw();
+      else {
+        const state = stateRef.current;
+        if (state && state.phase === "playing") writeSave(state);
+      }
     }, 1000);
     return () => {
       observer?.disconnect();
@@ -115,10 +123,24 @@ export function SwarmGame() {
     };
   }, [pause]);
 
-  const finish = useCallback((state: SwarmState) => {
-    clearRun("swarm");
+  // Leaving a screen (pause, level-up, quit) force-writes the run, and unmounting the panel does
+  // too, so the save never lags more than the moment play actually stopped.
+  useEffect(() => {
+    if (screen === "playing") return;
+    const state = stateRef.current;
+    if (state && state.phase === "playing") writeSave(state, true);
+  }, [screen]);
+
+  useEffect(() => () => {
+    const state = stateRef.current;
+    if (state && state.phase === "playing") writeSave(state, true);
+  }, []);
+
+  const finish = useCallback((state: QuackState) => {
+    clearRun("quack");
+    clearSave();
     const final = score(state);
-    const recorded = recordScore("swarm", final);
+    const recorded = recordScore("quack", final);
     setBest(recorded.best);
     setResult({ score: final, ...recorded, won: state.phase === "won", time: state.time, kills: state.kills, level: state.player.level });
     setScreen("over");
@@ -165,12 +187,29 @@ export function SwarmGame() {
   }
 
   function start() {
-    const state = createSwarm(Date.now() % 2_147_483_647, size.current.w ? size.current : undefined);
+    const state = createQuack(Date.now() % 2_147_483_647, size.current.w ? size.current : undefined);
     stateRef.current = state;
-    saveRun("swarm", state);
+    saveRun("quack", state);
+    // The new run replaces any old save immediately, not on the next autosave tick.
+    writeSave(state, true);
+    setSaved(state);
     keys.current = { ...NO_KEYS };
+    pointer.current = null;
     setResult(undefined);
     setScreen("playing");
+    focusStage();
+  }
+
+  function continueRun() {
+    const loaded = readSave();
+    if (!loaded) { setSaved(null); return; }
+    stateRef.current = loaded;
+    saveRun("quack", loaded);
+    setSaved(loaded);
+    keys.current = { ...NO_KEYS };
+    pointer.current = null;
+    setResult(undefined);
+    setScreen(resumeScreen(loaded));
     focusStage();
   }
 
@@ -180,9 +219,22 @@ export function SwarmGame() {
     focusStage();
   }
 
+  /** Saves right now and leaves for the chat; the title screen is the fallback. */
+  function saveQuit() {
+    const state = stateRef.current;
+    if (state && state.phase === "playing") writeSave(state, true);
+    setSaved(readSave());
+    keys.current = { ...NO_KEYS };
+    pointer.current = null;
+    if (onLeave) onLeave();
+    else setScreen("title");
+  }
+
   function endRun() {
-    clearRun("swarm");
+    clearRun("quack");
+    clearSave();
     stateRef.current = undefined;
+    setSaved(null);
     setScreen("title");
   }
 
@@ -236,7 +288,7 @@ export function SwarmGame() {
       className={`game-stage ${screen === "playing" ? "playing" : ""}`}
       tabIndex={0}
       role="application"
-      aria-label="Swarm"
+      aria-label="Quack Survivors"
       aria-roledescription="game"
       onKeyDown={onKeyDown}
       onKeyUp={onKeyUp}
@@ -273,9 +325,19 @@ export function SwarmGame() {
         {screen === "title" && (
           <motion.div key="title" className="game-overlay game-title" {...overlay} transition={{ duration: 0.24, ease: EASE }}>
             <DuckMark className="game-title-duck" />
-            <h2>Swarm</h2>
+            <h2>Quack Survivors</h2>
             <p>Bugs are closing in. Your weapons fire on their own. Survive five minutes.</p>
-            <button type="button" className="primary-button" autoFocus={engaged} onClick={start}>Play</button>
+            {saved ? (
+              <div className="game-continue">
+                <button type="button" className="primary-button" autoFocus={engaged} onClick={continueRun}>
+                  Continue · {formatClock(saved.time)}
+                </button>
+                <span className="game-best">Level {saved.player.level} · {Math.round(saved.player.hp)} HP · {saved.kills} {saved.kills === 1 ? "bug" : "bugs"}</span>
+                <button type="button" className="secondary-button" autoFocus={!engaged} onClick={start}>New run</button>
+              </div>
+            ) : (
+              <button type="button" className="primary-button" autoFocus={engaged} onClick={start}>Play</button>
+            )}
             {best > 0 && <span className="game-best">Best {best.toLocaleString()}</span>}
             <dl className="game-controls">
               <div><dt><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></dt><dd>Move (or arrows, or hold the mouse)</dd></div>
@@ -289,6 +351,7 @@ export function SwarmGame() {
             <p>{formatClock(state.time)} survived · Level {state.player.level} · {state.kills} {state.kills === 1 ? "bug" : "bugs"}</p>
             <div className="game-actions">
               <button type="button" className="primary-button" autoFocus={engaged} onClick={resume}>Resume</button>
+              <button type="button" className="secondary-button" onClick={saveQuit}>Save &amp; quit</button>
               <button type="button" className="secondary-button" onClick={endRun}>End run</button>
             </div>
           </motion.div>
@@ -300,11 +363,12 @@ export function SwarmGame() {
             <div className="game-upgrades" role="group" aria-label="Upgrades">
               {choices.map((id, index) => {
                 const level = upgradeLevel(state, id);
+                const evolution = (EVOLUTIONS as readonly string[]).includes(id);
                 return (
                   <motion.button
                     key={id}
                     type="button"
-                    className="game-upgrade"
+                    className={`game-upgrade ${evolution ? "evolution" : ""}`}
                     autoFocus={engaged && index === 0}
                     onClick={() => choose(id)}
                     initial={reduced ? false : { opacity: 0, y: 10 }}
@@ -313,12 +377,15 @@ export function SwarmGame() {
                   >
                     <kbd>{index + 1}</kbd>
                     <span className="game-upgrade-text">
-                      <strong>{UPGRADE_NAMES[id]}{level === 0 && id !== "snack" ? <em>New</em> : null}</strong>
+                      <strong>
+                        {UPGRADE_NAMES[id]}
+                        {level === 0 && id !== "snack" ? <em>{evolution ? "Evolution" : "New"}</em> : null}
+                      </strong>
                       <span>{upgradeDetail(state, id)}</span>
                     </span>
                     {id !== "snack" && (
-                      <span className="game-pips" aria-label={`Level ${level + 1} of ${MAX_LEVEL}`}>
-                        {Array.from({ length: MAX_LEVEL }, (_, pip) => <i key={pip} className={pip < level ? "on" : pip === level ? "next" : ""} />)}
+                      <span className="game-pips" aria-label={evolution ? "Evolution" : `Level ${level + 1} of ${MAX_LEVEL}`}>
+                        {Array.from({ length: MAX_LEVEL }, (_, pip) => <i key={pip} className={pip < level || evolution ? "on" : pip === level ? "next" : ""} />)}
                       </span>
                     )}
                   </motion.button>

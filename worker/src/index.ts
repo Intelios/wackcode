@@ -395,6 +395,26 @@ let backgroundShutdown = false;
 let stoppingRun = false;
 let backgroundFinishedRunId: string | undefined;
 const backgroundResultDeliveries = new Set<string>();
+/** Backoff for retrying result delivery after a rejected send: doubles per consecutive failure. */
+let backgroundRetryDelay = 0;
+let backgroundRetryAt = 0;
+
+/**
+ * A rejected delivery must not lose its results. `takeResults` claimed the jobs before the send,
+ * so undo that claim for every job that never landed (a landed `wackcode-subagent-results` message
+ * removes its ids from the in-flight set) and retry after the backoff.
+ */
+function backgroundDeliveryFailed(results: { jobIds: string[] }, error: unknown): void {
+  const lost = results.jobIds.filter((id) => backgroundResultDeliveries.has(id));
+  for (const id of lost) backgroundResultDeliveries.delete(id);
+  builtins.subagents.restoreResults(lost);
+  if (lost.length) {
+    backgroundRetryDelay = Math.min(backgroundRetryDelay ? backgroundRetryDelay * 2 : 1_000, 60_000);
+    backgroundRetryAt = Date.now() + backgroundRetryDelay;
+  }
+  notice(safeError(error), "error");
+  scheduleBackgroundResults();
+}
 
 function hasSubagentWork(): boolean { return builtins.subagents.hasWork() || backgroundResultDeliveries.size > 0; }
 
@@ -409,6 +429,7 @@ function workActivity(): NonNullable<SessionSnapshot["workActivity"]> {
 /** Never use the serial queue to deliver to a streaming parent: that queue awaits it. */
 function scheduleBackgroundResults(): void {
   if (backgroundTimer || backgroundShutdown) return;
+  // A failed delivery pushes its retry out by the backoff; fresh schedules clamp to it.
   backgroundTimer = setTimeout(() => {
     backgroundTimer = undefined;
     if (!session || !taskId || stoppingRun || stopRequested || backgroundShutdown) return;
@@ -421,8 +442,7 @@ function scheduleBackgroundResults(): void {
       if (results) {
         for (const id of results.jobIds) backgroundResultDeliveries.add(id);
         void session.sendCustomMessage({ customType: BACKGROUND_SUBAGENT_MESSAGE, content: results.text, display: false, details: { v: 1, jobIds: results.jobIds } }, { deliverAs: "steer", triggerTurn: true }).catch((error) => {
-          for (const id of results.jobIds) backgroundResultDeliveries.delete(id);
-          notice(safeError(error), "error");
+          backgroundDeliveryFailed(results, error);
         });
       }
       return;
@@ -445,6 +465,8 @@ function scheduleBackgroundResults(): void {
       send({ type: "run_state", taskId, runId, startedAt, state: "running" });
       try {
         await session.sendCustomMessage({ customType: BACKGROUND_SUBAGENT_MESSAGE, content: results.text, display: false, details: { v: 1, jobIds: results.jobIds } }, { triggerTurn: true });
+      } catch (error) {
+        backgroundDeliveryFailed(results, error);
       } finally {
         for (const id of results.jobIds) backgroundResultDeliveries.delete(id);
         if (activeRun?.runId === runId) { finalizeActiveRun(); activeRun = undefined; send({ type: "run_state", taskId, runId, state: "idle" }); }
@@ -453,7 +475,7 @@ function scheduleBackgroundResults(): void {
         scheduleBackgroundResults();
       }
     }).catch((error) => { notice(safeError(error), "error"); scheduleBackgroundResults(); });
-  }, 0);
+  }, Math.max(0, backgroundRetryAt - Date.now()));
 }
 
 function response(id: string, success: boolean, error?: string): void {
@@ -1374,6 +1396,8 @@ async function initialize(command: InitCommand): Promise<void> {
       const message = value.message as { customType?: string; details?: { jobIds?: string[] } } | undefined;
       if (message?.customType === BACKGROUND_SUBAGENT_MESSAGE) {
         for (const id of message.details?.jobIds ?? []) backgroundResultDeliveries.delete(id);
+        backgroundRetryAt = 0;
+        backgroundRetryDelay = 0;
         scheduleSnapshot();
       }
     }
@@ -1599,6 +1623,8 @@ async function stopActiveRun(): Promise<void> {
   if (!session || !taskId) throw new Error("Worker is not initialized");
   stoppingRun = true;
   backgroundResultDeliveries.clear();
+  backgroundRetryAt = 0;
+  backgroundRetryDelay = 0;
   session.clearQueue();
   builtins.autoTitle.abort();
   cancelPendingNativeRequests();

@@ -107,8 +107,9 @@ the final output and transcript have been sanitized.
 Background jobs own their signals and never update a launch tool after it returns. The worker
 coalesces completed results into hidden `wackcode-subagent-results` custom messages, steering a
 streaming parent at a safe tool boundary or starting a continuation on the serial queue after
-settlement. Explicit waits reserve their targets and consume results without an extra automatic
-continuation. Stop cancels jobs, shell processes and queued result delivery, including while the
+settlement. A rejected delivery loses nothing: its claim is rolled back (unless a stop owns the
+outcomes) and retried with backoff until the message lands. Explicit waits reserve their targets and
+consume results without an extra automatic continuation. Stop cancels jobs, shell processes and queued result delivery, including while the
 parent is idle. User messages can start alongside children; explicit Steer keeps its cancellation
 behaviour. Goal verification, plan submission and skill preview wait for outstanding children
 and result delivery.

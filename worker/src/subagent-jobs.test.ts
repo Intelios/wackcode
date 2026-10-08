@@ -71,6 +71,24 @@ describe("background sub-agent ownership", () => {
     expect(JSON.stringify(h.entries)).not.toContain("answer secret");
   });
 
+  it("restores a failed delivery's claim so the results are re-delivered instead of lost", async () => {
+    const h = await harness();
+    await h.launch(batch(2));
+    await vi.waitFor(() => expect(h.runs).toHaveLength(2));
+    h.runs[0].finish(); h.runs[1].finish();
+    await vi.waitFor(() => expect(h.controller.pendingCount()).toBe(2));
+    const claimed = h.controller.takeResults()!;
+    expect(h.controller.pendingCount()).toBe(0);
+    expect(h.controller.hasWork()).toBe(false);
+    h.controller.restoreResults(claimed.jobIds);
+    expect(h.controller.pendingCount()).toBe(2);
+    expect(h.controller.hasWork()).toBe(true);
+    expect(h.controller.takeResults()).toMatchObject({ jobIds: claimed.jobIds });
+    expect(h.controller.takeResults()).toBeUndefined();
+    h.controller.restoreResults(["foreign"]);
+    expect(h.controller.takeResults()).toBeUndefined();
+  });
+
   it("waits for all selected outcomes and prevents automatic delivery from consuming them", async () => {
     const h = await harness();
     const result = await h.launch(batch(2));
@@ -112,6 +130,20 @@ describe("background sub-agent ownership", () => {
     h.runs[0].finish();
     expect((await foreground).usage.input).toBe(10);
     expect(h.usage).not.toHaveBeenCalled();
+  });
+
+  it("a stop keeps owning outcomes, so a late restore never re-delivers them", async () => {
+    const h = await harness(1);
+    await h.launch(batch(1));
+    await vi.waitFor(() => expect(h.runs).toHaveLength(1));
+    h.runs[0].finish();
+    await vi.waitFor(() => expect(h.controller.pendingCount()).toBe(1));
+    const claimed = h.controller.takeResults()!;
+    await h.controller.stopAll();
+    h.controller.restoreResults(claimed.jobIds);
+    expect(h.controller.pendingCount()).toBe(0);
+    expect(h.controller.takeResults()).toBeUndefined();
+    expect(h.controller.hasWork()).toBe(false);
   });
 
   it("Stop/disabling and an aborted wait settle active and queued jobs without resuming", async () => {

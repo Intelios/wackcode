@@ -50,6 +50,8 @@ export interface SubagentsController {
   calls(): BackgroundSubagentCall[];
   /** Claim only completed, unreserved results. Explicit waits own their targets instead. */
   takeResults(): { jobIds: string[]; text: string } | undefined;
+  /** Undo a `takeResults` claim whose delivery never reached the session, so it is re-delivered. */
+  restoreResults(jobIds: string[]): void;
 }
 
 const JOB_PARAMS = {
@@ -278,6 +280,18 @@ export function createSubagentsExtension(host: BuiltinHost, currentMode: () => T
       if (!targets.length) return undefined;
       for (const job of targets) job.delivered = true;
       return { jobIds: targets.map((job) => job.id), text: textFor(targets) };
+    },
+    restoreResults(jobIds) {
+      // A stop owns every outcome as delivered/interrupted, so a late failure never un-delivers it.
+      if (stopped) return;
+      let restored = false;
+      for (const id of jobIds) {
+        const job = jobs.get(id);
+        if (!job?.background || !job.outcome || job.reserved || !job.delivered) continue;
+        job.delivered = false;
+        restored = true;
+      }
+      if (restored) changed();
     },
   };
   return { factory, controller };

@@ -1847,6 +1847,10 @@ async function handle(command: WorkerCommand): Promise<void> {
         emitSnapshot();
         send({ type: "run_finished", taskId, runId: command.runId, outcome: compactOutcome });
         send({ type: "run_state", taskId, runId: command.runId, state: "idle" });
+        // Compaction is a run-like command: drain a message queued while it ran, then pending
+        // subagent results, exactly as runPrompt does when a normal run settles.
+        scheduleQueuedPrompt();
+        scheduleBackgroundResults();
       }
       return;
     } else if (command.type === "prompt") {

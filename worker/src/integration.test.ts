@@ -1667,6 +1667,10 @@ describe("compaction continuity", () => {
     await writeFile(extension, `export default function (pi: any) {
       pi.on("session_before_compact", async (event: any) => {
         if (event.customInstructions === "wait") await new Promise((resolve) => event.signal.addEventListener("abort", resolve, { once: true }));
+        if (event.customInstructions === "hold") {
+          const { existsSync } = await import("node:fs");
+          while (!existsSync(${JSON.stringify(join(workspace, "release.compaction"))})) await new Promise((resolve) => setTimeout(resolve, 10));
+        }
         if (event.reason !== "manual") await new Promise((resolve) => setTimeout(resolve, 120));
         return { compaction: { summary: "## Goal\\nContinue the fixture.\\n\\n## Next steps\\nComplete the task.", firstKeptEntryId: "latest-answer", tokensBefore: event.preparation.tokensBefore } };
       });
@@ -1771,6 +1775,24 @@ describe("compaction continuity", () => {
     expect(worker.view?.compaction).toBeUndefined();
     expect(worker.outputs.find((output) => output.type === "run_finished" && output.runId === "failed-compact")).toMatchObject({ outcome: "failed" });
     expect(worker.view?.messages.filter((message) => message.compaction)).toHaveLength(1);
+  });
+
+  it("sends a message queued during manual compaction once it settles", async () => {
+    const { worker, provider, workspace } = await start();
+    worker.send({ id: crypto.randomUUID(), type: "compact", runId: "held-compact", instructions: "hold" });
+    await worker.waitFor((output) => emitted(output) && output.view?.compaction?.reason === "manual");
+    const queuedId = crypto.randomUUID();
+    worker.send({ id: queuedId, type: "queue_message", message: "Queued while compacting." });
+    await worker.waitFor((output) => output.type === "queue_state" && output.messages?.some((message) => message.id === queuedId));
+    // The message is parked in the queue row while compaction still holds the serial queue.
+    expect(provider.requests).toHaveLength(0);
+    await writeFile(join(workspace, "release.compaction"), "");
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "held-compact" && output.state === "idle");
+    await worker.waitFor(() => provider.requests.some((request) => request.text === "Queued while compacting."));
+    const drained = await worker.waitFor((output) => output.type === "run_finished" && output.runId !== "held-compact");
+    expect(drained.outcome).toBe("completed");
+    expect(worker.outputs.filter((output) => output.type === "queue_state").at(-1)?.messages).toEqual([]);
+    expect(worker.view?.messages.some((message) => message.blocks[0]?.text === "Queued while compacting.")).toBe(true);
   });
 });
 

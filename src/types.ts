@@ -1,4 +1,4 @@
-export type ApiFormat = "openai-completions" | "openai-responses";
+export type ApiFormat = "openai-completions" | "openai-responses" | "anthropic-messages";
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type TaskStatus = "idle" | "running" | "stopping" | "interrupted" | "error";
 

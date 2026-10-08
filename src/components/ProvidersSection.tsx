@@ -17,9 +17,10 @@ export type ConnectionMethod = "apiKey" | "subscription";
 const LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const API_FORMATS: { value: ApiFormat; label: string }[] = [
   { value: "openai-completions", label: "Chat Completions compatible" },
-  { value: "openai-responses", label: "Responses compatible" }
+  { value: "openai-responses", label: "Responses compatible" },
+  { value: "anthropic-messages", label: "Messages compatible" }
 ];
-const FORMAT_NAMES: Record<ApiFormat, string> = { "openai-completions": "Chat Completions", "openai-responses": "Responses" };
+const FORMAT_NAMES: Record<ApiFormat, string> = { "openai-completions": "Chat Completions", "openai-responses": "Responses", "anthropic-messages": "Messages" };
 const ANTHROPIC_GUIDANCE = "https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account";
 /** A discovery with more new IDs than this starts with nothing ticked, and gets a filter. */
 const FOUND_PRESELECT_LIMIT = 10;
@@ -29,7 +30,7 @@ const EASE: [number, number, number, number] = [0.33, 1, 0.68, 1];
 const METHODS: { value: ConnectionMethod; icon: IconName; title: string; detail: (names: string) => string }[] = [
   {
     value: "apiKey", icon: "key", title: "API key",
-    detail: () => "Any Chat Completions or Responses compatible endpoint: a provider's API, a gateway, or a server on your Mac."
+    detail: () => "Any Chat Completions, Responses or Messages compatible endpoint: a provider's API, a gateway, or a server on your Mac."
   },
   {
     value: "subscription", icon: "lock", title: "Sign in with a subscription",
@@ -616,8 +617,15 @@ function ConnectionEditor({
                 />
               </label>
               <label>
-                <span>Base URL</span>
-                <input value={draft.baseUrl} onChange={(event) => edit({ baseUrl: event.target.value })} placeholder="https://api.example.com/v1" spellCheck={false} />
+                {/* The Messages API posts to `{baseUrl}/v1/messages`, so its base URL leaves off
+                    the `/v1` that the OpenAI formats keep (OpenCode Go: `…/zen/go`). */}
+                <span>Base URL {draft.apiFormat === "anthropic-messages" && <small>/v1/messages is added for you</small>}</span>
+                <input
+                  value={draft.baseUrl}
+                  onChange={(event) => edit({ baseUrl: event.target.value })}
+                  placeholder={draft.apiFormat === "anthropic-messages" ? "https://api.anthropic.com" : "https://api.example.com/v1"}
+                  spellCheck={false}
+                />
               </label>
               <label>
                 <span>API key <small>{provider?.hasApiKey ? "Leave blank to keep the saved key" : "Stored on this Mac"}</small></span>

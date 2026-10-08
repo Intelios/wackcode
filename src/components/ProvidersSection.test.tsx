@@ -122,8 +122,25 @@ describe("Settings › Providers", () => {
     expect(raw.apiFormat).toBeUndefined();
 
     fireEvent.click(screen.getByRole("button", { name: "API format for Big Model" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Messages" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save connection" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
+    expect((onSave.mock.calls[1][0].models as ModelRecord[])[0].apiFormat).toBe("anthropic-messages");
+
+    fireEvent.click(screen.getByRole("button", { name: "API format for Big Model" }));
     fireEvent.click(screen.getByRole("menuitem", { name: /^Same as connection/ }));
     expect(screen.getByRole("button", { name: /^Big Model/ })).not.toHaveTextContent("Responses");
+  });
+
+  it("offers the Messages API for endpoints like OpenCode Go's, and hints at its base URL", async () => {
+    const { onSave } = renderProviders(undefined, "p1");
+    expect(screen.queryByText("/v1/messages is added for you")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "API format" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Messages compatible" }));
+    expect(screen.getByText("/v1/messages is added for you")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("https://api.anthropic.com")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save connection" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ apiFormat: "anthropic-messages" })));
   });
 
   it("lets you pick which discovered models to add, leaving out the ones already there", async () => {

@@ -1,7 +1,7 @@
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
-export type ApiFormat = "openai-completions" | "openai-responses";
+export type ApiFormat = "openai-completions" | "openai-responses" | "anthropic-messages";
 
 /**
  * The agent's working mode. "plan" is the plan-first mode, read-only by default; "ultraplan" is the same

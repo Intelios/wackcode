@@ -38,11 +38,12 @@ describe("connection models in Pi", () => {
   });
 
   it("runs a model over its own API, and the rest over the connection's", async () => {
-    const connection = provider({ models: [model("glm", "GLM"), { ...model("muse", "Muse"), api: "openai-responses" }] });
+    const connection = provider({ models: [model("glm", "GLM"), { ...model("muse", "Muse"), api: "openai-responses" }, { ...model("minimax", "MiniMax"), api: "anthropic-messages" }] });
     const runtime = await load(connection);
     expect(runtime.getError()).toBeUndefined();
     expect((await findModel(runtime, connection, "glm"))?.api).toBe("openai-completions");
     expect((await findModel(runtime, connection, "muse"))?.api).toBe("openai-responses");
+    expect((await findModel(runtime, connection, "minimax"))?.api).toBe("anthropic-messages");
   });
 
   it("names the connection and Pi's reason when Pi rejects it", async () => {

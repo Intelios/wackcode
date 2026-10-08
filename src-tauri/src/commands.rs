@@ -221,7 +221,7 @@ pub async fn save_provider(
     let name = required(&input.name, "Connection name")?;
     let base_url = validate_base_url(&input.base_url)?;
     if !API_FORMATS.contains(&input.api_format.as_str()) {
-        return Err("Choose a supported OpenAI-compatible API format".into());
+        return Err("Choose a supported API format".into());
     }
     validate_models(&input.models)?;
     let id = input
@@ -5000,8 +5000,10 @@ fn view_task_and_provider(
     Ok((task, provider))
 }
 
-/// The APIs a custom connection, or one of its models, may speak.
-const API_FORMATS: [&str; 2] = ["openai-completions", "openai-responses"];
+/// The APIs a custom connection, or one of its models, may speak. `anthropic-messages` posts to
+/// `{baseUrl}/v1/messages`, so a Messages base URL leaves off the `/v1` that the OpenAI formats
+/// keep (OpenCode Go: `…/zen/go` for Messages, `…/zen/go/v1` for Completions).
+const API_FORMATS: [&str; 3] = ["openai-completions", "openai-responses", "anthropic-messages"];
 
 fn validate_models(models: &[ModelRecord]) -> Result<(), String> {
     let mut ids = HashSet::new();
@@ -5863,7 +5865,8 @@ mod tests {
             api_format: api_format.map(Into::into),
         };
         assert!(validate_models(&[model(Some("openai-responses"))]).is_ok());
-        assert!(validate_models(&[model(Some("anthropic-messages"))])
+        assert!(validate_models(&[model(Some("anthropic-messages"))]).is_ok());
+        assert!(validate_models(&[model(Some("grpc"))])
             .unwrap_err()
             .contains("muse"));
         // Absent on disk means "follow the connection", and stays absent when written back.

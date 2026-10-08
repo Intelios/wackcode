@@ -2679,7 +2679,7 @@ pub async fn skill_draft_status(
     app: AppHandle,
     task_id: String,
 ) -> Result<Vec<crate::skill_creator::SkillDraftStatus>, String> {
-    crate::skill_creator::status(&app, &task_id)
+    crate::skill_creator::status(&app, &task_id).await
 }
 
 /// A draft's current SKILL.md document, for the review card's full-instructions view.

@@ -873,7 +873,8 @@ pub async fn publish(
 
 /// Reconcile an interrupted commit by hash. Returns the durable journal when the publish is
 /// proven saved, cleans up when it provably never happened, and leaves an unprovable state
-/// reported as "unknown" rather than guessing.
+/// reported as "unknown" rather than guessing. Call only while holding
+/// `skills::library_guard`: its hash checks must never observe a commit mid-flight.
 fn reconcile_journal(draft_root: &Path, journal: &PublicationJournal) -> Result<Option<PublicationJournal>, String> {
     if journal.state == "saved" {
         return Ok(Some(journal.clone()));
@@ -927,8 +928,9 @@ fn reconcile_journal(draft_root: &Path, journal: &PublicationJournal) -> Result<
 }
 
 /// Every draft this chat owns, with its latest review and publication state, for the review
-/// cards' hydration. Read-only apart from interrupted-commit reconciliation.
-pub fn status(app: &AppHandle, task_id: &str) -> Result<Vec<SkillDraftStatus>, String> {
+/// cards' hydration. Read-only apart from interrupted-commit reconciliation, which runs under
+/// `skills::library_guard` like every other library mutation.
+pub async fn status(app: &AppHandle, task_id: &str) -> Result<Vec<SkillDraftStatus>, String> {
     let root = drafts_root(app, task_id)?;
     let mut out = Vec::new();
     let entries = match fs::read_dir(&root) {
@@ -960,8 +962,18 @@ pub fn status(app: &AppHandle, task_id: &str) -> Result<Vec<SkillDraftStatus>, S
 
         let journal: Option<PublicationJournal> = read_json(&journal_path(&draft_root)).ok();
         let journal = match journal {
-            Some(journal) => reconcile_journal(&draft_root, &journal)?,
-            None => None,
+            // Reconciliation writes receipts and deletes staging trees, so it serializes with
+            // publishes on the shared library lock — otherwise a commit between journal-write
+            // and swap looks like one that never landed and its staging is deleted mid-write.
+            // Re-read under the lock: the publish may have finished while this call waited.
+            Some(journal) if journal.state != "saved" => {
+                let _guard = skills::library_guard().await;
+                match read_json::<PublicationJournal>(&journal_path(&draft_root)).ok() {
+                    Some(current) => reconcile_journal(&draft_root, &current)?,
+                    None => None,
+                }
+            }
+            other => other,
         };
 
         let revision = latest.as_ref().map(|(_, review)| review.revision.clone());

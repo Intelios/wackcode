@@ -26,6 +26,8 @@ function props(t: TaskRecord, titlePulse = 0) {
     onToggleBrowser: vi.fn(),
     terminalOpen: false,
     onToggleTerminal: vi.fn(),
+    gamesOpen: false,
+    onToggleGames: vi.fn(),
     onRename: vi.fn(),
     onTaskAction: vi.fn(),
     onListBranches: vi.fn(async () => ({ current: "main", branches: [] })),
@@ -71,5 +73,18 @@ describe("ChatHeader title", () => {
     expect(screen.getByRole("heading", { name: "Second chat" })).toBeInTheDocument();
     expect(screen.queryByText("First chat")).toBeNull();
     expect(document.querySelector(".title-glint")).toBeNull();
+  });
+});
+
+describe("ChatHeader panel buttons", () => {
+  it("toggles the Games panel and shows it pressed while open", () => {
+    const p = props(task("t1", "Chat"));
+    const { rerender } = render(<ChatHeader {...p} />);
+    const games = screen.getByRole("button", { name: "Games" });
+    expect(games).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(games);
+    expect(p.onToggleGames).toHaveBeenCalledOnce();
+    rerender(<ChatHeader {...p} gamesOpen />);
+    expect(screen.getByRole("button", { name: "Games" })).toHaveAttribute("aria-pressed", "true");
   });
 });

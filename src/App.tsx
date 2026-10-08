@@ -11,7 +11,7 @@ import { titleFromPrompt, samePlanState, sameTodoState, sameGoalState, applySnap
 import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix } from "./tree-utils";
 import { composeFileSection, splitFileSection, type FileAttachment } from "./attachment-utils";
 import { displayAgentName, hasSubagentCall, pruneDisabledTools, sameToolCatalog, subagentDetailsFor, parseSkillPreviewDetails, SKILL_CREATOR_TOOL_NAME } from "./tool-utils";
-import { CHANGES_VIEW, TERMINAL_VIEW, RUN_VIEW, durableView, rememberedView, toggleView, viewForChat, viewKey, type PanelViewKind, type SidePanelView } from "./side-panel";
+import { CHANGES_VIEW, GAMES_VIEW, TERMINAL_VIEW, RUN_VIEW, durableView, isDurable, rememberedView, toggleView, viewForChat, viewKey, type PanelViewKind, type SidePanelView } from "./side-panel";
 import { applyRunEvent, EMPTY_RUN_REGISTRY } from "./run-state";
 import { APP_SLASH_COMMANDS } from "./command-utils";
 import { performChatNavigation, withoutResolvedDialog } from "./menu-navigation";
@@ -85,6 +85,7 @@ import { RepoSwitcher } from "./components/RepoSwitcher";
 import { RunPanel } from "./components/RunPanel";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { SidePanel } from "./components/SidePanel";
+import { GamesPanel } from "./components/GamesPanel";
 import { SubagentPanelLink } from "./components/SubagentChip";
 import { ToolImageSource } from "./components/ToolRow";
 import { ContextMenuProvider } from "./components/ui/ContextMenu";
@@ -144,7 +145,7 @@ function commentsPrompt(comments: DiffComment[], mode: TaskMode): string {
 }
 
 const LAST_PROJECT_KEY = "wackcode:lastProject";
-/** Which durable view the side panel shows ("changes" | "terminal" | null = closed). */
+/** Which durable view the side panel shows ("changes" | "terminal" | "run" | "games" | null = closed). */
 const PANEL_VIEW_KEY = "wackcode:sidePanel";
 /** The pre-Terminal flag, still read once to migrate it into `PANEL_VIEW_KEY`. */
 const CHANGES_OPEN_KEY = "wackcode:changesOpen";
@@ -155,7 +156,7 @@ const COLLAPSED_PROJECTS_KEY = "wackcode:collapsedProjects";
 /** The durable view the panel should come back to — the stored pick, or the migrated Changes flag. */
 function rememberedPanelKind(): PanelViewKind | null {
   const stored = loadJSON<PanelViewKind | null | undefined>(PANEL_VIEW_KEY, undefined);
-  if (stored === "changes" || stored === "terminal" || stored === "run") return stored;
+  if (isDurable(stored)) return stored;
   if (stored === null) return null;
   return loadJSON<boolean>(CHANGES_OPEN_KEY, false) ? "changes" : null;
 }
@@ -427,7 +428,19 @@ export default function App() {
     }
     setSidePanel((current) => toggleView(current, TERMINAL_VIEW));
   }, [browserExpanded, browserRestoreWidth, setSidePanel, setPanelWidth, setBrowserExpanded]);
+  const toggleGames = useCallback(() => {
+    if (browserExpanded) {
+      setPanelWidth(browserRestoreWidth);
+      setBrowserExpanded(false);
+    }
+    setSidePanel((current) => toggleView(current, GAMES_VIEW));
+  }, [browserExpanded, browserRestoreWidth, setSidePanel, setPanelWidth, setBrowserExpanded]);
   const closeSidePanel = useCallback(() => setSidePanel(null), [setSidePanel]);
+  /** The Games panel's "back to chat": close the panel and put the caret back in the composer. */
+  const backToChat = useCallback(() => {
+    setSidePanel(null);
+    requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(".composer-input textarea")?.focus());
+  }, [setSidePanel]);
   const updateBrowser = useCallback((state: BrowserState) => {
     setBrowsers((current) => current[state.taskId] === state ? current : { ...current, [state.taskId]: state });
   }, []);
@@ -3050,6 +3063,8 @@ export default function App() {
               onToggleBrowser={toggleBrowser}
               terminalOpen={panelView?.kind === "terminal"}
               onToggleTerminal={toggleTerminal}
+              gamesOpen={panelView?.kind === "games"}
+              onToggleGames={toggleGames}
               onRename={(name) => void renameTask(selectedTask.id, name)}
               onTaskAction={(task, action) => void taskAction(task, action)}
               titlePulse={titlePulses[selectedTask.id] ?? 0}
@@ -3372,6 +3387,7 @@ export default function App() {
         label={panelView?.kind === "browser" ? "Browser"
           : panelView?.kind === "run" ? "Run"
           : panelView?.kind === "terminal" ? "Terminal"
+          : panelView?.kind === "games" ? "Games"
           : shownSubagent
             ? `SubAgent ${displayAgentName(shownSubagentCall?.details.results[shownSubagent.index]?.agent ?? "")}`.trim()
             : "Changes"}
@@ -3403,6 +3419,14 @@ export default function App() {
           onClose={closeSidePanel} />
       ) : view.kind === "terminal" ? (
         <TerminalPanel key={selectedTask.id} taskId={selectedTask.id} appearance={data.appearance} onClose={closeSidePanel} />
+      ) : view.kind === "games" ? (
+        <GamesPanel
+          status={selectedTask.status}
+          watchKey={selectedTask.id}
+          agentName={agentName(data.appearance)}
+          onClose={closeSidePanel}
+          onBackToChat={backToChat}
+        />
       ) : view.kind === "subagent" ? (
         <ChatContexts appearance={data.appearance}>
           <SubagentPanel

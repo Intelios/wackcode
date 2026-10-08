@@ -12,6 +12,7 @@ const content = (view: SidePanelView) => (
     : view.kind === "browser" ? "Browser view"
     : view.kind === "terminal" ? "Terminal view"
     : view.kind === "run" ? "Run view"
+    : view.kind === "games" ? "Games view"
     : `SubAgent view ${view.index}`}</p>
 );
 

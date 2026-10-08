@@ -1,7 +1,7 @@
 import type { SVGProps } from "react";
 import { quillIconPaths } from "./QuillMark";
 
-export type IconName = "star" | "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "browser" | "expand" | "collapse" | "copy" | "archive" | "unarchive" | "send" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "checklist" | "terminal" | "file" | "paperclip" | "pencil" | "quill" | "external" | "brain" | "hammer" | "search" | "wrench" | "question" | "image" | "close" | "rewind" | "agents" | "flame" | "palette" | "plug" | "book" | "comment" | "commit" | "push" | "pullRequest" | "slash" | "erase" | "cursor" | "memory" | "accessibility" | "viewfinder" | "lock" | "dock" | "clock" | "pull" | "fetch" | "pin" | "split" | "unified" | "undo" | "code" | "filePlus" | "textSearch" | "globe" | "play";
+export type IconName = "star" | "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "browser" | "expand" | "collapse" | "copy" | "archive" | "unarchive" | "send" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "checklist" | "terminal" | "file" | "paperclip" | "pencil" | "quill" | "external" | "brain" | "hammer" | "search" | "wrench" | "question" | "image" | "close" | "rewind" | "agents" | "flame" | "palette" | "plug" | "book" | "comment" | "commit" | "push" | "pullRequest" | "slash" | "erase" | "cursor" | "memory" | "accessibility" | "viewfinder" | "lock" | "dock" | "clock" | "pull" | "fetch" | "pin" | "split" | "unified" | "undo" | "code" | "filePlus" | "textSearch" | "globe" | "play" | "gamepad";
 
 const paths: Record<IconName, React.ReactNode> = {
   star: <path d="m12 3 2.8 5.7 6.3.9-4.5 4.4 1.1 6.2-5.7-3-5.7 3 1.1-6.2-4.5-4.4 6.3-.9z" />,
@@ -13,6 +13,8 @@ const paths: Record<IconName, React.ReactNode> = {
   git: <><circle cx="6" cy="5" r="2" /><circle cx="18" cy="7" r="2" /><circle cx="8" cy="19" r="2" /><path d="M6 7v3c0 3 2 3 2 7M8 13c0-4 8-1 10-4" /></>,
   refresh: <><path d="M20 7v5h-5" /><path d="M19 12a7 7 0 1 0-2 5" /></>,
   panel: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M15 4v16" /></>,
+  // Games: a rounded controller with a d-pad and two buttons.
+  gamepad: <><path d="M7.5 7h9a5 5 0 0 1 4.9 6l-.8 3.6a2.4 2.4 0 0 1-4.1 1.1L14.3 15.5H9.7l-2.2 2.2a2.4 2.4 0 0 1-4.1-1.1L2.6 13a5 5 0 0 1 4.9-6z" /><path d="M8 9.8v3.4M6.3 11.5h3.4" /><circle cx="15.6" cy="10.4" r=".6" fill="currentColor" /><circle cx="17.4" cy="12.4" r=".6" fill="currentColor" /></>,
   // Computer use: a window with a pointer resting on its corner.
   cursor: <><path d="M17 10.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h5.5" /><path d="m13 13 8 3-3.4 1.4L16 21z" /></>,
   // Computer use permissions: the accessibility figure, a viewfinder, a padlock, and the Dock strip.

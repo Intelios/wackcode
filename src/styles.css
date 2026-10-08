@@ -3175,6 +3175,89 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .terminal-pill.run-failed { color: var(--danger); }
 .terminal-pill.run-failed .terminal-pill-dot { background: var(--danger); }
 
+/* ── Games panel (GamesPanel.tsx, SwarmGame.tsx) ──── */
+/* Something to play while a slow model works. The stage is a content surface (`--wc-well`),
+   solid over image and Liquid Glass backdrops like the terminal; the canvas draws with colours
+   read from the theme (`games/palette.ts`). Screens over it are real buttons. */
+.games-panel { height: 100%; min-height: 0; display: flex; flex-direction: column; }
+.games-panel .terminal-pill { max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.games-body { position: relative; flex: 1; min-height: 0; display: flex; background: var(--wc-well); overflow: hidden; }
+.game-stage { position: relative; flex: 1; min-width: 0; min-height: 0; outline: none; overflow: hidden; }
+.game-stage.playing { cursor: crosshair; }
+.game-stage:focus-visible { box-shadow: inset 0 0 0 1px var(--wc-accent-line-soft); }
+.game-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+
+.game-overlay {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; padding: 24px 20px; text-align: center;
+}
+.game-overlay h2 { margin: 0; color: var(--text); font-size: 22px; font-weight: 750; letter-spacing: -.01em; }
+.game-overlay p { margin: 0; max-width: 300px; color: var(--text-soft); font-size: 12.5px; line-height: 1.5; }
+.game-dim { background: color-mix(in srgb, var(--wc-well) 78%, transparent); backdrop-filter: blur(3px); }
+.game-actions { display: flex; gap: 8px; margin-top: 6px; }
+.game-kicker { color: var(--wc-accent-text); font-size: 10.5px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+.game-kicker.lost { color: var(--danger); }
+.game-overlay h2.game-score { font-family: "SFMono-Regular", Consolas, monospace; font-size: 34px; color: var(--wc-accent); }
+.game-best { color: var(--text-dim); font-size: 11.5px; font-weight: 600; }
+.game-best.new {
+  padding: 3px 10px; border-radius: 999px; color: var(--wc-on-accent); background: var(--wc-accent);
+  animation: game-best-pop .5s var(--ease);
+}
+@keyframes game-best-pop { from { transform: scale(.6); opacity: 0; } 60% { transform: scale(1.12); opacity: 1; } to { transform: scale(1); } }
+
+/* The title card: the duck bobs above the name, as on the boot screen. */
+.game-title-duck { width: 54px; height: 54px; color: var(--wc-accent); margin-bottom: 2px; animation: game-duck-bob 2.4s ease-in-out infinite; }
+@keyframes game-duck-bob { 0%, 100% { transform: translateY(0) rotate(-3deg); } 50% { transform: translateY(-5px) rotate(3deg); } }
+.game-title .primary-button { min-width: 120px; margin-top: 6px; }
+.game-controls { display: flex; flex-direction: column; gap: 6px; margin: 14px 0 0; color: var(--text-dim); font-size: 11.5px; }
+.game-controls div { display: flex; align-items: center; justify-content: center; gap: 8px; }
+.game-controls dt { display: flex; gap: 3px; }
+.game-controls dd { margin: 0; }
+.game-overlay kbd, .game-upgrade kbd {
+  min-width: 18px; height: 18px; display: inline-grid; place-items: center; padding: 0 4px; border-radius: 4px;
+  border: 1px solid var(--border-bright); background: var(--surface); color: var(--text-soft);
+  font: 600 10px "SFMono-Regular", Consolas, monospace;
+}
+
+/* Level-up: three cards, picked by click or 1/2/3. Solid surfaces, accent on hover and focus. */
+.game-upgrades { width: min(320px, 100%); display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.game-upgrade {
+  display: flex; align-items: center; gap: 11px; width: 100%; padding: 11px 12px; text-align: left; cursor: pointer;
+  border-radius: 10px; border: 1px solid var(--border-bright); background: var(--wc-elevated); color: var(--text);
+  box-shadow: var(--shadow-pop); transition: border-color .14s var(--ease), background .14s var(--ease), transform .14s var(--ease);
+}
+.game-upgrade:hover, .game-upgrade:focus-visible { border-color: var(--wc-accent-line-soft); background: var(--wc-accent-tint); transform: translateY(-1px); }
+.game-upgrade-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.game-upgrade-text strong { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 650; }
+.game-upgrade-text strong em {
+  font-style: normal; font-size: 9.5px; font-weight: 750; letter-spacing: .05em; text-transform: uppercase;
+  padding: 1px 6px; border-radius: 999px; color: var(--wc-on-accent); background: var(--wc-accent);
+}
+.game-upgrade-text > span { color: var(--text-dim); font-size: 11.5px; line-height: 1.4; }
+.game-pips { flex: 0 0 auto; display: flex; gap: 3px; }
+.game-pips i { width: 5px; height: 12px; border-radius: 2px; background: var(--border-bright); }
+.game-pips i.on { background: var(--wc-accent); }
+.game-pips i.next { background: color-mix(in srgb, var(--wc-accent) 45%, transparent); animation: pulse 1.4s infinite; }
+
+/* The run-ended toast rises from the bottom of the stage; the game keeps going behind it. */
+.games-toast {
+  position: absolute; left: 12px; right: 12px; bottom: 12px; margin-inline: auto; max-width: 380px; z-index: 2;
+  display: flex; align-items: center; gap: 9px; padding: 8px 8px 8px 13px; border-radius: 12px;
+  border: 1px solid var(--wc-accent-line-soft); background: var(--wc-elevated); box-shadow: var(--shadow-pop);
+}
+.games-toast-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--wc-accent); box-shadow: 0 0 0 4px var(--wc-accent-tint); }
+.games-toast.failed { border-color: var(--danger-bg); }
+.games-toast.failed .games-toast-dot { background: var(--danger); box-shadow: 0 0 0 4px var(--danger-bg); }
+.games-toast.stopped .games-toast-dot { background: var(--text-dim); box-shadow: none; }
+.games-toast-text { flex: 1; min-width: 0; color: var(--text); font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.games-toast .icon-button { width: 26px; height: 26px; }
+.games-toast .icon-button svg { width: 14px; height: 14px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .game-title-duck, .game-best.new, .game-pips i.next { animation: none; }
+  .game-upgrade:hover, .game-upgrade:focus-visible { transform: none; }
+}
+
 /* ── ask_user_question card ────────────────────────── */
 .question-presence-wrap { animation: none; overflow: hidden; }
 .question-card .eyebrow { display: flex; align-items: center; gap: 5px; }

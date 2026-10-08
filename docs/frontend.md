@@ -118,11 +118,12 @@ queue actions dispatch while stopping. App captures the originating task id for 
 
 ## Side panel
 
-`SidePanel` shows one `SidePanelView` (`src/side-panel.ts`) at a time: Changes, Browser, Terminal, Run, or one sub-agent's transcript.
+`SidePanel` shows one `SidePanelView` (`src/side-panel.ts`) at a time: Changes, Browser, Terminal, Run, Games, or one sub-agent's transcript.
 
 - A new view is a union member, a component `SidePanel` renders, and a trigger that opens it (`toggleView`).
-- In the original layout, Changes, Terminal and Run are durable: which one is showing is remembered across chats and launches (`wackcode:sidePanel`). With chat tabs enabled, every tab keeps its own panel for the session and a new draft starts closed. Run follows the selected checkout and restoring it never launches a command. Browser and sub-agent views belong to one chat; the original layout falls back to the remembered durable view when the chat changes.
+- In the original layout, Changes, Terminal, Run and Games are durable: which one is showing is remembered across chats and launches (`wackcode:sidePanel`). With chat tabs enabled, every tab keeps its own panel for the session and a new draft starts closed. Run follows the selected checkout and restoring it never launches a command. Browser and sub-agent views belong to one chat; the original layout falls back to the remembered durable view when the chat changes.
 - Sub-agent transcripts reach the panel only through `watch_subagent` frames, never through snapshots.
+- **Games** (`GamesPanel`, one entry per game in its `GAMES` list): each game is a pure simulation under `src/games/` plus a component that owns its canvas and rAF loop. The panel's page remounts on every view or tab switch, so a run in progress lives in `games/session.ts` and comes back paused. Best scores are a `localStorage` convenience (`games/scores.ts`). The panel takes only the open chat's `status`, so streaming never re-renders it.
 
 ## Git mode
 

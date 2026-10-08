@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CHANGES_VIEW, TERMINAL_VIEW, RUN_VIEW, rememberedView, sameView, swapDirection, swapKey, toggleView, viewForChat, viewKey, type SidePanelView } from "./side-panel";
+import { CHANGES_VIEW, GAMES_VIEW, TERMINAL_VIEW, RUN_VIEW, rememberedView, sameView, swapDirection, swapKey, toggleView, viewForChat, viewKey, type SidePanelView } from "./side-panel";
 
 const scout: SidePanelView = { kind: "subagent", taskId: "chat-1", toolCallId: "call-1", index: 0 };
 const sibling: SidePanelView = { kind: "subagent", taskId: "chat-1", toolCallId: "call-1", index: 1 };
@@ -35,6 +35,8 @@ describe("side panel views", () => {
     expect(swapDirection(CHANGES_VIEW, TERMINAL_VIEW)).toBe(1);
     expect(swapDirection(TERMINAL_VIEW, CHANGES_VIEW)).toBe(-1);
     expect(swapDirection(TERMINAL_VIEW, scout)).toBe(1);
+    expect(swapDirection(TERMINAL_VIEW, GAMES_VIEW)).toBe(1);
+    expect(swapDirection(GAMES_VIEW, RUN_VIEW)).toBe(-1);
   });
 
   it("swaps whatever is showing for a trigger's view, and closes the active view", () => {
@@ -46,12 +48,15 @@ describe("side panel views", () => {
     expect(toggleView(scout, { ...scout })).toBeNull();
     expect(toggleView(CHANGES_VIEW, CHANGES_VIEW)).toBeNull();
     expect(toggleView(TERMINAL_VIEW, TERMINAL_VIEW)).toBeNull();
+    expect(toggleView(browser, GAMES_VIEW)).toBe(GAMES_VIEW);
+    expect(toggleView(GAMES_VIEW, GAMES_VIEW)).toBeNull();
   });
 
   it("remembers durable views and closing, but not task-bound views", () => {
     expect(rememberedView(CHANGES_VIEW)).toBe("changes");
     expect(rememberedView(TERMINAL_VIEW)).toBe("terminal");
     expect(rememberedView(RUN_VIEW)).toBe("run");
+    expect(rememberedView(GAMES_VIEW)).toBe("games");
     expect(rememberedView(null)).toBeNull();
     expect(rememberedView(scout)).toBeUndefined();
     expect(rememberedView(browser)).toBeUndefined();
@@ -69,5 +74,7 @@ describe("side panel views", () => {
     expect(viewForChat(browser, "chat-2", "run")).toBe(RUN_VIEW);
     expect(viewForChat(CHANGES_VIEW, "chat-2", null)).toBe(CHANGES_VIEW);
     expect(viewForChat(null, "chat-2", "terminal")).toBeNull();
+    expect(viewForChat(GAMES_VIEW, "chat-2", null)).toBe(GAMES_VIEW);
+    expect(viewForChat(scout, "chat-2", "games")).toBe(GAMES_VIEW);
   });
 });

@@ -28,6 +28,8 @@ interface ChatHeaderProps {
   onToggleBrowser: () => void;
   terminalOpen: boolean;
   onToggleTerminal: () => void;
+  gamesOpen: boolean;
+  onToggleGames: () => void;
   onRename: (name: string) => void;
   onTaskAction: (task: TaskRecord, action: TaskAction) => void;
   /** Bumps when the title model names the chat: the title swipes to the new name and glints. */
@@ -36,7 +38,7 @@ interface ChatHeaderProps {
   onCheckoutBranch: (name: string, kind: GitCheckoutKind) => Promise<void>;
 }
 
-export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStopRun, onShowRunOutput, git, onListBranches, onCheckoutBranch, changesCount, changesOpen, browserOpen, onToggleChanges, onToggleBrowser, terminalOpen, onToggleTerminal, onRename, onTaskAction, titlePulse = 0 }: ChatHeaderProps) {
+export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStopRun, onShowRunOutput, git, onListBranches, onCheckoutBranch, changesCount, changesOpen, browserOpen, onToggleChanges, onToggleBrowser, terminalOpen, onToggleTerminal, gamesOpen, onToggleGames, onRename, onTaskAction, titlePulse = 0 }: ChatHeaderProps) {
   const contextMenu = useContextMenu();
   const [renaming, setRenaming] = useState(false);
   const [value, setValue] = useState(task.name);
@@ -101,6 +103,11 @@ export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStop
             aria-pressed={terminalOpen}
           >
             <Icon name="terminal" />
+          </button>
+        </Tooltip>
+        <Tooltip label="Games" side="bottom">
+          <button type="button" className={`panel-button ${gamesOpen ? "active" : ""}`} onClick={onToggleGames} aria-label="Games" aria-pressed={gamesOpen}>
+            <Icon name="gamepad" />
           </button>
         </Tooltip>
         <MenuButton label="Chat menu" items={menu} />

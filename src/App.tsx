@@ -110,6 +110,8 @@ import { InlineDialog, type ExtensionUIResponse } from "./components/InlineDialo
 import type { PlanAction } from "./components/PlanCard";
 import type { SkillDraftAction } from "./components/SkillDraftCard";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
+import { ChatArea, type ChatAreaProps } from "./components/chat/ChatArea";
+import type { SystemNote } from "./components/chat/ChatBubbles";
 import { SubscriptionLoginDialog } from "./components/SubscriptionLoginDialog";
 import { ExploreGroupingEnabled } from "./components/ExploreGroup";
 import { ThinkingPreviewEnabled, ThinkingTimerPrecision } from "./components/ThinkingRow";
@@ -169,8 +171,6 @@ function rememberedPanelView(): SidePanelView | null {
 
 type Draft = ChatDraft;
 
-/** An empty Chat mode chat: what it is for, in place of the coding agent's invitation. */
-const CHAT_EMPTY_STATE = { title: "What's on your mind?", body: "Ask a question, think something through, or draft something. Files it makes go in this chat's scratchpad." };
 
 interface ConfirmState {
   title: string;
@@ -2975,6 +2975,66 @@ export default function App() {
   const composerMentions = mentions?.source === (mentionSource().source ?? "") ? mentions : undefined;
   const draftCatalog = !selectedTask && draftSlash?.projectId === (draft?.projectId ?? null) ? draftSlash : undefined;
 
+  // The Chat area's whole surface (ChatArea): the same state and handlers the Code view uses,
+  // with problems shown as system bubbles in the conversation instead of banners.
+  const chatTask = area === "chat" ? selectedTask : undefined;
+  const chatNotes: SystemNote[] = [];
+  if (chatTask) {
+    const error = runtime?.error || chatTask.lastError;
+    if (error) chatNotes.push({ key: "error", tone: "error", text: error, onDismiss: () => dismissError(chatTask.id) });
+    if (selectedModelGone) chatNotes.push({ key: "model", tone: "warning", text: runtime?.snapshot?.modelIssue ?? "This chat's model is no longer configured. Pick another below to keep chatting." });
+    runtime?.notices?.forEach((entry, index) => chatNotes.push({
+      key: `notice:${index}:${entry.message}`, tone: entry.level === "info" ? "info" : "warning", text: entry.message,
+      onDismiss: () => patchRuntime(chatTask.id, { notices: runtime.notices?.filter((_, position) => position !== index) })
+    }));
+    if (runtime?.lastRestore) chatNotes.push({
+      key: "restore", tone: "info", text: `Restored ${plural(runtime.lastRestore.count, "file")}.`,
+      action: { label: "Undo", run: () => void undoRestore() }, onDismiss: () => patchRuntime(chatTask.id, { lastRestore: undefined })
+    });
+  }
+  const chatAreaProps: ChatAreaProps | undefined = area === "chat" ? {
+    task: chatTask,
+    runtime: chatTask ? runtime : undefined,
+    // The echo is the first bubble: always merged until the snapshot records the real one.
+    messages: chatTask ? withPendingEcho(runtime) : [],
+    running: Boolean(chatTask && (chatTask.status === "running" || chatTask.status === "stopping") && runtime?.workActivity?.parent !== "idle"),
+    viewState: chatTask && (tabsEnabled || transcriptViews.current.has(chatTask.id)) ? transcriptView(chatTask.id) : undefined,
+    actionsEnabled: Boolean(chatTask && !selectedBusy && !pendingDialogTaskIds.has(chatTask.id)),
+    vision: selectedModel?.vision === true,
+    modelName: selectedModel?.name || selectedModel?.id,
+    notes: chatNotes,
+    dialogs: chatTask ? <InlineDialog requests={extensionRequests} accessRequests={accessRequests} selectedTaskId={chatTask.id}
+      agentName={agentName(data.appearance)} onRespond={handleExtensionRespond} onAccess={handleComputerAccess} /> : undefined,
+    browserOpen: panelView?.kind === "browser",
+    titlePulse: chatTask ? titlePulses[chatTask.id] ?? 0 : 0,
+    agentName: agentName(data.appearance),
+    providers: configuredProviders,
+    providerId: selectedTask?.providerId ?? draftChoice?.providerId,
+    modelId: selectedTask?.modelId ?? draftChoice?.modelId,
+    thinkingLevel: selectedTask?.thinkingLevel ?? draftChoice?.thinkingLevel,
+    favoriteModels: data.favoriteModels,
+    favoriteSaving,
+    onSetFavorite: setModelFavorite,
+    draftState: composerDrafts.forChat(composerDraftKey),
+    composerDisabled: Boolean(selectedTask?.archived || composerTab?.sending) || (selectedTask ? pendingDialogTaskIds.has(selectedTask.id) : false),
+    handoff: transitioning?.composerKey === composerDraftKey ? transitioning.message : undefined,
+    seed: selectedTask && composerSeed?.taskId === selectedTask.id ? composerSeed : undefined,
+    panel: tabsEnabled ? { id: "chat-tab-panel", labelledBy: activeTab ? `tab-${activeTab.id}` : undefined } : undefined,
+    onMessageAction,
+    onReveal: (path) => { void api.revealPath(path, true).catch((reason) => setGlobalError(String(reason))); },
+    loadImage: loadMessageImage,
+    onToggleBrowser: toggleBrowser,
+    onRename: (name) => { if (chatTask) void renameTask(chatTask.id, name); },
+    onTaskAction: (task, action) => void taskAction(task, action),
+    onConfigure: selectedTask ? (patch) => void configure(patch) : configureDraft,
+    // Literal: chat text starting with / is just text — Chat mode expands no commands.
+    onSend: (message, images, files, queue) => sendPrompt(message, { images, files, queue, literal: true }),
+    onSteer: steerMessage,
+    onDequeue: dequeueMessages,
+    onStop: () => void stopTask(),
+    onOpenSettings: openSettings
+  } : undefined;
+
   // Git mode's sidebar: the repository switcher and tabs on top, the file list with the commit
   // form (Changes) or the commit list (History) below.
   const gitSidebar = gitMode && gitProject ? {
@@ -3172,8 +3232,13 @@ export default function App() {
         {tabsEnabled && !gitMode && <ChatTabBar tabs={tabItems} activeId={activeTab?.id} canReopen={areaCanReopen}
           {...tabHandlers} />}
         {tabsEnabled && !selectedTask && activeTab?.error && <div className="error-banner workspace-error" role="alert"><span>{activeTab.error}</span></div>}
+        {area === "chat" && configuredProviders.length > 0 && chatAreaProps && <ChatContexts appearance={data.appearance}>
+          <ToolImageSource.Provider value={loadToolImage}>
+            <ChatArea {...chatAreaProps} />
+          </ToolImageSource.Provider>
+        </ChatContexts>}
         <AnimatePresence initial={false}>
-        {selectedTask ? (
+        {selectedTask && area === "code" ? (
           <motion.div key="chat" className={`chat-view${gitMode ? " git-behind" : ""}`} role={tabsEnabled ? "tabpanel" : undefined} id={tabsEnabled ? "chat-tab-panel" : undefined} aria-labelledby={tabsEnabled ? `tab-${activeTab?.id}` : undefined} inert={gitMode ? true : undefined} initial={false} exit={{ opacity: 0, transition: { duration: reduce ? 0 : 0.18, ease: EASE } }}>
             <motion.div initial={reduce ? false : { opacity: 0, y: -36 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reduce ? 0 : 0.45, delay: reduce ? 0 : 0.05, ease: EASE }}>
               <ChatHeader
@@ -3260,7 +3325,6 @@ export default function App() {
               onMessageAction={onMessageAction}
               onUndoRewind={runtime?.snapshot?.tree?.undo ? onUndoRewind : undefined}
               loadImage={loadMessageImage}
-              empty={selectedTask.kind === "chat" ? CHAT_EMPTY_STATE : undefined}
             />
             </ToolImageSource.Provider>
             </SubagentPanelLink.Provider>
@@ -3428,7 +3492,7 @@ export default function App() {
           )}
         </AnimatePresence>
 
-        {configuredProviders.length > 0 && (
+        {configuredProviders.length > 0 && area === "code" && (
           <div
             className={`composer-layer ${selectedTask ? "dock" : "hero"}`}
             role={tabsEnabled && !selectedTask ? "tabpanel" : undefined}
@@ -3454,11 +3518,9 @@ export default function App() {
                   }}
                   exit="leave"
                 >
-                  {area === "chat"
-                    ? "What's on your mind?"
-                    : draftProject
-                      ? <>What should we build in <TextSwap key={composerDraftKey} text={draftProject.name} swapKey={draftProject.id} variant="rise" />?</>
-                      : "What should we build?"}
+                  {draftProject
+                    ? <>What should we build in <TextSwap key={composerDraftKey} text={draftProject.name} swapKey={draftProject.id} variant="rise" />?</>
+                    : "What should we build?"}
                 </motion.h1>
               )}
             </AnimatePresence>
@@ -3478,7 +3540,7 @@ export default function App() {
               onSetFavorite={setModelFavorite}
               stats={selectedTask ? runtime?.snapshot?.stats : undefined}
               popoverSide={selectedTask ? "top" : "bottom"}
-              header={!selectedTask && area === "code" ? (
+              header={!selectedTask ? (
                 <ProjectBar
                   projects={data.projects}
                   projectId={draft?.projectId ?? null}
@@ -3492,27 +3554,27 @@ export default function App() {
                   onCheckoutBranch={(projectId, name, kind) => checkoutBranch({ projectId }, name, kind)}
                 />
               ) : undefined}
-              placeholder={area === "chat" ? (selectedTask ? "Reply…" : "Ask anything…") : !selectedTask ? "Describe a task or ask a question…" : undefined}
+              placeholder={!selectedTask ? "Describe a task or ask a question…" : undefined}
               agentName={agentName(data.appearance)}
               mode={currentMode}
               disabled={Boolean(selectedTask?.archived || composerTab?.sending) || (selectedTask ? pendingDialogTaskIds.has(selectedTask.id) : false)}
               executionPolicy={data.executionPolicy ?? DEFAULT_EXECUTION_POLICY}
               appliedExecutionPolicy={runtime?.snapshot?.executionPolicy}
-              onModeChange={area === "chat" ? undefined : (mode) => void setTaskMode(mode)}
+              onModeChange={(mode) => void setTaskMode(mode)}
               onConfigure={selectedTask ? (patch) => void configure(patch) : configureDraft}
               onSend={(message, images, files, queue) => sendPrompt(message, { images, files, queue })}
               onLiteral={(message, images, files) => sendPrompt(message, { images, files, literal: true })}
-              // Chat mode offers the app's own commands only: nothing to ask a worker for.
-              commands={area === "chat" ? enabledAppCommands : [...enabledAppCommands, ...(selectedTask ? runtime?.slashCommands ?? [] : draftCatalog?.commands ?? [])]}
-              commandsReady={area === "chat" ? true : selectedTask ? runtime?.slashCommands !== undefined : draftCatalog?.commands !== undefined}
-              commandsLoading={area === "chat" ? false : selectedTask ? runtime?.slashCommandsLoading : draftCatalog?.loading}
-              commandsError={area === "chat" ? undefined : selectedTask ? runtime?.slashCommandsError : draftCatalog?.error}
-              onRequestCommands={area === "chat" ? undefined : requestSlashCommands}
+              // The Chat area has its own composer (ChatArea); this one is Code's alone.
+              commands={[...enabledAppCommands, ...(selectedTask ? runtime?.slashCommands ?? [] : draftCatalog?.commands ?? [])]}
+              commandsReady={selectedTask ? runtime?.slashCommands !== undefined : draftCatalog?.commands !== undefined}
+              commandsLoading={selectedTask ? runtime?.slashCommandsLoading : draftCatalog?.loading}
+              commandsError={selectedTask ? runtime?.slashCommandsError : draftCatalog?.error}
+              onRequestCommands={requestSlashCommands}
               mentionFiles={composerMentions?.files}
               mentionsLoading={composerMentions?.loading}
               mentionsError={composerMentions?.error}
               mentionsTruncated={composerMentions?.truncated}
-              onRequestMentions={area === "chat" ? undefined : () => void requestMentions()}
+              onRequestMentions={() => void requestMentions()}
               onCommand={sendSlash}
               queuedMessages={runtime?.queued}
               onSteer={steerMessage}

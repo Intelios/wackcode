@@ -4,7 +4,7 @@ import { DEFAULT_EXECUTION_POLICY } from "../execution-policy";
 import { DEFAULT_AGENT_NAME } from "../agentName";
 import { ExecutionPolicyNotice } from "./ExecutionPolicyNotice";
 import type { ExecutionPolicyConfig, ImageContent, ProviderRecord, QueuedMessage, SessionSnapshot, SlashCommand, TaskMode, TaskStatus, ThinkingLevel } from "../types";
-import { attachFiles, filesFrom, imageDataUrl, splitFileSection, type FileAttachment } from "../attachment-utils";
+import { attachFiles, filesFrom, splitFileSection, type FileAttachment } from "../attachment-utils";
 import { activeMention, mentionValue, rankMentions, type MentionSuggestion } from "../mention-utils";
 import { activeSlashCommand } from "../command-utils";
 import { EMPTY_DRAFT, type ComposerDraft, type ComposerDraftState } from "../hooks/useComposerDrafts";
@@ -14,6 +14,8 @@ import { ModelPicker, ReasoningToggle, type ModelFavoritesProps } from "./ModelP
 import { ModeToggle } from "./ModeToggle";
 import { Tooltip } from "./ui/Tooltip";
 import { ImageLightbox } from "./ui/ImageLightbox";
+import { AttachmentTray } from "./composer/AttachmentTray";
+import { QueuedRows, queuedDisplay, useQueueActions } from "./composer/QueuedRows";
 
 /** Matches `--ease` in styles.css. */
 const EASE: [number, number, number, number] = [0.33, 1, 0.68, 1];
@@ -127,10 +129,17 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
   const seedNonces = useRef(new Map<string, number>());
   const fileRef = useRef<HTMLInputElement>(null);
   // Queue actions are single-flight per chat, including when selection leaves and returns.
-  // The ref guards same-tick repeats; state disables controls without changing worker-owned rows.
-  const queueActionLocks = useRef(new Set<string>());
-  const [pendingQueueKeys, setPendingQueueKeys] = useState<ReadonlySet<string>>(() => new Set());
-  const queuePending = pendingQueueKeys.has(draftKey);
+  const queue = useQueueActions({
+    draftKey, activeDraftKey, status, blocked: Boolean(disabled) || frozen !== undefined, onSteer, onDequeue,
+    onError: (message) => setAttachNotice(message),
+    onRestore: (restored, restoredFiles) => {
+      if (activeDraftKey.current === draftKey) setSlashNotice(undefined);
+      if (restoredFiles.length > 0) setFiles((current) => [...current, ...restoredFiles]);
+      if (restored) setDraft((current) => (current.trim() ? `${current}\n\n${restored}` : restored));
+      requestAnimationFrame(() => { if (activeDraftKey.current === draftKey) areaRef.current?.focus(); });
+    }
+  });
+  const queuePending = queue.pending;
   const busy = status === "running" || status === "stopping";
   const queueButton = busy && !backgroundWorking;
   const model = providers.find((provider) => provider.id === providerId)?.models.find((item) => item.id === modelId);
@@ -402,48 +411,9 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
     setAttachNotice(undefined);
   }
 
-  async function changeQueue(action: () => Promise<void>) {
-    if (disabled || frozen !== undefined || status === "stopping" || queueActionLocks.current.has(draftKey)) return;
-    queueActionLocks.current.add(draftKey);
-    setPendingQueueKeys(new Set(queueActionLocks.current));
-    try {
-      await action();
-    } catch (reason) {
-      // App normally reports failures through its runtime and resolves false/undefined.
-      // A rejected callback still leaves the queue and draft intact and releases the controls.
-      if (activeDraftKey.current === draftKey) setAttachNotice(String(reason));
-    } finally {
-      queueActionLocks.current.delete(draftKey);
-      setPendingQueueKeys(new Set(queueActionLocks.current));
-    }
-  }
-
-  async function steerQueued(messageId: string) {
-    if (!onSteer || status !== "running") return;
-    await changeQueue(async () => { await onSteer(messageId); });
-  }
-
-  /** Restore all queued texts to their originating draft, keeping newer typing and files.
-   * Queue-state events remove the rows; the generated file sections return to the tray. */
-  async function restoreQueued() {
-    if (!onDequeue) return;
-    await changeQueue(async () => {
-      const texts = await onDequeue();
-      if (!texts || texts.length === 0) return;
-      if (activeDraftKey.current === draftKey) setSlashNotice(undefined);
-      const parts = texts.map((text) => splitFileSection(text));
-      const restoredFiles = parts.flatMap((part) => part.files);
-      if (restoredFiles.length > 0) setFiles((current) => [...current, ...restoredFiles]);
-      const restored = parts.map((part) => part.text).filter(Boolean).join("\n\n");
-      if (restored) setDraft((current) => (current.trim() ? `${current}\n\n${restored}` : restored));
-      requestAnimationFrame(() => { if (activeDraftKey.current === draftKey) areaRef.current?.focus(); });
-    });
-  }
-
   const acceptsDrop = (event: DragEvent) => !disabled && providers.length > 0 && event.dataTransfer.types.includes("Files");
 
-  // Show the words, not generated file sections. Never reconstruct a steered payload from them.
-  const queuedEntries = (queuedMessages ?? []).map((entry) => ({ ...entry, text: splitFileSection(entry.text).text }));
+  const queuedEntries = queuedDisplay(queuedMessages);
   const queueActionsDisabled = disabled || frozen !== undefined || status === "stopping" || queuePending;
 
   return (
@@ -493,49 +463,11 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
             }) : <div className="slash-picker-status">No matching files</div>}
           {mentionFiles && mentionsTruncated && <div className="slash-picker-status">Only the first 20,000 files are listed.</div>}
         </div>}
-        {queuedEntries.length > 0 && (
-          <div className="composer-queue" role="list" aria-label="Queued messages">
-            {queuedEntries.map((entry) => (
-              <div className="queued-message" role="listitem" key={entry.id}>
-                <span className="queued-tag">Queued</span>
-                <span className="queued-text">{entry.text}</span>
-                <Tooltip label={`Interrupt ${agentName} and send this next. Keep other messages queued.`}>
-                  <button type="button" className="secondary-button compact queued-steer" disabled={queueActionsDisabled || status !== "running" || !onSteer} onClick={() => void steerQueued(entry.id)}>
-                    Steer
-                  </button>
-                </Tooltip>
-                <Tooltip label="Restore all queued messages to the composer">
-                  <button type="button" className="queued-remove" aria-label="Restore queued messages to the composer" disabled={queueActionsDisabled || !onDequeue} onClick={() => void restoreQueued()}>
-                    <Icon name="close" />
-                  </button>
-                </Tooltip>
-              </div>
-            ))}
-          </div>
-        )}
-        {(attachments.length > 0 || files.length > 0) && (
-          <div className="composer-attachments">
-            {attachments.map((image, index) => (
-              <div className="attachment-thumb" key={index}>
-                <button type="button" className="attachment-open" aria-label={`Open attached image ${index + 1}`} onClick={() => setShownImage({ index, url: imageDataUrl(image) })}>
-                  <img src={imageDataUrl(image)} alt={`Attached image ${index + 1}`} />
-                </button>
-                <button type="button" className="attachment-remove" aria-label={`Remove image ${index + 1}`} onClick={() => removeAttachment(index)}>
-                  <Icon name="close" />
-                </button>
-              </div>
-            ))}
-            {files.map((file, index) => (
-              <div className="attachment-file" key={index}>
-                <Icon name="file" />
-                <span className="attachment-file-name">{file.name}</span>
-                <button type="button" className="attachment-remove" aria-label={`Remove file ${index + 1}`} onClick={() => removeFile(index)}>
-                  <Icon name="close" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
+        <QueuedRows entries={queuedEntries} agentName={agentName} disabled={queueActionsDisabled}
+          canSteer={status === "running" && Boolean(onSteer)} canRestore={Boolean(onDequeue)}
+          onSteer={(id) => void queue.steer(id)} onRestore={() => void queue.restore()} />
+        <AttachmentTray images={attachments} files={files} onOpenImage={(index, url) => setShownImage({ index, url })}
+          onRemoveImage={removeAttachment} onRemoveFile={removeFile} />
         {(attachNotice || blockedByModel) && (
           <div className="attachment-notice" role="status">{blockedByModel ? `${noVisionMessage} Or remove the images to send.` : attachNotice}</div>
         )}

@@ -54,7 +54,7 @@ const TOOL_ICONS: Record<string, IconName> = {
 };
 
 /** A screenshot result's previews, always visible under its row; each opens full size. */
-function ToolImages({ call, result }: { call: NormalizedBlock; result: NormalizedBlock }) {
+export function ToolImages({ call, result }: { call: NormalizedBlock; result: NormalizedBlock }) {
   const load = useContext(ToolImageSource);
   const [shown, setShown] = useState<number>();
   const images = result.images ?? [];
@@ -125,7 +125,7 @@ function ToolText({ text, label = "output", maxLines = 60, command = false, copy
   );
 }
 
-function ToolDetail({ call, result }: { call: NormalizedBlock; result?: NormalizedBlock }) {
+export function ToolDetail({ call, result }: { call: NormalizedBlock; result?: NormalizedBlock }) {
   const summary = summarizeTool(call, result);
   const args = (call.arguments ?? {}) as Record<string, unknown>;
   const details = (result?.details ?? {}) as Record<string, unknown>;

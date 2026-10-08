@@ -46,6 +46,7 @@ function bootstrap(enabled = true) {
 const newTab = () => fireEvent.click(screen.getByRole("button", { name: "New chat tab" }));
 const chat = (id: string) => fireEvent.click(screen.getByRole("button", { name: `Chat ${id}` }));
 const input = () => within(document.querySelector(".composer-input") as HTMLElement).getByRole("textbox");
+const chatInput = () => screen.getByRole("textbox", { name: "Message" });
 const type = (text: string) => fireEvent.change(input(), { target: { value: text } });
 const native = async (command: string) => { await act(async () => events.get("native-tab-action")?.({ payload: command })); };
 const worker = async (payload: unknown) => { await act(async () => events.get("worker-event")?.({ payload })); };
@@ -350,21 +351,23 @@ describe("App areas", () => {
 
     enter("Chat");
     expect(area("Chat")).toHaveAttribute("aria-pressed", "true");
-    expect(await screen.findByRole("heading", { name: "What's on your mind?" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /What's on your mind\?/ })).toBeInTheDocument();
     // The sidebar's page slides out before the other area's slides in.
     expect(await screen.findByRole("button", { name: "Trip plan" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Chat a" })).toBeNull();
     // No project, no planning modes, no Git.
     for (const name of ["Add project", "Git mode"]) expect(screen.queryByRole("button", { name })).toBeNull();
     expect(screen.queryByRole("radio", { name: "Plan" })).toBeNull();
-    expect(input()).toHaveValue("");
-    type("Chat draft");
+    // Chat mode has its own composer, and the Code one isn't mounted.
+    expect(document.querySelector(".composer-input")).toBeNull();
+    expect(chatInput()).toHaveValue("");
+    fireEvent.change(chatInput(), { target: { value: "Chat draft" } });
 
     enter("Code");
     expect(input()).toHaveValue("Half a thought");
     expect(screen.getByRole("radio", { name: "Plan" })).toBeInTheDocument();
     enter("Chat");
-    expect(input()).toHaveValue("Chat draft");
+    expect(chatInput()).toHaveValue("Chat draft");
   });
 
   it("returns to the chat each area had open", async () => {
@@ -387,16 +390,17 @@ describe("App areas", () => {
     boot([task("a")]);
     await screen.findByRole("button", { name: "Settings" });
     enter("Chat");
-    type("Hello there"); fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    fireEvent.change(chatInput(), { target: { value: "Hello there" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() => expect(api.prompt).toHaveBeenCalled());
     expect(api.createTask).toHaveBeenCalledWith({ kind: "chat", name: "Hello there", providerId: "p", modelId: "first", thinkingLevel: "off" });
     expect(vi.mocked(api.prompt).mock.calls[0][0]).toMatchObject({ taskId: "made", mode: "build" });
     await waitFor(() => expect(api.openTask).toHaveBeenCalledWith("made"));
     expect(api.gitChanges).not.toHaveBeenCalledWith({ taskId: "made" });
     expect(api.setTaskMode).not.toHaveBeenCalled();
-    // The chat lands in the Chat list, and the header offers the scratchpad and the browser only.
-    expect(await screen.findByRole("button", { name: "Reveal scratchpad" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Browser" })).toBeInTheDocument();
+    // The chat's header offers the browser and its menu only; the scratchpad is in the menu.
+    expect(await screen.findByRole("button", { name: "Browser" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Chat menu" })).toBeInTheDocument();
     for (const name of ["Changes", "Terminal", "Games"]) expect(screen.queryByRole("button", { name })).toBeNull();
     enter("Code");
     expect(screen.queryByRole("button", { name: "Hello there" })).toBeNull();

@@ -19,6 +19,9 @@ const DIGIT = {
  * jump directly to their target, never queue every intermediate value. Columns key from the
  * units side so carries keep the same drum. Presence custom carries the current direction
  * to outgoing digits (their own props are frozen after removal). Mounts never roll.
+ * `layoutDependency` scopes the columns' position animation to carries: without it every
+ * rerender re-measures, and the transcript's follow-scroll shifts the measured box so the
+ * digits slide as each token lands.
  * The signed value is the accessible label; all transient visual digits are hidden from AT.
  * Reduced motion bypasses the animation tree entirely.
  */
@@ -42,6 +45,7 @@ export function RollingNumber({ value, prefix = "", className = "" }: RollingNum
             className="rolling-digit"
             aria-hidden="true"
             layout="position"
+            layoutDependency={digits.length}
             custom={direction}
             variants={DIGIT}
             initial="enter"

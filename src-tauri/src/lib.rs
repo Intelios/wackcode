@@ -1,5 +1,6 @@
 mod backgrounds;
 mod browser;
+mod chat_tabs;
 mod checkpoints;
 mod commands;
 mod computer_use;
@@ -61,6 +62,7 @@ pub fn run() {
             app.manage(state);
             usage::start_retry(app.handle().clone());
             menu_bar::setup(app)?;
+            chat_tabs::setup(app.handle())?;
             // The window is created hidden and transparent: paint it before it first appears.
             glass::apply(
                 app.handle(),
@@ -106,6 +108,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap,
+            chat_tabs::set_chat_tab_menu,
             commands::app_info,
             usage::usage_status,
             usage::set_usage_recording,

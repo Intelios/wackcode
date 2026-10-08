@@ -63,7 +63,7 @@ class WorkTurnBoundary extends Component<BoundaryProps, Record<string, never>, S
     // row, unless it disappears into the fold, in which case the new disclosure is the anchor.
     const manual = beforeFold && afterFold && previous.open !== this.props.open;
     if (manual && this.button.current) {
-      return { focus, anchor: { key: `work:${this.props.turn.userIndex}`, offset: offset(this.button.current, scroller) } };
+      return { focus, anchor: { key: `work:${this.props.turn.userKey}`, offset: offset(this.button.current, scroller) } };
     }
     const top = scroller.getBoundingClientRect().top;
     const reading = anchors(scroller).find((node) => node.getBoundingClientRect().bottom > top);
@@ -120,7 +120,7 @@ class WorkTurnBoundary extends Component<BoundaryProps, Record<string, never>, S
         {folded ? (
           <div className={`run-duration work-disclosure${open ? " open" : ""}`}>
             <button ref={this.button} type="button" className="run-duration-chip work-disclosure-button"
-              data-transcript-anchor={`work:${turn.userIndex}`}
+              data-transcript-anchor={`work:${turn.userKey}`}
               aria-label={`${label}. ${open ? "Hide" : "Show"} work transcript`}
               aria-expanded={open} aria-controls={regionId} onClick={onToggle}>
               <Icon name="clock" />{content}<Icon name="chevron" className="work-chevron" />
@@ -152,4 +152,3 @@ export function WorkTurn(props: Props) {
   const reduce = useReducedMotion();
   return <WorkTurnBoundary {...props} regionId={regionId} animate={reduce !== true && motionAllowed()} />;
 }
-

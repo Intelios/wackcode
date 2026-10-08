@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
+import { useNavigationDismiss } from "./NavigationScope";
 
 interface PopoverProps {
   anchor: RefObject<HTMLElement | null>;
@@ -14,6 +15,7 @@ interface PopoverProps {
 }
 
 export function Popover({ anchor, open, onClose, side = "bottom", align = "start", offset = 6, matchWidth, className, children }: PopoverProps) {
+  useNavigationDismiss(() => { if (open) onClose(); });
   const panelRef = useRef<HTMLDivElement>(null);
   const [style, setStyle] = useState<React.CSSProperties>({ position: "fixed", top: 0, left: 0, visibility: "hidden" });
 

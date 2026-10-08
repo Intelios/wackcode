@@ -638,6 +638,8 @@ export interface McpTestResult {
  * renderer themes itself from these (`theme.ts`); Rust applies the backdrop to the window.
  */
 export interface AppearanceConfig {
+  /** Optional session-only chat workspace with independent draft tabs. */
+  chatTabs: boolean;
   /** One-line gist of the reasoning beside a live "Thinking…" row. */
   thinkingPreview: boolean;
   /** How the thinking timer counts: whole seconds (`1s`) or tenths (`1.1s`). */

@@ -278,7 +278,7 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
 }
 
 pub fn show_main_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
+    if let Some(window) = app.get_window("main") {
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();

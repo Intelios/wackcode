@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useFollowScroll } from "./useFollowScroll";
+import type { TranscriptViewState } from "../transcript-view";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
@@ -45,6 +46,57 @@ function setup(initialHeight = 1_000) {
 }
 
 describe("useFollowScroll", () => {
+  it("waits for cold history, restores before paint and keeps the reading anchor through streaming", () => {
+    const saved = { following: false, top: 675, anchors: [{ key: "reading", offset: 25 }] };
+    const memory: TranscriptViewState = { position: saved };
+    function Remembered({ ready = false, y = 400 }: { ready?: boolean; y?: number }) {
+      const scroll = useFollowScroll(memory, ready);
+      return <div ref={scroll.ref} onScroll={scroll.onScroll} data-testid="memory-scroller">
+        {ready && <div data-transcript-anchor="reading" data-y={y}>History</div>}
+      </div>;
+    }
+    const view = render(<Remembered />);
+    const el = screen.getByTestId("memory-scroller");
+    Object.defineProperties(el, { clientHeight: { value: 300 }, scrollHeight: { value: 2_000 } });
+    el.getBoundingClientRect = () => ({ top: 50 } as DOMRect);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return { top: 50 + Number(this.dataset.y ?? 0) - el.scrollTop } as DOMRect;
+    });
+    view.rerender(<Remembered />);
+    expect(memory.position).toBe(saved);
+    expect(el.scrollTop).toBe(0);
+    view.rerender(<Remembered ready />);
+    expect(el.scrollTop).toBe(375);
+    view.rerender(<Remembered ready y={350} />);
+    expect(el.scrollTop).toBe(325);
+    expect(memory.position).toMatchObject({ following: false, top: 325 });
+  });
+
+  it("uses the nearest surviving anchor after a branch removes the held row, then clamps an empty branch", () => {
+    const memory: TranscriptViewState = { position: {
+      following: false, top: 490, anchors: [{ key: "removed", offset: 10 }, { key: "next", offset: 210 }, { key: "previous", offset: -290 }]
+    } };
+    function Branch({ ready = false, rows = [["removed", 500], ["next", 700], ["previous", 200]] as [string, number][] }: { ready?: boolean; rows?: [string, number][] }) {
+      const scroll = useFollowScroll(memory, ready);
+      return <div ref={scroll.ref} data-testid="branch-scroller">{ready && rows.map(([key, y]) => <div key={key} data-transcript-anchor={key} data-y={y}>{key}</div>)}</div>;
+    }
+    const view = render(<Branch />);
+    const el = screen.getByTestId("branch-scroller");
+    let height = 2_000;
+    Object.defineProperties(el, { clientHeight: { value: 300 }, scrollHeight: { get: () => height } });
+    el.getBoundingClientRect = () => ({ top: 50 } as DOMRect);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return { top: 50 + Number(this.dataset.y ?? 0) - el.scrollTop } as DOMRect;
+    });
+    view.rerender(<Branch ready />);
+    expect(el.scrollTop).toBe(490);
+    view.rerender(<Branch ready rows={[["next", 400], ["previous", 200]]} />);
+    expect(el.scrollTop).toBe(190);
+    height = 400;
+    view.rerender(<Branch ready rows={[]} />);
+    expect(el.scrollTop).toBe(100);
+  });
+
   it("follows growing output while the user stays at the bottom", () => {
     const { el, stream } = setup();
     expect(el.scrollTop).toBe(700);

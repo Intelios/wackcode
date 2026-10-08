@@ -41,7 +41,13 @@ const TIMER_PRECISIONS: { value: ThinkingTimerPrecision; label: string }[] = [
 
 /** The chat switches each show a miniature of what they change, so the effect is visible
  *  before it is switched on. */
-const CHAT_OPTIONS: { key: "thinkingPreview" | "messageBubbles" | "groupExploration" | "collapseCompletedWork"; label: string; description: (name: string) => string; preview: "bubble" | "thinking" | "explore" | "work" }[] = [
+const CHAT_OPTIONS: { key: "chatTabs" | "thinkingPreview" | "messageBubbles" | "groupExploration" | "collapseCompletedWork"; label: string; description: (name: string) => string; preview: "tabs" | "bubble" | "thinking" | "explore" | "work" }[] = [
+  {
+    key: "chatTabs",
+    label: "Chat tabs",
+    description: () => "Keep several chats and drafts open, each with its own reading position and panel. Tabs last until you quit.",
+    preview: "tabs"
+  },
   {
     key: "messageBubbles",
     label: "Message bubbles",
@@ -335,7 +341,12 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrl, 
               return (
                 <div className={`chat-preview-card ${on ? "on" : ""}`} key={option.key}>
                   <div className="chat-preview" aria-hidden="true">
-                    {option.preview === "bubble" ? (
+                    {option.preview === "tabs" ? (
+                      <>
+                        <span className={`mini-tabs ${on ? "enabled" : ""}`}><span>Build the app</span>{on && <><span>Fix the tests</span><Icon name="plus" /></>}</span>
+                        <span className="mini-msg mini-assistant flat">Ready when you are.</span>
+                      </>
+                    ) : option.preview === "bubble" ? (
                       <>
                         <span className="mini-msg mini-user">Looks good, ship it</span>
                         {/* Assistant prose: bubbled when the switch is on, flat when it is off. */}

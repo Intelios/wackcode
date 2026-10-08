@@ -20,6 +20,16 @@ function panel(view: SidePanelView | null, label: string, onWidthChange = vi.fn(
 }
 
 describe("SidePanel", () => {
+  it("retires a resize gesture when switching away unmounts its tab panel", () => {
+    const onWidthChange = vi.fn();
+    const view = render(panel(TERMINAL_VIEW, "Terminal", onWidthChange));
+    fireEvent.pointerDown(view.container.querySelector(".panel-resizer")!, { clientX: 500 });
+    fireEvent.pointerMove(window, { clientX: 450 });
+    expect(onWidthChange).toHaveBeenCalledOnce();
+    view.unmount();
+    fireEvent.pointerMove(window, { clientX: 300 });
+    expect(onWidthChange).toHaveBeenCalledOnce();
+  });
   it("shows one view at a time, named for what it shows", async () => {
     const view = render(panel(CHANGES_VIEW, "Changes"));
     expect(screen.getByRole("complementary", { name: "Changes" })).toHaveAttribute("id", "side-panel");

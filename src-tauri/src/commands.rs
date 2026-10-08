@@ -5241,6 +5241,7 @@ fn validate_appearance_config(
         }
     };
     let config = AppearanceConfig {
+        chat_tabs: input.chat_tabs,
         thinking_preview: input.thinking_preview,
         thinking_timer_precision: input.thinking_timer_precision,
         message_bubbles: input.message_bubbles,
@@ -5673,6 +5674,14 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn chat_tabs_default_off_and_save_without_changing_other_preferences() {
+        let old: AppearanceConfig = serde_json::from_str("{}").unwrap();
+        assert!(!old.chat_tabs);
+        let input = AppearanceConfig { chat_tabs: true, ..old.clone() };
+        assert_eq!(validate_appearance_config(input.clone(), &old, true).unwrap(), input);
     }
 
     #[test]

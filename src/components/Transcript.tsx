@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { CommandPresentation, NormalizedBlock, NormalizedMessage, PlanState, RunTiming, SessionSnapshot, SkillDraftStatus, TaskStatus } from "../types";
 import { AssistantNameContext } from "../agentName";
@@ -22,14 +22,16 @@ import { SkillDraftCard, type SkillDraftAction } from "./SkillDraftCard";
 import { turnExcerpt, type RailTurn } from "../scroll-rail";
 import { SubagentGroup } from "./SubagentChip";
 import { ThinkingExpansion, ThinkingRow } from "./ThinkingRow";
-import { OrphanResult, ToolRow } from "./ToolRow";
+import { OrphanResult, ToolExpansion, ToolRow } from "./ToolRow";
 import { useContextMenu } from "./ui/ContextMenu";
+import { useNavigationDismiss } from "./ui/NavigationScope";
 import { ImageLightbox } from "./ui/ImageLightbox";
 import { Popover } from "./ui/Popover";
 import { Tooltip } from "./ui/Tooltip";
 import { WorkTurn } from "./WorkTurn";
 import { CompactionRow } from "./CompactionRow";
 import { CompactingStage } from "./CompactingStage";
+import type { TranscriptViewState } from "../transcript-view";
 
 interface Props {
   messages: NormalizedMessage[];
@@ -44,6 +46,9 @@ interface Props {
   collapseCompletedWork?: boolean;
   /** Scope transient disclosures to this chat, without remounting its transcript. */
   scopeKey?: string;
+  /** App-owned reading/disclosure state; only the selected tab is mounted. */
+  viewState?: TranscriptViewState;
+  historyReady?: boolean;
   /** Protect the trailing diagnostics after a worker crash or refused run. */
   status?: TaskStatus;
   liveToolText?: Record<string, string>;
@@ -564,13 +569,18 @@ function activityLabel(activity?: string): string {
   return "Working…";
 }
 
-export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, compaction, runTimings = [], collapseCompletedWork = true, scopeKey = "", status, liveToolText, liveToolDetails, planState, onPlanAction, skillDrafts, skillDraftsSaving, taskId, onSkillAction, loadSkillDocument, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind, loadImage }: Props) {
-  const scroll = useFollowScroll();
+export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, compaction, runTimings = [], collapseCompletedWork = true, scopeKey = "", viewState, historyReady = true, status, liveToolText, liveToolDetails, planState, onPlanAction, skillDrafts, skillDraftsSaving, taskId, onSkillAction, loadSkillDocument, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind, loadImage }: Props) {
+  const scroll = useFollowScroll(viewState, historyReady);
   const { ref, onScroll, onWheel, detached, pauseFollowing, jumpToLatest } = scroll;
-  const [expandedWork, setExpandedWork] = useState(() => new Set<string>());
-  const [expandedCompactions, setExpandedCompactions] = useState(() => new Set<string>());
+  const [expandedWork, setExpandedWork] = useState(() => viewState?.work ?? new Set<string>());
+  const [expandedCompactions, setExpandedCompactions] = useState(() => viewState?.compactions ?? new Set<string>());
   const [editingId, setEditingId] = useState<string>();
-  const [expandedThinking] = useState(() => new Set<string>());
+  useNavigationDismiss(() => setEditingId(undefined));
+  const [expandedThinking] = useState(() => viewState?.thinking ?? new Set<string>());
+  const [expandedTools] = useState(() => viewState?.tools ?? new Set<string>());
+  const toolExpansions = useMemo(() => ({ scope: scopeKey, keys: expandedTools }), [scopeKey, expandedTools]);
+  // These sets already use chat/entry keys. Persist their identities without retaining
+  // DOM nodes, animation timers, lightboxes or a sent-message editor across navigation.
   const reduced = useReducedMotion() ?? false;
   const animateUi = !reduced && motionAllowed();
   // Set after the render where the stage was mounted, so a boundary arriving the very next
@@ -634,7 +644,15 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
 
   const grouping = useContext(ExploreGroupingEnabled);
   const assistantName = useContext(AssistantNameContext);
-  const [expandedGroups] = useState(() => new Set<string>());
+  const [expandedGroups] = useState(() => viewState?.exploration ?? new Set<string>());
+  useLayoutEffect(() => {
+    if (!viewState) return;
+    viewState.work = expandedWork;
+    viewState.compactions = expandedCompactions;
+    viewState.thinking = expandedThinking;
+    viewState.exploration = expandedGroups;
+    viewState.tools = expandedTools;
+  }, [viewState, expandedWork, expandedCompactions, expandedThinking, expandedGroups, expandedTools]);
   const layout = useMemo(
     () => layoutTranscript(messages, partial, { grouping, liveMessageId: running ? lastAssistantId : undefined }),
     [messages, partial, grouping, running, lastAssistantId]
@@ -741,6 +759,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
       <div className="conversation-scroll" ref={ref} onScroll={onScroll} onWheel={onWheel}>
         <ThinkingExpansion.Provider value={expandedThinking}>
           <ExploreExpansion.Provider value={expandedGroups}>
+          <ToolExpansion.Provider value={toolExpansions}>
             <div className="transcript">
               {messages.map((message, messageIndex) => {
                 const turn = workTurns.get(messageIndex);
@@ -790,6 +809,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
               )}
               {rewindBar}
             </div>
+          </ToolExpansion.Provider>
           </ExploreExpansion.Provider>
         </ThinkingExpansion.Provider>
       </div>

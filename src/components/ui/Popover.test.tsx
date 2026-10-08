@@ -2,6 +2,7 @@ import { useRef } from "react";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Popover } from "./Popover";
+import { NavigationScope } from "./NavigationScope";
 
 // jsdom has no layout: the anchor's rect and the panel's content height are faked per test.
 let anchorRect = { top: 0, bottom: 0 };
@@ -44,6 +45,19 @@ function panelStyle() {
 }
 
 describe("Popover", () => {
+  it("dismisses menus on navigation even when the underlying view stays mounted", () => {
+    const onClose = vi.fn();
+    function Surface({ scope }: { scope: string }) {
+      const anchor = useRef<HTMLButtonElement>(null);
+      return <NavigationScope.Provider value={scope}><button ref={anchor}>Anchor</button>
+        <Popover anchor={anchor} open onClose={onClose}>Panel</Popover>
+      </NavigationScope.Provider>;
+    }
+    const view = render(<Surface scope="chat" />);
+    expect(onClose).not.toHaveBeenCalled();
+    view.rerender(<Surface scope="git" />);
+    expect(onClose).toHaveBeenCalledOnce();
+  });
   // window.innerHeight is 768 in jsdom; margin 8, offset 6.
   it("stays on its preferred side when the panel fits there", () => {
     anchorRect = { top: 100, bottom: 130 };

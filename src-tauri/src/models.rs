@@ -443,6 +443,9 @@ pub struct ToolConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppearanceConfig {
+    /// Session-only chat tab workspace. This preference never reaches a worker.
+    #[serde(default)]
+    pub chat_tabs: bool,
     /// One-line gist of the reasoning beside a live "Thinking…" row.
     #[serde(default = "default_true")]
     pub thinking_preview: bool,
@@ -546,6 +549,7 @@ fn default_glass_tint() -> u8 {
 impl Default for AppearanceConfig {
     fn default() -> Self {
         Self {
+            chat_tabs: false,
             thinking_preview: true,
             thinking_timer_precision: ThinkingTimerPrecision::Second,
             message_bubbles: false,

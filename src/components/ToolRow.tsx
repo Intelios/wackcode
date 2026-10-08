@@ -16,6 +16,22 @@ import { CopyButton } from "./ui/CopyButton";
  */
 export const ToolImageSource = createContext<((toolCallId: string, index: number) => Promise<string | undefined>) | undefined>(undefined);
 
+/** Stable tool-call keys retain disclosure choices when only one tab is mounted. */
+export const ToolExpansion = createContext<{ scope: string; keys: Set<string> } | undefined>(undefined);
+function useToolDisclosure(entryKey?: string) {
+  const store = useContext(ToolExpansion);
+  const expanded = store?.keys;
+  const key = entryKey === undefined ? undefined : JSON.stringify([store?.scope ?? "", entryKey]);
+  const [open, setOpen] = useState(() => key !== undefined && expanded?.has(key) === true);
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (key === undefined) return;
+    if (next) expanded?.add(key); else expanded?.delete(key);
+  };
+  return [open, toggle] as const;
+}
+
 const TOOL_ICONS: Record<string, IconName> = {
   read: "file",
   bash: "terminal",
@@ -81,10 +97,10 @@ function DiffLines({ diff, path }: { diff: string; path?: string }) {
 }
 
 /** Preview limits only affect rendering: expansion and copying always use the source text. */
-function ToolText({ text, label = "output", maxLines = 60, command = false, copy = false }: {
-  text: string; label?: string; maxLines?: number; command?: boolean; copy?: boolean;
+function ToolText({ text, label = "output", maxLines = 60, command = false, copy = false, expansionKey }: {
+  text: string; label?: string; maxLines?: number; command?: boolean; copy?: boolean; expansionKey?: string;
 }) {
-  const [all, setAll] = useState(false);
+  const [all, toggleAll] = useToolDisclosure(expansionKey ? `${expansionKey}:${label}` : undefined);
   const id = useId();
   const lines = useMemo(() => text.split("\n"), [text]);
   const truncated = lines.length > maxLines;
@@ -96,7 +112,7 @@ function ToolText({ text, label = "output", maxLines = 60, command = false, copy
       {truncated ? (
         <div className="tool-text-toolbar">
           <span className="tool-text-count">{all ? `All ${lines.length} lines` : `Last ${maxLines} of ${lines.length} lines`}</span>
-          <button type="button" className="text-button" aria-expanded={all} aria-controls={id} onClick={() => setAll((value) => !value)}>
+          <button type="button" className="text-button" aria-expanded={all} aria-controls={id} onClick={toggleAll}>
             {all ? "Show less" : "Show all"}
           </button>
           {copy && <CopyButton text={text} label={`Copy ${label}`} />}
@@ -130,21 +146,21 @@ function ToolDetail({ call, result }: { call: NormalizedBlock; result?: Normaliz
     return (
       <div className="tool-detail">
         {/* Copy follows what the agent authored — the command — never the output it got back. */}
-        <ToolText text={String(args.command ?? "")} label="command" command copy />
-        {result?.text && <ToolText text={result.text} />}
+        <ToolText text={String(args.command ?? "")} label="command" command copy expansionKey={call.toolCallId} />
+        {result?.text && <ToolText text={result.text} expansionKey={call.toolCallId} />}
       </div>
     );
   }
   if (summary.kind === "write" && typeof args.content === "string") {
-    return <div className="tool-detail"><ToolText text={args.content} label="file content" maxLines={80} copy /></div>;
+    return <div className="tool-detail"><ToolText text={args.content} label="file content" maxLines={80} copy expansionKey={call.toolCallId} /></div>;
   }
   if (summary.kind === "search") {
-    return <div className="tool-detail">{result?.text ? <ToolText text={result.text} /> : <pre>No matches</pre>}</div>;
+    return <div className="tool-detail">{result?.text ? <ToolText text={result.text} expansionKey={call.toolCallId} /> : <pre>No matches</pre>}</div>;
   }
   return (
     <div className="tool-detail">
-      <ToolText text={JSON.stringify(args, null, 2)} label="arguments" />
-      {result?.text && <ToolText text={result.text} />}
+      <ToolText text={JSON.stringify(args, null, 2)} label="arguments" expansionKey={call.toolCallId} />
+      {result?.text && <ToolText text={result.text} expansionKey={call.toolCallId} />}
     </div>
   );
 }
@@ -157,7 +173,7 @@ interface ToolRowProps {
 }
 
 export function ToolRow({ call, result, liveText, running }: ToolRowProps) {
-  const [open, setOpen] = useState(false);
+  const [open, toggle] = useToolDisclosure(call.toolCallId ? `tool:${call.toolCallId}` : undefined);
   const summary = summarizeTool(call, result);
   const failed = result?.isError === true;
   const pending = running && !result;
@@ -168,7 +184,7 @@ export function ToolRow({ call, result, liveText, running }: ToolRowProps) {
 
   return (
     <div className={`tool-row ${open ? "open" : ""} ${failed ? "error" : ""}`}>
-      <button type="button" className="tool-row-head" onClick={() => expandable && setOpen((value) => !value)} disabled={!expandable} aria-expanded={open}>
+      <button type="button" className="tool-row-head" onClick={() => expandable && toggle()} disabled={!expandable} aria-expanded={open}>
         {/* Edits and writes get the quill mark — it writes while the tool runs, then rests —
             every other row keeps its static tool icon. */}
         {summary.kind === "edit" || summary.kind === "write" ? (
@@ -203,10 +219,10 @@ export function ToolRow({ call, result, liveText, running }: ToolRowProps) {
 
 /** Fallback row for a tool result that never matched a call (rare). */
 export function OrphanResult({ block }: { block: NormalizedBlock }) {
-  const [open, setOpen] = useState(false);
+  const [open, toggle] = useToolDisclosure(block.toolCallId ? `orphan:${block.toolCallId}` : undefined);
   return (
     <div className={`tool-row ${open ? "open" : ""} ${block.isError ? "error" : ""}`}>
-      <button type="button" className="tool-row-head" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+      <button type="button" className="tool-row-head" onClick={toggle} aria-expanded={open}>
         <Icon name="terminal" className="tool-row-icon" />
         <span className="tool-row-verb">{block.toolName ? `${block.toolName} result` : "Tool result"}</span>
         {block.isError && <span className="tool-row-failed">failed</span>}

@@ -175,6 +175,7 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
 
   // Picker state and notices belong to the visible composer, never to the previous chat.
   useLayoutEffect(() => {
+    setShownImage(null);
     setAttachNotice(undefined);
     setSlashNotice(undefined);
     setSlashDismissedAt(undefined);

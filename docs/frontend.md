@@ -55,6 +55,39 @@ as an unanchored row at the response tail. While compaction runs the tail shows
 20s/60s (with a rare duck cameo) and collapses into the newly-saved boundary row when it
 finishes; the status line under it carries the trigger reason and a wall-clock elapsed timer.
 
+## Optional chat tabs
+
+`appearance.chatTabs` defaults off. `App` owns `useChatTabs` and the pure rules in
+`chat-tabs.ts`: ordered stable tab ids, selection, taskless draft configuration, panel
+state and ten closed records. None of this workspace state is serialized; quitting or a
+renderer reload discards it, while hiding the window keeps it. A tab's id
+and composer key survive draft-to-chat binding, including binding a closed recovery
+record after a send finishes. Saved-chat composer keys also survive eviction from
+the recovery shelf, so failed input remains available through the sidebar.
+Opening an existing task deduplicates its tab. Closing
+never stops a worker, terminal, browser or project command, and tabs do not change reaping.
+
+Only the selected transcript and panel mount. `transcript-view.ts` stores follow-latest,
+anchor keys/viewport offsets, a clamped scroll fallback and disclosure sets per task.
+`useFollowScroll` waits for cold-history rows before restoring; when an anchor disappears
+it uses the nearest surviving saved row. Settings remounts restore the same reading state.
+Browser/Terminal/Run/sub-agent selection, panel width and the Changes entry belong to the
+tab. The panel keys by tab to retire an outgoing native browser before another mounts;
+sub-agent watches still use the single serialized watch queue.
+
+Asynchronous sends and slash preparation capture the originating composer key and tab id. They bind and
+report errors there without selecting it, even after closure. Composer updates capture
+its stable composer key. Evicting an unsent closed draft retires its key so late attachment
+reads cannot resurrect it. Disabling tabs preserves the dormant workspace in memory.
+`NavigationScope` dismisses menus, image lightboxes and sent-message editors on navigation,
+including when Git mode keeps the transcript mounted underneath. Disclosure sets survive.
+
+The native Tabs menu (`chat_tabs.rs`) owns app-local tab accelerators, including when
+a child WKWebView has focus. `api.setChatTabMenu` synchronizes availability, and App is
+the only listener for `native-tab-action`. Modal dialogs and Settings/Git disable tab
+commands. `⌘⇧T` remains Terminal; `⌘W` closes a tab when enabled and hides the window
+in the original layout. The window's close button always hides it.
+
 ## Composer drafts
 
 `App` keeps in-memory text, image and file drafts by chat id through `useComposerDrafts`.
@@ -88,7 +121,7 @@ queue actions dispatch while stopping. App captures the originating task id for 
 `SidePanel` shows one `SidePanelView` (`src/side-panel.ts`) at a time: Changes, Browser, Terminal, Run, or one sub-agent's transcript.
 
 - A new view is a union member, a component `SidePanel` renders, and a trigger that opens it (`toggleView`).
-- Changes, Terminal and Run are durable: which one is showing is remembered across chats and launches (`wackcode:sidePanel`). Run follows the selected checkout and restoring it never launches a command. Browser and sub-agent views belong to one chat and fall back to the remembered durable view when the chat changes.
+- In the original layout, Changes, Terminal and Run are durable: which one is showing is remembered across chats and launches (`wackcode:sidePanel`). With chat tabs enabled, every tab keeps its own panel for the session and a new draft starts closed. Run follows the selected checkout and restoring it never launches a command. Browser and sub-agent views belong to one chat; the original layout falls back to the remembered durable view when the chat changes.
 - Sub-agent transcripts reach the panel only through `watch_subagent` frames, never through snapshots.
 
 ## Git mode
@@ -129,6 +162,9 @@ another launch. Switching between chats in one checkout reuses the same session.
 ## Browser preview
 
 A native child `WKWebView` per chat (`browser.rs`), placed over `.browser-surface` by `BrowserPanel` through `browserPresent`. Hidden views stay attached, so a background chat's agent can keep using its page. Pages get an ephemeral data store and no Tauri capabilities.
+
+Native window actions use `get_window("main")`: after adding a preview, Tauri's
+single-webview `get_webview_window` wrapper no longer resolves the main window.
 
 The native page stays parked while the surface's full rectangle settles. Observe both the
 surface and the outer drawer: opening animates the drawer's width while its content keeps its

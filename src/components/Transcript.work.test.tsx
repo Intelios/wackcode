@@ -4,6 +4,8 @@ import type { NormalizedMessage } from "../types";
 import { ExploreGroupingEnabled } from "./ExploreGroup";
 import { SubagentPanelLink } from "./SubagentChip";
 import { Transcript } from "./Transcript";
+import type { TranscriptViewState } from "../transcript-view";
+import { NavigationScope } from "./ui/NavigationScope";
 
 const user: NormalizedMessage = { id: "u", entryId: "u", role: "user", timestamp: 100, blocks: [{ type: "text", text: "Fix it" }] };
 const progress: NormalizedMessage = { id: "p", role: "assistant", timestamp: 200, stopReason: "toolUse", blocks: [
@@ -24,6 +26,34 @@ const hide = () => screen.getByRole("button", { name: /Hide work transcript/ });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("Transcript completed work", () => {
+  it("restores work and thinking disclosures after remounting a tab, with stable branch anchors", () => {
+    const memory: TranscriptViewState = {};
+    const view = render(<Transcript messages={messages} running={false} scopeKey="chat" viewState={memory} />);
+    fireEvent.click(reveal());
+    fireEvent.click(screen.getByRole("button", { name: "Thought for 1s" }));
+    fireEvent.click(screen.getByRole("button", { name: /Edited.*a\.ts/ }));
+    expect(hide()).toHaveAttribute("data-transcript-anchor", "work:u");
+    view.unmount();
+    const earlier: NormalizedMessage = { id: "earlier", role: "system", blocks: [{ type: "text", text: "Earlier context" }] };
+    render(<Transcript messages={[earlier, ...messages]} running={false} scopeKey="chat" viewState={memory} />);
+    expect(hide()).toHaveAttribute("data-transcript-anchor", "work:u");
+    expect(screen.getByRole("button", { name: "Thought for 1s" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Checking the change")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Edited.*a\.ts/ })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("dismisses a sent-message edit on navigation while leaving disclosure choices intact", () => {
+    const surface = (scope: string) => <NavigationScope.Provider value={scope}>
+      <Transcript messages={messages} running={false} actionsEnabled onMessageAction={vi.fn()} />
+    </NavigationScope.Provider>;
+    const view = render(surface("chat"));
+    fireEvent.click(reveal());
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("textbox", { name: "Edit message" })).toBeInTheDocument();
+    view.rerender(surface("git"));
+    expect(screen.queryByRole("textbox", { name: "Edit message" })).toBeNull();
+    expect(hide()).toHaveAttribute("aria-expanded", "true");
+  });
   it("defaults to a timed disclosure with only the user and final answer visible, then reveals original details", () => {
     const { container } = render(<Transcript messages={messages} running={false} runTimings={timings} />);
     const button = reveal();

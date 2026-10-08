@@ -68,7 +68,7 @@ pub fn parse_hex(value: &str) -> Option<(u8, u8, u8)> {
 
 /// Applies `config` to the main window, asking it whether it has focus.
 pub fn sync(app: &AppHandle, config: &AppearanceConfig) -> Result<(), String> {
-    let focused = app.get_webview_window("main").and_then(|window| window.is_focused().ok()).unwrap_or(true);
+    let focused = app.get_window("main").and_then(|window| window.is_focused().ok()).unwrap_or(true);
     apply(app, NativeBackdrop::from_config(config), focused)
 }
 
@@ -79,7 +79,9 @@ pub fn is_supported() -> bool {
 /// Brings the main window in line with `backdrop`. `focused` decides whether glass shows
 /// (transparent window) or the window is painted opaque in the background colour.
 pub fn apply(app: &AppHandle, backdrop: NativeBackdrop, focused: bool) -> Result<(), String> {
-    let window = app.get_webview_window("main").ok_or_else(|| "The main window is unavailable".to_string())?;
+    // Browser previews make this a multi-webview window. The single-webview
+    // convenience lookup stops resolving it after the first preview is created.
+    let window = app.get_window("main").ok_or_else(|| "The main window is unavailable".to_string())?;
     let ns_window = window.ns_window().map_err(|error| error.to_string())?;
     if ns_window.is_null() {
         return Err("The native macOS window is unavailable".to_string());

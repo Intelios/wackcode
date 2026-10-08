@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ImageLightbox } from "./ImageLightbox";
+import { NavigationScope } from "./NavigationScope";
 
 // jsdom has no layout, so the image's box is faked: 400×300 at (100, 100). Reduced motion is
 // faked too, so every zoom animation lands at its end state immediately.
@@ -36,6 +37,20 @@ afterEach(() => {
 });
 
 describe("ImageLightbox", () => {
+  it("dismisses on navigation so a late original cannot appear over another tab", async () => {
+    let resolve!: (url: string) => void;
+    const load = () => new Promise<string>((done) => { resolve = done; });
+    const surface = (scope: string) => <NavigationScope.Provider value={scope}>
+      <ImageLightbox preview="data:image/png;base64,thumb" load={load} alt="Preview" onClose={onClose} />
+    </NavigationScope.Provider>;
+    const view = render(surface("chat"));
+    view.rerender(surface("git"));
+    expect(onClose).toHaveBeenCalledOnce();
+    view.unmount();
+    resolve("data:image/png;base64,original");
+    await Promise.resolve();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
   it("zooms toward the clicked point, and a second click zooms back out", async () => {
     const img = renderLightbox();
     // A click a quarter of the way across: that point becomes the centre.

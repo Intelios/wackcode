@@ -9,6 +9,8 @@ import { Icon } from "./Icons";
 import { Tooltip } from "./ui/Tooltip";
 
 interface Props {
+  selectedEntry?: { path: string; layer: "staged" | "working" };
+  onSelectEntry?: (selection: { path: string; layer: "staged" | "working" }) => void;
   changes?: GitChanges;
   loading: boolean;
   busy: boolean;
@@ -56,7 +58,8 @@ export function ChangesPanel(props: Props) {
   const flashTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const entries = changeEntries(changes?.files ?? []);
-  const current = entries.find((entry) => entry.file.path === selected?.path && entry.section.layer === selected.layer) ?? entries[0];
+  const selection = props.onSelectEntry ? props.selectedEntry : selected;
+  const current = entries.find((entry) => entry.file.path === selection?.path && entry.section.layer === selection.layer) ?? entries[0];
   const disabled = busy || localBusy;
   const files = changes?.files ?? [];
   // A scoped file that left the change list drops the scope back to all changes.
@@ -227,7 +230,11 @@ export function ChangesPanel(props: Props) {
             selected={current ? { path: current.file.path, layer: current.section.layer } : undefined}
             commentCounts={commentCounts}
             disabled={disabled}
-            onSelect={(entry) => setSelected({ path: entry.file.path, layer: entry.section.layer })}
+            onSelect={(entry) => {
+              const selection = { path: entry.file.path, layer: entry.section.layer };
+              setSelected(selection);
+              if (selection.layer !== "commit") props.onSelectEntry?.({ ...selection, layer: selection.layer });
+            }}
             onCommitFile={commitFile}
             onAction={entryAction}
           />

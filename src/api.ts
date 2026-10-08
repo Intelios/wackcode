@@ -211,6 +211,9 @@ export const api = {
     thinkingLevel: ThinkingLevel;
   }) => invoke<TaskRecord>("configure_task", { input }),
   openTask: (taskId: string) => invoke<void>("open_task", { taskId }),
+  /** Native accelerators also work while the per-chat WKWebView has focus. */
+  setChatTabMenu: (input: { tabsEnabled: boolean; enabled: boolean; tabCount: number; canReopen: boolean }) =>
+    invoke<void>("set_chat_tab_menu", { input }),
   /** Stream one sub-agent's transcript as `subagent_stream` events (a reset frame first); null stops. */
   watchSubagent: (taskId: string, target: SubagentTarget | null) => invoke<void>("watch_subagent", { taskId, target }),
   /** Full keyless `/` catalog for the welcome composer; this never creates a chat. */

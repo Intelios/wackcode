@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { swapDirection, swapKey, type SidePanelView } from "../side-panel";
 
@@ -39,6 +39,8 @@ interface SidePanelProps {
 export function SidePanel({ view, width, onWidthChange, label, children }: SidePanelProps) {
   const reduce = useReducedMotion();
   const [resizing, setResizing] = useState(false);
+  const resizeCleanup = useRef<(() => void) | undefined>(undefined);
+  useEffect(() => () => resizeCleanup.current?.(), []);
   // Which way the next page turn slides, derived when the view changes (React's pattern for
   // state that follows a prop).
   const [shown, setShown] = useState(view);
@@ -50,16 +52,22 @@ export function SidePanel({ view, width, onWidthChange, label, children }: SideP
 
   function startResize(event: React.PointerEvent) {
     event.preventDefault();
+    resizeCleanup.current?.();
     const startX = event.clientX;
     const startWidth = width;
     setResizing(true);
     const move = (moveEvent: PointerEvent) =>
       onWidthChange(Math.max(MIN_PANEL_WIDTH, Math.min(MAX_PANEL_WIDTH, startWidth + startX - moveEvent.clientX)));
-    const end = () => {
-      setResizing(false);
+    const cleanup = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", end);
     };
+    const end = () => {
+      setResizing(false);
+      cleanup();
+      resizeCleanup.current = undefined;
+    };
+    resizeCleanup.current = cleanup;
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", end);
   }

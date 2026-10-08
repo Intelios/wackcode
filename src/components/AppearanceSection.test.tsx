@@ -26,6 +26,13 @@ function renderSection(config: Partial<AppearanceConfig> = {}, { glassSupported 
 }
 
 describe("AppearanceSection theme", () => {
+  it("offers chat tabs off by default and saves through the appearance configuration", async () => {
+    const { onChange } = renderSection();
+    const toggle = screen.getByRole("switch", { name: "Chat tabs" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(toggle);
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ chatTabs: true })));
+  });
   it("applies a preset's accent and background together", async () => {
     const { onChange } = renderSection();
     expect(screen.getByRole("radio", { name: "WackCode" })).toHaveAttribute("aria-checked", "true");

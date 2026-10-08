@@ -1,4 +1,5 @@
 import { useCallback, useLayoutEffect, useRef, useState, type WheelEvent } from "react";
+import { captureScroll, restoreScroll, type TranscriptViewState } from "../transcript-view";
 
 const BOTTOM_EPSILON = 1;
 
@@ -8,19 +9,28 @@ const BOTTOM_EPSILON = 1;
  * Upward intent releases the pin before the browser scrolls. Only returning to
  * the bottom reattaches — a proximity threshold would fight small gestures.
  */
-export function useFollowScroll() {
+export function useFollowScroll(memory?: TranscriptViewState, historyReady = true) {
   const ref = useRef<HTMLDivElement>(null);
-  const following = useRef(true);
+  const ready = useRef(historyReady);
+  ready.current = historyReady;
+  const following = useRef(memory?.position?.following ?? true);
+  const restoring = useRef(memory?.position);
   const lastTop = useRef(0);
   const heldAnchor = useRef<{ node: HTMLElement; offset: number } | null>(null);
   const observed = useRef<{ element: HTMLElement; content: Element | null; observer: ResizeObserver } | null>(null);
-  const [detached, setDetached] = useState(false);
+  const [detached, setDetached] = useState(!following.current);
+
+  const savePosition = useCallback(() => {
+    const el = ref.current;
+    if (memory && el && !restoring.current) memory.position = captureScroll(el, following.current);
+  }, [memory]);
 
   const pauseFollowing = useCallback(() => {
     heldAnchor.current = null;
     following.current = false;
     setDetached(true);
-  }, []);
+    savePosition();
+  }, [savePosition]);
 
   const onWheel = (event: WheelEvent<HTMLDivElement>) => {
     const el = ref.current;
@@ -48,11 +58,22 @@ export function useFollowScroll() {
       setDetached(false);
     }
     lastTop.current = el.scrollTop;
+    savePosition();
   };
 
   const reconcile = useCallback(() => {
     const el = ref.current;
     if (!el) return;
+    // A cold history may arrive after the first paint. Keep the saved state intact until
+    // there is a real transcript to anchor, rather than saving the empty placeholder.
+    const position = restoring.current;
+    if (position) {
+      if (!ready.current) return;
+      const node = restoreScroll(el, position);
+      following.current = position.following;
+      if (node) heldAnchor.current = { node, offset: node.getBoundingClientRect().top - el.getBoundingClientRect().top };
+      restoring.current = undefined;
+    }
     const anchor = heldAnchor.current;
     if (following.current) {
       if (Math.abs(el.scrollHeight - el.scrollTop - el.clientHeight) > BOTTOM_EPSILON) el.scrollTop = el.scrollHeight;
@@ -60,10 +81,16 @@ export function useFollowScroll() {
       // Anchors are viewport-relative: use rects, never a nested wrapper's offsetTop.
       const delta = anchor.node.getBoundingClientRect().top - el.getBoundingClientRect().top - anchor.offset;
       if (Math.abs(delta) > BOTTOM_EPSILON) el.scrollTop += delta;
+    } else if (memory?.position && ready.current) {
+      // A branch change can retire the held row. Resolve the nearest surviving
+      // saved location before replacing that memory with the new layout.
+      const node = restoreScroll(el, memory.position);
+      if (node) heldAnchor.current = { node, offset: node.getBoundingClientRect().top - el.getBoundingClientRect().top };
     }
     // Record our own writes so their delayed scroll events aren't user intent.
     lastTop.current = el.scrollTop;
-  }, []);
+    savePosition();
+  }, [savePosition, memory]);
 
   const keepAnchor = useCallback((node: HTMLElement, offset: number) => {
     heldAnchor.current = { node, offset };
@@ -86,7 +113,7 @@ export function useFollowScroll() {
     if (content) observer.observe(content);
     observed.current = { element: el, content, observer };
   });
-  useLayoutEffect(() => () => observed.current?.observer.disconnect(), []);
+  useLayoutEffect(() => () => { savePosition(); observed.current?.observer.disconnect(); }, [savePosition]);
 
   const jumpToLatest = () => {
     heldAnchor.current = null;

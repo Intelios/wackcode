@@ -20,6 +20,7 @@ Everything runs locally. Your conversations go straight from your Mac to the mod
 ## Highlights
 
 - **Many chats at once.** Each chat runs its own agent in the background, in your project folder, a Git worktree, or a scratch folder.
+- **A tab workspace when you want it.** Optional chat tabs keep independent drafts, reading positions and panels within reach, with keyboard switching and closed-tab recovery.
 - **Queue first, steer when needed.** Send while the agent works to queue a message for after it. Click **Steer** on any queued message to interrupt and send it next, keeping the rest queued.
 - **Nothing is lost.** Retry, edit, rewind or fork from any message. Checkpoints can put your files back too.
 - **Plan before building.** Plan mode is read-only by default until you approve a plan; Ultra Plan interviews you first.
@@ -35,6 +36,8 @@ Everything runs locally. Your conversations go straight from your Mac to the mod
 Add a project folder with <kbd>⌘ O</kbd> and start a chat with <kbd>⌘ N</kbd>. A new chat opens as a draft where you pick the project from a searchable list (pinned projects first, and you can pin from the list) and choose **Local** (work in the folder itself) or **Worktree** (work in a separate Git worktree, so parallel chats don't collide). A chat can also run without a project, in its own scratch folder.
 
 Each chat keeps its unsent text and attachments while the app is running. Switch chats or open a new one with <kbd>⌘ N</kbd>, then return to pick up your draft.
+
+Turn on **Settings › Appearance › Chat tabs** to keep chats from any project in one tab strip. Each tab remembers its reading position and side panel; new tabs have their own project, model and unsent draft. Drag tabs to reorder, use <kbd>⌃ Tab</kbd> to switch, or <kbd>⌘ W</kbd> to close one without stopping its chat. **Reopen closed tab** restores the last ten closures, including drafts. The tab workspace lasts until you quit.
 
 Chats keep working when you switch away, and even when you close the window: WackCode stays in the menu bar, where the duck lists chats that are working or waiting for you. An idle chat's background process stops after 15 minutes. Saved history opens directly from disk, even without a working model connection; the agent starts again when you send it work. Archive finished chats to tidy the sidebar; the Archived view lets you restore or delete them.
 

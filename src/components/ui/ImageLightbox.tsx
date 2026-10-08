@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { animate, motion, useMotionValue, useReducedMotion } from "motion/react";
 import { Icon } from "../Icons";
+import { useNavigationDismiss } from "./NavigationScope";
 
 interface Props {
   /** Shown at once (a small preview), and kept if the original can't be loaded. */
@@ -25,6 +26,7 @@ const clamp = (value: number, min: number, max: number) => Math.min(max, Math.ma
  * zoomed it pans by dragging.
  */
 export function ImageLightbox({ preview, load, alt, onClose }: Props) {
+  useNavigationDismiss(onClose);
   const reduce = useReducedMotion();
   const [full, setFull] = useState<string>();
   const [zoomed, setZoomed] = useState(false);

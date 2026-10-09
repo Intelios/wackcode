@@ -18,16 +18,10 @@ import type {
   GitBranches,
   GitCheckoutKind,
   GitCheckoutResult,
-  GitCommitFiles,
-  GitLogPage,
   GitPublishInfo,
   GitPrInfo,
   GitGeneratedMessage,
-  GitPullResult,
-  GitRevertResult,
-  GitSyncStatus,
   GitTarget,
-  GitUndoResult,
   DiffComment,
   ImageContent,
   McpServerRecord,
@@ -293,8 +287,8 @@ export const api = {
   stopTask: (taskId: string) => invoke<void>("stop_task", { taskId }),
   archiveTask: (taskId: string) => invoke<TaskRecord>("archive_task", { taskId }),
   unarchiveTask: (taskId: string) => invoke<TaskRecord>("unarchive_task", { taskId }),
-  // Git commands take a `GitTarget`: a chat's workspace, or a project's folder (Git mode, and a
-  // draft's branch picker before the project has a chat).
+  // Git commands take a `GitTarget`: a chat's workspace, or a project's folder
+  // (a draft's branch picker before the project has a chat).
   gitChanges: (target: GitTarget) => invoke<GitChanges>("git_changes", target),
   gitChangeAction: (target: GitTarget, input: { file: string; layer: "staged" | "working"; action: "discard"; hunkId?: number; expected: string }) => invoke<GitChanges>("git_change_action", { ...target, ...input }),
   gitCommit: (target: GitTarget, input: { message: string; files: string[]; expected: string }) => invoke<GitChanges>("git_commit", { ...target, ...input }),
@@ -304,28 +298,14 @@ export const api = {
   gitCheckout: (target: GitTarget, name: string, kind: GitCheckoutKind) => invoke<GitCheckoutResult>("git_checkout", { ...target, name, kind }),
   gitPrPrepare: (target: GitTarget, remote: string) => invoke<GitPrInfo>("git_pr_prepare", { ...target, remote }),
   gitPrCreate: (target: GitTarget, remote: string, base: string, title: string, body: string, draft: boolean) => invoke<string>("git_pr_create", { ...target, remote, base, title, body, draft }),
-  /** Written by the chat's own model; `files` limits the diff it sees, `body` adds a description. */
-  gitGenerateMessage: (taskId: string, options: { files?: string[]; body?: boolean } = {}) => invoke<GitGeneratedMessage>("git_generate_message", { taskId, ...options }),
-  gitSyncStatus: (target: GitTarget) => invoke<GitSyncStatus>("git_sync_status", target),
-  /** The fetch remote's configured URL; null when the checkout has no remote. */
-  gitRemoteUrl: (target: GitTarget) => invoke<string | null>("git_remote_url", target),
-  /** Network: the user's own remote. `background` is Git mode's one fetch on open, which never prompts for credentials. */
-  gitFetch: (target: GitTarget, background = false) => invoke<GitSyncStatus>("git_fetch", { ...target, background }),
-  gitPull: (target: GitTarget) => invoke<GitPullResult>("git_pull", target),
-  gitLog: (target: GitTarget, skip: number, limit: number) => invoke<GitLogPage>("git_log", { ...target, skip, limit }),
-  gitCommitFiles: (target: GitTarget, sha: string) => invoke<GitCommitFiles>("git_commit_files", { ...target, sha }),
-  gitCommitDiff: (target: GitTarget, sha: string, path: string, oldPath: string | null) => invoke<GitChangeFile>("git_commit_diff", { ...target, sha, path, oldPath }),
-  gitUndoCommit: (target: GitTarget, sha: string) => invoke<GitUndoResult>("git_undo_commit", { ...target, sha }),
-  gitRevertCommit: (target: GitTarget, sha: string) => invoke<GitRevertResult>("git_revert_commit", { ...target, sha }),
+  /** Written by the chat's own model from the current changes. */
+  gitGenerateMessage: (taskId: string) => invoke<GitGeneratedMessage>("git_generate_message", { taskId }),
   setDiffComments: (taskId: string, comments: DiffComment[]) => invoke<DiffComment[]>("set_diff_comments", { taskId, comments }),
   listWorkspaceFiles: (taskId?: string, projectId?: string) => invoke<WorkspaceFiles>("list_workspace_files", { taskId, projectId }),
   revealTask: (taskId: string) => invoke<void>("reveal_task", { taskId }),
   /** `select` shows the item selected in its folder (`open -R`) instead of opening it — for
    *  executables such as the running app, which plain `open` would launch. */
   revealPath: (path: string, select = false) => invoke<void>("reveal_path", { path, select }),
-  /** The GUI editors installed on this Mac (VS Code, Zed, …), for Git mode's picker. */
-  listEditors: () => invoke<string[]>("list_editors"),
-  openInEditor: (target: GitTarget, editor: string) => invoke<void>("open_in_editor", { ...target, editor }),
   saveProjectRunCommand: (projectId: string, command: string) => invoke<ProjectRecord>("save_project_run_command", { projectId, command }),
   startRun: (taskId: string) => invoke<RunInfo>("start_run", { taskId }),
   stopRun: (sessionId: string) => invoke<RunInfo>("stop_run", { sessionId }),

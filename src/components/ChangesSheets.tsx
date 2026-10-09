@@ -3,8 +3,7 @@ import { isFresh } from "../changes-utils";
 import { Icon } from "./Icons";
 
 /**
- * The pull request form and the pending-comments list, shared by the Changes panel's dock and
- * Git mode. Both are presentational: the caller owns the fields and wraps async work in `run`
+ * The Changes panel's pull request form and pending-comments list. Both are presentational: the caller owns the fields and wraps async work in `run`
  * (busy flag plus error capture).
  */
 

@@ -50,7 +50,7 @@ Everything is under the app data directory (`~/Library/Application Support/com.w
 | `backgrounds/` | Validated copies of chosen background images; the only asset-protocol scope. |
 | `usage/v1/` | The usage ledger ([wackcode-usage-v1.md](wackcode-usage-v1.md)); never deleted with a chat. |
 
-The renderer keeps only UI conveniences in `localStorage` (`wackcode:*` keys such as the last model, the side panel's view and width, collapsed and pinned projects, and Git mode's last repository and diff layout).
+The renderer keeps only UI conveniences in `localStorage` (`wackcode:*` keys such as the last model, the side panel's view and width, collapsed and pinned projects).
 
 `MetadataState::mutate` restores the previous execution policy on a failed operation or write, while holding the lock. Failed override saves cannot silently change permissions. Other runtime state, such as a worker crash interruption, intentionally remains updated even when saving fails.
 
@@ -113,17 +113,15 @@ not. Commands must remain in the foreground; detached daemons are outside this l
 ## Locks
 
 - **`TaskLocks`** (`commands.rs`): any command that sends a chat work, moves its conversation, or touches its checkpoints holds that chat's lock.
-- **`GitLocks`**: one per checkout root. Git writes from the Changes panel and Git mode (commit, discard, push, fast-forward, undo, revert), branch switches and prompt dispatch (which snapshots a checkpoint) take it, so chats sharing a folder never interleave those operations.
-- **`GitNetworkLocks`**: one per checkout root, held only while a fetch talks to the remote. Keep network I/O off `GitLocks`: prompt dispatch waits on that lock, and a fetch can take 90 seconds. A pull therefore fetches first, then takes `GitLocks` for the local fast-forward.
+- **`GitLocks`**: one per checkout root. Git writes from the Changes panel (commit, discard, push), branch switches and prompt dispatch (which snapshots a checkpoint) take it, so chats sharing a folder never interleave those operations.
 
 ## Git targets
 
-Every Git command takes `task_id` or `project_id` and resolves it with `git_target` (`commands.rs`): a chat's workspace (the Changes panel) or a project's folder (Git mode, and the draft's branch picker). `TaskLocks` is held only for a chat target.
+Every Git command takes `task_id` or `project_id` and resolves it with `git_target` (`commands.rs`): a chat's workspace (the Changes panel) or a project's folder (the draft's branch picker). `TaskLocks` is held only for a chat target.
 
 - **Writes** go through `locked_checkout`: `idle_checkout` (no chat may be running in that checkout), then `GitLocks`, then `idle_checkout` again, because a chat can start while the command waits for the lock.
-- **Reads** (`git_changes`, `git_sync_status`, `git_remote_url`, `git_log`, `git_commit_files`, `git_commit_diff`) and `git_fetch` take neither: a fetch moves no branch, index or file.
-- **Network** (`git_fetch`, `git_pull`'s fetch, `git_push`, every `gh` call) runs through `git_cli`, which applies the login-shell environment so the user's credential helper and ssh-agent work. `git.rs` stays pure and synchronous.
-- **Pull never merges.** `git::fast_forward` reports a diverged branch and leaves HEAD alone; a conflicting `git::revert_commit` aborts itself. Both hand the rest to the agent.
+- **Reads** (`git_changes`, branch lists and publish info) take neither lock. They inspect local state only.
+- **Network** (`git_push`, every `gh` call) runs through `git_cli`, which applies the login-shell environment so the user's credential helper and ssh-agent work. `git.rs` stays pure and synchronous.
 - `git_generate_message` keeps `task_id`: the chat's own worker and model write the message.
 
 ## Session tree and checkpoints

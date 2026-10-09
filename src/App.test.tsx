@@ -11,9 +11,10 @@ vi.mock("@tauri-apps/api/core", () => ({ convertFileSrc: (value: string) => valu
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn().mockResolvedValue(null) }));
 vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ readText: vi.fn(), writeText: vi.fn() }));
 vi.mock("./api", () => ({ api: {
-  bootstrap: vi.fn(), refreshSubscriptionModels: vi.fn().mockResolvedValue([]), listEditors: vi.fn().mockResolvedValue([]),
+  bootstrap: vi.fn(), refreshSubscriptionModels: vi.fn().mockResolvedValue([]),
   takeMenuNavigation: vi.fn().mockResolvedValue(null), setChatTabMenu: vi.fn().mockResolvedValue(undefined),
   computerUseCursorAppearance: vi.fn().mockResolvedValue(undefined), openTask: vi.fn().mockResolvedValue(undefined),
+  gitPublishInfo: vi.fn().mockResolvedValue({ branch: "main", upstream: null, remotes: [] }),
   gitChanges: vi.fn().mockResolvedValue({ isGit: false, files: [] }), listDraftCommands: vi.fn().mockResolvedValue([]),
   listCommands: vi.fn().mockResolvedValue([]), getRun: vi.fn().mockResolvedValue({ cwd: "/tmp", run: null, generation: 0 }),
   createTask: vi.fn(), prompt: vi.fn(), setTaskMode: vi.fn(), executeCommand: vi.fn().mockResolvedValue(undefined),
@@ -455,5 +456,37 @@ describe("App areas", () => {
     await worker({ type: "snapshot", taskId: "c", snapshot: { ...snapshot([]), tools: [tool("read")] } });
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(screen.getByRole("status", { name: "Tool catalogue" })).toHaveTextContent("read,bash");
+  });
+});
+
+
+describe("Changes after Git Mode removal", () => {
+  it.each([false, true])("keeps the chat and Changes panel accessible with tabs=%s and old Git preferences", async (enabled) => {
+    const project = { id: "project", name: "Project", path: "/tmp/a", gitRoot: "/tmp/a", gitHasHead: true, runCommand: null, branch: "main", createdAt: "now" };
+    localStorage.setItem("wackcode:gitProject", project.id);
+    localStorage.setItem("wackcode:diffLayout", "split");
+    localStorage.setItem("wackcode:pinnedProjects", JSON.stringify([project.id]));
+    const data: AppData = { version: 1, providers: [provider], favoriteModels: [], projects: [project], tasks: [{ ...task("a"), projectId: project.id }], diffComments: {},
+      toolConfig: { disabled: [] }, toolCatalog: [], packages: [], subagents: { enabled: false, trigger: "on_request", maxConcurrency: 4, agents: [] },
+      autoTitle: { enabled: false, providerId: null, modelId: null }, appearance: { ...DEFAULT_APPEARANCE, chatTabs: enabled }, prompts: {}, mcp: { servers: [] } };
+    vi.mocked(api.bootstrap).mockResolvedValue({ data, appDataPath: "/tmp", glassSupported: false, computerUseSupported: false });
+    vi.mocked(api.gitChanges).mockResolvedValueOnce({ isGit: true, root: project.path, branch: "main", files: [], changesRevision: "clean" });
+    render(<App />);
+    await screen.findByRole("button", { name: "Chat a" });
+    chat("a");
+    await waitFor(() => expect(api.gitChanges).toHaveBeenCalledWith({ taskId: "a" }));
+    fireEvent.keyDown(window, { key: "c", metaKey: true, shiftKey: true });
+    expect(await screen.findByRole("heading", { name: "Changes" })).toBeInTheDocument();
+    expect(await screen.findByText("Working tree clean")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Git mode" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open in Git mode" })).toBeNull();
+    const editor = input();
+    fireEvent.change(editor, { target: { value: "Draft survives" } });
+    const shortcut = new KeyboardEvent("keydown", { key: "g", metaKey: true, shiftKey: true, cancelable: true });
+    act(() => { window.dispatchEvent(shortcut); });
+    expect(shortcut.defaultPrevented).toBe(false);
+    expect(screen.getByRole("heading", { name: "Changes" })).toBeInTheDocument();
+    expect(editor).toHaveValue("Draft survives");
+    expect(screen.getByRole("button", { name: "Close changes panel" })).toBeInTheDocument();
   });
 });

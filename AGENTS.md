@@ -23,7 +23,7 @@ WackCode is a local macOS desktop app for the [Pi coding agent](https://www.npmj
 |---|---|
 | Processes, worker lifecycle, locks, Git commands, persistence, types crossing layers, chat kinds, session tree, checkpoints | [docs/architecture.md](docs/architecture.md) |
 | Worker protocol, command queue, tools, built-ins, planning modes, Chat mode, memory, slash commands | [docs/worker.md](docs/worker.md) |
-| Renderer state, snapshots, areas (Code / Chat), side panel, Git mode, terminal, scroll rail, attachments, window | [docs/frontend.md](docs/frontend.md) |
+| Renderer state, snapshots, areas (Code / Chat), side panel, Changes, terminal, scroll rail, attachments, window | [docs/frontend.md](docs/frontend.md) |
 | Network, credentials, packages, skill/command loading, asset protocol, computer use | [docs/security.md](docs/security.md) |
 | Styles, theme, motion, components, icons, copy | [docs/design.md](docs/design.md) |
 | Tests, the dev app, mock servers, real LLMs | [docs/testing.md](docs/testing.md) |

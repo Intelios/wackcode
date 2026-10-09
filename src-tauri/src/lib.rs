@@ -46,7 +46,6 @@ pub fn run() {
         .manage(worker::WorkerActivity::default())
         .manage(commands::TaskLocks::default())
         .manage(commands::GitLocks::default())
-        .manage(commands::GitNetworkLocks::default())
         .manage(subscriptions::SubscriptionState::default())
         .manage(worker::ManagerState::default())
         .manage(terminal::TerminalState::default())
@@ -224,20 +223,9 @@ pub fn run() {
             commands::git_pr_prepare,
             commands::git_pr_create,
             commands::git_generate_message,
-            commands::git_sync_status,
-            commands::git_remote_url,
-            commands::git_fetch,
-            commands::git_pull,
-            commands::git_log,
-            commands::git_commit_files,
-            commands::git_commit_diff,
-            commands::git_undo_commit,
-            commands::git_revert_commit,
             commands::list_workspace_files,
             commands::reveal_task,
             commands::reveal_path,
-            commands::list_editors,
-            commands::open_in_editor,
             terminal::open_terminal,
             terminal::write_terminal,
             terminal::resize_terminal,

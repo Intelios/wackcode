@@ -1,9 +1,8 @@
 import type { ProjectRecord } from "./types";
 
 /**
- * Pure display rules for the new-chat project picker: how a folder's path is shortened, which
- * letter its tile shows, and what a search matches. Kept out of the component so they're
- * unit-testable.
+ * Shared project ordering and display rules: pins, shortened paths, tile letters and search.
+ * Kept out of the component so they're unit-testable.
  */
 
 /** "/Users/jack/Documents/GitHub/wackcode" -> "~/Documents/GitHub/wackcode". A path with more
@@ -31,4 +30,12 @@ export function matchesProject(project: ProjectRecord, needle: string): boolean 
   const query = needle.trim().toLowerCase();
   if (!query) return true;
   return project.name.toLowerCase().includes(query) || project.path.toLowerCase().includes(query);
+}
+
+/** Project ids pinned to the top of the sidebar and project picker. */
+export const PINNED_PROJECTS_KEY = "wackcode:pinnedProjects";
+
+/** Pinned projects first, each group in its existing order. */
+export function orderProjects(projects: ProjectRecord[], pinned: ReadonlySet<string>): ProjectRecord[] {
+  return [...projects.filter((project) => pinned.has(project.id)), ...projects.filter((project) => !pinned.has(project.id))];
 }

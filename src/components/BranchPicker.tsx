@@ -7,9 +7,8 @@ import { Popover } from "./ui/Popover";
 interface BranchPickerProps {
   /** The checked-out branch; null on a detached HEAD. */
   branch: string | null;
-  /** `pill` sits in the new-chat project bar; `meta` in the chat header's workspace line;
-   *  `toolbar` in Git mode's toolbar, captioned like GitHub Desktop's "Current branch". */
-  variant: "pill" | "meta" | "toolbar";
+  /** `pill` sits in the new-chat project bar; `meta` in the chat header's workspace line. */
+  variant: "pill" | "meta";
   /** Why switching is unavailable right now; the popover still opens and says so. */
   disabledReason?: string;
   side?: "top" | "bottom";
@@ -121,7 +120,7 @@ export function BranchPicker({ branch, variant, side = "bottom", disabledReason,
       <button
         ref={triggerRef}
         type="button"
-        className={`branch-trigger ${variant === "pill" ? "project-bar-branch" : variant === "toolbar" ? "branch-toolbar" : "branch-meta"}`}
+        className={`branch-trigger ${variant === "pill" ? "project-bar-branch" : "branch-meta"}`}
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={`Branch: ${label}. Switch branch`}
@@ -129,7 +128,6 @@ export function BranchPicker({ branch, variant, side = "bottom", disabledReason,
         onClick={() => (open ? close() : show())}
       >
         <Icon name="branch" />
-        {variant === "toolbar" && <span className="branch-toolbar-caption">Current branch</span>}
         <span className="branch-trigger-name">
           <AnimatePresence initial={false} mode="popLayout">
             <motion.span

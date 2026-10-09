@@ -24,7 +24,7 @@ Everything runs locally. Your conversations go straight from your Mac to the mod
 - **Queue first, steer when needed.** Send while the agent works to queue a message for after it. Click **Steer** on any queued message to interrupt and send it next, keeping the rest queued.
 - **Nothing is lost.** Retry, edit, rewind or fork from any message. Checkpoints can put your files back too.
 - **Plan before building.** Plan mode is read-only by default until you approve a plan; Ultra Plan interviews you first.
-- **Review and ship.** A built-in diff view with line comments, generated commit messages, push, and GitHub PRs, plus Git mode: a GitHub Desktop–style view for reading big diffs, committing, and syncing.
+- **Review and ship.** A built-in diff view with line comments, generated commit messages, push, and GitHub PRs.
 - **Sees what it builds.** A shared browser preview for web apps, and optional computer use for native Mac and iOS Simulator apps.
 - **Extensible.** MCP servers, Agent Skills, your own slash commands, Pi packages, per-project memory, and sub-agents.
 - **Just chat, too.** A separate Chat area turns the same connections into a general-purpose chat, with no project and no coding tools.
@@ -92,28 +92,13 @@ For longer jobs, `/goal <objective>` starts a goal loop: the agent works a round
 
 ### Review and ship
 
-Open the Changes panel with <kbd>⌘ ⇧ C</kbd> to see staged and unstaged changes file by file, with the selected file's diff beside the list.
+Open the Changes panel with <kbd>⌘ ⇧ C</kbd> to see staged and unstaged changes file by file, with the selected file's diff beside the list. It follows the chat's checkout, including when you work in a worktree.
 
 - Discard a file or a single hunk (after a confirmation).
 - Click beside any diff line to leave a comment, then **Address comments** to send them all to the agent at once.
 - Commit everything or a single file; committing stages for you. The commit message can be generated from your changes.
 - Push to your remote and open a GitHub pull request with an editable title and description (uses your existing `gh` login).
 - **Review** in the header asks the Reviewer sub-agent to look over everything uncommitted.
-
-### Git mode
-
-The Changes panel is for glancing at edits while the agent works. For a big diff, press <kbd>⌘ ⇧ G</kbd> (or the branch tile at the bottom of the sidebar) and WackCode turns into a Git client: the sidebar lists the changed files and the whole workspace becomes the diff.
-
-- **Pick a repository** from your projects. Pin the ones you use most; pinned projects also float to the top of the chat sidebar.
-- **Read one file at a time**, unified or side by side, at full height.
-- **Tick the files to commit**, write a summary and a description (or generate both from the ticked files), and commit. Discard a file or a hunk after a confirmation.
-- **Fetch, pull and push** from one button that shows what's next: Fetch, Pull ↓, Push ↑ or Publish branch. Pull only fast-forwards; if your branch and the remote have diverged, nothing is merged and you can ask the agent to rebase or merge.
-- **Open the project in your editor** (VS Code, Zed, Cursor, …) from a button beside the sync one. The chevron picks which editor, and the pick is remembered.
-- **Nothing to commit?** The screen suggests what to do next, including opening the repository in GitHub in your browser.
-- **History** lists the branch's commits with their diffs. Undo the latest unpushed commit, revert any commit, or ask the agent to explain or review one.
-- **The agent stays in reach.** Line comments, Review and the generated message go through a chat in that project, shown as "via *chat*" in the toolbar. Git mode stays open while the agent works, and the diff updates as it edits.
-
-Git mode works on a project's own folder. A chat that runs in a worktree keeps its changes in its Changes panel.
 
 ### Watch what it builds
 
@@ -177,7 +162,6 @@ In the composer, type `@` to mention a file or folder, and paste, drop or attach
 | <kbd>Enter</kbd> / <kbd>⌥ Enter</kbd> | Send, or queue for after the active work in a running chat |
 | <kbd>⇧ Enter</kbd> | New line |
 | <kbd>⌘ ⇧ C</kbd> | Show or hide Changes |
-| <kbd>⌘ ⇧ G</kbd> | Enter or leave Git mode |
 | <kbd>⌘ ⇧ T</kbd> | Show or hide the Terminal |
 | <kbd>⌃ ⌥ ⌘ .</kbd> | Stop computer use in every chat |
 | <kbd>⌘ Q</kbd> | Quit (closing the window keeps WackCode in the menu bar) |
@@ -254,9 +238,9 @@ It's still an agent with real access to your Mac, so a few things are worth know
 - Public web pages the agent reads with Web Fetch during a run: GET requests to public addresses only. Switch it off in **Settings › Packages**.
 - Pages you or the agent open in Browser preview, plus their assets, API calls and WebSockets.
 - MCP servers you add over HTTP/SSE: only their own address, with the headers you gave. Headers are refused over plain `http://` except to your own Mac.
-- Your Git remote when you fetch, pull or push, and GitHub (through `gh`) when you open a PR. Git mode fetches once when you open it or switch its repository, never on a timer and never while it is closed.
+- Your Git remote when you push, and GitHub (through `gh`) when you open a PR. Reading changes and switching branches use local Git state without fetching.
 
-Generating a commit message sends a bounded diff of your changes (in Git mode, only the files you ticked) to the chat's model. Computer use contacts nothing itself, but window captures and accessibility text of apps you allow go to your model provider like any other tool result.
+Generating a commit message sends a bounded diff of your changes to the chat's model. Computer use contacts nothing itself, but window captures and accessibility text of apps you allow go to your model provider like any other tool result.
 
 </details>
 

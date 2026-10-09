@@ -3,9 +3,9 @@ use crate::{
     models::{
         AppData, AppearanceConfig, AppInfo, AutoTitleConfig, BackdropMode, BootstrapPayload, BuiltinModelSuggestion,
         CheckpointChange, CheckpointRef, CreateTaskInput, DiffComment, ExportPlanInput,
-        ExecutionPolicyConfig, ExtensionUiResponseInput, FavoriteModelRef, ForkTaskInput, GitBranches, GitChangeFile, GitChanges,
-        GitCheckoutResult, GitCommitFiles, GitGeneratedMessage, GitLogPage, GitPrInfo,
-        GitPublishInfo, GitPullResult, GitRevertResult, GitSyncStatus, GitUndoResult, ImageContent,
+        ExecutionPolicyConfig, ExtensionUiResponseInput, FavoriteModelRef, ForkTaskInput, GitBranches, GitChanges,
+        GitCheckoutResult, GitGeneratedMessage, GitPrInfo,
+        GitPublishInfo, ImageContent,
         InstallPackageInput,
         McpServerRecord, McpTestResult,
         MemoriesChange, MemoriesOverview, MemoryConfig, MemoryDocument, ModelRecord,
@@ -49,22 +49,6 @@ pub struct TaskLocks(Mutex<HashMap<String, Arc<AsyncMutex<()>>>>);
 pub struct GitLocks(Mutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>>);
 
 impl GitLocks {
-    fn for_root(&self, root: PathBuf) -> Arc<AsyncMutex<()>> {
-        let mut locks = self
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        locks.entry(root).or_default().clone()
-    }
-}
-
-/// One per checkout root, held while a fetch talks to the remote. Separate from `GitLocks`
-/// because prompt dispatch waits on that one, and a fetch can take up to 90 seconds; a fetch
-/// only writes remote-tracking refs and objects, which Git guards with its own lockfiles.
-#[derive(Default)]
-pub struct GitNetworkLocks(Mutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>>);
-
-impl GitNetworkLocks {
     fn for_root(&self, root: PathBuf) -> Arc<AsyncMutex<()>> {
         let mut locks = self
             .0
@@ -4066,189 +4050,8 @@ pub async fn git_push(
     git::publish_info(&guard.workspace)
 }
 
-/// Read-only: where the checkout stands against its remote, from local refs.
-#[tauri::command]
-pub async fn git_sync_status(
-    state: State<'_, MetadataState>,
-    task_id: Option<String>,
-    project_id: Option<String>,
-) -> Result<GitSyncStatus, String> {
-    let workspace = git_target(&state, task_id.as_deref(), project_id.as_deref())?;
-    blocking(move || git::sync_status(&workspace)).await
-}
-
-/// Read-only: the fetch remote's configured URL, for the repository's web page.
-#[tauri::command]
-pub async fn git_remote_url(
-    state: State<'_, MetadataState>,
-    task_id: Option<String>,
-    project_id: Option<String>,
-) -> Result<Option<String>, String> {
-    let workspace = git_target(&state, task_id.as_deref(), project_id.as_deref())?;
-    blocking(move || git::remote_url(&workspace)).await
-}
-
-/// Fetch the checkout's remote (Git mode runs one in the `background` when it opens, and on
-/// the user's click otherwise; never on a timer). It doesn't need an idle checkout: fetching
-/// moves no local branch, index or file.
-#[tauri::command]
-pub async fn git_fetch(
-    app: AppHandle,
-    state: State<'_, MetadataState>,
-    task_id: Option<String>,
-    project_id: Option<String>,
-    background: Option<bool>,
-) -> Result<GitSyncStatus, String> {
-    let workspace = git_target(&state, task_id.as_deref(), project_id.as_deref())?;
-    let root = canonical_root(&workspace)?;
-    fetch_checkout(&app, &root, background.unwrap_or(false)).await?;
-    blocking(move || git::sync_status(&workspace)).await
-}
-
-fn canonical_root(workspace: &Path) -> Result<PathBuf, String> {
-    git::inspect_project(workspace)
-        .root
-        .ok_or("No Git repository")?
-        .canonicalize()
-        .map_err(|error| error.to_string())
-}
-
-/// One fetch per checkout at a time; a caller that finds one running waits for it and uses
-/// its result instead of fetching again.
-async fn fetch_checkout(app: &AppHandle, root: &Path, background: bool) -> Result<(), String> {
-    let lock = app.state::<GitNetworkLocks>().for_root(root.to_path_buf());
-    let _guard = match lock.clone().try_lock_owned() {
-        Ok(guard) => guard,
-        Err(_) => {
-            drop(lock.lock_owned().await);
-            return Ok(());
-        }
-    };
-    let status = {
-        let root = root.to_path_buf();
-        blocking(move || git::sync_status(&root)).await?
-    };
-    let remote = status
-        .fetch_remote
-        .ok_or("This repository has no remote to fetch from")?;
-    let mut args: Vec<String> = Vec::new();
-    // Opening Git mode must never pop a sign-in window: a background fetch that needs
-    // credentials just fails quietly, and a clicked Fetch can still prompt.
-    let env: &[(&str, &str)] = if background {
-        args.extend(["-c".to_string(), "credential.interactive=never".to_string()]);
-        &[("GCM_INTERACTIVE", "never")]
-    } else {
-        &[]
-    };
-    args.extend(git::fetch_args(&remote));
-    git_cli_with(root, "git", &args, env).await.map_err(|error| {
-        let line = error.lines().find(|line| !line.trim().is_empty()).unwrap_or(&error).trim().to_string();
-        format!("Could not fetch from {remote}: {line}")
-    })?;
-    Ok(())
-}
-
-/// A fast-forward-only pull: fetch (off `GitLocks`), then move the branch under the checkout's
-/// guards. A branch that has diverged is reported, never merged.
-#[tauri::command]
-pub async fn git_pull(
-    app: AppHandle,
-    state: State<'_, MetadataState>,
-    task_id: Option<String>,
-    project_id: Option<String>,
-) -> Result<GitPullResult, String> {
-    let workspace = idle_checkout(&state, git_target(&state, task_id.as_deref(), project_id.as_deref())?)?;
-    let root = canonical_root(&workspace)?;
-    let status = {
-        let root = root.clone();
-        blocking(move || git::sync_status(&root)).await?
-    };
-    if status.branch.is_none() {
-        return Err("Check out a branch before pulling".into());
-    }
-    if status.upstream.is_none() {
-        return Err("This branch has no upstream yet. Publish it first".into());
-    }
-    fetch_checkout(&app, &root, false).await?;
-    let guard = locked_checkout(&app, &state, task_id.as_deref(), project_id.as_deref()).await?;
-    let workspace = guard.workspace.clone();
-    blocking(move || {
-        let (outcome, pulled) = git::fast_forward(&workspace)?;
-        Ok(GitPullResult {
-            outcome,
-            pulled,
-            sync: git::sync_status(&workspace)?,
-            changes: git::changes(&workspace)?,
-        })
-    })
-    .await
-    .map_err(|error| worker::redact_and_limit(&error))
-}
-
-#[tauri::command]
-pub async fn git_log(
-    state: State<'_, MetadataState>,
-    task_id: Option<String>,
-    project_id: Option<String>,
-    skip: usize,
-    limit: usize,
-) -> Result<GitLogPage, String> {
-    let workspace = git_target(&state, task_id.as_deref(), project_id.as_deref())?;
-    blocking(move || git::log(&workspace, skip, limit)).await
-}
-
-#[tauri::command]
-pub async fn git_commit_files(
-    state: State<'_, MetadataState>,
-    task_id: Option<String>,
-    project_id: Option<String>,
-    sha: String,
-) -> Result<GitCommitFiles, String> {
-    let workspace = git_target(&state, task_id.as_deref(), project_id.as_deref())?;
-    blocking(move || git::commit_files(&workspace, &sha)).await
-}
-
-#[tauri::command]
-pub async fn git_commit_diff(
-    state: State<'_, MetadataState>,
-    task_id: Option<String>,
-    project_id: Option<String>,
-    sha: String,
-    path: String,
-    old_path: Option<String>,
-) -> Result<GitChangeFile, String> {
-    let workspace = git_target(&state, task_id.as_deref(), project_id.as_deref())?;
-    blocking(move || git::commit_diff(&workspace, &sha, &path, old_path.as_deref())).await
-}
-
-#[tauri::command]
-pub async fn git_undo_commit(
-    app: AppHandle,
-    state: State<'_, MetadataState>,
-    task_id: Option<String>,
-    project_id: Option<String>,
-    sha: String,
-) -> Result<GitUndoResult, String> {
-    let guard = locked_checkout(&app, &state, task_id.as_deref(), project_id.as_deref()).await?;
-    let workspace = guard.workspace.clone();
-    blocking(move || git::undo_commit(&workspace, &sha).map_err(|error| worker::redact_and_limit(&error))).await
-}
-
-#[tauri::command]
-pub async fn git_revert_commit(
-    app: AppHandle,
-    state: State<'_, MetadataState>,
-    task_id: Option<String>,
-    project_id: Option<String>,
-    sha: String,
-) -> Result<GitRevertResult, String> {
-    let guard = locked_checkout(&app, &state, task_id.as_deref(), project_id.as_deref()).await?;
-    let workspace = guard.workspace.clone();
-    blocking(move || git::revert_commit(&workspace, &sha).map_err(|error| worker::redact_and_limit(&error))).await
-}
-
-/// The folder a Git command acts on: a chat's workspace, or a project's folder (Git mode, and
-/// a draft's branch picker before its first chat exists).
+/// The folder a Git command acts on: a chat's workspace, or a project's folder
+/// (a draft's branch picker before its first chat exists).
 fn git_target(
     state: &MetadataState,
     task_id: Option<&str>,
@@ -4504,17 +4307,13 @@ pub async fn git_generate_message(
     app: AppHandle,
     state: State<'_, MetadataState>,
     task_id: String,
-    files: Option<Vec<String>>,
-    body: Option<bool>,
 ) -> Result<GitGeneratedMessage, String> {
     let _task = task_lock(&app, &task_id).lock_owned().await;
     let workspace = idle_checkout(&state, task_workspace(&state, &task_id)?)?;
     let snapshot = blocking(move || git::changes(&workspace)).await?;
-    // Git mode describes only the files ticked for the commit; empty means all of them.
-    let scope = files.unwrap_or_default();
     let mut diff = String::new();
     let mut truncated = false;
-    for file in snapshot.files.iter().filter(|file| scope.is_empty() || scope.contains(&file.path)) {
+    for file in &snapshot.files {
         for section in &file.sections {
             let remaining = 20_000usize.saturating_sub(diff.len());
             if remaining == 0 {
@@ -4559,18 +4358,14 @@ pub async fn git_generate_message(
     };
     let credential = credential_for(&app, &state, &provider)?;
     worker::ensure_worker(&app, &task, &provider, credential.as_deref()).await?;
-    let body = body.unwrap_or(false);
-    let result = worker::request(&app, &task_id, json!({ "id": Uuid::new_v4().to_string(), "type": "generate_commit_message", "diff": diff, "truncated": truncated, "body": body }), Duration::from_secs(40)).await?;
+    let result = worker::request(&app, &task_id, json!({ "id": Uuid::new_v4().to_string(), "type": "generate_commit_message", "diff": diff, "truncated": truncated }), Duration::from_secs(40)).await?;
     let message = result
         .as_str()
         .ok_or("The model did not return a commit message")?
         .trim()
         .to_string();
-    let (summary, description) = git::split_commit_message(&message);
     Ok(GitGeneratedMessage {
         message,
-        summary,
-        description,
         revision: snapshot.changes_revision,
     })
 }
@@ -4687,80 +4482,6 @@ pub fn reveal_path(path: String, select: Option<bool>) -> Result<(), String> {
 
 /// GUI editors WackCode can open a project folder in, most common first. A name is the app's
 /// bundle name, which is also what `open -a` takes.
-const EDITORS: &[&str] = &[
-    "Visual Studio Code",
-    "Visual Studio Code - Insiders",
-    "Cursor",
-    "Zed",
-    "Zed Preview",
-    "VSCodium",
-    "Sublime Text",
-    "Nova",
-    "Fleet",
-    "BBEdit",
-    "CotEditor",
-    "IntelliJ IDEA",
-    "IntelliJ IDEA CE",
-    "WebStorm",
-    "PyCharm",
-    "PyCharm CE",
-    "GoLand",
-    "PhpStorm",
-    "RubyMine",
-    "CLion",
-    "Rider",
-    "DataGrip",
-    "Android Studio",
-];
-
-/// The catalog editors installed in `roots`, in catalog order. Detection only looks at bundle
-/// names on disk; `open -a` itself resolves anything macOS knows about.
-fn editors_in(roots: &[PathBuf]) -> Vec<String> {
-    EDITORS
-        .iter()
-        .copied()
-        .filter(|name| roots.iter().any(|root| root.join(format!("{name}.app")).is_dir()))
-        .map(str::to_string)
-        .collect()
-}
-
-/// The editors installed on this Mac, for Git mode's "Open in editor" picker.
-#[tauri::command]
-pub fn list_editors(app: AppHandle) -> Result<Vec<String>, String> {
-    let home = skills::home_dir(&app)?;
-    Ok(editors_in(&[
-        PathBuf::from("/Applications"),
-        home.join("Applications"),
-        home.join("Applications/JetBrains Toolbox"),
-    ]))
-}
-
-/// Open the project's folder in an external editor (VS Code, Zed, …) by app name.
-#[tauri::command]
-pub fn open_in_editor(
-    state: State<'_, MetadataState>,
-    task_id: Option<String>,
-    project_id: Option<String>,
-    editor: String,
-) -> Result<(), String> {
-    let workspace = git_target(&state, task_id.as_deref(), project_id.as_deref())?;
-    let editor = editor.trim();
-    if editor.is_empty() {
-        return Err("Choose an editor to open this project in".into());
-    }
-    let output = Command::new("open")
-        .arg("-a")
-        .arg(editor)
-        .arg(&workspace)
-        .output()
-        .map_err(|error| error.to_string())?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(format!("{editor} could not open this project. Check that it is installed."))
-    }
-}
-
 fn credential_for(
     app: &AppHandle,
     state: &State<'_, MetadataState>,
@@ -6208,16 +5929,5 @@ mod tests {
             std::fs::read_to_string(&written).unwrap(),
             "# Plan\n\n- step\n"
         );
-    }
-
-    #[test]
-    fn editors_are_found_by_bundle_name_in_catalog_order() {
-        let directory = tempfile::tempdir().unwrap();
-        let apps = directory.path().join("Applications");
-        std::fs::create_dir_all(apps.join("Zed.app")).unwrap();
-        std::fs::create_dir_all(apps.join("Visual Studio Code.app")).unwrap();
-        std::fs::create_dir_all(apps.join("NotAnEditor.app")).unwrap();
-        std::fs::create_dir_all(apps.join("Zed")).unwrap();
-        assert_eq!(editors_in(&[apps]), vec!["Visual Studio Code", "Zed"]);
     }
 }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { orderProjects, sidebarPageDirection, type SidebarPage } from "../git-mode";
+import { orderProjects } from "../project-display";
 import { areaDirection, type Area } from "../areas";
 import { formatRelativeTime } from "../chat-utils";
 import { groupByRecency, matchingChats, newestChats } from "../sidebar-utils";
@@ -25,9 +25,11 @@ export const NO_PROJECT_KEY = "__no_project__";
 
 const EASE: [number, number, number, number] = [0.33, 1, 0.68, 1];
 
+type SidebarPage = "chats" | "archived";
+
 interface SidebarProps {
   projects: ProjectRecord[];
-  /** Pinned projects float to the top (and to the top of Git mode's repository switcher). */
+  /** Pinned projects float to the top. */
   pinnedProjectIds: ReadonlySet<string>;
   /** The area on screen. Code lists chats by project; Chat lists them by when they were last used. */
   area: Area;
@@ -58,13 +60,9 @@ interface SidebarProps {
   /** Archive every open chat in one group: a project id, or null for "No project". */
   onArchiveAll: (projectId: string | null) => void;
   onDeleteAllArchived: () => void;
-  /** Git mode: `top` replaces the New chat row and `page` the chat list. */
-  git?: { top: ReactNode; page: ReactNode };
-  /** Null when there's no project to open Git mode on. */
-  onToggleGit: (() => void) | null;
 }
 
-/** Pages slide by their order (chats, archived, git): forward enters from the right. A change
+/** Pages slide by their order (chats, archived): forward enters from the right. A change
  *  of area slides the same way, by the areas' order in the switch. */
 const pageVariants = {
   enter: ({ direction, reduce }: { direction: 1 | -1; reduce: boolean }) => (reduce ? { opacity: 0 } : { opacity: 0, x: 16 * direction }),
@@ -72,7 +70,7 @@ const pageVariants = {
   exit: ({ direction, reduce }: { direction: 1 | -1; reduce: boolean }) => (reduce ? { opacity: 0 } : { opacity: 0, x: -16 * direction })
 };
 
-export function Sidebar({ projects, pinnedProjectIds, area, areaAttention, onSwitchArea, tasks, selectedTaskId, archivedOpen, pendingDialogTaskIds, titlePulses, collapsedProjectIds, onSelectTask, onNewChat, onNewDraft, onAddProject, onToggleArchived, onToggleProjectCollapsed, onOpenSettings, onTaskAction, onProjectAction, onRenameTask, onArchiveAll, onDeleteAllArchived, git, onToggleGit }: SidebarProps) {
+export function Sidebar({ projects, pinnedProjectIds, area, areaAttention, onSwitchArea, tasks, selectedTaskId, archivedOpen, pendingDialogTaskIds, titlePulses, collapsedProjectIds, onSelectTask, onNewChat, onNewDraft, onAddProject, onToggleArchived, onToggleProjectCollapsed, onOpenSettings, onTaskAction, onProjectAction, onRenameTask, onArchiveAll, onDeleteAllArchived }: SidebarProps) {
   const contextMenu = useContextMenu();
   const [renamingId, setRenamingId] = useState<string>();
   const [renameValue, setRenameValue] = useState("");
@@ -86,12 +84,12 @@ export function Sidebar({ projects, pinnedProjectIds, area, areaAttention, onSwi
   }, []);
   const { confirming, confirm, setConfirming } = useConfirmAction();
   const reduce = useReducedMotion() ?? false;
-  const page: SidebarPage = git ? "git" : archivedOpen ? "archived" : "chats";
+  const page: SidebarPage = archivedOpen ? "archived" : "chats";
   // The direction is fixed when the page changes and held through the swap: App re-renders
   // often, and recomputing it mid-animation would send the incoming page in from the wrong side.
   const swap = useRef<{ page: SidebarPage; area: Area; direction: 1 | -1 }>({ page, area, direction: 1 });
   if (swap.current.area !== area) swap.current = { page, area, direction: areaDirection(swap.current.area, area) };
-  else if (swap.current.page !== page) swap.current = { page, area, direction: sidebarPageDirection(swap.current.page, page) };
+  else if (swap.current.page !== page) swap.current = { page, area, direction: page === "archived" ? 1 : -1 };
   const direction = swap.current.direction;
   const archivedTasks = tasks.filter((task) => task.archived);
   const hasArchived = archivedTasks.length > 0;
@@ -337,11 +335,11 @@ export function Sidebar({ projects, pinnedProjectIds, area, areaAttention, onSwi
   );
 
   return (
-    <aside className={`sidebar${git ? " git" : ""}`}>
+    <aside className="sidebar">
       <div className="titlebar-drag" data-tauri-drag-region />
       <div className="sidebar-top">
         <AreaSwitch area={area} attention={areaAttention} onSwitch={onSwitchArea} />
-        {git ? git.top : archivedOpen ? (
+        {archivedOpen ? (
           <div className="archived-header">
             <h2 className="archived-heading">Archived</h2>
             {archivedTasks.length > 0 && <span className="archived-count">{archivedTasks.length}</span>}
@@ -365,37 +363,35 @@ export function Sidebar({ projects, pinnedProjectIds, area, areaAttention, onSwi
             <Icon name="plus" /> New chat <kbd>⌘N</kbd>
           </button>
         )}
-        {!git && (
-          <div className="sidebar-search">
-            <Icon name="search" />
-            <input
-              ref={searchInput}
-              type="search"
-              aria-label={archivedOpen ? "Search archived chats" : "Search chats"}
-              placeholder="Search chats…"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Escape" && query) {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  setQuery("");
-                }
-              }}
-            />
-            {query && (
-              <button type="button" className="ghost-button" aria-label="Clear chat search" onClick={() => { setQuery(""); searchInput.current?.focus(); }}>
-                <Icon name="close" />
-              </button>
-            )}
-          </div>
-        )}
+        <div className="sidebar-search">
+          <Icon name="search" />
+          <input
+            ref={searchInput}
+            type="search"
+            aria-label={archivedOpen ? "Search archived chats" : "Search chats"}
+            placeholder="Search chats…"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && query) {
+                event.preventDefault();
+                event.stopPropagation();
+                setQuery("");
+              }
+            }}
+          />
+          {query && (
+            <button type="button" className="ghost-button" aria-label="Clear chat search" onClick={() => { setQuery(""); searchInput.current?.focus(); }}>
+              <Icon name="close" />
+            </button>
+          )}
+        </div>
       </div>
-      <nav className={`project-list${git ? " git-list" : ""}`} aria-label={git ? "Git changes" : archivedOpen ? "Archived chats" : area === "chat" ? "Chats" : "Projects and chats"}>
+      <nav className="project-list" aria-label={archivedOpen ? "Archived chats" : area === "chat" ? "Chats" : "Projects and chats"}>
         <AnimatePresence initial={false} mode="wait" custom={{ direction, reduce }}>
           <motion.div
             key={`${area}:${page}`}
-            className={`sidebar-page${page === "git" ? " git-page" : ""}`}
+            className="sidebar-page"
             custom={{ direction, reduce }}
             variants={pageVariants}
             initial="enter"
@@ -403,7 +399,7 @@ export function Sidebar({ projects, pinnedProjectIds, area, areaAttention, onSwi
             exit="exit"
             transition={{ duration: 0.16, ease: EASE }}
           >
-            {page === "git" ? git?.page : page === "archived" ? (
+            {page === "archived" ? (
               <ArchivedList
                 tasks={matchingTasks}
                 projects={projects}
@@ -418,27 +414,13 @@ export function Sidebar({ projects, pinnedProjectIds, area, areaAttention, onSwi
         </AnimatePresence>
       </nav>
       <div className="sidebar-footer">
-        {/* Projects and Git mode belong to the Code area. */}
+        {/* Projects belong to the Code area. */}
         {area === "code" && (
-          <>
-            <Tooltip label={<>Add project <kbd>⌘O</kbd></>}>
-              <button type="button" className="sidebar-tile" onClick={onAddProject} aria-label="Add project">
-                <Icon name="folder" />
-              </button>
-            </Tooltip>
-            <Tooltip label={onToggleGit ? <>{git ? "Exit Git mode" : "Git mode"} <kbd>⌘⇧G</kbd></> : "Add a project to use Git mode"}>
-              <button
-                type="button"
-                className={`sidebar-tile git-tile${git ? " active" : ""}`}
-                onClick={onToggleGit ?? undefined}
-                disabled={!onToggleGit}
-                aria-label="Git mode"
-                aria-pressed={Boolean(git)}
-              >
-                <Icon name="git" />
-              </button>
-            </Tooltip>
-          </>
+          <Tooltip label={<>Add project <kbd>⌘O</kbd></>}>
+            <button type="button" className="sidebar-tile" onClick={onAddProject} aria-label="Add project">
+              <Icon name="folder" />
+            </button>
+          </Tooltip>
         )}
         {hasArchived && (
           <Tooltip label={archivedOpen ? "Hide archived" : "Show archived"}>

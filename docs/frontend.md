@@ -79,12 +79,11 @@ Asynchronous sends and slash preparation capture the originating composer key an
 report errors there without selecting it, even after closure. Composer updates capture
 its stable composer key. Evicting an unsent closed draft retires its key so late attachment
 reads cannot resurrect it. Disabling tabs preserves the dormant workspace in memory.
-`NavigationScope` dismisses menus, image lightboxes and sent-message editors on navigation,
-including when Git mode keeps the transcript mounted underneath. Disclosure sets survive.
+`NavigationScope` dismisses menus, image lightboxes and sent-message editors on navigation. Disclosure sets survive.
 
 The native Tabs menu (`chat_tabs.rs`) owns app-local tab accelerators, including when
 a child WKWebView has focus. `api.setChatTabMenu` synchronizes availability, and App is
-the only listener for `native-tab-action`. Modal dialogs and Settings/Git disable tab
+the only listener for `native-tab-action`. Modal dialogs and Settings disable tab
 commands. `⌘⇧T` remains Terminal; `⌘W` closes a tab when enabled and hides the window
 in the original layout. The window's close button always hides it.
 
@@ -107,7 +106,7 @@ queue actions dispatch while stopping. App captures the originating task id for 
 
 ## New-chat project picker
 
-`ProjectBar` (the composer's `header` on the welcome screen) hosts `ProjectPicker`, `BranchPicker` and the Local/Worktree toggle. The picker reads and writes the same `pinnedProjects` set as the sidebar and Git mode's `RepoSwitcher`, so a pin made anywhere shows everywhere; it never keeps its own copy. Its display rules (`shortPath`, `monogram`, search) are pure functions in `project-display.ts`. ⌘O stays a global shortcut in `App`; the picker's footer only calls `onAddProject`.
+`ProjectBar` (the composer's `header` on the welcome screen) hosts `ProjectPicker`, `BranchPicker` and the Local/Worktree toggle. The picker reads and writes the same `pinnedProjects` set as the sidebar, so a pin made anywhere shows everywhere; it never keeps its own copy. Its display rules (`shortPath`, `monogram`, search) are pure functions in `project-display.ts`. ⌘O stays a global shortcut in `App`; the picker's footer only calls `onAddProject`.
 
 ## Attachments
 
@@ -129,7 +128,7 @@ queue actions dispatch while stopping. App captures the originating task id for 
 
 The app has two peer areas, Code and Chat (`src/areas.ts`). `App` holds which one is on screen in `area`, and `enterArea` is the only way it changes.
 
-- **A chat belongs to one area for life** (`taskArea`, from `TaskRecord.kind`). Every list is built from one area's chats (`areaTasks`, `codeTasks`): the sidebar, Archived, Git mode's linked chats, the tab bar. Opening a chat from anywhere else (the tray menu) enters its area first, in `selectTask`.
+- **A chat belongs to one area for life** (`taskArea`, from `TaskRecord.kind`). Every list is built from one area's chats (`areaTasks`, `codeTasks`): the sidebar, Archived, the tab bar. Opening a chat from anywhere else (the tray menu) enters its area first, in `selectTask`.
 - **Switching parks, never abandons.** With tabs, both areas' tabs live in one store, each tagged with its `area`; `switchTabArea` parks the open tab and restores the other area's. Without tabs, `parkedViews` holds each area's chat or unsent draft. One store rather than two because a send finishing or a chat binding must find its tab after the user has switched area.
 - **A draft's kind is the area on screen when the send starts**, captured before anything is awaited. It is not a `ChatDraft` field: draft edits rebuild that object field by field and would drop it.
 - **The Chat area renders nothing from the Code UI.** Instead of `Transcript`, `ChatHeader`, the scroll rail and `Composer`, App renders one `ChatArea` (`src/components/chat/`) with the same state and callbacks. Errors, model problems and notices reach it as `SystemNote` bubbles, not banners. `chatMenu` and `ArchivedList` read `task.kind`.
@@ -150,18 +149,19 @@ A messenger UI for `kind: "chat"` chats, mounted as one `ChatArea` in place of t
 - **Errors and questions** are `SystemBubble`s and the shared `InlineDialog`, centred in the thread; an archived chat shows a footer pill with Unarchive instead of the composer.
 - **Everything Chat-scoped is a `.chat-*` class** in the `Chat area` section of `styles.css`, plus `[data-area="chat"]` sidebar tweaks; the Code transcript's rules are untouched. Every looping animation has a still end state in the `prefers-reduced-motion` block.
 
-## Git mode
+## Changes panel
 
-A full-window Git client over the chat view, for one project's own folder (worktree chats keep their changes in the Changes panel). `useGitMode` (`src/hooks/`) holds its state per project and is called by `App`, so it may call `api`; `src/git-mode.ts` holds the pure rules (which project it opens on, the linked chat, the sync button's next action, the remote's web page, the checkbox arithmetic). The `Git*` components and `RepoSwitcher` are presentational.
+`ChangesPanel` reads the selected Code chat’s checkout, including its worktree. `App` owns
+Git calls and refreshes; the panel, file list, diff and commit dock are presentational.
+Chat mode never exposes this view or calls Git.
 
-- **Entering** (the sidebar's Git tile, ⌘⇧G, the Changes panel's button) swaps the sidebar to its `git` page and mounts `.git-view` over the workspace. **Leaving** is the toolbar ✕, ⌘⇧G, ⌘N, ⌘⇧C / ⌘⇧T, or any chat navigation (`dismissGitMode` in `menu-navigation.ts`). Settings opens over it and returns to it.
-- **Nothing underneath unmounts.** The chat view stays mounted with `inert` (scroll position, no transcript remount), and so does the composer, whose drafts live in `App`: `.composer-layer` takes `inert` and `data-git`, and CSS ducks it away.
-- **The side panel** closes through `view={null}`, keeping the remembered view. A native browser page would still float over Git mode while the drawer animates shut, because the exiting element keeps its old props; `NativeOverlaysHidden` (a context in `BrowserPanel.tsx`) is what hides it in time. Use it for any future full-window view.
-- **Network is user-driven:** one background fetch when Git mode opens or switches project, and whatever the user clicks. Refreshes on window focus, on `tool_execution_end` and at the end of a run read local state only (debounced and single-flight), and the chat's own Changes refresh is skipped while Git mode is open.
-- **The linked chat** runs the AI actions (comments, Review, Generate, Ask): the chat the user came from if it works in the project's folder, else the project's most recent, else one created on first use. `promptTask` sends to it without selecting it, and Git mode stays open. Comments are stored under the linked chat's id, so its Changes panel shows the same ones.
-- **Git writes wait for running chats** (`idle_checkout` in Rust). The UI says why through `GitActivity` and each disabled control's tooltip.
-- **"Open in editor" and "Open in GitHub"** open things outside the app. `list_editors` finds the installed editors by bundle name in `/Applications` and `~/Applications`; the pick lives in `localStorage` (`GIT_EDITOR_KEY`), and `open_in_editor` runs `open -a` on the project folder. The clean state's web card takes `repoUrl` — `repoWebUrl` (`git-mode.ts`) over the fetch remote's URL, loaded once per visit in `enter` — and opens it through `revealPath`, like a PR link.
-- **Performance:** `App` re-renders on every streaming delta. The Git components are `memo`'d and take callbacks from the ref-backed `gitHandlers` object, so only changed data re-renders them.
+- Diff comments belong to the chat (`diffComments[taskId]`); Address comments sends them to
+  that chat and clears them only after the prompt succeeds.
+- Commit handles all changed files or one file, stages them automatically, and guards the
+  operation with the displayed changes revision. Discard uses the displayed section revision
+  and a danger confirmation, for either a file or one hunk.
+- Generated messages use the chat’s own worker and model. Review uses the Reviewer sub-agent.
+- Push and PR creation are explicit actions. Local refreshes and branch lists never fetch.
 
 ## Terminal
 

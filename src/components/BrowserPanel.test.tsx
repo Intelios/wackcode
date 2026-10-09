@@ -2,7 +2,7 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import type { BrowserState } from "../types";
-import { BrowserPanel, NativeOverlaysHidden } from "./BrowserPanel";
+import { BrowserPanel } from "./BrowserPanel";
 
 vi.mock("../api", () => ({ api: { browserState: vi.fn(), browserPresent: vi.fn() } }));
 
@@ -15,13 +15,11 @@ const actions = { onState: vi.fn(), onExpand: vi.fn(), onReset: vi.fn(), onClose
 let bounds: DOMRect;
 const observers: { targets: Set<Element>; notify: () => void }[] = [];
 
-function panel(covered = false) {
+function panel(hidden = false) {
   return (
-    <NativeOverlaysHidden.Provider value={covered}>
-      <aside className="side-panel">
-        <BrowserPanel taskId={state.taskId} state={state} visible expanded={false} {...actions} />
-      </aside>
-    </NativeOverlaysHidden.Provider>
+    <aside className="side-panel">
+      <BrowserPanel taskId={state.taskId} state={state} visible={!hidden} expanded={false} {...actions} />
+    </aside>
   );
 }
 
@@ -85,7 +83,7 @@ describe("BrowserPanel positioning", () => {
     expect(presentations().at(-1)).toEqual({ taskId: state.taskId, visible: true, x: 1200, y: 100, width: 430, height: 700 });
   });
 
-  it("cancels pending placement when covered or unmounted, and restores it when uncovered", async () => {
+  it("cancels pending placement when hidden or unmounted, and restores it when shown", async () => {
     const view = render(panel());
     await advance(80);
     view.rerender(panel(true));

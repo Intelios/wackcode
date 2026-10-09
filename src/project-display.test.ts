@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchesProject, monogram, shortPath } from "./project-display";
+import { matchesProject, monogram, orderProjects, shortPath } from "./project-display";
 import type { ProjectRecord } from "./types";
 
 const project = (name: string, path: string): ProjectRecord => ({ id: name, name, path, gitRoot: null, gitHasHead: false, runCommand: null, branch: null, createdAt: "now" });
@@ -51,5 +51,12 @@ describe("matchesProject", () => {
   it("matches everything for an empty query", () => {
     expect(matchesProject(item, "")).toBe(true);
     expect(matchesProject(item, "   ")).toBe(true);
+  });
+});
+
+describe("orderProjects", () => {
+  it("floats pinned projects to the top while preserving each group’s order", () => {
+    const projects = ["a", "b", "c", "d"].map((name) => project(name, `/code/${name}`));
+    expect(orderProjects(projects, new Set(["d", "b"])).map((item) => item.id)).toEqual(["b", "d", "a", "c"]);
   });
 });

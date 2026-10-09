@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { BrowserState } from "../types";
 import { Icon } from "./Icons";
@@ -14,18 +14,8 @@ interface BrowserPanelProps {
   onClose: () => void;
 }
 
-/**
- * True while a full-window view (Git mode) covers the side panel. A context rather than the
- * `visible` prop: when the panel closes, AnimatePresence keeps rendering the exiting element
- * with its old props, so only a context update reaches it in time to hide the native page,
- * which otherwise floats above everything until the drawer finishes closing.
- */
-export const NativeOverlaysHidden = createContext(false);
-
 /** React owns the chrome; Rust places the untrusted native WKWebView over `browser-surface`. */
-export function BrowserPanel({ taskId, state, visible: shown, expanded, onState, onExpand, onReset, onClose }: BrowserPanelProps) {
-  const covered = useContext(NativeOverlaysHidden);
-  const visible = shown && !covered;
+export function BrowserPanel({ taskId, state, visible, expanded, onState, onExpand, onReset, onClose }: BrowserPanelProps) {
   const surface = useRef<HTMLDivElement>(null);
   const addressFocused = useRef(false);
   const [address, setAddress] = useState(state?.url ?? "");

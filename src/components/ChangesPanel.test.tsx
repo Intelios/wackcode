@@ -29,7 +29,7 @@ function props() {
     canReview: true, comments: [],
     onClose: vi.fn(), onRefresh: vi.fn(), onSettings: vi.fn(),
     onReview: vi.fn(async () => true), onAction: vi.fn(async () => {}),
-    onCommit: vi.fn(async () => {}), onGenerate: vi.fn(async () => ({ message: "Update file", summary: "Update file", description: "", revision: "index-1" })),
+    onCommit: vi.fn(async () => {}), onGenerate: vi.fn(async () => ({ message: "Update file", revision: "index-1" })),
     onPublishInfo: vi.fn(async () => ({ branch: "topic", upstream: null, remotes: ["origin"] })),
     onPush: vi.fn(async () => {}), onPreparePr: vi.fn(async () => ({ repo: "github.com/o/r", base: "main", head: "topic", title: "Title", body: "", existingUrl: null })),
     onCreatePr: vi.fn(async () => "https://github.com/o/r/pull/1"), onOpenPr: vi.fn(),
@@ -102,12 +102,5 @@ describe("ChangesPanel", () => {
     await waitFor(() => expect(callbacks.onCreatePr).toHaveBeenCalledWith("origin", "main", "Better title", "", false));
   });
 
-  it("opens Git mode on the file being read, when the chat works in its project's folder", () => {
-    const onOpenGitMode = vi.fn();
-    const { rerender } = render(<ChangesPanel {...props()} />);
-    expect(screen.queryByRole("button", { name: "Open in Git mode" })).toBeNull();
-    rerender(<ChangesPanel {...props()} onOpenGitMode={onOpenGitMode} />);
-    fireEvent.click(screen.getByRole("button", { name: "Open in Git mode" }));
-    expect(onOpenGitMode).toHaveBeenCalledWith("file.ts");
-  });
+
 });

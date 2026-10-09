@@ -25,25 +25,10 @@ function file(sections: GitDiffSection[]): GitChangeFile {
 }
 
 describe("DiffView", () => {
-  it("lays a hunk out side by side, pairing the removed line with the first added one", () => {
-    const working = section("working", "w1");
-    render(<DiffView file={file([working])} sections={[working]} layout="split" disabled={false} onAddComment={vi.fn()} onAction={vi.fn()} />);
-    const rows = document.querySelectorAll(".diff-split-row");
-    expect(rows).toHaveLength(3);
-    // Context on both sides; then old|new paired; then a blank left cell beside the extra addition.
-    expect(rows[1].querySelector(".diff-split-cell.deletion")).not.toBeNull();
-    expect(rows[1].querySelector(".diff-split-cell.addition")).not.toBeNull();
-    expect(rows[2].querySelector(".diff-split-cell.empty")).not.toBeNull();
-    // Split cells show bare code: no leading diff marker.
-    expect(rows[1].querySelector(".diff-split-cell.deletion code")?.textContent).toBe("const gone = 2;");
-    // One comment button per line: context only on the new side.
-    expect(screen.getAllByRole("button", { name: "Comment on src/file.ts line 1" })).toHaveLength(1);
-  });
-
-  it("anchors a split-view comment to the line's own section", () => {
+  it("anchors a comment to the line's own section", () => {
     const working = section("working", "w1");
     const onAddComment = vi.fn();
-    render(<DiffView file={file([working])} sections={[working]} layout="split" disabled={false} onAddComment={onAddComment} />);
+    render(<DiffView file={file([working])} sections={[working]} disabled={false} onAddComment={onAddComment} />);
     fireEvent.click(screen.getByRole("button", { name: "Comment on src/file.ts line 3" }));
     expect(onAddComment).toHaveBeenCalledWith(working, working.hunks[0].lines[3]);
   });

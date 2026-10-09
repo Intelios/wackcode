@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { orderProjects } from "../git-mode";
+import { orderProjects } from "../project-display";
 import { matchesProject, monogram, shortPath } from "../project-display";
 import type { ProjectRecord } from "../types";
 import { Icon } from "./Icons";
@@ -10,7 +10,7 @@ import { Popover } from "./ui/Popover";
  * The new-chat screen's project picker: a trigger with a monogram tile and a searchable popover.
  *
  * Invariants:
- * - Pins are the sidebar's and Git mode's own set (`pinnedProjects` in App); this component only
+ * - Pins are the sidebar's own set (`pinnedProjects` in App); this component only
  *   asks to change them. Pinned projects sort first, via the same `orderProjects`.
  * - ⌘O ("Add project…") is wired globally in App; the footer button just calls `onAddProject`.
  * - The rows live in one flat keyed list (headings inline) so pinning moves a row between groups

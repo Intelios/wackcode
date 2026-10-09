@@ -32,8 +32,6 @@ interface Props {
   onOpenPr: (url: string) => void;
   onComments: (comments: DiffComment[]) => Promise<void>;
   onAddressComments: (comments: DiffComment[]) => Promise<boolean>;
-  /** Opens Git mode on this file; only for chats that work in their project's own folder. */
-  onOpenGitMode?: (path?: string) => void;
 }
 
 /** The side panel's Changes view: the chat's Git changes, their diffs, and the commit dock. */
@@ -209,11 +207,6 @@ export function ChangesPanel(props: Props) {
         </div>
         <div className="changes-header-actions">
           {reviewUnavailable && reviewReason ? <Tooltip label={reviewReason}>{review}</Tooltip> : review}
-          {props.onOpenGitMode && changes?.isGit && (
-            <Tooltip label={<>Open in Git mode <kbd>⌘⇧G</kbd></>}>
-              <button className="icon-button" onClick={() => props.onOpenGitMode?.(current?.file.path)} aria-label="Open in Git mode"><Icon name="expand" /></button>
-            </Tooltip>
-          )}
           <button className="icon-button" onClick={props.onRefresh} aria-label="Refresh changes"><Icon name="refresh" className={loading ? "spinning" : ""} /></button>
           <button className="icon-button" onClick={props.onClose} aria-label="Close changes panel"><Icon name="close" /></button>
         </div>

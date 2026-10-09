@@ -108,6 +108,7 @@ not. Commands must remain in the foreground; detached daemons are outside this l
 - **Fingerprint:** provider, model and the trusted package resources resolved at spawn. When it changes, the worker is killed and respawned, even mid-run. Settings that apply live (tools, prompts, execution policy, sub-agents, MCP, skills, commands, memory, computer use, a provider's on/off switch) travel in `init` and in `set_*` commands and must stay out of the fingerprint.
 - **Idle reaper:** stops a worker 15 minutes after its last output, never the open chat (`SelectedTask`) and never the newest four. It takes the chat's task lock and re-checks status, so it can't race a run.
 - **Stopping vs crashing:** intentional stops remove the worker from the registry *before* signalling, so any exit while still registered is reported as a crash. `killpg` takes down the worker's whole process group, including stdio MCP servers.
+- **Host disconnect:** Code and Chat workers stop on stdin EOF or a stdout error, even if the host crashes or the dev app is rebuilt. Shutdown bypasses the prompt queue and init gate, cancels owned work, and has a three-second exit deadline. Never report a broken stdout pipe back through stdout: doing so can create an exception loop.
 
 ## Locks
 

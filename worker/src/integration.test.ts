@@ -789,6 +789,63 @@ afterEach(async () => {
 });
 
 describe("Pi worker integration", () => {
+  it.each([
+    ["code", "eof"], ["code", "shutdown"], ["code", "sigterm"],
+    ["chat", "eof"], ["chat", "shutdown"], ["chat", "sigterm"],
+  ])("stops an active %s provider stream on %s outside the prompt queue", async (kind, reason) => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-host-disconnect-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(provider.baseUrl, "cancel-secret", workspace, "disconnect-task", undefined, undefined, undefined, undefined, undefined, { kind });
+    cleanup.push(() => worker.shutdown());
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "disconnect-run", message: "wait until stopped" });
+    await provider.waitForSlowRequest();
+    const exited = new Promise<number | null>((resolveExit, reject) => {
+      const timer = setTimeout(() => reject(new Error("Worker did not stop its active stream")), 5_000);
+      worker.child.once("exit", (code) => { clearTimeout(timer); resolveExit(code); });
+    });
+    if (reason === "eof") worker.child.stdin.end();
+    else if (reason === "sigterm") worker.child.kill("SIGTERM");
+    else worker.send({ id: crypto.randomUUID(), type: "shutdown" });
+    expect(await exited).toBe(0);
+    expect(worker.outputs.some((output) => output.type === "worker_error")).toBe(false);
+  });
+
+  it("bounds shutdown when an extension prevents an active run from becoming idle", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-stuck-abort-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const extension = join(workspace, "stuck.ts");
+    const marker = join(workspace, "started");
+    await writeFile(extension, `import { writeFileSync } from "node:fs";
+      export default function(pi: any) {
+        pi.on("tool_call", () => {
+          writeFileSync(${JSON.stringify(marker)}, "started");
+          return new Promise(() => {});
+        });
+      }`);
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "stuck-task", undefined, undefined,
+      { extensions: [extension], skills: [], prompts: [], themes: [] });
+    cleanup.push(() => worker.shutdown());
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "stuck-run", message: "A run held by the extension." });
+    let started = false;
+    for (let attempt = 0; attempt < 100 && !started; attempt++) {
+      started = await readFile(marker, "utf8").then(() => true, () => false);
+      if (!started) await new Promise((wake) => setTimeout(wake, 50));
+    }
+    expect(started).toBe(true);
+    const exited = new Promise<number | null>((resolveExit, reject) => {
+      const timer = setTimeout(() => reject(new Error("Stuck abort outlived the shutdown deadline")), 5_000);
+      worker.child.once("exit", (code) => { clearTimeout(timer); resolveExit(code); });
+    });
+    const shutdownAt = Date.now();
+    worker.child.stdin.end();
+    expect(await exited).toBe(0);
+    expect(Date.now() - shutdownAt).toBeGreaterThanOrEqual(2_900);
+  });
+
   it("generates a commit message from staged data without tools or a chat turn", async () => {
     const provider = await startMockProvider();
     cleanup.push(provider.close);

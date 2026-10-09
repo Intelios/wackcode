@@ -388,7 +388,13 @@ const normalizedCache = new WeakMap<object, CachedMessage>();
 // invalidate just that message instead of the whole transcript.
 const imageOwners = new Map<string, object>();
 
+// A disconnected host owns no more work. In particular, never report an EPIPE
+// through stdout: that used to recursively emit worker_error and burn a CPU core.
+let bridgeClosed = false;
+let shutdownStarted = false;
+
 function send(output: WorkerOutput): void {
+  if (bridgeClosed) return;
   if (output.type === "run_finished") {
     if (output.outcome === "completed" && hasSubagentWork()) { backgroundFinishedRunId ??= output.runId; return; }
     if (backgroundFinishedRunId && !hasSubagentWork()) { output = { ...output, runId: backgroundFinishedRunId }; backgroundFinishedRunId = undefined; }
@@ -1786,6 +1792,7 @@ async function resend(command: Extract<WorkerCommand, { type: "resend" }>): Prom
 }
 
 async function handle(command: WorkerCommand): Promise<void> {
+  if (shutdownStarted) return;
   try {
     if (command.type === "init") {
       await initialize(command);
@@ -2164,15 +2171,6 @@ async function handle(command: WorkerCommand): Promise<void> {
       builtins.memory.refresh();
       applyDisabledTools();
       emitSnapshot();
-    } else if (command.type === "shutdown") {
-      backgroundShutdown = true;
-      cancelPendingNativeRequests(true);
-      await Promise.all([builtins.subagents.stopAll(true), subagentRunner?.abortAll(), builtins.bashJobs.stopAll()]);
-      if (!session.isIdle) await session.abort();
-      session.dispose();
-      await closeMcpServers();
-      response(command.id, true);
-      process.exit(0);
     }
     response(command.id, true);
   } catch (error) {
@@ -2194,6 +2192,34 @@ async function handle(command: WorkerCommand): Promise<void> {
  */
 function closeMcpServers(): Promise<void> {
   return Promise.race([builtins.mcp.closeAll(), new Promise<void>((resolve) => setTimeout(resolve, 2_000))]);
+}
+
+/**
+ * Quit, host death and fatal errors share one bounded cleanup, outside the prompt
+ * queue and the init gate. Applies to both Code and Chat workers. A stuck abort
+ * must not keep a worker alive after its app (and the host's reaper) is gone.
+ */
+function shutdownProcess(code = 0, commandId?: string): void {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  backgroundShutdown = true;
+  const deadline = setTimeout(() => process.exit(code), 3_000);
+  void (async () => {
+    try {
+      builtins.autoTitle.abort();
+      cancelPendingNativeRequests(true);
+      await Promise.all([builtins.subagents.stopAll(true), subagentRunner?.abortAll(), builtins.bashJobs.stopAll()]);
+      if (session && !session.isIdle) await session.abort();
+      session?.dispose();
+      await closeMcpServers();
+      if (commandId) response(commandId, true);
+    } catch {
+      code = 1;
+    } finally {
+      clearTimeout(deadline);
+      process.exit(code);
+    }
+  })();
 }
 
 /** Commands the host sends with `worker::request` and whose failures it reports itself. */
@@ -2345,12 +2371,18 @@ let initSettled: Promise<void> = Promise.resolve();
 
 const decoder = new JsonLineDecoder();
 process.stdin.on("data", (chunk: Buffer) => {
+  if (shutdownStarted) return;
   for (const line of decoder.push(chunk)) {
+    if (shutdownStarted) break;
     let command: WorkerCommand;
     try {
       command = JSON.parse(line) as WorkerCommand;
     } catch {
       send({ type: "worker_error", taskId, message: "The desktop bridge sent invalid JSON" });
+      continue;
+    }
+    if (command.type === "shutdown") {
+      shutdownProcess(0, command.id);
       continue;
     }
     if (command.type === "init") {
@@ -2389,28 +2421,28 @@ process.stdin.on("data", (chunk: Buffer) => {
 });
 
 process.stdin.resume();
-process.on("SIGTERM", () => {
-  void (async () => {
-    try {
-      backgroundShutdown = true;
-      builtins.autoTitle.abort();
-      cancelPendingNativeRequests(true);
-      await Promise.all([builtins.subagents.stopAll(true), subagentRunner?.abortAll(), builtins.bashJobs.stopAll()]);
-      if (session && !session.isIdle) await session.abort();
-      session?.dispose();
-      await closeMcpServers();
-    } finally {
-      process.exit(0);
-    }
-  })();
+process.stdin.on("end", () => {
+  bridgeClosed = true;
+  shutdownProcess();
 });
+process.stdin.on("error", () => {
+  bridgeClosed = true;
+  shutdownProcess(1);
+});
+process.stdout.on("error", () => {
+  bridgeClosed = true;
+  shutdownProcess(1);
+});
+process.on("SIGTERM", () => shutdownProcess());
 
-process.on("uncaughtException", (error) => {
-  send({ type: "worker_error", taskId, message: safeError(error) });
-  process.exitCode = 1;
-});
+function fatalError(error: unknown): void {
+  if (shutdownStarted) process.exit(1);
+  try {
+    send({ type: "worker_error", taskId, message: safeError(error) });
+  } finally {
+    shutdownProcess(1);
+  }
+}
 
-process.on("unhandledRejection", (error) => {
-  send({ type: "worker_error", taskId, message: safeError(error) });
-  process.exitCode = 1;
-});
+process.on("uncaughtException", fatalError);
+process.on("unhandledRejection", fatalError);

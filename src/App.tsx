@@ -79,6 +79,7 @@ import { RunPanel } from "./components/RunPanel";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { SidePanel } from "./components/SidePanel";
 import { GamesPanel } from "./components/GamesPanel";
+import { exitToArcade } from "./games/session";
 import { SubagentPanelLink } from "./components/SubagentChip";
 import { ToolImageSource } from "./components/ToolRow";
 import { ContextMenuProvider } from "./components/ui/ContextMenu";
@@ -437,8 +438,11 @@ export default function App() {
       setPanelWidth(browserRestoreWidth);
       setBrowserExpanded(false);
     }
+    // Toggling the Games panel away is a real close, not a view swap: the next open starts at
+    // the Arcade home rather than the game that was left open.
+    if (panelView?.kind === "games") exitToArcade();
     setSidePanel((current) => toggleView(current, GAMES_VIEW));
-  }, [browserExpanded, browserRestoreWidth, setSidePanel, setPanelWidth, setBrowserExpanded]);
+  }, [browserExpanded, browserRestoreWidth, panelView, setSidePanel, setPanelWidth, setBrowserExpanded]);
   const closeSidePanel = useCallback(() => setSidePanel(null), [setSidePanel]);
   /** The Games panel's "back to chat": close the panel and put the caret back in the composer. */
   const backToChat = useCallback(() => {
@@ -575,6 +579,8 @@ export default function App() {
       return;
     }
     // The durable side-panel view is Code's alone; Chat mode's panel only ever shows its browser.
+    // Leaving Code force-closes the Games panel, a real close: the Arcade comes next.
+    if (next !== "code") exitToArcade();
     setLegacySidePanel(next === "code" ? rememberedPanelView() : null);
     setLegacyBrowserExpanded(false);
     const parked = parkedViews.current[next];

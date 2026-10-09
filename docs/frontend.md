@@ -135,6 +135,7 @@ The app has two peer areas, Code and Chat (`src/areas.ts`). `App` holds which on
 - **Its side panel is the browser only.** `panelView` is null for anything else there, and the remembered durable view stays Code's: the persistence effect skips Chat.
 - **Never call Git for a Chat mode chat** (`refreshChanges` returns early) and never take its snapshot's tool list as the catalogue; see the host's matching rules in [architecture.md](architecture.md).
 - **The switch** (`AreaSwitch`) lives inside `.sidebar-top`. Don't add a child to `.sidebar`: the Settings rebuild animation addresses its children by position.
+- **The duck hops every switch** (`AreaHop`, the last `.app-shell` child): a real change of `area` dims the window for a beat and sends a spotlit duck across in the travel direction — rarely a somersault — then the lights come back up on the arriving area. The overlay is click-through and `aria-hidden`, keyed per switch so rapid toggling restarts it mid-flight instead of stacking. Reduced motion skips it entirely; nothing ever unmounts a finished hop.
 - **⌥⌘1 / ⌥⌘2** are matched on `event.code`, because ⌥ changes `event.key`. The native Go menu sends the same commands (`area-code`, `area-chat`) through `native-tab-action`, so they work while a browser page has focus.
 
 ## The Chat area (`src/components/chat/`)

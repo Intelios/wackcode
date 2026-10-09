@@ -371,6 +371,17 @@ describe("App areas", () => {
     expect(chatInput()).toHaveValue("Chat draft");
   });
 
+  it("hops the duck across on a real switch, in the direction of travel", async () => {
+    boot([task("a")]);
+    await screen.findByRole("button", { name: "Settings" });
+    // Boot never plays the cameo; it starts with the first real Code ↔ Chat change.
+    expect(document.querySelector(".area-hop")).toBeNull();
+    await native("area-chat");
+    expect(document.querySelector(".area-hop")).toHaveAttribute("data-direction", "right");
+    enter("Code");
+    expect(document.querySelector(".area-hop")).toHaveAttribute("data-direction", "left");
+  });
+
   it("returns to the chat each area had open", async () => {
     boot([task("a"), chatTask("c", "Trip plan")]);
     await screen.findByRole("button", { name: "Settings" });

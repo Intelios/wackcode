@@ -163,6 +163,23 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .app-shell.rebuild .settings-page-head { animation: rebuild-in .34s cubic-bezier(.3, 1.4, .4, 1) .14s both; --ry: 10px; }
 .app-shell.rebuild .settings-scroll { animation: rebuild-in .34s cubic-bezier(.3, 1.4, .4, 1) .2s both; --ry: 12px; }
 
+/* AreaHop (App.tsx): the duck's cameo on a Code ↔ Chat switch. The window dims for a beat
+   (.area-hop-scrim's vignette), a spotlit duck hops across the stage in the travel direction
+   (two arcs and a wobble, rarely a somersault), and the lights come back up on the arriving
+   area as it clears the far edge. Decoration only: clicks fall through, AT never hears of it,
+   reduced motion skips mounting it, and a finished hop stays mounted but invisible. */
+.area-hop { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 90; }
+.area-hop-scrim { position: absolute; inset: 0; background: radial-gradient(115% 95% at 50% 46%, rgb(0 0 0 / 42%) 0%, rgb(0 0 0 / 60%) 100%); }
+.area-hop-duck { position: absolute; left: 0; top: 56%; width: 52px; height: 52px; color: var(--wc-accent); }
+/* The spotlight: an accent glow centred on the duck, as a child of the animated element so it
+   rides along the hop for free. */
+.area-hop-glow { position: absolute; left: 50%; top: 50%; width: 190px; height: 190px; translate: -50% -50%; border-radius: 50%; z-index: -1; background: radial-gradient(circle, color-mix(in srgb, var(--wc-accent) 26%, transparent) 0%, color-mix(in srgb, var(--wc-accent) 10%, transparent) 44%, transparent 68%); }
+.area-hop-facing { display: block; width: 100%; height: 100%; filter: drop-shadow(0 8px 12px rgb(0 0 0 / 28%)); }
+/* DUCK_PATH faces right; heading back to Code it flies mirrored. The wrapper carries the flip
+   because motion owns the animated element's transform. */
+.area-hop[data-direction="left"] .area-hop-facing { transform: scaleX(-1); }
+.area-hop-facing .duck-mark { display: block; width: 100%; height: 100%; }
+
 /* ── Sidebar ───────────────────────────────────────── */
 .sidebar {
   width: 240px;

@@ -88,6 +88,7 @@ import { ChatHeader } from "./components/ChatHeader";
 import { Composer } from "./components/Composer";
 import { Icon } from "./components/Icons";
 import { DuckMark } from "./components/DuckMark";
+import { AreaHop } from "./components/AreaHop";
 import { ProjectBar } from "./components/ProjectBar";
 import { TextSwap } from "./components/TextSwap";
 import type { McpActions } from "./components/McpSection";
@@ -3225,6 +3226,9 @@ export default function App() {
         }}
       />}
       {globalError && <div className="global-toast"><span>{globalError}</span><button onClick={() => setGlobalError(undefined)}>×</button></div>}
+      {/* The switch's duck cameo: it hops across on every real Code ↔ Chat change. Decorative,
+          so it goes last and clicks fall through it. */}
+      <AreaHop area={area} />
     </div>
     </ContextMenuProvider>
     </NavigationScope.Provider>

@@ -1,4 +1,4 @@
-use crate::{models::{AppData, TaskStatus}, secrets::SecretStore};
+use crate::{models::{normalize_base_url, AppData, TaskStatus}, secrets::SecretStore};
 use std::{fs, path::{Path, PathBuf}, sync::Mutex};
 use tauri::{AppHandle, Manager};
 
@@ -23,7 +23,11 @@ impl MetadataState {
         let recovered = recover_interrupted_tasks(&mut data);
         // Built-in sub-agent definitions ship with the app; refresh them on every start.
         let refreshed = crate::subagents::normalize(&mut data.subagents);
-        let changed = recovered || refreshed;
+        // Connections saved before `validate_base_url` trimmed a pasted endpoint suffix can still
+        // carry `…/v1` or `…/v1/messages`; the Messages client adds `/v1/messages` itself, so the
+        // request doubled the path and landed on the gateway's HTML 404 page. Repair them once.
+        let rebased = normalize_provider_base_urls(&mut data);
+        let changed = recovered || refreshed || rebased;
         let state = Self { data: Mutex::new(data), data_path, secrets: SecretStore::load(&directory)? };
         if changed { state.save()?; }
         Ok(state)
@@ -47,6 +51,20 @@ impl MetadataState {
         };
         Ok(result)
     }
+}
+
+/// Re-canonicalizes every saved connection's base URL; returns whether any changed. The fix is
+/// idempotent, so a clean `wackcode.json` writes nothing.
+fn normalize_provider_base_urls(data: &mut AppData) -> bool {
+    let mut changed = false;
+    for provider in &mut data.providers {
+        let normalized = normalize_base_url(&provider.base_url, &provider.api_format);
+        if normalized != provider.base_url {
+            provider.base_url = normalized;
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn recover_interrupted_tasks(data: &mut AppData) -> bool {
@@ -332,5 +350,32 @@ mod tests {
         let with_branch = json.replace("\"createdAt\":\"c\"", "\"branch\":\"main\",\"createdAt\":\"c\"");
         let project: ProjectRecord = serde_json::from_str(&with_branch).unwrap();
         assert_eq!(project.branch, None);
+    }
+
+    #[test]
+    fn startup_repairs_a_messages_connection_saved_with_an_endpoint_suffix() {
+        // A connection saved before `validate_base_url` trimmed keeps its pasted `…/v1` (or a
+        // whole `…/v1/messages` endpoint); loading re-canonicalizes it so the Messages client
+        // stops doubling the path into the gateway's HTML 404 page.
+        let connection = |base_url: &str, api_format: &str| crate::models::ProviderRecord {
+            id: "p".into(), name: "P".into(), kind: crate::models::ProviderKind::Custom,
+            base_url: base_url.into(), api_format: api_format.into(), models: vec![],
+            created_at: "now".into(), updated_at: "now".into(),
+            has_api_key: true, connected: true, enabled: true,
+        };
+        let mut data = AppData {
+            providers: vec![
+                connection("https://opencode.ai/zen/go/v1", "anthropic-messages"),
+                connection("https://opencode.ai/zen/go/v1/messages", "anthropic-messages"),
+                connection("https://opencode.ai/zen/go/v1", "openai-completions"),
+            ],
+            ..AppData::default()
+        };
+        assert!(normalize_provider_base_urls(&mut data));
+        assert_eq!(data.providers[0].base_url, "https://opencode.ai/zen/go");
+        assert_eq!(data.providers[1].base_url, "https://opencode.ai/zen/go");
+        // The OpenAI formats keep their `/v1` — and a clean load reports nothing changed.
+        assert_eq!(data.providers[2].base_url, "https://opencode.ai/zen/go/v1");
+        assert!(!normalize_provider_base_urls(&mut data));
     }
 }

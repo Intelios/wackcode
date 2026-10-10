@@ -46,6 +46,25 @@ describe("connection models in Pi", () => {
     expect((await findModel(runtime, connection, "minimax"))?.api).toBe("anthropic-messages");
   });
 
+  it("gives a model the base URL its own API needs", async () => {
+    // The connection's `…/v1` fits its OpenAI models; the Messages one needs it stripped or its
+    // client doubles the path into the gateway's 404 page (`…/v1/v1/messages`).
+    const connection = provider({ models: [model("glm", "GLM"), { ...model("haiku", "Haiku"), api: "anthropic-messages" }] });
+    const runtime = await load(connection);
+    expect(runtime.getError()).toBeUndefined();
+    expect((await findModel(runtime, connection, "glm"))?.baseUrl).toBe("http://127.0.0.1:9/v1");
+    expect((await findModel(runtime, connection, "haiku"))?.baseUrl).toBe("http://127.0.0.1:9");
+  });
+
+  it("repairs a Messages connection whose saved base URL kept a pasted endpoint suffix", async () => {
+    // Records written before the base URL was normalized — the migration covers them, and the
+    // per-model derivation stays correct when it can't have run.
+    const connection = provider({ api: "anthropic-messages", baseUrl: "https://opencode.ai/zen/go/v1/messages" });
+    const runtime = await load(connection);
+    expect(runtime.getError()).toBeUndefined();
+    expect((await findModel(runtime, connection, "named"))?.baseUrl).toBe("https://opencode.ai/zen/go");
+  });
+
   it("names the connection and Pi's reason when Pi rejects it", async () => {
     const connection = provider({ baseUrl: "" });
     const runtime = await load(connection);

@@ -13,7 +13,28 @@ export type ModelRuntime = Awaited<ReturnType<PiModule["ModelRuntime"]["create"]
 export type PiModel = NonNullable<ReturnType<ModelRuntime["getModel"]>>;
 export type SettingsManager = ReturnType<PiModule["SettingsManager"]["inMemory"]>;
 
-export function modelDefinition(model: WorkerModel): Record<string, unknown> {
+/**
+ * The base URL a model's API actually needs. The Messages client appends `/v1/messages` itself
+ * and the OpenAI clients append `/chat/completions` or `/responses`, so an anthropic-messages
+ * base leaves `/v1` off while the OpenAI formats keep it. A model may speak a different API than
+ * its connection (`api` overrides it — OpenCode Go serves one gateway over all three), so its
+ * base URL is re-derived rather than inherited: a Messages model on a Completions connection
+ * would otherwise post `…/v1/v1/messages` and land on the gateway's HTML 404 page. Returns
+ * undefined when the connection's base already fits, leaving the provider's own `baseUrl` in
+ * force. Same-gateway base URLs are the documented convention (see ProvidersSection); a model
+ * hosted elsewhere can't be expressed today.
+ */
+function resolveModelBaseUrl(provider: WorkerProvider, model: WorkerModel): string | undefined {
+  const base = provider.baseUrl.replace(/\/+$/, "");
+  const api = model.api ?? provider.api;
+  const resolved = api === "anthropic-messages"
+    ? base.replace(/\/v1\/messages$/i, "").replace(/\/v1$/i, "")
+    : /\/v1$/i.test(base) ? base : `${base}/v1`;
+  return resolved === base ? undefined : resolved;
+}
+
+export function modelDefinition(provider: WorkerProvider, model: WorkerModel): Record<string, unknown> {
+  const baseUrl = resolveModelBaseUrl(provider, model);
   const thinkingLevelMap = Object.fromEntries(
     THINKING_LEVELS.map((level) => {
       if (!model.thinkingLevels.includes(level)) return [level, null];
@@ -35,8 +56,9 @@ export function modelDefinition(model: WorkerModel): Record<string, unknown> {
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     ...(model.reasoning ? { thinkingLevelMap } : {}),
     // Pi takes a model's own `api` over the provider's, so one gateway can serve each model
-    // over the API it actually speaks.
-    ...(model.api ? { api: model.api } : {})
+    // over the API it actually speaks — with the base URL that API needs.
+    ...(model.api ? { api: model.api } : {}),
+    ...(baseUrl ? { baseUrl } : {})
   };
 }
 
@@ -61,7 +83,7 @@ export async function createModelRuntime(
           name: provider.name,
           baseUrl: provider.baseUrl,
           api: provider.api,
-          models: provider.models.map(modelDefinition)
+          models: provider.models.map((model) => modelDefinition(provider, model))
         }
       }
     };

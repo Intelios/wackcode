@@ -9,7 +9,7 @@ use crate::{
         InstallPackageInput,
         McpServerRecord, McpTestResult,
         MemoriesChange, MemoriesOverview, MemoryConfig, MemoryDocument, ModelRecord,
-        NavigateResult, NavigateTaskInput, NavigateTaskResult, PackageRecord,
+        NavigateResult, NavigateTaskInput, NavigateTaskResult, normalize_base_url, PackageRecord,
         PackageSearchResult, ProjectRecord, PromptConfig, PromptInput, ProviderKind,
         ProviderRecord, QueueMessageInput, QueuedMessages, ResendInput, RestoreCheckpointInput,
         RestoreResult, SaveMcpServerInput, SaveMemoryInput, SaveProviderInput,
@@ -424,7 +424,7 @@ pub struct DiscoverModelsInput {
 /// Models API and OpenCode Go's `…/zen/go/v1/models` answer there, while `{base}/models` is the
 /// website's 404 page.
 fn model_list_url(base_url: &str, api_format: &str) -> String {
-    let base = base_url.trim_end_matches('/');
+    let base = normalize_base_url(base_url, api_format);
     if api_format == "anthropic-messages" {
         format!("{base}/v1/models")
     } else {
@@ -4792,8 +4792,8 @@ fn view_task_and_provider(
 
 /// The APIs a custom connection, or one of its models, may speak. `anthropic-messages` posts to
 /// `{baseUrl}/v1/messages`, so a Messages base URL leaves off the `/v1` that the OpenAI formats
-/// keep — `validate_base_url` trims one a pasted endpoint carried (OpenCode Go: `…/zen/go` for
-/// Messages, `…/zen/go/v1` for Completions).
+/// keep — `normalize_base_url` enforces that at save and on every load (OpenCode Go: `…/zen/go`
+/// for Messages, `…/zen/go/v1` for Completions).
 const API_FORMATS: [&str; 3] = ["openai-completions", "openai-responses", "anthropic-messages"];
 
 fn validate_models(models: &[ModelRecord]) -> Result<(), String> {
@@ -5078,23 +5078,12 @@ fn validate_appearance_config(
     Ok(config)
 }
 
-/// Gateways' docs quote whole endpoints (`…/zen/go/v1/messages`), but the Messages client adds
-/// `/v1/messages` itself, so a base URL pasted with that suffix would double the path and land on
-/// the gateway's HTML 404 page. Trim the suffix — and a lone `/v1`, which every Messages base URL
-/// leaves off (the OpenAI formats keep it: OpenCode Go is `…/zen/go` for Messages, `…/zen/go/v1`
-/// for Completions).
+/// Validates a pasted base URL after `normalize_base_url` puts it in the canonical form for its
+/// API (gateways' docs quote whole endpoints like `…/zen/go/v1/messages`, but the Messages
+/// client adds `/v1/messages` itself, so the suffix would otherwise double the path and land on
+/// the gateway's HTML 404 page).
 fn validate_base_url(value: &str, api_format: &str) -> Result<String, String> {
-    let mut value = required(value, "Base URL")?
-        .trim_end_matches('/')
-        .to_string();
-    if api_format == "anthropic-messages" {
-        for suffix in ["/v1/messages", "/v1"] {
-            if value.to_ascii_lowercase().ends_with(suffix) {
-                value.truncate(value.len() - suffix.len());
-                break;
-            }
-        }
-    }
+    let value = normalize_base_url(&required(value, "Base URL")?, api_format);
     let parsed = reqwest::Url::parse(&value).map_err(|_| "Enter a valid base URL".to_string())?;
     if parsed.scheme() != "https" && parsed.scheme() != "http" {
         return Err("The base URL must use http or https".into());

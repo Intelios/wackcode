@@ -76,6 +76,25 @@ pub enum ProviderKind {
     Subscription,
 }
 
+/// Canonical form of a connection's base URL for the API it speaks. The Messages client appends
+/// `/v1/messages` itself, so an anthropic-messages base URL leaves `/v1` off and any endpoint
+/// suffix pasted from a gateway's docs (OpenCode Go: `…/zen/go/v1/messages`) is trimmed —
+/// otherwise the request doubles the path and lands on the gateway's HTML 404 page. The OpenAI
+/// formats expect `/v1` in the base URL and are left untouched. `MetadataState::load` runs this
+/// over every saved provider so records written before the save-time trim existed are repaired.
+pub fn normalize_base_url(base_url: &str, api_format: &str) -> String {
+    let mut value = base_url.trim_end_matches('/').to_string();
+    if api_format == "anthropic-messages" {
+        for suffix in ["/v1/messages", "/v1"] {
+            if value.to_ascii_lowercase().ends_with(suffix) {
+                value.truncate(value.len() - suffix.len());
+                break;
+            }
+        }
+    }
+    value
+}
+
 /// One resource file a package contributes, with whether the user's filters currently load it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

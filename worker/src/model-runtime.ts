@@ -5,6 +5,7 @@
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { builtinCompat } from "./catalog-models.js";
 import { instrumentUsage } from "./usage.js";
 import { THINKING_LEVELS, type WorkerModel, type WorkerProvider } from "./protocol.js";
 
@@ -35,6 +36,11 @@ function resolveModelBaseUrl(provider: WorkerProvider, model: WorkerModel): stri
 
 export function modelDefinition(provider: WorkerProvider, model: WorkerModel): Record<string, unknown> {
   const baseUrl = resolveModelBaseUrl(provider, model);
+  // models.json re-declares the model, so Pi's request shaping (`forceAdaptiveThinking`,
+  // `maxTokensField`, `supportsStore`…) is lost unless the bundled catalogue's compat is copied
+  // over: without it an adaptive-only Claude is asked for `thinking.type:"enabled"` and answers
+  // 400, and a completions gateway is sent fields it rejects. Unknown IDs get Pi's defaults.
+  const compat = builtinCompat(model.api ?? provider.api, model.id, baseUrl ?? provider.baseUrl);
   const thinkingLevelMap = Object.fromEntries(
     THINKING_LEVELS.map((level) => {
       if (!model.thinkingLevels.includes(level)) return [level, null];
@@ -58,7 +64,8 @@ export function modelDefinition(provider: WorkerProvider, model: WorkerModel): R
     // Pi takes a model's own `api` over the provider's, so one gateway can serve each model
     // over the API it actually speaks — with the base URL that API needs.
     ...(model.api ? { api: model.api } : {}),
-    ...(baseUrl ? { baseUrl } : {})
+    ...(baseUrl ? { baseUrl } : {}),
+    ...(compat ? { compat } : {})
   };
 }
 

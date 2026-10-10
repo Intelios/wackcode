@@ -1,4 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedMessage } from "../types";
 import { composeFileSection } from "../attachment-utils";
@@ -526,6 +528,8 @@ describe("Transcript message actions", () => {
   });
 });
 
+const transcriptStyles = readFileSync(resolve(__dirname, "../styles.css"), "utf8");
+
 describe("Transcript command messages", () => {
   it("shows the compact invocation and opens the exact sent prompt", async () => {
     const onMessageAction = vi.fn().mockResolvedValue(true);
@@ -559,6 +563,26 @@ describe("Transcript command messages", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
+  });
+
+  it("reserves the full skill-creator label before wrapping its long request", () => {
+    const request = "make a skill that's designed around play testing / app testing. This would be the kind of skill that lets an agent use the app like a normal user.";
+    const command: NormalizedMessage = {
+      id: "skill-creator-1",
+      role: "user",
+      blocks: [{ type: "text", text: "The full skill-creator guide prompt" }],
+      commandPresentation: { id: "app:skill-creator", name: "skill-creator", arguments: request, kind: "command" }
+    };
+    const { container } = render(<Transcript messages={[command]} running={false} />);
+    const label = screen.getByRole("button", { name: "skill-creator command. View sent prompt" });
+    expect(container.querySelector(".command-message > .tooltip-wrap")).toContainElement(label);
+    expect(container.querySelector(".command-summary")).toHaveTextContent(request);
+    expect(container.querySelector(".command-message")).toHaveTextContent(`skill-creator·${request}`);
+
+    // The Tooltip wrapper (not its inner button) is the flex item and must not shrink over the
+    // summary. jsdom cannot measure this layout, so pin the layout rule that prevents the overlap.
+    const labelRule = transcriptStyles.match(/\.msg\.user \.command-message > \.tooltip-wrap\s*\{([^}]*)\}/)?.[1];
+    expect(labelRule).toMatch(/\bflex:\s*0\s+0\s+auto\s*;/);
   });
 
   it("labels automatic and resumed rounds while historical messages remain ordinary", () => {

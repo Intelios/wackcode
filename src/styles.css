@@ -540,6 +540,8 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
   background: color-mix(in srgb, var(--wc-accent) 12%, transparent); border-radius: 4px; padding: 0 4px;
 }
 .msg.user .command-message { display: flex; align-items: baseline; gap: 7px; }
+/* Tooltip's wrapper is the flex item; reserve the command name's width so it can't overlap the summary. */
+.msg.user .command-message > .tooltip-wrap { flex: 0 0 auto; }
 .command-word {
   position: relative; display: inline-block; flex: 0 0 auto; overflow: hidden;
   border: 0; padding: 0 2px; background: linear-gradient(110deg, var(--wc-accent), var(--wc-accent-hover), var(--wc-accent));

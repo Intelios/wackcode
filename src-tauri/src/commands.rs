@@ -203,7 +203,7 @@ pub async fn save_provider(
     input: SaveProviderInput,
 ) -> Result<ProviderRecord, String> {
     let name = required(&input.name, "Connection name")?;
-    let base_url = validate_base_url(&input.base_url)?;
+    let base_url = validate_base_url(&input.base_url, &input.api_format)?;
     if !API_FORMATS.contains(&input.api_format.as_str()) {
         return Err("Choose a supported API format".into());
     }
@@ -419,6 +419,19 @@ pub struct DiscoverModelsInput {
     pub provider_id: String,
 }
 
+/// Where a connection's model list lives. A Messages connection keeps `/v1` out of its base URL
+/// (the client adds `/v1/messages` itself), so its list sits behind the same prefix — Anthropic's
+/// Models API and OpenCode Go's `…/zen/go/v1/models` answer there, while `{base}/models` is the
+/// website's 404 page.
+fn model_list_url(base_url: &str, api_format: &str) -> String {
+    let base = base_url.trim_end_matches('/');
+    if api_format == "anthropic-messages" {
+        format!("{base}/v1/models")
+    } else {
+        format!("{base}/models")
+    }
+}
+
 #[tauri::command]
 pub async fn discover_models(
     state: State<'_, MetadataState>,
@@ -437,7 +450,7 @@ pub async fn discover_models(
         return Err("Subscription models are supplied by Pi".into());
     }
     let api_key = state.secrets.get(&provider.id)?;
-    let url = format!("{}/models", provider.base_url.trim_end_matches('/'));
+    let url = model_list_url(&provider.base_url, &provider.api_format);
     let response = reqwest::Client::new()
         .get(url)
         .bearer_auth(api_key)
@@ -4779,7 +4792,8 @@ fn view_task_and_provider(
 
 /// The APIs a custom connection, or one of its models, may speak. `anthropic-messages` posts to
 /// `{baseUrl}/v1/messages`, so a Messages base URL leaves off the `/v1` that the OpenAI formats
-/// keep (OpenCode Go: `…/zen/go` for Messages, `…/zen/go/v1` for Completions).
+/// keep — `validate_base_url` trims one a pasted endpoint carried (OpenCode Go: `…/zen/go` for
+/// Messages, `…/zen/go/v1` for Completions).
 const API_FORMATS: [&str; 3] = ["openai-completions", "openai-responses", "anthropic-messages"];
 
 fn validate_models(models: &[ModelRecord]) -> Result<(), String> {
@@ -5064,10 +5078,23 @@ fn validate_appearance_config(
     Ok(config)
 }
 
-fn validate_base_url(value: &str) -> Result<String, String> {
-    let value = required(value, "Base URL")?
+/// Gateways' docs quote whole endpoints (`…/zen/go/v1/messages`), but the Messages client adds
+/// `/v1/messages` itself, so a base URL pasted with that suffix would double the path and land on
+/// the gateway's HTML 404 page. Trim the suffix — and a lone `/v1`, which every Messages base URL
+/// leaves off (the OpenAI formats keep it: OpenCode Go is `…/zen/go` for Messages, `…/zen/go/v1`
+/// for Completions).
+fn validate_base_url(value: &str, api_format: &str) -> Result<String, String> {
+    let mut value = required(value, "Base URL")?
         .trim_end_matches('/')
         .to_string();
+    if api_format == "anthropic-messages" {
+        for suffix in ["/v1/messages", "/v1"] {
+            if value.to_ascii_lowercase().ends_with(suffix) {
+                value.truncate(value.len() - suffix.len());
+                break;
+            }
+        }
+    }
     let parsed = reqwest::Url::parse(&value).map_err(|_| "Enter a valid base URL".to_string())?;
     if parsed.scheme() != "https" && parsed.scheme() != "http" {
         return Err("The base URL must use http or https".into());
@@ -5781,6 +5808,45 @@ mod tests {
         let json = r#"{"id":"p","name":"P","baseUrl":"https://example.test/v1","apiFormat":"openai-completions","models":[],"createdAt":"now","updatedAt":"now","hasApiKey":true}"#;
         let provider: ProviderRecord = serde_json::from_str(json).unwrap();
         assert!(provider.enabled);
+    }
+
+    #[test]
+    fn messages_connections_lose_a_pasted_endpoint_but_openai_ones_keep_their_v1() {
+        // Whole endpoints, as gateway docs quote them (OpenCode Go: `…/zen/go/v1/messages`).
+        let clean = |url, format| validate_base_url(url, format).unwrap();
+        assert_eq!(
+            clean("https://opencode.ai/zen/go/v1/messages", "anthropic-messages"),
+            "https://opencode.ai/zen/go"
+        );
+        assert_eq!(
+            clean("https://opencode.ai/zen/go/v1/", "anthropic-messages"),
+            "https://opencode.ai/zen/go"
+        );
+        assert_eq!(
+            clean("https://opencode.ai/zen/go", "anthropic-messages"),
+            "https://opencode.ai/zen/go"
+        );
+        // The OpenAI formats keep the `/v1` they were given.
+        assert_eq!(
+            clean("https://opencode.ai/zen/go/v1", "openai-completions"),
+            "https://opencode.ai/zen/go/v1"
+        );
+    }
+
+    #[test]
+    fn messages_connections_list_their_models_behind_the_v1_prefix() {
+        assert_eq!(
+            model_list_url("https://opencode.ai/zen/go", "anthropic-messages"),
+            "https://opencode.ai/zen/go/v1/models"
+        );
+        assert_eq!(
+            model_list_url("https://api.anthropic.com/", "anthropic-messages"),
+            "https://api.anthropic.com/v1/models"
+        );
+        assert_eq!(
+            model_list_url("https://api.example.com/v1", "openai-completions"),
+            "https://api.example.com/v1/models"
+        );
     }
 
     #[test]

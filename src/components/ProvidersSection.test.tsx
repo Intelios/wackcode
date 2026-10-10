@@ -137,7 +137,7 @@ describe("Settings › Providers", () => {
     expect(screen.queryByText("/v1/messages is added for you")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "API format" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Messages compatible" }));
-    expect(screen.getByText("/v1/messages is added for you")).toBeInTheDocument();
+    expect(screen.getByText("/v1/messages is added for you; a pasted /v1 is trimmed")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("https://api.anthropic.com")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Save connection" }));
     await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ apiFormat: "anthropic-messages" })));

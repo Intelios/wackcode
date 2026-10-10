@@ -618,8 +618,9 @@ function ConnectionEditor({
               </label>
               <label>
                 {/* The Messages API posts to `{baseUrl}/v1/messages`, so its base URL leaves off
-                    the `/v1` that the OpenAI formats keep (OpenCode Go: `…/zen/go`). */}
-                <span>Base URL {draft.apiFormat === "anthropic-messages" && <small>/v1/messages is added for you</small>}</span>
+                    the `/v1` that the OpenAI formats keep (OpenCode Go: `…/zen/go`); saving trims
+                    one a pasted endpoint carried. */}
+                <span>Base URL {draft.apiFormat === "anthropic-messages" && <small>/v1/messages is added for you; a pasted /v1 is trimmed</small>}</span>
                 <input
                   value={draft.baseUrl}
                   onChange={(event) => edit({ baseUrl: event.target.value })}

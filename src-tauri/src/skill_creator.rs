@@ -161,9 +161,15 @@ fn validate_revision(revision: &str) -> Result<(), String> {
     if valid { Ok(()) } else { Err("That revision is not valid.".to_string()) }
 }
 
+/// A draft id's folder name — the *hyphenated* `Uuid` display `prepare` writes and the
+/// worker/renderer carry. `Uuid::parse_str` also accepts simple and braced spellings; they
+/// canonicalize here rather than addressing a second layout on disk.
+fn draft_dir_name(draft_id: &str) -> Result<String, String> {
+    Ok(validate_draft_id(draft_id)?.to_string())
+}
+
 fn draft_dir(app: &AppHandle, task_id: &str, draft_id: &str) -> Result<PathBuf, String> {
-    let id = validate_draft_id(draft_id)?;
-    Ok(drafts_root(app, task_id)?.join(id.as_simple().to_string()))
+    Ok(drafts_root(app, task_id)?.join(draft_dir_name(draft_id)?))
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, String> {
@@ -1059,6 +1065,19 @@ mod tests {
         assert!(validate_revision(&"a".repeat(63)).is_err());
         assert!(validate_revision(&"z".repeat(64)).is_err());
         assert!(validate_revision("../../../../etc/passwd").is_err());
+    }
+
+    #[test]
+    fn draft_dir_names_match_the_folders_prepare_writes() {
+        // Regression: prepare() names folders `Uuid::new_v4().to_string()` (hyphenated) while
+        // draft_dir once joined `as_simple()`, so preview/publish/read looked up a folder that
+        // could never exist. The parsed id must come back to the exact folder name on disk.
+        let id = Uuid::new_v4().to_string();
+        assert_eq!(draft_dir_name(&id).unwrap(), id);
+        // Other spellings the parser accepts resolve to the same canonical folder.
+        assert_eq!(draft_dir_name(&id.replace('-', "")).unwrap(), id);
+        assert_eq!(draft_dir_name(&format!("{{{id}}}")).unwrap(), id);
+        assert!(draft_dir_name("not-a-uuid").is_err());
     }
 
     #[test]

@@ -1432,6 +1432,10 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .project-row.active .project-row-main, .project-row.selected .project-row-main { color: var(--text); }
 .project-row.active .project-row-path, .project-row.active .project-row-sub { color: var(--text-dim); }
 .project-check { width: 14px; height: 14px; flex: 0 0 auto; margin-right: 2px; color: var(--wc-accent); }
+.project-picker-foot { border-top: 1px solid var(--border); padding: 5px; }
+.project-add { width: 100%; display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px; border: 0; border-radius: 9px; background: transparent; color: var(--text-soft); font-size: 12.5px; text-align: left; cursor: pointer; }
+.project-add:hover { background: var(--surface-hover); color: var(--text); }
+.project-add svg { width: 13px; height: 13px; }
 
 /* context breakdown popover */
 .context-pop { padding: 0; }

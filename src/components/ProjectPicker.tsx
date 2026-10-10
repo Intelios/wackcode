@@ -232,8 +232,8 @@ export function ProjectPicker({ projects, projectId, pinned, onSelect, onSetPinn
             )}
             {list}
           </motion.div>
-          <div className="repo-picker-foot">
-            <button type="button" className="repo-add" onClick={() => { setOpen(false); onAddProject(); }}>
+          <div className="project-picker-foot">
+            <button type="button" className="project-add" onClick={() => { setOpen(false); onAddProject(); }}>
               <Icon name="plus" /> Add project… <kbd>⌘O</kbd>
             </button>
           </div>

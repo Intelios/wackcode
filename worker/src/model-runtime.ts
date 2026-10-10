@@ -17,20 +17,23 @@ export type SettingsManager = ReturnType<PiModule["SettingsManager"]["inMemory"]
 /**
  * The base URL a model's API actually needs. The Messages client appends `/v1/messages` itself
  * and the OpenAI clients append `/chat/completions` or `/responses`, so an anthropic-messages
- * base leaves `/v1` off while the OpenAI formats keep it. A model may speak a different API than
- * its connection (`api` overrides it — OpenCode Go serves one gateway over all three), so its
- * base URL is re-derived rather than inherited: a Messages model on a Completions connection
- * would otherwise post `…/v1/v1/messages` and land on the gateway's HTML 404 page. Returns
- * undefined when the connection's base already fits, leaving the provider's own `baseUrl` in
- * force. Same-gateway base URLs are the documented convention (see ProvidersSection); a model
- * hosted elsewhere can't be expressed today.
+ * base leaves `/v1` off while the OpenAI formats keep whatever version segment they were given
+ * — `…/v1` usually, but endpoints like z.ai's `…/paas/v4` carry their own and must not gain a
+ * second one. A model on its connection's own API uses the saved base URL as-is (Messages also
+ * repairs records saved before canonicalization); only a model whose `api` overrides the
+ * connection's needs a re-derived base: a Messages model on a Completions connection would
+ * otherwise post `…/v1/v1/messages` and land on the gateway's HTML 404 page, and the reverse
+ * gains `/v1` (OpenCode Go's convention). Returns undefined when the connection's base already
+ * fits, leaving the provider's own `baseUrl` in force. Same-gateway base URLs are the
+ * documented convention (see ProvidersSection); a model hosted elsewhere can't be expressed
+ * today.
  */
 function resolveModelBaseUrl(provider: WorkerProvider, model: WorkerModel): string | undefined {
   const base = provider.baseUrl.replace(/\/+$/, "");
   const api = model.api ?? provider.api;
   const resolved = api === "anthropic-messages"
     ? base.replace(/\/v1\/messages$/i, "").replace(/\/v1$/i, "")
-    : /\/v1$/i.test(base) ? base : `${base}/v1`;
+    : api !== provider.api && !/\/v\d[^/]*$/i.test(base) ? `${base}/v1` : base;
   return resolved === base ? undefined : resolved;
 }
 

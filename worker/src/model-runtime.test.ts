@@ -56,6 +56,25 @@ describe("connection models in Pi", () => {
     expect((await findModel(runtime, connection, "haiku"))?.baseUrl).toBe("http://127.0.0.1:9");
   });
 
+  it("gives a Completions model the /v1 its Messages connection's base URL left off", async () => {
+    const connection = provider({ api: "anthropic-messages", baseUrl: "http://127.0.0.1:9/zen/go",
+      models: [model("haiku", "Haiku"), { ...model("glm", "GLM"), api: "openai-completions" }] });
+    const runtime = await load(connection);
+    expect(runtime.getError()).toBeUndefined();
+    expect((await findModel(runtime, connection, "haiku"))?.baseUrl).toBe("http://127.0.0.1:9/zen/go");
+    expect((await findModel(runtime, connection, "glm"))?.baseUrl).toBe("http://127.0.0.1:9/zen/go/v1");
+  });
+
+  it("keeps a non-v1 version segment an OpenAI connection's base URL already carries", async () => {
+    // z.ai's coding plan speaks Completions under `…/paas/v4`: appending `/v1` on top
+    // (`…/v4/v1/chat/completions`) lands on its 404 page, so a model on its connection's own
+    // API must use the saved base URL untouched.
+    const connection = provider({ baseUrl: "https://api.z.ai/api/coding/paas/v4" });
+    const runtime = await load(connection);
+    expect(runtime.getError()).toBeUndefined();
+    expect((await findModel(runtime, connection, "named"))?.baseUrl).toBe("https://api.z.ai/api/coding/paas/v4");
+  });
+
   it("repairs a Messages connection whose saved base URL kept a pasted endpoint suffix", async () => {
     // Records written before the base URL was normalized — the migration covers them, and the
     // per-model derivation stays correct when it can't have run.

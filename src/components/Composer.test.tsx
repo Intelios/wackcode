@@ -1015,9 +1015,12 @@ describe("Composer attachment previews", () => {
     attach(png());
     await screen.findByAltText("Attached image 1");
     fireEvent.click(screen.getByRole("button", { name: "Open attached image 1" }));
-    // The picked file is already in memory at full size, so the lightbox needs no fetch.
+    // The picked file is already in memory at full size, so the lightbox needs no fetch —
+    // and never wears the blurred placeholder class.
     const dialog = screen.getByRole("dialog", { name: "Attached image 1" });
-    expect(dialog.querySelector("img")?.getAttribute("src")).toMatch(/^data:image\/png;base64,/);
+    const lightboxImg = dialog.querySelector("img")!;
+    expect(lightboxImg.getAttribute("src")).toMatch(/^data:image\/png;base64,/);
+    expect(lightboxImg.className).not.toContain("preview");
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("dialog")).toBeNull();
   });

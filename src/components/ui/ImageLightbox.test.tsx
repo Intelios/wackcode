@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ImageLightbox } from "./ImageLightbox";
 import { NavigationScope } from "./NavigationScope";
@@ -50,6 +50,21 @@ describe("ImageLightbox", () => {
     resolve("data:image/png;base64,original");
     await Promise.resolve();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+  it("shows the preview sharp at once when it is the only image (no load)", () => {
+    const img = renderLightbox();
+    // The composer passes its already-full-size data URL with no `load`: it must never wear
+    // the blurred placeholder class.
+    expect(img.className).not.toContain("preview");
+    expect(img.className).toContain("loaded");
+  });
+  it("keeps the blurred preview when load resolves undefined (original unavailable)", async () => {
+    const img = render(<ImageLightbox preview="data:image/png;base64,thumb" load={() => Promise.resolve(undefined)} alt="Attached image 1" onClose={onClose} />)
+      .getByAltText("Attached image 1");
+    expect(img.className).toContain("preview"); // the placeholder while loading
+    await act(async () => {}); // let the undefined-resolving promise settle
+    expect(img.className).toContain("preview"); // and it stays blurred: no original to sharpen into
+    expect(img.className).not.toContain("loaded");
   });
   it("zooms toward the clicked point, and a second click zooms back out", async () => {
     const img = renderLightbox();

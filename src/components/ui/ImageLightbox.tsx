@@ -5,9 +5,9 @@ import { Icon } from "../Icons";
 import { useNavigationDismiss } from "./NavigationScope";
 
 interface Props {
-  /** Shown at once (a small preview), and kept if the original can't be loaded. */
+  /** Shown at once. With `load` it is a small placeholder kept if the original can't be loaded; without `load` it is the final image, shown sharp immediately. */
   preview: string;
-  /** Resolves to the full-size image's URL, or undefined when only the preview exists. */
+  /** Resolves to the full-size image's URL, or undefined when only the preview exists (which then stays blurred as the degraded state). Omit it when `preview` is already the original. */
   load?: () => Promise<string | undefined>;
   alt: string;
   onClose: () => void;
@@ -21,7 +21,8 @@ const clamp = (value: number, min: number, max: number) => Math.min(max, Math.ma
 
 /**
  * A screenshot at full size over the app. It grows out of the preview while the original loads,
- * then sharpens into it. Escape or a click outside closes it. Clicking the image zooms ZOOM×
+ * then sharpens into it; with no `load` the preview is the original, so it opens sharp right away.
+ * Escape or a click outside closes it. Clicking the image zooms ZOOM×
  * around the clicked point (click again, or −, to zoom back out; + zooms to centre); while
  * zoomed it pans by dragging.
  */
@@ -156,7 +157,7 @@ export function ImageLightbox({ preview, load, alt, onClose }: Props) {
       >
         <motion.img
           ref={imgRef}
-          className={full ? "loaded" : "preview"}
+          className={load && !full ? "preview" : "loaded"}
           src={full ?? preview}
           alt={alt}
           draggable={false}

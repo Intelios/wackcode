@@ -57,4 +57,4 @@ Test a new surface in at least the default, Mono and one colourful preset, with 
 - Short, plain sentences in the second person. Errors say what happened and what to do; Rust errors are shown to users verbatim, so write them as sentences.
 - Name settings as `Settings › Section`.
 - The agent is `agentName(...)` / `AssistantNameContext` (`src/agentName.ts`), never "Pi". Only genuine Pi product references (the package catalogue, subscription sign-in, the worker process) say Pi.
-- User-facing behaviour changes also update `README.md`.
+- Only changes that matter to a visitor update `README.md`; see the README rule in `AGENTS.md`.

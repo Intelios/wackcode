@@ -1,6 +1,6 @@
 # AGENTS.md
 
-WackCode is a local macOS desktop app for the [Pi coding agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent), built with Tauri 2, React 19 + TypeScript, and Rust. Pi is pinned in `worker/package.json`. `README.md` is the user-facing overview for GitHub visitors: update it when a user-visible feature changes, and keep it an overview, not a manual.
+WackCode is a local macOS desktop app for the [Pi coding agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent), built with Tauri 2, React 19 + TypeScript, and Rust. Pi is pinned in `worker/package.json`. `README.md` is the user-facing overview for GitHub visitors, not a manual. Update it only for changes that matter to a visitor deciding whether to use WackCode (a major feature, a changed requirement, a privacy or security change), not for small additions or UI details. Optional features get a mention, not a section.
 
 **Keep this file short:** it is sent with every agent request. It holds only rules that any change could break, plus the design direction. Area detail goes in `docs/`, and a feature's invariants go in comments next to its code, so read a file's header comment before changing it.
 
@@ -8,7 +8,7 @@ WackCode is a local macOS desktop app for the [Pi coding agent](https://www.npmj
 
 - macOS on Apple Silicon only. Unix-only APIs (`killpg`, `open(1)`) are deliberate; don't "fix" them for other platforms.
 - pnpm only (version pinned in `package.json`). No npm/yarn, no `package-lock.json`.
-- Out of scope; don't propose these as fixes: embedded editors, permission prompts (tool-call approval gates; Computer use's per-app access card is the one deliberate exception), automatic merging, notarization, auto-updates, other platforms.
+- Out of scope; don't propose these as fixes: embedded editors, permission prompts (tool-call approval gates; Computer use's per-app access card is the one deliberate exception), automatic merging, notarization, auto-updates.
 - `todo.md` (gitignored) is the owner's idea list: ask before starting anything from it.
 
 ## Map

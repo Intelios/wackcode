@@ -2878,19 +2878,37 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .skill-draft-saved code { font-size: 11px; color: var(--text-dim); overflow-wrap: anywhere; }
 
 /* ── Built-in todo panel ──────────────────────────── */
+/* A real drawn tree, not box-drawing text. The header's root dot is the trunk; every row's
+   ::before carries one segment of the vertical rail (accent fills in behind touched rows,
+   so the tree itself shows progress), and every ::after is the branch to that row's
+   status marker — a square stub mid-tree, a rounded └ bend on the last row. The rail sits
+   3.5px inside each row, exactly under the root dot's centre (12px head padding + half the
+   7px dot). Rows never wrap (subjects ellipsize), so the 50% marker maths stays true. */
 .todo-panel-wrap { flex: 0 0 auto; padding: 0 24px 8px; }
 .todo-panel { max-width: 760px; margin: 0 auto; border: 1px solid var(--border); background: var(--surface); border-radius: 10px; overflow: hidden; }
-.todo-panel-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px; }
+.todo-panel-head { position: relative; display: flex; align-items: center; gap: 8px; padding: 6px 12px 3px; }
+/* The stub that drops from the root dot into the list's rail while the panel is expanded. */
+.todo-panel:not(.collapsed) .todo-panel-head::after {
+  content: ""; position: absolute; left: 15px; top: calc(50% + 4px); bottom: 0;
+  width: 1px; background: var(--wc-accent); transition: background .35s var(--ease);
+}
+.todo-root-dot {
+  flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--wc-accent); transition: background .25s var(--ease);
+}
+.todo-root-dot.live { animation: goal-pulse 1.4s ease-in-out infinite; }
 .todo-panel-title {
   display: inline-flex; align-items: center; gap: 6px; min-width: 0;
   color: var(--wc-accent); font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em;
 }
 .todo-panel.done .todo-panel-title { color: var(--text-faint); }
+.todo-panel-count { color: var(--text-faint); font-weight: 600; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
 .todo-panel-more {
-  border: 0; background: transparent; color: var(--text-faint); font-size: 11px; padding: 2px 6px;
-  border-radius: 5px; cursor: pointer;
+  border: 1px solid var(--border); background: transparent; color: var(--text-faint); font-size: 10.5px;
+  padding: 1px 8px; border-radius: 999px; cursor: pointer;
+  transition: color .15s var(--ease), border-color .15s var(--ease), background .15s var(--ease);
 }
-.todo-panel-more:hover { color: var(--text-soft); background: var(--surface-hover); }
+.todo-panel-more:hover { color: var(--text-soft); border-color: var(--border-bright); background: var(--surface-hover); }
 .todo-panel-collapse {
   margin-left: auto; display: inline-grid; place-items: center; width: 22px; height: 22px;
   border: 0; background: transparent; color: var(--text-dim); border-radius: 5px; cursor: pointer;
@@ -2898,24 +2916,62 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .todo-panel-collapse:hover { color: var(--text-soft); background: var(--surface-hover); }
 .todo-panel-collapse svg { width: 12px; height: 12px; transform: rotate(90deg); transition: transform .15s ease; }
 .todo-panel.collapsed .todo-panel-collapse svg { transform: rotate(0deg); }
+/* The list is pulled up into the head's padding so the trunk from the root dot stays short:
+   the head stub and the first row's rail overlap on the same column. */
 .todo-panel-list {
-  margin: 0; padding: 0 12px 9px; list-style: none; display: flex; flex-direction: column; gap: 2px;
-  max-height: 176px; overflow-y: auto;
+  margin: -4px 0 0; padding: 0 12px 9px; list-style: none; display: flex; flex-direction: column;
+  max-height: 180px; overflow-y: auto;
 }
 .todo-row {
-  display: flex; align-items: baseline; gap: 7px; font-size: 12px; line-height: 1.55; color: var(--text-soft);
+  position: relative; display: flex; align-items: center; gap: 7px;
+  padding: 3px 0 3px 22px; font-size: 12px; line-height: 1.55; color: var(--text-soft);
 }
-.todo-row .todo-tree { flex: 0 0 auto; color: var(--text-faint); font-size: 11px; }
-.todo-row .todo-glyph { flex: 0 0 auto; width: 12px; text-align: center; }
-.todo-row.in_progress .todo-glyph { color: var(--wc-accent); }
+.todo-row:first-child { padding-top: 1px; }
+.todo-row::before {
+  content: ""; position: absolute; left: 3px; top: 0; bottom: 0; width: 1px;
+  background: var(--border-bright); transition: background .35s var(--ease);
+}
+.todo-row.completed::before, .todo-row.in_progress::before { background: var(--wc-accent); }
+.todo-row:last-child::before { bottom: calc(50% + 9px); }
+.todo-row::after {
+  content: ""; position: absolute; left: 3px; top: calc(50% - .5px); width: 19px; height: 1px;
+  background: var(--border-bright); transition: background .35s var(--ease);
+}
+.todo-row.completed::after, .todo-row.in_progress::after { background: var(--wc-accent); }
+.todo-row:last-child::after {
+  left: 3px; top: calc(50% - 10px); bottom: calc(50% - .5px); width: 19px; height: auto;
+  background: transparent; border-left: 1px solid var(--border-bright);
+  border-bottom: 1px solid var(--border-bright); border-bottom-left-radius: 8px;
+  transition: border-color .35s var(--ease);
+}
+.todo-row:last-child.completed::after, .todo-row:last-child.in_progress::after { border-color: var(--wc-accent); }
+.todo-mark { position: relative; flex: 0 0 auto; width: 12px; height: 12px; display: grid; place-items: center; }
+.todo-mark-circle {
+  width: 8.5px; height: 8.5px; border-radius: 50%; box-sizing: border-box;
+  border: 1.5px solid var(--text-faint);
+}
+.todo-mark-circle.in_progress {
+  border-color: var(--wc-accent);
+  background: conic-gradient(var(--wc-accent) 0 50%, transparent 50% 100%);
+}
+.todo-check { width: 11px; height: 11px; color: var(--wc-accent); stroke-width: 2.4; }
+.todo-check path { stroke-dasharray: 24; stroke-dashoffset: 24; animation: todo-check-draw .3s var(--ease) forwards; }
+@keyframes todo-check-draw { to { stroke-dashoffset: 0; } }
 .todo-row .todo-id { flex: 0 0 auto; color: var(--text-faint); font-size: 10.5px; }
 .todo-row .todo-subject { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.todo-row .todo-active-form { flex: 0 0 auto; color: var(--text-faint); font-size: 11px; }
-.todo-row .todo-blocks { flex: 0 0 auto; color: var(--text-faint); font-size: 10.5px; }
+.todo-row .todo-active-form { flex: 0 0 auto; color: var(--text-dim); font-size: 11px; }
+.todo-row .todo-blocks {
+  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 3px;
+  color: var(--text-faint); font-size: 10.5px;
+}
+.todo-row .todo-blocks svg { width: 10.5px; height: 10.5px; }
 .todo-row.completed { color: var(--text-faint); }
 .todo-row.completed .todo-subject { text-decoration: line-through; }
 .todo-panel-more:focus-visible, .todo-panel-collapse:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--wc-accent) 70%, transparent); outline-offset: 1px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .todo-root-dot { animation: none; }
 }
 
 /* ── Built-in goal banner ──────────────────────────── */

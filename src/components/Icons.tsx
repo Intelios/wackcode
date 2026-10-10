@@ -1,7 +1,7 @@
 import type { SVGProps } from "react";
 import { quillIconPaths } from "./QuillMark";
 
-export type IconName = "star" | "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "browser" | "expand" | "collapse" | "copy" | "archive" | "unarchive" | "send" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "checklist" | "terminal" | "file" | "paperclip" | "pencil" | "quill" | "external" | "brain" | "hammer" | "search" | "wrench" | "question" | "image" | "close" | "rewind" | "agents" | "flame" | "palette" | "plug" | "book" | "comment" | "commit" | "push" | "pullRequest" | "slash" | "erase" | "cursor" | "memory" | "accessibility" | "viewfinder" | "lock" | "dock" | "clock" | "pull" | "fetch" | "pin" | "split" | "unified" | "undo" | "code" | "filePlus" | "textSearch" | "globe" | "play" | "gamepad";
+export type IconName = "star" | "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "browser" | "expand" | "collapse" | "copy" | "archive" | "unarchive" | "send" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "checklist" | "terminal" | "file" | "paperclip" | "pencil" | "quill" | "external" | "brain" | "hammer" | "search" | "wrench" | "question" | "image" | "close" | "rewind" | "agents" | "flame" | "palette" | "plug" | "book" | "comment" | "commit" | "push" | "pullRequest" | "slash" | "erase" | "cursor" | "memory" | "accessibility" | "viewfinder" | "lock" | "dock" | "clock" | "pull" | "fetch" | "pin" | "split" | "unified" | "undo" | "code" | "filePlus" | "textSearch" | "globe" | "play" | "gamepad" | "link";
 
 const paths: Record<IconName, React.ReactNode> = {
   star: <path d="m12 3 2.8 5.7 6.3.9-4.5 4.4 1.1 6.2-5.7-3-5.7 3 1.1-6.2-4.5-4.4 6.3-.9z" />,
@@ -96,7 +96,9 @@ const paths: Record<IconName, React.ReactNode> = {
   slash: <><path d="m17 4-10 16" /><path d="M7 8.5 5 7l2-1.5" /><path d="m17 15.5 2 1.5-2 1.5" /></>,
   // Memory: the bookmark a saved note is.
   memory: <path d="M7 3.5h10a1 1 0 0 1 1 1V20l-6-3.8L6 20V4.5a1 1 0 0 1 1-1z" />,
-  erase: <><path d="m8.2 20.6-4.5-4.6a2 2 0 0 1 0-2.8L12 4.7a2 2 0 0 1 2.8 0l4.7 4.8a2 2 0 0 1 0 2.8l-6.5 6.5a2 2 0 0 1-1.4.6H9.5" /><path d="m9.8 7.8 6.6 6.6" /><path d="M3.5 20.5h17" /></>
+  erase: <><path d="m8.2 20.6-4.5-4.6a2 2 0 0 1 0-2.8L12 4.7a2 2 0 0 1 2.8 0l4.7 4.8a2 2 0 0 1 0 2.8l-6.5 6.5a2 2 0 0 1-1.4.6H9.5" /><path d="m9.8 7.8 6.6 6.6" /><path d="M3.5 20.5h17" /></>,
+  // Todo panel: the chain of tasks a blocked row is waiting on.
+  link: <><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></>
 };
 
 export function Icon({ name, ...props }: SVGProps<SVGSVGElement> & { name: IconName }) {

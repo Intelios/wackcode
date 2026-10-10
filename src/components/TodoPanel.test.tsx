@@ -13,15 +13,24 @@ describe("TodoPanel", () => {
     { id: 4, subject: "Old idea", status: "deleted" }
   ];
 
-  it("renders counts, glyphs, activeForm and dependency hints, hiding tombstones", () => {
+  it("renders counts, markers, activeForm and dependency hints, hiding tombstones", () => {
     render(<TodoPanel tasks={tasks} />);
-    expect(screen.getByText("Todos (1/3)")).toBeInTheDocument();
+    expect(screen.getByText("Todos")).toBeInTheDocument();
+    expect(screen.getByText("(1/3)")).toBeInTheDocument();
     expect(screen.getByText("Set up renderer")).toBeInTheDocument();
     expect(screen.getByText("(wiring the events)")).toBeInTheDocument();
-    expect(screen.getByText("⛓ #2")).toBeInTheDocument();
-    // Ids prefix every row once any task carries dependencies.
-    expect(screen.getByText("#2")).toBeInTheDocument();
+    expect(screen.getByLabelText("Blocked by #2")).toBeInTheDocument();
+    // Ids prefix every row once any task carries dependencies; the blocked hint repeats it.
+    expect(screen.getAllByText("#2").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByRole("listitem", { name: "Wire events, in progress" })).toBeInTheDocument();
     expect(screen.queryByText("Old idea")).not.toBeInTheDocument();
+  });
+
+  it("draws a ring for open tasks and a check for completed ones", () => {
+    const { container } = render(<TodoPanel tasks={tasks} />);
+    expect(container.querySelectorAll(".todo-mark-circle.pending")).toHaveLength(1);
+    expect(container.querySelectorAll(".todo-mark-circle.in_progress")).toHaveLength(1);
+    expect(container.querySelectorAll(".todo-check")).toHaveLength(1);
   });
 
   it("omits row ids when no task has dependencies", () => {
@@ -69,7 +78,7 @@ describe("TodoPanel", () => {
     render(<TodoPanel tasks={tasks} />);
     fireEvent.click(screen.getByRole("button", { name: "Collapse todos" }));
     expect(screen.queryByText("Set up renderer")).not.toBeInTheDocument();
-    expect(screen.getByText("Todos (1/3)")).toBeInTheDocument();
+    expect(screen.getByText("(1/3)")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Expand todos" }));
     expect(screen.getByText("Set up renderer")).toBeInTheDocument();

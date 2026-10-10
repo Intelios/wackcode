@@ -38,7 +38,7 @@ Add a project folder with <kbd>⌘ O</kbd> and start a chat with <kbd>⌘ N</kbd
 
 Each chat keeps its unsent text and attachments while the app is running. Switch chats or open a new one with <kbd>⌘ N</kbd>, then return to pick up your draft.
 
-Turn on **Settings › Appearance › Chat tabs** to keep chats from any project in one tab strip. Each tab remembers its reading position and side panel; new tabs have their own project, model and unsent draft. Drag tabs to reorder, use <kbd>⌃ Tab</kbd> to switch, or <kbd>⌘ W</kbd> to close one without stopping its chat. **Reopen closed tab** restores the last ten closures, including drafts. The tab workspace lasts until you quit.
+Turn on **Settings › Appearance › Chat tabs** to keep chats from any project in one tab strip. Each tab remembers its reading position and side panel; new tabs have their own project, model and unsent draft. The strip appears once a second chat is open and hides again for one. Drag tabs to reorder, use <kbd>⌃ Tab</kbd> to switch, or <kbd>⌘ W</kbd> to close one without stopping its chat. **Reopen closed tab** restores the last ten closures, including drafts. The tab workspace lasts until you quit.
 
 Chats keep working when you switch away, and even when you close the window: WackCode stays in the menu bar, where the duck lists chats that are working or waiting for you. Quitting stops the chat workers; they also stop if their connection to the app is lost. An idle chat's background process stops after 15 minutes. Saved history opens directly from disk, even without a working model connection; the agent starts again when you send it work. Archive finished chats to tidy the sidebar; the Archived view lets you restore or delete them.
 

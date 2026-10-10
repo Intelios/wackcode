@@ -395,7 +395,7 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .workspace { min-width: 0; flex: 1; display: flex; flex-direction: column; position: relative; }
 /* Draft hero and chat view overlay each other during the welcome→chat transition
    so the exiting hero can fade while the chat (and the gliding composer) mounts. */
-.chat-view { position: absolute; inset: 0; display: flex; flex-direction: column; padding-bottom: var(--composer-h, 0px); }
+.chat-view { position: absolute; inset: 0; display: flex; flex-direction: column; padding-bottom: var(--composer-h, 0px); transition: top .22s var(--ease); }
 .chat-transcript { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .workspace-header {
   min-height: 56px; padding: 12px 14px 9px 20px; display: flex; align-items: center; gap: 12px;
@@ -1361,7 +1361,7 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 /* Overlay layer for the persistent composer: it travels between the centered
    hero slot and the docked chat slot via a motion layout animation, so it can
    never unmount mid-transition. pointer-events pass through except the composer. */
-.composer-layer { position: absolute; inset: 0; display: flex; flex-direction: column; pointer-events: none; }
+.composer-layer { position: absolute; inset: 0; display: flex; flex-direction: column; pointer-events: none; transition: top .22s var(--ease); }
 .composer-layer.hero { justify-content: center; padding-bottom: 8%; }
 .composer-layer.dock { justify-content: flex-end; }
 .composer-layer .composer-wrap { pointer-events: auto; }
@@ -1667,7 +1667,7 @@ button.reasoning-toggle.at-max .reasoning-toggle-label {
    is scoped to a .chat-* class only the Chat area renders. Content surfaces (bubbles, the
    composer, sheets) stay solid over an image backdrop or Liquid Glass; only the header is shell.
    Each looping animation has a still end state in the reduced-motion block at the bottom. */
-.chat-area { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.chat-area { position: absolute; inset: 0; display: flex; flex-direction: column; transition: top .22s var(--ease); }
 .workspace.has-chat-tabs .chat-area { top: 42px; }
 .chat-area-view { position: absolute; inset: 0; display: flex; flex-direction: column; padding-bottom: var(--composer-h, 0px); }
 .chat-area-view > .inline-dialog-wrap { margin: 0 auto; width: min(720px, 100%); }

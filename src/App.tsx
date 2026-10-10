@@ -1259,6 +1259,9 @@ export default function App() {
   const tabCommandsAllowed = tabsEnabled && !settingsOpen && !confirm && !restoreDialog && !subscriptionLogin;
   const areaTabCount = tabsInArea(tabs.state, area).length;
   const areaCanReopen = tabs.state.closed.some((entry) => entry.tab.area === area);
+  // The strip only earns its space once it can switch between chats: a lone tab stays hidden
+  // and the workspace looks like the tabs-off layout. Shortcuts and the Tabs menu keep working.
+  const showChatTabBar = tabsEnabled && areaTabCount > 1;
   const nativeTabAction = useRef<(command: string) => void>(() => undefined);
   nativeTabAction.current = (command) => {
     // The native menu carries the area switch too, so it works while a browser page has focus.
@@ -2753,7 +2756,7 @@ export default function App() {
     composerDisabled: Boolean(selectedTask?.archived || composerTab?.sending) || (selectedTask ? pendingDialogTaskIds.has(selectedTask.id) : false),
     handoff: transitioning?.composerKey === composerDraftKey ? transitioning.message : undefined,
     seed: selectedTask && composerSeed?.taskId === selectedTask.id ? composerSeed : undefined,
-    panel: tabsEnabled ? { id: "chat-tab-panel", labelledBy: activeTab ? `tab-${activeTab.id}` : undefined } : undefined,
+    panel: showChatTabBar ? { id: "chat-tab-panel", labelledBy: activeTab ? `tab-${activeTab.id}` : undefined } : undefined,
     onMessageAction,
     onReveal: (path) => { void api.revealPath(path, true).catch((reason) => setGlobalError(String(reason))); },
     loadImage: loadMessageImage,
@@ -2873,8 +2876,8 @@ export default function App() {
         onDeleteAllArchived={deleteAllArchived}
       />
 
-      <main className={`workspace${tabsEnabled ? " has-chat-tabs" : ""}`}>
-        {tabsEnabled && <ChatTabBar tabs={tabItems} activeId={activeTab?.id} canReopen={areaCanReopen}
+      <main className={`workspace${showChatTabBar ? " has-chat-tabs" : ""}`}>
+        {showChatTabBar && <ChatTabBar tabs={tabItems} activeId={activeTab?.id} canReopen={areaCanReopen}
           {...tabHandlers} />}
         {tabsEnabled && !selectedTask && activeTab?.error && <div className="error-banner workspace-error" role="alert"><span>{activeTab.error}</span></div>}
         {area === "chat" && configuredProviders.length > 0 && chatAreaProps && <ChatContexts appearance={data.appearance}>
@@ -2884,7 +2887,7 @@ export default function App() {
         </ChatContexts>}
         <AnimatePresence initial={false}>
         {selectedTask && area === "code" ? (
-          <motion.div key="chat" className="chat-view" role={tabsEnabled ? "tabpanel" : undefined} id={tabsEnabled ? "chat-tab-panel" : undefined} aria-labelledby={tabsEnabled ? `tab-${activeTab?.id}` : undefined} initial={false} exit={{ opacity: 0, transition: { duration: reduce ? 0 : 0.18, ease: EASE } }}>
+          <motion.div key="chat" className="chat-view" role={showChatTabBar ? "tabpanel" : undefined} id={showChatTabBar ? "chat-tab-panel" : undefined} aria-labelledby={showChatTabBar ? `tab-${activeTab?.id}` : undefined} initial={false} exit={{ opacity: 0, transition: { duration: reduce ? 0 : 0.18, ease: EASE } }}>
             <motion.div initial={reduce ? false : { opacity: 0, y: -36 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reduce ? 0 : 0.45, delay: reduce ? 0 : 0.05, ease: EASE }}>
               <ChatHeader
               task={selectedTask}
@@ -3013,9 +3016,9 @@ export default function App() {
         {configuredProviders.length > 0 && area === "code" && (
           <div
             className={`composer-layer ${selectedTask ? "dock" : "hero"}`}
-            role={tabsEnabled && !selectedTask ? "tabpanel" : undefined}
-            id={tabsEnabled && !selectedTask ? "chat-tab-panel" : undefined}
-            aria-labelledby={tabsEnabled && !selectedTask ? `tab-${activeTab?.id}` : undefined}
+            role={showChatTabBar && !selectedTask ? "tabpanel" : undefined}
+            id={showChatTabBar && !selectedTask ? "chat-tab-panel" : undefined}
+            aria-labelledby={showChatTabBar && !selectedTask ? `tab-${activeTab?.id}` : undefined}
           >
             <AnimatePresence initial={false} mode="popLayout" custom={area}>
               {!selectedTask && (

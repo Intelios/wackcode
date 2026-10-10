@@ -74,8 +74,11 @@ describe("App tab workspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     fireEvent.click(screen.getByText("Toggle tabs"));
     fireEvent.click(screen.getByText("Close settings"));
+    // One tab still looks like the tabs-off layout; the strip arrives with the second chat.
+    expect(screen.queryByRole("tablist")).toBeNull();
+    chat("a");
     await screen.findByRole("tablist");
-    chat("a"); chat("b");
+    chat("b");
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     fireEvent.click(screen.getByText("Toggle tabs")); fireEvent.click(screen.getByText("Close settings"));
     expect(screen.queryByRole("tablist")).toBeNull();
@@ -86,8 +89,10 @@ describe("App tab workspace", () => {
   });
 
   it("preserves independent draft text, attachments, model choice and recovery", async () => {
-    bootstrap(); await screen.findByRole("tablist");
-    const first = screen.getByRole("tab").id;
+    bootstrap(); await screen.findByRole("button", { name: "Settings" });
+    await native("new");
+    const first = screen.getAllByRole("tab")[0].id;
+    fireEvent.click(document.getElementById(first)!);
     type("First draft");
     fireEvent.change(screen.getByTestId("attach-input"), { target: { files: [new File(["notes"], "notes.txt", { type: "text/plain" })] } });
     await screen.findByText("notes.txt");
@@ -114,10 +119,11 @@ describe("App tab workspace", () => {
       { id: `p-${id}`, role: "assistant", blocks: [{ type: "text", text: `Checking ${id}` }] },
       { id: `a-${id}`, entryId: `a-${id}`, role: "assistant", stopReason: "stop", blocks: [{ type: "text", text: `Answer ${id}` }], turn: { userEntryId: `u-${id}`, endEntryId: `a-${id}` } }
     ];
-    bootstrap(); await screen.findByRole("tablist");
+    bootstrap(); await screen.findByRole("button", { name: "Settings" });
     await worker({ type: "snapshot", taskId: "a", snapshot: snapshot(transcript("a")) });
     await worker({ type: "snapshot", taskId: "b", snapshot: snapshot(transcript("b")) });
-    chat("a"); fireEvent.click(screen.getByRole("button", { name: /Show work transcript/ }));
+    chat("a"); await screen.findByRole("tablist");
+    fireEvent.click(screen.getByRole("button", { name: /Show work transcript/ }));
     chat("b");
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     fireEvent.click(screen.getByText("Toggle tabs")); fireEvent.click(screen.getByText("Close settings"));
@@ -129,8 +135,9 @@ describe("App tab workspace", () => {
   });
 
   it("deduplicates chats, remembers panels, and leaves workers running on close", async () => {
-    bootstrap(); await screen.findByRole("tablist");
-    chat("a"); fireEvent.click(screen.getByRole("button", { name: "Terminal" }));
+    bootstrap(); await screen.findByRole("button", { name: "Settings" });
+    chat("a"); await screen.findByRole("tablist");
+    fireEvent.click(screen.getByRole("button", { name: "Terminal" }));
     await screen.findByLabelText("Terminal a");
     chat("b"); expect(screen.queryByLabelText("Terminal a")).toBeNull();
     chat("a"); await screen.findByLabelText("Terminal a");
@@ -144,8 +151,10 @@ describe("App tab workspace", () => {
   it("finishes an originating send after switching without stealing selection", async () => {
     const creation = deferred<TaskRecord>(); const dispatch = deferred<string>();
     vi.mocked(api.createTask).mockReturnValue(creation.promise); vi.mocked(api.prompt).mockReturnValue(dispatch.promise);
-    bootstrap(); await screen.findByRole("tablist");
-    const original = screen.getByRole("tab").id;
+    bootstrap(); await screen.findByRole("button", { name: "Settings" });
+    chat("a"); await screen.findByRole("tablist");
+    const original = screen.getByRole("tab", { name: "New chat" }).id;
+    fireEvent.click(document.getElementById(original)!);
     type("First send"); fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     newTab(); type("Keep my draft");
     await act(async () => creation.resolve({ ...task("created"), name: "First send" }));
@@ -161,14 +170,15 @@ describe("App tab workspace", () => {
   it("does not reopen a closed sending tab and recovers its failed input", async () => {
     const dispatch = deferred<string>();
     vi.mocked(api.createTask).mockResolvedValue({ ...task("created"), name: "Failed send" }); vi.mocked(api.prompt).mockReturnValue(dispatch.promise);
-    bootstrap(); await screen.findByRole("tablist"); type("Recover me");
+    bootstrap(); await screen.findByRole("button", { name: "Settings" }); type("Recover me");
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() => expect(api.prompt).toHaveBeenCalled());
     await native("close"); type("New draft");
     await act(async () => dispatch.reject(new Error("Fixture failure")));
     expect(input()).toHaveValue("New draft");
-    expect(screen.getAllByRole("tab")).toHaveLength(1);
+    expect(screen.queryByRole("tablist")).toBeNull();
     await native("reopen");
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
     await waitFor(() => expect(input()).toHaveValue("Recover me"));
     expect(screen.getByText(/Fixture failure/)).toBeInTheDocument();
   });
@@ -176,7 +186,7 @@ describe("App tab workspace", () => {
   it("keeps saved-chat input recoverable after its tab leaves the ten-record shelf", async () => {
     const dispatch = deferred<string>();
     vi.mocked(api.createTask).mockResolvedValue({ ...task("created"), name: "Saved failure" }); vi.mocked(api.prompt).mockReturnValue(dispatch.promise);
-    bootstrap(); await screen.findByRole("tablist"); type("Recover after eviction");
+    bootstrap(); await screen.findByRole("button", { name: "Settings" }); type("Recover after eviction");
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() => expect(api.prompt).toHaveBeenCalled());
     await native("close");
@@ -190,7 +200,10 @@ describe("App tab workspace", () => {
   it("binds a closed draft before dispatch so a sidebar opening recovers its identity", async () => {
     const creation = deferred<TaskRecord>(); const dispatch = deferred<string>();
     vi.mocked(api.createTask).mockReturnValue(creation.promise); vi.mocked(api.prompt).mockReturnValue(dispatch.promise);
-    bootstrap(); await screen.findByRole("tablist"); const origin = screen.getByRole("tab").id;
+    bootstrap(); await screen.findByRole("button", { name: "Settings" });
+    await native("new");
+    const origin = screen.getAllByRole("tab")[0].id;
+    fireEvent.click(document.getElementById(origin)!);
     type("Sidebar race"); fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await native("close"); type("Other draft");
     await act(async () => creation.resolve({ ...task("created"), name: "Sidebar race" }));
@@ -216,26 +229,30 @@ describe("App tab workspace", () => {
       fireEvent.click(screen.getByRole("button", { name: "Settings" }));
       fireEvent.click(screen.getByText("Toggle tabs")); fireEvent.click(screen.getByText("Close settings"));
     }
-    expect(screen.getAllByRole("tab")).toHaveLength(1);
-    expect(screen.getByRole("tab", { name: /Toggle during send/ })).toHaveAttribute("aria-selected", "true");
+    // The single bound tab keeps the strip hidden; a second chat reveals it.
+    expect(screen.queryByRole("tablist")).toBeNull();
+    chat("a"); await screen.findByRole("tablist");
+    expect(screen.getByRole("tab", { name: /Toggle during send/ })).toBeInTheDocument();
   });
 
   it("dispatches a prepared slash command in its closed origin without taking another draft", async () => {
     const creation = deferred<TaskRecord>(); vi.mocked(api.createTask).mockReturnValue(creation.promise);
-    bootstrap(); await screen.findByRole("tablist"); type("/goal Fixture goal");
+    bootstrap(); await screen.findByRole("button", { name: "Settings" }); type("/goal Fixture goal");
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() => expect(api.createTask).toHaveBeenCalled());
     await native("close"); type("Independent draft");
     await act(async () => creation.resolve({ ...task("goal"), name: "Goal chat" }));
     await waitFor(() => expect(api.goalControl).toHaveBeenCalledWith("goal", "set", "Fixture goal", expect.any(Number)));
     expect(input()).toHaveValue("Independent draft");
-    expect(screen.getAllByRole("tab")).toHaveLength(1);
-    await native("reopen"); expect(input()).toHaveValue("");
+    expect(screen.queryByRole("tablist")).toBeNull();
+    await native("reopen");
+    expect(screen.getAllByRole("tab")).toHaveLength(2); expect(input()).toHaveValue("");
   });
 
   it("closes archived tabs, restores them read-only and removes deleted recovery entries", async () => {
     vi.mocked(api.archiveTask).mockResolvedValue({ ...task("a"), archived: true });
-    bootstrap(); await screen.findByRole("tablist"); chat("a");
+    bootstrap(); await screen.findByRole("button", { name: "Settings" });
+    chat("a"); await screen.findByRole("tablist");
     fireEvent.click(screen.getByRole("button", { name: "Terminal" }));
     fireEvent.click(screen.getByRole("button", { name: "Chat menu" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Archive" }));
@@ -251,7 +268,8 @@ describe("App tab workspace", () => {
   });
 
   it("shows completion while away and clears it on selection; native actions pause in Settings", async () => {
-    bootstrap(); await screen.findByRole("tablist"); chat("a"); chat("b");
+    bootstrap(); await screen.findByRole("button", { name: "Settings" });
+    chat("a"); await screen.findByRole("tablist"); chat("b");
     await act(async () => events.get("worker-event")?.({ payload: { type: "run_finished", taskId: "a", runId: "run", outcome: "completed" } }));
     fireEvent.click(screen.getByRole("tab", { name: /Chat a — Finished/ }));
     expect(screen.getByRole("tab", { name: "Chat a" })).toHaveAttribute("aria-selected", "true");
@@ -262,13 +280,14 @@ describe("App tab workspace", () => {
   });
 
   it("uses the current controller selection for rapid native shortcut sequences", async () => {
-    bootstrap(); await screen.findByRole("tablist");
-    chat("a"); chat("b");
+    bootstrap(); await screen.findByRole("button", { name: "Settings" });
+    chat("a"); await screen.findByRole("tablist"); chat("b");
     await act(async () => {
       for (const command of ["select-1", "close", "select-2", "close"]) events.get("native-tab-action")?.({ payload: command });
     });
-    expect(screen.getAllByRole("tab")).toHaveLength(1);
-    expect(screen.getByRole("tab", { name: "Chat a" })).toHaveAttribute("aria-selected", "true");
+    // Down to one tab the strip hides; Chat a is the chat that survived.
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Chat a" })).toBeInTheDocument();
   });
 
   it("retires the outgoing native browser before restoring another and scopes late state replies", async () => {
@@ -278,7 +297,8 @@ describe("App tab workspace", () => {
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
       return this.classList.contains("browser-surface") ? new DOMRect(1000, 100, 430, 700) : new DOMRect();
     });
-    bootstrap(); await screen.findByRole("tablist"); chat("a");
+    bootstrap(); await screen.findByRole("button", { name: "Settings" }); chat("a");
+    await screen.findByRole("tablist");
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "requestAnimationFrame", "cancelAnimationFrame", "performance"] });
     const settle = async () => {
       await act(async () => { vi.advanceTimersByTime(500); });
@@ -309,10 +329,11 @@ describe("App tab workspace", () => {
           usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 1 } }]
       } }] }
     ];
-    bootstrap(); await screen.findByRole("tablist");
+    bootstrap(); await screen.findByRole("button", { name: "Settings" });
     await worker({ type: "snapshot", taskId: "a", snapshot: snapshot(transcript("a")) });
     await worker({ type: "snapshot", taskId: "b", snapshot: snapshot(transcript("b")) });
-    chat("a"); fireEvent.click(screen.getByRole("button", { name: /^SubAgent Scout/ }));
+    chat("a"); await screen.findByRole("tablist");
+    fireEvent.click(screen.getByRole("button", { name: /^SubAgent Scout/ }));
     await waitFor(() => expect(api.watchSubagent).toHaveBeenLastCalledWith("a", { toolCallId: "job-a", index: 0 }));
     chat("b"); fireEvent.click(screen.getByRole("button", { name: /^SubAgent Scout/ }));
     await waitFor(() => expect(api.watchSubagent).toHaveBeenLastCalledWith("b", { toolCallId: "job-b", index: 0 }));
@@ -443,15 +464,19 @@ describe("App areas", () => {
 
   it("gives each area its own tab bar", async () => {
     boot([task("a"), chatTask("c", "Trip plan")], true);
-    await screen.findByRole("tablist");
+    await screen.findByRole("button", { name: "Settings" });
+    // A lone draft tab stays below the strip's two-tab threshold.
+    expect(screen.queryByRole("tablist")).toBeNull();
     chat("a");
+    await screen.findByRole("tablist");
     await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
     enter("Chat");
-    // A fresh draft tab; Code's two are not in this bar.
-    await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
-    expect(screen.getByRole("tab")).toHaveAccessibleName(/New chat/);
+    // A fresh draft tab; Code's two are not in this bar, which hides again.
+    expect(screen.queryByRole("tablist")).toBeNull();
     fireEvent.click(await screen.findByRole("button", { name: "Trip plan" }));
+    await screen.findByRole("tablist");
     await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
+    expect(screen.getByRole("tab", { name: /Trip plan/ })).toHaveAttribute("aria-selected", "true");
     enter("Code");
     await waitFor(() => expect(screen.getByRole("tab", { name: /Chat a/ })).toHaveAttribute("aria-selected", "true"));
     expect(screen.getAllByRole("tab")).toHaveLength(2);

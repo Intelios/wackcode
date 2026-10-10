@@ -59,7 +59,9 @@ finishes; the status line under it carries the trigger reason and a wall-clock e
 
 `appearance.chatTabs` defaults off. `App` owns `useChatTabs` and the pure rules in
 `chat-tabs.ts`: ordered stable tab ids, selection, taskless draft configuration, panel
-state and ten closed records. None of this workspace state is serialized; quitting or a
+state and ten closed records. The strip mounts only once the area holds a second tab —
+one open chat keeps the tabs-off layout — while every tab rule still applies
+underneath. None of this workspace state is serialized; quitting or a
 renderer reload discards it, while hiding the window keeps it. A tab's id
 and composer key survive draft-to-chat binding, including binding a closed recovery
 record after a send finishes. Saved-chat composer keys also survive eviction from

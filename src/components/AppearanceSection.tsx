@@ -63,7 +63,7 @@ const CHAT_OPTIONS: { key: "chatTabs" | "thinkingPreview" | "messageBubbles" | "
   {
     key: "groupExploration",
     label: "Group exploration",
-    description: () => "Fold runs of file reads, searches and listings into one “Explored” row you can expand.",
+    description: () => "Fold runs of file reads, searches and listings into one “Explored” chip you can expand.",
     preview: "explore"
   },
   {
@@ -74,11 +74,11 @@ const CHAT_OPTIONS: { key: "chatTabs" | "thinkingPreview" | "messageBubbles" | "
   }
 ];
 
-/** The miniature exploration: one folded row when grouped, each call on its own row when not. */
-const MINI_EXPLORATION: { icon: "file" | "search"; verb: string; subject: string }[] = [
+/** The miniature exploration: one folded chip when grouped, each call its own chip when not. */
+const MINI_EXPLORATION: { icon: "file" | "search" | "folder"; verb: string; subject: string }[] = [
   { icon: "file", verb: "Read", subject: "App.tsx" },
   { icon: "search", verb: "Searched", subject: "useTheme" },
-  { icon: "search", verb: "Listed", subject: "src" }
+  { icon: "folder", verb: "Listed", subject: "src" }
 ];
 
 /** A group's place in the page's entrance: they rise in one after another (styles.css). */
@@ -383,19 +383,25 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrl, 
                     ) : option.preview === "explore" ? (
                       <>
                         {on ? (
-                          <span className="mini-tool">
-                            <Icon name="search" className="mini-tool-icon" />
+                          <span className="mini-tool mini-chip mini-fold">
+                            <span className="mini-stack">
+                              <Icon name="file" /><Icon name="search" /><Icon name="folder" />
+                            </span>
                             <span className="mini-tool-verb">Explored</span>
                             <span className="mini-tool-subject">· 1 file, 1 search, 1 list</span>
                             <Icon name="chevron" className="mini-tool-chevron" />
                           </span>
-                        ) : MINI_EXPLORATION.map((row) => (
-                          <span className="mini-tool" key={row.verb}>
-                            <Icon name={row.icon} className="mini-tool-icon" />
-                            <span className="mini-tool-verb">{row.verb}</span>
-                            <span className="mini-tool-subject">{row.subject}</span>
+                        ) : (
+                          <span className="mini-chips">
+                            {MINI_EXPLORATION.map((row) => (
+                              <span className="mini-tool mini-chip" key={row.verb}>
+                                <Icon name={row.icon} className="mini-tool-icon" />
+                                <span className="mini-tool-verb">{row.verb}</span>
+                                <span className="mini-tool-subject">{row.subject}</span>
+                              </span>
+                            ))}
                           </span>
-                        ))}
+                        )}
                         <span className="mini-msg mini-assistant flat">Done — the tests pass.</span>
                       </>
                     ) : (

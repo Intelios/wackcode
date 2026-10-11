@@ -8,7 +8,7 @@ import { attachFiles, filesFrom, splitFileSection, type FileAttachment } from ".
 import { activeMention, mentionValue, rankMentions, type MentionSuggestion } from "../mention-utils";
 import { activeSlashCommand } from "../command-utils";
 import { EMPTY_DRAFT, type ComposerDraft, type ComposerDraftState } from "../hooks/useComposerDrafts";
-import { Icon } from "./Icons";
+import { Icon, type IconName } from "./Icons";
 import { ContextPanel } from "./ContextPanel";
 import { ModelPicker, ReasoningToggle, type ModelFavoritesProps } from "./ModelPicker";
 import { ModeToggle } from "./ModeToggle";
@@ -21,6 +21,18 @@ import { QueuedRows, queuedDisplay, useQueueActions } from "./composer/QueuedRow
 const EASE: [number, number, number, number] = [0.33, 1, 0.68, 1];
 /** Springy settle (same bezier as `.segmented`) — makes the hero→dock glide land with a hint of overshoot. */
 const GLIDE_EASE: [number, number, number, number] = [0.34, 1.3, 0.64, 1];
+
+/** Where a slash command comes from, as the mark on its row in the `/` picker. */
+const COMMAND_ICONS: Record<SlashCommand["source"], IconName> = {
+  app: "slash", custom: "quill", prompt: "comment", skill: "book", extension: "plug"
+};
+
+/** The keys both pickers answer to, under their lists. Decoration: the listbox's options carry the semantics. */
+const PICKER_KEYS = (
+  <div className="slash-picker-foot" aria-hidden="true">
+    <kbd>↑</kbd><kbd>↓</kbd><span>move</span><kbd>⏎</kbd><span>pick</span><kbd>⎋</kbd><span>close</span>
+  </div>
+);
 
 /**
  * The composer's inline hint once a command that takes arguments is selected: the hint plus a
@@ -171,6 +183,11 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
     () => mentionQuery !== undefined && mentionFiles ? rankMentions(mentionFiles, mentionQuery) : [],
     [mentionFiles, mentionQuery]
   );
+  // Keep the row the arrow keys are on in view; the list scrolls under its hint strip.
+  const activeOption = showCommands ? `slash-option-${slashIndex}` : showMentions ? `mention-option-${mentionIndex}` : undefined;
+  useEffect(() => {
+    if (activeOption) document.getElementById(activeOption)?.scrollIntoView?.({ block: "nearest" });
+  }, [activeOption]);
   const mentionStart = showMentions ? mention.start : undefined;
   useEffect(() => { if (mentionStart !== undefined) onRequestMentions?.(); }, [mentionStart]);
   const slashStart = showCommands ? slash.start : undefined;
@@ -448,8 +465,10 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
         {showCommands && <div id="slash-command-list" className="slash-picker" role="listbox" aria-label="Slash commands">
           {commandsLoading ? <div className="slash-picker-status">Loading commands…</div> : commandsError ? <div className="slash-picker-status">{commandsError} <button type="button" onClick={onRequestCommands}>Retry</button></div> : suggestions.length ? suggestions.map((command, index) =>
             <button id={`slash-option-${index}`} type="button" role="option" aria-selected={index === slashIndex} className={`slash-option ${index === slashIndex ? "selected" : ""}`} key={command.id} onMouseDown={(event) => event.preventDefault()} onClick={() => insertCommand(command.name)}>
-              <strong>/{command.name}{command.argumentHint ? ` ${command.argumentHint}` : ""}</strong><span>{command.description}</span><small>{command.sourceLabel}</small>
+              <span className="slash-mark" aria-hidden="true"><Icon name={COMMAND_ICONS[command.source]} /></span>
+              <strong>/{command.name}{command.argumentHint && <em> {command.argumentHint}</em>}</strong><span>{command.description}</span><small>{command.sourceLabel}</small>
             </button>) : <div className="slash-picker-status">No matching commands</div>}
+          {!commandsLoading && !commandsError && suggestions.length > 0 && PICKER_KEYS}
         </div>}
         {showMentions && <div id="mention-list" className="slash-picker mention-picker" role="listbox" aria-label="Files">
           {mentionsError ? <div className="slash-picker-status">{mentionsError} <button type="button" onClick={onRequestMentions}>Retry</button></div>
@@ -457,11 +476,12 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
             : mentionSuggestions.length ? mentionSuggestions.map((entry, index) => {
               const bare = entry.path.replace(/\/$/, "");
               const cut = bare.lastIndexOf("/") + 1;
-              return <button id={`mention-option-${index}`} type="button" role="option" aria-selected={index === mentionIndex} className={`slash-option mention-option ${index === mentionIndex ? "selected" : ""}`} key={entry.path} onMouseDown={(event) => event.preventDefault()} onClick={() => insertMention(entry)}>
-                <Icon name={entry.directory ? "folder" : "file"} /><strong>{entry.path.slice(cut)}</strong><span>{bare.slice(0, cut)}</span>
+              return <button id={`mention-option-${index}`} type="button" role="option" aria-selected={index === mentionIndex} className={`slash-option mention-option${entry.directory ? " folder" : ""} ${index === mentionIndex ? "selected" : ""}`} key={entry.path} onMouseDown={(event) => event.preventDefault()} onClick={() => insertMention(entry)}>
+                <span className="slash-mark" aria-hidden="true"><Icon name={entry.directory ? "folder" : "file"} /></span><strong>{entry.path.slice(cut)}</strong><span>{bare.slice(0, cut)}</span>
               </button>;
             }) : <div className="slash-picker-status">No matching files</div>}
           {mentionFiles && mentionsTruncated && <div className="slash-picker-status">Only the first 20,000 files are listed.</div>}
+          {!mentionsError && mentionSuggestions.length > 0 && PICKER_KEYS}
         </div>}
         <QueuedRows entries={queuedEntries} agentName={agentName} disabled={queueActionsDisabled}
           canSteer={status === "running" && Boolean(onSteer)} canRestore={Boolean(onDequeue)}

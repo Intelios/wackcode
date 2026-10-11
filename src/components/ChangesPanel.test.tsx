@@ -103,4 +103,18 @@ describe("ChangesPanel", () => {
   });
 
 
+  it("heads the panel with the branch and totals, and names the dock's tabs with their counts", () => {
+    const comment = { id: "c1", path: "file.ts", layer: "staged" as const, side: "new" as const, line: 1, excerpt: "+const now = 2;", revision: "staged-1", text: "Why 2?" };
+    const view = render(<ChangesPanel {...props()} comments={[comment]} />);
+    expect(screen.getByRole("heading", { name: "topic 1 file +2 −2" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Comments 1" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Commit" })).toHaveAttribute("aria-selected", "false");
+
+    view.rerender(<ChangesPanel {...props()} changes={{ ...changes, files: [] }} />);
+    expect(screen.getByRole("heading", { name: "topic clean" })).toBeInTheDocument();
+    expect(screen.getByText("Working tree clean")).toBeInTheDocument();
+
+    view.rerender(<ChangesPanel {...props()} changes={{ isGit: false, root: null, branch: null, changesRevision: "", files: [] } as unknown as GitChanges} />);
+    expect(screen.getByRole("heading", { name: "No repository" })).toBeInTheDocument();
+  });
 });

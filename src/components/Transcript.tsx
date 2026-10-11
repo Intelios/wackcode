@@ -5,11 +5,11 @@ import { AssistantNameContext } from "../agentName";
 import { useFollowScroll } from "../hooks/useFollowScroll";
 import { motionAllowed, useSmoothText } from "../hooks/useSmoothText";
 import { formatRunDuration, isPlanMode } from "../chat-utils";
-import { blockKey, layoutTranscript, type TranscriptSlot } from "../explore-utils";
+import { blockKey, flyId, layoutTranscript, type TranscriptSlot } from "../explore-utils";
 import { completedPlan, layoutWorkTurns, type WorkRow } from "../completed-work";
 import { splitFileSection, type FileAttachment } from "../attachment-utils";
 import { splitMentions } from "../mention-utils";
-import { SUBAGENT_TOOL_NAME, SKILL_CREATOR_TOOL_NAME, parseSkillPreviewDetails, parseSubagentDetails, pendingSubagentDetails } from "../tool-utils";
+import { SUBAGENT_TOOL_NAME, SKILL_CREATOR_TOOL_NAME, exploreKind, parseSkillPreviewDetails, parseSubagentDetails, pendingSubagentDetails, toolPresentation } from "../tool-utils";
 import { hasVisibleMessages, latestTurn, messageText } from "../tree-utils";
 import { ExploreExpansion, ExploreGroup, ExploreGroupingEnabled } from "./ExploreGroup";
 import { Icon } from "./Icons";
@@ -22,7 +22,8 @@ import { SkillDraftCard, type SkillDraftAction } from "./SkillDraftCard";
 import { turnExcerpt, type RailTurn } from "../scroll-rail";
 import { SubagentGroup } from "./SubagentChip";
 import { ThinkingExpansion, ThinkingRow } from "./ThinkingRow";
-import { OrphanResult, ToolExpansion, ToolRow } from "./ToolRow";
+import { FLY, OrphanResult, ToolChips, ToolExpansion, ToolRow, useTranscriptMotion, type ChipCall } from "./ToolRow";
+import { PonderingDuck } from "./PonderingDuck";
 import { useContextMenu } from "./ui/ContextMenu";
 import { useNavigationDismiss } from "./ui/NavigationScope";
 import { ImageLightbox } from "./ui/ImageLightbox";
@@ -222,6 +223,70 @@ function ModelSwitchDivider({ entry }: { entry: DisplayModelSwitch }) {
   );
 }
 
+/**
+ * A reasoning row outside an Explored group carries the id its landing mark in the group's head
+ * will use, so when a run takes it in, it visibly flies into the head (`ExploreGroup.tsx`).
+ * Only that hand-off moves it: `layoutDependency` stays fixed so streamed text never re-measures
+ * (and differs from the mark's, or motion wouldn't resume the mark from this row).
+ */
+function FlyingThought({ id, children }: { id: string; children: ReactNode }) {
+  const animate = useTranscriptMotion();
+  if (!animate) return <>{children}</>;
+  return <motion.div className="fly-thought" layoutId={id} layoutDependency="thought" transition={{ layout: FLY }}>{children}</motion.div>;
+}
+
+/**
+ * The cards some tool calls render as instead of a plain call: a plan, sub-agent chips, a
+ * skill review. Undefined for an ordinary call, which `renderSlots` draws as a chip or row.
+ */
+function renderSpecialCall(
+  block: NormalizedBlock,
+  results: Map<string, NormalizedBlock>,
+  liveToolDetails: Record<string, unknown> | undefined,
+  live: boolean,
+  planState: PlanState | undefined,
+  onPlanAction: ((action: PlanAction) => void) | undefined,
+  running: boolean,
+  skillCard: SkillCardContext | undefined
+): ReactNode | undefined {
+  const result = block.toolCallId ? results.get(block.toolCallId) : undefined;
+  const plan = block.toolName === "plan_mode_complete" ? completedPlan(result) : undefined;
+  if (plan !== undefined) {
+    const current = isPlanMode(planState?.mode) && planState?.phase === "ready" && planState.plan === plan;
+    return <PlanCard plan={plan} current={current} busy={running} onAction={onPlanAction} ultra={current && planState?.mode === "ultraplan"} />;
+  }
+  if (block.toolName === SUBAGENT_TOOL_NAME) {
+    // The final result is authoritative; while running, the latest live update, or the
+    // call's own arguments until the first update arrives. A call refused before any child
+    // started has no details and falls through to the plain row with its error.
+    const liveDetails = block.toolCallId ? liveToolDetails?.[block.toolCallId] : undefined;
+    const details = result
+      ? parseSubagentDetails(result.details)
+      : live ? parseSubagentDetails(liveDetails) ?? pendingSubagentDetails(block) : undefined;
+    if (details && block.toolCallId) return <SubagentGroup toolCallId={block.toolCallId} details={details} live={Boolean(details.background) || (live && !result)} />;
+  }
+  if (block.toolName === SKILL_CREATOR_TOOL_NAME && result) {
+    // A finished preview result is the review card; while it runs the plain tool row shows
+    // progress, and a refused preview (no parseable details) keeps its error visible there.
+    const preview = result.isError ? undefined : parseSkillPreviewDetails(result.details);
+    if (preview) {
+      return (
+        <SkillDraftCard
+          details={preview}
+          status={skillCard?.drafts?.[preview.draftId]}
+          current={skillCard !== undefined && block.toolCallId === skillCard.latestId}
+          owned={!skillCard?.taskId || preview.ownerTaskId === skillCard.taskId}
+          busy={running}
+          saving={skillCard?.saving?.has(preview.draftId)}
+          onAction={skillCard?.onAction}
+          loadDocument={skillCard?.loadDocument}
+        />
+      );
+    }
+  }
+  return undefined;
+}
+
 function renderBlock(
   block: NormalizedBlock,
   key: string,
@@ -237,45 +302,17 @@ function renderBlock(
 ): ReactNode {
   if (block.type === "thinking") {
     // A streamed block is still being written until the worker has clocked its end.
-    return <ThinkingRow text={block.text ?? ""} durationMs={block.durationMs} startedAt={block.startedAt} live={running && streaming === true && block.durationMs === undefined} expansionKey={key} />;
+    return (
+      <FlyingThought id={flyId({ block, key })}>
+        <ThinkingRow text={block.text ?? ""} durationMs={block.durationMs} startedAt={block.startedAt} live={running && streaming === true && block.durationMs === undefined} expansionKey={key} />
+      </FlyingThought>
+    );
   }
   if (block.type === "tool-call") {
+    const special = renderSpecialCall(block, results, liveToolDetails, live, planState, onPlanAction, running, skillCard);
+    if (special !== undefined) return special;
     const result = block.toolCallId ? results.get(block.toolCallId) : undefined;
     const liveText = block.toolCallId ? liveToolText?.[block.toolCallId] : undefined;
-    const plan = block.toolName === "plan_mode_complete" ? completedPlan(result) : undefined;
-    if (plan !== undefined) {
-      const current = isPlanMode(planState?.mode) && planState?.phase === "ready" && planState.plan === plan;
-      return <PlanCard plan={plan} current={current} busy={running} onAction={onPlanAction} />;
-    }
-    if (block.toolName === SUBAGENT_TOOL_NAME) {
-      // The final result is authoritative; while running, the latest live update, or the
-      // call's own arguments until the first update arrives. A call refused before any child
-      // started has no details and falls through to the plain row with its error.
-      const liveDetails = block.toolCallId ? liveToolDetails?.[block.toolCallId] : undefined;
-      const details = result
-        ? parseSubagentDetails(result.details)
-        : live ? parseSubagentDetails(liveDetails) ?? pendingSubagentDetails(block) : undefined;
-      if (details && block.toolCallId) return <SubagentGroup toolCallId={block.toolCallId} details={details} live={Boolean(details.background) || (live && !result)} />;
-    }
-    if (block.toolName === SKILL_CREATOR_TOOL_NAME && result) {
-      // A finished preview result is the review card; while it runs the plain tool row shows
-      // progress, and a refused preview (no parseable details) keeps its error visible there.
-      const preview = result.isError ? undefined : parseSkillPreviewDetails(result.details);
-      if (preview) {
-        return (
-          <SkillDraftCard
-            details={preview}
-            status={skillCard?.drafts?.[preview.draftId]}
-            current={skillCard !== undefined && block.toolCallId === skillCard.latestId}
-            owned={!skillCard?.taskId || preview.ownerTaskId === skillCard.taskId}
-            busy={running}
-            saving={skillCard?.saving?.has(preview.draftId)}
-            onAction={skillCard?.onAction}
-            loadDocument={skillCard?.loadDocument}
-          />
-        );
-      }
-    }
     return <ToolRow call={block} result={result} liveText={liveText} running={live && !result} />;
   }
   if (block.type === "tool-result") {
@@ -301,21 +338,49 @@ function renderSlots(
   skillCard: SkillCardContext | undefined,
   streaming?: boolean
 ): ReactNode {
-  return slots.map((slot) => {
+  // Consecutive chip-shaped calls share one wrapping strip, as Chat's activity chips do; any
+  // other slot (prose, a row, reasoning, a card, a group) closes it.
+  const nodes: ReactNode[] = [];
+  let strip: ChipCall[] = [];
+  const flush = () => {
+    if (!strip.length) return;
+    const first = strip[0].call.toolCallId ?? nodes.length;
+    nodes.push(<div key={`chips:${first}`} className="block-slot"><ToolChips entries={strip} /></div>);
+    strip = [];
+  };
+  for (const slot of slots) {
     if (slot.type === "explore") {
-      return (
+      flush();
+      nodes.push(
         <div key={`explore:${slot.group.key}`} className="block-slot">
           <ExploreGroup group={slot.group} results={results} liveToolText={liveToolText} running={running} />
         </div>
       );
+      continue;
     }
     const block = message.blocks[slot.index];
-    return (
+    const special = block.type === "tool-call" ? renderSpecialCall(block, results, liveToolDetails, live, planState, onPlanAction, running, skillCard) : undefined;
+    if (block.type === "tool-call" && special === undefined && toolPresentation(block) === "chip") {
+      const result = block.toolCallId ? results.get(block.toolCallId) : undefined;
+      strip.push({
+        call: block,
+        result,
+        liveText: block.toolCallId ? liveToolText?.[block.toolCallId] : undefined,
+        running: live && !result,
+        // Exploration may yet be taken into a group: it flies into the head when it is.
+        flyId: exploreKind(block) ? flyId({ block, key: blockKey(message, slot.index) }) : undefined
+      });
+      continue;
+    }
+    flush();
+    nodes.push(
       <div key={block.toolCallId ?? slot.index} className="block-slot">
-        {renderBlock(block, blockKey(message, slot.index), results, liveToolText, liveToolDetails, live, planState, onPlanAction, running, skillCard, streaming)}
+        {special ?? renderBlock(block, blockKey(message, slot.index), results, liveToolText, liveToolDetails, live, planState, onPlanAction, running, skillCard, streaming)}
       </div>
     );
-  });
+  }
+  flush();
+  return nodes;
 }
 
 // Recomputed for every message on every streamed partial, so image blocks stand in as their id
@@ -563,6 +628,21 @@ function TurnActions({ message, actionsEnabled, retry, onAction }: Pick<MessageP
   return <MessageActions align="start" items={turnMenu(message, actionsEnabled, retry, onAction)} />;
 }
 
+/**
+ * What the agent is up to while nothing has streamed yet: Chat's typing presence, made to sit
+ * in a dense transcript — the pondering duck, three bouncing dots and the caption. The run
+ * clock stays on its own chip above the work. Dots hold still under reduced motion (styles.css).
+ */
+function WorkingPresence({ label }: { label: string }) {
+  return (
+    <div className="agent-working" role="status">
+      <PonderingDuck live className="agent-working-duck" />
+      <span className="work-dots" aria-hidden="true"><i /><i /><i /></span>
+      <span className="agent-working-label">{label}</span>
+    </div>
+  );
+}
+
 function activityLabel(activity?: string): string {
   if (!activity) return "Working…";
   if (activity.startsWith("tool_execution")) return "";
@@ -758,7 +838,9 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
 
   return (
     <div className="transcript-zone">
-      <div className="conversation-scroll" ref={ref} onScroll={onScroll} onWheel={onWheel}>
+      {/* `layoutScroll`: chips flying into an Explored head are measured in page space, so the
+          scroller's offset must be part of the measurement or follow-scrolling skews the flight. */}
+      <motion.div className="conversation-scroll" ref={ref} onScroll={onScroll} onWheel={onWheel} layoutScroll>
         <ThinkingExpansion.Provider value={expandedThinking}>
           <ExploreExpansion.Provider value={expandedGroups}>
           <ToolExpansion.Provider value={toolExpansions}>
@@ -806,15 +888,13 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
               <AnimatePresence>
                 {compaction ? <CompactingStage key="compacting" reason={compaction.reason} /> : null}
               </AnimatePresence>
-              {!compaction && waiting && label && (
-                <div className="agent-working" role="status"><span className="thinking-shimmer">{label}</span></div>
-              )}
+              {!compaction && waiting && label && <WorkingPresence label={label} />}
               {rewindBar}
             </div>
           </ToolExpansion.Provider>
           </ExploreExpansion.Provider>
         </ThinkingExpansion.Provider>
-      </div>
+      </motion.div>
       <ScrollRail target={ref} turns={turns} liveTurnId={liveTurnId} detached={detached} onNavigate={pauseFollowing} onJumpToLatest={jumpToLatest} />
     </div>
   );

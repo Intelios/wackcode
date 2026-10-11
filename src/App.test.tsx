@@ -512,7 +512,8 @@ describe("Changes after Git Mode removal", () => {
     chat("a");
     await waitFor(() => expect(api.gitChanges).toHaveBeenCalledWith({ taskId: "a" }));
     fireEvent.keyDown(window, { key: "c", metaKey: true, shiftKey: true });
-    expect(await screen.findByRole("heading", { name: "Changes" })).toBeInTheDocument();
+    expect(await screen.findByRole("complementary", { name: "Changes" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "main clean" })).toBeInTheDocument();
     expect(await screen.findByText("Working tree clean")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Git mode" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Open in Git mode" })).toBeNull();
@@ -521,7 +522,7 @@ describe("Changes after Git Mode removal", () => {
     const shortcut = new KeyboardEvent("keydown", { key: "g", metaKey: true, shiftKey: true, cancelable: true });
     act(() => { window.dispatchEvent(shortcut); });
     expect(shortcut.defaultPrevented).toBe(false);
-    expect(screen.getByRole("heading", { name: "Changes" })).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Changes" })).toBeInTheDocument();
     expect(editor).toHaveValue("Draft survives");
     expect(screen.getByRole("button", { name: "Close changes panel" })).toBeInTheDocument();
   });

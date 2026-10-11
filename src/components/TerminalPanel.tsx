@@ -194,7 +194,7 @@ export function TerminalPanel({ taskId, appearance, onClose }: TerminalPanelProp
   return (
     <div className="terminal-panel">
       <header className="panel-header terminal-header">
-        <span className="terminal-glyph" aria-hidden="true"><Icon name="terminal" /></span>
+        <span className="panel-mark" aria-hidden="true"><Icon name="terminal" /></span>
         <div className="panel-title" title={info?.cwd}>
           <span className="panel-kicker">Terminal</span>
           <h3>{title}</h3>

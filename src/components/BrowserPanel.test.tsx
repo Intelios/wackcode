@@ -15,10 +15,10 @@ const actions = { onState: vi.fn(), onExpand: vi.fn(), onReset: vi.fn(), onClose
 let bounds: DOMRect;
 const observers: { targets: Set<Element>; notify: () => void }[] = [];
 
-function panel(hidden = false) {
+function panel(hidden = false, shown: BrowserState = state) {
   return (
     <aside className="side-panel">
-      <BrowserPanel taskId={state.taskId} state={state} visible={!hidden} expanded={false} {...actions} />
+      <BrowserPanel taskId={state.taskId} state={shown} visible={!hidden} expanded={false} {...actions} />
     </aside>
   );
 }
@@ -100,5 +100,20 @@ describe("BrowserPanel positioning", () => {
     await advance(500);
     expect(presentations()).toHaveLength(1);
     expect(api.browserPresent).toHaveBeenLastCalledWith(expect.objectContaining({ visible: false }));
+  });
+  it("heads the panel with the page, and says whose hands are on it", () => {
+    const view = render(panel());
+    expect(screen.getByRole("heading", { name: "Google" })).toBeInTheDocument();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("button", { name: "Take control" })).toHaveAttribute("aria-pressed", "false");
+
+    view.rerender(panel(false, { ...state, title: "", userControl: true }));
+    expect(screen.getByRole("heading", { name: "www.google.com" })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("You have control");
+    expect(screen.getByRole("button", { name: "Resume agent control" })).toHaveAttribute("aria-pressed", "true");
+
+    view.rerender(panel(false, { ...state, url: "", title: "", agentActive: true }));
+    expect(screen.getByRole("heading", { name: "No page open" })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Agent is using the page");
   });
 });

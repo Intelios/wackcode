@@ -109,7 +109,7 @@ export const GamesPanel = memo(function GamesPanel({ status, watchKey, agentName
         {game ? (
           <button type="button" className="icon-button" aria-label="All games" onClick={backToArcade}><Icon name="back" /></button>
         ) : (
-          <span className="terminal-glyph" aria-hidden="true"><Icon name="gamepad" /></span>
+          <span className="panel-mark" aria-hidden="true"><Icon name="gamepad" /></span>
         )}
         <div className="panel-title">
           <span className="panel-kicker">Arcade</span>

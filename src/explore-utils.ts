@@ -190,9 +190,70 @@ export function exploreLabel(counts: ExploreCounts): string {
   ].filter(Boolean).join(", ");
 }
 
+const NOUNS: [keyof Omit<ExploreCounts, "failed">, string, string][] = [
+  ["files", "file", "files"],
+  ["images", "image", "images"],
+  ["searches", "search", "searches"],
+  ["lists", "list", "lists"],
+  ["commands", "command", "commands"]
+];
+
+/** `exploreLabel` in pieces, so the head can roll each number as calls join. */
+export function exploreLabelParts(counts: ExploreCounts): { key: string; count: number; noun: string }[] {
+  return NOUNS.filter(([key]) => counts[key] > 0).map(([key, one, many]) => ({ key, count: counts[key], noun: counts[key] === 1 ? one : many }));
+}
+
+const isPending = (item: ExploreItem, results: Map<string, NormalizedBlock>) =>
+  item.live && item.block.type === "tool-call" && !(item.block.toolCallId && results.has(item.block.toolCallId));
+
+/**
+ * The calls still in flight. They show as live chips beneath the head rather than inside it,
+ * and fly into the head as they finish.
+ */
+export function exploreLiveItems(group: ExploreGroup, results: Map<string, NormalizedBlock>): ExploreItem[] {
+  return group.items.filter((item) => isPending(item, results));
+}
+
+/** The group without its calls in flight: what has already joined the head. */
+export function settledGroup(group: ExploreGroup, results: Map<string, NormalizedBlock>): ExploreGroup {
+  const items = group.items.filter((item) => !isPending(item, results));
+  return items.length === group.items.length ? group : { ...group, items };
+}
+
+/**
+ * The shared-element id a block flies under when it joins a group: the chip or reasoning row
+ * outside the group and its landing mark in the head carry the same id (`ExploreGroup.tsx`).
+ */
+export function flyId(item: Pick<ExploreItem, "block" | "key">): string {
+  return item.block.type === "thinking" ? `think:${item.key}` : `call:${item.block.toolCallId ?? item.key}`;
+}
+
+export type ExploreMark = ExploreKind | "image" | "thought";
+const MARK_ORDER: ExploreMark[] = ["file", "image", "search", "list", "command", "thought"];
+
+/**
+ * The head's icon stack: one mark per kind the group holds, in a fixed order so marks never
+ * shuffle, each carrying the fly id of the newest item of its kind (the one that last landed).
+ * Pictured reads count as images, as in `exploreCounts`.
+ */
+export function exploreMarks(group: ExploreGroup, results: Map<string, NormalizedBlock>): { mark: ExploreMark; id: string }[] {
+  const latest = new Map<ExploreMark, string>();
+  for (const item of group.items) {
+    const { block } = item;
+    let mark: ExploreMark | undefined;
+    if (block.type === "thinking") mark = "thought";
+    else {
+      mark = kindOf(block);
+      if (mark === "file" && block.toolCallId && results.get(block.toolCallId)?.images?.length) mark = "image";
+    }
+    if (mark) latest.set(mark, flyId(item));
+  }
+  return MARK_ORDER.filter((mark) => latest.has(mark)).map((mark) => ({ mark, id: latest.get(mark)! }));
+}
+
 /** The call in flight, as the header shows it while the group runs: "Reading src/App.tsx". */
 export function exploreActivity(group: ExploreGroup, results: Map<string, NormalizedBlock>): string | undefined {
-  const pending = group.items.filter((item) => item.live && item.block.type === "tool-call" && !(item.block.toolCallId && results.has(item.block.toolCallId)));
+  const pending = exploreLiveItems(group, results);
   const latest = pending[pending.length - 1];
   if (!latest) return undefined;
   const summary = summarizeTool(latest.block);

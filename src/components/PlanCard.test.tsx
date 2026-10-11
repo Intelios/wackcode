@@ -27,6 +27,17 @@ describe("PlanCard", () => {
     expect(screen.getByText("Ship it")).toBeInTheDocument();
   });
 
+  it("says a decision is owed only on the current proposal, and wears Ultra Plan's fire when told to", () => {
+    const { container, rerender } = render(<PlanCard plan={plan} current onAction={vi.fn()} />);
+    expect(screen.getByText("Awaiting you")).toBeInTheDocument();
+    expect(container.querySelector(".plan-card")).not.toHaveClass("ultra");
+    rerender(<PlanCard plan={plan} current onAction={vi.fn()} ultra />);
+    expect(container.querySelector(".plan-card")).toHaveClass("current", "ultra");
+    rerender(<PlanCard plan={plan} current={false} onAction={vi.fn()} />);
+    expect(screen.queryByText("Awaiting you")).not.toBeInTheDocument();
+    expect(container.querySelector(".plan-card")).not.toHaveClass("current");
+  });
+
   it("disables actions while a run is in flight", () => {
     render(<PlanCard plan={plan} current busy onAction={vi.fn()} />);
     expect(screen.getByRole("button", { name: "Approve & implement" })).toBeDisabled();

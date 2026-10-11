@@ -145,6 +145,29 @@ describe("Sidebar title echo", () => {
   });
 });
 
+describe("Sidebar project marks and rows", () => {
+  it("leads a project with its monogram and hangs its chats on a rail beneath", () => {
+    const { container } = render(<Harness tasks={[task("t1", "p1", "Refactor parser")]} />);
+    const group = container.querySelector(".project-group")!;
+    expect(group.querySelector(".project-mark")).toHaveTextContent("T");
+    expect(group).not.toHaveClass("empty");
+    expect(group.querySelector(".project-tasks .task-item")).toHaveAccessibleName("Refactor parser");
+  });
+
+  it("marks a project with no open chats as empty, with no rail", () => {
+    const { container } = render(<Harness tasks={[]} />);
+    const group = container.querySelector(".project-group")!;
+    expect(group).toHaveClass("empty");
+    expect(group.querySelector(".project-tasks")).toBeNull();
+  });
+
+  it("shows a working chat with the bead trail and any other state as a dot", () => {
+    const { container } = render(<Harness tasks={[{ ...task("t1", "p1", "Busy"), status: "running" }, { ...task("t2", "p1", "Broken"), status: "running", lastError: "boom" }]} />);
+    expect(container.querySelector(".task-status.running .orbit-spinner")).not.toBeNull();
+    expect(container.querySelector(".task-status.error .orbit-spinner")).toBeNull();
+  });
+});
+
 describe("Sidebar collapsible projects", () => {
   it("hides a project's chats when its heading is clicked and shows a count", () => {
     render(<Harness tasks={[task("t1", "p1", "Refactor parser"), task("t2", null, "Loose chat")]} />);
@@ -215,8 +238,8 @@ describe("Sidebar collapsible projects", () => {
     const planned = { ...task("t1", "p1", "Refactor parser"), mode: "plan" as const };
     const grilled = { ...task("t2", "p1", "Rework auth"), mode: "ultraplan" as const };
     render(<Harness tasks={[planned, grilled, task("t3", "p1", "Fix typo")]} />);
-    expect(screen.getByText("Plan")).toHaveClass("task-mode-chip");
-    expect(screen.getByText("Ultra Plan")).toHaveClass("task-mode-chip", "ultra");
+    expect(screen.getByText("Plan").closest(".task-mode-chip")).not.toHaveClass("ultra");
+    expect(screen.getByText("Ultra Plan").closest(".task-mode-chip")).toHaveClass("ultra");
     expect(screen.getAllByText(/^(Ultra )?Plan$/)).toHaveLength(2);
   });
 
@@ -585,6 +608,9 @@ describe("Sidebar areas", () => {
     expect(within(group).getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "false");
     fireEvent.click(within(group).getByRole("button", { name: "Chat" }));
     expect(onSwitchArea).toHaveBeenCalledWith("chat");
+    // It sits in the title strip beside the traffic lights, not in the list's own header.
+    expect(group.closest(".sidebar-titlebar")).not.toBeNull();
+    expect(group.closest(".sidebar-top")).toBeNull();
   });
 
   it("says when the other area has a chat waiting for an answer", () => {

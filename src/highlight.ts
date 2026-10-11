@@ -189,6 +189,16 @@ function highlightDiffContent(content: string, lang: string, count: number): Rea
 }
 
 /**
+ * Per-line token nodes for a file's text in `lang`, one entry per line of `code`. The whole text
+ * is tokenized at once so a token spanning lines (a block comment) survives the split; an
+ * unknown language comes back as the plain lines.
+ */
+export function highlightLines(code: string, lang: string | null | undefined): ReactNode[][] {
+  const plain = code.split("\n");
+  return (lang ? highlightDiffContent(code, lang, plain.length) : undefined) ?? plain.map((line) => [line]);
+}
+
+/**
  * Per-line content for a diff: the `+`/`-`/space lines are tokenized with the file's `lang`,
  * keeping the diff marker as a plain leading character so it inherits the line's add/del ink;
  * everything else (hunk headers, `\ No newline at end of file`) stays plain. Falls back to the

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { DiffComment, GitChangeFile, GitPrInfo, GitPublishInfo, TaskMode } from "../types";
 import { Icon } from "./Icons";
@@ -68,6 +68,7 @@ interface ChangesDockProps {
 export function ChangesDock(props: ChangesDockProps) {
   const { open, onOpen, disabled } = props;
   const reduce = useReducedMotion();
+  const pillId = useId();
   const [preparing, setPreparing] = useState(false);
   // The remote the last prepare ran for, so a failed attempt doesn't re-fire in a loop.
   const [attempted, setAttempted] = useState("");
@@ -115,29 +116,38 @@ export function ChangesDock(props: ChangesDockProps) {
           </motion.div>
         )}
       </AnimatePresence>
-      <div className="dock-bar" role="tablist" aria-label="Change actions">
+      <div className="dock-bar">
         <span className={`dock-summary ${props.flash ? "flash" : ""}`}>{summary}</span>
         <span className="dock-spacer" />
-        {TABS.map(({ id, icon, label }) => {
-          const count = id === "comments" ? props.commentCount : 0;
-          const hidden = id === "comments" && count === 0;
-          const unavailable = id === "commit" ? false : id === "publish" ? !props.publish?.branch : false;
-          return (
-            <button
-              key={id}
-              type="button"
-              role="tab"
-              aria-selected={open === id}
-              className={`dock-tab ${open === id ? "active" : ""} ${hidden ? "hidden" : ""}`}
-              disabled={unavailable}
-              title={id === "publish" && !props.publish?.branch ? "Check out a branch to publish" : undefined}
-              onClick={() => onOpen(open === id ? null : id)}
-            >
-              <Icon name={icon} />
-              <span>{label}{count > 0 && ` ${count}`}</span>
-            </button>
-          );
-        })}
+        {/* One fill glides between the tabs and rests nowhere while the sheet is closed. */}
+        <div className="dock-tabs" role="tablist" aria-label="Change actions">
+          {TABS.map(({ id, icon, label }) => {
+            const count = id === "comments" ? props.commentCount : 0;
+            const hidden = id === "comments" && count === 0;
+            const unavailable = id === "commit" ? false : id === "publish" ? !props.publish?.branch : false;
+            return (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={open === id}
+                className={`dock-tab ${open === id ? "active" : ""} ${hidden ? "hidden" : ""}`}
+                disabled={unavailable}
+                aria-label={count > 0 ? `${label} ${count}` : label}
+                title={id === "publish" && !props.publish?.branch ? "Check out a branch to publish" : label}
+                onClick={() => onOpen(open === id ? null : id)}
+              >
+                {open === id && (
+                  <motion.span className="dock-tab-pill" aria-hidden="true" layoutId={reduce ? undefined : pillId}
+                    style={{ borderRadius: 999 }} transition={{ type: "spring", stiffness: 480, damping: 36 }} />
+                )}
+                <Icon name={icon} />
+                <span className="dock-tab-label">{label}</span>
+                {count > 0 && <>{" "}<em className="dock-tab-count">{count}</em></>}
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

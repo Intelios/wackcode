@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { orderProjects } from "../project-display";
+import { monogram, orderProjects } from "../project-display";
 import { areaDirection, type Area } from "../areas";
 import { formatRelativeTime } from "../chat-utils";
 import { groupByRecency, matchingChats, newestChats } from "../sidebar-utils";
@@ -17,6 +17,7 @@ import { Tooltip } from "./ui/Tooltip";
 import { DevBadge } from "./DevBadge";
 import { useConfirmAction } from "./ui/useConfirmAction";
 import { TextSwap } from "./TextSwap";
+import { OrbitSpinner } from "./OrbitSpinner";
 
 export type TaskAction = "rename" | "worktree" | "fork" | "reveal" | "reveal-file" | "copy" | "archive" | "unarchive" | "delete" | "delete-direct";
 export type ProjectAction = "reveal" | "remove" | "pin" | "unpin";
@@ -167,7 +168,10 @@ export function Sidebar({ projects, pinnedProjectIds, area, areaAttention, onSwi
         onDoubleClick={() => startRename(task)}
         onContextMenu={(event) => contextMenu(event, chatMenu(task, projects.find((project) => project.id === task.projectId), () => startRename(task), onTaskAction), "Chat menu")}
       >
-        <span className={`task-status ${task.lastError ? "error" : task.status}`} />
+        {/* A dot of the state's colour; a chat at work wears the bead trail, as its tab does. */}
+        <span className={`task-status ${task.lastError ? "error" : task.status}`}>
+          {!task.lastError && task.status === "running" && <OrbitSpinner active />}
+        </span>
         <span className="task-details">
           <span className="task-label">
             <span className="task-name"><TextSwap text={task.name} swapKey={titlePulses[task.id] ?? 0} variant="row" /></span>
@@ -179,8 +183,9 @@ export function Sidebar({ projects, pinnedProjectIds, area, areaAttention, onSwi
                 {age}
               </time>
             )}
-            {task.mode === "plan" && <span className="task-mode-chip">Plan</span>}
-            {task.mode === "ultraplan" && <span className="task-mode-chip ultra">Ultra Plan</span>}
+            {/* A round mark, to leave the single line to the name; the words stay for readers and the tooltip. */}
+            {task.mode === "plan" && <span className="task-mode-chip" title="Plan"><Icon name="brain" /><span className="task-mode-text">Plan</span></span>}
+            {task.mode === "ultraplan" && <span className="task-mode-chip ultra" title="Ultra Plan"><Icon name="flame" /><span className="task-mode-text">Ultra Plan</span></span>}
             {task.usesWorktree && <Icon name="branch" className="task-branch-icon" />}
           </span>
         </span>
@@ -219,9 +224,11 @@ export function Sidebar({ projects, pinnedProjectIds, area, areaAttention, onSwi
     );
   }
 
-  function renderHeading({ name, groupKey, plusLabel, title, groupTasks, pinned, onPlus, menu }: {
+  function renderHeading({ name, groupKey, plusLabel, title, groupTasks, pinned, loose, onPlus, menu }: {
     name: string;
     groupKey: string;
+    /** The "No project" group: a dashed mark in place of a monogram. */
+    loose?: boolean;
     plusLabel: string;
     title?: string;
     groupTasks: TaskRecord[];
@@ -242,6 +249,7 @@ export function Sidebar({ projects, pinnedProjectIds, area, areaAttention, onSwi
         >
           <Icon name="chevron" />
         </button>
+        <span className={loose ? "project-mark none" : "project-mark"} aria-hidden="true">{(!loose && monogram(name)) || <Icon name="folder" />}</span>
         <span className="project-name">{name}</span>
         {pinned && <Icon name="pin" className="project-pin" aria-label="Pinned" />}
         {collapsed && groupTasks.length > 0 && <span className="project-count">{groupTasks.length}</span>}
@@ -294,7 +302,7 @@ export function Sidebar({ projects, pinnedProjectIds, area, areaAttention, onSwi
           <motion.section
             layout={reduce ? false : "position"}
             transition={{ type: "spring", stiffness: 420, damping: 36 }}
-            className={`project-group ${isCollapsed(project.id) ? "" : "open"}${pinned ? " pinned" : ""}`}
+            className={`project-group ${isCollapsed(project.id) ? "" : "open"}${pinned ? " pinned" : ""}${projectTasks.length ? "" : " empty"}${projectTasks.some((task) => task.id === selectedTaskId) ? " current" : ""}`}
             key={project.id}
           >
             {renderHeading({
@@ -314,24 +322,25 @@ export function Sidebar({ projects, pinnedProjectIds, area, areaAttention, onSwi
                 { label: "Remove project", icon: <Icon name="trash" />, danger: true, onSelect: () => onProjectAction(project, "remove") }
               ]
             })}
-            {!isCollapsed(project.id) && projectTasks.map((task) => renderTask(task))}
+            {!isCollapsed(project.id) && projectTasks.length > 0 && <div className="project-tasks">{projectTasks.map((task) => renderTask(task))}</div>}
           </motion.section>
         );
       })}
       {looseTasks.length > 0 && (
-        <section className={`project-group ${isCollapsed(NO_PROJECT_KEY) ? "" : "open"}`}>
+        <section className={`project-group ${isCollapsed(NO_PROJECT_KEY) ? "" : "open"}${looseTasks.some((task) => task.id === selectedTaskId) ? " current" : ""}`}>
           {renderHeading({
             name: "No project",
             groupKey: NO_PROJECT_KEY,
             plusLabel: "New chat with no project",
             groupTasks: looseTasks,
+            loose: true,
             onPlus: () => onNewChat(null),
             menu: [
               { label: "New chat", icon: <Icon name="plus" />, onSelect: () => onNewChat(null) },
               { label: "Archive all chats", icon: <Icon name="archive" />, onSelect: () => onArchiveAll(null) }
             ]
           })}
-          {!isCollapsed(NO_PROJECT_KEY) && looseTasks.map((task) => renderTask(task))}
+          {!isCollapsed(NO_PROJECT_KEY) && <div className="project-tasks">{looseTasks.map((task) => renderTask(task))}</div>}
         </section>
       )}
     </>
@@ -339,9 +348,12 @@ export function Sidebar({ projects, pinnedProjectIds, area, areaAttention, onSwi
 
   return (
     <aside className="sidebar">
-      <div className="titlebar-drag" data-tauri-drag-region>{devBuild && <DevBadge />}</div>
-      <div className="sidebar-top">
+      {/* The strip beside the traffic lights holds the Code | Chat switch; what it leaves bare still drags the window. */}
+      <div className="titlebar-drag sidebar-titlebar" data-tauri-drag-region>
         <AreaSwitch area={area} attention={areaAttention} onSwitch={onSwitchArea} />
+        {devBuild && <DevBadge />}
+      </div>
+      <div className="sidebar-top">
         {archivedOpen ? (
           <div className="archived-header">
             <h2 className="archived-heading">Archived</h2>
@@ -362,8 +374,8 @@ export function Sidebar({ projects, pinnedProjectIds, area, areaAttention, onSwi
             </span>
           </div>
         ) : (
-          <button type="button" className="sidebar-action" onClick={onNewDraft}>
-            <Icon name="plus" /> New chat <kbd>⌘N</kbd>
+          <button type="button" className="sidebar-action sidebar-new" onClick={onNewDraft}>
+            <span className="sidebar-new-mark" aria-hidden="true"><Icon name="plus" /></span> New chat <kbd>⌘N</kbd>
           </button>
         )}
         <div className="sidebar-search">

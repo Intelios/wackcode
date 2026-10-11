@@ -77,6 +77,16 @@ describe("ChatHeader title", () => {
 });
 
 describe("ChatHeader panel buttons", () => {
+  it("groups the side panel's views into one control and fills only the open one", () => {
+    const p = props(task("t1", "Chat"));
+    const { rerender } = render(<ChatHeader {...p} changesCount={4} />);
+    const group = screen.getByRole("group", { name: "Side panel" });
+    expect([...group.querySelectorAll("button")].map((button) => button.getAttribute("aria-label"))).toEqual(["Browser", "Changes (4)", "Terminal", "Games"]);
+    expect(group.querySelector(".panel-switch-pill")).toBeNull();
+    rerender(<ChatHeader {...p} changesCount={4} changesOpen />);
+    expect(group.querySelector(".panel-switch-pill")?.closest("button")).toHaveAttribute("aria-label", "Changes (4)");
+  });
+
   it("toggles the Games panel and shows it pressed while open", () => {
     const p = props(task("t1", "Chat"));
     const { rerender } = render(<ChatHeader {...p} />);

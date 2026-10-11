@@ -58,7 +58,7 @@ function CommentCard({ comment, stale, draft, disabled, onEditComment, onUpdateC
 }) {
   return (
     <div className={`diff-comment ${stale ? "stale" : ""}`}>
-      <Icon name="comment" />
+      <span className="diff-comment-mark" aria-hidden="true"><Icon name="comment" /></span>
       <div className="diff-comment-body">
         <div className="diff-comment-meta">
           <span>{comment.path}:{comment.line} · {comment.side === "old" ? "removed line" : comment.layer}</span>
@@ -221,7 +221,7 @@ export function DiffView(props: DiffViewProps) {
   return (
     <>
       <div className="diff-file-header">
-        <Icon name="file" />
+        <span className="diff-file-mark" aria-hidden="true"><Icon name="file" /></span>
         <span className="diff-file-path" title={file.path}>
           {dir && <span className="change-dir">{dir}</span>}
           <span className="change-base">{base}</span>
@@ -246,7 +246,7 @@ export function DiffView(props: DiffViewProps) {
             transition={transition}
           >
             {file.binary ? (
-              <div className="diff-note"><Icon name="file" /><span>Binary file — no text diff</span></div>
+              <div className="diff-note"><span className="diff-file-mark" aria-hidden="true"><Icon name="file" /></span><span>Binary file — no text diff</span></div>
             ) : sections.every((section) => section.hunks.length === 0) ? (
               <div className="diff-note"><pre>{sections.map((section) => section.diff).join("\n") || "No text diff available"}</pre></div>
             ) : sections.map((section) => (

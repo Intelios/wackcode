@@ -72,6 +72,11 @@ export interface ToolSummary {
   kind: "read" | "edit" | "write" | "bash" | "search" | "other";
 }
 
+/** A call's arguments as an object: {} while they are still streaming in as partial JSON. */
+export function callArguments(block: NormalizedBlock): Record<string, unknown> {
+  return args(block);
+}
+
 function args(block: NormalizedBlock): Record<string, unknown> {
   const value = block.arguments;
   if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
@@ -243,6 +248,27 @@ export function exploreKind(call: NormalizedBlock): ExploreKind | undefined {
       return bashExploreKind(str(args(call).command));
     default:
       return undefined;
+  }
+}
+
+/**
+ * How the Code transcript draws a tool call: a pill "chip" that flows in a wrapping strip with
+ * its neighbours, or a full-width "row". Rows are kept for calls that changed the workspace or
+ * ran a real command (edits, writes, any shell command not known to only read), where the
+ * subject and +/− stats matter; everything else is a chip. Presentation only — it never
+ * decides what may run.
+ */
+export type ToolPresentation = "chip" | "row";
+
+export function toolPresentation(call: NormalizedBlock): ToolPresentation {
+  switch (call.toolName) {
+    case "edit":
+    case "write":
+      return "row";
+    case "bash":
+      return bashExploreKind(str(args(call).command)) ? "chip" : "row";
+    default:
+      return "chip";
   }
 }
 

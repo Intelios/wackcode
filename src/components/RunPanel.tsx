@@ -98,7 +98,7 @@ export function RunPanel({ run, appearance, configured, onRun, onStop, onClose }
   return (
     <div className="terminal-panel run-panel">
       <header className="panel-header terminal-header">
-        <span className="terminal-glyph" aria-hidden="true"><Icon name="play" /></span>
+        <span className="panel-mark" aria-hidden="true"><Icon name="play" /></span>
         <div className="panel-title"><span className="panel-kicker">Run</span><h3 title={run?.command}>{run?.command ?? "Project command"}</h3></div>
         <div className="panel-header-actions">
           <Tooltip label="Clear screen" side="bottom">

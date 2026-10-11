@@ -220,6 +220,19 @@ describe("Composer slash commands", () => {
     return { onCommand, onLiteral, onRequestCommands };
   }
 
+  it("marks each command by where it comes from and keeps the key hint out of the list's semantics", () => {
+    setup({ commands: [{ ...command, argumentHint: "<name>" }, { id: "skill:pdf", name: "skill:pdf", description: "Read PDFs", source: "skill", sourceLabel: "Your skills" }] });
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "/", selectionStart: 1 } });
+    const options = screen.getAllByRole("option");
+    // The mark is decoration: an option still reads as its command, hint, description and source.
+    expect(options[0]).toHaveTextContent("/hello <name>Say helloFixture");
+    expect(options.map((option) => option.querySelector(".slash-mark")?.getAttribute("aria-hidden"))).toEqual(["true", "true"]);
+    expect(options[0]).toHaveAttribute("aria-selected", "true");
+    const hint = document.querySelector(".slash-picker-foot")!;
+    expect(hint).toHaveAttribute("aria-hidden", "true");
+    expect(hint).toHaveTextContent("move");
+  });
+
   it("filters, selects, and runs a command with arguments", async () => {
     const { onCommand, onRequestCommands } = setup();
     const area = screen.getByRole("textbox");

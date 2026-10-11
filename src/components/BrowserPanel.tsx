@@ -14,6 +14,12 @@ interface BrowserPanelProps {
   onClose: () => void;
 }
 
+/** The page's host, for the header while a page has no title yet. */
+function pageHost(url: string | undefined): string {
+  if (!url) return "";
+  try { return new URL(url).host; } catch { return ""; }
+}
+
 /** React owns the chrome; Rust places the untrusted native WKWebView over `browser-surface`. */
 export function BrowserPanel({ taskId, state, visible, expanded, onState, onExpand, onReset, onClose }: BrowserPanelProps) {
   const surface = useRef<HTMLDivElement>(null);
@@ -87,38 +93,49 @@ export function BrowserPanel({ taskId, state, visible, expanded, onState, onExpa
   }
 
   const message = error ?? state?.error;
+  const control = state?.userControl ? "Resume agent control" : "Take control";
   return (
     <section className="browser-panel">
-      <header className="browser-panel-header">
-        <div className="browser-panel-title">
-          <span className={`browser-status-dot ${state?.agentActive ? "agent" : state?.loading ? "loading" : ""}`} />
-          <div><strong>{state?.title || "Browser"}</strong><span>{state?.agentActive ? "Agent is using the page" : state?.userControl ? "You have control" : "Shared browser"}</span></div>
+      <header className="panel-header">
+        <span className={`panel-mark ${state?.agentActive ? "live" : ""}`} aria-hidden="true"><Icon name="browser" /></span>
+        <div className="panel-title" title={state?.url || undefined}>
+          <span className="panel-kicker">Browser</span>
+          <h3>{state?.title || pageHost(state?.url) || "No page open"}</h3>
         </div>
-        <div className="browser-panel-actions">
+        {state?.agentActive ? (
+          <span className="terminal-pill running" role="status"><span className="terminal-pill-dot" aria-hidden="true" />Agent is using the page</span>
+        ) : state?.userControl ? (
+          <span className="terminal-pill" role="status"><span className="terminal-pill-dot" aria-hidden="true" />You have control</span>
+        ) : null}
+        <div className="panel-header-actions">
           <button type="button" className="icon-button" title={expanded ? "Restore browser" : "Expand browser"} aria-label={expanded ? "Restore browser" : "Expand browser"} onClick={onExpand}><Icon name={expanded ? "collapse" : "expand"} /></button>
           <button type="button" className="icon-button" title="Close browser panel" aria-label="Close browser panel" onClick={onClose}><Icon name="close" /></button>
         </div>
+        {state?.loading && <span className="panel-loading" aria-hidden="true" />}
       </header>
       <div className="browser-toolbar">
-        <button type="button" className="icon-button" aria-label="Back" title="Back" disabled={!state?.canGoBack} onClick={() => void run(() => api.browserNavigation(taskId, "back"))}><Icon name="back" /></button>
-        <button type="button" className="icon-button browser-forward" aria-label="Forward" title="Forward" disabled={!state?.canGoForward} onClick={() => void run(() => api.browserNavigation(taskId, "forward"))}><Icon name="back" /></button>
-        <button type="button" className="icon-button" aria-label={state?.loading ? "Stop loading" : "Reload"} title={state?.loading ? "Stop loading" : "Reload"} disabled={!state?.exists} onClick={() => void run(() => api.browserNavigation(taskId, state?.loading ? "stop" : "reload"))}><Icon name={state?.loading ? "stop" : "refresh"} /></button>
+        <div className="browser-nav">
+          <button type="button" className="icon-button" aria-label="Back" title="Back" disabled={!state?.canGoBack} onClick={() => void run(() => api.browserNavigation(taskId, "back"))}><Icon name="back" /></button>
+          <button type="button" className="icon-button browser-forward" aria-label="Forward" title="Forward" disabled={!state?.canGoForward} onClick={() => void run(() => api.browserNavigation(taskId, "forward"))}><Icon name="back" /></button>
+          <button type="button" className="icon-button" aria-label={state?.loading ? "Stop loading" : "Reload"} title={state?.loading ? "Stop loading" : "Reload"} disabled={!state?.exists} onClick={() => void run(() => api.browserNavigation(taskId, state?.loading ? "stop" : "reload"))}><Icon name={state?.loading ? "stop" : "refresh"} /></button>
+        </div>
         <form className="browser-address" onSubmit={submit}>
-          <Icon name="browser" />
+          <Icon name={state?.url?.startsWith("https://") ? "lock" : "globe"} />
           <input aria-label="Browser address" value={address} placeholder="localhost:5173" spellCheck={false}
             onFocus={() => { addressFocused.current = true; }} onBlur={() => { addressFocused.current = false; }}
             onChange={(event) => setAddress(event.target.value)} />
         </form>
-        <button type="button" className={`secondary-button browser-control ${state?.userControl ? "active" : ""}`} disabled={!state?.exists}
+        <button type="button" className={`browser-control ${state?.userControl ? "active" : ""}`} disabled={!state?.exists}
+          aria-label={control} title={control} aria-pressed={Boolean(state?.userControl)}
           onClick={() => void run(() => api.browserSetControl(taskId, !state?.userControl).then(onState))}>
-          {state?.userControl ? "Resume agent control" : "Take control"}
+          <Icon name="cursor" /><span>{control}</span>
         </button>
         <button type="button" className="icon-button" aria-label="Reset browser session" title="Reset browser session" disabled={!state?.exists} onClick={onReset}><Icon name="trash" /></button>
       </div>
       {state?.popup && <button type="button" className="browser-popup-return" onClick={() => void run(() => api.browserReturnFromPopup(taskId).then(onState))}><Icon name="back" /> Return to page</button>}
-      {message && <div className="browser-error" role="alert"><span>{message}</span><button type="button" onClick={() => setError(undefined)}>Dismiss</button></div>}
+      {message && <div className="browser-error" role="alert"><Icon name="alert" /><span>{message}</span><button type="button" onClick={() => setError(undefined)}>Dismiss</button></div>}
       <div className="browser-surface" ref={surface}>
-        {!state?.url && <div className="browser-empty"><Icon name="browser" /><h3>Preview a web app</h3><p>Enter a local or deployed HTTP address. The agent can open and use this browser too.</p></div>}
+        {!state?.url && <div className="browser-empty"><span className="panel-empty-mark" aria-hidden="true"><Icon name="browser" /></span><h3>Preview a web app</h3><p>Enter a local or deployed HTTP address. The agent can open and use this browser too.</p></div>}
       </div>
     </section>
   );

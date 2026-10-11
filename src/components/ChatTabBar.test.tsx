@@ -22,6 +22,20 @@ function setup(items = tabs) {
 }
 
 describe("ChatTabBar", () => {
+  it("fills only the active tab and draws each state as a badge, never a typed character", () => {
+    const { container, rerender, surface } = setup([...tabs, { id: "d", title: "Delta", project: "P", model: "M", status: "waiting" }, { id: "e", title: "Echo", project: "P", model: "M", status: "error" }]);
+    const fills = () => [...container.querySelectorAll(".chat-tab-pill")].map((pill) => pill.closest(".chat-tab")?.querySelector("[role='tab']")?.getAttribute("aria-label"));
+    expect(fills()).toEqual(["Alpha"]);
+    rerender(surface("c", [...tabs, { id: "d", title: "Delta", project: "P", model: "M", status: "waiting" }, { id: "e", title: "Echo", project: "P", model: "M", status: "error" }]));
+    expect(fills()).toEqual(["Gamma — Finished while away"]);
+    for (const status of ["idle", "completed", "waiting", "error"]) {
+      const badge = container.querySelector(`.chat-tab-status.${status}`)!;
+      expect(badge.querySelector("svg"), status).not.toBeNull();
+      expect(badge.textContent, status).toBe("");
+    }
+    expect(container.querySelector(".chat-tab-status.working .orbit-spinner")).not.toBeNull();
+  });
+
   it("offers accessible tabs, roving keyboard focus and separate close buttons", () => {
     const { onSelect, onClose, onNew } = setup();
     const first = screen.getByRole("tab", { name: "Alpha" });

@@ -79,9 +79,11 @@ export function SkillDraftCard({ details, status, current, owned, busy, saving, 
   return (
     <div className={`skill-draft-card ${current ? "current" : ""} ${saved ? "saved" : ""}`}>
       <div className="skill-draft-head">
-        <Icon name="book" />
-        <span>Skill draft</span>
-        <strong className="skill-draft-name">{details.name}</strong>
+        <span className="plan-card-mark" aria-hidden="true"><Icon name="book" /></span>
+        <div className="plan-card-title">
+          <strong className="skill-draft-name">{details.name}</strong>
+          <span>Skill draft</span>
+        </div>
         {details.manual && <span className="skill-draft-flag" title="Only loads when you type /skill:name">manual</span>}
       </div>
       <p className="skill-draft-description">{details.description}</p>

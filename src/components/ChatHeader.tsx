@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useId, useState } from "react";
+import { motion, useReducedMotion } from "motion/react";
 import type { GitBranches, GitCheckoutKind, ProjectRecord, RunInfo, TaskRecord } from "../types";
 import { RunButton } from "./RunButton";
 import { BranchPicker } from "./BranchPicker";
-import { Icon } from "./Icons";
+import { Icon, type IconName } from "./Icons";
 import { MenuButton } from "./ui/MenuButton";
 import { Tooltip } from "./ui/Tooltip";
 import { TextSwap } from "./TextSwap";
@@ -53,6 +54,16 @@ export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStop
   const menu = chatMenu(task, project, () => { setValue(task.name); setRenaming(true); }, onTaskAction);
   // A Chat mode chat has a scratchpad and a browser, and none of the project chrome.
   const chat = task.kind === "chat";
+  const reduce = useReducedMotion() ?? false;
+  const pillId = useId();
+  const panels: { label: string; icon: IconName; keys?: string; count?: number; open: boolean; onToggle: () => void }[] = [
+    { label: "Browser", icon: "browser", open: browserOpen, onToggle: onToggleBrowser },
+    ...(chat ? [] : [
+      { label: "Changes", icon: "panel" as const, keys: "⌘⇧C", count: changesCount, open: changesOpen, onToggle: onToggleChanges },
+      { label: "Terminal", icon: "terminal" as const, keys: "⌘⇧T", open: terminalOpen, onToggle: onToggleTerminal },
+      { label: "Games", icon: "gamepad" as const, open: gamesOpen, onToggle: onToggleGames }
+    ])
+  ];
 
   return (
     <header className="workspace-header">
@@ -92,36 +103,22 @@ export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStop
       <div className="header-actions">
         {project && !task.archived && <RunButton key={task.id} project={project} workspacePath={task.workspacePath} run={run}
           onSave={onSaveRunCommand} onRun={onRun} onStop={onStopRun} onShowOutput={onShowRunOutput} />}
-        <Tooltip label="Browser" side="bottom">
-          <button type="button" className={`panel-button ${browserOpen ? "active" : ""}`} onClick={onToggleBrowser} aria-label="Browser" aria-pressed={browserOpen}>
-            <Icon name="browser" />
-          </button>
-        </Tooltip>
-        {!chat && (
-          <>
-            <Tooltip label={<>Changes <kbd>⌘⇧C</kbd></>} side="bottom">
-              <button type="button" className={`panel-button ${changesOpen ? "active" : ""}`} onClick={onToggleChanges} aria-label={changesCount ? `Changes (${changesCount})` : "Changes"} aria-pressed={changesOpen}>
-                <Icon name="panel" />{changesCount ? <em className="changes-badge" aria-hidden="true">{changesCount}</em> : null}
+        {/* The side panel shows one view at a time, so its triggers are one control: a track whose
+            fill glides to whichever view is open, and rests nowhere while the panel is closed. */}
+        <div className="panel-switch" role="group" aria-label="Side panel">
+          {panels.map((panel) => (
+            <Tooltip key={panel.label} label={panel.keys ? <>{panel.label} <kbd>{panel.keys}</kbd></> : panel.label} side="bottom">
+              <button type="button" className={`panel-button panel-switch-tab ${panel.open ? "active" : ""}`} onClick={panel.onToggle}
+                aria-label={panel.count ? `${panel.label} (${panel.count})` : panel.label} aria-pressed={panel.open}>
+                {panel.open && (
+                  <motion.span className="panel-switch-pill" aria-hidden="true" layoutId={reduce ? undefined : pillId}
+                    style={{ borderRadius: 999 }} transition={{ type: "spring", stiffness: 480, damping: 36 }} />
+                )}
+                <Icon name={panel.icon} />{panel.count ? <em className="changes-badge" aria-hidden="true">{panel.count}</em> : null}
               </button>
             </Tooltip>
-            <Tooltip label={<>Terminal <kbd>⌘⇧T</kbd></>} side="bottom">
-              <button
-                type="button"
-                className={`panel-button ${terminalOpen ? "active" : ""}`}
-                onClick={onToggleTerminal}
-                aria-label="Terminal"
-                aria-pressed={terminalOpen}
-              >
-                <Icon name="terminal" />
-              </button>
-            </Tooltip>
-            <Tooltip label="Games" side="bottom">
-              <button type="button" className={`panel-button ${gamesOpen ? "active" : ""}`} onClick={onToggleGames} aria-label="Games" aria-pressed={gamesOpen}>
-                <Icon name="gamepad" />
-              </button>
-            </Tooltip>
-          </>
-        )}
+          ))}
+        </div>
         <MenuButton label="Chat menu" items={menu} />
       </div>
     </header>

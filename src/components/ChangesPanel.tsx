@@ -184,28 +184,36 @@ export function ChangesPanel(props: Props) {
   const review = (
     <button
       type="button"
-      className={`panel-button review-button ${!canReview ? "muted" : ""}`}
+      className={`review-button ${!canReview ? "muted" : ""}`}
       disabled={disabled || !changes?.isGit || files.length === 0}
       aria-disabled={!canReview}
+      aria-label="Review"
       onClick={() => (canReview ? void run(() => props.onReview()) : props.onSettings())}
     >
-      <Icon name="agents" /> Review
+      <Icon name="agents" /><span>Review</span>
     </button>
   );
 
   return (
     <div className="changes-panel">
       <header className="panel-header">
-        <div className="changes-title">
-          <h3>Changes</h3>
-          {changes?.isGit && files.length > 0 && (
-            <span className="changes-meta">
-              {changes.branch && <span className="changes-branch"><Icon name="branch" />{changes.branch}</span>}
-              {files.length} {files.length === 1 ? "file" : "files"} · <em className="stat-add">+{totals.add}</em> <em className="stat-del">−{totals.del}</em>
-            </span>
-          )}
+        <span className="panel-mark" aria-hidden="true"><Icon name="git" /></span>
+        <div className="panel-title">
+          <span className="panel-kicker">Changes</span>
+          <h3 className="changes-summary">
+            {!changes?.isGit ? "No repository" : (
+              <>
+                {changes.branch && <><span className="changes-branch" title={changes.branch}>{changes.branch}</span>{" "}</>}
+                {files.length === 0 ? <span className="changes-meta">{changes.branch ? "clean" : "Clean"}</span> : (
+                  <span className="changes-meta">
+                    {files.length} {files.length === 1 ? "file" : "files"} <em className="stat-add">+{totals.add}</em> <em className="stat-del">−{totals.del}</em>
+                  </span>
+                )}
+              </>
+            )}
+          </h3>
         </div>
-        <div className="changes-header-actions">
+        <div className="panel-header-actions">
           {reviewUnavailable && reviewReason ? <Tooltip label={reviewReason}>{review}</Tooltip> : review}
           <button className="icon-button" onClick={props.onRefresh} aria-label="Refresh changes"><Icon name="refresh" className={loading ? "spinning" : ""} /></button>
           <button className="icon-button" onClick={props.onClose} aria-label="Close changes panel"><Icon name="close" /></button>
@@ -213,9 +221,9 @@ export function ChangesPanel(props: Props) {
         {loading && <span className="panel-loading" aria-hidden="true" />}
       </header>
       {!changes?.isGit ? (
-        <div className="panel-empty"><Icon name="git" /><strong>No Git repository</strong><span>Chat and editing still work. Changes can’t be summarized here.</span></div>
+        <div className="panel-empty"><span className="panel-empty-mark" aria-hidden="true"><Icon name="git" /></span><strong>No Git repository</strong><span>Chat and editing still work. Changes can’t be summarized here.</span></div>
       ) : files.length === 0 ? (
-        <div className="panel-empty"><span className="clean-check">✓</span><strong>Working tree clean</strong><span>No staged, unstaged, or untracked files.</span></div>
+        <div className="panel-empty"><span className="panel-empty-mark good" aria-hidden="true"><Icon name="check" /></span><strong>Working tree clean</strong><span>No staged, unstaged, or untracked files.</span></div>
       ) : (
         <>
           <ChangesFileList

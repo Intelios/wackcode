@@ -1,6 +1,6 @@
-import { memo, useEffect, useRef, useState, type PointerEvent } from "react";
+import { memo, useEffect, useId, useRef, useState, type PointerEvent } from "react";
 import { motion, useReducedMotion } from "motion/react";
-import { Icon } from "./Icons";
+import { Icon, type IconName } from "./Icons";
 import { OrbitSpinner } from "./OrbitSpinner";
 import { TextSwap } from "./TextSwap";
 import { MenuButton } from "./ui/MenuButton";
@@ -29,8 +29,15 @@ interface Props {
 }
 
 const STATUS_LABEL = { idle: "", working: "Working", waiting: "Waiting for input", error: "Error", completed: "Finished while away" };
+/** A tab's badge when it isn't working (that one is the bead trail). */
+const STATUS_ICON: Record<Exclude<ChatTabItem["status"], "working">, IconName> = { idle: "comment", waiting: "help", error: "alert", completed: "check" };
 
-/** A compact workspace shelf, independent of the sidebar's chat library. */
+/**
+ * A compact workspace shelf, independent of the sidebar's chat library. Tabs are pills; the
+ * active one's fill is a single shared element (`layoutId`), so switching tabs glides it across
+ * rather than swapping it, as the Build/Plan toggle and the Code/Chat switch do. The list is a
+ * `layoutScroll` container so the glide measures correctly while the strip is scrolled.
+ */
 export const ChatTabBar = memo(function ChatTabBar({ tabs, activeId, canReopen, onSelect, onClose, onNew, onReopen, onReorder }: Props) {
   const reduce = useReducedMotion();
   const list = useRef<HTMLDivElement>(null);
@@ -38,6 +45,7 @@ export const ChatTabBar = memo(function ChatTabBar({ tabs, activeId, canReopen, 
   const [draggingId, setDraggingId] = useState<string>();
   const suppressClick = useRef(false);
   const contextMenu = useContextMenu();
+  const pillId = useId();
   const order = tabs.map((tab) => tab.id).join("\n");
   useEffect(() => {
     if (draggingId) return;
@@ -86,7 +94,7 @@ export const ChatTabBar = memo(function ChatTabBar({ tabs, activeId, canReopen, 
   return (
     <div className="chat-tab-strip">
       <div className="chat-tab-drag" data-tauri-drag-region />
-      <div ref={list} className="chat-tab-list" role="tablist" aria-label="Open chats" data-tauri-drag-region
+      <motion.div ref={list} layoutScroll className="chat-tab-list" role="tablist" aria-label="Open chats" data-tauri-drag-region
         onKeyDown={(event) => {
           if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
           event.preventDefault();
@@ -102,6 +110,10 @@ export const ChatTabBar = memo(function ChatTabBar({ tabs, activeId, canReopen, 
           <motion.div key={tab.id} layout={reduce ? false : "position"} transition={{ type: "spring", stiffness: 420, damping: 34 }}
             className={`chat-tab ${tab.id === activeId ? "active" : ""}${tab.id === draggingId ? " dragging" : ""}`}
             onContextMenu={(event) => contextMenu(event, menu(tab, index), "Tab menu")}>
+            {tab.id === activeId && (
+              <motion.span className="chat-tab-pill" aria-hidden="true" layoutId={reduce ? undefined : pillId}
+                style={{ borderRadius: 999 }} transition={{ type: "spring", stiffness: 460, damping: 36 }} />
+            )}
             <Tooltip side="bottom" label={<span className="chat-tab-detail"><strong>{tab.title}</strong><span>{tab.project} · {tab.model}</span>{STATUS_LABEL[tab.status] && <span>{STATUS_LABEL[tab.status]}</span>}</span>}>
               <button type="button" role="tab" id={`tab-${tab.id}`} aria-controls="chat-tab-panel"
                 aria-label={`${tab.title}${STATUS_LABEL[tab.status] ? ` — ${STATUS_LABEL[tab.status]}` : ""}`}
@@ -116,7 +128,7 @@ export const ChatTabBar = memo(function ChatTabBar({ tabs, activeId, canReopen, 
                 }}
                 onPointerMove={moveTab} onPointerUp={endDrag} onPointerCancel={endDrag} onLostPointerCapture={endDrag}>
                 <span className={`chat-tab-status ${tab.status}`} aria-hidden="true">
-                  {tab.status === "working" ? <OrbitSpinner active /> : tab.status === "error" ? "!" : tab.status === "waiting" ? "?" : tab.status === "completed" ? <Icon name="check" /> : <Icon name="comment" />}
+                  {tab.status === "working" ? <OrbitSpinner active /> : <Icon name={STATUS_ICON[tab.status]} />}
                 </span>
                 <TextSwap text={tab.title} swapKey={tab.titlePulse ?? 0} variant="title" />
               </button>
@@ -124,7 +136,7 @@ export const ChatTabBar = memo(function ChatTabBar({ tabs, activeId, canReopen, 
             <button type="button" className="icon-button chat-tab-close" aria-label={`Close tab ${tab.title}`} tabIndex={tab.id === activeId ? 0 : -1} onClick={() => onClose(tab.id)}><Icon name="close" /></button>
           </motion.div>
         ))}
-      </div>
+      </motion.div>
       <div className="chat-tab-actions">
         <Tooltip label={<>New chat <kbd>⌘N</kbd></>} side="bottom"><button type="button" className="icon-button" aria-label="New chat tab" onClick={onNew}><Icon name="plus" /></button></Tooltip>
         <MenuButton label="Open tabs" items={[

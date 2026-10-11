@@ -14,8 +14,9 @@ interface AreaSwitchProps {
 }
 
 /**
- * The Code | Chat switch at the top of the sidebar. The pill is one element that glides between
- * the two segments (a shared `layoutId`), so the switch reads as moving rather than repainting.
+ * The Code | Chat switch, in the sidebar's title strip beside the traffic lights. The pill is one
+ * element that glides between the two segments (a shared `layoutId`), so the switch reads as
+ * moving rather than repainting.
  * A pair of pressed-state buttons, not a tablist: the chat tab bar is the window's tablist.
  */
 export function AreaSwitch({ area, attention, onSwitch }: AreaSwitchProps) {

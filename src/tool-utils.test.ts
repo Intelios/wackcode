@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bashExploreKind, diffStats, displayAgentName, editStats, exploreKind, firstSentence, groupTools, imageReadNote, parseSubagentDetails, pendingSubagentDetails, pruneDisabledTools, sameToolCatalog, splitPathSubject, subagentDetailsFor, summarizeTool } from "./tool-utils";
+import { bashExploreKind, diffStats, displayAgentName, editStats, exploreKind, firstSentence, groupTools, imageReadNote, parseSubagentDetails, pendingSubagentDetails, pruneDisabledTools, sameToolCatalog, splitPathSubject, subagentDetailsFor, summarizeTool, toolPresentation } from "./tool-utils";
 import type { NormalizedBlock, NormalizedMessage, ToolCatalogEntry } from "./types";
 
 function call(toolName: string, args: unknown): NormalizedBlock {
@@ -296,5 +296,25 @@ describe("bashExploreKind", () => {
       "ls |& cat"
     ];
     for (const command of cases) expect(bashExploreKind(command), command).toBeUndefined();
+  });
+});
+
+describe("toolPresentation", () => {
+  const call = (toolName: string, args: Record<string, unknown> = {}): NormalizedBlock => ({ type: "tool-call", toolName, toolCallId: "c", arguments: args });
+
+  it("draws calls that only looked or talked to something as chips", () => {
+    for (const block of [
+      call("read", { path: "a.ts" }), call("grep"), call("find"), call("ls"), call("bash", { command: "git log -3" }),
+      call("memory_save", { title: "x" }), call("memory_recall"), call("web_fetch"), call("mcp__blender__look"),
+      call("computer_act"), call("todo"), call("ask_user_question"), call("plan_mode_complete"), call("custom_tool")
+    ]) expect(toolPresentation(block)).toBe("chip");
+  });
+
+  it("keeps edits, writes and commands that might change something as rows", () => {
+    expect(toolPresentation(call("edit"))).toBe("row");
+    expect(toolPresentation(call("write"))).toBe("row");
+    expect(toolPresentation(call("bash", { command: "rm -rf dist" }))).toBe("row");
+    expect(toolPresentation(call("bash", { command: "pnpm test" }))).toBe("row");
+    expect(toolPresentation(call("bash", { command: "ls > out.txt" }))).toBe("row");
   });
 });

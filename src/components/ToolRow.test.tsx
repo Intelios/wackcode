@@ -198,7 +198,8 @@ describe("ToolRow images", () => {
     const load = vi.fn(async () => "data:image/png;base64,b3JpZ2luYWw=");
     const view = render(<ToolImageSource.Provider value={load}><ToolRow call={call} result={result} /></ToolImageSource.Provider>);
     expect(screen.getByRole("img", { name: "manual_774.png" })).toHaveAttribute("src", "data:image/png;base64,cHJldmlldw==");
-    expect(view.container.querySelector(".tool-row-head .tool-row-icon")).toBeInTheDocument();
+    // A read is a chip: its image previews sit under the strip, outside the chip itself.
+    expect(view.container.querySelector(".tool-chip .tool-row-icon")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Open image manual_774.png" }));
     const dialog = screen.getByRole("dialog", { name: "manual_774.png" });
     await waitFor(() => expect(dialog.querySelector("img")?.getAttribute("src")).toBe("data:image/png;base64,b3JpZ2luYWw="));
@@ -233,5 +234,88 @@ describe("ToolRow images", () => {
   it("shows no image strip when no preview could be made at all", () => {
     const view = render(<ToolRow call={call} result={{ ...result, images: [{ imageId: "image-1", failed: true }] }} />);
     expect(view.container.querySelector(".tool-images")).not.toBeInTheDocument();
+  });
+});
+
+describe("ToolRow sheets", () => {
+  const open = (name: RegExp) => fireEvent.click(screen.getByRole("button", { name }));
+
+  it("numbers a read's lines from its offset and keeps the note out of the code", () => {
+    const call: NormalizedBlock = { type: "tool-call", toolCallId: "r1", toolName: "read", arguments: { path: "/repo/src/app.ts", offset: 40, limit: 2 } };
+    const text = "const a = 1;\nconst b = 2;\n\n[10 more lines in file. Use offset=42 to continue.]";
+    render(<ToolRow call={call} result={{ type: "tool-result", toolCallId: "r1", text }} />);
+    open(/^Read/);
+    const code = document.querySelector<HTMLElement>(".tool-code")!;
+    expect(code.textContent).toBe("const a = 1;\nconst b = 2;");
+    expect(code.style.counterReset).toBe("line 39");
+    expect(code.querySelector(".hljs-keyword")).not.toBeNull();
+    expect(screen.getByText("lines 40–41 of 51")).toBeInTheDocument();
+    expect(document.querySelector(".tool-head-path")?.textContent).toBe("/repo/src/app.ts");
+  });
+
+  it("groups a grep's hits by file and lights the pattern", () => {
+    const call: NormalizedBlock = { type: "tool-call", toolCallId: "g1", toolName: "grep", arguments: { pattern: "hit" } };
+    render(<ToolRow call={call} result={{ type: "tool-result", toolCallId: "g1", text: "src/a.ts:4: const hit = 1;\nsrc/b.ts:10: hit()" }} />);
+    open(/^Searched/);
+    expect([...document.querySelectorAll(".match-file")].map((file) => file.textContent)).toEqual(["src/a.ts\n", "src/b.ts\n"]);
+    expect(document.querySelector(".match-row")).toHaveAttribute("data-line", "4");
+    expect(document.querySelectorAll(".tool-matches mark")).toHaveLength(2);
+    expect(screen.getByText("2 matches in 2 files")).toBeInTheDocument();
+  });
+
+  it("shows how a failed command ended as a pill, apart from its output", () => {
+    const call: NormalizedBlock = { type: "tool-call", toolCallId: "b1", toolName: "bash", arguments: { command: "pnpm test" } };
+    render(<ToolRow call={call} result={{ type: "tool-result", toolCallId: "b1", isError: true, text: "1 failed\n\nCommand exited with code 1" }} />);
+    open(/^Ran/);
+    expect(screen.getByText("exit 1")).toHaveClass("tool-pill");
+    expect(document.querySelector(".tool-text pre")?.textContent).toBe("1 failed");
+  });
+
+  it("marks the option the user picked for a question", () => {
+    const questions = [{ id: "q", header: "Next", question: "Which way?", options: [{ label: "Left", description: "West." }, { label: "Right", description: "East." }] }];
+    const call: NormalizedBlock = { type: "tool-call", toolCallId: "q1", toolName: "ask_user_question", arguments: { questions } };
+    const result: NormalizedBlock = { type: "tool-result", toolCallId: "q1", text: "The user answered your questions:", details: { cancelled: false, answers: [{ questionId: "q", selected: ["Right"] }] } };
+    render(<ToolRow call={call} result={result} />);
+    open(/^Asked/);
+    const options = screen.getAllByRole("listitem");
+    expect(options.map((option) => option.getAttribute("aria-current"))).toEqual([null, "true"]);
+    expect(screen.getByText("Answered")).toBeInTheDocument();
+    expect(document.querySelector(".tool-detail")).not.toHaveTextContent("{");
+  });
+
+  it("lays any other call's arguments out as labelled rows, not JSON", () => {
+    const call: NormalizedBlock = { type: "tool-call", toolCallId: "f1", toolName: "web_fetch", arguments: { url: "https://example.com", maxLength: 4000 } };
+    render(<ToolRow call={call} result={{ type: "tool-result", toolCallId: "f1", text: "page text" }} />);
+    open(/^Fetched/);
+    expect([...document.querySelectorAll(".tool-args dt")].map((term) => term.textContent)).toEqual(["url", "maxLength"]);
+    expect(document.querySelector(".tool-args")).not.toHaveTextContent("{");
+    expect(screen.getByText("Result")).toBeInTheDocument();
+  });
+});
+
+describe("ToolRow work rows", () => {
+  it("opens an edit straight into its diff: the row's bar is the sheet's head", () => {
+    render(<ToolRow call={editCall} result={editResult} />);
+    fireEvent.click(screen.getByRole("button", { name: /Edited/ }));
+    const row = document.querySelector(".tool-row.open")!;
+    expect(row.querySelector(".tool-detail .tool-diff")).not.toBeNull();
+    expect(row.querySelector(".tool-head")).toBeNull();
+  });
+
+  it("gives a failed edit no second head, only what was sent and what went wrong", () => {
+    render(<ToolRow call={{ ...editCall, arguments: { path: "src/app.ts", oldText: "old", newText: "new" } }} result={{ ...editResult, isError: true, text: "Text was not found", details: undefined }} />);
+    fireEvent.click(screen.getByRole("button", { name: /Edited/ }));
+    expect(document.querySelector(".tool-row .tool-head")).toBeNull();
+    expect([...document.querySelectorAll(".tool-args dt")].map((term) => term.textContent)).toEqual(["path", "oldText", "newText"]);
+    expect(screen.getByText("Error")).toBeInTheDocument();
+  });
+
+  it("marks a command row, which keeps the command in full as its first pane and in the button's name", () => {
+    render(<ToolRow call={{ ...editCall, toolName: "bash", arguments: { command: "pnpm install" } }} result={{ ...editResult, text: "done", details: undefined }} />);
+    const bar = screen.getByRole("button", { name: /Ran/ });
+    fireEvent.click(bar);
+    expect(bar.closest(".tool-row")).toHaveClass("command", "open");
+    expect(bar).toHaveAccessibleName(/pnpm install/);
+    expect(document.querySelector(".tool-row .tool-command")?.textContent).toBe("pnpm install");
   });
 });

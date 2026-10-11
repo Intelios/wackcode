@@ -18,6 +18,7 @@ import type { Element, ElementContent } from "hast";
 import type { Components } from "react-markdown";
 import { api } from "./api";
 import { highlightBlock } from "./highlight";
+import { Icon } from "./components/Icons";
 import { CopyButton } from "./components/ui/CopyButton";
 
 interface ComponentsOptions {
@@ -93,6 +94,7 @@ function CodePre({ node, children, streamingTail }: CodePreProps) {
   return (
     <div className="code-block">
       <div className="code-block-toolbar">
+        <span className="code-block-mark" aria-hidden="true"><Icon name="code" /></span>
         <span className="code-block-language">{tag ?? "Code"}</span>
         <CopyButton text={text} label="Copy code" />
       </div>

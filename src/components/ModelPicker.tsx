@@ -355,7 +355,7 @@ export function ReasoningToggle({
       >
         <div className={`reasoning-panel${isTopLevel ? " at-max" : ""}`}>
           <div className="reasoning-header">
-            <Icon name="brain" className="reasoning-head-icon" />
+            <span className="reasoning-head-mark" aria-hidden="true"><Icon name="brain" className="reasoning-head-icon" /></span>
             <div className="reasoning-head-text">
               <span key={activeLevel} className={`reasoning-level-name${isReasoningOn ? " on" : ""}`}>{activeLevel}</span>
               <span className="reasoning-model-sub">{model?.name || model?.id}</span>

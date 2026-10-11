@@ -1,57 +1,22 @@
-import { createContext, useCallback, useContext, useId, useMemo, useState } from "react";
-import { highlightDiffLines, languageForPath } from "../highlight";
-import { editArgumentDiff, focusedEditDiff } from "../edit-preview";
+import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { NormalizedBlock } from "../types";
-import { imageReadNote, mcpToolParts, SCREENSHOT_TOOL_NAMES, splitPathSubject, summarizeTool } from "../tool-utils";
-import { Icon, type IconName } from "./Icons";
+import { SCREENSHOT_TOOL_NAMES, splitPathSubject, summarizeTool, toolPresentation, type ToolSummary } from "../tool-utils";
+import { motionAllowed } from "../hooks/useSmoothText";
+import { Icon } from "./Icons";
 import { OrbitSpinner } from "./OrbitSpinner";
 import { QuillMark } from "./QuillMark";
 import { RollingNumber } from "./RollingNumber";
+import { ToolDetail, ToolExpansion, ToolText, toolIcon, useToolDisclosure } from "./ToolDetail";
 import { ImageLightbox } from "./ui/ImageLightbox";
-import { CopyButton } from "./ui/CopyButton";
+
+export { ToolDetail, ToolExpansion };
 
 /**
  * Loads the original of an image a tool result returned (`api.toolImage` for the open chat),
  * as a URL. Without a provider, the lightbox shows the preview alone.
  */
 export const ToolImageSource = createContext<((toolCallId: string, index: number) => Promise<string | undefined>) | undefined>(undefined);
-
-/** Stable tool-call keys retain disclosure choices when only one tab is mounted. */
-export const ToolExpansion = createContext<{ scope: string; keys: Set<string> } | undefined>(undefined);
-function useToolDisclosure(entryKey?: string) {
-  const store = useContext(ToolExpansion);
-  const expanded = store?.keys;
-  const key = entryKey === undefined ? undefined : JSON.stringify([store?.scope ?? "", entryKey]);
-  const [open, setOpen] = useState(() => key !== undefined && expanded?.has(key) === true);
-  const toggle = () => {
-    const next = !open;
-    setOpen(next);
-    if (key === undefined) return;
-    if (next) expanded?.add(key); else expanded?.delete(key);
-  };
-  return [open, toggle] as const;
-}
-
-const TOOL_ICONS: Record<string, IconName> = {
-  read: "file",
-  bash: "terminal",
-  grep: "search",
-  find: "search",
-  ls: "search",
-  ask_user_question: "question",
-  plan_mode_complete: "brain",
-  todo: "checklist",
-  subagent: "agents",
-  computer_apps: "cursor",
-  computer_open: "cursor",
-  computer_snapshot: "cursor",
-  computer_screenshot: "image",
-  computer_act: "cursor",
-  memory_save: "memory",
-  memory_recall: "memory",
-  memory_forget: "memory",
-  browser_screenshot: "image"
-};
 
 /** How a result's images are named to the user: a capture, a file that was read, or a tool's output. */
 function imageWording(call: NormalizedBlock, result: NormalizedBlock): { noun: string; name: string; open: string; caption: string } {
@@ -104,99 +69,157 @@ export function ToolImages({ call, result, caption = false }: { call: Normalized
   );
 }
 
-function DiffLines({ diff, path }: { diff: string; path?: string }) {
-  const lines = useMemo(() => focusedEditDiff(diff).split("\n"), [diff]);
-  const classes = lines.map((line) =>
-    line.startsWith("+") && !line.startsWith("+++") ? "addition"
-      : line.startsWith("-") && !line.startsWith("---") ? "deletion"
-      : line.startsWith("@@") ? "hunk"
-      : line.startsWith("diff ") || line.startsWith("# ") ? "heading" : "");
-  // The edit's own file language highlights the code lines; hunk and heading lines stay plain.
-  const nodes = highlightDiffLines(lines, classes.map((name) => (name === "hunk" || name === "heading" ? "meta" : "code")), languageForPath(path));
-  return (
-    <pre className="diff-view tool-diff">
-      {lines.map((line, index) => (
-        <span className={classes[index]} key={index}>{nodes[index]}{"\n"}</span>
-      ))}
-    </pre>
-  );
+/** Chat's springs (ChatActivity.tsx): chips pop in, and fly into an Explored head. */
+const POP = { type: "spring", stiffness: 520, damping: 28 } as const;
+export const FLY = { type: "spring", stiffness: 420, damping: 30, mass: 0.8 } as const;
+const SHEET = { duration: 0.24, ease: [0.33, 1, 0.68, 1] } as const;
+
+/** True where transcript motion may play: not reduced, and a real browser (jsdom stays still). */
+export function useTranscriptMotion(): boolean {
+  const reduced = useReducedMotion() ?? false;
+  return !reduced && motionAllowed();
 }
 
-/** Preview limits only affect rendering: expansion and copying always use the source text. */
-function ToolText({ text, label = "output", maxLines = 60, command = false, copy = false, expansionKey }: {
-  text: string; label?: string; maxLines?: number; command?: boolean; copy?: boolean; expansionKey?: string;
-}) {
-  const [all, toggleAll] = useToolDisclosure(expansionKey ? `${expansionKey}:${label}` : undefined);
-  const id = useId();
-  const lines = useMemo(() => text.split("\n"), [text]);
-  const truncated = lines.length > maxLines;
-  const preview = truncated && !all ? lines.slice(-maxLines).join("\n") : text;
-  // The toolbar exists only for the truncation controls, and copy (where offered at all) rides
-  // in it; untruncated text has no row at all, so copy floats over the corner on hover instead.
-  return (
-    <div className="tool-text">
-      {truncated ? (
-        <div className="tool-text-toolbar">
-          <span className="tool-text-count">{all ? `All ${lines.length} lines` : `Last ${maxLines} of ${lines.length} lines`}</span>
-          <button type="button" className="text-button" aria-expanded={all} aria-controls={id} onClick={toggleAll}>
-            {all ? "Show less" : "Show all"}
-          </button>
-          {copy && <CopyButton text={text} label={`Copy ${label}`} />}
-        </div>
-      ) : copy ? (
-        <CopyButton text={text} label={`Copy ${label}`} floating />
-      ) : null}
-      <pre id={id} className={command ? "tool-command" : undefined}>{command ? "$ " : ""}{preview}</pre>
-    </div>
-  );
+/**
+ * Calls this renderer has already drawn. A call pops in only the first time it is drawn while
+ * running: history never pops, and the streamed copy being replaced by the saved message (a
+ * remount under a different parent) doesn't pop it a second time.
+ */
+const drawnCalls = new Set<string>();
+function usePopsIn(id: string | undefined, live: boolean): boolean {
+  const [pops] = useState(() => {
+    if (!id) return false;
+    const fresh = !drawnCalls.has(id);
+    drawnCalls.add(id);
+    return fresh && live;
+  });
+  return pops;
 }
 
-export function ToolDetail({ call, result }: { call: NormalizedBlock; result?: NormalizedBlock }) {
+/** One call's state as both shapes draw it. */
+function useCallFace(call: NormalizedBlock, result: NormalizedBlock | undefined, liveText: string | undefined, running: boolean | undefined) {
   const summary = summarizeTool(call, result);
-  const args = (call.arguments ?? {}) as Record<string, unknown>;
-  const details = (result?.details ?? {}) as Record<string, unknown>;
+  const failed = result?.isError === true;
+  const pending = Boolean(running && !result);
+  const shownResult = result ?? (pending && liveText ? { type: "tool-result" as const, text: liveText } : undefined);
+  const expandable = Boolean(shownResult?.text || (result?.details as Record<string, unknown> | undefined)?.diff || summary.kind === "write" || summary.kind === "other");
+  return { summary, failed, pending, shownResult, expandable };
+}
 
-  const editDiff = useMemo(() => summary.kind === "edit" && !result?.isError
-    ? (typeof details.diff === "string" && details.diff) || editArgumentDiff(args)
-    : undefined, [summary.kind, result?.isError, details.diff, args]);
-
-  if (editDiff) {
-    return (
-      <div className="tool-detail">
-        <CopyButton text={editDiff} label="Copy diff" floating />
-        <DiffLines diff={editDiff} path={typeof args.path === "string" ? args.path : undefined} />
-      </div>
-    );
-  }
-  if (summary.kind === "bash") {
-    return (
-      <div className="tool-detail">
-        {/* Copy follows what the agent authored — the command — never the output it got back. */}
-        <ToolText text={String(args.command ?? "")} label="command" command copy expansionKey={call.toolCallId} />
-        {result?.text && <ToolText text={result.text} expansionKey={call.toolCallId} />}
-      </div>
-    );
-  }
-  if (summary.kind === "write" && typeof args.content === "string") {
-    return <div className="tool-detail"><ToolText text={args.content} label="file content" maxLines={80} copy expansionKey={call.toolCallId} /></div>;
-  }
-  if (summary.kind === "read" && result?.images?.length) {
-    // The picture is under the row already; what's left to say is where it is and Pi's notes.
-    const note = imageReadNote(result.text);
-    return (
-      <div className="tool-detail">
-        <ToolText text={String(args.path ?? "")} label="path" copy expansionKey={call.toolCallId} />
-        {note && <ToolText text={note} label="note" expansionKey={call.toolCallId} />}
-      </div>
-    );
-  }
-  if (summary.kind === "search") {
-    return <div className="tool-detail">{result?.text ? <ToolText text={result.text} expansionKey={call.toolCallId} /> : <pre>No matches</pre>}</div>;
-  }
+/** Verb, subject (directory dimmed so the file name survives truncation), +/− and failure. */
+function CallWords({ summary, pending, failed }: { summary: ToolSummary; pending: boolean; failed: boolean }) {
+  /** Only real file paths get a dir/name split; commands, patterns and URLs are left whole. */
+  const pathParts = summary.kind === "read" || summary.kind === "edit" || summary.kind === "write" ? splitPathSubject(summary.subject) : undefined;
   return (
-    <div className="tool-detail">
-      <ToolText text={JSON.stringify(args, null, 2)} label="arguments" expansionKey={call.toolCallId} />
-      {result?.text && <ToolText text={result.text} expansionKey={call.toolCallId} />}
+    <>
+      <span className="tool-row-verb">{pending ? summary.activeVerb : summary.doneVerb}</span>
+      {summary.subject && (
+        <code className={`tool-row-subject ${pathParts?.dir ? "has-dir" : ""}`} title={summary.subject}>
+          {pathParts?.dir && <span className="tool-row-subject-dir">{pathParts.dir}</span>}
+          <span className="tool-row-subject-name">{pathParts ? pathParts.name : summary.subject}</span>
+        </code>
+      )}
+      {(summary.additions || summary.deletions) ? (
+        <span className="tool-row-stats">
+          {summary.additions ? <em className="add"><RollingNumber prefix="+" value={summary.additions} /></em> : null}
+          {summary.deletions ? <em className="del"><RollingNumber prefix="−" value={summary.deletions} /></em> : null}
+        </span>
+      ) : null}
+      {failed && <span className="tool-row-failed">failed</span>}
+    </>
+  );
+}
+
+/** A call drawn as a chip, inside a `ToolChips` strip. */
+export interface ChipCall {
+  call: NormalizedBlock;
+  result?: NormalizedBlock;
+  liveText?: string;
+  running?: boolean;
+  /** Shared-element id: set where this chip may fly into an Explored head (`explore-utils.ts` flyId). */
+  flyId?: string;
+}
+
+function ToolChip({ entry, open, onToggle }: { entry: ChipCall; open: boolean; onToggle: () => void }) {
+  const { call, result, liveText, running } = entry;
+  const { summary, failed, pending, expandable } = useCallFace(call, result, liveText, running);
+  const animate = useTranscriptMotion();
+  const pops = usePopsIn(call.toolCallId, pending);
+  const status = pending ? "live" : failed ? "failed" : "done";
+  return (
+    <motion.button
+      type="button"
+      className={`tool-chip ${status}${open ? " open" : ""}`}
+      aria-expanded={open}
+      disabled={!expandable}
+      onClick={() => expandable && onToggle()}
+      layoutId={animate ? entry.flyId : undefined}
+      // Only the hand-off into a head moves it, never its own re-renders (a growing label). The
+      // value must differ from the head mark's: motion only resumes a shared element from a
+      // predecessor whose layoutDependency differs (NodeStack.promote).
+      layoutDependency="chip"
+      style={{ borderRadius: 999 }}
+      initial={animate && pops ? { opacity: 0, scale: 0.8, y: 4 } : false}
+      animate={{ opacity: 1, scale: 1, y: 0 }}
+      transition={{ ...POP, layout: FLY }}
+    >
+      <Icon name={toolIcon(call, result, summary)} className="tool-row-icon" />
+      <CallWords summary={summary} pending={pending} failed={failed} />
+      <OrbitSpinner active={pending} failed={failed} className="tool-chip-spinner" />
+    </motion.button>
+  );
+}
+
+function Sheet({ entry, animate }: { entry: ChipCall; animate: boolean }) {
+  const { shownResult, pending } = useCallFace(entry.call, entry.result, entry.liveText, entry.running);
+  const body = <ToolDetail call={entry.call} result={shownResult} live={pending} />;
+  if (!animate) return <div className="tool-sheet">{body}</div>;
+  return (
+    <motion.div className="tool-sheet" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={SHEET}>
+      {body}
+    </motion.div>
+  );
+}
+
+const chipId = (entry: ChipCall, index: number) => entry.call.toolCallId ?? `chip:${index}`;
+
+/**
+ * A run of chip-shaped calls (`toolPresentation`) flowing side by side, as Chat's activity
+ * chips do. One sheet opens beneath the strip for the chip clicked; another chip swaps it.
+ * The open chip is remembered in `ToolExpansion`, under the same key a row would use, so it
+ * survives the streamed message being replaced by the saved one. Images the calls returned
+ * show under the strip.
+ */
+export function ToolChips({ entries, after }: { entries: ChipCall[]; after?: ReactNode }) {
+  const store = useContext(ToolExpansion);
+  const animate = useTranscriptMotion();
+  const storeKey = (id: string) => JSON.stringify([store?.scope ?? "", `tool:${id}`]);
+  const [open, setOpen] = useState<string | undefined>(() =>
+    entries.map(chipId).find((id) => store?.keys.has(storeKey(id))));
+  const toggle = (id: string) => {
+    const next = open === id ? undefined : id;
+    if (open) store?.keys.delete(storeKey(open));
+    if (next) store?.keys.add(storeKey(next));
+    setOpen(next);
+  };
+  const openIndex = entries.findIndex((entry, index) => chipId(entry, index) === open);
+  const openEntry = openIndex >= 0 ? entries[openIndex] : undefined;
+  const pictured = entries.filter((entry) => entry.result?.images?.length);
+  return (
+    <div className="tool-chips">
+      <div className="tool-chip-strip">
+        {entries.map((entry, index) => {
+          const id = chipId(entry, index);
+          return <ToolChip key={id} entry={entry} open={open === id} onToggle={() => toggle(id)} />;
+        })}
+        {after}
+      </div>
+      {animate ? (
+        <AnimatePresence initial={false}>
+          {openEntry && <Sheet key={open} entry={openEntry} animate />}
+        </AnimatePresence>
+      ) : openEntry && <Sheet entry={openEntry} animate={false} />}
+      {pictured.map((entry) => <ToolImages key={chipId(entry, entries.indexOf(entry))} call={entry.call} result={entry.result!} />)}
     </div>
   );
 }
@@ -208,48 +231,52 @@ interface ToolRowProps {
   running?: boolean;
 }
 
-export function ToolRow({ call, result, liveText, running }: ToolRowProps) {
+/**
+ * One tool call. Edits, writes and commands that might change something are full-width rows;
+ * everything else is a chip (`toolPresentation`), on its own strip when drawn alone.
+ */
+export function ToolRow(props: ToolRowProps) {
+  return toolPresentation(props.call) === "chip" ? <ToolChips entries={[props]} /> : <ToolCallRow {...props} />;
+}
+
+function ToolCallRow({ call, result, liveText, running }: ToolRowProps) {
   const [open, toggle] = useToolDisclosure(call.toolCallId ? `tool:${call.toolCallId}` : undefined);
-  const summary = summarizeTool(call, result);
-  const failed = result?.isError === true;
-  const pending = running && !result;
-  const shownResult = result ?? (pending && liveText ? { type: "tool-result" as const, text: liveText } : undefined);
-  /** Only real file paths get a dir/name split; commands, patterns and URLs are left whole. */
-  const pathParts = summary.kind === "read" || summary.kind === "edit" || summary.kind === "write" ? splitPathSubject(summary.subject) : undefined;
-  const expandable = Boolean(shownResult?.text || (result?.details as Record<string, unknown> | undefined)?.diff || summary.kind === "write" || summary.kind === "other");
+  const { summary, failed, pending, shownResult, expandable } = useCallFace(call, result, liveText, running);
+  const animate = useTranscriptMotion();
+  const pops = usePopsIn(call.toolCallId, pending);
 
   return (
-    <div className={`tool-row ${open ? "open" : ""} ${failed ? "error" : ""}`}>
+    <motion.div
+      className={`tool-row ${summary.kind === "bash" ? "command" : ""} ${open ? "open" : ""} ${failed ? "error" : ""}`}
+      initial={animate && pops ? { opacity: 0, scale: 0.96, y: 4 } : false}
+      animate={{ opacity: 1, scale: 1, y: 0 }}
+      transition={POP}
+    >
       <button type="button" className="tool-row-head" onClick={() => expandable && toggle()} disabled={!expandable} aria-expanded={open}>
         {/* Edits and writes get the quill mark — it writes while the tool runs, then rests —
             every other row keeps its static tool icon. */}
         {summary.kind === "edit" || summary.kind === "write" ? (
-          <QuillMark live={Boolean(pending)} className="tool-row-icon" />
+          <QuillMark live={pending} className="tool-row-icon" />
         ) : (
-          <Icon name={summary.kind === "read" && result?.images?.length ? "image" : TOOL_ICONS[call.toolName ?? ""] ?? (mcpToolParts(call.toolName ?? "") ? "plug" : "terminal")} className="tool-row-icon" />
+          <Icon name={toolIcon(call, result, summary)} className="tool-row-icon" />
         )}
-        <span className="tool-row-verb">{pending ? summary.activeVerb : summary.doneVerb}</span>
-        {summary.subject && (
-          <code className={`tool-row-subject ${pathParts?.dir ? "has-dir" : ""}`} title={summary.subject}>
-            {pathParts?.dir && <span className="tool-row-subject-dir">{pathParts.dir}</span>}
-            <span className="tool-row-subject-name">{pathParts ? pathParts.name : summary.subject}</span>
-          </code>
-        )}
-        {(summary.additions || summary.deletions) ? (
-          <span className="tool-row-stats">
-            {summary.additions ? <em className="add"><RollingNumber prefix="+" value={summary.additions} /></em> : null}
-            {summary.deletions ? <em className="del"><RollingNumber prefix="−" value={summary.deletions} /></em> : null}
-          </span>
-        ) : null}
-        {failed && <span className="tool-row-failed">failed</span>}
+        <CallWords summary={summary} pending={pending} failed={failed} />
         <span className="tool-row-status">
-          <OrbitSpinner active={Boolean(pending)} failed={failed} />
+          <OrbitSpinner active={pending} failed={failed} />
           {expandable && <Icon name="chevron" className="tool-chevron" />}
         </span>
       </button>
       {result?.images?.length ? <ToolImages call={call} result={result} /> : null}
-      {open && expandable && <ToolDetail call={call} result={shownResult} />}
-    </div>
+      {animate ? (
+        <AnimatePresence initial={false}>
+          {open && expandable && (
+            <motion.div key="detail" className="tool-row-reveal" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={SHEET}>
+              <ToolDetail call={call} result={shownResult} live={pending} head={false} />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      ) : open && expandable && <ToolDetail call={call} result={shownResult} live={pending} head={false} />}
+    </motion.div>
   );
 }
 

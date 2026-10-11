@@ -651,7 +651,7 @@ describe("Transcript exploration groups", () => {
 
     fireEvent.click(head);
     expect(view.container.querySelector(".explore-images")).not.toBeInTheDocument();
-    expect(view.container.querySelector(".explore-body .tool-row .tool-images")).toContainElement(screen.getByRole("button", { name: "Open image shot.png" }));
+    expect(view.container.querySelector(".explore-body .tool-chips .tool-images")).toContainElement(screen.getByRole("button", { name: "Open image shot.png" }));
     expect(view.container.querySelector(".explore-body figcaption")).not.toBeInTheDocument();
   });
 
@@ -671,6 +671,31 @@ describe("Transcript exploration groups", () => {
     expect(screen.queryByLabelText("Running")).not.toBeInTheDocument();
   });
 
+  it("shows the call in flight as a live chip under the head, which joins the head once it lands", () => {
+    const streaming: NormalizedMessage = { ...second, id: "streaming-3000" };
+    const view = render(<Transcript messages={[user, first, result("r1")]} running partial={streaming} />);
+    const live = view.container.querySelector(".explore-live");
+    expect(live).not.toBeNull();
+    expect(within(live as HTMLElement).getByRole("button", { name: /Searching.*needle/ })).toHaveClass("tool-chip", "live");
+    // Only what has landed is in the head's stack: the read.
+    expect(view.container.querySelectorAll(".explore-head .explore-mark")).toHaveLength(1);
+
+    view.rerender(<Transcript messages={[user, first, result("r1"), second, result("g1")]} running={false} collapseCompletedWork={false} />);
+    expect(view.container.querySelector(".explore-live")).toBeNull();
+    expect(screen.getByRole("button", { name: "Explored 1 file, 1 search" })).toBeInTheDocument();
+    expect(Array.from(view.container.querySelectorAll(".explore-head .explore-mark")).map((mark) => mark.classList[1])).toEqual(["file", "search"]);
+  });
+
+  it("opens to its calls as one chip strip, with reasoning between them in order", () => {
+    const thought: NormalizedMessage = { id: "a-2500", role: "assistant", timestamp: 2_500, blocks: [{ type: "thinking", text: "Now search", durationMs: 1_000 }, read("r2", "src/two.ts")] };
+    const view = render(<Transcript messages={[user, first, result("r1"), thought, result("r2"), second, result("g1"), answer]} running={false} collapseCompletedWork={false} />);
+    fireEvent.click(screen.getByRole("button", { name: "Explored 2 files, 1 search" }));
+    const body = view.container.querySelector(".explore-body")!;
+    const parts = Array.from(body.children).map((child) => child.classList.contains("tool-chips")
+      ? `chips:${child.querySelectorAll(".tool-chip").length}` : child.classList.contains("thinking-row") ? "thought" : child.className);
+    expect(parts).toEqual(["chips:1", "thought", "chips:2"]);
+  });
+
   it("keeps every call on its own row when switched off", () => {
     render(
       <ExploreGroupingEnabled.Provider value={false}>
@@ -683,8 +708,69 @@ describe("Transcript exploration groups", () => {
   });
 });
 
+describe("Transcript tool chips", () => {
+  const call = (id: string, toolName: string, args: Record<string, unknown> = {}) => ({ type: "tool-call" as const, toolName, toolCallId: id, arguments: args });
+  const done = (...ids: string[]): NormalizedMessage => ({ id: `tool-${ids.join("-")}`, role: "tool", blocks: ids.map((id) => ({ type: "tool-result" as const, toolCallId: id, text: `${id} output` })) });
+
+  it("flows neighbouring chip calls into one strip, which a row or prose breaks", () => {
+    const assistant: NormalizedMessage = { id: "a-1", role: "assistant", timestamp: 2_000, blocks: [
+      call("m1", "memory_save", { title: "Book taste" }),
+      call("f1", "web_fetch", { url: "https://example.com/page" }),
+      call("e1", "edit", { path: "src/a.ts", oldText: "a", newText: "b" }),
+      call("x1", "mcp__blender__look"),
+      { type: "text", text: "Done." }
+    ] };
+    const { container } = render(<Transcript messages={[assistant, done("m1", "f1", "e1", "x1")]} running={false} />);
+    const strips = container.querySelectorAll(".tool-chips");
+    expect(strips).toHaveLength(2);
+    expect(within(strips[0] as HTMLElement).getByRole("button", { name: /Saved memory.*Book taste/ })).toHaveClass("tool-chip");
+    expect(within(strips[0] as HTMLElement).getByRole("button", { name: /Fetched.*example\.com/ })).toHaveClass("tool-chip");
+    expect(within(strips[1] as HTMLElement).getByRole("button", { name: /Called.*look \(blender\)/ })).toHaveClass("tool-chip");
+    // The edit between them is a full-width row, outside every strip.
+    const edit = screen.getByRole("button", { name: /Edited.*a\.ts/ });
+    expect(edit.closest(".tool-row")).not.toBeNull();
+    expect(edit.closest(".tool-chips")).toBeNull();
+  });
+
+  it("gives each message its own strip", () => {
+    const first: NormalizedMessage = { id: "a-1", role: "assistant", timestamp: 2_000, blocks: [call("m1", "memory_save", { title: "One" })] };
+    const second: NormalizedMessage = { id: "a-2", role: "assistant", timestamp: 3_000, blocks: [call("m2", "memory_recall", { names: ["two"] })] };
+    const { container } = render(<Transcript messages={[first, done("m1"), second, done("m2")]} running={false} />);
+    expect(container.querySelectorAll(".tool-chips")).toHaveLength(2);
+  });
+
+  it("opens one sheet under the strip for the chip clicked, and swaps it for another", () => {
+    const assistant: NormalizedMessage = { id: "a-1", role: "assistant", timestamp: 2_000, blocks: [
+      call("m1", "memory_save", { title: "Book taste" }), call("f1", "web_fetch", { url: "https://example.com" })
+    ] };
+    const { container } = render(<Transcript messages={[assistant, done("m1", "f1")]} running={false} />);
+    const memory = screen.getByRole("button", { name: /Saved memory/ });
+    const fetch = screen.getByRole("button", { name: /Fetched/ });
+    fireEvent.click(memory);
+    expect(memory).toHaveAttribute("aria-expanded", "true");
+    expect(container.querySelectorAll(".tool-sheet")).toHaveLength(1);
+    expect(screen.getByText("m1 output")).toBeInTheDocument();
+    fireEvent.click(fetch);
+    expect(memory).toHaveAttribute("aria-expanded", "false");
+    expect(fetch).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByText("m1 output")).not.toBeInTheDocument();
+    expect(screen.getByText("f1 output")).toBeInTheDocument();
+    fireEvent.click(fetch);
+    expect(container.querySelector(".tool-sheet")).toBeNull();
+  });
+
+  it("shows the agent working with the duck, dots and caption", () => {
+    const user: NormalizedMessage = { id: "u", role: "user", timestamp: 1_000, blocks: [{ type: "text", text: "Go" }] };
+    const { container } = render(<Transcript messages={[user]} running activeRun={{ startedAt: 1_000 }} />);
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("Working…");
+    expect(status.querySelector(".ponder-duck.live")).not.toBeNull();
+    expect(container.querySelectorAll(".work-dots i")).toHaveLength(3);
+  });
+});
+
 describe("Transcript assistant prose", () => {
-  it("wraps a saved reply in .assistant-text but leaves tool rows outside it", () => {
+  it("wraps a saved reply in .assistant-text but leaves tool chips outside it", () => {
     const assistant: NormalizedMessage = {
       id: "assistant-1",
       role: "assistant",
@@ -696,7 +782,7 @@ describe("Transcript assistant prose", () => {
     const { container } = render(<Transcript messages={[assistant]} running={false} />);
     expect(container.querySelectorAll(".assistant-text")).toHaveLength(1);
     expect(container.querySelector(".assistant-text")).toHaveTextContent("Here is the answer.");
-    expect(container.querySelector(".tool-row")!.closest(".assistant-text")).toBeNull();
+    expect(container.querySelector(".tool-chip")!.closest(".assistant-text")).toBeNull();
   });
 
   it("wraps streamed text the same way", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { exploreActivity, exploreCounts, exploreLabel, layoutTranscript, type TranscriptSlot } from "./explore-utils";
+import { exploreActivity, exploreCounts, exploreLabel, exploreLabelParts, exploreLiveItems, exploreMarks, flyId, layoutTranscript, settledGroup, type TranscriptSlot } from "./explore-utils";
 import type { NormalizedBlock, NormalizedMessage } from "./types";
 
 const read = (id: string, path = `${id}.ts`): NormalizedBlock => ({ type: "tool-call", toolName: "read", toolCallId: id, arguments: { path } });
@@ -130,5 +130,35 @@ describe("exploration summary", () => {
     expect(exploreActivity(group([read("r1", "a.ts"), grep("g1")], true), results)).toBe("Searching x");
     expect(exploreActivity(group([read("r1", "a.ts"), grep("g1")], false), results)).toBeUndefined();
     expect(exploreActivity(group([read("r1", "a.ts")], true), results)).toBeUndefined();
+  });
+
+  it("splits the label into rolling parts that read the same as the label", () => {
+    const counts = { files: 2, images: 1, searches: 0, lists: 1, commands: 0, failed: 1 };
+    const parts = exploreLabelParts(counts);
+    expect(parts).toEqual([{ key: "files", count: 2, noun: "files" }, { key: "images", count: 1, noun: "image" }, { key: "lists", count: 1, noun: "list" }]);
+    expect(parts.map((part) => `${part.count} ${part.noun}`).join(", ")).toBe(exploreLabel(counts));
+  });
+
+  it("keeps calls in flight out of the head until they land", () => {
+    const results = new Map<string, NormalizedBlock>([["r1", { type: "tool-result", toolCallId: "r1" }]]);
+    const live = group([read("r1"), thinking("next"), grep("g1")], true);
+    expect(exploreLiveItems(live, results).map((item) => item.block.toolCallId)).toEqual(["g1"]);
+    expect(settledGroup(live, results).items.map((item) => item.block.toolCallId ?? "t")).toEqual(["r1", "t"]);
+    // Saved history (not live) is all settled, and keeps the very same group object.
+    const saved = group([read("r1"), grep("g1")]);
+    expect(exploreLiveItems(saved, results)).toEqual([]);
+    expect(settledGroup(saved, results)).toBe(saved);
+  });
+
+  it("stacks one mark per kind in a fixed order, each flying under its newest item's id", () => {
+    const ls: NormalizedBlock = { type: "tool-call", toolName: "ls", toolCallId: "l1", arguments: { path: "src" } };
+    const results = new Map<string, NormalizedBlock>([["r2", { type: "tool-result", toolCallId: "r2", images: [{ imageId: "i" }] }]]);
+    const marks = exploreMarks(group([grep("g1"), read("r1"), thinking("hm"), read("r2", "shot.png"), ls, read("r3")]), results);
+    expect(marks).toEqual([
+      { mark: "file", id: "call:r3" }, { mark: "image", id: "call:r2" }, { mark: "search", id: "call:g1" },
+      { mark: "list", id: "call:l1" }, { mark: "thought", id: "think:2" }
+    ]);
+    expect(flyId({ block: thinking("x"), key: "7:1" })).toBe("think:7:1");
+    expect(flyId({ block: read("r9"), key: "7:2" })).toBe("call:r9");
   });
 });

@@ -1,9 +1,12 @@
 //! Which apps computer use may touch. Pure logic, so every rule is unit-tested.
 //!
 //! Three layers, checked in order on every request:
-//! 1. WackCode itself — its own pid, any `com.wackcode.*` bundle (dev and installed builds share
-//!    `com.wackcode.desktop`), and its own executable or bundle path. The access card lives in
-//!    WackCode's window, so this is what keeps the agent from ever answering it.
+//! 1. This WackCode itself — its own pid, its own bundle id (`com.wackcode.desktop`,
+//!    `…desktop.dev` in the dev app), and its own executable or bundle path. The access card
+//!    lives in this app's own window, so this is what keeps the agent from ever answering it.
+//!    The other build's id is *not* blocked on purpose: driving WackCode Dev with computer use
+//!    goes through the access card like any app, and it can't reach this app's windows (its pid
+//!    still fails the `is_own` check and pointer hit-tests refuse our pid).
 //! 2. The hard list: apps that run arbitrary commands (terminals, script runners), hold secrets
 //!    (password managers, Keychain Access) or are the system's own security and chrome UI.
 //! 3. The user's never-allow list (Settings › Computer use).
@@ -11,6 +14,7 @@
 //! Past those, a chat needs a grant, which only the user gives through the access card. Grants
 //! and denials are per chat and in memory: nothing here is ever written to disk.
 
+use objc2_foundation::NSBundle;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -66,7 +70,6 @@ const HARD_BLOCKED: &[(&str, &str)] = &[
 
 /// Bundle-id prefixes refused outright (System Settings has changed ids across releases).
 const HARD_BLOCKED_PREFIXES: &[(&str, &str)] = &[
-    ("com.wackcode.", "WackCode"),
     ("com.apple.systempreferences", "System Settings"),
     ("com.apple.settings", "System Settings"),
 ];
@@ -81,10 +84,12 @@ pub struct AppIdentity {
     pub path: Option<PathBuf>,
 }
 
-/// WackCode's own process, taken once at startup.
+/// This WackCode's own identity, taken once at startup: its pid, bundle id (the dev app's
+/// `…desktop.dev` differs from the installed app's), and executable/bundle paths.
 #[derive(Debug, Clone, Default)]
 pub struct OwnIdentity {
     pub pid: i32,
+    pub bundle_id: Option<String>,
     pub executable: Option<PathBuf>,
     pub bundle: Option<PathBuf>,
 }
@@ -93,7 +98,8 @@ impl OwnIdentity {
     pub fn current() -> Self {
         let executable = std::env::current_exe().ok().and_then(|path| path.canonicalize().ok());
         let bundle = executable.as_deref().and_then(enclosing_bundle);
-        Self { pid: std::process::id() as i32, executable, bundle }
+        let bundle_id = NSBundle::mainBundle().bundleIdentifier().map(|id| id.to_string().to_lowercase());
+        Self { pid: std::process::id() as i32, bundle_id, executable, bundle }
     }
 }
 
@@ -106,7 +112,7 @@ pub fn enclosing_bundle(executable: &Path) -> Option<PathBuf> {
 pub fn block_reason(app: &AppIdentity, own: &OwnIdentity, never_allow: &[String]) -> Option<String> {
     let bundle_id = app.bundle_id.as_deref().map(str::to_ascii_lowercase);
     let is_own = app.pid == Some(own.pid)
-        || bundle_id.as_deref().is_some_and(|id| id.starts_with("com.wackcode."))
+        || (bundle_id.is_some() && bundle_id.as_deref() == own.bundle_id.as_deref())
         || app.path.as_ref().is_some_and(|path| Some(path) == own.executable.as_ref() || Some(path) == own.bundle.as_ref());
     if is_own {
         return Some("WackCode can't control or look at its own windows.".into());
@@ -230,6 +236,7 @@ mod tests {
     fn own() -> OwnIdentity {
         OwnIdentity {
             pid: 100,
+            bundle_id: Some("com.wackcode.desktop".into()),
             executable: Some(PathBuf::from("/Applications/WackCode.app/Contents/MacOS/wackcode")),
             bundle: Some(PathBuf::from("/Applications/WackCode.app")),
         }
@@ -243,12 +250,24 @@ mod tests {
     fn wackcode_is_blocked_by_pid_bundle_id_and_path() {
         assert!(block_reason(&app(100, Some("com.example.app"), "/tmp/X.app"), &own(), &[]).is_some());
         assert!(block_reason(&app(5, Some("com.wackcode.desktop"), "/tmp/X.app"), &own(), &[]).is_some());
-        // The dev app's own id is covered by the same `com.wackcode.` prefix, forever.
-        assert!(block_reason(&app(5, Some("com.wackcode.desktop.dev"), "/tmp/X.app"), &own(), &[]).is_some());
-        assert!(block_reason(&app(5, Some("COM.WackCode.Foo"), "/tmp/X.app"), &own(), &[]).is_some());
+        // The same id at any other path is still WackCode — the card must stay out of reach.
+        assert!(block_reason(&app(5, Some("COM.WackCode.Desktop"), "/tmp/X.app"), &own(), &[]).is_some());
         assert!(block_reason(&app(5, None, "/Applications/WackCode.app"), &own(), &[]).is_some());
         assert!(block_reason(&app(5, None, "/Applications/WackCode.app/Contents/MacOS/wackcode"), &own(), &[]).is_some());
         assert!(block_reason(&app(5, Some("com.example.app"), "/tmp/X.app"), &own(), &[]).is_none());
+    }
+
+    #[test]
+    fn the_dev_app_is_an_ordinary_app_to_the_installed_app() {
+        // The other build's bundle id isn't this app's own, so it's grantable — its card can't
+        // approve this app's grants, and this app's own windows stay pid- and id-blocked.
+        assert!(block_reason(&app(5, Some("com.wackcode.desktop.dev"), "/repo/target/debug/dev-app/WackCode Dev.app"), &own(), &[]).is_none());
+        let mut dev = own();
+        dev.bundle_id = Some("com.wackcode.desktop.dev".into());
+        dev.executable = Some(PathBuf::from("/repo/target/debug/dev-app/WackCode Dev.app/Contents/MacOS/wackcode"));
+        dev.bundle = Some(PathBuf::from("/repo/target/debug/dev-app/WackCode Dev.app"));
+        assert!(block_reason(&app(5, Some("com.wackcode.desktop.dev"), "/tmp/X.app"), &dev, &[]).is_some());
+        assert!(block_reason(&app(5, Some("com.wackcode.desktop"), "/tmp/X.app"), &dev, &[]).is_none());
     }
 
     #[test]

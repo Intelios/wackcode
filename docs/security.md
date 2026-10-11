@@ -78,7 +78,7 @@ Off by default. Rust `computer_use/` is the security boundary; the worker's tool
 
 - Every request re-checks the setting, the block list (`policy.rs`) and the chat's in-memory app grants. Grants are per chat and never written to disk.
 - The access card is answered renderer → `computer_use_respond_access`, never through the worker.
-- WackCode itself (its own pid, any `com.wackcode.*` bundle id, dev or installed) is never observed or driven.
+- WackCode itself — the running app's own pid, its own bundle id (`com.wackcode.desktop`, `…desktop.dev` inside the dev app) and its own paths — is never observed or driven. The other build's app (installed ↔ dev) is a normal ask-first target: it can never reach this app's windows or its access card.
 - Keys go only to the target pid, never to the HID stream. Only a hit-tested pointer action may use the foreground, after the user is idle, and it restores the previous app and cursor.
 - Secure text fields are never read or typed into.
 - All AX handles live on the engine thread (`engine.rs`).

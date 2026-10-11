@@ -32,7 +32,8 @@ Pure logic belongs in a colocated `*.test.ts` next to a small module (`chat-util
 - Call `tree` before acting; refs (`e3-12`) stay valid until the next `tree`/`find`. Acting on a `name` works too — an ambiguous name errors and lists the candidate refs.
 - Use `wait_for` instead of sleeping while a run streams or a sheet animates.
 - `shot` captures only the dev window, even while covered; `tree` is still the better way to read controls.
-- Every call refuses unless a process with bundle id `com.wackcode.desktop.dev` is running from this checkout's `src-tauri/target/` with a "WackCode Dev" window (the rule is in `src-tauri/wackdev/src/driver/target.rs`).
+- Every call refuses unless a process with bundle id `com.wackcode.desktop.dev` is running from this checkout's `src-tauri/target/` with a "WackCode Dev" window (the rule is in `src-tauri/wackdev/src/driver/target.rs`). A dev app running as the bare `target/debug/wackcode` binary has no bundle id and can't be targeted — `status` says so; `pnpm dev:stop`/`dev:background` sweeps and replaces it.
+- The built-in computer-use tools can also drive the dev app — it's a normal app to them (grant it through the access card like any other), while WackCode itself stays blocked.
 - Accessibility and Screen Recording are charged to the app that launched the server — the everyday WackCode, or the terminal for Claude Code. `status` reports which is missing.
 - If a control can't be named precisely, that's an accessibility bug: give it an `aria-label` in the app rather than reaching for coordinates.
 - `pnpm build:worker`/`cargo` edits don't touch the driver; `src-tauri/wackdev/` is rebuilt lazily by the server (`cargo build -p wackdev --bin wackdev-helper`).

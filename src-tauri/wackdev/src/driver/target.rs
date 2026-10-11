@@ -8,7 +8,7 @@
 //! Dev" titled) is picked with Accessibility at call time in `wackdev-helper`, which also
 //! reports it in `status`. `pick` is pure so the whole rule is unit-tested.
 
-use crate::apps;
+use crate::{apps, policy::enclosing_bundle};
 use std::path::{Path, PathBuf};
 
 /// The dev app's bundle id — `tauri.dev.conf.json` — never shared with any installed build.
@@ -51,6 +51,19 @@ pub fn pick(candidates: &[Candidate], target_root: &Path) -> Result<DevTarget, S
         .filter(|app| app.bundle_id.as_deref() == Some(DEV_BUNDLE_ID))
         .collect();
     if claimed.is_empty() {
+        // A bare `wackcode` binary from this checkout is probably the dev app running outside
+        // its .app bundle — macOS gives it no bundle id, so it can never be the target.
+        if let Some(bare) = candidates.iter().find(|app| {
+            app.bundle_id.is_none()
+                && app.executable.as_deref().is_some_and(|path| {
+                    inside(path, target_root) && enclosing_bundle(path).is_none() && path.file_name().is_some_and(|name| name == "wackcode")
+                })
+        }) {
+            return Err(format!(
+                "A WackCode dev build is running as a bare binary ({}) with no bundle id — nothing can target it. Stop it, then start it with `pnpm dev:background`.",
+                bare.executable.as_ref().expect("checked").display()
+            ));
+        }
         return Err(NOT_RUNNING.into());
     }
     let inside: Vec<&Candidate> = claimed
@@ -137,6 +150,22 @@ mod tests {
         let candidates = vec![Candidate { pid: 7, bundle_id: Some(DEV_BUNDLE_ID.into()), executable: Some(outside) }];
         let error = pick(&candidates, &target_root).unwrap_err();
         assert!(error.contains("isn't this checkout's dev app"), "{error}");
+    }
+
+    #[test]
+    fn a_bare_dev_binary_is_named_instead_of_not_running() {
+        let root = std::env::temp_dir().canonicalize().unwrap().join("target-bare");
+        let inside = root.join("debug/wackcode");
+        std::fs::create_dir_all(inside.parent().unwrap()).unwrap();
+        std::fs::write(&inside, b"x").unwrap();
+        let bare = Candidate { pid: 4, bundle_id: None, executable: Some(inside) };
+        let error = pick(&[bare], &root).unwrap_err();
+        assert!(error.contains("bare binary") && error.contains("dev:background"), "{error}");
+        // A wackcode-named binary outside this checkout, or bundled, doesn't trigger it.
+        let foreign = Candidate { pid: 4, bundle_id: None, executable: Some(PathBuf::from("/usr/bin/wackcode")) };
+        assert_eq!(pick(&[foreign], &root).unwrap_err(), NOT_RUNNING);
+        let bundled = Candidate { pid: 4, bundle_id: Some("com.example.Other".into()), executable: None };
+        assert_eq!(pick(&[bundled], &root).unwrap_err(), NOT_RUNNING);
     }
 
     #[test]

@@ -60,6 +60,9 @@ function alive(pid) {
 // The dev app runs from the minimal bundle scripts/dev-app.mjs makes (or, under
 // a plain `tauri dev`, as the bare cargo binary). The debug and release bundles'
 // binaries live under .../bundle/macos/ and never match.
+//
+// A bare `target/debug/wackcode` is *not* healthy: outside an .app bundle it has no bundle id,
+// so the wackdev driver can never resolve it — it's swept below as a stale half-instance.
 async function findDevApp() {
   const { ok, stdout } = await run("ps", ["-axo", "pid=,comm="]);
   if (!ok) fail("Could not list processes with `ps`. Is this macOS?");
@@ -69,7 +72,7 @@ async function findDevApp() {
     if (!match) continue;
     const comm = match[2].trim();
     if (comm.endsWith(DEV_APP) || comm.endsWith("target/debug/wackcode") || comm === "wackcode") {
-      found.push({ pid: Number(match[1]), command: comm });
+      found.push({ pid: Number(match[1]), command: comm, bundled: comm.endsWith(DEV_APP) });
     }
   }
   return found;
@@ -185,13 +188,14 @@ if (!existsSync(nodeBinary)) {
 }
 
 const runningApp = await findDevApp();
+const healthyApp = runningApp.filter((proc) => proc.bundled);
 const viteUp = await viteIsUp();
 
-if (runningApp.length > 0 && viteUp) {
+if (healthyApp.length > 0 && viteUp) {
   console.log(
-    `A healthy WackCode dev instance is already running (app pid ${runningApp[0].pid}).`
+    `A healthy WackCode dev instance is already running (app pid ${healthyApp[0].pid}).`
   );
-  printReady(runningApp[0].pid);
+  printReady(healthyApp[0].pid);
   process.exit(0);
 }
 
@@ -262,9 +266,9 @@ async function waitFor(label, check) {
 console.log("Waiting for Vite on port 1420…");
 await waitFor("Vite to listen on port 1420", viteIsUp);
 console.log("Waiting for the app process (a cold Rust build can take a few minutes)…");
-await waitFor("the app process to start", async () => (await findDevApp()).length > 0);
+await waitFor("the app process to start", async () => (await findDevApp()).some((proc) => proc.bundled));
 await sleep(SETTLE_MS);
-const app = await findDevApp();
+const app = (await findDevApp()).filter((proc) => proc.bundled);
 if (app.length === 0 || !alive(app[0].pid)) {
   fail(`The app process did not stay up. Last log lines:\n${logTail()}`);
 }

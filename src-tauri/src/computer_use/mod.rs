@@ -531,6 +531,7 @@ async fn screenshot(manager: &ComputerUseManager, task_id: &str, target: AppIden
 // Acting
 
 struct ActContext<'a> {
+    own_bundle_id: Option<String>,
     pid: i32,
     own_pid: i32,
     observation: &'a Observation,
@@ -555,7 +556,7 @@ impl ActContext<'_> {
 
     fn foreground(&mut self) -> Result<&mut pointer::Foreground, String> {
         if self.foreground.is_none() {
-            let own = OwnIdentity { pid: self.own_pid, ..OwnIdentity::default() };
+            let own = OwnIdentity { pid: self.own_pid, bundle_id: self.own_bundle_id.clone(), ..OwnIdentity::default() };
             let never_allow = self.never_allow.clone();
             let blocked = Box::new(move |bundle_id: Option<&str>| {
                 let identity = AppIdentity { pid: None, name: String::new(), bundle_id: bundle_id.map(str::to_string), path: None };
@@ -785,6 +786,7 @@ async fn act(
 ) -> Result<Value, String> {
     let task = task_id.to_string();
     let own_pid = manager.own.pid;
+    let own_bundle_id = manager.own.bundle_id.clone();
     manager
         .engine()
         .run(move |state: &mut EngineState| -> Result<Value, String> {
@@ -796,6 +798,7 @@ async fn act(
                 return Err(format!("stateId {state_id} belongs to another app."));
             }
             let mut context = ActContext {
+                own_bundle_id,
                 pid,
                 own_pid,
                 observation,

@@ -1,7 +1,7 @@
 use crate::{
     backgrounds, checkpoints, files, git, glass, mcp,
     models::{
-        AppData, AppearanceConfig, AppInfo, AutoTitleConfig, BackdropMode, BootstrapPayload, BuiltinModelSuggestion,
+        AppData, AppearanceConfig, AppInfo, AutoTitleConfig, BackdropMode, BackgroundImage, BootstrapPayload, BuiltinModelSuggestion,
         CheckpointChange, CheckpointRef, CreateTaskInput, DiffComment, ExportPlanInput,
         ExecutionPolicyConfig, ExtensionUiResponseInput, FavoriteModelRef, ForkTaskInput, GitBranches, GitChanges,
         GitCheckoutResult, GitGeneratedMessage, GitPrInfo,
@@ -1110,7 +1110,8 @@ pub async fn set_appearance_config(
 }
 
 /// Opens the native picker (so the renderer never supplies a path), stores a validated copy of
-/// the chosen image and switches the backdrop to it. `None` when the user cancels.
+/// each chosen image and switches the backdrop to the last one picked. `None` when the user
+/// cancels. Previously saved images stay in the library.
 #[tauri::command]
 pub async fn choose_background_image(
     app: AppHandle,
@@ -1120,59 +1121,168 @@ pub async fn choose_background_image(
     let Some(picked) = app
         .dialog()
         .file()
-        .set_title("Choose a background image")
+        .set_title("Choose background images")
         .add_filter("Images", &["png", "jpg", "jpeg", "webp"])
-        .blocking_pick_file()
+        .blocking_pick_files()
     else {
         return Ok(None);
     };
-    let source = picked
-        .into_path()
-        .map_err(|_| "That image could not be read.".to_string())?;
+    if picked.is_empty() {
+        return Ok(None);
+    }
     let folder = backgrounds::directory(
         &app.path()
             .app_data_dir()
             .map_err(|error| error.to_string())?,
     );
-    let name = backgrounds::import(&source, &folder)?;
+    let imports: Result<Vec<String>, String> = picked
+        .into_iter()
+        .map(|file| {
+            let source = file.into_path().map_err(|_| "That image could not be read.".to_string())?;
+            backgrounds::import(&source, &folder)
+        })
+        .collect();
+    let names = match imports {
+        Ok(names) => names,
+        Err(error) => {
+            // Nothing was saved, so the library still names exactly what may stay on disk; a
+            // partially imported batch leaves its files behind for this prune to clear.
+            prune_backgrounds(&app, &state);
+            return Err(error);
+        }
+    };
     let config = state.mutate(|data| {
-        data.appearance.background_image = Some(name.clone());
+        for name in &names {
+            data.appearance.background_images.push(BackgroundImage::fresh(name.clone()));
+        }
+        data.appearance.background_image = names.last().cloned();
         data.appearance.backdrop = BackdropMode::Image;
-        // A crop belongs to one picture; a new one starts centred.
-        let fresh = AppearanceConfig::default();
-        data.appearance.image_zoom = fresh.image_zoom;
-        data.appearance.image_x = fresh.image_x;
-        data.appearance.image_y = fresh.image_y;
         Ok(data.appearance.clone())
     })?;
-    backgrounds::prune(&folder, Some(&name));
+    prune_backgrounds(&app, &state);
     glass::sync(&app, &config)?;
     Ok(Some(config))
 }
 
-/// Forgets the background image and deletes WackCode's copy (never the user's original).
+/// Deletes background files the library no longer names: removed images and abandoned
+/// temporaries. Only the image commands call this; a folder that cannot be read skips the
+/// prune — the next successful one catches up.
+fn prune_backgrounds(app: &AppHandle, state: &MetadataState) {
+    let Ok(folder) = app.path().app_data_dir().map(|data| backgrounds::directory(&data)) else { return };
+    let Ok(keep) = state
+        .data
+        .lock()
+        .map(|data| data.appearance.background_images.iter().map(|image| image.name.clone()).collect::<Vec<_>>())
+    else { return };
+    backgrounds::prune(&folder, &keep);
+}
+
+/// Forgets saved background images and deletes WackCode's copies (never the user's originals).
+/// A name removes that one image: the one being shown switches to another, and removing the
+/// last falls back to the solid backdrop. No name removes them all.
 #[tauri::command]
 pub async fn remove_background_image(
     app: AppHandle,
     state: State<'_, MetadataState>,
+    name: Option<String>,
 ) -> Result<AppearanceConfig, String> {
     let config = state.mutate(|data| {
-        data.appearance.background_image = None;
-        if data.appearance.backdrop == BackdropMode::Image {
-            data.appearance.backdrop = BackdropMode::Solid;
+        data.appearance = remove_background_entry(&data.appearance, name.as_deref())?;
+        Ok(data.appearance.clone())
+    })?;
+    prune_backgrounds(&app, &state);
+    glass::sync(&app, &config)?;
+    Ok(config)
+}
+
+/// The removal rules, apart from the file deletes so they are testable without an app: reject
+/// any name Rust did not store, drop the entry, and keep `background_image` pointing at an
+/// image that is still saved.
+pub fn remove_background_entry(
+    config: &AppearanceConfig,
+    name: Option<&str>,
+) -> Result<AppearanceConfig, String> {
+    let mut next = config.clone();
+    match name {
+        Some(name) => {
+            // Bare names only: the renderer echoes what Rust stored, and a name joined into
+            // the folder unvalidated must not be able to reach outside it.
+            if name.is_empty() || name == ".." || name.contains(['/', '\\']) {
+                return Err("That background is not saved.".into());
+            }
+            let Some(index) = next.background_images.iter().position(|image| image.name == name) else {
+                return Err("That background is not saved.".into());
+            };
+            next.background_images.remove(index);
+            if next.background_image.as_deref() == Some(name) {
+                next.background_image = next.background_images.first().map(|image| image.name.clone());
+            }
+        }
+        None => next.background_images.clear(),
+    }
+    if next.background_images.is_empty() {
+        next.background_image = None;
+        if next.backdrop == BackdropMode::Image {
+            next.backdrop = BackdropMode::Solid;
+        }
+    }
+    Ok(next)
+}
+
+/// Makes a saved background the one shown. The renderer may only name an image Rust stored.
+#[tauri::command]
+pub async fn select_background_image(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    name: String,
+) -> Result<AppearanceConfig, String> {
+    let config = state.mutate(|data| {
+        if !data.appearance.background_images.iter().any(|image| image.name == name) {
+            return Err("That background is not saved.".into());
+        }
+        data.appearance.background_image = Some(name);
+        Ok(data.appearance.clone())
+    })?;
+    glass::sync(&app, &config)?;
+    Ok(config)
+}
+
+/// Shows a different saved background at random — the same choice shuffle makes on open, so
+/// the button that calls this needs no relaunch to prove the feature.
+#[tauri::command]
+pub async fn shuffle_background_image(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+) -> Result<AppearanceConfig, String> {
+    let config = state.mutate(|data| {
+        if let Some(next) =
+            backgrounds::pick_next(&data.appearance.background_images, data.appearance.background_image.as_deref())
+        {
+            data.appearance.background_image = Some(next);
         }
         Ok(data.appearance.clone())
     })?;
-    backgrounds::prune(
-        &backgrounds::directory(
-            &app.path()
-                .app_data_dir()
-                .map_err(|error| error.to_string())?,
-        ),
-        None,
-    );
     glass::sync(&app, &config)?;
     Ok(config)
+}
+
+/// Shuffle-on-open, shared by app launch and a window reopened from hidden: rotates the shown
+/// background only when the user asked for it and there is another image to show. `None` when
+/// nothing changed, so callers skip notifying the renderer entirely.
+pub fn shuffle_if_enabled(state: &MetadataState) -> Option<AppearanceConfig> {
+    let mut shuffled = None;
+    let _ = state.mutate(|data| {
+        if data.appearance.shuffle_backgrounds && data.appearance.background_image.is_some() {
+            if let Some(next) =
+                backgrounds::pick_next(&data.appearance.background_images, data.appearance.background_image.as_deref())
+            {
+                data.appearance.background_image = Some(next);
+                shuffled = Some(data.appearance.clone());
+            }
+        }
+        Ok(())
+    });
+    shuffled
 }
 
 /// Read-only overrides are queued between runs and never enter the worker fingerprint.
@@ -5023,7 +5133,9 @@ fn validate_prompt_config(input: PromptConfig) -> Result<PromptConfig, String> {
 }
 
 /// The background image is not the renderer's to set: it keeps the stored file, which only
-/// `choose_background_image` and `remove_background_image` change.
+/// `choose_background_image`, `remove_background_image`, selection and shuffle change. The
+/// echoed library may re-crop and reorder what Rust stored, but never add, drop or duplicate
+/// a name — images enter through the picker alone.
 fn validate_appearance_config(
     input: AppearanceConfig,
     current: &AppearanceConfig,
@@ -5044,6 +5156,24 @@ fn validate_appearance_config(
             Err(format!("{label} must be between 0 and 90%."))
         }
     };
+    // A crop belongs to one picture, and a picture to the library Rust built: every echoed
+    // name must be one already saved, and saved once.
+    let mut background_images = Vec::with_capacity(input.background_images.len());
+    for entry in input.background_images {
+        if !current.background_images.iter().any(|stored| stored.name == entry.name) {
+            return Err("That background is not saved.".into());
+        }
+        if background_images.iter().any(|saved: &BackgroundImage| saved.name == entry.name) {
+            return Err("Each background can only be saved once.".into());
+        }
+        if !(100..=400).contains(&entry.zoom) {
+            return Err("Image zoom must be between 100 and 400%.".into());
+        }
+        if entry.x > 1000 || entry.y > 1000 {
+            return Err("Image position must be between 0 and 1000.".into());
+        }
+        background_images.push(entry);
+    }
     let config = AppearanceConfig {
         chat_tabs: input.chat_tabs,
         thinking_preview: input.thinking_preview,
@@ -5055,26 +5185,13 @@ fn validate_appearance_config(
         background: colour("background", input.background)?,
         backdrop: input.backdrop,
         background_image: current.background_image.clone(),
+        background_images,
+        shuffle_backgrounds: input.shuffle_backgrounds,
         image_dim: percent("Image dimming", input.image_dim)?,
         image_blur: if input.image_blur <= 40 {
             input.image_blur
         } else {
             return Err("Image blur must be between 0 and 40 px.".into());
-        },
-        image_zoom: if (100..=400).contains(&input.image_zoom) {
-            input.image_zoom
-        } else {
-            return Err("Image zoom must be between 100 and 400%.".into());
-        },
-        image_x: if input.image_x <= 1000 {
-            input.image_x
-        } else {
-            return Err("Image position must be between 0 and 1000.".into());
-        },
-        image_y: if input.image_y <= 1000 {
-            input.image_y
-        } else {
-            return Err("Image position must be between 0 and 1000.".into());
         },
         glass_style: input.glass_style,
         glass_tint: percent("Glass tint", input.glass_tint)?,
@@ -5084,8 +5201,15 @@ fn validate_appearance_config(
     if config.backdrop == BackdropMode::Glass && !glass_supported {
         return Err("Liquid Glass needs macOS 26 or later.".into());
     }
-    if config.backdrop == BackdropMode::Image && config.background_image.is_none() {
-        return Err("Choose an image first.".into());
+    if config.backdrop == BackdropMode::Image {
+        match config.background_image.as_deref() {
+            None => return Err("Choose an image first.".into()),
+            // The current image must survive the echo; dropping it is the remove command's job.
+            Some(name) if !config.background_images.iter().any(|image| image.name == name) => {
+                return Err("That background is not saved.".into());
+            }
+            _ => {}
+        }
     }
     Ok(config)
 }
@@ -5535,11 +5659,10 @@ mod tests {
             background: Some("#14111b".into()),
             backdrop: BackdropMode::Image,
             background_image: Some("kept.png".into()),
+            background_images: vec![BackgroundImage { name: "kept.png".into(), zoom: 160, x: 250, y: 750 }],
+            shuffle_backgrounds: true,
             image_dim: 50,
             image_blur: 7,
-            image_zoom: 160,
-            image_x: 250,
-            image_y: 750,
             glass_style: GlassStyleSetting::Clear,
             glass_tint: 25,
             agent_name: Some("Nova".into()),
@@ -5627,19 +5750,50 @@ mod tests {
 
     #[test]
     fn the_image_crop_stays_in_range() {
-        let current = AppearanceConfig::default();
-        let with = |zoom, x, y| AppearanceConfig {
-            image_zoom: zoom,
-            image_x: x,
-            image_y: y,
-            ..current.clone()
+        let library = |names: &[&str]| AppearanceConfig {
+            background_images: names.iter().map(|name| BackgroundImage::fresh(name.to_string())).collect(),
+            ..AppearanceConfig::default()
         };
+        let with = |zoom, x, y| {
+            let mut config = library(&["a.png"]);
+            config.background_images[0] = BackgroundImage { name: "a.png".into(), zoom, x, y };
+            config
+        };
+        let current = library(&["a.png"]);
         assert!(validate_appearance_config(with(100, 0, 1000), &current, true).is_ok());
         assert!(validate_appearance_config(with(400, 1000, 0), &current, true).is_ok());
         assert!(validate_appearance_config(with(99, 500, 500), &current, true).is_err());
         assert!(validate_appearance_config(with(401, 500, 500), &current, true).is_err());
         assert!(validate_appearance_config(with(100, 1001, 500), &current, true).is_err());
         assert!(validate_appearance_config(with(100, 500, 1001), &current, true).is_err());
+    }
+
+    #[test]
+    fn the_renderer_cannot_invent_or_duplicate_library_entries() {
+        let current = AppearanceConfig {
+            background_images: vec![
+                BackgroundImage::fresh("a.png".into()),
+                BackgroundImage::fresh("b.png".into()),
+            ],
+            ..AppearanceConfig::default()
+        };
+        // Re-cropping and reordering what Rust stored is exactly the crop editor's save.
+        let recropped = AppearanceConfig {
+            background_images: vec![
+                BackgroundImage { name: "b.png".into(), zoom: 200, x: 100, y: 900 },
+                BackgroundImage { name: "a.png".into(), zoom: 150, x: 0, y: 1000 },
+            ],
+            ..current.clone()
+        };
+        assert_eq!(validate_appearance_config(recropped.clone(), &current, true).unwrap(), recropped);
+        // A name Rust never stored cannot enter through the echoed list…
+        let mut foreign = current.clone();
+        foreign.background_images.push(BackgroundImage::fresh("../../secrets.json".into()));
+        assert!(validate_appearance_config(foreign, &current, true).unwrap_err().contains("not saved"));
+        // …and neither can a second copy of one that did.
+        let mut doubled = current.clone();
+        doubled.background_images.push(BackgroundImage::fresh("a.png".into()));
+        assert!(validate_appearance_config(doubled, &current, true).unwrap_err().contains("once"));
     }
 
     #[test]
@@ -5653,18 +5807,79 @@ mod tests {
             .unwrap_err()
             .contains("macOS 26"));
         assert!(validate_appearance_config(glass, &current, true).is_ok());
-        let image = AppearanceConfig {
-            backdrop: BackdropMode::Image,
-            ..current.clone()
-        };
-        assert!(validate_appearance_config(image.clone(), &current, true)
-            .unwrap_err()
-            .contains("Choose an image"));
         let with_image = AppearanceConfig {
+            backdrop: BackdropMode::Image,
             background_image: Some("a.png".into()),
+            background_images: vec![BackgroundImage::fresh("a.png".into())],
             ..current
         };
-        assert!(validate_appearance_config(image, &with_image, true).is_ok());
+        assert!(validate_appearance_config(with_image.clone(), &with_image, true).is_ok());
+        // A library the current image is not in is as good as none.
+        let mut dangling = with_image.clone();
+        dangling.background_images.clear();
+        assert!(validate_appearance_config(dangling, &with_image, true).unwrap_err().contains("not saved"));
+    }
+
+    #[test]
+    fn removing_a_background_keeps_the_shown_one_valid() {
+        let config = |names: &[&str], shown: Option<&str>| AppearanceConfig {
+            backdrop: BackdropMode::Image,
+            background_image: shown.map(String::from),
+            background_images: names.iter().map(|name| BackgroundImage::fresh(name.to_string())).collect(),
+            ..AppearanceConfig::default()
+        };
+        // Removing an image that is not shown changes nothing else.
+        let next = remove_background_entry(&config(&["a.png", "b.png", "c.png"], Some("b.png")), Some("c.png")).unwrap();
+        assert_eq!(next.background_image.as_deref(), Some("b.png"));
+        assert_eq!(next.background_images.len(), 2);
+        // Removing the shown one switches to another.
+        let next = remove_background_entry(&config(&["a.png", "b.png"], Some("b.png")), Some("b.png")).unwrap();
+        assert_eq!(next.background_image.as_deref(), Some("a.png"));
+        // Removing the last falls back to the solid backdrop.
+        let next = remove_background_entry(&config(&["a.png"], Some("a.png")), Some("a.png")).unwrap();
+        assert_eq!(next.backdrop, BackdropMode::Solid);
+        assert_eq!(next.background_image, None);
+        assert!(next.background_images.is_empty());
+        // No name clears the whole library; unknown or path-like names are refused.
+        let next = remove_background_entry(&config(&["a.png", "b.png"], Some("a.png")), None).unwrap();
+        assert_eq!(next.backdrop, BackdropMode::Solid);
+        for bad in ["missing.png", "", "..", "../a.png", "a/b.png"] {
+            assert!(remove_background_entry(&config(&["a.png"], Some("a.png")), Some(bad)).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn shuffle_on_open_rotates_only_when_asked_and_only_with_a_choice() {
+        let directory = tempfile::tempdir().unwrap();
+        let library = |names: &[&str]| {
+            names.iter().map(|name| BackgroundImage::fresh(name.to_string())).collect::<Vec<_>>()
+        };
+        let state = |shuffle: bool, names: &[&str], shown: Option<&str>| MetadataState {
+            data: Mutex::new(AppData {
+                appearance: AppearanceConfig {
+                    shuffle_backgrounds: shuffle,
+                    background_image: shown.map(String::from),
+                    background_images: library(names),
+                    ..AppearanceConfig::default()
+                },
+                ..AppData::default()
+            }),
+            data_path: directory.path().join("wackcode.json"),
+            secrets: crate::secrets::SecretStore::load(directory.path()).unwrap(),
+        };
+        // Off, one image or none: nothing changes and nothing is reported.
+        assert!(shuffle_if_enabled(&state(false, &["a.png", "b.png"], Some("a.png"))).is_none());
+        assert!(shuffle_if_enabled(&state(true, &["a.png"], Some("a.png"))).is_none());
+        assert!(shuffle_if_enabled(&state(true, &[], None)).is_none());
+        // On with a choice: the shown image changes, and the choice reaches the file.
+        for _ in 0..16 {
+            let state = state(true, &["a.png", "b.png", "c.png"], Some("a.png"));
+            let shuffled = shuffle_if_enabled(&state).expect("a choice existed");
+            let shown = shuffled.background_image.as_deref().unwrap();
+            assert!(shown == "b.png" || shown == "c.png");
+            let saved: AppData = serde_json::from_str(&std::fs::read_to_string(&state.data_path).unwrap()).unwrap();
+            assert_eq!(saved.appearance.background_image.as_deref(), Some(shown));
+        }
     }
 
     #[test]

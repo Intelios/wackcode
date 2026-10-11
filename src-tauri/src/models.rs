@@ -488,25 +488,24 @@ pub struct AppearanceConfig {
     pub background: Option<String>,
     #[serde(default)]
     pub backdrop: BackdropMode,
-    /// A file name inside `<app data>/backgrounds/`, set only by `choose_background_image`.
+    /// The image currently shown: a name inside `<app data>/backgrounds/` and one of
+    /// `background_images`. Set only by Rust (the picker, selection, shuffle), never the renderer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_image: Option<String>,
+    /// Every background the user saved, each with its own crop. Entries are created only by
+    /// `choose_background_image`, so a name is always a file Rust itself imported.
+    #[serde(default)]
+    pub background_images: Vec<BackgroundImage>,
+    /// Show a different saved background each time WackCode opens. Needs more than one image.
+    #[serde(default)]
+    pub shuffle_backgrounds: bool,
     /// How much the background colour covers the image behind a chat, 0–90 %.
     #[serde(default = "default_image_dim")]
     pub image_dim: u8,
     /// Blur of the image behind a chat, 0–40 px.
     #[serde(default = "default_image_blur")]
     pub image_blur: u8,
-    /// Magnification of the image over a cover fit, 100–400 %.
-    #[serde(default = "default_image_zoom")]
-    pub image_zoom: u16,
-    /// Where the visible part sits along each axis, 0–1000 (thousandths): 0 is flush with the
-    /// left / top edge, 1000 flush with the right / bottom, the same convention as CSS
-    /// `background-position`. It holds for any window shape, so the crop survives a resize.
-    #[serde(default = "default_image_focus")]
-    pub image_x: u16,
-    #[serde(default = "default_image_focus")]
-    pub image_y: u16,
+    /// How much the background colour tints the glass, 0–90 %.
     #[serde(default)]
     pub glass_style: GlassStyleSetting,
     /// How much the background colour tints the glass, 0–90 %.
@@ -515,6 +514,32 @@ pub struct AppearanceConfig {
     /// What the app calls the agent in its own copy ("Nova is working…"); `None` is WackCode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
+}
+
+/// One saved background: the stored file name plus its crop. A crop belongs to one picture,
+/// so it lives on the entry and survives shuffling to another image.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundImage {
+    /// A file name inside `<app data>/backgrounds/`, created by `backgrounds::import`.
+    pub name: String,
+    /// Magnification of the image over a cover fit, 100–400 %.
+    #[serde(default = "default_image_zoom")]
+    pub zoom: u16,
+    /// Where the visible part sits along each axis, 0–1000 (thousandths): 0 is flush with the
+    /// left / top edge, 1000 flush with the right / bottom, the same convention as CSS
+    /// `background-position`. It holds for any window shape, so the crop survives a resize.
+    #[serde(default = "default_image_focus")]
+    pub x: u16,
+    #[serde(default = "default_image_focus")]
+    pub y: u16,
+}
+
+impl BackgroundImage {
+    /// A freshly imported image starts centred at cover fit.
+    pub fn fresh(name: String) -> Self {
+        Self { name, zoom: default_image_zoom(), x: default_image_focus(), y: default_image_focus() }
+    }
 }
 
 /// What sits behind the app's panels. The modes are exclusive: glass shows the desktop, which
@@ -578,11 +603,10 @@ impl Default for AppearanceConfig {
             background: None,
             backdrop: BackdropMode::Solid,
             background_image: None,
+            background_images: Vec::new(),
+            shuffle_backgrounds: false,
             image_dim: default_image_dim(),
             image_blur: default_image_blur(),
-            image_zoom: default_image_zoom(),
-            image_x: default_image_focus(),
-            image_y: default_image_focus(),
             glass_style: GlassStyleSetting::Frosted,
             glass_tint: default_glass_tint(),
             agent_name: None,

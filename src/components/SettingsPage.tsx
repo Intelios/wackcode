@@ -130,9 +130,12 @@ interface Props extends PackageActions, ModelFavoritesProps {
   glassSupported: boolean;
   onSetAppearance: (config: AppearanceConfig) => Promise<void>;
   onPreviewAppearance: (config: AppearanceConfig) => void;
-  backgroundImageUrl?: string;
+  /** Asset URL for a stored background name; undefined before the data path is known. */
+  backgroundImageUrlFor: (name: string) => string | undefined;
   onChooseBackgroundImage: () => Promise<void>;
-  onRemoveBackgroundImage: () => Promise<void>;
+  onRemoveBackgroundImage: (name?: string) => Promise<void>;
+  onSelectBackgroundImage: (name: string) => Promise<void>;
+  onShuffleBackgroundImage: () => Promise<void>;
   prompts: PromptConfig;
   onSetPrompts: (config: PromptConfig) => Promise<void>;
   /** Commands-section saves report the config back so `data.commands` stays current. */
@@ -149,7 +152,7 @@ interface Props extends PackageActions, ModelFavoritesProps {
 export function SettingsPage({
   executionPolicy, onSetExecutionPolicy, providers, favoriteModels, favoriteSaving, onSetFavorite, packages, toolCatalog, disabledTools, appDataPath,
   onClose, onSave, onDelete, onSetProviderEnabled, onConnectSubscription, onSignOutSubscription, connectedSubscriptionId, onSetDisabledTools,
-  subagents, onSetSubagents, computerUse = COMPUTER_USE_OFF, computerUseSupported = false, onSetComputerUse, autoTitle, onSetAutoTitle, appearance, glassSupported, onSetAppearance, onPreviewAppearance, backgroundImageUrl, onChooseBackgroundImage, onRemoveBackgroundImage, prompts, onSetPrompts, onCommandsChanged, memory, onSetMemory, mcp, mcpActions, devBuild, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
+  subagents, onSetSubagents, computerUse = COMPUTER_USE_OFF, computerUseSupported = false, onSetComputerUse, autoTitle, onSetAutoTitle, appearance, glassSupported, onSetAppearance, onPreviewAppearance, backgroundImageUrlFor, onChooseBackgroundImage, onRemoveBackgroundImage, onSelectBackgroundImage, onShuffleBackgroundImage, prompts, onSetPrompts, onCommandsChanged, memory, onSetMemory, mcp, mcpActions, devBuild, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
 }: Props) {
   const [chosenSection, setSection] = useState<SectionId>("providers");
   const [computerSetup, setComputerSetup] = useState(false);
@@ -376,11 +379,13 @@ export function SettingsPage({
           <AppearanceSection
             config={appearance}
             glassSupported={glassSupported}
-            backgroundImageUrl={backgroundImageUrl}
+            backgroundImageUrlFor={backgroundImageUrlFor}
             onChange={onSetAppearance}
             onPreview={onPreviewAppearance}
             onChooseImage={onChooseBackgroundImage}
             onRemoveImage={onRemoveBackgroundImage}
+            onSelectImage={onSelectBackgroundImage}
+            onShuffleImage={onShuffleBackgroundImage}
           />
         )}
         {section === "prompts" && <PromptsSection unrestrictedPlanning={executionPolicy?.unrestrictedPlanning} config={prompts} agentName={agentName(appearance)} onChange={onSetPrompts} />}

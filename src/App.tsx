@@ -11,6 +11,7 @@ import { chatModelGone, modelDisplayName, modelIsReady, pickThinkingLevel, type 
 import { titleFromPrompt, samePlanState, sameTodoState, sameGoalState, applySnapshotDelta, applySubagentFrame, pendingSubagentView, pendingEchoMessage, withPendingEcho, validateInitCommand, nextMode, isPlanMode } from "./chat-utils";
 import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix } from "./tree-utils";
 import { composeFileSection, splitFileSection, type FileAttachment } from "./attachment-utils";
+import { CENTRED } from "./backdrop-crop";
 import { displayAgentName, hasSubagentCall, pruneDisabledTools, sameToolCatalog, subagentDetailsFor, parseSkillPreviewDetails, SKILL_CREATOR_TOOL_NAME } from "./tool-utils";
 import { CHANGES_VIEW, GAMES_VIEW, TERMINAL_VIEW, RUN_VIEW, durableView, isDurable, rememberedView, toggleView, viewForChat, viewKey, type PanelViewKind, type SidePanelView } from "./side-panel";
 import { applyRunEvent, EMPTY_RUN_REGISTRY } from "./run-state";
@@ -32,6 +33,7 @@ import { Backdrop } from "./components/Backdrop";
 import type {
   AppData,
   AutoTitleConfig,
+  BackgroundImageEntry,
   AppearanceConfig,
   BrowserState,
   CommandsConfig,
@@ -198,6 +200,11 @@ interface SubscriptionLoginState {
   deviceCode?: { userCode: string; verificationUri: string };
   message?: string;
   error?: string;
+}
+
+/** The library entry currently shown: `backgroundImage` must name one, or nothing renders. */
+function shownBackground(appearance: AppearanceConfig): BackgroundImageEntry | undefined {
+  return appearance.backgroundImages.find((image) => image.name === appearance.backgroundImage);
 }
 
 /** What the chat and the side panel's sub-agent transcripts read from Settings › Appearance. */
@@ -859,6 +866,16 @@ export default function App() {
       }).catch(() => undefined);
     }).catch((reason) => setGlobalError(String(reason))).finally(() => active && setBooting(false));
     return () => { active = false; };
+  }, []);
+
+  // Shuffle-on-open rotates the background in Rust while the window is hidden; follow it so the
+  // swap crossfades in through the Backdrop instead of waiting for the next bootstrap.
+  useEffect(() => {
+    const unlisten = listen<AppearanceConfig>("background-shuffled", ({ payload }) => {
+      savedAppearance.current = payload;
+      setData((current) => ({ ...current, appearance: payload }));
+    });
+    return () => { void unlisten.then((stop) => stop()); };
   }, []);
 
   useEffect(() => {
@@ -1729,8 +1746,9 @@ export default function App() {
   // the cached theme, and the placeholder defaults would flash over it.
   useEffect(() => {
     if (booting) return;
-    // Image mode without a stored image (it failed to import) looks like Solid, not a hole.
-    const appearance = data.appearance.backdrop === "image" && !data.appearance.backgroundImage ? { ...data.appearance, backdrop: "solid" as const } : data.appearance;
+    // Image mode without a saved image to show (it failed to import, or was removed) looks
+    // like Solid, not a hole.
+    const appearance = data.appearance.backdrop === "image" && !shownBackground(data.appearance) ? { ...data.appearance, backdrop: "solid" as const } : data.appearance;
     const theme = applyTheme(appearance);
     cacheTheme(appearance);
     void api.computerUseCursorAppearance(computerCursorAppearance(appearance, theme)).catch(() => undefined);
@@ -1754,7 +1772,7 @@ export default function App() {
     }
   }
 
-  /** Rust opens the picker and stores the copy; a cancelled picker changes nothing. */
+  /** Rust opens the picker and stores the copies; a cancelled picker changes nothing. */
   async function chooseBackgroundImage() {
     const saved = await api.chooseBackgroundImage();
     if (!saved) return;
@@ -1762,8 +1780,20 @@ export default function App() {
     setData((current) => ({ ...current, appearance: saved }));
   }
 
-  async function removeBackgroundImage() {
-    const saved = await api.removeBackgroundImage();
+  async function removeBackgroundImage(name?: string) {
+    const saved = await api.removeBackgroundImage(name);
+    savedAppearance.current = saved;
+    setData((current) => ({ ...current, appearance: saved }));
+  }
+
+  async function selectBackgroundImage(name: string) {
+    const saved = await api.selectBackgroundImage(name);
+    savedAppearance.current = saved;
+    setData((current) => ({ ...current, appearance: saved }));
+  }
+
+  async function shuffleBackgroundImage() {
+    const saved = await api.shuffleBackgroundImage();
     savedAppearance.current = saved;
     setData((current) => ({ ...current, appearance: saved }));
   }
@@ -2683,9 +2713,12 @@ export default function App() {
   const reviewReason = !data.subagents.enabled ? "Enable sub-agents in Settings" : !canReview ? "Enable Reviewer in Settings" : undefined;
 
   // Served by the asset protocol, which may read only <app data>/backgrounds/ (tauri.conf.json).
-  const backgroundImageUrl = data.appearance.backgroundImage && appDataPath
-    ? convertFileSrc(`${appDataPath}/backgrounds/${data.appearance.backgroundImage}`)
-    : undefined;
+  const backgroundImageUrlFor = useCallback(
+    (name: string): string | undefined => (appDataPath ? convertFileSrc(`${appDataPath}/backgrounds/${name}`) : undefined),
+    [appDataPath]
+  );
+  const shownImage = shownBackground(data.appearance);
+  const backgroundImageUrl = shownImage ? backgroundImageUrlFor(shownImage.name) : undefined;
 
   const tabImpl = useRef({ select: selectWorkspaceTab, close: closeWorkspaceTab, reopen: reopenWorkspaceTab,
     new: () => openDraft(selectedTask ? selectedTask.projectId : draft?.projectId) });
@@ -2801,7 +2834,7 @@ export default function App() {
           scene={settingsOpen || selectedTask ? "chat" : "hero"}
           dim={data.appearance.imageDim}
           blur={data.appearance.imageBlur}
-          crop={{ zoom: data.appearance.imageZoom, x: data.appearance.imageX, y: data.appearance.imageY }}
+          crop={shownImage ? { zoom: shownImage.zoom, x: shownImage.x, y: shownImage.y } : CENTRED}
         />
       )}
       {settingsOpen ? (
@@ -2834,9 +2867,11 @@ export default function App() {
           glassSupported={glassSupported}
           onSetAppearance={setAppearance}
           onPreviewAppearance={previewAppearance}
-          backgroundImageUrl={backgroundImageUrl}
+          backgroundImageUrlFor={backgroundImageUrlFor}
           onChooseBackgroundImage={chooseBackgroundImage}
           onRemoveBackgroundImage={removeBackgroundImage}
+          onSelectBackgroundImage={selectBackgroundImage}
+          onShuffleBackgroundImage={shuffleBackgroundImage}
           executionPolicy={data.executionPolicy ?? DEFAULT_EXECUTION_POLICY}
           onSetExecutionPolicy={setExecutionPolicy}
           prompts={data.prompts}

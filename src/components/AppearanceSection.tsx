@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { DEFAULT_ACCENT, DEFAULT_BACKGROUND, THEME_PRESETS, clampBackground, resolveTheme, swatchTint } from "../theme";
 import { DEFAULT_AGENT_NAME, agentName } from "../agentName";
+import type { ImageCrop } from "../backdrop-crop";
 import type { AppearanceConfig, BackdropMode, GlassStyle, ThinkingTimerPrecision } from "../types";
 import { Icon } from "./Icons";
 import { PonderingDuck } from "./PonderingDuck";
@@ -11,15 +12,17 @@ interface AppearanceSectionProps {
   config: AppearanceConfig;
   /** macOS 26+: `NSGlassEffectView` exists. */
   glassSupported: boolean;
-  /** The stored background image, if any. */
-  backgroundImageUrl?: string;
+  /** Asset URL for a stored background name; undefined before the data path is known. */
+  backgroundImageUrlFor: (name: string) => string | undefined;
   /** Persist a change. */
   onChange: (config: AppearanceConfig) => Promise<void>;
   /** Show a change live without saving it: a colour picker or slider mid-drag. */
   onPreview: (config: AppearanceConfig) => void;
-  /** Rust opens the picker, stores a copy and switches the backdrop to it. */
+  /** Rust opens the picker, stores copies and switches the backdrop to the last one. */
   onChooseImage: () => Promise<void>;
-  onRemoveImage: () => Promise<void>;
+  onRemoveImage: (name?: string) => Promise<void>;
+  onSelectImage: (name: string) => Promise<void>;
+  onShuffleImage: () => Promise<void>;
 }
 
 const BACKDROPS: { value: BackdropMode; label: string; note: string }[] = [
@@ -92,7 +95,7 @@ function storedBackground(picked: string): string | null {
   return same(shown, DEFAULT_BACKGROUND) ? null : shown;
 }
 
-export function AppearanceSection({ config, glassSupported, backgroundImageUrl, onChange, onPreview, onChooseImage, onRemoveImage }: AppearanceSectionProps) {
+export function AppearanceSection({ config, glassSupported, backgroundImageUrlFor, onChange, onPreview, onChooseImage, onRemoveImage, onSelectImage, onShuffleImage }: AppearanceSectionProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   /** The last picked background was too light and got darkened; cleared by the next pick. */
@@ -137,6 +140,13 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrl, 
     setDarkened(!same(clampBackground(picked), picked));
     return { ...config, background: storedBackground(picked) };
   }
+
+  /** Save a crop onto the entry it belongs to: each saved image keeps its own crop. */
+  const withCrop = (crop: ImageCrop): AppearanceConfig => ({
+    ...config,
+    backgroundImages: config.backgroundImages.map((image) =>
+      image.name === config.backgroundImage ? { ...image, zoom: crop.zoom, x: crop.x, y: crop.y } : image)
+  });
 
   const withAccent = (picked: string): AppearanceConfig => ({ ...config, accent: same(picked, DEFAULT_ACCENT) ? null : picked.toLowerCase() });
 
@@ -251,25 +261,80 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrl, 
           {config.backdrop === "image" && (
             <div className="appearance-subgroup">
               <div className="tool-setting appearance-setting background-image-setting">
-                {backgroundImageUrl && <img className="background-thumb" src={backgroundImageUrl} alt="Current background" />}
                 <div className="tool-setting-text">
-                  <span className="tool-setting-name">Your image</span>
-                  <span className="tool-setting-description">Shown clearly on the new-chat screen and dimmed and blurred behind chats. WackCode keeps its own copy; your original is never changed.</span>
+                  <span className="tool-setting-name">Your images</span>
+                  <span className="tool-setting-description">Click one to show it — clearly on the new-chat screen, dimmed and blurred behind chats. WackCode keeps its own copies; your originals are never changed.</span>
                 </div>
                 <div className="row-actions">
-                  <button type="button" className="secondary-button" disabled={busy} onClick={() => void run(onChooseImage)}><Icon name="image" /> Replace…</button>
-                  <button type="button" className="secondary-button" disabled={busy} onClick={() => void run(onRemoveImage)}>Remove</button>
+                  <button type="button" className="secondary-button" disabled={busy} onClick={() => void run(onChooseImage)}><Icon name="plus" /> Add…</button>
                 </div>
               </div>
-              {backgroundImageUrl && (
-                <BackdropCropEditor
-                  imageUrl={backgroundImageUrl}
-                  crop={{ zoom: config.imageZoom, x: config.imageX, y: config.imageY }}
-                  disabled={busy}
-                  onPreview={(crop) => onPreview({ ...config, imageZoom: crop.zoom, imageX: crop.x, imageY: crop.y })}
-                  onCommit={(crop) => void save({ ...config, imageZoom: crop.zoom, imageX: crop.x, imageY: crop.y })}
-                />
+              {config.backgroundImages.length > 0 && (
+                <div className="background-strip" role="list" aria-label="Saved backgrounds">
+                  {config.backgroundImages.map((image, index) => {
+                    const url = backgroundImageUrlFor(image.name);
+                    const current = image.name === config.backgroundImage;
+                    return (
+                      <div className="background-item" role="listitem" key={image.name}>
+                        <button
+                          type="button"
+                          className={`background-thumb ${current ? "current" : ""}`}
+                          aria-label={`Background ${index + 1}${current ? " (showing)" : ""}`}
+                          aria-pressed={current}
+                          disabled={busy || !url}
+                          style={url ? { backgroundImage: `url("${url}")` } : undefined}
+                          onClick={() => { if (!current) void run(() => onSelectImage(image.name)); }}
+                        />
+                        {/* Revealed on hover and on keyboard focus, like every hover-only control. */}
+                        <button
+                          type="button"
+                          className="background-thumb-remove"
+                          aria-label={`Remove background ${index + 1}`}
+                          disabled={busy}
+                          onClick={() => void run(() => onRemoveImage(image.name))}
+                        >
+                          <Icon name="close" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
+              {config.backgroundImages.length > 1 && (
+                <div className="tool-setting appearance-setting">
+                  <div className="tool-setting-text">
+                    <span className="tool-setting-name">Shuffle</span>
+                    <span className="tool-setting-description">Show a different background each time you open WackCode. Shuffle now switches to another one straight away.</span>
+                  </div>
+                  <div className="row-actions">
+                    <button type="button" className="secondary-button" disabled={busy} onClick={() => void run(onShuffleImage)}><Icon name="shuffle" /> Shuffle now</button>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={config.shuffleBackgrounds}
+                      aria-label="Shuffle"
+                      className={`toggle ${config.shuffleBackgrounds ? "on" : ""}`}
+                      disabled={busy}
+                      onClick={() => void save({ ...config, shuffleBackgrounds: !config.shuffleBackgrounds })}
+                    >
+                      <span />
+                    </button>
+                  </div>
+                </div>
+              )}
+              {(() => {
+                const shown = config.backgroundImages.find((image) => image.name === config.backgroundImage);
+                const url = shown && backgroundImageUrlFor(shown.name);
+                return shown && url ? (
+                  <BackdropCropEditor
+                    imageUrl={url}
+                    crop={{ zoom: shown.zoom, x: shown.x, y: shown.y }}
+                    disabled={busy}
+                    onPreview={(crop) => onPreview(withCrop(crop))}
+                    onCommit={(crop) => void save(withCrop(crop))}
+                  />
+                ) : null;
+              })()}
               <div className="appearance-pair">
                 <SliderRow
                   label="Dim"

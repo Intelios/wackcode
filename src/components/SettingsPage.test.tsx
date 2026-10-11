@@ -47,7 +47,7 @@ it("shows subscription guidance before sign-in and reconnect", async () => {
   const props = {
     packages: [], toolCatalog: [], disabledTools: [], appDataPath: "/tmp/wackcode",
     onClose: vi.fn(), onSave: vi.fn(), onDelete: vi.fn(), onSetProviderEnabled: vi.fn(), onConnectSubscription,
-    onSignOutSubscription: vi.fn(), onSetDisabledTools: vi.fn(), subagents: noSubagents, onSetSubagents: vi.fn(), autoTitle: { enabled: false, providerId: null, modelId: null }, onSetAutoTitle: vi.fn(), appearance: defaultAppearance, glassSupported: true, onSetAppearance: vi.fn(), onPreviewAppearance: vi.fn(), onChooseBackgroundImage: vi.fn(), onRemoveBackgroundImage: vi.fn(), prompts: defaultPrompts, onSetPrompts: vi.fn(), onCommandsChanged: vi.fn(), memory: { enabled: true, disabledProjects: [] }, onSetMemory: vi.fn(),
+    onSignOutSubscription: vi.fn(), onSetDisabledTools: vi.fn(), subagents: noSubagents, onSetSubagents: vi.fn(), autoTitle: { enabled: false, providerId: null, modelId: null }, onSetAutoTitle: vi.fn(), appearance: defaultAppearance, glassSupported: true, onSetAppearance: vi.fn(), onPreviewAppearance: vi.fn(), onChooseBackgroundImage: vi.fn(), onRemoveBackgroundImage: vi.fn(), onSelectBackgroundImage: vi.fn(), onShuffleBackgroundImage: vi.fn(), backgroundImageUrlFor: vi.fn(), prompts: defaultPrompts, onSetPrompts: vi.fn(), onCommandsChanged: vi.fn(), memory: { enabled: true, disabledProjects: [] }, onSetMemory: vi.fn(),
     onRefresh: vi.fn().mockResolvedValue(undefined), onInstall: vi.fn(), onTrust: vi.fn(),
     onSearch: vi.fn().mockResolvedValue([]), onRemove: vi.fn(), onUpdate: vi.fn(), onSetResources: vi.fn()
   };
@@ -89,7 +89,7 @@ function renderTools(overrides: { disabled?: string[]; onSetDisabledTools?: (nex
       onSetProviderEnabled={vi.fn()}
       onConnectSubscription={vi.fn()}
       onSignOutSubscription={vi.fn()}
-      onSetDisabledTools={onSetDisabledTools} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
+      onSetDisabledTools={onSetDisabledTools} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} onSelectBackgroundImage={vi.fn()} onShuffleBackgroundImage={vi.fn()} backgroundImageUrlFor={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
       onRefresh={vi.fn().mockResolvedValue(undefined)}
       onInstall={vi.fn()}
       onTrust={vi.fn()}
@@ -191,7 +191,7 @@ describe("SettingsPage sidebar navigation", () => {
         onSetProviderEnabled={vi.fn()}
         onConnectSubscription={vi.fn()}
         onSignOutSubscription={vi.fn()}
-        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} onSelectBackgroundImage={vi.fn()} onShuffleBackgroundImage={vi.fn()} backgroundImageUrlFor={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onInstall={vi.fn()}
         onTrust={vi.fn()}
@@ -236,7 +236,7 @@ describe("SettingsPage sidebar navigation", () => {
         onSetProviderEnabled={vi.fn()}
         onConnectSubscription={vi.fn()}
         onSignOutSubscription={vi.fn()}
-        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} onSelectBackgroundImage={vi.fn()} onShuffleBackgroundImage={vi.fn()} backgroundImageUrlFor={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onInstall={vi.fn()}
         onTrust={vi.fn()}
@@ -285,7 +285,7 @@ describe("SettingsPage sidebar navigation", () => {
         onSetProviderEnabled={vi.fn()}
         onConnectSubscription={vi.fn()}
         onSignOutSubscription={vi.fn()}
-        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} onSelectBackgroundImage={vi.fn()} onShuffleBackgroundImage={vi.fn()} backgroundImageUrlFor={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onInstall={vi.fn()}
         onTrust={vi.fn()}
@@ -319,7 +319,7 @@ describe("SettingsPage about", () => {
         onSetProviderEnabled={vi.fn()}
         onConnectSubscription={vi.fn()}
         onSignOutSubscription={vi.fn()}
-        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} onSelectBackgroundImage={vi.fn()} onShuffleBackgroundImage={vi.fn()} backgroundImageUrlFor={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onInstall={vi.fn()}
         onTrust={vi.fn()}
@@ -371,7 +371,7 @@ describe("SettingsPage model capabilities", () => {
         onSetProviderEnabled={vi.fn()}
         onConnectSubscription={vi.fn()}
         onSignOutSubscription={vi.fn()}
-        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} onSelectBackgroundImage={vi.fn()} onShuffleBackgroundImage={vi.fn()} backgroundImageUrlFor={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onInstall={vi.fn()}
         onTrust={vi.fn()}
@@ -408,7 +408,7 @@ describe("SettingsPage provider enable switch", () => {
         onSetProviderEnabled={onSetProviderEnabled}
         onConnectSubscription={vi.fn()}
         onSignOutSubscription={vi.fn()}
-        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} onSelectBackgroundImage={vi.fn()} onShuffleBackgroundImage={vi.fn()} backgroundImageUrlFor={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onInstall={vi.fn()}
         onTrust={vi.fn()}
@@ -433,7 +433,7 @@ describe("SettingsPage provider enable switch", () => {
     // The switch rewrites `providers` live; only the saved record's flag changed, so the
     // in-progress rename must survive it.
     expect(screen.getByLabelText("Name", { selector: "input" })).toHaveValue("Renamed");
-    rerender(<SettingsPage {...noFavorites} providers={[{ ...provider, enabled: false }]} packages={[]} toolCatalog={catalog} disabledTools={[]} appDataPath="/tmp/wackcode" onClose={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onSetProviderEnabled={onSetProviderEnabled} onConnectSubscription={vi.fn()} onSignOutSubscription={vi.fn()} onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()} onRefresh={vi.fn().mockResolvedValue(undefined)} onInstall={vi.fn()} onTrust={vi.fn()} onSearch={vi.fn().mockResolvedValue([])} onRemove={vi.fn()} onUpdate={vi.fn()} onSetResources={vi.fn()} />);
+    rerender(<SettingsPage {...noFavorites} providers={[{ ...provider, enabled: false }]} packages={[]} toolCatalog={catalog} disabledTools={[]} appDataPath="/tmp/wackcode" onClose={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onSetProviderEnabled={onSetProviderEnabled} onConnectSubscription={vi.fn()} onSignOutSubscription={vi.fn()} onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} onSelectBackgroundImage={vi.fn()} onShuffleBackgroundImage={vi.fn()} backgroundImageUrlFor={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()} onRefresh={vi.fn().mockResolvedValue(undefined)} onInstall={vi.fn()} onTrust={vi.fn()} onSearch={vi.fn().mockResolvedValue([])} onRemove={vi.fn()} onUpdate={vi.fn()} onSetResources={vi.fn()} />);
     expect(screen.getByLabelText("Name", { selector: "input" })).toHaveValue("Renamed");
     expect(screen.getByRole("switch", { name: "Use Entrim AI" })).toHaveAttribute("aria-checked", "false");
   });
@@ -460,7 +460,7 @@ function renderModelSettings(provider: ProviderRecord = testProviders[0]) {
       providers={[provider]} packages={[]} toolCatalog={catalog} disabledTools={[]}
       appDataPath="/tmp/wackcode" onClose={vi.fn()} onSave={onSave} onDelete={vi.fn()} onSetProviderEnabled={vi.fn()}
       onConnectSubscription={vi.fn()} onSignOutSubscription={vi.fn()}
-      onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()} onRefresh={vi.fn()} onInstall={vi.fn()} onTrust={vi.fn()}
+      onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} onSelectBackgroundImage={vi.fn()} onShuffleBackgroundImage={vi.fn()} backgroundImageUrlFor={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()} onRefresh={vi.fn()} onInstall={vi.fn()} onTrust={vi.fn()}
       onSearch={vi.fn()} onRemove={vi.fn()} onUpdate={vi.fn()} onSetResources={vi.fn()}
     />
   );
@@ -549,7 +549,7 @@ describe("SettingsPage sub-agents", () => {
       onClose: vi.fn(), onSave: vi.fn(), onDelete: vi.fn(), onSetProviderEnabled: vi.fn(), onConnectSubscription: vi.fn(),
       onSignOutSubscription: vi.fn(), onSetDisabledTools: vi.fn(), onSetSubagents: vi.fn().mockResolvedValue(undefined),
       autoTitle: { enabled: false, providerId: null, modelId: null }, onSetAutoTitle: vi.fn(),
-      appearance: defaultAppearance, glassSupported: true, onSetAppearance: vi.fn(), onPreviewAppearance: vi.fn(), onChooseBackgroundImage: vi.fn(), onRemoveBackgroundImage: vi.fn(), prompts: defaultPrompts, onSetPrompts: vi.fn(), onCommandsChanged: vi.fn(), memory: { enabled: true, disabledProjects: [] }, onSetMemory: vi.fn(),
+      appearance: defaultAppearance, glassSupported: true, onSetAppearance: vi.fn(), onPreviewAppearance: vi.fn(), onChooseBackgroundImage: vi.fn(), onRemoveBackgroundImage: vi.fn(), onSelectBackgroundImage: vi.fn(), onShuffleBackgroundImage: vi.fn(), backgroundImageUrlFor: vi.fn(), prompts: defaultPrompts, onSetPrompts: vi.fn(), onCommandsChanged: vi.fn(), memory: { enabled: true, disabledProjects: [] }, onSetMemory: vi.fn(),
       onRefresh: vi.fn().mockResolvedValue(undefined), onInstall: vi.fn(), onTrust: vi.fn(),
       onSearch: vi.fn().mockResolvedValue([]), onRemove: vi.fn(), onUpdate: vi.fn(), onSetResources: vi.fn()
     };
@@ -638,7 +638,7 @@ describe("SettingsPage MCP servers", () => {
       <SettingsPage {...noFavorites}
         providers={[]} packages={[]} toolCatalog={[]} disabledTools={[]} appDataPath="/tmp/wackcode"
         onClose={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onSetProviderEnabled={vi.fn()} onConnectSubscription={vi.fn()} onSignOutSubscription={vi.fn()}
-        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
+        onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()} appearance={defaultAppearance} glassSupported onSetAppearance={vi.fn()} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} onSelectBackgroundImage={vi.fn()} onShuffleBackgroundImage={vi.fn()} backgroundImageUrlFor={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
         mcp={{ servers: [] }} mcpActions={mcpActions}
         onRefresh={vi.fn().mockResolvedValue(undefined)} onInstall={vi.fn()} onTrust={vi.fn()} onSearch={vi.fn().mockResolvedValue([])} onRemove={vi.fn()} onUpdate={vi.fn()} onSetResources={vi.fn()}
       />
@@ -664,7 +664,7 @@ describe("SettingsPage appearance section", () => {
         providers={[]} packages={[]} toolCatalog={[]} disabledTools={[]} appDataPath="/tmp/wackcode"
         onClose={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onSetProviderEnabled={vi.fn()} onConnectSubscription={vi.fn()} onSignOutSubscription={vi.fn()}
         onSetDisabledTools={vi.fn()} subagents={noSubagents} onSetSubagents={vi.fn()} autoTitle={{ enabled: false, providerId: null, modelId: null }} onSetAutoTitle={vi.fn()}
-        appearance={appearance} glassSupported onSetAppearance={onSetAppearance} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
+        appearance={appearance} glassSupported onSetAppearance={onSetAppearance} onPreviewAppearance={vi.fn()} onChooseBackgroundImage={vi.fn()} onRemoveBackgroundImage={vi.fn()} onSelectBackgroundImage={vi.fn()} onShuffleBackgroundImage={vi.fn()} backgroundImageUrlFor={vi.fn()} prompts={defaultPrompts} onSetPrompts={vi.fn()} onCommandsChanged={vi.fn()} memory={{ enabled: true, disabledProjects: [] }} onSetMemory={vi.fn()}
         onRefresh={vi.fn().mockResolvedValue(undefined)} onInstall={vi.fn()} onTrust={vi.fn()}
         onSearch={vi.fn().mockResolvedValue([])} onRemove={vi.fn()} onUpdate={vi.fn()} onSetResources={vi.fn()}
       />
@@ -716,7 +716,7 @@ describe("SettingsPage appearance section", () => {
     const appearance: AppearanceConfig = {
       ...DEFAULT_APPEARANCE, thinkingPreview: false, thinkingTimerPrecision: "tenth", messageBubbles: true,
       groupExploration: false, accent: "#b69cff", background: "#14111b", backdrop: "image", backgroundImage: "a.png",
-      imageDim: 50, imageBlur: 7, imageZoom: 160, imageX: 250, imageY: 750,
+      backgroundImages: [{ name: "a.png", zoom: 160, x: 250, y: 750 }], shuffleBackgrounds: true, imageDim: 50, imageBlur: 7,
       glassStyle: "clear", glassTint: 25, agentName: "Nova"
     };
     const { onSetAppearance } = renderAppearance(appearance);

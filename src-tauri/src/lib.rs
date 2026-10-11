@@ -53,6 +53,9 @@ pub fn run() {
         .manage(menu_bar::MenuBarState::default())
         .setup(|app| {
             let state = MetadataState::load(&app.handle())?;
+            // Shuffle-on-open: rotate the background before anything reads the config, so the
+            // native window and the renderer's `bootstrap` both see the image this launch shows.
+            commands::shuffle_if_enabled(&state);
             let (appearance, saved_window) = state
                 .data
                 .lock()
@@ -157,6 +160,8 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + 
             commands::set_appearance_config,
             commands::choose_background_image,
             commands::remove_background_image,
+            commands::select_background_image,
+            commands::shuffle_background_image,
             commands::set_subagent_config,
             commands::set_auto_title_config,
             commands::set_prompt_config,

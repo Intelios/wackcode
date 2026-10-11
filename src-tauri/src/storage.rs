@@ -1,4 +1,4 @@
-use crate::{models::{normalize_base_url, AppData, TaskStatus}, secrets::SecretStore};
+use crate::{models::{normalize_base_url, AppData, BackgroundImage, TaskStatus}, secrets::SecretStore};
 use std::{fs, path::{Path, PathBuf}, sync::Mutex};
 use tauri::{AppHandle, Manager};
 
@@ -13,10 +13,21 @@ impl MetadataState {
         let directory = app.path().app_data_dir().map_err(|error| error.to_string())?;
         fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
         let data_path = directory.join("wackcode.json");
+        let mut migrated = false;
         let mut data = if data_path.exists() {
             let content = fs::read_to_string(&data_path).map_err(|error| error.to_string())?;
-            serde_json::from_str::<AppData>(&content)
-                .map_err(|error| format!("Could not read WackCode metadata: {error}"))?
+            let mut data: AppData = serde_json::from_str(&content)
+                .map_err(|error| format!("Could not read WackCode metadata: {error}"))?;
+            // A file saved while backgrounds were a single image keeps its crop on `appearance`
+            // itself; those fields no longer exist on `AppearanceConfig`, so lift them out of
+            // the raw JSON and onto the one library entry they belonged to.
+            if data.appearance.background_images.is_empty() {
+                if let Some(entry) = legacy_background_entry(&content, &data.appearance) {
+                    data.appearance.background_images.push(entry);
+                    migrated = true;
+                }
+            }
+            data
         } else {
             AppData::default()
         };
@@ -27,7 +38,7 @@ impl MetadataState {
         // carry `…/v1` or `…/v1/messages`; the Messages client adds `/v1/messages` itself, so the
         // request doubled the path and landed on the gateway's HTML 404 page. Repair them once.
         let rebased = normalize_provider_base_urls(&mut data);
-        let changed = recovered || refreshed || rebased;
+        let changed = recovered || refreshed || rebased || migrated;
         let state = Self { data: Mutex::new(data), data_path, secrets: SecretStore::load(&directory)? };
         if changed { state.save()?; }
         Ok(state)
@@ -65,6 +76,28 @@ fn normalize_provider_base_urls(data: &mut AppData) -> bool {
         }
     }
     changed
+}
+
+/// The library entry for a config saved before backgrounds became a list: the stored name plus
+/// its crop, read from the raw JSON because `AppearanceConfig` no longer has those fields.
+/// `None` when there is no image to carry over (or the file predates cropping, which centres).
+fn legacy_background_entry(content: &str, appearance: &crate::models::AppearanceConfig) -> Option<BackgroundImage> {
+    let name = appearance.background_image.clone()?;
+    let saved = serde_json::from_str::<serde_json::Value>(content).ok()?.get("appearance").cloned();
+    let field = |key: &str, fallback: u16| {
+        saved
+            .as_ref()
+            .and_then(|value| value.get(key))
+            .and_then(|value| value.as_u64())
+            .and_then(|value| u16::try_from(value).ok())
+            .unwrap_or(fallback)
+    };
+    Some(BackgroundImage {
+        zoom: field("imageZoom", 100),
+        x: field("imageX", 500),
+        y: field("imageY", 500),
+        name,
+    })
 }
 
 fn recover_interrupted_tasks(data: &mut AppData) -> bool {
@@ -142,6 +175,22 @@ mod tests {
     }
 
     #[test]
+    fn single_image_files_migrate_into_a_one_entry_library() {
+        use crate::models::{AppearanceConfig, BackgroundImage};
+        // The crop lived on `appearance` itself; the entry inherits it exactly.
+        let legacy = r#"{"version":1,"appearance":{"backdrop":"image","backgroundImage":"kept.png","imageZoom":180,"imageX":300,"imageY":700}}"#;
+        let appearance: AppearanceConfig = serde_json::from_str::<crate::models::AppData>(legacy).unwrap().appearance;
+        let entry = legacy_background_entry(legacy, &appearance).unwrap();
+        assert_eq!(entry, BackgroundImage { name: "kept.png".into(), zoom: 180, x: 300, y: 700 });
+        // Files from before cropping, and configs with no image, centre or carry nothing over.
+        let bare = r#"{"version":1,"appearance":{"backdrop":"image","backgroundImage":"kept.png"}}"#;
+        let appearance: AppearanceConfig = serde_json::from_str::<crate::models::AppData>(bare).unwrap().appearance;
+        assert_eq!(legacy_background_entry(bare, &appearance).unwrap(), BackgroundImage::fresh("kept.png".into()));
+        let none = serde_json::to_string(&AppData::default()).unwrap();
+        assert!(legacy_background_entry(&none, &AppData::default().appearance).is_none());
+    }
+
+    #[test]
     fn metadata_written_before_tool_settings_existed_still_loads() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("wackcode.json");
@@ -198,7 +247,7 @@ mod tests {
 
     #[test]
     fn appearance_completed_work_folding_defaults_on_and_persists_without_resetting_preferences() {
-        use crate::models::{AppearanceConfig, BackdropMode, GlassStyleSetting, ThinkingTimerPrecision};
+        use crate::models::{AppearanceConfig, BackgroundImage, BackdropMode, GlassStyleSetting, ThinkingTimerPrecision};
         let mut expected = AppearanceConfig {
             thinking_preview: false,
             thinking_timer_precision: ThinkingTimerPrecision::Tenth,
@@ -208,11 +257,10 @@ mod tests {
             background: Some("#14111b".into()),
             backdrop: BackdropMode::Image,
             background_image: Some("kept.png".into()),
+            background_images: vec![BackgroundImage { name: "kept.png".into(), zoom: 160, x: 250, y: 750 }],
+            shuffle_backgrounds: false,
             image_dim: 50,
             image_blur: 7,
-            image_zoom: 160,
-            image_x: 250,
-            image_y: 750,
             glass_style: GlassStyleSetting::Clear,
             glass_tint: 25,
             agent_name: Some("Nova".into()),
@@ -252,10 +300,10 @@ mod tests {
         assert_eq!(data.appearance.backdrop, BackdropMode::Solid);
         assert_eq!((data.appearance.image_dim, data.appearance.image_blur, data.appearance.glass_tint), (65, 12, 40));
         // Files from before image cropping show the picture centred and uncropped.
-        assert_eq!((data.appearance.image_zoom, data.appearance.image_x, data.appearance.image_y), (100, 500, 500));
+        assert_eq!(BackgroundImage::fresh("a.png".into()), BackgroundImage { name: "a.png".into(), zoom: 100, x: 500, y: 500 });
         // Unpicked colours stay absent, so a future default still reaches this user.
         let saved = serde_json::to_string(&data.appearance).unwrap();
-        assert!(!saved.contains("accent") && !saved.contains("backgroundImage"), "{saved}");
+        assert!(!saved.contains("accent") && !saved.contains("\"backgroundImage\""), "{saved}");
     }
 
     #[test]

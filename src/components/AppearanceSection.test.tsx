@@ -6,23 +6,36 @@ import { AppearanceSection } from "./AppearanceSection";
 
 afterEach(cleanup);
 
-function renderSection(config: Partial<AppearanceConfig> = {}, { glassSupported = true, backgroundImageUrl = undefined as string | undefined } = {}) {
+/** A backdrop-Image config with the named library, the first entry shown. */
+function imageLibrary(names: string[], shown = names[0]): Partial<AppearanceConfig> {
+  return {
+    backdrop: "image",
+    backgroundImage: shown,
+    backgroundImages: names.map((name) => ({ name, zoom: 100, x: 500, y: 500 }))
+  };
+}
+
+function renderSection(config: Partial<AppearanceConfig> = {}, { glassSupported = true, urls = {} as Record<string, string> } = {}) {
   const onChange = vi.fn().mockResolvedValue(undefined);
   const onPreview = vi.fn();
   const onChooseImage = vi.fn().mockResolvedValue(undefined);
   const onRemoveImage = vi.fn().mockResolvedValue(undefined);
+  const onSelectImage = vi.fn().mockResolvedValue(undefined);
+  const onShuffleImage = vi.fn().mockResolvedValue(undefined);
   render(
     <AppearanceSection
       config={{ ...DEFAULT_APPEARANCE, ...config }}
       glassSupported={glassSupported}
-      backgroundImageUrl={backgroundImageUrl}
+      backgroundImageUrlFor={(name) => urls[name]}
       onChange={onChange}
       onPreview={onPreview}
       onChooseImage={onChooseImage}
       onRemoveImage={onRemoveImage}
+      onSelectImage={onSelectImage}
+      onShuffleImage={onShuffleImage}
     />
   );
-  return { onChange, onPreview, onChooseImage, onRemoveImage };
+  return { onChange, onPreview, onChooseImage, onRemoveImage, onSelectImage, onShuffleImage };
 }
 
 describe("AppearanceSection theme", () => {
@@ -104,19 +117,57 @@ describe("AppearanceSection backdrop", () => {
   });
 
   it("switches back to a stored image without asking again", async () => {
-    const { onChange, onChooseImage } = renderSection({ backgroundImage: "a.png" });
+    const { onChange, onChooseImage } = renderSection({ backgroundImage: "a.png", backgroundImages: [{ name: "a.png", zoom: 100, x: 500, y: 500 }] });
     fireEvent.click(screen.getByRole("radio", { name: "Image" }));
     await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ backdrop: "image" })));
     expect(onChooseImage).not.toHaveBeenCalled();
   });
 
-  it("shows image controls only in Image mode, and removes the image", async () => {
-    const { onRemoveImage } = renderSection({ backdrop: "image", backgroundImage: "a.png" }, { backgroundImageUrl: "asset://localhost/a.png" });
-    expect(screen.getByRole("img", { name: "Current background" })).toHaveAttribute("src", "asset://localhost/a.png");
+  it("shows one card per saved image and removes a named one", async () => {
+    const { onRemoveImage } = renderSection(
+      { ...imageLibrary(["a.png", "b.png"], "b.png"), backgroundImages: [{ name: "a.png", zoom: 100, x: 500, y: 500 }, { name: "b.png", zoom: 160, x: 250, y: 750 }] },
+      { urls: { "a.png": "asset://localhost/a.png", "b.png": "asset://localhost/b.png" } }
+    );
+    expect(screen.getByRole("button", { name: "Background 2 (showing)" })).toHaveStyle({ backgroundImage: 'url("asset://localhost/b.png")' });
+    expect(screen.getByRole("button", { name: "Background 1" })).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByRole("slider", { name: "Dim" })).toBeInTheDocument();
     expect(screen.queryByRole("slider", { name: "Tint" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
-    await waitFor(() => expect(onRemoveImage).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "Remove background 1" }));
+    await waitFor(() => expect(onRemoveImage).toHaveBeenCalledWith("a.png"));
+  });
+
+  it("shows a clicked card, without re-selecting the one already shown", async () => {
+    const { onSelectImage } = renderSection(imageLibrary(["a.png", "b.png"]), { urls: { "a.png": "asset://localhost/a.png", "b.png": "asset://localhost/b.png" } });
+    fireEvent.click(screen.getByRole("button", { name: "Background 2" }));
+    await waitFor(() => expect(onSelectImage).toHaveBeenCalledWith("b.png"));
+    fireEvent.click(screen.getByRole("button", { name: "Background 1 (showing)" }));
+    expect(onSelectImage).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers shuffle once two images are saved, and saves the choice", async () => {
+    renderSection(imageLibrary(["a.png"]));
+    expect(screen.queryByRole("switch", { name: "Shuffle" })).not.toBeInTheDocument();
+    const { onChange, onShuffleImage } = renderSection(imageLibrary(["a.png", "b.png"]));
+    const toggle = screen.getByRole("switch", { name: "Shuffle" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(toggle);
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ shuffleBackgrounds: true })));
+    fireEvent.click(screen.getByRole("button", { name: "Shuffle now" }));
+    await waitFor(() => expect(onShuffleImage).toHaveBeenCalled());
+  });
+
+  it("resets the crop of the shown image onto its own entry", async () => {
+    const { onChange } = renderSection(
+      {
+        ...imageLibrary(["a.png", "b.png"], "b.png"),
+        backgroundImages: [{ name: "a.png", zoom: 130, x: 400, y: 600 }, { name: "b.png", zoom: 160, x: 250, y: 750 }]
+      },
+      { urls: { "b.png": "asset://localhost/b.png" } }
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Reset position" }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      backgroundImages: [{ name: "a.png", zoom: 130, x: 400, y: 600 }, { name: "b.png", zoom: 100, x: 500, y: 500 }]
+    })));
   });
 
   it("previews a slider while dragging and saves it on release", async () => {

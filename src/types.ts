@@ -664,22 +664,33 @@ export interface AppearanceConfig {
   /** `#rrggbb` as displayed (already darkened for readability); absent is the default. */
   background?: string | null;
   backdrop: BackdropMode;
-  /** File name in `<app data>/backgrounds/`; only the image commands change it. */
+  /** The image currently shown: a name in `backgroundImages`. Only the image commands change it. */
   backgroundImage?: string | null;
+  /** Every background the user saved, each with its own crop. Entries are created in Rust. */
+  backgroundImages: BackgroundImageEntry[];
+  /** Show a different saved background each time WackCode opens. */
+  shuffleBackgrounds: boolean;
   /** How much the background colour covers the image behind a chat, 0–90 %. */
   imageDim: number;
   /** Blur of the image behind a chat, 0–40 px. */
   imageBlur: number;
-  /** Magnification over a cover fit, 100–400 %. */
-  imageZoom: number;
-  /** Where the visible part sits, 0–1000: 0 is flush left / top, 1000 flush right / bottom. */
-  imageX: number;
-  imageY: number;
   glassStyle: GlassStyle;
   /** How much the background colour tints the glass, 0–90 %. */
   glassTint: number;
   /** What the app calls the agent in its own copy; absent is `WackCode`. */
   agentName?: string | null;
+}
+
+/** One saved background and its crop. Mirrors `BackgroundImage` in models.rs: a crop belongs
+ *  to one picture, so it lives on the entry and survives shuffling to another image. */
+export interface BackgroundImageEntry {
+  /** File name in `<app data>/backgrounds/`; only Rust creates entries. */
+  name: string;
+  /** Magnification over a cover fit, 100–400 %. */
+  zoom: number;
+  /** Where the visible part sits, 0–1000: 0 is flush left / top, 1000 flush right / bottom. */
+  x: number;
+  y: number;
 }
 
 /** What sits behind the app's panels. Exclusive: glass shows the desktop an image would cover. */

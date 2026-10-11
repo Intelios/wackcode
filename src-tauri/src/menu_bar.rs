@@ -279,6 +279,14 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
 
 pub fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_window("main") {
+        // Showing a hidden window is "opening the app": shuffle first, then tell the renderer
+        // what it now shows. A window that was already on screen (menu bar while chatting, a
+        // dock click with the window visible) keeps its background.
+        if !window.is_visible().unwrap_or(true) {
+            if let Some(config) = crate::commands::shuffle_if_enabled(&app.state::<MetadataState>()) {
+                let _ = app.emit("background-shuffled", &config);
+            }
+        }
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();

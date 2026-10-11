@@ -4714,7 +4714,27 @@ html[data-force-reduced-motion] *::after {
 .crop-zoom input[type="range"] { width: auto; flex: 1; }
 .crop-zoom-icon { width: 14px; height: 14px; flex: 0 0 auto; color: var(--text-dim); }
 .crop-controls .row-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-.background-thumb { width: 72px; height: 44px; flex: 0 0 auto; object-fit: cover; border-radius: 6px; border: 1px solid var(--border-bright); }
+/* The saved-background strip (AppearanceSection.tsx): one cover-fit card per image. The shown
+   one wears the accent; the remove button appears on hover and keyboard focus alike. */
+.background-strip { display: flex; flex-wrap: wrap; gap: 10px; }
+.background-item { position: relative; }
+.background-item .background-thumb {
+  width: 88px; height: 54px; padding: 0; border: 1px solid var(--border-bright); border-radius: 6px;
+  background-color: var(--wc-well); background-size: cover; background-position: center;
+  cursor: pointer; transition: border-color .15s var(--ease), transform .15s var(--ease);
+}
+.background-item .background-thumb:hover { transform: translateY(-1px); }
+.background-item .background-thumb.current { border-color: var(--wc-accent); box-shadow: 0 0 0 1px var(--wc-accent); }
+.background-item .background-thumb:focus-visible { outline: 2px solid color-mix(in srgb, var(--wc-accent) 75%, transparent); outline-offset: 2px; }
+.background-thumb-remove {
+  position: absolute; top: -7px; right: -7px; display: grid; place-items: center; width: 20px; height: 20px;
+  padding: 0; border: 1px solid var(--border-bright); border-radius: 50%;
+  background: var(--surface); color: var(--text-soft); cursor: pointer;
+  opacity: 0; transition: opacity .15s var(--ease);
+}
+.background-thumb-remove svg { width: 11px; height: 11px; }
+.background-item:hover .background-thumb-remove, .background-thumb-remove:focus-visible { opacity: 1; }
+.background-thumb-remove:hover { color: var(--text); border-color: var(--text-soft); }
 .appearance-slider { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
 .appearance-slider output { width: 44px; text-align: right; color: var(--text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
 /* Undoes the global text-input styling; --fill is the thumb's position, set inline. */

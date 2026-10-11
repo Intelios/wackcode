@@ -118,9 +118,14 @@ export const api = {
   messageImage: (taskId: string, entryId: string, index = 0) => invoke<ImageContent | null>("message_image", { taskId, entryId, index }),
   browserReset: (taskId: string) => invoke<BrowserState>("browser_reset", { taskId }),
   browserReturnFromPopup: (taskId: string) => invoke<BrowserState>("browser_return_from_popup", { taskId }),
-  /** Opens the native picker in Rust; null when the user cancels. */
+  /** Opens the native picker in Rust (several images at once); null when the user cancels. */
   chooseBackgroundImage: () => invoke<AppearanceConfig | null>("choose_background_image"),
-  removeBackgroundImage: () => invoke<AppearanceConfig>("remove_background_image"),
+  /** Removes one saved image, or all of them when no name is given. */
+  removeBackgroundImage: (name?: string) => invoke<AppearanceConfig>("remove_background_image", { name }),
+  /** Makes a saved image the one shown; Rust validates the name. */
+  selectBackgroundImage: (name: string) => invoke<AppearanceConfig>("select_background_image", { name }),
+  /** Shows a different saved image at random — the same choice shuffle makes on open. */
+  shuffleBackgroundImage: () => invoke<AppearanceConfig>("shuffle_background_image"),
   setSubagentConfig: (input: SubagentConfig) => invoke<SubagentConfig>("set_subagent_config", { input }),
   setAutoTitleConfig: (input: AutoTitleConfig) => invoke<AutoTitleConfig>("set_auto_title_config", { input }),
   usageStatus: () => invoke<import("./types").UsageStatus>("usage_status"),

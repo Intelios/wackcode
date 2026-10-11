@@ -484,7 +484,7 @@ export default function App() {
       .catch((reason) => setGlobalError(String(reason)));
   }, []);
 
-  /** Full-size screenshots for the transcript's lightbox, from the open chat's session. */
+  /** Full-size originals of the images tools returned, for the transcript's lightbox, from the open chat's session. */
   const loadToolImage = useCallback((toolCallId: string, index: number) => {
     const taskId = selectedTaskId;
     if (!taskId) return Promise.resolve(undefined);

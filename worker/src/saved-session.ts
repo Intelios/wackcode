@@ -7,7 +7,7 @@
 import { readFile } from "node:fs/promises";
 import type { FileEntry, SessionEntry, SessionProjection } from "@earendil-works/pi-coding-agent";
 import type { NormalizedBlock, SessionSnapshot, TaskMode, ThinkingLevel } from "./protocol.js";
-import { normalizeMessage, THUMBNAIL_OPTIONS } from "./message-normalization.js";
+import { normalizeMessage, RESULT_THUMBNAIL_OPTIONS, THUMBNAIL_OPTIONS } from "./message-normalization.js";
 import { transcriptEntries, transcriptMessages } from "./transcript.js";
 import { buildTreeIndex, modelSwitchesOnPath, undoTarget, type EntryLike } from "./tree.js";
 import { resolveRunTimings } from "./run-timing.js";
@@ -62,25 +62,28 @@ export async function readSavedSession(options: SavedSessionOptions): Promise<Se
   let nextImageId = 0;
   let resize: Pi["resizeImage"] | undefined;
   const imageBlock = (block: Record<string, unknown>): NormalizedBlock => previews.get(block) ?? { type: "image", mimeType: String(block.mimeType ?? "image/png") };
-  const prepare = async (content: unknown, maxBytes = THUMBNAIL_OPTIONS.maxBytes, maxWidth = THUMBNAIL_OPTIONS.maxWidth) => {
+  const prepare = async (content: unknown, options = THUMBNAIL_OPTIONS) => {
     if (!Array.isArray(content)) return;
     for (const block of content) {
       if (!block || typeof block !== "object" || block.type !== "image" || previews.has(block)) continue;
       const mimeType = typeof block.mimeType === "string" ? block.mimeType : "image/png";
       const preview: NormalizedBlock = { type: "image", mimeType, imageId: `image-${++nextImageId}` };
       previews.set(block, preview);
-      if (typeof block.data !== "string" || !block.data) continue;
       try {
+        if (typeof block.data !== "string" || !block.data) continue;
         resize ??= (await import(new URL("utils/image-resize.js", piBase()).href)).resizeImage as Pi["resizeImage"];
-        const resized = await resize(Buffer.from(block.data, "base64"), mimeType, { maxWidth, maxHeight: maxWidth, maxBytes });
+        const resized = await resize(Buffer.from(block.data, "base64"), mimeType, options);
         if (resized) preview.thumbnail = `data:${resized.mimeType};base64,${resized.data}`;
-      } catch { /* An unreadable image must not hide the rest of the transcript. */ }
+      } catch { /* An unreadable image must not hide the rest of the transcript. */ } finally {
+        // Nothing resizes after this pass, so a missing preview is final.
+        if (!preview.thumbnail) preview.failed = true;
+      }
     }
   };
   for (const entry of transcriptEntries(path)) {
-    const message = entry.raw as { role?: string; content?: unknown; toolName?: string };
+    const message = entry.raw as { role?: string; content?: unknown };
     if (message.role === "user") await prepare(message.content);
-    else if (message.role === "toolResult" && (message.toolName === "browser_screenshot" || message.toolName === "computer_screenshot")) await prepare(message.content, 64 * 1024, 480);
+    else if (message.role === "toolResult") await prepare(message.content, RESULT_THUMBNAIL_OPTIONS);
   }
   const tokenHelpers = path.some((entry) => entry.type === "compaction")
     ? await import(new URL("core/compaction/compaction.js", piBase()).href) as Pick<Pi, "estimateTokens"> : undefined;

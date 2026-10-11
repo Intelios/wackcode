@@ -144,8 +144,10 @@ export function layoutTranscript(
 }
 
 export interface ExploreCounts {
-  /** Distinct files read. */
+  /** Distinct files read as text. */
   files: number;
+  /** Distinct files read as pictures: reads whose result came back with an image. */
+  images: number;
   searches: number;
   lists: number;
   /** Other read-only shell commands, such as `git log`. */
@@ -154,14 +156,16 @@ export interface ExploreCounts {
 }
 
 export function exploreCounts(group: ExploreGroup, results: Map<string, NormalizedBlock>): ExploreCounts {
-  const counts: ExploreCounts = { files: 0, searches: 0, lists: 0, commands: 0, failed: 0 };
+  const counts: ExploreCounts = { files: 0, images: 0, searches: 0, lists: 0, commands: 0, failed: 0 };
   const files = new Set<string>();
+  const images = new Set<string>();
   for (const { block } of group.items) {
     if (block.type !== "tool-call") continue;
     const kind = kindOf(block);
     if (kind === "file") {
       const path = (block.arguments as { path?: unknown } | undefined)?.path;
-      files.add(typeof path === "string" ? `path:${path}` : `call:${JSON.stringify(block.arguments ?? null)}`);
+      const pictured = block.toolCallId !== undefined && Boolean(results.get(block.toolCallId)?.images?.length);
+      (pictured ? images : files).add(typeof path === "string" ? `path:${path}` : `call:${JSON.stringify(block.arguments ?? null)}`);
     }
     else if (kind === "search") counts.searches += 1;
     else if (kind === "list") counts.lists += 1;
@@ -169,15 +173,17 @@ export function exploreCounts(group: ExploreGroup, results: Map<string, Normaliz
     if (block.toolCallId && results.get(block.toolCallId)?.isError) counts.failed += 1;
   }
   counts.files = files.size;
+  counts.images = images.size;
   return counts;
 }
 
 const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
 
-/** "3 files, 2 searches, 1 list". */
+/** "3 files, 1 image, 2 searches, 1 list". */
 export function exploreLabel(counts: ExploreCounts): string {
   return [
     counts.files ? plural(counts.files, "file", "files") : "",
+    counts.images ? plural(counts.images, "image", "images") : "",
     counts.searches ? plural(counts.searches, "search", "searches") : "",
     counts.lists ? plural(counts.lists, "list", "lists") : "",
     counts.commands ? plural(counts.commands, "command", "commands") : ""

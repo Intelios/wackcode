@@ -48,3 +48,35 @@ describe("normalizeMessage thinking timing", () => {
     expect(normalizeMessage(raw, 0, undefined, imageBlock, [0])?.blocks).toEqual([{ type: "thinking", text: "History", startedAt: 0 }]);
   });
 });
+
+describe("normalizeMessage tool result images", () => {
+  const png = { type: "image", data: "aW1hZ2U=", mimeType: "image/png" };
+  const result = (content: unknown[], toolName = "read") => normalizeMessage({ role: "toolResult", toolName, toolCallId: "call", content }, 0, undefined,
+    (block) => ({ type: "image", imageId: `id-${String(block.data)}`, ...(block.data === "broken" ? { failed: true as const } : block.data === "slow" ? {} : { thumbnail: "data:image/png;base64,cHJldmlldw==" }) }));
+
+  it("puts any tool's images on its one result block, as previews", () => {
+    for (const toolName of ["read", "computer_screenshot", "mcp__design__export"]) {
+      expect(result([{ type: "text", text: "Read image file [image/png]" }, png], toolName)?.blocks).toEqual([{
+        type: "tool-result", text: "Read image file [image/png]", toolName, toolCallId: "call", isError: false,
+        images: [{ imageId: "id-aW1hZ2U=", thumbnail: "data:image/png;base64,cHJldmlldw==" }]
+      }]);
+    }
+  });
+
+  it("keeps every image's position, whether its preview is pending or never coming", () => {
+    const images = result([{ ...png, data: "slow" }, { ...png, data: "broken" }, png])?.blocks;
+    // Image-only: one empty result still closes the call, and the originals stay out of it.
+    expect(images).toHaveLength(1);
+    expect(images?.[0]).toMatchObject({ type: "tool-result", text: "", toolCallId: "call" });
+    expect(images?.[0].images).toEqual([
+      { imageId: "id-slow" },
+      { imageId: "id-broken", failed: true },
+      { imageId: "id-aW1hZ2U=", thumbnail: "data:image/png;base64,cHJldmlldw==" }
+    ]);
+    expect(JSON.stringify(images)).not.toContain("aW1hZ2U=\"}");
+  });
+
+  it("leaves a result without images as it was", () => {
+    expect(result([{ type: "text", text: "contents" }])?.blocks[0]).not.toHaveProperty("images");
+  });
+});

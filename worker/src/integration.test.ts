@@ -19,7 +19,7 @@ type SnapshotView = {
     timestamp?: number;
     blocks: Array<{
       type: string; text?: string; toolName?: string; toolCallId?: string; details?: unknown; imageId?: string; thumbnail?: string; mimeType?: string;
-      durationMs?: number; startedAt?: number; images?: Array<{ imageId: string; thumbnail?: string }>;
+      durationMs?: number; startedAt?: number; images?: Array<{ imageId: string; thumbnail?: string; failed?: true }>;
     }>;
     entryId?: string;
     versions?: { index: number; total: number; previous?: string; next?: string; group: string };
@@ -1984,6 +1984,54 @@ describe("built-in extensions", () => {
     worker.send({ id: crypto.randomUUID(), type: "set_tools", disabledTools: ["web_fetch"] });
     await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.includes("web_fetch") === false);
     expect(worker.child.exitCode).toBeNull();
+  });
+
+  it("shows the image a read returned as a preview, and serves the original live and after a restart", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-read-image-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    // Wider than the 480px transcript preview, so the preview is a resized copy.
+    const picture = solidPng(1200, 30);
+    await writeFile(join(workspace, "shot.png"), Buffer.from(picture, "base64"));
+    await writeFile(join(workspace, "notes.txt"), "plain text");
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "read-image");
+    cleanup.push(() => worker.shutdown());
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "read-run", message: 'mcp: read {"path":"shot.png"}' });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "read-run" && output.state === "idle");
+    await worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) =>
+      message.blocks.some((block) => block.type === "tool-result" && block.images?.[0]?.thumbnail?.startsWith("data:image/"))) === true);
+    const blocks = () => worker.view?.messages.flatMap((message) => message.blocks) ?? [];
+    const result = blocks().find((block) => block.type === "tool-result" && block.toolName === "read");
+    // One result per call: the image rides it instead of becoming a block of its own.
+    expect(blocks().filter((block) => block.type === "tool-result" && block.toolCallId === result?.toolCallId)).toHaveLength(1);
+    expect(result?.text).toContain("Read image file [image/png]");
+    expect(result?.images).toHaveLength(1);
+
+    const id = crypto.randomUUID();
+    worker.send({ id, type: "tool_image", toolCallId: result?.toolCallId });
+    const original = await worker.waitFor((output) => output.type === "response" && output.id === id);
+    expect(original.result).toMatchObject({ type: "image", mimeType: "image/png" });
+    const sent = (original.result as { data: string }).data;
+    // The original is what the session holds; a snapshot never carries it.
+    expect(sent.length).toBeGreaterThan(0);
+    expect(JSON.stringify(worker.view)).not.toContain(sent);
+
+    // A text read has no image to show or to serve.
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "text-run", message: 'mcp: read {"path":"notes.txt"}' });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "text-run" && output.state === "idle");
+    const plain = blocks().filter((block) => block.type === "tool-result" && block.toolName === "read").at(-1);
+    expect(plain?.images).toBeUndefined();
+    const plainId = crypto.randomUUID();
+    worker.send({ id: plainId, type: "tool_image", toolCallId: plain?.toolCallId });
+    expect((await worker.waitFor((output) => output.type === "response" && output.id === plainId)).result).toBeNull();
+
+    // Opened cold, without a worker, the saved chat shows the same preview.
+    const cold = await readSavedSession({ sessionFile: worker.view!.sessionFile, taskId: "read-image", mode: "build", thinkingLevel: "off" });
+    const saved = cold.messages.flatMap((message) => message.blocks).find((block) => block.type === "tool-result" && block.images);
+    expect(saved?.images?.[0]?.thumbnail).toMatch(/^data:image\//);
+    expect(JSON.stringify(cold.messages)).not.toContain(sent);
   });
 
   it("keeps computer use off until it is switched on, then round-trips a screenshot while the prompt holds the queue", async () => {

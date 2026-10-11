@@ -106,9 +106,18 @@ describe("exploration summary", () => {
     const ls: NormalizedBlock = { type: "tool-call", toolName: "ls", toolCallId: "l1", arguments: { path: "src" } };
     const log: NormalizedBlock = { type: "tool-call", toolName: "bash", toolCallId: "c1", arguments: { command: "git log -3" } };
     const counts = exploreCounts(group([read("r1", "a.ts"), read("r2", "a.ts"), read("r3", "b.ts"), grep("g1"), ls, log, thinking("hm")]), new Map());
-    expect(counts).toEqual({ files: 2, searches: 1, lists: 1, commands: 1, failed: 0 });
+    expect(counts).toEqual({ files: 2, images: 0, searches: 1, lists: 1, commands: 1, failed: 0 });
     expect(exploreLabel(counts)).toBe("2 files, 1 search, 1 list, 1 command");
-    expect(exploreLabel({ files: 1, searches: 2, lists: 0, commands: 0, failed: 0 })).toBe("1 file, 2 searches");
+    expect(exploreLabel({ files: 1, images: 0, searches: 2, lists: 0, commands: 0, failed: 0 })).toBe("1 file, 2 searches");
+  });
+
+  it("counts a read that came back as a picture as an image, not a file", () => {
+    const pictured = (id: string): [string, NormalizedBlock] => [id, { type: "tool-result", toolCallId: id, images: [{ imageId: id }] }];
+    const results = new Map<string, NormalizedBlock>([pictured("r2"), pictured("r3"), ["r1", { type: "tool-result", toolCallId: "r1", text: "ok" }]]);
+    const counts = exploreCounts(group([read("r1", "a.ts"), read("r2", "shot.png"), read("r3", "shot.png"), read("r4", "b.ts")]), results);
+    expect(counts).toMatchObject({ files: 2, images: 1 });
+    expect(exploreLabel(counts)).toBe("2 files, 1 image");
+    expect(exploreLabel({ ...counts, files: 0, images: 2 })).toBe("2 images");
   });
 
   it("counts failed calls", () => {

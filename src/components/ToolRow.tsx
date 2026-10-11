@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useId, useMemo, useState } from
 import { highlightDiffLines, languageForPath } from "../highlight";
 import { editArgumentDiff, focusedEditDiff } from "../edit-preview";
 import type { NormalizedBlock } from "../types";
-import { mcpToolParts, splitPathSubject, summarizeTool } from "../tool-utils";
+import { imageReadNote, mcpToolParts, SCREENSHOT_TOOL_NAMES, splitPathSubject, summarizeTool } from "../tool-utils";
 import { Icon, type IconName } from "./Icons";
 import { OrbitSpinner } from "./OrbitSpinner";
 import { QuillMark } from "./QuillMark";
@@ -11,7 +11,7 @@ import { ImageLightbox } from "./ui/ImageLightbox";
 import { CopyButton } from "./ui/CopyButton";
 
 /**
- * Loads the original of a screenshot tool result's image (`api.toolImage` for the open chat),
+ * Loads the original of an image a tool result returned (`api.toolImage` for the open chat),
  * as a URL. Without a provider, the lightbox shows the preview alone.
  */
 export const ToolImageSource = createContext<((toolCallId: string, index: number) => Promise<string | undefined>) | undefined>(undefined);
@@ -53,27 +53,53 @@ const TOOL_ICONS: Record<string, IconName> = {
   browser_screenshot: "image"
 };
 
-/** A screenshot result's previews, always visible under its row; each opens full size. */
-export function ToolImages({ call, result }: { call: NormalizedBlock; result: NormalizedBlock }) {
+/** How a result's images are named to the user: a capture, a file that was read, or a tool's output. */
+function imageWording(call: NormalizedBlock, result: NormalizedBlock): { noun: string; name: string; open: string; caption: string } {
+  const summary = summarizeTool(call, result);
+  if (SCREENSHOT_TOOL_NAMES.has(call.toolName ?? "")) {
+    const subject = summary.subject || "the app";
+    return { noun: "screenshot", name: `Screenshot of ${subject}`, open: `Open screenshot of ${subject}`, caption: subject };
+  }
+  if (summary.kind === "read" && summary.subject) {
+    const file = splitPathSubject(summary.subject).name;
+    return { noun: "image", name: file, open: `Open image ${file}`, caption: file };
+  }
+  const subject = summary.subject || summary.doneVerb;
+  return { noun: "image", name: `Image from ${subject}`, open: `Open image from ${subject}`, caption: subject };
+}
+
+/**
+ * The images a tool result returned, always visible under its row; each opens full size. An
+ * image no preview could be made from shows nothing but keeps its position, which is what the
+ * original is fetched by. `caption` names the source under each preview, for where the row
+ * that would say so isn't on screen (a folded Explored group).
+ */
+export function ToolImages({ call, result, caption = false }: { call: NormalizedBlock; result: NormalizedBlock; caption?: boolean }) {
   const load = useContext(ToolImageSource);
   const [shown, setShown] = useState<number>();
   const images = result.images ?? [];
-  const subject = summarizeTool(call, result).subject || "the app";
+  const wording = imageWording(call, result);
   const loadShown = useCallback(
     () => (load && call.toolCallId && shown !== undefined ? load(call.toolCallId, shown) : Promise.resolve(undefined)),
     [load, call.toolCallId, shown]
   );
   const preview = shown !== undefined ? images[shown]?.thumbnail : undefined;
+  if (images.every((image) => image.failed)) return null;
   return (
     <div className="tool-images">
-      {images.map((image, index) => image.thumbnail ? (
-        <button key={image.imageId} type="button" className="tool-image" onClick={() => setShown(index)} aria-label={`Open screenshot of ${subject}`}>
-          <img src={image.thumbnail} alt={`Screenshot of ${subject}`} />
-        </button>
-      ) : (
-        <span key={image.imageId} className="tool-image pending" aria-label="Preparing screenshot preview" />
+      {images.map((image, index) => image.failed ? null : (
+        <figure key={image.imageId} className="tool-image-figure">
+          {image.thumbnail ? (
+            <button type="button" className="tool-image" onClick={() => setShown(index)} aria-label={wording.open} title={caption ? undefined : wording.caption}>
+              <img src={image.thumbnail} alt={wording.name} />
+            </button>
+          ) : (
+            <span className="tool-image pending" aria-label={`Preparing ${wording.noun} preview`} />
+          )}
+          {caption && <figcaption className="tool-image-caption" title={wording.caption}>{wording.caption}</figcaption>}
+        </figure>
       ))}
-      {preview && <ImageLightbox preview={preview} load={loadShown} alt={`Screenshot of ${subject}`} onClose={() => setShown(undefined)} />}
+      {preview && <ImageLightbox preview={preview} load={loadShown} alt={wording.name} onClose={() => setShown(undefined)} />}
     </div>
   );
 }
@@ -154,6 +180,16 @@ export function ToolDetail({ call, result }: { call: NormalizedBlock; result?: N
   if (summary.kind === "write" && typeof args.content === "string") {
     return <div className="tool-detail"><ToolText text={args.content} label="file content" maxLines={80} copy expansionKey={call.toolCallId} /></div>;
   }
+  if (summary.kind === "read" && result?.images?.length) {
+    // The picture is under the row already; what's left to say is where it is and Pi's notes.
+    const note = imageReadNote(result.text);
+    return (
+      <div className="tool-detail">
+        <ToolText text={String(args.path ?? "")} label="path" copy expansionKey={call.toolCallId} />
+        {note && <ToolText text={note} label="note" expansionKey={call.toolCallId} />}
+      </div>
+    );
+  }
   if (summary.kind === "search") {
     return <div className="tool-detail">{result?.text ? <ToolText text={result.text} expansionKey={call.toolCallId} /> : <pre>No matches</pre>}</div>;
   }
@@ -190,7 +226,7 @@ export function ToolRow({ call, result, liveText, running }: ToolRowProps) {
         {summary.kind === "edit" || summary.kind === "write" ? (
           <QuillMark live={Boolean(pending)} className="tool-row-icon" />
         ) : (
-          <Icon name={TOOL_ICONS[call.toolName ?? ""] ?? (mcpToolParts(call.toolName ?? "") ? "plug" : "terminal")} className="tool-row-icon" />
+          <Icon name={summary.kind === "read" && result?.images?.length ? "image" : TOOL_ICONS[call.toolName ?? ""] ?? (mcpToolParts(call.toolName ?? "") ? "plug" : "terminal")} className="tool-row-icon" />
         )}
         <span className="tool-row-verb">{pending ? summary.activeVerb : summary.doneVerb}</span>
         {summary.subject && (

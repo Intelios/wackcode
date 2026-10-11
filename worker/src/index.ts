@@ -16,7 +16,7 @@ import { GOAL_VERIFIER_SYSTEM } from "./builtin/goal/prompt.js";
 import { runGoalVerification } from "./builtin/goal/verify.js";
 import { buildSkillCreatorPrompt } from "./builtin/skill-creator/guide.js";
 import type { BuiltinHost, SubagentOutcome } from "./builtin/host.js";
-import { normalizeMessage as normalizeSavedMessage, textFromContent, THUMBNAIL_OPTIONS, THUMBNAIL_RESULT_TOOLS } from "./message-normalization.js";
+import { normalizeMessage as normalizeSavedMessage, textFromContent, THUMBNAIL_OPTIONS } from "./message-normalization.js";
 import { BACKGROUND_SUBAGENT_MESSAGE, backgroundCalls, interruptedDetails, projectBackgroundCards } from "./builtin/subagents/state.js";
 import { SUBAGENT_TOOL_NAME } from "./builtin/subagents/types.js";
 import { createModelRuntime, findModel, MODEL_MISSING_MESSAGE, missingModelMessage, missingModelPlaceholder, workerSettings, type PiModel } from "./model-runtime.js";
@@ -583,6 +583,8 @@ function toolUpdateText(partialResult: unknown): string {
 interface ImagePreview {
   id: string;
   url?: string;
+  /** The original could not be decoded or resized: the transcript stops waiting for a preview. */
+  failed?: true;
 }
 
 // Keyed by the image block itself. Pi keeps message objects stable across `session.messages`
@@ -604,11 +606,13 @@ function imageBlock(block: Record<string, unknown>, options = THUMBNAIL_OPTIONS)
       previewQueue = previewQueue
         .then(async () => {
           if (!piModule) return;
-          const resized = await piModule.resizeImage(Buffer.from(data, "base64"), mimeType, options);
-          if (!resized) return;
-          created.url = `data:${resized.mimeType};base64,${resized.data}`;
-          // The owning message's cached normalization still has no thumbnail; drop only that
-          // entry so the next emission re-normalizes (and re-sends) just this message.
+          // Tools return whatever they like (an MCP server's SVG, a truncated file), so a
+          // preview that can't be made is an outcome too, not something to wait on forever.
+          const resized = await piModule.resizeImage(Buffer.from(data, "base64"), mimeType, options).catch(() => undefined);
+          if (resized) created.url = `data:${resized.mimeType};base64,${resized.data}`;
+          else created.failed = true;
+          // The owning message's cached normalization still shows the preview as pending; drop
+          // only that entry so the next emission re-normalizes (and re-sends) just this message.
           const owner = imageOwners.get(created.id);
           if (owner) {
             imageOwners.delete(created.id);
@@ -617,9 +621,11 @@ function imageBlock(block: Record<string, unknown>, options = THUMBNAIL_OPTIONS)
           scheduleSnapshot();
         })
         .catch(() => undefined);
+    } else {
+      created.failed = true;
     }
   }
-  return { type: "image", mimeType, imageId: preview.id, thumbnail: preview.url };
+  return { type: "image", mimeType, imageId: preview.id, thumbnail: preview.url, ...(preview.failed ? { failed: true as const } : {}) };
 }
 
 function normalizeMessage(message: unknown, index: number, thinking?: ThinkingDurations, starts?: Array<number | null>, cacheKey: unknown = message): NormalizedMessage | undefined {
@@ -2221,9 +2227,9 @@ function shutdownProcess(code = 0, commandId?: string): void {
 const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "list_commands", "execute_command", "init_agents", "skill_creator", "compact", "dequeue", "queue_message", "steer_message", "goal_control", "watch_subagent", "tool_image", "message_image"]);
 
 /**
- * The original of a screenshot tool result's image, for the transcript's lightbox. Only the
- * tools whose previews the transcript shows (`THUMBNAIL_RESULT_TOOLS`) answer: other results'
- * images stay model-only.
+ * The original of an image a tool result returned, for the transcript's lightbox: the image at
+ * `index` among that result's images, the position its preview has in the block's `images`.
+ * Only the conversation as it stands is searched.
  */
 function toolResultImage(toolCallId: string, index: number): ImageContent | null {
   if (!session) return null;
@@ -2232,7 +2238,7 @@ function toolResultImage(toolCallId: string, index: number): ImageContent | null
   for (let position = messages.length - 1; position >= 0; position -= 1) {
     const message = messages[position];
     if (message?.role !== "toolResult" || message.toolCallId !== toolCallId) continue;
-    if (typeof message.toolName !== "string" || !THUMBNAIL_RESULT_TOOLS.has(message.toolName) || !Array.isArray(message.content)) return null;
+    if (!Array.isArray(message.content)) return null;
     const image = (message.content as Record<string, unknown>[]).filter((block) => block?.type === "image")[index];
     return image && typeof image.data === "string" && typeof image.mimeType === "string" ? { type: "image", data: image.data, mimeType: image.mimeType } : null;
   }

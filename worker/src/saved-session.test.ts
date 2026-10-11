@@ -57,6 +57,15 @@ describe("saved history without a worker", () => {
     expect(history.stats.contextBreakdown).toBeUndefined();
   });
 
+  it("marks a tool result's image that can't be previewed as failed instead of pending", async () => {
+    const result = { type: "message", id: "r", parentId: "a", message: { role: "toolResult", toolName: "mcp__design__export", toolCallId: "call", timestamp: 2,
+      content: [{ type: "text", text: "Exported" }, { type: "image", data: Buffer.from("not a picture").toString("base64"), mimeType: "image/png" }] } };
+    const history = await readSavedSession({ ...options, sessionFile: await fixture([header, user("a", null, "Export it"), result]) });
+    const block = history.messages.flatMap((message) => message.blocks).find((candidate) => candidate.type === "tool-result");
+    expect(block).toMatchObject({ text: "Exported", toolCallId: "call", images: [{ imageId: expect.any(String), failed: true }] });
+    expect(block?.images?.[0]).not.toHaveProperty("thumbnail");
+  });
+
   it("restores ready plans, todos and a paused goal without running extensions", async () => {
     const sessionFile = await fixture([
       header,

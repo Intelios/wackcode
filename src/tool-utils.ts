@@ -14,6 +14,19 @@ export const COMPUTER_TOOL_NAMES = ["computer_apps", "computer_open", "computer_
 /** Memory: its own setting (Settings › Memory), never the tool denylist. */
 export const MEMORY_TOOL_NAMES = ["memory_save", "memory_recall", "memory_forget"] as const;
 
+/** Tools whose whole result is a capture; their previews are labelled as screenshots. */
+export const SCREENSHOT_TOOL_NAMES: ReadonlySet<string> = new Set(["computer_screenshot", "browser_screenshot"]);
+
+/**
+ * What Pi's `read` says about an image beyond the picture itself: its result text without the
+ * leading "Read image file [image/png]" line, which leaves any resize hint and the warning that
+ * the model can't see images. Text in another shape comes back whole.
+ */
+export function imageReadNote(text: string | undefined): string {
+  if (!text) return "";
+  return text.replace(/^Read image file \[[^\]\n]*\]\n?/, "").trim();
+}
+
 /** An app as the model named it: a `.app` path shows as its name. */
 function appName(value: string): string {
   const match = /([^/]+)\.app\/?$/i.exec(value);

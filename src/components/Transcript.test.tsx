@@ -637,6 +637,24 @@ describe("Transcript exploration groups", () => {
     expect(screen.getByText("contents")).toBeInTheDocument();
   });
 
+  it("keeps a folded read's picture in view under the group, and moves it under its row when opened", () => {
+    const shot: NormalizedMessage = { id: "a-3000", role: "assistant", timestamp: 3_000, blocks: [read("r2", "captures/shot.png")] };
+    const pictured: NormalizedMessage = { id: "tool-r2", role: "tool", blocks: [{
+      type: "tool-result", toolCallId: "r2", toolName: "read", text: "Read image file [image/png]",
+      images: [{ imageId: "image-1", thumbnail: "data:image/png;base64,cHJldmlldw==" }]
+    }] };
+    const view = render(<Transcript messages={[user, first, result("r1"), shot, pictured, answer]} running={false} collapseCompletedWork={false} />);
+    const head = screen.getByRole("button", { name: "Explored 1 file, 1 image" });
+    const strip = view.container.querySelector(".explore-images");
+    expect(strip).toContainElement(screen.getByRole("button", { name: "Open image shot.png" }));
+    expect(strip?.querySelector("figcaption")).toHaveTextContent("shot.png");
+
+    fireEvent.click(head);
+    expect(view.container.querySelector(".explore-images")).not.toBeInTheDocument();
+    expect(view.container.querySelector(".explore-body .tool-row .tool-images")).toContainElement(screen.getByRole("button", { name: "Open image shot.png" }));
+    expect(view.container.querySelector(".explore-body figcaption")).not.toBeInTheDocument();
+  });
+
   it("names the call in flight while exploring, keeps its open state once saved, then shows counts", () => {
     const streaming: NormalizedMessage = { ...second, id: "streaming-3000" };
     const view = render(<Transcript messages={[user, first, result("r1")]} running partial={streaming} />);

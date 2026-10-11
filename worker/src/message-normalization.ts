@@ -3,12 +3,9 @@ import type { NormalizedBlock, NormalizedMessage } from "./protocol.js";
 import type { ThinkingDurations } from "./run-timing.js";
 import { withoutTranscripts } from "./builtin/subagents/details.js";
 import { SUBAGENT_TOOL_NAME } from "./builtin/subagents/types.js";
-import { BROWSER_SCREENSHOT_TOOL_NAME } from "./builtin/browser.js";
-import { COMPUTER_SCREENSHOT_TOOL_NAME } from "./builtin/computer-use/params.js";
 
 export const THUMBNAIL_OPTIONS = { maxWidth: 512, maxHeight: 512, maxBytes: 128 * 1024 };
 export const RESULT_THUMBNAIL_OPTIONS = { maxWidth: 480, maxHeight: 480, maxBytes: 64 * 1024 };
-export const THUMBNAIL_RESULT_TOOLS: ReadonlySet<string> = new Set([COMPUTER_SCREENSHOT_TOOL_NAME, BROWSER_SCREENSHOT_TOOL_NAME]);
 export type ImageNormalizer = (block: Record<string, unknown>, options?: typeof THUMBNAIL_OPTIONS) => NormalizedBlock;
 
 export function textFromContent(content: unknown): string {
@@ -36,10 +33,10 @@ function normalizeBlocks(content: unknown, role: string, thinking: ThinkingDurat
     if (!item || typeof item !== "object") return [];
     const block = item as Record<string, unknown>;
     if (block.type === "text") return [{ type: "text", text: String(block.text ?? "") }];
-    // A tool result's images (e.g. `read` on a PNG) still reach the model; the transcript shows
-    // only its text. Left in, each would become an empty result sharing the call's id and
-    // overwrite the real one. Screenshot tools' images ride their result block instead
-    // (`normalizeMessage`).
+    // A tool result's images (`read` on a PNG, a screenshot, an MCP tool's picture) never become
+    // blocks of their own: each would be an empty result sharing the call's id and overwrite
+    // the real one. They ride the result block as previews instead (`normalizeMessage`), for
+    // every tool and both chat kinds: Chat mode's chips show them inline (`ChatActivity`).
     if (block.type === "image") return role === "toolResult" ? [] : [imageBlock(block)];
     if (block.type === "thinking") {
       const durationMs = thinking?.[thought];
@@ -74,12 +71,13 @@ export function normalizeMessage(message: unknown, index: number, thinking: Thin
   if (rawRole === "toolResult") {
     // An image-only result still has to mark its call as finished.
     if (blocks.length === 0) blocks.push({ type: "tool-result", text: "" });
-    // The transcript keeps the last block per call id, so a screenshot's previews go on that one.
-    if (typeof raw.toolName === "string" && THUMBNAIL_RESULT_TOOLS.has(raw.toolName) && Array.isArray(raw.content)) {
+    // The transcript keeps the last block per call id, so the result's previews go on that one.
+    // Every image keeps its place, even one with no preview: `tool_image` answers by position.
+    if (Array.isArray(raw.content)) {
       const images = (raw.content as unknown[])
         .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null && (item as { type?: unknown }).type === "image")
         .map((item) => imageBlock(item, RESULT_THUMBNAIL_OPTIONS))
-        .map(({ imageId, thumbnail }) => ({ imageId: imageId as string, ...(thumbnail ? { thumbnail } : {}) }));
+        .map(({ imageId, thumbnail, failed }) => ({ imageId: imageId as string, ...(thumbnail ? { thumbnail } : failed ? { failed } : {}) }));
       if (images.length) blocks[blocks.length - 1].images = images;
     }
     for (const block of blocks) {

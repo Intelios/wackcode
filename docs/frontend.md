@@ -21,6 +21,8 @@ A plain send is echoed while it travels: the composer has already cleared, and t
 
 The composer never states the active policy: a persistent read-only badge lived next to the Build/Plan toggle and was removed. What remains is the queue notice: the worker's applied `executionPolicy` wins during a run, and a mismatch with saved Settings shows “Applies next turn”. Effective access is shown in Settings (› Tools and › Sub-agents). Cold history carries no policy: a new worker always receives current Settings, never permissions from session history.
 
+Images a tool returned (a picture `read`, a screenshot, an MCP tool's output) show as small previews under the tool's row (`ToolImages`), each opening in `ui/ImageLightbox` with the original from `api.toolImage`. Inside a folded Explored group they sit in a captioned strip under the fold and move under their own rows when it opens. Chat mode's chips show the same previews inline.
+
 ## Completed-work folding
 
 `completed-work.ts` projects each user turn into work and outcome slots without changing the

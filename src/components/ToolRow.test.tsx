@@ -1,7 +1,7 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedBlock } from "../types";
-import { OrphanResult, ToolRow } from "./ToolRow";
+import { OrphanResult, ToolImageSource, ToolRow } from "./ToolRow";
 import { CopyText } from "./ui/CopyButton";
 
 afterEach(cleanup);
@@ -183,5 +183,55 @@ describe("ToolRow", () => {
     fireEvent.click(screen.getByRole("button", { name: /Edited/ }));
     expect(screen.getByText("+const x = 1;")).toBeInTheDocument();
     expect(document.querySelector(".hljs")).toBeNull();
+  });
+});
+
+describe("ToolRow images", () => {
+  const path = "/Users/me/project/captures/manual_774.png";
+  const call: NormalizedBlock = { type: "tool-call", toolCallId: "call-9", toolName: "read", arguments: { path } };
+  const result: NormalizedBlock = {
+    type: "tool-result", toolCallId: "call-9", toolName: "read", text: "Read image file [image/png]",
+    images: [{ imageId: "image-1", thumbnail: "data:image/png;base64,cHJldmlldw==" }]
+  };
+
+  it("shows the picture a read returned under its row and opens the original full size", async () => {
+    const load = vi.fn(async () => "data:image/png;base64,b3JpZ2luYWw=");
+    const view = render(<ToolImageSource.Provider value={load}><ToolRow call={call} result={result} /></ToolImageSource.Provider>);
+    expect(screen.getByRole("img", { name: "manual_774.png" })).toHaveAttribute("src", "data:image/png;base64,cHJldmlldw==");
+    expect(view.container.querySelector(".tool-row-head .tool-row-icon")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open image manual_774.png" }));
+    const dialog = screen.getByRole("dialog", { name: "manual_774.png" });
+    await waitFor(() => expect(dialog.querySelector("img")?.getAttribute("src")).toBe("data:image/png;base64,b3JpZ2luYWw="));
+    expect(load).toHaveBeenCalledWith("call-9", 0);
+  });
+
+  it("expands to the full path and Pi's notes, never the raw arguments", () => {
+    const noted = { ...result, text: "Read image file [image/png]\n[Image: displayed at 2000x1500.]" };
+    const view = render(<ToolRow call={call} result={noted} />);
+    fireEvent.click(screen.getByRole("button", { name: /^Read/ }));
+    const detail = view.container.querySelector(".tool-detail");
+    expect([...detail!.querySelectorAll("pre")].map((pre) => pre.textContent)).toEqual([path, "[Image: displayed at 2000x1500.]"]);
+    expect(detail).not.toHaveTextContent("Read image file");
+    expect(detail).not.toHaveTextContent("{");
+  });
+
+  it("names an image from any other tool after the call, and skips one with no preview to come", () => {
+    const mcpCall: NormalizedBlock = { type: "tool-call", toolCallId: "call-10", toolName: "mcp__design__export", arguments: {} };
+    const mcpResult: NormalizedBlock = {
+      type: "tool-result", toolCallId: "call-10", toolName: "mcp__design__export", text: "Exported",
+      images: [{ imageId: "image-1", failed: true }, { imageId: "image-2", thumbnail: "data:image/png;base64,dHdv" }, { imageId: "image-3" }]
+    };
+    const load = vi.fn(async () => undefined);
+    render(<ToolImageSource.Provider value={load}><ToolRow call={mcpCall} result={mcpResult} /></ToolImageSource.Provider>);
+    expect(screen.getAllByRole("img")).toHaveLength(1);
+    expect(screen.getByLabelText("Preparing image preview")).toBeInTheDocument();
+    // The second image keeps its place in the result, which is what the original is fetched by.
+    fireEvent.click(screen.getByRole("button", { name: "Open image from export (design)" }));
+    expect(load).toHaveBeenCalledWith("call-10", 1);
+  });
+
+  it("shows no image strip when no preview could be made at all", () => {
+    const view = render(<ToolRow call={call} result={{ ...result, images: [{ imageId: "image-1", failed: true }] }} />);
+    expect(view.container.querySelector(".tool-images")).not.toBeInTheDocument();
   });
 });

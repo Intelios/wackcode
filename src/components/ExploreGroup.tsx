@@ -4,7 +4,7 @@ import { exploreActivity, exploreCounts, exploreLabel, type ExploreGroup as Grou
 import { Icon } from "./Icons";
 import { OrbitSpinner } from "./OrbitSpinner";
 import { ThinkingRow } from "./ThinkingRow";
-import { ToolRow } from "./ToolRow";
+import { ToolImages, ToolRow } from "./ToolRow";
 
 /** Settings → Appearance → Group exploration. When off, every call keeps its own row. */
 export const ExploreGroupingEnabled = createContext(true);
@@ -22,12 +22,20 @@ interface ExploreGroupProps {
   running: boolean;
 }
 
-/** A run of read-only tool calls folded into one row (`explore-utils.ts`). Starts collapsed. */
+/**
+ * A run of read-only tool calls folded into one row (`explore-utils.ts`). Starts collapsed;
+ * images its calls returned stay in view beneath it, and move under their own rows once open.
+ */
 export function ExploreGroup({ group, results, liveToolText, running }: ExploreGroupProps) {
   const expanded = useContext(ExploreExpansion);
   const [open, setOpen] = useState(() => expanded?.has(group.key) === true);
   const activity = exploreActivity(group, results);
   const counts = exploreCounts(group, results);
+  // What the folded calls returned as pictures: shown under the fold, where their rows aren't.
+  const pictured = open ? [] : group.items.flatMap(({ block }) => {
+    const result = block.type === "tool-call" && block.toolCallId ? results.get(block.toolCallId) : undefined;
+    return result?.images?.length ? [{ call: block, result }] : [];
+  });
 
   const toggle = () => {
     const next = !open;
@@ -51,6 +59,11 @@ export function ExploreGroup({ group, results, liveToolText, running }: ExploreG
           <Icon name="chevron" className="tool-chevron" />
         </span>
       </button>
+      {pictured.length > 0 && (
+        <div className="explore-images">
+          {pictured.map(({ call, result }) => <ToolImages key={call.toolCallId} call={call} result={result} caption />)}
+        </div>
+      )}
       {open && (
         <div className="explore-body">
           {group.items.map((item) => {

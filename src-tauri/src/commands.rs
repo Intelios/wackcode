@@ -2342,9 +2342,9 @@ pub async fn watch_subagent(
     Ok(())
 }
 
-/// The original image of a screenshot tool result, for the transcript's lightbox. The worker
-/// answers only for screenshot tools and reads its own session, bypassing its prompt queue, so
-/// this works mid-run; like `watch_subagent`, the chat's lock covers only starting its worker.
+/// The original of an image a tool result returned (a picture it read, a screenshot), for the
+/// transcript's lightbox. The worker reads its own session, bypassing its prompt queue, so this
+/// works mid-run; like `watch_subagent`, the chat's lock covers only starting its worker.
 #[tauri::command]
 pub async fn tool_image(
     app: AppHandle,

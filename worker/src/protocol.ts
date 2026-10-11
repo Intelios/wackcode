@@ -774,7 +774,7 @@ export type WorkerCommand =
   | { id: string; type: "skill_creator_response"; requestId: string; success: true; result: unknown }
   | { id: string; type: "skill_creator_response"; requestId: string; success: false; error: string }
   /**
-   * The original image of a screenshot tool result (answered with an `ImageContent` or null),
+   * The original of an image a tool result returned (answered with an `ImageContent` or null),
    * for the transcript's lightbox. Bypasses the command queue once the session exists.
    */
   | { id: string; type: "tool_image"; toolCallId: string; index?: number }
@@ -807,6 +807,8 @@ export interface NormalizedBlock {
   imageId?: string;
   /** Image blocks: a small `data:` URL preview, absent until it has been generated. */
   thumbnail?: string;
+  /** Image blocks: no preview could be made from the original, so none is coming. */
+  failed?: true;
   /** Thinking blocks: how long the model reasoned. Absent while it still is, and when never clocked. */
   durationMs?: number;
   /** Thinking blocks: this block's epoch-ms start timestamp, only while open; never persisted. */
@@ -817,11 +819,12 @@ export interface NormalizedBlock {
   isError?: boolean;
   details?: unknown;
   /**
-   * Screenshot tool results: in-memory previews of the result's images, like image blocks'
-   * `thumbnail` (absent until generated). Never persisted in `details`; the original comes from
-   * `tool_image`.
+   * Tool results: in-memory previews of the images the tool returned (a `read` of a picture, a
+   * screenshot, an MCP tool's image), like image blocks' `thumbnail` (absent until generated,
+   * `failed` when it never will be). Never persisted in `details`; the original comes from
+   * `tool_image`, by position in this list.
    */
-  images?: { imageId: string; thumbnail?: string }[];
+  images?: { imageId: string; thumbnail?: string; failed?: true }[];
 }
 
 /** The other versions of a user message: edits and retries sent from the same point. */

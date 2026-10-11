@@ -49,10 +49,10 @@ The transcript reaches the host as a full `snapshot`, then as `snapshot_delta`s 
 - Normalized messages are cached by Pi's own message objects. An unchanged message reuses the *same* normalized object, which keeps the diff O(changes) and lets the renderer memoize transcript rows by identity. Never mutate a cached object.
 - A delta is an optimization, never a requirement: when a change can't be expressed as "remove these ids, then replace or append these messages", `diffMessages` (`delta.ts`) returns undefined and a full snapshot goes out. Compaction forces a full snapshot. Keep that fallback.
 - A new field that changes mid-run needs `SnapshotDelta` (worker) and `applySnapshotDelta` (`src/chat-utils.ts`) updates.
-- Snapshots carry small image previews, never originals; the lightbox fetches the original with `tool_image`, or `message_image` for one the user attached to a message.
+- Snapshots carry small image previews, never originals; the lightbox fetches the original with `tool_image`, or `message_image` for one the user attached to a message. Every tool result's images get previews on its result block (`images`, in the result's own order, which is what `tool_image` indexes by), whichever tool returned them; one that can't be previewed is marked `failed` rather than left pending.
 - Compaction rows use Pi's saved entry ids and summaries. Their after-count estimates Pi's
-  projection at that entry, so later messages cannot change an old boundary's count. Screenshots
-  and saved sub-agent transcripts remain fetchable throughout the displayed branch.
+  projection at that entry, so later messages cannot change an old boundary's count. Tool-result
+  images and saved sub-agent transcripts remain fetchable throughout the displayed branch.
 - `compaction` is live snapshot/delta state, cleared on every compaction end. Manual compaction's
   `run_state` has `operation: "compaction"`; it never starts a prompt clock or records a turn duration.
 

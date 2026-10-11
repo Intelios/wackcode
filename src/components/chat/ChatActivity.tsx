@@ -1,7 +1,8 @@
 /**
  * Chat mode's tool calls as little chips in the agent's reply ("Looked up example.com"). A
  * chip opens a soft sheet with the same detail the Code transcript shows (`ToolDetail`), and a
- * settled run of several calls folds into one "Did N things" chip. Screenshots show inline.
+ * settled run of several calls folds into one "Did N things" chip. Images a tool returned (a
+ * screenshot, a picture it read) show inline.
  * Labels and folding are pure (`chat-activity.ts`); this file only renders them.
  */
 import { useState } from "react";
@@ -79,14 +80,14 @@ export function ActivityChips({ calls, results, live }: { calls: NormalizedBlock
     );
   });
   const openActivity = shown.find((activity) => activity.key === open);
-  const screenshots = activities.filter((activity) => activity.images && activity.result);
+  const pictured = activities.filter((activity) => activity.images && activity.result);
   return (
     <div className="chat-activity">
       <div className="chat-chips">{chips}</div>
       <AnimatePresence initial={false}>
         {openActivity && <Sheet key={openActivity.key} activity={openActivity} />}
       </AnimatePresence>
-      {screenshots.map((activity) => <ToolImages key={activity.key} call={activity.call} result={activity.result!} />)}
+      {pictured.map((activity) => <ToolImages key={activity.key} call={activity.call} result={activity.result!} />)}
     </div>
   );
 }

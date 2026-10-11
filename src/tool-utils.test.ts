@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bashExploreKind, diffStats, displayAgentName, editStats, exploreKind, firstSentence, groupTools, parseSubagentDetails, pendingSubagentDetails, pruneDisabledTools, sameToolCatalog, splitPathSubject, subagentDetailsFor, summarizeTool } from "./tool-utils";
+import { bashExploreKind, diffStats, displayAgentName, editStats, exploreKind, firstSentence, groupTools, imageReadNote, parseSubagentDetails, pendingSubagentDetails, pruneDisabledTools, sameToolCatalog, splitPathSubject, subagentDetailsFor, summarizeTool } from "./tool-utils";
 import type { NormalizedBlock, NormalizedMessage, ToolCatalogEntry } from "./types";
 
 function call(toolName: string, args: unknown): NormalizedBlock {
@@ -79,6 +79,19 @@ describe("summarizeTool", () => {
   it("falls back gracefully for unknown tools", () => {
     const summary = summarizeTool(call("mcp_deploy", {}));
     expect(summary.doneVerb).toBe("mcp_deploy");
+  });
+});
+
+describe("imageReadNote", () => {
+  it("drops the line that only names the type and keeps what else Pi said", () => {
+    expect(imageReadNote("Read image file [image/png]")).toBe("");
+    expect(imageReadNote("Read image file [image/jpeg]\n[Image: original 4000x3000, displayed at 2000x1500.]\n[Current model does not support images.]"))
+      .toBe("[Image: original 4000x3000, displayed at 2000x1500.]\n[Current model does not support images.]");
+  });
+
+  it("returns text in any other shape whole", () => {
+    expect(imageReadNote("Exported 2 frames")).toBe("Exported 2 frames");
+    expect(imageReadNote(undefined)).toBe("");
   });
 });
 

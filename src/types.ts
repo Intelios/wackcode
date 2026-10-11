@@ -959,6 +959,8 @@ export interface NormalizedBlock {
   imageId?: string;
   /** Image blocks: a small `data:` URL preview, absent until the worker has generated it. */
   thumbnail?: string;
+  /** Image blocks: no preview could be made from the original, so none is coming. */
+  failed?: true;
   /** Thinking blocks: how long the model reasoned. Absent while it still is, and when never clocked. */
   durationMs?: number;
   /** Thinking blocks: this block's epoch-ms start timestamp, only while open; never persisted. */
@@ -968,9 +970,10 @@ export interface NormalizedBlock {
   arguments?: unknown;
   isError?: boolean;
   details?: unknown;
-  /** Screenshot tool results: in-memory previews (`thumbnail` absent until generated); the
-   *  original comes from `api.toolImage`. */
-  images?: { imageId: string; thumbnail?: string }[];
+  /** Tool results: in-memory previews of the images the tool returned (`thumbnail` absent until
+   *  generated, `failed` when it never will be); the original comes from `api.toolImage`, by
+   *  position in this list. */
+  images?: { imageId: string; thumbnail?: string; failed?: true }[];
 }
 
 /**

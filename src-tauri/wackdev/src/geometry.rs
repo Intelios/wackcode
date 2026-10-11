@@ -21,6 +21,13 @@ impl Rect {
         (self.x + self.width / 2.0, self.y + self.height / 2.0)
     }
 
+    /// Finite, with a positive area: a rect SkyLight can use. A window mid-teardown (or one
+    /// that is minimized or off every Space) can report CGRectNull, NaN or zero instead, and
+    /// SkyLight asserts — aborting the process — on those.
+    pub fn has_area(&self) -> bool {
+        self.x.is_finite() && self.y.is_finite() && self.width.is_finite() && self.height.is_finite() && self.width > 0.0 && self.height > 0.0
+    }
+
     /// Same frame within a point, allowing for rounding between APIs.
     pub fn approx_eq(&self, other: &Rect) -> bool {
         (self.x - other.x).abs() <= 1.0
@@ -120,6 +127,21 @@ mod tests {
         assert_eq!(output_size(&rect(0.0, 0.0, 300.0, 2000.0), 1.0, 1280), (192, 1280));
         assert_eq!(output_size(&rect(0.0, 0.0, 0.0, 0.0), 2.0, 1280), (1, 1));
         assert_eq!(output_size(&rect(0.0, 0.0, 100.0, 50.0), f64::NAN, 1280), (100, 50));
+    }
+
+    #[test]
+    fn area_rejects_the_degenerate_frames_a_gone_window_reports() {
+        assert!(rect(0.0, 0.0, 10.0, 10.0).has_area());
+        for frame in [
+            rect(f64::INFINITY, f64::INFINITY, f64::INFINITY, f64::INFINITY), // CGRectNull
+            rect(f64::NAN, 0.0, 10.0, 10.0),
+            rect(0.0, 0.0, 10.0, f64::INFINITY),
+            rect(0.0, 0.0, 0.0, 10.0),
+            rect(0.0, 0.0, 10.0, 0.0),
+            rect(0.0, 0.0, -10.0, 10.0),
+        ] {
+            assert!(!frame.has_area(), "{frame:?}");
+        }
     }
 
     #[test]

@@ -80,6 +80,13 @@ fn start_window_capture(number: u32, crop: Option<Rect>, sender: Reply) {
         };
         let raw = unsafe { window.frame() };
         let frame = Rect { x: raw.origin.x, y: raw.origin.y, width: raw.size.width, height: raw.size.height };
+        // `initWithDesktopIndependentWindow:` hands the frame to SLSGetDisplaysWithRect, which
+        // asserts on CGRectNull or a zero-size frame — an abort that crashes this process. A
+        // window whose app just quit reports exactly that, so validate before constructing the
+        // filter (a stale but sane frame is still fine: the capture just fails below).
+        if !frame.has_area() {
+            return reply(&content_reply, Err("That window can't be captured right now: it may be closed, minimized or in another Space.".into()));
+        }
         let filter = unsafe { SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), &window) };
         let scale = unsafe { SCShareableContent::infoForFilter(&filter).pointPixelScale() } as f64;
         // The capture's pixel size; `crop` (in points) maps into it with these ratios.

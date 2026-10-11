@@ -14,6 +14,8 @@ export interface UsageRecord {
   subagent_id?: string;
   outcome: "completed" | "failed" | "cancelled";
   tokens: { input: number; output: number; cache_read: number; cache_write: number } | null;
+  /** The app mode — stamped host-side from TaskRecord.kind; the worker never sets it. */
+  mode?: "code" | "chat";
 }
 type Context = { purpose: UsagePurpose; subagent_id?: string };
 const context = new AsyncLocalStorage<Context>();

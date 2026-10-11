@@ -1213,6 +1213,8 @@ export interface UsageRecord {
   v: 1; id: string; ts: number; duration_ms: number; provider: string; model: string;
   purpose: "chat" | "subagent" | "title" | "compaction" | "branch_summary" | "goal_verification" | "commit_message";
   subagent_id?: string; outcome: "completed" | "failed" | "cancelled";
+  /** The app mode — stamped host-side from TaskRecord.kind; the worker never sets it. */
+  mode?: "code" | "chat";
   tokens: { input: number; output: number; cache_read: number; cache_write: number } | null;
 }
 export interface UsageStatus {

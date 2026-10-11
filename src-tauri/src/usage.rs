@@ -42,6 +42,12 @@ pub struct UsageRecord {
     pub project: Option<String>,
     #[serde(default)]
     pub workspace: Option<String>,
+    /// The app mode that made the call: `code` (the coding agent) or `chat`
+    /// (Chat mode). Stamped host-side from `TaskRecord.kind` — the worker does
+    /// not send it. Additive: records written before Chat mode shipped carry
+    /// no `mode`, and readers treat an absent `mode` as `code`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
 }
 impl UsageRecord {
     fn validate(&self) -> bool {
@@ -69,6 +75,10 @@ impl UsageRecord {
             ]
             .contains(&self.purpose.as_str())
             && ["completed", "failed", "cancelled"].contains(&self.outcome.as_str())
+            && self
+                .mode
+                .as_ref()
+                .is_none_or(|m| ["code", "chat"].contains(&m.as_str()))
             && self.tokens.as_ref().is_none_or(|t| {
                 [t.input, t.output, t.cache_read, t.cache_write]
                     .iter()
@@ -231,6 +241,10 @@ pub fn record(app: &AppHandle, task_id: &str, value: serde_json::Value) {
     };
     record.session_id = task.id.clone();
     record.workspace = Some(task.workspace_path.clone());
+    record.mode = Some(match task.kind {
+        crate::models::TaskKind::Code => "code".to_string(),
+        crate::models::TaskKind::Chat => "chat".to_string(),
+    });
     record.project = task
         .project_id
         .as_ref()
@@ -391,6 +405,23 @@ mod tests {
         assert!(record.validate());
         record.provider_name = None;
         assert!(record.validate());
+    }
+    #[test]
+    fn validates_mode_and_task_kind_spells_the_ledger_values() {
+        let mut record = records().remove(0);
+        assert!(record.validate()); // the fixture predates Chat mode: no mode
+        let value = serde_json::to_value(&record).unwrap();
+        assert!(value.as_object().unwrap().get("mode").is_none());
+        record.mode = Some("code".into());
+        assert!(record.validate());
+        assert_eq!(serde_json::to_value(&record).unwrap()["mode"], "code");
+        record.mode = Some("chat".into());
+        assert!(record.validate());
+        record.mode = Some("plan".into());
+        assert!(!record.validate());
+        // the ledger spells modes exactly how TaskKind serializes
+        assert_eq!(serde_json::to_string(&crate::models::TaskKind::Code).unwrap(), "\"code\"");
+        assert_eq!(serde_json::to_string(&crate::models::TaskKind::Chat).unwrap(), "\"chat\"");
     }
     #[test]
     fn provider_name_enrichment_resolves_from_the_registry() {

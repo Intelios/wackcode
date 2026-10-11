@@ -20,6 +20,8 @@ import { SubagentsSection } from "./SubagentsSection";
 import type { ModelFavoritesProps } from "./ModelPicker";
 import { ToolsSection } from "./ToolsSection";
 import { AppearanceSection } from "./AppearanceSection";
+import { DevBadge } from "./DevBadge";
+import { DeveloperSection } from "./DeveloperSection";
 import { DuckMark } from "./DuckMark";
 import { Tooltip } from "./ui/Tooltip";
 
@@ -70,7 +72,7 @@ const COMPUTER_USE_ACTIONS: ComputerUseActions = {
 };
 const COMPUTER_USE_OFF: ComputerUseConfig = { enabled: false, showAgentCursor: true, neverAllow: [] };
 
-type SectionId = "providers" | "packages" | "skills" | "commands" | "memory" | "tools" | "mcp" | "appearance" | "prompts" | "subagents" | "computer_use" | "integrations" | "about";
+type SectionId = "providers" | "packages" | "skills" | "commands" | "memory" | "tools" | "mcp" | "appearance" | "prompts" | "subagents" | "computer_use" | "integrations" | "developer" | "about";
 
 interface Section {
   id: SectionId;
@@ -93,7 +95,9 @@ const SECTIONS: Section[] = [
   // Only listed while computer use is switched on (Settings → Packages).
   { id: "computer_use", label: "Computer use", icon: "cursor" },
   { id: "appearance", label: "Appearance", icon: "palette" },
-  { id: "prompts", label: "Prompts", icon: "pencil" }
+  { id: "prompts", label: "Prompts", icon: "pencil" },
+  // Dev builds only (`devBuild`): developer toggles and the dev identity readout.
+  { id: "developer", label: "Developer", icon: "wrench" }
 ];
 
 interface Props extends PackageActions, ModelFavoritesProps {
@@ -138,12 +142,14 @@ interface Props extends PackageActions, ModelFavoritesProps {
   mcp?: McpConfig;
   /** Settings › MCP servers is listed once these are wired. */
   mcpActions?: McpActions;
+  /** Dev build: Settings › Developer is listed, and the DEV badge shows. */
+  devBuild?: boolean;
 }
 
 export function SettingsPage({
   executionPolicy, onSetExecutionPolicy, providers, favoriteModels, favoriteSaving, onSetFavorite, packages, toolCatalog, disabledTools, appDataPath,
   onClose, onSave, onDelete, onSetProviderEnabled, onConnectSubscription, onSignOutSubscription, connectedSubscriptionId, onSetDisabledTools,
-  subagents, onSetSubagents, computerUse = COMPUTER_USE_OFF, computerUseSupported = false, onSetComputerUse, autoTitle, onSetAutoTitle, appearance, glassSupported, onSetAppearance, onPreviewAppearance, backgroundImageUrl, onChooseBackgroundImage, onRemoveBackgroundImage, prompts, onSetPrompts, onCommandsChanged, memory, onSetMemory, mcp, mcpActions, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
+  subagents, onSetSubagents, computerUse = COMPUTER_USE_OFF, computerUseSupported = false, onSetComputerUse, autoTitle, onSetAutoTitle, appearance, glassSupported, onSetAppearance, onPreviewAppearance, backgroundImageUrl, onChooseBackgroundImage, onRemoveBackgroundImage, prompts, onSetPrompts, onCommandsChanged, memory, onSetMemory, mcp, mcpActions, devBuild, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
 }: Props) {
   const [chosenSection, setSection] = useState<SectionId>("providers");
   const [computerSetup, setComputerSetup] = useState(false);
@@ -151,7 +157,7 @@ export function SettingsPage({
   const section: SectionId =
     (chosenSection === "subagents" && !subagents.enabled) || (chosenSection === "computer_use" && !computerUse.enabled) ? "packages" : chosenSection;
   const sections = SECTIONS.filter((item) =>
-    (item.id !== "subagents" || subagents.enabled) && (item.id !== "computer_use" || computerUse.enabled) && (item.id !== "mcp" || mcpActions));
+    (item.id !== "subagents" || subagents.enabled) && (item.id !== "computer_use" || computerUse.enabled) && (item.id !== "mcp" || mcpActions) && (item.id !== "developer" || devBuild));
   /** Undefined shows the connections overview; "new" a new connection. */
   const [selectedProviderId, setSelectedProviderId] = useState<string>();
   /** Bumped on every navigation between connections, so each opens in a fresh editor. */
@@ -192,7 +198,7 @@ export function SettingsPage({
   return (
     <>
       <aside className="sidebar">
-        <div className="titlebar-drag" data-tauri-drag-region />
+        <div className="titlebar-drag" data-tauri-drag-region>{devBuild && <DevBadge />}</div>
         <div className="settings-head">
           <Tooltip label="Back to chats">
             <button type="button" className="settings-back-button" onClick={onClose} aria-label="Back to chats">
@@ -394,6 +400,7 @@ export function SettingsPage({
             onCancel={() => setComputerSetup(false)}
           />
         )}
+        {section === "developer" && devBuild && <DeveloperSection appDataPath={appDataPath} providers={providers} />}
         {section === "about" && <AboutSection />}
         {section === "subagents" && (
           <SubagentsSection

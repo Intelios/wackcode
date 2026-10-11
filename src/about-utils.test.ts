@@ -5,7 +5,10 @@ import type { AppInfo } from "./types";
 const INFO: AppInfo = {
   appVersion: "1.0.5",
   build: "development",
+  devBuild: true,
+  bundleId: "com.wackcode.desktop.dev",
   appPath: "/Applications/WackCode.app/Contents/MacOS/wackcode",
+  workerPath: "/repo/worker/dist/index.js",
   piVersion: "0.99.2",
   nodeVersion: "24.18.0",
   osVersion: "macOS 15.3",

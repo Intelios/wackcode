@@ -7,6 +7,7 @@ use super::geometry::{self, Rect, MAX_LONG_EDGE};
 use block2::RcBlock;
 use objc2::{AnyThread, rc::Retained, runtime::AnyObject};
 use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImageCompressionFactor};
+use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_core_graphics::CGImage;
 use objc2_foundation::{NSDictionary, NSError, NSNumber};
 use objc2_screen_capture_kit::{
@@ -49,10 +50,11 @@ fn encode(image: &CGImage) -> Option<(Vec<u8>, u32, u32)> {
 }
 
 /// Captures window `number` (a window-server number), scaled so its long edge is at most
-/// `MAX_LONG_EDGE` pixels.
-pub async fn window(number: u32) -> Result<Capture, String> {
+/// `MAX_LONG_EDGE` pixels. `crop` is a global screen rect (same space as AX frames); parts of
+/// it outside the window clamp to the window's edge. `None` captures the whole window.
+pub async fn window(number: u32, crop: Option<Rect>) -> Result<Capture, String> {
     let (sender, receiver) = oneshot::channel();
-    start_window_capture(number, Arc::new(Mutex::new(Some(sender))));
+    start_window_capture(number, crop, Arc::new(Mutex::new(Some(sender))));
     tokio::time::timeout(CAPTURE_TIMEOUT, receiver)
         .await
         .map_err(|_| "The window capture timed out.".to_string())?
@@ -61,7 +63,7 @@ pub async fn window(number: u32) -> Result<Capture, String> {
 
 /// Starts the capture; ScreenCaptureKit copies the handlers, so none outlives this call here
 /// (and no block is held across an await).
-fn start_window_capture(number: u32, sender: Reply) {
+fn start_window_capture(number: u32, crop: Option<Rect>, sender: Reply) {
     let content_reply = sender.clone();
     let content_handler = RcBlock::new(move |content: *mut SCShareableContent, error: *mut NSError| {
         if content.is_null() {
@@ -80,6 +82,7 @@ fn start_window_capture(number: u32, sender: Reply) {
         let frame = Rect { x: raw.origin.x, y: raw.origin.y, width: raw.size.width, height: raw.size.height };
         let filter = unsafe { SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), &window) };
         let scale = unsafe { SCShareableContent::infoForFilter(&filter).pointPixelScale() } as f64;
+        // The capture's pixel size; `crop` (in points) maps into it with these ratios.
         let (width, height) = geometry::output_size(&frame, scale, MAX_LONG_EDGE);
         let configuration = unsafe { SCStreamConfiguration::new() };
         unsafe {
@@ -94,7 +97,17 @@ fn start_window_capture(number: u32, sender: Reply) {
             if image.is_null() {
                 return reply(&image_reply, Err(format!("The window couldn't be captured: {}.", error_text(error))));
             }
-            let result = encode(unsafe { &*image })
+            let image = unsafe { &*image };
+            // `crop` is global points; the image is `width`×`height` pixels of the window
+            // frame, so shift by the frame origin and scale, clamped to the image.
+            let cropped = crop.and_then(|rect| {
+                let x = ((width as f64 / frame.width) * (rect.x - frame.x)).clamp(0.0, width as f64 - 1.0);
+                let y = ((height as f64 / frame.height) * (rect.y - frame.y)).clamp(0.0, height as f64 - 1.0);
+                let w = ((width as f64 / frame.width) * rect.width).clamp(1.0, width as f64 - x);
+                let h = ((height as f64 / frame.height) * rect.height).clamp(1.0, height as f64 - y);
+                CGImage::with_image_in_rect(Some(image), CGRect::new(CGPoint::new(x, y), CGSize::new(w, h)))
+            });
+            let result = encode(cropped.as_deref().unwrap_or(image))
                 .map(|(jpeg, width, height)| Capture { jpeg, width, height, frame })
                 .ok_or_else(|| "The captured window couldn't be encoded.".to_string());
             reply(&image_reply, result);

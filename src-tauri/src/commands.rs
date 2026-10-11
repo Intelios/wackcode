@@ -134,6 +134,7 @@ pub fn bootstrap(
             .into_owned(),
         glass_supported: glass::is_supported(),
         computer_use_supported: crate::computer_use::supported(),
+        dev_build: cfg!(debug_assertions),
     })
 }
 
@@ -181,10 +182,21 @@ pub fn app_info(app: AppHandle, state: State<'_, MetadataState>) -> Result<AppIn
     Ok(AppInfo {
         app_version: app.package_info().version.to_string(),
         build: if cfg!(debug_assertions) { "development" } else { "installed" }.into(),
+        dev_build: cfg!(debug_assertions),
+        bundle_id: app.config().identifier.clone(),
         app_path: std::env::current_exe()
             .map_err(|error| format!("WackCode could not find its own app folder: {error}"))?
             .to_string_lossy()
             .into_owned(),
+        worker_path: crate::worker::worker_entry_path(&app)
+            .map(|path| {
+                // The dev path joins `../`, which reads badly in the Settings › Developer readout.
+                std::fs::canonicalize(&path)
+                    .unwrap_or(path)
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .unwrap_or_default(),
         pi_version: env!("WACKCODE_PI_VERSION").into(),
         node_version: env!("WACKCODE_NODE_VERSION").into(),
         os_version,
@@ -5125,6 +5137,39 @@ fn slug(value: &str) -> String {
 
 fn limit(value: &str, count: usize) -> String {
     value.chars().take(count).collect()
+}
+
+// ---------------------------------------------------------------------------------------------
+// Developer settings (dev builds only; registered behind a debug_assertions route in lib.rs)
+
+/// Settings › Developer: wipe this dev app's data and relaunch. The command exists only in
+/// debug builds and refuses any bundle id but the dev one's, so it can never touch the
+/// installed app's folder. The folder moves to ~/.Trash rather than being deleted, the way
+/// `pnpm dev:reset` does.
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub fn developer_reset_data(app: AppHandle, state: State<'_, MetadataState>) -> Result<(), String> {
+    let identifier = app.config().identifier.clone();
+    if !identifier.ends_with(".dev") {
+        return Err(format!("Resetting data is a dev-app control; this build is {identifier}."));
+    }
+    let data_dir = state
+        .data_path
+        .parent()
+        .ok_or("The app's data folder can't be found.")?
+        .to_path_buf();
+    if !data_dir.ends_with(&identifier) {
+        return Err(format!("Refusing to move {}: it isn't the dev data folder.", data_dir.display()));
+    }
+    crate::cleanup_before_exit(&app);
+    let trash = std::env::home_dir()
+        .ok_or("The Trash can't be found.")?
+        .join(".Trash")
+        .join(format!("{identifier} {}", chrono::Utc::now().format("%Y-%m-%d %H.%M.%S")));
+    if data_dir.exists() {
+        std::fs::rename(&data_dir, &trash).map_err(|error| format!("The dev data folder couldn't be moved to the Trash: {error}"))?;
+    }
+    app.restart()
 }
 
 #[cfg(test)]

@@ -16,11 +16,10 @@ import { appendFileSync, existsSync, openSync, readFileSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { DEV_APP, DEV_BUNDLE_ID } from "./dev-paths.mjs";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = 1420;
-// Where scripts/dev-app.mjs puts the dev binary. The debug and release bundles live elsewhere.
-const DEV_APP = "target/debug/dev-app/WackCode.app/Contents/MacOS/wackcode";
 const LOG_FILE = "/tmp/wackcode-dev.log";
 const POLL_MS = 400;
 const SETTLE_MS = 2000;
@@ -166,11 +165,11 @@ function logTail(lines = 40) {
 
 function printReady(pid) {
   console.log("");
-  console.log(`Ready. The WackCode dev app is running (pid ${pid}).`);
+  console.log(`Ready. The WackCode Dev app is running (pid ${pid}).`);
   console.log(
-    "It runs from a minimal WackCode.app, so automation can target it by its"
+    "It runs from a minimal WackCode Dev.app, so automation can target it by its"
   );
-  console.log("bundle id, com.wackcode.desktop.");
+  console.log(`bundle id, ${DEV_BUNDLE_ID}, and its own data folder.`);
   console.log(`Log: ${LOG_FILE}`);
   console.log("Stop with: pnpm dev:stop");
 }

@@ -1,0 +1,91 @@
+[package]
+name = "wackdev"
+version = "0.0.0"
+description = "Shared macOS automation core for WackCode's dev-app driver"
+authors = ["Intelios"]
+edition = "2021"
+rust-version = "1.88"
+publish = false
+
+[dependencies]
+base64 = "0.22"
+block2 = "0.6"
+libc = "0.2"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSArray",
+    "NSBundle",
+    "NSCoder",
+    "NSData",
+    "NSDictionary",
+    "NSEnumerator",
+    "NSError",
+    "NSFileManager",
+    "NSGeometry",
+    "NSNotification",
+    "NSProcessInfo",
+    "NSString",
+    "NSURL",
+    "NSValue",
+    "NSAppleEventDescriptor",
+    "block2",
+] }
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "NSApplication",
+    "NSBitmapImageRep",
+    "NSGraphicsContext",
+    "NSImage",
+    "NSImageRep",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSWorkspace",
+    "block2",
+    "libc",
+    "objc2-core-graphics",
+] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "CFArray",
+    "CFBase",
+    "CFCGTypes",
+    "CFData",
+    "CFDictionary",
+    "CFNumber",
+    "CFString",
+] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = [
+    "std",
+    "libc",
+    "CGDirectDisplay",
+    "CGError",
+    "CGEvent",
+    "CGEventSource",
+    "CGEventTypes",
+    "CGGeometry",
+    "CGImage",
+    "CGRemoteOperation",
+    "CGSession",
+    "CGWindow",
+] }
+objc2-application-services = { version = "0.3", default-features = false, features = [
+    "std",
+    "libc",
+    "AXError",
+    "AXUIElement",
+    "AXValue",
+    "HIServices",
+] }
+objc2-screen-capture-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "block2",
+    "libc",
+    "objc2-core-foundation",
+    "objc2-core-graphics",
+    "SCScreenshotManager",
+    "SCShareableContent",
+    "SCStream",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time"] }

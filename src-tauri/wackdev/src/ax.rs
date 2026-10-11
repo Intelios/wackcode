@@ -169,7 +169,10 @@ pub fn system_wide() -> Element {
     system
 }
 
-/// Electron and Chromium build their web contents' tree only when asked. Harmless elsewhere.
+/// Electron and Chromium build their web contents' tree only when asked. Harmless elsewhere,
+/// **except** WKWebView apps (Tauri): there it removes the app's own windows from AXWindows
+/// until restart — never set it on one. The dev-app driver doesn't; computer use only sets it
+/// on its targets (never WackCode).
 pub fn enable_manual_accessibility(app: &AXUIElement) {
     let _ = set_bool(app, "AXManualAccessibility", true);
 }

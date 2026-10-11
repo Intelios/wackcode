@@ -41,7 +41,7 @@ function bootstrap(enabled = true) {
   const data: AppData = { version: 1, providers: [provider], favoriteModels: [], projects: [], tasks: [task("a"), task("b")], diffComments: {},
     toolConfig: { disabled: [] }, toolCatalog: [], packages: [], subagents: { enabled: false, trigger: "on_request", maxConcurrency: 4, agents: [] },
     autoTitle: { enabled: false, providerId: null, modelId: null }, appearance: { ...DEFAULT_APPEARANCE, chatTabs: enabled }, prompts: {}, mcp: { servers: [] } };
-  vi.mocked(api.bootstrap).mockResolvedValue({ data, appDataPath: "/tmp", glassSupported: false, computerUseSupported: false });
+  vi.mocked(api.bootstrap).mockResolvedValue({ data, appDataPath: "/tmp", glassSupported: false, computerUseSupported: false, devBuild: false });
   return render(<App />);
 }
 const newTab = () => fireEvent.click(screen.getByRole("button", { name: "New chat tab" }));
@@ -357,7 +357,7 @@ describe("App areas", () => {
     const data: AppData = { version: 1, providers: [provider], favoriteModels: [], projects: [], tasks, diffComments: {},
       toolConfig: { disabled: [] }, toolCatalog: [], packages: [], subagents: { enabled: false, trigger: "on_request", maxConcurrency: 4, agents: [] },
       autoTitle: { enabled: false, providerId: null, modelId: null }, appearance: { ...DEFAULT_APPEARANCE, chatTabs: enabled }, prompts: {}, mcp: { servers: [] } };
-    vi.mocked(api.bootstrap).mockResolvedValue({ data, appDataPath: "/tmp", glassSupported: false, computerUseSupported: false });
+    vi.mocked(api.bootstrap).mockResolvedValue({ data, appDataPath: "/tmp", glassSupported: false, computerUseSupported: false, devBuild: false });
     return render(<App />);
   }
   const area = (name: "Code" | "Chat") => screen.getByRole("button", { name });
@@ -505,7 +505,7 @@ describe("Changes after Git Mode removal", () => {
     const data: AppData = { version: 1, providers: [provider], favoriteModels: [], projects: [project], tasks: [{ ...task("a"), projectId: project.id }], diffComments: {},
       toolConfig: { disabled: [] }, toolCatalog: [], packages: [], subagents: { enabled: false, trigger: "on_request", maxConcurrency: 4, agents: [] },
       autoTitle: { enabled: false, providerId: null, modelId: null }, appearance: { ...DEFAULT_APPEARANCE, chatTabs: enabled }, prompts: {}, mcp: { servers: [] } };
-    vi.mocked(api.bootstrap).mockResolvedValue({ data, appDataPath: "/tmp", glassSupported: false, computerUseSupported: false });
+    vi.mocked(api.bootstrap).mockResolvedValue({ data, appDataPath: "/tmp", glassSupported: false, computerUseSupported: false, devBuild: false });
     vi.mocked(api.gitChanges).mockResolvedValueOnce({ isGit: true, root: project.path, branch: "main", files: [], changesRevision: "clean" });
     render(<App />);
     await screen.findByRole("button", { name: "Chat a" });

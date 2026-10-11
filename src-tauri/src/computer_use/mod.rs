@@ -12,17 +12,14 @@
 //! While any session exists the ⌃⌥⌘. stop shortcut is registered and the menu bar offers
 //! "Stop Computer Use".
 
-mod apps;
-mod ax;
-mod capture;
+// The platform pieces (Accessibility, pid input, capture, app resolution, permissions and
+// policy) live in the `wackdev` crate, shared with the dev-app driver. `pointer` keeps the
+// real-cursor half of input; `engine`, `cursor` and `request` are app concerns.
+pub use wackdev::{apps, ax, capture, geometry, input, keys, outline, permissions, policy};
+
 mod cursor;
 mod engine;
-mod geometry;
-mod input;
-mod keys;
-mod outline;
-mod permissions;
-pub mod policy;
+mod pointer;
 mod request;
 
 use crate::models::ComputerUseConfig;
@@ -503,7 +500,7 @@ async fn screenshot(manager: &ComputerUseManager, task_id: &str, target: AppIden
             Ok((window_json(&window, Some(number)), number))
         })
         .await??;
-    let capture = capture::window(number).await?;
+    let capture = capture::window(number, None).await?;
     let task = task_id.to_string();
     let geometry = CaptureGeometry { frame: capture.frame, output: (capture.width, capture.height) };
     let state_id = manager
@@ -538,7 +535,7 @@ struct ActContext<'a> {
     own_pid: i32,
     observation: &'a Observation,
     app_element: ax::Element,
-    foreground: Option<input::Foreground>,
+    foreground: Option<pointer::Foreground>,
     never_allow: Vec<String>,
     token: StopToken,
     cursor: Option<cursor::Session>,
@@ -556,7 +553,7 @@ impl ActContext<'_> {
         Ok(element.clone())
     }
 
-    fn foreground(&mut self) -> Result<&mut input::Foreground, String> {
+    fn foreground(&mut self) -> Result<&mut pointer::Foreground, String> {
         if self.foreground.is_none() {
             let own = OwnIdentity { pid: self.own_pid, ..OwnIdentity::default() };
             let never_allow = self.never_allow.clone();
@@ -565,7 +562,7 @@ impl ActContext<'_> {
                 policy::block_reason(&identity, &own, &never_allow).is_some()
             });
             let token = self.token.clone();
-            self.foreground = Some(input::Foreground::begin(self.pid, self.own_pid, self.observation.window.clone(), blocked, &move || token.is_stopped())?);
+            self.foreground = Some(pointer::Foreground::begin(self.pid, self.own_pid, self.observation.window.clone(), blocked, &move || token.is_stopped())?);
         }
         Ok(self.foreground.as_mut().expect("just set"))
     }
@@ -611,7 +608,7 @@ impl ActContext<'_> {
         }
     }
 
-    fn pointer(&mut self, point: (f64, f64)) -> Result<&mut input::Foreground, String> {
+    fn pointer(&mut self, point: (f64, f64)) -> Result<&mut pointer::Foreground, String> {
         let target = self.visual_point(&self.observation.window, point);
         let feedback = self.feedback.clone().zip(target);
         let foreground = self.foreground()?;

@@ -140,6 +140,23 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 [data-backdrop="image"] .draft-title { text-shadow: 0 1px 14px rgb(0 0 0 / 55%); }
 .titlebar-drag { height: 48px; flex: 0 0 48px; }
 
+/* The DEV badge in the title bar of a dev build (DevBadge): warning-tinted chrome so it can
+   never be mistaken for the installed app, and token-only so it survives every theme. */
+.dev-badge {
+  float: right;
+  margin: 15px 14px 0 0;
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--warning) 55%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--warning);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 14px;
+  user-select: none;
+}
+
 /* Rebuild choreography (App.tsx sets .rebuild on the shell each time the Settings swap
    remounts a screen). Every piece flies in from the edge it belongs to, staggered, so the
    screen reads as assembling itself. The chat header and transcript bring their own Framer
@@ -2623,6 +2640,19 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   * { transition-duration: .01ms !important; animation-duration: .01ms !important; }
   /* The welcome comet is a deliberate ambient exception and keeps its full speed. */
   .composer.comet::before { animation-duration: 2.5s !important; }
+}
+
+/* Settings › Developer's "Force reduced motion" (html[data-force-reduced-motion], set by
+   reducedMotion.ts): CSS media queries can't be forced, so this stands in for them. The
+   JS side goes through the real channel — useReducedMotion reads the flag's matchMedia —
+   while this rule makes every CSS animation and transition settle instantly, which is what
+   deterministic screenshots and driver waits need. Stronger than the media-query version on
+   purpose: looping ambient motion has no still frame to settle into, so it stops outright. */
+html[data-force-reduced-motion] *,
+html[data-force-reduced-motion] *::before,
+html[data-force-reduced-motion] *::after {
+  animation: none !important;
+  transition: none !important;
 }
 
 /* ── Extension dialogs and notices ─────────────────── */

@@ -919,6 +919,8 @@ export interface BootstrapPayload {
   glassSupported: boolean;
   /** Computer use needs macOS 14+ (`SCScreenshotManager`). */
   computerUseSupported?: boolean;
+  /** A `tauri dev`/debug-bundle build: shows the DEV badge and Settings › Developer. */
+  devBuild: boolean;
 }
 
 /** Settings › About: this copy of the app and everything it bundles. Mirrors `AppInfo` in `models.rs`. */
@@ -926,7 +928,13 @@ export interface AppInfo {
   appVersion: string;
   /** "development" or "installed". */
   build: "development" | "installed";
+  /** This copy is a dev build (DEV badge, Settings › Developer, dev bundle id). */
+  devBuild: boolean;
+  /** `tauri.conf.json`'s identifier — `com.wackcode.desktop.dev` in dev builds. */
+  bundleId: string;
   appPath: string;
+  /** The worker entry script this app spawns (the repo's `worker/dist` in dev). */
+  workerPath: string;
   /** The bundled Pi agent, from `runtime-lock.json`. */
   piVersion: string;
   /** The bundled Node runtime, from `runtime-lock.json`. */

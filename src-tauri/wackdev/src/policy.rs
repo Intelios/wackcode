@@ -243,6 +243,8 @@ mod tests {
     fn wackcode_is_blocked_by_pid_bundle_id_and_path() {
         assert!(block_reason(&app(100, Some("com.example.app"), "/tmp/X.app"), &own(), &[]).is_some());
         assert!(block_reason(&app(5, Some("com.wackcode.desktop"), "/tmp/X.app"), &own(), &[]).is_some());
+        // The dev app's own id is covered by the same `com.wackcode.` prefix, forever.
+        assert!(block_reason(&app(5, Some("com.wackcode.desktop.dev"), "/tmp/X.app"), &own(), &[]).is_some());
         assert!(block_reason(&app(5, Some("COM.WackCode.Foo"), "/tmp/X.app"), &own(), &[]).is_some());
         assert!(block_reason(&app(5, None, "/Applications/WackCode.app"), &own(), &[]).is_some());
         assert!(block_reason(&app(5, None, "/Applications/WackCode.app/Contents/MacOS/wackcode"), &own(), &[]).is_some());

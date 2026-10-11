@@ -69,4 +69,4 @@ WackCode should feel like a distinctive macOS app with its own character, never 
 | `pnpm dev:background` / `pnpm dev:stop` | Start / stop the live dev app. The only way to launch it; see [docs/testing.md](docs/testing.md). |
 | `pnpm mock:provider` | Deterministic mock provider at `http://127.0.0.1:43127/v1` (Chat Completions). |
 
-**Real LLMs:** use only the connection named **Testing (AI Agents may use this too)**, through the app, and never read its key from `secrets.json`. Any other connection or subscription sign-in may cost the owner money.
+**Real LLMs:** use only the connection named **Testing (AI Agents may use this too)**, through the app, and never read its key from `secrets.json`. Any other connection or subscription sign-in may cost the owner money. The dev app (`com.wackcode.desktop.dev`) has its own data folder: the Testing connection must be added *inside the dev app*, never copied from `secrets.json`.

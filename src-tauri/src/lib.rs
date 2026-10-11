@@ -68,6 +68,15 @@ pub fn run() {
                 glass::NativeBackdrop::from_config(&appearance),
                 true,
             )?;
+            if cfg!(debug_assertions) {
+                // Dev builds name their window from the merged config's productName ("WackCode
+                // Dev" under tauri.dev.conf.json): the dev driver's targeting reads it, and
+                // macOS shows it in Mission Control. Debug bundles keep "WackCode".
+                eprintln!("dev build: bundle id {}", app.config().identifier);
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.set_title(app.config().product_name.as_deref().unwrap_or("WackCode Dev"));
+                }
+            }
             if let Some(window) = app.get_webview_window("main") {
                 if let Some(saved_window) = saved_window {
                     window_state::restore(&window, saved_window);
@@ -105,7 +114,27 @@ pub fn run() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(invoke_handler())
+        .build(tauri::generate_context!())
+        .expect("error while building WackCode");
+
+    app.run(|app, event| {
+        if matches!(event, tauri::RunEvent::Reopen { .. }) {
+            menu_bar::show_main_window(app);
+        }
+        if matches!(
+            event,
+            tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
+        ) {
+            cleanup_before_exit(app);
+        }
+    });
+}
+
+/// Every renderer command. Debug builds add the Settings › Developer commands on top
+/// (`developer_*`), routed by name so release builds neither contain nor answer them.
+fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync + 'static {
+    let handler: Box<dyn Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync> = Box::new(tauri::generate_handler![
             commands::bootstrap,
             chat_tabs::set_chat_tab_menu,
             commands::app_info,
@@ -252,21 +281,20 @@ pub fn run() {
             computer_use::computer_use_cursor_appearance,
             computer_use::computer_use_respond_access,
             computer_use::computer_use_list_apps,
-        ])
-        .build(tauri::generate_context!())
-        .expect("error while building WackCode");
-
-    app.run(|app, event| {
-        if matches!(event, tauri::RunEvent::Reopen { .. }) {
-            menu_bar::show_main_window(app);
-        }
-        if matches!(
-            event,
-            tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
-        ) {
-            cleanup_before_exit(app);
-        }
-    });
+        ]);
+    #[cfg(debug_assertions)]
+    {
+        let developer: Box<dyn Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync> = Box::new(tauri::generate_handler![commands::developer_reset_data]);
+        return move |invoke: tauri::ipc::Invoke<tauri::Wry>| {
+            if invoke.message.command().starts_with("developer_") {
+                developer(invoke)
+            } else {
+                handler(invoke)
+            }
+        };
+    }
+    #[cfg(not(debug_assertions))]
+    handler
 }
 
 /// Everything that must happen before the process exits: on quit, and before a relaunch.

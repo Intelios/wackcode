@@ -34,7 +34,7 @@ cosmetic settings and never reach the worker or its fingerprint.
 
 ## Where state lives
 
-Everything is under the app data directory (`~/Library/Application Support/com.wackcode.desktop/`), except the user's skills in `~/.agents/skills`.
+Everything is under the app data directory (`~/Library/Application Support/com.wackcode.desktop/`), except the user's skills in `~/.agents/skills`. The dev app (`tauri.dev.conf.json`) is `com.wackcode.desktop.dev` and gets a sibling folder of its own, so the two never share state.
 
 | Path | What |
 |---|---|

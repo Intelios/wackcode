@@ -14,6 +14,7 @@ import { useContextMenu } from "./ui/ContextMenu";
 import type { MenuEntry } from "./ui/Menu";
 import { MenuButton } from "./ui/MenuButton";
 import { Tooltip } from "./ui/Tooltip";
+import { DevBadge } from "./DevBadge";
 import { useConfirmAction } from "./ui/useConfirmAction";
 import { TextSwap } from "./TextSwap";
 
@@ -60,6 +61,8 @@ interface SidebarProps {
   /** Archive every open chat in one group: a project id, or null for "No project". */
   onArchiveAll: (projectId: string | null) => void;
   onDeleteAllArchived: () => void;
+  /** Dev build: the DEV badge sits in the title bar. */
+  devBuild?: boolean;
 }
 
 /** Pages slide by their order (chats, archived): forward enters from the right. A change
@@ -70,7 +73,7 @@ const pageVariants = {
   exit: ({ direction, reduce }: { direction: 1 | -1; reduce: boolean }) => (reduce ? { opacity: 0 } : { opacity: 0, x: -16 * direction })
 };
 
-export function Sidebar({ projects, pinnedProjectIds, area, areaAttention, onSwitchArea, tasks, selectedTaskId, archivedOpen, pendingDialogTaskIds, titlePulses, collapsedProjectIds, onSelectTask, onNewChat, onNewDraft, onAddProject, onToggleArchived, onToggleProjectCollapsed, onOpenSettings, onTaskAction, onProjectAction, onRenameTask, onArchiveAll, onDeleteAllArchived }: SidebarProps) {
+export function Sidebar({ projects, pinnedProjectIds, area, areaAttention, onSwitchArea, tasks, selectedTaskId, archivedOpen, pendingDialogTaskIds, titlePulses, collapsedProjectIds, onSelectTask, onNewChat, onNewDraft, onAddProject, onToggleArchived, onToggleProjectCollapsed, onOpenSettings, onTaskAction, onProjectAction, onRenameTask, onArchiveAll, onDeleteAllArchived, devBuild }: SidebarProps) {
   const contextMenu = useContextMenu();
   const [renamingId, setRenamingId] = useState<string>();
   const [renameValue, setRenameValue] = useState("");
@@ -336,7 +339,7 @@ export function Sidebar({ projects, pinnedProjectIds, area, areaAttention, onSwi
 
   return (
     <aside className="sidebar">
-      <div className="titlebar-drag" data-tauri-drag-region />
+      <div className="titlebar-drag" data-tauri-drag-region>{devBuild && <DevBadge />}</div>
       <div className="sidebar-top">
         <AreaSwitch area={area} attention={areaAttention} onSwitch={onSwitchArea} />
         {archivedOpen ? (

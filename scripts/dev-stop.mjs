@@ -8,11 +8,10 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { DEV_APP } from "./dev-paths.mjs";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = 1420;
-// Where scripts/dev-app.mjs puts the dev binary. The debug and release bundles live elsewhere.
-const DEV_APP = "target/debug/dev-app/WackCode.app/Contents/MacOS/wackcode";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -119,7 +118,7 @@ async function killProcesses(processes, label) {
 }
 
 const app = await findDevApp();
-if (app.length > 0) await killProcesses(app, "the WackCode dev app");
+if (app.length > 0) await killProcesses(app, "the WackCode Dev app");
 
 const cli = await findTauriCli();
 if (cli.length > 0) await killProcesses(cli, "the tauri CLI");
@@ -137,7 +136,7 @@ if (holders.length > 0) {
 }
 
 if (stopped === 0) {
-  console.log("No WackCode dev instance is running.");
+  console.log("No WackCode Dev instance is running.");
 } else {
-  console.log("WackCode dev instance stopped.");
+  console.log("WackCode Dev instance stopped.");
 }

@@ -22,6 +22,30 @@ import { fileURLToPath } from "node:url";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
+// Deep-merge Tauri's config the way its `--config` merge patch does: objects merge
+// recursively, anything else (scalars, arrays) is replaced. Mirrors `tauri::utils::config`.
+function mergeConfig(base, overlay) {
+  const isObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+  const result = { ...base };
+  for (const [key, value] of Object.entries(overlay)) {
+    result[key] = isObject(result[key]) && isObject(value) ? mergeConfig(result[key], value) : value;
+  }
+  return result;
+}
+
+// `tauri dev --config` hands the merged config to the runner as TAURI_CONFIG; fall back to
+// merging the overlay ourselves so the identity is right even if that variable is absent.
+function devConfig() {
+  if (process.env.TAURI_CONFIG) {
+    try {
+      return JSON.parse(process.env.TAURI_CONFIG);
+    } catch {}
+  }
+  const base = JSON.parse(readFileSync(path.join(REPO, "src-tauri/tauri.conf.json"), "utf8"));
+  const overlay = JSON.parse(readFileSync(path.join(REPO, "src-tauri/tauri.dev.conf.json"), "utf8"));
+  return mergeConfig(base, overlay);
+}
+
 function fail(message) {
   console.error(message);
   process.exit(1);
@@ -46,14 +70,19 @@ for (const line of build.stdout.split("\n")) {
   if (!line.startsWith("{")) continue;
   try {
     const message = JSON.parse(line);
-    if (message.reason === "compiler-artifact" && message.executable && message.target?.kind?.includes("bin")) {
+    if (
+      message.reason === "compiler-artifact" &&
+      message.executable &&
+      message.target?.kind?.includes("bin") &&
+      message.target?.name === "wackcode"
+    ) {
       executable = message.executable;
     }
   } catch {}
 }
 if (!executable) fail("cargo build finished without producing the app binary.");
 
-const config = JSON.parse(readFileSync(path.join(REPO, "src-tauri/tauri.conf.json"), "utf8"));
+const config = devConfig();
 const bundle = path.join(path.dirname(executable), "dev-app", `${config.productName}.app`);
 const contents = path.join(bundle, "Contents");
 const binaryName = path.basename(executable);
@@ -61,7 +90,9 @@ mkdirSync(path.join(contents, "MacOS"), { recursive: true });
 mkdirSync(path.join(contents, "Resources"), { recursive: true });
 
 const escape = (value) => String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-const icon = path.join(REPO, "src-tauri/icons/icon.icns");
+// The dev bundle gets the amber icon so Dock and \u2318Tab never read it as the installed app.
+const iconFile = config.identifier === "com.wackcode.desktop.dev" && existsSync(path.join(REPO, "src-tauri/icons/icon-dev.icns")) ? "icon-dev.icns" : "icon.icns";
+const icon = path.join(REPO, "src-tauri/icons", iconFile);
 const keys = {
   CFBundleIdentifier: config.identifier,
   CFBundleName: config.productName,
@@ -69,7 +100,7 @@ const keys = {
   CFBundlePackageType: "APPL",
   CFBundleShortVersionString: config.version,
   CFBundleVersion: config.version,
-  ...(existsSync(icon) ? { CFBundleIconFile: "icon.icns" } : {}),
+  ...(existsSync(icon) ? { CFBundleIconFile: iconFile } : {}),
 };
 writeFileSync(
   path.join(contents, "Info.plist"),
@@ -84,7 +115,7 @@ ${Object.entries(keys).map(([key, value]) => `  <key>${key}</key>\n  <string>${e
 </plist>
 `
 );
-if (existsSync(icon)) copyFileSync(icon, path.join(contents, "Resources/icon.icns"));
+if (existsSync(icon)) copyFileSync(icon, path.join(contents, "Resources", iconFile));
 
 // An APFS clone: instant, and no second copy on disk. Staged and renamed into place, so a copy
 // that is somehow still running is never overwritten underneath itself.

@@ -965,7 +965,7 @@ pub fn start_idle_reaper(app: AppHandle) -> tauri::async_runtime::JoinHandle<()>
 
 // Tauri's mode chooses resources. A packaged `build --debug` still needs its bundled Node
 // and scripts; Rust's debug assertions do not mean a dev server or a shell PATH is available.
-fn worker_entry_path(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn worker_entry_path(app: &AppHandle) -> Result<PathBuf, String> {
     if tauri::is_dev() {
         Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist/index.js"))
     } else {

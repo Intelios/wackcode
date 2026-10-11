@@ -1533,6 +1533,9 @@ pub struct BootstrapPayload {
     pub glass_supported: bool,
     /// Computer use needs `SCScreenshotManager` (macOS 14+). Runtime-only, never stored.
     pub computer_use_supported: bool,
+    /// `cfg!(debug_assertions)`: a `tauri dev`/debug-bundle build. Drives the DEV badge and
+    /// Settings › Developer, which release builds never show. Runtime-only, never stored.
+    pub dev_build: bool,
 }
 
 /// Settings › About: this copy of the app and what it bundles. Runtime-only, never stored;
@@ -1544,8 +1547,15 @@ pub struct AppInfo {
     pub app_version: String,
     /// "development" or "installed"; the same signal `computer_use_status` reports.
     pub build: String,
+    /// `cfg!(debug_assertions)`: this copy is a dev build (the DEV badge, Settings ›
+    /// Developer and the dev bundle id all hang off it). Runtime-only, never stored.
+    pub dev_build: bool,
+    /// `tauri.conf.json`'s identifier — `com.wackcode.desktop.dev` in dev builds.
+    pub bundle_id: String,
     /// The running .app's executable, so a bug report can say which copy it came from.
     pub app_path: String,
+    /// The worker entry script this app spawns (the repo's `worker/dist` in dev).
+    pub worker_path: String,
     /// Baked by `build.rs` from `runtime-lock.json`, the contract `prepare:runtime` enforces.
     pub pi_version: String,
     pub node_version: String,

@@ -229,6 +229,8 @@ export default function App() {
   const [appDataPath, setAppDataPath] = useState("");
   const [glassSupported, setGlassSupported] = useState(false);
   const [computerUseSupported, setComputerUseSupported] = useState(false);
+  /** A `tauri dev`/debug-bundle build: DEV badge + Settings › Developer. */
+  const [devBuild, setDevBuild] = useState(false);
   const savedAppearance = useRef<AppearanceConfig>(DEFAULT_APPEARANCE);
   const [legacySelectedTaskId, setSelectedTaskId] = useState<string>();
   const tabs = useChatTabs();
@@ -841,6 +843,7 @@ export default function App() {
       setAppDataPath(payload.appDataPath);
       setGlassSupported(payload.glassSupported);
       setComputerUseSupported(payload.computerUseSupported === true);
+      setDevBuild(payload.devBuild === true);
       savedAppearance.current = payload.data.appearance;
       const projectId = lastProjectId(payload.data.projects);
       setLegacyDraft({ projectId, useWorktree: false });
@@ -2807,6 +2810,7 @@ export default function App() {
           toolCatalog={data.toolCatalog}
           disabledTools={data.toolConfig.disabled}
           appDataPath={appDataPath}
+          devBuild={devBuild}
           onClose={closeSettings}
           onSave={saveProvider}
           onDelete={deleteProvider}
@@ -2851,6 +2855,7 @@ export default function App() {
       <Sidebar
         projects={data.projects}
         pinnedProjectIds={pinnedProjects}
+        devBuild={devBuild}
         area={area}
         areaAttention={areaAttention}
         onSwitchArea={enterArea}

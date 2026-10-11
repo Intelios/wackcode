@@ -31,12 +31,24 @@ describe("context menu targets", () => {
     fireEvent.contextMenu(row);
     expect(screen.getByRole("menuitem", { name: "Move to worktree" })).toBeDisabled();
     expect(screen.getByRole("menuitem", { name: "Fork chat" })).not.toBeDisabled();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Reveal chat file" }));
+    expect(action).toHaveBeenLastCalledWith(chat, "reveal-file");
+    fireEvent.contextMenu(row);
     fireEvent.click(screen.getByRole("menuitem", { name: "Copy path" }));
     expect(action).toHaveBeenLastCalledWith(chat, "copy");
     fireEvent.contextMenu(row);
     fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
     expect(action).toHaveBeenLastCalledWith(chat, "delete");
     expect(select).not.toHaveBeenCalled();
+  });
+
+  it("unlocks Reveal chat file only once the chat has a saved session", () => {
+    const unsaved = { ...chat, sessionFile: null };
+    render(menus(<Sidebar area="code" onSwitchArea={() => undefined} projects={[project]} tasks={[unsaved]} selectedTaskId="selected" pinnedProjectIds={new Set()} pendingDialogTaskIds={new Set()} titlePulses={{}} collapsedProjectIds={new Set()}
+      archivedOpen={false} onSelectTask={vi.fn()} onTaskAction={vi.fn()} onNewChat={vi.fn()} onNewDraft={vi.fn()} onAddProject={vi.fn()} onToggleArchived={vi.fn()}
+      onToggleProjectCollapsed={vi.fn()} onOpenSettings={vi.fn()} onProjectAction={vi.fn()} onRenameTask={vi.fn()} onArchiveAll={vi.fn()} onDeleteAllArchived={vi.fn()} />));
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Background chat" }));
+    expect(screen.getByRole("menuitem", { name: "Reveal chat file" })).toBeDisabled();
   });
 
   it("keeps archived-chat Delete on the confirmation path too", () => {

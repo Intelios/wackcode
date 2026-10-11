@@ -2528,6 +2528,10 @@ export default function App() {
   async function taskAction(task: TaskRecord, action: TaskAction) {
     if (action === "reveal") {
       try { await api.revealTask(task.id); } catch (reason) { setGlobalError(String(reason)); }
+    } else if (action === "reveal-file") {
+      // The session transcript (.jsonl) is revealed selected inside its folder, like Memory's.
+      if (!task.sessionFile) return;
+      try { await api.revealPath(task.sessionFile, true); } catch (reason) { setGlobalError(String(reason)); }
     } else if (action === "copy") {
       await writeText(task.workspacePath);
     } else if (action === "archive") {

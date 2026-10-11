@@ -15,6 +15,8 @@ export function chatMenu(task: TaskRecord, project: ProjectRecord | undefined, r
     { label: "Fork chat", icon: <Icon name="branch" />, disabled: !canFork(task), onSelect: () => action(task, "fork") },
     "separator",
     { label: chat ? "Reveal scratchpad" : "Reveal in Finder", icon: <Icon name="folder" />, onSelect: () => action(task, "reveal") },
+    // The session transcript (.jsonl) only exists once the worker has answered, so reveal waits.
+    { label: "Reveal chat file", icon: <Icon name="file" />, disabled: !task.sessionFile, onSelect: () => action(task, "reveal-file") },
     { label: chat ? "Copy scratchpad path" : "Copy path", icon: <Icon name="copy" />, onSelect: () => action(task, "copy") },
     "separator",
     { label: task.archived ? "Unarchive" : "Archive", icon: <Icon name={task.archived ? "unarchive" : "archive"} />, onSelect: () => action(task, task.archived ? "unarchive" : "archive") },

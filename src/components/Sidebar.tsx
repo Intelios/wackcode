@@ -18,7 +18,7 @@ import { DevBadge } from "./DevBadge";
 import { useConfirmAction } from "./ui/useConfirmAction";
 import { TextSwap } from "./TextSwap";
 
-export type TaskAction = "rename" | "worktree" | "fork" | "reveal" | "copy" | "archive" | "unarchive" | "delete" | "delete-direct";
+export type TaskAction = "rename" | "worktree" | "fork" | "reveal" | "reveal-file" | "copy" | "archive" | "unarchive" | "delete" | "delete-direct";
 export type ProjectAction = "reveal" | "remove" | "pin" | "unpin";
 
 /** Collapse-key for the "No project" group, which has no ProjectRecord id. */

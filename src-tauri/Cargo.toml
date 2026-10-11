@@ -1,6 +1,6 @@
 [package]
 name = "wackcode"
-version = "1.3.2"
+version = "1.4.0"
 description = "A local desktop UI for the Pi coding agent"
 authors = ["Intelios"]
 edition = "2021"

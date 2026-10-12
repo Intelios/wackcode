@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthInteraction } from "@earendil-works/pi-ai";
-import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { SubscriptionAuthFlow } from "./subscription-auth-flow.js";
 
 const directories: string[] = [];
@@ -65,6 +65,26 @@ describe("subscription login bridge", () => {
     await vi.waitFor(() => expect(events.some((event) => event.type === "prompt")).toBe(true));
     flow.cancel();
     await running;
+    expect(events.map((event) => event.type)).toEqual(["prompt", "cancelled"]);
+  });
+
+  // Pi's own Anthropic login, not a stand-in: it opens by asking which method to use, before any
+  // network or callback server. The sign-in dialog renders that as its first screen, so a Pi
+  // upgrade that reshapes the question should fail here instead of in front of a user.
+  it("relays Anthropic's login method choice as the first prompt", async () => {
+    const path = await authPath();
+    const events: Record<string, unknown>[] = [];
+    const flow = new SubscriptionAuthFlow((event) => events.push(event as Record<string, unknown>));
+    const runtime = await ModelRuntime.create({ authPath: path, modelsPath: null, allowModelNetwork: false, refreshOnCreate: false });
+
+    const running = flow.run(runtime, "anthropic", path);
+    await vi.waitFor(() => expect(events.some((event) => event.type === "prompt")).toBe(true));
+    const { prompt } = events[0] as { prompt: { type: string; options: { id: string }[] } };
+    flow.cancel();
+    await running;
+
+    expect(prompt.type).toBe("select");
+    expect(prompt.options.map((option) => option.id)).toEqual(["browser", "copy_code"]);
     expect(events.map((event) => event.type)).toEqual(["prompt", "cancelled"]);
   });
 });

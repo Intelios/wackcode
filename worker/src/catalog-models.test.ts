@@ -69,18 +69,18 @@ describe("custom-connection compat lookup", () => {
   });
 
   it("marks a Claude newer than the catalogue adaptive, wherever it is hosted", () => {
-    // claude-haiku-5-5 predates the bundled catalogue's newest Haiku (4.5), yet every Claude
-    // ≥ 4.6 requires adaptive thinking — the failure this lookup exists to prevent.
+    // claude-haiku-9-9 is in no bundled catalogue (the test below fails if one ever lists it), yet
+    // every Claude ≥ 4.6 requires adaptive thinking — the failure this lookup exists to prevent.
     for (const baseUrl of ["https://api.anthropic.com", "https://opencode.ai/zen", "https://mirror.example"]) {
-      expect(builtinCompat("anthropic-messages", "claude-haiku-5-5", baseUrl))
-        .toMatchObject({ forceAdaptiveThinking: true });
+      expect(builtinCompat("anthropic-messages", "claude-haiku-9-9", baseUrl))
+        .toEqual({ forceAdaptiveThinking: true });
     }
   });
 
   it("leaves older or differently-named unknowns alone", () => {
     expect(builtinCompat("anthropic-messages", "claude-haiku-4-1", "https://api.anthropic.com")).toBeUndefined();
     expect(builtinCompat("anthropic-messages", "claude-3-7-sonnet", "https://api.anthropic.com")).toBeUndefined();
-    expect(builtinCompat("openai-completions", "claude-haiku-5-5", "https://api.anthropic.com/v1")).toBeUndefined();
+    expect(builtinCompat("openai-completions", "claude-haiku-9-9", "https://api.anthropic.com/v1")).toBeUndefined();
     expect(builtinCompat("anthropic-messages", "my-haiku-5-5", "https://mirror.example")).toBeUndefined();
   });
 });

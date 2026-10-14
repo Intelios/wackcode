@@ -27,8 +27,9 @@ export type SettingsManager = ReturnType<PiModule["SettingsManager"]["inMemory"]
  * otherwise post `…/v1/v1/messages` and land on the gateway's HTML 404 page, and the reverse
  * gains `/v1` (OpenCode Go's convention). Returns undefined when the connection's base already
  * fits, leaving the provider's own `baseUrl` in force. Same-gateway base URLs are the
- * documented convention (see ProvidersSection); a model hosted elsewhere can't be expressed
- * today.
+ * documented convention (see ProvidersSection), except OpenCode Go's native Google API:
+ * its legacy /zen/go prefix must become /inference/go. A model hosted elsewhere can't be
+ * expressed today.
  */
 function resolveModelBaseUrl(provider: WorkerProvider, model: WorkerModel): string | undefined {
   const saved = provider.baseUrl.replace(/\/+$/, "");
@@ -56,6 +57,13 @@ function resolveModelBaseUrl(provider: WorkerProvider, model: WorkerModel): stri
     // @google/genai concatenates baseUrl with its request path, so a query would swallow
     // /models/… into the query (and a fragment would hide it). Match save-time validation.
     if (url.search) throw new Error("Google base URLs cannot include query parameters. Remove the query and enter any API key in the API key field.");
+    // OpenCode's legacy Go prefix still serves the other APIs, but its Google route is an
+    // HTML 404. Native Gemini lives at the documented /inference/go/v1 prefix instead.
+    // Only change this known path on this exact host; never reroute another provider or API.
+    if (url.origin === "https://opencode.ai" && /^\/zen\/go(?:\/v1)?$/.test(url.pathname)) {
+      url.pathname = "/inference/go/v1";
+      base = url.toString();
+    }
     if (url.hash) {
       url.hash = "";
       base = url.toString();

@@ -871,11 +871,6 @@ function ModelEditor({ model, connectionFormat, catalog, catalogLoading, catalog
           />
         </label>
       </div>
-      {(model.apiFormat ?? connectionFormat) === "google-generative-ai"
-        && model.id === "gemini-4-argon-contributor"
-        && !catalog.some((entry) => entry.id === model.id && entry.sourceApi === "google-generative-ai") && (
-          <p className="settings-block-sub">Leave Reasoning off for now; this Pi version doesn't recognize Gemini 4's reasoning controls.</p>
-        )}
       <ModelSuggestionSearch
         modelLabel={model.name || model.id || "this model"}
         catalog={catalog}

@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createModelRuntime, findModel, MODEL_MISSING_MESSAGE, missingModelMessage } from "./model-runtime.js";
 import type { WorkerModel, WorkerProvider } from "./protocol.js";
 
@@ -18,6 +18,7 @@ const provider = (overrides: Partial<WorkerProvider>): WorkerProvider => ({
 const dirs: string[] = [];
 const servers: Server[] = [];
 afterEach(async () => {
+  vi.unstubAllGlobals();
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))));
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
@@ -98,6 +99,50 @@ describe("connection models in Pi", () => {
     expect(await findModel(runtime, connection, "gemini-4-argon-contributor")).toMatchObject({
       api: "google-generative-ai", baseUrl: "https://opencode.ai/inference/go/v1"
     });
+  });
+
+  it.each(["openai-completions", "anthropic-messages", "google-generative-ai"] as const)("routes native Gemini off the legacy Go prefix on a %s connection", async (api) => {
+    const baseUrl = `https://opencode.ai/zen/go${api === "anthropic-messages" ? "" : "/v1"}`;
+    const connection = provider({ api, baseUrl, models: [model("default", "Default"),
+      { ...model("gemini-4-argon-contributor", "Gemini"), api: "google-generative-ai" }] });
+    const runtime = await load(connection);
+    expect(runtime.getError()).toBeUndefined();
+    expect((await findModel(runtime, connection, "gemini-4-argon-contributor"))?.baseUrl).toBe("https://opencode.ai/inference/go/v1");
+    expect((await findModel(runtime, connection, "default"))?.baseUrl).toBe(api === "google-generative-ai" ? "https://opencode.ai/inference/go/v1" : baseUrl);
+  });
+
+  it.each(["https://opencode.ai.example/zen/go/v1", "https://mirror.example/zen/go/v1", "https://opencode.ai:8443/zen/go/v1", "https://opencode.ai/zen/v1"])("does not reroute a different origin or non-Go path: %s", async (baseUrl) => {
+    const connection = provider({ api: "google-generative-ai", baseUrl });
+    const runtime = await load(connection);
+    expect((await findModel(runtime, connection, "named"))?.baseUrl).toBe(baseUrl);
+  });
+
+  it("sends the SDK request to inference for the user's legacy mixed-API configuration", async () => {
+    const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      // Reproduce the real service's distinction: native Google on /zen/go is HTML 404,
+      // while /inference/go is the Google API. Never accept the old prefix in this fixture.
+      if (new URL(url).pathname !== "/inference/go/v1/models/gemini-4-argon-contributor:streamGenerateContent") {
+        return new Response("<!DOCTYPE html><title>Not Found | opencode</title>", { status: 404 });
+      }
+      return new Response(`data: ${JSON.stringify({ candidates: [{ content: { role: "model", parts: [{ text: "Correct route" }] }, finishReason: "STOP" }] })}\n\n`,
+        { headers: { "Content-Type": "text/event-stream" } });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const connection = provider({ baseUrl: "https://opencode.ai/zen/go/v1", models: [model("glm", "GLM"),
+      { ...model("gemini-4-argon-contributor", "Gemini"), api: "google-generative-ai" }] });
+    const runtime = await load(connection);
+    const gemini = (await findModel(runtime, connection, "gemini-4-argon-contributor"))!;
+    const result = await runtime.completeSimple(gemini, { messages: [{ role: "user", content: "Check routing", timestamp: Date.now() }] },
+      { sessionId: "legacy-go-test", maxRetries: 0 });
+    expect(result.errorMessage).toBeUndefined();
+    expect(result.content).toContainEqual(expect.objectContaining({ type: "text", text: "Correct route" }));
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0][0].toString()).toBe("https://opencode.ai/inference/go/v1/models/gemini-4-argon-contributor:streamGenerateContent?alt=sse");
+    const headers = new Headers(fetch.mock.calls[0][1]?.headers);
+    expect(headers.get("x-opencode-session")).toBe("legacy-go-test");
+    expect(headers.get("user-agent")).toBe("WackCode");
+    expect((await findModel(runtime, connection, "glm"))?.baseUrl).toBe(connection.baseUrl);
   });
 
   it("repairs a pasted Google model endpoint without duplicating the SDK's models path", async () => {

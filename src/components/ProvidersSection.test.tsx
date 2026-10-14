@@ -160,12 +160,6 @@ describe("Settings › Providers", () => {
     expect(onSave.mock.calls[1][0].models[0].apiFormat).toBe("google-generative-ai");
   });
 
-  it("explains the bundled Pi version's reasoning limitation for the new Argon model", () => {
-    renderProviders([{ ...gateway, models: [{ ...ready, id: "gemini-4-argon-contributor", name: "Gemini 4 Argon", apiFormat: "google-generative-ai", reasoning: false }] }], "p1");
-    fireEvent.click(screen.getByRole("button", { name: /^Gemini 4 Argon/ }));
-    expect(screen.getByText(/Leave Reasoning off for now/)).toBeInTheDocument();
-  });
-
   it("lets you pick which discovered models to add, leaving out the ones already there", async () => {
     const { onDiscover, onSave } = renderProviders(undefined, "p1", ["vendor/big-model", "vendor/new-a", "vendor/new-b"]);
     fireEvent.click(screen.getByRole("button", { name: "Fetch models" }));

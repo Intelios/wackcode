@@ -143,6 +143,29 @@ describe("Settings › Providers", () => {
     await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ apiFormat: "anthropic-messages" })));
   });
 
+  it("offers Google's native API at connection and model level", async () => {
+    const { onSave } = renderProviders(undefined, "p1");
+    fireEvent.click(screen.getByRole("button", { name: "API format" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Google Generative AI compatible" }));
+    expect(screen.getByText("/models/… is added for you; a pasted model endpoint is trimmed")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("https://generativelanguage.googleapis.com/v1beta")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save connection" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ apiFormat: "google-generative-ai" })));
+
+    fireEvent.click(screen.getByRole("button", { name: /^Big Model/ }));
+    fireEvent.click(screen.getByRole("button", { name: "API format for Big Model" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Google Generative AI" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save connection" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
+    expect(onSave.mock.calls[1][0].models[0].apiFormat).toBe("google-generative-ai");
+  });
+
+  it("explains the bundled Pi version's reasoning limitation for the new Argon model", () => {
+    renderProviders([{ ...gateway, models: [{ ...ready, id: "gemini-4-argon-contributor", name: "Gemini 4 Argon", apiFormat: "google-generative-ai", reasoning: false }] }], "p1");
+    fireEvent.click(screen.getByRole("button", { name: /^Gemini 4 Argon/ }));
+    expect(screen.getByText(/Leave Reasoning off for now/)).toBeInTheDocument();
+  });
+
   it("lets you pick which discovered models to add, leaving out the ones already there", async () => {
     const { onDiscover, onSave } = renderProviders(undefined, "p1", ["vendor/big-model", "vendor/new-a", "vendor/new-b"]);
     fireEvent.click(screen.getByRole("button", { name: "Fetch models" }));

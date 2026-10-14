@@ -437,11 +437,104 @@ pub struct DiscoverModelsInput {
 /// website's 404 page.
 fn model_list_url(base_url: &str, api_format: &str) -> String {
     let base = normalize_base_url(base_url, api_format);
+    if api_format == "google-generative-ai" {
+        if let Ok(mut url) = reqwest::Url::parse(&base) {
+            url.set_path(&format!("{}/models", url.path().trim_end_matches('/')));
+            return url.to_string();
+        }
+    }
     if api_format == "anthropic-messages" {
         format!("{base}/v1/models")
     } else {
         format!("{base}/models")
     }
+}
+
+/// Gateways may return OpenAI's `data[].id` even for a Google connection. Native Google
+/// returns resource names in `models[].name`; strip only the leading resource prefix.
+fn discovered_model_ids(body: &Value, api_format: &str) -> Vec<String> {
+    let mut ids: Vec<String> = body.get("data").and_then(Value::as_array)
+        .into_iter().flatten()
+        .filter_map(|item| item.get("id").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    if api_format == "google-generative-ai" {
+        ids.extend(body.get("models").and_then(Value::as_array)
+            .into_iter().flatten()
+            .filter_map(|item| item.get("name").and_then(Value::as_str))
+            .map(|name| name.strip_prefix("models/").unwrap_or(name).to_string()));
+    }
+    ids
+}
+
+/// Pagination tokens are opaque query values, never URLs. Every page uses the configured
+/// origin. Google redirects are disabled because custom API-key headers are not automatically
+/// stripped; other formats keep same-origin redirects but may never forward a key to a new host.
+async fn fetch_model_ids(base_url: &str, api_format: &str, api_key: &str) -> Result<Vec<String>, String> {
+    let endpoint = reqwest::Url::parse(&model_list_url(base_url, api_format))
+        .map_err(|_| "Enter a valid base URL".to_string())?;
+    let origin = endpoint.origin();
+    let google = api_format == "google-generative-ai";
+    let redirects = if google {
+        reqwest::redirect::Policy::none()
+    } else {
+        reqwest::redirect::Policy::custom(move |attempt| {
+            if attempt.previous().len() >= 10 || attempt.url().origin() != origin {
+                attempt.stop()
+            } else {
+                attempt.follow()
+            }
+        })
+    };
+    let client = reqwest::Client::builder()
+        .redirect(redirects)
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|error| format!("Could not fetch models: {error}"))?;
+    let mut url = endpoint.clone();
+    let mut ids = Vec::new();
+    let mut tokens = HashSet::new();
+    loop {
+        let request = client.get(url.clone());
+        // Google SDK uses this header for custom proxies as well as Google's own endpoint.
+        let request = if google {
+            request.header("x-goog-api-key", api_key)
+        } else {
+            request.bearer_auth(api_key)
+        };
+        let response = request.send().await
+            .map_err(|error| format!("Could not fetch models: {error}"))?;
+        let status = response.status();
+        if status.is_redirection() {
+            return Err("The model endpoint redirected the request. Set the connection's base URL to the final endpoint before trying again.".into());
+        }
+        let body: Value = response.json().await
+            .map_err(|error| format!("The model endpoint did not return JSON: {error}"))?;
+        if !status.is_success() {
+            let message = body.pointer("/error/message").and_then(Value::as_str)
+                .unwrap_or("The provider rejected the model request");
+            return Err(format!("Model discovery failed ({status}): {}", limit(message, 400)));
+        }
+        ids.extend(discovered_model_ids(&body, api_format));
+        let next = google.then(|| body.get("nextPageToken").and_then(Value::as_str))
+            .flatten().filter(|token| !token.is_empty());
+        let Some(token) = next else { break };
+        if tokens.len() >= 99 || !tokens.insert(token.to_string()) {
+            return Err("The model endpoint returned too many pages or repeated a page token. You can still add a model manually.".into());
+        }
+        url = endpoint.clone();
+        let query: Vec<(String, String)> = url.query_pairs()
+            .filter(|(key, _)| key != "pageToken")
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect();
+        url.set_query(None);
+        url.query_pairs_mut().extend_pairs(query).append_pair("pageToken", token);
+    }
+    ids.sort();
+    ids.dedup();
+    if ids.is_empty() {
+        return Err("The endpoint returned no model IDs. You can still add one manually.".into());
+    }
+    Ok(ids)
 }
 
 #[tauri::command]
@@ -462,42 +555,7 @@ pub async fn discover_models(
         return Err("Subscription models are supplied by Pi".into());
     }
     let api_key = state.secrets.get(&provider.id)?;
-    let url = model_list_url(&provider.base_url, &provider.api_format);
-    let response = reqwest::Client::new()
-        .get(url)
-        .bearer_auth(api_key)
-        .timeout(std::time::Duration::from_secs(20))
-        .send()
-        .await
-        .map_err(|error| format!("Could not fetch models: {error}"))?;
-    let status = response.status();
-    let body: Value = response
-        .json()
-        .await
-        .map_err(|error| format!("The model endpoint did not return JSON: {error}"))?;
-    if !status.is_success() {
-        let message = body
-            .pointer("/error/message")
-            .and_then(Value::as_str)
-            .unwrap_or("The provider rejected the model request");
-        return Err(format!(
-            "Model discovery failed ({status}): {}",
-            limit(message, 400)
-        ));
-    }
-    let mut ids: Vec<String> = body
-        .get("data")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|item| item.get("id").and_then(Value::as_str).map(str::to_string))
-        .collect();
-    ids.sort();
-    ids.dedup();
-    if ids.is_empty() {
-        return Err("The endpoint returned no model IDs. You can still add one manually.".into());
-    }
-    Ok(ids)
+    fetch_model_ids(&provider.base_url, &provider.api_format, &api_key).await
 }
 
 #[tauri::command]
@@ -4915,8 +4973,10 @@ fn view_task_and_provider(
 /// The APIs a custom connection, or one of its models, may speak. `anthropic-messages` posts to
 /// `{baseUrl}/v1/messages`, so a Messages base URL leaves off the `/v1` that the OpenAI formats
 /// keep — `normalize_base_url` enforces that at save and on every load (OpenCode Go: `…/zen/go`
-/// for Messages, `…/zen/go/v1` for Completions).
-const API_FORMATS: [&str; 3] = ["openai-completions", "openai-responses", "anthropic-messages"];
+/// for Messages, `…/zen/go/v1` for Completions). Google keeps `/v1` or `/v1beta` too.
+const API_FORMATS: [&str; 4] = [
+    "openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai",
+];
 
 fn validate_models(models: &[ModelRecord]) -> Result<(), String> {
     let mut ids = HashSet::new();
@@ -5223,6 +5283,9 @@ fn validate_base_url(value: &str, api_format: &str) -> Result<String, String> {
     let parsed = reqwest::Url::parse(&value).map_err(|_| "Enter a valid base URL".to_string())?;
     if parsed.scheme() != "https" && parsed.scheme() != "http" {
         return Err("The base URL must use http or https".into());
+    }
+    if api_format == "google-generative-ai" && parsed.query().is_some() {
+        return Err("Google base URLs cannot include query parameters. Remove the query and enter any API key in the API key field.".into());
     }
     Ok(value)
 }
@@ -5975,6 +6038,9 @@ mod tests {
         };
         assert!(validate_models(&[model(Some("openai-responses"))]).is_ok());
         assert!(validate_models(&[model(Some("anthropic-messages"))]).is_ok());
+        assert!(validate_models(&[model(Some("google-generative-ai"))]).is_ok());
+        assert!(validate_models(&[model(None)]).is_ok());
+        assert!(validate_models(&[model(Some(""))]).is_err());
         assert!(validate_models(&[model(Some("grpc"))])
             .unwrap_err()
             .contains("muse"));
@@ -6080,6 +6146,157 @@ mod tests {
             clean("https://opencode.ai/zen/go/v1", "openai-completions"),
             "https://opencode.ai/zen/go/v1"
         );
+    }
+
+    #[test]
+    fn google_connections_trim_only_versioned_model_endpoints() {
+        let format = "google-generative-ai";
+        let base = "https://opencode.ai/inference/go/v1";
+        for suffix in ["", "/", "/models", "/models/", "/models/models", "/models/gemini-4-argon-contributor",
+            "/models/gemini-4-argon-contributor:generateContent",
+            "/models/gemini-4-argon-contributor:streamGenerateContent?alt=sse"] {
+            assert_eq!(validate_base_url(&format!("{base}{suffix}"), format).unwrap(), base);
+        }
+        assert_eq!(normalize_base_url("https://example.test/v1beta/models/gemini", format),
+            "https://example.test/v1beta");
+        assert_eq!(normalize_base_url("https://example.test/v1/models/gemini?route=a%2Fb#docs", format),
+            "https://example.test/v1?route=a%2Fb");
+        assert_eq!(normalize_base_url("https://example.test/v1/models/gemini:streamGenerateContent?alt=sse&route=go", format),
+            "https://example.test/v1?route=go");
+        for url in ["https://example.test/catalog/models/gemini",
+            "https://example.test/v1/models/gemini/extra",
+            "https://example.test/v1/models/gemini:unrelated",
+            "https://example.test/v1?route=/models/gemini/",
+            "https://example.test/v1?route=/models/gemini:streamGenerateContent&alt=sse"] {
+            assert_eq!(normalize_base_url(url, format), url);
+        }
+        assert_eq!(validate_base_url(&format!("{base}/models/gemini#docs"), format).unwrap(), base);
+        assert!(validate_base_url(&format!("{base}?key=not-a-real-key"), format).unwrap_err().contains("API key field"));
+        assert_eq!(model_list_url(&format!("{base}/models/gemini"), format), format!("{base}/models"));
+        assert_eq!(model_list_url("https://example.test/v1beta?route=go", format),
+            "https://example.test/v1beta/models?route=go");
+    }
+
+    #[test]
+    fn discovery_accepts_google_native_and_gateway_shapes_without_changing_other_formats() {
+        let gateway = json!({"data": [{"id": "gemini-4"}, {"id": "vendor/model"}, {"id": 7}]});
+        assert_eq!(discovered_model_ids(&gateway, "google-generative-ai"), ["gemini-4", "vendor/model"]);
+        assert_eq!(discovered_model_ids(&gateway, "openai-completions"), ["gemini-4", "vendor/model"]);
+        let native = json!({"models": [{"name": "models/gemini-4"}, {"name": "gemini-3"},
+            {"name": "vendor/models/gemini"}, {"name": null}, {}]});
+        assert_eq!(discovered_model_ids(&native, "google-generative-ai"),
+            ["gemini-4", "gemini-3", "vendor/models/gemini"]);
+        assert!(discovered_model_ids(&native, "anthropic-messages").is_empty());
+    }
+
+    /// A loopback-only discovery fixture. Both accept and reads are bounded so a failed test
+    /// cannot leave a server thread waiting forever. No real provider or credentials are used.
+    fn discovery_server(responses: Vec<String>) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base = format!("http://{}/v1", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for response in responses {
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(std::time::Instant::now() < deadline, "Discovery did not request a page");
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(error) => panic!("{error}"),
+                    }
+                };
+                // macOS can inherit the listener's nonblocking flag on accepted sockets.
+                stream.set_nonblocking(false).unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0; 1024];
+                while !request.ends_with(b"\r\n\r\n") {
+                    let read = stream.read(&mut buffer).unwrap();
+                    assert!(read > 0);
+                    request.extend_from_slice(&buffer[..read]);
+                }
+                requests.push(String::from_utf8(request).unwrap());
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+            requests
+        });
+        (base, handle)
+    }
+
+    fn discovery_json(body: Value) -> String {
+        let body = body.to_string();
+        format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+    }
+
+    #[test]
+    fn google_discovery_paginates_with_header_auth_on_the_configured_origin() {
+        let token = "https://unrelated.test/next?key=not-a-key&part=2";
+        let (base, server) = discovery_server(vec![
+            discovery_json(json!({"models": [{"name": "models/gemini-b"}], "nextPageToken": token})),
+            discovery_json(json!({"models": [{"name": "models/gemini-a"}, {"name": "models/gemini-b"}]})),
+        ]);
+        let result = tauri::async_runtime::block_on(fetch_model_ids(
+            &format!("{base}?route=go"), "google-generative-ai", "test-discovery-key"));
+        let requests = server.join().unwrap();
+        assert_eq!(result.unwrap(), ["gemini-a", "gemini-b"]);
+        for request in &requests {
+            assert!(request.to_ascii_lowercase().contains("x-goog-api-key: test-discovery-key\r\n"));
+            assert!(!request.to_ascii_lowercase().contains("authorization:"));
+            assert!(request.starts_with("GET /v1/models?route=go"));
+        }
+        let target = requests[1].split_whitespace().nth(1).unwrap();
+        let parsed = reqwest::Url::parse(&format!("http://fixture.test{target}")).unwrap();
+        assert_eq!(parsed.path(), "/v1/models");
+        assert!(parsed.query_pairs().any(|(key, value)| key == "pageToken" && value == token));
+    }
+
+    #[test]
+    fn non_google_discovery_keeps_bearer_auth_and_ignores_google_pagination() {
+        let (base, server) = discovery_server(vec![discovery_json(json!({
+            "data": [{"id": "b"}, {"id": "a"}, {"id": "b"}], "nextPageToken": "ignored"
+        }))]);
+        let result = tauri::async_runtime::block_on(fetch_model_ids(&base, "openai-completions", "test-key"));
+        let requests = server.join().unwrap();
+        assert_eq!(result.unwrap(), ["a", "b"]);
+        assert!(requests[0].to_ascii_lowercase().contains("authorization: bearer test-key\r\n"));
+        assert!(!requests[0].to_ascii_lowercase().contains("x-goog-api-key:"));
+    }
+
+    #[test]
+    fn non_google_discovery_keeps_same_origin_redirects() {
+        for format in ["openai-completions", "anthropic-messages"] {
+            let (base, server) = discovery_server(vec![
+                "HTTP/1.1 301 Moved Permanently\r\nLocation: /v1/available-models\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+                discovery_json(json!({"data": [{"id": "gemini"}]})),
+            ]);
+            let result = tauri::async_runtime::block_on(fetch_model_ids(&base, format, "test-key"));
+            let requests = server.join().unwrap();
+            assert_eq!(result.unwrap(), ["gemini"]);
+            assert!(requests[1].starts_with("GET /v1/available-models "));
+            assert!(requests[1].to_ascii_lowercase().contains("authorization: bearer test-key\r\n"));
+        }
+    }
+
+    #[test]
+    fn discovery_refuses_redirects_and_repeated_google_page_tokens() {
+        for format in ["google-generative-ai", "openai-completions"] {
+            let (base, server) = discovery_server(vec![
+                "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:9/other-origin\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into()
+            ]);
+            let error = tauri::async_runtime::block_on(fetch_model_ids(&base, format, "test-key")).unwrap_err();
+            server.join().unwrap();
+            assert!(error.contains("redirected"), "{error}");
+        }
+        let page = discovery_json(json!({"models": [{"name": "models/gemini"}], "nextPageToken": "same"}));
+        let (base, server) = discovery_server(vec![page.clone(), page]);
+        let error = tauri::async_runtime::block_on(fetch_model_ids(&base, "google-generative-ai", "test-key")).unwrap_err();
+        server.join().unwrap();
+        assert!(error.contains("repeated a page token"));
     }
 
     #[test]

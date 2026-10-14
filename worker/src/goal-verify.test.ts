@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { parseGoalVerdict } from "./builtin/goal/verify.js";
+import { describe, expect, it, vi } from "vitest";
+import { parseGoalVerdict, runGoalVerification } from "./builtin/goal/verify.js";
 
 /**
  * The verifier's JSON contract, pinned so the loop's asymmetry stays deliberate:
@@ -7,6 +7,14 @@ import { parseGoalVerdict } from "./builtin/goal/verify.js";
  * `passed:false` with no `nextAction` stops the loop instead of spinning.
  */
 describe("goal verifier contract", () => {
+  it("carries the conversation ID to the auxiliary model request", async () => {
+    const completeSimple = vi.fn().mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: '{"passed":true}' }] });
+    const verdict = await runGoalVerification({ completeSimple } as never,
+      { reasoning: false } as never, "Verify", { objective: "Test", iteration: 1, transcript: "Done" }, undefined, "conversation-id");
+    expect(verdict.kind).toBe("pass");
+    expect(completeSimple.mock.calls[0][2].sessionId).toBe("conversation-id");
+  });
+
   it("accepts a clean pass", () => {
     expect(parseGoalVerdict('{"passed": true, "reason": "all checks ran"}')).toEqual({ kind: "pass", reason: "all checks ran" });
     expect(parseGoalVerdict('{"passed":true}')).toEqual({ kind: "pass", reason: undefined });

@@ -1,4 +1,5 @@
 import { mkdtemp, rm } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -15,7 +16,11 @@ const provider = (overrides: Partial<WorkerProvider>): WorkerProvider => ({
 });
 
 const dirs: string[] = [];
-afterEach(async () => { await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true }))); });
+const servers: Server[] = [];
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))));
+  await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
 async function load(connection: WorkerProvider) {
   const dir = await mkdtemp(join(tmpdir(), "wackcode-model-runtime-"));
   dirs.push(dir);
@@ -82,6 +87,95 @@ describe("connection models in Pi", () => {
     const runtime = await load(connection);
     expect(runtime.getError()).toBeUndefined();
     expect((await findModel(runtime, connection, "named"))?.baseUrl).toBe("https://opencode.ai/zen/go");
+  });
+
+  it.each(["openai-completions", "anthropic-messages", "google-generative-ai"] as const)("loads a Gemini model on a %s connection with the right versioned base", async (api) => {
+    const connection = provider({ api,
+      baseUrl: `https://opencode.ai/inference/go${api === "anthropic-messages" ? "" : "/v1"}`,
+      models: [{ ...model("gemini-4-argon-contributor", "Gemini 4 Argon Contributor"), api: "google-generative-ai" }] });
+    const runtime = await load(connection);
+    expect(runtime.getError()).toBeUndefined();
+    expect(await findModel(runtime, connection, "gemini-4-argon-contributor")).toMatchObject({
+      api: "google-generative-ai", baseUrl: "https://opencode.ai/inference/go/v1"
+    });
+  });
+
+  it("repairs a pasted Google model endpoint without duplicating the SDK's models path", async () => {
+    const connection = provider({ api: "google-generative-ai",
+      baseUrl: "https://opencode.ai/inference/go/v1/models/gemini-4-argon-contributor",
+      models: [model("gemini-4-argon-contributor", "Gemini"), { ...model("glm", "GLM"), api: "openai-completions" }] });
+    const runtime = await load(connection);
+    expect(runtime.getError()).toBeUndefined();
+    expect((await findModel(runtime, connection, "gemini-4-argon-contributor"))?.baseUrl).toBe("https://opencode.ai/inference/go/v1");
+    expect((await findModel(runtime, connection, "glm"))?.baseUrl).toBe("https://opencode.ai/inference/go/v1");
+  });
+
+  it.each([
+    ["https://example.test/v1beta/models/gemini:streamGenerateContent?alt=sse", "https://example.test/v1beta"],
+    ["https://example.test/v1/models/gemini#docs", "https://example.test/v1"],
+    ["https://example.test/catalog/models/gemini", "https://example.test/catalog/models/gemini"],
+    ["https://example.test/v1/models/gemini:unrelated", "https://example.test/v1/models/gemini:unrelated"]
+  ])("canonicalizes only a versioned Google endpoint: %s", async (baseUrl, expected) => {
+    const connection = provider({ api: "google-generative-ai", baseUrl });
+    const runtime = await load(connection);
+    expect(runtime.getError()).toBeUndefined();
+    expect((await findModel(runtime, connection, "named"))?.baseUrl).toBe(expected);
+  });
+
+  it.each(["google-generative-ai", "openai-completions"] as const)("refuses queries before the Google SDK can corrupt the request path on %s", async (api) => {
+    const connection = provider({ api, baseUrl: "https://example.test/v1?key=not-a-real-key",
+      models: [{ ...model("gemini", "Gemini"), api: "google-generative-ai" }] });
+    await expect(load(connection)).rejects.toThrow("Google base URLs cannot include query parameters");
+  });
+
+  it("streams native Gemini text and tool calls through the configured gateway path", async () => {
+    const requests: { url?: string; key?: string; body: Record<string, unknown> }[] = [];
+    const server = createServer(async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      requests.push({ url: request.url, key: request.headers["x-goog-api-key"] as string,
+        body: JSON.parse(Buffer.concat(chunks).toString()) });
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      response.end(`data: ${JSON.stringify({ candidates: [{ content: { role: "model", parts: [
+        { text: "Hello from Gemini" }, { functionCall: { name: "read", args: { path: "README.md" } } }
+      ] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15 } })}\n\n`);
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as { port: number }).port;
+    const connection = provider({ baseUrl: `http://127.0.0.1:${port}/inference/go/v1`,
+      models: [{ ...model("gemini-4-argon-contributor", "Gemini"), api: "google-generative-ai", vision: true }] });
+    const runtime = await load(connection);
+    const gemini = (await findModel(runtime, connection, "gemini-4-argon-contributor"))!;
+    const messages = [
+      { role: "system" as const, content: "You are a coding assistant.", timestamp: Date.now(), toolsAdded: [
+        { name: "read", description: "Read a file", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } as never }
+      ] },
+      { role: "user" as const, content: [{ type: "text" as const, text: "Inspect the README" }, { type: "image" as const, mimeType: "image/png", data: "aGVsbG8=" }], timestamp: Date.now() }
+    ];
+    const result = await runtime.completeSimple(gemini, { messages }, { sessionId: "gemini-test" });
+    expect(result.errorMessage).toBeUndefined();
+    expect(result.content).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "text", text: "Hello from Gemini" }),
+      expect.objectContaining({ type: "toolCall", name: "read", arguments: { path: "README.md" } })
+    ]));
+    expect(result.usage).toMatchObject({ input: 10, output: 5 });
+    expect(requests).toHaveLength(1);
+    expect(requests[0].url).toBe("/inference/go/v1/models/gemini-4-argon-contributor:streamGenerateContent?alt=sse");
+    expect(requests[0].key).toBe("test-key");
+    expect(requests[0].body).toMatchObject({ contents: [{ parts: [
+      { text: "Inspect the README" }, { inlineData: { mimeType: "image/png", data: "aGVsbG8=" } }
+    ] }], tools: [{ functionDeclarations: [{ name: "read" }] }] });
+    const call = result.content.find((part) => part.type === "toolCall")!;
+    const continuation = await runtime.completeSimple(gemini, { messages: [...messages, result,
+      { role: "toolResult", toolCallId: call.id, toolName: "read", content: [{ type: "text", text: "# Project" }], isError: false, timestamp: Date.now() }
+    ] }, { sessionId: "gemini-test" });
+    expect(continuation.errorMessage).toBeUndefined();
+    expect(requests[1].body.contents).toEqual(expect.arrayContaining([
+      expect.objectContaining({ parts: expect.arrayContaining([
+        expect.objectContaining({ functionResponse: expect.objectContaining({ name: "read" }) })
+      ]) })
+    ]));
   });
 
   it("names the connection and Pi's reason when Pi rejects it", async () => {

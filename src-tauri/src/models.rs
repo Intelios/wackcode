@@ -80,9 +80,60 @@ pub enum ProviderKind {
 /// `/v1/messages` itself, so an anthropic-messages base URL leaves `/v1` off and any endpoint
 /// suffix pasted from a gateway's docs (OpenCode Go: `…/zen/go/v1/messages`) is trimmed —
 /// otherwise the request doubles the path and lands on the gateway's HTML 404 page. The OpenAI
-/// formats expect `/v1` in the base URL and are left untouched. `MetadataState::load` runs this
-/// over every saved provider so records written before the save-time trim existed are repaired.
+/// formats expect `/v1` in the base URL and are left untouched. Google also keeps its version,
+/// but drops a pasted `/models[/<id>[:action]]` endpoint. Only versioned Google paths qualify;
+/// unrelated paths and queries stay intact (except the streaming action's `alt=sse`). Fragments
+/// are removed; other query parameters are rejected at save because the Google SDK can't use them.
+/// `MetadataState::load` runs this over every saved provider to repair older records too.
 pub fn normalize_base_url(base_url: &str, api_format: &str) -> String {
+    if api_format == "google-generative-ai" {
+        if let Ok(mut url) = reqwest::Url::parse(base_url) {
+            let path = url.path().trim_end_matches('/');
+            let segments: Vec<&str> = path.split('/').collect();
+            let endpoint = segments.iter().enumerate().find_map(|(index, segment)| {
+                (*segment == "models"
+                    && index > 0
+                    && matches!(segments[index - 1], "v1" | "v1beta" | "v1alpha")
+                    && segments.len() - index <= 2).then_some(index)
+            });
+            let mut streaming = false;
+            let endpoint = endpoint.filter(|index| {
+                match segments.get(*index + 1) {
+                    None => true,
+                    Some(id) => {
+                        let (id, action) = id.split_once(':').unwrap_or((id, ""));
+                        streaming = action == "streamGenerateContent";
+                        !id.is_empty()
+                            && matches!(action, "" | "generateContent" | "streamGenerateContent")
+                    }
+                }
+            });
+            let normalized_path = match endpoint {
+                Some(index) => segments[..index].join("/"),
+                None => path.to_string(),
+            };
+            // Do not reserialize an unrelated URL, including its query or fragment.
+            if normalized_path == url.path() && url.fragment().is_none() {
+                return base_url.to_string();
+            }
+            url.set_path(&normalized_path);
+            url.set_fragment(None);
+            if endpoint.is_some() && streaming {
+                let query: Vec<(String, String)> = url.query_pairs()
+                    .filter(|(key, value)| !(key == "alt" && value == "sse"))
+                    .map(|(key, value)| (key.into_owned(), value.into_owned()))
+                    .collect();
+                // Preserve unrelated query bytes exactly unless an action parameter was removed.
+                if query.len() != url.query_pairs().count() {
+                    url.set_query(None);
+                    if !query.is_empty() {
+                        url.query_pairs_mut().extend_pairs(query);
+                    }
+                }
+            }
+            return url.to_string();
+        }
+    }
     let mut value = base_url.trim_end_matches('/').to_string();
     if api_format == "anthropic-messages" {
         for suffix in ["/v1/messages", "/v1"] {

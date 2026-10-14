@@ -68,6 +68,7 @@ export async function runGoalVerification(
   systemPrompt: string,
   input: GoalVerifyInput,
   signal?: AbortSignal,
+  sessionId?: string,
 ): Promise<GoalVerdict> {
   try {
     // The lowest reasoning level the model offers, mirroring auto-title: the verifier is a
@@ -86,6 +87,7 @@ export async function runGoalVerification(
         timestamp: Date.now(),
       }],
     }, {
+      sessionId,
       signal,
       timeoutMs: 30_000,
       maxRetries: 0,

@@ -7,6 +7,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { builtinCompat } from "./catalog-models.js";
 import { instrumentUsage } from "./usage.js";
+import { instrumentOpenCodeHeaders } from "./opencode-headers.js";
 import { THINKING_LEVELS, type WorkerModel, type WorkerProvider } from "./protocol.js";
 
 type PiModule = typeof import("@earendil-works/pi-coding-agent");
@@ -16,8 +17,9 @@ export type SettingsManager = ReturnType<PiModule["SettingsManager"]["inMemory"]
 
 /**
  * The base URL a model's API actually needs. The Messages client appends `/v1/messages` itself
- * and the OpenAI clients append `/chat/completions` or `/responses`, so an anthropic-messages
- * base leaves `/v1` off while the OpenAI formats keep whatever version segment they were given
+ * and the OpenAI clients append `/chat/completions` or `/responses`. Google adds
+ * `/models/<id>:streamGenerateContent`. A Messages base leaves `/v1` off while the other
+ * formats keep whatever version segment they were given
  * — `…/v1` usually, but endpoints like z.ai's `…/paas/v4` carry their own and must not gain a
  * second one. A model on its connection's own API uses the saved base URL as-is (Messages also
  * repairs records saved before canonicalization); only a model whose `api` overrides the
@@ -29,12 +31,40 @@ export type SettingsManager = ReturnType<PiModule["SettingsManager"]["inMemory"]
  * today.
  */
 function resolveModelBaseUrl(provider: WorkerProvider, model: WorkerModel): string | undefined {
-  const base = provider.baseUrl.replace(/\/+$/, "");
+  const saved = provider.baseUrl.replace(/\/+$/, "");
+  // Saved connections are already canonicalized by Rust. Repair a pre-canonicalized Google
+  // URL too, but only its versioned endpoint path — never a query or an unrelated /models path.
+  let base = saved;
+  if (provider.api === "google-generative-ai") {
+    try {
+      const url = new URL(saved);
+      const path = url.pathname.replace(/\/+$/, "");
+      const match = path.match(/^(.*\/(?:v1|v1beta|v1alpha))\/models(?:\/[^/:]+(?::(?:generateContent|streamGenerateContent))?)?$/);
+      if (match) {
+        url.pathname = match[1];
+        if (path.endsWith(":streamGenerateContent") && url.searchParams.getAll("alt").includes("sse")) {
+          const query = [...url.searchParams].filter(([key, value]) => key !== "alt" || value !== "sse");
+          url.search = new URLSearchParams(query).toString();
+        }
+        base = url.toString();
+      }
+    } catch { /* Pi reports invalid URLs. */ }
+  }
   const api = model.api ?? provider.api;
+  if (api === "google-generative-ai") {
+    const url = new URL(base);
+    // @google/genai concatenates baseUrl with its request path, so a query would swallow
+    // /models/… into the query (and a fragment would hide it). Match save-time validation.
+    if (url.search) throw new Error("Google base URLs cannot include query parameters. Remove the query and enter any API key in the API key field.");
+    if (url.hash) {
+      url.hash = "";
+      base = url.toString();
+    }
+  }
   const resolved = api === "anthropic-messages"
     ? base.replace(/\/v1\/messages$/i, "").replace(/\/v1$/i, "")
     : api !== provider.api && !/\/v\d[^/]*$/i.test(base) ? `${base}/v1` : base;
-  return resolved === base ? undefined : resolved;
+  return resolved === saved ? undefined : resolved;
 }
 
 export function modelDefinition(provider: WorkerProvider, model: WorkerModel): Record<string, unknown> {
@@ -112,6 +142,7 @@ export async function createModelRuntime(
     if (!credential.apiKey) throw new Error("This connection has no API key");
     await runtime.setRuntimeApiKey(provider.id, credential.apiKey);
   }
+  instrumentOpenCodeHeaders(runtime);
   instrumentUsage(runtime);
   return runtime;
 }

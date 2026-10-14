@@ -18,9 +18,10 @@ const LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhi
 const API_FORMATS: { value: ApiFormat; label: string }[] = [
   { value: "openai-completions", label: "Chat Completions compatible" },
   { value: "openai-responses", label: "Responses compatible" },
-  { value: "anthropic-messages", label: "Messages compatible" }
+  { value: "anthropic-messages", label: "Messages compatible" },
+  { value: "google-generative-ai", label: "Google Generative AI compatible" }
 ];
-const FORMAT_NAMES: Record<ApiFormat, string> = { "openai-completions": "Chat Completions", "openai-responses": "Responses", "anthropic-messages": "Messages" };
+const FORMAT_NAMES: Record<ApiFormat, string> = { "openai-completions": "Chat Completions", "openai-responses": "Responses", "anthropic-messages": "Messages", "google-generative-ai": "Google Generative AI" };
 const ANTHROPIC_GUIDANCE = "https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account";
 /** A discovery with more new IDs than this starts with nothing ticked, and gets a filter. */
 const FOUND_PRESELECT_LIMIT = 10;
@@ -30,7 +31,7 @@ const EASE: [number, number, number, number] = [0.33, 1, 0.68, 1];
 const METHODS: { value: ConnectionMethod; icon: IconName; title: string; detail: (names: string) => string }[] = [
   {
     value: "apiKey", icon: "key", title: "API key",
-    detail: () => "Any Chat Completions, Responses or Messages compatible endpoint: a provider's API, a gateway, or a server on your Mac."
+    detail: () => "Any Chat Completions, Responses, Messages or Google Generative AI compatible endpoint: a provider's API, a gateway, or a server on your Mac."
   },
   {
     value: "subscription", icon: "lock", title: "Sign in with a subscription",
@@ -617,14 +618,14 @@ function ConnectionEditor({
                 />
               </label>
               <label>
-                {/* The Messages API posts to `{baseUrl}/v1/messages`, so its base URL leaves off
-                    the `/v1` that the OpenAI formats keep (OpenCode Go: `…/zen/go`); saving trims
-                    one a pasted endpoint carried. */}
-                <span>Base URL {draft.apiFormat === "anthropic-messages" && <small>/v1/messages is added for you; a pasted /v1 is trimmed</small>}</span>
+                {/* Each SDK adds its own request path; saving trims pasted Messages/Google endpoints. */}
+                <span>Base URL {draft.apiFormat === "anthropic-messages" && <small>/v1/messages is added for you; a pasted /v1 is trimmed</small>}
+                  {draft.apiFormat === "google-generative-ai" && <small>/models/… is added for you; a pasted model endpoint is trimmed</small>}
+                </span>
                 <input
                   value={draft.baseUrl}
                   onChange={(event) => edit({ baseUrl: event.target.value })}
-                  placeholder={draft.apiFormat === "anthropic-messages" ? "https://api.anthropic.com" : "https://api.example.com/v1"}
+                  placeholder={draft.apiFormat === "anthropic-messages" ? "https://api.anthropic.com" : draft.apiFormat === "google-generative-ai" ? "https://generativelanguage.googleapis.com/v1beta" : "https://api.example.com/v1"}
                   spellCheck={false}
                 />
               </label>
@@ -870,6 +871,11 @@ function ModelEditor({ model, connectionFormat, catalog, catalogLoading, catalog
           />
         </label>
       </div>
+      {(model.apiFormat ?? connectionFormat) === "google-generative-ai"
+        && model.id === "gemini-4-argon-contributor"
+        && !catalog.some((entry) => entry.id === model.id && entry.sourceApi === "google-generative-ai") && (
+          <p className="settings-block-sub">Leave Reasoning off for now; this Pi version doesn't recognize Gemini 4's reasoning controls.</p>
+        )}
       <ModelSuggestionSearch
         modelLabel={model.name || model.id || "this model"}
         catalog={catalog}

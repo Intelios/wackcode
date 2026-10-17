@@ -1310,6 +1310,33 @@ export interface ExtensionNotice {
 }
 
 /** Compact runtime state for one chat's native, ephemeral browser session. */
+export type BrowserViewportPreset = "desktop" | "laptop" | "tablet" | "phone";
+export interface BrowserViewport { preset: BrowserViewportPreset; width: number; height: number }
+export interface BrowserBounds { x: number; y: number; width: number; height: number }
+/** A locator is capture-time evidence, never an actionable browser tool ref. */
+export interface BrowserContextTarget {
+  selector: string;
+  path: { kind: "frame" | "shadow"; selector: string }[];
+  label: string;
+  dom: string;
+  bounds: BrowserBounds;
+  truncated?: boolean;
+}
+export interface BrowserContextAttachment {
+  id: string;
+  kind: "element" | "markup";
+  capturedAt: number;
+  url: string;
+  title: string;
+  viewport: BrowserViewport;
+  image: ImageContent;
+  targets: BrowserContextTarget[];
+  truncated?: boolean;
+}
+/** Metadata rides the text; its one image rides the ordinary, ordered image array. */
+export interface BrowserContextRecord extends Omit<BrowserContextAttachment, "image"> { imageIndex: number }
+export interface RestoredPrompt { text: string; images?: ImageContent[] }
+
 export interface BrowserState {
   taskId: string;
   exists: boolean;
@@ -1322,6 +1349,8 @@ export interface BrowserState {
   agentActive: boolean;
   userControl: boolean;
   popup: boolean;
+  viewport?: BrowserViewport;
+  capturing?: boolean;
 }
 
 export interface UsageRecord {
@@ -1336,11 +1365,12 @@ export interface UsageStatus {
   enabled: boolean; path: string; hasHistory: boolean; error: string | null; pending: number; dropped: number; lastWritten: number | null;
 }
 
-/** One pending message, identified by the worker; its full payload stays in the worker. */
+/** One pending message, identified by the worker. Images keep browser chips inspectable. */
 export interface QueuedMessage {
   id: string;
   /** May include the generated attached-files section. */
   text: string;
+  images?: ImageContent[];
 }
 
 export type WorkerEvent =

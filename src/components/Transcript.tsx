@@ -1,3 +1,4 @@
+import { MessageBrowserContexts } from "./browser/MessageBrowserContexts";
 import { Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { CommandPresentation, NormalizedBlock, NormalizedMessage, PlanState, RunTiming, SessionSnapshot, SkillDraftStatus, TaskStatus } from "../types";
@@ -486,7 +487,7 @@ function FileChip({ file }: { file: FileAttachment }) {
 }
 
 /** A sent message's attached images; each opens full size in the lightbox. */
-function MessageImages({ images, entryId, loadImage }: { images: NormalizedBlock[]; entryId?: string; loadImage?: MessageImageLoader }) {
+function MessageImages({ images, entryId, loadImage, hidden = [] }: { images: NormalizedBlock[]; entryId?: string; loadImage?: MessageImageLoader; hidden?: number[] }) {
   const [shown, setShown] = useState<{ index: number; image: NormalizedBlock } | null>(null);
   const loadShown = useCallback(
     () => (loadImage && entryId && shown ? loadImage(entryId, shown.index) : Promise.resolve(undefined)),
@@ -494,7 +495,7 @@ function MessageImages({ images, entryId, loadImage }: { images: NormalizedBlock
   );
   return (
     <div className="message-images">
-      {images.map((image, index) => image.thumbnail
+      {images.map((image, index) => hidden.includes(index) ? null : image.thumbnail
         ? (
           <button key={image.imageId ?? index} type="button" className="message-image" onClick={() => setShown({ index, image })} aria-label={`Open attached image ${index + 1}`}>
             <img src={image.thumbnail} alt={`Attached image ${index + 1}`} />
@@ -543,12 +544,13 @@ const Message = memo(function Message({ message, slots, results, liveToolText, l
     const images = message.blocks.filter((block) => block.type === "image");
     // The message text carries attached files in its generated section; the transcript shows
     // them as chips and the words without them.
-    const { text, files } = splitFileSection(messageText(message));
+    const { text, files, browserContexts = [] } = splitFileSection(messageText(message));
     if (editing) {
       return (
         <div className="msg user editing" data-transcript-anchor={scrollAnchor} data-turn={message.versions ? message.versions.group : message.id}>
           <MessageEditor
             text={text}
+            browserContexts={browserContexts}
             images={images}
             files={files}
             vision={vision}
@@ -569,7 +571,8 @@ const Message = memo(function Message({ message, slots, results, liveToolText, l
     }
     return (
       <div className="msg user" data-transcript-anchor={scrollAnchor} onContextMenu={(event) => contextMenu(event, items.map((item) => ({ label: item.label, icon: <Icon name={item.icon} />, onSelect: item.onClick })), "Message menu")} data-turn={message.versions ? message.versions.group : message.id}>
-        {images.length > 0 && <MessageImages images={images} entryId={message.entryId} loadImage={loadImage} />}
+        <MessageBrowserContexts contexts={browserContexts} images={images} loadImage={loadImage && message.entryId ? (index) => loadImage(message.entryId!, index) : undefined} />
+        {images.length > 0 && <MessageImages images={images} hidden={browserContexts.map((context) => context.imageIndex)} entryId={message.entryId} loadImage={loadImage} />}
         {files.length > 0 && (
           <div className="message-files">
             {files.map((file, index) => <FileChip key={index} file={file} />)}

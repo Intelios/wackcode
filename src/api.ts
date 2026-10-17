@@ -1,3 +1,4 @@
+import type { BrowserContextAttachment, BrowserViewportPreset, RestoredPrompt } from "./types";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   AutoTitleConfig,
@@ -94,8 +95,13 @@ export const api = {
   setToolConfig: (disabled: string[]) => invoke<ToolConfig>("set_tool_config", { input: { disabled } }),
   setAppearanceConfig: (input: AppearanceConfig) => invoke<AppearanceConfig>("set_appearance_config", { input }),
   browserState: (taskId: string) => invoke<BrowserState>("browser_state", { taskId }),
-  browserPresent: (input: { taskId: string; visible: boolean; x: number; y: number; width: number; height: number }) =>
+  browserPresent: (input: { taskId: string; presentationId?: string; visible: boolean; x: number; y: number; width: number; height: number }) =>
     invoke<BrowserState>("browser_present", { input }),
+  browserRetirePresentation: (taskId: string, presentationId: string) => invoke<void>("browser_retire_presentation", { taskId, presentationId }),
+  browserSetViewport: (taskId: string, preset: BrowserViewportPreset) => invoke<BrowserState>("browser_set_viewport", { taskId, preset }),
+  browserCapture: (taskId: string, captureId: string, presentationId: string) => invoke<BrowserContextAttachment>("browser_capture", { taskId, captureId, presentationId }),
+  browserPick: (taskId: string, captureId: string, presentationId: string, accent: string, outline: string) => invoke<BrowserContextAttachment | null>("browser_pick", { taskId, captureId, presentationId, accent, outline }),
+  browserCancelCapture: (taskId: string, captureId: string) => invoke<void>("browser_cancel_capture", { taskId, captureId }),
   browserOpen: (taskId: string, url: string) => invoke<BrowserState>("browser_open", { input: { taskId, url } }),
   browserNavigation: (taskId: string, action: "back" | "forward" | "reload" | "stop") =>
     invoke<void>("browser_navigation", { input: { taskId, action } }),
@@ -270,7 +276,7 @@ export const api = {
   steerMessage: (input: { taskId: string; messageId: string; startedAt: number }) =>
     invoke<void>("steer_message", { input }),
   /** Take the queued messages back out of the worker's pending lists, for the composer. */
-  dequeueMessages: (taskId: string) => invoke<{ steering: string[]; followUp: string[] }>("dequeue_messages", { taskId }),
+  dequeueMessages: (taskId: string) => invoke<{ steering: RestoredPrompt[]; followUp: RestoredPrompt[] }>("dequeue_messages", { taskId }),
   /** Send a message again as a new version: unchanged (retry) or with new text (edit). */
   resendMessage: (input: {
     taskId: string;

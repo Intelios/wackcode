@@ -3,6 +3,11 @@
 //! view is positioned over the Browser panel. Hidden views stay attached so background agents
 //! can keep rendering, inspect the page, and take snapshots without activating another window.
 
+mod native;
+use crate::models::{
+    BrowserContextAttachment, BrowserContextTarget, BrowserViewport, BrowserViewportPreset,
+    ImageContent,
+};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use block2::RcBlock;
 use objc2::{runtime::AnyObject, AnyThread, MainThreadMarker, Message};
@@ -20,13 +25,12 @@ use std::{
 };
 use tauri::{
     webview::{DownloadEvent, PageLoadEvent, WebviewBuilder},
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Position, Rect, Size, Webview,
-    WebviewUrl,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Webview, WebviewUrl,
 };
 use tokio::sync::{oneshot, Mutex as AsyncMutex};
 
-const DEFAULT_WIDTH: f64 = 1024.0;
-const DEFAULT_HEIGHT: f64 = 768.0;
+const DEFAULT_WIDTH: f64 = 1440.0;
+const DEFAULT_HEIGHT: f64 = 900.0;
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_CONSOLE_ENTRIES: usize = 200;
 
@@ -114,6 +118,8 @@ pub struct BrowserState {
     pub agent_active: bool,
     pub user_control: bool,
     pub popup: bool,
+    pub viewport: BrowserViewport,
+    pub capturing: bool,
 }
 
 impl BrowserState {
@@ -130,6 +136,8 @@ impl BrowserState {
             agent_active: false,
             user_control: false,
             popup: false,
+            viewport: BrowserViewport::default(),
+            capturing: false,
         }
     }
 }
@@ -146,6 +154,7 @@ struct BrowserSession {
     webview: Webview,
     state: BrowserState,
     visible: bool,
+    /// CSS viewport dimensions, independent of the native presentation rectangle.
     width: f64,
     height: f64,
     epoch: u64,
@@ -156,6 +165,11 @@ struct BrowserSession {
     return_url: Option<String>,
     control_epoch: u64,
     revealed_to_user: bool,
+    presentation_id: Option<String>,
+    capture_id: Option<String>,
+    pick_sender: Option<oneshot::Sender<Option<(f64, f64)>>>,
+    hover_pending: bool,
+    display_rect: Option<(f64, f64, f64, f64)>,
 }
 
 #[derive(Default)]
@@ -164,6 +178,7 @@ pub struct BrowserManager {
     operations: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
     cancelled: Mutex<HashSet<String>>,
     create_lock: Mutex<()>,
+    retired_presentations: Mutex<HashSet<String>>,
 }
 
 impl BrowserManager {
@@ -209,6 +224,7 @@ impl BrowserManager {
             .ok()
             .and_then(|mut sessions| sessions.remove(task_id));
         if let Some(session) = session {
+            native::dispose(&session.webview);
             let _ = session.webview.close();
         }
         if let Ok(mut operations) = self.operations.lock() {
@@ -229,6 +245,7 @@ impl BrowserManager {
             })
             .unwrap_or_default();
         for session in sessions {
+            native::dispose(&session.webview);
             let _ = session.webview.close();
         }
     }
@@ -245,12 +262,11 @@ fn emit_state(app: &AppHandle, state: BrowserState, reveal: bool) {
 fn park_webview(webview: &Webview, width: f64, height: f64) -> Result<(), String> {
     // Keep inactive pages attached and renderable at their last viewport size. The parent view
     // clips this far-offscreen child, so it cannot cover React chrome or application dialogs.
-    webview
-        .set_bounds(Rect {
-            position: Position::Logical(LogicalPosition::new(-10_000.0, -10_000.0)),
-            size: Size::Logical(LogicalSize::new(width, height)),
-        })
-        .map_err(|error| error.to_string())?;
+    native::place(
+        webview,
+        (-10_000.0, -10_000.0, width, height),
+        (width, height),
+    )?;
     webview.show().map_err(|error| error.to_string())
 }
 
@@ -267,6 +283,9 @@ fn mutate_session(app: &AppHandle, task_id: &str, mutate: impl FnOnce(&mut Brows
 }
 
 fn on_page_load(app: &AppHandle, task_id: &str, url: &str, event: PageLoadEvent) {
+    if event == PageLoadEvent::Started {
+        cancel_capture(app, task_id, None);
+    }
     mutate_session(app, task_id, |session| {
         session.state.loading = event == PageLoadEvent::Started;
         if url != "about:blank" {
@@ -400,6 +419,11 @@ fn ensure_session(app: &AppHandle, task_id: &str) -> Result<Webview, String> {
                 return_url: None,
                 control_epoch: 0,
                 revealed_to_user: false,
+                presentation_id: None,
+                capture_id: None,
+                pick_sender: None,
+                hover_pending: false,
+                display_rect: None,
             },
         );
     emit_state(app, state, false);
@@ -721,6 +745,11 @@ async fn browser_action(app: &AppHandle, task_id: &str, action: &Value) -> Resul
         .ok_or_else(|| "browser_act needs an action kind.".to_string())?;
     let webview = app.state::<BrowserManager>().webview(task_id)?;
     match kind {
+        "set_viewport" => {
+            let preset = serde_json::from_value(action.get("viewport").cloned().unwrap_or(Value::Null))
+                .map_err(|_| "Choose a valid browser viewport preset.".to_string())?;
+            Ok(json!({ "ok": true, "state": set_viewport(app, task_id, preset)? }))
+        }
         "click" | "hover" => {
             let (x, y) = if let Some(reference) = action.get("ref").and_then(Value::as_str) {
                 let target = target_for(app, task_id, reference)?;
@@ -827,14 +856,13 @@ fn browser_navigation_inner(app: &AppHandle, task_id: &str, action: &str) -> Res
 }
 
 async fn screenshot(webview: &Webview) -> Result<(Vec<u8>, u32, u32), String> {
-    let size = webview.size().map_err(|error| error.to_string())?;
     let (sender, receiver) = oneshot::channel();
     let sender = Arc::new(Mutex::new(Some(sender)));
     webview
         .with_webview(move |platform| unsafe {
             let view: &WKWebView = &*platform.inner().cast();
             let configuration = WKSnapshotConfiguration::new(MainThreadMarker::new_unchecked());
-            configuration.setAfterScreenUpdates(false);
+            configuration.setAfterScreenUpdates(true);
             let handler = RcBlock::new(
                 move |image: *mut objc2_app_kit::NSImage, error: *mut objc2_foundation::NSError| {
                     let result = if image.is_null() {
@@ -857,7 +885,17 @@ async fn screenshot(webview: &Webview) -> Result<(Vec<u8>, u32, u32), String> {
                                     &NSDictionary::dictionary(),
                                 )
                             })
-                            .map(|data| data.as_bytes_unchecked().to_vec())
+                            .and_then(|data| {
+                                let rep = NSBitmapImageRep::initWithData(
+                                    NSBitmapImageRep::alloc(),
+                                    &data,
+                                )?;
+                                Some((
+                                    data.as_bytes_unchecked().to_vec(),
+                                    rep.pixelsWide() as u32,
+                                    rep.pixelsHigh() as u32,
+                                ))
+                            })
                             .ok_or_else(|| "WebKit could not encode the page snapshot.".to_string())
                     };
                     if let Some(sender) = sender.lock().ok().and_then(|mut sender| sender.take()) {
@@ -872,7 +910,7 @@ async fn screenshot(webview: &Webview) -> Result<(Vec<u8>, u32, u32), String> {
         .await
         .map_err(|_| "The screenshot timed out.".to_string())?
         .map_err(|_| "The screenshot was cancelled.".to_string())??;
-    Ok((bytes, size.width, size.height))
+    Ok(bytes)
 }
 
 async fn console_entries(app: &AppHandle, task_id: &str) -> Result<Value, String> {
@@ -922,6 +960,11 @@ pub async fn execute_agent_request(
         let session = sessions
             .get_mut(&task_id)
             .ok_or_else(|| "Browser session disappeared".to_string())?;
+        if session.state.capturing {
+            return Err(
+                "The user is capturing browser context. Try again after capture finishes.".into(),
+            );
+        }
         if session.state.user_control {
             return Err(
                 "The user has taken control of this browser. Wait until they resume agent control."
@@ -939,6 +982,11 @@ pub async fn execute_agent_request(
             .and_then(Value::as_str)
             .ok_or_else(|| "browser_open needs a URL.".to_string())
             .and_then(|url| {
+                if let Some(preset) = request.get("viewport") {
+                    let preset = serde_json::from_value(preset.clone())
+                        .map_err(|_| "Choose a valid browser viewport preset.".to_string())?;
+                    set_viewport(&app, &task_id, preset)?;
+                }
                 navigate(&app, &task_id, url, true).map(|state| json!({ "state": state }))
             }),
         "snapshot" => page_snapshot(&app, &task_id).await,
@@ -952,15 +1000,12 @@ pub async fn execute_agent_request(
         }
         "screenshot" => {
             let webview = manager.webview(&task_id)?;
-            let scale = webview
-                .window()
-                .scale_factor()
-                .map_err(|error| error.to_string())?;
+            let viewport = manager.state(&task_id).viewport;
             screenshot(&webview).await.map(|(bytes, width, height)| json!({
                 "ok": true,
                 "image": { "mimeType": "image/png", "data": BASE64.encode(bytes), "width": width, "height": height },
-                "viewport": { "width": f64::from(width) / scale, "height": f64::from(height) / scale },
-                "coordinateScale": scale,
+                "coordinateScale": f64::from(width) / viewport.width,
+                "viewport": viewport,
                 "url": manager.state(&task_id).url
             }))
         }
@@ -1000,6 +1045,8 @@ pub async fn execute_agent_request(
 #[serde(rename_all = "camelCase")]
 pub struct BrowserPresentInput {
     task_id: String,
+    #[serde(default)]
+    presentation_id: Option<String>,
     visible: bool,
     x: f64,
     y: f64,
@@ -1012,16 +1059,347 @@ pub fn browser_state(app: AppHandle, task_id: String) -> BrowserState {
     app.state::<BrowserManager>().state(&task_id)
 }
 
+fn set_viewport(
+    app: &AppHandle,
+    task_id: &str,
+    preset: BrowserViewportPreset,
+) -> Result<BrowserState, String> {
+    cancel_capture(app, task_id, None);
+    let manager = app.state::<BrowserManager>();
+    let webview = manager.webview(task_id)?;
+    let viewport: BrowserViewport = preset.into();
+    mutate_session(app, task_id, |session| {
+        session.state.viewport = viewport.clone();
+        session.width = viewport.width;
+        session.height = viewport.height;
+        session.epoch = session.epoch.wrapping_add(1);
+        session.targets.clear();
+    });
+    let display = manager.sessions.lock().ok().and_then(|sessions| {
+        sessions.get(task_id).and_then(|session| {
+            if session.visible {
+                session.display_rect
+            } else {
+                None
+            }
+        })
+    });
+    if let Some((x, y, width, height)) = display {
+        native::place(
+            &webview,
+            fit_rect((x, y, width, height), (viewport.width, viewport.height)),
+            (viewport.width, viewport.height),
+        )?;
+    } else {
+        park_webview(&webview, viewport.width, viewport.height)?;
+    }
+    Ok(manager.state(task_id))
+}
+
+#[tauri::command]
+pub async fn browser_set_viewport(
+    app: AppHandle,
+    task_id: String,
+    preset: BrowserViewportPreset,
+) -> Result<BrowserState, String> {
+    let operation = app.state::<BrowserManager>().operation(&task_id);
+    let _guard = operation.lock().await;
+    set_viewport(&app, &task_id, preset)
+}
+
+fn dom_script(point: Option<(f64, f64)>) -> String {
+    format!(
+        "({})({})",
+        include_str!("browser/dom.js"),
+        point
+            .map(|(x, y)| json!({"x":x,"y":y}))
+            .unwrap_or(Value::Null)
+    )
+}
+
+fn capture_valid(app: &AppHandle, task_id: &str, id: &str) -> bool {
+    app.state::<BrowserManager>()
+        .sessions
+        .lock()
+        .ok()
+        .is_some_and(|sessions| {
+            sessions
+                .get(task_id)
+                .is_some_and(|session| session.capture_id.as_deref() == Some(id))
+        })
+}
+
+fn cancel_capture(app: &AppHandle, task_id: &str, id: Option<&str>) {
+    let manager = app.state::<BrowserManager>();
+    let view = manager.sessions.lock().ok().and_then(|mut sessions| {
+        let session = sessions.get_mut(task_id)?;
+        if id.is_some_and(|id| session.capture_id.as_deref() != Some(id)) {
+            return None;
+        }
+        session.capture_id = None;
+        session.state.capturing = false;
+        session.hover_pending = false;
+        if let Some(sender) = session.pick_sender.take() {
+            let _ = sender.send(None);
+        }
+        Some(session.webview.clone())
+    });
+    if let Some(view) = view {
+        native::cancel(&view);
+        emit_state(app, manager.state(task_id), false);
+    }
+}
+
+#[tauri::command]
+pub fn browser_cancel_capture(app: AppHandle, task_id: String, capture_id: String) {
+    cancel_capture(&app, &task_id, Some(&capture_id));
+}
+
+fn hover_pick(
+    app: &AppHandle,
+    task_id: &str,
+    id: &str,
+    x: f64,
+    y: f64,
+    accent: &str,
+    outline: &str,
+) {
+    let manager = app.state::<BrowserManager>();
+    let view = manager.sessions.lock().ok().and_then(|mut sessions| {
+        let session = sessions.get_mut(task_id)?;
+        if session.hover_pending {
+            return None;
+        }
+        session.hover_pending = true;
+        Some(session.webview.clone())
+    });
+    let Some(view) = view else {
+        return;
+    };
+    let app = app.clone();
+    let task = task_id.to_owned();
+    let id = id.to_owned();
+    let accent = accent.to_owned();
+    let outline = outline.to_owned();
+    tauri::async_runtime::spawn(async move {
+        let result = eval_value(&view, dom_script(Some((x, y)))).await;
+        let picking = app
+            .state::<BrowserManager>()
+            .sessions
+            .lock()
+            .ok()
+            .is_some_and(|sessions| {
+                sessions.get(&task).is_some_and(|session| {
+                    session.capture_id.as_deref() == Some(&id) && session.pick_sender.is_some()
+                })
+            });
+        if picking {
+            let target = result
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("targets")
+                        .and_then(Value::as_array)
+                        .and_then(|targets| targets.first())
+                        .cloned()
+                })
+                .and_then(|value| serde_json::from_value::<BrowserContextTarget>(value).ok());
+            native::highlight(&view, id.clone(), target, accent, outline);
+        }
+        if let Ok(mut sessions) = app.state::<BrowserManager>().sessions.lock() {
+            if let Some(session) = sessions.get_mut(&task) {
+                session.hover_pending = false;
+            }
+        };
+    });
+}
+
+async fn reserve_capture(
+    app: &AppHandle,
+    task_id: &str,
+    id: &str,
+    presentation: &str,
+) -> Result<(), String> {
+    let manager = app.state::<BrowserManager>();
+    let operation = manager.operation(task_id);
+    let _guard = operation.lock().await;
+    let mut sessions = manager
+        .sessions
+        .lock()
+        .map_err(|_| "The browser is unavailable.".to_string())?;
+    let session = sessions
+        .get_mut(task_id)
+        .ok_or_else(|| "Open a page before capturing it.".to_string())?;
+    if !session.visible
+        || session.presentation_id.as_deref() != Some(presentation)
+        || session.capture_id.is_some()
+    {
+        return Err("The browser moved or another capture is in progress. Try again.".into());
+    }
+    session.capture_id = Some(id.into());
+    session.state.capturing = true;
+    session.control_epoch = session.control_epoch.wrapping_add(1);
+    emit_state(app, session.state.clone(), false);
+    Ok(())
+}
+
+async fn capture_page(
+    app: &AppHandle,
+    task_id: &str,
+    id: &str,
+    point: Option<(f64, f64)>,
+) -> Result<BrowserContextAttachment, String> {
+    let manager = app.state::<BrowserManager>();
+    let operation = manager.operation(task_id);
+    let _guard = operation.lock().await;
+    if !capture_valid(app, task_id, id) {
+        return Err("Browser capture cancelled.".into());
+    }
+    let view = manager.webview(task_id)?;
+    // Picker decoration is a native sibling, so WebKit snapshots never include it.
+    let before = eval_value(&view, dom_script(point)).await?;
+    let (bytes, _, _) = screenshot(&view).await?;
+    let after = eval_value(
+        &view,
+        "({width:innerWidth,height:innerHeight,x:scrollX,y:scrollY,url:location.href})",
+    )
+    .await?;
+    if !capture_valid(app, task_id, id) || before.get("viewport") != Some(&after) {
+        return Err("The page changed while capturing. Try again.".into());
+    }
+    let state = manager.state(task_id);
+    let targets: Vec<BrowserContextTarget> =
+        serde_json::from_value(before.get("targets").cloned().unwrap_or(json!([])))
+            .map_err(|_| "The page returned unreadable element context.".to_string())?;
+    Ok(BrowserContextAttachment {
+        id: id.into(),
+        kind: if point.is_some() { "element" } else { "markup" }.into(),
+        captured_at: chrono::Utc::now().timestamp_millis(),
+        url: after
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or(&state.url)
+            .into(),
+        title: before
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or(&state.title)
+            .into(),
+        viewport: state.viewport,
+        image: ImageContent {
+            kind: "image".into(),
+            mime_type: "image/png".into(),
+            data: BASE64.encode(bytes),
+        },
+        targets,
+        truncated: before
+            .get("truncated")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
+#[tauri::command]
+pub async fn browser_capture(
+    app: AppHandle,
+    task_id: String,
+    capture_id: String,
+    presentation_id: String,
+) -> Result<BrowserContextAttachment, String> {
+    reserve_capture(&app, &task_id, &capture_id, &presentation_id).await?;
+    let result = capture_page(&app, &task_id, &capture_id, None).await;
+    cancel_capture(&app, &task_id, Some(&capture_id));
+    result
+}
+
+#[tauri::command]
+pub async fn browser_pick(
+    app: AppHandle,
+    task_id: String,
+    capture_id: String,
+    presentation_id: String,
+    accent: String,
+    outline: String,
+) -> Result<Option<BrowserContextAttachment>, String> {
+    reserve_capture(&app, &task_id, &capture_id, &presentation_id).await?;
+    let (sender, receiver) = oneshot::channel();
+    let view = app.state::<BrowserManager>().webview(&task_id)?;
+    if let Ok(mut sessions) = app.state::<BrowserManager>().sessions.lock() {
+        if let Some(session) = sessions.get_mut(&task_id) {
+            session.pick_sender = Some(sender);
+        }
+    }
+    if let Err(error) = native::pick(&app, &task_id, &view, &capture_id, &accent, &outline) {
+        cancel_capture(&app, &task_id, Some(&capture_id));
+        return Err(error);
+    }
+    let result = match tokio::time::timeout(Duration::from_secs(600), receiver).await {
+        Ok(Ok(Some(point))) => capture_page(&app, &task_id, &capture_id, Some(point))
+            .await
+            .map(Some),
+        _ => Ok(None),
+    };
+    cancel_capture(&app, &task_id, Some(&capture_id));
+    result
+}
+
+/// Retire a renderer mount, including any presentation request still queued behind its cleanup.
+#[tauri::command]
+pub fn browser_retire_presentation(app: AppHandle, task_id: String, presentation_id: String) {
+    let manager = app.state::<BrowserManager>();
+    if let Ok(mut retired) = manager.retired_presentations.lock() {
+        retired.insert(presentation_id.clone());
+    }
+    let view = manager.sessions.lock().ok().and_then(|mut sessions| {
+        let session = sessions.get_mut(&task_id)?;
+        if session.presentation_id.as_deref() != Some(&presentation_id) {
+            return None;
+        }
+        session.visible = false;
+        Some((session.webview.clone(), session.width, session.height))
+    });
+    if let Some((view, width, height)) = view {
+        cancel_capture(&app, &task_id, None);
+        let _ = park_webview(&view, width, height);
+    }
+}
+
+fn fit_rect(
+    (x, y, width, height): (f64, f64, f64, f64),
+    (vw, vh): (f64, f64),
+) -> (f64, f64, f64, f64) {
+    let scale = (width / vw).min(height / vh);
+    (
+        x + (width - vw * scale) / 2.0,
+        y + (height - vh * scale) / 2.0,
+        vw * scale,
+        vh * scale,
+    )
+}
+
 #[tauri::command]
 pub fn browser_present(app: AppHandle, input: BrowserPresentInput) -> Result<BrowserState, String> {
     let manager = app.state::<BrowserManager>();
+    if input.presentation_id.as_ref().is_some_and(|id| {
+        manager
+            .retired_presentations
+            .lock()
+            .map(|retired| retired.contains(id))
+            .unwrap_or(true)
+    }) {
+        return Ok(manager.state(&input.task_id));
+    }
     if !input.visible {
         let parked = manager.sessions.lock().ok().and_then(|mut sessions| {
             let session = sessions.get_mut(&input.task_id)?;
+            if session.presentation_id != input.presentation_id {
+                return None;
+            }
             session.visible = false;
             Some((session.webview.clone(), session.width, session.height))
         });
         if let Some((webview, width, height)) = parked {
+            cancel_capture(&app, &input.task_id, None);
             park_webview(&webview, width, height)?;
         }
         return Ok(manager.state(&input.task_id));
@@ -1035,12 +1413,40 @@ pub fn browser_present(app: AppHandle, input: BrowserPresentInput) -> Result<Bro
         return Err("Browser bounds are empty.".into());
     }
     let webview = ensure_session(&app, &input.task_id)?;
-    webview
-        .set_bounds(Rect {
-            position: Position::Logical(LogicalPosition::new(input.x, input.y)),
-            size: Size::Logical(LogicalSize::new(input.width, input.height)),
+    let outgoing = manager
+        .sessions
+        .lock()
+        .ok()
+        .map(|mut sessions| {
+            sessions
+                .iter_mut()
+                .filter_map(|(task, session)| {
+                    if session.presentation_id.is_some()
+                        && (task != &input.task_id
+                            || session.presentation_id != input.presentation_id)
+                    {
+                        if let Ok(mut retired) = manager.retired_presentations.lock() {
+                            retired.extend(session.presentation_id.clone());
+                        }
+                        if session.visible {
+                            session.visible = false;
+                            return Some((
+                                task.clone(),
+                                session.webview.clone(),
+                                session.width,
+                                session.height,
+                            ));
+                        }
+                    }
+                    None
+                })
+                .collect::<Vec<_>>()
         })
-        .map_err(|error| error.to_string())?;
+        .unwrap_or_default();
+    for (task, view, width, height) in outgoing {
+        cancel_capture(&app, &task, None);
+        park_webview(&view, width, height)?;
+    }
     let has_page = {
         let mut sessions = manager
             .sessions
@@ -1050,15 +1456,27 @@ pub fn browser_present(app: AppHandle, input: BrowserPresentInput) -> Result<Bro
             .get_mut(&input.task_id)
             .ok_or_else(|| "Browser session disappeared".to_string())?;
         session.visible = true;
-        session.width = input.width;
-        session.height = input.height;
+        session.presentation_id = input.presentation_id;
+        session.display_rect = Some((input.x, input.y, input.width, input.height));
+        session.width = session.state.viewport.width;
+        session.height = session.state.viewport.height;
         session.revealed_to_user = true;
         !session.state.url.is_empty()
     };
     if has_page {
+        let viewport = manager.state(&input.task_id).viewport;
+        native::place(
+            &webview,
+            fit_rect(
+                (input.x, input.y, input.width, input.height),
+                (viewport.width, viewport.height),
+            ),
+            (viewport.width, viewport.height),
+        )?;
         webview.show().map_err(|error| error.to_string())?;
     } else {
-        park_webview(&webview, input.width, input.height)?;
+        let viewport = manager.state(&input.task_id).viewport;
+        park_webview(&webview, viewport.width, viewport.height)?;
     }
     Ok(manager.state(&input.task_id))
 }
@@ -1142,6 +1560,24 @@ pub fn browser_return_from_popup(app: AppHandle, task_id: String) -> Result<Brow
 #[cfg(test)]
 mod tests {
     use super::normalize_url;
+
+    #[test]
+    fn viewport_fit_centres_without_changing_the_logical_page() {
+        use crate::models::{BrowserViewport, BrowserViewportPreset};
+        let desktop = BrowserViewport::default();
+        assert_eq!((desktop.width, desktop.height), (1440.0, 900.0));
+        let (_, y, width, height) =
+            super::fit_rect((0.0, 100.0, 430.0, 700.0), (desktop.width, desktop.height));
+        assert!((width - 430.0).abs() < 0.001);
+        assert!((height / width - 900.0 / 1440.0).abs() < 0.001);
+        assert!((y - (100.0 + (700.0 - height) / 2.0)).abs() < 0.001);
+        let phone: BrowserViewport = BrowserViewportPreset::Phone.into();
+        let (x, _, width, height) =
+            super::fit_rect((100.0, 0.0, 430.0, 700.0), (phone.width, phone.height));
+        assert!((height - 700.0).abs() < 0.001);
+        assert!((x - (100.0 + (430.0 - width) / 2.0)).abs() < 0.001);
+        assert!(serde_json::from_str::<BrowserViewportPreset>("\"unknown\"").is_err());
+    }
 
     #[test]
     fn browser_urls_are_http_only_and_localhost_gets_a_scheme() {

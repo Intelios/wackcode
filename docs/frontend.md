@@ -113,8 +113,8 @@ Rewind seeds are consumed once per chat so returning to it cannot overwrite late
 
 Running sends (Enter, ⌥Enter or Queue beside Stop) wait for the active parent run to finish. When `workActivity.parent` is idle and background children remain, the composer shows Send beside Stop: a queued send starts immediately alongside those children. Aggregate status remains running so Git, history and workspace actions stay protected. Background chips follow child lifetime independently of the launch tool; active chips stay outside completed-work folds, and earlier parent answers remain visible beside later continuations. Each
 queued row has an explicit Steer action: it interrupts the active work and sends that worker
-id next, keeping the rest queued. `queue_state.messages` supplies stable `{ id, text }` rows;
-the worker retains their full payloads and images. Queue/run events are authoritative: full
+id next, keeping the rest queued. `queue_state.messages` supplies stable `{ id, text, images? }` rows;
+the worker retains their full payloads and images. Restoring returns structured text/image prompts, reconstructs grouped browser chips and retains overflow in the draft with sending blocked until it fits. Queue/run events are authoritative: full
 snapshots don't clear the queue, and steering never optimistically removes a row, changes run
 status or adds a pending echo. Queue actions are single-flight per draft key, and no sends or
 queue actions dispatch while stopping. App captures the originating task id for async errors.
@@ -125,7 +125,7 @@ queue actions dispatch while stopping. App captures the originating task id for 
 
 ## Attachments
 
-- Images ride `images` through `api.ts` to the worker, and reach only models with Vision on.
+- Images ride `images` through `api.ts` to the worker, and reach only models with Vision on. Browser context chips count toward the same image limits. Their versioned generated text section maps each capture to its image index; `browser-context.ts` owns encoding, parsing and reindexing, including sent-message edits.
 - Every attached image opens full size in `ui/ImageLightbox`: the composer shows the picked file it still holds, and the transcript and edit box fetch the original from the chat's session with `api.messageImage` (a snapshot's thumbnail is all they render). In the lightbox, a click zooms toward the clicked point (click again, or −, to zoom out; + zooms to centre) and a zoomed image pans by dragging.
 - Attached text files are folded into the message text by `composeFileSection` and read back out for display by `splitFileSection` (`src/attachment-utils.ts`). Change both halves together.
 - A plain-text paste of 32 KiB or more (`MIN_PASTE_FILE_BYTES`, UTF-8 bytes) becomes a `Pasted text N.txt` attachment instead of a wall of text in the draft; it meets the same file caps, and a paste that does not fit stays in the draft with a notice explaining why. The notice's **Insert as text** puts it back. Attachments alone can be sent, so a paste-only message works; a queued message made only of files shows their names.
@@ -204,14 +204,32 @@ another launch. Switching between chats in one checkout reuses the same session.
 
 ## Browser preview
 
-A native child `WKWebView` per chat (`browser.rs`), placed over `.browser-surface` by `BrowserPanel` through `browserPresent`. Hidden views stay attached, so a background chat's agent can keep using its page. Pages get an ephemeral data store and no Tauri capabilities.
+`browser.rs` owns an ephemeral native WebKit session per chat. A main-thread AppKit container
+scales a fixed CSS viewport into `.browser-surface`; changing panel/window size never changes
+responsive breakpoints. Presets are mirrored in `browser-context.ts` and Rust's models.
+Hidden views remain attached at the selected viewport size for background tool use. Native
+window actions use `get_window("main")`: the single-webview wrapper cannot resolve a window
+with preview children. Keep observing both the surface and outer drawer, and wait for the
+full rectangle to settle before native placement; drawer motion can move it without resizing.
 
-Native window actions use `get_window("main")`: after adding a preview, Tauri's
-single-webview `get_webview_window` wrapper no longer resolves the main window.
+`BrowserPanel` owns one presentation token per effect lifetime (including Strict Mode's
+remount). Retirement rejects late placement requests; presenting another owner retires the old
+one. Modals and popovers park the native view. Expanded mode spans the main area and keeps the
+same composer mounted below it; its height and inline dialogs set `--browser-dock-h`.
 
-The native page stays parked while the surface's full rectangle settles. Observe both the
-surface and the outer drawer: opening animates the drawer's width while its content keeps its
-final size, so a surface-only resize observer misses the position change.
+Picking intercepts native pointer events, so selecting never activates the page. Capture
+reservations serialize with browser tools, leave explicit user control untouched, and end on
+completion/cancellation/navigation/closure. DOM inspection runs in WebKit's isolated client
+world. The markup editor uses frozen pixels and a bounded geometry index, never the live DOM.
+Arrows use their tips, text its anchor, boxes their enclosed elements, and pen strokes their
+points; matching prefers specific targets and removes ancestor duplication.
+
+One browser chip bundles image, capture-time URL/viewport and up to eight inert DOM targets.
+Its DOM budget is 16 KiB (64 KiB per message), with visible truncation. The image uses the
+ordinary image pipeline; metadata lives in a versioned generated prompt tail. Both areas use
+`BrowserContextChip`, `MessageBrowserContexts` and the same draft/queue codec. Copies omit
+transport text; edits reindex retained images; retries, forks and cold history retain the
+stored evidence. An attached chip is inspectable/removable; drawing layers end at attachment.
 
 ## Scroll rail
 

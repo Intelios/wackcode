@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import { MessageQueue } from "./message-queue.js";
 
 describe("desktop message queue", () => {
-  it("keeps FIFO order and exposes only the text and stable id", () => {
+  it("keeps FIFO order and exposes images for pending attachment inspection", () => {
     const queue = new MessageQueue();
     queue.enqueue({ id: "a", text: "first", images: [{ type: "image", mimeType: "image/png", data: "private payload" }] });
     queue.enqueue({ id: "b", text: "second" });
-    expect(queue.view()).toEqual([{ id: "a", text: "first" }, { id: "b", text: "second" }]);
+    expect(queue.view()).toEqual([{ id: "a", text: "first", images: [{ type: "image", mimeType: "image/png", data: "private payload" }] }, { id: "b", text: "second" }]);
     expect(queue.take()?.id).toBe("a");
     expect(queue.take()?.id).toBe("b");
     expect(queue.take()).toBeUndefined();
@@ -46,5 +46,17 @@ describe("desktop message queue", () => {
     expect(queue.clear()).toEqual(["second", "first"]);
     expect(queue.clear()).toEqual([]);
     expect(queue.hasPending).toBe(false);
+  });
+
+  it("restores full image payloads once without changing their order", () => {
+    const queue = new MessageQueue();
+    const first = { id: "a", text: "browser context imageIndex=1", images: [
+      { type: "image" as const, mimeType: "image/png", data: "ordinary" },
+      { type: "image" as const, mimeType: "image/png", data: "browser" }
+    ] };
+    queue.enqueue(first); queue.enqueue({ id: "b", text: "second" });
+    expect(queue.drain()).toEqual([first, { id: "b", text: "second" }]);
+    expect(queue.view()).toEqual([]);
+    expect(queue.drain()).toEqual([]);
   });
 });

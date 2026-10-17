@@ -1,4 +1,4 @@
-import type { CheckpointRef, CommandPresentation, ImageContent, QueuedMessage } from "./protocol.js";
+import type { CheckpointRef, CommandPresentation, QueuedMessage } from "./protocol.js";
 
 /**
  * Desktop sends wait outside Pi's run, not in its boundary-only steering queue. Keeping the
@@ -8,7 +8,6 @@ import type { CheckpointRef, CommandPresentation, ImageContent, QueuedMessage } 
  * removes it; duplicate text is deliberately allowed and never used as identity.
  */
 export interface PendingMessage extends QueuedMessage {
-  images?: ImageContent[];
   literal?: boolean;
   presentation?: CommandPresentation;
   runId?: string;
@@ -24,7 +23,7 @@ export class MessageQueue {
   get hasRunnable(): boolean { return !this.paused && this.hasPending; }
 
   view(): QueuedMessage[] {
-    return this.messages.map(({ id, text }) => ({ id, text }));
+    return this.messages.map(({ id, text, images }) => ({ id, text, ...(images?.length ? { images } : {}) }));
   }
 
   enqueue(message: PendingMessage): void {
@@ -44,10 +43,11 @@ export class MessageQueue {
   }
 
   clear(): string[] {
-    const texts = this.messages.map(({ text }) => text);
-    this.messages = [];
-    return texts;
+    return this.drain().map(({ text }) => text);
   }
+
+  /** Restore payloads, preserving the image order used by browser-context records. */
+  drain(): PendingMessage[] { const messages = this.messages; this.messages = []; return messages; }
 
   pause(): void { this.paused = true; }
   resume(): void { this.paused = false; }

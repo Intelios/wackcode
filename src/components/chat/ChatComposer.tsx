@@ -1,3 +1,4 @@
+import { encodeContexts, restoreContexts } from "../../browser-context";
 /**
  * Chat mode's composer: a round, friendly pill instead of the Code composer's toolbar. It keeps
  * what a conversation needs — attachments, the model and reasoning pickers, Stop, and queued
@@ -9,8 +10,8 @@
  */
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type DragEvent, type SetStateAction } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import type { ImageContent, ProviderRecord, QueuedMessage, TaskStatus, ThinkingLevel } from "../../types";
-import { attachFiles, filesFrom, largePasteText, pastedTextFile, splitFileSection, type FileAttachment } from "../../attachment-utils";
+import type { ImageContent, ProviderRecord, QueuedMessage, RestoredPrompt, TaskStatus, ThinkingLevel } from "../../types";
+import { attachmentProblem, attachFiles, filesFrom, largePasteText, pastedTextFile, splitFileSection, type FileAttachment } from "../../attachment-utils";
 import { EMPTY_DRAFT, type ComposerDraft, type ComposerDraftState } from "../../hooks/useComposerDrafts";
 import { AttachmentTray } from "../composer/AttachmentTray";
 import { PasteNotice } from "../composer/PasteNotice";
@@ -46,11 +47,11 @@ interface ChatComposerProps extends ModelFavoritesProps {
   frozen?: string;
   hero: boolean;
   queuedMessages?: QueuedMessage[];
-  seed?: { text: string; nonce: number };
+  seed?: { text: string; images?: ImageContent[]; nonce: number };
   onConfigure: (patch: { providerId?: string; modelId?: string; thinkingLevel?: ThinkingLevel }) => void;
   onSend: (message: string, images: ImageContent[], files: FileAttachment[], queue?: boolean) => Promise<boolean>;
   onSteer?: (messageId: string) => Promise<boolean>;
-  onDequeue?: () => Promise<string[] | undefined>;
+  onDequeue?: () => Promise<(RestoredPrompt | string)[] | undefined>;
   onStop: () => void;
   onOpenSettings: () => void;
   /** Reports whether there's something typed, so the hero's duck can perk up. */
@@ -64,6 +65,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   const reduce = useReducedMotion() ?? false;
   const { key: draftKey, value, update: updateDraft } = draftState;
   const { text: draft, images, files } = value;
+  const contexts = value.browserContexts ?? [];
+  const attachmentError = attachmentProblem(value);
   const activeDraftKey = useRef(draftKey);
   activeDraftKey.current = draftKey;
   const areaRef = useRef<HTMLTextAreaElement>(null);
@@ -87,14 +90,15 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   const model = providers.find((provider) => provider.id === providerId)?.models.find((item) => item.id === modelId);
   const vision = model?.vision === true;
   const noVisionMessage = `${model?.name || model?.id || "This model"} doesn't accept images. Turn on Vision for it in Settings.`;
-  const blockedByModel = images.length > 0 && !vision;
+  const blockedByModel = (images.length + contexts.length > 0 && !vision) || Boolean(attachmentError);
   const shownText = frozen ?? draft;
-  const canSend = !disabled && frozen === undefined && providers.length > 0 && status !== "stopping" && (Boolean(draft.trim()) || files.length > 0) && !blockedByModel;
+  const canSend = !disabled && frozen === undefined && providers.length > 0 && status !== "stopping" && (Boolean(draft.trim()) || files.length > 0 || contexts.length > 0) && !blockedByModel;
 
   const queue = useQueueActions({
     draftKey, activeDraftKey, status, blocked: Boolean(disabled) || frozen !== undefined, onSteer, onDequeue,
     onError: setNotice,
-    onRestore: (restored, restoredFiles) => {
+    onRestore: (restored, restoredFiles, restoredImages, restoredContexts) => {
+      updateDraft((current) => ({ ...current, images: [...current.images, ...restoredImages], browserContexts: [...(current.browserContexts ?? []), ...restoredContexts] }));
       if (restoredFiles.length) setField("files", (current) => [...current, ...restoredFiles]);
       if (restored) setField("text", (current) => current.trim() ? `${current}\n\n${restored}` : restored);
       requestAnimationFrame(() => { if (activeDraftKey.current === draftKey) areaRef.current?.focus(); });
@@ -137,13 +141,15 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   }, []);
 
   const seedText = useRef(seed?.text);
+  const seedImages = useRef(seed?.images);
+  seedImages.current = seed?.images;
   seedText.current = seed?.text;
   useEffect(() => {
     const nonce = seed?.nonce;
     if (nonce === undefined || seedText.current === undefined || seedNonces.current.get(draftKey) === nonce) return;
     seedNonces.current.set(draftKey, nonce);
     const restored = splitFileSection(seedText.current);
-    updateDraft((current) => ({ ...current, text: restored.text, files: restored.files }));
+    updateDraft((current) => ({ ...current, text: restored.text, files: restored.files, ...restoreContexts(restored.browserContexts ?? [], seedImages.current ?? []) }));
     setPasteNotice(undefined);
     areaRef.current?.focus();
   }, [seed?.nonce, draftKey]);
@@ -157,19 +163,21 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     setNotice(undefined);
     setPasteNotice(undefined);
     setLaunches((count) => count + 1);
-    const ok = await onSend(message, keptImages, keptFiles, queueing ? true : undefined);
+    const outgoing = encodeContexts(message, keptImages, contexts);
+    const ok = await onSend(outgoing.text, outgoing.images, keptFiles, queueing ? true : undefined);
     if (!ok) {
       updateDraft((current) => ({
         text: current.text ? `${message}\n\n${current.text}` : message,
         images: [...keptImages, ...current.images],
-        files: [...keptFiles, ...current.files]
+        files: [...keptFiles, ...current.files],
+        browserContexts: [...contexts, ...(current.browserContexts ?? [])]
       }));
     }
   }
 
   async function addFiles(picked: File[]) {
     if (picked.length === 0) return;
-    const result = await attachFiles({ images, files }, picked, { vision, noVisionMessage, mentions: false });
+    const result = await attachFiles({ images, files }, picked, { vision, noVisionMessage, mentions: false, reservedImages: contexts.length });
     setField("images", result.images);
     setField("files", result.files);
     if (activeDraftKey.current === draftKey) setNotice(result.error);
@@ -216,7 +224,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
         layout={reduce ? false : "position"}
         transition={{ duration: 0.6, ease: GLIDE_EASE }}
       >
-        <AttachmentTray images={images} files={files} className="chat-attachments"
+        <AttachmentTray images={images} files={files} browserContexts={contexts} onRemoveContext={(index) => setField("browserContexts", contexts.filter((_, i) => i !== index))} className="chat-attachments"
           onOpenImage={(index, url) => setShownImage({ index, url })}
           onRemoveImage={(index) => { setField("images", images.filter((_, i) => i !== index)); setNotice(undefined); }}
           onRemoveFile={(index) => {
@@ -233,7 +241,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
           )}
           {(notice || blockedByModel) && (
             <motion.div key="notice" className="chat-composer-notice" role="status" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
-              {blockedByModel ? `${noVisionMessage} Or remove the images to send.` : notice}
+              {attachmentError || (blockedByModel ? `${noVisionMessage} Or remove the images to send.` : notice)}
             </motion.div>
           )}
         </AnimatePresence>

@@ -87,7 +87,7 @@ export function SidePanel({ view, width, onWidthChange, label, children }: SideP
         >
           <div className="panel-resizer" onPointerDown={startResize} />
           <div className="side-panel-inner" style={{ width }}>
-            <AnimatePresence mode="popLayout" initial={false} custom={direction}>
+            <AnimatePresence mode="popLayout" initial={false} custom={direction} propagate>
               <motion.div
                 key={swapKey(view)}
                 className="side-panel-page"

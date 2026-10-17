@@ -4,10 +4,12 @@
  * › Composer drafts): nothing here removes a row optimistically, and actions lock per draft key.
  */
 import { useRef, useState, type ReactNode } from "react";
-import { splitFileSection, type FileAttachment } from "../../attachment-utils";
-import type { QueuedMessage, TaskStatus } from "../../types";
+import { imageDataUrl, splitFileSection, type FileAttachment } from "../../attachment-utils";
+import type { BrowserContextAttachment, BrowserContextRecord, ImageContent, QueuedMessage, RestoredPrompt, TaskStatus } from "../../types";
+import { contextLabel, restoreContexts } from "../../browser-context";
 import { Icon } from "../Icons";
 import { Tooltip } from "../ui/Tooltip";
+import { BrowserContextChip } from "../browser/BrowserContextChip";
 
 interface QueueActionOptions {
   draftKey: string;
@@ -17,10 +19,10 @@ interface QueueActionOptions {
   /** Disabled, frozen or otherwise unable to act, before the lock is considered. */
   blocked: boolean;
   onSteer?: (messageId: string) => Promise<boolean>;
-  onDequeue?: () => Promise<string[] | undefined>;
+  onDequeue?: () => Promise<(RestoredPrompt | string)[] | undefined>;
   onError: (message: string) => void;
   /** Restored texts (file sections split back out) for the originating draft. */
-  onRestore: (text: string, files: FileAttachment[]) => void;
+  onRestore: (text: string, files: FileAttachment[], images: ImageContent[], contexts: BrowserContextAttachment[]) => void;
 }
 
 export function useQueueActions({ draftKey, activeDraftKey, status, blocked, onSteer, onDequeue, onError, onRestore }: QueueActionOptions) {
@@ -57,8 +59,13 @@ export function useQueueActions({ draftKey, activeDraftKey, status, blocked, onS
     await change(async () => {
       const texts = await onDequeue();
       if (!texts || texts.length === 0) return;
-      const parts = texts.map((text) => splitFileSection(text));
-      onRestore(parts.map((part) => part.text).filter(Boolean).join("\n\n"), parts.flatMap((part) => part.files));
+      const parts = texts.map((item) => {
+        const prompt = typeof item === "string" ? { text: item, images: [] } : item;
+        const split = splitFileSection(prompt.text);
+        return { ...split, ...restoreContexts(split.browserContexts ?? [], prompt.images ?? []) };
+      });
+      onRestore(parts.map((part) => part.text).filter(Boolean).join("\n\n"), parts.flatMap((part) => part.files),
+        parts.flatMap((part) => part.images), parts.flatMap((part) => part.browserContexts));
     });
   }
 
@@ -67,15 +74,16 @@ export function useQueueActions({ draftKey, activeDraftKey, status, blocked, onS
 
 /** Show the words, not generated file sections. A message made only of files shows their names
  *  instead, so its row is never blank. Never reconstruct a steered payload from them. */
-export function queuedDisplay(queued: QueuedMessage[] | undefined): QueuedMessage[] {
+type QueuedDisplayMessage = QueuedMessage & { browserContexts?: BrowserContextRecord[] };
+export function queuedDisplay(queued: QueuedMessage[] | undefined): QueuedDisplayMessage[] {
   return (queued ?? []).map((entry) => {
-    const { text, files } = splitFileSection(entry.text);
-    return { ...entry, text: text || files.map((file) => file.name).join(", ") };
+    const { text, files, browserContexts = [] } = splitFileSection(entry.text);
+    return { ...entry, text: text || [...files.map((file) => file.name), ...browserContexts.map(contextLabel)].join(", "), ...(browserContexts.length ? { browserContexts } : {}) };
   });
 }
 
 interface QueuedRowsProps {
-  entries: QueuedMessage[];
+  entries: QueuedDisplayMessage[];
   agentName: string;
   disabled: boolean;
   canSteer: boolean;
@@ -92,9 +100,12 @@ export function QueuedRows({ entries, agentName, disabled, canSteer, canRestore,
   return (
     <div className={className} role="list" aria-label="Queued messages">
       {entries.map((entry) => (
-        <div className="queued-message" role="listitem" key={entry.id}>
+        <div className={`queued-message${entry.browserContexts?.length ? " queued-browser-message" : ""}`} role="listitem" key={entry.id}>
           {tag ?? <span className="queued-tag">Queued</span>}
-          <span className="queued-text">{entry.text}</span>
+          <div className="queued-content"><span className="queued-text">{entry.text}</span>
+            {entry.browserContexts?.length ? <div className="message-browser-contexts">{entry.browserContexts.map((context) => <BrowserContextChip key={context.id} context={context}
+              preview={entry.images?.[context.imageIndex] ? imageDataUrl(entry.images[context.imageIndex]) : undefined} />)}</div> : null}
+          </div>
           <Tooltip label={`Interrupt ${agentName} and send this next. Keep other messages queued.`}>
             <button type="button" className="secondary-button compact queued-steer" disabled={disabled || !canSteer} onClick={() => onSteer(entry.id)}>
               Steer

@@ -3,7 +3,8 @@
  * waiting to send. Each image opens full size from the data URL the composer already holds.
  */
 import { imageDataUrl, type FileAttachment } from "../../attachment-utils";
-import type { ImageContent } from "../../types";
+import type { BrowserContextAttachment, ImageContent } from "../../types";
+import { BrowserContextChip } from "../browser/BrowserContextChip";
 import { Icon } from "../Icons";
 
 interface AttachmentTrayProps {
@@ -13,12 +14,15 @@ interface AttachmentTrayProps {
   onRemoveImage: (index: number) => void;
   onRemoveFile: (index: number) => void;
   className?: string;
+  browserContexts?: BrowserContextAttachment[];
+  onRemoveContext?: (index: number) => void;
 }
 
-export function AttachmentTray({ images, files, onOpenImage, onRemoveImage, onRemoveFile, className = "composer-attachments" }: AttachmentTrayProps) {
-  if (images.length === 0 && files.length === 0) return null;
+export function AttachmentTray({ images, files, onOpenImage, onRemoveImage, onRemoveFile, browserContexts = [], onRemoveContext, className = "composer-attachments" }: AttachmentTrayProps) {
+  if (images.length === 0 && files.length === 0 && browserContexts.length === 0) return null;
   return (
     <div className={className}>
+      {browserContexts.map((context, index) => <BrowserContextChip key={context.id} context={context} preview={imageDataUrl(context.image)} onRemove={onRemoveContext ? () => onRemoveContext(index) : undefined} />)}
       {images.map((image, index) => (
         <div className="attachment-thumb" key={index}>
           <button type="button" className="attachment-open" aria-label={`Open attached image ${index + 1}`} onClick={() => onOpenImage(index, imageDataUrl(image))}>

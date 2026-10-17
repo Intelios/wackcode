@@ -920,6 +920,16 @@ describe("browser built-in", () => {
     expect(image.content).toContainEqual({ type: "image", data: "cG5n", mimeType: "image/png" });
     expect(image.content[0]?.text).toContain("coordinate scale 2");
   });
+
+  it("lets the agent choose a viewport on open or without navigating", async () => {
+    const { requests, tools } = harness(true);
+    await tools.get("browser_open")!.execute("call", { url: "http://localhost:5173", viewport: "desktop" }, undefined);
+    await tools.get("browser_act")!.execute("call", { kind: "set_viewport", viewport: "phone" }, undefined);
+    expect(requests).toEqual([
+      { op: "open", url: "http://localhost:5173", viewport: "desktop" },
+      { op: "act", action: { kind: "set_viewport", viewport: "phone" } }
+    ]);
+  });
 });
 
 describe("memory built-in", () => {

@@ -4759,7 +4759,8 @@ describe("message queueing", () => {
 
   it("restores queued messages to the caller without delivering them", async () => {
     const { provider, worker, runId } = await startSlowRun("alpha-secret", "dequeue");
-    await enqueue(worker, "Keep this one back.");
+    const images = [{ type: "image", mimeType: "image/png", data: "cG5n" }];
+    await enqueue(worker, "Keep this one back.", { images });
     await enqueue(worker, "And this later.");
     await worker.waitFor((output) => output.type === "queue_state" && output.messages?.length === 2);
 
@@ -4767,7 +4768,7 @@ describe("message queueing", () => {
     worker.send({ id, type: "dequeue" });
     const cleared = await worker.waitFor((output) => output.type === "response" && output.id === id);
     expect(cleared.success).toBe(true);
-    expect(cleared.result).toEqual({ steering: [], followUp: ["Keep this one back.", "And this later."] });
+    expect(cleared.result).toEqual({ steering: [], followUp: [{ text: "Keep this one back.", images }, { text: "And this later." }] });
 
     await worker.waitFor((output) => output.type === "run_state" && output.runId === runId && output.state === "idle");
     expect(provider.requests.some((request) => request.text.includes("Keep this one back.") || request.text.includes("And this later."))).toBe(false);

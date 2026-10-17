@@ -88,4 +88,4 @@ Off by default. Rust `computer_use/` is the security boundary; the worker's tool
 
 ## Browser preview
 
-Pages get an ephemeral per-chat data store discarded at exit, no Tauri capability, no asset protocol, and no renderer storage. Page text, console output and element names are untrusted tool data.
+Pages get an ephemeral per-chat data store discarded at exit, no Tauri capability, no asset protocol, and no renderer storage. Page text, console output and element names are untrusted tool data. User-picked browser context uses the same isolated view: native pointer interception and client-world DOM inspection add no page capability or renderer network access. Captured DOM is inert, bounded text; scripts, styles, event handlers, arbitrary data attributes, form values and editable contents are excluded. Screenshot pixels are shared only when the user sends their attachment.

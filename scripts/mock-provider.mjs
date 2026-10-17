@@ -62,6 +62,10 @@ const server = createServer(async (request, response) => {
   // "search fixture: <query>" calls web_search when Settings › Web offers it.
   const searchQuery = /^search fixture:\s*(.+)$/i.exec(prompt)?.[1];
   const search = searchQuery && body.tools?.some((tool) => tool.function?.name === "web_search") ? searchQuery : undefined;
+  // Explicit browser fixtures drive the real host through the app without a paid model.
+  const browserMatch = /^browser fixture:[ \t]*(browser_(?:open|snapshot|act|screenshot|console))[ \t]*(\{[^\n]*\})?(?:\n|$)/.exec(prompt);
+  const browser = browserMatch && body.tools?.some((tool) => tool.function?.name === browserMatch[1])
+    ? { name: browserMatch[1], arguments: browserMatch[2] || "{}" } : undefined;
   if (child) {
     response.write(": background child working\n\n");
     if (prompt.includes("until stopped")) return;
@@ -75,7 +79,7 @@ const server = createServer(async (request, response) => {
   const backgroundLaunched = messages.slice(messages.lastIndexOf(latestUser) + 1).some((message) => message.role === "assistant" && message.tool_calls?.some((call) => call.function?.name === "subagent"));
   const resultsArrived = prompt.includes("Job ");
   const backgroundLaunch = background && subagent && !backgroundLaunched && !resultsArrived;
-  if (backgroundLaunch || (!background && !child && !resultsArrived && !hasToolResult && body.tools?.length)) {
+  if (backgroundLaunch || (!background && !child && !resultsArrived && !hasToolResult && body.tools?.length && (!browserMatch || browser))) {
     send(response, {
       id: "fixture-tool",
       object: "chat.completion.chunk",
@@ -90,8 +94,8 @@ const server = createServer(async (request, response) => {
             id: `fixture-tool-${messages.length}`,
             type: "function",
             function: {
-              name: backgroundLaunch ? "subagent" : search ? "web_search" : "write",
-              arguments: JSON.stringify(backgroundLaunch
+              name: backgroundLaunch ? "subagent" : browser ? browser.name : search ? "web_search" : "write",
+              arguments: browser ? browser.arguments : JSON.stringify(backgroundLaunch
                 ? { agent: roles.includes("worker") ? "worker" : roles[0], task: `background-fixture-child${prompt.includes("until stopped") ? " until stopped" : ""}`, background: true }
                 : search ? { query: search, count: 3 }
                 : escape ? { path: "../wackcode-escape.txt", content: "Written outside the workspace.\n" }
@@ -116,7 +120,7 @@ const server = createServer(async (request, response) => {
       object: "chat.completion.chunk",
       created: 2,
       model: body.model,
-      choices: [{ index: 0, delta: { role: "assistant", content: child ? "Background fixture child completed." : searchQuery ? "I searched the web; the results are in the card above." : resultsArrived ? "The background child finished; its result has arrived." : background ? "I launched a background helper and finished my own work. You can send another message while it runs." : escape ? "I tried to write `../wackcode-escape.txt`, outside the workspace." : "Created `wackcode-live.txt`." }, finish_reason: null }]
+      choices: [{ index: 0, delta: { role: "assistant", content: browserMatch ? "Browser fixture complete." : child ? "Background fixture child completed." : searchQuery ? "I searched the web; the results are in the card above." : resultsArrived ? "The background child finished; its result has arrived." : background ? "I launched a background helper and finished my own work. You can send another message while it runs." : escape ? "I tried to write `../wackcode-escape.txt`, outside the workspace." : "Created `wackcode-live.txt`." }, finish_reason: null }]
     });
     send(response, {
       id: "fixture-done",

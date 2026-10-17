@@ -1,5 +1,7 @@
 import { useLayoutEffect, useRef, useState, useCallback } from "react";
-import type { NormalizedBlock } from "../types";
+import type { BrowserContextRecord, NormalizedBlock } from "../types";
+import { appendContextSection, reindexContexts } from "../browser-context";
+import { MessageBrowserContexts } from "./browser/MessageBrowserContexts";
 import type { FileAttachment } from "../attachment-utils";
 import { Icon } from "./Icons";
 import { ImageLightbox } from "./ui/ImageLightbox";
@@ -11,6 +13,7 @@ interface Props {
   images: NormalizedBlock[];
   /** The original message's attached text files. */
   files: FileAttachment[];
+  browserContexts?: BrowserContextRecord[];
   /** Whether the chat's model accepts images. */
   vision: boolean;
   modelName?: string;
@@ -22,7 +25,7 @@ interface Props {
 }
 
 /** Edits a sent message in place. Sending makes the edit a new version of the message. */
-export function MessageEditor({ text, images, files, vision, modelName, loadImage, onSend, onCancel }: Props) {
+export function MessageEditor({ text, images, files, browserContexts = [], vision, modelName, loadImage, onSend, onCancel }: Props) {
   const [draft, setDraft] = useState(text);
   const [removed, setRemoved] = useState<number[]>([]);
   const [removedFiles, setRemovedFiles] = useState<number[]>([]);
@@ -35,6 +38,7 @@ export function MessageEditor({ text, images, files, vision, modelName, loadImag
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const kept = images.filter((_, index) => !removed.includes(index));
   const keptFiles = files.filter((_, index) => !removedFiles.includes(index));
+  const keptContexts = browserContexts.filter((context) => !removed.includes(context.imageIndex));
   const blocked = kept.length > 0 && !vision;
 
   useLayoutEffect(() => {
@@ -53,17 +57,18 @@ export function MessageEditor({ text, images, files, vision, modelName, loadImag
 
   async function send() {
     const message = draft.trim();
-    if ((!message && keptFiles.length === 0) || busy || blocked) return;
+    if ((!message && keptFiles.length === 0 && keptContexts.length === 0) || busy || blocked) return;
     setBusy(true);
-    const sent = await onSend(message, keptFiles, removed);
+    const sent = await onSend(appendContextSection(message, reindexContexts(keptContexts, removed)), keptFiles, removed);
     if (!sent) setBusy(false);
   }
 
   return (
     <div className="message-editor">
+      <MessageBrowserContexts contexts={keptContexts} images={images} loadImage={loadImage} onRemove={(context) => setRemoved((current) => [...current, context.imageIndex])} />
       {images.length > 0 && (
         <div className="composer-attachments">
-          {images.map((image, index) => removed.includes(index) ? null : (
+          {images.map((image, index) => removed.includes(index) || browserContexts.some((context) => context.imageIndex === index) ? null : (
             <div className="attachment-thumb" key={image.imageId ?? index}>
               {image.thumbnail
                 ? (
@@ -115,7 +120,7 @@ export function MessageEditor({ text, images, files, vision, modelName, loadImag
       />
       <div className="message-editor-actions">
         <button type="button" className="secondary-button" onClick={onCancel}>Cancel</button>
-        <button type="button" className="primary-button" disabled={(!draft.trim() && keptFiles.length === 0) || busy || blocked} onClick={() => void send()}>
+        <button type="button" className="primary-button" disabled={(!draft.trim() && keptFiles.length === 0 && keptContexts.length === 0) || busy || blocked} onClick={() => void send()}>
           {busy ? "Sending…" : "Send"}
         </button>
       </div>

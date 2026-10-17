@@ -1,10 +1,11 @@
+import { encodeContexts, restoreContexts } from "../browser-context";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode, type SetStateAction } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { DEFAULT_EXECUTION_POLICY } from "../execution-policy";
 import { DEFAULT_AGENT_NAME } from "../agentName";
 import { ExecutionPolicyNotice } from "./ExecutionPolicyNotice";
-import type { ExecutionPolicyConfig, ImageContent, ProviderRecord, QueuedMessage, SessionSnapshot, SlashCommand, TaskMode, TaskStatus, ThinkingLevel } from "../types";
-import { attachFiles, filesFrom, largePasteText, pastedTextFile, splitFileSection, type FileAttachment } from "../attachment-utils";
+import type { ExecutionPolicyConfig, ImageContent, ProviderRecord, QueuedMessage, RestoredPrompt, SessionSnapshot, SlashCommand, TaskMode, TaskStatus, ThinkingLevel } from "../types";
+import { attachmentProblem, attachFiles, filesFrom, largePasteText, pastedTextFile, splitFileSection, type FileAttachment } from "../attachment-utils";
 import { activeMention, mentionValue, rankMentions, type MentionSuggestion } from "../mention-utils";
 import { activeSlashCommand } from "../command-utils";
 import { EMPTY_DRAFT, type ComposerDraft, type ComposerDraftState } from "../hooks/useComposerDrafts";
@@ -94,14 +95,14 @@ interface ComposerProps extends ModelFavoritesProps {
   /** Interrupts active work and sends this worker-owned entry next. App reports failures. */
   onSteer?: (messageId: string) => Promise<boolean>;
   /** Takes all queued messages back out of the worker; resolves with their texts for the draft. */
-  onDequeue?: () => Promise<string[] | undefined>;
+  onDequeue?: () => Promise<(RestoredPrompt | string)[] | undefined>;
   onStop: () => void;
   onOpenSettings: () => void;
   /** When true the composer is visually dimmed and non-interactive (e.g. a dialog needs attention). */
   disabled?: boolean;
   /** Replaces the draft whenever `nonce` changes, e.g. with the text of a rewound message
    *  (whose attached files are restored from its generated section). */
-  seed?: { text: string; nonce: number };
+  seed?: { text: string; images?: ImageContent[]; nonce: number };
   /** Traces an ambient accent line around the border; used on the draft hero only. */
   comet?: boolean;
   /** Shows this text read-only instead of the draft while the hero composer hands off to the docked one. */
@@ -115,6 +116,8 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
   const value = draftState?.value ?? localDraft;
   const updateDraft = draftState?.update ?? setLocalDraft;
   const { text: draft, images: attachments, files } = value;
+  const contexts = value.browserContexts ?? [];
+  const attachmentError = attachmentProblem(value);
   const draftKey = draftState?.key ?? "local";
   const activeDraftKey = useRef(draftKey);
   activeDraftKey.current = draftKey;
@@ -147,7 +150,8 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
   const queue = useQueueActions({
     draftKey, activeDraftKey, status, blocked: Boolean(disabled) || frozen !== undefined, onSteer, onDequeue,
     onError: (message) => setAttachNotice(message),
-    onRestore: (restored, restoredFiles) => {
+    onRestore: (restored, restoredFiles, restoredImages, restoredContexts) => {
+      updateDraft((current) => ({ ...current, images: [...current.images, ...restoredImages], browserContexts: [...(current.browserContexts ?? []), ...restoredContexts] }));
       if (activeDraftKey.current === draftKey) setSlashNotice(undefined);
       if (restoredFiles.length > 0) setFiles((current) => [...current, ...restoredFiles]);
       if (restored) setDraft((current) => (current.trim() ? `${current}\n\n${restored}` : restored));
@@ -161,7 +165,7 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
   const vision = model?.vision === true;
   const noVisionMessage = `${model?.name || model?.id || "This model"} doesn't accept images. Turn on Vision for it in Settings.`;
   // Images picked for a vision model, then the model was switched to one without it.
-  const blockedByModel = attachments.length > 0 && !vision;
+  const blockedByModel = (attachments.length + contexts.length > 0 && !vision) || Boolean(attachmentError);
   const tokenEnd = draft.search(/\s/);
   const commandEnd = tokenEnd < 0 ? draft.length : tokenEnd;
   const commandToken = draft.startsWith("/") ? draft.slice(1, commandEnd) : "";
@@ -250,6 +254,8 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
 
   // Only a new nonce reseeds, so a re-render never clobbers what the user has typed since.
   const seedText = useRef(seed?.text);
+  const seedImages = useRef(seed?.images);
+  seedImages.current = seed?.images;
   seedText.current = seed?.text;
   const seedNonce = seed?.nonce;
   useEffect(() => {
@@ -258,8 +264,7 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
     // A rewound message's text carries its attached files in the generated section; put them
     // back in the tray instead of showing the section in the draft.
     const restored = splitFileSection(seedText.current);
-    setDraft(restored.text);
-    setFiles(restored.files);
+    updateDraft((current) => ({ ...current, text: restored.text, files: restored.files, ...restoreContexts(restored.browserContexts ?? [], seedImages.current ?? []) }));
     setPasteNotice(undefined);
     areaRef.current?.focus();
   }, [seedNonce, draftKey]);
@@ -271,14 +276,14 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
    *  expands commands (and the queue resolves the catalog entry first) and the generated
    *  section would fold into the expansion. Sending the same text literally never expands. */
   function filesVsCommand(message: string): boolean {
-    return files.length > 0 && message.startsWith("/");
+    return (files.length > 0 || contexts.length > 0) && message.startsWith("/");
   }
 
   /** Every running send queues for after the active work, raw or command-expanded.
    * Steer is a separate action on a stable queued-message id. */
   async function queueDraft(literal = false) {
     const message = draft.trim();
-    if ((!message && files.length === 0) || status !== "running" || disabled || frozen !== undefined || providers.length === 0 || blockedByModel) return;
+    if ((!message && files.length === 0 && contexts.length === 0) || status !== "running" || disabled || frozen !== undefined || providers.length === 0 || blockedByModel) return;
     if (!literal && filesVsCommand(message)) {
       setSlashNotice("Remove attached files before running this command.");
       setSlashDismissedAt(slash?.start);
@@ -289,12 +294,14 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
     updateDraft(EMPTY_DRAFT);
     setAttachNotice(undefined);
     setPasteNotice(undefined);
-    const ok = literal && onLiteral ? await onLiteral(message, images, keptFiles) : await onSend(message, images, keptFiles, true);
+    const outgoing = encodeContexts(message, images, contexts);
+    const ok = literal && onLiteral ? await onLiteral(outgoing.text, outgoing.images, keptFiles) : await onSend(outgoing.text, outgoing.images, keptFiles, true);
     if (!ok) {
       updateDraft((current) => ({
         text: current.text ? `${message}\n\n${current.text}` : message,
         images: [...images, ...current.images],
-        files: [...keptFiles, ...current.files]
+        files: [...keptFiles, ...current.files],
+        browserContexts: [...contexts, ...(current.browserContexts ?? [])]
       }));
     }
   }
@@ -302,7 +309,7 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
   async function send() {
     if (frozen !== undefined || disabled || providers.length === 0 || status === "stopping") return;
     const message = draft.trim();
-    if ((!message && files.length === 0) || blockedByModel) return;
+    if ((!message && files.length === 0 && contexts.length === 0) || blockedByModel) return;
     if (filesVsCommand(message)) {
       setSlashNotice("Remove attached files before running this command.");
       setSlashDismissedAt(slash?.start);
@@ -367,12 +374,14 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
     updateDraft(EMPTY_DRAFT);
     setAttachNotice(undefined);
     setPasteNotice(undefined);
-    const ok = await onSend(message, images, keptFiles);
+    const outgoing = encodeContexts(message, images, contexts);
+    const ok = await onSend(outgoing.text, outgoing.images, keptFiles);
     if (!ok) {
       updateDraft((current) => ({
         text: current.text ? `${message}\n\n${current.text}` : message,
         images: [...images, ...current.images],
-        files: [...keptFiles, ...current.files]
+        files: [...keptFiles, ...current.files],
+        browserContexts: [...contexts, ...(current.browserContexts ?? [])]
       }));
     }
   }
@@ -409,7 +418,8 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
   async function sendLiteral() {
     if (!onLiteral || disabled || frozen !== undefined || providers.length === 0 || status === "stopping" || !draft.trim() || blockedByModel) return;
     if (busy) return void queueDraft(true);
-    const ok = await onLiteral(draft.trim(), attachments, files);
+    const outgoing = encodeContexts(draft.trim(), attachments, contexts);
+    const ok = await onLiteral(outgoing.text, outgoing.images, files);
     if (ok) {
       updateDraft((current) => current === value ? EMPTY_DRAFT : current);
       if (activeDraftKey.current === draftKey) { setSlashNotice(undefined); setPasteNotice(undefined); }
@@ -419,7 +429,7 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
   /** Images need the model's Vision; text files ride the message text and always attach. */
   async function addFiles(picked: File[]) {
     if (picked.length === 0) return;
-    const result = await attachFiles({ images: attachments, files }, picked, { vision, noVisionMessage, mentions: Boolean(onRequestMentions) });
+    const result = await attachFiles({ images: attachments, files }, picked, { vision, noVisionMessage, mentions: Boolean(onRequestMentions), reservedImages: contexts.length });
     setAttachments(result.images);
     setFiles(result.files);
     if (activeDraftKey.current === draftKey) setAttachNotice(result.error);
@@ -517,6 +527,7 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
           canSteer={status === "running" && Boolean(onSteer)} canRestore={Boolean(onDequeue)}
           onSteer={(id) => void queue.steer(id)} onRestore={() => void queue.restore()} />
         <AttachmentTray images={attachments} files={files} onOpenImage={(index, url) => setShownImage({ index, url })}
+          browserContexts={contexts} onRemoveContext={(index) => setField("browserContexts", contexts.filter((_, i) => i !== index))}
           onRemoveImage={removeAttachment} onRemoveFile={removeFile} />
         {pasteNotice && (
           <div className="attachment-notice paste-notice" role="status">
@@ -524,7 +535,7 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
           </div>
         )}
         {(attachNotice || blockedByModel) && (
-          <div className="attachment-notice" role="status">{blockedByModel ? `${noVisionMessage} Or remove the images to send.` : attachNotice}</div>
+          <div className="attachment-notice" role="status">{attachmentError || (blockedByModel ? `${noVisionMessage} Or remove the images to send.` : attachNotice)}</div>
         )}
         {slashNotice && <div className="attachment-notice" role="status">{slashNotice} <button type="button" disabled={disabled || frozen !== undefined || status === "stopping" || blockedByModel || !onLiteral} onClick={() => void sendLiteral()}>Send as message</button></div>}
         <AnimatePresence initial={false}>
@@ -543,7 +554,8 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
           {highlightedCommand && <div ref={highlightRef} className="composer-highlight" aria-hidden="true">
             {highlightedCommand[1]}<span className="composer-command">/{highlightedCommand[2]}</span>{composerText.slice(highlightedCommand[0].length)}{"\n"}
           </div>}
-          <textarea
+            <textarea
+              aria-label="Message"
             ref={areaRef}
             aria-controls={showCommands ? "slash-command-list" : showMentions ? "mention-list" : undefined}
             aria-expanded={showCommands || showMentions}
@@ -683,7 +695,7 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
               </Tooltip>
             )}
             <Tooltip label={status === "stopping" ? `Wait for ${agentName} to stop` : queueButton ? `Queue for after ${agentName} finishes (⏎)` : "Send (⏎)"}>
-              <button type="button" className={`send-button${queueButton ? " queue" : ""}`} onClick={() => void send()} disabled={disabled || frozen !== undefined || providers.length === 0 || status === "stopping" || (!draft.trim() && files.length === 0) || blockedByModel} aria-label={queueButton ? "Queue message" : "Send message"}>
+              <button type="button" className={`send-button${queueButton ? " queue" : ""}`} onClick={() => void send()} disabled={disabled || frozen !== undefined || providers.length === 0 || status === "stopping" || (!draft.trim() && files.length === 0 && contexts.length === 0) || blockedByModel} aria-label={queueButton ? "Queue message" : "Send message"}>
                 <Icon name="send" />
                 {queueButton && <span>Queue</span>}
               </button>

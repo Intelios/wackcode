@@ -3125,8 +3125,7 @@ pub async fn steer_message(
     Ok(())
 }
 
-/// Take the chat's queued messages back out of the worker and return their texts for the
-/// composer. Images cannot be returned and drop out of the restored draft.
+/// Return complete queued prompts, keeping images paired with generated browser context.
 #[tauri::command]
 pub async fn dequeue_messages(
     app: AppHandle,
@@ -5597,13 +5596,15 @@ mod tests {
     }
 
     #[test]
-    fn queued_message_restoration_keeps_camel_case_and_legacy_defaults() {
+    fn queued_message_restoration_keeps_images_and_defaults() {
         let cleared: QueuedMessages =
-            serde_json::from_str(r#"{"steering":["a"],"followUp":["b"]}"#).unwrap();
-        assert_eq!(cleared.steering, vec!["a".to_string()]);
-        assert_eq!(cleared.follow_up, vec!["b".to_string()]);
-        assert_eq!(serde_json::to_value(cleared).unwrap(), json!({ "steering": ["a"], "followUp": ["b"] }));
-        let legacy: QueuedMessages = serde_json::from_str(r#"{"steering":["a"]}"#).unwrap();
+            serde_json::from_str(r#"{"steering":[{"text":"a"}],"followUp":[{"text":"b","images":[{"type":"image","mimeType":"image/png","data":"AAAA"}]}]}"#).unwrap();
+        assert_eq!(cleared.steering[0].text, "a");
+        assert!(cleared.steering[0].images.is_empty());
+        assert_eq!(cleared.follow_up[0].text, "b");
+        assert_eq!(cleared.follow_up[0].images[0].data, "AAAA");
+        assert_eq!(serde_json::to_value(cleared).unwrap()["followUp"][0]["images"][0]["mimeType"], "image/png");
+        let legacy: QueuedMessages = serde_json::from_str(r#"{"steering":[{"text":"a"}]}"#).unwrap();
         assert!(legacy.follow_up.is_empty());
     }
 

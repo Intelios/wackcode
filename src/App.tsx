@@ -1,3 +1,6 @@
+import { restoreContexts } from "./browser-context";
+import type { RestoredPrompt } from "./types";
+import { attachmentProblem } from "./attachment-utils";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type SetStateAction } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -299,7 +302,7 @@ export default function App() {
   const [skillDraftsSaving, setSkillDraftsSaving] = useState<ReadonlySet<string>>(new Set());
   const composerDrafts = useComposerDrafts();
   /** Rewind requests are consumed once by their chat, including across selection changes. */
-  const [composerSeed, setComposerSeed] = useState<{ taskId: string; text: string; nonce: number }>();
+  const [composerSeed, setComposerSeed] = useState<{ taskId: string; text: string; images?: ImageContent[]; nonce: number }>();
   const draftPreparations = useRef(new Map<string, Promise<TaskRecord | undefined>>());
   const draftEpoch = useRef(0);
   /** Taskless `/` catalog for the welcome composer, keyed by its selected project. */
@@ -476,14 +479,27 @@ export default function App() {
     setSidePanel({ kind: "browser", taskId });
     void api.browserOpen(taskId, url).then(updateBrowser).catch((reason) => setGlobalError(String(reason)));
   }, [browserBuiltinOn, setSidePanel, updateBrowser]);
+  useEffect(() => {
+    if (!browserExpanded) return;
+    const shell = document.querySelector<HTMLElement>(".app-shell");
+    if (!shell) return;
+    const update = () => {
+      const composer = shell.querySelector<HTMLElement>(area === "chat" ? ".chat-composer-wrap" : ".composer-wrap");
+      const dialog = shell.querySelector<HTMLElement>(".inline-dialog-wrap");
+      shell.style.setProperty("--browser-dock-h", `${(composer?.offsetHeight ?? 140) + (dialog?.offsetHeight ?? 0)}px`);
+      if (composer) observer.observe(composer);
+      if (dialog) observer.observe(dialog);
+    };
+    const observer = new ResizeObserver(update);
+    const changes = new MutationObserver(update);
+    changes.observe(shell, { childList: true, subtree: true }); update();
+    return () => { observer.disconnect(); changes.disconnect(); shell.style.removeProperty("--browser-dock-h"); };
+  }, [browserExpanded, composerDraftKey, area]);
   const toggleBrowserExpanded = useCallback(() => {
-    if (browserExpanded) setPanelWidth(browserRestoreWidth);
-    else {
-      setBrowserRestoreWidth(panelWidth);
-      setPanelWidth(Math.min(1200, Math.max(720, window.innerWidth - 560)));
-    }
+    if (!browserExpanded) setBrowserRestoreWidth(panelWidth);
     setBrowserExpanded(!browserExpanded);
-  }, [browserExpanded, panelWidth, browserRestoreWidth, setPanelWidth, setBrowserExpanded, setBrowserRestoreWidth]);
+    requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(".composer-input textarea, .chat-composer textarea")?.focus());
+  }, [browserExpanded, setBrowserExpanded, setBrowserRestoreWidth, panelWidth]);
   const openSubagent = useCallback((toolCallId: string, index: number) => {
     const taskId = selectedTaskRef.current;
     if (browserExpanded) {
@@ -2308,14 +2324,25 @@ export default function App() {
 
   async function rewind(user: NormalizedMessage) {
     const task = selectedTask;
+    const originKey = composerDraftKey;
     const entryId = user.entryId;
     if (!task || !entryId) return;
     const changes = await changesSince(task, user.checkpoint);
     const checkpointId = user.checkpoint?.id;
     const scope = restoreScope(task);
     const moveConversation = async (restore?: { checkpointId: string; paths: string[] }) => {
+      const images = await Promise.all(user.blocks.filter((block) => block.type === "image").map(async (_, index) => {
+        const image = await api.messageImage(task.id, entryId, index);
+        if (!image) throw new Error("An attached image could not be restored. Try again.");
+        return image;
+      }));
       const result = await api.navigateTask({ taskId: task.id, entryId, target: "before", kind: "rewind", restore });
-      if (result.navigate.editorText) setComposerSeed({ taskId: task.id, text: result.navigate.editorText, nonce: Date.now() });
+      const text = messageText(user);
+      // A hidden or closed tab still owns this draft; never seed the newly selected composer.
+      const restored = splitFileSection(text);
+      const bundle = restoreContexts(restored.browserContexts ?? [], images);
+      composerDrafts.update(originKey, (current) => ({ ...current, text: restored.text, files: restored.files, ...bundle }));
+      if (composerKeyRef.current === originKey) setComposerSeed({ taskId: task.id, text, images, nonce: Date.now() });
       patchRuntime(task.id, { lastRestore: undefined });
       afterRestore(task.id, result.restore, result.restoreError);
     };
@@ -2475,8 +2502,8 @@ export default function App() {
     }
   }
 
-  /** Take the queued messages back out of the worker and hand their texts to the composer. */
-  async function dequeueMessages(): Promise<string[] | undefined> {
+  /** Return complete queued prompts to their originating composer. */
+  async function dequeueMessages(): Promise<RestoredPrompt[] | undefined> {
     if (!selectedTask || selectedTask.status === "stopping") return undefined;
     const taskId = selectedTask.id;
     try {
@@ -2849,7 +2876,7 @@ export default function App() {
         { label: "Settings…", icon: <Icon name="settings" />, hint: "⌘,", onSelect: openSettings }
       ]}
     >
-    <div className={`app-shell${rebuilding ? " rebuild" : ""}`} data-area={area}>
+    <div className={`app-shell${rebuilding ? " rebuild" : ""}${browserExpanded && panelView?.kind === "browser" ? " browser-expanded" : ""}${showChatTabBar ? " browser-has-tabs" : ""}`} data-area={area}>
       {data.appearance.backdrop === "image" && (
         <Backdrop
           imageUrl={backgroundImageUrl}
@@ -3194,6 +3221,15 @@ export default function App() {
           visible={!confirm && !restoreDialog && !subscriptionLogin && !extensionRequests.some((request) => request.taskId === view.taskId) && !accessRequests.some((request) => request.taskId === view.taskId)}
           expanded={browserExpanded}
           onState={updateBrowser}
+          onAttach={(context) => {
+            const key = composerDraftKey;
+            const current = composerDrafts.get(key);
+            const next = { ...current, browserContexts: [...(current.browserContexts ?? []), context] };
+            const problem = attachmentProblem(next);
+            if (problem) throw new Error(problem);
+            composerDrafts.update(key, (draft) => ({ ...draft, browserContexts: [...(draft.browserContexts ?? []), context] }));
+            requestAnimationFrame(() => { if (composerKeyRef.current === key) document.querySelector<HTMLTextAreaElement>(".composer-input textarea, .chat-composer textarea")?.focus(); });
+          }}
           onExpand={toggleBrowserExpanded}
           onReset={() => setConfirm({
             title: "Reset browser session?",

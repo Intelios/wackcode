@@ -21,7 +21,7 @@ Each chat worker runs one Pi session in-process. Sub-agents are in-memory child 
 Resource selection follows Tauri's development mode, so a packaged debug build also uses
 the bundled runtime and scripts when opened from Finder.
 
-Native subsystems live in Rust and never in a worker: the per-chat browser (`browser.rs`, a child `WKWebView`), the terminal (`terminal.rs`), project commands (`run_command.rs`), computer use (`computer_use/`), the window backdrop (`glass.rs`), and the menu bar duck (`menu_bar.rs`). A worker asks for browser and computer work over the protocol (`browser_request`, `computer_request`); the host does it and enforces the rules. Web search works the same way (`web_request`, `web.rs`): Rust holds the provider's key, calls it, and counts the request in `web-usage.json`.
+Native subsystems live in Rust and never in a worker: the per-chat browser (`browser.rs`, a child `WKWebView` inside a scaled AppKit container), the terminal (`terminal.rs`), project commands (`run_command.rs`), computer use (`computer_use/`), the window backdrop (`glass.rs`), and the menu bar duck (`menu_bar.rs`). A worker asks for browser and computer work over the protocol (`browser_request`, `computer_request`); the host does it and enforces the rules. Web search works the same way (`web_request`, `web.rs`): Rust holds the provider's key, calls it, and counts the request in `web-usage.json`.
 
 Computer use's agent cursor is a native, nonactivating AppKit panel, drawn on the main thread.
 The engine publishes only dispatched action kinds and screen-point geometry; AX handles stay

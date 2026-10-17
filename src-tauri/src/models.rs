@@ -1302,13 +1302,21 @@ pub struct SteerMessageInput {
     pub started_at: Option<u64>,
 }
 
-/// The cleared worker queue texts, including Pi's pending lists, for the composer to take back.
+/// Cleared text/image payloads, including Pi's pending lists, for the composer to take back.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueuedMessages {
-    pub steering: Vec<String>,
+    pub steering: Vec<RestoredPrompt>,
     #[serde(default)]
-    pub follow_up: Vec<String>,
+    pub follow_up: Vec<RestoredPrompt>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoredPrompt {
+    pub text: String,
+    #[serde(default)]
+    pub images: Vec<ImageContent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1622,6 +1630,44 @@ pub struct ImageContent {
     /// Base64 without a `data:` prefix.
     pub data: String,
     pub mime_type: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum BrowserViewportPreset { #[default] Desktop, Laptop, Tablet, Phone }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserViewport { pub preset: BrowserViewportPreset, pub width: f64, pub height: f64 }
+impl From<BrowserViewportPreset> for BrowserViewport {
+    fn from(preset: BrowserViewportPreset) -> Self {
+        let (width, height) = match preset {
+            BrowserViewportPreset::Desktop => (1440.0, 900.0), BrowserViewportPreset::Laptop => (1280.0, 800.0),
+            BrowserViewportPreset::Tablet => (768.0, 1024.0), BrowserViewportPreset::Phone => (390.0, 844.0),
+        };
+        Self { preset, width, height }
+    }
+}
+impl Default for BrowserViewport { fn default() -> Self { BrowserViewportPreset::Desktop.into() } }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserBounds { pub x: f64, pub y: f64, pub width: f64, pub height: f64 }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserLocatorPart { pub kind: String, pub selector: String }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserContextTarget {
+    pub selector: String, pub path: Vec<BrowserLocatorPart>, pub label: String, pub dom: String,
+    pub bounds: BrowserBounds, #[serde(default)] pub truncated: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserContextAttachment {
+    pub id: String, pub kind: String, pub captured_at: i64, pub url: String, pub title: String,
+    pub viewport: BrowserViewport, pub image: ImageContent, pub targets: Vec<BrowserContextTarget>,
+    #[serde(default)] pub truncated: bool,
 }
 
 #[derive(Debug, Deserialize)]

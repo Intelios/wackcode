@@ -1,3 +1,4 @@
+import type { RestoredPrompt } from "../../types";
 /**
  * The whole Chat area: what App renders in place of the Code chat view and composer layer when
  * `area === "chat"`. It is fed one bundle of state and callbacks App already owns (sends,
@@ -54,7 +55,7 @@ export interface ChatAreaProps extends ModelFavoritesProps {
   composerDisabled: boolean;
   /** The first send's words, while the hero hands them to the new chat. */
   handoff?: string;
-  seed?: { text: string; nonce: number };
+  seed?: { text: string; images?: ImageContent[]; nonce: number };
   /** Tab panel wiring when chat tabs are on. */
   panel?: { id: string; labelledBy?: string };
   onMessageAction: (action: MessageAction) => Promise<boolean> | void;
@@ -66,7 +67,7 @@ export interface ChatAreaProps extends ModelFavoritesProps {
   onConfigure: (patch: { providerId?: string; modelId?: string; thinkingLevel?: ThinkingLevel }) => void;
   onSend: (message: string, images: ImageContent[], files: FileAttachment[], queue?: boolean) => Promise<boolean>;
   onSteer: (messageId: string) => Promise<boolean>;
-  onDequeue: () => Promise<string[] | undefined>;
+  onDequeue: () => Promise<(RestoredPrompt | string)[] | undefined>;
   onStop: () => void;
   onOpenSettings: () => void;
 }

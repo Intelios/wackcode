@@ -1,4 +1,5 @@
-import type { ImageContent } from "./types";
+import type { BrowserContextAttachment, BrowserContextRecord, ImageContent } from "./types";
+import { domBytes, MAX_MESSAGE_DOM, splitContextSection } from "./browser-context";
 
 /**
  * Composer-side attachment limits. `src-tauri/src/commands.rs` (`validate_images`) enforces the
@@ -30,6 +31,18 @@ export interface FileAttachment {
 export interface AttachmentState {
   images: ImageContent[];
   files: FileAttachment[];
+  browserContexts?: BrowserContextAttachment[];
+}
+
+/** Queue restoration keeps everything, including overflow; sending waits for it to fit. */
+export function attachmentProblem(state: AttachmentState): string | undefined {
+  const contexts = state.browserContexts ?? [];
+  if (state.images.length + contexts.length > MAX_IMAGES) return `Attach at most ${MAX_IMAGES} images to one message. Remove some attachments to send.`;
+  if (state.files.length > MAX_FILES) return `Attach at most ${MAX_FILES} files to one message.`;
+  if (state.files.reduce((sum, file) => sum + textBytes(file.text), 0) > MAX_FILE_TOTAL_BYTES) return "Attached text is larger than 512 KB. Remove some files to send.";
+  if (contexts.reduce((sum, context) => sum + domBytes(context.targets), 0) > MAX_MESSAGE_DOM) return "Browser DOM context is larger than 64 KB. Remove some browser attachments to send.";
+  if ([...state.images, ...contexts.map((context) => context.image)].some((image) => Math.floor(image.data.length * 0.75) - (image.data.match(/=+$/)?.[0].length ?? 0) > MAX_IMAGE_BYTES)) return "An attached image is larger than 20 MB.";
+  return undefined;
 }
 
 export interface AttachResult extends AttachmentState {
@@ -107,6 +120,7 @@ export async function attachFiles(existing: AttachmentState, picked: File[], opt
   noVisionMessage: string;
   /** Whether `@` mentions exist where this composer is; false in Chat mode, which has no workspace to point into. */
   mentions?: boolean;
+  reservedImages?: number;
 }): Promise<AttachResult> {
   const images = [...existing.images];
   const files = [...existing.files];
@@ -123,7 +137,7 @@ export async function attachFiles(existing: AttachmentState, picked: File[], opt
         problems.push(`${name} is larger than ${MAX_IMAGE_BYTES / 1024 / 1024} MB.`);
         continue;
       }
-      if (images.length >= MAX_IMAGES) {
+      if (images.length + (options.reservedImages ?? 0) >= MAX_IMAGES) {
         problems.push(`Attach at most ${MAX_IMAGES} images to one message.`);
         break;
       }
@@ -240,10 +254,17 @@ export interface SplitFiles {
   /** Everything the user typed, without the generated section. */
   text: string;
   files: FileAttachment[];
+  browserContexts?: BrowserContextRecord[];
 }
 
 /** The message's own words and its attached files — the inverse of `composeFileSection`. */
 export function splitFileSection(message: string): SplitFiles {
+  const files = splitFilesOnly(message);
+  const context = splitContextSection(files.text);
+  return { ...files, text: context.text, ...(context.contexts.length ? { browserContexts: context.contexts } : {}) };
+}
+
+function splitFilesOnly(message: string): SplitFiles {
   // Scan section starts from the end: a genuine section is the message tail, and a lookalike
   // inside the user's own words must not shadow it.
   const head = `\n\n${SECTION_OPEN}\n`;

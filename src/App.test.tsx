@@ -21,7 +21,7 @@ vi.mock("./api", () => ({ api: {
   createTask: vi.fn(), prompt: vi.fn(), setTaskMode: vi.fn(), executeCommand: vi.fn().mockResolvedValue(undefined),
   stopTask: vi.fn().mockResolvedValue(undefined), setAppearanceConfig: vi.fn(async (config) => config),
   watchSubagent: vi.fn().mockResolvedValue(undefined), archiveTask: vi.fn(), deleteTask: vi.fn().mockResolvedValue(undefined),
-  goalControl: vi.fn().mockResolvedValue(undefined), browserState: vi.fn(), browserPresent: vi.fn()
+  goalControl: vi.fn().mockResolvedValue(undefined), browserState: vi.fn(), browserPresent: vi.fn(), browserRetirePresentation: vi.fn().mockResolvedValue(undefined)
 } }));
 vi.mock("./components/SettingsPage", () => ({ SettingsPage: (props: { appearance: typeof DEFAULT_APPEARANCE; toolCatalog: { name: string }[]; onSetAppearance: (value: typeof DEFAULT_APPEARANCE) => void; onClose: () => void }) => <>
   <output aria-label="Tool catalogue">{props.toolCatalog.map((tool) => tool.name).join(",")}</output>

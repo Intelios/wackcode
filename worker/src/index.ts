@@ -2078,10 +2078,10 @@ async function handle(command: WorkerCommand): Promise<void> {
         send({ type: "run_state", taskId, state: "idle" });
       }
     } else if (command.type === "dequeue") {
-      const texts = messageQueue.clear();
+      const messages = messageQueue.drain().map(({ text, images }) => ({ text, ...(images?.length ? { images } : {}) }));
       const cleared = session.clearQueue();
       emitQueueState();
-      respond(command.id, { steering: cleared.steering, followUp: [...texts, ...cleared.followUp] });
+      respond(command.id, { steering: cleared.steering.map((text) => ({ text })), followUp: [...messages, ...cleared.followUp.map((text) => ({ text }))] });
       return;
     } else if (command.type === "snapshot") {
       emitSnapshot();

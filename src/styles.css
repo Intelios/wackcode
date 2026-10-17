@@ -1840,6 +1840,8 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 }
 .queued-tag { flex: 0 0 auto; font-size: 10px; font-weight: 650; letter-spacing: .3px; text-transform: uppercase; color: var(--text-dim); }
 .queued-text { flex: 1; min-width: 0; font-size: 12px; color: var(--text-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queued-content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.queued-browser-message .message-browser-contexts { margin: 5px 0; }
 .queued-message > .tooltip-wrap { flex: 0 0 auto; }
 /* Always visible, including keyboard focus; Steer is deliberate, never the default send. */
 .queued-steer.secondary-button.compact {
@@ -1858,6 +1860,7 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .queued-remove svg { width: 11px; height: 11px; }
 /* In the Code composer the queue is a stack of pills, like the chips above it. */
 .composer-queue .queued-message { border-radius: 999px; padding: 4px 6px 4px 12px; }
+.composer-queue .queued-browser-message { border-radius: 16px; }
 .composer-queue .queued-steer.secondary-button.compact, .composer-queue .queued-remove { border-radius: 999px; }
 .queued-remove:not(:disabled):hover, .queued-remove:focus-visible { color: var(--text); background: var(--surface-hover); }
 .attach-button {
@@ -2783,6 +2786,56 @@ button.reasoning-toggle.at-max .reasoning-toggle-label {
 .project-row.pinned .repo-pin { color: var(--wc-accent); }
 .project-row.pinned .repo-pin svg { transform: rotate(0deg); }
 .project-row .repo-pin { margin-right: 4px; }
+
+/* Desktop canvas chrome stays readable while the native page scales inside its solid well. */
+.browser-canvas-toolbar { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-bottom: 1px solid var(--border); background: var(--wc-panel); }
+.browser-canvas-toolbar .select-trigger { width: 105px; min-height: 28px; border-radius: var(--wc-radius-pill); }
+.browser-canvas-dimensions { display: flex; align-items: center; gap: 8px; color: var(--text-soft); font: 10.5px "SFMono-Regular", monospace; white-space: nowrap; }
+@container (max-width: 360px) { .browser-canvas-toolbar .select-trigger { width: 90px; } .browser-canvas-toolbar { gap: 6px; } .browser-canvas-dimensions { gap: 5px; font-size: 10px; } }
+.browser-canvas-dimensions small { color: var(--text-faint); font: inherit; }
+.browser-capture-actions { display: flex; margin-left: auto; }
+.browser-capture-actions .active { color: var(--wc-accent-text); background: var(--wc-accent-tint); }
+.browser-surface { background: var(--wc-well); }
+/* Expanded presentation leaves the same composer mounted and the transcript parked behind it. */
+.app-shell.browser-expanded > .side-panel { position: absolute; left: 240px; right: 0; top: 0; bottom: var(--browser-dock-h, 150px); width: auto !important; max-width: none; height: auto; z-index: 3; border-left: 0; }
+.app-shell.browser-expanded.browser-has-tabs > .side-panel { top: 42px; }
+.browser-expanded .side-panel-inner { width: 100% !important; max-width: none; }
+.browser-expanded .panel-resizer { display: none; }
+.browser-expanded .workspace-header, .browser-expanded .chat-header,
+.browser-expanded .chat-transcript, .browser-expanded .chat-scroll-zone { visibility: hidden; }
+.browser-expanded .composer-layer, .browser-expanded .chat-composer-layer { z-index: 4; }
+.browser-expanded .inline-dialog-wrap { position: absolute; bottom: var(--composer-h, 140px); left: 0; right: 0; z-index: 5; }
+.browser-context-chip { display: inline-flex; max-width: 280px; min-width: 0; align-items: center; gap: 3px; border: 1px solid var(--wc-accent-line-soft); border-radius: var(--wc-radius-card); background: var(--wc-well); overflow: hidden; }
+.browser-context-open { display: flex; min-width: 0; gap: 9px; align-items: center; border: 0; background: transparent; color: var(--text); padding: 6px 8px; text-align: left; cursor: pointer; }
+.browser-context-open > img { width: 42px; height: 32px; object-fit: cover; border-radius: 5px; }
+.browser-context-open > svg { flex-shrink: 0; color: var(--wc-accent-text); }
+.browser-context-open > span { display: grid; min-width: 0; gap: 3px; }
+.browser-context-open strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; font-weight: 600; }
+.browser-context-open small { color: var(--text-dim); font-size: 9.5px; white-space: nowrap; }
+.browser-context-chip > .icon-button { flex-shrink: 0; width: 25px; height: 25px; margin-right: 4px; border-radius: 50%; }
+.browser-context-chip:hover, .browser-context-chip:focus-within { border-color: var(--wc-accent-line); background: var(--wc-elevated); }
+.message-browser-contexts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; margin: 5px 0; }
+.browser-context-backdrop { z-index: 1000; padding: 24px; }
+.browser-context-inspector, .browser-markup { width: min(1280px, 100%); height: min(900px, 100%); display: flex; flex-direction: column; min-height: 0; border: 1px solid var(--border-bright); border-radius: var(--wc-radius-card); background: var(--surface); overflow: hidden; }
+.browser-context-inspector-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 2fr) minmax(250px, 1fr); overflow: auto; }
+.browser-context-image { width: 100%; height: 100%; min-height: 0; object-fit: contain; background: var(--wc-well); }
+.browser-context-details { padding: 18px; overflow: auto; font-size: 12px; border-left: 1px solid var(--border); }
+.browser-context-details p { margin: 0 0 8px; }
+.browser-context-url, .browser-context-details code { overflow-wrap: anywhere; color: var(--text-dim); font: 10.5px "SFMono-Regular", monospace; }
+.browser-context-details details { margin-top: 15px; }
+.browser-context-details summary { cursor: pointer; margin-bottom: 7px; }
+.browser-context-details pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--wc-well); padding: 10px; border-radius: 8px; font-size: 10.5px; }
+.browser-markup-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; padding: 8px 14px; border-bottom: 1px dotted var(--wc-accent-line); }
+.browser-markup-toolbar .segmented button.active { color: var(--wc-accent-text); background: var(--wc-accent-tint); box-shadow: inset 0 0 0 1px var(--wc-accent-line); }
+.browser-markup-toolbar .segmented button { display: flex; align-items: center; gap: 6px; }
+.browser-markup-toolbar input { flex: 1; min-width: 200px; padding: 7px 12px; border: 1px solid var(--border); border-radius: var(--wc-radius-pill); background: var(--wc-input); color: var(--text); }
+.browser-markup-stage { flex: 1; min-height: 0; display: grid; place-items: center; padding: 14px; overflow: hidden; background: var(--wc-well); container-type: size; }
+.browser-markup-image { position: relative; max-width: 100%; max-height: 100%; width: min(100cqw, calc(100cqh * var(--markup-aspect, 1.6))); box-shadow: 0 0 0 1px var(--border); }
+.browser-markup-image img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.browser-markup-image canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+.browser-markup-footer { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); }
+.browser-markup-footer > span { flex: 1; font-size: 11px; color: var(--text-dim); }
+@media (max-width: 1050px) { .browser-context-inspector-body { grid-template-columns: minmax(0, 3fr) minmax(230px, 2fr); } }
 
 /* ── Changes panel ─────────────────────────────────── */
 .changes-panel { height: 100%; min-height: 0; display: flex; flex-direction: column; }

@@ -175,6 +175,9 @@ export interface ImageContent {
   mimeType: string;
 }
 
+/** Queue restoration returns whole payloads; generated browser metadata indexes these images. */
+export interface RestoredPrompt { text: string; images?: ImageContent[] }
+
 export interface WorkerModel {
   id: string;
   name: string;
@@ -1063,10 +1066,11 @@ export type ExtensionUIRequest =
       offerWrapUp?: true;
     };
 
-/** One desktop-queued message; attachments and command provenance stay in the worker. */
+/** One desktop-queued message. Command provenance stays in the worker. */
 export interface QueuedMessage {
   id: string;
   text: string;
+  images?: ImageContent[];
 }
 
 export type WorkerOutput =

@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from "react";
+import { useIsPresent } from "motion/react";
 import { api } from "../api";
-import type { BrowserState } from "../types";
+import type { BrowserContextAttachment, BrowserState, BrowserViewportPreset } from "../types";
+import { boundTargets, BROWSER_VIEWPORTS, flattenCapture } from "../browser-context";
 import { Icon } from "./Icons";
+import { BrowserMarkup } from "./browser/BrowserMarkup";
+import { Select } from "./ui/Select";
 
 interface BrowserPanelProps {
   taskId: string;
@@ -12,6 +16,7 @@ interface BrowserPanelProps {
   onExpand: () => void;
   onReset: () => void;
   onClose: () => void;
+  onAttach?: (context: BrowserContextAttachment) => void;
 }
 
 /** The page's host, for the header while a page has no title yet. */
@@ -21,11 +26,49 @@ function pageHost(url: string | undefined): string {
 }
 
 /** React owns the chrome; Rust places the untrusted native WKWebView over `browser-surface`. */
-export function BrowserPanel({ taskId, state, visible, expanded, onState, onExpand, onReset, onClose }: BrowserPanelProps) {
+export function BrowserPanel({ taskId, state, visible, expanded, onState, onExpand, onReset, onClose, onAttach }: BrowserPanelProps) {
   const surface = useRef<HTMLDivElement>(null);
   const addressFocused = useRef(false);
   const [address, setAddress] = useState(state?.url ?? "");
   const [error, setError] = useState<string>();
+  const [markup, setMarkup] = useState<BrowserContextAttachment>();
+  const [modalOpen, setModalOpen] = useState(false);
+  const [busy, setBusy] = useState<"pick" | "capture">();
+  const [displayScale, setDisplayScale] = useState(1);
+  const presentationId = useRef(crypto.randomUUID());
+  const captureId = useRef<string | undefined>(undefined);
+  const isPresent = useIsPresent();
+  const captureAllowed = useRef(visible && isPresent);
+  captureAllowed.current = visible && isPresent;
+  const viewport = state?.viewport ?? BROWSER_VIEWPORTS.desktop;
+  const presented = visible && isPresent && !modalOpen && !markup;
+
+  useEffect(() => {
+    const update = () => setModalOpen(Boolean(document.querySelector(".modal-backdrop, .popover")));
+    const observer = new MutationObserver(update);
+    observer.observe(document.body, { childList: true, subtree: true }); update();
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    const owner = crypto.randomUUID();
+    presentationId.current = owner;
+    return () => {
+      if (captureId.current) void api.browserCancelCapture(taskId, captureId.current).catch(() => {});
+      captureId.current = undefined;
+      void api.browserRetirePresentation(taskId, owner).catch(() => {});
+    };
+  }, [taskId]);
+  useEffect(() => {
+    if (visible && isPresent) return;
+    const id = captureId.current;
+    captureId.current = undefined;
+    setBusy(undefined);
+    if (id) void api.browserCancelCapture(taskId, id).catch(() => {});
+    if (!isPresent) {
+      setMarkup(undefined);
+      void api.browserRetirePresentation(taskId, presentationId.current).catch(() => {});
+    }
+  }, [visible, isPresent, taskId]);
 
   useEffect(() => {
     void api.browserState(taskId).then(onState).catch((reason) => setError(String(reason)));
@@ -38,12 +81,13 @@ export function BrowserPanel({ taskId, state, visible, expanded, onState, onExpa
   useEffect(() => {
     const element = surface.current;
     if (!element) return;
+    const owner = presentationId.current;
     let frame: number | undefined;
-    const hide = () => void api.browserPresent({ taskId, visible: false, x: 0, y: 0, width: 1, height: 1 }).catch(() => {});
+    const hide = () => void api.browserPresent({ taskId, presentationId: owner, visible: false, x: 0, y: 0, width: 1, height: 1 }).catch(() => {});
     const place = () => {
       if (frame !== undefined) window.cancelAnimationFrame(frame);
       hide();
-      if (!visible) return;
+      if (!presented) return;
       // The drawer and page slides can move this fixed-size surface without resizing it.
       // Keep the native page parked until its full rectangle has stopped moving, rather than
       // measuring once after a delay that may expire partway through an animation.
@@ -61,7 +105,8 @@ export function BrowserPanel({ taskId, state, visible, expanded, onState, onExpa
         }
         frame = undefined;
         if (bounds.width < 1 || bounds.height < 1) return;
-        void api.browserPresent({ taskId, visible: true, x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height })
+        setDisplayScale(Math.min(bounds.width / viewport.width, bounds.height / viewport.height));
+        void api.browserPresent({ taskId, presentationId: owner, visible: true, x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height })
           .then(onState).catch((reason) => setError(String(reason)));
       };
       frame = window.requestAnimationFrame(settle);
@@ -79,7 +124,31 @@ export function BrowserPanel({ taskId, state, visible, expanded, onState, onExpa
       window.removeEventListener("resize", place);
       hide();
     };
-  }, [taskId, visible, expanded, state?.url, onState]);
+  }, [taskId, presented, expanded, state?.url, viewport.width, viewport.height, presentationId, onState]);
+
+  async function capture(kind: "pick" | "capture") {
+    const id = crypto.randomUUID(); captureId.current = id; setBusy(kind); setError(undefined);
+    const theme = getComputedStyle(document.documentElement);
+    try {
+      const result = kind === "pick"
+        ? await api.browserPick(taskId, id, presentationId.current, theme.getPropertyValue("--wc-accent").trim(), theme.getPropertyValue("--wc-well").trim())
+        : await api.browserCapture(taskId, id, presentationId.current);
+      if (captureId.current !== id || !captureAllowed.current || !result) return;
+      if (kind === "capture") setMarkup(result);
+      else {
+        const target = result.targets[0];
+        const marks = target ? [{ kind: "box" as const, points: [{ x: target.bounds.x, y: target.bounds.y }, { x: target.bounds.x + target.bounds.width, y: target.bounds.y + target.bounds.height }] }] : [];
+        const image = await flattenCapture(result, marks, theme.getPropertyValue("--wc-accent"), theme.getPropertyValue("--wc-well"));
+        if (captureId.current === id && captureAllowed.current) onAttach?.({ ...result, ...boundTargets(result.targets), image });
+      }
+    } catch (reason) { if (captureId.current === id) setError(String(reason)); }
+    finally { if (captureId.current === id) { captureId.current = undefined; setBusy(undefined); } }
+  }
+
+  function cancelPick() {
+    const id = captureId.current; captureId.current = undefined; setBusy(undefined);
+    if (id) void api.browserCancelCapture(taskId, id).catch(() => {});
+  }
 
   async function run(action: () => Promise<unknown>) {
     setError(undefined);
@@ -96,11 +165,11 @@ export function BrowserPanel({ taskId, state, visible, expanded, onState, onExpa
   const control = state?.userControl ? "Resume agent control" : "Take control";
   return (
     <section className="browser-panel">
-      <header className="panel-header">
+      <header className="panel-header" data-tauri-drag-region>
         <span className={`panel-mark ${state?.agentActive ? "live" : ""}`} aria-hidden="true"><Icon name="browser" /></span>
-        <div className="panel-title" title={state?.url || undefined}>
-          <span className="panel-kicker">Browser</span>
-          <h3>{state?.title || pageHost(state?.url) || "No page open"}</h3>
+        <div className="panel-title" title={state?.url || undefined} data-tauri-drag-region>
+          <span className="panel-kicker" data-tauri-drag-region>Browser</span>
+          <h3 data-tauri-drag-region>{state?.title || pageHost(state?.url) || "No page open"}</h3>
         </div>
         {state?.agentActive ? (
           <span className="terminal-pill running" role="status"><span className="terminal-pill-dot" aria-hidden="true" />Agent is using the page</span>
@@ -132,11 +201,23 @@ export function BrowserPanel({ taskId, state, visible, expanded, onState, onExpa
         </button>
         <button type="button" className="icon-button" aria-label="Reset browser session" title="Reset browser session" disabled={!state?.exists} onClick={onReset}><Icon name="trash" /></button>
       </div>
+      <div className="browser-canvas-toolbar">
+        <Select aria-label="Browser viewport" value={viewport.preset} disabled={Boolean(busy)}
+          options={Object.values(BROWSER_VIEWPORTS).map((preset) => ({ value: preset.preset, label: preset.preset[0].toUpperCase() + preset.preset.slice(1), hint: `${preset.width} × ${preset.height}` }))}
+          onChange={(preset) => void run(() => api.browserSetViewport(taskId, preset as BrowserViewportPreset).then(onState))} />
+        <span className="browser-canvas-dimensions">{viewport.width} × {viewport.height}<small>{busy === "pick" ? "Pick · ⎋" : busy === "capture" ? "Capturing…" : `${Math.round(displayScale * 100)}%`}</small></span>
+        <div className="browser-capture-actions">
+          <button type="button" className={`icon-button${busy === "pick" ? " active" : ""}`} aria-label={busy === "pick" ? "Cancel element picking" : "Pick an element"} title={busy === "pick" ? "Cancel element picking (⎋)" : "Pick an element"}
+            disabled={!state?.url || busy === "capture" || !onAttach} onClick={() => busy === "pick" ? cancelPick() : void capture("pick")}><Icon name="cursor" /></button>
+          <button type="button" className="icon-button" aria-label="Mark up screenshot" title="Mark up screenshot" disabled={!state?.url || Boolean(busy) || !onAttach} onClick={() => void capture("capture")}><Icon name="pencil" /></button>
+        </div>
+      </div>
       {state?.popup && <button type="button" className="browser-popup-return" onClick={() => void run(() => api.browserReturnFromPopup(taskId).then(onState))}><Icon name="back" /> Return to page</button>}
       {message && <div className="browser-error" role="alert"><Icon name="alert" /><span>{message}</span><button type="button" onClick={() => setError(undefined)}>Dismiss</button></div>}
       <div className="browser-surface" ref={surface}>
         {!state?.url && <div className="browser-empty"><span className="panel-empty-mark" aria-hidden="true"><Icon name="browser" /></span><h3>Preview a web app</h3><p>Enter a local or deployed HTTP address. The agent can open and use this browser too.</p></div>}
       </div>
+      {markup && isPresent && <BrowserMarkup capture={markup} onAdd={(context) => onAttach?.(context)} onClose={() => setMarkup(undefined)} />}
     </section>
   );
 }

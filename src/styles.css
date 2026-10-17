@@ -4001,10 +4001,13 @@ html[data-force-reduced-motion] *::after {
 .terminal-pill.running .terminal-pill-dot { background: var(--wc-accent); animation: pulse 1.8s infinite; }
 .terminal-pill.stopped { color: var(--text-dim); }
 
-.terminal-body { position: relative; flex: 1; min-height: 0; display: flex; background: var(--wc-well); overflow: hidden; }
+.terminal-body { position: relative; flex: 1; min-height: 0; min-width: 0; display: flex; background: var(--wc-well); overflow: hidden; }
 /* Host padding insets xterm: the fit addon reads this box's content size, so padding here —
-   not on .xterm — is what leaves breathing room around the scroll region. */
-.terminal-screen { position: relative; flex: 1; min-height: 0; padding: 10px 4px 10px 12px; transition: opacity .3s var(--ease); }
+   not on .xterm — is what leaves breathing room around the scroll region. min-width: 0 lets
+   the screen shrink inside the flex row; without it the 80-column min-content forces the host
+   wider than the panel, fit measures too many columns, and the shell wraps past the visible
+   edge so typed input runs off screen. */
+.terminal-screen { position: relative; flex: 1; min-width: 0; min-height: 0; padding: 10px 4px 10px 12px; transition: opacity .3s var(--ease); overflow: hidden; }
 .terminal-screen .xterm { height: 100%; }
 .terminal-screen .xterm-viewport::-webkit-scrollbar { width: 8px; }
 .terminal-screen .xterm-viewport::-webkit-scrollbar-thumb { background: var(--wc-track); border-radius: 4px; border: 2px solid transparent; background-clip: padding-box; }
@@ -4042,7 +4045,6 @@ html[data-force-reduced-motion] *::after {
 
 /* Run shares the terminal palette, with a separate checkout-owned session. */
 .run-panel-meta { flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 7px 13px; border-bottom: 1px solid var(--border); background: var(--wc-panel); }
-.run-panel .terminal-screen { min-width: 0; }
 .run-panel-folder { flex: 1; }
 .run-panel-folder > span { overflow: hidden; text-overflow: ellipsis; }
 .run-panel .panel-title h3 { font-family: "SFMono-Regular", Consolas, monospace; font-size: 11.5px; }

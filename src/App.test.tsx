@@ -4,6 +4,7 @@ import type { AppData, BrowserState, NormalizedMessage, ProviderRecord, SessionS
 import { DEFAULT_APPEARANCE } from "./theme";
 import App from "./App";
 import { api } from "./api";
+import { composeFileSection } from "./attachment-utils";
 
 const events = vi.hoisted(() => new Map<string, (event: { payload: unknown }) => void>());
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async (name, handler) => { events.set(name, handler); return () => events.delete(name); }) }));
@@ -437,6 +438,20 @@ describe("App areas", () => {
     for (const name of ["Changes", "Terminal", "Games"]) expect(screen.queryByRole("button", { name })).toBeNull();
     enter("Code");
     expect(screen.queryByRole("button", { name: "Hello there" })).toBeNull();
+  });
+
+  it("names a chat after its only attachment when a paste has no words", async () => {
+    vi.mocked(api.createTask).mockResolvedValue(chatTask("made", "Pasted text 1.txt"));
+    boot([task("a")]);
+    await screen.findByRole("button", { name: "Settings" });
+    enter("Chat");
+    const text = "x".repeat(40 * 1024);
+    fireEvent.paste(chatInput(), { clipboardData: { types: ["text/plain"], getData: () => text } });
+    expect(await screen.findByRole("button", { name: "Remove file 1" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(api.prompt).toHaveBeenCalled());
+    expect(api.createTask).toHaveBeenCalledWith({ kind: "chat", name: "Pasted text 1.txt", providerId: "p", modelId: "first", thinkingLevel: "off" });
+    expect(vi.mocked(api.prompt).mock.calls[0][0].message).toBe(composeFileSection("", [{ name: "Pasted text 1.txt", text }]));
   });
 
   it("switches with ⌥⌘1 and ⌥⌘2, and leaves the Code shortcuts alone in Chat", async () => {

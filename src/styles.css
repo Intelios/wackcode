@@ -1820,6 +1820,16 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .attachment-file > svg { width: 13px; height: 13px; flex: 0 0 auto; color: var(--text-dim); }
 .attachment-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attachment-notice { padding: 8px 15px 0; font-size: 12px; color: var(--warning); }
+/* A large paste became a text-file attachment: informational, with the way back to plain text. */
+.paste-notice { color: var(--text-soft); }
+.paste-notice strong { color: var(--text); font-weight: 600; }
+.paste-notice-action {
+  padding: 0; border: 0; background: none; color: var(--wc-accent);
+  font: inherit; font-weight: 600; cursor: pointer;
+}
+.paste-notice-action:hover { text-decoration: underline; }
+.paste-notice-action:focus-visible { outline: 2px solid color-mix(in srgb, var(--wc-accent) 70%, transparent); outline-offset: 2px; border-radius: 4px; }
+.paste-notice-action:disabled { color: var(--text-faint); cursor: default; text-decoration: none; }
 /* The selected command's `argument-hint`, shown until the first argument is typed. */
 .arg-hint { padding: 8px 15px 0; font: 10.5px "SFMono-Regular", Consolas, monospace; color: var(--text-faint); }
 /* Messages queued on the running prompt, between the transcript and the draft. */

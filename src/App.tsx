@@ -1918,8 +1918,10 @@ export default function App() {
   async function sendPrompt(message: string, options: { images?: ImageContent[]; files?: FileAttachment[]; mode?: TaskMode; literal?: boolean; queue?: boolean } = {}): Promise<boolean> {
     const { images, files = [], mode: modeOverride, literal, queue } = options;
     // Attached text files travel inside the message text; the composer's own words stay `message`
-    // (the frozen hand-off and the chat's stand-in title show those).
+    // (the frozen hand-off and the chat's stand-in title show those). A paste can be the whole
+    // message, so with no words the first attached file names the chat instead of "New chat".
     const sent = composeFileSection(message, files);
+    const title = titleFromPrompt(message || files[0]?.name || "");
     if (!selectedTask) {
       const key = composerDraftKey;
       const origin = tabForComposer(key)?.id;
@@ -1937,10 +1939,10 @@ export default function App() {
       let task: TaskRecord | undefined;
       const pendingSlash = draftPreparations.current.get(key);
       try {
-        task = pendingSlash ? await pendingSlash : await api.createTask(chat ? { kind: "chat", name: titleFromPrompt(message), ...choice } : {
+        task = pendingSlash ? await pendingSlash : await api.createTask(chat ? { kind: "chat", name: title, ...choice } : {
           projectId: active.projectId,
           useWorktree: active.useWorktree && Boolean(draftProject?.gitHasHead),
-          name: titleFromPrompt(message), ...choice
+          name: title, ...choice
         });
         if (!task) return false;
         if (stillHere()) setTransitioning({ message, taskId: task.id, fromSelectedId: selectedTaskId, composerKey: key });

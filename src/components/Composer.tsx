@@ -4,7 +4,7 @@ import { DEFAULT_EXECUTION_POLICY } from "../execution-policy";
 import { DEFAULT_AGENT_NAME } from "../agentName";
 import { ExecutionPolicyNotice } from "./ExecutionPolicyNotice";
 import type { ExecutionPolicyConfig, ImageContent, ProviderRecord, QueuedMessage, SessionSnapshot, SlashCommand, TaskMode, TaskStatus, ThinkingLevel } from "../types";
-import { attachFiles, filesFrom, splitFileSection, type FileAttachment } from "../attachment-utils";
+import { attachFiles, filesFrom, largePasteText, pastedTextFile, splitFileSection, type FileAttachment } from "../attachment-utils";
 import { activeMention, mentionValue, rankMentions, type MentionSuggestion } from "../mention-utils";
 import { activeSlashCommand } from "../command-utils";
 import { EMPTY_DRAFT, type ComposerDraft, type ComposerDraftState } from "../hooks/useComposerDrafts";
@@ -15,6 +15,7 @@ import { ModeToggle } from "./ModeToggle";
 import { Tooltip } from "./ui/Tooltip";
 import { ImageLightbox } from "./ui/ImageLightbox";
 import { AttachmentTray } from "./composer/AttachmentTray";
+import { PasteNotice } from "./composer/PasteNotice";
 import { QueuedRows, queuedDisplay, useQueueActions } from "./composer/QueuedRows";
 
 /** Matches `--ease` in styles.css. */
@@ -125,6 +126,8 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
   const setAttachments = (next: SetStateAction<ImageContent[]>) => setField("images", next);
   const setFiles = (next: SetStateAction<FileAttachment[]>) => setField("files", next);
   const [attachNotice, setAttachNotice] = useState<string>();
+  /** The pasted text that became an attachment, while its notice offers the way back. */
+  const [pasteNotice, setPasteNotice] = useState<FileAttachment>();
   const [slashNotice, setSlashNotice] = useState<string>();
   const [slashDismissedAt, setSlashDismissedAt] = useState<number>();
   const [slashIndex, setSlashIndex] = useState(0);
@@ -257,8 +260,12 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
     const restored = splitFileSection(seedText.current);
     setDraft(restored.text);
     setFiles(restored.files);
+    setPasteNotice(undefined);
     areaRef.current?.focus();
   }, [seedNonce, draftKey]);
+
+  // A notice belongs to the draft that saw the paste; the composer outlives chat switches.
+  useLayoutEffect(() => { setPasteNotice(undefined); }, [draftKey]);
 
   /** Attached files travel inside the message text, so they can't ride a `/` command: Pi
    *  expands commands (and the queue resolves the catalog entry first) and the generated
@@ -271,7 +278,7 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
    * Steer is a separate action on a stable queued-message id. */
   async function queueDraft(literal = false) {
     const message = draft.trim();
-    if (!message || status !== "running" || disabled || frozen !== undefined || providers.length === 0 || blockedByModel) return;
+    if ((!message && files.length === 0) || status !== "running" || disabled || frozen !== undefined || providers.length === 0 || blockedByModel) return;
     if (!literal && filesVsCommand(message)) {
       setSlashNotice("Remove attached files before running this command.");
       setSlashDismissedAt(slash?.start);
@@ -281,6 +288,7 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
     const keptFiles = files;
     updateDraft(EMPTY_DRAFT);
     setAttachNotice(undefined);
+    setPasteNotice(undefined);
     const ok = literal && onLiteral ? await onLiteral(message, images, keptFiles) : await onSend(message, images, keptFiles, true);
     if (!ok) {
       updateDraft((current) => ({
@@ -294,7 +302,7 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
   async function send() {
     if (frozen !== undefined || disabled || providers.length === 0 || status === "stopping") return;
     const message = draft.trim();
-    if (!message || blockedByModel) return;
+    if ((!message && files.length === 0) || blockedByModel) return;
     if (filesVsCommand(message)) {
       setSlashNotice("Remove attached files before running this command.");
       setSlashDismissedAt(slash?.start);
@@ -358,6 +366,7 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
     const keptFiles = files;
     updateDraft(EMPTY_DRAFT);
     setAttachNotice(undefined);
+    setPasteNotice(undefined);
     const ok = await onSend(message, images, keptFiles);
     if (!ok) {
       updateDraft((current) => ({
@@ -403,7 +412,7 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
     const ok = await onLiteral(draft.trim(), attachments, files);
     if (ok) {
       updateDraft((current) => current === value ? EMPTY_DRAFT : current);
-      if (activeDraftKey.current === draftKey) setSlashNotice(undefined);
+      if (activeDraftKey.current === draftKey) { setSlashNotice(undefined); setPasteNotice(undefined); }
     }
   }
 
@@ -426,6 +435,27 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
     const next = files.filter((_, itemIndex) => itemIndex !== index);
     setFiles(next);
     setAttachNotice(undefined);
+    if (next.every((file) => file.name !== pasteNotice?.name)) setPasteNotice(undefined);
+  }
+
+  /** Put a pasted attachment's text back in the draft, where the notice's button asks for it. */
+  function insertPastedText() {
+    if (!pasteNotice || disabled || frozen !== undefined) return;
+    const { name, text } = pasteNotice;
+    const area = areaRef.current;
+    const start = area?.selectionStart ?? draft.length;
+    const end = area?.selectionEnd ?? start;
+    const caretAfter = start + text.length;
+    setDraft(draft.slice(0, start) + text + draft.slice(end));
+    setCaret(caretAfter);
+    setFiles((current) => current.filter((file) => file.name !== name));
+    setPasteNotice(undefined);
+    setAttachNotice(undefined);
+    requestAnimationFrame(() => {
+      if (activeDraftKey.current !== draftKey) return;
+      areaRef.current?.focus();
+      areaRef.current?.setSelectionRange(caretAfter, caretAfter);
+    });
   }
 
   const acceptsDrop = (event: DragEvent) => !disabled && providers.length > 0 && event.dataTransfer.types.includes("Files");
@@ -488,6 +518,11 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
           onSteer={(id) => void queue.steer(id)} onRestore={() => void queue.restore()} />
         <AttachmentTray images={attachments} files={files} onOpenImage={(index, url) => setShownImage({ index, url })}
           onRemoveImage={removeAttachment} onRemoveFile={removeFile} />
+        {pasteNotice && (
+          <div className="attachment-notice paste-notice" role="status">
+            <PasteNotice file={pasteNotice} onInsert={insertPastedText} disabled={disabled || frozen !== undefined} />
+          </div>
+        )}
         {(attachNotice || blockedByModel) && (
           <div className="attachment-notice" role="status">{blockedByModel ? `${noVisionMessage} Or remove the images to send.` : attachNotice}</div>
         )}
@@ -532,6 +567,24 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
             onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
             onScroll={syncHighlightScroll}
             onPaste={(event) => {
+              if (disabled || frozen !== undefined) return;
+              // A paste this large would swamp the draft; it becomes a text file like a picked one.
+              const pasted = largePasteText(event.clipboardData);
+              if (pasted !== undefined) {
+                const plan = pastedTextFile(pasted, files);
+                if ("file" in plan) {
+                  event.preventDefault();
+                  const file = plan.file;
+                  setFiles((current) => [...current, file]);
+                  setPasteNotice(file);
+                  setAttachNotice(undefined);
+                } else {
+                  // The caps refused it: leave the insertion to the browser and say where it went.
+                  setPasteNotice(undefined);
+                  setAttachNotice(`${plan.error} The paste went into the draft.`);
+                }
+                return;
+              }
               // Rich-text apps put an image rendition next to copied text; that is a text paste.
               if (event.clipboardData.types.includes("text/plain")) return;
               const picked = filesFrom(event.clipboardData);
@@ -630,7 +683,7 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
               </Tooltip>
             )}
             <Tooltip label={status === "stopping" ? `Wait for ${agentName} to stop` : queueButton ? `Queue for after ${agentName} finishes (⏎)` : "Send (⏎)"}>
-              <button type="button" className={`send-button${queueButton ? " queue" : ""}`} onClick={() => void send()} disabled={disabled || frozen !== undefined || providers.length === 0 || status === "stopping" || !draft.trim() || blockedByModel} aria-label={queueButton ? "Queue message" : "Send message"}>
+              <button type="button" className={`send-button${queueButton ? " queue" : ""}`} onClick={() => void send()} disabled={disabled || frozen !== undefined || providers.length === 0 || status === "stopping" || (!draft.trim() && files.length === 0) || blockedByModel} aria-label={queueButton ? "Queue message" : "Send message"}>
                 <Icon name="send" />
                 {queueButton && <span>Queue</span>}
               </button>

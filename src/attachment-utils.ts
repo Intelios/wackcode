@@ -5,7 +5,9 @@ import type { ImageContent } from "./types";
  * same image numbers, so keep those in sync. The worker then resizes each image to Pi's own
  * inline limits, so these only need to keep obviously unusable files out. Text files exist
  * only inside the message text (see `composeFileSection`), so their limits are the composer's
- * own: they exist to keep one message from swallowing the context window.
+ * own: they exist to keep one message from swallowing the context window. A paste of
+ * `MIN_PASTE_FILE_BYTES` or more becomes one of those text files instead of a wall of text in
+ * the draft (see `pastedTextFile`).
  */
 export const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
 export const MAX_IMAGES = 8;
@@ -13,6 +15,8 @@ export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 export const MAX_FILES = 8;
 export const MAX_FILE_BYTES = 256 * 1024;
 export const MAX_FILE_TOTAL_BYTES = 512 * 1024;
+/** Pastes at least this large (UTF-8 bytes) become a `Pasted text N.txt` attachment. */
+export const MIN_PASTE_FILE_BYTES = 32 * 1024;
 
 /** A text file attached to a message; folded into the message text at send time. */
 export interface FileAttachment {
@@ -40,6 +44,58 @@ export function filesFrom(source: DataTransfer | FileList | null | undefined): F
   return Array.from(files);
 }
 
+const utf8 = new TextEncoder();
+
+/** A string's size as the wire sees it — UTF-8 bytes, the unit every text-file limit uses. */
+export function textBytes(text: string): number {
+  return utf8.encode(text).length;
+}
+
+/**
+ * The clipboard's plain text when a paste is big enough to attach. Text pastes are read from
+ * `text/plain`, so a rich-text copy qualifies through its plain rendition while a clipboard that
+ * only carries files (a copied screenshot) has no text and falls through to `attachFiles`. A
+ * missing `getData` (a synthetic event, an unusual platform) counts as no text.
+ */
+export function largePasteText(clipboard: { types?: readonly string[]; getData?: (type: string) => string } | null | undefined): string | undefined {
+  if (!clipboard?.types?.includes("text/plain") || typeof clipboard.getData !== "function") return undefined;
+  const text = clipboard.getData("text/plain");
+  return textBytes(text) >= MIN_PASTE_FILE_BYTES ? text : undefined;
+}
+
+const tooLarge = (label: string) => `${label} is larger than ${MAX_FILE_BYTES / 1024} KB.`;
+const tooManyFiles = () => `Attach at most ${MAX_FILES} files to one message.`;
+const tooMuchText = () => `Attached text can add up to at most ${MAX_FILE_TOTAL_BYTES / 1024} KB.`;
+
+/** Why a text file of `bytes` can't join `files`, if it can't. `label` names the subject in the
+ *  sentence — a picked file's name, or "That paste" — so both routes share one set of limits. */
+function textFileProblem(label: string, bytes: number, files: FileAttachment[], totalBytes: number): string | undefined {
+  if (bytes > MAX_FILE_BYTES) return tooLarge(label);
+  if (files.length >= MAX_FILES) return tooManyFiles();
+  if (totalBytes + bytes > MAX_FILE_TOTAL_BYTES) return tooMuchText();
+  return undefined;
+}
+
+/** The first free `Pasted text N.txt`, numbering past the files already in the tray. */
+export function pastedTextName(files: FileAttachment[]): string {
+  const taken = new Set(files.map((file) => file.name.toLowerCase()));
+  let index = 1;
+  while (taken.has(`pasted text ${index}.txt`)) index += 1;
+  return `Pasted text ${index}.txt`;
+}
+
+/**
+ * A pasted text as a text-file attachment, or why it has to stay in the draft. The clipboard
+ * already hands us the string, so nothing is read or decoded: this is the synchronous decision
+ * the paste handler needs before it can swallow the event. Limits match `attachFiles` exactly.
+ */
+export function pastedTextFile(text: string, files: FileAttachment[]): { file: FileAttachment } | { error: string } {
+  const bytes = textBytes(text);
+  const totalBytes = files.reduce((sum, file) => sum + textBytes(file.text), 0);
+  const problem = textFileProblem("That paste", bytes, files, totalBytes);
+  return problem ? { error: problem } : { file: { name: pastedTextName(files), text } };
+}
+
 /**
  * Read `picked` into attachments, appending to `existing` up to the limits. PNG, JPEG, GIF and
  * WebP go through as images (a model without Vision refuses them with `noVisionMessage`); every
@@ -55,7 +111,7 @@ export async function attachFiles(existing: AttachmentState, picked: File[], opt
   const images = [...existing.images];
   const files = [...existing.files];
   const problems: string[] = [];
-  let totalBytes = files.reduce((sum, file) => sum + file.text.length, 0);
+  let totalBytes = files.reduce((sum, file) => sum + textBytes(file.text), 0);
   for (const file of picked) {
     const name = file.name || "That file";
     if ((ACCEPTED_IMAGE_TYPES as readonly string[]).includes(file.type)) {
@@ -78,12 +134,13 @@ export async function attachFiles(existing: AttachmentState, picked: File[], opt
       }
       continue;
     }
+    // Refuse an obviously oversized file before reading it; the rest of the caps need its text.
     if (file.size > MAX_FILE_BYTES) {
-      problems.push(`${name} is larger than ${MAX_FILE_BYTES / 1024} KB.`);
+      problems.push(tooLarge(name));
       continue;
     }
     if (files.length >= MAX_FILES) {
-      problems.push(`Attach at most ${MAX_FILES} files to one message.`);
+      problems.push(tooManyFiles());
       break;
     }
     let text: string;
@@ -93,11 +150,13 @@ export async function attachFiles(existing: AttachmentState, picked: File[], opt
       problems.push(`${name} isn't a text file or a PNG, JPEG, GIF, or WebP image.${options.mentions === false ? "" : " Put it in the workspace and mention its path with @ instead."}`);
       continue;
     }
-    if (totalBytes + text.length > MAX_FILE_TOTAL_BYTES) {
-      problems.push(`Attached text can add up to at most ${MAX_FILE_TOTAL_BYTES / 1024} KB.`);
+    const bytes = textBytes(text);
+    const problem = textFileProblem(name, bytes, files, totalBytes);
+    if (problem) {
+      problems.push(problem);
       continue;
     }
-    totalBytes += text.length;
+    totalBytes += bytes;
     files.push({ name, text });
   }
   return { images, files, error: problems[0] };

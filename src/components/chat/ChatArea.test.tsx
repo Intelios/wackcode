@@ -96,6 +96,29 @@ describe("ChatArea", () => {
     await vi.waitFor(() => expect(draftValue.text).toBe("again"));
   });
 
+  it("turns a large paste into an attachment and sends it with no words", () => {
+    const props = renderArea({ task: task(), runtime: { snapshot: {} as never } as TaskRuntime });
+    const area = screen.getByRole("textbox", { name: "Message" });
+    const text = "x".repeat(40 * 1024);
+    fireEvent.paste(area, { clipboardData: { types: ["text/plain"], getData: () => text } });
+    expect(area).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Remove file 1" })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Pasted text 1.txt");
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    expect(props.onSend).toHaveBeenCalledWith("", [], [{ name: "Pasted text 1.txt", text }], undefined);
+    expect(draftValue.files).toEqual([]);
+  });
+
+  it("puts a pasted attachment back into the chat draft", () => {
+    renderArea({ task: task(), runtime: { snapshot: {} as never } as TaskRuntime });
+    const area = screen.getByRole("textbox", { name: "Message" });
+    const text = "a pasted line\n".repeat(3000);
+    fireEvent.paste(area, { clipboardData: { types: ["text/plain"], getData: () => text } });
+    expect(screen.getByRole("button", { name: "Insert as text" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Insert as text" }));
+    expect(draftValue).toEqual({ text, images: [], files: [] });
+  });
+
   it("swaps the composer for the archived footer", () => {
     renderArea({ task: task({ archived: true }), runtime: { snapshot: {} as never } as TaskRuntime });
     expect(screen.queryByRole("textbox", { name: "Message" })).toBeNull();

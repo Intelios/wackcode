@@ -65,9 +65,13 @@ export function useQueueActions({ draftKey, activeDraftKey, status, blocked, onS
   return { pending, steer, restore };
 }
 
-/** Show the words, not generated file sections. Never reconstruct a steered payload from them. */
+/** Show the words, not generated file sections. A message made only of files shows their names
+ *  instead, so its row is never blank. Never reconstruct a steered payload from them. */
 export function queuedDisplay(queued: QueuedMessage[] | undefined): QueuedMessage[] {
-  return (queued ?? []).map((entry) => ({ ...entry, text: splitFileSection(entry.text).text }));
+  return (queued ?? []).map((entry) => {
+    const { text, files } = splitFileSection(entry.text);
+    return { ...entry, text: text || files.map((file) => file.name).join(", ") };
+  });
 }
 
 interface QueuedRowsProps {

@@ -10,9 +10,10 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type DragEvent, type SetStateAction } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ImageContent, ProviderRecord, QueuedMessage, TaskStatus, ThinkingLevel } from "../../types";
-import { attachFiles, filesFrom, splitFileSection, type FileAttachment } from "../../attachment-utils";
+import { attachFiles, filesFrom, largePasteText, pastedTextFile, splitFileSection, type FileAttachment } from "../../attachment-utils";
 import { EMPTY_DRAFT, type ComposerDraft, type ComposerDraftState } from "../../hooks/useComposerDrafts";
 import { AttachmentTray } from "../composer/AttachmentTray";
+import { PasteNotice } from "../composer/PasteNotice";
 import { QueuedRows, queuedDisplay, useQueueActions } from "../composer/QueuedRows";
 import { Icon } from "../Icons";
 import { ModelPicker, ReasoningToggle, type ModelFavoritesProps } from "../ModelPicker";
@@ -70,6 +71,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   const wrapRef = useRef<HTMLDivElement>(null);
   const seedNonces = useRef(new Map<string, number>());
   const [notice, setNotice] = useState<string>();
+  /** The pasted text that became an attachment, while its notice offers the way back. */
+  const [pasteNotice, setPasteNotice] = useState<FileAttachment>();
   const [dragging, setDragging] = useState(false);
   const [shownImage, setShownImage] = useState<{ index: number; url: string } | null>(null);
   /** Bumped on each send: the send button does a little hop. */
@@ -86,7 +89,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   const noVisionMessage = `${model?.name || model?.id || "This model"} doesn't accept images. Turn on Vision for it in Settings.`;
   const blockedByModel = images.length > 0 && !vision;
   const shownText = frozen ?? draft;
-  const canSend = !disabled && frozen === undefined && providers.length > 0 && status !== "stopping" && Boolean(draft.trim()) && !blockedByModel;
+  const canSend = !disabled && frozen === undefined && providers.length > 0 && status !== "stopping" && (Boolean(draft.trim()) || files.length > 0) && !blockedByModel;
 
   const queue = useQueueActions({
     draftKey, activeDraftKey, status, blocked: Boolean(disabled) || frozen !== undefined, onSteer, onDequeue,
@@ -111,8 +114,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     }
   }), [updateDraft]);
 
-  useEffect(() => { onTyping?.(Boolean(draft.trim())); }, [draft, onTyping]);
-  useLayoutEffect(() => { setNotice(undefined); setShownImage(null); setDragging(false); }, [draftKey]);
+  useEffect(() => { onTyping?.(Boolean(draft.trim() || files.length)); }, [draft, files.length, onTyping]);
+  useLayoutEffect(() => { setNotice(undefined); setPasteNotice(undefined); setShownImage(null); setDragging(false); }, [draftKey]);
 
   useLayoutEffect(() => {
     const area = areaRef.current;
@@ -141,6 +144,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     seedNonces.current.set(draftKey, nonce);
     const restored = splitFileSection(seedText.current);
     updateDraft((current) => ({ ...current, text: restored.text, files: restored.files }));
+    setPasteNotice(undefined);
     areaRef.current?.focus();
   }, [seed?.nonce, draftKey]);
 
@@ -151,6 +155,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     const keptFiles = files;
     updateDraft(EMPTY_DRAFT);
     setNotice(undefined);
+    setPasteNotice(undefined);
     setLaunches((count) => count + 1);
     const ok = await onSend(message, keptImages, keptFiles, queueing ? true : undefined);
     if (!ok) {
@@ -168,6 +173,25 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     setField("images", result.images);
     setField("files", result.files);
     if (activeDraftKey.current === draftKey) setNotice(result.error);
+  }
+
+  /** Put a pasted attachment's text back in the draft, where the notice's button asks for it. */
+  function insertPastedText() {
+    if (!pasteNotice || disabled || frozen !== undefined) return;
+    const { name, text } = pasteNotice;
+    const area = areaRef.current;
+    const start = area?.selectionStart ?? draft.length;
+    const end = area?.selectionEnd ?? start;
+    const caretAfter = start + text.length;
+    setField("text", draft.slice(0, start) + text + draft.slice(end));
+    setField("files", files.filter((file) => file.name !== name));
+    setPasteNotice(undefined);
+    setNotice(undefined);
+    requestAnimationFrame(() => {
+      if (activeDraftKey.current !== draftKey) return;
+      areaRef.current?.focus();
+      areaRef.current?.setSelectionRange(caretAfter, caretAfter);
+    });
   }
 
   const acceptsDrop = (event: DragEvent) => !disabled && providers.length > 0 && event.dataTransfer.types.includes("Files");
@@ -195,10 +219,20 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
         <AttachmentTray images={images} files={files} className="chat-attachments"
           onOpenImage={(index, url) => setShownImage({ index, url })}
           onRemoveImage={(index) => { setField("images", images.filter((_, i) => i !== index)); setNotice(undefined); }}
-          onRemoveFile={(index) => { setField("files", files.filter((_, i) => i !== index)); setNotice(undefined); }} />
+          onRemoveFile={(index) => {
+            const next = files.filter((_, i) => i !== index);
+            setField("files", next);
+            setNotice(undefined);
+            if (next.every((file) => file.name !== pasteNotice?.name)) setPasteNotice(undefined);
+          }} />
         <AnimatePresence initial={false}>
+          {pasteNotice && (
+            <motion.div key="paste" className="chat-composer-notice paste-notice" role="status" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              <PasteNotice file={pasteNotice} onInsert={insertPastedText} disabled={disabled || frozen !== undefined} />
+            </motion.div>
+          )}
           {(notice || blockedByModel) && (
-            <motion.div className="chat-composer-notice" role="status" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+            <motion.div key="notice" className="chat-composer-notice" role="status" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
               {blockedByModel ? `${noVisionMessage} Or remove the images to send.` : notice}
             </motion.div>
           )}
@@ -223,6 +257,24 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
             placeholder={providers.length === 0 ? "Connect a provider to start…" : status === "stopping" ? `${agentName} is stopping…` : queueing ? `${agentName} is replying — ⏎ sends after` : placeholder}
             onChange={(event) => { if (frozen === undefined) { setField("text", event.target.value); setNotice(undefined); } }}
             onPaste={(event) => {
+              if (disabled || frozen !== undefined) return;
+              // A paste this large would swamp the draft; it becomes a text file like a picked one.
+              const pasted = largePasteText(event.clipboardData);
+              if (pasted !== undefined) {
+                const plan = pastedTextFile(pasted, files);
+                if ("file" in plan) {
+                  event.preventDefault();
+                  const file = plan.file;
+                  setField("files", [...files, file]);
+                  setPasteNotice(file);
+                  setNotice(undefined);
+                } else {
+                  // The caps refused it: leave the insertion to the browser and say where it went.
+                  setPasteNotice(undefined);
+                  setNotice(`${plan.error} The paste went into the draft.`);
+                }
+                return;
+              }
               if (event.clipboardData.types.includes("text/plain")) return;
               const picked = filesFrom(event.clipboardData);
               if (picked.length === 0) return;

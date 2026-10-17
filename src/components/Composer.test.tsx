@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ImageContent, ProviderRecord, QueuedMessage } from "../types";
-import { composeFileSection, type FileAttachment } from "../attachment-utils";
+import { composeFileSection, MAX_FILE_BYTES, type FileAttachment } from "../attachment-utils";
 import { Composer } from "./Composer";
 import { useComposerDrafts } from "../hooks/useComposerDrafts";
 
@@ -31,6 +31,16 @@ function png(name = "shot.png"): File {
 
 function txt(name = "notes.txt", body = "hi"): File {
   return new File([body], name, { type: "text/plain" });
+}
+
+/** A clipboard carrying only plain text, as the browser hands a paste to the composer. */
+function pasted(text: string) {
+  return { clipboardData: { types: ["text/plain"], getData: () => text } };
+}
+
+/** A paste comfortably over the attachment threshold, in whole lines. */
+function bigPaste(tag = ""): string {
+  return "a line of pasted text\n".repeat(2200) + tag;
 }
 
 function renderComposer(modelId: string, onSend: (message: string, images: ImageContent[], files: FileAttachment[]) => Promise<boolean> = vi.fn().mockResolvedValue(true)) {
@@ -108,6 +118,67 @@ describe("Composer attachments", () => {
     expect(await screen.findByAltText("Attached image 1")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Remove image 1" }));
     expect(screen.queryByAltText("Attached image 1")).not.toBeInTheDocument();
+  });
+
+  it("turns a large paste into a text-file attachment", async () => {
+    const { onSend } = renderComposer("sees");
+    const text = bigPaste();
+    fireEvent.paste(screen.getByRole("textbox"), pasted(text));
+    expect(screen.getByRole("textbox")).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Remove file 1" })).toBeInTheDocument();
+    const notice = screen.getByRole("status");
+    expect(notice).toHaveTextContent("Pasted");
+    expect(notice).toHaveTextContent("Pasted text 1.txt");
+    expect(within(notice).getByRole("button", { name: "Insert as text" })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Summarize this" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("Summarize this", [], [{ name: "Pasted text 1.txt", text }]));
+  });
+
+  it("leaves a small text paste to the textarea", () => {
+    renderComposer("sees");
+    fireEvent.paste(screen.getByRole("textbox"), pasted("a short note"));
+    expect(screen.queryByRole("button", { name: "Remove file 1" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Insert as text" })).not.toBeInTheDocument();
+  });
+
+  it("keeps an over-limit paste in the draft and says why", () => {
+    renderComposer("sees");
+    fireEvent.paste(screen.getByRole("textbox"), pasted("x".repeat(MAX_FILE_BYTES + 1)));
+    expect(screen.queryByRole("button", { name: "Remove file 1" })).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(`That paste is larger than ${MAX_FILE_BYTES / 1024} KB. The paste went into the draft.`);
+  });
+
+  it("puts a pasted attachment back into the draft", () => {
+    renderComposer("sees");
+    const text = bigPaste();
+    fireEvent.paste(screen.getByRole("textbox"), pasted(text));
+    fireEvent.click(screen.getByRole("button", { name: "Insert as text" }));
+    expect(screen.getByRole("textbox")).toHaveValue(text);
+    expect(screen.queryByRole("button", { name: "Remove file 1" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Insert as text" })).not.toBeInTheDocument();
+  });
+
+  it("numbers a second paste and keeps the first attached", () => {
+    renderComposer("sees");
+    const first = bigPaste();
+    const second = bigPaste("and its tail");
+    fireEvent.paste(screen.getByRole("textbox"), pasted(first));
+    fireEvent.paste(screen.getByRole("textbox"), pasted(second));
+    expect(screen.getByRole("button", { name: "Remove file 1" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove file 2" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Insert as text" }));
+    expect(screen.getByRole("textbox")).toHaveValue(second);
+    expect(screen.getByRole("button", { name: "Remove file 1" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Remove file 2" })).not.toBeInTheDocument();
+  });
+
+  it("sends a pasted attachment with no words", async () => {
+    const { onSend } = renderComposer("sees");
+    const text = bigPaste();
+    fireEvent.paste(screen.getByRole("textbox"), pasted(text));
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("", [], [{ name: "Pasted text 1.txt", text }]));
   });
 
   it("restores the message and attachments when the send fails", async () => {
@@ -752,6 +823,23 @@ describe("Composer queueing while the agent is working", () => {
     fireEvent.click(screen.getByRole("button", { name: "Restore queued messages to the composer" }));
     await waitFor(() => expect(area).toHaveValue("Queued note"));
     expect(await screen.findByText("notes.txt")).toBeInTheDocument();
+  });
+
+  it("shows a file-only queued message by its file name", () => {
+    const composed = composeFileSection("", [{ name: "Pasted text 1.txt", text: "big" }]);
+    setup({ queuedMessages: [{ id: "files-only", text: composed }], onDequeue: vi.fn() });
+    const list = screen.getByRole("list", { name: "Queued messages" });
+    expect(list).toHaveTextContent("Pasted text 1.txt");
+    expect(list).not.toHaveTextContent("attached-files");
+  });
+
+  it("queues a pasted attachment with no words", async () => {
+    const { onSend, area } = setup();
+    const text = bigPaste();
+    fireEvent.paste(area, pasted(text));
+    expect(await screen.findByRole("button", { name: "Remove file 1" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Queue message" }));
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("", [], [{ name: "Pasted text 1.txt", text }], true));
   });
 });
 

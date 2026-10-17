@@ -128,6 +128,7 @@ queue actions dispatch while stopping. App captures the originating task id for 
 - Images ride `images` through `api.ts` to the worker, and reach only models with Vision on.
 - Every attached image opens full size in `ui/ImageLightbox`: the composer shows the picked file it still holds, and the transcript and edit box fetch the original from the chat's session with `api.messageImage` (a snapshot's thumbnail is all they render). In the lightbox, a click zooms toward the clicked point (click again, or −, to zoom out; + zooms to centre) and a zoomed image pans by dragging.
 - Attached text files are folded into the message text by `composeFileSection` and read back out for display by `splitFileSection` (`src/attachment-utils.ts`). Change both halves together.
+- A plain-text paste of 32 KiB or more (`MIN_PASTE_FILE_BYTES`, UTF-8 bytes) becomes a `Pasted text N.txt` attachment instead of a wall of text in the draft; it meets the same file caps, and a paste that does not fit stays in the draft with a notice explaining why. The notice's **Insert as text** puts it back. Attachments alone can be sent, so a paste-only message works; a queued message made only of files shows their names.
 - Attached files never ride a `/`-command message: Pi expands commands and would swallow the section. Sending the same text literally is the deliberate escape hatch.
 
 ## Side panel

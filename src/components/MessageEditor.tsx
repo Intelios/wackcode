@@ -53,7 +53,7 @@ export function MessageEditor({ text, images, files, vision, modelName, loadImag
 
   async function send() {
     const message = draft.trim();
-    if (!message || busy || blocked) return;
+    if ((!message && keptFiles.length === 0) || busy || blocked) return;
     setBusy(true);
     const sent = await onSend(message, keptFiles, removed);
     if (!sent) setBusy(false);
@@ -115,7 +115,7 @@ export function MessageEditor({ text, images, files, vision, modelName, loadImag
       />
       <div className="message-editor-actions">
         <button type="button" className="secondary-button" onClick={onCancel}>Cancel</button>
-        <button type="button" className="primary-button" disabled={!draft.trim() || busy || blocked} onClick={() => void send()}>
+        <button type="button" className="primary-button" disabled={(!draft.trim() && keptFiles.length === 0) || busy || blocked} onClick={() => void send()}>
           {busy ? "Sending…" : "Send"}
         </button>
       </div>

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  MAX_FILE_BYTES, MAX_FILE_TOTAL_BYTES, MAX_FILES, MAX_IMAGES, MAX_IMAGE_BYTES,
-  attachFiles, composeFileSection, filesFrom, imageDataUrl, readFileText, readImageFile,
-  splitFileSection, type FileAttachment
+  MAX_FILE_BYTES, MAX_FILE_TOTAL_BYTES, MAX_FILES, MAX_IMAGES, MAX_IMAGE_BYTES, MIN_PASTE_FILE_BYTES,
+  attachFiles, composeFileSection, filesFrom, imageDataUrl, largePasteText, pastedTextFile, pastedTextName,
+  readFileText, readImageFile, splitFileSection, textBytes, type FileAttachment
 } from "./attachment-utils";
 
 function png(name = "shot.png", bytes = [0x89, 0x50, 0x4e, 0x47]): File {
@@ -87,9 +87,63 @@ describe("attachment-utils", () => {
     expect(third.files).toHaveLength(2);
     expect(third.error).toContain("512 KB");
   });
+
+  it("counts attached text in bytes, not UTF-16 units", async () => {
+    // 200,000 two-byte characters are 400 KB on the wire, so one more 256 KB file no longer fits.
+    const existing = [{ name: "wide.txt", text: "é".repeat(200_000) }];
+    const result = await attachFiles({ images: [], files: existing }, [textFile("more.txt", "x".repeat(MAX_FILE_BYTES - 1))], sees);
+    expect(result.files).toHaveLength(1);
+    expect(result.error).toContain(`${MAX_FILE_TOTAL_BYTES / 1024} KB`);
+  });
+});
+
+describe("large pastes", () => {
+  const clipboard = (text: string, types: readonly string[] = ["text/plain"]) => ({ types, getData: () => text });
+
+  it("counts text in UTF-8 bytes", () => {
+    expect(textBytes("é")).toBe(2);
+    expect(textBytes("𝄞")).toBe(4);
+  });
+
+  it("takes plain text at the threshold and leaves smaller pastes alone", () => {
+    const atLimit = "x".repeat(MIN_PASTE_FILE_BYTES);
+    expect(largePasteText(clipboard(atLimit))).toBe(atLimit);
+    expect(largePasteText(clipboard("x".repeat(MIN_PASTE_FILE_BYTES - 1)))).toBeUndefined();
+    // 16,384 two-byte characters are 32 KiB on the wire but only 16,384 UTF-16 units.
+    expect(largePasteText(clipboard("é".repeat(MIN_PASTE_FILE_BYTES / 2)))).toHaveLength(MIN_PASTE_FILE_BYTES / 2);
+  });
+
+  it("ignores clipboards without plain text or without a reader", () => {
+    expect(largePasteText(null)).toBeUndefined();
+    expect(largePasteText({ types: ["Files"] })).toBeUndefined();
+    expect(largePasteText({ types: ["text/plain"] })).toBeUndefined();
+    expect(largePasteText(clipboard("small"))).toBeUndefined();
+  });
+
+  it("names pastes past the files already attached", () => {
+    expect(pastedTextName([])).toBe("Pasted text 1.txt");
+    expect(pastedTextFile("big", [])).toEqual({ file: { name: "Pasted text 1.txt", text: "big" } });
+    const taken = [{ name: "Pasted text 1.txt", text: "x" }, { name: "notes.txt", text: "y" }];
+    expect(pastedTextFile("big", taken)).toEqual({ file: { name: "Pasted text 2.txt", text: "big" } });
+    // A number freed by removing an earlier paste is reused.
+    expect(pastedTextName([{ name: "pasted text 2.txt", text: "x" }])).toBe("Pasted text 1.txt");
+  });
+
+  it("holds a paste to the file caps and says why", () => {
+    expect(pastedTextFile("x".repeat(MAX_FILE_BYTES + 1), [])).toEqual({ error: "That paste is larger than 256 KB." });
+    const many = Array.from({ length: MAX_FILES }, (_, index) => ({ name: `f${index}.txt`, text: "x" }));
+    expect(pastedTextFile("x", many)).toEqual({ error: `Attach at most ${MAX_FILES} files to one message.` });
+    const full = [{ name: "a.txt", text: "x".repeat(MAX_FILE_BYTES) }, { name: "b.txt", text: "y".repeat(MAX_FILE_BYTES) }];
+    expect(pastedTextFile("x", full)).toEqual({ error: `Attached text can add up to at most ${MAX_FILE_TOTAL_BYTES / 1024} KB.` });
+  });
 });
 
 describe("composeFileSection / splitFileSection", () => {
+  it("round-trips a pasted file whose name has spaces", () => {
+    const files: FileAttachment[] = [{ name: "Pasted text 12.txt", text: "first\nsecond" }];
+    expect(splitFileSection(composeFileSection("", files))).toEqual({ text: "", files });
+  });
+
   it("round-trips the words and the files exactly", () => {
     const files: FileAttachment[] = [
       { name: "notes.md", text: "line one\nline two" },

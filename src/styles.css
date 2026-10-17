@@ -1819,6 +1819,9 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 }
 .attachment-file > svg { width: 13px; height: 13px; flex: 0 0 auto; color: var(--text-dim); }
 .attachment-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A terminal selection's chip: the same file chip, marked for its origin and showing its span. */
+.attachment-file.terminal > svg { color: var(--wc-accent); }
+.attachment-file-meta { flex: 0 0 auto; color: var(--text-dim); font-size: 10.5px; }
 .attachment-notice { padding: 8px 15px 0; font-size: 12px; color: var(--warning); }
 /* A large paste became a text-file attachment: informational, with the way back to plain text. */
 .paste-notice { color: var(--text-soft); }
@@ -4036,6 +4039,30 @@ html[data-force-reduced-motion] *::after {
 .terminal-notice strong { color: var(--text); font-size: 12.5px; font-weight: 650; }
 .terminal-notice span { color: var(--text-dim); font-size: 11.5px; line-height: 1.45; }
 .terminal-notice .secondary-button { margin-top: 7px; }
+
+/* Selection → composer: the pill rests above the selection's end row (below it when there is
+   no room) and hands the text to the draft. One-shot entrance; the global reduced-motion
+   rule stills it. */
+.terminal-add-pill {
+  position: absolute; z-index: 3; display: inline-flex; align-items: center; gap: 6px;
+  height: 28px; padding: 0 12px; border: 1px solid var(--border-bright); border-radius: 999px;
+  background: var(--wc-elevated); color: var(--text); box-shadow: var(--shadow-pop);
+  font-size: 11.5px; font-weight: 600; cursor: pointer;
+  animation: terminal-pill-in .18s var(--ease);
+}
+.terminal-add-pill svg { width: 12px; height: 12px; color: var(--wc-accent); }
+.terminal-add-pill:hover { border-color: var(--wc-accent); }
+@keyframes terminal-pill-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+/* Why a selection didn't attach (the composer's caps): small, top-right, clear of the
+   notice cards that rise at the bottom. */
+.terminal-add-notice {
+  position: absolute; top: 10px; right: 12px; z-index: 3;
+  max-width: min(280px, calc(100% - 24px)); padding: 7px 11px;
+  border: 1px solid var(--border-bright); border-radius: var(--wc-radius-card);
+  background: var(--wc-elevated); color: var(--warning); box-shadow: var(--shadow-pop);
+  font-size: 11px; line-height: 1.4;
+}
 
 @media (prefers-reduced-motion: reduce) {
   .terminal-screen { transition: none; }

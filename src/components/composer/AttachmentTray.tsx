@@ -33,15 +33,19 @@ export function AttachmentTray({ images, files, onOpenImage, onRemoveImage, onRe
           </button>
         </div>
       ))}
-      {files.map((file, index) => (
-        <div className="attachment-file" key={index}>
-          <Icon name="file" />
-          <span className="attachment-file-name">{file.name}</span>
-          <button type="button" className="attachment-remove" aria-label={`Remove file ${index + 1}`} onClick={() => onRemoveFile(index)}>
-            <Icon name="close" />
-          </button>
-        </div>
-      ))}
+      {files.map((file, index) => {
+        const lines = file.text.split("\n").length;
+        return (
+          <div className={`attachment-file${file.source === "terminal" ? " terminal" : ""}`} key={index}>
+            <Icon name={file.source === "terminal" ? "terminal" : "file"} />
+            <span className="attachment-file-name">{file.name}</span>
+            {file.source === "terminal" && <small className="attachment-file-meta">{lines} {lines === 1 ? "line" : "lines"}</small>}
+            <button type="button" className="attachment-remove" aria-label={`Remove file ${index + 1}`} onClick={() => onRemoveFile(index)}>
+              <Icon name="close" />
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
 }

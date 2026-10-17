@@ -28,7 +28,11 @@ vi.mock("./components/SettingsPage", () => ({ SettingsPage: (props: { appearance
   <button onClick={() => props.onSetAppearance({ ...props.appearance, chatTabs: !props.appearance.chatTabs })}>Toggle tabs</button>
   <button onClick={props.onClose}>Close settings</button>
 </> }));
-vi.mock("./components/TerminalPanel", () => ({ TerminalPanel: ({ taskId }: { taskId: string }) => <div aria-label={`Terminal ${taskId}`} /> }));
+const terminalAttach = vi.hoisted(() => ({ current: undefined as undefined | ((text: string) => void) }));
+vi.mock("./components/TerminalPanel", () => ({ TerminalPanel: ({ taskId, onAttach }: { taskId: string; onAttach?: (text: string) => void }) => {
+  terminalAttach.current = onAttach;
+  return <div aria-label={`Terminal ${taskId}`} />;
+} }));
 
 const provider: ProviderRecord = {
   id: "p", name: "Mock", baseUrl: "http://127.0.0.1:43127/v1", apiFormat: "openai-completions", kind: "custom",
@@ -133,6 +137,18 @@ describe("App tab workspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     fireEvent.click(screen.getByText("Toggle tabs")); fireEvent.click(screen.getByText("Close settings"));
     chat("a"); expect(screen.getByRole("button", { name: /Hide work transcript/ })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("takes a terminal selection into the draft as a marked chip", async () => {
+    bootstrap(); await screen.findByRole("button", { name: "Settings" });
+    chat("a"); await screen.findByRole("tablist");
+    fireEvent.click(screen.getByRole("button", { name: "Terminal" }));
+    await screen.findByLabelText("Terminal a");
+
+    act(() => terminalAttach.current!("ls --long\ntotal 12"));
+    const chip = await screen.findByText("Terminal output.txt");
+    expect(chip.closest(".attachment-file")).toHaveClass("terminal");
+    expect(screen.getByText("2 lines")).toBeInTheDocument();
   });
 
   it("deduplicates chats, remembers panels, and leaves workers running on close", async () => {

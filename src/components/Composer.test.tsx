@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useEffect } from "react";
 import type { ImageContent, ProviderRecord, QueuedMessage } from "../types";
 import { composeFileSection, MAX_FILE_BYTES, type FileAttachment } from "../attachment-utils";
 import { Composer } from "./Composer";
@@ -953,6 +954,22 @@ describe("Composer per-chat drafts", () => {
     view.rerender(<Harness chat="task:b" />);
     expect(area).toHaveValue("Draft B");
     expect(screen.getByText("b.txt")).toBeInTheDocument();
+  });
+
+  it("marks a terminal selection's chip with its span and removes it from the draft", async () => {
+    function Seeded() {
+      const drafts = useComposerDrafts();
+      useEffect(() => {
+        drafts.update("task:t", (draft) => ({ ...draft, files: [...draft.files, { name: "Terminal output.txt", text: "one\ntwo\nthree", source: "terminal" as const }] }));
+      }, []);
+      return <Composer {...noFavorites} {...base} draftState={drafts.forChat("task:t")} />;
+    }
+    render(<Seeded />);
+    const chip = await screen.findByText("Terminal output.txt");
+    expect(chip.closest(".attachment-file")).toHaveClass("terminal");
+    expect(screen.getByText("3 lines")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Remove file 1" }));
+    expect(screen.queryByText("Terminal output.txt")).not.toBeInTheDocument();
   });
 
   it("opens a fresh welcome draft for every new-chat request and retains the chat draft", () => {

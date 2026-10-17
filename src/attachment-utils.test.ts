@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_FILE_BYTES, MAX_FILE_TOTAL_BYTES, MAX_FILES, MAX_IMAGES, MAX_IMAGE_BYTES, MIN_PASTE_FILE_BYTES,
-  attachFiles, composeFileSection, filesFrom, imageDataUrl, largePasteText, pastedTextFile, pastedTextName,
-  readFileText, readImageFile, splitFileSection, textBytes, type FileAttachment
+  attachFiles, composeFileSection, filesFrom, imageDataUrl, largePasteText, normalizeTerminalSelection, pastedTextFile, pastedTextName,
+  readFileText, readImageFile, splitFileSection, terminalOutputFile, terminalOutputName, textBytes, type FileAttachment
 } from "./attachment-utils";
 
 function png(name = "shot.png", bytes = [0x89, 0x50, 0x4e, 0x47]): File {
@@ -180,5 +180,40 @@ describe("composeFileSection / splitFileSection", () => {
   it("round-trips a message that is only files", () => {
     const files = [{ name: "a.txt", text: "b" }];
     expect(splitFileSection(composeFileSection("", files))).toEqual({ text: "", files });
+  });
+});
+
+describe("terminal selections", () => {
+  it("tidies the selection for the chip", () => {
+    expect(normalizeTerminalSelection("  $ make   \n\nerror: boom \n\n\n")).toBe("  $ make\n\nerror: boom");
+    expect(normalizeTerminalSelection("one\r\ntwo\r")).toBe("one\ntwo");
+    expect(normalizeTerminalSelection("   \n\n")).toBe("");
+  });
+
+  it("names chips macOS-style past the files already attached", () => {
+    expect(terminalOutputName([])).toBe("Terminal output.txt");
+    expect(terminalOutputName([{ name: "Terminal output.txt", text: "x" }])).toBe("Terminal output 2.txt");
+    // Case-insensitive, and a user's own file of the same name is taken too.
+    expect(terminalOutputName([{ name: "TERMINAL OUTPUT.TXT", text: "x" }, { name: "notes.md", text: "y" }])).toBe("Terminal output 2.txt");
+    expect(terminalOutputName([{ name: "Terminal output.txt", text: "x" }, { name: "Terminal output 2.txt", text: "y" }])).toBe("Terminal output 3.txt");
+  });
+
+  it("marks the chip for its origin and holds it to the same caps as pastes", () => {
+    expect(terminalOutputFile("make: *** [all] Error 2\n", [])).toEqual({ file: { name: "Terminal output.txt", text: "make: *** [all] Error 2\n", source: "terminal" } });
+    expect(terminalOutputFile("   ", [])).toEqual({ error: "The terminal selection is empty." });
+    expect(terminalOutputFile("x".repeat(MAX_FILE_BYTES + 1), [])).toEqual({ error: "That terminal selection is larger than 256 KB." });
+    const many = Array.from({ length: MAX_FILES }, (_, index) => ({ name: `f${index}.txt`, text: "x" }));
+    expect(terminalOutputFile("out", many)).toEqual({ error: `Attach at most ${MAX_FILES} files to one message.` });
+    const full = [{ name: "a.txt", text: "x".repeat(MAX_FILE_BYTES) }, { name: "b.txt", text: "y".repeat(MAX_FILE_BYTES) }];
+    expect(terminalOutputFile("x", full)).toEqual({ error: `Attached text can add up to at most ${MAX_FILE_TOTAL_BYTES / 1024} KB.` });
+  });
+
+  it("round-trips a terminal chip through the message text untouched", () => {
+    const text = 'weird </file> <file name="x" lines="1">\n"quoted" & <tagged>\nsecond line';
+    const message = composeFileSection("Why did this fail?", [{ name: "Terminal output.txt", text, source: "terminal" }]);
+    const back = splitFileSection(message);
+    expect(back.text).toBe("Why did this fail?");
+    // `source` is presentation only: the round-trip drops it and the chip stays readable.
+    expect(back.files).toEqual([{ name: "Terminal output.txt", text }]);
   });
 });

@@ -1,9 +1,11 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
 import { Terminal } from "@xterm/xterm";
 import { api } from "../api";
 import { DEFAULT_APPEARANCE } from "../theme";
 import type { TerminalFrame, TerminalInfo } from "../types";
+import { ContextMenuProvider } from "./ui/ContextMenu";
 import { TerminalPanel } from "./TerminalPanel";
 
 // xterm measures real layout, so the mock records what the component does with it: output
@@ -17,11 +19,17 @@ vi.mock("@xterm/xterm", () => ({
     options: Record<string, unknown> = {};
     keyHandler?: (event: { type: string; key: string; metaKey?: boolean; ctrlKey?: boolean; shiftKey?: boolean }) => boolean;
     dataHandler?: (data: string) => void;
+    selection = "";
+    selectionRange: { start: { x: number; y: number }; end: { x: number; y: number } } | undefined;
+    selectionHandler?: () => void;
     written: string[] = [];
     open = vi.fn();
     loadAddon = vi.fn();
     attachCustomKeyEventHandler = vi.fn((handler: MockTerminal["keyHandler"]) => { this.keyHandler = handler; });
     onData = vi.fn((handler: (data: string) => void) => { this.dataHandler = handler; return { dispose: vi.fn() }; });
+    onSelectionChange = vi.fn((handler: () => void) => { this.selectionHandler = handler; return { dispose: vi.fn() }; });
+    getSelection = vi.fn(() => this.selection);
+    getSelectionPosition = vi.fn(() => (this.selection ? this.selectionRange : undefined));
     write = vi.fn((data: string) => { this.written.push(data); });
     reset = vi.fn();
     clear = vi.fn();
@@ -47,10 +55,36 @@ const info: TerminalInfo = { sessionId: "s1", shell: "zsh", cwd: "/tmp/work", fr
 let onFrame: (frame: TerminalFrame) => void = () => undefined;
 
 type KeyEvent = { type: string; key: string; metaKey?: boolean; ctrlKey?: boolean; shiftKey?: boolean };
-type MockTerm = { dataHandler?: (data: string) => void; keyHandler?: (event: KeyEvent) => boolean; written: string[]; reset: unknown };
+type Range = { start: { x: number; y: number }; end: { x: number; y: number } };
+type MockTerm = {
+  dataHandler?: (data: string) => void;
+  keyHandler?: (event: KeyEvent) => boolean;
+  selectionHandler?: () => void;
+  selection: string;
+  selectionRange?: Range;
+  written: string[];
+  reset: unknown;
+};
 
 function instances(): MockTerm[] {
   return (Terminal as unknown as { instances: MockTerm[] }).instances;
+}
+
+/** Report a selection the way xterm does: the state first, then the change event. */
+function select(text: string, range: Range = { start: { x: 0, y: 2 }, end: { x: 10, y: 3 } }) {
+  const term = instances()[0];
+  term.selection = text;
+  term.selectionRange = range;
+  act(() => term.selectionHandler?.());
+}
+
+/** The panel's context menu needs the app's provider behind it. */
+function withMenu(node: ReactNode) {
+  return (
+    <ContextMenuProvider scope="test" items={[]} copyText={vi.fn(async () => undefined)} readText={vi.fn(async () => "")} openLink={vi.fn(async () => undefined)} onError={vi.fn()}>
+      {node}
+    </ContextMenuProvider>
+  );
 }
 
 function renderPanel() {
@@ -157,5 +191,59 @@ describe("TerminalPanel", () => {
     expect(handler({ type: "keydown", key: "Tab", shiftKey: true })).toBe(true);
     expect(handler({ type: "keydown", key: "x" })).toBe(true);
     expect(handler({ type: "keyup", key: "n", metaKey: true })).toBe(true);
+  });
+
+  it("offers a selection to the draft — tidied — from the pill and the context menu", async () => {
+    const onAttach = vi.fn();
+    render(withMenu(<TerminalPanel taskId="chat-1" appearance={DEFAULT_APPEARANCE} onClose={() => {}} onAttach={onAttach} />));
+    await waitFor(() => expect(api.openTerminal).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "Add to draft" })).toBeNull();
+
+    select("ls --long   \n\ntotal 12  \n\n");
+    fireEvent.click(await screen.findByRole("button", { name: "Add to draft" }));
+    expect(onAttach).toHaveBeenCalledWith("ls --long\n\ntotal 12");
+
+    fireEvent.contextMenu(document.querySelector(".terminal-screen")!);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Add selection to draft" }));
+    expect(onAttach).toHaveBeenCalledTimes(2);
+    // The selection survives the hand-off; adding it again stays the user's call.
+    expect(instances()[0].selection).toBe("ls --long   \n\ntotal 12  \n\n");
+  });
+
+  it("hides the pill mid-drag so it can't steal the selection's mouse-up", async () => {
+    render(<TerminalPanel taskId="chat-1" appearance={DEFAULT_APPEARANCE} onClose={() => {}} onAttach={vi.fn()} />);
+    await waitFor(() => expect(api.openTerminal).toHaveBeenCalled());
+    const host = document.querySelector(".terminal-screen")!;
+    const term = instances()[0];
+
+    fireEvent.mouseDown(host);
+    term.selection = "hello";
+    term.selectionRange = { start: { x: 0, y: 2 }, end: { x: 5, y: 2 } };
+    act(() => term.selectionHandler?.());
+    expect(screen.queryByRole("button", { name: "Add to draft" })).toBeNull();
+
+    fireEvent.mouseUp(host);
+    expect(screen.getByRole("button", { name: "Add to draft" })).toBeInTheDocument();
+  });
+
+  it("says why a selection didn't attach, and clears the note on the next change", async () => {
+    const onAttach = vi.fn(() => { throw new Error("Attach at most 8 files to one message."); });
+    render(<TerminalPanel taskId="chat-1" appearance={DEFAULT_APPEARANCE} onClose={() => {}} onAttach={onAttach} />);
+    await waitFor(() => expect(api.openTerminal).toHaveBeenCalled());
+
+    select("hello");
+    fireEvent.click(await screen.findByRole("button", { name: "Add to draft" }));
+    expect(onAttach).toHaveBeenCalledWith("hello");
+    await screen.findByText("Attach at most 8 files to one message.");
+
+    select("more output");
+    expect(screen.queryByText("Attach at most 8 files to one message.")).toBeNull();
+  });
+
+  it("disables the menu's add item while nothing is selected", async () => {
+    render(withMenu(<TerminalPanel taskId="chat-1" appearance={DEFAULT_APPEARANCE} onClose={() => {}} onAttach={vi.fn()} />));
+    await waitFor(() => expect(api.openTerminal).toHaveBeenCalled());
+    fireEvent.contextMenu(document.querySelector(".terminal-screen")!);
+    expect(await screen.findByRole("menuitem", { name: "Add selection to draft" })).toBeDisabled();
   });
 });

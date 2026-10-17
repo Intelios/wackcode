@@ -25,6 +25,10 @@ export interface FileAttachment {
   name: string;
   /** The file's full text, as read (`readFileText`). */
   text: string;
+  /** Where the chip came from, for the tray's mark only. Never serialized: a message that
+   *  round-trips through `composeFileSection` (transcript, edit and queue restores) loses it
+   *  and the chip falls back to the generic file icon. */
+  source?: "terminal";
 }
 
 /** What the composer holds: images ride the prompt as `ImageContent`, text files as text. */
@@ -95,6 +99,36 @@ export function pastedTextName(files: FileAttachment[]): string {
   let index = 1;
   while (taken.has(`pasted text ${index}.txt`)) index += 1;
   return `Pasted text ${index}.txt`;
+}
+
+/** The first free terminal chip name, macOS numbering past the files already in the tray:
+ *  `Terminal output.txt`, then `Terminal output 2.txt`, and so on. */
+export function terminalOutputName(files: FileAttachment[]): string {
+  const taken = new Set(files.map((file) => file.name.toLowerCase()));
+  let index = 1;
+  while (taken.has(index === 1 ? "terminal output.txt" : `terminal output ${index}.txt`)) index += 1;
+  return index === 1 ? "Terminal output.txt" : `Terminal output ${index}.txt`;
+}
+
+/** xterm's selection tidied for the chip: trailing spaces per line and the blank lines a
+ *  drag's edges pick up are gone, so the agent sees the output itself. Soft-wrapped rows
+ *  are already joined by xterm and pass through untouched. */
+export function normalizeTerminalSelection(raw: string): string {
+  const lines = raw.replace(/\r\n?/g, "\n").split("\n").map((line) => line.replace(/[ \t]+$/, ""));
+  while (lines.length > 0 && lines[0] === "") lines.shift();
+  while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  return lines.join("\n");
+}
+
+/** A terminal selection as a text-file attachment, or why it can't join `files`. Mirrors
+ *  `pastedTextFile` exactly — same caps, one budget shared with pastes and picked files —
+ *  but names the chip for its origin. An empty selection is refused, never attached. */
+export function terminalOutputFile(text: string, files: FileAttachment[]): { file: FileAttachment } | { error: string } {
+  if (!text.trim()) return { error: "The terminal selection is empty." };
+  const bytes = textBytes(text);
+  const totalBytes = files.reduce((sum, file) => sum + textBytes(file.text), 0);
+  const problem = textFileProblem("That terminal selection", bytes, files, totalBytes);
+  return problem ? { error: problem } : { file: { name: terminalOutputName(files), text, source: "terminal" } };
 }
 
 /**

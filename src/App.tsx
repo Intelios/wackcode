@@ -13,7 +13,7 @@ import { PINNED_PROJECTS_KEY } from "./project-display";
 import { chatModelGone, modelDisplayName, modelIsReady, pickThinkingLevel, type ModelChoice } from "./model-utils";
 import { titleFromPrompt, samePlanState, sameTodoState, sameGoalState, applySnapshotDelta, applySubagentFrame, pendingSubagentView, pendingEchoMessage, withPendingEcho, validateInitCommand, nextMode, isPlanMode } from "./chat-utils";
 import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix } from "./tree-utils";
-import { composeFileSection, splitFileSection, type FileAttachment } from "./attachment-utils";
+import { composeFileSection, splitFileSection, terminalOutputFile, type FileAttachment } from "./attachment-utils";
 import { CENTRED } from "./backdrop-crop";
 import { BROWSER_TOOL_NAMES, displayAgentName, hasSubagentCall, pruneDisabledTools, sameToolCatalog, subagentDetailsFor, parseSkillPreviewDetails, SKILL_CREATOR_TOOL_NAME } from "./tool-utils";
 import { LinkOpenerContext, openExternally, type LinkOpener } from "./link-opener";
@@ -3250,7 +3250,22 @@ export default function App() {
           onStop={() => { if (selectedRun) void stopRun(selectedRun).catch((reason) => setGlobalError(String(reason))); }}
           onClose={closeSidePanel} />
       ) : view.kind === "terminal" ? (
-        <TerminalPanel key={selectedTask.id} taskId={selectedTask.id} appearance={data.appearance} onClose={closeSidePanel} />
+        <TerminalPanel
+          key={selectedTask.id}
+          taskId={selectedTask.id}
+          appearance={data.appearance}
+          onClose={closeSidePanel}
+          onAttach={(text) => {
+            // A terminal selection joins the draft as a text-file chip, the same transport
+            // every attached file uses. The caps' sentence goes back to the panel, the
+            // BrowserPanel `onAttach` contract.
+            const key = composerDraftKey;
+            const plan = terminalOutputFile(text, composerDrafts.get(key).files);
+            if ("error" in plan) throw new Error(plan.error);
+            composerDrafts.update(key, (draft) => ({ ...draft, files: [...draft.files, plan.file] }));
+            requestAnimationFrame(() => { if (composerKeyRef.current === key) document.querySelector<HTMLTextAreaElement>(".composer-input textarea, .chat-composer textarea")?.focus(); });
+          }}
+        />
       ) : view.kind === "games" ? (
         <GamesPanel
           status={selectedTask.status}

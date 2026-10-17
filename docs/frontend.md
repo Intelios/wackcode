@@ -127,7 +127,7 @@ queue actions dispatch while stopping. App captures the originating task id for 
 
 - Images ride `images` through `api.ts` to the worker, and reach only models with Vision on. Browser context chips count toward the same image limits. Their versioned generated text section maps each capture to its image index; `browser-context.ts` owns encoding, parsing and reindexing, including sent-message edits.
 - Every attached image opens full size in `ui/ImageLightbox`: the composer shows the picked file it still holds, and the transcript and edit box fetch the original from the chat's session with `api.messageImage` (a snapshot's thumbnail is all they render). In the lightbox, a click zooms toward the clicked point (click again, or −, to zoom out; + zooms to centre) and a zoomed image pans by dragging.
-- Attached text files are folded into the message text by `composeFileSection` and read back out for display by `splitFileSection` (`src/attachment-utils.ts`). Change both halves together.
+- Attached text files are folded into the message text by `composeFileSection` and read back out for display by `splitFileSection` (`src/attachment-utils.ts`). Change both halves together. A terminal selection is one of these files (`source: "terminal"` only marks its chip with the terminal icon and a line count); it is not its own wire format.
 - A plain-text paste of 32 KiB or more (`MIN_PASTE_FILE_BYTES`, UTF-8 bytes) becomes a `Pasted text N.txt` attachment instead of a wall of text in the draft; it meets the same file caps, and a paste that does not fit stays in the draft with a notice explaining why. The notice's **Insert as text** puts it back. Attachments alone can be sent, so a paste-only message works; a queued message made only of files shows their names.
 - Attached files never ride a `/`-command message: Pi expands commands and would swallow the section. Sending the same text literally is the deliberate escape hatch.
 
@@ -187,6 +187,7 @@ The user's own shell, in `src-tauri/src/terminal.rs`. The agent never sees it.
 - One PTY per chat, keyed by task id, spawned lazily in the chat's `workspace_path` with the login-shell environment.
 - It is not a worker: it never joins the worker fingerprint and the idle reaper never kills it. It dies only via `kill_for_task` (delete, archive, worktree conversion), when the user ends it, or via `terminate_all` on app exit.
 - Output streams over a `Channel<TerminalFrame>` straight into xterm, never through React state. A ~256 KiB scrollback ring buffer replays on reattach; one lock orders replay and live output so nothing is lost or duplicated.
+- The agent never sees any of it unless the user says so: a selection rests an **Add to draft** pill at its end row (and a context-menu item), which hands the tidied text to the composer as a `Terminal output N.txt` text-file chip (`terminalOutputFile`/`normalizeTerminalSelection` in `attachment-utils.ts`, `onAttach` follows `BrowserPanel`'s contract). A refusal (the shared file caps) shows as a small notice in the panel.
 
 ## Project Run commands
 

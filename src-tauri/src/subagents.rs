@@ -13,11 +13,12 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 use uuid::Uuid;
 
-/// The tools a sub-agent may be given: Pi's own, plus the built-in `web_fetch` (which the worker
-/// withholds while the user has switched Web Fetch off). Package tools never reach a child.
-pub const CHILD_TOOLS: &[&str] = &["read", "grep", "find", "ls", "bash", "edit", "write", "web_fetch"];
+/// The tools a sub-agent may be given: Pi's own, plus the built-in `web_fetch` and `web_search`
+/// (which the worker withholds while Web Fetch is off or no search provider is active). Package
+/// tools never reach a child. Mirrors `CHILD_TOOLS` in the worker and `SUBAGENT_TOOLS` in types.ts.
+pub const CHILD_TOOLS: &[&str] = &["read", "grep", "find", "ls", "bash", "edit", "write", "web_fetch", "web_search"];
 /// Everything a read-only agent may use; its bash is further limited by the Plan-mode policy.
-const READ_ONLY_TOOLS: &[&str] = &["read", "grep", "find", "ls", "bash", "web_fetch"];
+const READ_ONLY_TOOLS: &[&str] = &["read", "grep", "find", "ls", "bash", "web_fetch", "web_search"];
 pub const MAX_CONCURRENCY: u32 = 8;
 /// Children one `subagent` call may carry; mirrors `MAX_PARALLEL_TASKS` in the worker.
 const MAX_PARALLEL_TASKS: u32 = 8;
@@ -41,7 +42,7 @@ const BUILTINS: &[BuiltinAgent] = &[
     BuiltinAgent {
         id: "builtin:scout",
         name: "scout",
-        description: "Fast read-only codebase reconnaissance. Returns compressed findings (files, line ranges, key code, architecture) that another agent can act on without re-reading everything. Can also read public web pages by URL, such as a library's docs or an issue, but can't search the web.",
+        description: "Fast read-only codebase reconnaissance. Returns compressed findings (files, line ranges, key code, architecture) that another agent can act on without re-reading everything. Can also read public web pages by URL, such as a library's docs or an issue, and search the web when Web Search is set up.",
         prompt: include_str!("subagents/scout.md"),
         tools: READ_ONLY_TOOLS,
         read_only: true,

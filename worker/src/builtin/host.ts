@@ -87,8 +87,8 @@ export interface BuiltinHost {
    * come back as `inconclusive` (fail-open) or `aborted` verdicts.
    */
   runGoalVerification(input: GoalVerifyInput, signal?: AbortSignal): Promise<GoalVerdict>;
-  /** Tools a sub-agent could be given (Pi's own, plus `web_fetch`) that are available here and
-   *  that the user has not switched off. */
+  /** Tools a sub-agent could be given (Pi's own, plus `web_fetch` and `web_search`) that are
+   *  available here and that the user has not switched off. */
   childToolNames(): string[];
   /**
    * Run one sub-agent to completion in its own in-process session. Never rejects once the
@@ -113,6 +113,11 @@ export interface BuiltinHost {
    * grants and the access card. Rejects when the host refuses or the signal aborts.
    */
   computer(request: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>;
+  /**
+   * Send one web search or routed page read to the native host, which holds the provider's key
+   * and makes the request (`web.rs`). Rejects with the host's sentence on any failure.
+   */
+  web(request: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>;
   /** Whether this chat's current model can receive an image tool result. */
   supportsVision(): boolean;
 }

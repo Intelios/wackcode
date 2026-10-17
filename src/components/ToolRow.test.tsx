@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedBlock } from "../types";
 import { OrphanResult, ToolImageSource, ToolRow } from "./ToolRow";
 import { CopyText } from "./ui/CopyButton";
+import { LinkOpenerContext } from "../link-opener";
 
 afterEach(cleanup);
 
@@ -281,6 +282,46 @@ describe("ToolRow sheets", () => {
     expect(options.map((option) => option.getAttribute("aria-current"))).toEqual([null, "true"]);
     expect(screen.getByText("Answered")).toBeInTheDocument();
     expect(document.querySelector(".tool-detail")).not.toHaveTextContent("{");
+  });
+
+  it("opens a web search into its result cards, and a result into the opener", () => {
+    const call: NormalizedBlock = { type: "tool-call", toolCallId: "w1", toolName: "web_search", arguments: { query: "tauri 2 release" } };
+    const result: NormalizedBlock = {
+      type: "tool-result", toolCallId: "w1", text: "Web search via DeepSeek…",
+      details: {
+        v: 1, query: "tauri 2 release", provider: { name: "DeepSeek", kind: "deepseek" },
+        results: [
+          { title: "Tauri 2.0 is out", url: "https://v2.tauri.app/blog/", host: "v2.tauri.app", snippet: "Stable at last", date: "2026-06-01T00:00:00+00:00" },
+          { title: "Bad", url: "javascript:alert(1)", host: "x" },
+        ],
+      },
+    };
+    const openLink = vi.fn();
+    render(<LinkOpenerContext.Provider value={openLink}><ToolRow call={call} result={result} /></LinkOpenerContext.Provider>);
+    open(/^Searched the web/);
+    expect(screen.getByText("DeepSeek · 1 result")).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: "Tauri 2.0 is out" });
+    expect(link).toHaveAttribute("href", "https://v2.tauri.app/blog/");
+    expect(screen.queryByRole("link", { name: "Bad" })).not.toBeInTheDocument();
+    fireEvent.click(link);
+    expect(openLink).toHaveBeenCalledWith("https://v2.tauri.app/blog/", { external: false });
+    fireEvent.click(link, { metaKey: true });
+    expect(openLink).toHaveBeenLastCalledWith("https://v2.tauri.app/blog/", { external: true });
+  });
+
+  it("falls back to the plain sheet for a failed or unrecognised web search", () => {
+    const call: NormalizedBlock = { type: "tool-call", toolCallId: "w2", toolName: "web_search", arguments: { query: "x" } };
+    render(<ToolRow call={call} result={{ type: "tool-result", toolCallId: "w2", isError: true, text: "Your DeepSeek balance is empty." }} />);
+    open(/Searched the web/);
+    expect(screen.getByText("Your DeepSeek balance is empty.")).toBeInTheDocument();
+    expect(document.querySelector(".web-results")).toBeNull();
+  });
+
+  it("says which provider read a routed page", () => {
+    const call: NormalizedBlock = { type: "tool-call", toolCallId: "f2", toolName: "web_fetch", arguments: { url: "https://example.com" } };
+    render(<ToolRow call={call} result={{ type: "tool-result", toolCallId: "f2", text: "page", details: { via: "DeepSeek" } }} />);
+    open(/^Fetched/);
+    expect(screen.getByText("via DeepSeek")).toBeInTheDocument();
   });
 
   it("lays any other call's arguments out as labelled rows, not JSON", () => {

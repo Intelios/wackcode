@@ -1,12 +1,14 @@
-import type { NormalizedBlock, NormalizedMessage, SkillPreviewDetails, SubagentDetails, SubagentResult, SubagentStatus, ToolCatalogEntry } from "./types";
+import type { NormalizedBlock, NormalizedMessage, SearchProviderKind, SkillPreviewDetails, SubagentDetails, SubagentResult, SubagentStatus, ToolCatalogEntry, WebSearchDetails } from "./types";
 import { displayPath } from "./chat-utils";
 
 /** The built-in sub-agents tool. Its calls render as SubAgent chips rather than a tool row. */
 export const SUBAGENT_TOOL_NAME = "subagent";
 /** The built-in skill-creator tool; its preview results render as the review card. */
 export const SKILL_CREATOR_TOOL_NAME = "skill_creator";
-/** The one WackCode built-in tool the user can switch off, through the tool denylist. */
+/** The one WackCode built-in tool the user can switch off, through the tool denylist (on Settings › Web). */
 export const WEB_FETCH_TOOL_NAME = "web_fetch";
+/** Web search: its own setting (Settings › Web), never the tool denylist. */
+export const WEB_SEARCH_TOOL_NAME = "web_search";
 /** Browser preview is one grouped switch even though the extension exposes five tools. */
 export const BROWSER_TOOL_NAMES = ["browser_open", "browser_snapshot", "browser_act", "browser_screenshot", "browser_console"] as const;
 /** Computer use: its own setting (Settings › Packages), never the tool denylist. */
@@ -189,6 +191,8 @@ export function summarizeTool(call: NormalizedBlock, result?: NormalizedBlock): 
       return { kind: "other", activeVerb: "Updating todos", doneVerb: "Todos updated", subject: str(toolArgs.subject) };
     case WEB_FETCH_TOOL_NAME:
       return { kind: "other", activeVerb: "Fetching", doneVerb: "Fetched", subject: displayUrl(str(toolArgs.url)) };
+    case WEB_SEARCH_TOOL_NAME:
+      return { kind: "other", activeVerb: "Searching the web", doneVerb: "Searched the web", subject: str(toolArgs.query) };
     case "memory_save": {
       const updated = typeof toolArgs.name === "string" && toolArgs.name.trim();
       return { kind: "other", activeVerb: updated ? "Updating memory" : "Saving memory", doneVerb: updated ? "Updated memory" : "Saved memory", subject: str(toolArgs.title) };
@@ -489,11 +493,39 @@ export interface ToolGroup {
   tools: ToolCatalogEntry[];
 }
 
+const SEARCH_KINDS: ReadonlySet<string> = new Set<SearchProviderKind>(["deepseek", "brave", "tavily", "searxng", "custom"]);
+
+/**
+ * A `web_search` result's card details, or undefined when they aren't the v1 shape (an older or
+ * damaged session falls back to the plain sheet). Only http(s) links survive.
+ */
+export function parseWebSearchDetails(value: unknown): WebSearchDetails | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const record = value as Record<string, unknown>;
+  const provider = record.provider as Record<string, unknown> | undefined;
+  if (record.v !== 1 || typeof record.query !== "string" || !Array.isArray(record.results)) return undefined;
+  if (typeof provider?.name !== "string" || !SEARCH_KINDS.has(String(provider.kind))) return undefined;
+  const results: WebSearchDetails["results"] = [];
+  for (const entry of record.results.slice(0, 20)) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const item = entry as Record<string, unknown>;
+    if (typeof item.url !== "string" || !/^https?:\/\//i.test(item.url) || typeof item.title !== "string") continue;
+    results.push({
+      title: item.title,
+      url: item.url,
+      host: typeof item.host === "string" ? item.host : displayUrl(item.url).split("/")[0],
+      ...(typeof item.snippet === "string" && item.snippet ? { snippet: item.snippet } : {}),
+      ...(typeof item.date === "string" && item.date ? { date: item.date } : {}),
+    });
+  }
+  return { v: 1, query: record.query, provider: { name: provider.name, kind: provider.kind as SearchProviderKind }, results };
+}
+
 /**
  * Group the catalogue for the Tools panel: Pi's own tools first, then one group per package
  * in stable alphabetical order. A package tool with no source string falls into "Other" rather
  * than disappearing. WackCode's built-in extension tools are never listed — they are part of
- * the app itself. The one that can be switched off, web_fetch, has its switch on its Built-ins card.
+ * the app itself. The one that can be switched off, web_fetch, has its switch on Settings › Web.
  * MCP tools aren't listed either: their switches are in Settings › MCP servers.
  */
 export function groupTools(catalog: ToolCatalogEntry[]): ToolGroup[] {

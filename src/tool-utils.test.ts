@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bashExploreKind, diffStats, displayAgentName, editStats, exploreKind, firstSentence, groupTools, imageReadNote, parseSubagentDetails, pendingSubagentDetails, pruneDisabledTools, sameToolCatalog, splitPathSubject, subagentDetailsFor, summarizeTool, toolPresentation } from "./tool-utils";
+import { bashExploreKind, diffStats, displayAgentName, editStats, exploreKind, firstSentence, groupTools, imageReadNote, parseSubagentDetails, parseWebSearchDetails, pendingSubagentDetails, pruneDisabledTools, sameToolCatalog, splitPathSubject, subagentDetailsFor, summarizeTool, toolPresentation } from "./tool-utils";
 import type { NormalizedBlock, NormalizedMessage, ToolCatalogEntry } from "./types";
 
 function call(toolName: string, args: unknown): NormalizedBlock {
@@ -29,6 +29,15 @@ describe("summarizeTool", () => {
     expect(recalled.doneVerb).toBe("Recalled memory");
     expect(recalled.subject).toBe("user_prefers, feedback_run-worker-tests");
     expect(summarizeTool(call("memory_forget", { name: "user_prefers" })).subject).toBe("user_prefers");
+  });
+
+  it("summarizes web searches by their query and reads only well-formed card details", () => {
+    expect(summarizeTool(call("web_search", { query: "rust 1.95" }))).toMatchObject({ activeVerb: "Searching the web", doneVerb: "Searched the web", subject: "rust 1.95" });
+    const details = { v: 1, query: "q", provider: { name: "Brave Search", kind: "brave" }, results: [{ title: "A", url: "https://a.example/", host: "a.example" }, { title: "B", url: "ftp://b" }, "junk"] };
+    expect(parseWebSearchDetails(details)).toEqual({ v: 1, query: "q", provider: { name: "Brave Search", kind: "brave" }, results: [{ title: "A", url: "https://a.example/", host: "a.example" }] });
+    expect(parseWebSearchDetails({ ...details, v: 2 })).toBeUndefined();
+    expect(parseWebSearchDetails({ ...details, provider: { name: "X", kind: "evil" } })).toBeUndefined();
+    expect(parseWebSearchDetails(null)).toBeUndefined();
   });
 
   it("summarizes web_fetch calls with a short URL", () => {

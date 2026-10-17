@@ -36,6 +36,7 @@ function fakeHost(overrides: Partial<BuiltinHost> = {}): BuiltinHost {
     browser: vi.fn(),
     skillCreator: vi.fn(),
     computer: vi.fn(),
+    web: vi.fn(),
     supportsVision: () => false,
     ...overrides,
   } as BuiltinHost;

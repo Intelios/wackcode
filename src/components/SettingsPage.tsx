@@ -3,7 +3,7 @@ import { api } from "../api";
 import { agentName } from "../agentName";
 import { modelIsReady } from "../model-utils";
 import { BROWSER_TOOL_NAMES, WEB_FETCH_TOOL_NAME } from "../tool-utils";
-import type { ExecutionPolicyConfig, AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CommandsConfig, ComputerUseConfig, McpConfig, MemoryConfig, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ToolCatalogEntry } from "../types";
+import type { ExecutionPolicyConfig, AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CommandsConfig, ComputerUseConfig, McpConfig, MemoryConfig, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ToolCatalogEntry, WebConfig } from "../types";
 import { Icon, type IconName } from "./Icons";
 import { AboutSection } from "./AboutSection";
 import { CommandsSection, type SlashCommandActions } from "./CommandsSection";
@@ -24,6 +24,7 @@ import { DevBadge } from "./DevBadge";
 import { DeveloperSection } from "./DeveloperSection";
 import { DuckMark } from "./DuckMark";
 import { Tooltip } from "./ui/Tooltip";
+import { WebSection, type WebActions } from "./web/WebSection";
 
 /** Settings › Skills talks to Rust directly, like the rest of this page; `api`'s functions are stable. */
 const SKILL_ACTIONS: SkillActions = {
@@ -71,8 +72,21 @@ const COMPUTER_USE_ACTIONS: ComputerUseActions = {
   onListApps: api.computerUseListApps
 };
 const COMPUTER_USE_OFF: ComputerUseConfig = { enabled: false, showAgentCursor: true, neverAllow: [] };
+/** Settings › Web talks to Rust directly, like Skills; saved configs go back through `onWebChanged`. */
+const WEB_ACTIONS: WebActions = {
+  onSave: api.saveSearchProvider,
+  onDelete: api.deleteSearchProvider,
+  onSetActive: api.setActiveSearchProvider,
+  onSetConfig: api.setWebConfig,
+  onTest: api.testSearchProvider,
+  onUsage: api.webUsage,
+  onResetUsage: api.resetWebUsage,
+  // Settings has no chat to preview a page in, so a Test search result opens in the default browser.
+  onOpenLink: (url) => void api.revealPath(url).catch(() => undefined)
+};
+const WEB_OFF: WebConfig = { enabled: false, providers: [], activeProviderId: null, routeFetch: false };
 
-type SectionId = "providers" | "packages" | "skills" | "commands" | "memory" | "tools" | "mcp" | "appearance" | "prompts" | "subagents" | "computer_use" | "integrations" | "developer" | "about";
+type SectionId = "providers" | "packages" | "skills" | "commands" | "memory" | "tools" | "mcp" | "web" | "appearance" | "prompts" | "subagents" | "computer_use" | "integrations" | "developer" | "about";
 
 interface Section {
   id: SectionId;
@@ -89,6 +103,8 @@ const SECTIONS: Section[] = [
   { id: "memory", label: "Memory", icon: "memory" },
   { id: "tools", label: "Tools", icon: "wrench" },
   { id: "mcp", label: "MCP servers", icon: "plug" },
+  // Always listed: besides web search, it holds Web Fetch's switch.
+  { id: "web", label: "Web", icon: "globe" },
   // Only listed while the built-in is switched on (Settings → Packages). Auto titles lives
   // on the same page, as an agent WackCode runs itself rather than one the model can call.
   { id: "subagents", label: "Sub-agents", icon: "agents" },
@@ -147,12 +163,15 @@ interface Props extends PackageActions, ModelFavoritesProps {
   mcpActions?: McpActions;
   /** Dev build: Settings › Developer is listed, and the DEV badge shows. */
   devBuild?: boolean;
+  /** Settings › Web; absent in metadata from before it existed. */
+  web?: WebConfig;
+  onWebChanged?: (config: WebConfig) => void;
 }
 
 export function SettingsPage({
   executionPolicy, onSetExecutionPolicy, providers, favoriteModels, favoriteSaving, onSetFavorite, packages, toolCatalog, disabledTools, appDataPath,
   onClose, onSave, onDelete, onSetProviderEnabled, onConnectSubscription, onSignOutSubscription, connectedSubscriptionId, onSetDisabledTools,
-  subagents, onSetSubagents, computerUse = COMPUTER_USE_OFF, computerUseSupported = false, onSetComputerUse, autoTitle, onSetAutoTitle, appearance, glassSupported, onSetAppearance, onPreviewAppearance, backgroundImageUrlFor, onChooseBackgroundImage, onRemoveBackgroundImage, onSelectBackgroundImage, onShuffleBackgroundImage, prompts, onSetPrompts, onCommandsChanged, memory, onSetMemory, mcp, mcpActions, devBuild, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
+  subagents, onSetSubagents, computerUse = COMPUTER_USE_OFF, computerUseSupported = false, onSetComputerUse, autoTitle, onSetAutoTitle, appearance, glassSupported, onSetAppearance, onPreviewAppearance, backgroundImageUrlFor, onChooseBackgroundImage, onRemoveBackgroundImage, onSelectBackgroundImage, onShuffleBackgroundImage, prompts, onSetPrompts, onCommandsChanged, memory, onSetMemory, mcp, mcpActions, devBuild, web = WEB_OFF, onWebChanged, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
 }: Props) {
   const [chosenSection, setSection] = useState<SectionId>("providers");
   const [computerSetup, setComputerSetup] = useState(false);
@@ -172,6 +191,13 @@ export function SettingsPage({
   const [subscriptionError, setSubscriptionError] = useState<string>();
   const [newMethod, setNewMethod] = useState<ConnectionMethod>("apiKey");
   const selectedSection = SECTIONS.find((item) => item.id === section);
+  const webFetchEnabled = !disabledTools.includes(WEB_FETCH_TOOL_NAME);
+  // Web fetch rides the Tools denylist, so switching it applies live with no restart.
+  const toggleWebFetch = (enabled: boolean) => onSetDisabledTools(
+    enabled
+      ? disabledTools.filter((name) => name !== WEB_FETCH_TOOL_NAME)
+      : [...disabledTools.filter((name) => name !== WEB_FETCH_TOOL_NAME), WEB_FETCH_TOOL_NAME]
+  );
 
   useEffect(() => {
     let active = true;
@@ -305,7 +331,9 @@ export function SettingsPage({
             subagentsEnabled={subagents.enabled}
             memoryEnabled={memory.enabled}
             onConfigureMemory={() => setSection("memory")}
-            webFetchEnabled={!disabledTools.includes(WEB_FETCH_TOOL_NAME)}
+            webFetchEnabled={webFetchEnabled}
+            webSearchEnabled={web.enabled && web.providers.some((record) => record.id === web.activeProviderId)}
+            onConfigureWeb={() => setSection("web")}
             browserEnabled={BROWSER_TOOL_NAMES.every((name) => !disabledTools.includes(name))}
             computerUseEnabled={computerUse.enabled}
             computerUseSupported={computerUseSupported}
@@ -318,12 +346,6 @@ export function SettingsPage({
             autoTitlesEnabled={autoTitle.enabled}
             autoTitlesConfigured={providers.some((provider) => provider.id === autoTitle.providerId && provider.connected && provider.models.some((model) => model.id === autoTitle.modelId && modelIsReady(model)))}
             onToggleSubagents={(enabled) => onSetSubagents({ ...subagents, enabled })}
-            // Web fetch rides the Tools denylist, so switching it applies live with no restart.
-            onToggleWebFetch={(enabled) => onSetDisabledTools(
-              enabled
-                ? disabledTools.filter((name) => name !== WEB_FETCH_TOOL_NAME)
-                : [...disabledTools.filter((name) => name !== WEB_FETCH_TOOL_NAME), WEB_FETCH_TOOL_NAME]
-            )}
             onToggleBrowser={(enabled) => onSetDisabledTools(
               enabled
                 ? disabledTools.filter((name) => !(BROWSER_TOOL_NAMES as readonly string[]).includes(name))
@@ -390,6 +412,17 @@ export function SettingsPage({
         )}
         {section === "prompts" && <PromptsSection unrestrictedPlanning={executionPolicy?.unrestrictedPlanning} config={prompts} agentName={agentName(appearance)} onChange={onSetPrompts} />}
         {section === "mcp" && mcpActions && <McpSection servers={mcp?.servers ?? []} agentName={agentName(appearance)} {...mcpActions} />}
+        {section === "web" && (
+          <WebSection
+            {...WEB_ACTIONS}
+            config={web}
+            providers={providers}
+            agentName={agentName(appearance)}
+            webFetchEnabled={webFetchEnabled}
+            onToggleWebFetch={toggleWebFetch}
+            onChanged={(config) => onWebChanged?.(config)}
+          />
+        )}
         {section === "computer_use" && onSetComputerUse && (
           <ComputerUseSection config={computerUse} actions={COMPUTER_USE_ACTIONS} agentName={agentName(appearance)} onChange={onSetComputerUse} />
         )}
@@ -416,7 +449,7 @@ export function SettingsPage({
             favoriteSaving={favoriteSaving}
             onSetFavorite={onSetFavorite}
             onChange={onSetSubagents}
-            webFetchEnabled={!disabledTools.includes(WEB_FETCH_TOOL_NAME)}
+            webFetchEnabled={webFetchEnabled}
             autoTitle={autoTitle}
             onSetAutoTitle={onSetAutoTitle}
             onOpenProviders={() => { setNewMethod("apiKey"); openProvider("new"); }}

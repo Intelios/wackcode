@@ -1135,16 +1135,17 @@ describe("Pi worker integration", () => {
       "subagent_job",
       "todo",
       "web_fetch",
+      "web_search",
       "write"
     ]);
     expect(ready.snapshot?.tools?.every((tool) => tool.source.kind === "builtin" || tool.source.kind === "wackcode")).toBe(true);
     // The denylist from `init` is applied before the first turn, and tools whose external
     // binary is missing are never offered even though they stay listed in the catalogue.
     const catalog = ready.snapshot?.tools ?? [];
-    // Sub-agents, computer use and memory are the built-ins that stay off until the user (or
-    // the host's memory payload) switches them on; this test sends no memory payload.
+    // Sub-agents, computer use, memory and web search are the built-ins that stay off until the
+    // user (or the host's memory payload) switches them on; this test sends no memory payload.
     const expectedActive = catalog
-      .filter((tool) => tool.available && tool.name !== "find" && !tool.name.startsWith("subagent") && !tool.name.startsWith("computer_") && !tool.name.startsWith("memory_"))
+      .filter((tool) => tool.available && tool.name !== "find" && !tool.name.startsWith("subagent") && !tool.name.startsWith("computer_") && !tool.name.startsWith("memory_") && tool.name !== "web_search")
       .map((tool) => tool.name)
       .sort();
     expect(ready.snapshot?.activeTools?.sort()).toEqual(expectedActive);
@@ -2265,6 +2266,100 @@ describe("built-in extensions", () => {
     ) as { content?: string } | undefined;
     expect(toolResult?.content).toContain("local or private network address");
     expect(toolResult?.content).not.toContain("Plan mode");
+  });
+
+  const DEEPSEEK_WEB = { search: { label: "DeepSeek", kind: "deepseek" }, fetch: null };
+
+  it("offers web_search only while Settings › Web has a provider, and asks the host for every search", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-web-search-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker, ready } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "web-search-task");
+    cleanup.push(() => worker.shutdown());
+    expect(ready.snapshot?.tools?.some((tool) => tool.name === "web_search")).toBe(true);
+    expect(ready.snapshot?.activeTools).not.toContain("web_search");
+
+    worker.send({ id: crypto.randomUUID(), type: "set_web", web: DEEPSEEK_WEB });
+    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.includes("web_search") === true);
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "search-run", message: 'mcp: web_search {"query":"tauri  2 docs","count":3,"recency":"week"}' });
+    const request = await worker.waitFor((output) => output.type === "web_request");
+    // The worker sends the query, never a key: Rust holds it.
+    expect(request.request).toEqual({ op: "search", query: "tauri 2 docs", count: 3, recency: "week" });
+    expect(JSON.stringify(request)).not.toContain("alpha-secret");
+    // The answer reaches the tool even though the running prompt holds the command queue.
+    worker.send({
+      id: crypto.randomUUID(), type: "web_response", requestId: request.requestId, success: true,
+      result: {
+        provider: { id: "s1", name: "DeepSeek", kind: "deepseek" },
+        results: [{ title: "Tauri 2.0", url: "https://v2.tauri.app/", snippet: "Build apps", summary: "Build smaller, faster apps", date: "2026-06-01T00:00:00+00:00" }],
+      },
+    });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "search-run" && output.state === "idle");
+    const sent = JSON.stringify(provider.requests.at(-1)!.body.messages);
+    expect(sent).toContain("Web search via DeepSeek");
+    expect(sent).toContain("https://v2.tauri.app/");
+    expect(sent).toContain("untrusted web content");
+    const result = worker.view?.messages.flatMap((message) => message.blocks).find((block) => block.type === "tool-result" && block.toolName === "web_search");
+    expect(result?.details).toMatchObject({ v: 1, query: "tauri 2 docs", provider: { name: "DeepSeek" }, results: [{ host: "v2.tauri.app", title: "Tauri 2.0" }] });
+
+    worker.send({ id: crypto.randomUUID(), type: "set_web", web: null });
+    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.includes("web_search") === false);
+    expect(worker.child.exitCode).toBeNull();
+  });
+
+  it("passes a host refusal through as the tool's error", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-web-search-error-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "web-search-error", undefined, undefined, undefined, "plan", undefined, { web: DEEPSEEK_WEB }
+    );
+    cleanup.push(() => worker.shutdown());
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: 'mcp: web_search {"query":"anything"}' });
+    // Plan mode lets it through: it only reads.
+    const request = await worker.waitFor((output) => output.type === "web_request");
+    worker.send({ id: crypto.randomUUID(), type: "web_response", requestId: request.requestId, success: false, error: "Your DeepSeek balance is empty. Top up at platform.deepseek.com, then try again." });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "run-1" && output.state === "idle");
+    const sent = JSON.stringify(provider.requests.at(-1)!.body.messages);
+    expect(sent).toContain("DeepSeek balance is empty");
+    expect(sent).not.toContain("Plan mode");
+  });
+
+  it("reads pages through the provider while routing is on, after the public-address check", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-web-fetch-routed-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "web-fetch-routed", undefined, undefined, undefined, undefined, undefined,
+      { web: { ...DEEPSEEK_WEB, fetch: { label: "DeepSeek" } } }
+    );
+    cleanup.push(() => worker.shutdown());
+
+    // An IP literal keeps the check offline.
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "routed", message: 'mcp: web_fetch {"url":"https://93.184.215.14/page"}' });
+    const request = await worker.waitFor((output) => output.type === "web_request");
+    expect(request.request).toEqual({ op: "fetch", url: "https://93.184.215.14/page" });
+    worker.send({
+      id: crypto.randomUUID(), type: "web_response", requestId: request.requestId, success: true,
+      result: { provider: { name: "DeepSeek", kind: "deepseek" }, url: "https://93.184.215.14/page", title: "Example", content: "# Hello\n\nRendered body.", truncated: false },
+    });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "routed" && output.state === "idle");
+    const sent = JSON.stringify(provider.requests.at(-1)!.body.messages);
+    expect(sent).toContain("Read via: DeepSeek");
+    expect(sent).toContain("Rendered body.");
+    const block = worker.view?.messages.flatMap((message) => message.blocks).find((entry) => entry.type === "tool-result" && entry.toolName === "web_fetch");
+    expect(block?.details).toMatchObject({ via: "DeepSeek", title: "Example" });
+
+    // A private address never reaches the host, let alone the provider.
+    const before = worker.outputs.filter((output) => output.type === "web_request").length;
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "private", message: 'mcp: web_fetch {"url":"http://10.0.0.1/admin"}' });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "private" && output.state === "idle");
+    expect(worker.outputs.filter((output) => output.type === "web_request")).toHaveLength(before);
+    expect(JSON.stringify(provider.requests.at(-1)!.body.messages)).toContain("local or private network address");
   });
 });
 
@@ -4935,7 +5030,7 @@ describe("message queueing", () => {
 
 describe("Chat mode", () => {
   const ALLOWED = new Set([
-    "read", "write", "edit", "ls", "grep", "find", "web_fetch", "ask_user_question",
+    "read", "write", "edit", "ls", "grep", "find", "web_fetch", "web_search", "ask_user_question",
     "memory_save", "memory_recall", "memory_forget",
     "browser_open", "browser_snapshot", "browser_act", "browser_screenshot", "browser_console",
   ]);
@@ -5026,6 +5121,23 @@ describe("Chat mode", () => {
     expect(after).toContain("You are Quill, a writing partner.");
     expect(after).toContain("## Working in this chat");
     expect(worker.child.exitCode).toBeNull();
+  });
+
+  it("offers web_search with Settings › Web, and its guide stops saying it can't search", async () => {
+    const { provider, worker } = await start("chat-search", { extra: { web: { search: { label: "DeepSeek", kind: "deepseek" }, fetch: null } } });
+    const first = await run(worker, provider, "Hello.");
+    expect(offeredTools(provider.requests[first])).toContain("web_search");
+    const prompt = systemTextOf(provider.requests[first]);
+    expect(prompt).toContain("web_search: searches the web through DeepSeek");
+    expect(prompt).toContain("a search result,");
+    expect(prompt).not.toContain("You have no built-in web search");
+    expect(prompt).not.toContain("It cannot search");
+
+    worker.send({ id: crypto.randomUUID(), type: "set_web", web: null });
+    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.includes("web_search") === false);
+    const later = await run(worker, provider, "Again.", 1);
+    expect(offeredTools(provider.requests[later])).not.toContain("web_search");
+    expect(systemTextOf(provider.requests.at(-1)!)).toContain("You have no built-in web search");
   });
 
   it("starts with the custom persona when Settings has one", async () => {

@@ -124,6 +124,7 @@ pub fn bootstrap(
     for project in &mut data.projects {
         project.branch = git::current_branch(Path::new(&project.path));
     }
+    crate::web::refresh_key_state(&mut data.web, &data.providers, &state.secrets);
     Ok(BootstrapPayload {
         data,
         app_data_path: state
@@ -307,6 +308,8 @@ pub async fn save_provider(
     }
     // Other chats' sub-agents may use this connection with its old key or models.
     worker::broadcast_subagents(&app).await?;
+    // A search provider may borrow this connection's key.
+    worker::broadcast_web(&app).await?;
     Ok(record)
 }
 
@@ -331,6 +334,7 @@ pub async fn set_provider_enabled(
         Ok(provider.clone())
     })?;
     worker::broadcast_subagents(&app).await?;
+    worker::broadcast_web(&app).await?;
     Ok(record)
 }
 
@@ -405,6 +409,16 @@ pub async fn delete_provider(
             agents.join(", ")
         ));
     }
+    let searches = crate::web::providers_linking(
+        &state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?.web,
+        &provider_id,
+    );
+    if !searches.is_empty() {
+        return Err(format!(
+            "The web search provider ‘{}’ uses this connection's key. Give it its own key or remove it in Settings › Web first.",
+            searches.join("’, ‘")
+        ));
+    }
     let kind = state
         .data
         .lock()
@@ -422,7 +436,8 @@ pub async fn delete_provider(
     state.mutate(|data| {
         data.providers.retain(|provider| provider.id != provider_id);
         Ok(())
-    })
+    })?;
+    worker::broadcast_web(&app).await
 }
 
 #[derive(Debug, Deserialize)]

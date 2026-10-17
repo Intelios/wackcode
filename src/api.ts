@@ -139,6 +139,17 @@ export const api = {
   setMcpServerTools: (serverId: string, disabledTools: string[]) =>
     invoke<McpServerRecord>("set_mcp_server_tools", { serverId, disabledTools }),
   testMcpServer: (serverId: string) => invoke<McpTestResult>("test_mcp_server", { serverId }),
+  saveSearchProvider: (input: import("./types").SaveSearchProviderInput) =>
+    invoke<import("./types").WebConfig>("save_search_provider", { input }),
+  deleteSearchProvider: (providerId: string) => invoke<import("./types").WebConfig>("delete_search_provider", { providerId }),
+  setActiveSearchProvider: (providerId: string | null) =>
+    invoke<import("./types").WebConfig>("set_active_search_provider", { providerId }),
+  setWebConfig: (input: { enabled: boolean; routeFetch: boolean }) => invoke<import("./types").WebConfig>("set_web_config", { input }),
+  /** Three results through a saved provider, or through unsaved edits (`draft`). */
+  testSearchProvider: (input: { id?: string; draft?: import("./types").SaveSearchProviderInput; query: string }) =>
+    invoke<import("./types").WebTestResult>("test_search_provider", { input }),
+  webUsage: () => invoke<import("./types").WebUsageSummary>("web_usage"),
+  resetWebUsage: (providerId?: string) => invoke<import("./types").WebUsageSummary>("reset_web_usage", { providerId }),
   listPackages: () => invoke<PackageRecord[]>("list_packages"),
   searchPackages: (query: string, from = 0) =>
     invoke<PackageSearchResult[]>("search_packages", { input: { query, from } }),

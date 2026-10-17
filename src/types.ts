@@ -718,11 +718,11 @@ export interface PromptConfig {
 /** When the chat's agent should reach for sub-agents. Only changes the tool's guidance. */
 export type SubagentTrigger = "on_request" | "auto";
 
-/** Tools a sub-agent can be given: Pi's own, plus the built-in web_fetch. Mirrors `CHILD_TOOLS` in subagents.rs. */
-export const SUBAGENT_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write", "web_fetch"] as const;
+/** Tools a sub-agent can be given: Pi's own, plus the built-in web_fetch and web_search. Mirrors `CHILD_TOOLS` in subagents.rs. */
+export const SUBAGENT_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write", "web_fetch", "web_search"] as const;
 export type SubagentTool = (typeof SUBAGENT_TOOLS)[number];
 /** What a read-only sub-agent may have. */
-export const READ_ONLY_SUBAGENT_TOOLS: readonly string[] = ["read", "grep", "find", "ls", "bash", "web_fetch"];
+export const READ_ONLY_SUBAGENT_TOOLS: readonly string[] = ["read", "grep", "find", "ls", "bash", "web_fetch", "web_search"];
 export const MAX_SUBAGENT_CONCURRENCY = 8;
 
 /** A sub-agent's own model; without one it runs on the chat's model. */
@@ -869,7 +869,108 @@ export interface AppData {
   commands?: CommandsConfig;
   computerUse?: ComputerUseConfig;
   memory?: MemoryConfig;
+  /** Settings › Web. Absent in metadata saved before it existed. */
+  web?: WebConfig;
   window?: WindowState | null;
+}
+
+// ── Settings › Web (src-tauri/src/web.rs) ─────────────────
+
+export type SearchProviderKind = "deepseek" | "brave" | "tavily" | "searxng" | "custom";
+
+/** Where a search provider's key comes from. Never the key itself. */
+export type SearchKeySource = { type: "none" } | { type: "own" } | { type: "connection"; providerId: string };
+
+/** How to call a search API WackCode has no preset for. Paths are dotted, with numeric indexes. */
+export interface CustomSearchSpec {
+  method: "GET" | "POST";
+  authHeader?: string | null;
+  authPrefix?: string | null;
+  queryParam?: string | null;
+  countParam?: string | null;
+  /** POST: JSON with `{{query}}` and `{{count}}` placeholders. */
+  bodyTemplate?: string | null;
+  resultsPath: string;
+  titlePath: string;
+  urlPath: string;
+  snippetPath?: string | null;
+  datePath?: string | null;
+}
+
+export interface SearchProviderRecord {
+  id: string;
+  name: string;
+  kind: SearchProviderKind;
+  keySource: SearchKeySource;
+  /** The key it needs can be found right now (its own, or the linked connection's). */
+  hasKey: boolean;
+  /** SearXNG's instance, or a Custom API's search URL. */
+  baseUrl?: string | null;
+  custom?: CustomSearchSpec | null;
+  priceSearchPer1k?: number | null;
+  priceFetchPer1k?: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WebConfig {
+  enabled: boolean;
+  providers: SearchProviderRecord[];
+  activeProviderId?: string | null;
+  /** Every web_fetch goes through the active provider's own fetch endpoint. */
+  routeFetch: boolean;
+}
+
+export interface SaveSearchProviderInput {
+  id?: string;
+  name: string;
+  kind: SearchProviderKind;
+  keySource: SearchKeySource;
+  /** Blank keeps the saved key. */
+  apiKey?: string;
+  baseUrl?: string | null;
+  custom?: CustomSearchSpec | null;
+  priceSearchPer1k?: number | null;
+  priceFetchPer1k?: number | null;
+}
+
+/** One search result as Rust returns it (Test search). */
+export interface SearchHit {
+  title: string;
+  url: string;
+  snippet: string;
+  summary: string;
+  date?: string;
+  site?: string;
+}
+
+export interface WebTestResult {
+  ok: boolean;
+  error?: string;
+  results: SearchHit[];
+  elapsedMs: number;
+}
+
+export interface WebUsageCounters {
+  searches: number;
+  fetches: number;
+  billedSearches: number;
+  billedFetches: number;
+  failed: number;
+}
+
+/** This month's counts per provider, kept only on this Mac. */
+export interface WebUsageSummary {
+  month: string;
+  providers: Array<{ id: string } & WebUsageCounters>;
+}
+
+/** `web_search` tool details (worker/src/protocol.ts). */
+export interface WebSearchDetails {
+  v: 1;
+  query: string;
+  provider: { name: string; kind: SearchProviderKind };
+  results: Array<{ title: string; url: string; host: string; snippet?: string; date?: string }>;
 }
 
 /** The computer-use built-in. Off by default; per-app grants are never stored. */

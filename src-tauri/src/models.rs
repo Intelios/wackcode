@@ -797,6 +797,136 @@ pub struct ComputerUseConfig {
 
 fn default_show_agent_cursor() -> bool { true }
 
+/// Settings › Web (`web.rs`). Off until the user adds a provider and switches it on. A
+/// provider's own key lives in `secrets.json` as `search:<id>`; a linked one is read from the
+/// connection it names at send time, so nothing here is ever a credential.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WebConfig {
+    /// The Web Search switch: `web_search` is offered only while this is on.
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub providers: Vec<SearchProviderRecord>,
+    /// The one provider every search (and, with `route_fetch`, every fetch) goes to.
+    #[serde(default)]
+    pub active_provider_id: Option<String>,
+    /// Send every web_fetch through the active provider's own fetch endpoint.
+    #[serde(default)]
+    pub route_fetch: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchProviderKind {
+    Deepseek,
+    Brave,
+    Tavily,
+    Searxng,
+    Custom,
+}
+
+/// Where a search provider's key comes from.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum SearchKeySource {
+    /// No key (a SearXNG instance, or a Custom endpoint without auth).
+    #[default]
+    None,
+    /// Its own key, stored as `search:<id>`.
+    Own,
+    /// The key of a Settings › Providers connection on the same origin.
+    Connection {
+        #[serde(rename = "providerId")]
+        provider_id: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchProviderRecord {
+    pub id: String,
+    pub name: String,
+    pub kind: SearchProviderKind,
+    #[serde(default)]
+    pub key_source: SearchKeySource,
+    /// Whether the key this provider needs can be found right now. Never the key itself.
+    #[serde(default)]
+    pub has_key: bool,
+    /// The endpoint for SearXNG (the instance) and Custom (the search URL). Presets ignore it.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub custom: Option<CustomSearchSpec>,
+    /// The user's price per 1,000 successful requests, for the usage meter's estimate.
+    #[serde(default)]
+    pub price_search_per_1k: Option<f64>,
+    #[serde(default)]
+    pub price_fetch_per_1k: Option<f64>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum HttpMethod {
+    #[default]
+    Get,
+    Post,
+}
+
+/// How to call a search API WackCode has no preset for: where the query goes and where the
+/// results are in the JSON it returns. Paths are dotted, with numeric indexes (`data.0.items`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomSearchSpec {
+    #[serde(default)]
+    pub method: HttpMethod,
+    /// The header the key goes in, such as `Authorization` or `X-API-Key`.
+    #[serde(default)]
+    pub auth_header: Option<String>,
+    /// Text before the key in that header, such as `Bearer `.
+    #[serde(default)]
+    pub auth_prefix: Option<String>,
+    /// GET: the query-string parameter that carries the query.
+    #[serde(default)]
+    pub query_param: Option<String>,
+    #[serde(default)]
+    pub count_param: Option<String>,
+    /// POST: a JSON body with `{{query}}` and `{{count}}` placeholders.
+    #[serde(default)]
+    pub body_template: Option<String>,
+    pub results_path: String,
+    pub title_path: String,
+    pub url_path: String,
+    #[serde(default)]
+    pub snippet_path: Option<String>,
+    #[serde(default)]
+    pub date_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveSearchProviderInput {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub name: String,
+    pub kind: SearchProviderKind,
+    #[serde(default)]
+    pub key_source: SearchKeySource,
+    /// Blank keeps the saved key.
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub custom: Option<CustomSearchSpec>,
+    #[serde(default)]
+    pub price_search_per_1k: Option<f64>,
+    #[serde(default)]
+    pub price_fetch_per_1k: Option<f64>,
+}
+
 #[cfg(test)]
 mod computer_use_config_tests {
     use super::ComputerUseConfig;
@@ -1049,6 +1179,9 @@ pub struct AppData {
     pub computer_use: ComputerUseConfig,
     #[serde(default)]
     pub memory: MemoryConfig,
+    /// Settings › Web: search providers and web_fetch routing. Keys live in `secrets.json`.
+    #[serde(default)]
+    pub web: WebConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<WindowState>,
 }
@@ -1078,6 +1211,7 @@ impl Default for AppData {
             commands: CommandsConfig::default(),
             computer_use: ComputerUseConfig::default(),
             memory: MemoryConfig::default(),
+            web: WebConfig::default(),
             window: None,
         }
     }

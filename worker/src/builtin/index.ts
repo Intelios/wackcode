@@ -2,9 +2,10 @@
  * WackCode's built-in extensions: compiled into the worker, loaded through Pi's inline-factory
  * mechanism rather than the trusted-package path. They are ordinary code in this repo — no
  * trust gate applies because nothing external can reach this list. All are always on except
- * sub-agents and computer use, which the user switches on in Settings (their tools stay
- * inactive until then), browser preview and web fetch, which are on until the user switches them
- * off (see `SWITCHABLE_BUILTIN_TOOLS`), and MCP, whose tools come from the servers the user adds.
+ * sub-agents, computer use and web search, which the user switches on in Settings (their tools
+ * stay inactive until then), browser preview and web fetch, which are on until the user switches
+ * them off (see `SWITCHABLE_BUILTIN_TOOLS`), and MCP, whose tools come from the servers the user
+ * adds.
  *
  * A Chat mode chat loads `chatFactories` instead of `factories`: no shell, planning, todo,
  * sub-agents, goal loop, computer use or skill creator, plus the guard that enforces the rest
@@ -29,6 +30,7 @@ import { type SkillCreatorController, createSkillCreatorExtension } from "./skil
 import { type SubagentsController, createSubagentsExtension } from "./subagents/index.js";
 import { type TodoHandle, createTodoExtension } from "./todo/index.js";
 import { WEB_FETCH_TOOL_NAME, createWebFetchExtension } from "./web-fetch/index.js";
+import { type WebSearchController, createWebSearchExtension } from "./web-search/index.js";
 
 /**
  * Built-in tools the user's Settings denylist applies to. Every other built-in tool is part of
@@ -62,6 +64,8 @@ export interface BuiltinExtensions {
   computerUse: ComputerUseController;
   /** The /skill-creator workflow: branch state plus the tool's availability. */
   skillCreator: SkillCreatorController;
+  /** Settings › Web: whether web_search is offered, and whether web_fetch reads through it. */
+  webSearch: WebSearchController;
 }
 
 export function createBuiltinExtensions(host: BuiltinHost, options: {
@@ -81,9 +85,19 @@ export function createBuiltinExtensions(host: BuiltinHost, options: {
     isReadOnly: (name) => mcp.controller.isReadOnlyTool(name),
   }, () => policy);
   const todo = createTodoExtension(host);
-  // One instance for the chat and its sub-agents, so they share its page cache.
-  const webFetch: InlineExtension = { name: "wackcode-web-fetch", factory: createWebFetchExtension(), hidden: true };
-  subagents = createSubagentsExtension(host, () => planMode.controller.getState().mode, webFetch, () => policy);
+  // One instance each for the chat and its sub-agents, so they share the page cache and the
+  // search provider's state.
+  const webSearch = createWebSearchExtension(host);
+  const webSearchExtension: InlineExtension = { name: "wackcode-web-search", factory: webSearch.factory, hidden: true };
+  const webFetch: InlineExtension = {
+    name: "wackcode-web-fetch",
+    factory: createWebFetchExtension({}, {
+      route: () => webSearch.controller.fetchRoute(),
+      read: (url, signal) => host.web({ op: "fetch", url }, signal),
+    }),
+    hidden: true,
+  };
+  subagents = createSubagentsExtension(host, () => planMode.controller.getState().mode, webFetch, () => policy, webSearchExtension);
   const autoTitle = createAutoTitleExtension(host);
   const goal = createGoalExtension(host, () => planMode.controller.getState().mode !== "build");
   const memory = createMemoryExtension(() => options.isChat?.() ? "chat" : "project");
@@ -114,6 +128,7 @@ export function createBuiltinExtensions(host: BuiltinHost, options: {
       { name: "wackcode-goal", factory: goal.factory, hidden: true },
       memoryExtension,
       webFetch,
+      webSearchExtension,
       browser,
       { name: "wackcode-computer-use", factory: computerUse.factory, hidden: true },
       { name: "wackcode-skill-creator", factory: skillCreator.factory, hidden: true },
@@ -129,6 +144,7 @@ export function createBuiltinExtensions(host: BuiltinHost, options: {
       autoTitleExtension,
       memoryExtension,
       webFetch,
+      webSearchExtension,
       browser,
       mcpExtension,
     ],
@@ -147,5 +163,6 @@ export function createBuiltinExtensions(host: BuiltinHost, options: {
     mcp: mcp.controller,
     computerUse: computerUse.controller,
     skillCreator: skillCreator.controller,
+    webSearch: webSearch.controller,
   };
 }

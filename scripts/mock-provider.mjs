@@ -19,6 +19,25 @@ const server = createServer(async (request, response) => {
     response.end(JSON.stringify({ object: "list", data: [{ id: "wackcode-fixture-model", object: "model" }] }));
     return;
   }
+  // A SearXNG-shaped search endpoint, so Settings › Web can be tried without a paid provider:
+  // add a SearXNG provider at http://127.0.0.1:43127 (no key).
+  if (request.method === "GET" && url.pathname === "/search") {
+    if (url.searchParams.get("format") !== "json") {
+      response.writeHead(403).end("JSON format is disabled");
+      return;
+    }
+    const query = url.searchParams.get("q") ?? "";
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({
+      query,
+      results: [
+        { title: `${query} — fixture result one`, url: "https://example.com/one", content: `The first fixture page about ${query}.`, publishedDate: "2026-06-01T00:00:00" },
+        { title: "Fixture docs", url: "https://docs.example.org/guide", content: "A second, documentation-shaped result." },
+        { title: "Fixture forum thread", url: "https://forum.example.net/t/42", content: "Someone asked the same question." },
+      ],
+    }));
+    return;
+  }
   if (request.method !== "POST" || url.pathname !== "/v1/chat/completions") {
     response.writeHead(404).end();
     return;
@@ -40,6 +59,9 @@ const server = createServer(async (request, response) => {
   // Chat mode's confinement check: the write aims one folder above the workspace.
   const escape = prompt.toLowerCase().includes("escape fixture");
   const child = prompt.startsWith("background-fixture-child");
+  // "search fixture: <query>" calls web_search when Settings › Web offers it.
+  const searchQuery = /^search fixture:\s*(.+)$/i.exec(prompt)?.[1];
+  const search = searchQuery && body.tools?.some((tool) => tool.function?.name === "web_search") ? searchQuery : undefined;
   if (child) {
     response.write(": background child working\n\n");
     if (prompt.includes("until stopped")) return;
@@ -68,9 +90,10 @@ const server = createServer(async (request, response) => {
             id: `fixture-tool-${messages.length}`,
             type: "function",
             function: {
-              name: backgroundLaunch ? "subagent" : "write",
+              name: backgroundLaunch ? "subagent" : search ? "web_search" : "write",
               arguments: JSON.stringify(backgroundLaunch
                 ? { agent: roles.includes("worker") ? "worker" : roles[0], task: `background-fixture-child${prompt.includes("until stopped") ? " until stopped" : ""}`, background: true }
+                : search ? { query: search, count: 3 }
                 : escape ? { path: "../wackcode-escape.txt", content: "Written outside the workspace.\n" }
                 : { path: "wackcode-live.txt", content: "Edited through WackCode and Pi.\n" })
             }
@@ -93,7 +116,7 @@ const server = createServer(async (request, response) => {
       object: "chat.completion.chunk",
       created: 2,
       model: body.model,
-      choices: [{ index: 0, delta: { role: "assistant", content: child ? "Background fixture child completed." : resultsArrived ? "The background child finished; its result has arrived." : background ? "I launched a background helper and finished my own work. You can send another message while it runs." : escape ? "I tried to write `../wackcode-escape.txt`, outside the workspace." : "Created `wackcode-live.txt`." }, finish_reason: null }]
+      choices: [{ index: 0, delta: { role: "assistant", content: child ? "Background fixture child completed." : searchQuery ? "I searched the web; the results are in the card above." : resultsArrived ? "The background child finished; its result has arrived." : background ? "I launched a background helper and finished my own work. You can send another message while it runs." : escape ? "I tried to write `../wackcode-escape.txt`, outside the workspace." : "Created `wackcode-live.txt`." }, finish_reason: null }]
     });
     send(response, {
       id: "fixture-done",

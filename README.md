@@ -86,7 +86,8 @@ Open Changes with <kbd>⌘ ⇧ C</kbd> to review staged and unstaged changes fil
 - **Commands:** type `/` for built-ins such as `/init` and `/goal`, or for commands from packages, skills and your own prompt templates.
 - **Memory:** short per-project notes that the agent recalls in later chats. Every note is a file you can read, edit or delete.
 - **Packages:** install Pi packages (extensions, prompt templates and skills) from npm or Git.
-- **Web Fetch:** lets the agent read public web pages by URL, never reaching `localhost` or your local network. On by default; switch it off in **Settings › Packages**.
+- **Web Fetch:** lets the agent read public web pages by URL, never reaching `localhost` or your local network. On by default; switch it off in **Settings › Web**.
+- **Web Search** *(optional)*: a search tool through the provider you pick in **Settings › Web**: DeepSeek, Brave, Tavily, your own SearXNG, or any JSON search API. Searches usually cost a little per request, so it's off until you add one; a local meter estimates what you've spent. Your queries go to that provider, and it can also read pages for Web Fetch if you want.
 - **Sub-agents** *(optional)*: the agent can hand self-contained tasks to helpers with their own context windows, using WackCode's scout, reviewer and worker roles. Each helper costs extra model usage, so they're off by default; switch them on in **Settings › Packages**.
 - **Auto titles** *(optional)*: an `auto-titles` agent, run on a small, cheap model, gives each new chat a title from its first message.
 
@@ -140,7 +141,7 @@ Then press <kbd>⌘ O</kbd> to add a project, pick a model in the composer, and 
 ## Privacy and security
 
 - **Nothing phones home.** There is no WackCode account, backend, analytics, telemetry, updater or automatic model discovery, and nothing is contacted on launch or on a timer. Pi's own telemetry and update checks are switched off.
-- **Your conversations go only to your chosen provider:** the conversation, anything you attach, and whatever project files the agent reads.
+- **Your conversations go only to your chosen provider:** the conversation, anything you attach, and whatever project files the agent reads. If you set up Web Search, the agent's search queries also go to the search provider you picked.
 - **Keys stay local.** API keys and MCP secrets live in files only your account can read, and a chat's background process receives them privately, never through command-line arguments or environment variables. Subscription sign-ins keep their own credential files, separate from the Pi CLI's.
 - **Projects can't run code on their own.** A project's `.pi/` extensions and skill folders never load. Its `AGENTS.md` does, on purpose.
 - **Usage ledger.** WackCode keeps a local, usage-only ledger that TokenTrail reads to chart token use and estimated cost. It's on by default; switch it off in **Settings › Integrations**. It holds token counts, provider and model, project and workspace paths, opaque IDs, timing, purpose and outcome, and never prompts, responses, chat titles, credentials, endpoint URLs or tool arguments. The ledger is never sent anywhere, and cost figures are API-equivalent estimates, not your actual subscription spend. The [v1 contract](docs/wackcode-usage-v1.md) documents the format.
@@ -159,7 +160,8 @@ It's still an agent with real access to your Mac, so a few things are worth know
 - The model providers you configure, and subscription sign-in services after you choose **Sign in**. Expired tokens refresh as part of a model request.
 - The npm registry and a package's own source, only while you browse or install packages.
 - pi.dev's skill catalogue, only while you browse **Settings › Skills › Browse** (falls back to the npm registry).
-- Public web pages the agent reads with Web Fetch during a run: GET requests to public addresses only. Switch it off in **Settings › Packages**.
+- Public web pages the agent reads with Web Fetch during a run: GET requests to public addresses only. Switch it off in **Settings › Web**.
+- The search provider you add in **Settings › Web**, when the agent searches or you run a Test search: only its own API (or the URL you entered), never redirected elsewhere. The key stays in WackCode's own process. If you turn on reading pages through it, the pages Web Fetch reads go to it too.
 - Pages you or the agent open in Browser preview, plus their assets, API calls and WebSockets.
 - MCP servers you add over HTTP/SSE: only their own address, with the headers you gave. Headers are refused over plain `http://` except to your own Mac.
 - Your Git remote when you push, and GitHub (through `gh`) when you open a PR. Reading changes and switching branches use local Git state without fetching.

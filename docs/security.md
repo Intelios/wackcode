@@ -19,6 +19,7 @@ No telemetry, account, backend, updater, automatic model discovery, or traffic o
 - the npm registry and a package's own source, while the user browses or installs one;
 - pi.dev's catalogue page while the user browses Settings › Skills (redirects within pi.dev only; falls back to the npm registry);
 - public pages the agent reads with the built-in `web_fetch` during a run (GET only, public IPs only, user-switchable);
+- the search provider the user picks in Settings › Web, during a run or a Test search: a preset's fixed API (`api.deepseek.com`, `api.search.brave.com`, `api.tavily.com`) or the URL the user entered (SearXNG, Custom). Rust (`web.rs`) makes these requests, so the key never reaches a worker; it contacts only that endpoint, refuses redirects, and sends a key only over https (or to this Mac). With "Read pages through <provider>" on, every `web_fetch` URL goes to the provider's fetch endpoint instead, after the same public-address checks in the worker and again in Rust. Off until the user adds a provider and switches it on;
 - pages explicitly opened in the per-chat browser preview, plus their assets, API and WebSocket traffic (including in background chats);
 - HTTP/SSE MCP servers the user adds (their URL's origin only; headers refused over plain `http://` except to localhost);
 - the user's Git remote and GitHub (through their own `gh` login), only when they push or open a PR. Reading changes and switching branches use local refs; the app never fetches automatically.
@@ -29,8 +30,8 @@ Never add a network origin silently; call it out explicitly and update `README.m
 
 ## Credentials
 
-- API keys and MCP header/env values (`mcp:<id>`) persist only in `secrets.json` (0600). OAuth credentials live only in per-provider 0600 `auth.json` files, never in the Pi CLI's own auth file.
-- A worker receives credentials only over its stdin (`init`, `set_subagents`, `set_mcp`, a first run's `autoTitle`), and only the auth paths it needs.
+- API keys, MCP header/env values (`mcp:<id>`) and search provider keys (`search:<id>`) persist only in `secrets.json` (0600). A search provider that borrows a connection's key is linked by id and reads it at send time, never copying it, and only when the provider's endpoint has the same origin as that connection (`web::linkable_connection`); Custom and SearXNG can never borrow one. A connection a search provider borrows from can't be deleted. OAuth credentials live only in per-provider 0600 `auth.json` files, never in the Pi CLI's own auth file.
+- A worker receives credentials only over its stdin (`init`, `set_subagents`, `set_mcp`, a first run's `autoTitle`), and only the auth paths it needs. `set_web` carries none: a worker asks Rust to search (`web_request`).
 - Credentials never go in argv, env vars, `wackcode.json`, Tauri events, or the renderer. The one exception is an MCP env value, which becomes its own stdio server's environment.
 - Workers get the login-shell environment (`shell_env.rs`) with provider keys stripped afterwards (`strip_provider_env`). Keep that stripping in every process that inherits it.
 - Keep both redaction layers: `safeError` in the worker and `redact_and_limit` in Rust.

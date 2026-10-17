@@ -12,7 +12,8 @@ import { titleFromPrompt, samePlanState, sameTodoState, sameGoalState, applySnap
 import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix } from "./tree-utils";
 import { composeFileSection, splitFileSection, type FileAttachment } from "./attachment-utils";
 import { CENTRED } from "./backdrop-crop";
-import { displayAgentName, hasSubagentCall, pruneDisabledTools, sameToolCatalog, subagentDetailsFor, parseSkillPreviewDetails, SKILL_CREATOR_TOOL_NAME } from "./tool-utils";
+import { BROWSER_TOOL_NAMES, displayAgentName, hasSubagentCall, pruneDisabledTools, sameToolCatalog, subagentDetailsFor, parseSkillPreviewDetails, SKILL_CREATOR_TOOL_NAME } from "./tool-utils";
+import { LinkOpenerContext, openExternally, type LinkOpener } from "./link-opener";
 import { CHANGES_VIEW, GAMES_VIEW, TERMINAL_VIEW, RUN_VIEW, durableView, isDurable, rememberedView, toggleView, viewForChat, viewKey, type PanelViewKind, type SidePanelView } from "./side-panel";
 import { applyRunEvent, EMPTY_RUN_REGISTRY } from "./run-state";
 import { APP_SLASH_COMMANDS, appCommandsFor } from "./command-utils";
@@ -37,6 +38,7 @@ import type {
   AppearanceConfig,
   BrowserState,
   CommandsConfig,
+  WebConfig,
   MemoryConfig,
   PromptConfig,
   CheckpointChange,
@@ -208,8 +210,9 @@ function shownBackground(appearance: AppearanceConfig): BackgroundImageEntry | u
 }
 
 /** What the chat and the side panel's sub-agent transcripts read from Settings › Appearance. */
-function ChatContexts({ appearance, children }: { appearance: AppearanceConfig; children: ReactNode }) {
+function ChatContexts({ appearance, openLink, children }: { appearance: AppearanceConfig; openLink: LinkOpener; children: ReactNode }) {
   return (
+    <LinkOpenerContext.Provider value={openLink}>
     <AssistantNameContext.Provider value={agentName(appearance)}>
       <ThinkingPreviewEnabled.Provider value={appearance.thinkingPreview}>
         <ThinkingTimerPrecision.Provider value={appearance.thinkingTimerPrecision}>
@@ -219,6 +222,7 @@ function ChatContexts({ appearance, children }: { appearance: AppearanceConfig; 
         </ThinkingTimerPrecision.Provider>
       </ThinkingPreviewEnabled.Provider>
     </AssistantNameContext.Provider>
+    </LinkOpenerContext.Provider>
   );
 }
 
@@ -461,6 +465,17 @@ export default function App() {
   const updateBrowser = useCallback((state: BrowserState) => {
     setBrowsers((current) => current[state.taskId] === state ? current : { ...current, [state.taskId]: state });
   }, []);
+  // A web_search result opens in this chat's browser preview while the Browser built-in is on.
+  const browserBuiltinOn = BROWSER_TOOL_NAMES.every((name) => !data.toolConfig.disabled.includes(name));
+  const openLink = useCallback<LinkOpener>((url, options) => {
+    const taskId = selectedTaskRef.current;
+    if (options?.external || !browserBuiltinOn || !taskId || !/^https?:\/\//i.test(url)) {
+      openExternally(url);
+      return;
+    }
+    setSidePanel({ kind: "browser", taskId });
+    void api.browserOpen(taskId, url).then(updateBrowser).catch((reason) => setGlobalError(String(reason)));
+  }, [browserBuiltinOn, setSidePanel, updateBrowser]);
   const toggleBrowserExpanded = useCallback(() => {
     if (browserExpanded) setPanelWidth(browserRestoreWidth);
     else {
@@ -1181,6 +1196,11 @@ export default function App() {
     },
     []
   );
+
+  // Settings › Web reports every saved config back, like Commands. Stable for the same reason.
+  const webChanged = useCallback((config: WebConfig) => {
+    setData((current) => ({ ...current, web: config }));
+  }, []);
 
   async function connectSubscription(providerId: string) {
     pendingSubscriptionCancel.current = false;
@@ -2881,6 +2901,8 @@ export default function App() {
           onSetMemory={setMemory}
           mcp={data.mcp}
           mcpActions={mcpActions}
+          web={data.web}
+          onWebChanged={webChanged}
           onRefresh={refreshPackages}
           onInstall={installPackage}
           onTrust={trustPackage}
@@ -2924,7 +2946,7 @@ export default function App() {
         {showChatTabBar && <ChatTabBar tabs={tabItems} activeId={activeTab?.id} canReopen={areaCanReopen}
           {...tabHandlers} />}
         {tabsEnabled && !selectedTask && activeTab?.error && <div className="error-banner workspace-error" role="alert"><span>{activeTab.error}</span></div>}
-        {area === "chat" && configuredProviders.length > 0 && chatAreaProps && <ChatContexts appearance={data.appearance}>
+        {area === "chat" && configuredProviders.length > 0 && chatAreaProps && <ChatContexts appearance={data.appearance} openLink={openLink}>
           <ToolImageSource.Provider value={loadToolImage}>
             <ChatArea {...chatAreaProps} />
           </ToolImageSource.Provider>
@@ -2980,7 +3002,7 @@ export default function App() {
               </div>
             )}
             <motion.div className="chat-transcript" initial={reduce ? false : { opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reduce ? 0 : 0.4, delay: reduce ? 0 : 0.14, ease: EASE }}>
-            <ChatContexts appearance={data.appearance}>
+            <ChatContexts appearance={data.appearance} openLink={openLink}>
             <SubagentPanelLink.Provider value={subagentLink}>
             <ToolImageSource.Provider value={loadToolImage}>
             <Transcript
@@ -3200,7 +3222,7 @@ export default function App() {
           onBackToChat={backToChat}
         />
       ) : view.kind === "subagent" ? (
-        <ChatContexts appearance={data.appearance}>
+        <ChatContexts appearance={data.appearance} openLink={openLink}>
           <SubagentPanel
             toolCallId={view.toolCallId}
             index={view.index}

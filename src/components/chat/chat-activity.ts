@@ -64,6 +64,7 @@ export function activityLabel(call: NormalizedBlock, live: boolean): { label: st
     case "grep": return { icon: "search", label: join(pick("Searching for", "Searched for"), str(a.pattern) ? quoted(str(a.pattern)) : "") };
     case "find": return { icon: "search", label: join(pick("Looking for", "Looked for"), str(a.pattern) ? quoted(str(a.pattern)) : "files") };
     case "web_fetch": return { icon: "globe", label: join(pick("Looking up", "Looked up"), str(a.url) ? displayUrl(str(a.url)) : "a page") };
+    case "web_search": return { icon: "search", label: join(pick("Searching the web for", "Searched the web for"), str(a.query) ? quoted(str(a.query)) : "something") };
     case "memory_save": return { icon: "memory", label: join(pick("Remembering", "Remembered"), str(a.title) ? quoted(str(a.title)) : "that") };
     case "memory_recall": return { icon: "memory", label: pick("Recalling a memory", "Recalled a memory") };
     case "memory_forget": return { icon: "memory", label: pick("Forgetting a memory", "Forgot a memory") };

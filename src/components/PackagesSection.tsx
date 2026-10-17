@@ -34,7 +34,7 @@ interface BuiltinExtension {
   description: string;
   tools: readonly string[];
   icon: IconName;
-  kind?: "subagents" | "auto_titles" | "web_fetch" | "browser" | "computer_use" | "mcp" | "memory";
+  kind?: "subagents" | "auto_titles" | "web_fetch" | "web_search" | "browser" | "computer_use" | "mcp" | "memory";
 }
 
 /**
@@ -99,10 +99,18 @@ const BUILTIN_EXTENSIONS: readonly BuiltinExtension[] = [
   {
     name: "Web Fetch",
     description:
-      "Lets the agent read a web page by URL, returned as Markdown. Public addresses only: it can't reach localhost or your local network, and it doesn't search. The only built-in that contacts sites you didn't configure.",
+      "Lets the agent read a web page by URL, returned as Markdown. Public addresses only: it can't reach localhost or your local network. The only built-in that contacts sites you didn't configure. Switch it on or off, or read pages through your search provider, in Settings › Web.",
     tools: ["web_fetch"],
     icon: "external",
     kind: "web_fetch"
+  },
+  {
+    name: "Web Search",
+    description:
+      "Lets the agent search the web through a provider you pick: DeepSeek, Brave, Tavily, your own SearXNG, or any JSON API. Off until you add one in Settings › Web; searches usually cost a little per request, and a usage meter keeps count.",
+    tools: ["web_search"],
+    icon: "search",
+    kind: "web_search"
   },
   {
     name: "Memory",
@@ -191,8 +199,12 @@ interface Props extends PackageActions {
   subagentsEnabled?: boolean;
   /** The Memory master switch (Settings › Memory); the card shows state, the page holds the switch. */
   memoryEnabled?: boolean;
-  /** On unless `web_fetch` is in the tool denylist. */
+  /** On unless `web_fetch` is in the tool denylist. Its switch lives on Settings › Web. */
   webFetchEnabled?: boolean;
+  /** Settings › Web's switch is on and a provider is active. */
+  webSearchEnabled?: boolean;
+  /** Opens Settings › Web, where Web Fetch's and Web Search's switches live. */
+  onConfigureWeb?: () => void;
   browserEnabled?: boolean;
   computerUseEnabled?: boolean;
   /** macOS 14+; otherwise the switch stays off. */
@@ -200,7 +212,6 @@ interface Props extends PackageActions {
   autoTitlesEnabled?: boolean;
   autoTitlesConfigured?: boolean;
   onToggleSubagents?: (enabled: boolean) => Promise<void>;
-  onToggleWebFetch?: (enabled: boolean) => Promise<void>;
   onToggleBrowser?: (enabled: boolean) => Promise<void>;
   onToggleComputerUse?: (enabled: boolean) => Promise<void>;
   /** Opens Settings → Computer use. */
@@ -218,9 +229,9 @@ interface Props extends PackageActions {
 type Tab = "installed" | "browse";
 
 export function PackagesSection({
-  packages, agentName = "WackCode", subagentsEnabled = false, webFetchEnabled = true, browserEnabled = true, computerUseEnabled = false, computerUseSupported = true, memoryEnabled = true,
+  packages, agentName = "WackCode", subagentsEnabled = false, webFetchEnabled = true, webSearchEnabled = false, onConfigureWeb, browserEnabled = true, computerUseEnabled = false, computerUseSupported = true, memoryEnabled = true,
   autoTitlesEnabled = false, autoTitlesConfigured = false,
-  onToggleSubagents, onToggleWebFetch, onToggleBrowser, onToggleComputerUse, onConfigureComputerUse, onToggleAutoTitles, onConfigureSubagents, onConfigureAutoTitles, onConfigureMemory, onConfigureMcp,
+  onToggleSubagents, onToggleBrowser, onToggleComputerUse, onConfigureComputerUse, onToggleAutoTitles, onConfigureSubagents, onConfigureAutoTitles, onConfigureMemory, onConfigureMcp,
   onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
 }: Props) {
   const [tab, setTab] = useState<Tab>("installed");
@@ -276,6 +287,7 @@ export function PackagesSection({
     : extension.kind === "browser" ? browserEnabled
     : extension.kind === "computer_use" ? computerUseEnabled
     : extension.kind === "web_fetch" ? webFetchEnabled
+    : extension.kind === "web_search" ? webSearchEnabled
     : extension.kind === "auto_titles" ? autoTitlesEnabled
     : extension.kind === "memory" ? memoryEnabled
     : true;
@@ -395,8 +407,6 @@ export function PackagesSection({
                     busy={busy}
                     onToggle={extension.kind === "subagents" && onToggleSubagents
                       ? (enabled) => void run(() => onToggleSubagents(enabled)).catch(() => undefined)
-                      : extension.kind === "web_fetch" && onToggleWebFetch
-                      ? (enabled) => void run(() => onToggleWebFetch(enabled)).catch(() => undefined)
                       : extension.kind === "browser" && onToggleBrowser
                       ? (enabled) => void run(() => onToggleBrowser(enabled)).catch(() => undefined)
                       : extension.kind === "computer_use" && onToggleComputerUse
@@ -404,7 +414,7 @@ export function PackagesSection({
                       : extension.kind === "auto_titles" && onToggleAutoTitles
                       ? (enabled) => void run(() => onToggleAutoTitles(enabled)).catch(() => undefined)
                       : undefined}
-                    onConfigure={extension.kind === "subagents" ? onConfigureSubagents : extension.kind === "computer_use" ? onConfigureComputerUse : extension.kind === "auto_titles" ? onConfigureAutoTitles : extension.kind === "memory" ? onConfigureMemory : extension.kind === "mcp" ? onConfigureMcp : undefined}
+                    onConfigure={extension.kind === "subagents" ? onConfigureSubagents : extension.kind === "computer_use" ? onConfigureComputerUse : extension.kind === "auto_titles" ? onConfigureAutoTitles : extension.kind === "memory" ? onConfigureMemory : extension.kind === "mcp" ? onConfigureMcp : extension.kind === "web_fetch" || extension.kind === "web_search" ? onConfigureWeb : undefined}
                     toggleDisabled={(extension.kind === "auto_titles" && !autoTitlesEnabled && (!autoTitlesConfigured || !subagentsEnabled)) || (extension.kind === "computer_use" && !computerUseEnabled && !computerUseSupported)}
                     disabledReason={extension.kind === "computer_use" ? "Requires macOS 14 or later" : undefined}
                     subagentsOff={extension.kind === "auto_titles" && !subagentsEnabled}
@@ -456,15 +466,15 @@ interface BuiltinCardProps {
 
 /**
  * A built-in extension, in the same card shape as a package. Optional ones (sub-agents, browser
- * preview, computer use, web fetch, auto titles) carry a live switch. Memory's switch lives on its
- * own page, so its card shows the state and links there. The rest are part of the app and say
+ * preview, computer use, auto titles) carry a live switch. Memory's, Web Fetch's and Web Search's
+ * switches live on their own pages, so their cards show the state and link there. The rest are part of the app and say
  * "Always on" rather than showing a switch that can't move. Auto titles lives on the Sub-agents
  * page, so its Set up is blocked while that built-in is off. Its tools are listed as names; a
  * built-in's tools switch together.
  */
 function BuiltinCard({ extension, enabled, busy, toggleDisabled = false, disabledReason, subagentsOff = false, onToggle, onConfigure }: BuiltinCardProps) {
   const autoTitles = extension.kind === "auto_titles";
-  const elsewhere = extension.kind === "memory";
+  const elsewhere = extension.kind === "memory" || extension.kind === "web_fetch" || extension.kind === "web_search";
   const switchable = Boolean(onToggle) || autoTitles;
   const showState = switchable || elsewhere;
   const configurable = onConfigure && (autoTitles || elsewhere || extension.kind === "mcp" || (onToggle && enabled));

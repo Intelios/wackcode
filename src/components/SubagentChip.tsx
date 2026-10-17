@@ -48,7 +48,8 @@ const STEP_VERBS: Record<string, string> = {
   bash: "Running",
   edit: "Editing",
   write: "Writing",
-  web_fetch: "Fetching"
+  web_fetch: "Fetching",
+  web_search: "Searching the web for"
 };
 
 /** A child's latest tool call as its chip's ticker reads it: "Reading session.ts". */

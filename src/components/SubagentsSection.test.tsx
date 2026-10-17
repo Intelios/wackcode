@@ -127,7 +127,7 @@ describe("SubagentsSection", () => {
     cleanup();
     renderSection({ agents: [webScout, docs] }, [provider], false);
     fireEvent.click(screen.getByRole("button", { name: /scout/ }));
-    expect(screen.getByText(/Web Fetch is off in Settings › Packages/)).toBeInTheDocument();
+    expect(screen.getByText(/Web Fetch is off in Settings › Web/)).toBeInTheDocument();
   });
 
   it("switches an agent off and saves the change at once", async () => {

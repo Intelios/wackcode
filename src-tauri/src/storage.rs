@@ -144,6 +144,36 @@ mod tests {
     }
 
     #[test]
+    fn web_settings_round_trip_without_keys_and_old_files_load() {
+        use crate::models::{SearchKeySource, SearchProviderKind, SearchProviderRecord};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("wackcode.json");
+        let secrets = SecretStore::load(directory.path()).unwrap();
+        secrets.set("search:s1", "sk-own-search-key").unwrap();
+        let mut data = AppData::default();
+        let provider = |id: &str, key_source| SearchProviderRecord {
+            id: id.into(), name: "DeepSeek".into(), kind: SearchProviderKind::Deepseek, key_source, has_key: true,
+            base_url: None, custom: None, price_search_per_1k: Some(0.75), price_fetch_per_1k: Some(0.75),
+            created_at: String::new(), updated_at: String::new(),
+        };
+        data.web.enabled = true;
+        data.web.providers = vec![
+            provider("s1", SearchKeySource::Own),
+            provider("s2", SearchKeySource::Connection { provider_id: "custom-1".into() }),
+        ];
+        save_to_path(&path, &data).unwrap();
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("\"keySource\""));
+        assert!(content.contains("\"providerId\": \"custom-1\""));
+        assert!(!content.contains("sk-own-search-key"));
+        let reloaded: AppData = serde_json::from_str(&content).unwrap();
+        assert_eq!(reloaded.web, data.web);
+        // A file from before Settings › Web loads with search off.
+        let old: AppData = serde_json::from_str(r#"{ "version": 1 }"#).unwrap();
+        assert!(!old.web.enabled && old.web.providers.is_empty());
+    }
+
+    #[test]
     fn execution_policy_persists_and_failed_saves_leave_effective_settings_unchanged() {
         let directory = tempfile::tempdir().unwrap();
         let state = MetadataState {

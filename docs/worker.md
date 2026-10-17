@@ -17,7 +17,7 @@ Then run `pnpm test:worker`. Commands whose outcome the caller awaits go through
 
 Commands run one at a time on a serial queue, and a prompt holds the queue until its run settles. So anything that has to reach a *running* run bypasses the queue, or it deadlocks behind that run. The bypass list lives in the stdin dispatch at the bottom of `index.ts`:
 
-- `abort`, `extension_ui_response`, `browser_response`, `computer_response`: answers the running run is waiting on.
+- `abort`, `extension_ui_response`, `browser_response`, `computer_response`, `web_response`: answers the running run is waiting on.
 - `queue_message`, `dequeue`: the user's steering and follow-up messages.
 - `goal_control` except `set`: pause, resume and clear act on a live loop. `set` starts a run, so it queues.
 - `watch_subagent`, `tool_image`: read-only peeks; the panel opens on a child during blocking or background delegation.
@@ -60,7 +60,7 @@ The transcript reaches the host as a full `snapshot`, then as `snapshot_delta`s 
 
 - Never pass `tools:` to the chat's `createAgentSession`: Pi treats it as a registry filter and erases extension tools. Apply the user's denylist with `setActiveToolsByName`, and re-apply it after anything that can re-activate tools (extension `session_start`, `navigateTree`, a roster change).
 - The Settings › Tools denylist covers Pi's tools and package tools. Built-in extension tools are exempt (a disabled `plan_mode_complete` would silently break Plan mode), except the ones in `SWITCHABLE_BUILTIN_TOOLS` (browser, `web_fetch`).
-- Sub-agents, memory and computer use have their own settings and keep their tools out through `inactiveTools()`; they never appear on the denylist.
+- Sub-agents, memory, computer use and web search have their own settings and keep their tools out through `inactiveTools()`; they never appear on the denylist. `web_search` is offered while `set_web` (or `init`'s `web`) names an active provider, and reaches sub-agents through its own clause in `childToolNames`.
 - MCP tools (`mcp__<server>__<tool>`) have their own per-server and per-tool switches and stay out while their server is off or unreachable. Keep the built-in and MCP switch rules separate.
 - `powershell` is removed from the registry; `grep`/`find` are reported unavailable when ripgrep/fd are missing (the worker is offline and can't download them).
 
@@ -88,7 +88,7 @@ The user's Terminal and project Run processes are separate and unchanged.
 
 ## Built-in extensions (`worker/src/builtin/`)
 
-WackCode's own extensions load as inline factories, so they bypass the package trust gate by construction. They are: `ask-user-question`, `auto-title`, `bash-jobs`, `browser`, `computer-use`, `goal`, `mcp`, `memory`, `plan-mode`, `skill-creator`, `subagents`, `todo`, `web-fetch`, and `chat-mode`, a guard with no tools of its own that only Chat mode chats load.
+WackCode's own extensions load as inline factories, so they bypass the package trust gate by construction. They are: `ask-user-question`, `auto-title`, `bash-jobs`, `browser`, `computer-use`, `goal`, `mcp`, `memory`, `plan-mode`, `skill-creator`, `subagents`, `todo`, `web-fetch`, `web-search`, and `chat-mode`, a guard with no tools of its own that only Chat mode chats load.
 
 - Adding or renaming one also updates `BUILTIN_EXTENSIONS` in `src/components/PackagesSection.tsx`, which shows them so nobody installs a duplicate package.
 - Sub-agents never get browser, computer-use, MCP or memory tools, or skills. A child session loads its role's tool allowlist, its own shell check-in extension and the extensions the built-in hands it.
@@ -140,13 +140,13 @@ The tool exists only while the workflow is active on the branch (or the command'
 
 A Chat mode chat is the same worker with a different prompt and far fewer tools. Everything that differs is decided in the worker (`chatKind` in `index.ts`), so an app-wide `set_*` broadcast can never widen such a chat. Read `builtin/chat-mode/` before changing any of it.
 
-- **Built-ins:** `chatFactories` instead of `factories`: ask, auto-title, memory, web-fetch, browser, MCP and the guard. The built-ins it leaves out still have controllers, which report their resting state. They are created at module scope, before `init`, so this is a second list chosen at session creation and not a runtime switch.
+- **Built-ins:** `chatFactories` instead of `factories`: ask, auto-title, memory, web-fetch, web-search, browser, MCP and the guard. The built-ins it leaves out still have controllers, which report their resting state. They are created at module scope, before `init`, so this is a second list chosen at session creation and not a runtime switch.
 - **Registry:** `excludeTools` also drops `bash`, and no shell tool is registered. (`excludeTools` is not the `tools:` allowlist, which stays forbidden.) Package resources are ignored.
 - **Active set:** `activeToolNames()` adds the allowlist (`chatToolAllowed`) on top of the usual rules. The user's denylist and MCP switches still narrow it.
 - **Enforcement:** the guard's `tool_call` hook blocks anything off the allowlist and any file-tool path outside the scratchpad, fail-closed. The active set alone is not enforcement: a navigation restores the transcript's declared tools.
 - **Paths:** `confine` mirrors Pi's own path resolution, which Pi does not export, then compares real paths. It rewrites an allowed `path` to the scratchpad-relative spelling it checked. A Pi upgrade that changes how file tools resolve a path must update it; `policy.test.ts` pins the cases.
 - **Prompt:** built in `withAppLayers`, without flipping a loader flag. The chat persona replaces Pi's, which also drops Pi's tool, rules and docs sections; context files, skills and prompt templates are served empty; the app's guide (`buildChatGuide`) is appended ahead of the memory index; Pi still adds the cwd, which is the scratchpad.
-- **The guide carries what `promptGuidelines` cannot.** Pi drops every tool's guidelines once a custom prompt is set, so the rule that fetched content is data, not instructions, lives in the guide. It is rebuilt at run start when the date or the active tools moved.
+- **The guide carries what `promptGuidelines` cannot.** Pi drops every tool's guidelines once a custom prompt is set, so the rule that fetched content and search results are data, not instructions, lives in the guide, as does what web_search does and whether the chat can search at all. It is rebuilt at run start when the date or the active tools moved.
 - **Commands:** the catalogue is empty; `execute_command`, `init_agents`, `skill_creator`, `goal_control` and `set_mode` are refused, and the coding-only `set_*` broadcasts are acknowledged and dropped. A typed `/goal` reaches the model as plain text.
 
 ## Planning modes

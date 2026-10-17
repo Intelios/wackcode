@@ -27,6 +27,8 @@ mod terminal;
 mod window_state;
 mod worker;
 mod usage;
+mod web;
+mod web_usage;
 
 use storage::MetadataState;
 use tauri::Manager;
@@ -42,6 +44,7 @@ pub fn run() {
         .manage(usage::UsageState::default())
         .manage(browser::BrowserManager::default())
         .manage(computer_use::ComputerUseManager::default())
+        .manage(web::WebState::default())
         .manage(worker::SelectedTask::default())
         .manage(worker::WorkerActivity::default())
         .manage(commands::TaskLocks::default())
@@ -61,6 +64,7 @@ pub fn run() {
                 .lock()
                 .map_err(|_| "Metadata lock was poisoned".to_string())
                 .map(|data| (data.appearance.clone(), data.window))?;
+            app.manage(web_usage::WebUsageState::load(&app.path().app_data_dir()?));
             app.manage(state);
             usage::start_retry(app.handle().clone());
             menu_bar::setup(app)?;
@@ -283,6 +287,13 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + 
             computer_use::computer_use_reset_permissions,
             computer_use::computer_use_relaunch,
             computer_use::set_computer_use_config,
+            web::save_search_provider,
+            web::delete_search_provider,
+            web::set_active_search_provider,
+            web::set_web_config,
+            web::test_search_provider,
+            web::web_usage,
+            web::reset_web_usage,
             computer_use::computer_use_cursor_appearance,
             computer_use::computer_use_respond_access,
             computer_use::computer_use_list_apps,
@@ -306,6 +317,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + 
 pub(crate) fn cleanup_before_exit(app: &tauri::AppHandle) {
     // Flushes the window geometry `window_state::record` only kept in memory.
     let _ = app.state::<MetadataState>().save();
+    let _ = app.state::<web_usage::WebUsageState>().flush();
     app.state::<worker::ReaperHandle>().stop();
     app.state::<WorkerState>().terminate_all();
     app.state::<browser::BrowserManager>().dispose_all();

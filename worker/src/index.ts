@@ -12,6 +12,7 @@ import { chatToolAllowed } from "./builtin/chat-mode/policy.js";
 import { DEFAULT_CHAT_PROMPT, buildChatGuide, chatGuideDate } from "./builtin/chat-mode/prompt.js";
 import { BROWSER_TOOL_NAMES } from "./builtin/browser.js";
 import { COMPUTER_TOOL_NAMES } from "./builtin/computer-use/params.js";
+import { WEB_SEARCH_TOOL_NAME } from "./builtin/web-search/index.js";
 import { GOAL_VERIFIER_SYSTEM } from "./builtin/goal/prompt.js";
 import { runGoalVerification } from "./builtin/goal/verify.js";
 import { buildSkillCreatorPrompt } from "./builtin/skill-creator/guide.js";
@@ -145,8 +146,8 @@ let disabledTools = new Set<string>();
 let subagentRunner: SubagentRunner | undefined;
 /** Aborts the wait for MCP servers at the start of a run, when the user presses Stop. */
 let mcpWait: AbortController | undefined;
-/** Which native host subsystem a request goes to: the per-chat browser, computer use, or the skill-creator's managed drafts. */
-type NativeChannel = "browser" | "computer" | "skill_creator";
+/** Which native host subsystem a request goes to: the per-chat browser, computer use, the skill-creator's managed drafts, or Settings › Web's search provider. */
+type NativeChannel = "browser" | "computer" | "skill_creator" | "web";
 interface PendingNativeRequest {
   channel: NativeChannel;
   resolve(value: unknown): void;
@@ -160,11 +161,13 @@ const NATIVE_CANCELLED: Record<NativeChannel, string> = {
   browser: "Browser action cancelled.",
   computer: "Computer use was stopped.",
   skill_creator: "The skill-creator action was stopped.",
+  web: "The web request was stopped.",
 };
 const NATIVE_WORKER_STOPPED: Record<NativeChannel, string> = {
   browser: "Browser action cancelled because the worker stopped.",
   computer: "Computer use was stopped because the chat's worker stopped.",
   skill_creator: "The skill-creator action was stopped because the chat's worker stopped.",
+  web: "The web request was stopped because the chat's worker stopped.",
 };
 
 /** Rejects every pending native request and tells the host, which stops the work it can. */
@@ -296,9 +299,10 @@ const builtinHost: BuiltinHost = {
     if (!modelRuntime || !model || chatModelMissing()) return Promise.resolve({ kind: "inconclusive", reason: "No model is configured." });
     return withUsage("goal_verification", () => runGoalVerification(modelRuntime!, model, GOAL_VERIFIER_SYSTEM, input, signal, session?.sessionId));
   },
+  // web_search has its own setting rather than the denylist: a child gets it while it is offered.
   childToolNames: () =>
     toolCatalog()
-      .filter((tool) => !BROWSER_TOOL_NAMES.includes(tool.name as typeof BROWSER_TOOL_NAMES[number]) && !COMPUTER_TOOL_NAMES.includes(tool.name as typeof COMPUTER_TOOL_NAMES[number]) && (tool.source.kind === "builtin" || SWITCHABLE_BUILTIN_TOOLS.has(tool.name)) && tool.available && !disabledTools.has(tool.name))
+      .filter((tool) => !BROWSER_TOOL_NAMES.includes(tool.name as typeof BROWSER_TOOL_NAMES[number]) && !COMPUTER_TOOL_NAMES.includes(tool.name as typeof COMPUTER_TOOL_NAMES[number]) && (tool.source.kind === "builtin" || SWITCHABLE_BUILTIN_TOOLS.has(tool.name) || tool.name === WEB_SEARCH_TOOL_NAME) && tool.available && !disabledTools.has(tool.name) && !builtins.webSearch.inactiveTools().includes(tool.name))
       .map((tool) => tool.name),
   runSubagent: async (request) => {
     if (!subagentRunner) throw new Error("Worker is not initialized");
@@ -320,6 +324,7 @@ const builtinHost: BuiltinHost = {
   browser: (request, signal) => nativeRequest("browser", request, signal),
   computer: (request, signal) => nativeRequest("computer", request, signal),
   skillCreator: (request, signal) => nativeRequest("skill_creator", request, signal),
+  web: (request, signal) => nativeRequest("web", request, signal),
   supportsVision: () => Boolean((session?.model?.input as string[] | undefined)?.includes("image")),
 };
 const builtins = createBuiltinExtensions(builtinHost, {
@@ -725,7 +730,7 @@ function toolCatalog(): ToolCatalogEntry[] {
 // switches too (Settings › MCP servers), and stay out while their server is off or unreachable.
 // A Chat mode chat narrows all of that to its allowlist; the chat guard enforces it at call time.
 function activeToolNames(): string[] {
-  const inactive = new Set([...builtins.subagents.inactiveTools(), ...builtins.mcp.inactiveTools(), ...builtins.computerUse.inactiveTools(), ...builtins.memory.inactiveTools(), ...builtins.skillCreator.inactiveTools()]);
+  const inactive = new Set([...builtins.subagents.inactiveTools(), ...builtins.mcp.inactiveTools(), ...builtins.computerUse.inactiveTools(), ...builtins.memory.inactiveTools(), ...builtins.skillCreator.inactiveTools(), ...builtins.webSearch.inactiveTools()]);
   return toolCatalog()
     .filter((tool) => tool.available && !inactive.has(tool.name))
     .filter((tool) => !disabledTools.has(tool.name) || tool.source.kind === "mcp" || (tool.source.kind === "wackcode" && !SWITCHABLE_BUILTIN_TOOLS.has(tool.name)))
@@ -744,6 +749,7 @@ function chatGuide(): string {
   return buildChatGuide({
     activeTools,
     hasMcpTools: [...activeTools].some((name) => builtins.mcp.serverOf(name) !== undefined),
+    searchLabel: builtins.webSearch.label(),
     today: chatGuideDate(),
   });
 }
@@ -1265,6 +1271,7 @@ async function initialize(command: InitCommand): Promise<void> {
   if (!chatKind) await applySubagents(command.subagents ?? null);
   builtins.mcp.configure(command.mcp ?? []);
   builtins.computerUse.configure(!chatKind && command.computerUse?.enabled === true);
+  builtins.webSearch.configure(command.web);
   // Before any contract can be published: the plan-mode extension composes each contract from
   // the current overrides, and the restored session's reconcile runs right after creation.
   setPromptOverrides(command.prompts);
@@ -1804,7 +1811,7 @@ async function handle(command: WorkerCommand): Promise<void> {
       await initialize(command);
     } else if (!session || !taskId) {
       throw new Error("Worker is not initialized");
-    } else if (command.type === "browser_response" || command.type === "computer_response" || command.type === "skill_creator_response") {
+    } else if (command.type === "browser_response" || command.type === "computer_response" || command.type === "skill_creator_response" || command.type === "web_response") {
       const pending = pendingNativeRequests.get(command.requestId);
       if (!pending) return;
       pendingNativeRequests.delete(command.requestId);
@@ -2131,6 +2138,12 @@ async function handle(command: WorkerCommand): Promise<void> {
       await applySubagents(command.subagents);
       applyDisabledTools();
       emitSnapshot();
+    } else if (command.type === "set_web") {
+      // Queued, like computer use, so web_search never vanishes under a running call. Every
+      // chat kind takes it: Chat mode offers search too.
+      builtins.webSearch.configure(command.web);
+      applyDisabledTools();
+      emitSnapshot();
     } else if (command.type === "set_computer_use") {
       // Queued, so the tools never vanish under a running call; the host has already stopped
       // any computer-use work of this chat and cleared its grants when it was switched off.
@@ -2347,6 +2360,7 @@ function bypassesQueue(command: WorkerCommand): boolean {
     case "browser_response":
     case "computer_response":
     case "skill_creator_response":
+    case "web_response":
     case "extension_ui_response":
     case "queue_message":
     case "steer_message":

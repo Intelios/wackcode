@@ -90,6 +90,8 @@ export function summarizeActivity(tool: string, args: unknown): SubagentActivity
       return { tool, subject: oneLine(input.path) || "." };
     case "web_fetch":
       return { tool, subject: oneLine(input.url) };
+    case "web_search":
+      return { tool, subject: oneLine(input.query) };
     default:
       return { tool, subject: oneLine(input.path) };
   }

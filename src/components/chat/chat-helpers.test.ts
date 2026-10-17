@@ -48,6 +48,8 @@ describe("dividerLabel", () => {
 describe("activities", () => {
   it("speaks in plain words, present while live and past once done", () => {
     expect(activityLabel(call("1", "web_fetch", { url: "https://www.example.com/a?b" }), true).label).toBe("Looking up example.com/a");
+    expect(activityLabel(call("1", "web_search", { query: "tide times" }), true).label).toBe("Searching the web for “tide times”");
+    expect(activityLabel(call("1", "web_search", { query: "tide times" }), false).label).toBe("Searched the web for “tide times”");
     expect(activityLabel(call("1", "write", { path: "notes/plan.md" }), false).label).toBe("Jotted down plan.md");
     expect(activityLabel(call("1", "mcp__fs__read_thing"), false).label).toBe("Used read thing (fs)");
     expect(activityLabel(call("1", "memory_save", { title: "Likes tea" }), false).label).toBe("Remembered “Likes tea”");

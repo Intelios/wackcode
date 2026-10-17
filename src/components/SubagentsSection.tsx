@@ -25,7 +25,7 @@ interface Props extends ModelFavoritesProps {
   providers: ProviderRecord[];
   /** Saves the whole configuration; rejects with a user-facing message. */
   onChange: (config: SubagentConfig) => Promise<void>;
-  /** False while Web Fetch is switched off in Packages, which keeps web_fetch from every agent. */
+  /** False while Web Fetch is switched off in Settings › Web, which keeps web_fetch from every agent. */
   webFetchEnabled?: boolean;
   /** Automatic titles, shown as an agent WackCode runs itself — it is never offered to the model. */
   autoTitle: AutoTitleConfig;
@@ -39,7 +39,7 @@ interface Props extends ModelFavoritesProps {
 /** Shown under an agent's tools when it lists web_fetch but Web Fetch is switched off. */
 function WebFetchOffHint({ tools, webFetchEnabled }: { tools: string[]; webFetchEnabled: boolean }) {
   if (webFetchEnabled || !tools.includes("web_fetch")) return null;
-  return <small className="subagent-hint">Web Fetch is off in Settings › Packages, so no sub-agent gets web_fetch.</small>;
+  return <small className="subagent-hint">Web Fetch is off in Settings › Web, so no sub-agent gets web_fetch.</small>;
 }
 
 const TRIGGER_OPTIONS: { value: SubagentConfig["trigger"]; label: string; hint: string; icon: IconName }[] = [

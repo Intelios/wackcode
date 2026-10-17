@@ -198,24 +198,26 @@ describe("PackagesSection built-ins", () => {
     await waitFor(() => expect(onToggleSubagents).toHaveBeenLastCalledWith(false));
   });
 
-  it("shows Web Fetch on by default and lets it be switched off", async () => {
-    const onToggleWebFetch = vi.fn().mockResolvedValue(undefined);
-    renderSection([], { onToggleWebFetch });
-    const card = screen.getByText("Web Fetch").closest("article")!;
-    const toggle = within(card).getByRole("switch", { name: "Web Fetch" });
-    expect(toggle).toBeEnabled();
-    expect(toggle).toHaveAttribute("aria-checked", "true");
-    expect(within(card).getByText("On")).toBeInTheDocument();
-    expect(within(card).getByText("web_fetch")).toBeInTheDocument();
-    expect(within(card).queryByRole("button", { name: /Configure/ })).not.toBeInTheDocument();
-    fireEvent.click(toggle);
-    await waitFor(() => expect(onToggleWebFetch).toHaveBeenCalledWith(false));
+  it("shows Web Fetch and Web Search's state, with their switches on Settings › Web", () => {
+    const onConfigureWeb = vi.fn();
+    renderSection([], { onConfigureWeb });
+    const fetchCard = screen.getByRole("article", { name: "Web Fetch" });
+    expect(within(fetchCard).queryByRole("switch")).not.toBeInTheDocument();
+    expect(within(fetchCard).getByText("On")).toBeInTheDocument();
+    expect(within(fetchCard).getByText("web_fetch")).toBeInTheDocument();
+    fireEvent.click(within(fetchCard).getByRole("button", { name: /Configure/ }));
+    expect(onConfigureWeb).toHaveBeenCalledTimes(1);
+
+    const searchCard = screen.getByRole("article", { name: "Web Search" });
+    expect(within(searchCard).getByText("Off")).toBeInTheDocument();
+    expect(within(searchCard).getByText("web_search")).toBeInTheDocument();
+    fireEvent.click(within(searchCard).getByRole("button", { name: /Configure/ }));
+    expect(onConfigureWeb).toHaveBeenCalledTimes(2);
 
     cleanup();
-    renderSection([], { webFetchEnabled: false, onToggleWebFetch });
-    expect(screen.getByRole("switch", { name: "Web Fetch" })).toHaveAttribute("aria-checked", "false");
-    fireEvent.click(screen.getByRole("switch", { name: "Web Fetch" }));
-    await waitFor(() => expect(onToggleWebFetch).toHaveBeenLastCalledWith(true));
+    renderSection([], { webFetchEnabled: false, webSearchEnabled: true, onConfigureWeb });
+    expect(within(screen.getByRole("article", { name: "Web Fetch" })).getByText("Off")).toBeInTheDocument();
+    expect(within(screen.getByRole("article", { name: "Web Search" })).getByText("On")).toBeInTheDocument();
   });
 
   it("still shows them alongside installed packages", () => {

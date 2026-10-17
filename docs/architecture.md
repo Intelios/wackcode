@@ -7,7 +7,7 @@ How WackCode's processes fit together, where state lives, and the rules that kee
 | Process | Code | Holds credentials? | Network? |
 |---|---|---|---|
 | Renderer (WKWebView) | `src/` | Never | Never; CSP allows IPC only |
-| Rust host | `src-tauri/src/` | Reads `secrets.json` / `auth.json` | Only for user-triggered actions (see [security.md](security.md)) |
+| Rust host | `src-tauri/src/` | Reads `secrets.json` / `auth.json` | User-triggered actions, and the search provider a chat's `web_search` (or routed `web_fetch`) asks for (see [security.md](security.md)) |
 | Chat worker, one per chat | `worker/src/index.ts` | Only what arrives over its stdin | Provider, MCP, `web_fetch`; Pi runs with `PI_OFFLINE` |
 | Package manager | `worker/src/manager.ts` | Never | npm registry and package sources |
 | Skills scan | `worker/src/skills-scan.ts` | Never | Never; reads files only |
@@ -21,7 +21,7 @@ Each chat worker runs one Pi session in-process. Sub-agents are in-memory child 
 Resource selection follows Tauri's development mode, so a packaged debug build also uses
 the bundled runtime and scripts when opened from Finder.
 
-Native subsystems live in Rust and never in a worker: the per-chat browser (`browser.rs`, a child `WKWebView`), the terminal (`terminal.rs`), project commands (`run_command.rs`), computer use (`computer_use/`), the window backdrop (`glass.rs`), and the menu bar duck (`menu_bar.rs`). A worker asks for browser and computer work over the protocol (`browser_request`, `computer_request`); the host does it and enforces the rules.
+Native subsystems live in Rust and never in a worker: the per-chat browser (`browser.rs`, a child `WKWebView`), the terminal (`terminal.rs`), project commands (`run_command.rs`), computer use (`computer_use/`), the window backdrop (`glass.rs`), and the menu bar duck (`menu_bar.rs`). A worker asks for browser and computer work over the protocol (`browser_request`, `computer_request`); the host does it and enforces the rules. Web search works the same way (`web_request`, `web.rs`): Rust holds the provider's key, calls it, and counts the request in `web-usage.json`.
 
 Computer use's agent cursor is a native, nonactivating AppKit panel, drawn on the main thread.
 The engine publishes only dispatched action kinds and screen-point geometry; AX handles stay
@@ -39,7 +39,8 @@ Everything is under the app data directory (`~/Library/Application Support/com.w
 | Path | What |
 |---|---|
 | `wackcode.json` | Settings, projects, chats. Written only through `MetadataState::mutate` (`storage.rs`). |
-| `secrets.json` (0600) | API keys, and MCP header/env values keyed `mcp:<id>`. |
+| `secrets.json` (0600) | API keys, MCP header/env values keyed `mcp:<id>`, and search provider keys keyed `search:<id>`. |
+| `web-usage.json` | Settings › Web's usage meter: searches and page reads per provider per month, the last 12 months. Written a few seconds after a change (`web_usage.rs`), never sent anywhere, and not the TokenTrail ledger. |
 | `subscriptions/<id>/auth.json` (0600) | OAuth credentials, one file per subscription provider. |
 | `sessions/<task>/`, `agent/<task>/` | A chat's Pi session files and Pi agent directory. |
 | `scratch/<task>/` | Workspace for chats without a project, and every Chat mode chat's scratchpad. Deleted with the chat. |

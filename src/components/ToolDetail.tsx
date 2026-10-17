@@ -16,7 +16,10 @@ import { highlightBlock, highlightDiffLines, highlightLines, languageForPath } f
 import { editArgumentDiff, focusedEditDiff } from "../edit-preview";
 import { displayPath } from "../chat-utils";
 import type { NormalizedBlock } from "../types";
-import { callArguments, imageReadNote, mcpToolParts, splitPathSubject, summarizeTool, type ToolSummary } from "../tool-utils";
+import { WEB_SEARCH_TOOL_NAME, callArguments, imageReadNote, mcpToolParts, parseWebSearchDetails, splitPathSubject, summarizeTool, type ToolSummary } from "../tool-utils";
+import type { WebSearchDetails } from "../types";
+import { useLinkOpener } from "../link-opener";
+import { WebResults } from "./web/WebResults";
 import { argRows, askedQuestions, grepMatcher, parseGrep, readRange, splitCommandStatus, splitMatches, splitNotice, type Asked, type GrepFile } from "../tool-output";
 import { Icon, type IconName } from "./Icons";
 import { CopyButton } from "./ui/CopyButton";
@@ -46,6 +49,7 @@ const TOOL_ICONS: Record<string, IconName> = {
   find: "search",
   ls: "folder",
   web_fetch: "globe",
+  web_search: "search",
   browser_open: "browser",
   browser_snapshot: "browser",
   browser_act: "cursor",
@@ -324,14 +328,43 @@ function AskSheet({ asked }: { asked: Asked }) {
   );
 }
 
+/**
+ * web_search: the query in full, the provider and count, then the results as cards. A result
+ * opens in the chat's browser preview (⌘-click: the default browser).
+ */
+function WebSearchSheet({ search, head }: { search: WebSearchDetails; head: boolean }) {
+  const open = useLinkOpener();
+  const count = search.results.length;
+  return (
+    <>
+      {head && (
+        <SheetHead icon="search" meta={<span className="tool-pill">{search.provider.name} · {plural(count, "result")}</span>}>
+          <span className="tool-head-query">{search.query}</span>
+        </SheetHead>
+      )}
+      <div className="tool-web-results">
+        {count === 0
+          ? <p className="tool-web-empty">No results.</p>
+          : <WebResults results={search.results} label={`Results for ${search.query}`} onOpen={(url, event) => open(url, { external: event.metaKey })} />}
+      </div>
+    </>
+  );
+}
+
+/** web_fetch's sheet adds who read the page, when a search provider did. */
+function viaPill(details: Record<string, unknown>): ReactNode {
+  return typeof details.via === "string" && details.via ? <span className="tool-pill">via {details.via}</span> : undefined;
+}
+
 /** Any other call: its name, its arguments as labelled rows, and what came back. */
 function CallSheet({ call, args, result, failed, icon, head, expansionKey }: { call: NormalizedBlock; args: Record<string, unknown>; result?: NormalizedBlock; failed: boolean; icon: IconName; head: boolean; expansionKey?: string }) {
   const rows = argRows(args);
   const mcp = mcpToolParts(call.toolName ?? "");
+  const via = viaPill((result?.details ?? {}) as Record<string, unknown>);
   return (
     <>
       {head && (
-        <SheetHead icon={icon} meta={mcp && <span className="tool-head-meta">{mcp.server}</span>}>
+        <SheetHead icon={icon} meta={mcp ? <span className="tool-head-meta">{mcp.server}</span> : via}>
           <span className="tool-head-code"><span className="pattern">{mcp ? mcp.tool : call.toolName ?? "tool"}</span></span>
         </SheetHead>
       )}
@@ -368,6 +401,7 @@ export function ToolDetail({ call, result, live = false, head = true }: { call: 
     ? (typeof details.diff === "string" && details.diff) || editArgumentDiff(args)
     : undefined, [summary.kind, failed, details.diff, args]);
   const asked = useMemo(() => (call.toolName === "ask_user_question" ? askedQuestions(args, result) : undefined), [call.toolName, args, result]);
+  const search = useMemo(() => (call.toolName === WEB_SEARCH_TOOL_NAME && !failed ? parseWebSearchDetails(result?.details) : undefined), [call.toolName, failed, result?.details]);
 
   let sheet: ReactNode;
   if (editDiff) {
@@ -405,6 +439,8 @@ export function ToolDetail({ call, result, live = false, head = true }: { call: 
     sheet = <SearchSheet call={call} args={args} result={result} failed={failed} icon={icon} expansionKey={key} />;
   } else if (asked) {
     sheet = <AskSheet asked={asked} />;
+  } else if (search) {
+    sheet = <WebSearchSheet search={search} head={head} />;
   } else {
     sheet = <CallSheet call={call} args={args} result={result} failed={failed} icon={icon} head={head} expansionKey={key} />;
   }

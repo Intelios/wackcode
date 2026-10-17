@@ -22,6 +22,7 @@ import { readOnlyGuard } from "./guard.js";
 import { SUBAGENT_PROMPT_SNIPPET, subagentDescription, subagentGuidelines } from "./prompt.js";
 import { normalizeSubagentParams, subagentParams } from "./schema.js";
 import { WEB_FETCH_TOOL_NAME } from "../web-fetch/index.js";
+import { WEB_SEARCH_TOOL_NAME } from "../web-search/index.js";
 import { SUBAGENT_JOB_TOOL_NAME, SUBAGENT_TOOL_LABEL, SUBAGENT_TOOL_NAME, resolveChildTools } from "./types.js";
 import { SubagentJobs } from "./jobs.js";
 import { BACKGROUND_SUBAGENT_ENTRY, type BackgroundSubagentCall } from "./state.js";
@@ -63,7 +64,7 @@ const JOB_PARAMS = {
 } as const;
 
 /** Background jobs own their signals, never an already-settled parent tool's callbacks. */
-export function createSubagentsExtension(host: BuiltinHost, currentMode: () => TaskMode, webFetch: InlineExtension, executionPolicy: () => ExecutionPolicyConfig = () => DEFAULT_EXECUTION_POLICY) {
+export function createSubagentsExtension(host: BuiltinHost, currentMode: () => TaskMode, webFetch: InlineExtension, executionPolicy: () => ExecutionPolicyConfig = () => DEFAULT_EXECUTION_POLICY, webSearch?: InlineExtension) {
   let config: SubagentRuntimeConfig | null = null;
   let pi: ExtensionAPI | undefined;
   let registeredKey: string | undefined;
@@ -136,7 +137,11 @@ export function createSubagentsExtension(host: BuiltinHost, currentMode: () => T
       const tools = resolveChildTools(spec.tools, spec.readOnly, available);
       const request: SubagentRunRequest = {
         toolCallId, index, spec, task: input.task, tools, signal: controller.signal,
-        extensions: [...(spec.readOnly ? [readOnlyGuard()] : []), ...(tools.includes(WEB_FETCH_TOOL_NAME) ? [webFetch] : [])],
+        extensions: [
+          ...(spec.readOnly ? [readOnlyGuard()] : []),
+          ...(tools.includes(WEB_FETCH_TOOL_NAME) ? [webFetch] : []),
+          ...(webSearch && tools.includes(WEB_SEARCH_TOOL_NAME) ? [webSearch] : []),
+        ],
         observer: {
           started: (model) => { result.model = model; updates.schedule(); },
           tool: (name, args) => { recordActivity(result, summarizeActivity(name, args)); updates.schedule(); },

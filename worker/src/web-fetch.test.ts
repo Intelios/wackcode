@@ -4,7 +4,7 @@ import { gzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { isBlockedAddress, isBlockedHostname } from "./builtin/web-fetch/address.js";
 import { convertBody } from "./builtin/web-fetch/convert.js";
-import { WebFetchError, fetchUrl, parseUrl } from "./builtin/web-fetch/fetch.js";
+import { WebFetchError, assertPublicUrl, fetchUrl, parseUrl } from "./builtin/web-fetch/fetch.js";
 import { createWebFetchExtension, formatPage, normalizeWebFetchParams } from "./builtin/web-fetch/index.js";
 
 describe("web_fetch address policy", () => {
@@ -145,6 +145,51 @@ describe("web_fetch requests", () => {
     await expect(tool.execute("call-2", { url: `${base}/image` }, undefined)).rejects.toThrow(/image\/png, which web_fetch can't read/);
     await expect(tool.execute("call-3", { url: "" }, undefined)).rejects.toThrow(/non-empty/);
     await expect(tool.execute("call-4", { url: `${base}/page`, offset: -1 }, undefined)).rejects.toThrow(/offset/);
+  });
+});
+
+describe("web_fetch through a search provider", () => {
+  function routed(read: (url: string) => Promise<unknown>, label: () => string | undefined = () => "DeepSeek") {
+    const reads: string[] = [];
+    const tool = registerTool(createWebFetchExtension({}, {
+      route: () => { const value = label(); return value ? { label: value } : undefined; },
+      read: async (url) => { reads.push(url); return read(url); },
+    }));
+    return { tool, reads };
+  }
+
+  it("checks the URL before the host sees it", async () => {
+    const { tool, reads } = routed(async () => ({ content: "never" }));
+    for (const url of ["http://localhost/", "http://10.1.2.3/", "http://[::1]/", "https://user:pw@93.184.215.14/", "file:///etc/hosts", "http://printer.local/"]) {
+      await expect(tool.execute("call", { url }, undefined)).rejects.toBeInstanceOf(WebFetchError);
+    }
+    expect(reads).toEqual([]);
+    await expect(assertPublicUrl("http://169.254.169.254/latest")).rejects.toThrow(/local or private/);
+    await expect(assertPublicUrl("https://93.184.215.14/x")).resolves.toBeInstanceOf(URL);
+  });
+
+  it("formats the provider's page like a local one, pages through it, and caches it apart", async () => {
+    let route = "DeepSeek";
+    const long = Array.from({ length: 4000 }, (_, index) => `line ${index} ${"x".repeat(40)}`).join("\n");
+    const { tool, reads } = routed(async (url) => ({ url, title: "Docs", content: long, truncated: false }), () => route);
+    const first = await tool.execute("call-1", { url: "https://93.184.215.14/docs" }, undefined);
+    expect(first.content[0].text).toContain("Title: Docs");
+    expect(first.content[0].text).toContain("Read via: DeepSeek");
+    expect(first.content[0].text).toMatch(/Use offset=\d+ to continue/);
+    expect(first.details).toMatchObject({ via: "DeepSeek", truncated: true, status: 200 });
+    const next = Number(/offset=(\d+)/.exec(first.content[0].text)![1]);
+    await tool.execute("call-2", { url: "https://93.184.215.14/docs", offset: next }, undefined);
+    expect(reads).toHaveLength(1);
+    // Another provider is a different page: the first one's copy isn't served for it.
+    route = "Tavily";
+    const other = await tool.execute("call-3", { url: "https://93.184.215.14/docs" }, undefined);
+    expect(other.content[0].text).toContain("Read via: Tavily");
+    expect(reads).toHaveLength(2);
+  });
+
+  it("reports the host's refusal and never falls back to a local fetch", async () => {
+    const { tool } = routed(async () => { throw new Error("DeepSeek couldn't get readable content from that page."); });
+    await expect(tool.execute("call", { url: "https://93.184.215.14/broken" }, undefined)).rejects.toThrow("DeepSeek couldn't get readable content from that page.");
   });
 });
 

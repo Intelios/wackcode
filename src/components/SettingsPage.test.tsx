@@ -19,7 +19,8 @@ vi.mock("../api", () => ({ api: {
   computerUseOpenSettings: vi.fn().mockResolvedValue(undefined),
   computerUseResetPermissions: vi.fn().mockResolvedValue(undefined),
   computerUseRelaunch: vi.fn().mockResolvedValue(undefined),
-  computerUseListApps: vi.fn().mockResolvedValue([{ name: "Notes", bundleId: "com.apple.Notes" }])
+  computerUseListApps: vi.fn().mockResolvedValue([{ name: "Notes", bundleId: "com.apple.Notes" }]),
+  webUsage: vi.fn().mockResolvedValue({ month: "2026-10", providers: [] })
 } }));
 
 vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ writeText: vi.fn().mockResolvedValue(undefined) }));
@@ -217,6 +218,7 @@ describe("SettingsPage sidebar navigation", () => {
       "Commands",
       "Memory",
       "Tools",
+      "Web",
       "Appearance",
       "Prompts"
     ]);
@@ -613,11 +615,11 @@ describe("SettingsPage sub-agents", () => {
     expect(toggle).toHaveAttribute("title", "Requires macOS 14 or later");
   });
 
-  it("switches Web Fetch through the tool denylist, keeping the rest of it", async () => {
+  it("switches Web Fetch on Settings › Web through the tool denylist, keeping the rest of it", async () => {
     const { rerender, props, subagents } = renderPage(false);
     props.onSetDisabledTools.mockResolvedValue(undefined);
     rerender(<SettingsPage {...noFavorites} {...props} subagents={subagents} disabledTools={["bash"]} />);
-    fireEvent.click(within(screen.getByRole("navigation", { name: "Settings sections" })).getByRole("button", { name: /Packages/ }));
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Settings sections" })).getByRole("button", { name: /^Web$/ }));
     fireEvent.click(await screen.findByRole("switch", { name: "Web Fetch" }));
     await waitFor(() => expect(props.onSetDisabledTools).toHaveBeenCalledWith(["bash", "web_fetch"]));
 

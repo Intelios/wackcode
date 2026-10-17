@@ -531,6 +531,38 @@ export interface InitCommand {
    * Mac supports it; live via `set_computer_use`. The host enforces it on every request anyway.
    */
   computerUse?: { enabled: boolean } | null;
+  /**
+   * Settings › Web: the active search provider and whether web_fetch reads pages through it.
+   * Null while search is off. Never a key: Rust makes the requests (`web_request`). Live via
+   * `set_web`, for every chat kind.
+   */
+  web?: WebRuntime | null;
+}
+
+export type WebSearchProviderKind = "deepseek" | "brave" | "tavily" | "searxng" | "custom";
+
+/** What a worker may offer from Settings › Web. Mirrors `web::runtime_payload` in Rust. */
+export interface WebRuntime {
+  search: { label: string; kind: WebSearchProviderKind };
+  /** Set while every web_fetch goes through the provider's own fetch endpoint. */
+  fetch: { label: string } | null;
+}
+
+/** One result in a `web_search` call's details, for the transcript's results card. */
+export interface WebSearchResultDetails {
+  title: string;
+  url: string;
+  host: string;
+  snippet?: string;
+  date?: string;
+}
+
+/** `web_search` tool details. Versioned: saved chats keep whatever shape they were written in. */
+export interface WebSearchDetails {
+  v: 1;
+  query: string;
+  provider: { name: string; kind: WebSearchProviderKind };
+  results: WebSearchResultDetails[];
 }
 
 export interface WorkerResources {
@@ -767,12 +799,15 @@ export type WorkerCommand =
   | { id: string; type: "set_commands"; commands: UserCommandsPayload }
   | { id: string; type: "set_memory"; memory: MemoryPayload | null }
   | { id: string; type: "set_computer_use"; enabled: boolean }
+  | { id: string; type: "set_web"; web: WebRuntime | null }
   | { id: string; type: "browser_response"; requestId: string; success: true; result: unknown }
   | { id: string; type: "browser_response"; requestId: string; success: false; error: string }
   | { id: string; type: "computer_response"; requestId: string; success: true; result: unknown }
   | { id: string; type: "computer_response"; requestId: string; success: false; error: string }
   | { id: string; type: "skill_creator_response"; requestId: string; success: true; result: unknown }
   | { id: string; type: "skill_creator_response"; requestId: string; success: false; error: string }
+  | { id: string; type: "web_response"; requestId: string; success: true; result: unknown }
+  | { id: string; type: "web_response"; requestId: string; success: false; error: string }
   /**
    * The original of an image a tool result returned (answered with an `ImageContent` or null),
    * for the transcript's lightbox. Bypasses the command queue once the session exists.
@@ -1055,6 +1090,9 @@ export type WorkerOutput =
   /** The skill-creator built-in asking its host to prepare/preview a managed draft. */
   | { type: "skill_creator_request"; taskId: string; requestId: string; request: Record<string, unknown> }
   | { type: "skill_creator_cancel"; taskId: string; requestId: string }
+  /** A web search or a routed page read; Rust calls the provider (`web.rs`). */
+  | { type: "web_request"; taskId: string; requestId: string; request: Record<string, unknown> }
+  | { type: "web_cancel"; taskId: string; requestId: string }
   | ({ type: "extension_ui_request"; taskId: string; requestId: string } & ExtensionUIRequest)
   | { type: "extension_ui_resolved"; taskId: string; requestId: string; cancelled: boolean }
   | { type: "extension_notice"; taskId: string; message: string; level: "info" | "warning" | "error" }

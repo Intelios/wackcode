@@ -100,6 +100,25 @@ export function parseUrl(raw: string): URL {
   return url;
 }
 
+/**
+ * The checks a local fetch makes, without fetching: used before a URL is handed to a search
+ * provider's fetch endpoint (Settings › Web), so a private address or internal name never
+ * leaves the Mac. Rust repeats them before sending.
+ */
+export async function assertPublicUrl(raw: string, isAllowed: (address: string) => boolean = (address) => !isBlockedAddress(address)): Promise<URL> {
+  const url = parseUrl(raw);
+  const hostname = url.hostname.replace(/^\[|\]$/g, "");
+  if (isIP(hostname)) {
+    if (!isAllowed(hostname)) throw new WebFetchError(privateMessage(hostname));
+    return url;
+  }
+  const addresses = await new Promise<LookupAddress[]>((resolve, reject) => {
+    dnsLookup(hostname, { all: true }, (error, found: LookupAddress[]) => (error ? reject(new WebFetchError(`Could not find ${hostname}.`)) : resolve(found)));
+  });
+  if (addresses.length === 0 || addresses.some((entry) => !isAllowed(entry.address))) throw new WebFetchError(privateMessage(hostname));
+  return url;
+}
+
 function privateMessage(host: string): string {
   return `${host} is a local or private network address. web_fetch only reads public web pages.`;
 }

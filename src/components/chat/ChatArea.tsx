@@ -100,10 +100,10 @@ export function ChatArea(props: ChatAreaProps) {
   const archived = task?.archived === true;
 
   return (
-    <div className={`chat-area ${task ? "dock" : "hero"}`} role={props.panel ? "tabpanel" : undefined} id={props.panel?.id} aria-labelledby={props.panel?.labelledBy}>
+    <div data-dynamic-space className={`chat-area ${task ? "dock" : "hero"}`} role={props.panel ? "tabpanel" : undefined} id={props.panel?.id} aria-labelledby={props.panel?.labelledBy}>
       <AnimatePresence initial={false}>
         {task ? (
-          <motion.div key={`chat:${task.id}`} className="chat-area-view"
+          <motion.div key={`chat:${task.id}`} data-dynamic-space className="chat-area-view"
             initial={reduce ? false : { opacity: 0 }} animate={{ opacity: 1 }}
             exit={{ opacity: 0, transition: { duration: reduce ? 0 : 0.16, ease: EASE } }} transition={{ duration: 0.3, ease: EASE }}>
             <motion.div initial={reduce ? false : { opacity: 0, y: -24 }} animate={{ opacity: 1, y: 0 }} transition={{ type: "spring", stiffness: 380, damping: 30, delay: 0.04 }}>

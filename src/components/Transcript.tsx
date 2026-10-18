@@ -872,7 +872,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
   if (!hasVisibleMessages(messages) && !partial && !activeRun) {
     return (
       <div className="transcript-zone">
-        <div className="conversation-scroll">
+        <div data-dynamic-space className="conversation-scroll">
           <div className="conversation-empty">
             <h2>{empty?.title ?? "What should we build?"}</h2>
             <p>{empty?.body ?? <>Describe the change, bug, or question — {assistantName} can read this project, run commands, and edit files.</>}</p>
@@ -887,7 +887,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
     <div className="transcript-zone">
       {/* `layoutScroll`: chips flying into an Explored head are measured in page space, so the
           scroller's offset must be part of the measurement or follow-scrolling skews the flight. */}
-      <motion.div className="conversation-scroll" ref={ref} onScroll={onScroll} onWheel={onWheel} layoutScroll>
+      <motion.div data-dynamic-space className="conversation-scroll" ref={ref} onScroll={onScroll} onWheel={onWheel} layoutScroll>
         <ThinkingExpansion.Provider value={expandedThinking}>
           <ExploreExpansion.Provider value={expandedGroups}>
           <ToolExpansion.Provider value={toolExpansions}>

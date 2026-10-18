@@ -6,6 +6,15 @@
      (Settings › Appearance) and sets them inline on <html>; these are the defaults for the first
      paint and must equal resolveTheme({}) (theme.test.ts). Never write a raw colour below :root
      for something the theme should recolour: add a token to TOKENS in theme.ts instead. */
+  --wc-dynamic-theme-1: #c2ee4a;
+  --wc-dynamic-theme-2: #5dd7af;
+  --wc-dynamic-theme-3: #c7c576;
+  --wc-dynamic-aurora-1: #59d6d2;
+  --wc-dynamic-aurora-2: #587fe8;
+  --wc-dynamic-aurora-3: #af78df;
+  --wc-dynamic-sunset-1: #ec829f;
+  --wc-dynamic-sunset-2: #e5af6a;
+  --wc-dynamic-sunset-3: #a37bd4;
   --wc-accent: #c2ee4a;
   --wc-accent-hover: #d0f664;
   --wc-accent-text: #cce98a;
@@ -104,6 +113,25 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 /* ── Shell ─────────────────────────────────────────── */
 /* isolation: the backdrop sits at z-index -1 inside the shell, behind every panel. */
 .app-shell { position: relative; isolation: isolate; display: flex; width: 100%; height: 100%; background: var(--wc-shell); }
+
+/* Dynamic backgrounds: only transforms/opacity change on prepainted blooms. Canvas glyphs
+   share the same bounded ink layer. The veil protects unboxed transcript prose at 100%. */
+.dynamic-backdrop { position: absolute; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; background: var(--bg); }
+.dynamic-ink { position: absolute; inset: 0; opacity: var(--wc-dynamic-strength); }
+.dynamic-ink canvas { display: block; width: 100%; height: 100%; }
+.dynamic-blooms { position: absolute; inset: -12%; overflow: hidden; }
+.dynamic-bloom { position: absolute; width: 75%; height: 90%; border-radius: 50%; will-change: transform, opacity; }
+.dynamic-bloom.bloom-1 { left: -8%; top: 2%; background: radial-gradient(ellipse, var(--wc-dynamic-paint-1), transparent 68%); }
+.dynamic-bloom.bloom-2 { right: -8%; top: -12%; background: radial-gradient(ellipse, var(--wc-dynamic-paint-2), transparent 68%); }
+.dynamic-bloom.bloom-3 { left: 18%; bottom: -25%; background: radial-gradient(ellipse, var(--wc-dynamic-paint-3), transparent 68%); }
+.dynamic-veil { position: absolute; inset: 0; background: var(--bg); opacity: .93; transition: opacity 1s var(--ease); }
+.dynamic-backdrop[data-scene="hero"] .dynamic-veil { opacity: .65; }
+/* Keep the hero's small secondary text clear without hiding the field around its edges. */
+.dynamic-backdrop[data-scene="hero"]::after { content: ""; position: absolute; inset: 0; background: radial-gradient(ellipse at 60% 45%, color-mix(in srgb, var(--bg) 85%, transparent), transparent 70%); }
+@media (prefers-reduced-motion: reduce) {
+  .dynamic-veil { transition: none; }
+  .dynamic-bloom { will-change: auto; }
+}
 
 /* Image backdrop (Backdrop.tsx). Two stacked copies crossfade on opacity only, which is cheap:
    a vivid hero copy that fades out above the composer on the new-chat screen, and a blurred,
@@ -4784,6 +4812,17 @@ html[data-force-reduced-motion] *::after {
   backdrop-filter: blur(2px);
 }
 .appearance-tile.selected .art-window.glassy { border-color: var(--wc-accent-ring); }
+
+/* Dynamic choices show the material, with an explicit badge only on pointer-reactive styles. */
+.art-colour-drift { inset: -20%; background: radial-gradient(ellipse at 25% 60%, var(--wc-dynamic-theme-1), transparent 60%), radial-gradient(ellipse at 80% 30%, var(--wc-dynamic-theme-2), transparent 60%), radial-gradient(ellipse at 65% 80%, var(--wc-dynamic-theme-3), transparent 60%); opacity: .55; transform: rotate(-12deg); }
+.art-dynamic-orbit { inset: 13px 32%; border: 1px dotted var(--wc-accent-text); border-radius: 50%; transform: rotate(-22deg); }
+.dynamic-style-art { height: 86px; }
+.art-glyph-flow { inset: -4px 0; white-space: pre; font: 12px/20px "SFMono-Regular", Consolas, monospace; letter-spacing: 3px; color: var(--wc-accent); text-align: center; transform: rotate(-8deg) scale(1.1); mask-image: radial-gradient(ellipse at 50% 50%, black 10%, transparent 75%); }
+.dynamic-reactive-tag { margin-left: 8px; padding: 3px 6px; font-size: 9px; font-weight: 500; letter-spacing: .3px; color: var(--wc-accent-text); border: 1px solid var(--wc-accent-ring); border-radius: var(--wc-radius-pill); background: var(--wc-accent-wash); }
+.dynamic-palette-swatch { display: inline-block; width: 12px; height: 12px; margin-right: 5px; vertical-align: -2px; border-radius: 50%; }
+.dynamic-palette-swatch.palette-theme { background: linear-gradient(135deg, var(--wc-dynamic-theme-1), var(--wc-dynamic-theme-2), var(--wc-dynamic-theme-3)); }
+.dynamic-palette-swatch.palette-aurora { background: linear-gradient(135deg, var(--wc-dynamic-aurora-1), var(--wc-dynamic-aurora-2), var(--wc-dynamic-aurora-3)); }
+.dynamic-palette-swatch.palette-sunset { background: linear-gradient(135deg, var(--wc-dynamic-sunset-1), var(--wc-dynamic-sunset-2), var(--wc-dynamic-sunset-3)); }
 
 /* .tooltip-wrap is inline-flex for inline triggers; as a grid cell it has to stretch, or the
    wrapped tile (Liquid Glass before macOS 26) would shrink-wrap and mismatch its neighbours. */

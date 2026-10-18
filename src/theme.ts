@@ -28,6 +28,9 @@ export const DEFAULT_APPEARANCE: AppearanceConfig = {
   groupExploration: true,
   collapseCompletedWork: true,
   backdrop: "solid",
+  dynamicStyle: "colourDrift",
+  dynamicPalette: "theme",
+  dynamicIntensity: 50,
   backgroundImages: [],
   shuffleBackgrounds: false,
   imageDim: 65,
@@ -157,7 +160,7 @@ export function contrast(first: string, second: string): number {
  *   `ref` is pre-harmonised against the default accent, which is why the lean is relative to
  *   `DEFAULT_ACCENT_LCH` and the default theme reproduces the refs exactly.
  */
-type Recipe = "surface" | "text" | "accent" | "on-accent" | "syntax";
+type Recipe = "decorative" | "surface" | "text" | "accent" | "on-accent" | "syntax";
 
 /** How far syntax hues rotate towards the accent (0 = no lean, 1 = collapse onto it). */
 const SYNTAX_HUE_LEAN = 0.18;
@@ -166,6 +169,15 @@ const SYNTAX_CHROMA_FLOOR = 0.35;
 
 /** Every themeable token, with the hex it had before theming existed. */
 export const TOKENS: Record<string, { recipe: Recipe; ref: string }> = {
+  "--wc-dynamic-theme-1": { recipe: "accent", ref: "#c2ee4a" },
+  "--wc-dynamic-theme-2": { recipe: "accent", ref: "#5dd7af" },
+  "--wc-dynamic-theme-3": { recipe: "accent", ref: "#c7c576" },
+  "--wc-dynamic-aurora-1": { recipe: "decorative", ref: "#59d6d2" },
+  "--wc-dynamic-aurora-2": { recipe: "decorative", ref: "#587fe8" },
+  "--wc-dynamic-aurora-3": { recipe: "decorative", ref: "#af78df" },
+  "--wc-dynamic-sunset-1": { recipe: "decorative", ref: "#ec829f" },
+  "--wc-dynamic-sunset-2": { recipe: "decorative", ref: "#e5af6a" },
+  "--wc-dynamic-sunset-3": { recipe: "decorative", ref: "#a37bd4" },
   "--bg": { recipe: "surface", ref: "#111310" },
   "--wc-sidebar": { recipe: "surface", ref: "#0d0f0c" },
   "--wc-well": { recipe: "surface", ref: "#0c0e0b" },
@@ -255,6 +267,7 @@ function angleDelta(from: number, to: number): number {
 }
 
 function derive(recipe: Recipe, ref: Lch, background: Lch, accent: Lch): Lch {
+  if (recipe === "decorative") return ref;
   if (recipe === "syntax") {
     const chromaScale = SYNTAX_CHROMA_FLOOR + (1 - SYNTAX_CHROMA_FLOOR) * Math.min(1, Math.max(0, accent.c / DEFAULT_ACCENT_LCH.c));
     return {
@@ -390,7 +403,7 @@ function shellVariables(backdrop: BackdropMode, solid: Record<string, string>, g
     const [red, green, blue] = parseHex(solid[name])!;
     return `rgb(${red} ${green} ${blue} / ${Math.round(Math.min(1, Math.max(0, amount)) * 100)}%)`;
   };
-  if (backdrop === "image") {
+  if (backdrop === "image" || backdrop === "dynamic") {
     // The image is already dimmed by the backdrop layer; these only separate the panels.
     return {
       "--wc-shell": "transparent",

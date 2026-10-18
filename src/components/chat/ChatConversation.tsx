@@ -139,9 +139,9 @@ export function ChatConversation({ task, messages, partial, running, compaction,
 
   return (
     <div className="chat-scroll-zone">
-      <div className="chat-scroll" ref={ref} onScroll={onScroll} onWheel={onWheel}>
+      <div data-dynamic-space className="chat-scroll" ref={ref} onScroll={onScroll} onWheel={onWheel}>
         <VisualCardScope.Provider value={visualScope}>
-        <div className="chat-thread">
+        <div data-dynamic-space className="chat-thread">
           {entries.map((entry, index) => {
             if (entry.type === "divider") return <TimeDivider key={entry.key} label={dividerLabel(entry.at)} />;
             if (entry.type === "compaction") return <CompactionNote key={entry.key} message={entry.message} />;

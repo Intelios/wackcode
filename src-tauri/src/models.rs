@@ -539,6 +539,13 @@ pub struct AppearanceConfig {
     pub background: Option<String>,
     #[serde(default)]
     pub backdrop: BackdropMode,
+    /// Renderer-only decoration; retained when another backdrop is selected.
+    #[serde(default)]
+    pub dynamic_style: DynamicBackgroundStyle,
+    #[serde(default)]
+    pub dynamic_palette: DynamicBackgroundPalette,
+    #[serde(default = "default_dynamic_intensity")]
+    pub dynamic_intensity: u8,
     /// The image currently shown: a name inside `<app data>/backgrounds/` and one of
     /// `background_images`. Set only by Rust (the picker, selection, shuffle), never the renderer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -602,7 +609,27 @@ pub enum BackdropMode {
     Solid,
     Image,
     Glass,
+    Dynamic,
 }
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DynamicBackgroundStyle {
+    #[default]
+    ColourDrift,
+    GlyphFlow,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DynamicBackgroundPalette {
+    #[default]
+    Theme,
+    Aurora,
+    Sunset,
+}
+
+fn default_dynamic_intensity() -> u8 { 50 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -653,6 +680,9 @@ impl Default for AppearanceConfig {
             accent: None,
             background: None,
             backdrop: BackdropMode::Solid,
+            dynamic_style: DynamicBackgroundStyle::ColourDrift,
+            dynamic_palette: DynamicBackgroundPalette::Theme,
+            dynamic_intensity: default_dynamic_intensity(),
             background_image: None,
             background_images: Vec::new(),
             shuffle_backgrounds: false,

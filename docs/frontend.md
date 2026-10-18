@@ -258,3 +258,20 @@ stored evidence. An attached chip is inspectable/removable; drawing layers end a
 - Keep `dragDropEnabled: false`, or native handling swallows the composer's attachment drops.
 - The title bar is an overlay: keep the `data-tauri-drag-region` strips working when changing headers or the sidebar.
 - Closing the window hides it; the app keeps running behind the menu bar duck until ⌘Q.
+
+## Dynamic backgrounds
+
+`DynamicBackdrop` is one persistent, aria-hidden layer under the app shell in both areas.
+Appearance stores `dynamicStyle`, `dynamicPalette` and `dynamicIntensity` through the existing
+appearance command; these never reach workers. `backgroundPhase` derives idle, thinking,
+answering, working or child-only activity from the selected chat. Settings and pending user
+questions use idle. App dispatches one imperative pulse at a direct send (including draft
+creation and retries); queue insertion and navigation do not pulse.
+
+Only exact elements marked `data-dynamic-space` accept decorative ripples; descendants,
+controls, text and titlebar drag strips do not. The canvas never receives pointer input.
+App subscribes to native window focus through `api`; the component handles document visibility.
+Its bounded 30 fps loop writes only canvas pixels and bloom transforms/opacity, with cached
+colours/glyphs. A hidden/unfocused window or zero intensity cancels it. Reduce Motion draws
+one still composition and ignores pulses. Theme/style changes rebuild the paint resources;
+activity and scene changes retain them. The background-colour veil protects unboxed text.

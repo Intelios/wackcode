@@ -1,3 +1,4 @@
+import { useImperativeHandle, type Ref } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppData, BrowserState, NormalizedMessage, ProviderRecord, SessionSnapshot, TaskRecord } from "./types";
@@ -12,6 +13,8 @@ vi.mock("@tauri-apps/api/core", () => ({ convertFileSrc: (value: string) => valu
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn().mockResolvedValue(null) }));
 vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ readText: vi.fn(), writeText: vi.fn() }));
 vi.mock("./api", () => ({ api: {
+  windowFocused: vi.fn().mockResolvedValue(true), onWindowFocus: vi.fn().mockResolvedValue(() => {}),
+  queueMessage: vi.fn().mockResolvedValue(undefined),
   bootstrap: vi.fn(), refreshSubscriptionModels: vi.fn().mockResolvedValue([]),
   takeMenuNavigation: vi.fn().mockResolvedValue(null), setChatTabMenu: vi.fn().mockResolvedValue(undefined),
   computerUseCursorAppearance: vi.fn().mockResolvedValue(undefined), openTask: vi.fn().mockResolvedValue(undefined),
@@ -26,8 +29,14 @@ vi.mock("./api", () => ({ api: {
 vi.mock("./components/SettingsPage", () => ({ SettingsPage: (props: { appearance: typeof DEFAULT_APPEARANCE; toolCatalog: { name: string }[]; onSetAppearance: (value: typeof DEFAULT_APPEARANCE) => void; onClose: () => void }) => <>
   <output aria-label="Tool catalogue">{props.toolCatalog.map((tool) => tool.name).join(",")}</output>
   <button onClick={() => props.onSetAppearance({ ...props.appearance, chatTabs: !props.appearance.chatTabs })}>Toggle tabs</button>
+  <button onClick={() => { Promise.resolve(props.onSetAppearance({ ...props.appearance, dynamicStyle: "glyphFlow" })).catch(() => undefined); }}>Use Glyph Flow</button>
   <button onClick={props.onClose}>Close settings</button>
 </> }));
+const dynamic = vi.hoisted(() => ({ pulse: vi.fn(), ripple: vi.fn() }));
+vi.mock("./components/DynamicBackdrop", () => ({ DynamicBackdrop: (props: { ref: Ref<typeof dynamic>; phase: string; style: string }) => {
+  useImperativeHandle(props.ref, () => dynamic, []);
+  return <output aria-label="Dynamic background">{props.style}:{props.phase}</output>;
+} }));
 const terminalAttach = vi.hoisted(() => ({ current: undefined as undefined | ((text: string) => void) }));
 vi.mock("./components/TerminalPanel", () => ({ TerminalPanel: ({ taskId, onAttach }: { taskId: string; onAttach?: (text: string) => void }) => {
   terminalAttach.current = onAttach;
@@ -42,10 +51,10 @@ const provider: ProviderRecord = {
 const task = (id: string): TaskRecord => ({ id, projectId: null, name: `Chat ${id}`, workspacePath: `/tmp/${id}`, worktreePath: null,
   branch: null, usesWorktree: false, providerId: "p", modelId: "first", thinkingLevel: "off", sessionFile: null, status: "idle", mode: "build",
   archived: false, archivedAt: null, lastError: null, kind: "code", lastActivityAt: null, createdAt: "2026-01-01", updatedAt: "2026-01-01", autoTitleEligible: false, autoTitleAttemptId: null });
-function bootstrap(enabled = true) {
+function bootstrap(enabled = true, dynamic = false) {
   const data: AppData = { version: 1, providers: [provider], favoriteModels: [], projects: [], tasks: [task("a"), task("b")], diffComments: {},
     toolConfig: { disabled: [] }, toolCatalog: [], packages: [], subagents: { enabled: false, trigger: "on_request", maxConcurrency: 4, agents: [] },
-    autoTitle: { enabled: false, providerId: null, modelId: null }, appearance: { ...DEFAULT_APPEARANCE, chatTabs: enabled }, prompts: {}, mcp: { servers: [] } };
+    autoTitle: { enabled: false, providerId: null, modelId: null }, appearance: { ...DEFAULT_APPEARANCE, chatTabs: enabled, backdrop: dynamic ? "dynamic" : "solid" }, prompts: {}, mcp: { servers: [] } };
   vi.mocked(api.bootstrap).mockResolvedValue({ data, appDataPath: "/tmp", glassSupported: false, computerUseSupported: false, devBuild: false });
   return render(<App />);
 }
@@ -556,5 +565,37 @@ describe("Changes after Git Mode removal", () => {
     expect(screen.getByRole("complementary", { name: "Changes" })).toBeInTheDocument();
     expect(editor).toHaveValue("Draft survives");
     expect(screen.getByRole("button", { name: "Close changes panel" })).toBeInTheDocument();
+  });
+});
+
+
+describe("App dynamic background wiring", () => {
+  it("pulses on dispatch, not queued messages or chat navigation", async () => {
+    bootstrap(true, true);
+    await screen.findByRole("button", { name: "Settings" });
+    chat("a");
+    type("hello");
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(api.prompt).toHaveBeenCalled());
+    expect(dynamic.pulse).toHaveBeenCalledOnce();
+    type("queued hello");
+    fireEvent.keyDown(input(), { key: "Enter" });
+    await waitFor(() => expect(api.queueMessage).toHaveBeenCalled());
+    expect(dynamic.pulse).toHaveBeenCalledOnce();
+    chat("b");
+    expect(screen.getByLabelText("Dynamic background")).toHaveTextContent("idle");
+    chat("a");
+    expect(dynamic.pulse).toHaveBeenCalledOnce();
+  });
+  it("restores the persisted appearance when a save fails", async () => {
+    bootstrap(true, true);
+    await screen.findByRole("button", { name: "Settings" });
+    const saving = deferred<typeof DEFAULT_APPEARANCE>();
+    vi.mocked(api.setAppearanceConfig).mockReturnValueOnce(saving.promise);
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(screen.getByText("Use Glyph Flow"));
+    expect(screen.getByLabelText("Dynamic background")).toHaveTextContent("glyphFlow");
+    await act(async () => saving.reject(new Error("Could not save")));
+    expect(screen.getByLabelText("Dynamic background")).toHaveTextContent("colourDrift");
   });
 });

@@ -195,3 +195,24 @@ describe("visual replies' theme", () => {
     ]);
   });
 });
+
+
+describe("dynamic background palettes", () => {
+  it("keeps the shell translucent and content solid", () => {
+    const solid = resolveTheme({}).variables;
+    const dynamic = resolveTheme({ backdrop: "dynamic" }).variables;
+    expect(dynamic["--wc-shell"]).toBe("transparent");
+    expect(dynamic["--wc-sidebar"]).toContain("50%");
+    for (const token of ["--wc-composer", "--surface", "--wc-menu", "--wc-well"]) expect(dynamic[token]).toBe(solid[token]);
+  });
+  it("preserves monochrome and separates curated palettes from the accent", () => {
+    const mono = resolveTheme({ accent: "#e6e6e6", background: "#111111" }).variables;
+    const other = resolveTheme({ accent: "#ff8fb8" }).variables;
+    for (let n = 1; n <= 3; n++) {
+      const channels = parseHex(mono[`--wc-dynamic-theme-${n}`])!;
+      expect(Math.max(...channels) - Math.min(...channels)).toBeLessThanOrEqual(1);
+      expect(mono[`--wc-dynamic-aurora-${n}`]).toBe(other[`--wc-dynamic-aurora-${n}`]);
+      expect(mono[`--wc-dynamic-sunset-${n}`]).toBe(other[`--wc-dynamic-sunset-${n}`]);
+    }
+  });
+});

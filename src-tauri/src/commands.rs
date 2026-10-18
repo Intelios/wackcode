@@ -5258,6 +5258,13 @@ fn validate_appearance_config(
         accent: colour("accent", input.accent)?,
         background: colour("background", input.background)?,
         backdrop: input.backdrop,
+        dynamic_style: input.dynamic_style,
+        dynamic_palette: input.dynamic_palette,
+        dynamic_intensity: if input.dynamic_intensity <= 100 {
+            input.dynamic_intensity
+        } else {
+            return Err("Dynamic intensity must be between 0 and 100%.".into());
+        },
         background_image: current.background_image.clone(),
         background_images,
         shuffle_backgrounds: input.shuffle_backgrounds,
@@ -5689,6 +5696,34 @@ mod tests {
         assert_eq!(command_opening(None, "just args"), "just args");
         assert_eq!(command_opening(Some("   "), "args"), "args");
         assert_eq!(command_opening(None, ""), "");
+    }
+
+    #[test]
+    fn dynamic_appearance_defaults_validates_and_survives_mode_switches() {
+        use crate::models::{DynamicBackgroundPalette, DynamicBackgroundStyle};
+        let old: AppearanceConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.backdrop, BackdropMode::Solid);
+        assert_eq!(old.dynamic_style, DynamicBackgroundStyle::ColourDrift);
+        assert_eq!(old.dynamic_palette, DynamicBackgroundPalette::Theme);
+        assert_eq!(old.dynamic_intensity, 50);
+        let mut input = AppearanceConfig {
+            backdrop: BackdropMode::Dynamic,
+            dynamic_style: DynamicBackgroundStyle::GlyphFlow,
+            dynamic_palette: DynamicBackgroundPalette::Sunset,
+            dynamic_intensity: 100,
+            ..old.clone()
+        };
+        for backdrop in [BackdropMode::Dynamic, BackdropMode::Solid, BackdropMode::Glass] {
+            input.backdrop = backdrop;
+            let saved = validate_appearance_config(input.clone(), &old, true).unwrap();
+            assert_eq!(saved, input);
+            assert_eq!(serde_json::from_str::<AppearanceConfig>(&serde_json::to_string(&saved).unwrap()).unwrap(), saved);
+        }
+        input.backdrop = BackdropMode::Dynamic;
+        input.dynamic_intensity = 0;
+        assert!(validate_appearance_config(input.clone(), &old, false).is_ok());
+        input.dynamic_intensity = 101;
+        assert!(validate_appearance_config(input, &old, false).unwrap_err().contains("0 and 100"));
     }
 
     #[test]

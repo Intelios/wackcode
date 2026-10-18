@@ -53,6 +53,25 @@ const server = createServer(async (request, response) => {
     process.stdout.write("slow request started\n");
     return;
   }
+  // A long, tool-free turn for dynamic backgrounds and streaming/scroll performance checks.
+  // Stays entirely on localhost and can be stopped at any time from either area.
+  if (textOf(latestUser?.content).trim().toLowerCase() === "dynamic background fixture") {
+    const chunk = (delta, finish_reason = null) => send(response, {
+      id: "fixture-dynamic", object: "chat.completion.chunk", created: 1, model: body.model,
+      choices: [{ index: 0, delta, finish_reason }]
+    });
+    chunk({ role: "assistant" });
+    for (let n = 0; n < 16 && !response.destroyed; n++) {
+      chunk({ reasoning_content: "Considering the shapes, motion, and contrast. " });
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    for (let n = 0; n < 80 && !response.destroyed; n++) {
+      chunk({ content: `Paragraph ${n + 1}: A quiet background moves behind this reply while the words stay readable. You can scroll, type a draft, or switch chats as this local fixture continues.\n\n` });
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    if (!response.destroyed) { chunk({}, "stop"); response.end("data: [DONE]\n\n"); }
+    return;
+  }
   const hasToolResult = messages.at(-1)?.role === "tool";
   const prompt = textOf(latestUser?.content);
   const background = prompt.toLowerCase().includes("background fixture");

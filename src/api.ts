@@ -1,4 +1,5 @@
 import type { BrowserContextAttachment, BrowserViewportPreset, RestoredPrompt } from "./types";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   AutoTitleConfig,
@@ -72,6 +73,8 @@ import type {
 } from "./types";
 
 export const api = {
+  windowFocused: () => getCurrentWindow().isFocused(),
+  onWindowFocus: (changed: (focused: boolean) => void) => getCurrentWindow().onFocusChanged((event) => changed(event.payload)),
   bootstrap: () => invoke<BootstrapPayload>("bootstrap"),
   /** Settings › About: versions, build flavour and local counts, in one read. */
   appInfo: () => invoke<AppInfo>("app_info"),

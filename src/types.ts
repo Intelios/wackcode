@@ -664,6 +664,10 @@ export interface AppearanceConfig {
   /** `#rrggbb` as displayed (already darkened for readability); absent is the default. */
   background?: string | null;
   backdrop: BackdropMode;
+  /** Cosmetic only: never sent to the worker. Retained across backdrop changes. */
+  dynamicStyle: DynamicBackgroundStyle;
+  dynamicPalette: DynamicBackgroundPalette;
+  dynamicIntensity: number;
   /** The image currently shown: a name in `backgroundImages`. Only the image commands change it. */
   backgroundImage?: string | null;
   /** Every background the user saved, each with its own crop. Entries are created in Rust. */
@@ -716,7 +720,9 @@ export interface BackgroundImageEntry {
 }
 
 /** What sits behind the app's panels. Exclusive: glass shows the desktop an image would cover. */
-export type BackdropMode = "solid" | "image" | "glass";
+export type BackdropMode = "solid" | "image" | "glass" | "dynamic";
+export type DynamicBackgroundStyle = "colourDrift" | "glyphFlow";
+export type DynamicBackgroundPalette = "theme" | "aurora" | "sunset";
 export type GlassStyle = "frosted" | "clear";
 /** How the thinking timer counts, in Settings → Appearance. Mirrors the Rust enum. */
 export type ThinkingTimerPrecision = "second" | "tenth";

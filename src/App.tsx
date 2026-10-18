@@ -34,6 +34,8 @@ import { useModelFavorites } from "./hooks/useModelFavorites";
 import { DEFAULT_APPEARANCE, applyTheme, cacheTheme } from "./theme";
 import { computerCursorAppearance } from "./computer-cursor";
 import { AssistantNameContext, agentName } from "./agentName";
+import { DynamicBackdrop, type DynamicBackdropHandle } from "./components/DynamicBackdrop";
+import { backgroundPhase, isBackgroundClick } from "./dynamic-background";
 import { Backdrop } from "./components/Backdrop";
 import type {
   AppData,
@@ -368,6 +370,28 @@ export default function App() {
   const mentionRequest = useRef(0);
   /** Mid first-send choreography: the hero is exiting while this message rides the composer down. */
   const [transitioning, setTransitioning] = useState<{ message: string; taskId?: string; fromSelectedId?: string; composerKey: string }>();
+
+  const dynamicBackdrop = useRef<DynamicBackdropHandle>(null);
+  const [windowFocused, setWindowFocused] = useState(false);
+  const dynamicEnabled = data.appearance.backdrop === "dynamic";
+  useEffect(() => {
+    if (!dynamicEnabled) return;
+    setWindowFocused(false);
+    let disposed = false;
+    let revision = 0;
+    let unlisten: (() => void) | undefined;
+    void api.onWindowFocus((focused) => {
+      revision++;
+      if (!disposed) setWindowFocused(focused);
+    }).then(async (stop) => {
+      if (disposed) { stop(); return; }
+      unlisten = stop;
+      const initialRevision = revision;
+      const focused = await api.windowFocused();
+      if (!disposed && revision === initialRevision) setWindowFocused(focused);
+    }).catch(() => { /* Stay still if native focus cannot be established. */ });
+    return () => { disposed = true; unlisten?.(); };
+  }, [dynamicEnabled]);
 
   const selectedTask = data.tasks.find((task) => task.id === selectedTaskId);
   /** The chats `@` may reference here: Chat mode chats only in the Chat area, this chat excluded.
@@ -1964,6 +1988,7 @@ export default function App() {
       const stillHere = () => composerKeyRef.current === key;
       const clearHandoff = () => setTransitioning((current) => current?.composerKey === key ? undefined : current);
       if (origin) tabs.update((state) => patchTab(state, origin, { sending: true, error: undefined }));
+      dynamicBackdrop.current?.pulse();
       setTransitioning({ message, composerKey: key });
       let task: TaskRecord | undefined;
       const pendingSlash = draftPreparations.current.get(key);
@@ -2046,6 +2071,7 @@ export default function App() {
       }
     }
     const startedAt = Date.now();
+    if (task.id === selectedTaskRef.current) dynamicBackdrop.current?.pulse();
     const ownMode = task.id === selectedTask?.id ? currentMode : runtimes[task.id]?.planState?.mode ?? task.mode;
     patchTask(task.id, { status: "running", lastError: null });
     patchRuntime(task.id, { error: undefined, activity: "starting", activeRun: { startedAt }, pendingMessage: pendingEchoMessage(sent, images, startedAt) });
@@ -2302,6 +2328,7 @@ export default function App() {
     if (!task || !entryId) return false;
     const send = async (restore?: { checkpointId: string; paths: string[] }) => {
       const startedAt = Date.now();
+      if (task.id === selectedTaskRef.current) dynamicBackdrop.current?.pulse();
       patchTask(task.id, { status: "running", lastError: null });
       patchRuntime(task.id, { error: undefined, activity: "starting", activeRun: { startedAt }, lastRestore: undefined });
       try {
@@ -2912,7 +2939,19 @@ export default function App() {
         { label: "Settings…", icon: <Icon name="settings" />, hint: "⌘,", onSelect: openSettings }
       ]}
     >
-    <div className={`app-shell${rebuilding ? " rebuild" : ""}${browserExpanded && panelView?.kind === "browser" ? " browser-expanded" : ""}${showChatTabBar ? " browser-has-tabs" : ""}`} data-area={area}>
+    <div className={`app-shell${rebuilding ? " rebuild" : ""}${browserExpanded && panelView?.kind === "browser" ? " browser-expanded" : ""}${showChatTabBar ? " browser-has-tabs" : ""}`} data-area={area} data-dynamic-space onClickCapture={(event) => {
+      if (event.button === 0 && !settingsOpen && !confirm && !restoreDialog && !subscriptionLogin && isBackgroundClick(event.target)) {
+        dynamicBackdrop.current?.ripple(event.clientX, event.clientY);
+      }
+    }}>
+      {dynamicEnabled && <DynamicBackdrop ref={dynamicBackdrop}
+        style={data.appearance.dynamicStyle} palette={data.appearance.dynamicPalette}
+        intensity={data.appearance.dynamicIntensity} accent={data.appearance.accent} background={data.appearance.background}
+        scene={settingsOpen || selectedTask ? "chat" : "hero"} focused={windowFocused}
+        phase={backgroundPhase({ status: selectedTask?.status, runtime,
+          sending: transitioning?.composerKey === composerDraftKey,
+          waiting: Boolean(selectedTask && pendingDialogTaskIds.has(selectedTask.id)), settings: settingsOpen })}
+      />}
       {data.appearance.backdrop === "image" && (
         <Backdrop
           imageUrl={backgroundImageUrl}
@@ -3007,7 +3046,7 @@ export default function App() {
         onDeleteAllArchived={deleteAllArchived}
       />
 
-      <main className={`workspace${showChatTabBar ? " has-chat-tabs" : ""}`}>
+      <main data-dynamic-space className={`workspace${showChatTabBar ? " has-chat-tabs" : ""}`}>
         {showChatTabBar && <ChatTabBar tabs={tabItems} activeId={activeTab?.id} canReopen={areaCanReopen}
           {...tabHandlers} />}
         {tabsEnabled && !selectedTask && activeTab?.error && <div className="error-banner workspace-error" role="alert"><span>{activeTab.error}</span></div>}

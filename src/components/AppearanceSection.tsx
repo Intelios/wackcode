@@ -28,7 +28,8 @@ interface AppearanceSectionProps {
 const BACKDROPS: { value: BackdropMode; label: string; note: string }[] = [
   { value: "solid", label: "Solid", note: "One flat colour" },
   { value: "image", label: "Image", note: "A picture of your own" },
-  { value: "glass", label: "Liquid Glass", note: "The desktop shows through" }
+  { value: "glass", label: "Liquid Glass", note: "The desktop shows through" },
+  { value: "dynamic", label: "Dynamic Backgrounds", note: "Motion that follows your chat" }
 ];
 
 const GLASS_STYLES: { value: GlassStyle; label: string; note: string }[] = [
@@ -241,6 +242,7 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrlFo
                         <span className="art-window" />
                       </>
                     )}
+                    {option.value === "dynamic" && <><span className="art-colour-drift" /><span className="art-dynamic-orbit" /></>}
                     {option.value === "glass" && (
                       <>
                         <span className="art-desk" />
@@ -257,6 +259,48 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrlFo
               return unavailable ? <Tooltip key={option.value} label="Liquid Glass needs macOS 26 or later">{tile}</Tooltip> : tile;
             })}
           </div>
+
+          {config.backdrop === "dynamic" && (
+            <div className="appearance-subgroup">
+              <div className="appearance-tiles" role="radiogroup" aria-label="Dynamic background style">
+                {([
+                  { id: "colourDrift", name: "Colour Drift", note: "Soft colour blooms gather energy as your chat works." },
+                  { id: "glyphFlow", name: "Glyph Flow", note: "Click empty background to ripple through drifting characters." }
+                ] as const).map((style) => (
+                  <button type="button" role="radio" aria-checked={config.dynamicStyle === style.id}
+                    aria-label={style.name} key={style.id} disabled={busy}
+                    className={`appearance-tile ${config.dynamicStyle === style.id ? "selected" : ""}`}
+                    onClick={() => void save({ ...config, dynamicStyle: style.id })}>
+                    <span className="tile-art dynamic-style-art" aria-hidden="true">
+                      {style.id === "colourDrift" ? <span className="art-colour-drift" /> : <span className="art-glyph-flow">{'. : + x 0 1 * . : + x 0 1 *\n : + x 0 1 * . : + x 0 1 *\n. : + x 0 1 * . : + x 0 1 *\n : + x 0 1 * . : + x 0 1 *'}</span>}
+                    </span>
+                    <span className="appearance-tile-text">
+                      <span className="appearance-tile-label">{style.name}{style.id === "glyphFlow" && <span className="dynamic-reactive-tag">Reactive</span>}</span>
+                      <span className="appearance-tile-note">{style.note}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <div className="tool-setting appearance-setting">
+                <div className="tool-setting-text"><span className="tool-setting-name">Palette</span>
+                  <span className="tool-setting-description">Follow your accent, or give the background its own colours.</span></div>
+                <div className="segmented" role="radiogroup" aria-label="Dynamic background palette">
+                  {(["theme", "aurora", "sunset"] as const).map((palette) => <button key={palette} type="button" role="radio"
+                    aria-checked={config.dynamicPalette === palette} disabled={busy}
+                    className={`segmented-option ${config.dynamicPalette === palette ? "selected" : ""}`}
+                    onClick={() => void save({ ...config, dynamicPalette: palette })}>
+                    <span className={`dynamic-palette-swatch palette-${palette}`} aria-hidden="true" />
+                    {palette === "theme" ? "Theme" : palette === "aurora" ? "Aurora" : "Sunset"}
+                  </button>)}
+                </div>
+              </div>
+              <SliderRow label="Intensity" description="Expressive on the welcome screen, softer behind conversations. Zero turns the effect off."
+                value={config.dynamicIntensity} max={100} unit="%" disabled={busy}
+                onPreview={(dynamicIntensity) => onPreview({ ...config, dynamicIntensity })}
+                onCommit={(dynamicIntensity) => void save({ ...config, dynamicIntensity })} />
+              <p className="appearance-group-note">Motion pauses when you leave the app. With Reduce Motion, backgrounds stay still.</p>
+            </div>
+          )}
 
           {config.backdrop === "image" && (
             <div className="appearance-subgroup">

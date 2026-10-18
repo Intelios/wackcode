@@ -280,3 +280,31 @@ describe("AppearanceSection agent name", () => {
     expect(screen.getByText("Ask WackCode to inspect, change, or run something…")).toBeInTheDocument();
   });
 });
+
+describe("dynamic backgrounds", () => {
+  it("selects Dynamic without changing the saved image or dynamic preferences", async () => {
+    const { onChange } = renderSection({ ...imageLibrary(["kept.png"]), dynamicStyle: "glyphFlow", dynamicPalette: "sunset", dynamicIntensity: 72 });
+    fireEvent.click(screen.getByRole("radio", { name: "Dynamic Backgrounds" }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ backdrop: "dynamic", backgroundImage: "kept.png", dynamicStyle: "glyphFlow", dynamicPalette: "sunset", dynamicIntensity: 72 })));
+  });
+  it("labels only Glyph Flow reactive and saves styles and palettes", async () => {
+    const { onChange } = renderSection({ backdrop: "dynamic" });
+    expect(screen.getByRole("radio", { name: "Colour Drift" })).toHaveAttribute("aria-checked", "true");
+    expect(within(screen.getByRole("radio", { name: "Glyph Flow" })).getByText("Reactive")).toBeInTheDocument();
+    expect(within(screen.getByRole("radio", { name: "Colour Drift" })).queryByText("Reactive")).toBeNull();
+    fireEvent.click(screen.getByRole("radio", { name: "Glyph Flow" }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ dynamicStyle: "glyphFlow" })));
+    await waitFor(() => expect(screen.getByRole("radio", { name: "Aurora" })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole("radio", { name: "Aurora" }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ dynamicPalette: "aurora" })));
+  });
+  it("previews intensity while dragging and commits on release", async () => {
+    const { onChange, onPreview } = renderSection({ backdrop: "dynamic" });
+    const slider = screen.getByRole("slider", { name: "Intensity" });
+    fireEvent.input(slider, { target: { value: "83" } });
+    expect(onPreview).toHaveBeenCalledWith(expect.objectContaining({ dynamicIntensity: 83 }));
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.change(slider, { target: { value: "83" } });
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ dynamicIntensity: 83 })));
+  });
+});

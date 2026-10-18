@@ -28,7 +28,7 @@ Everything runs locally. Your conversations go straight from your Mac to the mod
 - **Answers you can look at.** The agent can draw a chart, comparison, diagram or small interactive mockup right in the conversation instead of describing it.
 - **Extensible.** MCP servers, Agent Skills, slash commands, Pi packages, per-project memory, and optional sub-agents.
 - **Just chat, too.** A separate Chat area turns the same connections into a general-purpose chat, with no project and no coding tools.
-- **Yours.** Six themes or your own colours, image backdrops, Liquid Glass, and your agent's name. Appearance never changes what the model does.
+- **Yours.** Six themes or your own colours, image backdrops, Liquid Glass, dynamic backgrounds that respond to chat activity, and your agent's name. Appearance never changes what the model does.
 
 ## Features
 

@@ -20,7 +20,8 @@ import type { FileAttachment } from "../../attachment-utils";
 import type { ComposerDraftState } from "../../hooks/useComposerDrafts";
 import type { TranscriptViewState } from "../../transcript-view";
 import type { ModelFavoritesProps } from "../ModelPicker";
-import type { MessageAction, MessageImageLoader } from "../Transcript";
+import type { ChatMentionSuggestion } from "../../mention-utils";
+import type { ChatLinks, MessageAction, MessageImageLoader } from "../Transcript";
 import type { TaskAction } from "../Sidebar";
 import { Icon } from "../Icons";
 import { ChatAreaHeader } from "./ChatAreaHeader";
@@ -52,6 +53,8 @@ export interface ChatAreaProps extends ModelFavoritesProps {
   modelId?: string;
   thinkingLevel?: ThinkingLevel;
   draftState: ComposerDraftState;
+  /** Chats this area's `@` picker offers: Chat mode chats only, this chat excluded. */
+  mentionChats?: ChatMentionSuggestion[];
   composerDisabled: boolean;
   /** The first send's words, while the hero hands them to the new chat. */
   handoff?: string;
@@ -61,6 +64,7 @@ export interface ChatAreaProps extends ModelFavoritesProps {
   onMessageAction: (action: MessageAction) => Promise<boolean> | void;
   onReveal: (path: string) => void;
   loadImage?: MessageImageLoader;
+  chatLinks?: ChatLinks;
   onToggleBrowser: () => void;
   onRename: (name: string) => void;
   onTaskAction: (task: TaskRecord, action: TaskAction) => void;
@@ -117,6 +121,7 @@ export function ChatArea(props: ChatAreaProps) {
               onMessageAction={props.onMessageAction}
               onReveal={props.onReveal}
               loadImage={props.loadImage}
+              chatLinks={props.chatLinks}
             />
             {props.dialogs}
           </motion.div>
@@ -159,6 +164,7 @@ export function ChatArea(props: ChatAreaProps) {
             frozen={task ? undefined : handoff}
             queuedMessages={runtime?.queued}
             seed={props.seed}
+            mentionChats={props.mentionChats}
             onConfigure={props.onConfigure}
             onSend={props.onSend}
             onSteer={props.onSteer}

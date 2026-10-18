@@ -1,5 +1,6 @@
 mod backgrounds;
 mod browser;
+mod chat_refs;
 mod chat_tabs;
 mod checkpoints;
 mod commands;

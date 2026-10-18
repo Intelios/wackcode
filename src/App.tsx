@@ -1,6 +1,7 @@
 import { restoreContexts } from "./browser-context";
 import type { RestoredPrompt } from "./types";
 import { attachmentProblem } from "./attachment-utils";
+import { chatRefCandidates } from "./chat-refs";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type SetStateAction } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -368,6 +369,17 @@ export default function App() {
   const [transitioning, setTransitioning] = useState<{ message: string; taskId?: string; fromSelectedId?: string; composerKey: string }>();
 
   const selectedTask = data.tasks.find((task) => task.id === selectedTaskId);
+  /** The chats `@` may reference here: Chat mode chats only in the Chat area, this chat excluded.
+   *  The host still enforces the rule (`chat_refs.rs`); this is the matching UX. */
+  const mentionChats = useMemo(
+    () => chatRefCandidates(data.tasks, data.projects, area === "chat" ? "chat" : "code", selectedTask?.id),
+    [data.tasks, data.projects, area, selectedTask?.id]
+  );
+  /** Opening a chat a message referenced with `@`; a deleted one stays a plain token. */
+  const chatLinks = useMemo(() => ({
+    known: new Set(data.tasks.map((task) => task.id)),
+    open: (taskId: string) => selectTaskRef.current(taskId)
+  }), [data.tasks]);
   const composerDraftKey = tabsEnabled && activeTab ? activeTab.composerKey : legacyComposerKey ?? (selectedTask ? `task:${selectedTask.id}` : `new:${draftEpoch.current}`);
   const composerKeyRef = useRef(composerDraftKey);
   composerKeyRef.current = composerDraftKey;
@@ -2341,7 +2353,7 @@ export default function App() {
       // A hidden or closed tab still owns this draft; never seed the newly selected composer.
       const restored = splitFileSection(text);
       const bundle = restoreContexts(restored.browserContexts ?? [], images);
-      composerDrafts.update(originKey, (current) => ({ ...current, text: restored.text, files: restored.files, ...bundle }));
+      composerDrafts.update(originKey, (current) => ({ ...current, text: restored.text, files: restored.files, chatRefs: restored.chatRefs ?? [], ...bundle }));
       if (composerKeyRef.current === originKey) setComposerSeed({ taskId: task.id, text, images, nonce: Date.now() });
       patchRuntime(task.id, { lastRestore: undefined });
       afterRestore(task.id, result.restore, result.restoreError);
@@ -2828,6 +2840,8 @@ export default function App() {
     actionsEnabled: Boolean(chatTask && !selectedBusy && !pendingDialogTaskIds.has(chatTask.id)),
     vision: selectedModel?.vision === true,
     modelName: selectedModel?.name || selectedModel?.id,
+    mentionChats,
+    chatLinks,
     notes: chatNotes,
     dialogs: chatTask ? <InlineDialog requests={extensionRequests} accessRequests={accessRequests} selectedTaskId={chatTask.id}
       agentName={agentName(data.appearance)} onRespond={handleExtensionRespond} onAccess={handleComputerAccess} /> : undefined,
@@ -3068,6 +3082,7 @@ export default function App() {
               onMessageAction={onMessageAction}
               onUndoRewind={runtime?.snapshot?.tree?.undo ? onUndoRewind : undefined}
               loadImage={loadMessageImage}
+              chatLinks={chatLinks}
             />
             </ToolImageSource.Provider>
             </SubagentPanelLink.Provider>
@@ -3185,6 +3200,7 @@ export default function App() {
               commandsError={selectedTask ? runtime?.slashCommandsError : draftCatalog?.error}
               onRequestCommands={requestSlashCommands}
               mentionFiles={composerMentions?.files}
+              mentionChats={mentionChats}
               mentionsLoading={composerMentions?.loading}
               mentionsError={composerMentions?.error}
               mentionsTruncated={composerMentions?.truncated}

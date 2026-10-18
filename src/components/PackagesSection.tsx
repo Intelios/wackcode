@@ -113,6 +113,13 @@ const BUILTIN_EXTENSIONS: readonly BuiltinExtension[] = [
     kind: "web_search"
   },
   {
+    name: "Chat references",
+    description:
+      "Powers @ chat mentions: pick a chat with @ in the composer and the message carries only its id. The agent reads that chat's saved history on demand with read_chat, so referencing a long chat costs nothing until it looks. Chat mode can reference other Chat mode chats; Code chats can reference any chat.",
+    tools: ["read_chat"],
+    icon: "comment"
+  },
+  {
     name: "Memory",
     description:
       "Notes the agent keeps for itself across chats, one folder per repository: your preferences, corrections, decisions and pointers that AGENTS.md files don't carry. A one-line index rides in every chat; full notes are read only when relevant. Switch it on or off in Settings › Memory.",

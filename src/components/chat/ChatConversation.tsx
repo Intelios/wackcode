@@ -17,7 +17,7 @@ import { latestTurn, messageText } from "../../tree-utils";
 import type { TranscriptViewState } from "../../transcript-view";
 import { useNavigationDismiss } from "../ui/NavigationScope";
 import { DuckMark } from "../DuckMark";
-import type { MessageAction, MessageImageLoader } from "../Transcript";
+import type { ChatLinks, MessageAction, MessageImageLoader } from "../Transcript";
 import { AgentReply, CompactionNote, replyPieces, SystemBubble, TimeDivider, TypingBubble, TypingRow, UserBubble, type SystemNote, type TypingMood } from "./ChatBubbles";
 import { clusterMessages, dividerLabel, type ChatEntry } from "./chat-clusters";
 import { scratchpadFiles } from "./chat-scratchpad";
@@ -38,6 +38,8 @@ interface ChatConversationProps {
   onMessageAction: (action: MessageAction) => Promise<boolean> | void;
   onReveal: (path: string) => void;
   loadImage?: MessageImageLoader;
+  /** Opening a chat this conversation's messages referenced with `@`. */
+  chatLinks?: ChatLinks;
 }
 
 type Local = MessageAction | { type: "start-edit"; id: string } | { type: "cancel-edit" };
@@ -50,7 +52,7 @@ function moodOf(partial: NormalizedMessage | undefined, compaction: boolean): { 
   return { mood: "typing" };
 }
 
-export function ChatConversation({ task, messages, partial, running, compaction, viewState, historyReady, actionsEnabled, vision, modelName, notes, onMessageAction, onReveal, loadImage }: ChatConversationProps) {
+export function ChatConversation({ task, messages, partial, running, compaction, viewState, historyReady, actionsEnabled, vision, modelName, notes, onMessageAction, onReveal, loadImage, chatLinks }: ChatConversationProps) {
   const reduce = useReducedMotion() ?? false;
   const { ref, onScroll, onWheel, detached, jumpToLatest } = useFollowScroll(viewState, historyReady);
   const [editingId, setEditingId] = useState<string>();
@@ -137,7 +139,7 @@ export function ChatConversation({ task, messages, partial, running, compaction,
                 <UserBubble key={entry.key} message={entry.message} first={entry.first} actionsEnabled={actionsEnabled}
                   retry={entry.index === lastUserIndex && entry.message.id === latest?.user.id && !latest?.answer}
                   editing={editingId === entry.message.id} vision={vision} modelName={modelName}
-                  stopped={Boolean(answer)} onAction={handle} loadImage={loadImage} />
+                  stopped={Boolean(answer)} onAction={handle} loadImage={loadImage} chatLinks={chatLinks} />
               );
             }
             return renderReply(entry, entry === liveReply);

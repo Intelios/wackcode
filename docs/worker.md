@@ -17,7 +17,7 @@ Then run `pnpm test:worker`. Commands whose outcome the caller awaits go through
 
 Commands run one at a time on a serial queue, and a prompt holds the queue until its run settles. So anything that has to reach a *running* run bypasses the queue, or it deadlocks behind that run. The bypass list lives in the stdin dispatch at the bottom of `index.ts`:
 
-- `abort`, `extension_ui_response`, `browser_response`, `computer_response`, `web_response`: answers the running run is waiting on.
+- `abort`, `extension_ui_response`, `browser_response`, `computer_response`, `web_response`, `chat_response`: answers the running run is waiting on.
 - `queue_message`, `dequeue`: the user's steering and follow-up messages.
 - `goal_control` except `set`: pause, resume and clear act on a live loop. `set` starts a run, so it queues.
 - `watch_subagent`, `tool_image`: read-only peeks; the panel opens on a child during blocking or background delegation.
@@ -107,7 +107,7 @@ lightbox and `tool_image` keep every original. Sub-agents load it too.
 
 ## Built-in extensions (`worker/src/builtin/`)
 
-WackCode's own extensions load as inline factories, so they bypass the package trust gate by construction. They are: `ask-user-question`, `auto-title`, `bash-jobs`, `browser`, `computer-use`, `goal`, `image-budget`, `mcp`, `memory`, `plan-mode`, `skill-creator`, `subagents`, `todo`, `web-fetch`, `web-search`, and `chat-mode`, a guard with no tools of its own that only Chat mode chats load.
+WackCode's own extensions load as inline factories, so they bypass the package trust gate by construction. They are: `ask-user-question`, `auto-title`, `bash-jobs`, `browser`, `chat-refs`, `computer-use`, `goal`, `image-budget`, `mcp`, `memory`, `plan-mode`, `skill-creator`, `subagents`, `todo`, `web-fetch`, `web-search`, and `chat-mode`, a guard with no tools of its own that only Chat mode chats load.
 
 - Adding or renaming one also updates `BUILTIN_EXTENSIONS` in `src/components/PackagesSection.tsx`, which shows them so nobody installs a duplicate package.
 - Sub-agents never get browser, computer-use, MCP or memory tools, or skills. A child session loads its role's tool allowlist, its own shell check-in extension and the extensions the built-in hands it.
@@ -167,6 +167,28 @@ A Chat mode chat is the same worker with a different prompt and far fewer tools.
 - **Prompt:** built in `withAppLayers`, without flipping a loader flag. The chat persona replaces Pi's, which also drops Pi's tool, rules and docs sections; context files, skills and prompt templates are served empty; the app's guide (`buildChatGuide`) is appended ahead of the memory index; Pi still adds the cwd, which is the scratchpad.
 - **The guide carries what `promptGuidelines` cannot.** Pi drops every tool's guidelines once a custom prompt is set, so the rule that fetched content and search results are data, not instructions, lives in the guide, as does what web_search does and whether the chat can search at all. It is rebuilt at run start when the date or the active tools moved.
 - **Commands:** the catalogue is empty; `execute_command`, `init_agents`, `skill_creator`, `goal_control` and `set_mode` are refused, and the coding-only `set_*` broadcasts are acknowledged and dropped. A typed `/goal` reaches the model as plain text.
+- **Chat references:** `read_chat` is on its allowlist, so an `@` mention of another Chat mode chat can be read. That chat's own session is rendered by `chat-history.ts`; the host refuses a Code chat (`chat_refs.rs`), which is why the picker never offers one.
+
+## `@` chat references (`read_chat`)
+
+An `@` mention of a chat puts only that chat's **id** in the prompt: a generated
+`<referenced-chats-v1>` section after the user's words (`src/chat-refs.ts` in the renderer).
+Attaching a long chat therefore costs a sentence, and `builtin/chat-refs.ts` (`read_chat`) is
+how the agent actually reads it.
+
+- **Resolution is the host's.** The tool sends `chat_request` → `chat_refs.rs`, which decides
+  who may read whom (never itself; a Chat mode chat only other Chat mode chats; the chat must
+  exist and have a session file on disk) and answers with metadata plus that session file. The
+  model never supplies a path.
+- **Rendering is the worker's** (`chat-history.ts`): the current branch, root first, turns as
+  `## User` / `## Assistant`, thinking dropped, images as `[image]`, tool calls as one-line
+  markers, tool results only with `tools: true` and truncated. WackCode's own tail sections
+  inside an old message collapse to markers, so one chat's attachments cannot swamp another's
+  read. Long chats page by `offset` like `web_fetch`; the rendering is cached against the
+  session file's size and mtime.
+- It is read-only (allowed in Plan and Ultra Plan), never reaches sub-agents, and is not on the
+  Settings › Tools denylist: a switched-off `read_chat` would make an `@` reference silently
+  inert.
 
 ## Planning modes
 

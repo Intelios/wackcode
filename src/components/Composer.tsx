@@ -6,7 +6,8 @@ import { DEFAULT_AGENT_NAME } from "../agentName";
 import { ExecutionPolicyNotice } from "./ExecutionPolicyNotice";
 import type { ExecutionPolicyConfig, ImageContent, ProviderRecord, QueuedMessage, RestoredPrompt, SessionSnapshot, SlashCommand, TaskMode, TaskStatus, ThinkingLevel } from "../types";
 import { attachmentProblem, attachFiles, filesFrom, largePasteText, pastedTextFile, splitFileSection, type FileAttachment } from "../attachment-utils";
-import { activeMention, mentionValue, rankMentions, type MentionSuggestion } from "../mention-utils";
+import { activeMention, mentionValue, type ChatMentionSuggestion, type MentionSuggestion } from "../mention-utils";
+import { chatMentionToken, encodeChatRefs, rankSuggestions, survivingChatRefs } from "../chat-refs";
 import { activeSlashCommand } from "../command-utils";
 import { EMPTY_DRAFT, type ComposerDraft, type ComposerDraftState } from "../hooks/useComposerDrafts";
 import { Icon, type IconName } from "./Icons";
@@ -15,6 +16,7 @@ import { ModelPicker, ReasoningToggle, type ModelFavoritesProps } from "./ModelP
 import { ModeToggle } from "./ModeToggle";
 import { Tooltip } from "./ui/Tooltip";
 import { ImageLightbox } from "./ui/ImageLightbox";
+import { MentionPicker, PICKER_KEYS } from "./ui/MentionPicker";
 import { AttachmentTray } from "./composer/AttachmentTray";
 import { PasteNotice } from "./composer/PasteNotice";
 import { QueuedRows, queuedDisplay, useQueueActions } from "./composer/QueuedRows";
@@ -28,13 +30,6 @@ const GLIDE_EASE: [number, number, number, number] = [0.34, 1.3, 0.64, 1];
 const COMMAND_ICONS: Record<SlashCommand["source"], IconName> = {
   app: "slash", custom: "quill", prompt: "comment", skill: "book", extension: "plug"
 };
-
-/** The keys both pickers answer to, under their lists. Decoration: the listbox's options carry the semantics. */
-const PICKER_KEYS = (
-  <div className="slash-picker-foot" aria-hidden="true">
-    <kbd>↑</kbd><kbd>↓</kbd><span>move</span><kbd>⏎</kbd><span>pick</span><kbd>⎋</kbd><span>close</span>
-  </div>
-);
 
 /**
  * The composer's inline hint once a command that takes arguments is selected: the hint plus a
@@ -85,6 +80,8 @@ interface ComposerProps extends ModelFavoritesProps {
   onLiteral?: (message: string, images: ImageContent[], files: FileAttachment[]) => Promise<boolean>;
   /** Workspace files for `@` mentions, relative to it; undefined until loaded. */
   mentionFiles?: string[];
+  /** Chats `@` may reference, already filtered by the kind rule (`chatRefs.ts`). */
+  mentionChats?: ChatMentionSuggestion[];
   mentionsLoading?: boolean;
   mentionsError?: string;
   mentionsTruncated?: boolean;
@@ -111,12 +108,13 @@ interface ComposerProps extends ModelFavoritesProps {
   agentName?: string;
 }
 
-export function Composer({ draftState, status, backgroundWorking = false, providerId, modelId, thinkingLevel, providers, favoriteModels, favoriteSaving, onSetFavorite, stats, header, placeholder, popoverSide = "top", mode, executionPolicy = DEFAULT_EXECUTION_POLICY, appliedExecutionPolicy, onModeChange, onConfigure, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, mentionFiles, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, queuedMessages, onSteer, onDequeue, onStop, onOpenSettings, disabled, seed, comet, frozen, agentName = DEFAULT_AGENT_NAME }: ComposerProps) {
+export function Composer({ draftState, status, backgroundWorking = false, providerId, modelId, thinkingLevel, providers, favoriteModels, favoriteSaving, onSetFavorite, stats, header, placeholder, popoverSide = "top", mode, executionPolicy = DEFAULT_EXECUTION_POLICY, appliedExecutionPolicy, onModeChange, onConfigure, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, mentionFiles, mentionChats, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, queuedMessages, onSteer, onDequeue, onStop, onOpenSettings, disabled, seed, comet, frozen, agentName = DEFAULT_AGENT_NAME }: ComposerProps) {
   const [localDraft, setLocalDraft] = useState<ComposerDraft>(EMPTY_DRAFT);
   const value = draftState?.value ?? localDraft;
   const updateDraft = draftState?.update ?? setLocalDraft;
   const { text: draft, images: attachments, files } = value;
   const contexts = value.browserContexts ?? [];
+  const chatRefs = value.chatRefs ?? [];
   const attachmentError = attachmentProblem(value);
   const draftKey = draftState?.key ?? "local";
   const activeDraftKey = useRef(draftKey);
@@ -150,8 +148,13 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
   const queue = useQueueActions({
     draftKey, activeDraftKey, status, blocked: Boolean(disabled) || frozen !== undefined, onSteer, onDequeue,
     onError: (message) => setAttachNotice(message),
-    onRestore: (restored, restoredFiles, restoredImages, restoredContexts) => {
-      updateDraft((current) => ({ ...current, images: [...current.images, ...restoredImages], browserContexts: [...(current.browserContexts ?? []), ...restoredContexts] }));
+    onRestore: (restored, restoredFiles, restoredImages, restoredContexts, restoredChatRefs) => {
+      updateDraft((current) => ({
+        ...current,
+        images: [...current.images, ...restoredImages],
+        chatRefs: [...(current.chatRefs ?? []), ...restoredChatRefs].filter((ref, index, all) => all.findIndex((item) => item.id === ref.id) === index),
+        browserContexts: [...(current.browserContexts ?? []), ...restoredContexts]
+      }));
       if (activeDraftKey.current === draftKey) setSlashNotice(undefined);
       if (restoredFiles.length > 0) setFiles((current) => [...current, ...restoredFiles]);
       if (restored) setDraft((current) => (current.trim() ? `${current}\n\n${restored}` : restored));
@@ -187,8 +190,8 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
   const showMentions = mention !== null && mention.start !== mentionDismissedAt;
   const mentionQuery = showMentions ? mention.query : undefined;
   const mentionSuggestions = useMemo(
-    () => mentionQuery !== undefined && mentionFiles ? rankMentions(mentionFiles, mentionQuery) : [],
-    [mentionFiles, mentionQuery]
+    () => mentionQuery !== undefined ? rankSuggestions(mentionFiles, mentionChats, mentionQuery) : [],
+    [mentionFiles, mentionChats, mentionQuery]
   );
   // Keep the row the arrow keys are on in view; the list scrolls under its hint strip.
   const activeOption = showCommands ? `slash-option-${slashIndex}` : showMentions ? `mention-option-${mentionIndex}` : undefined;
@@ -264,7 +267,7 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
     // A rewound message's text carries its attached files in the generated section; put them
     // back in the tray instead of showing the section in the draft.
     const restored = splitFileSection(seedText.current);
-    updateDraft((current) => ({ ...current, text: restored.text, files: restored.files, ...restoreContexts(restored.browserContexts ?? [], seedImages.current ?? []) }));
+    updateDraft((current) => ({ ...current, text: restored.text, files: restored.files, chatRefs: restored.chatRefs ?? [], ...restoreContexts(restored.browserContexts ?? [], seedImages.current ?? []) }));
     setPasteNotice(undefined);
     areaRef.current?.focus();
   }, [seedNonce, draftKey]);
@@ -276,7 +279,13 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
    *  expands commands (and the queue resolves the catalog entry first) and the generated
    *  section would fold into the expansion. Sending the same text literally never expands. */
   function filesVsCommand(message: string): boolean {
-    return (files.length > 0 || contexts.length > 0) && message.startsWith("/");
+    return (files.length > 0 || contexts.length > 0 || chatRefs.length > 0) && message.startsWith("/");
+  }
+
+  /** The message as it goes on the wire: browser contexts, then the referenced chats, both
+   *  generated tail sections. Attached files are appended by App (`composeFileSection`). */
+  function outgoingText(message: string, outgoing: { text: string; images: ImageContent[] }) {
+    return encodeChatRefs(outgoing.text, survivingChatRefs(message, chatRefs));
   }
 
   /** Every running send queues for after the active work, raw or command-expanded.
@@ -295,12 +304,13 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
     setAttachNotice(undefined);
     setPasteNotice(undefined);
     const outgoing = encodeContexts(message, images, contexts);
-    const ok = literal && onLiteral ? await onLiteral(outgoing.text, outgoing.images, keptFiles) : await onSend(outgoing.text, outgoing.images, keptFiles, true);
+    const ok = literal && onLiteral ? await onLiteral(outgoingText(message, outgoing), outgoing.images, keptFiles) : await onSend(outgoingText(message, outgoing), outgoing.images, keptFiles, true);
     if (!ok) {
       updateDraft((current) => ({
         text: current.text ? `${message}\n\n${current.text}` : message,
         images: [...images, ...current.images],
         files: [...keptFiles, ...current.files],
+        chatRefs,
         browserContexts: [...contexts, ...(current.browserContexts ?? [])]
       }));
     }
@@ -375,12 +385,13 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
     setAttachNotice(undefined);
     setPasteNotice(undefined);
     const outgoing = encodeContexts(message, images, contexts);
-    const ok = await onSend(outgoing.text, outgoing.images, keptFiles);
+    const ok = await onSend(outgoingText(message, outgoing), outgoing.images, keptFiles);
     if (!ok) {
       updateDraft((current) => ({
         text: current.text ? `${message}\n\n${current.text}` : message,
         images: [...images, ...current.images],
         files: [...keptFiles, ...current.files],
+        chatRefs,
         browserContexts: [...contexts, ...(current.browserContexts ?? [])]
       }));
     }
@@ -403,12 +414,18 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
 
   function insertMention(entry: MentionSuggestion) {
     if (!mention) return;
-    const value = mentionValue(entry.path, entry.directory);
+    // A file ends the token; a folder stays open so its contents are suggested next. A chat
+    // always ends it, and records the id the generated section will carry.
+    const value = entry.kind === "chat" ? chatMentionToken(entry.name) : mentionValue(entry.path, entry.directory);
+    const staysOpen = entry.kind === "file" && entry.directory;
     const rest = draft.slice(mention.end);
-    // A file ends the token; a folder stays open so its contents are suggested next.
-    const gap = entry.directory || /^\s/.test(rest) ? "" : " ";
+    const gap = staysOpen || /^\s/.test(rest) ? "" : " ";
     const next = draft.slice(0, mention.start) + value + gap + rest;
-    const position = mention.start + value.length + (entry.directory ? 0 : 1);
+    const position = mention.start + value.length + (staysOpen ? 0 : 1);
+    if (entry.kind === "chat") {
+      const ref = { id: entry.id, name: entry.name };
+      setField("chatRefs", (current) => [...(current ?? []).filter((item) => item.id !== ref.id), ref]);
+    }
     setDraft(next);
     setCaret(position);
     setMentionIndex(0);
@@ -419,7 +436,7 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
     if (!onLiteral || disabled || frozen !== undefined || providers.length === 0 || status === "stopping" || !draft.trim() || blockedByModel) return;
     if (busy) return void queueDraft(true);
     const outgoing = encodeContexts(draft.trim(), attachments, contexts);
-    const ok = await onLiteral(outgoing.text, outgoing.images, files);
+    const ok = await onLiteral(outgoingText(draft.trim(), outgoing), outgoing.images, files);
     if (ok) {
       updateDraft((current) => current === value ? EMPTY_DRAFT : current);
       if (activeDraftKey.current === draftKey) { setSlashNotice(undefined); setPasteNotice(undefined); }
@@ -510,19 +527,10 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
             </button>) : <div className="slash-picker-status">No matching commands</div>}
           {!commandsLoading && !commandsError && suggestions.length > 0 && PICKER_KEYS}
         </div>}
-        {showMentions && <div id="mention-list" className="slash-picker mention-picker" role="listbox" aria-label="Files">
-          {mentionsError ? <div className="slash-picker-status">{mentionsError} <button type="button" onClick={onRequestMentions}>Retry</button></div>
-            : !mentionFiles ? <div className="slash-picker-status">{mentionsLoading ? "Loading files…" : "No files"}</div>
-            : mentionSuggestions.length ? mentionSuggestions.map((entry, index) => {
-              const bare = entry.path.replace(/\/$/, "");
-              const cut = bare.lastIndexOf("/") + 1;
-              return <button id={`mention-option-${index}`} type="button" role="option" aria-selected={index === mentionIndex} className={`slash-option mention-option${entry.directory ? " folder" : ""} ${index === mentionIndex ? "selected" : ""}`} key={entry.path} onMouseDown={(event) => event.preventDefault()} onClick={() => insertMention(entry)}>
-                <span className="slash-mark" aria-hidden="true"><Icon name={entry.directory ? "folder" : "file"} /></span><strong>{entry.path.slice(cut)}</strong><span>{bare.slice(0, cut)}</span>
-              </button>;
-            }) : <div className="slash-picker-status">No matching files</div>}
-          {mentionFiles && mentionsTruncated && <div className="slash-picker-status">Only the first 20,000 files are listed.</div>}
-          {!mentionsError && mentionSuggestions.length > 0 && PICKER_KEYS}
-        </div>}
+        {showMentions && <MentionPicker id="mention-list" label="Files and chats" suggestions={mentionSuggestions} index={mentionIndex} onPick={insertMention}
+          notice={mentionsError ? <div className="slash-picker-status">{mentionsError} <button type="button" onClick={onRequestMentions}>Retry</button></div> : undefined}
+          empty={mentionsError ? "No matching chats" : !mentionFiles && !mentionChats?.length ? (mentionsLoading ? "Loading files…" : "No files") : "No matching files or chats"}
+          footnote={mentionFiles && mentionsTruncated ? <div className="slash-picker-status">Only the first 20,000 files are listed.</div> : undefined} />}
         <QueuedRows entries={queuedEntries} agentName={agentName} disabled={queueActionsDisabled}
           canSteer={status === "running" && Boolean(onSteer)} canRestore={Boolean(onDequeue)}
           onSteer={(id) => void queue.steer(id)} onRestore={() => void queue.restore()} />

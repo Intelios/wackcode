@@ -10,6 +10,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { NormalizedBlock, NormalizedMessage } from "../../types";
 import { AssistantNameContext } from "../../agentName";
 import { splitFileSection, type FileAttachment } from "../../attachment-utils";
+import { MentionText, type ChatLinks } from "../Transcript";
 import { messageText } from "../../tree-utils";
 import { useSmoothText } from "../../hooks/useSmoothText";
 import { DuckMark } from "../DuckMark";
@@ -109,19 +110,21 @@ interface UserBubbleProps {
   stopped?: boolean;
   onAction: (action: MessageAction | { type: "start-edit"; id: string } | { type: "cancel-edit" }) => Promise<boolean> | void;
   loadImage?: MessageImageLoader;
+  /** Opening the chats this message referenced with `@`. */
+  chatLinks?: ChatLinks;
 }
 
-export const UserBubble = memo(function UserBubble({ message, first, actionsEnabled, retry, editing, vision, modelName, stopped, onAction, loadImage }: UserBubbleProps) {
+export const UserBubble = memo(function UserBubble({ message, first, actionsEnabled, retry, editing, vision, modelName, stopped, onAction, loadImage, chatLinks }: UserBubbleProps) {
   const reduce = useReducedMotion() ?? false;
   const pending = message.id.startsWith("pending:");
   const images = message.blocks.filter((block) => block.type === "image");
-  const { text, files, browserContexts = [] } = splitFileSection(messageText(message));
+  const { text, files, browserContexts = [], chatRefs = [] } = splitFileSection(messageText(message));
   const anchor = `message:${message.id}`;
   if (editing) {
     return (
       <div className="chat-row user editing" data-transcript-anchor={anchor}>
         <MessageEditor
-          text={text} images={images} files={files} browserContexts={browserContexts} vision={vision} modelName={modelName}
+          text={text} images={images} files={files} browserContexts={browserContexts} chatRefs={chatRefs} vision={vision} modelName={modelName}
           loadImage={loadImage && message.entryId ? (index) => loadImage(message.entryId!, index) : undefined}
           onCancel={() => void onAction({ type: "cancel-edit" })}
           onSend={async (edited, keptFiles, removeImages) => (await onAction({ type: "edit", message, text: edited, files: keptFiles, removeImages })) === true}
@@ -143,7 +146,7 @@ export const UserBubble = memo(function UserBubble({ message, first, actionsEnab
       <MessageBrowserContexts contexts={browserContexts} images={images} loadImage={loadImage && message.entryId ? (index) => loadImage(message.entryId!, index) : undefined} />
       {images.length > 0 && <BubbleImages images={images} hidden={browserContexts.map((context) => context.imageIndex)} entryId={message.entryId} loadImage={loadImage} />}
       {files.length > 0 && <div className="chat-attached">{files.map((file, index) => <FileNote key={index} file={file} />)}</div>}
-      {text && <div className="chat-bubble user">{text}</div>}
+      {text && <div className="chat-bubble user"><MentionText text={text} chatRefs={chatRefs} chatLinks={chatLinks} /></div>}
       <div className="chat-tray end">
         {stopped && <span className="chat-stopped">Stopped</span>}
         <Versions message={message} disabled={!actionsEnabled} onSwitch={(entryId) => void onAction({ type: "switch", entryId })} />

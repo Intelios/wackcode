@@ -148,8 +148,8 @@ let disabledTools = new Set<string>();
 let subagentRunner: SubagentRunner | undefined;
 /** Aborts the wait for MCP servers at the start of a run, when the user presses Stop. */
 let mcpWait: AbortController | undefined;
-/** Which native host subsystem a request goes to: the per-chat browser, computer use, the skill-creator's managed drafts, or Settings › Web's search provider. */
-type NativeChannel = "browser" | "computer" | "skill_creator" | "web";
+/** Which native host subsystem a request goes to: the per-chat browser, computer use, the skill-creator's managed drafts, Settings › Web's search provider, or `read_chat`'s referenced-chat lookup. */
+type NativeChannel = "browser" | "computer" | "skill_creator" | "web" | "chat";
 interface PendingNativeRequest {
   channel: NativeChannel;
   resolve(value: unknown): void;
@@ -164,12 +164,14 @@ const NATIVE_CANCELLED: Record<NativeChannel, string> = {
   computer: "Computer use was stopped.",
   skill_creator: "The skill-creator action was stopped.",
   web: "The web request was stopped.",
+  chat: "Reading that chat was stopped.",
 };
 const NATIVE_WORKER_STOPPED: Record<NativeChannel, string> = {
   browser: "Browser action cancelled because the worker stopped.",
   computer: "Computer use was stopped because the chat's worker stopped.",
   skill_creator: "The skill-creator action was stopped because the chat's worker stopped.",
   web: "The web request was stopped because the chat's worker stopped.",
+  chat: "Reading that chat was stopped because the chat's worker stopped.",
 };
 
 /** Rejects every pending native request and tells the host, which stops the work it can. */
@@ -327,6 +329,7 @@ const builtinHost: BuiltinHost = {
   computer: (request, signal) => nativeRequest("computer", request, signal),
   skillCreator: (request, signal) => nativeRequest("skill_creator", request, signal),
   web: (request, signal) => nativeRequest("web", request, signal),
+  readChat: (request, signal) => nativeRequest("chat", request, signal),
   supportsVision: () => Boolean((session?.model?.input as string[] | undefined)?.includes("image")),
 };
 const builtins = createBuiltinExtensions(builtinHost, {
@@ -1813,7 +1816,7 @@ async function handle(command: WorkerCommand): Promise<void> {
       await initialize(command);
     } else if (!session || !taskId) {
       throw new Error("Worker is not initialized");
-    } else if (command.type === "browser_response" || command.type === "computer_response" || command.type === "skill_creator_response" || command.type === "web_response") {
+    } else if (command.type === "browser_response" || command.type === "computer_response" || command.type === "skill_creator_response" || command.type === "web_response" || command.type === "chat_response") {
       const pending = pendingNativeRequests.get(command.requestId);
       if (!pending) return;
       pendingNativeRequests.delete(command.requestId);
@@ -2363,6 +2366,7 @@ function bypassesQueue(command: WorkerCommand): boolean {
     case "computer_response":
     case "skill_creator_response":
     case "web_response":
+    case "chat_response":
     case "extension_ui_response":
     case "queue_message":
     case "steer_message":

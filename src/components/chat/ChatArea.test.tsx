@@ -119,6 +119,32 @@ describe("ChatArea", () => {
     expect(draftValue).toEqual({ text, images: [], files: [] });
   });
 
+  it("offers only chats in Chat mode's @ picker, and sends the reference as an id section", async () => {
+    const props = renderArea({ task: task(), runtime: { snapshot: {} as never } as TaskRuntime,
+      mentionChats: [{ kind: "chat", id: "other", name: "Auth refactor", label: "No project", archived: false, at: 1 }] });
+    const area = screen.getByRole("textbox", { name: "Message" });
+    fireEvent.change(area, { target: { value: "keep going in @auth", selectionStart: 21 } });
+    const list = screen.getByRole("listbox", { name: "Chats" });
+    expect(list).toHaveTextContent("Auth refactor");
+    fireEvent.keyDown(area, { key: "Enter" });
+    expect(area).toHaveValue('keep going in @"Auth refactor" ');
+    fireEvent.keyDown(area, { key: "Enter" });
+    await vi.waitFor(() => expect(props.onSend).toHaveBeenCalledTimes(1));
+    const sent = (props.onSend as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(sent).toContain("<referenced-chats-v1>");
+    expect(sent).toContain('{"id":"other","name":"Auth refactor"}');
+  });
+
+  it("marks a referenced chat's token in the transcript and opens it on click", () => {
+    const open = vi.fn();
+    renderArea({ task: task(), runtime: { snapshot: {} as never } as TaskRuntime, chatLinks: { known: new Set(["other"]), open },
+      messages: [msg("u1", "user", 'continue @"Auth refactor"\n\n<referenced-chats-v1>\nChats the user referenced with @.\n{"version":1,"chats":[{"id":"other","name":"Auth refactor"}]}\n</referenced-chats-v1>')] });
+    expect(screen.queryByText(/referenced-chats-v1/)).toBeNull();
+    const token = screen.getByRole("button", { name: /@"Auth refactor"/ });
+    fireEvent.click(token);
+    expect(open).toHaveBeenCalledWith("other");
+  });
+
   it("swaps the composer for the archived footer", () => {
     renderArea({ task: task({ archived: true }), runtime: { snapshot: {} as never } as TaskRuntime });
     expect(screen.queryByRole("textbox", { name: "Message" })).toBeNull();

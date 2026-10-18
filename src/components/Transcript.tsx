@@ -1,7 +1,7 @@
 import { MessageBrowserContexts } from "./browser/MessageBrowserContexts";
 import { Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import type { CommandPresentation, NormalizedBlock, NormalizedMessage, PlanState, RunTiming, SessionSnapshot, SkillDraftStatus, TaskStatus } from "../types";
+import type { ChatRefRecord, CommandPresentation, NormalizedBlock, NormalizedMessage, PlanState, RunTiming, SessionSnapshot, SkillDraftStatus, TaskStatus } from "../types";
 import { AssistantNameContext } from "../agentName";
 import { useFollowScroll } from "../hooks/useFollowScroll";
 import { motionAllowed, useSmoothText } from "../hooks/useSmoothText";
@@ -9,6 +9,7 @@ import { formatRunDuration, isPlanMode } from "../chat-utils";
 import { blockKey, flyId, layoutTranscript, type TranscriptSlot } from "../explore-utils";
 import { completedPlan, layoutWorkTurns, type WorkRow } from "../completed-work";
 import { splitFileSection, type FileAttachment } from "../attachment-utils";
+import { chatMentionToken } from "../chat-refs";
 import { splitMentions } from "../mention-utils";
 import { SUBAGENT_TOOL_NAME, SKILL_CREATOR_TOOL_NAME, exploreKind, parseSkillPreviewDetails, parseSubagentDetails, pendingSubagentDetails, toolPresentation } from "../tool-utils";
 import { hasVisibleMessages, latestTurn, messageText } from "../tree-utils";
@@ -79,6 +80,8 @@ interface Props {
   onUndoRewind?: () => void;
   /** Resolves a sent message's attached image to its full-size URL, for the lightbox. */
   loadImage?: MessageImageLoader;
+  /** Opening the chats a message referenced with `@` (absent: tokens are not clickable). */
+  chatLinks?: ChatLinks;
   /** What an empty chat says. Absent: the coding agent's invitation. */
   empty?: { title: string; body: string };
 }
@@ -96,6 +99,15 @@ interface SkillCardContext {
 
 /** How the transcript fetches the full-size original of one of a sent message's images. */
 export type MessageImageLoader = (entryId: string, index: number) => Promise<string | undefined>;
+
+/**
+ * How a message's `@` chat tokens reach their chat. A reference to a chat that no longer
+ * exists (`known`) stays a plain highlighted token: nothing to open.
+ */
+export interface ChatLinks {
+  known: ReadonlySet<string>;
+  open: (taskId: string) => void;
+}
 
 export interface DisplayModelSwitch {
   id: string;
@@ -126,10 +138,18 @@ function StreamingText({ text }: { text: string }) {
   return <div className="stream-text assistant-text"><Markdown streaming>{shown}</Markdown></div>;
 }
 
-function MentionText({ text }: { text: string }) {
-  return <>{splitMentions(text).map((segment, index) => segment.mention
-    ? <span key={index} className="mention">{segment.text}</span>
-    : segment.text)}</>;
+export function MentionText({ text, chatRefs, chatLinks }: { text: string; chatRefs?: ChatRefRecord[]; chatLinks?: ChatLinks }) {
+  const refs = new Map((chatRefs ?? []).map((ref) => [chatMentionToken(ref.name), ref] as const));
+  return <>{splitMentions(text).map((segment, index) => {
+    const ref = segment.mention ? refs.get(segment.text) : undefined;
+    if (!ref) return segment.mention ? <span key={index} className="mention">{segment.text}</span> : segment.text;
+    if (!chatLinks?.known.has(ref.id)) return <span key={index} className="mention chat">{segment.text}</span>;
+    return (
+      <button key={index} type="button" className="mention chat" title="Open this chat" onClick={() => chatLinks.open(ref.id)}>
+        <Icon name="comment" />{segment.text}
+      </button>
+    );
+  })}</>;
 }
 
 function commandSummary(presentation: CommandPresentation): string {
@@ -535,22 +555,24 @@ interface MessageProps {
   modelName?: string;
   onAction: (action: LocalAction) => Promise<boolean> | void;
   loadImage?: MessageImageLoader;
+  chatLinks?: ChatLinks;
 }
 
-const Message = memo(function Message({ message, slots, results, liveToolText, liveToolDetails, live, running, planState, onPlanAction, skillCard, actionsEnabled, retry, editing, vision, modelName, onAction, loadImage, turnActions = true, anchorPart }: MessageProps) {
+const Message = memo(function Message({ message, slots, results, liveToolText, liveToolDetails, live, running, planState, onPlanAction, skillCard, actionsEnabled, retry, editing, vision, modelName, onAction, loadImage, chatLinks, turnActions = true, anchorPart }: MessageProps) {
   const contextMenu = useContextMenu();
   const scrollAnchor = `message:${message.id}${anchorPart ? `:${anchorPart}` : ""}`;
   if (message.role === "user") {
     const images = message.blocks.filter((block) => block.type === "image");
     // The message text carries attached files in its generated section; the transcript shows
     // them as chips and the words without them.
-    const { text, files, browserContexts = [] } = splitFileSection(messageText(message));
+    const { text, files, browserContexts = [], chatRefs = [] } = splitFileSection(messageText(message));
     if (editing) {
       return (
         <div className="msg user editing" data-transcript-anchor={scrollAnchor} data-turn={message.versions ? message.versions.group : message.id}>
           <MessageEditor
             text={text}
             browserContexts={browserContexts}
+            chatRefs={chatRefs}
             images={images}
             files={files}
             vision={vision}
@@ -580,7 +602,7 @@ const Message = memo(function Message({ message, slots, results, liveToolText, l
         )}
         {text && (message.commandPresentation
           ? <CommandMessage message={message} onCopy={(prompt) => onAction({ type: "copy-prompt", text: prompt })} />
-          : <div className="bubble"><MentionText text={text} /></div>)}
+          : <div className="bubble"><MentionText text={text} chatRefs={chatRefs} chatLinks={chatLinks} /></div>)}
         <MessageActions
           align="end"
           items={items}
@@ -612,7 +634,7 @@ const Message = memo(function Message({ message, slots, results, liveToolText, l
   && prev.skillCard === next.skillCard
   && prev.actionsEnabled === next.actionsEnabled && prev.retry === next.retry && prev.editing === next.editing
   && prev.vision === next.vision && prev.modelName === next.modelName && prev.onAction === next.onAction
-  && prev.loadImage === next.loadImage);
+  && prev.loadImage === next.loadImage && prev.chatLinks === next.chatLinks);
 
 // No Copy here: while a run streams only Copy would fill this row, and the hidden row still
 // reserved height — a visible gap above the live stream. Copy stays on user bubbles and `/copy`.
@@ -654,7 +676,7 @@ function activityLabel(activity?: string): string {
   return "Working…";
 }
 
-export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, compaction, runTimings = [], collapseCompletedWork = true, scopeKey = "", viewState, historyReady = true, status, liveToolText, liveToolDetails, planState, onPlanAction, skillDrafts, skillDraftsSaving, taskId, onSkillAction, loadSkillDocument, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind, loadImage, empty }: Props) {
+export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, compaction, runTimings = [], collapseCompletedWork = true, scopeKey = "", viewState, historyReady = true, status, liveToolText, liveToolDetails, planState, onPlanAction, skillDrafts, skillDraftsSaving, taskId, onSkillAction, loadSkillDocument, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind, loadImage, chatLinks, empty }: Props) {
   const scroll = useFollowScroll(viewState, historyReady);
   const { ref, onScroll, onWheel, detached, pauseFollowing, jumpToLatest } = scroll;
   const [expandedWork, setExpandedWork] = useState(() => viewState?.work ?? new Set<string>());
@@ -802,7 +824,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
       live={running && message.id === lastAssistantId} running={running} planState={planState} onPlanAction={onPlanAction} skillCard={skillCard}
       sig={cachedSignature(message, slots, results, liveToolText, liveToolDetails, anchorPart)} turnActions={turnActions} anchorPart={anchorPart}
       actionsEnabled={actionsEnabled} retry={message.id === (latest?.answer ?? latest?.user)?.id}
-      editing={editingId === message.id} vision={vision} modelName={modelName} onAction={handleAction} loadImage={loadImage} />
+      editing={editingId === message.id} vision={vision} modelName={modelName} onAction={handleAction} loadImage={loadImage} chatLinks={chatLinks} />
   );
   const renderOrphans = (message: NormalizedMessage, blocks = message.blocks.filter((block) => !block.toolCallId || !callIds.has(block.toolCallId))) =>
     blocks.length > 0 ? <div className="orphan-group" data-transcript-anchor={`message:${message.id}`}>

@@ -5,7 +5,7 @@
  */
 import { useRef, useState, type ReactNode } from "react";
 import { imageDataUrl, splitFileSection, type FileAttachment } from "../../attachment-utils";
-import type { BrowserContextAttachment, BrowserContextRecord, ImageContent, QueuedMessage, RestoredPrompt, TaskStatus } from "../../types";
+import type { BrowserContextAttachment, BrowserContextRecord, ChatRefRecord, ImageContent, QueuedMessage, RestoredPrompt, TaskStatus } from "../../types";
 import { contextLabel, restoreContexts } from "../../browser-context";
 import { Icon } from "../Icons";
 import { Tooltip } from "../ui/Tooltip";
@@ -22,7 +22,7 @@ interface QueueActionOptions {
   onDequeue?: () => Promise<(RestoredPrompt | string)[] | undefined>;
   onError: (message: string) => void;
   /** Restored texts (file sections split back out) for the originating draft. */
-  onRestore: (text: string, files: FileAttachment[], images: ImageContent[], contexts: BrowserContextAttachment[]) => void;
+  onRestore: (text: string, files: FileAttachment[], images: ImageContent[], contexts: BrowserContextAttachment[], chatRefs: ChatRefRecord[]) => void;
 }
 
 export function useQueueActions({ draftKey, activeDraftKey, status, blocked, onSteer, onDequeue, onError, onRestore }: QueueActionOptions) {
@@ -65,7 +65,7 @@ export function useQueueActions({ draftKey, activeDraftKey, status, blocked, onS
         return { ...split, ...restoreContexts(split.browserContexts ?? [], prompt.images ?? []) };
       });
       onRestore(parts.map((part) => part.text).filter(Boolean).join("\n\n"), parts.flatMap((part) => part.files),
-        parts.flatMap((part) => part.images), parts.flatMap((part) => part.browserContexts));
+        parts.flatMap((part) => part.images), parts.flatMap((part) => part.browserContexts), parts.flatMap((part) => part.chatRefs ?? []));
     });
   }
 

@@ -1,8 +1,11 @@
 import { useCallback, useRef, useState, type SetStateAction } from "react";
 import type { AttachmentState } from "../attachment-utils";
+import type { ChatRefRecord } from "../types";
 
 export interface ComposerDraft extends AttachmentState {
   text: string;
+  /** The `@` chats this draft references; the id rides the message as a tail section at send. */
+  chatRefs?: ChatRefRecord[];
 }
 
 export const EMPTY_DRAFT: ComposerDraft = { text: "", images: [], files: [] };

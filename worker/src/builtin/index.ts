@@ -17,6 +17,7 @@ import { BROWSER_TOOL_NAMES, createBrowserExtension } from "./browser.js";
 import { createAskUserQuestionExtension } from "./ask-user-question.js";
 import { type BashJobsController, createBashJobsExtension } from "./bash-jobs.js";
 import { createChatGuardExtension } from "./chat-mode/index.js";
+import { createChatRefsExtension } from "./chat-refs.js";
 import { type ComputerUseController, createComputerUseExtension } from "./computer-use/index.js";
 import { createAutoTitleExtension, type AutoTitleController } from "./auto-title.js";
 import { createImageBudgetExtension } from "./image-budget.js";
@@ -104,6 +105,7 @@ export function createBuiltinExtensions(host: BuiltinHost, options: {
   const goal = createGoalExtension(host, () => planMode.controller.getState().mode !== "build");
   const memory = createMemoryExtension(() => options.isChat?.() ? "chat" : "project");
   const browser: InlineExtension = { name: "wackcode-browser", factory: createBrowserExtension(host), hidden: true };
+  const chatRefs: InlineExtension = { name: "wackcode-chat-refs", factory: createChatRefsExtension(host), hidden: true };
   const computerUse = createComputerUseExtension(host);
   const skillCreator = createSkillCreatorExtension(host, {
     commandEnabled: () => options.commandEnabled?.("app:skill-creator") ?? true,
@@ -133,6 +135,7 @@ export function createBuiltinExtensions(host: BuiltinHost, options: {
       webFetch,
       webSearchExtension,
       browser,
+      chatRefs,
       { name: "wackcode-computer-use", factory: computerUse.factory, hidden: true },
       { name: "wackcode-skill-creator", factory: skillCreator.factory, hidden: true },
       mcpExtension,
@@ -150,6 +153,7 @@ export function createBuiltinExtensions(host: BuiltinHost, options: {
       webFetch,
       webSearchExtension,
       browser,
+      chatRefs,
       mcpExtension,
     ],
     bashJobs: bashJobs.controller,

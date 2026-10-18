@@ -1340,7 +1340,7 @@ fn handle_worker_line(
         }
         return;
     }
-    if event_type == "browser_cancel" || event_type == "computer_cancel" || event_type == "skill_creator_cancel" || event_type == "web_cancel" {
+    if event_type == "browser_cancel" || event_type == "computer_cancel" || event_type == "skill_creator_cancel" || event_type == "web_cancel" || event_type == "chat_cancel" {
         if let Some(request_id) = value.get("requestId").and_then(Value::as_str) {
             if event_type == "browser_cancel" {
                 app.state::<crate::browser::BrowserManager>().cancel(request_id);
@@ -1354,11 +1354,12 @@ fn handle_worker_line(
         }
         return;
     }
-    if event_type == "browser_request" || event_type == "computer_request" || event_type == "skill_creator_request" || event_type == "web_request" {
+    if event_type == "browser_request" || event_type == "computer_request" || event_type == "skill_creator_request" || event_type == "web_request" || event_type == "chat_request" {
         let channel = match event_type.as_str() {
             "browser_request" => NativeChannel::Browser,
             "computer_request" => NativeChannel::Computer,
             "web_request" => NativeChannel::Web,
+            "chat_request" => NativeChannel::ChatRef,
             _ => NativeChannel::SkillCreator,
         };
         spawn_native_request(app, task_id, worker_pid, channel, &value);
@@ -1534,6 +1535,8 @@ enum NativeChannel {
     SkillCreator,
     /// Settings › Web's search and page reads (`web.rs`).
     Web,
+    /// `read_chat`: resolving a referenced chat (`chat_refs.rs`).
+    ChatRef,
 }
 
 /// Runs a worker's request to a native subsystem (the browser preview, computer use, web
@@ -1563,6 +1566,10 @@ fn spawn_native_request(app: &AppHandle, task_id: &str, worker_pid: u32, channel
             NativeChannel::Web => (
                 crate::web::execute_agent_request(request_app.clone(), request_task.clone(), request_id.clone(), request).await,
                 "web_response",
+            ),
+            NativeChannel::ChatRef => (
+                crate::chat_refs::execute_agent_request(&request_app, &request_task, request).await,
+                "chat_response",
             ),
         };
         // A restarted worker owns the same chat id but a different generation. Never let it

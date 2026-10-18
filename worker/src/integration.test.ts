@@ -1130,6 +1130,7 @@ describe("Pi worker integration", () => {
       "memory_save",
       "plan_mode_complete",
       "read",
+      "read_chat",
       "skill_creator",
       "subagent",
       "subagent_job",
@@ -1179,13 +1180,13 @@ describe("Pi worker integration", () => {
         "browser_console"
       ]
     });
-    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.length === 8);
+    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.length === 9);
     // `find`/`grep` availability varies by host; the companion stays on even without bash.
     const beforeSecondRun = provider.requests.length;
     worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-2", message: "Again." });
     await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.snapshot === undefined && provider.requests.length > beforeSecondRun);
 
-    expect(offered(provider.requests[beforeSecondRun])).toEqual(["ask_user_question", "bash_job", "edit", "plan_mode_complete", "read", "skill_creator", "todo", "write"]);
+    expect(offered(provider.requests[beforeSecondRun])).toEqual(["ask_user_question", "bash_job", "edit", "plan_mode_complete", "read", "read_chat", "skill_creator", "todo", "write"]);
     expect(worker.child.exitCode).toBeNull();
   });
 
@@ -2266,6 +2267,34 @@ describe("built-in extensions", () => {
     ) as { content?: string } | undefined;
     expect(toolResult?.content).toContain("local or private network address");
     expect(toolResult?.content).not.toContain("Plan mode");
+  });
+
+  it("lets read_chat run in Plan mode, because it only reads another chat", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-read-chat-plan-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const sessionFile = join(workspace, "other.jsonl");
+    await writeFile(sessionFile, [
+      JSON.stringify({ type: "session", version: 1, id: "other", timestamp: "2026-01-01T00:00:00Z", cwd: workspace }),
+      JSON.stringify({ type: "message", id: "u1", parentId: null, timestamp: "2026-01-01T00:00:00Z", message: { role: "user", content: "Plan the auth refactor.", timestamp: 1 } }),
+    ].join("\n") + "\n");
+    const { worker } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "read-chat-plan-task", undefined, undefined, undefined, "plan"
+    );
+    cleanup.push(() => worker.shutdown());
+    await worker.waitFor((output) => output.type === "plan_state" && output.mode === "plan");
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "plan-read", message: 'mcp: read_chat {"chat":"other"}' });
+    const request = await worker.waitFor((output) => output.type === "chat_request");
+    worker.send({
+      id: crypto.randomUUID(), type: "chat_response", requestId: request.requestId, success: true,
+      result: { id: "other", name: "Auth refactor", sessionFile },
+    });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "plan-read" && output.state === "idle");
+    const result = toolResultContents(provider.requests.at(-1)!.body).at(-1) ?? "";
+    expect(result).toContain("Plan the auth refactor.");
+    expect(result).not.toContain("Plan mode");
   });
 
   const DEEPSEEK_WEB = { search: { label: "DeepSeek", kind: "deepseek" }, fetch: null };
@@ -5055,9 +5084,65 @@ describe("message queueing", () => {
   });
 });
 
+describe("chat references", () => {
+  // A second chat's saved session, written the way Pi writes one.
+  async function savedChat(root: string): Promise<string> {
+    const file = join(root, "other-chat.jsonl");
+    const header = { type: "session", version: 1, id: "other-session", timestamp: "2026-01-01T00:00:00Z", cwd: root };
+    const message = (id: string, parentId: string | null, role: string, content: unknown, extra: Record<string, unknown> = {}) => ({
+      type: "message", id, parentId, timestamp: "2026-01-01T00:00:00Z",
+      message: { role, content, timestamp: 1, ...(role === "assistant"
+        ? { api: "openai-completions", provider: "p", model: "m", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, stopReason: "stop" }
+        : {}), ...extra },
+    });
+    const entries = [
+      header,
+      message("u1", null, "user", [{ type: "text", text: "Wire the login form." }]),
+      message("a1", "u1", "assistant", [{ type: "text", text: "Login form wired to /auth." }]),
+    ];
+    await writeFile(file, entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+    return file;
+  }
+
+  it("asks the host to resolve a referenced chat, then reads that session and pages it", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const root = await mkdtemp(join(tmpdir(), "wackcode-chat-refs-"));
+    cleanup.push(() => rm(root, { recursive: true, force: true }));
+    const sessionFile = await savedChat(root);
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", root, "reader-task");
+    cleanup.push(() => worker.shutdown());
+    expect((worker.view?.activeTools ?? [])).toContain("read_chat");
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "read-run", message: 'mcp: read_chat {"chat":"other"}' });
+    const request = await worker.waitFor((output) => output.type === "chat_request");
+    // The model's id goes to the host unchanged; the host, not the worker, decides access.
+    expect(request.request).toEqual({ chat: "other" });
+    worker.send({
+      id: crypto.randomUUID(), type: "chat_response", requestId: request.requestId, success: true,
+      result: { id: "other", name: "Auth refactor", project: "WackCode", model: "Gateway · sees", sessionFile },
+    });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "read-run" && output.state === "idle");
+
+    const contents = toolResultContents(provider.requests.at(-1)!.body);
+    expect(contents.at(-1)).toContain("# Chat: Auth refactor");
+    expect(contents.at(-1)).toContain("Login form wired to /auth.");
+
+    // A host refusal is the answer: the tool reports its sentence instead of reading anything.
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "refused-run", message: 'mcp: read_chat {"chat":"gone"}' });
+    const refused = await worker.waitFor((output) => output.type === "chat_request" && output.request?.chat === "gone");
+    worker.send({
+      id: crypto.randomUUID(), type: "chat_response", requestId: refused.requestId, success: false,
+      error: "That chat no longer exists.",
+    });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "refused-run" && output.state === "idle");
+    expect(toolResultContents(provider.requests.at(-1)!.body).at(-1)).toContain("That chat no longer exists.");
+  });
+});
+
 describe("Chat mode", () => {
   const ALLOWED = new Set([
-    "read", "write", "edit", "ls", "grep", "find", "web_fetch", "web_search", "ask_user_question",
+    "read", "write", "edit", "ls", "grep", "find", "web_fetch", "web_search", "ask_user_question", "read_chat",
     "memory_save", "memory_recall", "memory_forget",
     "browser_open", "browser_snapshot", "browser_act", "browser_screenshot", "browser_console",
   ]);

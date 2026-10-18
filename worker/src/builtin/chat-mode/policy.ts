@@ -16,6 +16,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { fileURLToPath } from "node:url";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../ask-user-question.js";
 import { BROWSER_TOOL_NAMES } from "../browser.js";
+import { READ_CHAT_TOOL_NAME } from "../chat-refs.js";
 import { MEMORY_TOOL_NAMES } from "../memory/index.js";
 import { WEB_FETCH_TOOL_NAME } from "../web-fetch/index.js";
 import { WEB_SEARCH_TOOL_NAME } from "../web-search/index.js";
@@ -27,7 +28,7 @@ const PATH_OPTIONAL: ReadonlySet<string> = new Set(["ls", "grep", "find"]);
 /** WackCode's own tools a Chat mode chat keeps. Each still obeys its own setting. `web_search`
  *  reaches no file or process here: Rust makes the request (`web.rs`). */
 export const CHAT_BUILTIN_TOOLS: ReadonlySet<string> = new Set([
-  ASK_USER_QUESTION_TOOL_NAME, WEB_FETCH_TOOL_NAME, WEB_SEARCH_TOOL_NAME, ...MEMORY_TOOL_NAMES, ...BROWSER_TOOL_NAMES
+  ASK_USER_QUESTION_TOOL_NAME, WEB_FETCH_TOOL_NAME, WEB_SEARCH_TOOL_NAME, READ_CHAT_TOOL_NAME, ...MEMORY_TOOL_NAMES, ...BROWSER_TOOL_NAMES
 ]);
 
 export type ChatToolSource = "builtin" | "wackcode" | "mcp" | "package";

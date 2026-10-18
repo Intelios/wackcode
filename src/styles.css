@@ -684,10 +684,20 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
   padding: 9px 13px; font-size: 13.5px; line-height: 1.55; color: var(--text);
   white-space: pre-wrap; word-break: break-word;
 }
-.msg.user .bubble .mention {
+.msg.user .bubble .mention, .chat-bubble.user .mention {
   font-family: "SFMono-Regular", Consolas, monospace; font-size: .9em; color: var(--wc-accent);
   background: color-mix(in srgb, var(--wc-accent) 12%, transparent); border-radius: 4px; padding: 0 4px;
 }
+/* A referenced chat: the same accent token, with the chat mark and the affordance of a link. */
+.mention.chat {
+  display: inline-flex; align-items: center; gap: 3px; border: 0; font: inherit;
+  font-family: "SFMono-Regular", Consolas, monospace; font-size: .9em; color: var(--wc-accent);
+  background: color-mix(in srgb, var(--wc-accent) 12%, transparent); border-radius: 4px; padding: 0 4px;
+}
+button.mention.chat { cursor: pointer; transition: background .12s var(--ease), color .12s var(--ease); }
+button.mention.chat:hover { background: color-mix(in srgb, var(--wc-accent) 22%, transparent); color: var(--wc-accent-hover); }
+button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid); outline-offset: 1px; }
+.mention.chat svg { width: 12px; height: 12px; flex: 0 0 auto; }
 .msg.user .command-message { display: flex; align-items: baseline; gap: 7px; }
 /* Tooltip's wrapper is the flex item; reserve the command name's width so it can't overlap the summary. */
 .msg.user .command-message > .tooltip-wrap { flex: 0 0 auto; }
@@ -1721,6 +1731,15 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .mention-option strong { min-width: 0; max-width: 60%; color: var(--text); }
 .mention-option > span:not(.slash-mark) { font: 11.5px "SFMono-Regular", Consolas, monospace; color: var(--text-dim); }
 .mention-option.folder .slash-mark { color: var(--wc-accent); }
+/* A chat row: a name, not a path, so it reads in the UI face; the mark stays the accent's. */
+.mention-option.chat-option > span:not(.slash-mark) { font: 12.5px -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; color: var(--text-dim); }
+.mention-option.chat-option .slash-mark { color: var(--wc-accent); }
+/* The chats' heading inside the `@` list: files keep the list above it untouched. */
+.mention-group {
+  padding: 7px 10px 3px 8px; margin-top: 2px; border-top: 1px solid var(--border);
+  color: var(--text-faint); font-size: 10px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase;
+}
+.mention-group:first-child { margin-top: 0; border-top: 0; }
 .slash-picker-foot {
   position: sticky; bottom: 0; display: flex; align-items: center; gap: 5px; margin: 4px -5px 0; padding: 6px 12px 7px;
   border-top: 1px solid var(--border); background: var(--wc-menu); color: var(--text-faint); font-size: 10.5px;

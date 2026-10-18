@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState, useCallback } from "react";
-import type { BrowserContextRecord, NormalizedBlock } from "../types";
+import type { BrowserContextRecord, ChatRefRecord, NormalizedBlock } from "../types";
 import { appendContextSection, reindexContexts } from "../browser-context";
+import { encodeChatRefs, survivingChatRefs } from "../chat-refs";
 import { MessageBrowserContexts } from "./browser/MessageBrowserContexts";
 import type { FileAttachment } from "../attachment-utils";
 import { Icon } from "./Icons";
@@ -14,6 +15,8 @@ interface Props {
   /** The original message's attached text files. */
   files: FileAttachment[];
   browserContexts?: BrowserContextRecord[];
+  /** The chats the original message referenced: kept while their `@` token survives the edit. */
+  chatRefs?: ChatRefRecord[];
   /** Whether the chat's model accepts images. */
   vision: boolean;
   modelName?: string;
@@ -25,7 +28,7 @@ interface Props {
 }
 
 /** Edits a sent message in place. Sending makes the edit a new version of the message. */
-export function MessageEditor({ text, images, files, browserContexts = [], vision, modelName, loadImage, onSend, onCancel }: Props) {
+export function MessageEditor({ text, images, files, browserContexts = [], chatRefs = [], vision, modelName, loadImage, onSend, onCancel }: Props) {
   const [draft, setDraft] = useState(text);
   const [removed, setRemoved] = useState<number[]>([]);
   const [removedFiles, setRemovedFiles] = useState<number[]>([]);
@@ -59,7 +62,8 @@ export function MessageEditor({ text, images, files, browserContexts = [], visio
     const message = draft.trim();
     if ((!message && keptFiles.length === 0 && keptContexts.length === 0) || busy || blocked) return;
     setBusy(true);
-    const sent = await onSend(appendContextSection(message, reindexContexts(keptContexts, removed)), keptFiles, removed);
+    const withContexts = appendContextSection(message, reindexContexts(keptContexts, removed));
+    const sent = await onSend(encodeChatRefs(withContexts, survivingChatRefs(message, chatRefs)), keptFiles, removed);
     if (!sent) setBusy(false);
   }
 

@@ -1335,6 +1335,11 @@ export interface BrowserContextAttachment {
 }
 /** Metadata rides the text; its one image rides the ordinary, ordered image array. */
 export interface BrowserContextRecord extends Omit<BrowserContextAttachment, "image"> { imageIndex: number }
+/**
+ * One `@` chat reference: the message keeps `@"Name"` as text and the generated tail section
+ * carries the id, so a rename never breaks the reference and the agent reads the chat on demand.
+ */
+export interface ChatRefRecord { id: string; name: string }
 export interface RestoredPrompt { text: string; images?: ImageContent[] }
 
 export interface BrowserState {

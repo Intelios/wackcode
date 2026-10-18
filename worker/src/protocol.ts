@@ -811,6 +811,9 @@ export type WorkerCommand =
   | { id: string; type: "skill_creator_response"; requestId: string; success: false; error: string }
   | { id: string; type: "web_response"; requestId: string; success: true; result: unknown }
   | { id: string; type: "web_response"; requestId: string; success: false; error: string }
+  /** The host's answer to `read_chat`: a referenced chat's metadata and session file, or a refusal. */
+  | { id: string; type: "chat_response"; requestId: string; success: true; result: unknown }
+  | { id: string; type: "chat_response"; requestId: string; success: false; error: string }
   /**
    * The original of an image a tool result returned (answered with an `ImageContent` or null),
    * for the transcript's lightbox. Bypasses the command queue once the session exists.
@@ -1097,6 +1100,9 @@ export type WorkerOutput =
   /** A web search or a routed page read; Rust calls the provider (`web.rs`). */
   | { type: "web_request"; taskId: string; requestId: string; request: Record<string, unknown> }
   | { type: "web_cancel"; taskId: string; requestId: string }
+  /** `read_chat`: resolve a referenced chat id; Rust enforces who may read whom (`chat_refs.rs`). */
+  | { type: "chat_request"; taskId: string; requestId: string; request: Record<string, unknown> }
+  | { type: "chat_cancel"; taskId: string; requestId: string }
   | ({ type: "extension_ui_request"; taskId: string; requestId: string } & ExtensionUIRequest)
   | { type: "extension_ui_resolved"; taskId: string; requestId: string; cancelled: boolean }
   | { type: "extension_notice"; taskId: string; message: string; level: "info" | "warning" | "error" }

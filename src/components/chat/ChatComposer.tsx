@@ -2,16 +2,20 @@ import { encodeContexts, restoreContexts } from "../../browser-context";
 /**
  * Chat mode's composer: a round, friendly pill instead of the Code composer's toolbar. It keeps
  * what a conversation needs — attachments, the model and reasoning pickers, Stop, and queued
- * messages with Steer — and leaves out slash commands, @ mentions, planning modes and stats.
+ * messages with Steer — and leaves out slash commands, workspace file mentions, planning modes
+ * and stats. Its `@` picker is chats only: Chat mode may reference other Chat mode chats, and has
+ * no workspace files to point into (`chat-refs.ts`).
  *
  * Drafts live in App (`useComposerDrafts`) and every async update captures its draft key, as
  * in Composer.tsx: a late send failure or queue restore writes back to the chat it came from.
  * The attachment tray and queued rows are the shared pieces in `../composer/`.
  */
-import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type DragEvent, type SetStateAction } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type SetStateAction } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ImageContent, ProviderRecord, QueuedMessage, RestoredPrompt, TaskStatus, ThinkingLevel } from "../../types";
 import { attachmentProblem, attachFiles, filesFrom, largePasteText, pastedTextFile, splitFileSection, type FileAttachment } from "../../attachment-utils";
+import { activeMention, type ChatMentionSuggestion, type MentionSuggestion } from "../../mention-utils";
+import { chatMentionToken, encodeChatRefs, rankChats, survivingChatRefs } from "../../chat-refs";
 import { EMPTY_DRAFT, type ComposerDraft, type ComposerDraftState } from "../../hooks/useComposerDrafts";
 import { AttachmentTray } from "../composer/AttachmentTray";
 import { PasteNotice } from "../composer/PasteNotice";
@@ -20,6 +24,7 @@ import { Icon } from "../Icons";
 import { ModelPicker, ReasoningToggle, type ModelFavoritesProps } from "../ModelPicker";
 import { ImageLightbox } from "../ui/ImageLightbox";
 import { Tooltip } from "../ui/Tooltip";
+import { MentionPicker } from "../ui/MentionPicker";
 import { ChatAvatar } from "./ChatBubbles";
 
 /** Same overshooting glide as the Code composer's hero→dock move. */
@@ -48,6 +53,8 @@ interface ChatComposerProps extends ModelFavoritesProps {
   hero: boolean;
   queuedMessages?: QueuedMessage[];
   seed?: { text: string; images?: ImageContent[]; nonce: number };
+  /** Chats the `@` picker offers: this chat excluded, Chat mode chats only. */
+  mentionChats?: ChatMentionSuggestion[];
   onConfigure: (patch: { providerId?: string; modelId?: string; thinkingLevel?: ThinkingLevel }) => void;
   onSend: (message: string, images: ImageContent[], files: FileAttachment[], queue?: boolean) => Promise<boolean>;
   onSteer?: (messageId: string) => Promise<boolean>;
@@ -60,12 +67,13 @@ interface ChatComposerProps extends ModelFavoritesProps {
 
 export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(function ChatComposer({
   draftState, status, backgroundWorking = false, providers, providerId, modelId, thinkingLevel, favoriteModels, favoriteSaving, onSetFavorite,
-  placeholder, agentName, disabled, frozen, hero, queuedMessages, seed, onConfigure, onSend, onSteer, onDequeue, onStop, onOpenSettings, onTyping
+  placeholder, agentName, disabled, frozen, hero, queuedMessages, seed, mentionChats, onConfigure, onSend, onSteer, onDequeue, onStop, onOpenSettings, onTyping
 }, handle) {
   const reduce = useReducedMotion() ?? false;
   const { key: draftKey, value, update: updateDraft } = draftState;
   const { text: draft, images, files } = value;
   const contexts = value.browserContexts ?? [];
+  const chatRefs = value.chatRefs ?? [];
   const attachmentError = attachmentProblem(value);
   const activeDraftKey = useRef(draftKey);
   activeDraftKey.current = draftKey;
@@ -80,6 +88,10 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   const [shownImage, setShownImage] = useState<{ index: number; url: string } | null>(null);
   /** Bumped on each send: the send button does a little hop. */
   const [launches, setLaunches] = useState(0);
+  const [caret, setCaret] = useState(draft.length);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  /** Where the `@` token Escape closed starts; it stays closed until that `@` goes away. */
+  const [mentionDismissedAt, setMentionDismissedAt] = useState<number>();
 
   function setField<K extends keyof ComposerDraft>(field: K, next: SetStateAction<ComposerDraft[K]>) {
     updateDraft((current) => ({ ...current, [field]: typeof next === "function" ? (next as (v: ComposerDraft[K]) => ComposerDraft[K])(current[field]) : next }));
@@ -92,13 +104,24 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   const noVisionMessage = `${model?.name || model?.id || "This model"} doesn't accept images. Turn on Vision for it in Settings.`;
   const blockedByModel = (images.length + contexts.length > 0 && !vision) || Boolean(attachmentError);
   const shownText = frozen ?? draft;
+  const mention = !disabled && frozen === undefined ? activeMention(draft, caret) : null;
+  const showMentions = mention !== null && mention.start !== mentionDismissedAt;
+  const mentionSuggestions = useMemo(
+    () => showMentions && mentionChats?.length ? rankChats(mentionChats, mention.query) : [],
+    [mentionChats, showMentions, mention?.query]
+  );
   const canSend = !disabled && frozen === undefined && providers.length > 0 && status !== "stopping" && (Boolean(draft.trim()) || files.length > 0 || contexts.length > 0) && !blockedByModel;
 
   const queue = useQueueActions({
     draftKey, activeDraftKey, status, blocked: Boolean(disabled) || frozen !== undefined, onSteer, onDequeue,
     onError: setNotice,
-    onRestore: (restored, restoredFiles, restoredImages, restoredContexts) => {
-      updateDraft((current) => ({ ...current, images: [...current.images, ...restoredImages], browserContexts: [...(current.browserContexts ?? []), ...restoredContexts] }));
+    onRestore: (restored, restoredFiles, restoredImages, restoredContexts, restoredChatRefs) => {
+      updateDraft((current) => ({
+        ...current,
+        images: [...current.images, ...restoredImages],
+        chatRefs: [...(current.chatRefs ?? []), ...restoredChatRefs].filter((ref, index, all) => all.findIndex((item) => item.id === ref.id) === index),
+        browserContexts: [...(current.browserContexts ?? []), ...restoredContexts]
+      }));
       if (restoredFiles.length) setField("files", (current) => [...current, ...restoredFiles]);
       if (restored) setField("text", (current) => current.trim() ? `${current}\n\n${restored}` : restored);
       requestAnimationFrame(() => { if (activeDraftKey.current === draftKey) areaRef.current?.focus(); });
@@ -109,6 +132,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     focus: () => areaRef.current?.focus(),
     fill: (text: string) => {
       updateDraft((current) => ({ ...current, text }));
+      setCaret(text.length);
       requestAnimationFrame(() => {
         const area = areaRef.current;
         if (!area) return;
@@ -119,7 +143,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   }), [updateDraft]);
 
   useEffect(() => { onTyping?.(Boolean(draft.trim() || files.length)); }, [draft, files.length, onTyping]);
-  useLayoutEffect(() => { setNotice(undefined); setPasteNotice(undefined); setShownImage(null); setDragging(false); }, [draftKey]);
+  useLayoutEffect(() => { setNotice(undefined); setPasteNotice(undefined); setShownImage(null); setDragging(false); setCaret(draft.length); setMentionIndex(0); setMentionDismissedAt(undefined); }, [draftKey]);
 
   useLayoutEffect(() => {
     const area = areaRef.current;
@@ -149,7 +173,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     if (nonce === undefined || seedText.current === undefined || seedNonces.current.get(draftKey) === nonce) return;
     seedNonces.current.set(draftKey, nonce);
     const restored = splitFileSection(seedText.current);
-    updateDraft((current) => ({ ...current, text: restored.text, files: restored.files, ...restoreContexts(restored.browserContexts ?? [], seedImages.current ?? []) }));
+    updateDraft((current) => ({ ...current, text: restored.text, files: restored.files, chatRefs: restored.chatRefs ?? [], ...restoreContexts(restored.browserContexts ?? [], seedImages.current ?? []) }));
     setPasteNotice(undefined);
     areaRef.current?.focus();
   }, [seed?.nonce, draftKey]);
@@ -164,15 +188,34 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     setPasteNotice(undefined);
     setLaunches((count) => count + 1);
     const outgoing = encodeContexts(message, keptImages, contexts);
-    const ok = await onSend(outgoing.text, outgoing.images, keptFiles, queueing ? true : undefined);
+    // Referenced chats ride a tail section after the browser contexts, never as content.
+    const text = encodeChatRefs(outgoing.text, survivingChatRefs(message, chatRefs));
+    const ok = await onSend(text, outgoing.images, keptFiles, queueing ? true : undefined);
     if (!ok) {
       updateDraft((current) => ({
         text: current.text ? `${message}\n\n${current.text}` : message,
         images: [...keptImages, ...current.images],
         files: [...keptFiles, ...current.files],
+        chatRefs,
         browserContexts: [...contexts, ...(current.browserContexts ?? [])]
       }));
     }
+  }
+
+  /** Insert a referenced chat where the `@` token is and remember its id for the tail section. */
+  function insertMention(entry: MentionSuggestion) {
+    if (!mention || entry.kind !== "chat") return;
+    const value = chatMentionToken(entry.name);
+    const rest = draft.slice(mention.end);
+    const gap = /^\s/.test(rest) ? "" : " ";
+    const next = draft.slice(0, mention.start) + value + gap + rest;
+    const position = mention.start + value.length + 1;
+    const ref = { id: entry.id, name: entry.name };
+    setField("chatRefs", (current) => [...(current ?? []).filter((item) => item.id !== ref.id), ref]);
+    setField("text", next);
+    setCaret(position);
+    setMentionIndex(0);
+    requestAnimationFrame(() => { if (activeDraftKey.current !== draftKey) return; areaRef.current?.focus(); areaRef.current?.setSelectionRange(position, position); });
   }
 
   async function addFiles(picked: File[]) {
@@ -245,6 +288,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
             </motion.div>
           )}
         </AnimatePresence>
+        {showMentions && <MentionPicker id="chat-mention-list" label="Chats" suggestions={mentionSuggestions} index={mentionIndex} onPick={insertMention}
+          empty={mentionChats?.length ? "No matching chats" : "No other chats to reference"} />}
         <div className="chat-composer-row">
           {providers.length > 0 && (
             <Tooltip label="Attach files or images">
@@ -262,8 +307,21 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
             value={shownText}
             readOnly={frozen !== undefined}
             disabled={disabled || providers.length === 0}
+            aria-controls={showMentions ? "chat-mention-list" : undefined}
+            aria-expanded={showMentions}
+            aria-activedescendant={showMentions && mentionSuggestions.length ? `mention-option-${Math.min(mentionIndex, mentionSuggestions.length - 1)}` : undefined}
             placeholder={providers.length === 0 ? "Connect a provider to start…" : status === "stopping" ? `${agentName} is stopping…` : queueing ? `${agentName} is replying — ⏎ sends after` : placeholder}
-            onChange={(event) => { if (frozen === undefined) { setField("text", event.target.value); setNotice(undefined); } }}
+            onChange={(event) => {
+              if (frozen !== undefined) return;
+              const value = event.target.value;
+              setField("text", value);
+              setCaret(event.target.selectionStart);
+              setMentionIndex(0);
+              setMentionDismissedAt((at) => at !== undefined && value[at] === "@" ? at : undefined);
+              setNotice(undefined);
+            }}
+            onClick={(event) => setCaret(event.currentTarget.selectionStart)}
+            onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
             onPaste={(event) => {
               if (disabled || frozen !== undefined) return;
               // A paste this large would swamp the draft; it becomes a text file like a picked one.
@@ -290,6 +348,13 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
               void addFiles(picked);
             }}
             onKeyDown={(event) => {
+              if (showMentions && !event.nativeEvent.isComposing) {
+                const count = mentionSuggestions.length;
+                if (event.key === "ArrowDown" && count) { event.preventDefault(); setMentionIndex((index) => (index + 1) % count); return; }
+                if (event.key === "ArrowUp" && count) { event.preventDefault(); setMentionIndex((index) => (index - 1 + count) % count); return; }
+                if ((event.key === "Tab" || event.key === "Enter") && count && !event.shiftKey) { event.preventDefault(); insertMention(mentionSuggestions[Math.min(mentionIndex, count - 1)]); return; }
+                if (event.key === "Escape") { event.preventDefault(); setMentionDismissedAt(mention.start); return; }
+              }
               if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); }
             }}
           />

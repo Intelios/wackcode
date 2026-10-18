@@ -1,5 +1,6 @@
-import type { BrowserContextAttachment, BrowserContextRecord, ImageContent } from "./types";
+import type { BrowserContextAttachment, BrowserContextRecord, ChatRefRecord, ImageContent } from "./types";
 import { domBytes, MAX_MESSAGE_DOM, splitContextSection } from "./browser-context";
+import { splitChatRefSection } from "./chat-refs";
 
 /**
  * Composer-side attachment limits. `src-tauri/src/commands.rs` (`validate_images`) enforces the
@@ -289,13 +290,25 @@ export interface SplitFiles {
   text: string;
   files: FileAttachment[];
   browserContexts?: BrowserContextRecord[];
+  /** The `@` chats this message referenced (`chat-refs.ts`), for the transcript and edits. */
+  chatRefs?: ChatRefRecord[];
 }
 
-/** The message's own words and its attached files — the inverse of `composeFileSection`. */
+/**
+ * The message's own words and its attached files — the inverse of `composeFileSection`.
+ * Generated sections are stripped in the order they were appended (files, then referenced
+ * chats, then browser contexts), because each one only counts as the message's own tail.
+ */
 export function splitFileSection(message: string): SplitFiles {
   const files = splitFilesOnly(message);
-  const context = splitContextSection(files.text);
-  return { ...files, text: context.text, ...(context.contexts.length ? { browserContexts: context.contexts } : {}) };
+  const chats = splitChatRefSection(files.text);
+  const context = splitContextSection(chats.text);
+  return {
+    ...files,
+    text: context.text,
+    ...(context.contexts.length ? { browserContexts: context.contexts } : {}),
+    ...(chats.chatRefs.length ? { chatRefs: chats.chatRefs } : {}),
+  };
 }
 
 function splitFilesOnly(message: string): SplitFiles {

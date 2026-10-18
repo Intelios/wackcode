@@ -118,6 +118,11 @@ export interface BuiltinHost {
    * and makes the request (`web.rs`). Rejects with the host's sentence on any failure.
    */
   web(request: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>;
+  /**
+   * Ask the host to resolve a chat the user referenced with `@` (`read_chat`): who may read whom
+   * is decided there (`chat_refs.rs`), and the answer carries that chat's session file.
+   */
+  readChat(request: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>;
   /** Whether this chat's current model can receive an image tool result. */
   supportsVision(): boolean;
 }

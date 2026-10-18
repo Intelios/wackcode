@@ -51,6 +51,12 @@ Don't describe it as more than this, and don't add a tool to Chat mode's allowli
 
 Chat mode is also where the app has no permission prompts by design: there is nothing to approve, because there is no path outside the scratchpad to ask about. Keep it that way (see `AGENTS.md`).
 
+The one cross-chat read is `read_chat`, and it takes no path: the worker sends a chat id to the
+host (`chat_refs.rs`), which refuses anything that is not a saved chat with a session file —
+never the reading chat itself, and for a Chat mode chat only another Chat mode chat, so project
+material from a Code chat cannot reach a scratchpad-confined chat. The worker then renders that
+one session read-only (`worker/src/chat-history.ts`); nothing else from the chat crosses.
+
 A Chat mode worker loads no package, even a trusted one, and receives no sub-agent settings: that payload carries other connections' credentials.
 
 ## Pi lockdown

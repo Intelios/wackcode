@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedMessage } from "../types";
 import { composeFileSection } from "../attachment-utils";
+import { encodeChatRefs } from "../chat-refs";
 import { ExploreGroupingEnabled } from "./ExploreGroup";
 import { SubagentPanelLink } from "./SubagentChip";
 import { ThinkingPreviewEnabled } from "./ThinkingRow";
@@ -512,6 +513,44 @@ describe("Transcript message actions", () => {
       type: "edit", message: withFiles, text: "Make it blue",
       files: [{ name: "more.txt", text: "x" }], removeImages: []
     });
+  });
+
+  it("hides the referenced-chats section and links a token to a chat that still exists", async () => {
+    const withChat: NormalizedMessage = {
+      ...user,
+      versions: undefined,
+      blocks: [{ type: "text", text: encodeChatRefs('continue @"Auth refactor"', [{ id: "auth", name: "Auth refactor" }]) }]
+    };
+    const open = vi.fn();
+    const view = render(<Transcript messages={[withChat]} running={false} actionsEnabled onMessageAction={vi.fn()}
+      chatLinks={{ known: new Set(["auth"]), open }} />);
+    expect(screen.queryByText(/referenced-chats-v1/)).not.toBeInTheDocument();
+    const token = screen.getByRole("button", { name: /@"Auth refactor"/ });
+    expect(token).toHaveClass("mention", "chat");
+    fireEvent.click(token);
+    expect(open).toHaveBeenCalledWith("auth");
+
+    // A chat that was deleted since stays a highlighted token, not a dead button.
+    view.rerender(<Transcript messages={[withChat]} running={false} actionsEnabled onMessageAction={vi.fn()}
+      chatLinks={{ known: new Set(), open }} />);
+    expect(screen.queryByRole("button", { name: /@"Auth refactor"/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/@"Auth refactor"/)).toHaveClass("mention", "chat");
+  });
+
+  it("keeps a surviving chat reference when the message is edited", async () => {
+    const withChat: NormalizedMessage = {
+      ...user,
+      versions: undefined,
+      blocks: [{ type: "text", text: encodeChatRefs('continue @"Auth refactor"', [{ id: "auth", name: "Auth refactor" }]) }]
+    };
+    const onMessageAction = vi.fn().mockResolvedValue(true);
+    render(<Transcript messages={[withChat]} running={false} actionsEnabled onMessageAction={onMessageAction} />);
+    // The editor shows the words without the section, and re-encodes the refs on send.
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("textbox", { name: "Edit message" })).toHaveValue('continue @"Auth refactor"');
+    await act(async () => { fireEvent.keyDown(screen.getByRole("textbox", { name: "Edit message" }), { key: "Enter" }); });
+    const edit = onMessageAction.mock.calls[0][0] as { text: string };
+    expect(edit.text.startsWith('continue @"Auth refactor"\n\n<referenced-chats-v1>')).toBe(true);
   });
 
   it("offers retry on an unanswered latest message and shows the empty state after rewinding the first one", () => {

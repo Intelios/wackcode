@@ -1,6 +1,8 @@
 /**
- * `@` file mentions, modelled on Pi's own TUI autocomplete (pi-tui `CombinedAutocompleteProvider`):
- * the message keeps `@path` (or `@"path with spaces"`) as plain text and the model reads the file itself.
+ * `@` mentions, modelled on Pi's own TUI autocomplete (pi-tui `CombinedAutocompleteProvider`):
+ * the message keeps `@path` (or `@"path with spaces"`) as plain text and the model reads the file
+ * itself. Chats are the same gesture with a different payload (`chat-refs.ts`): the token names
+ * the chat, and a generated section carries its id instead of its history.
  */
 
 /** The `@` token the caret is in: `draft.slice(start, end)` is replaced when a suggestion is chosen. */
@@ -12,11 +14,27 @@ export interface ActiveMention {
   quoted: boolean;
 }
 
-export interface MentionSuggestion {
+/** A file row in the `@` picker. */
+export interface FileMentionSuggestion {
+  kind: "file";
   /** Relative to the workspace; directories end with `/`. */
   path: string;
   directory: boolean;
 }
+
+/** A chat row in the `@` picker; `name` is what the token spells, `label` the dim second column. */
+export interface ChatMentionSuggestion {
+  kind: "chat";
+  id: string;
+  name: string;
+  label: string;
+  archived: boolean;
+  /** Last activity in ms, the ranking's tiebreak; absent sorts last. */
+  at?: number;
+}
+
+/** Anything the `@` picker lists: workspace files, then referenced chats. */
+export type MentionSuggestion = FileMentionSuggestion | ChatMentionSuggestion;
 
 /** Characters that may sit right before a mention's `@`, besides whitespace. */
 const OPENERS = new Set(["(", "[", "{", "\"", "'", "`"]);
@@ -55,10 +73,12 @@ export function mentionValue(path: string, directory = false): string {
   return directory ? `@"${path}` : `@"${path}"`;
 }
 
-const entryCache = new WeakMap<string[], MentionSuggestion[]>();
+type FileEntry = Omit<FileMentionSuggestion, "kind">;
+
+const entryCache = new WeakMap<string[], FileEntry[]>();
 
 /** Every file plus every folder that holds one, computed once per listing. */
-function entriesFor(files: string[]): MentionSuggestion[] {
+function entriesFor(files: string[]): FileEntry[] {
   const cached = entryCache.get(files);
   if (cached) return cached;
   const directories = new Set<string>();
@@ -90,7 +110,10 @@ function isSubsequence(query: string, target: string): boolean {
   return index === query.length;
 }
 
-function score(entry: MentionSuggestion, query: string): number {
+/** Shared with chat ranking, which uses the same weak fallback for whole names. */
+export { isSubsequence };
+
+function score(entry: FileEntry, query: string): number {
   const path = entry.path.toLowerCase();
   const bare = path.replace(/\/$/, "");
   let value = 0;
@@ -115,9 +138,9 @@ function score(entry: MentionSuggestion, query: string): number {
 }
 
 /** The best matches for what follows `@`: folders end with `/`, an empty query lists the top level. */
-export function rankMentions(files: string[], query: string, limit = 20): MentionSuggestion[] {
+export function rankMentions(files: string[], query: string, limit = 20): FileMentionSuggestion[] {
   const needle = query.toLowerCase();
-  const scored: { entry: MentionSuggestion; score: number }[] = [];
+  const scored: { entry: FileEntry; score: number }[] = [];
   for (const entry of entriesFor(files)) {
     const value = score(entry, needle);
     if (value > 0) scored.push({ entry, score: value });
@@ -126,7 +149,7 @@ export function rankMentions(files: string[], query: string, limit = 20): Mentio
     || depth(a.entry.path) - depth(b.entry.path)
     || a.entry.path.length - b.entry.path.length
     || a.entry.path.localeCompare(b.entry.path));
-  return scored.slice(0, limit).map((item) => item.entry);
+  return scored.slice(0, limit).map((item) => ({ kind: "file" as const, ...item.entry }));
 }
 
 export interface TextSegment {

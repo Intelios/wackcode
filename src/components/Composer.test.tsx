@@ -860,12 +860,12 @@ describe("Composer @ file mentions", () => {
     const { onRequestMentions, onSend, area } = setup();
     fireEvent.change(area, { target: { value: "look at @rea", selectionStart: 12 } });
     expect(onRequestMentions).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("listbox", { name: "Files" })).toBeInTheDocument();
+    expect(screen.getByRole("listbox", { name: "Files and chats" })).toBeInTheDocument();
     expect(screen.getAllByRole("option")[0]).toHaveTextContent("README.md");
     fireEvent.keyDown(area, { key: "Enter" });
     expect(area).toHaveValue("look at @README.md ");
     expect(onSend).not.toHaveBeenCalled();
-    expect(screen.queryByRole("listbox", { name: "Files" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("listbox", { name: "Files and chats" })).not.toBeInTheDocument();
   });
 
   it("keeps the picker open inside a chosen folder", () => {
@@ -890,7 +890,7 @@ describe("Composer @ file mentions", () => {
     const { onSend, area } = setup();
     fireEvent.change(area, { target: { value: "see @src", selectionStart: 8 } });
     fireEvent.keyDown(area, { key: "Escape" });
-    expect(screen.queryByRole("listbox", { name: "Files" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("listbox", { name: "Files and chats" })).not.toBeInTheDocument();
     fireEvent.keyDown(area, { key: "Enter" });
     expect(onSend).toHaveBeenCalledWith("see @src", [], []);
   });
@@ -899,9 +899,9 @@ describe("Composer @ file mentions", () => {
     const onRequestMentions = vi.fn();
     const { area } = setup({ mentionFiles: undefined, mentionsLoading: true, onRequestMentions });
     fireEvent.change(area, { target: { value: "mail a@b", selectionStart: 8 } });
-    expect(screen.queryByRole("listbox", { name: "Files" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("listbox", { name: "Files and chats" })).not.toBeInTheDocument();
     fireEvent.change(area, { target: { value: "@", selectionStart: 1 } });
-    expect(screen.getByRole("listbox", { name: "Files" })).toHaveTextContent("Loading files…");
+    expect(screen.getByRole("listbox", { name: "Files and chats" })).toHaveTextContent("Loading files…");
     cleanup();
     const failed = setup({ mentionFiles: undefined, mentionsError: "Pick a project to mention its files." });
     fireEvent.change(failed.area, { target: { value: "@", selectionStart: 1 } });
@@ -916,6 +916,55 @@ function deferred<T>() {
   const promise = new Promise<T>((done) => { resolve = done; });
   return { promise, resolve };
 }
+
+describe("Composer @ chat references", () => {
+  const chats = [
+    { kind: "chat" as const, id: "auth", name: "Auth refactor", label: "WackCode", archived: false, at: 3 },
+    { kind: "chat" as const, id: "design", name: "Design notes", label: "No project", archived: true, at: 2 }
+  ];
+
+  function setup(extra: Partial<React.ComponentProps<typeof Composer>> = {}) {
+    const onSend = vi.fn().mockResolvedValue(true);
+    render(<Composer {...noFavorites} status="idle" providers={providers} providerId="p" modelId="sees" thinkingLevel="off"
+      onConfigure={vi.fn()} onSend={onSend} onStop={vi.fn()} onOpenSettings={vi.fn()}
+      onRequestMentions={vi.fn()} mentionChats={chats} {...extra} />);
+    return { onSend, area: screen.getByRole("textbox") };
+  }
+
+  it("lists matching chats under their own heading and inserts a quoted token", () => {
+    const { onSend, area } = setup({ mentionFiles: ["README.md"] });
+    fireEvent.change(area, { target: { value: "keep going in @auth", selectionStart: 21 } });
+    const list = screen.getByRole("listbox", { name: "Files and chats" });
+    expect(list).toHaveTextContent("Chats");
+    expect(list).toHaveTextContent("Auth refactor");
+    expect(list).toHaveTextContent("WackCode");
+    fireEvent.keyDown(area, { key: "Enter" });
+    expect(area).toHaveValue('keep going in @"Auth refactor" ');
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("sends the reference as an id section, and drops it when the token is deleted", async () => {
+    const first = setup();
+    fireEvent.change(first.area, { target: { value: "continue @auth", selectionStart: 13 } });
+    fireEvent.keyDown(first.area, { key: "Enter" });
+    expect(first.area).toHaveValue('continue @"Auth refactor" ');
+    fireEvent.keyDown(first.area, { key: "Enter" });
+    await waitFor(() => expect(first.onSend).toHaveBeenCalledTimes(1));
+    const sent = first.onSend.mock.calls[0][0] as string;
+    expect(sent.startsWith('continue @"Auth refactor"\n\n<referenced-chats-v1>')).toBe(true);
+    expect(sent).toContain('{"id":"auth","name":"Auth refactor"}');
+    cleanup();
+
+    // Editing the token away leaves nothing to reference: the section is not generated.
+    const second = setup();
+    fireEvent.change(second.area, { target: { value: "continue @auth", selectionStart: 13 } });
+    fireEvent.keyDown(second.area, { key: "Enter" });
+    fireEvent.change(second.area, { target: { value: "continue", selectionStart: 8 } });
+    fireEvent.keyDown(second.area, { key: "Enter" });
+    await waitFor(() => expect(second.onSend).toHaveBeenCalledTimes(1));
+    expect(second.onSend.mock.calls[0][0]).toBe("continue");
+  });
+});
 
 describe("Composer per-chat drafts", () => {
   const base = {

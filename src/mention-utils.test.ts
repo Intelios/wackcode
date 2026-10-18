@@ -48,7 +48,7 @@ describe("rankMentions", () => {
 
   it("derives folders and lists their direct children first", () => {
     expect(rankMentions(files, "src/").map((entry) => entry.path)).toEqual(["src/components/", "src/App.tsx", "src/readme-utils.ts", "src/components/Composer.tsx"]);
-    expect(rankMentions(files, "comp")[0]).toEqual({ path: "src/components/", directory: true });
+    expect(rankMentions(files, "comp")[0]).toEqual({ kind: "file", path: "src/components/", directory: true });
   });
 
   it("falls back to fuzzy subsequences", () => {

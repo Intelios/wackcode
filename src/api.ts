@@ -67,6 +67,7 @@ import type {
   TerminalInfo,
   ThinkingLevel,
   ToolConfig,
+  VisualThemeVars,
   WorkspaceFiles
 } from "./types";
 
@@ -122,6 +123,8 @@ export const api = {
   toolImage: (taskId: string, toolCallId: string, index = 0) => invoke<ImageContent | null>("tool_image", { taskId, toolCallId, index }),
   /** The original image a sent message attached, or null when it's gone. */
   messageImage: (taskId: string, entryId: string, index = 0) => invoke<ImageContent | null>("message_image", { taskId, entryId, index }),
+  /** Stages a visual reply's HTML in Rust and returns the `wcvisual:` URL its frame loads. */
+  stageVisual: (html: string, theme: VisualThemeVars) => invoke<string>("stage_visual", { html, theme }),
   browserReset: (taskId: string) => invoke<BrowserState>("browser_reset", { taskId }),
   browserReturnFromPopup: (taskId: string) => invoke<BrowserState>("browser_return_from_popup", { taskId }),
   /** Opens the native picker in Rust (several images at once); null when the user cancels. */

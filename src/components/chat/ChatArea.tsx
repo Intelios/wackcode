@@ -29,6 +29,7 @@ import { ChatComposer, type ChatComposerHandle } from "./ChatComposer";
 import { ChatConversation } from "./ChatConversation";
 import { ChatHero } from "./ChatHero";
 import { EASE, type SystemNote } from "./ChatBubbles";
+import type { VisualSendResult } from "../../visual-action";
 
 export interface ChatAreaProps extends ModelFavoritesProps {
   task?: TaskRecord;
@@ -63,6 +64,10 @@ export interface ChatAreaProps extends ModelFavoritesProps {
   panel?: { id: string; labelledBy?: string };
   onMessageAction: (action: MessageAction) => Promise<boolean> | void;
   onReveal: (path: string) => void;
+  /** A visual reply's button was clicked: send its words as the user (`visual-action.ts`). */
+  onVisualSend?: (text: string, title: string) => Promise<VisualSendResult>;
+  /** A link inside a visual, opened outside the app. */
+  onVisualLink?: (href: string) => void;
   loadImage?: MessageImageLoader;
   chatLinks?: ChatLinks;
   onToggleBrowser: () => void;
@@ -122,6 +127,8 @@ export function ChatArea(props: ChatAreaProps) {
               onReveal={props.onReveal}
               loadImage={props.loadImage}
               chatLinks={props.chatLinks}
+              onVisualSend={props.onVisualSend}
+              onVisualLink={props.onVisualLink}
             />
             {props.dialogs}
           </motion.div>

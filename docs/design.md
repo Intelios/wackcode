@@ -27,6 +27,7 @@ Test a new surface in at least the default, Mono and one colourful preset, with 
 
 - Two radius tokens in `:root`: `--wc-radius-pill` for what you press and for chips, `--wc-radius-card` (14px) for content surfaces: tool sheets, work rows, code blocks. Reach for these before writing a new literal; older surfaces still carry their own.
 - A content surface that opens has one anatomy: a lighter head band with a round accent mark, a dotted accent seam, then the body on `--wc-well`. Tool sheets, work rows and code fences all use it.
+- A visual reply (`.visual-card`) wears that same anatomy so it reads as transcript furniture: the head band with its mark, title and actions, then the model's own document filling a transparent frame. Its colours come from the app's theme tokens (`visualThemeVars`), so a chart is drawn in the user's accent and a light background renders a light visual.
 - Inside a transcript every button is a pill or a circle (`.transcript-zone`); Settings keeps its squarer buttons.
 
 ## Motion

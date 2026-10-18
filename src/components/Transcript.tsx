@@ -11,7 +11,7 @@ import { completedPlan, layoutWorkTurns, type WorkRow } from "../completed-work"
 import { splitFileSection, type FileAttachment } from "../attachment-utils";
 import { chatMentionToken } from "../chat-refs";
 import { splitMentions } from "../mention-utils";
-import { SUBAGENT_TOOL_NAME, SKILL_CREATOR_TOOL_NAME, exploreKind, parseSkillPreviewDetails, parseSubagentDetails, pendingSubagentDetails, toolPresentation } from "../tool-utils";
+import { SUBAGENT_TOOL_NAME, SHOW_VISUAL_TOOL_NAME, SKILL_CREATOR_TOOL_NAME, currentVisualIds, exploreKind, parseSkillPreviewDetails, parseSubagentDetails, parseVisualArgs, pendingSubagentDetails, toolPresentation } from "../tool-utils";
 import { hasVisibleMessages, latestTurn, messageText } from "../tree-utils";
 import { ExploreExpansion, ExploreGroup, ExploreGroupingEnabled } from "./ExploreGroup";
 import { Icon } from "./Icons";
@@ -19,9 +19,11 @@ import { Markdown } from "./Markdown";
 import { MessageActions, type MessageActionItem } from "./MessageActions";
 import { MessageEditor } from "./MessageEditor";
 import { PlanCard, type PlanAction } from "./PlanCard";
+import { VisualCallCard, VisualCardScope, VisualSentNote, type VisualScope } from "./VisualCard";
 import { ScrollRail } from "./ScrollRail";
 import { SkillDraftCard, type SkillDraftAction } from "./SkillDraftCard";
 import { turnExcerpt, type RailTurn } from "../scroll-rail";
+import { splitVisualAction, type VisualSendResult } from "../visual-action";
 import { SubagentGroup } from "./SubagentChip";
 import { ThinkingExpansion, ThinkingRow } from "./ThinkingRow";
 import { FLY, OrphanResult, ToolChips, ToolExpansion, ToolRow, useTranscriptMotion, type ChipCall } from "./ToolRow";
@@ -60,6 +62,10 @@ interface Props {
   /** Latest Plan mode state; PlanCards use it to know which proposal is awaiting a decision. */
   planState?: PlanState;
   onPlanAction?: (action: PlanAction) => void;
+  /** A visual reply's button was clicked: send its words as the user (`visual-action.ts`). */
+  onVisualSend?: (text: string, title: string) => Promise<VisualSendResult>;
+  /** A link inside a visual: the webview cannot open one, so the app does. */
+  onVisualLink?: (href: string) => void;
   /** The skill-creator review cards: draft publication states, the owning chat, and their actions. */
   skillDrafts?: Record<string, SkillDraftStatus>;
   /** Drafts with a save in flight. */
@@ -275,6 +281,11 @@ function renderSpecialCall(
   if (plan !== undefined) {
     const current = isPlanMode(planState?.mode) && planState?.phase === "ready" && planState.plan === plan;
     return <PlanCard plan={plan} current={current} busy={running} onAction={onPlanAction} ultra={current && planState?.mode === "ultraplan"} />;
+  }
+  if (block.toolName === SHOW_VISUAL_TOOL_NAME) {
+    // The card is this call's settled outcome; while it runs the ordinary chip shows progress,
+    // and a refused call keeps its error on the plain row.
+    if (result && !result.isError && parseVisualArgs(block)) return <VisualCallCard block={block} />;
   }
   if (block.toolName === SUBAGENT_TOOL_NAME) {
     // The final result is authoritative; while running, the latest live update, or the
@@ -563,9 +574,10 @@ const Message = memo(function Message({ message, slots, results, liveToolText, l
   const scrollAnchor = `message:${message.id}${anchorPart ? `:${anchorPart}` : ""}`;
   if (message.role === "user") {
     const images = message.blocks.filter((block) => block.type === "image");
-    // The message text carries attached files in its generated section; the transcript shows
-    // them as chips and the words without them.
-    const { text, files, browserContexts = [], chatRefs = [] } = splitFileSection(messageText(message));
+    // The message text carries attached files and, for a visual's button, the section naming
+    // that visual; the transcript shows the words and both as their own parts.
+    const spoken = splitVisualAction(messageText(message));
+    const { text, files, browserContexts = [], chatRefs = [] } = splitFileSection(spoken.text);
     if (editing) {
       return (
         <div className="msg user editing" data-transcript-anchor={scrollAnchor} data-turn={message.versions ? message.versions.group : message.id}>
@@ -603,6 +615,7 @@ const Message = memo(function Message({ message, slots, results, liveToolText, l
         {text && (message.commandPresentation
           ? <CommandMessage message={message} onCopy={(prompt) => onAction({ type: "copy-prompt", text: prompt })} />
           : <div className="bubble"><MentionText text={text} chatRefs={chatRefs} chatLinks={chatLinks} /></div>)}
+        {spoken.title && <VisualSentNote title={spoken.title} />}
         <MessageActions
           align="end"
           items={items}
@@ -676,7 +689,7 @@ function activityLabel(activity?: string): string {
   return "Working…";
 }
 
-export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, compaction, runTimings = [], collapseCompletedWork = true, scopeKey = "", viewState, historyReady = true, status, liveToolText, liveToolDetails, planState, onPlanAction, skillDrafts, skillDraftsSaving, taskId, onSkillAction, loadSkillDocument, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind, loadImage, chatLinks, empty }: Props) {
+export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, compaction, runTimings = [], collapseCompletedWork = true, scopeKey = "", viewState, historyReady = true, status, liveToolText, liveToolDetails, planState, onPlanAction, onVisualSend, onVisualLink, skillDrafts, skillDraftsSaving, taskId, onSkillAction, loadSkillDocument, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind, loadImage, chatLinks, empty }: Props) {
   const scroll = useFollowScroll(viewState, historyReady);
   const { ref, onScroll, onWheel, detached, pauseFollowing, jumpToLatest } = scroll;
   const [expandedWork, setExpandedWork] = useState(() => viewState?.work ?? new Set<string>());
@@ -749,6 +762,15 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
 
   const lastAssistantId = useMemo(() => [...messages].reverse().find((message) => message.role === "assistant")?.id, [messages]);
 
+  // Only the newest answer's visuals may send: their buttons stay live, older ones go inert
+  // (`VisualCard`), so a scrollback full of widgets cannot each start a turn.
+  const visualScope = useMemo<VisualScope>(() => ({
+    currentIds: currentVisualIds(messages, partial),
+    busy: running,
+    onSend: onVisualSend,
+    onOpenLink: onVisualLink
+  }), [messages, partial, running, onVisualSend, onVisualLink]);
+
   const grouping = useContext(ExploreGroupingEnabled);
   const assistantName = useContext(AssistantNameContext);
   const [expandedGroups] = useState(() => viewState?.exploration ?? new Set<string>());
@@ -775,7 +797,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
     .map((message) => {
       const text = message.commandPresentation
         ? `/${message.commandPresentation.name} ${commandSummary(message.commandPresentation)}`
-        : splitFileSection(messageText(message)).text;
+        : splitFileSection(splitVisualAction(messageText(message)).text).text;
       return { id: message.versions ? message.versions.group : message.id, excerpt: turnExcerpt(text) };
     }), [messages]);
   const liveTurnId = useMemo(() => {
@@ -869,6 +891,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
         <ThinkingExpansion.Provider value={expandedThinking}>
           <ExploreExpansion.Provider value={expandedGroups}>
           <ToolExpansion.Provider value={toolExpansions}>
+          <VisualCardScope.Provider value={visualScope}>
             <div className="transcript">
               {messages.map((message, messageIndex) => {
                 const turn = workTurns.get(messageIndex);
@@ -916,6 +939,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
               {!compaction && waiting && label && <WorkingPresence label={label} />}
               {rewindBar}
             </div>
+          </VisualCardScope.Provider>
           </ToolExpansion.Provider>
           </ExploreExpansion.Provider>
         </ThinkingExpansion.Provider>

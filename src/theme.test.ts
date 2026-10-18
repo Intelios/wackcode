@@ -13,7 +13,9 @@ import {
   contrast,
   parseHex,
   resolveTheme,
-  swatchTint
+  swatchTint,
+  visualThemeVars,
+  visualVariables
 } from "./theme";
 
 const stylesheet = readFileSync(resolve(__dirname, "styles.css"), "utf8");
@@ -152,5 +154,44 @@ describe("theme tokens", () => {
     applyTheme({ backdrop: "glass", messageBubbles: true }, root);
     expect(root.dataset.backdrop).toBe("glass");
     expect(root.dataset.messageBubbles).toBe("on");
+  });
+});
+
+describe("visual replies' theme", () => {
+  it("hands a visual the app's own colours and font", () => {
+    const root = document.createElement("div");
+    document.body.append(root);
+    const applied = applyTheme({ accent: "#6cc4ff", background: "#0f1218" }, root);
+    const theme = visualThemeVars(root);
+    expect(theme.bg).toBe("#0f1218");
+    expect(theme.surface).toBe(applied.variables["--surface"]);
+    expect(theme.accent).toBe("#6cc4ff");
+    expect(theme.text).toBe(applied.variables["--text"]);
+    // The frame cannot load Inter, so it gets the stack and falls back the same way the app does.
+    expect(theme.font).toContain("sans-serif");
+    expect(theme.mono).toContain("monospace");
+    expect(theme.radius).toBe("14px");
+    expect(theme.scheme).toBe("dark");
+    root.remove();
+  });
+
+  it("calls a light background light, so form controls follow the app", () => {
+    const root = document.createElement("div");
+    document.body.append(root);
+    // Set directly: the app's own clamp keeps a saved background dark, but a theme is free to
+    // hand the frame any surface it likes.
+    root.style.setProperty("--bg", "#f6f4ee");
+    expect(visualThemeVars(root).scheme).toBe("light");
+    root.style.setProperty("--bg", "#111310");
+    expect(visualThemeVars(root).scheme).toBe("dark");
+    root.remove();
+  });
+
+  it("names the variables the frame's stylesheet expects", () => {
+    const theme = visualThemeVars(document.documentElement);
+    expect(Object.keys(visualVariables(theme)).sort()).toEqual([
+      "--accent", "--accent-text", "--bg", "--border", "--font", "--mono",
+      "--on-accent", "--radius", "--surface", "--text", "--text-dim", "--text-soft"
+    ]);
   });
 });

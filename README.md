@@ -25,6 +25,7 @@ Everything runs locally. Your conversations go straight from your Mac to the mod
 - **Plan before building.** Plan mode stays read-only by default until you approve a plan; Ultra Plan interviews you first.
 - **Review and ship.** A built-in diff view with line comments, generated commit messages, push, and GitHub pull requests.
 - **Sees what it builds.** A shared browser preview for web apps, and optional computer use for native Mac and iOS Simulator apps.
+- **Answers you can look at.** The agent can draw a chart, comparison, diagram or small interactive mockup right in the conversation instead of describing it.
 - **Extensible.** MCP servers, Agent Skills, slash commands, Pi packages, per-project memory, and optional sub-agents.
 - **Just chat, too.** A separate Chat area turns the same connections into a general-purpose chat, with no project and no coding tools.
 - **Yours.** Six themes or your own colours, image backdrops, Liquid Glass, and your agent's name. Appearance never changes what the model does.
@@ -44,6 +45,15 @@ Each chat keeps its unsent draft while the app is running. Chats keep working wh
 The **Code | Chat** switch moves between the coding agent and Chat mode, an ordinary chat with any of your connections. Chat mode has its own prompt and a small set of tools, and no project, shell, terminal, Git, sub-agents, computer use, skills or packages. Each chat gets a private scratchpad folder that its file tools can't leave; it's deleted with the chat. MCP servers and the browser aren't confined to it, so switch on only the ones you'd trust in any chat.
 
 Don't open Chat mode chats in a WackCode build from before Chat mode: an older build would run them as coding chats.
+
+### Answers you can look at
+
+Some answers are easier to see than to read: the agent can reply with a chart, a comparison, a
+diagram, a mockup of a UI it is proposing, or a small widget you can actually use, drawn in the
+conversation in the app's own colours. It works in both areas — most at home in Chat mode, and
+handy in Code mode when the agent describes a change to an interface. A visual runs in a sandbox
+of its own with no network access at all, and a button inside one can send a message for you only
+when you click it. Switch it off in **Settings › Tools › Built-ins**.
 
 ### Queue, steer and rewind
 
@@ -166,7 +176,7 @@ It's still an agent with real access to your Mac, so a few things are worth know
 - MCP servers you add over HTTP/SSE: only their own address, with the headers you gave. Headers are refused over plain `http://` except to your own Mac.
 - Your Git remote when you push, and GitHub (through `gh`) when you open a PR. Reading changes and switching branches use local Git state without fetching.
 
-Generating a commit message sends a bounded diff of your changes to the chat's model. Computer use contacts nothing itself, but window captures and accessibility text of apps you allow go to your model provider like any other tool result.
+Generating a commit message sends a bounded diff of your changes to the chat's model. Computer use contacts nothing itself, but window captures and accessibility text of apps you allow go to your model provider like any other tool result. A visual reply is drawn in a sandboxed frame that cannot reach the network or the app itself, so neither the model nor the visual can phone home from it.
 
 </details>
 

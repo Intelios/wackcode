@@ -14,6 +14,7 @@ import { BROWSER_OPEN_TOOL_NAME } from "../browser.js";
 import { MEMORY_SAVE_TOOL_NAME } from "../memory/index.js";
 import { WEB_FETCH_TOOL_NAME } from "../web-fetch/index.js";
 import { WEB_SEARCH_TOOL_NAME } from "../web-search/index.js";
+import { SHOW_VISUAL_TOOL_NAME, VISUAL_GUIDE_LINES } from "../visual.js";
 
 export const DEFAULT_CHAT_PROMPT = `You are a helpful, knowledgeable assistant in a desktop chat app. People come to you to think things through, learn, write, plan, analyse and get everyday things done.
 
@@ -62,6 +63,10 @@ export function buildChatGuide({ activeTools, hasMcpTools, today, searchLabel }:
   }
   if (has(MEMORY_SAVE_TOOL_NAME)) {
     lines.push("", "Memory: notes carry over to future chats here. Save only what will help later, such as a lasting preference or a correction. Update or retire a note rather than adding another.");
+  }
+  if (has(SHOW_VISUAL_TOOL_NAME)) {
+    // The same words the tool carries as promptGuidelines in Code mode, where Pi serves them.
+    lines.push("", `Visual replies: ${VISUAL_GUIDE_LINES[0]} ${VISUAL_GUIDE_LINES[1]} ${VISUAL_GUIDE_LINES[2]} ${VISUAL_GUIDE_LINES[3]} ${VISUAL_GUIDE_LINES[4]} ${VISUAL_GUIDE_LINES[5]}`);
   }
   if (hasMcpTools) {
     lines.push("", "Connected tools: tools whose names start with mcp__ come from servers the user added. Use them when they fit, and say what you did.");

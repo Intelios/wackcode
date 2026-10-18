@@ -1131,6 +1131,7 @@ describe("Pi worker integration", () => {
       "plan_mode_complete",
       "read",
       "read_chat",
+      "show_visual",
       "skill_creator",
       "subagent",
       "subagent_job",
@@ -1180,13 +1181,13 @@ describe("Pi worker integration", () => {
         "browser_console"
       ]
     });
-    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.length === 9);
+    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.length === 10);
     // `find`/`grep` availability varies by host; the companion stays on even without bash.
     const beforeSecondRun = provider.requests.length;
     worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-2", message: "Again." });
     await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.snapshot === undefined && provider.requests.length > beforeSecondRun);
 
-    expect(offered(provider.requests[beforeSecondRun])).toEqual(["ask_user_question", "bash_job", "edit", "plan_mode_complete", "read", "read_chat", "skill_creator", "todo", "write"]);
+    expect(offered(provider.requests[beforeSecondRun])).toEqual(["ask_user_question", "bash_job", "edit", "plan_mode_complete", "read", "read_chat", "show_visual", "skill_creator", "todo", "write"]);
     expect(worker.child.exitCode).toBeNull();
   });
 
@@ -4119,7 +4120,8 @@ describe("sub-agents", () => {
       const tools = offered(request);
       const roleTools = (ready.snapshot?.tools ?? []).filter((tool) => tool.available && scout.tools.includes(tool.name)).map((tool) => tool.name);
       expect(tools).toEqual([...roleTools, "bash_job"].sort());
-      for (const hidden of ["edit", "write", "subagent", "todo", "ask_user_question", "plan_mode_complete"]) {
+      // A child has no transcript to draw in, so visual replies stay out too.
+      for (const hidden of ["edit", "write", "subagent", "todo", "ask_user_question", "plan_mode_complete", "show_visual"]) {
         expect(tools).not.toContain(hidden);
       }
     }
@@ -5142,7 +5144,7 @@ describe("chat references", () => {
 
 describe("Chat mode", () => {
   const ALLOWED = new Set([
-    "read", "write", "edit", "ls", "grep", "find", "web_fetch", "web_search", "ask_user_question", "read_chat",
+    "read", "write", "edit", "ls", "grep", "find", "web_fetch", "web_search", "ask_user_question", "read_chat", "show_visual",
     "memory_save", "memory_recall", "memory_forget",
     "browser_open", "browser_snapshot", "browser_act", "browser_screenshot", "browser_console",
   ]);

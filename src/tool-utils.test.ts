@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bashExploreKind, diffStats, displayAgentName, editStats, exploreKind, firstSentence, groupTools, imageReadNote, parseSubagentDetails, parseWebSearchDetails, pendingSubagentDetails, pruneDisabledTools, sameToolCatalog, splitPathSubject, subagentDetailsFor, summarizeTool, toolPresentation } from "./tool-utils";
+import { bashExploreKind, currentVisualIds, diffStats, displayAgentName, editStats, exploreKind, firstSentence, groupTools, imageReadNote, parseSubagentDetails, parseWebSearchDetails, pendingSubagentDetails, pruneDisabledTools, sameToolCatalog, splitPathSubject, subagentDetailsFor, summarizeTool, toolPresentation } from "./tool-utils";
 import type { NormalizedBlock, NormalizedMessage, ToolCatalogEntry } from "./types";
 
 function call(toolName: string, args: unknown): NormalizedBlock {
@@ -325,5 +325,24 @@ describe("toolPresentation", () => {
     expect(toolPresentation(call("bash", { command: "rm -rf dist" }))).toBe("row");
     expect(toolPresentation(call("bash", { command: "pnpm test" }))).toBe("row");
     expect(toolPresentation(call("bash", { command: "ls > out.txt" }))).toBe("row");
+  });
+});
+
+describe("currentVisualIds", () => {
+  const visual = (id: string): NormalizedBlock => ({ type: "tool-call", toolName: "show_visual", toolCallId: id, arguments: { title: "Chart", html: "<p/>" } });
+  const user = (id: string): NormalizedMessage => ({ id, role: "user", blocks: [{ type: "text", text: "Show me" }] });
+  const assistant = (id: string, blocks: NormalizedBlock[]): NormalizedMessage => ({ id, role: "assistant", blocks });
+
+  it("counts a visual whose turn went on to write a sentence", () => {
+    // Pi records the tool-use step and the answer as two messages: the newest one is text only.
+    const result: NormalizedMessage = { id: "r1", role: "tool", blocks: [{ type: "tool-result", toolCallId: "v1", text: "Shown." }] };
+    const messages = [user("u1"), assistant("a1", [visual("v1")]), result, assistant("a2", [{ type: "text", text: "Here." }])];
+    expect([...currentVisualIds(messages)]).toEqual(["v1"]);
+  });
+
+  it("stops at the last user message, so an earlier turn's visual is not current", () => {
+    const messages = [user("u1"), assistant("a1", [visual("v1")]), user("u2"), assistant("a2", [{ type: "text", text: "Sure" }])];
+    expect([...currentVisualIds(messages)]).toEqual([]);
+    expect([...currentVisualIds(messages, assistant("p", [visual("v2")]))]).toEqual(["v2"]);
   });
 });

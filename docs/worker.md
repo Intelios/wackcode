@@ -107,11 +107,33 @@ lightbox and `tool_image` keep every original. Sub-agents load it too.
 
 ## Built-in extensions (`worker/src/builtin/`)
 
-WackCode's own extensions load as inline factories, so they bypass the package trust gate by construction. They are: `ask-user-question`, `auto-title`, `bash-jobs`, `browser`, `chat-refs`, `computer-use`, `goal`, `image-budget`, `mcp`, `memory`, `plan-mode`, `skill-creator`, `subagents`, `todo`, `web-fetch`, `web-search`, and `chat-mode`, a guard with no tools of its own that only Chat mode chats load.
+WackCode's own extensions load as inline factories, so they bypass the package trust gate by construction. They are: `ask-user-question`, `auto-title`, `bash-jobs`, `browser`, `chat-refs`, `computer-use`, `goal`, `image-budget`, `mcp`, `memory`, `plan-mode`, `skill-creator`, `subagents`, `todo`, `visual`, `web-fetch`, `web-search`, and `chat-mode`, a guard with no tools of its own that only Chat mode chats load.
 
 - Adding or renaming one also updates `BUILTIN_EXTENSIONS` in `src/components/PackagesSection.tsx`, which shows them so nobody installs a duplicate package.
-- Sub-agents never get browser, computer-use, MCP or memory tools, or skills. A child session loads its role's tool allowlist, its own shell check-in extension and the extensions the built-in hands it.
+- Sub-agents never get browser, computer-use, MCP, memory or visual tools, or skills. A child session loads its role's tool allowlist, its own shell check-in extension and the extensions the built-in hands it.
 - Foreground sub-agent transcripts are saved on the `subagent` result's `details` but kept out of snapshots (`withoutTranscripts` in `normalizeMessage`) and live card updates (`snapshotDetails`). The side panel gets them only through `watch_subagent` frames.
+
+### Visual replies (`visual.ts`)
+
+`show_visual` lets the agent answer part of a turn with a small HTML document — a chart, a
+comparison, a diagram, a mockup of proposed UI, a tiny widget — that the desktop draws where the
+call landed (`src/components/VisualCard.tsx`). It takes a `title` (60 characters) and an `html`
+body (64 KiB), and returns only `{ v: 1, title }`: the markup itself stays in the call's
+arguments, which Pi saves, so cold history needs nothing extra and the result does not repeat a
+64 KiB document into the context.
+
+- It is read-only, so Plan and Ultra Plan let it through; Chat mode allows it
+  (`CHAT_BUILTIN_TOOLS`), where its guide carries the same words as the tool's
+  `promptGuidelines` (Pi drops those once a chat prompt is set). Sub-agents never get it: a child
+  has no transcript to draw in.
+- It is switchable (`SWITCHABLE_BUILTIN_TOOLS`), so Settings › Tools can take it away; the
+  Packages built-in card carries that switch. Saved visuals still render — the switch is a
+  capability, not a display preference.
+- The document runs in a sandboxed frame with no network at all, so the guidelines say to inline
+  every asset and to colour from the app's CSS variables. `wackcode.send(text)` posts the message
+  the renderer gates (see [security.md](security.md#visual-replies)).
+- `read_chat` collapses the call to `[visual: Title]`, and a message a visual sent to
+  `[sent from visual: Title]`.
 
 ### Background sub-agents
 

@@ -117,6 +117,7 @@ import type { SystemNote } from "./components/chat/ChatBubbles";
 import { SubscriptionLoginDialog } from "./components/SubscriptionLoginDialog";
 import { ExploreGroupingEnabled } from "./components/ExploreGroup";
 import { ThinkingPreviewEnabled, ThinkingTimerPrecision } from "./components/ThinkingRow";
+import { composeVisualAction, splitVisualAction, type VisualSendResult } from "./visual-action";
 
 const emptyData: AppData = {
   version: 1,
@@ -2012,6 +2013,21 @@ export default function App() {
   /**
    * Send an already-composed message to an existing chat. The mode defaults to the chat's own.
    */
+  /**
+   * A visual reply's button, pressed by the user (`VisualCard`): the widget's words go out as
+   * their next message, with the generated tail that says which visual they came from
+   * (`visual-action.ts`). Literal, so a widget cannot make Pi run a slash command, and refused
+   * while the chat is busy — a widget never piles up turns on its own.
+   */
+  async function visualSend(text: string, title: string): Promise<VisualSendResult> {
+    const task = selectedTask;
+    if (!task) return { ok: false, reason: "failed" };
+    const status = data.tasks.find((item) => item.id === task.id)?.status ?? task.status;
+    if (status === "running" || status === "stopping") return { ok: false, reason: "busy" };
+    const sent = await sendPrompt(composeVisualAction(text, title), { literal: true });
+    return sent ? { ok: true } : { ok: false, reason: "failed" };
+  }
+
   async function promptTask(task: TaskRecord, sent: string, options: { images?: ImageContent[]; mode?: TaskMode; literal?: boolean; queue?: boolean } = {}): Promise<boolean> {
     const { images, mode: modeOverride, literal, queue } = options;
     const status = data.tasks.find((item) => item.id === task.id)?.status ?? task.status;
@@ -2458,8 +2474,8 @@ export default function App() {
   async function messageAction(action: MessageAction): Promise<boolean> {
     const messages = runtime?.snapshot?.messages ?? [];
     if (action.type === "copy") {
-      // The generated attached-files section is transport, not the message's words.
-      await writeText(splitFileSection(messageText(action.message)).text);
+      // The generated attached-files and visual-action sections are transport, not the words.
+      await writeText(splitFileSection(splitVisualAction(messageText(action.message)).text).text);
     } else if (action.type === "copy-prompt") {
       await writeText(action.text);
     } else if (action.type === "edit") {
@@ -2478,11 +2494,12 @@ export default function App() {
   }
 
   // Stable identities for the memoized transcript: the latest handlers are read through refs.
-  const handlers = useRef({ messageAction, planAction, skillDraftAction, undoRewind: () => undefined as void });
+  const handlers = useRef({ messageAction, planAction, skillDraftAction, visualSend: (text: string, title: string) => visualSend(text, title), undoRewind: () => undefined as void });
   handlers.current = {
     messageAction,
     planAction,
     skillDraftAction,
+    visualSend,
     undoRewind: () => {
       const undo = runtime?.snapshot?.tree?.undo;
       if (undo) void moveInTree(undo, "undo");
@@ -2492,6 +2509,9 @@ export default function App() {
   const onPlanAction = useCallback((action: PlanAction) => void handlers.current.planAction(action), []);
   const onSkillDraftAction = useCallback((action: SkillDraftAction) => void handlers.current.skillDraftAction(action), []);
   const onUndoRewind = useCallback(() => handlers.current.undoRewind(), []);
+  const onVisualSend = useCallback((text: string, title: string) => handlers.current.visualSend(text, title), []);
+  // A visual's link opens the way a Markdown link does: the webview cannot open one itself.
+  const onVisualLink = useCallback((href: string) => { void api.revealPath(href).catch(() => undefined); }, []);
 
   async function stopTask() {
     if (!selectedTask) return;
@@ -2861,6 +2881,8 @@ export default function App() {
     seed: selectedTask && composerSeed?.taskId === selectedTask.id ? composerSeed : undefined,
     panel: showChatTabBar ? { id: "chat-tab-panel", labelledBy: activeTab ? `tab-${activeTab.id}` : undefined } : undefined,
     onMessageAction,
+    onVisualSend,
+    onVisualLink,
     onReveal: (path) => { void api.revealPath(path, true).catch((reason) => setGlobalError(String(reason))); },
     loadImage: loadMessageImage,
     onToggleBrowser: toggleBrowser,
@@ -3071,6 +3093,8 @@ export default function App() {
               liveToolDetails={runtime?.liveToolDetails}
               planState={runtime?.planState}
               onPlanAction={onPlanAction}
+              onVisualSend={onVisualSend}
+              onVisualLink={onVisualLink}
               skillDrafts={runtime?.skillDrafts}
               skillDraftsSaving={skillDraftsSaving}
               taskId={selectedTask.id}

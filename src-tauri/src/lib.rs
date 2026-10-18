@@ -28,6 +28,7 @@ mod terminal;
 mod window_state;
 mod worker;
 mod usage;
+mod visuals;
 mod web;
 mod web_usage;
 
@@ -41,6 +42,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(computer_use::shortcut_plugin())
+        // One webview, one page: nothing navigates away, and a visual's frame never leaves
+        // `wcvisual:` (`visuals::navigation_allowed`).
+        .plugin(visuals::navigation_plugin())
         .manage(WorkerState::default())
         .manage(usage::UsageState::default())
         .manage(browser::BrowserManager::default())
@@ -53,6 +57,7 @@ pub fn run() {
         .manage(subscriptions::SubscriptionState::default())
         .manage(worker::ManagerState::default())
         .manage(terminal::TerminalState::default())
+        .manage(visuals::VisualStore::new())
         .manage(run_command::RunState::default())
         .manage(menu_bar::MenuBarState::default())
         .setup(|app| {
@@ -121,6 +126,13 @@ pub fn run() {
                     let _ = glass::apply(app, glass::NativeBackdrop::from_config(&data), *focused);
                 }
             }
+        })
+        // Visual replies render model-authored HTML in an iframe: the scheme serves only the
+        // documents the renderer staged this launch, with its own `default-src 'none'` CSP
+        // (`visuals.rs`). The app's CSP allows the scheme through `frame-src`.
+        .register_uri_scheme_protocol(visuals::VISUAL_SCHEME, |ctx, request| {
+            let store = ctx.app_handle().state::<visuals::VisualStore>();
+            visuals::protocol_response(&store, &request, ctx.webview_label())
         })
         .invoke_handler(invoke_handler())
         .build(tauri::generate_context!())
@@ -285,6 +297,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + 
             run_command::write_run,
             run_command::resize_run,
             menu_bar::take_menu_navigation,
+            visuals::stage_visual,
             commands::tool_image,
             commands::message_image,
             computer_use::computer_use_status,

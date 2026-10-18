@@ -16,6 +16,9 @@ import { useFollowScroll } from "../../hooks/useFollowScroll";
 import { latestTurn, messageText } from "../../tree-utils";
 import type { TranscriptViewState } from "../../transcript-view";
 import { useNavigationDismiss } from "../ui/NavigationScope";
+import { VisualCardScope, type VisualScope } from "../VisualCard";
+import { currentVisualIds } from "../../tool-utils";
+import type { VisualSendResult } from "../../visual-action";
 import { DuckMark } from "../DuckMark";
 import type { ChatLinks, MessageAction, MessageImageLoader } from "../Transcript";
 import { AgentReply, CompactionNote, replyPieces, SystemBubble, TimeDivider, TypingBubble, TypingRow, UserBubble, type SystemNote, type TypingMood } from "./ChatBubbles";
@@ -40,6 +43,10 @@ interface ChatConversationProps {
   loadImage?: MessageImageLoader;
   /** Opening a chat this conversation's messages referenced with `@`. */
   chatLinks?: ChatLinks;
+  /** A visual reply's button was clicked: send its words as the user (`visual-action.ts`). */
+  onVisualSend?: (text: string, title: string) => Promise<VisualSendResult>;
+  /** A link inside a visual, opened outside the app. */
+  onVisualLink?: (href: string) => void;
 }
 
 type Local = MessageAction | { type: "start-edit"; id: string } | { type: "cancel-edit" };
@@ -52,7 +59,7 @@ function moodOf(partial: NormalizedMessage | undefined, compaction: boolean): { 
   return { mood: "typing" };
 }
 
-export function ChatConversation({ task, messages, partial, running, compaction, viewState, historyReady, actionsEnabled, vision, modelName, notes, onMessageAction, onReveal, loadImage, chatLinks }: ChatConversationProps) {
+export function ChatConversation({ task, messages, partial, running, compaction, viewState, historyReady, actionsEnabled, vision, modelName, notes, onMessageAction, onReveal, loadImage, chatLinks, onVisualSend, onVisualLink }: ChatConversationProps) {
   const reduce = useReducedMotion() ?? false;
   const { ref, onScroll, onWheel, detached, jumpToLatest } = useFollowScroll(viewState, historyReady);
   const [editingId, setEditingId] = useState<string>();
@@ -77,6 +84,15 @@ export function ChatConversation({ task, messages, partial, running, compaction,
     }
     return map;
   }, [messages, partial]);
+
+  // Only the newest answer's visuals may send; older cards keep working but go inert
+  // (`VisualCard`), so a scrollback of widgets cannot each start a turn.
+  const visualScope = useMemo<VisualScope>(() => ({
+    currentIds: currentVisualIds(messages, partial),
+    busy: running,
+    onSend: onVisualSend,
+    onOpenLink: onVisualLink
+  }), [messages, partial, running, onVisualSend, onVisualLink]);
 
   const entries = useMemo(() => clusterMessages(messages), [messages]);
   const latest = useMemo(() => latestTurn(messages), [messages]);
@@ -124,6 +140,7 @@ export function ChatConversation({ task, messages, partial, running, compaction,
   return (
     <div className="chat-scroll-zone">
       <div className="chat-scroll" ref={ref} onScroll={onScroll} onWheel={onWheel}>
+        <VisualCardScope.Provider value={visualScope}>
         <div className="chat-thread">
           {entries.map((entry, index) => {
             if (entry.type === "divider") return <TimeDivider key={entry.key} label={dividerLabel(entry.at)} />;
@@ -155,6 +172,7 @@ export function ChatConversation({ task, messages, partial, running, compaction,
             {notes.map((note) => <SystemBubble key={note.key} note={note} />)}
           </AnimatePresence>
         </div>
+        </VisualCardScope.Provider>
       </div>
       <AnimatePresence>
         {detached && (

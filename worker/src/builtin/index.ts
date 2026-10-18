@@ -3,9 +3,9 @@
  * mechanism rather than the trusted-package path. They are ordinary code in this repo — no
  * trust gate applies because nothing external can reach this list. All are always on except
  * sub-agents, computer use and web search, which the user switches on in Settings (their tools
- * stay inactive until then), browser preview and web fetch, which are on until the user switches
- * them off (see `SWITCHABLE_BUILTIN_TOOLS`), and MCP, whose tools come from the servers the user
- * adds.
+ * stay inactive until then), browser preview, web fetch and visual replies, which are on until
+ * the user switches them off (see `SWITCHABLE_BUILTIN_TOOLS`), and MCP, whose tools come from
+ * the servers the user adds.
  *
  * A Chat mode chat loads `chatFactories` instead of `factories`: no shell, planning, todo,
  * sub-agents, goal loop, computer use or skill creator, plus the guard that enforces the rest
@@ -33,12 +33,13 @@ import { type SubagentsController, createSubagentsExtension } from "./subagents/
 import { type TodoHandle, createTodoExtension } from "./todo/index.js";
 import { WEB_FETCH_TOOL_NAME, createWebFetchExtension } from "./web-fetch/index.js";
 import { type WebSearchController, createWebSearchExtension } from "./web-search/index.js";
+import { SHOW_VISUAL_TOOL_NAME, createVisualExtension } from "./visual.js";
 
 /**
  * Built-in tools the user's Settings denylist applies to. Every other built-in tool is part of
  * how the app works (a disabled plan_mode_complete would break Plan mode) and ignores it.
  */
-export const SWITCHABLE_BUILTIN_TOOLS: ReadonlySet<string> = new Set([WEB_FETCH_TOOL_NAME, ...BROWSER_TOOL_NAMES]);
+export const SWITCHABLE_BUILTIN_TOOLS: ReadonlySet<string> = new Set([WEB_FETCH_TOOL_NAME, SHOW_VISUAL_TOOL_NAME, ...BROWSER_TOOL_NAMES]);
 
 export interface BuiltinExtensions {
   /** Factories handed to `DefaultResourceLoader.extensionFactories`. */
@@ -105,6 +106,8 @@ export function createBuiltinExtensions(host: BuiltinHost, options: {
   const goal = createGoalExtension(host, () => planMode.controller.getState().mode !== "build");
   const memory = createMemoryExtension(() => options.isChat?.() ? "chat" : "project");
   const browser: InlineExtension = { name: "wackcode-browser", factory: createBrowserExtension(host), hidden: true };
+  // No host: the visual is drawn by the desktop from the call's own arguments (`visual.ts`).
+  const visual: InlineExtension = { name: "wackcode-visual", factory: createVisualExtension(), hidden: true };
   const chatRefs: InlineExtension = { name: "wackcode-chat-refs", factory: createChatRefsExtension(host), hidden: true };
   const computerUse = createComputerUseExtension(host);
   const skillCreator = createSkillCreatorExtension(host, {
@@ -135,6 +138,7 @@ export function createBuiltinExtensions(host: BuiltinHost, options: {
       webFetch,
       webSearchExtension,
       browser,
+      visual,
       chatRefs,
       { name: "wackcode-computer-use", factory: computerUse.factory, hidden: true },
       { name: "wackcode-skill-creator", factory: skillCreator.factory, hidden: true },
@@ -153,6 +157,7 @@ export function createBuiltinExtensions(host: BuiltinHost, options: {
       webFetch,
       webSearchExtension,
       browser,
+      visual,
       chatRefs,
       mcpExtension,
     ],

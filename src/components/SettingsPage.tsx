@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import { api } from "../api";
 import { agentName } from "../agentName";
 import { modelIsReady } from "../model-utils";
-import { BROWSER_TOOL_NAMES, WEB_FETCH_TOOL_NAME } from "../tool-utils";
+import { BROWSER_TOOL_NAMES, SHOW_VISUAL_TOOL_NAME, WEB_FETCH_TOOL_NAME } from "../tool-utils";
 import type { ExecutionPolicyConfig, AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CommandsConfig, ComputerUseConfig, McpConfig, MemoryConfig, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ToolCatalogEntry, WebConfig } from "../types";
 import { Icon, type IconName } from "./Icons";
 import { AboutSection } from "./AboutSection";
@@ -335,6 +335,12 @@ export function SettingsPage({
             webSearchEnabled={web.enabled && web.providers.some((record) => record.id === web.activeProviderId)}
             onConfigureWeb={() => setSection("web")}
             browserEnabled={BROWSER_TOOL_NAMES.every((name) => !disabledTools.includes(name))}
+            visualEnabled={!disabledTools.includes(SHOW_VISUAL_TOOL_NAME)}
+            onToggleVisual={(enabled) => onSetDisabledTools(
+              enabled
+                ? disabledTools.filter((name) => name !== SHOW_VISUAL_TOOL_NAME)
+                : [...disabledTools.filter((name) => name !== SHOW_VISUAL_TOOL_NAME), SHOW_VISUAL_TOOL_NAME]
+            )}
             computerUseEnabled={computerUse.enabled}
             computerUseSupported={computerUseSupported}
             // Switching on goes through the setup dialog, which saves the setting itself.

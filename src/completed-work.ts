@@ -1,6 +1,6 @@
 import type { NormalizedBlock, NormalizedMessage, TaskStatus } from "./types";
 import type { TranscriptLayout, TranscriptSlot } from "./explore-utils";
-import { SKILL_CREATOR_TOOL_NAME, parseSkillPreviewDetails } from "./tool-utils";
+import { SHOW_VISUAL_TOOL_NAME, SKILL_CREATOR_TOOL_NAME, parseSkillPreviewDetails } from "./tool-utils";
 
 /**
  * Presentation only: each user starts a turn on the visible session branch. The worker's
@@ -40,6 +40,11 @@ export function completedSkillDraft(result?: NormalizedBlock): boolean {
   return !result?.isError && parseSkillPreviewDetails(result?.details) !== undefined;
 }
 
+/** A visual reply is content the reader came for, never work to fold away. */
+export function completedVisual(result?: NormalizedBlock): boolean {
+  return result !== undefined && !result.isError;
+}
+
 interface Options {
   layout: TranscriptLayout;
   results: Map<string, NormalizedBlock>;
@@ -74,6 +79,7 @@ export function layoutWorkTurns(messages: NormalizedMessage[], options: Options)
     let annotated = -1;
     let plan: { index: number; block: number; id: string } | undefined;
     let skill: { index: number; block: number; id: string } | undefined;
+    const visuals: Array<{ index: number; block: number }> = [];
     let systemNotice = false;
     let unfinishedCall = false;
     let backgroundDelegation = false;
@@ -110,6 +116,9 @@ export function layoutWorkTurns(messages: NormalizedMessage[], options: Options)
           if (block.toolName === SKILL_CREATOR_TOOL_NAME && completedSkillDraft(result) && block.toolCallId) {
             skill = { index, block: blockIndex, id: block.toolCallId };
           }
+          if (block.toolName === SHOW_VISUAL_TOOL_NAME && completedVisual(result)) {
+            visuals.push({ index, block: blockIndex });
+          }
         });
       }
     }
@@ -124,7 +133,7 @@ export function layoutWorkTurns(messages: NormalizedMessage[], options: Options)
     const answer = terminal >= 0 ? messages[terminal] : undefined;
     const turn: WorkTurn = {
       userIndex, userKey: identity(user), endIndex,
-      key: JSON.stringify([identity(user), answer ? identity(answer) : null, plan?.id ?? null, skill?.id ?? null]),
+      key: JSON.stringify([identity(user), answer ? identity(answer) : null, plan?.id ?? null, skill?.id ?? null, visuals.map((visual) => `${visual.index}:${visual.block}`).join(",")]),
       body
     };
     turns.set(userIndex, turn);
@@ -135,9 +144,16 @@ export function layoutWorkTurns(messages: NormalizedMessage[], options: Options)
 
     let lastCall = -1;
     answer.blocks.forEach((block, index) => { if (block.type === "tool-call") lastCall = index; });
+    // A visual is part of the answer wherever the turn drew it: Pi records the tool-use step and
+    // the prose after it as separate messages, so the card usually sits one message earlier.
+    const visualSlots = visuals;
+    // In the message that carries the answer, text after a visual is answer prose too.
+    const lastVisibleCall = visualSlots
+      .filter((visual) => visual.index === terminal)
+      .reduce((lowest, visual) => Math.min(lowest, visual.block), lastCall);
     const textIndices = new Set(answer.blocks.flatMap((block, index) =>
-      index > lastCall && block.type === "text" && block.text?.trim() ? [index] : []));
-    if (!textIndices.size && !plan && !skill) return;
+      index > lastVisibleCall && block.type === "text" && block.text?.trim() ? [index] : []));
+    if (!textIndices.size && !plan && !skill && !visualSlots.length) return;
 
     const work: WorkRow[] = [];
     const outcome: WorkRow[] = [];
@@ -147,7 +163,7 @@ export function layoutWorkTurns(messages: NormalizedMessage[], options: Options)
       && row.index < terminal && messages[row.index].role === "assistant"
       && !messages[row.index].blocks.some((block) => block.type === "tool-call") ? [row.index] : []) : []);
     const visible = (index: number, slot: TranscriptSlot) => slot.type === "block"
-      && ((index === terminal && textIndices.has(slot.index)) || (earlierAnswers.has(index) && messages[index].blocks[slot.index]?.type === "text") || (index === plan?.index && slot.index === plan.block) || (index === skill?.index && slot.index === skill.block));
+      && ((index === terminal && textIndices.has(slot.index)) || (earlierAnswers.has(index) && messages[index].blocks[slot.index]?.type === "text") || (index === plan?.index && slot.index === plan.block) || (index === skill?.index && slot.index === skill.block) || visualSlots.some((visual) => visual.index === index && visual.block === slot.index));
     for (const row of body) {
       if (row.type === "compaction") { outcome.push(row); continue; }
       if (row.type !== "message") { work.push(row); continue; }

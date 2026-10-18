@@ -8,11 +8,13 @@
  * left out, images as `[image]`, tool calls as one-line markers. Tool results are included only
  * on request, and truncated, because a coding chat's results are where the megabytes are.
  * WackCode's own generated tail sections inside a user message (attached files, browser context,
- * referenced chats) collapse to one-line markers so a nested dump cannot swallow the answer.
+ * referenced chats, a message a visual sent) collapse to one-line markers so a nested dump cannot
+ * swallow the answer.
  */
 import type { FileEntry, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { transcriptEntries } from "./transcript.js";
 import { buildTreeIndex, type EntryLike } from "./tree.js";
+import { MAX_VISUAL_TITLE, SHOW_VISUAL_TOOL_NAME } from "./builtin/visual.js";
 
 /** What the host knows about the chat, beyond its session file. */
 export interface ChatHistoryMeta {
@@ -34,10 +36,19 @@ const MAX_RESULT_CHARS = 2_000;
 /** A tool call's arguments, as one line next to its name. */
 const MAX_ARGS_CHARS = 120;
 
-const TAIL_SECTIONS = [
-  { open: "<attached-files>", close: "</attached-files>", marker: "[attached files]" },
-  { open: "<browser-contexts-v1>", close: "</browser-contexts-v1>", marker: "[browser context]" },
-  { open: "<referenced-chats-v1>", close: "</referenced-chats-v1>", marker: "[referenced chats]" },
+const TAIL_SECTIONS: readonly { open: string; close: string; marker: (inner: string) => string }[] = [
+  { open: "<attached-files>", close: "</attached-files>", marker: () => "[attached files]" },
+  { open: "<browser-contexts-v1>", close: "</browser-contexts-v1>", marker: () => "[browser context]" },
+  { open: "<referenced-chats-v1>", close: "</referenced-chats-v1>", marker: () => "[referenced chats]" },
+  {
+    open: "<visual-action-v1>",
+    close: "</visual-action-v1>",
+    // The title is the one detail worth keeping: it says which visual the user pressed.
+    marker: (inner) => {
+      const title = /visual\s+"([^"]{1,60})"/.exec(inner)?.[1];
+      return title ? `[sent from visual: ${title}]` : "[sent from visual]";
+    },
+  },
 ] as const;
 
 /** Where a generated section starts, counting the blank line before it (or the message's start). */
@@ -53,8 +64,10 @@ export function stripTailSections(text: string): string {
   for (let pass = 0; pass < TAIL_SECTIONS.length * 2; pass += 1) {
     const hit = TAIL_SECTIONS.find((section) => body.endsWith(`\n${section.close}`) && sectionStart(body, section.open) >= 0);
     if (!hit) break;
-    body = body.slice(0, sectionStart(body, hit.open));
-    markers.unshift(hit.marker);
+    const start = sectionStart(body, hit.open);
+    const inner = body.slice(start + hit.open.length, body.length - hit.close.length - 1);
+    body = body.slice(0, start);
+    markers.unshift(hit.marker(inner));
   }
   return [body, ...markers].filter(Boolean).join("\n\n");
 }
@@ -82,6 +95,11 @@ function toolCalls(content: unknown): string[] {
     if (!block || typeof block !== "object") return [];
     const value = block as { type?: unknown; name?: unknown; arguments?: unknown };
     if (value.type !== "toolCall" || typeof value.name !== "string") return [];
+    // A visual's HTML is its whole point; the marker names it and leaves the markup out.
+    if (value.name === SHOW_VISUAL_TOOL_NAME) {
+      const title = (value.arguments as { title?: unknown } | undefined)?.title;
+      return [typeof title === "string" && title.trim() ? `[visual: ${clip(title, MAX_VISUAL_TITLE)}]` : "[visual]"];
+    }
     let args = "";
     try { args = JSON.stringify(value.arguments ?? {}); } catch { args = ""; }
     return [args && args !== "{}" ? `[tool: ${value.name}(${clip(args, MAX_ARGS_CHARS)})]` : `[tool: ${value.name}]`];

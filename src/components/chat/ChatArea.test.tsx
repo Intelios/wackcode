@@ -77,6 +77,46 @@ describe("ChatArea", () => {
     expect(screen.getByRole("textbox", { name: "Message" })).toBeInTheDocument();
   });
 
+  it("draws a settled visual reply as a card where the call landed", () => {
+    const call: NormalizedMessage = { id: "a1", role: "assistant", timestamp: Date.now(), stopReason: "stop",
+      blocks: [
+        { type: "text", text: "Here is the shape of it." },
+        { type: "tool-call", toolCallId: "v1", toolName: "show_visual", arguments: { title: "Latency by region", html: "<p>42</p>" } },
+        { type: "tool-result", toolCallId: "v1", toolName: "show_visual", text: "Shown." }
+      ] };
+    renderArea({ task: task(), messages: [msg("u1", "user", "Show me"), call] });
+    expect(screen.getByRole("figure", { name: "Visual: Latency by region" })).toBeInTheDocument();
+    expect(screen.getByText("Here is the shape of it.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Expand visual" })).toBeInTheDocument();
+    // The visual is not folded into the reply's activity chips.
+    expect(document.querySelector(".chat-visual")).not.toBeNull();
+  });
+
+  it("keeps a visual that is still being drawn, or one that failed, as a chip", () => {
+    const running: NormalizedMessage = { id: "a1", role: "assistant", timestamp: Date.now(),
+      blocks: [{ type: "tool-call", toolCallId: "v1", toolName: "show_visual", arguments: { title: "Latency", html: "<p>42</p>" } }] };
+    const { unmount } = render(<Host {...{ ...base(), task: task(), messages: [msg("u1", "user", "Show me"), running] }} />);
+    expect(screen.queryByRole("figure")).toBeNull();
+    unmount();
+    cleanup();
+    const failed: NormalizedMessage = { id: "a1", role: "assistant", timestamp: Date.now(), stopReason: "stop",
+      blocks: [
+        { type: "tool-call", toolCallId: "v1", toolName: "show_visual", arguments: { title: "Latency", html: "<p>42</p>" } },
+        { type: "tool-result", toolCallId: "v1", toolName: "show_visual", text: "html is too large", isError: true }
+      ] };
+    renderArea({ task: task(), messages: [msg("u1", "user", "Show me"), failed] });
+    expect(screen.queryByRole("figure")).toBeNull();
+    expect(screen.getByText(/Drawing|Drew/)).toBeInTheDocument();
+  });
+
+  it("says when a message came from a visual the user clicked", () => {
+    const sent = msg("u1", "user", 'Pick option B\n\n<visual-action-v1>\nSent from the visual "Latency by region".\n</visual-action-v1>');
+    renderArea({ task: task(), messages: [sent, msg("a1", "assistant", "Done.")] });
+    expect(screen.getByText("Pick option B")).toBeInTheDocument();
+    expect(screen.getByText("Sent from “Latency by region”")).toBeInTheDocument();
+    expect(screen.queryByText(/visual-action-v1/)).toBeNull();
+  });
+
   it("shows the typing bubble while running", () => {
     renderArea({ task: task({ status: "running" }), running: true,
       runtime: { snapshot: {} as never } as TaskRuntime, messages: [msg("u1", "user", "Hi")] });

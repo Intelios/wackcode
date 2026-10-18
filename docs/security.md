@@ -26,7 +26,9 @@ No telemetry, account, backend, updater, automatic model discovery, or traffic o
 
 Never add a network origin silently; call it out explicitly and update `README.md`.
 
-**CSP** stays `default-src 'self'` with IPC-only `connect-src`. The renderer never fetches; remote calls go through Rust or the package-manager process.
+**CSP** stays `default-src 'self'` with IPC-only `connect-src`, plus the one `frame-src
+wcvisual:` that lets a visual reply's frame load (see [Visual replies](#visual-replies)). The
+renderer never fetches; remote calls go through Rust or the package-manager process.
 
 ## Credentials
 
@@ -74,6 +76,49 @@ A Chat mode worker loads no package, even a trusted one, and receives no sub-age
 ## Package trust
 
 An installed extension is unsandboxed code inside the worker that holds the API key. `trusted_at` is set only by a user-confirmed `install_package` or `trust_package`. Never default it, and keep `sync_packages` from trusting packages that arrive by any other route. Untrusted or switched-off resources never reach a worker at all (the resource gate in `worker.rs`).
+
+## Visual replies
+
+`show_visual` lets the model author HTML and JavaScript, so it runs in its own browsing context,
+never in the renderer. Rust (`src-tauri/src/visuals.rs`) is the boundary:
+
+- **Staging.** The renderer hands the document to `stage_visual`, which keeps it in memory (128
+  entries / 16 MiB, oldest evicted) and returns a `wcvisual://localhost/<token>` URL. Nothing is
+  written to disk, no path is involved, and the app's own webview is the only one served: the
+  handler 404s for any other webview, any other method, and any unknown or non-hex token.
+- **The frame's own CSP.** The document is served with `default-src 'none'; script-src
+  'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none';
+  form-action 'none'; base-uri 'none'`. It has no network of any kind — no scripts, fonts,
+  frames or fetches — so a visual cannot exfiltrate what it is shown. Only inline scripts (the
+  model's own) and inline styles run.
+- **A navigation guard, natively.** A CSP belongs to the document that leaves, not the one that
+  arrives, so `location.href = "https://…"` inside a visual would load a remote page in its frame:
+  a network request the user never asked for. `visuals::navigation_allowed` refuses every
+  navigation outside the app's own origins (the bundled `tauri://`, this run's dev server or
+  `frontendDist`) and a `wcvisual:` frame — the app gains **no new network origin**, and no
+  visual can become one. It is registered as a small Tauri plugin (`navigation_plugin`), because
+  this window comes from `tauri.conf.json` and a config-built window carries no navigation
+  handler of its own. Do not remove it, and do not add an origin to the list for a feature that
+  does not need to navigate.
+- **The wrapper's theme values.** A staged document splices the renderer's CSS variables into one
+  `<style>`. Each value is checked against a fixed character set and length, so no value can end
+  the rule or the style element; a value that fails refuses the whole staging call.
+- **The iframe is `sandbox="allow-scripts"`**: an opaque origin, no forms, no popups, no top
+  navigation, no access to this app's DOM, `localStorage` or cookies. Tauri's initialization
+  scripts (the IPC bridge, the invoke key, `__TAURI_INTERNALS__`) are main-frame only, and an IPC
+  request additionally needs the per-launch invoke key and a parseable `Origin` (an opaque origin
+  sends `null`), which the frame never has.
+- **The only way out is `postMessage`**, and the card verifies `event.source` against its own
+  frame: a content height, a link the user clicked (http(s) only, opened outside the app) and a
+  bounded `wackcode.send` text. A send is refused unless the visual belongs to the newest answer,
+  runs one per visual per second, and goes out as an ordinary literal message with a
+  `<visual-action-v1>` tail, so model-authored script can never steer the chat on its own — the
+  user always presses the button, and Pi never expands it as a slash command.
+
+The `frame-src wcvisual:` directive in `tauri.conf.json` is the only CSP change this feature
+needs; `default-src`, `connect-src`, `script-src` and the asset protocol's scope are untouched.
+Do not loosen the frame's own CSP: a visual with network access would be a new origin the user
+never chose.
 
 ## Asset protocol
 

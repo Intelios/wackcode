@@ -7,7 +7,7 @@
 - **`App.tsx`** owns all cross-cutting state: `data` (the `AppData` from `bootstrap`) and each chat's runtime. Update it immutably through `patchTask`, `patchRuntime` and `setData`.
 - **Events:** `App.tsx` is the only place that listens to Tauri events: `worker-event`, `run-event`, `subscription-login-event` and `native-chat-navigation` (the menu bar). A worker protocol change ends in its `worker-event` switch; see [worker.md](worker.md#protocol-changes). `title_changed` carries a `source` — `"opening"` for the first-run stand-in, `"auto"` for the model's title; only the latter bumps `titlePulses`, which drives the header's swipe+glint and the sidebar row's crossfade.
 - **`api.ts`** is the only bridge to Rust: one typed `invoke` wrapper per command. Terminal output arrives on a `Channel`, not an event.
-- **Components are presentational.** The exceptions call `api` directly because they wrap one self-contained surface: `SettingsPage.tsx` (and `IntegrationsSection.tsx`, `AboutSection.tsx`), `BrowserPanel.tsx` (positions the native web view), `TerminalPanel.tsx` and `RunPanel.tsx` (stream their PTYs) and `markdown-components.tsx` (its link override routes http(s) clicks through `revealPath`; the webview cannot open links itself) and `link-opener.ts` (a web_search result opens in the chat's browser preview through App's opener, otherwise through `revealPath`). Don't add more without the same reason.
+- **Components are presentational.** The exceptions call `api` directly because they wrap one self-contained surface: `SettingsPage.tsx` (and `IntegrationsSection.tsx`, `AboutSection.tsx`), `BrowserPanel.tsx` (positions the native web view), `TerminalPanel.tsx` and `RunPanel.tsx` (stream their PTYs), `VisualCard.tsx` (stages each frame's document through `stageVisual`, the one call that fits its own sandboxed surface) and `markdown-components.tsx` (its link override routes http(s) clicks through `revealPath`; the webview cannot open links itself) and `link-opener.ts` (a web_search result opens in the chat's browser preview through App's opener, otherwise through `revealPath`). Don't add more without the same reason.
 
 ## Context menus
 
@@ -22,6 +22,20 @@ A plain send is echoed while it travels: the composer has already cleared, and t
 The composer never states the active policy: a persistent read-only badge lived next to the Build/Plan toggle and was removed. What remains is the queue notice: the worker's applied `executionPolicy` wins during a run, and a mismatch with saved Settings shows “Applies next turn”. Effective access is shown in Settings (› Tools and › Sub-agents). Cold history carries no policy: a new worker always receives current Settings, never permissions from session history.
 
 Images a tool returned (a picture `read`, a screenshot, an MCP tool's output) show as small previews under the tool's row or chip strip (`ToolImages`), each opening in `ui/ImageLightbox` with the original from `api.toolImage`. Inside a folded Explored group they sit in a captioned strip under the fold and move under their own chips when it opens. Chat mode's chips show the same previews inline.
+
+**Visual replies** (`VisualCard.tsx`) draw a settled `show_visual` call where it landed: the
+assistant's small HTML answer — a chart, a comparison, a mockup — in a card shaped like a code
+fence (mark, title, Expand, copy) over a sandboxed frame. `VisualCallCard` reads the scope the
+transcript provides (`VisualCardScope`): the tool-call ids on the newest answer, which alone may
+send, and the App's send/link handlers. A running or refused call keeps its chip and its error;
+`completed-work.ts` treats a settled visual as an outcome, never as work to fold away. The frame
+is staged through Rust (`visuals.rs`), reports its own height (clamped to 96–640 px), and takes
+its colours from `visualThemeVars`/`visualVariables` in `theme.ts`, repainted in place when the
+appearance changes. Only messages from that frame's own `contentWindow` are accepted: a height, a
+link the user clicked (opened through `revealPath`, as a Markdown link is) and a
+`wackcode.send` text, which is refused when the visual is not on the latest answer, while a
+reply is running, or twice within a second. A message a visual sent travels as a
+`<visual-action-v1>` tail (`visual-action.ts`) and shows as "Sent from “Title”" under its words.
 
 ## Transcript work surfaces
 
@@ -165,6 +179,7 @@ A messenger UI for `kind: "chat"` chats, mounted as one `ChatArea` in place of t
 - **`ChatHero`** is the empty state: a duck afloat on a pond of light, a time-of-day greeting and three of `PROMPT_IDEAS` (picked deterministically from the draft key, `chat-hero.ts`). An idea fills the draft, it doesn't send. On the first send `handoff` freezes the pill's words, the duck dives and the composer glides from hero to dock (`layout` on `.chat-composer`); the pending echo is the first bubble.
 - **`ChatComposer`** is the round pill: same `useAttachments`/`QueuedRows`/`useQueueActions` machinery as `Composer`, but no slash menu, workspace file mentions, mode toggle, project bar or stats. Its `@` picker is chats only (`MentionPicker`, shared with `Composer`): Chat mode may reference other Chat mode chats. Enter sends (queues while busy); the foot row keeps `ModelPicker` and `ReasoningToggle`. It measures itself into `--composer-h` on `.chat-area` so the thread pads around it.
 - **Errors and questions** are `SystemBubble`s and the shared `InlineDialog`, centred in the thread; an archived chat shows a footer pill with Unarchive instead of the composer.
+- **Visual replies** are their own reply piece (`.chat-visual`, at most 720 px wide, outside any bubble): a settled call is the card, a running or refused one a chip. `ChatConversation` provides the same `VisualCardScope` the Code transcript does, so an older reply's visual has working widgets but inert buttons.
 - **Everything Chat-scoped is a `.chat-*` class** in the `Chat area` section of `styles.css`, plus `[data-area="chat"]` sidebar tweaks; the Code transcript's rules are untouched. Every looping animation has a still end state in the `prefers-reduced-motion` block.
 
 ## Changes panel

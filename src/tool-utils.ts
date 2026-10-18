@@ -5,6 +5,8 @@ import { displayPath } from "./chat-utils";
 export const SUBAGENT_TOOL_NAME = "subagent";
 /** The built-in skill-creator tool; its preview results render as the review card. */
 export const SKILL_CREATOR_TOOL_NAME = "skill_creator";
+/** The built-in visual replies tool; a settled call renders as the visual card. */
+export const SHOW_VISUAL_TOOL_NAME = "show_visual";
 /** The one WackCode built-in tool the user can switch off, through the tool denylist (on Settings › Web). */
 export const WEB_FETCH_TOOL_NAME = "web_fetch";
 /** Web search: its own setting (Settings › Web), never the tool denylist. */
@@ -141,6 +143,37 @@ export function displayUrl(value: string): string {
 }
 
 /**
+ * The visual calls on the newest answer — the only ones whose buttons may send.
+ *
+ * Pi records one assistant message per step, so a turn that drew a visual and then wrote a
+ * sentence ends with a text-only message. Walk back to the last user message and collect
+ * across every assistant step there, or a fresh visual would go inert the moment the agent
+ * added a word after it.
+ */
+export function currentVisualIds(messages: NormalizedMessage[], partial?: NormalizedMessage): Set<string> {
+  const ids = new Set<string>();
+  const all = partial ? [...messages, partial] : messages;
+  for (let index = all.length - 1; index >= 0; index -= 1) {
+    const message = all[index];
+    if (message.role === "user") break;
+    if (message.role !== "assistant") continue;
+    for (const block of message.blocks) {
+      if (block.type === "tool-call" && block.toolName === SHOW_VISUAL_TOOL_NAME && block.toolCallId) ids.add(block.toolCallId);
+    }
+  }
+  return ids;
+}
+
+/** A visual call's two arguments, once they are both real strings within the tool's own caps. */
+export function parseVisualArgs(call: NormalizedBlock): { title: string; html: string } | undefined {
+  const toolArgs = args(call);
+  const title = str(toolArgs.title).trim();
+  const html = str(toolArgs.html);
+  if (!title || !html.trim()) return undefined;
+  return { title, html };
+}
+
+/**
  * A path subject (`displayPath` output) as a dim directory tail and the name to anchor on.
  * `dir` keeps its trailing slash; anything without a slash stays a single `name`.
  */
@@ -193,6 +226,8 @@ export function summarizeTool(call: NormalizedBlock, result?: NormalizedBlock): 
       return { kind: "other", activeVerb: "Fetching", doneVerb: "Fetched", subject: displayUrl(str(toolArgs.url)) };
     case WEB_SEARCH_TOOL_NAME:
       return { kind: "other", activeVerb: "Searching the web", doneVerb: "Searched the web", subject: str(toolArgs.query) };
+    case SHOW_VISUAL_TOOL_NAME:
+      return { kind: "other", activeVerb: "Drawing", doneVerb: "Drew", subject: str(toolArgs.title) };
     case "memory_save": {
       const updated = typeof toolArgs.name === "string" && toolArgs.name.trim();
       return { kind: "other", activeVerb: updated ? "Updating memory" : "Saving memory", doneVerb: updated ? "Updated memory" : "Saved memory", subject: str(toolArgs.title) };

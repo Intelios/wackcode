@@ -44,7 +44,7 @@ const PI_TOOLS: PiTool[] = [
 ];
 
 const ELSEWHERE: { id: ToolsElsewhere; icon: IconName; title: string; detail: string }[] = [
-  { id: "packages", icon: "spark", title: "Built-ins", detail: "Web fetch, browser preview, sub-agents and computer use" },
+  { id: "packages", icon: "spark", title: "Built-ins", detail: "Web fetch, browser preview, visual replies, sub-agents and computer use" },
   { id: "memory", icon: "memory", title: "Memory", detail: "Notes it saves and recalls, per project" },
   { id: "mcp", icon: "plug", title: "MCP servers", detail: "Tools from the servers you connect" }
 ];

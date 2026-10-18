@@ -34,7 +34,7 @@ interface BuiltinExtension {
   description: string;
   tools: readonly string[];
   icon: IconName;
-  kind?: "subagents" | "auto_titles" | "web_fetch" | "web_search" | "browser" | "computer_use" | "mcp" | "memory";
+  kind?: "subagents" | "auto_titles" | "web_fetch" | "web_search" | "browser" | "computer_use" | "mcp" | "memory" | "show_visual";
 }
 
 /**
@@ -87,6 +87,14 @@ const BUILTIN_EXTENSIONS: readonly BuiltinExtension[] = [
     tools: ["browser_open", "browser_snapshot", "browser_act", "browser_screenshot", "browser_console"],
     icon: "browser",
     kind: "browser"
+  },
+  {
+    name: "Visual replies",
+    description:
+      "Lets the agent answer with a chart, a comparison, a diagram or a small interactive mockup drawn right in the conversation — in Chat mode and in Code chats. A visual runs sandboxed with no network access at all, and a button in one can send a message on your behalf only when you click it.",
+    tools: ["show_visual"],
+    icon: "visual",
+    kind: "show_visual"
   },
   {
     name: "Computer use",
@@ -213,6 +221,9 @@ interface Props extends PackageActions {
   /** Opens Settings › Web, where Web Fetch's and Web Search's switches live. */
   onConfigureWeb?: () => void;
   browserEnabled?: boolean;
+  /** On unless `show_visual` is in the tool denylist; its switch is on this card. */
+  visualEnabled?: boolean;
+  onToggleVisual?: (enabled: boolean) => Promise<void>;
   computerUseEnabled?: boolean;
   /** macOS 14+; otherwise the switch stays off. */
   computerUseSupported?: boolean;
@@ -236,7 +247,7 @@ interface Props extends PackageActions {
 type Tab = "installed" | "browse";
 
 export function PackagesSection({
-  packages, agentName = "WackCode", subagentsEnabled = false, webFetchEnabled = true, webSearchEnabled = false, onConfigureWeb, browserEnabled = true, computerUseEnabled = false, computerUseSupported = true, memoryEnabled = true,
+  packages, agentName = "WackCode", subagentsEnabled = false, webFetchEnabled = true, webSearchEnabled = false, onConfigureWeb, browserEnabled = true, visualEnabled = true, onToggleVisual, computerUseEnabled = false, computerUseSupported = true, memoryEnabled = true,
   autoTitlesEnabled = false, autoTitlesConfigured = false,
   onToggleSubagents, onToggleBrowser, onToggleComputerUse, onConfigureComputerUse, onToggleAutoTitles, onConfigureSubagents, onConfigureAutoTitles, onConfigureMemory, onConfigureMcp,
   onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
@@ -292,6 +303,7 @@ export function PackagesSection({
   const builtinEnabled = (extension: BuiltinExtension) =>
     extension.kind === "subagents" ? subagentsEnabled
     : extension.kind === "browser" ? browserEnabled
+    : extension.kind === "show_visual" ? visualEnabled
     : extension.kind === "computer_use" ? computerUseEnabled
     : extension.kind === "web_fetch" ? webFetchEnabled
     : extension.kind === "web_search" ? webSearchEnabled
@@ -416,6 +428,8 @@ export function PackagesSection({
                       ? (enabled) => void run(() => onToggleSubagents(enabled)).catch(() => undefined)
                       : extension.kind === "browser" && onToggleBrowser
                       ? (enabled) => void run(() => onToggleBrowser(enabled)).catch(() => undefined)
+                      : extension.kind === "show_visual" && onToggleVisual
+                      ? (enabled) => void run(() => onToggleVisual(enabled)).catch(() => undefined)
                       : extension.kind === "computer_use" && onToggleComputerUse
                       ? (enabled) => void run(() => onToggleComputerUse(enabled)).catch(() => undefined)
                       : extension.kind === "auto_titles" && onToggleAutoTitles

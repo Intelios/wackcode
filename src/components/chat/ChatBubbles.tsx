@@ -14,6 +14,9 @@ import { MentionText, type ChatLinks } from "../Transcript";
 import { messageText } from "../../tree-utils";
 import { useSmoothText } from "../../hooks/useSmoothText";
 import { DuckMark } from "../DuckMark";
+import { SHOW_VISUAL_TOOL_NAME, parseVisualArgs } from "../../tool-utils";
+import { VisualCallCard, VisualSentNote } from "../VisualCard";
+import { splitVisualAction } from "../../visual-action";
 import { Icon, type IconName } from "../Icons";
 import { Markdown } from "../Markdown";
 import { MessageEditor } from "../MessageEditor";
@@ -118,7 +121,10 @@ export const UserBubble = memo(function UserBubble({ message, first, actionsEnab
   const reduce = useReducedMotion() ?? false;
   const pending = message.id.startsWith("pending:");
   const images = message.blocks.filter((block) => block.type === "image");
-  const { text, files, browserContexts = [], chatRefs = [] } = splitFileSection(messageText(message));
+  // A message a visual's button sent carries the section naming that visual: show its words,
+  // then say where they came from.
+  const spoken = splitVisualAction(messageText(message));
+  const { text, files, browserContexts = [], chatRefs = [] } = splitFileSection(spoken.text);
   const anchor = `message:${message.id}`;
   if (editing) {
     return (
@@ -147,6 +153,7 @@ export const UserBubble = memo(function UserBubble({ message, first, actionsEnab
       {images.length > 0 && <BubbleImages images={images} hidden={browserContexts.map((context) => context.imageIndex)} entryId={message.entryId} loadImage={loadImage} />}
       {files.length > 0 && <div className="chat-attached">{files.map((file, index) => <FileNote key={index} file={file} />)}</div>}
       {text && <div className="chat-bubble user"><MentionText text={text} chatRefs={chatRefs} chatLinks={chatLinks} /></div>}
+      {spoken.title && <VisualSentNote title={spoken.title} />}
       <div className="chat-tray end">
         {stopped && <span className="chat-stopped">Stopped</span>}
         <Versions message={message} disabled={!actionsEnabled} onSwitch={(entryId) => void onAction({ type: "switch", entryId })} />
@@ -190,6 +197,8 @@ function ThoughtCaption({ text }: { text: string }) {
 type Piece =
   | { type: "thought"; key: string; text: string }
   | { type: "tools"; key: string; calls: NormalizedBlock[] }
+  /** A `show_visual` call: the card once it settled, a chip while it runs or if it failed. */
+  | { type: "visual"; key: string; call: NormalizedBlock }
   | { type: "text"; key: string; text: string; streaming: boolean }
   | { type: "error"; key: string; text: string };
 
@@ -209,6 +218,12 @@ export function replyPieces(messages: NormalizedMessage[], partial?: NormalizedM
           else pieces.push({ type: "thought", key, text: block.text.trim() });
         }
       } else if (block.type === "tool-call") {
+        // A visual is drawn where the call landed, not folded into a chip strip: it is part of
+        // the answer, sized like a bubble and outside one.
+        if (block.toolName === SHOW_VISUAL_TOOL_NAME) {
+          pieces.push({ type: "visual", key, call: block });
+          return;
+        }
         const last = pieces[pieces.length - 1];
         if (last?.type === "tools") last.calls.push(block);
         else pieces.push({ type: "tools", key, calls: [block] });
@@ -251,6 +266,14 @@ export function AgentReply({ pieces, results, first, live, files, copyText, onRe
         {first && <div className="chat-name">{name}</div>}
         {pieces.map((piece) => {
           if (piece.type === "thought") return <ThoughtCaption key={piece.key} text={piece.text} />;
+          if (piece.type === "visual") {
+            const result = piece.call.toolCallId ? results.get(piece.call.toolCallId) : undefined;
+            // Settled and successful is a card; anything else keeps today's chip, with its error.
+            if (result && !result.isError && parseVisualArgs(piece.call)) {
+              return <div key={piece.key} className="chat-visual"><VisualCallCard block={piece.call} /></div>;
+            }
+            return <ActivityChips key={piece.key} calls={[piece.call]} results={results} live={live} />;
+          }
           if (piece.type === "tools") return <ActivityChips key={piece.key} calls={piece.calls} results={results} live={live} />;
           if (piece.type === "error") return <div key={piece.key} className="chat-bubble agent error" role="alert"><Icon name="close" /> {piece.text}</div>;
           return (

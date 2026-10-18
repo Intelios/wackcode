@@ -69,6 +69,9 @@ export function activityLabel(call: NormalizedBlock, live: boolean): { label: st
     case "memory_recall": return { icon: "memory", label: pick("Recalling a memory", "Recalled a memory") };
     case "memory_forget": return { icon: "memory", label: pick("Forgetting a memory", "Forgot a memory") };
     case "ask_user_question": return { icon: "question", label: pick("Asking you", "Asked you") };
+    // Only a visual that is still being drawn, or one that failed, reaches a chip: a settled one
+    // is its own card (`ChatBubbles.tsx`).
+    case "show_visual": return { icon: "visual", label: join(pick("Drawing", "Drew"), str(a.title) ? quoted(str(a.title)) : "a visual") };
     case "browser_open": return { icon: "browser", label: join(pick("Opening", "Opened"), str(a.url) ? displayUrl(str(a.url)) : "the browser") };
     case "browser_snapshot": return { icon: "browser", label: pick("Reading the page", "Read the page") };
     case "browser_act": return { icon: "cursor", label: pick("Using the page", "Used the page") };

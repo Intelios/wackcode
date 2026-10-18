@@ -1,0 +1,163 @@
+<!doctype html>
+<!--
+  The document a visual reply runs in (`visuals.rs`). The host splices the theme variables and the
+  model's HTML into the two markers below and serves it from `wcvisual://localhost/<token>` under
+  a `default-src 'none'` CSP: no network, no fonts, no frames, no forms.
+
+  The bridge is the only way out. It reports the content's height, forwards a link the user
+  clicked, and answers `wackcode.send()` — which the card validates, rate-limits and hands to the
+  ordinary send path. Nothing else crosses.
+
+  Keep this document small and dependency-free: it is served on every visual, and the model's own
+  markup has to feel like part of it.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<title>Visual</title>
+<style>
+:root{/*__THEME__*/}
+/* The app's own token names (styles.css, theme.ts), so markup written against WackCode's
+   styles — which a model working in this repo will reach for — looks right instead of falling
+   back to whatever literal colour it guessed. The semantic colours are the app's fixed ones. */
+:root{
+  --wc-accent: var(--accent);
+  --wc-accent-hover: color-mix(in srgb, var(--accent) 78%, white);
+  --wc-accent-text: var(--accent-text);
+  --wc-on-accent: var(--on-accent);
+  --wc-accent-line: color-mix(in srgb, var(--accent) 40%, var(--border));
+  --wc-accent-line-soft: color-mix(in srgb, var(--accent) 22%, var(--border));
+  --wc-accent-tint: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  --wc-accent-tint-strong: color-mix(in srgb, var(--accent) 20%, var(--surface));
+  --wc-focus-line: color-mix(in srgb, var(--accent) 55%, var(--border));
+  --wc-toggle: color-mix(in srgb, var(--surface) 55%, var(--border));
+  --wc-toggle-on: color-mix(in srgb, var(--accent) 32%, var(--surface));
+  --wc-knob: var(--text-dim);
+  --wc-radius-card: var(--radius);
+  --wc-radius-pill: 999px;
+  --wc-well: color-mix(in srgb, var(--bg) 88%, var(--surface));
+  --wc-elevated: color-mix(in srgb, var(--surface) 82%, var(--text));
+  --wc-code-bg: color-mix(in srgb, var(--surface) 85%, var(--text));
+  --surface-raised: color-mix(in srgb, var(--surface) 92%, var(--text));
+  --surface-hover: color-mix(in srgb, var(--surface) 86%, var(--text));
+  --border-bright: color-mix(in srgb, var(--border) 76%, var(--text));
+  --text-faint: color-mix(in srgb, var(--text-dim) 72%, transparent);
+  --danger: #f08080;
+  --danger-bg: #351d1d;
+  --warning: #e6ba69;
+  --wc-success: #a8d883;
+}
+html,body{margin:0;padding:0;background:transparent;color:var(--text);font:13.5px/1.55 var(--font);-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}
+a{color:var(--accent-text);text-underline-offset:2px}
+button,input,select,textarea{font:inherit;color:inherit}
+h1,h2,h3,h4{margin:0 0 .35em;line-height:1.25;color:var(--text);font-weight:600}
+::selection{background:color-mix(in srgb, var(--accent) 30%, transparent)}
+</style>
+<script>
+(function () {
+  "use strict";
+  // A visual's height is reported, never assumed; the card clamps it to its own cap.
+  var MAX_HEIGHT = 4000;
+  var MAX_TEXT = 2000;
+  var seq = 0;
+  var waiting = {};
+  var lastHeight = 0;
+  var frame = 0;
+
+  function post(message) {
+    try { window.parent.postMessage(message, "*"); } catch (error) { /* the host went away */ }
+  }
+
+  function measure() {
+    var root = document.documentElement;
+    var body = document.body;
+    var height = Math.ceil(Math.max(
+      root ? root.scrollHeight : 0,
+      body ? body.scrollHeight : 0,
+      root ? root.offsetHeight : 0
+    ));
+    if (height <= 0 || height === lastHeight) return;
+    lastHeight = height;
+    post({ type: "wackcode-visual:size", height: Math.min(height, MAX_HEIGHT) });
+  }
+
+  function scheduleMeasure() {
+    if (frame) return;
+    frame = window.requestAnimationFrame(function () { frame = 0; measure(); });
+  }
+
+  function applyTheme(message) {
+    var vars = message.vars;
+    var root = document.documentElement;
+    if (!root || !vars || typeof vars !== "object") return;
+    for (var name in vars) {
+      if (Object.prototype.hasOwnProperty.call(vars, name) && name.slice(0, 2) === "--" && typeof vars[name] === "string") {
+        root.style.setProperty(name, vars[name]);
+      }
+    }
+    if (message.scheme === "light" || message.scheme === "dark") root.style.colorScheme = message.scheme;
+  }
+
+  // The whole API a visual gets. Frozen, so markup cannot hand itself more.
+  window.wackcode = Object.freeze({
+    version: 1,
+    send: function (text) {
+      return new Promise(function (resolve) {
+        if (typeof text !== "string" || !text.trim()) { resolve({ ok: false, reason: "invalid" }); return; }
+        var id = ++seq;
+        waiting[id] = resolve;
+        post({ type: "wackcode-visual:send", id: id, text: text.slice(0, MAX_TEXT) });
+      });
+    }
+  });
+
+  window.addEventListener("message", function (event) {
+    var data = event.data;
+    if (!data || typeof data !== "object") return;
+    if (data.type === "wackcode-visual:send-result" && typeof data.id === "number") {
+      var resolve = waiting[data.id];
+      if (!resolve) return;
+      delete waiting[data.id];
+      resolve({ ok: data.ok === true, reason: typeof data.reason === "string" ? data.reason : undefined });
+    } else if (data.type === "wackcode-visual:theme") {
+      applyTheme(data);
+    }
+  });
+
+  // A link never navigates this frame, which would leave the app (and the CSP would refuse it
+  // anyway): the host decides what may open, and opens it outside.
+  document.addEventListener("click", function (event) {
+    var node = event.target;
+    while (node && node !== document && node.nodeType !== 1) node = node.parentNode;
+    while (node && node !== document) {
+      if (node.tagName === "A") {
+        var href = node.getAttribute("href") || "";
+        event.preventDefault();
+        if (/^https?:\/\//i.test(href)) post({ type: "wackcode-visual:link", href: href });
+        return;
+      }
+      node = node.parentNode;
+    }
+  }, true);
+
+  document.addEventListener("submit", function (event) { event.preventDefault(); }, true);
+
+  if (window.ResizeObserver) {
+    var observer = new ResizeObserver(scheduleMeasure);
+    observer.observe(document.documentElement);
+    if (document.body) observer.observe(document.body);
+  }
+  if (window.MutationObserver) {
+    new MutationObserver(scheduleMeasure).observe(document.documentElement, { childList: true, characterData: true, subtree: true });
+  }
+  window.addEventListener("load", scheduleMeasure);
+  window.addEventListener("resize", scheduleMeasure);
+  document.addEventListener("DOMContentLoaded", scheduleMeasure);
+  scheduleMeasure();
+})();
+</script>
+</head>
+<body><!--__BODY__--></body>
+</html>

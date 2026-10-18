@@ -681,6 +681,28 @@ export interface AppearanceConfig {
   agentName?: string | null;
 }
 
+/**
+ * The theme a visual reply's frame is staged with: the CSS variables `visuals.rs` defines
+ * before the model's markup runs, read from the applied theme (`visualThemeVars`). Mirrors
+ * `VisualTheme` in visuals.rs.
+ */
+export interface VisualThemeVars {
+  bg: string;
+  surface: string;
+  text: string;
+  textSoft: string;
+  textDim: string;
+  border: string;
+  accent: string;
+  accentText: string;
+  onAccent: string;
+  font: string;
+  mono: string;
+  radius: string;
+  /** `light` or `dark`: form controls and scrollbars inside a visual follow the app. */
+  scheme: "light" | "dark";
+}
+
 /** One saved background and its crop. Mirrors `BackgroundImage` in models.rs: a crop belongs
  *  to one picture, so it lives on the entry and survives shuffling to another image. */
 export interface BackgroundImageEntry {

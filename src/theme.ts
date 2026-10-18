@@ -13,7 +13,7 @@
  * user's theme, while each token keeps its own hue slot so the palette stays readable.
  */
 
-import type { AppearanceConfig, BackdropMode } from "./types";
+import type { AppearanceConfig, BackdropMode, VisualThemeVars } from "./types";
 
 export const DEFAULT_ACCENT = "#c2ee4a";
 /** Also `DEFAULT_BACKGROUND` in `src-tauri/src/glass.rs`, which paints the native window. */
@@ -414,6 +414,62 @@ function shellVariables(backdrop: BackdropMode, solid: Record<string, string>, g
     "--wc-shell": solid["--bg"],
     "--wc-header": alpha("--bg", 0.92),
     "--wc-composer-fade": solid["--bg"]
+  };
+}
+
+/** The app's own font stacks (`styles.css`), handed to a visual so it matches the chat. The
+ *  frames cannot load a font file, so both fall back exactly as the renderer does. */
+const VISUAL_FONT = 'Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif';
+const VISUAL_MONO = '"SFMono-Regular", ui-monospace, Consolas, monospace';
+
+/**
+ * The variables a visual reply's frame is built with (`visuals.rs`): the app's own colours, font
+ * and card radius, read from what is actually applied to `root`, so a card looks like part of
+ * the chat in any theme, light or dark. A visual never sees the shell's see-through surfaces —
+ * it sits inside a solid content card.
+ */
+export function visualThemeVars(root: HTMLElement = document.documentElement): VisualThemeVars {
+  const style = getComputedStyle(root);
+  const read = (name: string, fallback: string) => style.getPropertyValue(name).trim() || fallback;
+  const bg = read("--bg", DEFAULT_BACKGROUND);
+  const rgb = parseHex(bg);
+  return {
+    bg,
+    surface: read("--surface", "#161914"),
+    text: read("--text", "#e8ece4"),
+    textSoft: read("--text-soft", "#adb5a7"),
+    textDim: read("--text-dim", "#757e70"),
+    border: read("--border", "#2b3028"),
+    accent: read("--wc-accent", DEFAULT_ACCENT),
+    accentText: read("--wc-accent-text", DEFAULT_ACCENT),
+    onAccent: read("--wc-on-accent", "#172000"),
+    font: VISUAL_FONT,
+    mono: VISUAL_MONO,
+    radius: read("--wc-radius-card", "14px"),
+    // The background decides light/dark, exactly as the app's own text contrast does.
+    scheme: rgb && luminance(rgb) > 0.42 ? "light" : "dark"
+  };
+}
+
+/**
+ * The same variables under the frame's own CSS custom property names, for the live update a
+ * visual receives when the user changes the theme (`VisualCard`). Mirrors the names `visuals.rs`
+ * writes into the wrapper's `:root` rule, so a re-themed frame and a freshly staged one agree.
+ */
+export function visualVariables(theme: VisualThemeVars): Record<string, string> {
+  return {
+    "--bg": theme.bg,
+    "--surface": theme.surface,
+    "--text": theme.text,
+    "--text-soft": theme.textSoft,
+    "--text-dim": theme.textDim,
+    "--border": theme.border,
+    "--accent": theme.accent,
+    "--accent-text": theme.accentText,
+    "--on-accent": theme.onAccent,
+    "--font": theme.font,
+    "--mono": theme.mono,
+    "--radius": theme.radius
   };
 }
 

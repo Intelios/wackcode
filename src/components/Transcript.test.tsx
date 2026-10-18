@@ -1013,3 +1013,48 @@ describe("Transcript attached images", () => {
     expect(loadImage).toHaveBeenCalledWith("entry-1", 0);
   });
 });
+
+describe("Transcript visual replies", () => {
+  const visual = (patch: Partial<NormalizedMessage> = {}): NormalizedMessage[] => [
+    { id: "u", entryId: "u", role: "user", timestamp: 100, blocks: [{ type: "text", text: "Show me" }] },
+    { id: "a", entryId: "a", role: "assistant", timestamp: 200, stopReason: "stop", turn: { userEntryId: "u", endEntryId: "a" }, blocks: [
+      { type: "text", text: "Here it is." },
+      { type: "tool-call", toolCallId: "v1", toolName: "show_visual", arguments: { title: "Latency by region", html: "<p>42</p>" } },
+      { type: "tool-result", toolCallId: "v1", toolName: "show_visual", text: "Shown." }
+    ], ...patch }
+  ];
+
+  it("draws a settled visual call as the card, not as a chip", () => {
+    render(<Transcript messages={visual()} running={false} collapseCompletedWork={false} />);
+    expect(screen.getByRole("figure", { name: "Visual: Latency by region" })).toBeInTheDocument();
+    expect(screen.getByText("Here it is.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Expand visual" })).toBeInTheDocument();
+  });
+
+  it("keeps a running or refused visual on its plain row", () => {
+    const running = visual();
+    running[1] = { ...running[1], blocks: running[1].blocks.slice(0, 2) };
+    const { unmount } = render(<Transcript messages={running} running />);
+    expect(screen.queryByRole("figure")).toBeNull();
+    unmount();
+
+    const refused = visual();
+    refused[1] = { ...refused[1], blocks: [...refused[1].blocks.slice(0, 2), { type: "tool-result", toolCallId: "v1", toolName: "show_visual", text: "html is too large", isError: true }] };
+    render(<Transcript messages={refused} running={false} />);
+    expect(screen.queryByRole("figure")).toBeNull();
+    // The refused call keeps today's chip, whose sheet carries the error.
+    const chip = document.querySelector(".tool-chip");
+    expect(chip?.textContent).toContain("Drew");
+    expect(chip?.textContent).toContain("Latency by region");
+  });
+
+  it("shows a visual-sent message's words and where they came from", () => {
+    render(<Transcript messages={[
+      { id: "u", entryId: "u", role: "user", blocks: [{ type: "text", text: 'Pick option B\n\n<visual-action-v1>\nSent from the visual "Latency by region".\n</visual-action-v1>' }] },
+      { id: "a", entryId: "a", role: "assistant", blocks: [{ type: "text", text: "Done" }] }
+    ]} running={false} />);
+    expect(screen.getByText("Pick option B")).toBeInTheDocument();
+    expect(screen.getByText("Sent from “Latency by region”")).toBeInTheDocument();
+    expect(screen.queryByText(/visual-action-v1/)).toBeNull();
+  });
+});

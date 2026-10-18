@@ -63,6 +63,27 @@ describe("completed work layout", () => {
     expect(slots(turn, "outcome")).toEqual([[1, 3, true], [1, 4, true]]);
   });
 
+  it("keeps a visual reply out of the work fold, with the prose that surrounds it", () => {
+    const visual = assistant("a", [
+      text("Here is where the time goes"),
+      { type: "tool-call", toolCallId: "v1", toolName: "show_visual", arguments: { title: "Latency", html: "<p>hi</p>" } },
+      text("One region stands out.")
+    ], { stopReason: "stop", turn: { userEntryId: "u", endEntryId: "a" } });
+    const shown = result("v1", { toolName: "show_visual", details: { v: 1, title: "Latency" } });
+    // The visual and the prose after it are the answer; only the lead-in folds as work.
+    const turn = project([user(), visual, shown]).get(0)!;
+    expect(slots(turn, "outcome")).toEqual([[1, 1, true], [1, 2, true]]);
+    expect(slots(turn, "work")).toEqual([[1, 0, false]]);
+    // Pi's usual shape: the tool-use step, its result, then the answer as another message.
+    const split = project([user(), assistant("call", [text("Let me show you"), { type: "tool-call", toolCallId: "v1", toolName: "show_visual", arguments: { title: "Latency", html: "<p/>" } }], { stopReason: "toolUse" }), shown, assistant("answer", [text("That row is the whole change.")], { stopReason: "stop", turn: { userEntryId: "u", endEntryId: "answer" } })]).get(0)!;
+    // The card stays visible beside the answer; only the lead-in sentence folds.
+    expect(slots(split, "outcome")).toEqual([[1, 1, false], [3, 0, true]]);
+    expect(slots(split, "work")).toEqual([[1, 0, false]]);
+    // A refused call is work like any other failed call: never a card, never an outcome.
+    const refused = result("v1", { toolName: "show_visual", isError: true });
+    expect(slots(project([user(), visual, refused]).get(0)!, "outcome")).toEqual([[1, 2, true]]);
+  });
+
   it("supports legacy metadata/timing and does not create a fold for a direct answer", () => {
     expect(project([user(), assistant("p", [text("Reading")]), assistant("a", [text("Finished")])]).get(0)?.folded).toBeDefined();
     expect(project([user(), answer]).get(0)?.folded).toBeUndefined();

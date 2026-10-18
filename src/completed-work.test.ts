@@ -175,3 +175,47 @@ describe("completed work layout", () => {
     expect(project([user()]).get(0)?.folded).toBeUndefined();
   });
 });
+
+describe("suggested tasks", () => {
+  const brief = "**Where:** `src/a.ts:3`\n\nThe stop button stays disabled.";
+  const suggest = (id = "s1", title = "Dismiss stays disabled"): NormalizedBlock =>
+    ({ type: "tool-call", toolCallId: id, toolName: "suggest_task", arguments: { title, kind: "bug", description: brief } });
+  const suggested = (id = "s1"): NormalizedMessage =>
+    ({ id: `q-${id}`, role: "tool", blocks: [{ type: "tool-result", toolCallId: id, toolName: "suggest_task", text: "Suggested", details: { v: 1, kind: "bug", title: "Dismiss stays disabled" } }] });
+  const withSuggestion = () => [
+    user(),
+    assistant("work", [call(), suggest()]),
+    result(),
+    suggested(),
+    answer
+  ];
+
+  it("collects the turn's accepted suggestions for its tray", () => {
+    const turn = project(withSuggestion()).get(0)!;
+    expect(turn.suggestions).toEqual([{ id: "s1", title: "Dismiss stays disabled", kind: "bug", description: brief }]);
+    expect(turn.settled).toBe(true);
+  });
+
+  it("keeps the suggested task inside the work, not the outcome", () => {
+    const turn = project(withSuggestion()).get(0)!;
+    // The call is technical work: it folds away with the rest, while the card is drawn after it.
+    expect(turn.folded?.work.some((row) => row.type === "message" && row.index === 1)).toBe(true);
+    expect(turn.folded?.outcome.some((row) => row.type === "message" && row.index === 1)).toBe(false);
+  });
+
+  it("waits for the run to settle before any tray can appear", () => {
+    const live = project(withSuggestion(), { running: true, activeRun: { startedAt: 100 } }).get(0)!;
+    expect(live.settled).toBe(false);
+    expect(live.suggestions).toHaveLength(1);
+    const settled = project(withSuggestion()).get(0)!;
+    expect(settled.settled).toBe(true);
+  });
+
+  it("ignores a refused suggestion and one that never returned", () => {
+    const refused = withSuggestion();
+    refused[3] = { ...refused[3], blocks: [{ type: "tool-result", toolCallId: "s1", toolName: "suggest_task", text: "already suggested", isError: true }] };
+    expect(project(refused).get(0)?.suggestions).toEqual([]);
+    const unfinished = withSuggestion().slice(0, 3);
+    expect(project(unfinished).get(0)?.suggestions).toEqual([]);
+  });
+});

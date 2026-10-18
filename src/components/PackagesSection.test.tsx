@@ -303,3 +303,21 @@ describe("PackagesSection browse tab", () => {
     expect(grid?.querySelectorAll(".search-result")).toHaveLength(2);
   });
 });
+
+describe("PackagesSection task suggestions", () => {
+  it("carries its own switch: on by default, off through Settings › Tools", async () => {
+    const onToggleSuggestions = vi.fn().mockResolvedValue(undefined);
+    renderSection([], { onToggleSuggestions });
+    const card = screen.getByRole("article", { name: "Task suggestions" });
+    const toggle = within(card).getByRole("switch", { name: "Task suggestions" });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    expect(within(card).getByText("suggest_task")).toBeInTheDocument();
+    fireEvent.click(toggle);
+    await waitFor(() => expect(onToggleSuggestions).toHaveBeenCalledWith(false));
+  });
+
+  it("reads as off when the tool is in the denylist", () => {
+    renderSection([], { suggestionsEnabled: false, onToggleSuggestions: vi.fn() });
+    expect(screen.getByRole("switch", { name: "Task suggestions" })).toHaveAttribute("aria-checked", "false");
+  });
+});

@@ -25,6 +25,7 @@ Everything runs locally. Your conversations go straight from your Mac to the mod
 - **Plan before building.** Plan mode stays read-only by default until you approve a plan; Ultra Plan interviews you first.
 - **Review and ship.** A built-in diff view with line comments, generated commit messages, push, and GitHub pull requests.
 - **Sees what it builds.** A shared browser preview for web apps, and optional computer use for native Mac and iOS Simulator apps.
+- **Follow-ups, not footnotes.** When the agent spots an unrelated bug or rough edge, it files it as a suggested task under its answer — start it here or in a new chat whenever you want.
 - **Answers you can look at.** The agent can draw a chart, comparison, diagram or small interactive mockup right in the conversation instead of describing it.
 - **Extensible.** MCP servers, Agent Skills, slash commands, Pi packages, per-project memory, and optional sub-agents.
 - **Just chat, too.** A separate Chat area turns the same connections into a general-purpose chat, with no project and no coding tools.
@@ -100,6 +101,7 @@ Open Changes with <kbd>⌘ ⇧ C</kbd> to review staged and unstaged changes fil
 - **Web Search** *(optional)*: a search tool through the provider you pick in **Settings › Web**: DeepSeek, Brave, Tavily, your own SearXNG, or any JSON search API. Searches usually cost a little per request, so it's off until you add one; a local meter estimates what you've spent. Your queries go to that provider, and it can also read pages for Web Fetch if you want.
 - **Sub-agents** *(optional)*: the agent can hand self-contained tasks to helpers with their own context windows, using WackCode's scout, reviewer and worker roles. Each helper costs extra model usage, so they're off by default; switch them on in **Settings › Packages**.
 - **Auto titles** *(optional)*: an `auto-titles` agent, run on a small, cheap model, gives each new chat a title from its first message.
+- **Task suggestions:** the agent can file a follow-up it noticed while working — a bug, a rough edge, missing polish — as a card under its answer instead of burying it in the final message. Nothing starts on its own: the card waits, and can start the task in this chat or in a new one. Sub-agents never file them; switch the whole thing off in **Settings › Packages**.
 
 Switch any tool off in **Settings › Tools**, and customise the system prompts in **Settings › Prompts**.
 

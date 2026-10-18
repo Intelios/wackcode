@@ -15,6 +15,7 @@ import type { FileEntry, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { transcriptEntries } from "./transcript.js";
 import { buildTreeIndex, type EntryLike } from "./tree.js";
 import { MAX_VISUAL_TITLE, SHOW_VISUAL_TOOL_NAME } from "./builtin/visual.js";
+import { MAX_SUGGESTION_TITLE, SUGGEST_TASK_TOOL_NAME } from "./builtin/suggest-task.js";
 
 /** What the host knows about the chat, beyond its session file. */
 export interface ChatHistoryMeta {
@@ -47,6 +48,15 @@ const TAIL_SECTIONS: readonly { open: string; close: string; marker: (inner: str
     marker: (inner) => {
       const title = /visual\s+"([^"]{1,60})"/.exec(inner)?.[1];
       return title ? `[sent from visual: ${title}]` : "[sent from visual]";
+    },
+  },
+  {
+    open: "<suggested-task-v1>",
+    close: "</suggested-task-v1>",
+    // Which suggestion this turn started, and the chat it came from when it is a new chat.
+    marker: (inner) => {
+      const title = /task\s+"([^"]{1,80})"/.exec(inner)?.[1];
+      return title ? `[started suggested task: ${title}]` : "[started a suggested task]";
     },
   },
 ] as const;
@@ -99,6 +109,11 @@ function toolCalls(content: unknown): string[] {
     if (value.name === SHOW_VISUAL_TOOL_NAME) {
       const title = (value.arguments as { title?: unknown } | undefined)?.title;
       return [typeof title === "string" && title.trim() ? `[visual: ${clip(title, MAX_VISUAL_TITLE)}]` : "[visual]"];
+    }
+    // A suggestion's brief is written for the user's card, not for another chat's context.
+    if (value.name === SUGGEST_TASK_TOOL_NAME) {
+      const title = (value.arguments as { title?: unknown } | undefined)?.title;
+      return [typeof title === "string" && title.trim() ? `[suggested task: ${clip(title, MAX_SUGGESTION_TITLE)}]` : "[suggested task]"];
     }
     let args = "";
     try { args = JSON.stringify(value.arguments ?? {}); } catch { args = ""; }

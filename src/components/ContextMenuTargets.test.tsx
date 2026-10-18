@@ -15,7 +15,7 @@ const project: ProjectRecord = { id: "p", name: "Project", path: "/code", gitRoo
 const chat: TaskRecord = {
   id: "other", projectId: "p", name: "Background chat", workspacePath: "/code", worktreePath: null, branch: null, usesWorktree: false,
   autoTitleEligible: false, autoTitleAttemptId: null, providerId: "prov", modelId: "m", thinkingLevel: "off", sessionFile: "session.json", status: "idle",
-  mode: "build", archived: false, archivedAt: null, lastError: null, kind: "code", lastActivityAt: null, createdAt: "now", updatedAt: "now"
+  mode: "build", archived: false, archivedAt: null, lastError: null, kind: "code", lastActivityAt: null, originSuggestion: null, dismissedSuggestions: [], createdAt: "now", updatedAt: "now"
 };
 function menus(children: ReactNode) {
   return <ContextMenuProvider scope="test" items={[]} copyText={vi.fn()} readText={vi.fn()} openLink={vi.fn()} onError={vi.fn()}>{children}</ContextMenuProvider>;

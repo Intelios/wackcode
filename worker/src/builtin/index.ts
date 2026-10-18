@@ -29,6 +29,7 @@ import type { ExecutionPolicyConfig } from "../protocol.js";
 import { DEFAULT_EXECUTION_POLICY, normalizeExecutionPolicy } from "../execution-policy.js";
 import { type PlanModeController, createPlanModeExtension } from "./plan-mode/index.js";
 import { type SkillCreatorController, createSkillCreatorExtension } from "./skill-creator/index.js";
+import { SUGGEST_TASK_TOOL_NAME, createSuggestTaskExtension } from "./suggest-task.js";
 import { type SubagentsController, createSubagentsExtension } from "./subagents/index.js";
 import { type TodoHandle, createTodoExtension } from "./todo/index.js";
 import { WEB_FETCH_TOOL_NAME, createWebFetchExtension } from "./web-fetch/index.js";
@@ -39,7 +40,7 @@ import { SHOW_VISUAL_TOOL_NAME, createVisualExtension } from "./visual.js";
  * Built-in tools the user's Settings denylist applies to. Every other built-in tool is part of
  * how the app works (a disabled plan_mode_complete would break Plan mode) and ignores it.
  */
-export const SWITCHABLE_BUILTIN_TOOLS: ReadonlySet<string> = new Set([WEB_FETCH_TOOL_NAME, SHOW_VISUAL_TOOL_NAME, ...BROWSER_TOOL_NAMES]);
+export const SWITCHABLE_BUILTIN_TOOLS: ReadonlySet<string> = new Set([WEB_FETCH_TOOL_NAME, SHOW_VISUAL_TOOL_NAME, SUGGEST_TASK_TOOL_NAME, ...BROWSER_TOOL_NAMES]);
 
 export interface BuiltinExtensions {
   /** Factories handed to `DefaultResourceLoader.extensionFactories`. */
@@ -108,6 +109,8 @@ export function createBuiltinExtensions(host: BuiltinHost, options: {
   const browser: InlineExtension = { name: "wackcode-browser", factory: createBrowserExtension(host), hidden: true };
   // No host: the visual is drawn by the desktop from the call's own arguments (`visual.ts`).
   const visual: InlineExtension = { name: "wackcode-visual", factory: createVisualExtension(), hidden: true };
+  // No host either: a suggestion card is drawn from the call's arguments (`suggest-task.ts`).
+  const suggestTask: InlineExtension = { name: "wackcode-suggest-task", factory: createSuggestTaskExtension(), hidden: true };
   const chatRefs: InlineExtension = { name: "wackcode-chat-refs", factory: createChatRefsExtension(host), hidden: true };
   const computerUse = createComputerUseExtension(host);
   const skillCreator = createSkillCreatorExtension(host, {
@@ -139,6 +142,7 @@ export function createBuiltinExtensions(host: BuiltinHost, options: {
       webSearchExtension,
       browser,
       visual,
+      suggestTask,
       chatRefs,
       { name: "wackcode-computer-use", factory: computerUse.factory, hidden: true },
       { name: "wackcode-skill-creator", factory: skillCreator.factory, hidden: true },

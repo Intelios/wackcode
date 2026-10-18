@@ -37,6 +37,26 @@ link the user clicked (opened through `revealPath`, as a Markdown link is) and a
 reply is running, or twice within a second. A message a visual sent travels as a
 `<visual-action-v1>` tail (`visual-action.ts`) and shows as "Sent from “Title”" under its words.
 
+**Suggested tasks** (`SuggestionTray.tsx`) are the follow-ups a turn filed with `suggest_task`,
+drawn as one tray under that turn's answer. `layoutWorkTurns` collects the turn's accepted
+suggestions (`suggestions`, `completed-work.ts`) and reports `settled` — the run is over, not
+merely the answer text — so `WorkTurn`'s `after` slot never puts cards above a live stream. The
+call itself stays an ordinary chip inside the turn's work; the tray is the actionable card.
+
+- State is never kept in the component. `SuggestionScopeContext` carries what the transcript
+  cannot know: the chats each suggestion opened (`TaskRecord.originSuggestion`, mapped by
+  `suggestionLinks`), the ones the user dismissed (`TaskRecord.dismissedSuggestions`), whether a
+  new chat would see the same files, and the App's handlers. "Started here" is read back out of
+  this chat's own later messages (`startedHere`), so a rewind re-opens the card; a deleted chat's
+  card becomes actionable again.
+- A card starts in Build by default and offers Plan and Ultra Plan in its menu. "Start here" is
+  disabled while a run is in flight or the chat's model is gone; "Start in new chat" only exists
+  where there is a project. Starting sends a literal prompt with a `<suggested-task-v1>` tail
+  (`src/suggestions.ts`), which the user bubble strips in favour of a "Suggested task" caption.
+- Unlike a visual reply, an older turn's card stays actionable: it is a task to come back to.
+  Motion (the tray's arrival, the bulb's one glint, each card's stagger) is off under reduced
+  motion; cards are content surfaces, so they stay solid over an image backdrop or Liquid Glass.
+
 ## Transcript work surfaces
 
 The Code transcript borrows Chat's look for its work but keeps its own components and `.tool-*`/`.explore-*` classes (it never uses `.chat-*` rules, and Chat never uses these).

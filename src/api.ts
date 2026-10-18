@@ -60,6 +60,7 @@ import type {
   SlashCommandsOverview,
   SubagentConfig,
   SubagentTarget,
+  SuggestionOrigin,
   SubscriptionProviderInfo,
   TaskKind,
   TaskMode,
@@ -224,8 +225,13 @@ export const api = {
     providerId: string;
     modelId: string;
     thinkingLevel: ThinkingLevel;
+    /** Set when the chat starts from a suggested task; the origin chat's card links to it. */
+    origin?: SuggestionOrigin;
   }) => invoke<TaskRecord>("create_task", { input }),
   renameTask: (taskId: string, name: string) => invoke<TaskRecord>("rename_task", { taskId, name }),
+  /** Dismiss or restore one suggested task's card; the state lives in `wackcode.json`. */
+  setSuggestionDismissed: (input: { taskId: string; suggestionId: string; dismissed: boolean }) =>
+    invoke<TaskRecord>("set_suggestion_dismissed", { input }),
   /** Clears a chat's saved error; Dismiss must persist or the banner returns on relaunch. */
   clearTaskError: (taskId: string) => invoke<void>("clear_task_error", { taskId }),
   deleteTask: (taskId: string) => invoke<void>("delete_task", { taskId }),

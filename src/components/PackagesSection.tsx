@@ -34,7 +34,7 @@ interface BuiltinExtension {
   description: string;
   tools: readonly string[];
   icon: IconName;
-  kind?: "subagents" | "auto_titles" | "web_fetch" | "web_search" | "browser" | "computer_use" | "mcp" | "memory" | "show_visual";
+  kind?: "subagents" | "auto_titles" | "web_fetch" | "web_search" | "browser" | "computer_use" | "mcp" | "memory" | "show_visual" | "suggest_task";
 }
 
 /**
@@ -95,6 +95,14 @@ const BUILTIN_EXTENSIONS: readonly BuiltinExtension[] = [
     tools: ["show_visual"],
     icon: "visual",
     kind: "show_visual"
+  },
+  {
+    name: "Task suggestions",
+    description:
+      "Lets the agent file a follow-up it noticed while working — a bug, a rough edge, missing polish — instead of burying it in its final message. Nothing is started on its own: the suggestion waits under the answer as a card, with Start in new chat and Start here. Sub-agents never file them; Chat mode doesn't have them.",
+    tools: ["suggest_task"],
+    icon: "bulb",
+    kind: "suggest_task"
   },
   {
     name: "Computer use",
@@ -224,6 +232,9 @@ interface Props extends PackageActions {
   /** On unless `show_visual` is in the tool denylist; its switch is on this card. */
   visualEnabled?: boolean;
   onToggleVisual?: (enabled: boolean) => Promise<void>;
+  /** On unless `suggest_task` is in the tool denylist; saved cards still render when off. */
+  suggestionsEnabled?: boolean;
+  onToggleSuggestions?: (enabled: boolean) => Promise<void>;
   computerUseEnabled?: boolean;
   /** macOS 14+; otherwise the switch stays off. */
   computerUseSupported?: boolean;
@@ -247,7 +258,7 @@ interface Props extends PackageActions {
 type Tab = "installed" | "browse";
 
 export function PackagesSection({
-  packages, agentName = "WackCode", subagentsEnabled = false, webFetchEnabled = true, webSearchEnabled = false, onConfigureWeb, browserEnabled = true, visualEnabled = true, onToggleVisual, computerUseEnabled = false, computerUseSupported = true, memoryEnabled = true,
+  packages, agentName = "WackCode", subagentsEnabled = false, webFetchEnabled = true, webSearchEnabled = false, onConfigureWeb, browserEnabled = true, visualEnabled = true, onToggleVisual, suggestionsEnabled = true, onToggleSuggestions, computerUseEnabled = false, computerUseSupported = true, memoryEnabled = true,
   autoTitlesEnabled = false, autoTitlesConfigured = false,
   onToggleSubagents, onToggleBrowser, onToggleComputerUse, onConfigureComputerUse, onToggleAutoTitles, onConfigureSubagents, onConfigureAutoTitles, onConfigureMemory, onConfigureMcp,
   onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
@@ -304,6 +315,7 @@ export function PackagesSection({
     extension.kind === "subagents" ? subagentsEnabled
     : extension.kind === "browser" ? browserEnabled
     : extension.kind === "show_visual" ? visualEnabled
+    : extension.kind === "suggest_task" ? suggestionsEnabled
     : extension.kind === "computer_use" ? computerUseEnabled
     : extension.kind === "web_fetch" ? webFetchEnabled
     : extension.kind === "web_search" ? webSearchEnabled
@@ -430,6 +442,8 @@ export function PackagesSection({
                       ? (enabled) => void run(() => onToggleBrowser(enabled)).catch(() => undefined)
                       : extension.kind === "show_visual" && onToggleVisual
                       ? (enabled) => void run(() => onToggleVisual(enabled)).catch(() => undefined)
+                      : extension.kind === "suggest_task" && onToggleSuggestions
+                      ? (enabled) => void run(() => onToggleSuggestions(enabled)).catch(() => undefined)
                       : extension.kind === "computer_use" && onToggleComputerUse
                       ? (enabled) => void run(() => onToggleComputerUse(enabled)).catch(() => undefined)
                       : extension.kind === "auto_titles" && onToggleAutoTitles

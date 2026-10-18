@@ -118,6 +118,8 @@ mod tests {
             created_at: "now".into(),
             updated_at: "now".into(),
             last_activity_at: None,
+            origin_suggestion: None,
+            dismissed_suggestions: Vec::new(),
         }
     }
 

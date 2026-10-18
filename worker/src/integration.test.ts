@@ -578,6 +578,13 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
         ? [toolCall("plan_mode_complete", { plan: "# The plan\n\n- Ship it" })]
       : lastUserText.startsWith("todo:")
         ? [toolCall("todo", { action: "create", subject: "Ship the thing" })]
+      // "suggest: <title>" files one suggested task, then the next turn answers in prose.
+      : lastUserText.startsWith("suggest:")
+        ? [toolCall("suggest_task", {
+            title: lastUserText.slice("suggest:".length).trim(),
+            kind: "bug",
+            description: "**Where:** `src/a.ts:3`\n\nThe stop button stays disabled."
+          })]
       : lastUserText.startsWith("fetch:")
         ? [toolCall("web_fetch", { url: lastUserText.slice("fetch:".length).trim() })]
       // "mcp: <tool name> <JSON arguments>"
@@ -1135,6 +1142,7 @@ describe("Pi worker integration", () => {
       "skill_creator",
       "subagent",
       "subagent_job",
+      "suggest_task",
       "todo",
       "web_fetch",
       "web_search",
@@ -1181,13 +1189,13 @@ describe("Pi worker integration", () => {
         "browser_console"
       ]
     });
-    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.length === 10);
+    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.length === 11);
     // `find`/`grep` availability varies by host; the companion stays on even without bash.
     const beforeSecondRun = provider.requests.length;
     worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-2", message: "Again." });
     await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.snapshot === undefined && provider.requests.length > beforeSecondRun);
 
-    expect(offered(provider.requests[beforeSecondRun])).toEqual(["ask_user_question", "bash_job", "edit", "plan_mode_complete", "read", "read_chat", "show_visual", "skill_creator", "todo", "write"]);
+    expect(offered(provider.requests[beforeSecondRun])).toEqual(["ask_user_question", "bash_job", "edit", "plan_mode_complete", "read", "read_chat", "show_visual", "skill_creator", "suggest_task", "todo", "write"]);
     expect(worker.child.exitCode).toBeNull();
   });
 
@@ -2228,6 +2236,58 @@ describe("built-in extensions", () => {
     expect(second.ready.snapshot?.todoState?.tasks).toMatchObject([
       { id: 1, subject: "Ship the thing", status: "pending" }
     ]);
+  });
+
+  it("files a suggested task and records its versioned details in the transcript", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-suggest-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "suggest-task");
+    cleanup.push(() => worker.shutdown());
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "suggest: Dismiss stays disabled" });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+
+    // The tool was offered to the model, and its wire result says it was recorded rather than done.
+    const offered = (provider.requests[0].body.tools as Array<{ function: { name: string } }>).map((tool) => tool.function.name);
+    expect(offered).toContain("suggest_task");
+    const wireResult = provider.requests[1].body.messages.find(
+      (message) => (message as { role?: string }).role === "tool"
+    ) as { content?: string } | undefined;
+    expect(wireResult?.content).toContain('Suggested “Dismiss stays disabled”');
+
+    // The brief stays in the call's arguments; the result carries only the card's identity.
+    await worker.waitFor((output) =>
+      emitted(output) &&
+      output.view?.messages.some((message) => message.blocks.some((block) => block.toolName === "suggest_task" && block.details !== undefined)) === true
+    );
+    const details = worker.view?.messages
+      .flatMap((message) => message.blocks)
+      .find((block) => block.toolName === "suggest_task" && block.details !== undefined)
+      ?.details as { v?: number; kind?: string; title?: string } | undefined;
+    expect(details).toEqual({ v: 1, kind: "bug", title: "Dismiss stays disabled" });
+    expect(JSON.stringify(details)).not.toContain("src/a.ts");
+  });
+
+  it("stays usable in Plan mode — it only records a follow-up", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-suggest-plan-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "suggest-plan-task", undefined, undefined, undefined, "plan"
+    );
+    cleanup.push(() => worker.shutdown());
+    await worker.waitFor((output) => output.type === "plan_state" && output.mode === "plan");
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "suggest: Dismiss stays disabled" });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    expect(worker.outputs.some((output) => output.type === "worker_error")).toBe(false);
+    const details = worker.view?.messages
+      .flatMap((message) => message.blocks)
+      .find((block) => block.toolName === "suggest_task" && block.details !== undefined)?.details as { title?: string } | undefined;
+    expect(details?.title).toBe("Dismiss stays disabled");
   });
 
   it("stays usable in Plan mode — it mutates only its own list, never the workspace", async () => {
@@ -4120,8 +4180,8 @@ describe("sub-agents", () => {
       const tools = offered(request);
       const roleTools = (ready.snapshot?.tools ?? []).filter((tool) => tool.available && scout.tools.includes(tool.name)).map((tool) => tool.name);
       expect(tools).toEqual([...roleTools, "bash_job"].sort());
-      // A child has no transcript to draw in, so visual replies stay out too.
-      for (const hidden of ["edit", "write", "subagent", "todo", "ask_user_question", "plan_mode_complete", "show_visual"]) {
+      // A child has no transcript to draw in, so visual replies and task suggestions stay out too.
+      for (const hidden of ["edit", "write", "subagent", "todo", "ask_user_question", "plan_mode_complete", "show_visual", "suggest_task"]) {
         expect(tools).not.toContain(hidden);
       }
     }

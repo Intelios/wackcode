@@ -113,6 +113,8 @@ import { ComputerUseBanner } from "./components/ComputerUseBanner";
 import { InlineDialog, type ExtensionUIResponse } from "./components/InlineDialog";
 import type { PlanAction } from "./components/PlanCard";
 import type { SkillDraftAction } from "./components/SkillDraftCard";
+import type { SuggestionAction } from "./components/SuggestionTray";
+
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { ChatArea, type ChatAreaProps } from "./components/chat/ChatArea";
 import type { SystemNote } from "./components/chat/ChatBubbles";
@@ -120,6 +122,7 @@ import { SubscriptionLoginDialog } from "./components/SubscriptionLoginDialog";
 import { ExploreGroupingEnabled } from "./components/ExploreGroup";
 import { ThinkingPreviewEnabled, ThinkingTimerPrecision } from "./components/ThinkingRow";
 import { composeVisualAction, splitVisualAction, type VisualSendResult } from "./visual-action";
+import { composeSuggestedTask, splitSuggestedTask, suggestionLinks, type SuggestionCard } from "./suggestions";
 
 const emptyData: AppData = {
   version: 1,
@@ -2253,6 +2256,80 @@ export default function App() {
     }
   }
 
+  /**
+   * The selected suggestion's model, if it is still there and ready. A suggestion's new chat
+   * keeps the origin's connection, model and thinking level — it is the same work — and falls
+   * back to the project's default only when that model left its connection.
+   */
+  function suggestionChoice(task: TaskRecord): ModelChoice | undefined {
+    const provider = configuredProviders.find((item) => item.id === task.providerId);
+    const model = provider?.models.find((item) => item.id === task.modelId);
+    if (!provider || !model || !modelIsReady(model)) return undefined;
+    return { providerId: provider.id, modelId: model.id, thinkingLevel: pickThinkingLevel(model, task.thinkingLevel) };
+  }
+
+  /**
+   * A suggested task's new chat (`SuggestionTray`): the origin's project, files, model and
+   * worktree setting, named after the suggestion, with the origin recorded so the card can
+   * link back to it. It starts in the background — the user stays in the chat they were
+   * reading — as a background tab when tabs are on.
+   */
+  async function startSuggestionChat(origin: TaskRecord, card: SuggestionCard, mode: TaskMode, message: string) {
+    const project = data.projects.find((item) => item.id === origin.projectId);
+    if (!project) return;
+    const choice = suggestionChoice(origin) ?? defaultChoice(project.id);
+    if (!choice) { openSettings(); return; }
+    try {
+      const created = await api.createTask({
+        projectId: project.id,
+        useWorktree: origin.usesWorktree && Boolean(project.gitHasHead),
+        name: card.title,
+        ...choice,
+        origin: { taskId: origin.id, suggestionId: card.id }
+      });
+      setData((current) => ({ ...current, tasks: [...current.tasks, created] }));
+      rememberModel(created);
+      if (tabsEnabledRef.current) tabs.update((state) => openChatTab(state, created.id, false, undefined, "code"));
+      await promptTask(created, message, { mode, literal: true });
+    } catch (reason) {
+      patchRuntime(origin.id, { error: String(reason) });
+    }
+  }
+
+  /**
+   * A suggested-task card's actions. Starting sends the brief as a literal prompt — a title can
+   * never run a slash command — with the tail naming the suggestion, so the transcript shows the
+   * caption instead of the transport. Dismissing is card state and lives in `wackcode.json`.
+   */
+  async function suggestionAction(action: SuggestionAction) {
+    const task = selectedTask;
+    if (!task) return;
+    if (action.type === "copy") {
+      try {
+        await writeText(composeSuggestedTask(action.card));
+        appendNotice(task.id, { message: "Suggested task copied as a prompt.", level: "info" });
+      } catch (reason) {
+        patchRuntime(task.id, { error: String(reason) });
+      }
+      return;
+    }
+    if (action.type === "dismiss") {
+      try {
+        const updated = await api.setSuggestionDismissed({ taskId: task.id, suggestionId: action.card.id, dismissed: action.dismissed });
+        setData((current) => ({ ...current, tasks: current.tasks.map((item) => item.id === updated.id ? updated : item) }));
+      } catch (reason) {
+        patchRuntime(task.id, { error: String(reason) });
+      }
+      return;
+    }
+    if (action.target === "new") {
+      await startSuggestionChat(task, action.card, action.mode, composeSuggestedTask(action.card, { chatId: task.id, chatName: task.name }));
+      return;
+    }
+    // Starting here waits for the chat to settle: the card disables the button while it runs.
+    await sendPrompt(composeSuggestedTask(action.card), { mode: action.mode, literal: true });
+  }
+
   /** Hydrate (or refresh) the selected chat's draft publication states from the host. */
   async function refreshSkillDrafts(taskId: string, key: string) {
     try {
@@ -2502,7 +2579,8 @@ export default function App() {
     const messages = runtime?.snapshot?.messages ?? [];
     if (action.type === "copy") {
       // The generated attached-files and visual-action sections are transport, not the words.
-      await writeText(splitFileSection(splitVisualAction(messageText(action.message)).text).text);
+      // The generated attached-files, visual-action and suggested-task sections are transport.
+      await writeText(splitFileSection(splitSuggestedTask(splitVisualAction(messageText(action.message)).text).text).text);
     } else if (action.type === "copy-prompt") {
       await writeText(action.text);
     } else if (action.type === "edit") {
@@ -2521,11 +2599,12 @@ export default function App() {
   }
 
   // Stable identities for the memoized transcript: the latest handlers are read through refs.
-  const handlers = useRef({ messageAction, planAction, skillDraftAction, visualSend: (text: string, title: string) => visualSend(text, title), undoRewind: () => undefined as void });
+  const handlers = useRef({ messageAction, planAction, skillDraftAction, suggestionAction, visualSend: (text: string, title: string) => visualSend(text, title), undoRewind: () => undefined as void });
   handlers.current = {
     messageAction,
     planAction,
     skillDraftAction,
+    suggestionAction,
     visualSend,
     undoRewind: () => {
       const undo = runtime?.snapshot?.tree?.undo;
@@ -2537,6 +2616,20 @@ export default function App() {
   const onSkillDraftAction = useCallback((action: SkillDraftAction) => void handlers.current.skillDraftAction(action), []);
   const onUndoRewind = useCallback(() => handlers.current.undoRewind(), []);
   const onVisualSend = useCallback((text: string, title: string) => handlers.current.visualSend(text, title), []);
+  const onSuggestionAction = useCallback((action: SuggestionAction) => void handlers.current.suggestionAction(action), []);
+  /**
+   * What the selected chat's suggested-task cards may do. `started` and `busy` are the
+   * transcript's own (its messages, its run); everything else lives here: the chats a suggestion
+   * opened, what the user dismissed, and whether a new chat would see the same files.
+   */
+  const selectedSuggestions = useMemo(() => selectedTask ? {
+    links: suggestionLinks(data.tasks).get(selectedTask.id) ?? new Map(),
+    dismissed: new Set(selectedTask.dismissedSuggestions ?? []),
+    canStartNewChat: Boolean(selectedTask.projectId) && selectedTask.kind !== "chat",
+    modelMissing: Boolean(runtime?.snapshot?.modelIssue),
+    onAction: onSuggestionAction,
+    onOpenChat: (taskId: string) => selectTaskRef.current(taskId)
+  } : undefined, [data.tasks, selectedTask, runtime?.snapshot?.modelIssue, onSuggestionAction]);
   // A visual's link opens the way a Markdown link does: the webview cannot open one itself.
   const onVisualLink = useCallback((href: string) => { void api.revealPath(href).catch(() => undefined); }, []);
 
@@ -3146,6 +3239,7 @@ export default function App() {
               onUndoRewind={runtime?.snapshot?.tree?.undo ? onUndoRewind : undefined}
               loadImage={loadMessageImage}
               chatLinks={chatLinks}
+              suggestions={selectedSuggestions}
             />
             </ToolImageSource.Provider>
             </SubagentPanelLink.Provider>

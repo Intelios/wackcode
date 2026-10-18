@@ -17,6 +17,8 @@ interface Props {
   onToggle: () => void;
   onAutoCollapse: () => void;
   renderRows: (rows: WorkRow[], part?: "work" | "outcome") => ReactNode;
+  /** Drawn after the outcome, inside the turn: the settled suggested-task tray. */
+  after?: ReactNode;
   scroll: Pick<ReturnType<typeof useFollowScroll>, "ref" | "isFollowing" | "keepAnchor" | "reconcile">;
 }
 
@@ -101,7 +103,7 @@ class WorkTurnBoundary extends Component<BoundaryProps, Record<string, never>, S
   }
 
   render() {
-    const { turn, user, duration, durationMs, enabled, onToggle, renderRows, regionId, animate, scroll } = this.props;
+    const { turn, user, duration, durationMs, enabled, onToggle, renderRows, after, regionId, animate, scroll } = this.props;
     const open = this.props.open && !this.completedNow();
     const folded = enabled && Boolean(turn.folded);
     const partition = enabled ? turn.partition : undefined;
@@ -142,6 +144,7 @@ class WorkTurnBoundary extends Component<BoundaryProps, Record<string, never>, S
           )}
         </div>
         {partition && renderRows(partition.outcome, "outcome")}
+        {after}
       </div>
     );
   }

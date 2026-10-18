@@ -24,6 +24,8 @@ import { ScrollRail } from "./ScrollRail";
 import { SkillDraftCard, type SkillDraftAction } from "./SkillDraftCard";
 import { turnExcerpt, type RailTurn } from "../scroll-rail";
 import { splitVisualAction, type VisualSendResult } from "../visual-action";
+import { splitSuggestedTask, startedHere, type SuggestionLink } from "../suggestions";
+import { SuggestionNote, SuggestionScopeContext, SuggestionTray, type SuggestionScope } from "./SuggestionTray";
 import { SubagentGroup } from "./SubagentChip";
 import { ThinkingExpansion, ThinkingRow } from "./ThinkingRow";
 import { FLY, OrphanResult, ToolChips, ToolExpansion, ToolRow, useTranscriptMotion, type ChipCall } from "./ToolRow";
@@ -90,7 +92,16 @@ interface Props {
   chatLinks?: ChatLinks;
   /** What an empty chat says. Absent: the coding agent's invitation. */
   empty?: { title: string; body: string };
+  /**
+   * Suggested-task state that lives outside this chat's transcript: the chats started from its
+   * suggestions, the ones the user dismissed, and the two handlers. `started` and `busy` are
+   * read here (this chat's own messages, and whether a run is live), so they are not passed in.
+   */
+  suggestions?: SuggestionScopeInput;
 }
+
+/** Everything about suggested tasks the transcript cannot know by itself. */
+export type SuggestionScopeInput = Omit<SuggestionScope, "started" | "busy">;
 
 /** How the tool-related cards and their actions reach every rendered block. */
 interface SkillCardContext {
@@ -136,6 +147,9 @@ export type MessageAction =
   | { type: "fork"; message: NormalizedMessage };
 
 const NO_SLOTS: TranscriptSlot[] = [];
+/** Stable empties, so the suggestion scope's memo does not churn with a fresh object each render. */
+const EMPTY_LINKS: ReadonlyMap<string, SuggestionLink> = new Map();
+const EMPTY_SUGGESTIONS: ReadonlySet<string> = new Set();
 
 type LocalAction = MessageAction | { type: "start-edit"; id: string } | { type: "cancel-edit" };
 
@@ -574,10 +588,13 @@ const Message = memo(function Message({ message, slots, results, liveToolText, l
   const scrollAnchor = `message:${message.id}${anchorPart ? `:${anchorPart}` : ""}`;
   if (message.role === "user") {
     const images = message.blocks.filter((block) => block.type === "image");
-    // The message text carries attached files and, for a visual's button, the section naming
-    // that visual; the transcript shows the words and both as their own parts.
+    // The message text carries attached files and, for a visual's button or a started
+    // suggested task, the section naming it; the transcript shows the words and both as their
+    // own parts.
     const spoken = splitVisualAction(messageText(message));
-    const { text, files, browserContexts = [], chatRefs = [] } = splitFileSection(spoken.text);
+    // A message that started a suggested task carries that suggestion's tail section.
+    const started = splitSuggestedTask(spoken.text);
+    const { text, files, browserContexts = [], chatRefs = [] } = splitFileSection(started.text);
     if (editing) {
       return (
         <div className="msg user editing" data-transcript-anchor={scrollAnchor} data-turn={message.versions ? message.versions.group : message.id}>
@@ -616,6 +633,7 @@ const Message = memo(function Message({ message, slots, results, liveToolText, l
           ? <CommandMessage message={message} onCopy={(prompt) => onAction({ type: "copy-prompt", text: prompt })} />
           : <div className="bubble"><MentionText text={text} chatRefs={chatRefs} chatLinks={chatLinks} /></div>)}
         {spoken.title && <VisualSentNote title={spoken.title} />}
+        {started.suggestion && <SuggestionNote origin={started.suggestion.origin} />}
         <MessageActions
           align="end"
           items={items}
@@ -689,7 +707,7 @@ function activityLabel(activity?: string): string {
   return "Working…";
 }
 
-export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, compaction, runTimings = [], collapseCompletedWork = true, scopeKey = "", viewState, historyReady = true, status, liveToolText, liveToolDetails, planState, onPlanAction, onVisualSend, onVisualLink, skillDrafts, skillDraftsSaving, taskId, onSkillAction, loadSkillDocument, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind, loadImage, chatLinks, empty }: Props) {
+export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, compaction, runTimings = [], collapseCompletedWork = true, scopeKey = "", viewState, historyReady = true, status, liveToolText, liveToolDetails, planState, onPlanAction, onVisualSend, onVisualLink, skillDrafts, skillDraftsSaving, taskId, onSkillAction, loadSkillDocument, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind, loadImage, chatLinks, empty, suggestions }: Props) {
   const scroll = useFollowScroll(viewState, historyReady);
   const { ref, onScroll, onWheel, detached, pauseFollowing, jumpToLatest } = scroll;
   const [expandedWork, setExpandedWork] = useState(() => viewState?.work ?? new Set<string>());
@@ -771,6 +789,19 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
     onOpenLink: onVisualLink
   }), [messages, partial, running, onVisualSend, onVisualLink]);
 
+  // What a suggested-task card may do here: this chat's own started ones, the chats they opened,
+  // and what the user dismissed. Nothing is ever started by accident: `busy` is this run.
+  const suggestionScope = useMemo<SuggestionScope>(() => ({
+    links: suggestions?.links ?? EMPTY_LINKS,
+    dismissed: suggestions?.dismissed ?? EMPTY_SUGGESTIONS,
+    started: new Set(startedHere(messages, partial).keys()),
+    busy: running,
+    canStartNewChat: suggestions?.canStartNewChat ?? false,
+    modelMissing: suggestions?.modelMissing,
+    onAction: suggestions?.onAction,
+    onOpenChat: suggestions?.onOpenChat,
+  }), [suggestions, messages, partial, running]);
+
   const grouping = useContext(ExploreGroupingEnabled);
   const assistantName = useContext(AssistantNameContext);
   const [expandedGroups] = useState(() => viewState?.exploration ?? new Set<string>());
@@ -797,7 +828,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
     .map((message) => {
       const text = message.commandPresentation
         ? `/${message.commandPresentation.name} ${commandSummary(message.commandPresentation)}`
-        : splitFileSection(splitVisualAction(messageText(message)).text).text;
+        : splitFileSection(splitSuggestedTask(splitVisualAction(messageText(message)).text).text).text;
       return { id: message.versions ? message.versions.group : message.id, excerpt: turnExcerpt(text) };
     }), [messages]);
   const liveTurnId = useMemo(() => {
@@ -892,6 +923,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
           <ExploreExpansion.Provider value={expandedGroups}>
           <ToolExpansion.Provider value={toolExpansions}>
           <VisualCardScope.Provider value={visualScope}>
+          <SuggestionScopeContext.Provider value={suggestionScope}>
             <div className="transcript">
               {messages.map((message, messageIndex) => {
                 const turn = workTurns.get(messageIndex);
@@ -909,6 +941,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
                 return <Fragment key={key}>
                   {renderSwitches(messageIndex)}
                   <WorkTurn turn={turn} scopeKey={scopeKey} user={renderMessage(message)} duration={duration} durationMs={timingsByMessage.get(message.id)}
+                    after={turn.settled && turn.suggestions.length > 0 ? <SuggestionTray suggestions={turn.suggestions} /> : undefined}
                     enabled={collapseCompletedWork} open={expandedWork.has(expansionKey)} renderRows={renderRows} scroll={scroll}
                     onAutoCollapse={() => setExpandedWork((current) => {
                       if (!current.has(expansionKey)) return current;
@@ -939,6 +972,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
               {!compaction && waiting && label && <WorkingPresence label={label} />}
               {rewindBar}
             </div>
+          </SuggestionScopeContext.Provider>
           </VisualCardScope.Provider>
           </ToolExpansion.Provider>
           </ExploreExpansion.Provider>

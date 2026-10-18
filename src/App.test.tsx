@@ -24,7 +24,8 @@ vi.mock("./api", () => ({ api: {
   createTask: vi.fn(), prompt: vi.fn(), setTaskMode: vi.fn(), executeCommand: vi.fn().mockResolvedValue(undefined),
   stopTask: vi.fn().mockResolvedValue(undefined), setAppearanceConfig: vi.fn(async (config) => config),
   watchSubagent: vi.fn().mockResolvedValue(undefined), archiveTask: vi.fn(), deleteTask: vi.fn().mockResolvedValue(undefined),
-  goalControl: vi.fn().mockResolvedValue(undefined), browserState: vi.fn(), browserPresent: vi.fn(), browserRetirePresentation: vi.fn().mockResolvedValue(undefined)
+  goalControl: vi.fn().mockResolvedValue(undefined), browserState: vi.fn(), browserPresent: vi.fn(), browserRetirePresentation: vi.fn().mockResolvedValue(undefined),
+  setSuggestionDismissed: vi.fn()
 } }));
 vi.mock("./components/SettingsPage", () => ({ SettingsPage: (props: { appearance: typeof DEFAULT_APPEARANCE; toolCatalog: { name: string }[]; onSetAppearance: (value: typeof DEFAULT_APPEARANCE) => void; onClose: () => void }) => <>
   <output aria-label="Tool catalogue">{props.toolCatalog.map((tool) => tool.name).join(",")}</output>
@@ -50,7 +51,7 @@ const provider: ProviderRecord = {
 };
 const task = (id: string): TaskRecord => ({ id, projectId: null, name: `Chat ${id}`, workspacePath: `/tmp/${id}`, worktreePath: null,
   branch: null, usesWorktree: false, providerId: "p", modelId: "first", thinkingLevel: "off", sessionFile: null, status: "idle", mode: "build",
-  archived: false, archivedAt: null, lastError: null, kind: "code", lastActivityAt: null, createdAt: "2026-01-01", updatedAt: "2026-01-01", autoTitleEligible: false, autoTitleAttemptId: null });
+  archived: false, archivedAt: null, lastError: null, kind: "code", lastActivityAt: null, originSuggestion: null, dismissedSuggestions: [], createdAt: "2026-01-01", updatedAt: "2026-01-01", autoTitleEligible: false, autoTitleAttemptId: null });
 function bootstrap(enabled = true, dynamic = false) {
   const data: AppData = { version: 1, providers: [provider], favoriteModels: [], projects: [], tasks: [task("a"), task("b")], diffComments: {},
     toolConfig: { disabled: [] }, toolCatalog: [], packages: [], subagents: { enabled: false, trigger: "on_request", maxConcurrency: 4, agents: [] },
@@ -597,5 +598,91 @@ describe("App dynamic background wiring", () => {
     expect(screen.getByLabelText("Dynamic background")).toHaveTextContent("glyphFlow");
     await act(async () => saving.reject(new Error("Could not save")));
     expect(screen.getByLabelText("Dynamic background")).toHaveTextContent("colourDrift");
+  });
+});
+
+describe("App suggested tasks", () => {
+  const brief = "**Where:** `src/components/Composer.tsx:88`\n\nThe stop button stays disabled after a failed save.";
+  const project = { id: "proj", name: "Project", path: "/tmp/proj", gitRoot: null, gitHasHead: false, runCommand: null, branch: null, createdAt: "2026-01-01" };
+  const suggestedTask = (id: string, patch: Partial<TaskRecord> = {}): TaskRecord => ({ ...task(id), projectId: "proj", ...patch });
+  const startedChat = (id: string, originId: string): TaskRecord => suggestedTask(id, {
+    name: "Dismiss stays disabled",
+    originSuggestion: { taskId: originId, suggestionId: "s1" }
+  });
+  function boot(tasks: TaskRecord[]) {
+    const data: AppData = { version: 1, providers: [provider], favoriteModels: [], projects: [project], tasks, diffComments: {},
+      toolConfig: { disabled: [] }, toolCatalog: [], packages: [], subagents: { enabled: false, trigger: "on_request", maxConcurrency: 4, agents: [] },
+      autoTitle: { enabled: false, providerId: null, modelId: null }, appearance: { ...DEFAULT_APPEARANCE, chatTabs: true }, prompts: {}, mcp: { servers: [] } };
+    vi.mocked(api.bootstrap).mockResolvedValue({ data, appDataPath: "/tmp", glassSupported: false, computerUseSupported: false, devBuild: false });
+    return render(<App />);
+  }
+  /** A settled turn that filed one suggested task. */
+  const turn = (): NormalizedMessage[] => [
+    { id: "u", entryId: "u", role: "user", timestamp: 100, blocks: [{ type: "text", text: "Fix the layout" }] },
+    { id: "a", entryId: "a", role: "assistant", timestamp: 200, stopReason: "stop", turn: { userEntryId: "u", endEntryId: "a" }, blocks: [
+      { type: "tool-call", toolCallId: "s1", toolName: "suggest_task", arguments: { title: "Dismiss stays disabled", kind: "bug", description: brief } },
+      { type: "tool-result", toolCallId: "s1", toolName: "suggest_task", text: "Suggested", details: { v: 1, kind: "bug", title: "Dismiss stays disabled" } },
+      { type: "text", text: "The layout is fixed." }
+    ] }
+  ];
+  async function showTray(tasks = [suggestedTask("a"), suggestedTask("b")]) {
+    boot(tasks);
+    await screen.findByRole("button", { name: "Settings" });
+    await worker({ type: "snapshot", taskId: "a", snapshot: snapshot(turn()) });
+    chat("a");
+    return screen.findByRole("heading", { name: "Spotted along the way" });
+  }
+
+  it("starts a suggestion here as a literal prompt in the chosen mode", async () => {
+    await showTray();
+    fireEvent.click(screen.getByRole("button", { name: /Start here/ }));
+    await waitFor(() => expect(api.prompt).toHaveBeenCalledWith(expect.objectContaining({ taskId: "a", mode: "build", literal: true })));
+    const sent = vi.mocked(api.prompt).mock.calls.at(-1)?.[0].message ?? "";
+    expect(sent.startsWith("Dismiss stays disabled\n\n**Where:**")).toBe(true);
+    expect(sent).toContain("<suggested-task-v1>");
+    expect(sent).toContain('"id":"s1"');
+  });
+
+  it("starts a suggestion in a new chat in the background, keeping the same project and model", async () => {
+    await showTray();
+    vi.mocked(api.createTask).mockResolvedValue(startedChat("new", "a"));
+    fireEvent.click(screen.getByRole("button", { name: /Start in new chat/ }));
+    await waitFor(() => expect(api.createTask).toHaveBeenCalledWith({
+      projectId: "proj", useWorktree: false, name: "Dismiss stays disabled", providerId: "p", modelId: "first", thinkingLevel: "off",
+      origin: { taskId: "a", suggestionId: "s1" }
+    }));
+    await waitFor(() => expect(api.prompt).toHaveBeenCalledWith(expect.objectContaining({ taskId: "new", mode: "build", literal: true })));
+    const sent = vi.mocked(api.prompt).mock.calls.at(-1)?.[0].message ?? "";
+    expect(sent).toContain('"origin":{"chatId":"a","chatName":"Chat a"}');
+    // The user stays where they were, and the card now points at the chat it opened.
+    expect(screen.getByRole("heading", { name: "Spotted along the way" })).toBeInTheDocument();
+    await screen.findByRole("button", { name: "“Dismiss stays disabled”" });
+    expect(screen.queryByRole("button", { name: /Start here/ })).toBeNull();
+  });
+
+  it("dismisses a suggestion for good, and restores it", async () => {
+    await showTray();
+    vi.mocked(api.setSuggestionDismissed).mockResolvedValue(suggestedTask("a", { dismissedSuggestions: ["s1"] }));
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss “Dismiss stays disabled”" }));
+    await waitFor(() => expect(api.setSuggestionDismissed).toHaveBeenCalledWith({ taskId: "a", suggestionId: "s1", dismissed: true }));
+    await screen.findByRole("button", { name: "Restore" });
+    vi.mocked(api.setSuggestionDismissed).mockResolvedValue(suggestedTask("a"));
+    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+    await waitFor(() => expect(api.setSuggestionDismissed).toHaveBeenLastCalledWith({ taskId: "a", suggestionId: "s1", dismissed: false }));
+    await screen.findByRole("button", { name: /Start here/ });
+  });
+
+  it("shows a suggestion's chat in this chat's transcript as a caption, not as transport", async () => {
+    boot([suggestedTask("a")]);
+    await screen.findByRole("button", { name: "Settings" });
+    const message = `Dismiss stays disabled\n\n${brief}\n\n<suggested-task-v1>\nStarted from a suggested task "Dismiss stays disabled" in the chat "Settings cleanup".\n{"version":1,"id":"s1","kind":"bug","title":"Dismiss stays disabled","origin":{"chatId":"b","chatName":"Settings cleanup"}}\n</suggested-task-v1>`;
+    await worker({ type: "snapshot", taskId: "a", snapshot: snapshot([
+      { id: "u", entryId: "u", role: "user", blocks: [{ type: "text", text: message }] },
+      { id: "a", entryId: "a", role: "assistant", blocks: [{ type: "text", text: "On it" }] }
+    ]) });
+    chat("a");
+    expect(await screen.findByText("Suggested task")).toBeInTheDocument();
+    expect(screen.getByText("from “Settings cleanup”")).toBeInTheDocument();
+    expect(screen.queryByText(/suggested-task-v1/)).toBeNull();
   });
 });

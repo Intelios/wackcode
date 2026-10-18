@@ -401,7 +401,25 @@ export interface TaskRecord {
   updatedAt: string;
   /** When the chat last started a run; the Chat area orders by it. Null until the first run. */
   lastActivityAt: string | null;
+  /**
+   * The suggested task this chat was started from (`src/suggestions.ts`). The origin chat's card
+   * reads it to say where the task went; null for an ordinary chat and for every fork.
+   */
+  originSuggestion: SuggestionOrigin | null;
+  /** Suggested-task ids the user dismissed in this chat. Card state only. */
+  dismissedSuggestions: string[];
 }
+
+/** Which suggestion on which chat a new chat was started from. */
+export interface SuggestionOrigin {
+  /** The chat whose transcript holds the suggestion card. */
+  taskId: string;
+  /** The `suggest_task` tool-call id, which is the suggestion's identity. */
+  suggestionId: string;
+}
+
+/** How `suggest_task` classified a follow-up: broken, rough, or merely missing. */
+export type SuggestionKind = "bug" | "polish" | "improvement";
 
 /** One resource file a package contributes. */
 export interface PackageResourceRecord {

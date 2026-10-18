@@ -14,6 +14,7 @@ function task(id: string, name: string, overrides: Partial<TaskRecord> = {}): Ta
     providerId: "p", modelId: "m", thinkingLevel: "off", sessionFile: `${id}.jsonl`,
     status: "idle", mode: "build", archived: false, archivedAt: null, lastError: null,
     createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z", lastActivityAt: null,
+    originSuggestion: null, dismissedSuggestions: [],
     ...overrides
   };
 }

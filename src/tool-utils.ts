@@ -1,5 +1,6 @@
 import type { NormalizedBlock, NormalizedMessage, SearchProviderKind, SkillPreviewDetails, SubagentDetails, SubagentResult, SubagentStatus, ToolCatalogEntry, WebSearchDetails } from "./types";
 import { displayPath } from "./chat-utils";
+import { SUGGEST_TASK_TOOL_NAME } from "./suggestions";
 
 /** The built-in sub-agents tool. Its calls render as SubAgent chips rather than a tool row. */
 export const SUBAGENT_TOOL_NAME = "subagent";
@@ -228,6 +229,8 @@ export function summarizeTool(call: NormalizedBlock, result?: NormalizedBlock): 
       return { kind: "other", activeVerb: "Searching the web", doneVerb: "Searched the web", subject: str(toolArgs.query) };
     case SHOW_VISUAL_TOOL_NAME:
       return { kind: "other", activeVerb: "Drawing", doneVerb: "Drew", subject: str(toolArgs.title) };
+    case SUGGEST_TASK_TOOL_NAME:
+      return { kind: "other", activeVerb: "Spotting", doneVerb: "Spotted", subject: str(toolArgs.title) };
     case "memory_save": {
       const updated = typeof toolArgs.name === "string" && toolArgs.name.trim();
       return { kind: "other", activeVerb: updated ? "Updating memory" : "Saving memory", doneVerb: updated ? "Updated memory" : "Saved memory", subject: str(toolArgs.title) };

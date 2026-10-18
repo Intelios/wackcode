@@ -1704,6 +1704,7 @@ mod tests {
             thinking_level: "off".into(), session_file: None, status,
             mode: TaskMode::Build, archived: false, archived_at: None, last_error: None,
             created_at: "now".into(), updated_at: "now".into(), last_activity_at: None,
+            origin_suggestion: None, dismissed_suggestions: Vec::new(),
         };
         MetadataState {
             data: Mutex::new(crate::models::AppData { tasks: vec![task], ..Default::default() }),

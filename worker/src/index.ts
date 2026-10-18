@@ -13,6 +13,7 @@ import { DEFAULT_CHAT_PROMPT, buildChatGuide, chatGuideDate } from "./builtin/ch
 import { BROWSER_TOOL_NAMES } from "./builtin/browser.js";
 import { COMPUTER_TOOL_NAMES } from "./builtin/computer-use/params.js";
 import { VISUAL_TOOL_NAMES } from "./builtin/visual.js";
+import { SUGGEST_TASK_TOOL_NAMES } from "./builtin/suggest-task.js";
 import { WEB_SEARCH_TOOL_NAME } from "./builtin/web-search/index.js";
 import { GOAL_VERIFIER_SYSTEM } from "./builtin/goal/prompt.js";
 import { runGoalVerification } from "./builtin/goal/verify.js";
@@ -305,10 +306,11 @@ const builtinHost: BuiltinHost = {
     return withUsage("goal_verification", () => runGoalVerification(modelRuntime!, model, GOAL_VERIFIER_SYSTEM, input, signal, session?.sessionId));
   },
   // web_search has its own setting rather than the denylist: a child gets it while it is offered.
-  // Visual replies stay out: a child has no transcript to draw in (`visual.ts`).
+  // Visual replies and task suggestions stay out: a child has no transcript to draw a card in
+  // (`visual.ts`, `suggest-task.ts`), so it reports what it noticed and the parent decides.
   childToolNames: () =>
     toolCatalog()
-      .filter((tool) => !BROWSER_TOOL_NAMES.includes(tool.name as typeof BROWSER_TOOL_NAMES[number]) && !COMPUTER_TOOL_NAMES.includes(tool.name as typeof COMPUTER_TOOL_NAMES[number]) && !VISUAL_TOOL_NAMES.includes(tool.name as typeof VISUAL_TOOL_NAMES[number]) && (tool.source.kind === "builtin" || SWITCHABLE_BUILTIN_TOOLS.has(tool.name) || tool.name === WEB_SEARCH_TOOL_NAME) && tool.available && !disabledTools.has(tool.name) && !builtins.webSearch.inactiveTools().includes(tool.name))
+      .filter((tool) => !BROWSER_TOOL_NAMES.includes(tool.name as typeof BROWSER_TOOL_NAMES[number]) && !COMPUTER_TOOL_NAMES.includes(tool.name as typeof COMPUTER_TOOL_NAMES[number]) && !VISUAL_TOOL_NAMES.includes(tool.name as typeof VISUAL_TOOL_NAMES[number]) && !SUGGEST_TASK_TOOL_NAMES.includes(tool.name as typeof SUGGEST_TASK_TOOL_NAMES[number]) && (tool.source.kind === "builtin" || SWITCHABLE_BUILTIN_TOOLS.has(tool.name) || tool.name === WEB_SEARCH_TOOL_NAME) && tool.available && !disabledTools.has(tool.name) && !builtins.webSearch.inactiveTools().includes(tool.name))
       .map((tool) => tool.name),
   runSubagent: async (request) => {
     if (!subagentRunner) throw new Error("Worker is not initialized");

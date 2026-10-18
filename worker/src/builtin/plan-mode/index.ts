@@ -18,6 +18,7 @@ import { TODO_TOOL_NAME } from "../todo/types.js";
 import { WEB_FETCH_TOOL_NAME } from "../web-fetch/index.js";
 import { WEB_SEARCH_TOOL_NAME } from "../web-search/index.js";
 import { SHOW_VISUAL_TOOL_NAME } from "../visual.js";
+import { SUGGEST_TASK_TOOL_NAME } from "../suggest-task.js";
 import { BASH_JOB_TOOL_NAME } from "../bash-jobs.js";
 import { READ_CHAT_TOOL_NAME } from "../chat-refs.js";
 import { BROWSER_ACT_TOOL_NAME, BROWSER_CONSOLE_TOOL_NAME, BROWSER_OPEN_TOOL_NAME, BROWSER_SCREENSHOT_TOOL_NAME, BROWSER_SNAPSHOT_TOOL_NAME } from "../browser.js";
@@ -176,7 +177,9 @@ export function createPlanModeExtension(host: BuiltinHost, mcpTools?: PlanModeMc
       // history, through the host, which decides what may be read. Memory notes live outside
       // the workspace, and a correction heard during planning is exactly what should outlive
       // the session, so the memory tools stay available. `show_visual` only draws in this
-      // chat's transcript, so a mocked-up UI is fair game while planning. Computer use may list apps and look at a window
+      // chat's transcript, so a mocked-up UI is fair game while planning. `suggest_task` only
+      // records a follow-up task for later, which planning turns up more than anything.
+      // Computer use may list apps and look at a window
       // the user has allowed (the access card is theirs to answer), never open or operate one.
       const helper =
         event.toolName === ASK_USER_QUESTION_TOOL_NAME ||
@@ -189,6 +192,7 @@ export function createPlanModeExtension(host: BuiltinHost, mcpTools?: PlanModeMc
         event.toolName === WEB_SEARCH_TOOL_NAME ||
         event.toolName === READ_CHAT_TOOL_NAME ||
         event.toolName === SHOW_VISUAL_TOOL_NAME ||
+        event.toolName === SUGGEST_TASK_TOOL_NAME ||
         (MEMORY_TOOL_NAMES as readonly string[]).includes(event.toolName) ||
         event.toolName === BROWSER_SNAPSHOT_TOOL_NAME ||
         event.toolName === BROWSER_SCREENSHOT_TOOL_NAME ||

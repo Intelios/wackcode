@@ -1143,7 +1143,29 @@ pub struct TaskRecord {
     /// a rename, an archive or a model change, so it cannot. Absent until the first run.
     #[serde(default)]
     pub last_activity_at: Option<String>,
+    /// The suggested task this chat was started from (`suggest_task`, `src/suggestions.ts`).
+    /// The origin chat's card reads it to say where the task went; absent for ordinary chats.
+    #[serde(default)]
+    pub origin_suggestion: Option<SuggestionOrigin>,
+    /// Suggested-task ids the user dismissed in this chat. Bounded by `MAX_DISMISSED_SUGGESTIONS`;
+    /// the oldest entry is dropped first. Card state only — never a filter on what may run.
+    #[serde(default)]
+    pub dismissed_suggestions: Vec<String>,
 }
+
+/// Which suggestion on which chat a new chat was started from.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SuggestionOrigin {
+    /// The chat whose transcript holds the suggestion card.
+    pub task_id: String,
+    /// The `suggest_task` tool-call id, which is the suggestion's identity.
+    pub suggestion_id: String,
+}
+
+/// How many dismissed suggestions one chat remembers. A chat that keeps suggesting cannot grow
+/// its metadata without bound; the oldest dismissal is forgotten first.
+pub const MAX_DISMISSED_SUGGESTIONS: usize = 200;
 
 /// The main window's last normal-mode geometry in logical points, recorded from resize and
 /// move events and restored on launch (`window_state.rs`). Absent until the first event.
@@ -1285,6 +1307,9 @@ pub struct CreateTaskInput {
     pub provider_id: String,
     pub model_id: String,
     pub thinking_level: String,
+    /// The suggested task this chat starts from (`suggest_task`); absent for a normal chat.
+    #[serde(default)]
+    pub origin: Option<SuggestionOrigin>,
 }
 
 #[derive(Debug, Deserialize)]

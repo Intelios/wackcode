@@ -107,10 +107,10 @@ lightbox and `tool_image` keep every original. Sub-agents load it too.
 
 ## Built-in extensions (`worker/src/builtin/`)
 
-WackCode's own extensions load as inline factories, so they bypass the package trust gate by construction. They are: `ask-user-question`, `auto-title`, `bash-jobs`, `browser`, `chat-refs`, `computer-use`, `goal`, `image-budget`, `mcp`, `memory`, `plan-mode`, `skill-creator`, `subagents`, `todo`, `visual`, `web-fetch`, `web-search`, and `chat-mode`, a guard with no tools of its own that only Chat mode chats load.
+WackCode's own extensions load as inline factories, so they bypass the package trust gate by construction. They are: `ask-user-question`, `auto-title`, `bash-jobs`, `browser`, `chat-refs`, `computer-use`, `goal`, `image-budget`, `mcp`, `memory`, `plan-mode`, `skill-creator`, `subagents`, `suggest-task`, `todo`, `visual`, `web-fetch`, `web-search`, and `chat-mode`, a guard with no tools of its own that only Chat mode chats load.
 
 - Adding or renaming one also updates `BUILTIN_EXTENSIONS` in `src/components/PackagesSection.tsx`, which shows them so nobody installs a duplicate package.
-- Sub-agents never get browser, computer-use, MCP, memory or visual tools, or skills. A child session loads its role's tool allowlist, its own shell check-in extension and the extensions the built-in hands it.
+- Sub-agents never get browser, computer-use, MCP, memory, visual or suggestion tools, or skills. A child session loads its role's tool allowlist, its own shell check-in extension and the extensions the built-in hands it.
 - Foreground sub-agent transcripts are saved on the `subagent` result's `details` but kept out of snapshots (`withoutTranscripts` in `normalizeMessage`) and live card updates (`snapshotDetails`). The side panel gets them only through `watch_subagent` frames.
 
 ### Visual replies (`visual.ts`)
@@ -134,6 +134,35 @@ arguments, which Pi saves, so cold history needs nothing extra and the result do
   the renderer gates (see [security.md](security.md#visual-replies)).
 - `read_chat` collapses the call to `[visual: Title]`, and a message a visual sent to
   `[sent from visual: Title]`.
+
+### Task suggestions (`suggest-task.ts`)
+
+`suggest_task` lets the agent file a follow-up it noticed while working — a bug, a rough edge, a
+missing bit of polish — without doing it and without burying it in its final message. It takes a
+`title` (80 characters), a `kind` (`bug`, `polish` or `improvement`) and a self-contained
+`description` (2,000 characters), and returns `{ v: 1, kind, title }`: the brief stays in the
+call's arguments, which Pi saves, so cold history needs nothing extra. The desktop draws one
+card per accepted suggestion under the turn's answer (`src/components/SuggestionTray.tsx`).
+
+- **It only records.** It is read-only, so Plan and Ultra Plan allow it (the plan-mode helper
+  list): noticing a bug while planning is exactly when it helps. It writes nothing to disk and
+  changes no file.
+- **Guards, because a model that can file tasks files too many.** At most
+  `MAX_SUGGESTIONS_PER_RUN` (5) per run, reset when the run settles (`agent_end`), and a title
+  already suggested on the session branch is refused. The branch is the record: accepted calls
+  are the tool results carrying versioned `details`, so the check follows a rewind and survives
+  a restart. The comparison ignores case and spacing.
+- **Scope.** Code chats only: it is never in `chatFactories` and never on the Chat mode
+  allowlist. Sub-agents never get it (`childToolNames`): a child has no transcript to draw a
+  card in, so it reports what it noticed and the parent decides. It is switchable
+  (`SWITCHABLE_BUILTIN_TOOLS`), so Settings › Tools can take it away; saved cards still render.
+- **Starting one is the renderer's job.** "Start here" and "Start in new chat" send the title
+  and brief as a literal prompt with a generated `<suggested-task-v1>` tail (`src/suggestions.ts`),
+  never through the tool. A new chat records `TaskRecord.originSuggestion`, which is what the
+  origin's card turns into a link. Dismissal lives in `TaskRecord.dismissedSuggestions`; neither
+  is ever part of a run's input.
+- `read_chat` collapses the call to `[suggested task: Title]` and a started one's tail to
+  `[started suggested task: Title]`.
 
 ### Background sub-agents
 

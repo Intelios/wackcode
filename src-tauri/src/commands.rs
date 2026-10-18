@@ -17,8 +17,8 @@ use crate::{
         SetPackageResourcesInput, SetTaskModeInput, SetToolConfigInput, SkillDocument,
         SkillFolderKind, SkillFolderRecord, SkillSearchPage, SkillsChange, SkillsOverview,
         SlashCommand, SlashCommandDocument, SlashCommandsChange, SlashCommandsOverview,
-        SteerMessageInput, SubagentConfig, SubagentWatchTarget, TaskKind, TaskMode, TaskRecord, TaskStatus, ToolConfig,
-        WorkspaceFiles,
+        SteerMessageInput, SubagentConfig, SubagentWatchTarget, SuggestionOrigin, TaskKind, TaskMode, TaskRecord, TaskStatus,
+        ToolConfig, MAX_DISMISSED_SUGGESTIONS, WorkspaceFiles,
     },
     memory, skills, slash_commands,
     storage::MetadataState,
@@ -2252,6 +2252,15 @@ pub fn create_task(
         .unwrap_or("New chat")
         .to_string();
     validate_task_kind(input.kind, input.project_id.is_some(), input.use_worktree)?;
+    let origin = match &input.origin {
+        Some(origin) => Some(validate_suggestion_origin(
+            &state,
+            origin,
+            input.kind,
+            input.project_id.as_deref(),
+        )?),
+        None => None,
+    };
     let (project, provider) = {
         let data = state
             .data
@@ -2326,7 +2335,8 @@ pub fn create_task(
         kind: input.kind,
         project_id: project.as_ref().map(|project| project.id.clone()),
         name,
-        auto_title_eligible: true,
+        // A suggested task arrives with a title the model wrote for a card: keep it.
+        auto_title_eligible: origin.is_none(),
         auto_title_attempt_id: None,
         workspace_path: workspace_path.to_string_lossy().into_owned(),
         worktree_path,
@@ -2344,6 +2354,8 @@ pub fn create_task(
         created_at: now.clone(),
         updated_at: now,
         last_activity_at: None,
+        origin_suggestion: origin,
+        dismissed_suggestions: Vec::new(),
     };
     state.mutate(|data| {
         data.tasks.push(record.clone());
@@ -3518,6 +3530,10 @@ pub async fn fork_task(
         created_at: now.clone(),
         updated_at: now,
         last_activity_at: None,
+        // A fork is not the chat a suggestion was started from, and its own cards keep their
+        // own state. Forking never inherits either.
+        origin_suggestion: None,
+        dismissed_suggestions: Vec::new(),
     };
     let git_root = project
         .as_ref()
@@ -3779,6 +3795,35 @@ pub fn clear_task_error(state: State<'_, MetadataState>, task_id: String) -> Res
             .ok_or_else(|| "Chat not found".to_string())?;
         task.last_error = None;
         Ok(())
+    })
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetSuggestionDismissedInput {
+    pub task_id: String,
+    pub suggestion_id: String,
+    pub dismissed: bool,
+}
+
+/// A suggested task's card state is the chat's own, not its transcript's, so dismissing it must
+/// reach `wackcode.json`: the card is rebuilt from the saved tool call every time the chat is
+/// opened. It is presentation only — nothing the agent may do depends on it — so it never moves
+/// `updated_at` or wakes a worker.
+#[tauri::command]
+pub fn set_suggestion_dismissed(
+    state: State<'_, MetadataState>,
+    input: SetSuggestionDismissedInput,
+) -> Result<TaskRecord, String> {
+    let suggestion_id = validate_suggestion_id(&input.suggestion_id)?;
+    state.mutate(|data| {
+        let task = data
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == input.task_id)
+            .ok_or_else(|| "Chat not found".to_string())?;
+        apply_suggestion_dismissal(task, suggestion_id, input.dismissed);
+        Ok(task.clone())
     })
 }
 
@@ -4906,6 +4951,73 @@ fn validate_checkpoint_id(checkpoint_id: &str) -> Result<(), String> {
     }
 }
 
+/// One chat's dismissed-suggestion list: newest last, bounded, and idempotent so a double click
+/// (or a restore of something already restored) changes nothing.
+fn apply_suggestion_dismissal(task: &mut TaskRecord, suggestion_id: &str, dismissed: bool) {
+    task.dismissed_suggestions
+        .retain(|entry| entry != suggestion_id);
+    if !dismissed {
+        return;
+    }
+    task.dismissed_suggestions.push(suggestion_id.to_string());
+    let excess = task
+        .dismissed_suggestions
+        .len()
+        .saturating_sub(MAX_DISMISSED_SUGGESTIONS);
+    if excess > 0 {
+        task.dismissed_suggestions.drain(..excess);
+    }
+}
+
+/// A suggested task's identity, as the worker's tool-call id spells it (`suggest-task.ts`).
+/// The id comes from the renderer, so this checks its shape rather than trusting it.
+fn validate_suggestion_id(suggestion_id: &str) -> Result<&str, String> {
+    let id = suggestion_id.trim();
+    if id.is_empty()
+        || id.len() > 128
+        || !id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "-_.|:".contains(character))
+    {
+        return Err("That suggestion could not be found in this chat.".into());
+    }
+    Ok(id)
+}
+
+/// A chat started from a suggested task stays inside the origin chat's own world: a coding chat,
+/// in the same project, whose origin still exists. The origin is what the new chat's transcript
+/// names, so a deleted chat must not leave a dangling link behind.
+fn validate_suggestion_origin(
+    state: &MetadataState,
+    origin: &SuggestionOrigin,
+    kind: TaskKind,
+    project_id: Option<&str>,
+) -> Result<SuggestionOrigin, String> {
+    if kind != TaskKind::Code {
+        return Err("A suggested task can only start a coding chat.".into());
+    }
+    let suggestion_id = validate_suggestion_id(&origin.suggestion_id)?;
+    let data = state
+        .data
+        .lock()
+        .map_err(|_| "Metadata lock was poisoned".to_string())?;
+    let source = data
+        .tasks
+        .iter()
+        .find(|task| task.id == origin.task_id)
+        .ok_or_else(|| "The chat this suggestion came from no longer exists.".to_string())?;
+    if source.kind != TaskKind::Code {
+        return Err("Suggested tasks come from coding chats.".into());
+    }
+    if source.project_id.as_deref() != project_id {
+        return Err("A suggested task stays in the chat's own project.".into());
+    }
+    Ok(SuggestionOrigin {
+        task_id: source.id.clone(),
+        suggestion_id: suggestion_id.to_string(),
+    })
+}
+
 /// Chat mode chats live in a scratch folder: a project or a worktree would hand the reduced
 /// agent a real codebase as its "scratchpad".
 fn validate_task_kind(kind: TaskKind, has_project: bool, use_worktree: bool) -> Result<(), String> {
@@ -5994,6 +6106,107 @@ mod tests {
             let saved: AppData = serde_json::from_str(&std::fs::read_to_string(&state.data_path).unwrap()).unwrap();
             assert_eq!(saved.appearance.background_image.as_deref(), Some(shown));
         }
+    }
+
+    #[test]
+    fn a_suggested_task_stays_in_its_origin_chats_project_and_kind() {
+        let directory = tempfile::tempdir().unwrap();
+        let task = |id: &str, kind: &str, project: Option<&str>| -> TaskRecord {
+            serde_json::from_value(json!({
+                "id": id, "kind": kind, "projectId": project, "name": id, "workspacePath": "/tmp",
+                "usesWorktree": false, "providerId": "p", "modelId": "m", "thinkingLevel": "off",
+                "createdAt": "c", "updatedAt": "u"
+            }))
+            .unwrap()
+        };
+        let state = MetadataState {
+            data: Mutex::new(AppData {
+                tasks: vec![
+                    task("origin", "code", Some("p")),
+                    task("elsewhere", "code", Some("other")),
+                    task("chat", "chat", None),
+                ],
+                ..AppData::default()
+            }),
+            data_path: directory.path().join("wackcode.json"),
+            secrets: crate::secrets::SecretStore::load(directory.path()).unwrap(),
+        };
+        let origin = SuggestionOrigin {
+            task_id: "origin".into(),
+            suggestion_id: "call-abc".into(),
+        };
+        assert_eq!(
+            validate_suggestion_origin(&state, &origin, TaskKind::Code, Some("p")).unwrap(),
+            origin
+        );
+        // The origin must still exist, be a coding chat, and share the new chat's project.
+        let refusal = |patch: SuggestionOrigin, kind: TaskKind, project: Option<&str>| {
+            validate_suggestion_origin(&state, &patch, kind, project).unwrap_err()
+        };
+        assert_eq!(
+            refusal(SuggestionOrigin { task_id: "gone".into(), ..origin.clone() }, TaskKind::Code, Some("p")),
+            "The chat this suggestion came from no longer exists."
+        );
+        assert_eq!(
+            refusal(origin.clone(), TaskKind::Code, Some("other")),
+            "A suggested task stays in the chat's own project."
+        );
+        assert_eq!(
+            refusal(origin.clone(), TaskKind::Code, None),
+            "A suggested task stays in the chat's own project."
+        );
+        assert_eq!(
+            refusal(origin.clone(), TaskKind::Chat, None),
+            "A suggested task can only start a coding chat."
+        );
+        assert_eq!(
+            refusal(SuggestionOrigin { task_id: "chat".into(), ..origin.clone() }, TaskKind::Code, None),
+            "Suggested tasks come from coding chats."
+        );
+        // The id comes from the renderer, so its shape is checked rather than trusted.
+        for bad in ["", "   ", "../../etc/passwd", &"x".repeat(129)] {
+            assert!(validate_suggestion_id(bad).unwrap_err().contains("could not be found"));
+        }
+        assert_eq!(validate_suggestion_id("  call-abc  ").unwrap(), "call-abc");
+    }
+
+    #[test]
+    fn dismissed_suggestions_are_bounded_idempotent_and_presentation_only() {
+        let mut task: TaskRecord = serde_json::from_value(json!({
+            "id": "origin", "projectId": null, "name": "n", "workspacePath": "/tmp",
+            "usesWorktree": false, "providerId": "p", "modelId": "m", "thinkingLevel": "off",
+            "createdAt": "c", "updatedAt": "u"
+        }))
+        .unwrap();
+        assert!(task.dismissed_suggestions.is_empty());
+        apply_suggestion_dismissal(&mut task, "call-1", true);
+        apply_suggestion_dismissal(&mut task, "call-1", true);
+        assert_eq!(task.dismissed_suggestions, vec!["call-1"]);
+        apply_suggestion_dismissal(&mut task, "call-1", false);
+        assert!(task.dismissed_suggestions.is_empty());
+        // Restoring something that was never dismissed changes nothing.
+        apply_suggestion_dismissal(&mut task, "call-2", false);
+        assert!(task.dismissed_suggestions.is_empty());
+        for index in 0..(MAX_DISMISSED_SUGGESTIONS + 5) {
+            apply_suggestion_dismissal(&mut task, &format!("call-{index}"), true);
+        }
+        assert_eq!(task.dismissed_suggestions.len(), MAX_DISMISSED_SUGGESTIONS);
+        // The oldest are the ones forgotten.
+        assert_eq!(task.dismissed_suggestions[0], "call-5");
+    }
+
+    #[test]
+    fn metadata_saved_before_suggestions_existed_still_loads() {
+        let task: TaskRecord = serde_json::from_value(json!({
+            "id": "t", "projectId": null, "name": "n", "workspacePath": "/tmp", "usesWorktree": false,
+            "providerId": "p", "modelId": "m", "thinkingLevel": "off", "createdAt": "c", "updatedAt": "u"
+        }))
+        .unwrap();
+        assert_eq!(task.origin_suggestion, None);
+        assert!(task.dismissed_suggestions.is_empty());
+        let saved = serde_json::to_value(&task).unwrap();
+        assert_eq!(saved["originSuggestion"], serde_json::Value::Null);
+        assert_eq!(saved["dismissedSuggestions"], json!([]));
     }
 
     #[test]

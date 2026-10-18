@@ -9,7 +9,7 @@ function task(id: string, name: string): TaskRecord {
   return {
     id, projectId: "p1", name, autoTitleEligible: false, autoTitleAttemptId: null, workspacePath: "/tmp", worktreePath: null,
     branch: null, usesWorktree: false, providerId: "p", modelId: "m", thinkingLevel: "off", sessionFile: null,
-    status: "idle", mode: "build", archived: false, archivedAt: null, lastError: null, kind: "code", lastActivityAt: null, createdAt: "now", updatedAt: "now"
+    status: "idle", mode: "build", archived: false, archivedAt: null, lastError: null, kind: "code", lastActivityAt: null, originSuggestion: null, dismissedSuggestions: [], createdAt: "now", updatedAt: "now"
   };
 }
 

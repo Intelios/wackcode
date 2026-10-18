@@ -1058,3 +1058,47 @@ describe("Transcript visual replies", () => {
     expect(screen.queryByText(/visual-action-v1/)).toBeNull();
   });
 });
+
+
+describe("Transcript suggested tasks", () => {
+  const brief = "**Where:** `src/components/Composer.tsx:88`\n\nThe stop button disables itself after a failed save.";
+  const suggestion = (patch: Partial<NormalizedMessage> = {}): NormalizedMessage[] => [
+    { id: "u", entryId: "u", role: "user", timestamp: 100, blocks: [{ type: "text", text: "Fix the layout" }] },
+    { id: "a", entryId: "a", role: "assistant", timestamp: 200, stopReason: "stop", turn: { userEntryId: "u", endEntryId: "a" }, blocks: [
+      { type: "tool-call", toolCallId: "s1", toolName: "suggest_task", arguments: { title: "Dismiss stays disabled", kind: "bug", description: brief } },
+      { type: "tool-result", toolCallId: "s1", toolName: "suggest_task", text: "Suggested", details: { v: 1, kind: "bug", title: "Dismiss stays disabled" } },
+      { type: "text", text: "The layout is fixed." }
+    ], ...patch }
+  ];
+
+  it("draws the tray under the answer once the turn has settled", () => {
+    const { container } = render(<Transcript messages={suggestion()} running={false} />);
+    expect(screen.getByRole("heading", { name: "Spotted along the way" })).toBeInTheDocument();
+    expect(screen.getByText("Dismiss stays disabled")).toBeInTheDocument();
+    // The tray sits after the answer, never inside the folded work.
+    const turn = container.querySelector(".transcript-turn");
+    const order = Array.from(turn?.children ?? []).map((child) => child.className);
+    expect(order.indexOf("suggestion-tray")).toBeGreaterThan(order.findIndex((name) => name.includes("work-disclosure")));
+  });
+
+  it("keeps the call as an ordinary chip in the turn's work, so the tray is never its only trace", () => {
+    const { container } = render(<Transcript messages={suggestion()} running={false} collapseCompletedWork={false} />);
+    const chip = Array.from(container.querySelectorAll(".tool-chip")).find((entry) => entry.textContent?.includes("Spotted"));
+    expect(chip?.textContent).toContain("Dismiss stays disabled");
+  });
+
+  it("keeps the tray off the live turn", () => {
+    render(<Transcript messages={suggestion()} running activeRun={{ startedAt: 50 }} activity="tool_execution" />);
+    expect(screen.queryByRole("heading", { name: "Spotted along the way" })).toBeNull();
+  });
+
+  it("shows a started suggestion's words with its caption instead of the transport", () => {
+    render(<Transcript messages={[
+      { id: "u", entryId: "u", role: "user", blocks: [{ type: "text", text: `Dismiss stays disabled\n\n${brief}\n\n<suggested-task-v1>\nStarted from a suggested task "Dismiss stays disabled".\n{"version":1,"id":"s1","kind":"bug","title":"Dismiss stays disabled"}\n</suggested-task-v1>` }] },
+      { id: "a", entryId: "a", role: "assistant", blocks: [{ type: "text", text: "On it" }] }
+    ]} running={false} />);
+    expect(screen.getByText(/Dismiss stays disabled/)).toBeInTheDocument();
+    expect(screen.getByText("Suggested task")).toBeInTheDocument();
+    expect(screen.queryByText(/suggested-task-v1/)).toBeNull();
+  });
+});

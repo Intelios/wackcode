@@ -265,6 +265,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + 
             commands::unarchive_task,
             commands::rename_task,
             commands::clear_task_error,
+            commands::set_suggestion_dismissed,
             commands::delete_task,
             commands::convert_task_to_worktree,
             commands::remove_project,

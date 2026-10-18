@@ -14,7 +14,7 @@ const provider: ProviderRecord = {
 };
 const task = (patch: Partial<TaskRecord> = {}): TaskRecord => ({ id: "t", projectId: null, name: "My chat", workspacePath: "/tmp/t", worktreePath: null,
   branch: null, usesWorktree: false, providerId: "p", modelId: "first", thinkingLevel: "off", sessionFile: null, status: "idle", mode: "build",
-  archived: false, archivedAt: null, lastError: null, kind: "chat", lastActivityAt: null, createdAt: "2026-01-01", updatedAt: "2026-01-01", autoTitleEligible: false, autoTitleAttemptId: null, ...patch });
+  archived: false, archivedAt: null, lastError: null, kind: "chat", lastActivityAt: null, originSuggestion: null, dismissedSuggestions: [], createdAt: "2026-01-01", updatedAt: "2026-01-01", autoTitleEligible: false, autoTitleAttemptId: null, ...patch });
 const msg = (id: string, role: "user" | "assistant", text: string, patch: Partial<NormalizedMessage> = {}): NormalizedMessage =>
   ({ id, role, blocks: [{ type: "text", text }], timestamp: Date.now(), ...patch });
 

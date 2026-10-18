@@ -1,6 +1,7 @@
 import type { NormalizedBlock, NormalizedMessage, TaskStatus } from "./types";
 import type { TranscriptLayout, TranscriptSlot } from "./explore-utils";
 import { SHOW_VISUAL_TOOL_NAME, SKILL_CREATOR_TOOL_NAME, parseSkillPreviewDetails } from "./tool-utils";
+import { SUGGEST_TASK_TOOL_NAME, suggestionFromCall, type SuggestionCard } from "./suggestions";
 
 /**
  * Presentation only: each user starts a turn on the visible session branch. The worker's
@@ -26,6 +27,13 @@ export interface WorkTurn {
   partition?: { work: WorkRow[]; outcome: WorkRow[] };
   /** Present only for a settled, successful turn with both work and an outcome. */
   folded?: { work: WorkRow[]; outcome: WorkRow[] };
+  /**
+   * The run is over: the trailing turn is no longer live, streaming or stopping. Suggested-task
+   * cards wait for this, so they never appear above a live turn still being written.
+   */
+  settled: boolean;
+  /** The suggested tasks this turn filed, drawn under the outcome (`SuggestionTray`). */
+  suggestions: SuggestionCard[];
 }
 
 /** The result is authoritative: rejected or unfinished plan calls are never plan cards. */
@@ -80,6 +88,7 @@ export function layoutWorkTurns(messages: NormalizedMessage[], options: Options)
     let plan: { index: number; block: number; id: string } | undefined;
     let skill: { index: number; block: number; id: string } | undefined;
     const visuals: Array<{ index: number; block: number }> = [];
+    const suggestions: SuggestionCard[] = [];
     let systemNotice = false;
     let unfinishedCall = false;
     let backgroundDelegation = false;
@@ -119,6 +128,11 @@ export function layoutWorkTurns(messages: NormalizedMessage[], options: Options)
           if (block.toolName === SHOW_VISUAL_TOOL_NAME && completedVisual(result)) {
             visuals.push({ index, block: blockIndex });
           }
+          // A suggestion is not part of the answer: its card waits for the tray below it.
+          if (block.toolName === SUGGEST_TASK_TOOL_NAME) {
+            const card = suggestionFromCall(block, result);
+            if (card) suggestions.push(card);
+          }
         });
       }
     }
@@ -133,8 +147,10 @@ export function layoutWorkTurns(messages: NormalizedMessage[], options: Options)
     const answer = terminal >= 0 ? messages[terminal] : undefined;
     const turn: WorkTurn = {
       userIndex, userKey: identity(user), endIndex,
-      key: JSON.stringify([identity(user), answer ? identity(answer) : null, plan?.id ?? null, skill?.id ?? null, visuals.map((visual) => `${visual.index}:${visual.block}`).join(",")]),
-      body
+      key: JSON.stringify([identity(user), answer ? identity(answer) : null, plan?.id ?? null, skill?.id ?? null, visuals.map((visual) => `${visual.index}:${visual.block}`).join(","), suggestions.map((card) => card.id).join(",")]),
+      // The tray waits for the run, not for the answer text: a stopped or failed turn still
+      // keeps the suggestions it filed, while the live turn never shows cards above its stream.
+      body, settled: !active, suggestions
     };
     turns.set(userIndex, turn);
     if (staleAnnotation || systemNotice || unfinishedCall || !answer || failed(answer)) return;

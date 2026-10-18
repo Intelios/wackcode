@@ -86,9 +86,28 @@ gets `bash_job` only when its filtered tool list includes bash; this companion c
 shell text or target an arbitrary process. Read-only guards still check the original command.
 The user's Terminal and project Run processes are separate and unchanged.
 
+### Images
+
+A gateway in front of a provider rejects an oversized request body with HTTP 413 for every later
+turn, whatever the model, so a chat's images are bounded twice:
+
+- **Each image**, when it enters a session. Every custom model's `models.json` declares
+  `inputLimits.images.resize` from `image-limits.ts`, and Pi applies it to prompt images and to
+  every tool result's images (`read` of a picture, browser and computer screenshots, MCP). Pi
+  adds a dimension note whenever it resizes, so screenshot coordinates stay mappable. The same
+  limits run over the composer's attachments in `prepareImages`.
+- **The request**, on every model call. `builtin/image-budget.ts` runs on the `context` hook with
+  a total byte budget for a chat's images. Older tool images become a placeholder first, then
+  older images the user attached; the newest image always survives, so the tool that just
+  finished still reaches the model. Removals happen in whole chunks so the rewritten prefix
+  stays byte-identical between calls and the prompt cache keeps hitting.
+
+The budget never changes the session: it rewrites only the copy Pi sends, so the transcript, the
+lightbox and `tool_image` keep every original. Sub-agents load it too.
+
 ## Built-in extensions (`worker/src/builtin/`)
 
-WackCode's own extensions load as inline factories, so they bypass the package trust gate by construction. They are: `ask-user-question`, `auto-title`, `bash-jobs`, `browser`, `computer-use`, `goal`, `mcp`, `memory`, `plan-mode`, `skill-creator`, `subagents`, `todo`, `web-fetch`, `web-search`, and `chat-mode`, a guard with no tools of its own that only Chat mode chats load.
+WackCode's own extensions load as inline factories, so they bypass the package trust gate by construction. They are: `ask-user-question`, `auto-title`, `bash-jobs`, `browser`, `computer-use`, `goal`, `image-budget`, `mcp`, `memory`, `plan-mode`, `skill-creator`, `subagents`, `todo`, `web-fetch`, `web-search`, and `chat-mode`, a guard with no tools of its own that only Chat mode chats load.
 
 - Adding or renaming one also updates `BUILTIN_EXTENSIONS` in `src/components/PackagesSection.tsx`, which shows them so nobody installs a duplicate package.
 - Sub-agents never get browser, computer-use, MCP or memory tools, or skills. A child session loads its role's tool allowlist, its own shell check-in extension and the extensions the built-in hands it.
@@ -174,3 +193,8 @@ A Chat mode chat is the same worker with a different prompt and far fewer tools.
 ## Errors and redaction
 
 Errors the worker reports pass `safeError`, which strips the credentials this worker holds (the chat's, and those of its sub-agents' connections and MCP servers). Rust redacts and bounds them again with `redact_and_limit`. Keep both layers.
+
+`describeProviderError` (`provider-error.ts`) rewrites the one raw failure a user cannot act on —
+a gateway's HTTP 413, which arrives as an nginx HTML page inside a JSON wrapper — into a sentence
+that says what to do. It runs in `safeError` and in the message normalizer, so a live chat and its
+saved history show the same sentence.

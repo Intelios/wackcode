@@ -2728,7 +2728,7 @@ describe("image attachments", () => {
       provider.baseUrl, "alpha-secret", workspace, "vision-task", undefined, undefined, undefined, undefined, true
     );
     cleanup.push(() => worker.shutdown());
-    // Wider than Pi's 2000px inline limit, so the worker has to resize it.
+    // Wider than WackCode's 1600px inline limit, so the worker has to resize it.
     const original = solidPng(2400, 16);
     worker.send({
       id: crypto.randomUUID(), type: "prompt", runId: "vision-run", message: "What is in this image?",
@@ -2768,7 +2768,7 @@ describe("image attachments", () => {
     );
     cleanup.push(() => worker.shutdown());
     // Wider than the 512px transcript preview (so the preview is a resized copy), yet within
-    // Pi's 2000px inline limit (so the session keeps the exact bytes the model received).
+    // Within WackCode's 1600px inline limit (so the session keeps the exact bytes the model received).
     const first = solidPng(600, 30);
     const second = solidPng(640, 24);
     worker.send({
@@ -2818,6 +2818,32 @@ describe("image attachments", () => {
     const parts = userParts(provider.requests[0]);
     expect(parts.some((part) => part.type === "image_url")).toBe(false);
     expect(parts.some((part) => part.text === "(image omitted: model does not support images)")).toBe(true);
+  });
+
+  it("shrinks an image a tool returns to the model's inline limits", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-read-limit-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    // Wider than the 1600px inline limit `models.json` declares, so Pi's tool-result
+    // normalization has to shrink it before the next request.
+    const original = solidPng(2400, 30);
+    await writeFile(join(workspace, "wide.png"), Buffer.from(original, "base64"));
+    const { worker } = await initializeWorker(
+      provider.baseUrl, "alpha-secret", workspace, "read-limit", undefined, undefined, undefined, undefined, true
+    );
+    cleanup.push(() => worker.shutdown());
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "read-limit-run", message: 'mcp: read {"path":"wide.png"}' });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "read-limit-run" && output.state === "idle");
+
+    // The second request carries the conversation's tool result, image included.
+    const messages = JSON.stringify(provider.requests[1].body.messages);
+    const sent = /"data:image\/(png|jpeg);base64,([A-Za-z0-9+/=]+)"/.exec(messages);
+    expect(sent?.[2]).toBeTruthy();
+    expect(sent![2]).not.toBe(original);
+    // Pi keeps the smaller of the two encodings; a solid image stays PNG, whose IHDR holds the width.
+    if (sent![1] === "png") expect(Buffer.from(sent![2], "base64").readUInt32BE(16)).toBeLessThanOrEqual(1600);
   });
 
   it("keeps attached images in the Pi session file across a restart", async () => {

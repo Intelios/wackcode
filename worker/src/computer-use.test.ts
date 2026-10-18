@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { COMPUTER_TOOL_NAMES, createComputerUseExtension, formatAct, formatApps } from "./builtin/computer-use/index.js";
-import { PRUNED_SCREENSHOT_TEXT, pruneScreenshots, screenshotsToRemove } from "./builtin/computer-use/prune.js";
 import type { BuiltinHost } from "./builtin/host.js";
 
 type ToolResult = { content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>; details: unknown };
@@ -9,7 +8,6 @@ type Tool = { name: string; executionMode?: string; execute: (...args: unknown[]
 function harness(vision = true, reply: (request: Record<string, unknown>) => unknown = () => ({})) {
   const requests: Record<string, unknown>[] = [];
   const tools = new Map<string, Tool>();
-  const handlers = new Map<string, (event: { messages: unknown[] }) => unknown>();
   const host = {
     computer: async (request: Record<string, unknown>) => {
       requests.push(request);
@@ -21,9 +19,8 @@ function harness(vision = true, reply: (request: Record<string, unknown>) => unk
   const extension = createComputerUseExtension(host);
   extension.factory({
     registerTool: (tool: Tool) => tools.set(tool.name, tool),
-    on: (event: string, handler: (event: { messages: unknown[] }) => unknown) => handlers.set(event, handler),
   } as never);
-  return { requests, tools, handlers, controller: extension.controller };
+  return { requests, tools, controller: extension.controller };
 }
 
 describe("computer use built-in", () => {
@@ -94,48 +91,5 @@ describe("computer use built-in", () => {
     expect(text).toContain("1. press — ok via ax");
     expect(text).toContain("2. click — failed: Another app covers that point.");
     expect(text).toContain("expect: not met — no matching element");
-  });
-
-  it("prunes old screenshots from the model's context through the context hook", () => {
-    const { handlers } = harness();
-    const shot = (id: number) => ({ role: "toolResult", toolName: "computer_screenshot", content: [{ type: "text", text: `shot ${id}` }, { type: "image", data: `img${id}` }] });
-    const messages = Array.from({ length: 8 }, (_, index) => shot(index));
-    const result = handlers.get("context")!({ messages }) as { messages: typeof messages };
-    const images = result.messages.flatMap((message) => message.content).filter((block) => block.type === "image");
-    expect(images.map((block) => (block as { data: string }).data)).toEqual(["img5", "img6", "img7"]);
-    expect(handlers.get("context")!({ messages: messages.slice(0, 3) })).toBeUndefined();
-  });
-});
-
-describe("screenshot pruning", () => {
-  const shot = (tool: string, id: string) => ({ role: "toolResult", toolName: tool, content: [{ type: "text", text: id }, { type: "image", data: id }] });
-  const tools = new Set(["computer_screenshot"]);
-
-  it("removes in whole chunks so the prompt prefix stays stable between them", () => {
-    expect([0, 1, 3, 4, 7, 8, 12, 13].map((total) => screenshotsToRemove(total))).toEqual([0, 0, 0, 0, 0, 5, 5, 10]);
-    const seven = Array.from({ length: 7 }, (_, index) => shot("computer_screenshot", `s${index}`));
-    expect(pruneScreenshots(seven, tools)).toBeUndefined();
-    const eight = [...seven, shot("computer_screenshot", "s7")];
-    const pruned = pruneScreenshots(eight, tools)!;
-    const texts = pruned.flatMap((message) => message.content).filter((block) => block.type === "text").map((block) => (block as { text: string }).text);
-    expect(texts.filter((text) => text === PRUNED_SCREENSHOT_TEXT)).toHaveLength(5);
-    // Adding one more within the chunk changes only the new tail, not what was pruned.
-    const nine = pruneScreenshots([...eight, shot("computer_screenshot", "s8")], tools)!;
-    expect(JSON.stringify(nine.slice(0, 8))).toBe(JSON.stringify(pruned));
-  });
-
-  it("leaves other tools' images alone and never mutates its input", () => {
-    const messages = [
-      ...Array.from({ length: 8 }, (_, index) => shot("computer_screenshot", `s${index}`)),
-      shot("read", "file"),
-      shot("browser_screenshot", "page"),
-    ];
-    const before = JSON.stringify(messages);
-    const pruned = pruneScreenshots(messages, tools)!;
-    expect(JSON.stringify(messages)).toBe(before);
-    expect(pruned[8]).toBe(messages[8]);
-    expect(pruned[9]).toBe(messages[9]);
-    expect(pruned[7]).toBe(messages[7]);
-    expect(pruned[0]).not.toBe(messages[0]);
   });
 });

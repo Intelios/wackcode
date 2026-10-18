@@ -23,6 +23,8 @@ import { SUBAGENT_TOOL_NAME } from "./builtin/subagents/types.js";
 import { createModelRuntime, findModel, MODEL_MISSING_MESSAGE, missingModelMessage, missingModelPlaceholder, workerSettings, type PiModel } from "./model-runtime.js";
 import { sameExecutionPolicy } from "./execution-policy.js";
 import { promptOverrides, setPromptOverrides } from "./prompt-overrides.js";
+import { INLINE_IMAGE_LIMITS } from "./image-limits.js";
+import { describeProviderError } from "./provider-error.js";
 import { SubagentRunner } from "./subagent-runner.js";
 import { SubagentStreams, isSubagentTranscript } from "./subagent-stream.js";
 import {
@@ -1118,16 +1120,16 @@ function createExtensionUIContext(): Record<string, unknown> {
 /**
  * Pi's CLI runs attachments through `processImage` (resize to Pi's inline limits) before they
  * reach a session, but `session.prompt` itself forwards images untouched. `processImage` is not
- * exported, so this repeats it with the exported `resizeImage` and Pi's own defaults. The
- * dimension note Pi adds for tool reads is left out: it is for coordinate mapping, and here it
- * would show up in the user's own message.
+ * exported, so this repeats it with the exported `resizeImage` and WackCode's own inline limits,
+ * the same ones `models.json` declares for Pi. The dimension note Pi adds for tool reads is left
+ * out: it is for coordinate mapping, and here it would show up in the user's own message.
  */
 async function prepareImages(images: ImageContent[] | undefined): Promise<ImageContent[]> {
   if (!images?.length) return [];
   if (!piModule) throw new Error("Worker is not initialized");
   const prepared: ImageContent[] = [];
   for (const image of images) {
-    const resized = await piModule.resizeImage(Buffer.from(image.data, "base64"), image.mimeType);
+    const resized = await piModule.resizeImage(Buffer.from(image.data, "base64"), image.mimeType, INLINE_IMAGE_LIMITS);
     if (!resized) throw new Error("An attached image could not be read, or could not be resized below the inline image size limit.");
     prepared.push({ type: "image", data: resized.data, mimeType: resized.mimeType });
   }
@@ -2340,7 +2342,7 @@ function redactCredentials(text: string): string {
 
 function safeError(error: unknown): string {
   const message = redactCredentials(error instanceof Error ? error.message : String(error));
-  return message.replace(/(sk-[A-Za-z0-9_-]{8,}|Bearer\s+[A-Za-z0-9._-]+|(?:code|device_code|refresh_token|access_token)=[^\s&]+)/gi, "[credential redacted]");
+  return describeProviderError(message.replace(/(sk-[A-Za-z0-9_-]{8,}|Bearer\s+[A-Za-z0-9._-]+|(?:code|device_code|refresh_token|access_token)=[^\s&]+)/gi, "[credential redacted]"));
 }
 
 /**

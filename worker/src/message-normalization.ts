@@ -3,6 +3,7 @@ import type { NormalizedBlock, NormalizedMessage } from "./protocol.js";
 import type { ThinkingDurations } from "./run-timing.js";
 import { withoutTranscripts } from "./builtin/subagents/details.js";
 import { SUBAGENT_TOOL_NAME } from "./builtin/subagents/types.js";
+import { describeProviderError } from "./provider-error.js";
 
 export const THUMBNAIL_OPTIONS = { maxWidth: 512, maxHeight: 512, maxBytes: 128 * 1024 };
 export const RESULT_THUMBNAIL_OPTIONS = { maxWidth: 480, maxHeight: 480, maxBytes: 64 * 1024 };
@@ -100,7 +101,7 @@ export function normalizeMessage(message: unknown, index: number, thinking: Thin
     timestamp,
     blocks,
     stopReason: abortStop ? "aborted" : typeof raw.stopReason === "string" ? raw.stopReason : undefined,
-    errorMessage: abortStop ? undefined : typeof raw.errorMessage === "string" ? raw.errorMessage : undefined
+    errorMessage: abortStop ? undefined : typeof raw.errorMessage === "string" ? describeProviderError(raw.errorMessage) : undefined
   };
   return normalized;
 }

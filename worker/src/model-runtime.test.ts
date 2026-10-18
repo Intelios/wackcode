@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createModelRuntime, findModel, MODEL_MISSING_MESSAGE, missingModelMessage } from "./model-runtime.js";
+import { INLINE_IMAGE_LIMITS } from "./image-limits.js";
 import type { WorkerModel, WorkerProvider } from "./protocol.js";
 
 const model = (id: string, name: string): WorkerModel => ({
@@ -36,6 +37,12 @@ describe("connection models in Pi", () => {
     expect(runtime.getError()).toBeUndefined();
     expect((await findModel(runtime, connection, "named"))?.name).toBe("Named");
     expect((await findModel(runtime, connection, "unnamed"))?.name).toBe("unnamed");
+  });
+
+  it("declares the inline image limits every model resizes prompt and tool images to", async () => {
+    const connection = provider({});
+    const runtime = await load(connection);
+    expect((await findModel(runtime, connection, "named"))?.inputLimits?.images?.resize).toEqual(INLINE_IMAGE_LIMITS);
   });
 
   it("blames the model only when the connection itself loaded", async () => {

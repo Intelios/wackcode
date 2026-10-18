@@ -47,6 +47,15 @@ describe("normalizeMessage thinking timing", () => {
     expect(normalizeMessage(raw, 0, [300], imageBlock)?.blocks).toEqual([{ type: "thinking", text: "History", durationMs: 300 }]);
     expect(normalizeMessage(raw, 0, undefined, imageBlock, [0])?.blocks).toEqual([{ type: "thinking", text: "History", startedAt: 0 }]);
   });
+
+  it("shows a gateway's 413 as a sentence, in a live chat and in saved history alike", () => {
+    const message = normalizeMessage({
+      role: "assistant", content: [], stopReason: "error",
+      errorMessage: "413: {\"message\":\"<html><title>413 Request Entity Too Large</title></html>\"}"
+    }, 0, undefined, imageBlock);
+    expect(message?.errorMessage).toContain("too large for this endpoint");
+    expect(message?.errorMessage).not.toContain("<html>");
+  });
 });
 
 describe("normalizeMessage tool result images", () => {

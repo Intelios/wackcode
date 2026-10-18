@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { builtinCompat } from "./catalog-models.js";
 import { instrumentUsage } from "./usage.js";
 import { instrumentOpenCodeHeaders } from "./opencode-headers.js";
+import { INLINE_IMAGE_LIMITS } from "./image-limits.js";
 import { THINKING_LEVELS, type WorkerModel, type WorkerProvider } from "./protocol.js";
 
 type PiModule = typeof import("@earendil-works/pi-coding-agent");
@@ -98,6 +99,11 @@ export function modelDefinition(provider: WorkerProvider, model: WorkerModel): R
     // Pi's own capability flag. Without "image", Pi replaces images with an "image omitted"
     // placeholder before the request is built, and `read` stops returning image content.
     input: model.vision ? ["text", "image"] : ["text"],
+    // Pi resizes prompt and tool-result images (`read`, screenshots, MCP) to these, so declaring
+    // them here keeps every image small at the source instead of Pi's roomy defaults. Without
+    // `inputLimits` a single screenshot can be megabytes, and a chat with a dozen of them grows
+    // its request until a gateway's body cap answers 413 (see `image-limits.ts`).
+    inputLimits: { images: { resize: INLINE_IMAGE_LIMITS } },
     contextWindow: model.contextWindow,
     maxTokens: model.maxTokens,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

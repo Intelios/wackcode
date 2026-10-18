@@ -14,6 +14,7 @@ import type { Usage } from "@earendil-works/pi-ai";
 import type { SubagentOutcome, SubagentRunRequest } from "./builtin/host.js";
 import { addUsage, emptyUsage } from "./builtin/subagents/details.js";
 import { BASH_JOB_TOOL_NAME, createBashJobsExtension } from "./builtin/bash-jobs.js";
+import { createImageBudgetExtension } from "./builtin/image-budget.js";
 import {
   type ModelRuntime,
   type PiModel,
@@ -187,7 +188,12 @@ export class SubagentRunner {
       noPromptTemplates: true,
       noThemes: true,
       noContextFiles: false,
-      extensionFactories: [{ name: "wackcode-bash-jobs", factory: bashJobs.factory, hidden: true }, ...request.extensions],
+      extensionFactories: [
+        { name: "wackcode-bash-jobs", factory: bashJobs.factory, hidden: true },
+        // A child reads files too; its images must not grow past a gateway's body cap either.
+        { name: "wackcode-image-budget", factory: createImageBudgetExtension(), hidden: true },
+        ...request.extensions
+      ],
       appendSystemPromptOverride: (base) => [...base, request.spec.prompt],
     });
     await resourceLoader.reload();

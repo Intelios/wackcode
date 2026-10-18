@@ -23,7 +23,6 @@ import {
   OBSERVE_PARAMS,
   OPEN_PARAMS,
 } from "./params.js";
-import { pruneScreenshots } from "./prune.js";
 
 export * from "./params.js";
 
@@ -72,8 +71,6 @@ interface ActResult {
   note?: string;
   error?: string;
 }
-
-const SCREENSHOT_TOOLS: ReadonlySet<string> = new Set([COMPUTER_SCREENSHOT_TOOL_NAME]);
 
 const GUIDELINES = [
   "Use computer use to verify or operate native apps you are building or testing when a shell command or the browser preview can't show the result. Build and launch the app with the shell tools or computer_open first.",
@@ -253,12 +250,6 @@ export function createComputerUseExtension(host: BuiltinHost) {
           details: { app: appLabel(asRecord(result.app) as AppInfo), results, expect: result.expect },
         };
       },
-    });
-
-    // Rewrites only the copy sent to the model; see prune.ts for why removal is chunked.
-    pi.on("context", (event) => {
-      const messages = pruneScreenshots(event.messages, SCREENSHOT_TOOLS);
-      return messages ? { messages } : undefined;
     });
   };
 

@@ -53,10 +53,11 @@ export interface PlanModeController {
   /** The state the desktop renders (mode, phase, ready plan). */
   getState(): PlanState;
   /**
-   * Switch modes. Publishes the hidden contract message, persists and re-emits state.
+   * Switch modes without abandoning a proposal. Only an explicit discard clears it here;
+   * starting a turn clears it below. Publishes the contract, persists and re-emits state.
    * Throws when the extension has not finished loading.
    */
-  setMode(mode: TaskMode): PlanState;
+  setMode(mode: TaskMode, discardPlan?: boolean): PlanState;
 }
 
 /** How restricted planning tells MCP tools apart: only tools marked read-only may run. */
@@ -103,20 +104,19 @@ export function createPlanModeExtension(host: BuiltinHost, mcpTools?: PlanModeMc
     contractsRelevant = true;
   };
 
-  const setMode = (mode: TaskMode): PlanState => {
+  const setMode = (mode: TaskMode, discardPlan = false): PlanState => {
     requirePi();
     const before = { active, readyPlan };
     if (mode === "build") {
       if (active || contractsRelevant) publishContract("normal");
       active = undefined;
-      // Leaving Plan mode abandons the proposed plan, same as upstream's exit.
-      readyPlan = undefined;
     } else if (active !== mode) {
-      // Plan ↔ Ultra Plan only changes how hard the agent interviews; a plan awaiting review
-      // stays reviewable until the next prompt revises it.
       publishContract(mode);
       active = mode;
     }
+    // The composer's mode controls the next turn, independently of the proposal awaiting
+    // review. A mode switch is not approval or discard, including a switch to Build.
+    if (discardPlan) readyPlan = undefined;
     // Every prompt carries the composer's mode. Writing an unchanged state before each user
     // message would only bury the conversation's structure in duplicate entries.
     if (before.active !== active || before.readyPlan !== readyPlan) persist();
@@ -256,10 +256,11 @@ export function createPlanModeExtension(host: BuiltinHost, mcpTools?: PlanModeMc
       }
     });
 
-    // A fresh prompt while a plan awaits review is revision feedback: it can no longer be
-    // implemented until the agent resubmits a complete (possibly unchanged) plan.
+    // A fresh prompt consumes the proposal in any mode: planning feedback needs a new
+    // submission, and a Build turn starts work. Keep it ready until the turn actually starts
+    // so a rejected prompt does not lose the review actions.
     pi.on("before_agent_start", () => {
-      if (active && readyPlan !== undefined) {
+      if (readyPlan !== undefined) {
         readyPlan = undefined;
         persist();
         emit();

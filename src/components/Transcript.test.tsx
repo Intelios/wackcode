@@ -358,12 +358,18 @@ describe("Transcript plan cards", () => {
     { id: "tool-2", role: "tool", blocks: [{ type: "tool-result", toolName: "plan_mode_complete", toolCallId: "call-1", text: plan, details: { version: 1, source: "plan_mode_complete", plan } }] }
   ];
 
-  it("keeps the review actions on the awaiting plan in Plan and Ultra Plan, not in Build", () => {
+  it("keeps the review actions on an awaiting plan across every mode switch", () => {
     const view = render(<Transcript messages={messages} running={false} planState={{ mode: "ultraplan", phase: "ready", plan }} onPlanAction={() => undefined} />);
     expect(screen.getByRole("button", { name: "Approve & implement" })).toBeInTheDocument();
     view.rerender(<Transcript messages={messages} running={false} planState={{ mode: "plan", phase: "ready", plan }} onPlanAction={() => undefined} />);
     expect(screen.getByRole("button", { name: "Approve & implement" })).toBeInTheDocument();
-    view.rerender(<Transcript messages={messages} running={false} planState={{ mode: "build", phase: "planning" }} onPlanAction={() => undefined} />);
+    view.rerender(<Transcript messages={messages} running={false} planState={{ mode: "build", phase: "ready", plan }} onPlanAction={() => undefined} />);
+    for (const name of ["Approve & implement", "Save PLAN.md", "Copy", "Discard"]) {
+      expect(screen.getByRole("button", { name })).toBeInTheDocument();
+    }
+    view.rerender(<Transcript messages={messages} running={false} planState={{ mode: "ultraplan", phase: "ready", plan }} onPlanAction={() => undefined} />);
+    expect(screen.getByRole("button", { name: "Approve & implement" })).toBeInTheDocument();
+    view.rerender(<Transcript messages={messages} running={false} planState={{ mode: "ultraplan", phase: "planning" }} onPlanAction={() => undefined} />);
     expect(screen.queryByRole("button", { name: "Approve & implement" })).not.toBeInTheDocument();
   });
 });

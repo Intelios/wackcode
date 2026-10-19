@@ -1730,6 +1730,9 @@ pub struct BrowserContextAttachment {
 pub struct SetTaskModeInput {
     pub task_id: String,
     pub mode: TaskMode,
+    /// Switching modes keeps a proposal; only the card's Discard action abandons it.
+    #[serde(default)]
+    pub discard_plan: bool,
 }
 
 #[derive(Debug, Deserialize)]

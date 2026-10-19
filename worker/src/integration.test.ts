@@ -2636,7 +2636,61 @@ describe("Plan mode", () => {
       provider.baseUrl, "alpha-secret", workspace, "restore-task", sessionFile, undefined, undefined, "build"
     );
     cleanup.push(() => third.worker.shutdown());
-    await third.worker.waitFor((output) => output.type === "plan_state" && output.mode === "build");
+    const built = await third.worker.waitFor((output) => output.type === "plan_state" && output.mode === "build");
+    expect(built).toMatchObject({ phase: "ready", plan: "# The plan\n\n- Ship it" });
+  });
+
+  it.each(["plan", "ultraplan"] as const)("preserves a %s proposal through Build, restart and mode switches until explicitly discarded", async (mode) => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-plan-switch-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const first = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "plan-switch", undefined, undefined, undefined, mode);
+    cleanup.push(() => first.worker.shutdown());
+    first.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "plan", message: "finish plan" });
+    await first.worker.waitFor((output) => output.type === "run_state" && output.runId === "plan" && output.state === "idle");
+    const plan = "# The plan\n\n- Ship it";
+    const switchMode = async (worker: WorkerHarness, mode: TaskMode, discardPlan = false) => {
+      const id = crypto.randomUUID();
+      worker.send({ id, type: "set_mode", mode, discardPlan });
+      expect(await worker.waitFor((output) => output.type === "response" && output.id === id)).toMatchObject({ success: true });
+    };
+    await switchMode(first.worker, "build");
+    expect(first.worker.view?.planState).toEqual({ mode: "build", phase: "ready", plan });
+    await expectSavedHistory(first.worker.view!);
+    await first.worker.shutdown();
+
+    const second = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "plan-switch", first.ready.snapshot?.sessionFile, undefined, undefined, "build");
+    cleanup.push(() => second.worker.shutdown());
+    expect(second.ready.snapshot?.planState).toEqual({ mode: "build", phase: "ready", plan });
+    for (const next of ["plan", "ultraplan", "build"] as const) {
+      await switchMode(second.worker, next);
+      expect(second.worker.view?.planState).toEqual({ mode: next, phase: "ready", plan });
+    }
+    // Discard must clear the plan even though the mode does not change.
+    await switchMode(second.worker, "build", true);
+    expect(second.worker.view?.planState).toEqual({ mode: "build", phase: "planning" });
+    await expectSavedHistory(second.worker.view!);
+    await second.worker.shutdown();
+
+    const third = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "plan-switch", first.ready.snapshot?.sessionFile, undefined, undefined, mode);
+    cleanup.push(() => third.worker.shutdown());
+    expect(third.ready.snapshot?.planState).toEqual({ mode, phase: "planning" });
+  });
+
+  it("clears the proposal when implementation starts in Build", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-plan-implement-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "plan-implement", undefined, undefined, undefined, "ultraplan");
+    cleanup.push(() => worker.shutdown());
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "plan", message: "finish plan" });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "plan" && output.state === "idle");
+    worker.send({ id: crypto.randomUUID(), type: "prompt", mode: "build", runId: "implement", message: "Implement the plan." });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "implement" && output.state === "idle");
+    expect(worker.view?.planState).toEqual({ mode: "build", phase: "planning" });
+    await expectSavedHistory(worker.view!);
   });
 
   it("keeps Ultra Plan read-only, under its own contract", async () => {

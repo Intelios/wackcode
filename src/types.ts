@@ -23,7 +23,7 @@ export interface ExecutionPolicyConfig {
 /** Plan mode state published by the built-in plan-mode extension. */
 export interface PlanState {
   mode: TaskMode;
-  /** "ready" once the agent has submitted a complete plan; cleared by revision or leaving Plan mode. */
+  /** "ready" after submission, across mode switches; cleared by discard or starting a turn. */
   phase: "planning" | "ready";
   /** The completed plan awaiting approval (phase === "ready"). */
   plan?: string;

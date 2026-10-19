@@ -2173,9 +2173,8 @@ export default function App() {
     const previous = selectedTask.mode;
     const previousPlanState = runtime?.planState;
     patchTask(selectedTask.id, { mode });
-    // Plan ↔ Ultra Plan keeps a plan awaiting review; the worker's plan_state confirms it.
-    const keepsPlan = previousPlanState && previousPlanState.mode !== "build" && mode !== "build";
-    patchRuntime(selectedTask.id, { planState: keepsPlan ? { ...previousPlanState, mode } : { mode, phase: "planning" } });
+    // The mode controls the next turn; switching it leaves the proposal awaiting review.
+    patchRuntime(selectedTask.id, { planState: previousPlanState ? { ...previousPlanState, mode } : { mode, phase: "planning" } });
     try {
       const updated = await api.setTaskMode(selectedTask.id, mode);
       patchTask(selectedTask.id, updated);
@@ -2195,7 +2194,7 @@ export default function App() {
       try {
         const updated = await api.setTaskMode(selectedTask.id, "build");
         patchTask(selectedTask.id, updated);
-        patchRuntime(selectedTask.id, { planState: { mode: "build", phase: "planning" } });
+        patchRuntime(selectedTask.id, { planState: { mode: "build", phase: "ready", plan } });
       } catch (reason) {
         patchRuntime(selectedTask.id, { error: String(reason) });
         return;
@@ -2219,7 +2218,7 @@ export default function App() {
         confirmLabel: "Discard",
         danger: true,
         run: async () => {
-          const updated = await api.setTaskMode(selectedTask.id, "build");
+          const updated = await api.setTaskMode(selectedTask.id, "build", { discardPlan: true });
           patchTask(selectedTask.id, updated);
           patchRuntime(selectedTask.id, { planState: { mode: "build", phase: "planning" } });
         }

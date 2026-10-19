@@ -81,6 +81,61 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
+describe("App plan review", () => {
+  const plan = "# The plan\n\n- Ship it";
+  async function openPlan() {
+    bootstrap(false);
+    await screen.findByRole("button", { name: "Settings" });
+    chat("a");
+    await worker({ type: "snapshot", taskId: "a", snapshot: {
+      ...snapshot([
+        { id: "call", role: "assistant", blocks: [{ type: "tool-call", toolName: "plan_mode_complete", toolCallId: "plan", arguments: { plan } }] },
+        { id: "result", role: "tool", blocks: [{ type: "tool-result", toolName: "plan_mode_complete", toolCallId: "plan", details: { version: 1, source: "plan_mode_complete", plan } }] }
+      ]), planState: { mode: "ultraplan", phase: "ready", plan }
+    } });
+    vi.mocked(api.setTaskMode).mockImplementation(async (_id, mode) => ({ ...task("a"), mode }));
+    expect(screen.getByRole("button", { name: "Approve & implement" })).toBeInTheDocument();
+  }
+
+  it("keeps the whole action row while switching from Ultra Plan to Build and back", async () => {
+    await openPlan();
+    for (const [name, mode] of [["Build", "build"], ["Plan", "plan"], ["Plan", "ultraplan"]] as const) {
+      const pending = deferred<TaskRecord>();
+      vi.mocked(api.setTaskMode).mockReturnValueOnce(pending.promise);
+      fireEvent.click(screen.getByRole("radio", { name }));
+      // The optimistic mode change must preserve the proposal too.
+      for (const label of ["Approve & implement", "Save PLAN.md", "Copy", "Discard"]) {
+        expect(screen.getByRole("button", { name: label })).toBeEnabled();
+      }
+      await act(async () => pending.resolve({ ...task("a"), mode }));
+      await worker({ type: "plan_state", taskId: "a", mode, phase: "ready", plan });
+      expect(screen.getByRole("button", { name: "Approve & implement" })).toBeEnabled();
+    }
+  });
+
+  it("explicitly discards the proposal even when already in Build", async () => {
+    await openPlan();
+    fireEvent.click(screen.getByRole("radio", { name: "Build" }));
+    await waitFor(() => expect(api.setTaskMode).toHaveBeenCalledWith("a", "build"));
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Discard this plan?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(api.setTaskMode).toHaveBeenLastCalledWith("a", "build", { discardPlan: true }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Approve & implement" })).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("radio", { name: "Plan" }));
+    expect(screen.queryByRole("button", { name: "Approve & implement" })).not.toBeInTheDocument();
+  });
+
+  it("keeps approval available if starting implementation fails", async () => {
+    await openPlan();
+    vi.mocked(api.prompt).mockRejectedValueOnce(new Error("Could not start the worker."));
+    fireEvent.click(screen.getByRole("button", { name: "Approve & implement" }));
+    await waitFor(() => expect(api.prompt).toHaveBeenCalledWith(expect.objectContaining({ taskId: "a", mode: "build", message: "Implement the plan." })));
+    await screen.findByText(/Could not start the worker\./);
+    expect(screen.getByRole("button", { name: "Approve & implement" })).toBeEnabled();
+  });
+});
+
 describe("App tab workspace", () => {
   it("keeps tabs optional and restores the dormant workspace on toggling", async () => {
     bootstrap(false);

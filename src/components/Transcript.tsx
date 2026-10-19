@@ -5,7 +5,7 @@ import type { ChatRefRecord, CommandPresentation, NormalizedBlock, NormalizedMes
 import { AssistantNameContext } from "../agentName";
 import { useFollowScroll } from "../hooks/useFollowScroll";
 import { motionAllowed, useSmoothText } from "../hooks/useSmoothText";
-import { formatRunDuration, isPlanMode } from "../chat-utils";
+import { formatRunDuration } from "../chat-utils";
 import { blockKey, flyId, layoutTranscript, type TranscriptSlot } from "../explore-utils";
 import { completedPlan, layoutWorkTurns, type WorkRow } from "../completed-work";
 import { splitFileSection, type FileAttachment } from "../attachment-utils";
@@ -293,7 +293,7 @@ function renderSpecialCall(
   const result = block.toolCallId ? results.get(block.toolCallId) : undefined;
   const plan = block.toolName === "plan_mode_complete" ? completedPlan(result) : undefined;
   if (plan !== undefined) {
-    const current = isPlanMode(planState?.mode) && planState?.phase === "ready" && planState.plan === plan;
+    const current = planState?.phase === "ready" && planState.plan === plan;
     return <PlanCard plan={plan} current={current} busy={running} onAction={onPlanAction} ultra={current && planState?.mode === "ultraplan"} />;
   }
   if (block.toolName === SHOW_VISUAL_TOOL_NAME) {

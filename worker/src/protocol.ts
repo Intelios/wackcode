@@ -24,7 +24,7 @@ export interface ExecutionPolicyConfig {
 /** Plan mode state published by the built-in plan-mode extension. */
 export interface PlanState {
   mode: TaskMode;
-  /** "ready" once the agent has submitted a complete plan; cleared by revision or leaving Plan mode. */
+  /** "ready" after submission, across mode switches; cleared by discard or starting a turn. */
   phase: "planning" | "ready";
   /** The completed plan awaiting approval (phase === "ready"). */
   plan?: string;
@@ -792,7 +792,7 @@ export type WorkerCommand =
   | { id: string; type: "generate_commit_message"; diff: string; truncated: boolean }
   | { id: string; type: "set_model"; modelId: string }
   | { id: string; type: "set_thinking"; level: ThinkingLevel }
-  | { id: string; type: "set_mode"; mode: TaskMode }
+  | { id: string; type: "set_mode"; mode: TaskMode; discardPlan?: boolean }
   | { id: string; type: "set_tools"; disabledTools: string[] }
   | { id: string; type: "set_subagents"; subagents: SubagentRuntimeConfig | null }
   | { id: string; type: "set_prompts"; prompts: PromptOverrides }

@@ -2127,7 +2127,7 @@ async function handle(command: WorkerCommand): Promise<void> {
     } else if (command.type === "set_mode") {
       refuseInChat("Plan mode");
       if (session.isStreaming) throw new Error("Wait for the current run before changing mode");
-      builtins.planMode.setMode(command.mode);
+      builtins.planMode.setMode(command.mode, command.discardPlan);
       emitSnapshot();
     } else if (command.type === "extension_ui_response") {
       pendingDialogs.get(command.requestId)?.({
@@ -2246,7 +2246,7 @@ function shutdownProcess(code = 0, commandId?: string): void {
 }
 
 /** Commands the host sends with `worker::request` and whose failures it reports itself. */
-const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "list_commands", "execute_command", "init_agents", "skill_creator", "compact", "dequeue", "queue_message", "steer_message", "goal_control", "watch_subagent", "tool_image", "message_image"]);
+const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "list_commands", "execute_command", "init_agents", "skill_creator", "compact", "dequeue", "queue_message", "steer_message", "goal_control", "watch_subagent", "tool_image", "message_image", "set_mode"]);
 
 /**
  * The original of an image a tool result returned, for the transcript's lightbox: the image at

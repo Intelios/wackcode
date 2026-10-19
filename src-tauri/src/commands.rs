@@ -3628,38 +3628,43 @@ pub async fn fork_task(
     outcome
 }
 
-/// Switch a task between Build and Plan mode. Persisted immediately and pushed to the worker
-/// when one is running; otherwise the mode rides along on `init`/`prompt` next time.
+/// Switch the next turn's mode without abandoning a proposal, unless explicitly discarded.
+/// Await the worker's persisted state so mode switches and discards survive idle reaping.
 #[tauri::command]
 pub async fn set_task_mode(
     app: AppHandle,
     state: State<'_, MetadataState>,
     input: SetTaskModeInput,
 ) -> Result<TaskRecord, String> {
-    let task = state.mutate(|data| {
+    let lock = task_lock(&app, &input.task_id);
+    let _guard = lock.lock().await;
+    let (task, provider) = task_and_provider(&state, &input.task_id)?;
+    refuse_chat(&task, "Plan mode")?;
+    if matches!(task.status, TaskStatus::Running | TaskStatus::Stopping) {
+        return Err("Wait for this task to stop before changing modes".into());
+    }
+    let api_key = credential_for(&app, &state, &provider)?;
+    worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
+    worker::request(
+        &app,
+        &task.id,
+        json!({
+            "id": Uuid::new_v4().to_string(), "type": "set_mode", "mode": input.mode,
+            "discardPlan": input.discard_plan
+        }),
+        REQUEST_TIMEOUT,
+    )
+    .await?;
+    state.mutate(|data| {
         let task = data
             .tasks
             .iter_mut()
             .find(|task| task.id == input.task_id)
             .ok_or_else(|| "Task not found".to_string())?;
-        refuse_chat(task, "Plan mode")?;
-        if matches!(task.status, TaskStatus::Running | TaskStatus::Stopping) {
-            return Err("Wait for this task to stop before changing modes".into());
-        }
         task.mode = input.mode;
         task.updated_at = Utc::now().to_rfc3339();
         Ok(task.clone())
-    })?;
-    // No worker is fine — `init` and `prompt` both carry the record's mode.
-    let _ = worker::send(
-        &app,
-        &task.id,
-        &json!({
-            "id": Uuid::new_v4().to_string(), "type": "set_mode", "mode": task.mode
-        }),
-    )
-    .await;
-    Ok(task)
+    })
 }
 
 /// Save the proposed plan as `PLAN.md` in the task workspace. Refuses to overwrite: the file

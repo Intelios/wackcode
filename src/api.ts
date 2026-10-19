@@ -317,7 +317,7 @@ export const api = {
   /** A new chat from a turn of this one (its end when `entryId` is omitted). */
   forkTask: (input: { taskId: string; entryId?: string; checkpoint?: CheckpointRef }) =>
     invoke<TaskRecord>("fork_task", { input }),
-  setTaskMode: (taskId: string, mode: TaskMode) => invoke<TaskRecord>("set_task_mode", { input: { taskId, mode } }),
+  setTaskMode: (taskId: string, mode: TaskMode, options?: { discardPlan?: boolean }) => invoke<TaskRecord>("set_task_mode", { input: { taskId, mode, ...options } }),
   /** Save the proposed plan as PLAN.md in the task workspace. Returns the path. */
   exportPlan: (taskId: string, content: string) => invoke<string>("export_plan", { input: { taskId, content } }),
   stopTask: (taskId: string) => invoke<void>("stop_task", { taskId }),

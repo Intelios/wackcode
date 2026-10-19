@@ -391,7 +391,7 @@ describe("plan state restore", () => {
     expect(restorePlanState([stateEntry(true, "the plan")])).toEqual({ active: "plan", plan: "the plan" });
     expect(restorePlanState([stateEntry(true), stateEntry(false)])).toEqual({});
     expect(restorePlanState([])).toEqual({});
-    expect(restorePlanState([stateEntry(false, "stale")])).toEqual({});
+    expect(restorePlanState([stateEntry(false, "the plan")])).toEqual({ plan: "the plan" });
   });
 
   it("restores Ultra Plan, and reads entries from before it existed as Plan", () => {

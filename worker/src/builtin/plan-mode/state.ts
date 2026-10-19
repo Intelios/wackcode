@@ -14,7 +14,7 @@ export interface PersistedPlanState {
   enabled: boolean;
   /** Ultra Plan rather than Plan. Absent on entries written before Ultra Plan existed. */
   ultra?: true;
-  /** Completed plan awaiting user action (the "ready" phase). */
+  /** Completed plan awaiting user action (the "ready" phase), including in Build mode. */
   plan?: string;
 }
 
@@ -47,13 +47,15 @@ export function restorePlanState(branch: unknown[]): RestoredPlanState {
     }
   }
   const entry = entries[stateIndex];
-  if (!isRecord(entry?.data) || entry.data.enabled !== true) return {};
+  if (!isRecord(entry?.data) || typeof entry.data.enabled !== "boolean") return {};
 
-  const active: PlanVariant = entry.data.ultra === true ? "ultraplan" : "plan";
+  const active: PlanVariant | undefined = entry.data.enabled ? (entry.data.ultra === true ? "ultraplan" : "plan") : undefined;
   // A crash between completion and state write loses `plan`; the completion's own tool
   // result is still on the branch, so recover from it like upstream does.
-  const plan = normalizePersistedPlan(entry.data.plan) ?? latestCompletionPlan(entries.slice(stateIndex + 1));
-  return plan === undefined ? { active } : { active, plan };
+  // Build can retain a persisted proposal, but a completion after a Build state is not a
+  // valid submission: recovery from the tool result only applies while planning is active.
+  const plan = normalizePersistedPlan(entry.data.plan) ?? (active ? latestCompletionPlan(entries.slice(stateIndex + 1)) : undefined);
+  return { ...(active ? { active } : {}), ...(plan !== undefined ? { plan } : {}) };
 }
 
 function normalizePersistedPlan(value: unknown) {

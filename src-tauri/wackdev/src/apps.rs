@@ -30,7 +30,7 @@ pub struct RunningApp {
 
 impl RunningApp {
     pub fn identity(&self) -> AppIdentity {
-        let path = self.bundle_path.clone().or_else(|| self.executable.clone()).map(|path| path.canonicalize().unwrap_or(path));
+        let path = self.bundle_path.as_ref().or(self.executable.as_ref()).and_then(|path| path.canonicalize().ok());
         AppIdentity { pid: Some(self.pid), name: self.name.clone(), bundle_id: self.bundle_id.clone(), path }
     }
 }
@@ -92,7 +92,9 @@ pub struct InstalledApp {
 
 impl InstalledApp {
     pub fn identity(&self) -> AppIdentity {
-        AppIdentity { pid: None, name: self.name.clone(), bundle_id: self.bundle_id.clone(), path: Some(self.path.clone()) }
+        // Installed and running identities must use the same real path, including apps found
+        // by Launch Services or through an alias/symlink. An unresolved path is not persistable.
+        AppIdentity { pid: None, name: self.name.clone(), bundle_id: self.bundle_id.clone(), path: self.path.canonicalize().ok() }
     }
 }
 

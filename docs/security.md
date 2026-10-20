@@ -128,8 +128,9 @@ Enabled only for `$APPDATA/backgrounds/*`. Only `choose_background_image` writes
 
 Off by default. Rust `computer_use/` is the security boundary; the worker's tools only describe requests.
 
-- Every request re-checks the setting, the block list (`policy.rs`) and the chat's in-memory app grants. Grants are per chat and never written to disk.
-- The access card is answered renderer → `computer_use_respond_access`, never through the worker.
+- Every request re-checks the setting, the block list (`policy.rs`) and app access. “Allow for this chat” grants and denials stay in memory; an explicit “Always allow” saves the host-resolved canonical path and bundle id in `wackcode.json`, across coding chats and restarts. A per-chat denial and every block still win. Chat mode and sub-agents never get computer use.
+- The access card is answered renderer → `computer_use_respond_access`, never through the worker. Only an answer to a live host-raised card can create a saved approval; Settings can revoke one, never grant one. Failed saves leave effective permissions unchanged and the card retryable.
+- Settings › Computer use lists saved approvals with their paths. Revoking one clears matching in-memory approvals and stops active computer use before further actions; switching the feature off keeps saved approvals but permits no access. An app moved to another path asks again. Rebuilding or replacing an app at its approved path with the same bundle id retains approval — deliberate for testing development builds, not a code-signing guarantee.
 - WackCode itself — the running app's own pid, its own bundle id (`com.wackcode.desktop`, `…desktop.dev` inside the dev app) and its own paths — is never observed or driven. The other build's app (installed ↔ dev) is a normal ask-first target: it can never reach this app's windows or its access card.
 - Keys go only to the target pid, never to the HID stream. Only a hit-tested pointer action may use the foreground, after the user is idle, and it restores the previous app and cursor.
 - Secure text fields are never read or typed into.

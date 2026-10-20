@@ -1681,6 +1681,8 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
   font-family: "SFMono-Regular", Consolas, monospace; font-size: 10.5px; color: var(--text-dim);
 }
 .computer-access-body { margin: 0; color: var(--text-soft); font-size: 12px; line-height: 1.55; }
+.computer-access-note { margin: 8px 0 0; color: var(--text-dim); font-size: 11px; line-height: 1.55; }
+.computer-access-actions { flex-wrap: wrap; }
 .computer-access-body kbd, .computer-banner-key {
   margin: 0; padding: 1px 5px; border: 1px solid var(--border-bright); border-radius: 5px;
   background: var(--surface); color: var(--text-soft); font-size: 10.5px; white-space: nowrap;
@@ -5516,7 +5518,7 @@ span.model-row-main { cursor: default; padding-left: 13px; }
 }
 
 /* ── Settings › Computer use (ComputerUseSection.tsx) ── */
-/* A centred column of solid cards: hero stage, permissions, stop keys, blocked apps. Sections
+/* A centred column of solid cards: hero stage, permissions, stop keys, app choices. Sections
    rise in one after another (--i). Every loop stills under reduced motion (block at the end). */
 .computer-page { max-width: 780px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
 .computer-hero, .computer-block { animation: pop-in .36s var(--ease) both; animation-delay: calc(var(--i, 0) * 70ms); }
@@ -5632,6 +5634,22 @@ span.model-row-main { cursor: default; padding-left: 13px; }
 .computer-stop-text li svg { width: 11px; height: 11px; color: var(--text-dim); }
 .computer-stop-duck { display: grid; }
 .computer-stop-duck .duck-mark { width: 13px; height: 13px; color: var(--wc-accent); }
+
+/* Saved approvals show the actual location; a name alone never identifies an allowed app. */
+.computer-allowed { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.computer-allowed li {
+  display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 11px;
+  border: 1px solid var(--wc-accent-line-soft); background: var(--wc-well);
+}
+.computer-allowed-mark {
+  flex: 0 0 auto; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%;
+  color: var(--wc-accent-text); background: var(--wc-accent-tint); border: 1px solid var(--wc-accent-line-soft);
+}
+.computer-allowed-mark svg { width: 15px; height: 15px; }
+.computer-allowed-app { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.computer-allowed-app strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.computer-allowed-app code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; color: var(--text-dim); }
+.computer-allowed .secondary-button { flex: 0 0 auto; }
 
 /* Always-blocked tiles carry a faint hatch so they read as locked, not as options. */
 .computer-blocked { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 8px; }

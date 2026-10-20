@@ -2,8 +2,11 @@
 //! user is building. This module is the security boundary; the worker's tools
 //! (`worker/src/builtin/computer-use/`) only describe requests. Every request re-checks, in
 //! order: the setting and macOS support, the permission it needs, the target's block status
-//! (`policy`), and this chat's grant — raising the access card itself when there is none. The
-//! card is answered renderer → `computer_use_respond_access`, never through the worker.
+//! (`policy`), then this chat's denial/grant and exact-identity saved Always Allow entries —
+//! raising the access card itself when there is none. Only a live card answer may create a
+//! saved grant. Answers, stops and restrictive settings changes serialize on `inner`, always
+//! before the metadata lock; a failed save leaves the card retryable and grants nothing.
+//! The card is answered renderer → `computer_use_respond_access`, never through the worker.
 //!
 //! Background first: element actions go through Accessibility and keys go only to the target
 //! process. Only pointer actions Accessibility can't do use the real cursor (`input::Foreground`).
@@ -22,7 +25,7 @@ mod engine;
 mod pointer;
 mod request;
 
-use crate::models::ComputerUseConfig;
+use crate::models::{ComputerAppGrant, ComputerUseConfig, TaskKind};
 use crate::storage::MetadataState;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use engine::{CaptureGeometry, Engine, EngineState, Observation, StopToken};
@@ -45,6 +48,7 @@ const LAUNCH_WINDOW_WAIT: Duration = Duration::from_secs(10);
 #[serde(rename_all = "camelCase")]
 pub enum AccessDecision {
     Allow,
+    Always,
     Deny,
     Never,
     Cancelled,
@@ -53,6 +57,7 @@ pub enum AccessDecision {
 struct PendingAccess {
     task_id: String,
     identity: AppIdentity,
+    token: StopToken,
     reply: oneshot::Sender<AccessDecision>,
 }
 
@@ -69,6 +74,18 @@ struct Inner {
     access: HashMap<String, PendingAccess>,
     hotkey_registered: bool,
     hotkey_available: bool,
+}
+
+impl Inner {
+    /// Conservative restriction changes cancel every queued/in-flight computer request and
+    /// access card, not the chat runs themselves. Already dispatched native calls can finish;
+    /// every later step rechecks its stopped token before observing or acting again.
+    fn cancel_all_requests(&mut self) {
+        for (_, token) in self.requests.values() {
+            token.stop();
+        }
+        cancel_replies(self.access.drain().map(|(_, pending)| { pending.token.stop(); pending.reply }).collect());
+    }
 }
 
 pub struct ComputerUseManager {
@@ -132,7 +149,7 @@ impl ComputerUseManager {
             }
         }
         let ids = inner.access.iter().filter(|(_, pending)| pending.task_id == task_id).map(|(id, _)| id.clone()).collect::<Vec<_>>();
-        ids.into_iter().filter_map(|id| inner.access.remove(&id)).map(|pending| pending.reply).collect()
+        ids.into_iter().filter_map(|id| inner.access.remove(&id)).map(|pending| { pending.token.stop(); pending.reply }).collect()
     }
 }
 
@@ -151,6 +168,75 @@ fn emit(app: &AppHandle, task_id: &str, value: Value) {
 
 fn config(app: &AppHandle) -> ComputerUseConfig {
     app.state::<MetadataState>().data.lock().map(|data| data.computer_use.clone()).unwrap_or_default()
+}
+
+fn saved_key(grant: &ComputerAppGrant) -> Option<AppKey> {
+    AppKey::persistent(grant.bundle_id.as_deref(), &grant.path)
+}
+
+/// Derive persistence from host-resolved identity only. Recheck that the canonical path has
+/// not disappeared or changed since the card was raised; never follow a new symlink for it.
+fn persistable_grant(identity: &AppIdentity) -> Option<ComputerAppGrant> {
+    let path = identity.path.as_deref()?;
+    if path.canonicalize().ok()?.as_os_str() != path.as_os_str() {
+        return None;
+    }
+    let path = path.to_str()?;
+    AppKey::persistent(identity.bundle_id.as_deref(), path)?;
+    Some(ComputerAppGrant { name: identity.name.clone(), bundle_id: identity.bundle_id.clone(), path: path.to_string() })
+}
+
+fn request_settings(metadata: &MetadataState, task_id: &str, token: &StopToken) -> Result<ComputerUseConfig, String> {
+    if token.is_stopped() {
+        return Err(STOPPED.into());
+    }
+    let data = metadata.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+    if data.tasks.iter().any(|task| task.id == task_id && task.kind == TaskKind::Chat) {
+        return Err("Computer use isn't available in Chat mode.".into());
+    }
+    if !data.computer_use.enabled {
+        return Err("Computer use is switched off in Settings › Packages.".into());
+    }
+    Ok(data.computer_use.clone())
+}
+
+fn effective_access(settings: &ComputerUseConfig, inner: &Inner, own: &OwnIdentity, task_id: &str, identity: &AppIdentity) -> Result<Grant, String> {
+    if !settings.enabled {
+        return Err("Computer use is switched off in Settings › Packages.".into());
+    }
+    let saved = settings.always_allow.iter().filter_map(saved_key).collect::<Vec<_>>();
+    inner.grants.effective_decision(task_id, identity, own, &settings.never_allow, &saved)
+}
+
+fn denied_access(identity: &AppIdentity) -> String {
+    format!("The user denied access to {} for this chat. Don't try again; ask them what they'd like instead.", identity.name)
+}
+
+/// Rechecked inside engine jobs too: waiting on a card, another app's AX work, launch or
+/// capture must not keep using a settings/grant snapshot that has since been revoked.
+#[derive(Clone)]
+struct AccessScope {
+    app: AppHandle,
+    task_id: String,
+    identity: AppIdentity,
+    token: StopToken,
+}
+
+impl AccessScope {
+    fn new(app: &AppHandle, task_id: &str, identity: AppIdentity, token: &StopToken) -> Self {
+        Self { app: app.clone(), task_id: task_id.to_string(), identity, token: token.clone() }
+    }
+
+    fn check(&self) -> Result<ComputerUseConfig, String> {
+        let manager = self.app.state::<ComputerUseManager>();
+        let inner = manager.lock()?;
+        let settings = request_settings(&self.app.state::<MetadataState>(), &self.task_id, &self.token)?;
+        match effective_access(&settings, &inner, &manager.own, &self.task_id, &self.identity)? {
+            Grant::Allowed => Ok(settings),
+            Grant::Denied => Err(denied_access(&self.identity)),
+            Grant::Unknown => Err(format!("Access to {} is no longer allowed. Ask the user for access again.", self.identity.name)),
+        }
+    }
 }
 
 fn app_json(identity: &AppIdentity) -> Value {
@@ -176,24 +262,43 @@ pub async fn execute_agent_request(app: AppHandle, task_id: String, request_id: 
     // may still settle later, but cannot acquire the next run's visual generation.
     let token = StopToken::default();
     let cursor = manager.cursor.session(&task_id, token.clone());
-    let _guard = operation.lock().await;
     {
         let mut inner = manager.lock()?;
         if inner.cancelled.remove(&request_id) {
             return Err(STOPPED.into());
         }
+        // Register before the operation wait, so stop/revoke also cancels queued work.
         inner.requests.insert(request_id.clone(), (task_id.clone(), token.clone()));
     }
-    let result = match tokio::time::timeout(OPERATION_TIMEOUT, run(&app, &manager, &task_id, parsed, &token, cursor)).await {
-        Ok(result) => result,
-        Err(_) => {
-            token.stop();
-            manager.cursor.wake();
-            Err("The computer-use action took too long and was stopped.".into())
+    let _guard = operation.lock().await;
+    let result = if token.is_stopped() {
+        Err(STOPPED.into())
+    } else {
+        // Keep the future (and any card receiver) alive until timeout cancellation takes the
+        // answer lock. Otherwise a timeout could drop the receiver during a grant's save.
+        let mut timed = Box::pin(tokio::time::timeout(OPERATION_TIMEOUT, run(&app, &manager, &task_id, parsed, &token, cursor)));
+        match timed.as_mut().await {
+            Ok(result) => result,
+            Err(_) => {
+                let _inner = manager.lock()?;
+                token.stop();
+                Err("The computer-use action took too long and was stopped.".into())
+            }
         }
     };
-    if let Ok(mut inner) = manager.lock() {
+    let stale = if let Ok(mut inner) = manager.lock() {
+        if result.is_err() { token.stop(); }
         inner.requests.remove(&request_id);
+        // A timeout drops the card's receiver. Retire its event too, and never let a late
+        // renderer answer save a grant for an abandoned request.
+        let ids = inner.access.iter().filter(|(_, pending)| pending.reply.is_closed()).map(|(id, _)| id.clone()).collect::<Vec<_>>();
+        ids.into_iter().filter_map(|id| inner.access.remove(&id).map(|pending| (id, pending.task_id))).collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    manager.cursor.wake();
+    for (id, task) in stale {
+        emit(&app, &task, json!({ "type": "computer_access_resolved", "taskId": task, "requestId": id, "decision": AccessDecision::Cancelled }));
     }
     if token.is_stopped() && result.is_ok() {
         return Err(STOPPED.into());
@@ -202,10 +307,7 @@ pub async fn execute_agent_request(app: AppHandle, task_id: String, request_id: 
 }
 
 async fn run(app: &AppHandle, manager: &ComputerUseManager, task_id: &str, request: ComputerRequest, token: &StopToken, cursor: Option<cursor::Session>) -> Result<Value, String> {
-    let settings = config(app);
-    if !settings.enabled {
-        return Err("Computer use is switched off in Settings › Packages.".into());
-    }
+    let settings = request_settings(&app.state::<MetadataState>(), task_id, token)?;
     if !permissions::is_supported() {
         return Err("Computer use needs macOS 14 or later.".into());
     }
@@ -214,29 +316,28 @@ async fn run(app: &AppHandle, manager: &ComputerUseManager, task_id: &str, reque
     }
     manager.cursor.set_enabled(app, settings.show_agent_cursor);
     match request {
-        ComputerRequest::Apps => list_apps(manager, task_id, settings).await,
-        ComputerRequest::Open { app: query } => open(app, manager, task_id, &query, settings, token, cursor).await,
+        ComputerRequest::Apps => list_apps(app, manager, task_id, token).await,
+        ComputerRequest::Open { app: query } => open(app, manager, task_id, &query, token, cursor).await,
         ComputerRequest::Snapshot { app: query, window } => {
-            let target = running_target(app, manager, task_id, &query, settings, token).await?;
+            let target = running_target(app, manager, task_id, &query, token).await?;
             if let (Some(cursor), Some(pid)) = (&cursor, target.pid) { cursor.target_app(pid); }
-            begin_session(app, manager, task_id, &target.name);
-            snapshot(manager, task_id, target, window).await
+            begin_session(app, manager, task_id, &target.name, token);
+            snapshot(manager, AccessScope::new(app, task_id, target, token), window).await
         }
         ComputerRequest::Screenshot { app: query, window } => {
             if !permissions::screen_recording_preflight() {
                 return Err("WackCode doesn't have Screen Recording permission, so it can't capture windows. Use computer_snapshot, or ask the user to allow it in Settings › Computer use.".into());
             }
-            let target = running_target(app, manager, task_id, &query, settings, token).await?;
+            let target = running_target(app, manager, task_id, &query, token).await?;
             if let (Some(cursor), Some(pid)) = (&cursor, target.pid) { cursor.target_app(pid); }
-            begin_session(app, manager, task_id, &target.name);
-            screenshot(manager, task_id, target, window).await
+            begin_session(app, manager, task_id, &target.name, token);
+            screenshot(manager, AccessScope::new(app, task_id, target, token), window).await
         }
         ComputerRequest::Act { app: query, state_id, actions, expect } => {
-            let never_allow = settings.never_allow.clone();
-            let target = running_target(app, manager, task_id, &query, settings, token).await?;
+            let target = running_target(app, manager, task_id, &query, token).await?;
             if let (Some(cursor), Some(pid)) = (&cursor, target.pid) { cursor.target_app(pid); }
-            begin_session(app, manager, task_id, &target.name);
-            act(manager, task_id, target, state_id, actions, expect, never_allow, token.clone(), cursor).await
+            begin_session(app, manager, task_id, &target.name, token);
+            act(manager, AccessScope::new(app, task_id, target, token), state_id, actions, expect, cursor).await
         }
     }
 }
@@ -247,7 +348,6 @@ async fn resolve_target(
     manager: &ComputerUseManager,
     task_id: &str,
     query: &str,
-    settings: &ComputerUseConfig,
     token: &StopToken,
     launch: bool,
 ) -> Result<apps::Resolved, String> {
@@ -258,8 +358,10 @@ async fn resolve_target(
         apps::Resolved::Running(running) => running.identity(),
         apps::Resolved::Installed(installed) => installed.identity(),
     };
-    if let Some(reason) = policy::block_reason(&identity, &manager.own, &settings.never_allow) {
-        return Err(reason);
+    {
+        let inner = manager.lock()?;
+        let settings = request_settings(&app.state::<MetadataState>(), task_id, token)?;
+        effective_access(&settings, &inner, &manager.own, task_id, &identity)?;
     }
     if !launch {
         if let apps::Resolved::Installed(installed) = &resolved {
@@ -275,21 +377,23 @@ async fn running_target(
     manager: &ComputerUseManager,
     task_id: &str,
     query: &str,
-    settings: ComputerUseConfig,
     token: &StopToken,
 ) -> Result<AppIdentity, String> {
-    match resolve_target(app, manager, task_id, query, &settings, token, false).await? {
+    match resolve_target(app, manager, task_id, query, token, false).await? {
         apps::Resolved::Running(running) => Ok(running.identity()),
         apps::Resolved::Installed(installed) => Err(format!("{} isn't running. Open it with computer_open first.", installed.name)),
     }
 }
 
 async fn ensure_access(app: &AppHandle, manager: &ComputerUseManager, task_id: &str, identity: &AppIdentity, launch: bool, token: &StopToken) -> Result<(), String> {
-    let key = AppKey::of(identity);
-    match manager.lock()?.grants.decision(task_id, &key) {
-        Grant::Allowed => return Ok(()),
-        Grant::Denied => return Err(format!("The user denied access to {} for this chat. Ask them before trying again.", identity.name)),
-        Grant::Unknown => {}
+    {
+        let inner = manager.lock()?;
+        let settings = request_settings(&app.state::<MetadataState>(), task_id, token)?;
+        match effective_access(&settings, &inner, &manager.own, task_id, identity)? {
+            Grant::Allowed => return Ok(()),
+            Grant::Denied => return Err(denied_access(identity)),
+            Grant::Unknown => {}
+        }
     }
     let icon = match identity.path.clone() {
         Some(path) => manager.engine().run(move |_| apps::icon_data_url(&path)).await.ok().flatten(),
@@ -297,12 +401,22 @@ async fn ensure_access(app: &AppHandle, manager: &ComputerUseManager, task_id: &
     };
     let request_id = uuid::Uuid::new_v4().to_string();
     let (reply, mut receiver) = oneshot::channel();
-    manager.lock()?.access.insert(request_id.clone(), PendingAccess { task_id: task_id.to_string(), identity: identity.clone(), reply });
+    {
+        let mut inner = manager.lock()?;
+        let settings = request_settings(&app.state::<MetadataState>(), task_id, token)?;
+        match effective_access(&settings, &inner, &manager.own, task_id, identity)? {
+            Grant::Allowed => return Ok(()),
+            Grant::Denied => return Err(denied_access(identity)),
+            Grant::Unknown => {}
+        }
+        inner.access.insert(request_id.clone(), PendingAccess { task_id: task_id.to_string(), identity: identity.clone(), token: token.clone(), reply });
+    }
     emit(app, task_id, json!({
         "type": "computer_access_request", "taskId": task_id, "requestId": request_id, "launch": launch,
+        "canAlwaysAllow": persistable_grant(identity).is_some(),
         "app": { "name": identity.name, "bundleId": identity.bundle_id, "path": identity.path, "icon": icon },
     }));
-    // Like ask_user_question, the card waits as long as the user needs; a stop cancels it.
+    // Wait for an answer, or for the owning request to be stopped/cancelled/timed out.
     let decision = loop {
         match tokio::time::timeout(Duration::from_millis(200), &mut receiver).await {
             Ok(decision) => break decision.unwrap_or(AccessDecision::Cancelled),
@@ -316,95 +430,90 @@ async fn ensure_access(app: &AppHandle, manager: &ComputerUseManager, task_id: &
         }
     };
     emit(app, task_id, json!({ "type": "computer_access_resolved", "taskId": task_id, "requestId": request_id, "decision": decision }));
-    match decision {
-        AccessDecision::Allow => {
-            manager.lock()?.grants.allow(task_id, key);
-            Ok(())
-        }
-        AccessDecision::Deny | AccessDecision::Never => {
-            manager.lock()?.grants.deny(task_id, key);
-            Err(if decision == AccessDecision::Never {
-                format!("The user never allows computer use in {}. Don't try again; ask them what they'd like instead.", identity.name)
-            } else {
-                format!("The user denied access to {} for this chat. Don't try again; ask them what they'd like instead.", identity.name)
-            })
-        }
-        AccessDecision::Cancelled => Err(STOPPED.into()),
+    if decision == AccessDecision::Cancelled {
+        return Err(STOPPED.into());
     }
+    // Answers apply grants while holding `inner`, not here after the await: revoking or
+    // stopping between the answer and this continuation must never recreate an allow.
+    AccessScope::new(app, task_id, identity.clone(), token).check().map(|_| ())
 }
 
-async fn list_apps(manager: &ComputerUseManager, task_id: &str, settings: ComputerUseConfig) -> Result<Value, String> {
-    let (allowed, denied) = {
-        let inner = manager.lock()?;
-        (inner.grants.allowed(task_id), inner.grants.denied(task_id))
-    };
-    let own = manager.own.clone();
+async fn list_apps(app: &AppHandle, manager: &ComputerUseManager, task_id: &str, token: &StopToken) -> Result<Value, String> {
+    let app = app.clone();
+    let task = task_id.to_string();
+    let token = token.clone();
     let apps = manager
         .engine()
-        .run(move |_| {
-            let mut list = apps::running()
-                .into_iter()
-                .filter(|running| running.pid != own.pid)
-                .map(|running| {
-                    let identity = running.identity();
-                    let key = AppKey::of(&identity);
-                    let access = if policy::block_reason(&identity, &own, &settings.never_allow).is_some() {
-                        "blocked"
-                    } else if allowed.contains(&key) {
-                        "granted"
-                    } else if denied.contains(&key) {
-                        "denied"
-                    } else {
-                        "ask"
-                    };
-                    // Window titles can be private (mail subjects, document names): only apps
-                    // this chat may use show theirs.
-                    let windows = if access == "granted" {
-                        ax::windows(&ax::application(running.pid))
-                            .iter()
-                            .map(|window| window_json(window, input::window_number(&window.element, running.pid)))
-                            .collect::<Vec<_>>()
-                    } else {
-                        Vec::new()
-                    };
-                    (access == "granted", json!({
-                        "name": running.name, "bundleId": running.bundle_id, "pid": running.pid,
-                        "frontmost": running.frontmost, "access": access, "windows": windows,
-                    }))
-                })
-                .collect::<Vec<_>>();
+        .run(move |_| -> Result<Vec<Value>, String> {
+            let manager = app.state::<ComputerUseManager>();
+            request_settings(&app.state::<MetadataState>(), &task, &token)?;
+            let mut list = Vec::new();
+            for running in apps::running().into_iter().filter(|running| running.pid != manager.own.pid) {
+                let identity = running.identity();
+                let access = {
+                    let inner = manager.lock()?;
+                    let settings = request_settings(&app.state::<MetadataState>(), &task, &token)?;
+                    match effective_access(&settings, &inner, &manager.own, &task, &identity) {
+                        Err(_) => "blocked",
+                        Ok(Grant::Allowed) => "granted",
+                        Ok(Grant::Denied) => "denied",
+                        Ok(Grant::Unknown) => "ask",
+                    }
+                };
+                // Window titles can be private (mail subjects, document names): use the same
+                // effective decision as actions, including saved grants and chat denials.
+                let windows = if access == "granted" {
+                    if token.is_stopped() { return Err(STOPPED.into()); }
+                    ax::windows(&ax::application(running.pid))
+                        .iter()
+                        .map(|window| window_json(window, input::window_number(&window.element, running.pid)))
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
+                list.push((access == "granted", json!({
+                    "name": running.name, "bundleId": running.bundle_id, "pid": running.pid,
+                    "frontmost": running.frontmost, "access": access, "windows": windows,
+                })));
+            }
             list.sort_by_key(|(granted, _)| !granted);
-            list.into_iter().map(|(_, value)| value).collect::<Vec<_>>()
+            Ok(list.into_iter().map(|(_, value)| value).collect())
         })
-        .await?;
+        .await??;
     Ok(json!({ "apps": apps }))
 }
 
-async fn open(app: &AppHandle, manager: &ComputerUseManager, task_id: &str, query: &str, settings: ComputerUseConfig, token: &StopToken, cursor: Option<cursor::Session>) -> Result<Value, String> {
-    let resolved = resolve_target(app, manager, task_id, query, &settings, token, true).await?;
+async fn open(app: &AppHandle, manager: &ComputerUseManager, task_id: &str, query: &str, token: &StopToken, cursor: Option<cursor::Session>) -> Result<Value, String> {
+    let resolved = resolve_target(app, manager, task_id, query, token, true).await?;
     let (identity, launched) = match resolved {
         apps::Resolved::Running(running) => (running.identity(), false),
         apps::Resolved::Installed(installed) => {
-            let path = installed.path.clone();
-            let pid = manager.engine().run(move |_| apps::launch(&path)).await??;
             let mut identity = installed.identity();
+            // Launch the canonical path covered by access, not a potentially retargeted alias.
+            let path = identity.path.clone().ok_or("The app's canonical path is no longer available.")?;
+            let scope = AccessScope::new(app, task_id, identity.clone(), token);
+            let pid = manager.engine().run(move |_| { scope.check()?; apps::launch(&path) }).await??;
             identity.pid = Some(pid);
             (identity, true)
         }
     };
-    begin_session(app, manager, task_id, &identity.name);
+    let scope = AccessScope::new(app, task_id, identity.clone(), token);
+    scope.check()?;
+    begin_session(app, manager, task_id, &identity.name, token);
     let pid = identity.pid.ok_or("The app has no process.")?;
     if let Some(cursor) = &cursor { cursor.target_app(pid); }
     let deadline = Instant::now() + if launched { LAUNCH_WINDOW_WAIT } else { Duration::ZERO };
     let windows = loop {
+        let scope = scope.clone();
         let windows = manager
             .engine()
-            .run(move |_| {
+            .run(move |_| -> Result<Vec<Value>, String> {
+                scope.check()?;
                 let app_element = ax::application(pid);
                 ax::enable_manual_accessibility(&app_element);
-                ax::windows(&app_element).iter().map(|window| window_json(window, input::window_number(&window.element, pid))).collect::<Vec<_>>()
+                Ok(ax::windows(&app_element).iter().map(|window| window_json(window, input::window_number(&window.element, pid))).collect())
             })
-            .await?;
+            .await??;
         if !windows.is_empty() || Instant::now() >= deadline || token.is_stopped() {
             break windows;
         }
@@ -443,11 +552,13 @@ fn pick_window(pid: i32, name: &str, requested: Option<u32>) -> Result<(ax::AxWi
     Ok((window, number, listed))
 }
 
-async fn snapshot(manager: &ComputerUseManager, task_id: &str, target: AppIdentity, window: Option<u32>) -> Result<Value, String> {
-    let task = task_id.to_string();
+async fn snapshot(manager: &ComputerUseManager, scope: AccessScope, window: Option<u32>) -> Result<Value, String> {
+    let task = scope.task_id.clone();
+    let target = scope.identity.clone();
     manager
         .engine()
         .run(move |state: &mut EngineState| {
+            scope.check()?;
             let pid = target.pid.ok_or("The app has no process.")?;
             let app_element = ax::application(pid);
             ax::enable_manual_accessibility(&app_element);
@@ -489,23 +600,29 @@ async fn snapshot(manager: &ComputerUseManager, task_id: &str, target: AppIdenti
         .await?
 }
 
-async fn screenshot(manager: &ComputerUseManager, task_id: &str, target: AppIdentity, window: Option<u32>) -> Result<Value, String> {
+async fn screenshot(manager: &ComputerUseManager, scope: AccessScope, window: Option<u32>) -> Result<Value, String> {
+    let target = scope.identity.clone();
     let pid = target.pid.ok_or("The app has no process.")?;
     let name = target.name.clone();
+    let before_capture = scope.clone();
     let (window_value, number) = manager
         .engine()
         .run(move |_| -> Result<(Value, u32), String> {
+            before_capture.check()?;
             let (window, number, _) = pick_window(pid, &name, window)?;
             let number = number.ok_or("That window can't be identified for capture.")?;
             Ok((window_json(&window, Some(number)), number))
         })
         .await??;
+    scope.check()?;
     let capture = capture::window(number, None).await?;
-    let task = task_id.to_string();
+    scope.check()?;
+    let task = scope.task_id.clone();
     let geometry = CaptureGeometry { frame: capture.frame, output: (capture.width, capture.height) };
     let state_id = manager
         .engine()
         .run(move |state: &mut EngineState| -> Result<String, String> {
+            scope.check()?;
             let app_element = ax::application(pid);
             let window = ax::windows(&app_element)
                 .into_iter()
@@ -772,24 +889,23 @@ fn check_expect(context: &ActContext<'_>, expect: &Expect) -> Value {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn act(
     manager: &ComputerUseManager,
-    task_id: &str,
-    target: AppIdentity,
+    scope: AccessScope,
     state_id: String,
     actions: Vec<Action>,
     expect: Option<Expect>,
-    never_allow: Vec<String>,
-    token: StopToken,
     cursor: Option<cursor::Session>,
 ) -> Result<Value, String> {
-    let task = task_id.to_string();
+    let task = scope.task_id.clone();
+    let target = scope.identity.clone();
+    let token = scope.token.clone();
     let own_pid = manager.own.pid;
     let own_bundle_id = manager.own.bundle_id.clone();
     manager
         .engine()
         .run(move |state: &mut EngineState| -> Result<Value, String> {
+            let settings = scope.check()?;
             let pid = target.pid.ok_or("The app has no process.")?;
             let observation = state.observation(&task, &state_id).ok_or_else(|| {
                 format!("stateId {state_id} is out of date or unknown. Take a new computer_snapshot or computer_screenshot and use its stateId.")
@@ -804,7 +920,7 @@ async fn act(
                 observation,
                 app_element: ax::application(pid),
                 foreground: None,
-                never_allow,
+                never_allow: settings.never_allow,
                 token,
                 cursor,
                 feedback: None,
@@ -812,6 +928,7 @@ async fn act(
             let mut results = Vec::new();
             let mut all_ok = true;
             for (index, action) in actions.iter().enumerate() {
+                context.never_allow = scope.check()?.never_allow;
                 if context.stopped() {
                     all_ok = false;
                     results.push(json!({ "index": index, "kind": action.kind(), "ok": false, "error": STOPPED }));
@@ -844,6 +961,7 @@ async fn act(
                 (Some(expect), true) => check_expect(&context, expect),
                 _ => Value::Null,
             };
+            scope.check()?;
             let focused = ax::element(&context.app_element, "AXFocusedUIElement").map(|element| ax::describe(&element));
             let window_title = ax::string(&context.observation.window, "AXTitle");
             Ok(json!({
@@ -878,9 +996,10 @@ fn state_event(app: &AppHandle, task_id: &str, active: bool, app_name: Option<&s
     emit(app, task_id, json!({ "type": "computer_state", "taskId": task_id, "computer": { "active": active, "app": app_name, "hotkey": hotkey } }));
 }
 
-fn begin_session(app: &AppHandle, manager: &ComputerUseManager, task_id: &str, app_name: &str) {
+fn begin_session(app: &AppHandle, manager: &ComputerUseManager, task_id: &str, app_name: &str, token: &StopToken) {
     let (first, changed) = match manager.lock() {
         Ok(mut inner) => {
+            if token.is_stopped() { return; }
             let first = inner.sessions.is_empty() && !inner.hotkey_registered;
             let previous = inner.sessions.insert(task_id.to_string(), app_name.to_string());
             (first, previous.as_deref() != Some(app_name))
@@ -928,7 +1047,9 @@ fn end_session(app: &AppHandle, task_id: &str) {
 pub fn on_run_state(app: &AppHandle, task_id: &str, state: &str) {
     let manager = app.state::<ComputerUseManager>();
     if state == "running" { manager.cursor.start_run(app, task_id); }
-    if state == "stopping" { manager.cursor.end_run(task_id); }
+    if matches!(state, "stopping" | "idle" | "interrupted") {
+        stop_cursor(app, task_id);
+    }
     if matches!(state, "idle" | "interrupted") {
         end_session(app, task_id);
     }
@@ -943,9 +1064,13 @@ pub fn on_worker_stopped(app: &AppHandle, task_id: &str) {
     end_session(app, task_id);
 }
 
-/// Retire the visual immediately when Stop is clicked, before an abort reaches the worker.
+/// Retire visuals and access cards immediately when Stop is clicked, before an abort reaches
+/// the worker. This shares the answer lock, so a late Always answer cannot survive a stop.
 pub fn stop_cursor(app: &AppHandle, task_id: &str) {
-    app.state::<ComputerUseManager>().cursor.end_run(task_id);
+    let manager = app.state::<ComputerUseManager>();
+    let replies = manager.lock().map(|mut inner| ComputerUseManager::stop_chat(&mut inner, task_id)).unwrap_or_default();
+    cancel_replies(replies);
+    manager.cursor.end_run(task_id);
 }
 
 /// The chat was archived, deleted or moved to a worktree.
@@ -993,7 +1118,8 @@ pub async fn emergency_stop(app: &AppHandle, source: &str) {
     }
 }
 
-/// Switching the feature off: stop everything and forget every grant.
+/// Switching the feature off: stop everything and forget transient grants only. Saved Always
+/// Allow entries remain on disk, but cannot authorize anything until the feature is enabled.
 async fn disable(app: &AppHandle) {
     emergency_stop(app, "switched off").await;
     let manager = app.state::<ComputerUseManager>();
@@ -1084,20 +1210,82 @@ pub fn computer_use_relaunch(app: AppHandle) {
     app.restart();
 }
 
-#[tauri::command]
-pub async fn set_computer_use_config(app: AppHandle, input: ComputerUseConfig) -> Result<ComputerUseConfig, String> {
-    let config = ComputerUseConfig { enabled: input.enabled, show_agent_cursor: input.show_agent_cursor, never_allow: policy::validate_never_allow(&input.never_allow)? };
-    let was_enabled = config_enabled(&app);
-    app.state::<MetadataState>().mutate(|data| {
-        data.computer_use = config.clone();
-        Ok(())
+/// Settings deliberately has no grant field. A larger renderer config can deserialize here,
+/// but its `alwaysAllow` is ignored: only `answer_access` can create a saved app identity.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ComputerUseSettings {
+    enabled: bool,
+    show_agent_cursor: bool,
+    never_allow: Vec<String>,
+}
+
+impl Default for ComputerUseSettings {
+    fn default() -> Self {
+        let defaults = ComputerUseConfig::default();
+        Self { enabled: defaults.enabled, show_agent_cursor: defaults.show_agent_cursor, never_allow: defaults.never_allow }
+    }
+}
+
+/// Called with `inner` held, before taking the metadata lock (the same order as card answers).
+fn save_settings(metadata: &MetadataState, inner: &mut Inner, input: ComputerUseSettings) -> Result<(ComputerUseConfig, bool), String> {
+    let never_allow = policy::validate_never_allow(&input.never_allow)?;
+    let (settings, disabled, restricted) = metadata.mutate(|data| {
+        let previous = &data.computer_use;
+        let disabled = previous.enabled && !input.enabled;
+        let restricted = !input.enabled || never_allow.iter().any(|id| !previous.never_allow.iter().any(|old| old.eq_ignore_ascii_case(id)));
+        data.computer_use.enabled = input.enabled;
+        data.computer_use.show_agent_cursor = input.show_agent_cursor;
+        data.computer_use.never_allow = never_allow.clone();
+        data.computer_use.always_allow.retain(|grant| !grant.bundle_id.as_deref().is_some_and(|id| never_allow.iter().any(|never| never.eq_ignore_ascii_case(id))));
+        Ok((data.computer_use.clone(), disabled, restricted))
     })?;
-    app.state::<ComputerUseManager>().cursor.set_enabled(&app, config.enabled && config.show_agent_cursor);
-    if was_enabled && !config.enabled {
+    for id in &settings.never_allow {
+        inner.grants.revoke_bundle_id(id);
+    }
+    if restricted { inner.cancel_all_requests(); }
+    Ok((settings, disabled))
+}
+
+#[tauri::command]
+pub async fn set_computer_use_config(app: AppHandle, input: ComputerUseSettings) -> Result<ComputerUseConfig, String> {
+    let manager = app.state::<ComputerUseManager>();
+    let (settings, disabled) = {
+        let mut inner = manager.lock()?;
+        save_settings(&app.state::<MetadataState>(), &mut inner, input)?
+    };
+    manager.cursor.set_enabled(&app, settings.enabled && settings.show_agent_cursor);
+    if disabled {
         disable(&app).await;
     }
     crate::worker::broadcast_computer_use(&app).await?;
-    Ok(config)
+    Ok(config(&app))
+}
+
+fn revoke_app(metadata: &MetadataState, inner: &mut Inner, key: &AppKey) -> Result<ComputerUseConfig, String> {
+    let settings = metadata.mutate(|data| {
+        data.computer_use.always_allow.retain(|grant| saved_key(grant).as_ref() != Some(key));
+        Ok(data.computer_use.clone())
+    })?;
+    inner.grants.revoke_app(key);
+    // Include all queued requests and cards, so no pre-revocation answer or engine wait can
+    // restore access. This intentionally does not abort the chats' non-computer work.
+    inner.cancel_all_requests();
+    Ok(settings)
+}
+
+#[tauri::command]
+pub async fn computer_use_revoke_app(app: AppHandle, bundle_id: Option<String>, path: String) -> Result<ComputerUseConfig, String> {
+    // Match the saved key literally (apart from bundle-id case), even if the app was removed
+    // or its old path is now a symlink. Never canonicalize renderer input into another grant.
+    let key = AppKey::persistent(bundle_id.as_deref(), &path).ok_or("An app grant needs an absolute path.")?;
+    let manager = app.state::<ComputerUseManager>();
+    let settings = {
+        let mut inner = manager.lock()?;
+        revoke_app(&app.state::<MetadataState>(), &mut inner, &key)?
+    };
+    manager.cursor.wake();
+    Ok(settings)
 }
 
 #[tauri::command]
@@ -1107,39 +1295,84 @@ pub fn computer_use_cursor_appearance(app: AppHandle, input: cursor::CursorAppea
     Ok(())
 }
 
-fn config_enabled(app: &AppHandle) -> bool {
-    config(app).enabled
-}
-
-/// The user answered an access card. Only the request id and decision cross from the renderer:
-/// which app the answer covers comes from the card Rust raised. "Never allow" also adds the app
-/// to the Settings list, and the new settings come back so Settings can show it.
-#[tauri::command]
-pub fn computer_use_respond_access(app: AppHandle, task_id: String, request_id: String, decision: AccessDecision) -> Result<Option<ComputerUseConfig>, String> {
-    let manager = app.state::<ComputerUseManager>();
-    let pending = {
-        let mut inner = manager.lock()?;
-        match inner.access.get(&request_id) {
-            Some(pending) if pending.task_id == task_id => inner.access.remove(&request_id),
-            _ => return Err("That access request is no longer open.".into()),
+/// The only grant-creation path. Keep the pending card until persistence succeeds; holding
+/// `inner` across the save serializes it with stop/revoke/settings, and rollback on any save
+/// error leaves both the receiver and effective permissions untouched so the user can retry.
+fn answer_access(metadata: &MetadataState, inner: &mut Inner, own: &OwnIdentity, task_id: &str, request_id: &str, decision: AccessDecision) -> Result<Option<ComputerUseConfig>, String> {
+    let pending = match inner.access.get(request_id) {
+        Some(pending) if pending.task_id == task_id => pending,
+        _ => return Err("That access request is no longer open.".into()),
+    };
+    if pending.token.is_stopped() || pending.reply.is_closed() {
+        let pending = inner.access.remove(request_id).expect("checked above");
+        let _ = pending.reply.send(AccessDecision::Cancelled);
+        return Err("That access request is no longer open.".into());
+    }
+    let identity = pending.identity.clone();
+    if decision != AccessDecision::Cancelled {
+        let settings = request_settings(metadata, task_id, &pending.token)?;
+        if effective_access(&settings, inner, own, task_id, &identity)? == Grant::Denied {
+            return Err(denied_access(&identity));
         }
     }
-    .expect("checked above");
-    let mut updated = None;
+    let updated = match decision {
+        AccessDecision::Always => {
+            let grant = persistable_grant(&identity).ok_or("This app doesn't have a canonical path to save. Allow it for this chat instead.")?;
+            let key = saved_key(&grant).expect("host-derived canonical grant");
+            Some(metadata.mutate(|data| {
+                data.computer_use.always_allow.retain(|saved| saved_key(saved).as_ref() != Some(&key));
+                data.computer_use.always_allow.push(grant);
+                Ok(data.computer_use.clone())
+            })?)
+        }
+        AccessDecision::Never => match identity.bundle_id.as_deref() {
+            Some(bundle_id) => Some(metadata.mutate(|data| {
+                let mut never = data.computer_use.never_allow.clone();
+                never.push(bundle_id.to_string());
+                data.computer_use.never_allow = policy::validate_never_allow(&never)?;
+                data.computer_use.always_allow.retain(|saved| !saved.bundle_id.as_deref().is_some_and(|id| id.eq_ignore_ascii_case(bundle_id)));
+                Ok(data.computer_use.clone())
+            })?),
+            None => None,
+        },
+        _ => None,
+    };
+    let pending = inner.access.remove(request_id).expect("the answer lock still owns the card");
+    let key = AppKey::of(&identity);
+    match decision {
+        AccessDecision::Allow => inner.grants.allow(task_id, key),
+        // Always is saved only: a parallel transient allow would survive revoking the entry.
+        AccessDecision::Always | AccessDecision::Cancelled => {}
+        AccessDecision::Deny | AccessDecision::Never => inner.grants.deny(task_id, key),
+    }
     if decision == AccessDecision::Never {
-        if let Some(bundle_id) = pending.identity.bundle_id.clone() {
-            let state = app.state::<MetadataState>();
-            state.mutate(|data| {
-                if !data.computer_use.never_allow.iter().any(|entry| entry.eq_ignore_ascii_case(&bundle_id)) {
-                    data.computer_use.never_allow.push(bundle_id.clone());
-                }
-                Ok(())
-            })?;
-            updated = Some(config(&app));
+        if let Some(id) = identity.bundle_id.as_deref() {
+            inner.grants.revoke_bundle_id(id);
+            inner.cancel_all_requests();
         }
     }
     let _ = pending.reply.send(decision);
     Ok(updated)
+}
+
+/// Only task/request ids and the decision come from the renderer; the app identity belongs to
+/// the live card Rust raised. Always/Never return the saved settings for Settings to display.
+#[tauri::command]
+pub async fn computer_use_respond_access(app: AppHandle, task_id: String, request_id: String, decision: AccessDecision) -> Result<Option<ComputerUseConfig>, String> {
+    let manager = app.state::<ComputerUseManager>();
+    let (result, cancelled) = {
+        let mut inner = manager.lock()?;
+        let result = answer_access(&app.state::<MetadataState>(), &mut inner, &manager.own, &task_id, &request_id, decision);
+        // An expired answer can remove its card before the timeout sweep sees it. Retire the
+        // renderer card here too; a failed save keeps its pending entry and remains retryable.
+        let cancelled = result.is_err() && !inner.access.contains_key(&request_id);
+        (result, cancelled)
+    };
+    manager.cursor.wake();
+    if cancelled {
+        emit(&app, &task_id, json!({ "type": "computer_access_resolved", "taskId": task_id, "requestId": request_id, "decision": AccessDecision::Cancelled }));
+    }
+    result
 }
 
 #[derive(Debug, Serialize)]
@@ -1171,4 +1404,322 @@ pub async fn computer_use_list_apps(app: AppHandle) -> Result<Vec<RunningAppInfo
 
 pub fn supported() -> bool {
     permissions::is_supported()
+}
+
+#[cfg(test)]
+mod access_tests {
+    use super::*;
+    use crate::models::{AppData, TaskRecord};
+    use crate::secrets::SecretStore;
+    use std::{fs, path::PathBuf};
+
+    fn own() -> OwnIdentity {
+        OwnIdentity { pid: 100, bundle_id: Some("com.wackcode.desktop".into()), ..OwnIdentity::default() }
+    }
+
+    fn fixture() -> (tempfile::TempDir, MetadataState, AppIdentity) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("Example.app");
+        fs::create_dir(&path).unwrap();
+        let state = MetadataState {
+            data: Mutex::new(AppData { computer_use: ComputerUseConfig { enabled: true, ..ComputerUseConfig::default() }, ..AppData::default() }),
+            data_path: directory.path().join("wackcode.json"),
+            secrets: SecretStore::load(directory.path()).unwrap(),
+        };
+        state.save().unwrap();
+        let identity = AppIdentity { pid: Some(5), name: "Host-resolved app".into(), bundle_id: Some("com.example.App".into()), path: Some(path.canonicalize().unwrap()) };
+        (directory, state, identity)
+    }
+
+    fn settings(state: &MetadataState) -> ComputerUseConfig {
+        state.data.lock().unwrap().computer_use.clone()
+    }
+
+    fn disk_settings(state: &MetadataState) -> ComputerUseConfig {
+        serde_json::from_str::<AppData>(&fs::read_to_string(&state.data_path).unwrap()).unwrap().computer_use
+    }
+
+    fn pending(inner: &mut Inner, task: &str, request: &str, identity: &AppIdentity) -> (StopToken, oneshot::Receiver<AccessDecision>) {
+        let token = StopToken::default();
+        let (reply, receiver) = oneshot::channel();
+        inner.requests.insert(format!("operation-{request}"), (task.to_string(), token.clone()));
+        inner.access.insert(request.to_string(), PendingAccess { task_id: task.to_string(), identity: identity.clone(), token: token.clone(), reply });
+        (token, receiver)
+    }
+
+    fn save_always(state: &MetadataState, inner: &mut Inner, identity: &AppIdentity, request: &str) {
+        let (_, mut receiver) = pending(inner, "chat", request, identity);
+        answer_access(state, inner, &own(), "chat", request, AccessDecision::Always).unwrap();
+        assert_eq!(receiver.try_recv().unwrap(), AccessDecision::Always);
+    }
+
+    #[test]
+    fn always_saves_host_identity_without_a_transient_allow_and_reloads_across_chats() {
+        let (_directory, state, identity) = fixture();
+        let mut inner = Inner::default();
+        assert_eq!(serde_json::to_value(AccessDecision::Always).unwrap(), "always");
+        save_always(&state, &mut inner, &identity, "card");
+        let saved = settings(&state);
+        assert_eq!(saved.always_allow, vec![persistable_grant(&identity).unwrap()]);
+        assert_eq!(disk_settings(&state), saved);
+        assert_eq!(inner.grants.decision("chat", &AppKey::of(&identity)), Grant::Unknown);
+        let fresh = Inner::default();
+        for task in ["chat", "other-chat"] {
+            assert_eq!(effective_access(&disk_settings(&state), &fresh, &own(), task, &identity), Ok(Grant::Allowed));
+        }
+        let renamed = AppIdentity { name: "Different display name".into(), bundle_id: Some("COM.EXAMPLE.APP".into()), ..identity.clone() };
+        assert_eq!(effective_access(&saved, &inner, &own(), "chat", &renamed), Ok(Grant::Allowed));
+        inner.grants.deny("chat", AppKey::of(&identity));
+        assert_eq!(effective_access(&saved, &inner, &own(), "chat", &identity), Ok(Grant::Denied));
+        assert_eq!(effective_access(&saved, &inner, &own(), "other-chat", &identity), Ok(Grant::Allowed));
+    }
+
+    #[test]
+    fn only_live_cards_for_the_same_chat_can_create_grants() {
+        let (_directory, state, identity) = fixture();
+        let mut inner = Inner::default();
+        assert!(answer_access(&state, &mut inner, &own(), "chat", "invented", AccessDecision::Always).is_err());
+        let (_, mut receiver) = pending(&mut inner, "chat", "card", &identity);
+        assert!(answer_access(&state, &mut inner, &own(), "other-chat", "card", AccessDecision::Always).is_err());
+        assert!(inner.access.contains_key("card"));
+        assert!(matches!(receiver.try_recv(), Err(oneshot::error::TryRecvError::Empty)));
+        drop(receiver); // The owning request was timed out/dropped, even without a worker cancel.
+        assert!(answer_access(&state, &mut inner, &own(), "chat", "card", AccessDecision::Always).is_err());
+        assert!(!inner.access.contains_key("card"));
+        assert!(settings(&state).always_allow.is_empty());
+        assert!(disk_settings(&state).always_allow.is_empty());
+    }
+
+    #[test]
+    fn persistence_requires_a_canonical_absolute_path_and_supports_path_only_apps() {
+        let (directory, state, identity) = fixture();
+        let alias = directory.path().join("Alias.app");
+        std::os::unix::fs::symlink(identity.path.as_ref().unwrap(), &alias).unwrap();
+        for path in [None, Some(PathBuf::from("relative.app")), Some(alias), Some(directory.path().join("Gone.app"))] {
+            let target = AppIdentity { path, ..identity.clone() };
+            assert!(persistable_grant(&target).is_none());
+            let mut inner = Inner::default();
+            let (_, mut receiver) = pending(&mut inner, "chat", "card", &target);
+            assert!(answer_access(&state, &mut inner, &own(), "chat", "card", AccessDecision::Always).is_err());
+            assert!(inner.access.contains_key("card"));
+            assert!(matches!(receiver.try_recv(), Err(oneshot::error::TryRecvError::Empty)));
+            assert!(settings(&state).always_allow.is_empty());
+        }
+        let mut inner = Inner::default();
+        let path_only = AppIdentity { bundle_id: None, ..identity };
+        save_always(&state, &mut inner, &path_only, "path-only");
+        assert_eq!(effective_access(&settings(&state), &inner, &own(), "other", &path_only), Ok(Grant::Allowed));
+        let with_id = AppIdentity { bundle_id: Some("com.example.App".into()), ..path_only.clone() };
+        assert_eq!(effective_access(&settings(&state), &inner, &own(), "other", &with_id), Ok(Grant::Unknown));
+    }
+
+    #[test]
+    fn running_and_installed_identities_canonicalize_the_same_symlink() {
+        let (directory, _state, identity) = fixture();
+        let alias = directory.path().join("Alias.app");
+        std::os::unix::fs::symlink(identity.path.as_ref().unwrap(), &alias).unwrap();
+        let installed = apps::InstalledApp { path: alias.clone(), name: identity.name.clone(), bundle_id: identity.bundle_id.clone() };
+        let running = apps::RunningApp { pid: 5, name: identity.name, bundle_id: identity.bundle_id, bundle_path: Some(alias), executable: None, frontmost: false };
+        assert_eq!(AppKey::of(&installed.identity()), AppKey::of(&running.identity()));
+        assert_eq!(installed.identity().path, identity.path);
+        assert!(persistable_grant(&installed.identity()).is_some());
+    }
+
+    #[test]
+    fn failed_always_and_never_saves_keep_cards_retryable_and_grant_nothing() {
+        for decision in [AccessDecision::Always, AccessDecision::Never] {
+            let (_directory, state, identity) = fixture();
+            let mut inner = Inner::default();
+            let (_, mut receiver) = pending(&mut inner, "chat", "card", &identity);
+            let before = settings(&state);
+            fs::create_dir(state.data_path.with_extension("json.tmp")).unwrap();
+            assert!(answer_access(&state, &mut inner, &own(), "chat", "card", decision).is_err());
+            assert!(inner.access.contains_key("card"));
+            assert!(matches!(receiver.try_recv(), Err(oneshot::error::TryRecvError::Empty)));
+            assert_eq!(inner.grants.decision("chat", &AppKey::of(&identity)), Grant::Unknown);
+            assert_eq!(settings(&state), before);
+            assert_eq!(disk_settings(&state), before);
+            fs::remove_dir(state.data_path.with_extension("json.tmp")).unwrap();
+            let updated = answer_access(&state, &mut inner, &own(), "chat", "card", decision).unwrap().unwrap();
+            assert_eq!(receiver.try_recv().unwrap(), decision);
+            assert_eq!(disk_settings(&state), updated);
+            assert!(!inner.access.contains_key("card"));
+            if decision == AccessDecision::Always {
+                assert_eq!(inner.grants.decision("chat", &AppKey::of(&identity)), Grant::Unknown);
+                assert_eq!(updated.always_allow.len(), 1);
+            } else {
+                assert_eq!(inner.grants.decision("chat", &AppKey::of(&identity)), Grant::Denied);
+                assert_eq!(updated.never_allow, ["com.example.App"]);
+            }
+        }
+    }
+
+    #[test]
+    fn stop_and_stopped_tokens_prevent_late_always_answers() {
+        let (_directory, state, identity) = fixture();
+        let mut inner = Inner::default();
+        let (token, mut receiver) = pending(&mut inner, "chat", "card", &identity);
+        cancel_replies(ComputerUseManager::stop_chat(&mut inner, "chat"));
+        assert!(token.is_stopped());
+        assert_eq!(receiver.try_recv().unwrap(), AccessDecision::Cancelled);
+        assert!(answer_access(&state, &mut inner, &own(), "chat", "card", AccessDecision::Always).is_err());
+        let (token, mut receiver) = pending(&mut inner, "chat", "cancelled", &identity);
+        token.stop(); // A tool abort may stop the token before the wait loop removes its card.
+        assert!(answer_access(&state, &mut inner, &own(), "chat", "cancelled", AccessDecision::Always).is_err());
+        assert_eq!(receiver.try_recv().unwrap(), AccessDecision::Cancelled);
+        assert!(settings(&state).always_allow.is_empty());
+    }
+
+    #[test]
+    fn revocation_is_exact_clears_all_chats_and_cancels_every_pending_and_queued_request() {
+        let (directory, state, identity) = fixture();
+        let other_path = directory.path().join("Other.app");
+        fs::create_dir(&other_path).unwrap();
+        let other = AppIdentity { path: Some(other_path.canonicalize().unwrap()), ..identity.clone() };
+        let mut inner = Inner::default();
+        save_always(&state, &mut inner, &identity, "first");
+        save_always(&state, &mut inner, &other, "other");
+        let key = AppKey::of(&identity);
+        for task in ["a", "b"] { inner.grants.allow(task, key.clone()); }
+        inner.grants.deny("denied", key.clone());
+        inner.grants.allow("a", AppKey::of(&other));
+        let (pending_token, mut receiver) = pending(&mut inner, "other-chat", "pending", &other);
+        let queued = StopToken::default();
+        inner.requests.insert("queued".into(), ("queued-chat".into(), queued.clone()));
+        let revoke_key = AppKey::persistent(Some("COM.EXAMPLE.APP"), identity.path.as_ref().unwrap().to_str().unwrap()).unwrap();
+        let updated = revoke_app(&state, &mut inner, &revoke_key).unwrap();
+        assert_eq!(updated.always_allow, [persistable_grant(&other).unwrap()]);
+        assert_eq!(disk_settings(&state), updated);
+        for task in ["a", "b", "chat"] {
+            assert_eq!(effective_access(&updated, &inner, &own(), task, &identity), Ok(Grant::Unknown));
+        }
+        assert_eq!(inner.grants.decision("denied", &key), Grant::Denied);
+        assert_eq!(inner.grants.decision("a", &AppKey::of(&other)), Grant::Allowed);
+        assert!(pending_token.is_stopped() && queued.is_stopped());
+        assert!(inner.requests.values().all(|(_, token)| token.is_stopped()));
+        assert!(inner.access.is_empty());
+        assert_eq!(receiver.try_recv().unwrap(), AccessDecision::Cancelled);
+        assert!(answer_access(&state, &mut inner, &own(), "other-chat", "pending", AccessDecision::Always).is_err());
+    }
+
+    #[test]
+    fn settings_cannot_create_or_replace_grants_and_disabling_keeps_them_inactive() {
+        let (_directory, state, identity) = fixture();
+        let mut inner = Inner::default();
+        let input = || serde_json::from_value::<ComputerUseSettings>(json!({
+            "enabled": true, "showAgentCursor": false, "neverAllow": [],
+            "alwaysAllow": [{ "name": "Forged", "bundleId": "com.example.Evil", "path": "/tmp/Evil.app" }],
+        })).unwrap();
+        save_settings(&state, &mut inner, input()).unwrap();
+        assert!(settings(&state).always_allow.is_empty());
+        save_always(&state, &mut inner, &identity, "card");
+        let saved = settings(&state).always_allow;
+        save_settings(&state, &mut inner, input()).unwrap();
+        assert_eq!(settings(&state).always_allow, saved);
+        let (token, mut receiver) = pending(&mut inner, "other", "pending", &identity);
+        let (off, disabled) = save_settings(&state, &mut inner, ComputerUseSettings::default()).unwrap();
+        assert!(disabled && !off.enabled && token.is_stopped());
+        assert_eq!(receiver.try_recv().unwrap(), AccessDecision::Cancelled);
+        assert_eq!(off.always_allow, saved);
+        assert!(effective_access(&off, &inner, &own(), "chat", &identity).is_err());
+        let (on, _) = save_settings(&state, &mut inner, input()).unwrap();
+        assert_eq!(on.always_allow, saved);
+        assert_eq!(effective_access(&on, &inner, &own(), "chat", &identity), Ok(Grant::Allowed));
+    }
+
+    #[test]
+    fn adding_never_by_settings_or_card_removes_all_saved_paths_and_transient_allows() {
+        for from_card in [false, true] {
+            let (directory, state, identity) = fixture();
+            let path = directory.path().join("Second.app");
+            fs::create_dir(&path).unwrap();
+            let second = AppIdentity { path: Some(path.canonicalize().unwrap()), bundle_id: Some("COM.EXAMPLE.APP".into()), ..identity.clone() };
+            let unrelated = AppIdentity { bundle_id: None, ..identity.clone() };
+            let mut inner = Inner::default();
+            save_always(&state, &mut inner, &identity, "first");
+            save_always(&state, &mut inner, &second, "second");
+            save_always(&state, &mut inner, &unrelated, "unrelated");
+            inner.grants.allow("other", AppKey::of(&identity));
+            let (token, mut receiver) = pending(&mut inner, "other", "pending", &second);
+            if from_card {
+                let (_, mut answer) = pending(&mut inner, "new-chat", "never", &identity);
+                answer_access(&state, &mut inner, &own(), "new-chat", "never", AccessDecision::Never).unwrap();
+                assert_eq!(answer.try_recv().unwrap(), AccessDecision::Never);
+            } else {
+                save_settings(&state, &mut inner, ComputerUseSettings { enabled: true, never_allow: vec!["com.example.app".into()], ..ComputerUseSettings::default() }).unwrap();
+            }
+            assert!(token.is_stopped());
+            assert_eq!(receiver.try_recv().unwrap(), AccessDecision::Cancelled);
+            assert_eq!(settings(&state).always_allow, [persistable_grant(&unrelated).unwrap()]);
+            assert_eq!(inner.grants.decision("other", &AppKey::of(&identity)), Grant::Unknown);
+            assert!(effective_access(&settings(&state), &inner, &own(), "other", &identity).is_err());
+            let (unblocked, _) = save_settings(&state, &mut inner, ComputerUseSettings { enabled: true, ..ComputerUseSettings::default() }).unwrap();
+            assert_eq!(effective_access(&unblocked, &inner, &own(), "other", &identity), Ok(Grant::Unknown));
+        }
+    }
+
+    #[test]
+    fn answer_rechecks_disabled_blocked_and_denied_policy_and_excludes_chat_mode() {
+        for restriction in ["disabled", "never", "hard", "own", "denied", "chat-mode"] {
+            let (_directory, state, mut identity) = fixture();
+            let mut inner = Inner::default();
+            match restriction {
+                "disabled" => state.data.lock().unwrap().computer_use.enabled = false,
+                "never" => state.data.lock().unwrap().computer_use.never_allow.push("COM.EXAMPLE.APP".into()),
+                "hard" => identity.bundle_id = Some("com.apple.Terminal".into()),
+                "own" => identity.pid = Some(100),
+                "denied" => inner.grants.deny("chat", AppKey::of(&identity)),
+                "chat-mode" => {
+                    let task: TaskRecord = serde_json::from_value(json!({
+                        "id": "chat", "kind": "chat", "name": "Chat", "projectId": null,
+                        "workspacePath": "/tmp/scratch", "worktreePath": null, "branch": null,
+                        "usesWorktree": false, "providerId": "p", "modelId": "m", "thinkingLevel": "off",
+                        "sessionFile": null, "archived": false, "lastError": null, "createdAt": "now", "updatedAt": "now",
+                    })).unwrap();
+                    state.data.lock().unwrap().tasks.push(task);
+                }
+                _ => unreachable!(),
+            }
+            let (_, _receiver) = pending(&mut inner, "chat", "card", &identity);
+            assert!(answer_access(&state, &mut inner, &own(), "chat", "card", AccessDecision::Always).is_err(), "{restriction}");
+            assert!(settings(&state).always_allow.is_empty());
+        }
+    }
+
+    #[test]
+    fn simultaneous_revoke_and_answer_cannot_resurrect_a_saved_grant() {
+        for _ in 0..8 {
+            let (_directory, state, identity) = fixture();
+            let state = Arc::new(state);
+            let mut inner = Inner::default();
+            let (token, _receiver) = pending(&mut inner, "chat", "card", &identity);
+            let inner = Arc::new(Mutex::new(inner));
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            let answer = {
+                let state = state.clone();
+                let inner = inner.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    answer_access(&state, &mut inner.lock().unwrap(), &own(), "chat", "card", AccessDecision::Always)
+                })
+            };
+            let revoke = {
+                let state = state.clone();
+                let inner = inner.clone();
+                let key = AppKey::of(&identity);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    revoke_app(&state, &mut inner.lock().unwrap(), &key)
+                })
+            };
+            let _ = answer.join().unwrap();
+            revoke.join().unwrap().unwrap();
+            assert!(settings(&state).always_allow.is_empty());
+            assert!(disk_settings(&state).always_allow.is_empty());
+            assert!(token.is_stopped());
+            assert!(request_settings(&state, "chat", &token).is_err());
+            assert_eq!(inner.lock().unwrap().grants.decision("chat", &AppKey::of(&identity)), Grant::Unknown);
+        }
+    }
 }

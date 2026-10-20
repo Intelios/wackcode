@@ -11,8 +11,9 @@
 //!    (password managers, Keychain Access) or are the system's own security and chrome UI.
 //! 3. The user's never-allow list (Settings › Computer use).
 //!
-//! Past those, a chat needs a grant, which only the user gives through the access card. Grants
-//! and denials are per chat and in memory: nothing here is ever written to disk.
+//! Past those, a chat needs a grant, which only the user gives through the access card. A chat's
+//! denial wins over any saved Always Allow entry. Ordinary grants and denials stay in memory;
+//! the host alone persists explicit Always Allow answers, bound to the exact app identity.
 
 use objc2_foundation::NSBundle;
 use std::collections::{HashMap, HashSet};
@@ -164,6 +165,17 @@ pub struct AppKey {
 }
 
 impl AppKey {
+    /// A saved identity must have an absolute path; bundle-id-only grants are never valid.
+    /// The host supplies canonical paths and must not re-canonicalize saved paths at use time
+    /// (a changed symlink must not transfer a grant to a different location).
+    pub fn persistent(bundle_id: Option<&str>, path: &str) -> Option<Self> {
+        let absolute = Path::new(path);
+        if !absolute.is_absolute() || absolute.components().any(|part| matches!(part, std::path::Component::CurDir | std::path::Component::ParentDir)) {
+            return None;
+        }
+        Some(Self { bundle_id: bundle_id.map(str::to_ascii_lowercase), path: Some(path.to_string()) })
+    }
+
     pub fn of(app: &AppIdentity) -> Self {
         Self {
             bundle_id: app.bundle_id.as_deref().map(str::to_ascii_lowercase),
@@ -192,6 +204,24 @@ pub struct GrantStore {
 }
 
 impl GrantStore {
+    /// The shared access decision for actions and app listings. Blocks always win, then this
+    /// chat's denial, then transient or exact-key persistent grants. Names and pids cannot
+    /// confer persistent access, and a saved entry cannot match an app without a path.
+    pub fn effective_decision(&self, task_id: &str, app: &AppIdentity, own: &OwnIdentity, never_allow: &[String], always_allow: &[AppKey]) -> Result<Grant, String> {
+        if let Some(reason) = block_reason(app, own, never_allow) {
+            return Err(reason);
+        }
+        let key = AppKey::of(app);
+        match self.decision(task_id, &key) {
+            Grant::Denied => Ok(Grant::Denied),
+            Grant::Allowed => Ok(Grant::Allowed),
+            Grant::Unknown => {
+                let persistent = key.path.as_deref().and_then(|path| AppKey::persistent(key.bundle_id.as_deref(), path));
+                Ok(if persistent.as_ref().is_some_and(|key| always_allow.contains(key)) { Grant::Allowed } else { Grant::Unknown })
+            }
+        }
+    }
+
     pub fn decision(&self, task_id: &str, key: &AppKey) -> Grant {
         match self.chats.get(task_id) {
             Some(chat) if chat.denied.contains(key) => Grant::Denied,
@@ -212,12 +242,17 @@ impl GrantStore {
         chat.denied.insert(key);
     }
 
-    pub fn allowed(&self, task_id: &str) -> Vec<AppKey> {
-        self.chats.get(task_id).map(|chat| chat.allowed.iter().cloned().collect()).unwrap_or_default()
+    /// Revocation must clear transient allows in every chat too, without removing denials.
+    pub fn revoke_app(&mut self, key: &AppKey) {
+        for chat in self.chats.values_mut() {
+            chat.allowed.remove(key);
+        }
     }
 
-    pub fn denied(&self, task_id: &str) -> Vec<AppKey> {
-        self.chats.get(task_id).map(|chat| chat.denied.iter().cloned().collect()).unwrap_or_default()
+    pub fn revoke_bundle_id(&mut self, bundle_id: &str) {
+        for chat in self.chats.values_mut() {
+            chat.allowed.retain(|key| !key.bundle_id.as_deref().is_some_and(|id| id.eq_ignore_ascii_case(bundle_id)));
+        }
     }
 
     pub fn forget_chat(&mut self, task_id: &str) {
@@ -312,6 +347,67 @@ mod tests {
         assert_eq!(store.decision("chat", &real), Grant::Allowed);
         store.forget_chat("chat");
         assert_eq!(store.decision("chat", &real), Grant::Unknown);
+    }
+
+    #[test]
+    fn persistent_access_is_exact_key_cross_chat_and_below_denials_and_blocks() {
+        let mut store = GrantStore::default();
+        let target = app(5, Some("COM.EXAMPLE.APP"), "/Applications/App.app");
+        let key = AppKey::persistent(Some("com.example.App"), "/Applications/App.app").unwrap();
+        let saved = vec![key.clone()];
+        let decision = |store: &GrantStore, chat: &str, target: &AppIdentity, never: &[String]| {
+            store.effective_decision(chat, target, &own(), never, &saved)
+        };
+        assert_eq!(decision(&store, "chat", &target, &[]), Ok(Grant::Allowed));
+        assert_eq!(decision(&store, "other", &target, &[]), Ok(Grant::Allowed));
+        assert_eq!(decision(&store, "chat", &app(6, Some("com.example.App"), "/tmp/App.app"), &[]), Ok(Grant::Unknown));
+        assert_eq!(decision(&store, "chat", &app(6, None, "/Applications/App.app"), &[]), Ok(Grant::Unknown));
+        store.deny("chat", key.clone());
+        assert_eq!(decision(&store, "chat", &target, &[]), Ok(Grant::Denied));
+        assert_eq!(decision(&store, "other", &target, &[]), Ok(Grant::Allowed));
+        assert!(decision(&store, "chat", &target, &["com.example.app".into()]).is_err());
+
+        // Even a forged saved or transient grant cannot get past own/hard blocks.
+        for blocked in [app(100, Some("com.example.App"), "/Applications/App.app"), app(6, Some("com.apple.Terminal"), "/tmp/Terminal.app")] {
+            let key = AppKey::of(&blocked);
+            store.allow("chat", key.clone());
+            assert!(store.effective_decision("chat", &blocked, &own(), &[], &[key]).is_err());
+        }
+    }
+
+    #[test]
+    fn path_only_access_is_exact_and_pathless_entries_cannot_allow() {
+        let store = GrantStore::default();
+        let target = app(5, None, "/tmp/local-app");
+        let saved = AppKey::persistent(None, "/tmp/local-app").unwrap();
+        assert_eq!(store.effective_decision("chat", &target, &own(), &[], &[saved.clone()]), Ok(Grant::Allowed));
+        assert_eq!(store.effective_decision("chat", &app(5, None, "/tmp/other-app"), &own(), &[], &[saved]), Ok(Grant::Unknown));
+        assert!(AppKey::persistent(Some("com.example.App"), "").is_none());
+        assert!(AppKey::persistent(None, "relative/app").is_none());
+        assert!(AppKey::persistent(None, "/tmp/../app").is_none());
+        let pathless = AppIdentity { path: None, ..target };
+        assert_eq!(store.effective_decision("chat", &pathless, &own(), &[], &[AppKey::of(&pathless)]), Ok(Grant::Unknown));
+    }
+
+    #[test]
+    fn revocation_removes_all_chats_transient_allows_for_only_the_exact_identity() {
+        let mut store = GrantStore::default();
+        let key = AppKey::of(&app(5, Some("com.example.App"), "/Applications/App.app"));
+        let other = AppKey::of(&app(6, Some("com.example.App"), "/tmp/App.app"));
+        for chat in ["a", "b"] {
+            store.allow(chat, key.clone());
+            store.allow(chat, other.clone());
+        }
+        store.deny("denied", key.clone());
+        store.revoke_app(&key);
+        for chat in ["a", "b"] {
+            assert_eq!(store.decision(chat, &key), Grant::Unknown);
+            assert_eq!(store.decision(chat, &other), Grant::Allowed);
+        }
+        assert_eq!(store.decision("denied", &key), Grant::Denied);
+        store.revoke_bundle_id("COM.EXAMPLE.APP");
+        assert_eq!(store.decision("a", &other), Grant::Unknown);
+        assert_eq!(store.decision("denied", &key), Grant::Denied);
     }
 
     #[test]

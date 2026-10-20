@@ -426,13 +426,16 @@ fn build_menu(
     activity: &ActivityStore,
     metadata: &MetadataState,
 ) -> Result<Menu<tauri::Wry>, String> {
+    // Sample computer use before taking metadata: access answers hold computer-use state
+    // while saving metadata. Reversing that order here would deadlock a menu refresh with an
+    // answer or engine policy check. This advisory snapshot needs no overlapping locks.
+    let computer_active = manager.state::<crate::computer_use::ComputerUseManager>().any_session();
     let data = metadata
         .data
         .lock()
         .map_err(|_| "Metadata lock was poisoned".to_string())?;
     let menu = Menu::new(manager).map_err(|error| error.to_string())?;
-    // Lock order: the activity store (held by the caller), then computer use's own state.
-    if manager.state::<crate::computer_use::ComputerUseManager>().any_session() {
+    if computer_active {
         menu.append(
             &MenuItem::with_id(manager, STOP_COMPUTER_ID, "Stop Computer Use  ⌃⌥⌘.", true, None::<&str>)
                 .map_err(|error| error.to_string())?,

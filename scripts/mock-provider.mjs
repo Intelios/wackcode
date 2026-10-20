@@ -88,6 +88,10 @@ const server = createServer(async (request, response) => {
   const browserMatch = /^browser fixture:[ \t]*(browser_(?:open|snapshot|act|screenshot|console))[ \t]*(\{[^\n]*\})?(?:\n|$)/.exec(prompt);
   const browser = browserMatch && body.tools?.some((tool) => tool.function?.name === browserMatch[1])
     ? { name: browserMatch[1], arguments: browserMatch[2] || "{}" } : undefined;
+  // Computer fixtures exercise the actual app-consent boundary, never a mock permission store.
+  const computerMatch = /^computer fixture:[ \t]*(computer_(?:apps|open|snapshot|screenshot|act))[ \t]*(\{[^\n]*\})?(?:\n|$)/.exec(prompt);
+  const computer = computerMatch && body.tools?.some((tool) => tool.function?.name === computerMatch[1])
+    ? { name: computerMatch[1], arguments: computerMatch[2] || "{}" } : undefined;
   if (child) {
     response.write(": background child working\n\n");
     if (prompt.includes("until stopped")) return;
@@ -101,7 +105,7 @@ const server = createServer(async (request, response) => {
   const backgroundLaunched = messages.slice(messages.lastIndexOf(latestUser) + 1).some((message) => message.role === "assistant" && message.tool_calls?.some((call) => call.function?.name === "subagent"));
   const resultsArrived = prompt.includes("Job ");
   const backgroundLaunch = background && subagent && !backgroundLaunched && !resultsArrived;
-  if (backgroundLaunch || suggest || (!background && !suggestFixture && !child && !resultsArrived && !hasToolResult && body.tools?.length && (!browserMatch || browser))) {
+  if (backgroundLaunch || suggest || (!background && !suggestFixture && !child && !resultsArrived && !hasToolResult && body.tools?.length && (!browserMatch || browser) && (!computerMatch || computer))) {
     send(response, {
       id: "fixture-tool",
       object: "chat.completion.chunk",
@@ -116,14 +120,14 @@ const server = createServer(async (request, response) => {
             id: `fixture-tool-${messages.length}`,
             type: "function",
             function: {
-              name: backgroundLaunch ? "subagent" : suggest ? "suggest_task" : browser ? browser.name : search ? "web_search" : "write",
+              name: backgroundLaunch ? "subagent" : suggest ? "suggest_task" : browser ? browser.name : computer ? computer.name : search ? "web_search" : "write",
               arguments: suggest
                 ? JSON.stringify({
                   title: "Dismiss button stays disabled after a failed save",
                   kind: "bug",
                   description: "**Where:** `src/components/Composer.tsx:88`\n\nThe stop button stays disabled after a save fails, so the chat can never be stopped again. Re-enable it when the send settles, whatever the outcome."
                 })
-                : browser ? browser.arguments : JSON.stringify(backgroundLaunch
+                : browser ? browser.arguments : computer ? computer.arguments : JSON.stringify(backgroundLaunch
                 ? { agent: roles.includes("worker") ? "worker" : roles[0], task: `background-fixture-child${prompt.includes("until stopped") ? " until stopped" : ""}`, background: true }
                 : search ? { query: search, count: 3 }
                 : escape ? { path: "../wackcode-escape.txt", content: "Written outside the workspace.\n" }
@@ -148,7 +152,7 @@ const server = createServer(async (request, response) => {
       object: "chat.completion.chunk",
       created: 2,
       model: body.model,
-      choices: [{ index: 0, delta: { role: "assistant", content: suggestFixture ? "Layout fixed. I noted one follow-up below." : browserMatch ? "Browser fixture complete." : child ? "Background fixture child completed." : searchQuery ? "I searched the web; the results are in the card above." : resultsArrived ? "The background child finished; its result has arrived." : background ? "I launched a background helper and finished my own work. You can send another message while it runs." : escape ? "I tried to write `../wackcode-escape.txt`, outside the workspace." : "Created `wackcode-live.txt`." }, finish_reason: null }]
+      choices: [{ index: 0, delta: { role: "assistant", content: suggestFixture ? "Layout fixed. I noted one follow-up below." : browserMatch ? "Browser fixture complete." : computerMatch ? "Computer fixture complete." : child ? "Background fixture child completed." : searchQuery ? "I searched the web; the results are in the card above." : resultsArrived ? "The background child finished; its result has arrived." : background ? "I launched a background helper and finished my own work. You can send another message while it runs." : escape ? "I tried to write `../wackcode-escape.txt`, outside the workspace." : "Created `wackcode-live.txt`." }, finish_reason: null }]
     });
     send(response, {
       id: "fixture-done",

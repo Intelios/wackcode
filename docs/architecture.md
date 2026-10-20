@@ -53,7 +53,7 @@ Everything is under the app data directory (`~/Library/Application Support/com.w
 
 The renderer keeps only UI conveniences in `localStorage` (`wackcode:*` keys such as the last model, the side panel's view and width, collapsed and pinned projects).
 
-`MetadataState::mutate` restores the previous execution policy on a failed operation or write, while holding the lock. Failed override saves cannot silently change permissions. Other runtime state, such as a worker crash interruption, intentionally remains updated even when saving fails.
+`MetadataState::mutate` restores the previous execution policy and computer-use settings on a failed operation or write, while holding the lock. Failed permission saves cannot silently change access. Other runtime state, such as a worker crash interruption, intentionally remains updated even when saving fails.
 
 ## Chat kinds
 

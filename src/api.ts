@@ -13,6 +13,7 @@ import type {
   CheckpointChange,
   CheckpointRef,
   ComputerAccessDecision,
+  ComputerAppGrant,
   ComputerCursorAppearance,
   ComputerUseConfig,
   ComputerUseStatus,
@@ -118,9 +119,12 @@ export const api = {
   computerUseOpenSettings: (pane: "accessibility" | "screenRecording") => invoke<void>("computer_use_open_settings", { pane }),
   computerUseResetPermissions: () => invoke<void>("computer_use_reset_permissions"),
   computerUseRelaunch: () => invoke<void>("computer_use_relaunch"),
-  setComputerUseConfig: (input: ComputerUseConfig) => invoke<ComputerUseConfig>("set_computer_use_config", { input }),
+  setComputerUseConfig: ({ enabled, showAgentCursor, neverAllow }: Omit<ComputerUseConfig, "alwaysAllow">) =>
+    invoke<ComputerUseConfig>("set_computer_use_config", { input: { enabled, showAgentCursor, neverAllow } }),
+  /** Removes a saved approval; only the host's access card can create one. */
+  computerUseRevokeApp: ({ bundleId, path }: ComputerAppGrant) => invoke<ComputerUseConfig>("computer_use_revoke_app", { bundleId: bundleId ?? null, path }),
   computerUseCursorAppearance: (input: ComputerCursorAppearance) => invoke<void>("computer_use_cursor_appearance", { input }),
-  /** Answers an access card. "never" also adds the app to Settings' list and returns the new settings. */
+  /** Answers a host-raised card. Persistent choices return the updated settings after saving. */
   computerUseRespondAccess: (taskId: string, requestId: string, decision: ComputerAccessDecision) =>
     invoke<ComputerUseConfig | null>("computer_use_respond_access", { taskId, requestId, decision }),
   computerUseListApps: () => invoke<{ name: string; bundleId: string }[]>("computer_use_list_apps"),

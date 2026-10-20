@@ -1,7 +1,7 @@
 import { useImperativeHandle, type Ref } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppData, BrowserState, NormalizedMessage, ProviderRecord, SessionSnapshot, TaskRecord } from "./types";
+import type { AppData, BrowserState, ComputerAccessRequest, ComputerAppGrant, ComputerUseConfig, NormalizedMessage, ProviderRecord, SessionSnapshot, TaskRecord } from "./types";
 import { DEFAULT_APPEARANCE } from "./theme";
 import App from "./App";
 import { api } from "./api";
@@ -18,6 +18,7 @@ vi.mock("./api", () => ({ api: {
   bootstrap: vi.fn(), refreshSubscriptionModels: vi.fn().mockResolvedValue([]),
   takeMenuNavigation: vi.fn().mockResolvedValue(null), setChatTabMenu: vi.fn().mockResolvedValue(undefined),
   computerUseCursorAppearance: vi.fn().mockResolvedValue(undefined), openTask: vi.fn().mockResolvedValue(undefined),
+  computerUseRespondAccess: vi.fn(), computerUseRevokeApp: vi.fn(),
   gitPublishInfo: vi.fn().mockResolvedValue({ branch: "main", upstream: null, remotes: [] }),
   gitChanges: vi.fn().mockResolvedValue({ isGit: false, files: [] }), listDraftCommands: vi.fn().mockResolvedValue([]),
   listCommands: vi.fn().mockResolvedValue([]), getRun: vi.fn().mockResolvedValue({ cwd: "/tmp", run: null, generation: 0 }),
@@ -27,8 +28,10 @@ vi.mock("./api", () => ({ api: {
   goalControl: vi.fn().mockResolvedValue(undefined), browserState: vi.fn(), browserPresent: vi.fn(), browserRetirePresentation: vi.fn().mockResolvedValue(undefined),
   setSuggestionDismissed: vi.fn()
 } }));
-vi.mock("./components/SettingsPage", () => ({ SettingsPage: (props: { appearance: typeof DEFAULT_APPEARANCE; toolCatalog: { name: string }[]; onSetAppearance: (value: typeof DEFAULT_APPEARANCE) => void; onClose: () => void }) => <>
+vi.mock("./components/SettingsPage", () => ({ SettingsPage: (props: { appearance: typeof DEFAULT_APPEARANCE; toolCatalog: { name: string }[]; computerUse?: ComputerUseConfig; onRevokeComputerApp?: (grant: ComputerAppGrant) => Promise<void>; onSetAppearance: (value: typeof DEFAULT_APPEARANCE) => void; onClose: () => void }) => <>
   <output aria-label="Tool catalogue">{props.toolCatalog.map((tool) => tool.name).join(",")}</output>
+  <output aria-label="Saved computer app approvals">{props.computerUse?.alwaysAllow.map((grant) => grant.name).join(",")}</output>
+  {props.computerUse?.alwaysAllow[0] && <button onClick={() => void props.onRevokeComputerApp?.(props.computerUse!.alwaysAllow[0])}>Revoke first app</button>}
   <button onClick={() => props.onSetAppearance({ ...props.appearance, chatTabs: !props.appearance.chatTabs })}>Toggle tabs</button>
   <button onClick={() => { Promise.resolve(props.onSetAppearance({ ...props.appearance, dynamicStyle: "glyphFlow" })).catch(() => undefined); }}>Use Glyph Flow</button>
   <button onClick={props.onClose}>Close settings</button>
@@ -80,6 +83,47 @@ beforeEach(() => {
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+describe("App computer app approvals", () => {
+  const access: ComputerAccessRequest = { taskId: "a", requestId: "access-a", launch: false, canAlwaysAllow: true,
+    app: { name: "TextEdit", bundleId: "com.apple.TextEdit", path: "/System/Applications/TextEdit.app" } };
+  const grant: ComputerAppGrant = { name: "TextEdit", bundleId: "com.apple.TextEdit", path: "/System/Applications/TextEdit.app" };
+  const saved: ComputerUseConfig = { enabled: true, showAgentCursor: true, neverAllow: [], alwaysAllow: [grant] };
+
+  it("keeps an access card retryable when saving fails and updates Settings only after success", async () => {
+    vi.mocked(api.computerUseRespondAccess).mockRejectedValueOnce(new Error("App approval couldn't be saved.")).mockResolvedValueOnce(saved);
+    bootstrap(false);
+    await screen.findByRole("button", { name: "Settings" });
+    chat("a");
+    await worker({ type: "computer_access_request", ...access });
+    fireEvent.click(screen.getByRole("button", { name: "Always allow" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("App approval couldn't be saved.");
+    expect(screen.getByRole("button", { name: "Always allow" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Always allow" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Always allow" })).toBeNull());
+    expect(api.computerUseRespondAccess).toHaveBeenNthCalledWith(2, "a", "access-a", "always");
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect(screen.getByLabelText("Saved computer app approvals")).toHaveTextContent("TextEdit");
+
+    vi.mocked(api.computerUseRevokeApp).mockResolvedValueOnce({ ...saved, alwaysAllow: [] });
+    fireEvent.click(screen.getByRole("button", { name: "Revoke first app" }));
+    await waitFor(() => expect(screen.getByLabelText("Saved computer app approvals")).toBeEmptyDOMElement());
+    expect(api.computerUseRevokeApp).toHaveBeenCalledExactlyOnceWith(grant);
+  });
+
+  it("retires an expired access card so it cannot hide the next request", async () => {
+    bootstrap(false);
+    await screen.findByRole("button", { name: "Settings" });
+    chat("a");
+    await worker({ type: "computer_access_request", ...access });
+    await worker({ type: "computer_access_request", ...access, requestId: "next-card", app: { name: "My App", path: "/tmp/My App.app" } });
+    expect(screen.getByRole("region", { name: "Allow WackCode to use TextEdit?" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Allow WackCode to use My App?" })).toBeNull();
+    await worker({ type: "computer_access_resolved", taskId: "a", requestId: access.requestId, decision: "cancelled" });
+    expect(screen.queryByRole("region", { name: "Allow WackCode to use TextEdit?" })).toBeNull();
+    expect(screen.getByRole("region", { name: "Allow WackCode to use My App?" })).toBeInTheDocument();
+  });
+});
 
 describe("App plan review", () => {
   const plan = "# The plan\n\n- Ship it";

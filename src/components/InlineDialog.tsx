@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ComputerAccessDecision, ComputerAccessRequest, ExtensionUIRequest, QuestionAnswer } from "../types";
 import { ComputerAccessCard } from "./ComputerAccessCard";
@@ -25,7 +25,7 @@ interface InlineDialogProps {
   agentName?: string;
   /** Called when the user answers or cancels the dialog. */
   onRespond: (request: ExtensionUIRequest, response: ExtensionUIResponse) => void;
-  onAccess?: (request: ComputerAccessRequest, decision: ComputerAccessDecision) => void;
+  onAccess?: (request: ComputerAccessRequest, decision: ComputerAccessDecision) => void | Promise<void>;
 }
 
 /**
@@ -39,6 +39,9 @@ interface InlineDialogProps {
 export function InlineDialog({ requests, accessRequests = [], selectedTaskId, agentName = "WackCode", onRespond, onAccess }: InlineDialogProps) {
   const reduced = useReducedMotion();
   const responded = useRef<string | null>(null);
+  const accessInFlight = useRef(new Set<string>());
+  const [answeringAccess, setAnsweringAccess] = useState(new Set<string>());
+  const [accessError, setAccessError] = useState<{ requestId: string; message: string }>();
   const access = onAccess ? accessRequests.find((entry) => entry.taskId === selectedTaskId) : undefined;
   const request = access ? undefined : requests.find((entry) => entry.taskId === selectedTaskId);
 
@@ -54,7 +57,21 @@ export function InlineDialog({ requests, accessRequests = [], selectedTaskId, ag
 
   const handleAccess = useCallback(
     (decision: ComputerAccessDecision) => {
-      if (access) onAccess?.(access, decision);
+      if (!access || !onAccess || accessInFlight.current.has(access.requestId)) return;
+      const id = access.requestId;
+      accessInFlight.current.add(id);
+      setAnsweringAccess((current) => new Set(current).add(id));
+      setAccessError(undefined);
+      // Keep a failed save's card retryable. In particular, never show a saved approval before
+      // Rust has committed it, and don't let repeated clicks or Escape answer it twice.
+      void (async () => {
+        try { await onAccess(access, decision); }
+        catch (reason) { setAccessError({ requestId: id, message: String(reason) }); }
+        finally {
+          accessInFlight.current.delete(id);
+          setAnsweringAccess((current) => { const next = new Set(current); next.delete(id); return next; });
+        }
+      })();
     },
     [access, onAccess]
   );
@@ -73,7 +90,8 @@ export function InlineDialog({ requests, accessRequests = [], selectedTaskId, ag
   if (access) {
     return (
       <div className="inline-dialog-wrap">
-        <ComputerAccessCard key={access.requestId} request={access} agentName={agentName} onDecide={handleAccess} />
+        <ComputerAccessCard key={access.requestId} request={access} agentName={agentName} busy={answeringAccess.has(access.requestId)} onDecide={handleAccess} />
+        {accessError?.requestId === access.requestId && <div className="error-banner" role="alert">{accessError.message}</div>}
       </div>
     );
   }

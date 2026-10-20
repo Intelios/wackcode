@@ -1036,13 +1036,23 @@ export interface WebSearchDetails {
   results: Array<{ title: string; url: string; host: string; snippet?: string; date?: string }>;
 }
 
-/** The computer-use built-in. Off by default; per-app grants are never stored. */
+/** A host-resolved app explicitly approved across coding chats and app restarts. */
+export interface ComputerAppGrant {
+  /** Display only; access matches the canonical path and bundle id, never the name. */
+  name: string;
+  bundleId?: string | null;
+  path: string;
+}
+
+/** The computer-use built-in. Off by default; only explicit Always Allow grants persist. */
 export interface ComputerUseConfig {
   enabled: boolean;
   /** A separate desktop marker for dispatched actions; takes effect without restarting. */
   showAgentCursor: boolean;
   /** Bundle ids the agent may never use, on top of the built-in block list. */
   neverAllow: string[];
+  /** Created only by answering the host's access card, never by saving Settings. */
+  alwaysAllow: ComputerAppGrant[];
 }
 
 /** Resolved theme tokens for the native cursor; runtime-only and never sent to a worker. */
@@ -1068,7 +1078,7 @@ export interface ComputerUseStatus {
   devBuild: boolean;
 }
 
-export type ComputerAccessDecision = "allow" | "deny" | "never";
+export type ComputerAccessDecision = "allow" | "always" | "deny" | "never";
 
 /** An access card Rust raised: the first time a chat's agent wants to use an app. */
 export interface ComputerAccessRequest {
@@ -1076,6 +1086,8 @@ export interface ComputerAccessRequest {
   requestId: string;
   /** The app is not running yet: allowing also launches it. */
   launch: boolean;
+  /** The host resolved a stable app location that it can remember. */
+  canAlwaysAllow: boolean;
   app: { name: string; bundleId?: string | null; path?: string | null; icon?: string | null };
 }
 

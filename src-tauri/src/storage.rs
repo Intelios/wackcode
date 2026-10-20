@@ -55,9 +55,13 @@ impl MetadataState {
             // Access permissions must remain at their saved value on failure. Other state,
             // such as a worker crash interruption, intentionally survives a failed save.
             let previous_policy = data.execution_policy.clone();
+            let previous_computer_use = data.computer_use.clone();
             let result = operation(&mut data)
                 .and_then(|result| save_to_path(&self.data_path, &data).map(|_| result));
-            if result.is_err() { data.execution_policy = previous_policy; }
+            if result.is_err() {
+                data.execution_policy = previous_policy;
+                data.computer_use = previous_computer_use;
+            }
             result?
         };
         Ok(result)
@@ -202,6 +206,51 @@ mod tests {
         fs::create_dir(state.data_path.with_extension("json.tmp")).unwrap();
         assert!(state.mutate(|data| { data.execution_policy = enabled.clone(); Ok(()) }).is_err());
         assert_eq!(state.data.lock().unwrap().execution_policy, crate::models::ExecutionPolicyConfig::default());
+    }
+
+    #[test]
+    fn computer_use_grants_round_trip_and_roll_back_on_operation_and_write_errors() {
+        use crate::models::{ComputerAppGrant, ComputerUseConfig};
+        let directory = tempfile::tempdir().unwrap();
+        let state = MetadataState {
+            data: Mutex::new(AppData::default()),
+            data_path: directory.path().join("wackcode.json"),
+            secrets: SecretStore::load(directory.path()).unwrap(),
+        };
+        let saved = ComputerUseConfig {
+            enabled: true,
+            always_allow: vec![
+                ComputerAppGrant { name: "App".into(), bundle_id: Some("com.example.App".into()), path: "/Applications/App.app".into() },
+                ComputerAppGrant { name: "Local app".into(), bundle_id: None, path: "/tmp/local-app".into() },
+            ],
+            ..ComputerUseConfig::default()
+        };
+        state.mutate(|data| { data.computer_use = saved.clone(); Ok(()) }).unwrap();
+        let disk = || serde_json::from_str::<AppData>(&fs::read_to_string(&state.data_path).unwrap()).unwrap().computer_use;
+        assert_eq!(disk(), saved);
+
+        let result: Result<(), String> = state.mutate(|data| {
+            data.computer_use = ComputerUseConfig::default();
+            data.execution_policy.unrestricted_planning = true;
+            Err("The operation failed.".into())
+        });
+        assert!(result.is_err());
+        assert_eq!(state.data.lock().unwrap().computer_use, saved);
+        assert!(!state.data.lock().unwrap().execution_policy.unrestricted_planning);
+        assert_eq!(disk(), saved);
+
+        fs::create_dir(state.data_path.with_extension("json.tmp")).unwrap();
+        assert!(state.mutate(|data| { data.computer_use = ComputerUseConfig::default(); Ok(()) }).is_err());
+        assert_eq!(state.data.lock().unwrap().computer_use, saved);
+        assert_eq!(disk(), saved);
+
+        // A failed first grant must not become effective in memory either.
+        fs::remove_dir(state.data_path.with_extension("json.tmp")).unwrap();
+        state.mutate(|data| { data.computer_use = ComputerUseConfig::default(); Ok(()) }).unwrap();
+        fs::create_dir(state.data_path.with_extension("json.tmp")).unwrap();
+        assert!(state.mutate(|data| { data.computer_use = saved.clone(); Ok(()) }).is_err());
+        assert_eq!(state.data.lock().unwrap().computer_use, ComputerUseConfig::default());
+        assert_eq!(disk(), ComputerUseConfig::default());
     }
 
     #[test]

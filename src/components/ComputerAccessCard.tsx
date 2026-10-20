@@ -4,6 +4,7 @@ import { Icon } from "./Icons";
 interface Props {
   request: ComputerAccessRequest;
   agentName: string;
+  busy?: boolean;
   onDecide: (decision: ComputerAccessDecision) => void;
 }
 
@@ -13,7 +14,7 @@ interface Props {
  * host. Deliberately no default focus, so a stray Enter can't allow anything; Escape denies
  * (InlineDialog).
  */
-export function ComputerAccessCard({ request, agentName, onDecide }: Props) {
+export function ComputerAccessCard({ request, agentName, busy = false, onDecide }: Props) {
   const { app } = request;
   return (
     <div className="inline-dialog-card computer-access-card" role="region" aria-label={`Allow ${agentName} to use ${app.name}?`}>
@@ -31,15 +32,22 @@ export function ComputerAccessCard({ request, agentName, onDecide }: Props) {
       </div>
       <p className="computer-access-body">
         {request.launch ? `${app.name} isn't open yet; allowing also launches it in the background. ` : ""}
-        {agentName} will be able to see {app.name}'s windows and press, type and choose menus in it for the rest of this chat, until WackCode quits.
+        {agentName} will be able to see {app.name}'s windows and press, type and choose menus in it.
         Press <kbd>⌃⌥⌘.</kbd> to stop at any time.
       </p>
-      <div className="confirm-actions computer-access-actions">
+      <p className="computer-access-note">
+        Allow for this chat lasts until WackCode quits.
+        {request.canAlwaysAllow && " Always allow remembers this app at this location for all coding chats, even after restarting. Revoke it in Settings › Computer use."}
+      </p>
+      <div className="confirm-actions computer-access-actions" aria-busy={busy}>
         {app.bundleId && (
-          <button type="button" className="secondary-button computer-access-never" onClick={() => onDecide("never")}>Never allow</button>
+          <button type="button" className="secondary-button computer-access-never" disabled={busy} onClick={() => onDecide("never")}>Never allow</button>
         )}
-        <button type="button" className="secondary-button" onClick={() => onDecide("deny")}>Deny</button>
-        <button type="button" className="primary-button" onClick={() => onDecide("allow")}>Allow for this chat</button>
+        <button type="button" className="secondary-button" disabled={busy} onClick={() => onDecide("deny")}>Deny</button>
+        {request.canAlwaysAllow && (
+          <button type="button" className="secondary-button" disabled={busy} onClick={() => onDecide("always")}>Always allow</button>
+        )}
+        <button type="button" className="primary-button" disabled={busy} onClick={() => onDecide("allow")}>Allow for this chat</button>
       </div>
     </div>
   );

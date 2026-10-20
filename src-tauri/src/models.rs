@@ -832,8 +832,19 @@ pub struct SubagentConfig {
 
 pub const DEFAULT_SUBAGENT_CONCURRENCY: u32 = 4;
 
-/// The computer-use built-in (`computer_use/`). Off by default. Which apps a chat may use is
-/// never stored: grants live in memory per chat until the app quits.
+/// One explicit Always Allow answer to a host-raised access card. The name is display-only;
+/// access requires both this canonical absolute path and the case-insensitive bundle id.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerAppGrant {
+    pub name: String,
+    #[serde(default)]
+    pub bundle_id: Option<String>,
+    pub path: String,
+}
+
+/// The computer-use built-in (`computer_use/`). Off by default. Ordinary grants and denials
+/// stay in memory per chat; only explicit Always Allow answers are saved, by the host.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ComputerUseConfig {
@@ -844,6 +855,9 @@ pub struct ComputerUseConfig {
     /// Bundle ids the user never wants the agent to use, on top of the built-in block list.
     #[serde(default)]
     pub never_allow: Vec<String>,
+    /// Created only by answering an open host access card, never by a settings payload.
+    #[serde(default)]
+    pub always_allow: Vec<ComputerAppGrant>,
 }
 
 fn default_show_agent_cursor() -> bool { true }
@@ -980,7 +994,23 @@ pub struct SaveSearchProviderInput {
 
 #[cfg(test)]
 mod computer_use_config_tests {
-    use super::ComputerUseConfig;
+    use super::{ComputerAppGrant, ComputerUseConfig};
+
+    #[test]
+    fn always_allow_defaults_empty_and_uses_camel_case_with_optional_bundle_id() {
+        assert!(ComputerUseConfig::default().always_allow.is_empty());
+        let old: ComputerUseConfig = serde_json::from_str(r#"{"enabled":true,"neverAllow":[]}"#).unwrap();
+        assert!(old.always_allow.is_empty());
+        let grant: ComputerAppGrant = serde_json::from_str(r#"{"name":"Local app","path":"/tmp/local-app"}"#).unwrap();
+        assert_eq!(grant.bundle_id, None);
+        let config = ComputerUseConfig { always_allow: vec![grant], ..old };
+        let value = serde_json::to_value(&config).unwrap();
+        assert_eq!(value["alwaysAllow"][0]["path"], "/tmp/local-app");
+        assert!(value["alwaysAllow"][0].get("bundleId").is_some());
+        assert_eq!(serde_json::from_value::<ComputerUseConfig>(value).unwrap(), config);
+        assert!(serde_json::from_str::<ComputerAppGrant>(r#"{"name":"No path","bundleId":"com.example.App"}"#).is_err());
+    }
+
     #[test]
     fn cursor_defaults_on_for_new_and_existing_installations() {
         assert!(ComputerUseConfig::default().show_agent_cursor);
@@ -995,7 +1025,7 @@ mod computer_use_config_tests {
 }
 
 impl Default for ComputerUseConfig {
-    fn default() -> Self { Self { enabled: false, show_agent_cursor: true, never_allow: Vec::new() } }
+    fn default() -> Self { Self { enabled: false, show_agent_cursor: true, never_allow: Vec::new(), always_allow: Vec::new() } }
 }
 
 /// Runtime-only resolved renderer tokens for the native computer-use cursor.

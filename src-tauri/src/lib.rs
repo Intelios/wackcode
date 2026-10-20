@@ -317,6 +317,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + 
             web::reset_web_usage,
             computer_use::computer_use_cursor_appearance,
             computer_use::computer_use_respond_access,
+            computer_use::computer_use_revoke_app,
             computer_use::computer_use_list_apps,
         ]);
     #[cfg(debug_assertions)]

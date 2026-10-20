@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import type { ComputerUseConfig, ComputerUseStatus } from "../types";
+import type { ComputerAppGrant, ComputerUseConfig, ComputerUseStatus } from "../types";
 import { DuckMark } from "./DuckMark";
 import { Icon, type IconName } from "./Icons";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
@@ -152,14 +152,15 @@ interface Props {
   /** The agent's name in the app's own copy (Settings › Appearance). */
   agentName?: string;
   onChange: (config: ComputerUseConfig) => Promise<void>;
+  onRevokeApp?: (grant: ComputerAppGrant) => Promise<void>;
 }
 
-/** Settings › Computer use: permissions, the stop shortcut, and the apps it never uses. */
-export function ComputerUseSection({ config, actions, agentName = "WackCode", onChange }: Props) {
+/** Settings › Computer use: permissions, the stop shortcut, and remembered app choices. */
+export function ComputerUseSection({ config, actions, agentName = "WackCode", onChange, onRevokeApp }: Props) {
   const { status, refresh } = useComputerUseStatus(actions.onStatus);
   const reduceMotion = useReducedMotion();
   const [error, setError] = useState<string>();
-  const [confirm, setConfirm] = useState<"reset" | "relaunch">();
+  const [confirm, setConfirm] = useState<"reset" | "relaunch" | ComputerAppGrant>();
   const [apps, setApps] = useState<{ name: string; bundleId: string }[]>([]);
   const [manual, setManual] = useState("");
   const [busy, setBusy] = useState(false);
@@ -213,7 +214,7 @@ export function ComputerUseSection({ config, actions, agentName = "WackCode", on
           <div className="computer-hero-text">
             <span className={`computer-pill ${ready ? "ready" : ""}`}><i aria-hidden="true" />{pill}</span>
             <h3>{agentName} can use the apps you build</h3>
-            <p>macOS asks you to allow {agentName} twice. After that, the agent still asks in the chat the first time it wants each app.</p>
+            <p>macOS asks you to allow {agentName} twice. After that, choose which apps it can use in the chat — just for that chat, or always.</p>
           </div>
           <button type="button" className="secondary-button compact computer-recheck" onClick={refresh}><Icon name="refresh" /> Recheck</button>
         </section>
@@ -267,6 +268,38 @@ export function ComputerUseSection({ config, actions, agentName = "WackCode", on
         </section>
 
         <section className="computer-block" style={step(4)}>
+          <h3 className="computer-block-title">Always allowed apps</h3>
+          <p className="computer-block-sub">Remembered across coding chats and restarts, only at the approved app location.</p>
+          {config.alwaysAllow.length === 0 ? (
+            <p className="computer-never-empty">No apps remembered. Choose Always allow on an app's access card to add it here.</p>
+          ) : (
+            <ul className="computer-allowed" aria-label="Apps you always allow">
+              <AnimatePresence initial={false}>
+                {config.alwaysAllow.map((grant) => (
+                  <motion.li
+                    key={JSON.stringify([grant.bundleId, grant.path])}
+                    layout={!reduceMotion}
+                    initial={reduceMotion ? false : { opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ type: "spring", stiffness: 520, damping: 32 }}
+                  >
+                    <span className="computer-allowed-mark" aria-hidden="true"><Icon name="check" /></span>
+                    <div className="computer-allowed-app">
+                      <strong>{grant.name}</strong>
+                      {grant.bundleId && <code>{grant.bundleId}</code>}
+                      <code title={grant.path}>{grant.path}</code>
+                    </div>
+                    <button type="button" className="secondary-button compact" disabled={busy || !onRevokeApp}
+                      aria-label={`Ask before using ${grant.name} again`} onClick={() => setConfirm(grant)}>Ask again</button>
+                  </motion.li>
+                ))}
+              </AnimatePresence>
+            </ul>
+          )}
+        </section>
+
+        <section className="computer-block" style={step(5)}>
           <h3 className="computer-block-title">Apps it never uses</h3>
           <p className="computer-block-sub">Refused before anything is asked.</p>
           <ul className="computer-blocked" aria-label="Always blocked">
@@ -343,6 +376,16 @@ export function ComputerUseSection({ config, actions, agentName = "WackCode", on
         {error && <div className="error-banner" role="alert">{error}</div>}
       </div>
 
+      {typeof confirm === "object" && onRevokeApp && (
+        <ConfirmDialog
+          title={`Ask before using ${confirm.name} again?`}
+          body="This removes its saved approval and stops active computer use in every chat. The next attempt to use this app will ask for permission again."
+          confirmLabel="Ask again"
+          danger
+          onConfirm={() => onRevokeApp(confirm)}
+          onCancel={() => setConfirm(undefined)}
+        />
+      )}
       {confirm === "reset" && (
         <ConfirmDialog
           title="Reset WackCode's permissions?"

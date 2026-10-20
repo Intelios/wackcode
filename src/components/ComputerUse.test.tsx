@@ -12,6 +12,7 @@ const access: ComputerAccessRequest = {
   taskId: "task-1",
   requestId: "access-1",
   launch: false,
+  canAlwaysAllow: true,
   app: { name: "TextEdit", bundleId: "com.apple.TextEdit", path: "/System/Applications/TextEdit.app" },
 };
 
@@ -24,25 +25,30 @@ const question: ExtensionUIRequest = {
 };
 
 describe("computer-use access card", () => {
-  it("comes before other dialogs and answers with the chosen decision", () => {
+  it.each([
+    ["Allow for this chat", "allow"],
+    ["Always allow", "always"],
+    ["Deny", "deny"],
+    ["Never allow", "never"],
+  ])("comes before other dialogs and answers %s with %s", async (label, decision) => {
     const onAccess = vi.fn();
     const onRespond = vi.fn();
     render(<InlineDialog requests={[question]} accessRequests={[access]} selectedTaskId="task-1" agentName="Nova" onRespond={onRespond} onAccess={onAccess} />);
     expect(screen.getByRole("region", { name: "Allow Nova to use TextEdit?" })).toBeInTheDocument();
     expect(screen.queryByText("Are you sure?")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Allow for this chat" }));
-    expect(onAccess).toHaveBeenCalledWith(access, "allow");
-    fireEvent.click(screen.getByRole("button", { name: "Never allow" }));
-    expect(onAccess).toHaveBeenLastCalledWith(access, "never");
+    expect(screen.getByText(/all coding chats, even after restarting/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: label }));
+    await waitFor(() => expect(onAccess).toHaveBeenCalledExactlyOnceWith(access, decision));
     expect(onRespond).not.toHaveBeenCalled();
   });
 
-  it("never focuses Allow, and Escape denies", () => {
+  it("never focuses either Allow choice, and Escape denies", async () => {
     const onAccess = vi.fn();
     render(<InlineDialog requests={[]} accessRequests={[access]} selectedTaskId="task-1" onRespond={vi.fn()} onAccess={onAccess} />);
     expect(screen.getByRole("button", { name: "Allow for this chat" })).not.toHaveFocus();
+    expect(screen.getByRole("button", { name: "Always allow" })).not.toHaveFocus();
     fireEvent.keyDown(window, { key: "Escape" });
-    expect(onAccess).toHaveBeenCalledWith(access, "deny");
+    await waitFor(() => expect(onAccess).toHaveBeenCalledWith(access, "deny"));
   });
 
   it("says when allowing also launches the app, and hides Never allow without a bundle id", () => {
@@ -57,6 +63,33 @@ describe("computer-use access card", () => {
     );
     expect(screen.getByText(/allowing also launches it/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Never allow" })).toBeNull();
+  });
+
+  it("hides Always allow when the host cannot remember a stable app identity", () => {
+    render(<InlineDialog requests={[]} accessRequests={[{ ...access, canAlwaysAllow: false, app: { name: "Transient app" } }]}
+      selectedTaskId="task-1" onRespond={vi.fn()} onAccess={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "Always allow" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Allow for this chat" })).toBeEnabled();
+  });
+
+  it("keeps failed saves retryable and answers only once while a save is pending", async () => {
+    let rejectSave!: (reason: Error) => void;
+    const pending = new Promise<void>((_resolve, reject) => { rejectSave = reject; });
+    const onAccess = vi.fn().mockReturnValueOnce(pending).mockResolvedValue(undefined);
+    render(<InlineDialog requests={[]} accessRequests={[access]} selectedTaskId="task-1" onRespond={vi.fn()} onAccess={onAccess} />);
+    const always = screen.getByRole("button", { name: "Always allow" });
+    fireEvent.click(always);
+    expect(always).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Allow for this chat" })).toBeDisabled();
+    fireEvent.click(always);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onAccess).toHaveBeenCalledExactlyOnceWith(access, "always");
+    rejectSave(new Error("Couldn't save app access."));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't save app access.");
+    expect(always).toBeEnabled();
+    fireEvent.click(always);
+    await waitFor(() => expect(onAccess).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("shows nothing for another chat's card", () => {

@@ -1,13 +1,13 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ComputerUseStatus } from "../types";
+import type { ComputerAppGrant, ComputerUseStatus } from "../types";
 import { ComputerUseSection, type ComputerUseActions } from "./ComputerUseSection";
 
 afterEach(cleanup);
 
 const base: ComputerUseStatus = { supported: true, accessibility: true, screenRecording: true, hotkeyAvailable: true, devBuild: false };
 
-function setup(status: Partial<ComputerUseStatus> = {}, neverAllow: string[] = []) {
+function setup(status: Partial<ComputerUseStatus> = {}, neverAllow: string[] = [], alwaysAllow: ComputerAppGrant[] = []) {
   const actions: ComputerUseActions = {
     onStatus: vi.fn().mockResolvedValue({ ...base, ...status }),
     onRequestPermission: vi.fn().mockResolvedValue(undefined),
@@ -17,8 +17,9 @@ function setup(status: Partial<ComputerUseStatus> = {}, neverAllow: string[] = [
     onListApps: vi.fn().mockResolvedValue([{ name: "Notes", bundleId: "com.apple.Notes" }])
   };
   const onChange = vi.fn().mockResolvedValue(undefined);
-  render(<ComputerUseSection config={{ enabled: true, showAgentCursor: true, neverAllow }} actions={actions} agentName="Nova" onChange={onChange} />);
-  return { actions, onChange };
+  const onRevokeApp = vi.fn().mockResolvedValue(undefined);
+  render(<ComputerUseSection config={{ enabled: true, showAgentCursor: true, neverAllow, alwaysAllow }} actions={actions} agentName="Nova" onChange={onChange} onRevokeApp={onRevokeApp} />);
+  return { actions, onChange, onRevokeApp };
 }
 
 describe("ComputerUseSection", () => {
@@ -27,7 +28,7 @@ describe("ComputerUseSection", () => {
     const checkbox = screen.getByRole("checkbox", { name: "Show agent cursor" });
     expect(checkbox).toBeChecked();
     fireEvent.click(checkbox);
-    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ enabled: true, showAgentCursor: false, neverAllow: ["com.example.Secret"] }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ enabled: true, showAgentCursor: false, neverAllow: ["com.example.Secret"], alwaysAllow: [] }));
   });
   it("says it is ready once both permissions are allowed", async () => {
     setup();
@@ -61,10 +62,57 @@ describe("ComputerUseSection", () => {
     const { onChange } = setup({}, ["com.apple.Notes"]);
     expect(await screen.findByText("Notes")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Allow asking for Notes again" }));
-    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ enabled: true, showAgentCursor: true, neverAllow: [] }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ enabled: true, showAgentCursor: true, neverAllow: [], alwaysAllow: [] }));
     fireEvent.change(screen.getByRole("textbox", { name: "Bundle id to never allow" }), { target: { value: "com.example.Secret" } });
     fireEvent.keyDown(screen.getByRole("textbox", { name: "Bundle id to never allow" }), { key: "Enter" });
-    await waitFor(() => expect(onChange).toHaveBeenLastCalledWith({ enabled: true, showAgentCursor: true, neverAllow: ["com.apple.Notes", "com.example.Secret"] }));
+    await waitFor(() => expect(onChange).toHaveBeenLastCalledWith({ enabled: true, showAgentCursor: true, neverAllow: ["com.apple.Notes", "com.example.Secret"], alwaysAllow: [] }));
+  });
+
+  it("explains how to remember an app without granting access from Settings", async () => {
+    setup();
+    expect(await screen.findByText(/Choose Always allow on an app's access card/)).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Apps you always allow" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Always allow" })).toBeNull();
+  });
+
+  it("shows the saved app's exact location and revokes only after confirmation", async () => {
+    const grant = { name: "My App", bundleId: "com.example.App", path: "/Users/me/Build/My App.app" };
+    const { onChange, onRevokeApp } = setup({}, [], [grant]);
+    const list = await screen.findByRole("list", { name: "Apps you always allow" });
+    expect(list).toHaveTextContent("My App");
+    expect(list).toHaveTextContent(grant.bundleId);
+    expect(within(list).getByText(grant.path)).toHaveAttribute("title", grant.path);
+    fireEvent.click(within(list).getByRole("button", { name: "Ask before using My App again" }));
+    let dialog = screen.getByRole("alertdialog", { name: "Ask before using My App again?" });
+    expect(dialog).toHaveTextContent("stops active computer use in every chat");
+    expect(onRevokeApp).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    fireEvent.click(within(list).getByRole("button", { name: "Ask before using My App again" }));
+    dialog = screen.getByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Ask again" }));
+    await waitFor(() => expect(onRevokeApp).toHaveBeenCalledExactlyOnceWith(grant));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps saved approvals intact when revocation fails", async () => {
+    const grant = { name: "My App", path: "/Users/me/Build/My App.app" };
+    const { onRevokeApp } = setup({}, [], [grant]);
+    onRevokeApp.mockRejectedValueOnce("Couldn't save app access.");
+    fireEvent.click(await screen.findByRole("button", { name: "Ask before using My App again" }));
+    const dialog = screen.getByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Ask again" }));
+    expect(await within(dialog).findByText("Couldn't save app access.")).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Apps you always allow" })).toHaveTextContent(grant.path);
+    expect(within(dialog).getByRole("button", { name: "Ask again" })).toBeEnabled();
+  });
+
+  it("preserves saved app choices when changing the cursor setting", async () => {
+    const grant = { name: "My App", path: "/Users/me/Build/My App.app" };
+    const { onChange } = setup({}, [], [grant]);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Show agent cursor" }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ enabled: true, showAgentCursor: false, neverAllow: [], alwaysAllow: [grant] }));
   });
 
   it("rechecks the permissions on demand", async () => {

@@ -582,7 +582,7 @@ describe("SettingsPage sub-agents", () => {
   it("switches computer use on only through its setup dialog, then lists its page", async () => {
     const { rerender, props, subagents } = renderPage(false);
     const onSetComputerUse = vi.fn().mockResolvedValue(undefined);
-    const off = { enabled: false, showAgentCursor: true, neverAllow: [] };
+    const off = { enabled: false, showAgentCursor: true, neverAllow: [], alwaysAllow: [] };
     rerender(<SettingsPage {...noFavorites} {...props} subagents={subagents} computerUse={off} computerUseSupported onSetComputerUse={onSetComputerUse} />);
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
     expect(within(nav).queryByRole("button", { name: /Computer use/ })).not.toBeInTheDocument();
@@ -596,19 +596,19 @@ describe("SettingsPage sub-agents", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Allow…" }));
     expect(api.computerUseRequestPermission).toHaveBeenCalledWith("screenRecording");
     fireEvent.click(within(dialog).getByRole("button", { name: "Turn on anyway" }));
-    await waitFor(() => expect(onSetComputerUse).toHaveBeenCalledWith({ enabled: true, showAgentCursor: true, neverAllow: [] }));
+    await waitFor(() => expect(onSetComputerUse).toHaveBeenCalledWith({ enabled: true, showAgentCursor: true, neverAllow: [], alwaysAllow: [] }));
 
-    rerender(<SettingsPage {...noFavorites} {...props} subagents={subagents} computerUse={{ enabled: true, showAgentCursor: true, neverAllow: [] }} computerUseSupported onSetComputerUse={onSetComputerUse} />);
+    rerender(<SettingsPage {...noFavorites} {...props} subagents={subagents} computerUse={{ enabled: true, showAgentCursor: true, neverAllow: [], alwaysAllow: [] }} computerUseSupported onSetComputerUse={onSetComputerUse} />);
     expect(within(nav).getByRole("button", { name: /Computer use/ })).toHaveClass("active");
     expect(screen.getByRole("heading", { name: "Apps it never uses" })).toBeInTheDocument();
     fireEvent.change(screen.getByRole("textbox", { name: "Bundle id to never allow" }), { target: { value: "com.example.Secret" } });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
-    await waitFor(() => expect(onSetComputerUse).toHaveBeenLastCalledWith({ enabled: true, showAgentCursor: true, neverAllow: ["com.example.Secret"] }));
+    await waitFor(() => expect(onSetComputerUse).toHaveBeenLastCalledWith({ enabled: true, showAgentCursor: true, neverAllow: ["com.example.Secret"], alwaysAllow: [] }));
   });
 
   it("keeps the computer use switch off on Macs that can't run it", async () => {
     const { rerender, props, subagents } = renderPage(false);
-    rerender(<SettingsPage {...noFavorites} {...props} subagents={subagents} computerUse={{ enabled: false, showAgentCursor: true, neverAllow: [] }} computerUseSupported={false} onSetComputerUse={vi.fn()} />);
+    rerender(<SettingsPage {...noFavorites} {...props} subagents={subagents} computerUse={{ enabled: false, showAgentCursor: true, neverAllow: [], alwaysAllow: [] }} computerUseSupported={false} onSetComputerUse={vi.fn()} />);
     fireEvent.click(within(screen.getByRole("navigation", { name: "Settings sections" })).getByRole("button", { name: /Packages/ }));
     const toggle = await screen.findByRole("switch", { name: "Computer use" });
     expect(toggle).toBeDisabled();

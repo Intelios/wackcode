@@ -4,7 +4,7 @@ import { agentName } from "../agentName";
 import { modelIsReady } from "../model-utils";
 import { BROWSER_TOOL_NAMES, SHOW_VISUAL_TOOL_NAME, WEB_FETCH_TOOL_NAME } from "../tool-utils";
 import { SUGGEST_TASK_TOOL_NAME } from "../suggestions";
-import type { ExecutionPolicyConfig, AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CommandsConfig, ComputerUseConfig, GitConfig, McpConfig, MemoryConfig, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ToolCatalogEntry, WebConfig } from "../types";
+import type { ExecutionPolicyConfig, AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CommandsConfig, ComputerAppGrant, ComputerUseConfig, GitConfig, McpConfig, MemoryConfig, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ToolCatalogEntry, WebConfig } from "../types";
 import { Icon, type IconName } from "./Icons";
 import { AboutSection } from "./AboutSection";
 import { CommandsSection, type SlashCommandActions } from "./CommandsSection";
@@ -73,7 +73,7 @@ const COMPUTER_USE_ACTIONS: ComputerUseActions = {
   onRelaunch: api.computerUseRelaunch,
   onListApps: api.computerUseListApps
 };
-const COMPUTER_USE_OFF: ComputerUseConfig = { enabled: false, showAgentCursor: true, neverAllow: [] };
+const COMPUTER_USE_OFF: ComputerUseConfig = { enabled: false, showAgentCursor: true, neverAllow: [], alwaysAllow: [] };
 /** Settings › Web talks to Rust directly, like Skills; saved configs go back through `onWebChanged`. */
 const WEB_ACTIONS: WebActions = {
   onSave: api.saveSearchProvider,
@@ -144,6 +144,7 @@ interface Props extends PackageActions, ModelFavoritesProps {
   /** macOS 14+: computer use can be switched on. */
   computerUseSupported?: boolean;
   onSetComputerUse?: (config: ComputerUseConfig) => Promise<void>;
+  onRevokeComputerApp?: (grant: ComputerAppGrant) => Promise<void>;
   autoTitle: AutoTitleConfig;
   onSetAutoTitle: (config: AutoTitleConfig) => Promise<void>;
   appearance: AppearanceConfig;
@@ -179,7 +180,7 @@ interface Props extends PackageActions, ModelFavoritesProps {
 export function SettingsPage({
   executionPolicy, onSetExecutionPolicy, providers, favoriteModels, favoriteSaving, onSetFavorite, packages, toolCatalog, disabledTools, appDataPath,
   onClose, onSave, onDelete, onSetProviderEnabled, onConnectSubscription, onSignOutSubscription, connectedSubscriptionId, onSetDisabledTools,
-  subagents, onSetSubagents, computerUse = COMPUTER_USE_OFF, computerUseSupported = false, onSetComputerUse, autoTitle, onSetAutoTitle, appearance, glassSupported, onSetAppearance, onPreviewAppearance, backgroundImageUrlFor, onChooseBackgroundImage, onRemoveBackgroundImage, onSelectBackgroundImage, onShuffleBackgroundImage, prompts, onSetPrompts, onCommandsChanged, memory, onSetMemory, mcp, mcpActions, devBuild, web = WEB_OFF, onWebChanged, git = GIT_DEFAULT, onSetGit, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
+  subagents, onSetSubagents, computerUse = COMPUTER_USE_OFF, computerUseSupported = false, onSetComputerUse, onRevokeComputerApp, autoTitle, onSetAutoTitle, appearance, glassSupported, onSetAppearance, onPreviewAppearance, backgroundImageUrlFor, onChooseBackgroundImage, onRemoveBackgroundImage, onSelectBackgroundImage, onShuffleBackgroundImage, prompts, onSetPrompts, onCommandsChanged, memory, onSetMemory, mcp, mcpActions, devBuild, web = WEB_OFF, onWebChanged, git = GIT_DEFAULT, onSetGit, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
 }: Props) {
   const [chosenSection, setSection] = useState<SectionId>("providers");
   const [computerSetup, setComputerSetup] = useState(false);
@@ -445,7 +446,7 @@ export function SettingsPage({
           />
         )}
         {section === "computer_use" && onSetComputerUse && (
-          <ComputerUseSection config={computerUse} actions={COMPUTER_USE_ACTIONS} agentName={agentName(appearance)} onChange={onSetComputerUse} />
+          <ComputerUseSection config={computerUse} actions={COMPUTER_USE_ACTIONS} agentName={agentName(appearance)} onChange={onSetComputerUse} onRevokeApp={onRevokeComputerApp} />
         )}
         {computerSetup && onSetComputerUse && (
           <ComputerUseSetupDialog

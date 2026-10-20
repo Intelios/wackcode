@@ -55,6 +55,7 @@ import type {
   ExtensionUIRequest,
   ComputerAccessDecision,
   ComputerAccessRequest,
+  ComputerAppGrant,
   ComputerUseConfig,
   DiffComment,
   GitChangeFile,
@@ -604,11 +605,10 @@ export default function App() {
     void refreshSkillDrafts(selectedTask.id, latestSkillDraft);
   }, [selectedTask, latestSkillDraft, runtime?.skillDraftsKey]);
 
-  const handleComputerAccess = useCallback((request: ComputerAccessRequest, decision: ComputerAccessDecision) => {
+  const handleComputerAccess = useCallback(async (request: ComputerAccessRequest, decision: ComputerAccessDecision) => {
+    const config = await api.computerUseRespondAccess(request.taskId, request.requestId, decision);
+    if (config) setData((current) => ({ ...current, computerUse: config }));
     setAccessRequests((current) => current.filter((entry) => entry.requestId !== request.requestId));
-    void api.computerUseRespondAccess(request.taskId, request.requestId, decision)
-      .then((config) => { if (config) setData((current) => ({ ...current, computerUse: config })); })
-      .catch((reason) => setGlobalError(String(reason)));
   }, []);
 
   const reduce = useReducedMotion();
@@ -1734,15 +1734,13 @@ export default function App() {
   }
 
   async function setComputerUse(config: ComputerUseConfig) {
-    const previous = data.computerUse;
-    setData((current) => ({ ...current, computerUse: config }));
-    try {
-      const saved = await api.setComputerUseConfig(config);
-      setData((current) => ({ ...current, computerUse: saved }));
-    } catch (reason) {
-      setData((current) => ({ ...current, computerUse: previous }));
-      throw reason;
-    }
+    const saved = await api.setComputerUseConfig(config);
+    setData((current) => ({ ...current, computerUse: saved }));
+  }
+
+  async function revokeComputerApp(grant: ComputerAppGrant) {
+    const saved = await api.computerUseRevokeApp(grant);
+    setData((current) => ({ ...current, computerUse: saved }));
   }
 
   async function setSubagents(config: SubagentConfig) {
@@ -3080,9 +3078,10 @@ export default function App() {
           onSetDisabledTools={setDisabledTools}
           subagents={data.subagents}
           onSetSubagents={setSubagents}
-          computerUse={data.computerUse ?? { enabled: false, showAgentCursor: true, neverAllow: [] }}
+          computerUse={data.computerUse ?? { enabled: false, showAgentCursor: true, neverAllow: [], alwaysAllow: [] }}
           computerUseSupported={computerUseSupported}
           onSetComputerUse={setComputerUse}
+          onRevokeComputerApp={revokeComputerApp}
           autoTitle={data.autoTitle}
           onSetAutoTitle={setAutoTitle}
           appearance={data.appearance}

@@ -354,6 +354,45 @@ describe("ReasoningToggle", () => {
     expect(document.querySelector(".reasoning-max-fx")).not.toBeNull();
   });
 
+  it("offers Ultra above the model's top level, with its own effect", () => {
+    const onConfigure = vi.fn();
+    const props = { providers: testProviders, providerId: "openrouter", modelId: "anthropic/claude-3.5-sonnet", onConfigure };
+    const { rerender } = render(<ReasoningToggle {...props} thinkingLevel="max" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /max/i }));
+    const ticks = document.querySelectorAll(".reasoning-tick");
+    expect(ticks[ticks.length - 1]).toHaveTextContent("ultra");
+    fireEvent.change(screen.getByLabelText("Reasoning effort"), { target: { value: String(ticks.length - 1) } });
+    expect(onConfigure).toHaveBeenCalledWith({ thinkingLevel: "ultra" });
+
+    rerender(<ReasoningToggle {...props} thinkingLevel="ultra" />);
+    const toggle = screen.getByRole("button", { name: /ultra/i, expanded: true });
+    expect(toggle).toHaveClass("at-ultra");
+    expect(toggle).not.toHaveClass("at-max");
+    expect(document.querySelector(".reasoning-panel")).toHaveClass("at-ultra");
+    expect(document.querySelector(".reasoning-panel")).not.toHaveClass("at-max");
+    expect(document.querySelector(".reasoning-ultra-fx")).not.toBeNull();
+    expect(document.querySelector(".reasoning-max-fx")).toBeNull();
+  });
+
+  it("keeps a sub-agent's own model to the model's levels, without Ultra", () => {
+    render(
+      <ReasoningToggle
+        providers={testProviders}
+        providerId="openrouter"
+        modelId="anthropic/claude-3.5-sonnet"
+        thinkingLevel="max"
+        allowUltra={false}
+        onConfigure={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /max/i }));
+
+    expect(screen.queryByRole("button", { name: "ultra" })).not.toBeInTheDocument();
+    expect(document.querySelector(".reasoning-panel")).toHaveClass("at-max");
+  });
+
   it("does not show the max-level effect below the topmost level", () => {
     render(
       <ReasoningToggle

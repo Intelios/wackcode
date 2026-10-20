@@ -1,8 +1,22 @@
-import type { AutoTitleConfig, BuiltinModelSuggestion, ModelRecord, ModelRef, ProviderRecord, SubagentModel, ThinkingLevel } from "./types";
+import type { AutoTitleConfig, BuiltinModelSuggestion, ModelRecord, ModelRef, ProviderRecord, ReasoningEffort, SubagentModel, ThinkingLevel } from "./types";
 
 /** Renderer preference only; existing chats keep their own model settings. */
 export interface ModelChoice extends ModelRef {
-  thinkingLevel: ThinkingLevel;
+  thinkingLevel: ReasoningEffort;
+}
+
+/** The reasoning slider's order, low to high. Ultra sits above every level a model can list. */
+export const REASONING_ORDER: Record<ReasoningEffort, number> = { off: 0, minimal: 1, low: 2, medium: 3, high: 4, xhigh: 5, max: 6, ultra: 7 };
+
+/**
+ * A model's reasoning choices, low to high: its own levels, then Ultra whenever it can reason at
+ * all. `ultra: false` keeps to the model's own levels (a sub-agent's model never runs on Ultra).
+ */
+export function reasoningLevels(model: ModelRecord | undefined, { ultra = true }: { ultra?: boolean } = {}): ReasoningEffort[] {
+  const own: ReasoningEffort[] = (model?.thinkingLevels.length ? model.thinkingLevels : ["off" as const])
+    .slice()
+    .sort((a, b) => REASONING_ORDER[a] - REASONING_ORDER[b]);
+  return ultra && own.some((level) => level !== "off") ? [...own, "ultra"] : own;
 }
 
 /** Restore a usable choice, or fall back to the first available configured model. */
@@ -125,13 +139,17 @@ export function modelDisplayName(providers: ProviderRecord[], reference: ModelRe
 }
 
 /**
- * The reasoning level to use after a model change: the requested one if the model has it, else
- * the current one, else "medium", else the model's first level.
+ * The reasoning level to use after a model change: the requested one if the model offers it, else
+ * the current one, else "medium", else the model's first level. Ultra carries over to any model
+ * that can reason; with `ultra: false` only the model's own levels count.
  */
-export function pickThinkingLevel(model: ModelRecord | undefined, requested?: ThinkingLevel, current?: ThinkingLevel): ThinkingLevel {
+export function pickThinkingLevel(model: ModelRecord | undefined, requested: ReasoningEffort | undefined, current: ReasoningEffort | undefined, options: { ultra: false }): ThinkingLevel;
+export function pickThinkingLevel(model: ModelRecord | undefined, requested?: ReasoningEffort, current?: ReasoningEffort, options?: { ultra?: boolean }): ReasoningEffort;
+export function pickThinkingLevel(model: ModelRecord | undefined, requested?: ReasoningEffort, current?: ReasoningEffort, options: { ultra?: boolean } = {}): ReasoningEffort {
   const levels: ThinkingLevel[] = model?.thinkingLevels.length ? model.thinkingLevels : ["off"];
-  if (requested && levels.includes(requested)) return requested;
-  if (current && levels.includes(current)) return current;
+  const offered = reasoningLevels(model, options);
+  if (requested && offered.includes(requested)) return requested;
+  if (current && offered.includes(current)) return current;
   return levels.includes("medium") ? "medium" : levels[0];
 }
 

@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_CHAT_PROMPT, DEFAULT_PLAN_PROMPT, DEFAULT_SYSTEM_PROMPT } from "../promptDefaults";
+import { DEFAULT_CHAT_PROMPT, DEFAULT_PLAN_PROMPT, DEFAULT_SYSTEM_PROMPT, DEFAULT_ULTRA_PROMPT } from "../promptDefaults";
 import type { PromptConfig } from "../types";
 import { PromptsSection } from "./PromptsSection";
 
@@ -22,8 +22,8 @@ describe("PromptsSection", () => {
     expect(screen.getByText(/restore the built-in text whenever you like/i)).toBeInTheDocument();
     expect(screen.getByText(/including chats that are already planning/i)).toBeInTheDocument();
     expect(within(screen.getByRole("region", { name: "Prompts overview" })).getByText("Built-in")).toBeInTheDocument();
-    // The coding persona, Plan, Ultra Plan and Chat mode.
-    expect(screen.getAllByText("Default")).toHaveLength(4);
+    // The coding persona, Plan, Ultra Plan, Ultra and Chat mode.
+    expect(screen.getAllByText("Default")).toHaveLength(5);
     // Nothing to restore while every prompt is at its default.
     expect(screen.queryByRole("button", { name: "Restore default" })).not.toBeInTheDocument();
     // The default texts are on screen for review, starting with the persona paragraph.
@@ -40,6 +40,18 @@ describe("PromptsSection", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Chat mode text" }), { target: { value: "You are Quill." } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onChange).toHaveBeenCalledWith({ chatPrompt: "You are Quill." }));
+  });
+
+  it("offers the Ultra instruction in the warm palette and saves a custom one", async () => {
+    const { onChange } = renderPrompts();
+    const card = screen.getByRole("article", { name: "Ultra" });
+    expect(card).toHaveClass("ultra");
+    customise("Ultra");
+    expect(screen.getByRole("textbox", { name: "Ultra text" })).toHaveValue(DEFAULT_ULTRA_PROMPT);
+    expect(within(card).getByText(/highest reasoning level/i)).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "Ultra text" }), { target: { value: "Leave no stone unturned." } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ ultraPrompt: "Leave no stone unturned." }));
   });
 
   it("explains the coding guide and gives the core a full-sized editor", () => {

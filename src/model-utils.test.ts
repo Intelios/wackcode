@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyBuiltinModelSuggestion, autoTitleModelIssue, chatModelGone, defaultModelChoice, favoriteModelEntries, formatTokens, mergeDiscoveredModels, modelDisplayName, pickThinkingLevel, searchBuiltinModels, subagentModelIssue } from "./model-utils";
+import { applyBuiltinModelSuggestion, autoTitleModelIssue, chatModelGone, defaultModelChoice, favoriteModelEntries, formatTokens, mergeDiscoveredModels, modelDisplayName, pickThinkingLevel, reasoningLevels, searchBuiltinModels, subagentModelIssue } from "./model-utils";
 import type { BuiltinModelSuggestion, ModelRecord, ProviderRecord } from "./types";
 
 const flash: BuiltinModelSuggestion = {
@@ -132,6 +132,27 @@ describe("pickThinkingLevel", () => {
     expect(pickThinkingLevel(model(["off", "medium"]), undefined, "max")).toBe("medium");
     expect(pickThinkingLevel(model(["low", "high"]))).toBe("low");
     expect(pickThinkingLevel(undefined, "high")).toBe("off");
+  });
+
+  it("carries Ultra to any model that can reason, and only there", () => {
+    expect(pickThinkingLevel(model(["off", "low"]), "ultra", "low")).toBe("ultra");
+    expect(pickThinkingLevel(model(["off", "medium", "high"]), undefined, "ultra")).toBe("ultra");
+    expect(pickThinkingLevel(model(["off"]), "ultra")).toBe("off");
+    expect(pickThinkingLevel(model(["off", "medium", "high"]), "ultra", undefined, { ultra: false })).toBe("medium");
+  });
+});
+
+describe("reasoningLevels", () => {
+  const model = (thinkingLevels: ModelRecord["thinkingLevels"]): ModelRecord => ({
+    id: "m", name: "M", contextWindow: 1, maxTokens: 1, reasoning: true, thinkingLevels, thinkingLevelMap: {}, vision: false
+  });
+
+  it("orders the model's own levels and adds Ultra above them when it can reason", () => {
+    expect(reasoningLevels(model(["max", "off", "low"]))).toEqual(["off", "low", "max", "ultra"]);
+    expect(reasoningLevels(model(["high"]))).toEqual(["high", "ultra"]);
+    expect(reasoningLevels(model(["off"]))).toEqual(["off"]);
+    expect(reasoningLevels(undefined)).toEqual(["off"]);
+    expect(reasoningLevels(model(["off", "low", "max"]), { ultra: false })).toEqual(["off", "low", "max"]);
   });
 });
 

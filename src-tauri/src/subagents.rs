@@ -397,6 +397,8 @@ mod tests {
         assert!(refuse(SubagentRecord { tools: vec!["edit".into()], ..custom("docs") }).contains("read-only"));
         assert!(refuse(SubagentRecord { model: choice("missing", "low"), ..custom("docs") }).contains("no longer exists"));
         assert!(refuse(SubagentRecord { model: choice("p", "max"), ..custom("docs") }).contains("doesn't support max"));
+        // Ultra is a chat's reasoning, not a capability: a sub-agent's own model never holds it.
+        assert!(refuse(SubagentRecord { model: choice("p", "ultra"), ..custom("docs") }).contains("doesn't support ultra"));
         let mut config = base();
         config.max_concurrency = 9;
         assert!(validate(&config, &[]).is_err());

@@ -295,6 +295,12 @@ how the agent actually reads it.
 - Removing planning restrictions bypasses only the read-only tool policy; completion, interview, approval and Build-only workflow gates remain. `access.ts` adds transient guidance after contract reconciliation, never a session entry or a change to the canonical prompt.
 - Resolve a child from its saved role and the policy once per call. Normally read-only roles gain edit/write and unrestricted bash only with the child override and without a read-only planning parent. Editing roles remain refused by read-only planning. Disabled tools and the child-only tool inventory still apply. Result `readOnly` records that call's effective policy; saved roles and custom instructions stay intact.
 
+## Ultra
+
+- Ultra (`builtin/ultra.ts`) is the reasoning step above a model's own top level. The host stores it as the chat's `thinkingLevel` (`"ultra"`), but it is never a model capability and **never reaches Pi**: `piThinkingLevel` hands Pi `max`, which Pi clamps to the highest level the model record lists. `THINKING_LEVELS` (protocol.ts, commands.rs) stays Pi's list; Ultra is offered on any model with a level other than `off`.
+- While on, the system prompt's addendum ends with `ultraPrompt()` (Settings › Prompts › Ultra, or `DEFAULT_ULTRA_PROMPT`), in coding and Chat mode chats alike. A level change respawns the worker through `configure_task`, so the flag is fixed for a worker's life; `set_prompts` edits apply from the next message.
+- Sub-agents on the chat's model inherit `session.thinkingLevel`, the real clamped level, so they run at the top level without the instruction. A sub-agent's own model never takes Ultra.
+
 ## Memory
 
 - The note format (`<type>_<slug>.md` with `type`/`title`/`description`/`modified` frontmatter) is one contract shared by `src-tauri/src/memory.rs` and `worker/src/builtin/memory/store.ts`. Change both together.

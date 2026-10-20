@@ -15,7 +15,7 @@ import type { RestoredPrompt } from "../../types";
  */
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import type { ImageContent, NormalizedMessage, ProviderRecord, TaskRecord, TaskRuntime, ThinkingLevel } from "../../types";
+import type { ImageContent, NormalizedMessage, ProviderRecord, ReasoningEffort, TaskRecord, TaskRuntime } from "../../types";
 import type { FileAttachment } from "../../attachment-utils";
 import type { ComposerDraftState } from "../../hooks/useComposerDrafts";
 import type { TranscriptViewState } from "../../transcript-view";
@@ -52,7 +52,7 @@ export interface ChatAreaProps extends ModelFavoritesProps {
   providers: ProviderRecord[];
   providerId?: string;
   modelId?: string;
-  thinkingLevel?: ThinkingLevel;
+  thinkingLevel?: ReasoningEffort;
   draftState: ComposerDraftState;
   /** Chats this area's `@` picker offers: Chat mode chats only, this chat excluded. */
   mentionChats?: ChatMentionSuggestion[];
@@ -73,7 +73,7 @@ export interface ChatAreaProps extends ModelFavoritesProps {
   onToggleBrowser: () => void;
   onRename: (name: string) => void;
   onTaskAction: (task: TaskRecord, action: TaskAction) => void;
-  onConfigure: (patch: { providerId?: string; modelId?: string; thinkingLevel?: ThinkingLevel }) => void;
+  onConfigure: (patch: { providerId?: string; modelId?: string; thinkingLevel?: ReasoningEffort }) => void;
   onSend: (message: string, images: ImageContent[], files: FileAttachment[], queue?: boolean) => Promise<boolean>;
   onSteer: (messageId: string) => Promise<boolean>;
   onDequeue: () => Promise<(RestoredPrompt | string)[] | undefined>;

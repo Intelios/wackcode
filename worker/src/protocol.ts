@@ -1,6 +1,12 @@
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+/**
+ * A chat's reasoning choice: one of Pi's levels, or Ultra — the model's highest level plus an
+ * extra instruction (`builtin/ultra.ts`). Never a model capability, and never handed to Pi.
+ */
+export const ULTRA_EFFORT = "ultra";
+export type ReasoningEffort = ThinkingLevel | typeof ULTRA_EFFORT;
 export type ApiFormat = "openai-completions" | "openai-responses" | "anthropic-messages" | "google-generative-ai";
 
 /**
@@ -371,6 +377,8 @@ export interface PromptOverrides {
   planPrompt?: string;
   /** Replaces the Ultra Plan contract body (the marker line is always the app's own). */
   ultraPlanPrompt?: string;
+  /** Replaces the instruction an Ultra chat's system prompt gains (`builtin/ultra.ts`). */
+  ultraPrompt?: string;
 }
 
 /** How WackCode reaches an MCP server. */
@@ -498,7 +506,7 @@ export interface InitCommand {
   modelId: string;
   apiKey?: string;
   authPath?: string;
-  thinkingLevel: ThinkingLevel;
+  thinkingLevel: ReasoningEffort;
   /**
    * Tools the user has switched off, built-in or extension-contributed.
    * A denylist, so a tool a newly installed package adds is on by default.
@@ -799,7 +807,7 @@ export type WorkerCommand =
   | { id: string; type: "watch_subagent"; target: SubagentTarget | null }
   | { id: string; type: "generate_commit_message"; diff: string; truncated: boolean }
   | { id: string; type: "set_model"; modelId: string }
-  | { id: string; type: "set_thinking"; level: ThinkingLevel }
+  | { id: string; type: "set_thinking"; level: ReasoningEffort }
   | { id: string; type: "set_mode"; mode: TaskMode; discardPlan?: boolean }
   | { id: string; type: "set_tools"; disabledTools: string[] }
   | { id: string; type: "set_subagents"; subagents: SubagentRuntimeConfig | null }
@@ -1010,7 +1018,7 @@ export interface SessionSnapshot {
       cacheHitRate: number | null;
     };
   };
-  thinkingLevel: ThinkingLevel;
+  thinkingLevel: ReasoningEffort;
   availableThinkingLevels: ThinkingLevel[];
   model?: { provider: string; id: string; name?: string };
   /** True while the session runs on the stand-in for a model that left its connection. */

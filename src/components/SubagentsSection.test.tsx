@@ -146,6 +146,14 @@ describe("SubagentsSection", () => {
     expect(onChange.mock.calls[0][0].agents[0].model).toEqual({ providerId: "custom-a", modelId: "mini", thinkingLevel: "medium" });
   });
 
+  it("never offers Ultra for an agent's own model", () => {
+    renderSection({ agents: [{ ...scout, model: { providerId: "custom-a", modelId: "mini", thinkingLevel: "medium" } }] });
+    fireEvent.click(screen.getByRole("button", { name: /scout/ }));
+    fireEvent.click(screen.getByRole("button", { name: /medium/i }));
+    expect(screen.getByRole("button", { name: "low" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "ultra" })).not.toBeInTheDocument();
+  });
+
   it("warns when an agent's own model can no longer run", () => {
     renderSection({ agents: [{ ...scout, model: { providerId: "custom-a", modelId: "mini", thinkingLevel: "low" } }] }, [{ ...provider, connected: false }]);
     expect(screen.getByText(/Cheap has no API key\. It will refuse to run/)).toBeInTheDocument();

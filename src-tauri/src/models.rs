@@ -740,6 +740,9 @@ pub struct PromptConfig {
     /// Replaces the Ultra Plan contract body (the marker line stays the app's own).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ultra_plan_prompt: Option<String>,
+    /// Replaces the instruction a chat's system prompt gains while its reasoning is on Ultra.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ultra_prompt: Option<String>,
 }
 
 /// When the chat's agent should reach for sub-agents. Only changes the tool's guidance text.

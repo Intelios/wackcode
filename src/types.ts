@@ -1,5 +1,12 @@
 export type ApiFormat = "openai-completions" | "openai-responses" | "anthropic-messages" | "google-generative-ai";
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+/**
+ * A chat's reasoning choice: one of the model's levels, or Ultra — the model's highest level plus
+ * an extra instruction in the system prompt. Ultra is never a model capability: it is offered on
+ * any model that can reason (`reasoningLevels` in model-utils.ts) and the worker translates it.
+ * Mirrors `ReasoningEffort` in worker/src/protocol.ts.
+ */
+export type ReasoningEffort = ThinkingLevel | "ultra";
 export type TaskStatus = "idle" | "running" | "stopping" | "interrupted" | "error";
 
 /**
@@ -394,7 +401,7 @@ export interface TaskRecord {
   usesWorktree: boolean;
   providerId: string;
   modelId: string;
-  thinkingLevel: ThinkingLevel;
+  thinkingLevel: ReasoningEffort;
   sessionFile: string | null;
   status: TaskStatus;
   /** Mirrors the worker's `plan_state`; the durable hint the UI uses before a worker reports in. */
@@ -765,6 +772,8 @@ export interface PromptConfig {
   planPrompt?: string | null;
   /** Replaces the Ultra Plan contract body (the marker line stays the app's own). */
   ultraPlanPrompt?: string | null;
+  /** Replaces the instruction a chat's system prompt gains while its reasoning is on Ultra. */
+  ultraPrompt?: string | null;
 }
 
 /** When the chat's agent should reach for sub-agents. Only changes the tool's guidance. */
@@ -1289,7 +1298,7 @@ export interface SessionSnapshot {
       cacheHitRate: number | null;
     };
   };
-  thinkingLevel: ThinkingLevel;
+  thinkingLevel: ReasoningEffort;
   availableThinkingLevels: ThinkingLevel[];
   model?: { provider: string; id: string; name?: string };
   /** True while the session runs on the stand-in for a model that left its connection. */

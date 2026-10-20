@@ -42,6 +42,7 @@ import type {
   PromptConfig,
   ProviderRecord,
   QuestionAnswer,
+  ReasoningEffort,
   RestoreResult,
   RunInfo,
   RunLookup,
@@ -68,7 +69,6 @@ import type {
   TaskRecord,
   TerminalFrame,
   TerminalInfo,
-  ThinkingLevel,
   ToolConfig,
   VisualThemeVars,
   WorkspaceFiles
@@ -226,7 +226,7 @@ export const api = {
     useWorktree?: boolean;
     providerId: string;
     modelId: string;
-    thinkingLevel: ThinkingLevel;
+    thinkingLevel: ReasoningEffort;
     /** Set when the chat starts from a suggested task; the origin chat's card links to it. */
     origin?: SuggestionOrigin;
   }) => invoke<TaskRecord>("create_task", { input }),
@@ -243,7 +243,7 @@ export const api = {
     taskId: string;
     providerId: string;
     modelId: string;
-    thinkingLevel: ThinkingLevel;
+    thinkingLevel: ReasoningEffort;
   }) => invoke<TaskRecord>("configure_task", { input }),
   openTask: (taskId: string) => invoke<void>("open_task", { taskId }),
   /** Native accelerators also work while the per-chat WKWebView has focus. */
@@ -270,7 +270,7 @@ export const api = {
     startedAt: number;
     providerId: string;
     modelId: string;
-    thinkingLevel: ThinkingLevel;
+    thinkingLevel: ReasoningEffort;
     /** The composer's mode; applied before the run. Required for a draft's first message. */
     mode?: TaskMode;
     /** Refused by Rust unless the model has Vision turned on. */
@@ -302,7 +302,7 @@ export const api = {
     startedAt: number;
     providerId: string;
     modelId: string;
-    thinkingLevel: ThinkingLevel;
+    thinkingLevel: ReasoningEffort;
   }) => invoke<string>("resend_message", { input }),
   /** Rewind to before a message, switch to another version, or undo a rewind. */
   navigateTask: (input: {

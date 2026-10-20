@@ -17,7 +17,8 @@ export function setPromptOverrides(next: PromptOverrides | null | undefined): vo
     systemPrompt: nonEmpty(next?.systemPrompt),
     chatPrompt: nonEmpty(next?.chatPrompt),
     planPrompt: nonEmpty(next?.planPrompt),
-    ultraPlanPrompt: nonEmpty(next?.ultraPlanPrompt)
+    ultraPlanPrompt: nonEmpty(next?.ultraPlanPrompt),
+    ultraPrompt: nonEmpty(next?.ultraPrompt)
   };
 }
 

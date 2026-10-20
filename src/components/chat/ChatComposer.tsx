@@ -12,7 +12,7 @@ import { encodeContexts, restoreContexts } from "../../browser-context";
  */
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type SetStateAction } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import type { ImageContent, ProviderRecord, QueuedMessage, RestoredPrompt, TaskStatus, ThinkingLevel } from "../../types";
+import type { ImageContent, ProviderRecord, QueuedMessage, ReasoningEffort, RestoredPrompt, TaskStatus } from "../../types";
 import { attachmentProblem, attachFiles, filesFrom, largePasteText, pastedTextFile, splitFileSection, type FileAttachment } from "../../attachment-utils";
 import { activeMention, type ChatMentionSuggestion, type MentionSuggestion } from "../../mention-utils";
 import { chatMentionToken, encodeChatRefs, rankChats, survivingChatRefs } from "../../chat-refs";
@@ -44,7 +44,7 @@ interface ChatComposerProps extends ModelFavoritesProps {
   providers: ProviderRecord[];
   providerId?: string;
   modelId?: string;
-  thinkingLevel?: ThinkingLevel;
+  thinkingLevel?: ReasoningEffort;
   placeholder: string;
   agentName: string;
   disabled?: boolean;
@@ -55,7 +55,7 @@ interface ChatComposerProps extends ModelFavoritesProps {
   seed?: { text: string; images?: ImageContent[]; nonce: number };
   /** Chats the `@` picker offers: this chat excluded, Chat mode chats only. */
   mentionChats?: ChatMentionSuggestion[];
-  onConfigure: (patch: { providerId?: string; modelId?: string; thinkingLevel?: ThinkingLevel }) => void;
+  onConfigure: (patch: { providerId?: string; modelId?: string; thinkingLevel?: ReasoningEffort }) => void;
   onSend: (message: string, images: ImageContent[], files: FileAttachment[], queue?: boolean) => Promise<boolean>;
   onSteer?: (messageId: string) => Promise<boolean>;
   onDequeue?: () => Promise<(RestoredPrompt | string)[] | undefined>;

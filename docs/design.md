@@ -15,7 +15,7 @@ WackCode is a dark, compact macOS workspace with a lime accent (`#c2ee4a` on `#1
 
 - **Adding a colour:** add a token to `TOKENS` in `src/theme.ts` (a recipe anchored on its default hex), add the same default under `:root` in `styles.css`, and use `var(--wc-…)`. `theme.test.ts` fails if the two disagree or a raw hex appears below `:root`.
 - **Glows and tints:** `color-mix(in srgb, var(--wc-accent) N%, transparent)`, never an `rgb()` of the default accent.
-- **Fixed meaning:** danger, warning, diff, success, the stop button and Ultra Plan (`--wc-ultra*`) keep their colours in every theme. The literals allowed below `:root` are listed in `SEMANTIC_COLOURS` in `theme.test.ts`.
+- **Fixed meaning:** danger, warning, diff, success, the stop button and Ultra (`--wc-ultra*`: Ultra Plan and the Ultra reasoning level) keep their colours in every theme. The literals allowed below `:root` are listed in `SEMANTIC_COLOURS` in `theme.test.ts`.
 - **Contrast is automatic:** a background too light for the app's fixed light text is darkened, and an accent too dark to read is lightened. Text on the accent uses `--wc-on-accent`.
 - **Surfaces**, darkest to lightest: `--wc-well`, `--wc-sidebar`, `--wc-input`, `--wc-panel`, `--bg`, `--surface`, `--wc-composer`, `--wc-elevated`, `--surface-raised`, `--wc-menu`. Text: `--text`, `--wc-text-body`, `--text-soft`, `--text-dim`, `--text-faint`. Lines: `--border`, `--border-bright`.
 - **See-through shell:** only `--wc-shell`, `--wc-header`, `--wc-sidebar`, `--wc-panel` and `--wc-composer-fade` turn translucent over an image or Liquid Glass (`shellVariables` in `theme.ts`). Content (bubbles, composer, cards, dialogs) never does.

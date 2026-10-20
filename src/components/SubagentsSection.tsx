@@ -10,7 +10,7 @@ import {
   type SubagentConfig,
   type SubagentModel,
   type SubagentRecord,
-  type ThinkingLevel
+  type ReasoningEffort
 } from "../types";
 import { DuckMark } from "./DuckMark";
 import { Icon, type IconName } from "./Icons";
@@ -133,13 +133,13 @@ interface ModelFieldProps extends ModelFavoritesProps {
 function ModelField({ agentName, model, providers, favoriteModels, favoriteSaving, onSetFavorite, disabled, onChange }: ModelFieldProps) {
   const usable = useMemo(() => providers.filter((provider) => provider.enabled !== false && provider.connected && provider.models.some(modelIsReady)), [providers]);
 
-  function choose(patch: { providerId?: string; modelId?: string; thinkingLevel?: ThinkingLevel }) {
+  function choose(patch: { providerId?: string; modelId?: string; thinkingLevel?: ReasoningEffort }) {
     const providerId = patch.providerId ?? model?.providerId ?? usable[0]?.id;
     const provider = usable.find((item) => item.id === providerId);
     const modelId = patch.modelId ?? (patch.providerId || !model ? provider?.models.find(modelIsReady)?.id : model.modelId);
     const record = provider?.models.find((item) => item.id === modelId);
     if (!providerId || !modelId) return;
-    onChange({ providerId, modelId, thinkingLevel: pickThinkingLevel(record, patch.thinkingLevel, model?.thinkingLevel) });
+    onChange({ providerId, modelId, thinkingLevel: pickThinkingLevel(record, patch.thinkingLevel, model?.thinkingLevel, { ultra: false }) });
   }
 
   return (
@@ -169,6 +169,7 @@ function ModelField({ agentName, model, providers, favoriteModels, favoriteSavin
               providerId={model.providerId}
               modelId={model.modelId}
               thinkingLevel={model.thinkingLevel}
+              allowUltra={false}
               disabled={disabled}
               popoverSide="bottom"
               onConfigure={choose}

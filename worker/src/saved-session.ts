@@ -6,7 +6,7 @@
  */
 import { readFile } from "node:fs/promises";
 import type { FileEntry, SessionEntry, SessionProjection } from "@earendil-works/pi-coding-agent";
-import type { NormalizedBlock, SessionSnapshot, TaskMode, ThinkingLevel } from "./protocol.js";
+import type { NormalizedBlock, ReasoningEffort, SessionSnapshot, TaskMode } from "./protocol.js";
 import { normalizeMessage, RESULT_THUMBNAIL_OPTIONS, THUMBNAIL_OPTIONS } from "./message-normalization.js";
 import { transcriptEntries, transcriptMessages } from "./transcript.js";
 import { buildTreeIndex, modelSwitchesOnPath, undoTarget, type EntryLike } from "./tree.js";
@@ -27,7 +27,7 @@ export interface SavedSessionOptions {
   sessionFile?: string | null;
   taskId: string;
   mode: TaskMode;
-  thinkingLevel: ThinkingLevel;
+  thinkingLevel: ReasoningEffort;
   contextWindow?: number;
 }
 

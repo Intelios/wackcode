@@ -97,6 +97,10 @@ async fn checkout_dispatch_guard(
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(90);
 
 const THINKING_LEVELS: &[&str] = &["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+/// A chat's reasoning above the model's own top level: that level plus the Ultra instruction.
+/// It is the app's, never a model capability, so it is offered on any model that can reason and
+/// `THINKING_LEVELS` (which also checks capability lists) leaves it out. The worker translates it.
+const ULTRA_EFFORT: &str = "ultra";
 /// Image limits for one prompt. `src/attachment-utils.ts` enforces the same numbers in the composer.
 const MAX_PROMPT_IMAGES: usize = 8;
 const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
@@ -5187,14 +5191,20 @@ fn validate_model_selection(
     if provider.kind == ProviderKind::Subscription && !provider.connected {
         return Err("Sign in to this subscription again in Settings".into());
     }
-    validate_thinking(thinking_level)?;
+    if thinking_level != ULTRA_EFFORT {
+        validate_thinking(thinking_level)?;
+    }
     validate_selected_model(provider, model_id)?;
     let model = provider
         .models
         .iter()
         .find(|model| model.id == model_id)
         .ok_or_else(|| "The selected model is no longer configured".to_string())?;
-    if !model
+    if thinking_level == ULTRA_EFFORT {
+        if !model.thinking_levels.iter().any(|level| level != "off") {
+            return Err("The selected model does not support Ultra reasoning".into());
+        }
+    } else if !model
         .thinking_levels
         .iter()
         .any(|level| level == thinking_level)
@@ -5338,6 +5348,7 @@ fn validate_prompt_config(input: PromptConfig) -> Result<PromptConfig, String> {
         chat_prompt: normalize_override("Chat mode prompt", input.chat_prompt)?,
         plan_prompt: normalize_override("Plan mode prompt", input.plan_prompt)?,
         ultra_plan_prompt: normalize_override("Ultra Plan prompt", input.ultra_plan_prompt)?,
+        ultra_prompt: normalize_override("Ultra prompt", input.ultra_prompt)?,
     })
 }
 
@@ -6267,6 +6278,21 @@ mod tests {
     }
 
     #[test]
+    fn the_ultra_prompt_is_trimmed_and_bounded() {
+        let config = validate_prompt_config(PromptConfig {
+            ultra_prompt: Some("  Leave no stone unturned.  ".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(config.ultra_prompt.as_deref(), Some("Leave no stone unturned."));
+        let long = validate_prompt_config(PromptConfig {
+            ultra_prompt: Some("x".repeat(MAX_PROMPT_OVERRIDE_CHARS + 1)),
+            ..Default::default()
+        });
+        assert!(long.unwrap_err().contains("Ultra prompt"));
+    }
+
+    #[test]
     fn chat_mode_chats_never_take_a_project_or_a_worktree() {
         assert!(validate_task_kind(TaskKind::Chat, false, false).is_ok());
         assert!(validate_task_kind(TaskKind::Code, true, true).is_ok());
@@ -6632,6 +6658,41 @@ mod tests {
             .contains("turned off"));
         provider.enabled = true;
         assert!(validate_model_selection(&provider, "m", "off").is_ok());
+    }
+
+    #[test]
+    fn ultra_is_offered_on_any_model_that_can_reason_but_is_never_a_capability() {
+        let model = |levels: &[&str]| ModelRecord {
+            id: "m".into(),
+            name: "M".into(),
+            context_window: Some(8_000),
+            max_tokens: Some(1_000),
+            reasoning: levels.len() > 1,
+            thinking_levels: levels.iter().map(|level| level.to_string()).collect(),
+            thinking_level_map: Default::default(),
+            vision: false,
+            api_format: None,
+        };
+        let mut provider = ProviderRecord {
+            id: "p".into(),
+            name: "P".into(),
+            kind: ProviderKind::Custom,
+            base_url: "https://example.test/v1".into(),
+            api_format: "openai-completions".into(),
+            models: vec![model(&["off", "low", "high"])],
+            created_at: "now".into(),
+            updated_at: "now".into(),
+            has_api_key: true,
+            connected: true,
+            enabled: true,
+        };
+        assert!(validate_model_selection(&provider, "m", "ultra").is_ok());
+        provider.models = vec![model(&["off"])];
+        assert_eq!(
+            validate_model_selection(&provider, "m", "ultra").unwrap_err(),
+            "The selected model does not support Ultra reasoning"
+        );
+        assert!(validate_thinking("ultra").is_err());
     }
 
     #[test]

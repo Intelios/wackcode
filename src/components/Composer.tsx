@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { DEFAULT_EXECUTION_POLICY } from "../execution-policy";
 import { DEFAULT_AGENT_NAME } from "../agentName";
 import { ExecutionPolicyNotice } from "./ExecutionPolicyNotice";
-import type { ExecutionPolicyConfig, ImageContent, ProviderRecord, QueuedMessage, RestoredPrompt, SessionSnapshot, SlashCommand, TaskMode, TaskStatus, ThinkingLevel } from "../types";
+import type { ExecutionPolicyConfig, ImageContent, ProviderRecord, QueuedMessage, ReasoningEffort, RestoredPrompt, SessionSnapshot, SlashCommand, TaskMode, TaskStatus } from "../types";
 import { attachmentProblem, attachFiles, filesFrom, largePasteText, pastedTextFile, splitFileSection, type FileAttachment } from "../attachment-utils";
 import { activeMention, mentionValue, type ChatMentionSuggestion, type MentionSuggestion } from "../mention-utils";
 import { chatMentionToken, encodeChatRefs, rankSuggestions, survivingChatRefs } from "../chat-refs";
@@ -55,7 +55,7 @@ interface ComposerProps extends ModelFavoritesProps {
   draftState?: ComposerDraftState;
   providerId?: string;
   modelId?: string;
-  thinkingLevel?: ThinkingLevel;
+  thinkingLevel?: ReasoningEffort;
   providers: ProviderRecord[];
   stats?: SessionSnapshot["stats"];
   header?: ReactNode;
@@ -66,7 +66,7 @@ interface ComposerProps extends ModelFavoritesProps {
   executionPolicy?: ExecutionPolicyConfig;
   appliedExecutionPolicy?: ExecutionPolicyConfig;
   onModeChange?: (mode: TaskMode) => void;
-  onConfigure: (patch: { providerId?: string; modelId?: string; thinkingLevel?: ThinkingLevel }) => void;
+  onConfigure: (patch: { providerId?: string; modelId?: string; thinkingLevel?: ReasoningEffort }) => void;
   /** Resolves false when the send failed; the composer then restores the draft and attachments.
    * Attached text files travel as `files` and join the message text at the wire; `queue` is true
    * while running so the message waits for the active work to finish. */

@@ -2072,6 +2072,30 @@ button.reasoning-toggle.at-max .reasoning-toggle-label {
   -webkit-background-clip: text; background-clip: text; color: transparent;
   animation: reasoning-text-sheen 3.4s var(--ease) infinite;
 }
+/* Ultra, above the model's own top level, wears Ultra Plan's fixed warm palette so "Ultra" reads
+   the same in every theme: the pill radiates heat on Ultra Plan's own rhythm (`ultra-heat`), the
+   brain runs hot, and a warm sheen crosses the label faster than Max's. */
+button.reasoning-toggle.at-ultra {
+  color: var(--wc-ultra);
+  background: color-mix(in srgb, var(--wc-ultra) 11%, var(--surface-hover));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wc-ultra) 30%, transparent), 0 0 12px -3px color-mix(in srgb, var(--wc-ultra-hot) 55%, transparent);
+  animation: ultra-heat 5.4s ease-in-out infinite;
+}
+button.reasoning-toggle.at-ultra .reasoning-icon {
+  color: var(--wc-ultra-hot);
+  animation: reasoning-ultra-glint 2.6s ease-in-out infinite;
+}
+button.reasoning-toggle.at-ultra .reasoning-toggle-label {
+  background: linear-gradient(90deg, var(--wc-ultra) 36%, var(--wc-ultra-glow) 50%, var(--wc-ultra) 64%);
+  background-size: 260% 100%;
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: reasoning-text-sheen 2.6s var(--ease) infinite;
+}
+/* A run owns the reasoning: hold the heat still, as Ultra Plan's toggle does, rather than animate
+   a control the user can't use. The warm colours stay. */
+button.reasoning-toggle.at-ultra:disabled,
+button.reasoning-toggle.at-ultra:disabled .reasoning-icon,
+button.reasoning-toggle.at-ultra:disabled .reasoning-toggle-label { animation: none; }
 
 /* Send is the one accent object in the toolbar: grey until there is something to send, then
    lit with a soft glow. It leans into a hover like Chat's and dips when pressed. Queue is the
@@ -2173,7 +2197,8 @@ button.reasoning-toggle.at-max .reasoning-toggle-label {
 
 /* reasoning popover & slider */
 .reasoning-pop { padding: 0; }
-.reasoning-panel { padding: 14px 14px 12px; width: 256px; box-sizing: border-box; }
+/* Wide enough for eight tick labels (all seven levels plus Ultra) without them touching. */
+.reasoning-panel { padding: 14px 14px 12px; width: 296px; box-sizing: border-box; }
 .reasoning-header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
 /* The head's mark lights with the level: grey while reasoning is off, the accent once it is on. */
 .reasoning-head-mark {
@@ -2258,6 +2283,50 @@ button.reasoning-toggle.at-max .reasoning-toggle-label {
 .reasoning-tick:hover { color: var(--text-soft); }
 .reasoning-tick.selected .reasoning-tick-label { color: var(--text); font-weight: 600; }
 .reasoning-tick-label { display: block; font-size: 10px; line-height: 1; white-space: nowrap; }
+
+/* Ultra's panel: the track turns molten — amber running to ember red at the top end, a slow heat
+   wave rolling through it and coals that swell on an uneven beat — sparks lift off its top edge
+   into the gap under the header, and the thumb becomes a white-hot core. Max's light and
+   particles belong to the model's own top level and never show here. */
+.reasoning-panel.at-ultra .reasoning-header .reasoning-head-mark {
+  background: color-mix(in srgb, var(--wc-ultra) 14%, var(--surface-hover)); color: var(--wc-ultra-hot);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wc-ultra) 34%, transparent), 0 0 14px -3px color-mix(in srgb, var(--wc-ultra-hot) 60%, transparent);
+}
+.reasoning-panel.at-ultra .reasoning-level-name {
+  color: var(--wc-ultra);
+  text-shadow: 0 0 16px color-mix(in srgb, var(--wc-ultra-hot) 55%, transparent);
+}
+.reasoning-panel.at-ultra .reasoning-fill {
+  background: linear-gradient(90deg, var(--wc-ultra) 0%, color-mix(in srgb, var(--wc-ultra) 55%, var(--wc-ultra-hot)) 62%, var(--wc-ultra-hot) 100%);
+  box-shadow: 0 0 18px -2px color-mix(in srgb, var(--wc-ultra-hot) 60%, transparent);
+  animation: reasoning-ultra-heat 3.3s ease-in-out infinite;
+}
+.reasoning-panel.at-ultra .reasoning-fill::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 55%;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--wc-ultra-glow) 55%, transparent), transparent);
+  transform: translateX(-120%);
+  animation: reasoning-ultra-wave 2.4s ease-in-out infinite;
+}
+.reasoning-panel.at-ultra .reasoning-dot.on { background: color-mix(in srgb, var(--wc-ultra-glow) 70%, transparent); }
+.reasoning-panel.at-ultra .reasoning-thumb {
+  background: var(--wc-ultra-glow);
+  box-shadow:
+    0 1px 5px rgb(0 0 0 / .55), 0 0 0 1px rgb(0 0 0 / .18),
+    0 0 0 3px color-mix(in srgb, var(--wc-ultra) 32%, transparent),
+    0 0 14px 2px color-mix(in srgb, var(--wc-ultra-hot) 62%, transparent);
+}
+.reasoning-panel.at-ultra .reasoning-tick.selected .reasoning-tick-label { color: var(--wc-ultra); }
+/* Sparks are born on the track's top rim and climb 14–19px on `ultra-ember`, the same throw as
+   Ultra Plan's flame embers: bright on the way out, thinning only over the last stretch. */
+.reasoning-ultra-fx { position: absolute; inset: 0; pointer-events: none; }
+.reasoning-ultra-fx span {
+  position: absolute; bottom: calc(100% - 3px); border-radius: 50%;
+  background: var(--wc-ultra-glow); opacity: 0;
+  box-shadow:
+    0 0 4px 1px color-mix(in srgb, var(--wc-ultra-hot) 90%, transparent),
+    0 0 9px 3px color-mix(in srgb, var(--wc-ultra-hot) 30%, transparent);
+  animation: ultra-ember 1.6s ease-out infinite;
+}
 
 /* ── Chat area (src/components/chat/) ───────────────
    Chat mode's own messenger UI: bubbles, the duck's typing bubble, activity chips, the hero
@@ -3297,6 +3366,22 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   0% { background-position: 110% 0; }
   45%, 100% { background-position: -8% 0; }
 }
+/* Coals, not a metronome: the fill swells and dips on an uneven beat. */
+@keyframes reasoning-ultra-heat {
+  0%, 100% { filter: brightness(1) saturate(1); }
+  18% { filter: brightness(1.1) saturate(1.08); }
+  34% { filter: brightness(.97) saturate(1); }
+  57% { filter: brightness(1.14) saturate(1.12); }
+  78% { filter: brightness(1.02) saturate(1.02); }
+}
+@keyframes reasoning-ultra-wave {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(240%); }
+}
+@keyframes reasoning-ultra-glint {
+  0%, 100% { filter: drop-shadow(0 0 2px color-mix(in srgb, var(--wc-ultra-hot) 55%, transparent)); }
+  50% { filter: brightness(1.25) drop-shadow(0 0 4px color-mix(in srgb, var(--wc-ultra-hot) 85%, transparent)); }
+}
 @keyframes reasoning-icon-glint {
   0%, 3% { filter: brightness(1); }
   9% { filter: brightness(1.7) drop-shadow(0 0 3px color-mix(in srgb, var(--wc-accent-hover) 80%, transparent)); }
@@ -3321,6 +3406,14 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   .reasoning-max-fx span { animation: none; opacity: .6; transform: none; }
   button.reasoning-toggle.at-max .reasoning-icon,
   button.reasoning-toggle.at-max .reasoning-toggle-label { animation: none; }
+  /* Ultra holds still but stays warm: the molten fill with its wave parked, sparks hanging where
+     they would be mid-climb, and the pill's resting glow. */
+  .reasoning-panel.at-ultra .reasoning-fill { animation: none; }
+  .reasoning-panel.at-ultra .reasoning-fill::after { animation: none; opacity: .5; transform: translateX(70%); }
+  .reasoning-ultra-fx span { animation: none; opacity: .75; transform: translate(calc(var(--drift) * .5), calc(var(--rise) * -.5)); }
+  button.reasoning-toggle.at-ultra,
+  button.reasoning-toggle.at-ultra .reasoning-icon,
+  button.reasoning-toggle.at-ultra .reasoning-toggle-label { animation: none; }
   .command-word:hover, .command-word:focus-visible { animation: none; background-position: 0 0; }
   .settings-subnav { transform: none !important; }
   .settings-back-button svg { transform: none !important; }

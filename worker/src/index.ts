@@ -26,6 +26,7 @@ import { SUBAGENT_TOOL_NAME } from "./builtin/subagents/types.js";
 import { createModelRuntime, findModel, MODEL_MISSING_MESSAGE, missingModelMessage, missingModelPlaceholder, workerSettings, type PiModel } from "./model-runtime.js";
 import { sameExecutionPolicy } from "./execution-policy.js";
 import { promptOverrides, setPromptOverrides } from "./prompt-overrides.js";
+import { isUltra, piThinkingLevel, ultraPrompt } from "./builtin/ultra.js";
 import { INLINE_IMAGE_LIMITS } from "./image-limits.js";
 import { describeProviderError } from "./provider-error.js";
 import { SubagentRunner } from "./subagent-runner.js";
@@ -116,6 +117,9 @@ let workspacePath: string | undefined;
 let chatKind = false;
 // The guide last served to Pi, so a run can tell when it went stale (a new day, a tool change).
 let servedGuide: string | undefined;
+// The chat's reasoning is Ultra (`builtin/ultra.ts`): Pi runs at the model's top level and the
+// system prompt gains the Ultra instruction. Set from `init` before the session exists.
+let ultra = false;
 let workspaceIsGitRepo = false;
 // Settings › Git: the coding guide asks for a Co-authored-by trailer naming the chat's model.
 let commitAttribution = false;
@@ -866,7 +870,7 @@ function getSnapshot(rev: number): SessionSnapshot {
       contextUsage: stats.contextUsage,
       contextBreakdown: contextBreakdown(stats)
     },
-    thinkingLevel: session.thinkingLevel as ThinkingLevel,
+    thinkingLevel: ultra ? "ultra" : session.thinkingLevel as ThinkingLevel,
     availableThinkingLevels: session.getAvailableThinkingLevels() as ThinkingLevel[],
     model: model ? { provider: model.provider, id: model.id, name: model.name } : undefined,
     ...(chatModelMissing() ? { modelMissing: true, modelIssue: missingModelReason } : {}),
@@ -1220,7 +1224,12 @@ function withAppLayers(loader: ResourceLoader): ResourceLoader {
     getAppendSystemPrompt: () => {
       const memory = builtins.memory.appendPrompt();
       servedGuide = chatKind ? chatGuide() : codeGuide();
-      return [servedGuide, ...(chatKind ? [] : loader.getAppendSystemPrompt()), ...(memory ? [memory] : [])];
+      return [
+        servedGuide,
+        ...(chatKind ? [] : loader.getAppendSystemPrompt()),
+        ...(memory ? [memory] : []),
+        ...(ultra ? [ultraPrompt()] : [])
+      ];
     },
     getAppendSystemPromptSources: () => {
       const path = builtins.memory.sourcePath();
@@ -1311,7 +1320,7 @@ async function initialize(command: InitCommand): Promise<void> {
     parentProvider: command.provider,
     parentRuntime: modelRuntime,
     parentModel: () => session?.model,
-    parentThinkingLevel: () => (session?.thinkingLevel ?? command.thinkingLevel) as ThinkingLevel,
+    parentThinkingLevel: () => (session?.thinkingLevel ?? piThinkingLevel(command.thinkingLevel)) as ThinkingLevel,
     safeError
   });
   builtins.configureExecutionPolicy(chatKind ? undefined : command.executionPolicy);
@@ -1320,6 +1329,7 @@ async function initialize(command: InitCommand): Promise<void> {
   builtins.computerUse.configure(!chatKind && command.computerUse?.enabled === true);
   builtins.webSearch.configure(command.web);
   commitAttribution = !chatKind && command.git?.commitAttribution === true;
+  ultra = isUltra(command.thinkingLevel);
   // Before any contract can be published: the plan-mode extension composes each contract from
   // the current overrides, and the restored session's reconcile runs right after creation.
   setPromptOverrides(command.prompts);
@@ -1390,7 +1400,7 @@ async function initialize(command: InitCommand): Promise<void> {
     agentDir: command.agentDir,
     modelRuntime,
     model: sessionModel,
-    thinkingLevel: command.thinkingLevel,
+    thinkingLevel: piThinkingLevel(command.thinkingLevel),
     // `excludeTools` takes a tool out of the registry on every refresh, so a Chat mode chat has
     // no shell to re-activate. (It is not the `tools:` allowlist, which would erase extension tools.)
     excludeTools: chatKind ? [...UNSUPPORTED_TOOLS, "bash"] : UNSUPPORTED_TOOLS,
@@ -2164,7 +2174,10 @@ async function handle(command: WorkerCommand): Promise<void> {
       emitSnapshot();
     } else if (command.type === "set_thinking") {
       if (session.isStreaming) throw new Error("Wait for the current run before changing reasoning effort");
-      session.setThinkingLevel(command.level);
+      ultra = isUltra(command.level);
+      session.setThinkingLevel(piThinkingLevel(command.level));
+      // Re-applying the active tools rebuilds the system prompt, adding or dropping the Ultra text.
+      applyDisabledTools();
       emitSnapshot();
     } else if (command.type === "set_mode") {
       refuseInChat("Plan mode");

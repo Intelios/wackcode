@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
-import { DEFAULT_CHAT_PROMPT, DEFAULT_PLAN_PROMPT, DEFAULT_SYSTEM_PROMPT, DEFAULT_ULTRA_PLAN_PROMPT } from "../promptDefaults";
+import { DEFAULT_CHAT_PROMPT, DEFAULT_PLAN_PROMPT, DEFAULT_SYSTEM_PROMPT, DEFAULT_ULTRA_PLAN_PROMPT, DEFAULT_ULTRA_PROMPT } from "../promptDefaults";
 import type { PromptConfig } from "../types";
 import { Icon, type IconName } from "./Icons";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
@@ -17,7 +17,7 @@ interface PromptSpec {
   /** What the editor is prefilled with: the user's text, or the built-in text to start from. */
   defaultText: string;
   icon: IconName;
-  /** Ultra Plan keeps its fixed warm palette in every theme; the rest follow the accent. */
+  /** Ultra Plan and Ultra keep their fixed warm palette in every theme; the rest follow the accent. */
   tone: "accent" | "ultra";
   /** Explain the app-owned guidance outside this editable text. */
   note?: string;
@@ -51,6 +51,15 @@ const PROMPTS: PromptSpec[] = [
     icon: "flame",
     tone: "ultra",
     note: "WackCode adds one hidden header line above this text to recognise the contract; everything you write here is the contract the model sees."
+  },
+  {
+    key: "ultraPrompt",
+    title: "Ultra",
+    description: "Added to a chat's system prompt while its reasoning is set to Ultra, in the Code and Chat areas.",
+    defaultText: DEFAULT_ULTRA_PROMPT,
+    icon: "brain",
+    tone: "ultra",
+    note: "Ultra also runs the model at its highest reasoning level; this text is the extra instruction."
   },
   {
     key: "chatPrompt",

@@ -2965,6 +2965,57 @@ describe("custom prompts (Settings → Prompts)", () => {
     expect(worker.child.exitCode).toBeNull();
   });
 
+  it("runs Ultra at the model's top level with the Ultra instruction, and never hands Pi the word", async () => {
+    const { DEFAULT_ULTRA_PROMPT } = await import("./builtin/ultra.js");
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-ultra-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker, ready } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "ultra-task", undefined, undefined, undefined, undefined, undefined,
+      { thinkingLevel: "ultra" });
+    cleanup.push(() => worker.shutdown());
+    expect(ready.snapshot?.thinkingLevel).toBe("ultra");
+    const send = async (runId: string) => {
+      const index = provider.requests.length;
+      worker.send({ id: crypto.randomUUID(), type: "prompt", runId, message: "Hello." });
+      await worker.waitFor((output) => output.type === "run_state" && output.runId === runId && output.state === "idle");
+      return index;
+    };
+    // The fixture model's levels are off and high, so Ultra's `max` clamps to high.
+    const first = await send("ultra-1");
+    expect(provider.requests[first].body.reasoning_effort).toBe("wire-high");
+    expect(systemPromptOf(provider, first)).toContain(DEFAULT_ULTRA_PROMPT);
+
+    const promptsId = crypto.randomUUID();
+    worker.send({ id: promptsId, type: "set_prompts", prompts: { ultraPrompt: "CUSTOM_ULTRA_RULES" } });
+    await worker.waitFor((output) => output.type === "response" && output.id === promptsId && output.success);
+    const second = await send("ultra-2");
+    expect(systemPromptOf(provider, second)).toContain("CUSTOM_ULTRA_RULES");
+
+    const thinkingId = crypto.randomUUID();
+    worker.send({ id: thinkingId, type: "set_thinking", level: "high" });
+    await worker.waitFor((output) => output.type === "response" && output.id === thinkingId && output.success);
+    expect(worker.view?.thinkingLevel).toBe("high");
+    const third = await send("ultra-3");
+    expect(provider.requests[third].body.reasoning_effort).toBe("wire-high");
+    // The latest system message patch carries the addendum without the Ultra text.
+    const addenda = systemPromptOf(provider, third).split("<addendum>");
+    expect(addenda.at(-1)).not.toContain("CUSTOM_ULTRA_RULES");
+    expect(worker.child.exitCode).toBeNull();
+  });
+
+  it("leaves the Ultra instruction out of a chat that is not on Ultra", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-not-ultra-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "not-ultra-task");
+    cleanup.push(() => worker.shutdown());
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "plain", message: "Hello." });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "plain" && output.state === "idle");
+    expect(systemPromptOf(provider)).not.toContain("Optimise for the most exhaustive, correct answer");
+  });
+
   it("asks for a co-author trailer naming the model of each run, until set_git switches it off", async () => {
     const provider = await startMockProvider();
     cleanup.push(provider.close);
@@ -4336,6 +4387,17 @@ describe("sub-agents", () => {
     expect(offered(requests[0])).not.toContain("web_fetch");
   });
 
+  it("runs a child on an Ultra chat's model at the top level, without the Ultra instruction", async () => {
+    const { provider, worker } = await start("subagents-ultra", { subagents: config({ agents: [scout] }), thinkingLevel: "ultra" });
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "ultra-child", message: "subagent single" });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "ultra-child" && output.state === "idle");
+    const child = provider.requests.find((request) => request.text.startsWith("child-"));
+    expect(child).toBeDefined();
+    expect(child!.body.reasoning_effort).toBe("wire-high");
+    expect(JSON.stringify(child!.body.messages)).not.toContain("Optimise for the most exhaustive, correct answer");
+    expect(JSON.stringify(provider.requests[0].body.messages)).toContain("Optimise for the most exhaustive, correct answer");
+  });
+
   it("adds the shell companion only for children whose role and global switches allow bash", async () => {
     const { provider, worker, ready } = await start("subagents-shell-companion", {
       subagents: config({ agents: [{ ...scout, tools: ["read", "ls"] }] }),
@@ -5586,6 +5648,16 @@ describe("Chat mode", () => {
     const later = await run(worker, provider, "Again.", 1);
     expect(offeredTools(provider.requests[later])).not.toContain("web_search");
     expect(systemTextOf(provider.requests.at(-1)!)).toContain("You have no built-in web search");
+  });
+
+  it("adds the Ultra instruction to a Chat mode chat on Ultra, after its guide", async () => {
+    const { DEFAULT_ULTRA_PROMPT } = await import("./builtin/ultra.js");
+    const { provider, worker } = await start("chat-ultra", { extra: { thinkingLevel: "ultra" } });
+    const first = await run(worker, provider, "Hello.", 1);
+    const prompt = systemTextOf(provider.requests[first]);
+    expect(provider.requests[first].body.reasoning_effort).toBe("wire-high");
+    expect(prompt).toContain(`${DEFAULT_ULTRA_PROMPT}\n</addendum>`);
+    expect(prompt.indexOf("## Working in this chat")).toBeLessThan(prompt.indexOf(DEFAULT_ULTRA_PROMPT));
   });
 
   it("starts with the custom persona when Settings has one", async () => {

@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import type { ModelRef, ProviderRecord, ThinkingLevel } from "../types";
-import { favoriteModelEntries, modelIsReady } from "../model-utils";
+import type { ModelRef, ProviderRecord, ReasoningEffort } from "../types";
+import { favoriteModelEntries, modelIsReady, reasoningLevels } from "../model-utils";
 import { Icon } from "./Icons";
 import { Popover } from "./ui/Popover";
 
@@ -17,20 +17,20 @@ export interface ModelPickerProps extends ModelFavoritesProps {
   modelId?: string;
   disabled?: boolean;
   popoverSide?: "top" | "bottom";
-  onConfigure: (patch: { providerId?: string; modelId?: string; thinkingLevel?: ThinkingLevel }) => void;
+  onConfigure: (patch: { providerId?: string; modelId?: string; thinkingLevel?: ReasoningEffort }) => void;
 }
 
 export interface ReasoningToggleProps {
   providers: ProviderRecord[];
   providerId?: string;
   modelId?: string;
-  thinkingLevel?: ThinkingLevel;
+  thinkingLevel?: ReasoningEffort;
+  /** Offer Ultra above the model's own levels. Off for a sub-agent's own model. */
+  allowUltra?: boolean;
   disabled?: boolean;
   popoverSide?: "top" | "bottom";
-  onConfigure: (patch: { thinkingLevel: ThinkingLevel }) => void;
+  onConfigure: (patch: { thinkingLevel: ReasoningEffort }) => void;
 }
-
-const LEVEL_ORDER: Record<ThinkingLevel, number> = { off: 0, minimal: 1, low: 2, medium: 3, high: 4, xhigh: 5, max: 6 };
 
 const MAX_FX_DOTS = [
   { left: "6%", top: "30%", size: 3, dur: "3.4s", delay: "-0.4s" },
@@ -45,6 +45,20 @@ const MAX_FX_DOTS = [
   { left: "81%", top: "62%", size: 2.6, dur: "2.5s", delay: "-2.3s" },
   { left: "90%", top: "40%", size: 3.2, dur: "3.6s", delay: "-0.7s" },
   { left: "96%", top: "55%", size: 2.4, dur: "2.8s", delay: "-1.9s" }
+];
+
+// Ultra's sparks leave the track's top edge and climb into the gap under the header. Uneven
+// spacing, sizes and periods keep any two from landing on the same beat (see `.flame-ember`).
+const ULTRA_EMBERS = [
+  { left: "7%", size: 3, rise: "15px", drift: "-2px", dur: "1.7s", delay: "-0.3s" },
+  { left: "18%", size: 2.4, rise: "18px", drift: "2.5px", dur: "1.4s", delay: "-1.1s" },
+  { left: "29%", size: 3.4, rise: "14px", drift: "-3px", dur: "1.9s", delay: "-0.8s" },
+  { left: "41%", size: 2.6, rise: "17px", drift: "1.5px", dur: "1.5s", delay: "-1.6s" },
+  { left: "53%", size: 3.2, rise: "16px", drift: "-1.5px", dur: "1.8s", delay: "-0.1s" },
+  { left: "64%", size: 2.2, rise: "19px", drift: "3px", dur: "1.3s", delay: "-0.9s" },
+  { left: "75%", size: 3, rise: "15px", drift: "-2.5px", dur: "1.6s", delay: "-1.4s" },
+  { left: "86%", size: 2.6, rise: "17px", drift: "2px", dur: "2s", delay: "-0.5s" },
+  { left: "94%", size: 2.2, rise: "14px", drift: "-1px", dur: "1.45s", delay: "-1.2s" }
 ];
 
 export function ModelPicker({
@@ -287,6 +301,7 @@ export function ReasoningToggle({
   providerId,
   modelId,
   thinkingLevel = "off",
+  allowUltra = true,
   disabled,
   popoverSide = "top",
   onConfigure
@@ -297,11 +312,9 @@ export function ReasoningToggle({
 
   const provider = providers.find((item) => item.id === providerId);
   const model = provider?.models.find((item) => item.id === modelId);
-  const levels: ThinkingLevel[] = (model?.thinkingLevels.length ? model.thinkingLevels : (["off"] as ThinkingLevel[]))
-    .slice()
-    .sort((a, b) => LEVEL_ORDER[a] - LEVEL_ORDER[b]);
+  const levels = reasoningLevels(model, { ultra: allowUltra });
 
-  const activeLevel: ThinkingLevel = levels.includes(thinkingLevel) ? thinkingLevel : levels[0] ?? "off";
+  const activeLevel: ReasoningEffort = levels.includes(thinkingLevel) ? thinkingLevel : levels[0] ?? "off";
   const currentIndex = Math.max(0, levels.indexOf(activeLevel));
 
   // Little "pop" on the thumb whenever the level changes (and when the popover opens)
@@ -319,7 +332,11 @@ export function ReasoningToggle({
   }
 
   const isReasoningOn = activeLevel !== "off";
-  const isTopLevel = currentIndex === levels.length - 1;
+  // Max's effect stays on the model's own top level; Ultra, above it, has its own.
+  const isUltra = activeLevel === "ultra";
+  const topOwnIndex = levels.length - (levels.includes("ultra") ? 2 : 1);
+  const isTopLevel = currentIndex === topOwnIndex;
+  const peak = isUltra ? " at-ultra" : isTopLevel ? " at-max" : "";
   const position = currentIndex / (levels.length - 1);
 
   function pick(idx: number) {
@@ -334,7 +351,7 @@ export function ReasoningToggle({
       <button
         ref={triggerRef}
         type="button"
-        className={`model-pill reasoning-toggle${isReasoningOn ? " active" : ""}${isTopLevel ? " at-max" : ""}`}
+        className={`model-pill reasoning-toggle${isReasoningOn ? " active" : ""}${peak}`}
         disabled={disabled}
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -353,7 +370,7 @@ export function ReasoningToggle({
         align="start"
         className="reasoning-pop"
       >
-        <div className={`reasoning-panel${isTopLevel ? " at-max" : ""}`}>
+        <div className={`reasoning-panel${peak}`}>
           <div className="reasoning-header">
             <span className="reasoning-head-mark" aria-hidden="true"><Icon name="brain" className="reasoning-head-icon" /></span>
             <div className="reasoning-head-text">
@@ -381,6 +398,20 @@ export function ReasoningToggle({
                   </div>
                 )}
               </div>
+              {isUltra && (
+                <div className="reasoning-ultra-fx">
+                  {ULTRA_EMBERS.map((ember, idx) => (
+                    <span
+                      key={idx}
+                      style={{
+                        left: ember.left, width: ember.size, height: ember.size,
+                        "--rise": ember.rise, "--drift": ember.drift,
+                        animationDuration: ember.dur, animationDelay: ember.delay
+                      } as CSSProperties}
+                    />
+                  ))}
+                </div>
+              )}
               {levels.map((level, idx) => (
                 <span
                   key={level}

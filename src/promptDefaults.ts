@@ -5,7 +5,7 @@
  * `promptDefaults.test.ts` pins the copies, so a change on either side fails a test.
  * When a pinned test fails after updating one side, copy the new text here (or there) to match.
  * The Chat mode persona mirrors `DEFAULT_CHAT_PROMPT` in `worker/src/builtin/chat-mode/prompt.ts`
- * the same way.
+ * the same way, and the Ultra instruction `DEFAULT_ULTRA_PROMPT` in `worker/src/builtin/ultra.ts`.
  */
 export const DEFAULT_SYSTEM_PROMPT = `You are a coding agent working inside WackCode, a desktop app for macOS. You work with the user toward their goals in their project, using your own judgment along the way. Use the instructions below and the tools available to you.
 
@@ -183,6 +183,13 @@ Only call plan_mode_complete when the plan leaves no implementation decisions un
 Keep the plan concise, human and agent digestible, and free of open decisions. Prefer grouped behavior-level changes over file-by-file or symbol-by-symbol inventories. Do not ask "should I proceed?"; plan_mode_complete opens the plan review in the app.
 
 If the user requests revisions after a completed plan, the next plan_mode_complete call must contain a complete replacement, not a delta. If there is not enough information for a complete replacement, continue planning with ask_user_question instead of calling plan_mode_complete.`;
+
+export const DEFAULT_ULTRA_PROMPT = `# Ultra
+The user set this chat to Ultra: you are running at your highest reasoning effort, and speed and cost are not the goal. Optimise for the most exhaustive, correct answer — not the fastest or cheapest.
+- Investigate fully before you act or conclude. Read the relevant files and context rather than assuming, and follow each lead to the end.
+- Weigh alternatives and edge cases, and check your reasoning for gaps before you commit to an answer.
+- Verify thoroughly: run the checks that would catch you being wrong, and don't settle for the first answer that looks plausible.
+- Ultra changes how hard you work, not what you may do. Every other instruction still applies, and your replies stay as clear and readable as usual.`;
 
 /**
  * The WackCode Agent GitHub App's bot address that Settings › Git previews, mirroring

@@ -4,13 +4,14 @@ import { agentName } from "../agentName";
 import { modelIsReady } from "../model-utils";
 import { BROWSER_TOOL_NAMES, SHOW_VISUAL_TOOL_NAME, WEB_FETCH_TOOL_NAME } from "../tool-utils";
 import { SUGGEST_TASK_TOOL_NAME } from "../suggestions";
-import type { ExecutionPolicyConfig, AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CommandsConfig, ComputerUseConfig, McpConfig, MemoryConfig, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ToolCatalogEntry, WebConfig } from "../types";
+import type { ExecutionPolicyConfig, AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CommandsConfig, ComputerUseConfig, GitConfig, McpConfig, MemoryConfig, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ToolCatalogEntry, WebConfig } from "../types";
 import { Icon, type IconName } from "./Icons";
 import { AboutSection } from "./AboutSection";
 import { CommandsSection, type SlashCommandActions } from "./CommandsSection";
 import { MemorySection, type MemoryActions } from "./MemorySection";
 import { ComputerUseSection, type ComputerUseActions } from "./ComputerUseSection";
 import { ComputerUseSetupDialog } from "./ComputerUseSetupDialog";
+import { GitSection } from "./GitSection";
 import { IntegrationsSection } from "./IntegrationsSection";
 import { McpSection, type McpActions } from "./McpSection";
 import { PackagesSection, type PackageActions } from "./PackagesSection";
@@ -86,8 +87,10 @@ const WEB_ACTIONS: WebActions = {
   onOpenLink: (url) => void api.revealPath(url).catch(() => undefined)
 };
 const WEB_OFF: WebConfig = { enabled: false, providers: [], activeProviderId: null, routeFetch: false };
+/** Rust fills `git` in for every metadata file; this only covers fixtures without it. */
+const GIT_DEFAULT: GitConfig = { commitAttribution: true };
 
-type SectionId = "providers" | "packages" | "skills" | "commands" | "memory" | "tools" | "mcp" | "web" | "appearance" | "prompts" | "subagents" | "computer_use" | "integrations" | "developer" | "about";
+type SectionId = "providers" | "packages" | "skills" | "commands" | "memory" | "tools" | "git" | "mcp" | "web" | "appearance" | "prompts" | "subagents" | "computer_use" | "integrations" | "developer" | "about";
 
 interface Section {
   id: SectionId;
@@ -103,6 +106,7 @@ const SECTIONS: Section[] = [
   { id: "commands", label: "Commands", icon: "slash" },
   { id: "memory", label: "Memory", icon: "memory" },
   { id: "tools", label: "Tools", icon: "wrench" },
+  { id: "git", label: "Git", icon: "git" },
   { id: "mcp", label: "MCP servers", icon: "plug" },
   // Always listed: besides web search, it holds Web Fetch's switch.
   { id: "web", label: "Web", icon: "globe" },
@@ -167,12 +171,15 @@ interface Props extends PackageActions, ModelFavoritesProps {
   /** Settings › Web; absent in metadata from before it existed. */
   web?: WebConfig;
   onWebChanged?: (config: WebConfig) => void;
+  /** Settings › Git; listed once `onSetGit` is wired. */
+  git?: GitConfig;
+  onSetGit?: (config: GitConfig) => Promise<void>;
 }
 
 export function SettingsPage({
   executionPolicy, onSetExecutionPolicy, providers, favoriteModels, favoriteSaving, onSetFavorite, packages, toolCatalog, disabledTools, appDataPath,
   onClose, onSave, onDelete, onSetProviderEnabled, onConnectSubscription, onSignOutSubscription, connectedSubscriptionId, onSetDisabledTools,
-  subagents, onSetSubagents, computerUse = COMPUTER_USE_OFF, computerUseSupported = false, onSetComputerUse, autoTitle, onSetAutoTitle, appearance, glassSupported, onSetAppearance, onPreviewAppearance, backgroundImageUrlFor, onChooseBackgroundImage, onRemoveBackgroundImage, onSelectBackgroundImage, onShuffleBackgroundImage, prompts, onSetPrompts, onCommandsChanged, memory, onSetMemory, mcp, mcpActions, devBuild, web = WEB_OFF, onWebChanged, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
+  subagents, onSetSubagents, computerUse = COMPUTER_USE_OFF, computerUseSupported = false, onSetComputerUse, autoTitle, onSetAutoTitle, appearance, glassSupported, onSetAppearance, onPreviewAppearance, backgroundImageUrlFor, onChooseBackgroundImage, onRemoveBackgroundImage, onSelectBackgroundImage, onShuffleBackgroundImage, prompts, onSetPrompts, onCommandsChanged, memory, onSetMemory, mcp, mcpActions, devBuild, web = WEB_OFF, onWebChanged, git = GIT_DEFAULT, onSetGit, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
 }: Props) {
   const [chosenSection, setSection] = useState<SectionId>("providers");
   const [computerSetup, setComputerSetup] = useState(false);
@@ -180,7 +187,7 @@ export function SettingsPage({
   const section: SectionId =
     (chosenSection === "subagents" && !subagents.enabled) || (chosenSection === "computer_use" && !computerUse.enabled) ? "packages" : chosenSection;
   const sections = SECTIONS.filter((item) =>
-    (item.id !== "subagents" || subagents.enabled) && (item.id !== "computer_use" || computerUse.enabled) && (item.id !== "mcp" || mcpActions) && (item.id !== "developer" || devBuild));
+    (item.id !== "subagents" || subagents.enabled) && (item.id !== "computer_use" || computerUse.enabled) && (item.id !== "mcp" || mcpActions) && (item.id !== "git" || onSetGit) && (item.id !== "developer" || devBuild));
   /** Undefined shows the connections overview; "new" a new connection. */
   const [selectedProviderId, setSelectedProviderId] = useState<string>();
   /** Bumped on every navigation between connections, so each opens in a fresh editor. */
@@ -423,6 +430,7 @@ export function SettingsPage({
             onShuffleImage={onShuffleBackgroundImage}
           />
         )}
+        {section === "git" && onSetGit && <GitSection config={git} agentName={agentName(appearance)} onChange={onSetGit} />}
         {section === "prompts" && <PromptsSection unrestrictedPlanning={executionPolicy?.unrestrictedPlanning} config={prompts} agentName={agentName(appearance)} onChange={onSetPrompts} />}
         {section === "mcp" && mcpActions && <McpSection servers={mcp?.servers ?? []} agentName={agentName(appearance)} {...mcpActions} />}
         {section === "web" && (

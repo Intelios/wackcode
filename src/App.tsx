@@ -50,6 +50,7 @@ import type {
   CheckpointChange,
   CheckpointRef,
   ExecutionPolicyConfig,
+  GitConfig,
   ExtensionNotice,
   ExtensionUIRequest,
   ComputerAccessDecision,
@@ -1879,6 +1880,11 @@ export default function App() {
     setData((current) => ({ ...current, executionPolicy: saved }));
   }
 
+  async function setGit(config: GitConfig) {
+    const saved = await api.setGitConfig(config);
+    setData((current) => ({ ...current, git: saved }));
+  }
+
   async function setPrompts(config: PromptConfig) {
     const previous = data.prompts;
     setData((current) => ({ ...current, prompts: config }));
@@ -3090,6 +3096,8 @@ export default function App() {
           onShuffleBackgroundImage={shuffleBackgroundImage}
           executionPolicy={data.executionPolicy ?? DEFAULT_EXECUTION_POLICY}
           onSetExecutionPolicy={setExecutionPolicy}
+          git={data.git}
+          onSetGit={setGit}
           prompts={data.prompts}
           onSetPrompts={setPrompts}
           onCommandsChanged={commandsChanged}

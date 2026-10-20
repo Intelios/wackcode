@@ -2965,6 +2965,54 @@ describe("custom prompts (Settings → Prompts)", () => {
     expect(worker.child.exitCode).toBeNull();
   });
 
+  it("asks for a co-author trailer naming the model of each run, until set_git switches it off", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-coauthor-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const base = initCommand(provider.baseUrl, "alpha-secret", workspace, "coauthor-task");
+    const second = { ...base.provider.models[0], id: "second-model", name: "Second <model>" };
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "coauthor-task", undefined, undefined, undefined, undefined, undefined,
+      { git: { commitAttribution: true }, provider: { ...base.provider, models: [...base.provider.models, second] } });
+    cleanup.push(() => worker.shutdown());
+    const trailer = (model: string) => `Co-authored-by: ${model} (WackCode) <345377139+wackcode-agent[bot]@users.noreply.github.com>`;
+    const runOnce = async (runId: string) => {
+      const index = provider.requests.length;
+      worker.send({ id: crypto.randomUUID(), type: "prompt", runId, message: "Commit it." });
+      await worker.waitFor((output) => output.type === "run_state" && output.runId === runId && output.state === "idle");
+      return systemPromptOf(provider, index);
+    };
+    const sendAndWait = async (command: Record<string, unknown>) => {
+      const id = crypto.randomUUID();
+      worker.send({ id, ...command });
+      await worker.waitFor((output) => output.type === "response" && output.id === id && output.success);
+    };
+
+    expect(await runOnce("run-1")).toContain(`Commit attribution: end each commit message you write with a blank line and then exactly this trailer, which names the model running now: ${trailer("Shared model")}.`);
+    await sendAndWait({ type: "set_model", modelId: "second-model" });
+    expect(await runOnce("run-2")).toContain(trailer("Second model"));
+    await sendAndWait({ type: "set_git", git: { commitAttribution: false } });
+    expect(await runOnce("run-3")).not.toMatch(/Co-authored-by|Commit attribution/);
+    await sendAndWait({ type: "set_git", git: { commitAttribution: true } });
+    expect(await runOnce("run-4")).toContain(trailer("Second model"));
+  });
+
+  it("never asks a Chat mode chat for the trailer, whatever the host sends", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const scratch = await mkdtemp(join(tmpdir(), "wackcode-coauthor-chat-"));
+    cleanup.push(() => rm(scratch, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", scratch, "coauthor-chat", undefined, undefined, undefined, undefined, undefined,
+      { kind: "chat", git: { commitAttribution: true } });
+    cleanup.push(() => worker.shutdown());
+    const gitId = crypto.randomUUID();
+    worker.send({ id: gitId, type: "set_git", git: { commitAttribution: true } });
+    await worker.waitFor((output) => output.type === "response" && output.id === gitId && output.success);
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "Hello." });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "run-1" && output.state === "idle");
+    expect(systemPromptOf(provider)).not.toMatch(/Co-authored-by|Commit attribution/);
+  });
+
   it("preserves loader trust and SYSTEM.md precedence, with the guide before append text and memory", async () => {
     const provider = await startMockProvider();
     cleanup.push(provider.close);

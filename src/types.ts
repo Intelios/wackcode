@@ -20,6 +20,12 @@ export interface ExecutionPolicyConfig {
   unrestrictedPlanning: boolean;
 }
 
+/** Settings › Git. Mirrors `GitConfig` in models.rs and the worker's protocol.ts. */
+export interface GitConfig {
+  /** Coding chats end their commits with a Co-authored-by trailer for the chat's model. */
+  commitAttribution: boolean;
+}
+
 /** Plan mode state published by the built-in plan-mode extension. */
 export interface PlanState {
   mode: TaskMode;
@@ -917,6 +923,8 @@ export interface AppData {
   memory?: MemoryConfig;
   /** Settings › Web. Absent in metadata saved before it existed. */
   web?: WebConfig;
+  /** Settings › Git. Rust always fills it in; optional for test fixtures. */
+  git?: GitConfig;
   window?: WindowState | null;
 }
 

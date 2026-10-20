@@ -32,7 +32,7 @@ const PROMPTS: PromptSpec[] = [
     defaultText: DEFAULT_SYSTEM_PROMPT,
     icon: "spark",
     tone: "accent",
-    note: "WackCode adds a guide after this text, written from the tools that are switched on: when to use them, their rules, today's date and whether the project uses Git. This guide stays in place when you customise the core."
+    note: "WackCode adds a guide after this text, written from the tools that are switched on: when to use them, their rules, today's date, whether the project uses Git and, while Settings › Git is on, the commit co-author line. This guide stays in place when you customise the core."
   },
   {
     key: "planPrompt",

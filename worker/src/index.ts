@@ -10,7 +10,7 @@ import type { CompactionResult, PromptTemplate, ResourceLoader, SessionEntry } f
 import { SWITCHABLE_BUILTIN_TOOLS, createBuiltinExtensions } from "./builtin/index.js";
 import { chatToolAllowed } from "./builtin/chat-mode/policy.js";
 import { DEFAULT_CHAT_PROMPT, buildChatGuide, chatGuideDate } from "./builtin/chat-mode/prompt.js";
-import { DEFAULT_CODE_PROMPT, buildCodeGuide } from "./builtin/code-prompt/prompt.js";
+import { DEFAULT_CODE_PROMPT, buildCodeGuide, coAuthorLabel } from "./builtin/code-prompt/prompt.js";
 import { BROWSER_TOOL_NAMES } from "./builtin/browser.js";
 import { COMPUTER_TOOL_NAMES } from "./builtin/computer-use/params.js";
 import { VISUAL_TOOL_NAMES } from "./builtin/visual.js";
@@ -117,6 +117,8 @@ let chatKind = false;
 // The guide last served to Pi, so a run can tell when it went stale (a new day, a tool change).
 let servedGuide: string | undefined;
 let workspaceIsGitRepo = false;
+// Settings › Git: the coding guide asks for a Co-authored-by trailer naming the chat's model.
+let commitAttribution = false;
 // An installed package handles session_before_compact: WackCode's compaction leaves it to them.
 let packageCompacts = false;
 let session: AgentSession | undefined;
@@ -355,7 +357,7 @@ const builtins = createBuiltinExtensions(builtinHost, {
 
 // Coding-only settings the host broadcasts to every worker. A Chat mode chat has none of the
 // features behind them, so they are acknowledged and dropped.
-const CHAT_IGNORED_COMMANDS = new Set<WorkerCommand["type"]>(["set_subagents", "set_computer_use", "set_skills", "set_commands", "set_execution_policy"]);
+const CHAT_IGNORED_COMMANDS = new Set<WorkerCommand["type"]>(["set_subagents", "set_computer_use", "set_skills", "set_commands", "set_execution_policy", "set_git"]);
 
 function refuseInChat(what: string): void {
   if (chatKind) throw new Error(`${what} isn't available in Chat mode.`);
@@ -788,6 +790,7 @@ function codeGuide(): string {
     searchLabel: builtins.webSearch.label(),
     today: chatGuideDate(),
     isGitRepo: workspaceIsGitRepo,
+    coAuthor: commitAttribution && session?.model ? coAuthorLabel(session.model.name, session.model.id) : undefined,
   });
 }
 
@@ -1316,6 +1319,7 @@ async function initialize(command: InitCommand): Promise<void> {
   builtins.mcp.configure(command.mcp ?? []);
   builtins.computerUse.configure(!chatKind && command.computerUse?.enabled === true);
   builtins.webSearch.configure(command.web);
+  commitAttribution = !chatKind && command.git?.commitAttribution === true;
   // Before any contract can be published: the plan-mode extension composes each contract from
   // the current overrides, and the restored session's reconcile runs right after creation.
   setPromptOverrides(command.prompts);
@@ -2202,6 +2206,10 @@ async function handle(command: WorkerCommand): Promise<void> {
       builtins.configureExecutionPolicy(command.executionPolicy);
       applyDisabledTools();
       emitSnapshot();
+    } else if (command.type === "set_git") {
+      // Queued like set_prompts. Nothing else to do: the trailer lives in the coding guide, which
+      // `runPrompt` rebuilds at the next run start once it differs from the one served.
+      commitAttribution = command.git.commitAttribution;
     } else if (command.type === "set_prompts") {
       // Queued so a prompt's text never changes under the run that quoted it. Re-applying the
       // active tools forces Pi's per-request system-prompt rebuild, which re-reads the persona

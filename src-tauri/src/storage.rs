@@ -380,6 +380,19 @@ mod tests {
     }
 
     #[test]
+    fn commit_attribution_defaults_on_and_round_trips_off() {
+        // Files from before Settings › Git get attribution on, as a fresh install does.
+        let data: AppData = serde_json::from_str(r#"{"version":1}"#).unwrap();
+        assert!(data.git.commit_attribution);
+        let data: AppData = serde_json::from_str(r#"{"version":1,"git":{}}"#).unwrap();
+        assert!(data.git.commit_attribution);
+        let data: AppData = serde_json::from_str(r#"{"version":1,"git":{"commitAttribution":false}}"#).unwrap();
+        assert!(!data.git.commit_attribution);
+        let written = serde_json::to_string(&data).unwrap();
+        assert!(written.contains(r#""git":{"commitAttribution":false}"#));
+    }
+
+    #[test]
     fn startup_marks_active_tasks_interrupted_without_replaying_them() {
         let mut data = AppData {
             tasks: vec![TaskRecord {

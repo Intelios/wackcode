@@ -6483,19 +6483,20 @@ label > span small.mcp-invalid { color: var(--warning); }
 .memory-type-badge[data-type="feedback"], .memory-kinds li[data-type="feedback"] i { color: var(--wc-code-string); }
 .memory-type-badge[data-type="project"], .memory-kinds li[data-type="project"] i { color: var(--wc-code-keyword); }
 .memory-type-badge[data-type="reference"], .memory-kinds li[data-type="reference"] i { color: var(--wc-code-meta); }
-.memory-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
-.memory-steps li { display: flex; flex-direction: column; gap: 3px; padding: 12px 13px; border: 1px solid var(--border); border-radius: 11px; background: var(--wc-well); }
-.memory-step-mark {
+/* Settings › Git's notes share these cards, without the step numbers. */
+.memory-steps, .git-notes { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
+.memory-steps li, .git-notes li { display: flex; flex-direction: column; gap: 3px; padding: 12px 13px; border: 1px solid var(--border); border-radius: 11px; background: var(--wc-well); }
+.memory-step-mark, .git-note-mark {
   position: relative; width: 34px; height: 34px; margin-bottom: 7px; display: grid; place-items: center; border-radius: 10px;
   border: 1px solid var(--border-bright); background: var(--surface); color: var(--wc-accent-text);
 }
-.memory-step-mark svg { width: 17px; height: 17px; }
+.memory-step-mark svg, .git-note-mark svg { width: 17px; height: 17px; }
 .memory-step-mark b {
   position: absolute; top: -6px; left: -6px; width: 16px; height: 16px; display: grid; place-items: center; border-radius: 50%;
   background: var(--surface-raised); border: 1px solid var(--border-bright); color: var(--text-dim); font-size: 9.5px; font-weight: 700;
 }
-.memory-steps strong { font-size: 12.5px; }
-.memory-steps li > span:last-child { color: var(--text-dim); font-size: 11px; line-height: 1.45; }
+.memory-steps strong, .git-notes strong { font-size: 12.5px; }
+.memory-steps li > span:last-child, .git-notes li > span:last-child { color: var(--text-dim); font-size: 11px; line-height: 1.45; }
 
 /* Stage: a fresh note is filed onto the stack, its lines appear and a bookmark drops onto it. */
 .memory-stage-card { fill: var(--wc-well); stroke: var(--border-bright); stroke-width: 1.4; stroke-dasharray: 4 3; transition: stroke .3s var(--ease); }
@@ -6529,6 +6530,66 @@ label > span small.mcp-invalid { color: var(--warning); }
   .memory-project-mono, .memory-add { transition: none; }
 }
 .memory-name-field input { font-size: 12px; }
+
+/* ── Settings › Git (GitSection.tsx) ── */
+/* A Settings page (SettingsHero): the switch, the exact line it adds, and three notes (their cards
+   are the Memory page's steps, above). */
+.git-trailer-preview {
+  margin: 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: 11px; background: var(--wc-well);
+  color: var(--text-soft); font: 11px/1.65 "SFMono-Regular", Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.git-trailer-subject { color: var(--text); }
+.git-trailer-line { transition: opacity .3s var(--ease); }
+.git-trailer-model {
+  padding: 1px 6px; border: 1px solid var(--wc-accent-line-soft); border-radius: 5px;
+  background: var(--wc-accent-tint); color: var(--wc-accent-text); font-family: Inter, ui-sans-serif, -apple-system, sans-serif; font-size: 10.5px; font-weight: 600;
+}
+.git-trailer-block.off .git-trailer-line { opacity: .35; text-decoration: line-through; text-decoration-color: var(--text-faint); }
+
+/* Stage: a commit card settles onto the newest commit and the duck slides in beside you as
+   co-author while its trailer writes itself. Off, the card is yours alone and rests dashed. */
+.git-stage-branch, .git-stage-stem { fill: none; stroke: var(--border-bright); stroke-width: 2; stroke-linecap: round; }
+.git-stage-commit { fill: var(--wc-well); stroke: var(--border-bright); stroke-width: 1.6; }
+.git-stage-sheet { fill: var(--surface-raised); stroke: var(--border-bright); stroke-width: 1.4; stroke-dasharray: 4 3; transition: stroke .3s var(--ease); }
+.git-stage-title, .git-stage-line { fill: var(--border-bright); }
+.git-stage-avatar { fill: var(--wc-well); stroke: var(--border-bright); stroke-width: 1.4; }
+.git-stage-avatar.duck { fill: var(--surface); }
+.git-stage-person { fill: var(--text-faint); }
+.git-stage-duck-mark { color: var(--text-faint); }
+.git-stage-trailer { fill: var(--border-bright); transform-box: fill-box; transform-origin: left center; }
+.git-stage-card, .git-stage-duck, .git-stage-commit.head { transform-box: fill-box; transform-origin: 50% 50%; }
+.git-stage-duck, .git-stage-trailer { opacity: 0; transition: opacity .3s var(--ease); }
+.git-stage.live .git-stage-sheet { stroke-dasharray: none; stroke: var(--wc-accent-line); }
+.git-stage.live .git-stage-title { fill: var(--wc-accent-text); }
+.git-stage.live .git-stage-stem { stroke: var(--wc-accent-line); }
+.git-stage.live .git-stage-commit.head { fill: var(--wc-accent); stroke: var(--wc-accent); animation: git-stage-head 7s var(--ease) infinite; }
+.git-stage.live .git-stage-avatar.duck { stroke: var(--wc-accent); }
+.git-stage.live .git-stage-duck-mark { color: var(--wc-accent); }
+.git-stage.live .git-stage-duck { opacity: 1; animation: git-stage-duck 7s cubic-bezier(.3, 1.4, .5, 1) infinite; }
+.git-stage.live .git-stage-trailer { opacity: 1; fill: var(--wc-accent); animation: git-stage-trailer 7s var(--ease) infinite; }
+.git-stage.live .git-stage-card { animation: git-stage-card 7s var(--ease) infinite; }
+@keyframes git-stage-card {
+  0% { opacity: 0; transform: translateY(-10px); }
+  10%, 88% { opacity: 1; transform: none; }
+  96%, 100% { opacity: 0; transform: translateY(-4px); }
+}
+@keyframes git-stage-duck {
+  0%, 18% { opacity: 0; transform: translateX(14px) rotate(14deg); }
+  30%, 100% { opacity: 1; transform: none; }
+}
+@keyframes git-stage-trailer {
+  0%, 30% { opacity: 0; transform: scaleX(.2); }
+  40%, 100% { opacity: 1; transform: none; }
+}
+@keyframes git-stage-head {
+  0%, 40% { transform: none; }
+  46% { transform: scale(1.35); }
+  54%, 100% { transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .git-stage.live .git-stage-card, .git-stage.live .git-stage-duck, .git-stage.live .git-stage-trailer, .git-stage.live .git-stage-commit.head { animation: none; }
+  .git-stage-duck, .git-stage-trailer, .git-trailer-line { transition: none; }
+}
 
 /* ── Settings › About (AboutSection.tsx) ── */
 /* A Settings page (SettingsHero): the duck presents its spec card — version, engine, machine —

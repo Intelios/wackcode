@@ -705,6 +705,24 @@ pub struct ExecutionPolicyConfig {
     pub unrestricted_planning: bool,
 }
 
+/// Settings › Git. Mirrors `GitConfig` in types.ts and the worker's protocol.ts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitConfig {
+    /// Coding chats are told to end their commits with a Co-authored-by trailer naming the
+    /// chat's model and the WackCode Agent GitHub App. On unless the user switched it off.
+    #[serde(default = "commit_attribution_default")]
+    pub commit_attribution: bool,
+}
+
+fn commit_attribution_default() -> bool { true }
+
+impl Default for GitConfig {
+    fn default() -> Self {
+        Self { commit_attribution: true }
+    }
+}
+
 /// User-customized built-in prompt texts (Settings → Prompts). An absent field means the
 /// shipped default is in force. Plain text in `wackcode.json`: none of it is a credential.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -1234,6 +1252,8 @@ pub struct AppData {
     /// Settings › Web: search providers and web_fetch routing. Keys live in `secrets.json`.
     #[serde(default)]
     pub web: WebConfig,
+    #[serde(default)]
+    pub git: GitConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<WindowState>,
 }
@@ -1264,6 +1284,7 @@ impl Default for AppData {
             computer_use: ComputerUseConfig::default(),
             memory: MemoryConfig::default(),
             web: WebConfig::default(),
+            git: GitConfig::default(),
             window: None,
         }
     }

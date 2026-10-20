@@ -615,6 +615,18 @@ describe("SettingsPage sub-agents", () => {
     expect(toggle).toHaveAttribute("title", "Requires macOS 14 or later");
   });
 
+  it("lists Settings › Git once it's wired, saving the attribution switch", async () => {
+    const { rerender, props, subagents } = renderPage(false);
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    expect(within(nav).queryByRole("button", { name: /^Git$/ })).not.toBeInTheDocument();
+    const onSetGit = vi.fn().mockResolvedValue(undefined);
+    rerender(<SettingsPage {...noFavorites} {...props} subagents={subagents} git={{ commitAttribution: true }} onSetGit={onSetGit} />);
+    fireEvent.click(within(nav).getByRole("button", { name: /^Git$/ }));
+    expect(screen.getByRole("heading", { name: "WackCode as co-author" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("switch", { name: "Credit commits" }));
+    await waitFor(() => expect(onSetGit).toHaveBeenCalledWith({ commitAttribution: false }));
+  });
+
   it("switches Web Fetch on Settings › Web through the tool denylist, keeping the rest of it", async () => {
     const { rerender, props, subagents } = renderPage(false);
     props.onSetDisabledTools.mockResolvedValue(undefined);

@@ -224,8 +224,17 @@ The core plus guide with every built-in enabled is bounded at 23,000 characters 
 5,750 tokens by characters ÷ 4), before project context, skills, memory or user-supplied tool
 metadata. Active tools' rules are preserved in full rather than truncated.
 
-Like Chat mode's guide, the coding guide is refreshed between runs when its date, active tools
-or guidance change; it stays stable during a run. Settings remain queued and apply from the next
+While Settings › Git's commit attribution is on (`init.git`, live via `set_git`; Chat mode is
+sent null and ignores `set_git`), the guide asks the agent to end every commit message with
+`Co-authored-by: <model> (WackCode) <WACKCODE_COAUTHOR_EMAIL>`. The address is the WackCode
+Agent GitHub App's bot noreply email, which GitHub links by email; the app has no key or
+permissions and nothing signs in as it. The name is the session model's `coAuthorLabel`, so the
+run-start refresh below makes each run's trailer name the model that did the work.
+"(WackCode)" names the app, never `appearance.agentName`. Commits made from the Changes panel
+and by sub-agents get no trailer.
+
+Like Chat mode's guide, the coding guide is refreshed between runs when its date, active tools,
+model or guidance change; it stays stable during a run. Settings remain queued and apply from the next
 message. The Git-repository context is checked once at worker initialization, never for Chat mode.
 
 ## Coding compaction

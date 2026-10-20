@@ -3,7 +3,7 @@ import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-age
 import { createReadToolDefinition, createEditToolDefinition, createWriteToolDefinition, createGrepToolDefinition, createFindToolDefinition, createLsToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createBuiltinExtensions } from "../index.js";
 import type { BuiltinHost } from "../host.js";
-import { DEFAULT_CODE_PROMPT, buildCodeGuide, type CodeGuideInput, type CodeToolGuidance } from "./prompt.js";
+import { DEFAULT_CODE_PROMPT, WACKCODE_COAUTHOR_EMAIL, buildCodeGuide, coAuthorLabel, type CodeGuideInput, type CodeToolGuidance } from "./prompt.js";
 
 const guide = (tools: string[] = [], input: Partial<CodeGuideInput> = {}) => buildCodeGuide({
   activeTools: new Set(tools),
@@ -82,6 +82,26 @@ describe("coding prompt", () => {
     expect(guide()).toContain("Follow project instructions supplied by the app");
   });
 
+  it("asks for the co-author trailer only while attribution names a model, Git repository or not", () => {
+    const trailer = "Co-authored-by: GPT-5.6 (WackCode) <345377139+wackcode-agent[bot]@users.noreply.github.com>";
+    expect(guide([], { coAuthor: "GPT-5.6" })).toContain(`Commit attribution: end each commit message you write with a blank line and then exactly this trailer, which names the model running now: ${trailer}. A final -m adds it correctly.`);
+    // A switched model must not copy an earlier trailer, nor rewrite history to fix one.
+    expect(guide([], { coAuthor: "GPT-5.6" })).toContain("Use it as written even when earlier commits in this chat carry a different one, and never amend or rewrite those to match.");
+    expect(guide([], { coAuthor: "GPT-5.6", isGitRepo: false })).toContain(trailer);
+    expect(guide()).not.toMatch(/Co-authored-by|Commit attribution/);
+    expect(guide([], { coAuthor: "" })).not.toContain("Commit attribution");
+    expect(WACKCODE_COAUTHOR_EMAIL).toMatch(/^\d+\+wackcode-agent\[bot\]@users\.noreply\.github\.com$/);
+  });
+
+  it("keeps the co-author name to one bounded line, falling back to the model ID", () => {
+    expect(coAuthorLabel("Claude Opus 4.7", "claude-opus-4-7")).toBe("Claude Opus 4.7");
+    expect(coAuthorLabel("My <model>\n  two", "id")).toBe("My model two");
+    expect(coAuthorLabel(" \t ", "gpt-5.6")).toBe("gpt-5.6");
+    expect(coAuthorLabel("<>", "gpt-5.6")).toBe("gpt-5.6");
+    expect(coAuthorLabel(undefined, "gpt-5.6")).toBe("gpt-5.6");
+    expect(coAuthorLabel("x".repeat(200), "id")).toHaveLength(60);
+  });
+
   it("bounds the core and full guide using actual built-in snippets and guidelines", async () => {
     const definitions: CodeToolGuidance[] = [];
     const collect = (tool: ToolDefinition) => definitions.push({ name: tool.name, snippet: tool.promptSnippet, guidelines: tool.promptGuidelines });
@@ -90,7 +110,7 @@ describe("coding prompt", () => {
     for (const extension of builtins.factories) await extension.factory(api);
     for (const factory of [createReadToolDefinition, createEditToolDefinition, createWriteToolDefinition, createGrepToolDefinition, createFindToolDefinition, createLsToolDefinition]) collect(factory(process.cwd()));
     collect(builtins.bashJobs.tool(process.cwd()));
-    const text = DEFAULT_CODE_PROMPT + "\n\n" + guide(definitions.map((tool) => tool.name), { toolDefinitions: definitions, hasMcpTools: true, hasSkills: true, searchLabel: "Search provider" });
+    const text = DEFAULT_CODE_PROMPT + "\n\n" + guide(definitions.map((tool) => tool.name), { toolDefinitions: definitions, hasMcpTools: true, hasSkills: true, searchLabel: "Search provider", coAuthor: "x".repeat(60) });
     // Existing tool metadata accounts for over 10k characters of rules alone. Preserve it;
     // this cap measures all built-ins, excluding user-supplied packages, skills and memory.
     expect(text.length).toBeLessThan(23_000);

@@ -21,6 +21,12 @@ export interface ExecutionPolicyConfig {
   unrestrictedPlanning: boolean;
 }
 
+/** Settings › Git. Mirrors `GitConfig` in models.rs and types.ts. */
+export interface GitConfig {
+  /** Coding chats end their commits with a Co-authored-by trailer for the chat's model. */
+  commitAttribution: boolean;
+}
+
 /** Plan mode state published by the built-in plan-mode extension. */
 export interface PlanState {
   mode: TaskMode;
@@ -540,6 +546,8 @@ export interface InitCommand {
    * `set_web`, for every chat kind.
    */
   web?: WebRuntime | null;
+  /** Settings › Git. Null for Chat mode chats, absent on older hosts: attribution stays off. Live via `set_git`. */
+  git?: GitConfig | null;
 }
 
 export type WebSearchProviderKind = "deepseek" | "brave" | "tavily" | "searxng" | "custom";
@@ -803,6 +811,7 @@ export type WorkerCommand =
   | { id: string; type: "set_memory"; memory: MemoryPayload | null }
   | { id: string; type: "set_computer_use"; enabled: boolean }
   | { id: string; type: "set_web"; web: WebRuntime | null }
+  | { id: string; type: "set_git"; git: GitConfig }
   | { id: string; type: "browser_response"; requestId: string; success: true; result: unknown }
   | { id: string; type: "browser_response"; requestId: string; success: false; error: string }
   | { id: string; type: "computer_response"; requestId: string; success: true; result: unknown }

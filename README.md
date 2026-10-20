@@ -81,7 +81,7 @@ For longer jobs, `/goal <objective>` runs a goal loop: the agent works in rounds
 
 ### Review and ship
 
-Open Changes with <kbd>⌘ ⇧ C</kbd> to review staged and unstaged changes file by file. Discard a file or hunk (after a confirmation), or click beside any diff line to leave a comment; **Address comments** sends them all to the agent at once. Commit (the message can be generated from your changes), push, and open a GitHub pull request with an editable title and description, using your existing `gh` login.
+Open Changes with <kbd>⌘ ⇧ C</kbd> to review staged and unstaged changes file by file. Discard a file or hunk (after a confirmation), or click beside any diff line to leave a comment; **Address comments** sends them all to the agent at once. Commit (the message can be generated from your changes), push, and open a GitHub pull request with an editable title and description, using your existing `gh` login. Commits the agent makes end with a `Co-authored-by` line naming the model, so GitHub shows WackCode as co-author; it's on by default and you can switch it off in **Settings › Git**.
 
 ### Preview, run and play
 

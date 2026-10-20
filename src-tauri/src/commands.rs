@@ -3,7 +3,7 @@ use crate::{
     models::{
         AppData, AppearanceConfig, AppInfo, AutoTitleConfig, BackdropMode, BackgroundImage, BootstrapPayload, BuiltinModelSuggestion,
         CheckpointChange, CheckpointRef, CreateTaskInput, DiffComment, ExportPlanInput,
-        ExecutionPolicyConfig, ExtensionUiResponseInput, FavoriteModelRef, ForkTaskInput, GitBranches, GitChanges,
+        ExecutionPolicyConfig, ExtensionUiResponseInput, FavoriteModelRef, ForkTaskInput, GitBranches, GitChanges, GitConfig,
         GitCheckoutResult, GitGeneratedMessage, GitPrInfo,
         GitPublishInfo, ImageContent,
         InstallPackageInput,
@@ -1374,6 +1374,24 @@ pub async fn set_execution_policy_config(
         "type": "set_execution_policy", "executionPolicy": config
     })).await?;
     Ok(config)
+}
+
+/// Settings › Git. Like custom prompts, it reaches running coding chats on their next turn and
+/// never restarts a worker.
+#[tauri::command]
+pub async fn set_git_config(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    input: GitConfig,
+) -> Result<GitConfig, String> {
+    state.mutate(|data| {
+        data.git = input.clone();
+        Ok(())
+    })?;
+    worker::broadcast_coding(&app, &json!({
+        "id": Uuid::new_v4().to_string(), "type": "set_git", "git": input
+    })).await?;
+    Ok(input)
 }
 
 /// Custom prompts apply to running chats on their next turn, like tool changes: workers are

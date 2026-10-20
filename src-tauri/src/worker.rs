@@ -503,7 +503,7 @@ pub async fn ensure_worker_with(
         }
     });
 
-    let (disabled_tools, resources, prompts, execution_policy) = {
+    let (disabled_tools, resources, prompts, execution_policy, git) = {
         let state = app.state::<MetadataState>();
         let data = state
             .data
@@ -514,6 +514,7 @@ pub async fn ensure_worker_with(
             resources_for(task.kind, &data.packages),
             data.prompts.clone(),
             data.execution_policy.clone(),
+            data.git.clone(),
         )
     };
 
@@ -568,6 +569,8 @@ pub async fn ensure_worker_with(
         // Settings › Web: which search provider (and page routing) is available, never a key.
         // Every chat kind gets it. Live too, via set_web; the host re-checks per request.
         "web": web_payload(app),
+        // Settings › Git. Chat mode never commits. Live too, via set_git; never in the fingerprint.
+        "git": if chat { Value::Null } else { json!(git) },
     });
     if options.wait_ready {
         request(app, &task.id, init, INIT_TIMEOUT).await.map(|_| ())

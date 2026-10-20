@@ -183,3 +183,9 @@ Only call plan_mode_complete when the plan leaves no implementation decisions un
 Keep the plan concise, human and agent digestible, and free of open decisions. Prefer grouped behavior-level changes over file-by-file or symbol-by-symbol inventories. Do not ask "should I proceed?"; plan_mode_complete opens the plan review in the app.
 
 If the user requests revisions after a completed plan, the next plan_mode_complete call must contain a complete replacement, not a delta. If there is not enough information for a complete replacement, continue planning with ask_user_question instead of calling plan_mode_complete.`;
+
+/**
+ * The WackCode Agent GitHub App's bot address that Settings › Git previews, mirroring
+ * `WACKCODE_COAUTHOR_EMAIL` in `worker/src/builtin/code-prompt/prompt.ts` (pinned the same way).
+ */
+export const WACKCODE_COAUTHOR_EMAIL = "345377139+wackcode-agent[bot]@users.noreply.github.com";

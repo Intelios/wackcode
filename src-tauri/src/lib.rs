@@ -183,6 +183,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + 
             commands::set_auto_title_config,
             commands::set_prompt_config,
             commands::set_execution_policy_config,
+            commands::set_git_config,
             commands::save_mcp_server,
             commands::delete_mcp_server,
             commands::set_mcp_server_enabled,

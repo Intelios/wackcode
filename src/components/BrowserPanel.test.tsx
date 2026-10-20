@@ -7,7 +7,7 @@ import { BROWSER_VIEWPORTS } from "../browser-context";
 import { BrowserPanel } from "./BrowserPanel";
 import { SidePanel } from "./SidePanel";
 
-vi.mock("../api", () => ({ api: { browserState: vi.fn(), browserPresent: vi.fn(), browserRetirePresentation: vi.fn().mockResolvedValue(undefined), browserCapture: vi.fn(), browserCancelCapture: vi.fn().mockResolvedValue(undefined) } }));
+vi.mock("../api", () => ({ api: { browserState: vi.fn(), browserPresent: vi.fn(), browserRetirePresentation: vi.fn().mockResolvedValue(undefined), browserCapture: vi.fn(), browserSetViewport: vi.fn(), browserCancelCapture: vi.fn().mockResolvedValue(undefined) } }));
 
 const state: BrowserState = {
   taskId: "chat-1", exists: true, url: "https://www.google.com/", title: "Google",
@@ -118,6 +118,18 @@ describe("BrowserPanel positioning", () => {
     view.rerender(panel(false, { ...state, url: "", title: "", agentActive: true }));
     expect(screen.getByRole("heading", { name: "No page open" })).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Agent is using the page");
+  });
+  it("picks the viewport from a radio group of devices", async () => {
+    vi.mocked(api.browserSetViewport).mockResolvedValue({ ...state, viewport: BROWSER_VIEWPORTS.phone });
+    render(panel(false, { ...state, viewport: BROWSER_VIEWPORTS.tablet }));
+    const group = screen.getByRole("radiogroup", { name: "Browser viewport" });
+    expect(group).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Tablet, 768 × 1024" })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(screen.getByRole("radio", { name: "Tablet, 768 × 1024" }));
+    expect(api.browserSetViewport).not.toHaveBeenCalled();
+    await act(async () => { fireEvent.click(screen.getByRole("radio", { name: "Phone, 390 × 844" })); });
+    expect(api.browserSetViewport).toHaveBeenCalledWith(state.taskId, "phone");
+    expect(actions.onState).toHaveBeenCalledWith(expect.objectContaining({ viewport: BROWSER_VIEWPORTS.phone }));
   });
   it("retires the first StrictMode presentation without reusing it", async () => {
     render(<StrictMode>{panel()}</StrictMode>);

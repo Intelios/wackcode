@@ -1,7 +1,7 @@
 import type { SVGProps } from "react";
 import { quillIconPaths } from "./QuillMark";
 
-export type IconName = "markupArrow" | "markupBox" | "markupText" | "redo" | "star" | "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "browser" | "expand" | "collapse" | "copy" | "archive" | "unarchive" | "send" | "shuffle" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "checklist" | "terminal" | "file" | "paperclip" | "pencil" | "quill" | "external" | "brain" | "hammer" | "search" | "wrench" | "question" | "image" | "close" | "rewind" | "agents" | "flame" | "palette" | "plug" | "book" | "comment" | "commit" | "push" | "pullRequest" | "slash" | "erase" | "cursor" | "memory" | "accessibility" | "viewfinder" | "lock" | "dock" | "clock" | "pull" | "fetch" | "pin" | "split" | "unified" | "undo" | "code" | "filePlus" | "textSearch" | "globe" | "play" | "gamepad" | "link" | "help" | "alert" | "visual" | "bulb" | "canvas" | "minus";
+export type IconName = "markupArrow" | "markupBox" | "markupText" | "redo" | "star" | "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "browser" | "expand" | "collapse" | "copy" | "archive" | "unarchive" | "send" | "shuffle" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "checklist" | "terminal" | "file" | "paperclip" | "pencil" | "quill" | "external" | "brain" | "hammer" | "search" | "wrench" | "question" | "image" | "close" | "rewind" | "agents" | "flame" | "palette" | "plug" | "book" | "comment" | "commit" | "push" | "pullRequest" | "slash" | "erase" | "cursor" | "memory" | "accessibility" | "viewfinder" | "lock" | "dock" | "clock" | "pull" | "fetch" | "pin" | "split" | "unified" | "undo" | "code" | "filePlus" | "textSearch" | "globe" | "play" | "gamepad" | "link" | "help" | "alert" | "visual" | "bulb" | "canvas" | "minus" | "desktop" | "laptop" | "tablet" | "phone";
 
 const paths: Record<IconName, React.ReactNode> = {
   markupArrow: <path d="M5 19 19 5M8 5h11v11" />,
@@ -27,6 +27,11 @@ const paths: Record<IconName, React.ReactNode> = {
   lock: <><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></>,
   dock: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 8h18" /><rect x="7" y="14.5" width="10" height="3.5" rx="1.2" /></>,
   browser: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 8h18" /><circle cx="6" cy="6" r=".45" fill="currentColor" stroke="none" /><circle cx="8" cy="6" r=".45" fill="currentColor" stroke="none" /></>,
+  // Browser viewports: a monitor on its stand, a laptop, a tablet and a phone.
+  desktop: <><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M12 16v4M8 20h8" /></>,
+  laptop: <><rect x="5" y="5" width="14" height="10" rx="1.6" /><path d="M2.5 19h19l-1.6-4H4.1z" /></>,
+  tablet: <><rect x="5" y="3" width="14" height="18" rx="2.2" /><path d="M11 18h2" /></>,
+  phone: <><rect x="7" y="3" width="10" height="18" rx="2.4" /><path d="M11 5.5h2" /></>,
   expand: <><path d="M9 4H4v5M15 4h5v5M20 15v5h-5M9 20H4v-5" /></>,
   collapse: <><path d="M4 9h5V4M20 9h-5V4M15 20v-5h5M9 20v-5H4" /></>,
   copy: <><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" /></>,

@@ -2841,41 +2841,87 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
 
 /* ── Browser panel ─────────────────────────────────── */
 /* The page itself is a native child WKWebView placed over .browser-surface. Everything around
-   it remains ordinary themed React chrome, and the surface stays opaque over glass/images. */
+   it remains ordinary themed React chrome, and the stage stays opaque over glass/images. Nothing
+   may overlay the surface: the native page draws above every DOM element there. */
 .browser-panel { height: 100%; min-height: 0; display: flex; flex-direction: column; }
-.browser-toolbar { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; min-height: 46px; padding: 7px 9px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--text) 2.5%, transparent); }
-.browser-nav { flex: 0 0 auto; display: flex; align-items: center; }
-.browser-toolbar .icon-button { width: 28px; height: 28px; }
-.browser-toolbar .icon-button svg { width: 15px; height: 15px; }
+/* Two quiet rows under the head, no bands: hands-on controls, then how the page is staged. */
+.browser-toolbar { flex: 0 0 auto; display: flex; align-items: center; gap: 7px; padding: 9px 10px 5px; }
+.browser-nav, .browser-viewports { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 1px; padding: 2px; border-radius: var(--wc-radius-pill); background: color-mix(in srgb, var(--text) 4%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 7%, transparent); }
+.browser-toolbar .icon-button { width: 26px; height: 26px; }
+.browser-toolbar .icon-button svg { width: 14px; height: 14px; }
 .browser-forward svg { transform: rotate(180deg); }
-/* The address is a pill that takes the composer's focus halo. */
-.browser-address { flex: 1; min-width: 90px; height: 30px; display: flex; align-items: center; gap: 7px; padding: 0 13px 0 10px; border: 1px solid var(--border); border-radius: var(--wc-radius-pill); background: var(--wc-input); transition: border-color .15s var(--ease), box-shadow .15s var(--ease); }
+.browser-reload svg { transition: transform .5s cubic-bezier(.3, 1.4, .4, 1); }
+.browser-reload:not(.loading):is(:hover, :focus-visible):not(:disabled) svg { transform: rotate(150deg); }
+/* The address is a pill that takes the composer's focus halo; a sheen crosses it while the page loads. */
+.browser-address { position: relative; isolation: isolate; flex: 1; min-width: 90px; height: 30px; display: flex; align-items: center; gap: 7px; padding: 0 13px 0 11px; overflow: hidden; border: 1px solid var(--border); border-radius: var(--wc-radius-pill); background: var(--wc-input); transition: border-color .15s var(--ease), box-shadow .15s var(--ease); }
 .browser-address:focus-within { border-color: var(--wc-accent-line-mid); box-shadow: 0 0 0 3px color-mix(in srgb, var(--wc-accent) 10%, transparent); }
+.browser-address.loading::before { content: ""; position: absolute; inset: 0 auto 0 0; z-index: -1; width: 45%; background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--wc-accent) 13%, transparent), transparent); animation: browser-address-sheen 1.25s var(--ease) infinite; }
+@keyframes browser-address-sheen { from { transform: translateX(-100%); } to { transform: translateX(230%); } }
 .browser-address svg { width: 13px; height: 13px; flex: 0 0 auto; color: var(--text-faint); transition: color .15s var(--ease); }
 .browser-address:focus-within svg { color: var(--wc-accent-text); }
-.browser-address input { width: 100%; min-width: 0; padding: 0; border: 0; outline: 0; color: var(--text); background: transparent; font: 11.5px "SFMono-Regular", Consolas, monospace; }
-.browser-address input::placeholder { color: var(--wc-placeholder); }
+.browser-address input { width: 100%; min-width: 0; padding: 0; border: 0; outline: 0; color: var(--text); background: transparent; font: 11.5px "SFMono-Regular", Consolas, monospace; text-overflow: ellipsis; }
+.browser-address input::placeholder { color: var(--wc-placeholder); font-family: inherit; }
 /* Whose hands are on the page. Lit while the user has taken control. */
 .browser-control { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 30px; padding: 0 12px 0 10px; border: 0; border-radius: var(--wc-radius-pill); background: color-mix(in srgb, var(--text) 6%, transparent); color: var(--text-soft); font-size: 11.5px; font-weight: 600; white-space: nowrap; cursor: pointer; transition: background .15s var(--ease), color .15s var(--ease), box-shadow .15s var(--ease); }
 .browser-control svg { width: 14px; height: 14px; flex: 0 0 auto; }
 .browser-control:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 10%, transparent); color: var(--text); }
+.browser-control:active:not(:disabled) { transform: scale(.96); }
+.browser-control:disabled { opacity: .45; cursor: default; }
 .browser-control.active, .browser-control.active:hover:not(:disabled) { background: color-mix(in srgb, var(--wc-accent) 13%, transparent); box-shadow: inset 0 0 0 1px var(--wc-accent-line); color: var(--wc-accent-text); }
-.browser-popup-return { flex: 0 0 auto; height: 30px; display: flex; align-items: center; justify-content: center; gap: 6px; border: 0; border-bottom: 1px solid var(--wc-accent-line-soft); background: var(--wc-accent-tint); color: var(--wc-accent-text); font-size: 11px; font-weight: 600; cursor: pointer; }
+/* Staging: the viewport as a pill track with a gliding fill, its size and scale, then the capture tools. */
+.browser-stagebar { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; padding: 4px 10px 9px; border-bottom: 1px solid var(--border); }
+.browser-viewport { position: relative; isolation: isolate; width: 30px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--wc-radius-pill); background: transparent; color: var(--text-dim); cursor: pointer; transition: color .15s var(--ease), background .15s var(--ease); }
+.browser-viewport svg { width: 14px; height: 14px; }
+.browser-viewport:hover:not(:disabled):not(.selected) { background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text-soft); }
+.browser-viewport.selected { color: var(--wc-accent-text); cursor: default; }
+.browser-viewport:disabled:not(.selected) { opacity: .45; cursor: default; }
+.browser-viewport-pill { position: absolute; inset: 0; z-index: -1; pointer-events: none; background: color-mix(in srgb, var(--wc-accent) 13%, transparent); box-shadow: inset 0 0 0 1px var(--wc-accent-line); }
+.browser-readout { min-width: 0; display: flex; align-items: baseline; gap: 7px; overflow: hidden; color: var(--text-soft); font: 10.5px "SFMono-Regular", Consolas, monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.browser-readout small { color: var(--text-faint); font: inherit; }
+.browser-readout small.busy { color: var(--wc-accent-text); }
+.browser-capture-actions { flex: 0 0 auto; display: flex; gap: 2px; margin-left: auto; }
+.browser-capture-actions .icon-button { width: 28px; height: 28px; }
+.browser-capture-actions .icon-button svg { width: 15px; height: 15px; }
+.browser-capture-actions .active, .browser-capture-actions .active:hover:not(:disabled) { color: var(--wc-accent-text); background: color-mix(in srgb, var(--wc-accent) 13%, transparent); box-shadow: inset 0 0 0 1px var(--wc-accent-line); }
+/* The page rests on a dotted well like a device on a desk. The frame is drawn behind the native
+   view at the rectangle `fit_rect` (browser.rs) gives it, so only its ring and shadow show: grey
+   at rest, accent while you hold the page, a ring sent out while the agent uses it. */
+.browser-stage { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 12px; background-color: var(--wc-well); background-image: radial-gradient(circle, color-mix(in srgb, var(--text) 9%, transparent) 1px, transparent 1.3px); background-size: 16px 16px; background-position: center; }
+.browser-surface { position: relative; flex: 1; min-width: 0; min-height: 0; container-type: size; }
+.browser-frame { position: absolute; left: 50%; top: 50%; width: min(100cqw, calc(100cqh * var(--browser-aspect))); height: min(100cqh, calc(100cqw / var(--browser-aspect))); transform: translate(-50%, -50%); border-radius: 2px; background: var(--surface); box-shadow: 0 0 0 1px var(--border-bright), 0 0 0 5px color-mix(in srgb, var(--text) 4%, transparent), 0 24px 48px -20px rgb(0 0 0 / 70%); transition: box-shadow .25s var(--ease); animation: browser-frame-in .3s cubic-bezier(.3, 1.3, .4, 1) both; }
+/* A new viewport sets the frame down with a small bounce; the page lands in it once placement settles. */
+@keyframes browser-frame-in { from { opacity: 0; transform: translate(-50%, -50%) scale(.94); } }
+.browser-frame.user { box-shadow: 0 0 0 1px var(--wc-accent-line), 0 0 0 5px color-mix(in srgb, var(--wc-accent) 14%, transparent), 0 24px 48px -20px rgb(0 0 0 / 70%); }
+.browser-frame.agent { animation: browser-frame-in .3s cubic-bezier(.3, 1.3, .4, 1) both, browser-frame-live 1.7s var(--ease) .3s infinite; }
+@keyframes browser-frame-live {
+  from { box-shadow: 0 0 0 1px var(--wc-accent-line), 0 0 0 0 color-mix(in srgb, var(--wc-accent) 34%, transparent), 0 24px 48px -20px rgb(0 0 0 / 70%); }
+  to { box-shadow: 0 0 0 1px var(--wc-accent-line), 0 0 0 10px color-mix(in srgb, var(--wc-accent) 0%, transparent), 0 24px 48px -20px rgb(0 0 0 / 70%); }
+}
+/* Notices sit on the well above the page, so the native view moves down rather than covering them. */
+.browser-popup-return { flex: 0 0 auto; align-self: center; height: 26px; display: inline-flex; align-items: center; gap: 6px; padding: 0 13px 0 10px; border: 0; border-radius: var(--wc-radius-pill); background: color-mix(in srgb, var(--wc-accent) 13%, transparent); box-shadow: inset 0 0 0 1px var(--wc-accent-line); color: var(--wc-accent-text); font-size: 11px; font-weight: 600; cursor: pointer; transition: background .15s var(--ease); }
+.browser-popup-return:hover { background: color-mix(in srgb, var(--wc-accent) 20%, transparent); }
 .browser-popup-return svg { width: 13px; height: 13px; }
-.browser-error { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--border); background: var(--danger-bg); color: var(--danger); font-size: 11px; }
+.browser-error { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 11px; border: 1px solid color-mix(in srgb, var(--danger) 28%, transparent); border-radius: 12px; background: var(--danger-bg); color: var(--danger); font-size: 11px; }
 .browser-error svg { width: 13px; height: 13px; flex: 0 0 auto; }
 .browser-error span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .browser-error button { flex: 0 0 auto; height: 22px; padding: 0 10px; border: 0; border-radius: var(--wc-radius-pill); background: color-mix(in srgb, var(--danger) 14%, transparent); color: inherit; cursor: pointer; font-size: 10.5px; font-weight: 600; }
 .browser-error button:hover { background: color-mix(in srgb, var(--danger) 24%, transparent); }
-.browser-surface { position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--surface); }
-.browser-empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; padding: 30px; text-align: center; background: var(--surface); }
+.browser-empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; padding: 30px; text-align: center; }
 .browser-empty h3 { margin: 0; font-size: 14px; }
-.browser-empty p { max-width: 310px; margin: 7px 0 0; color: var(--text-dim); font-size: 11.5px; line-height: 1.55; }
+.browser-empty p { max-width: 290px; margin: 7px 0 0; color: var(--text-dim); font-size: 11.5px; line-height: 1.55; }
+@media (prefers-reduced-motion: reduce) {
+  .browser-address.loading::before { animation: none; inset: 0; width: auto; transform: none; background: color-mix(in srgb, var(--wc-accent) 6%, transparent); }
+  .browser-frame.agent { animation: none; box-shadow: 0 0 0 1px var(--wc-accent-line), 0 0 0 5px color-mix(in srgb, var(--wc-accent) 14%, transparent), 0 24px 48px -20px rgb(0 0 0 / 70%); }
+}
 
 @container (max-width: 520px) {
   /* Too narrow for the words: the control keeps its icon and its name. */
   .browser-control { width: 30px; padding: 0; }
   .browser-control span { display: none; }
+}
+@container (max-width: 360px) {
+  .browser-readout > span { display: none; }
+  .browser-stage { padding: 8px; }
 }
 
 .project-pin { width: 11px; height: 11px; flex: 0 0 auto; margin-left: 4px; color: var(--wc-accent-text); transform: rotate(35deg); }
@@ -2889,15 +2935,6 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
 .project-row.pinned .repo-pin svg { transform: rotate(0deg); }
 .project-row .repo-pin { margin-right: 4px; }
 
-/* Desktop canvas chrome stays readable while the native page scales inside its solid well. */
-.browser-canvas-toolbar { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-bottom: 1px solid var(--border); background: var(--wc-panel); }
-.browser-canvas-toolbar .select-trigger { width: 105px; min-height: 28px; border-radius: var(--wc-radius-pill); }
-.browser-canvas-dimensions { display: flex; align-items: center; gap: 8px; color: var(--text-soft); font: 10.5px "SFMono-Regular", monospace; white-space: nowrap; }
-@container (max-width: 360px) { .browser-canvas-toolbar .select-trigger { width: 90px; } .browser-canvas-toolbar { gap: 6px; } .browser-canvas-dimensions { gap: 5px; font-size: 10px; } }
-.browser-canvas-dimensions small { color: var(--text-faint); font: inherit; }
-.browser-capture-actions { display: flex; margin-left: auto; }
-.browser-capture-actions .active { color: var(--wc-accent-text); background: var(--wc-accent-tint); }
-.browser-surface { background: var(--wc-well); }
 /* Expanded presentation leaves the same composer mounted and the transcript parked behind it. */
 .app-shell.panel-expanded > .side-panel { position: absolute; left: 240px; right: 0; top: 0; bottom: var(--panel-dock-h, 150px); width: auto !important; max-width: none; height: auto; z-index: 3; border-left: 0; }
 .app-shell.panel-expanded.panel-has-tabs > .side-panel { top: 42px; }

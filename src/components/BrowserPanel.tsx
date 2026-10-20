@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from "react";
-import { useIsPresent } from "motion/react";
+import { useContext, useEffect, useRef, useState } from "react";
+import { motion, useIsPresent, useReducedMotion } from "motion/react";
 import { api } from "../api";
 import type { BrowserContextAttachment, BrowserState, BrowserViewportPreset } from "../types";
 import { boundTargets, BROWSER_VIEWPORTS, flattenCapture } from "../browser-context";
+import { AssistantNameContext } from "../agentName";
 import { Icon } from "./Icons";
 import { BrowserMarkup } from "./browser/BrowserMarkup";
-import { Select } from "./ui/Select";
 
 interface BrowserPanelProps {
   taskId: string;
@@ -25,6 +25,8 @@ function pageHost(url: string | undefined): string {
   try { return new URL(url).host; } catch { return ""; }
 }
 
+const VIEWPORT_LABELS: Record<BrowserViewportPreset, string> = { desktop: "Desktop", laptop: "Laptop", tablet: "Tablet", phone: "Phone" };
+
 /** React owns the chrome; Rust places the untrusted native WKWebView over `browser-surface`. */
 export function BrowserPanel({ taskId, state, visible, expanded, onState, onExpand, onReset, onClose, onAttach }: BrowserPanelProps) {
   const surface = useRef<HTMLDivElement>(null);
@@ -38,6 +40,8 @@ export function BrowserPanel({ taskId, state, visible, expanded, onState, onExpa
   const presentationId = useRef(crypto.randomUUID());
   const captureId = useRef<string | undefined>(undefined);
   const isPresent = useIsPresent();
+  const reduceMotion = useReducedMotion();
+  const agent = useContext(AssistantNameContext);
   const captureAllowed = useRef(visible && isPresent);
   captureAllowed.current = visible && isPresent;
   const viewport = state?.viewport ?? BROWSER_VIEWPORTS.desktop;
@@ -163,6 +167,8 @@ export function BrowserPanel({ taskId, state, visible, expanded, onState, onExpa
 
   const message = error ?? state?.error;
   const control = state?.userControl ? "Resume agent control" : "Take control";
+  const hands = state?.userControl ? "user" : state?.agentActive ? "agent" : undefined;
+  const readout = busy === "pick" ? "Pick · ⎋" : busy === "capture" ? "Capturing…" : state?.url ? `${Math.round(displayScale * 100)}%` : "";
   return (
     <section className="browser-panel">
       <header className="panel-header" data-tauri-drag-region>
@@ -177,6 +183,7 @@ export function BrowserPanel({ taskId, state, visible, expanded, onState, onExpa
           <span className="terminal-pill" role="status"><span className="terminal-pill-dot" aria-hidden="true" />You have control</span>
         ) : null}
         <div className="panel-header-actions">
+          <button type="button" className="icon-button" aria-label="Reset browser session" title="Reset browser session" disabled={!state?.exists} onClick={onReset}><Icon name="trash" /></button>
           <button type="button" className="icon-button" title={expanded ? "Restore browser" : "Expand browser"} aria-label={expanded ? "Restore browser" : "Expand browser"} onClick={onExpand}><Icon name={expanded ? "collapse" : "expand"} /></button>
           <button type="button" className="icon-button" title="Close browser panel" aria-label="Close browser panel" onClick={onClose}><Icon name="close" /></button>
         </div>
@@ -186,12 +193,12 @@ export function BrowserPanel({ taskId, state, visible, expanded, onState, onExpa
         <div className="browser-nav">
           <button type="button" className="icon-button" aria-label="Back" title="Back" disabled={!state?.canGoBack} onClick={() => void run(() => api.browserNavigation(taskId, "back"))}><Icon name="back" /></button>
           <button type="button" className="icon-button browser-forward" aria-label="Forward" title="Forward" disabled={!state?.canGoForward} onClick={() => void run(() => api.browserNavigation(taskId, "forward"))}><Icon name="back" /></button>
-          <button type="button" className="icon-button" aria-label={state?.loading ? "Stop loading" : "Reload"} title={state?.loading ? "Stop loading" : "Reload"} disabled={!state?.exists} onClick={() => void run(() => api.browserNavigation(taskId, state?.loading ? "stop" : "reload"))}><Icon name={state?.loading ? "stop" : "refresh"} /></button>
+          <button type="button" className={`icon-button browser-reload${state?.loading ? " loading" : ""}`} aria-label={state?.loading ? "Stop loading" : "Reload"} title={state?.loading ? "Stop loading" : "Reload"} disabled={!state?.exists} onClick={() => void run(() => api.browserNavigation(taskId, state?.loading ? "stop" : "reload"))}><Icon name={state?.loading ? "stop" : "refresh"} /></button>
         </div>
-        <form className="browser-address" onSubmit={submit}>
+        <form className={`browser-address${state?.loading ? " loading" : ""}`} onSubmit={submit}>
           <Icon name={state?.url?.startsWith("https://") ? "lock" : "globe"} />
           <input aria-label="Browser address" value={address} placeholder="localhost:5173" spellCheck={false}
-            onFocus={() => { addressFocused.current = true; }} onBlur={() => { addressFocused.current = false; }}
+            onFocus={(event) => { addressFocused.current = true; event.target.select(); }} onBlur={() => { addressFocused.current = false; }}
             onChange={(event) => setAddress(event.target.value)} />
         </form>
         <button type="button" className={`browser-control ${state?.userControl ? "active" : ""}`} disabled={!state?.exists}
@@ -199,23 +206,44 @@ export function BrowserPanel({ taskId, state, visible, expanded, onState, onExpa
           onClick={() => void run(() => api.browserSetControl(taskId, !state?.userControl).then(onState))}>
           <Icon name="cursor" /><span>{control}</span>
         </button>
-        <button type="button" className="icon-button" aria-label="Reset browser session" title="Reset browser session" disabled={!state?.exists} onClick={onReset}><Icon name="trash" /></button>
       </div>
-      <div className="browser-canvas-toolbar">
-        <Select aria-label="Browser viewport" value={viewport.preset} disabled={Boolean(busy)}
-          options={Object.values(BROWSER_VIEWPORTS).map((preset) => ({ value: preset.preset, label: preset.preset[0].toUpperCase() + preset.preset.slice(1), hint: `${preset.width} × ${preset.height}` }))}
-          onChange={(preset) => void run(() => api.browserSetViewport(taskId, preset as BrowserViewportPreset).then(onState))} />
-        <span className="browser-canvas-dimensions">{viewport.width} × {viewport.height}<small>{busy === "pick" ? "Pick · ⎋" : busy === "capture" ? "Capturing…" : `${Math.round(displayScale * 100)}%`}</small></span>
+      <div className="browser-stagebar">
+        <div className="browser-viewports" role="radiogroup" aria-label="Browser viewport">
+          {Object.values(BROWSER_VIEWPORTS).map((preset) => {
+            const selected = preset.preset === viewport.preset;
+            const label = `${VIEWPORT_LABELS[preset.preset]}, ${preset.width} × ${preset.height}`;
+            return (
+              <button key={preset.preset} type="button" role="radio" aria-checked={selected} aria-label={label} title={label}
+                className={`browser-viewport${selected ? " selected" : ""}`} disabled={Boolean(busy)}
+                onClick={() => { if (!selected) void run(() => api.browserSetViewport(taskId, preset.preset).then(onState)); }}>
+                {selected && <motion.span className="browser-viewport-pill" aria-hidden="true" layoutId={reduceMotion ? undefined : `browser-viewport-${taskId}`}
+                  style={{ borderRadius: 999 }} transition={{ type: "spring", stiffness: 480, damping: 36 }} />}
+                <Icon name={preset.preset} />
+              </button>
+            );
+          })}
+        </div>
+        <span className="browser-readout"><span>{viewport.width} × {viewport.height}</span><small className={busy ? "busy" : undefined}>{readout}</small></span>
         <div className="browser-capture-actions">
           <button type="button" className={`icon-button${busy === "pick" ? " active" : ""}`} aria-label={busy === "pick" ? "Cancel element picking" : "Pick an element"} title={busy === "pick" ? "Cancel element picking (⎋)" : "Pick an element"}
-            disabled={!state?.url || busy === "capture" || !onAttach} onClick={() => busy === "pick" ? cancelPick() : void capture("pick")}><Icon name="cursor" /></button>
+            aria-pressed={busy === "pick"} disabled={!state?.url || busy === "capture" || !onAttach} onClick={() => busy === "pick" ? cancelPick() : void capture("pick")}><Icon name="viewfinder" /></button>
           <button type="button" className="icon-button" aria-label="Mark up screenshot" title="Mark up screenshot" disabled={!state?.url || Boolean(busy) || !onAttach} onClick={() => void capture("capture")}><Icon name="pencil" /></button>
         </div>
       </div>
-      {state?.popup && <button type="button" className="browser-popup-return" onClick={() => void run(() => api.browserReturnFromPopup(taskId).then(onState))}><Icon name="back" /> Return to page</button>}
-      {message && <div className="browser-error" role="alert"><Icon name="alert" /><span>{message}</span><button type="button" onClick={() => setError(undefined)}>Dismiss</button></div>}
-      <div className="browser-surface" ref={surface}>
-        {!state?.url && <div className="browser-empty"><span className="panel-empty-mark" aria-hidden="true"><Icon name="browser" /></span><h3>Preview a web app</h3><p>Enter a local or deployed HTTP address. The agent can open and use this browser too.</p></div>}
+      <div className="browser-stage">
+        {state?.popup && <button type="button" className="browser-popup-return" onClick={() => void run(() => api.browserReturnFromPopup(taskId).then(onState))}><Icon name="back" /> Return to page</button>}
+        {message && <div className="browser-error" role="alert"><Icon name="alert" /><span>{message}</span><button type="button" onClick={() => setError(undefined)}>Dismiss</button></div>}
+        <div className="browser-surface" ref={surface} style={{ "--browser-aspect": viewport.width / viewport.height } as React.CSSProperties}>
+          {state?.url ? (
+            <span key={viewport.preset} className={`browser-frame${hands ? ` ${hands}` : ""}`} aria-hidden="true" />
+          ) : (
+            <div className="browser-empty">
+              <span className="panel-empty-mark" aria-hidden="true"><Icon name="browser" /></span>
+              <h3>Preview a web app</h3>
+              <p>Enter a local or deployed HTTP address above. {agent} can open and use this browser too.</p>
+            </div>
+          )}
+        </div>
       </div>
       {markup && isPresent && <BrowserMarkup capture={markup} onAdd={(context) => onAttach?.(context)} onClose={() => setMarkup(undefined)} />}
     </section>

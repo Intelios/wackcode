@@ -520,7 +520,7 @@ async fn eval_value(webview: &Webview, script: impl Into<String>) -> Result<Valu
     serde_json::from_str(&raw).map_err(|_| "The page returned an unreadable result.".to_string())
 }
 
-async fn eval_page_value(webview: &Webview, script: impl Into<String>) -> Result<Value, String> {
+pub(crate) async fn eval_page_value(webview: &Webview, script: impl Into<String>) -> Result<Value, String> {
     // Console and dialog records live in the page world because those hooks must observe page
     // JavaScript. Keep every DOM inspection and interaction helper in `eval_value` above.
     let (sender, receiver) = oneshot::channel();
@@ -855,7 +855,8 @@ fn browser_navigation_inner(app: &AppHandle, task_id: &str, action: &str) -> Res
     Ok(json!({ "ok": true }))
 }
 
-async fn screenshot(webview: &Webview) -> Result<(Vec<u8>, u32, u32), String> {
+/// A PNG of a webview's current rendering. Also `canvas_render.rs`'s, for its parked view.
+pub(crate) async fn screenshot(webview: &Webview) -> Result<(Vec<u8>, u32, u32), String> {
     let (sender, receiver) = oneshot::channel();
     let sender = Arc::new(Mutex::new(Some(sender)));
     webview

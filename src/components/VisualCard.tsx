@@ -1,9 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { motion, useReducedMotion } from "motion/react";
-import { api } from "../api";
-import { visualThemeVars, visualVariables } from "../theme";
-import type { VisualThemeVars } from "../types";
+import { useFrameTheme, useStagedVisual } from "../hooks/useStagedVisual";
 import { MAX_VISUAL_SEND_CHARS, type VisualSendResult } from "../visual-action";
 import { parseVisualArgs } from "../tool-utils";
 import type { NormalizedBlock } from "../types";
@@ -56,10 +54,8 @@ interface VisualFrameProps {
 function VisualFrame({ html, title, maxHeight, controls, onRefusal }: VisualFrameProps) {
   const reduce = useReducedMotion();
   const frameRef = useRef<HTMLIFrameElement>(null);
-  const [src, setSrc] = useState<string>();
+  const { src, failed, fail, retry } = useStagedVisual(html);
   const [height, setHeight] = useState<number>();
-  const [failed, setFailed] = useState(false);
-  const [attempt, setAttempt] = useState(0);
   const lastSend = useRef(0);
   // The listener is registered once; these are read at message time.
   const live = useRef(controls);
@@ -72,35 +68,17 @@ function VisualFrame({ html, title, maxHeight, controls, onRefusal }: VisualFram
     frameRef.current?.contentWindow?.postMessage({ type: "wackcode-visual:send-result", id, ok, ...(reason ? { reason } : {}) }, "*");
   }, []);
 
-  useEffect(() => {
-    let mounted = true;
-    setSrc(undefined);
-    setHeight(undefined);
-    setFailed(false);
-    api.stageVisual(html, visualThemeVars())
-      .then((url) => { if (mounted) setSrc(url); })
-      .catch(() => { if (mounted) setFailed(true); });
-    return () => { mounted = false; };
-  }, [html, attempt]);
+  // A freshly staged document lays out again from the minimum.
+  useEffect(() => { setHeight(undefined); }, [src]);
 
   // No height means the document never laid out: show the retry instead of an empty well.
   useEffect(() => {
     if (!src || height !== undefined) return;
-    const timer = window.setTimeout(() => setFailed(true), LOAD_TIMEOUT_MS);
+    const timer = window.setTimeout(fail, LOAD_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
   }, [src, height]);
 
-  // A theme change repaints the frame in place, keeping whatever the widget was doing.
-  useEffect(() => {
-    if (!src) return;
-    const push = () => {
-      const theme: VisualThemeVars = visualThemeVars();
-      frameRef.current?.contentWindow?.postMessage({ type: "wackcode-visual:theme", vars: visualVariables(theme), scheme: theme.scheme }, "*");
-    };
-    const observer = new MutationObserver(push);
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["style", "data-backdrop"] });
-    return () => observer.disconnect();
-  }, [src]);
+  useFrameTheme(frameRef, src);
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
@@ -140,10 +118,6 @@ function VisualFrame({ html, title, maxHeight, controls, onRefusal }: VisualFram
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
   }, [answer, maxHeight, onRefusal]);
-
-  const retry = () => {
-    setAttempt((current) => current + 1);
-  };
 
   if (failed) {
     return (

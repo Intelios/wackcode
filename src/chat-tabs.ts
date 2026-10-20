@@ -25,13 +25,13 @@ export interface ChatDraft {
 export interface TabPanelState {
   view: SidePanelView | null;
   width: number;
-  browserExpanded: boolean;
-  browserRestoreWidth: number;
+  panelExpanded: boolean;
+  expandRestoreWidth: number;
   changesSelection?: { path: string; layer: "staged" | "working" };
 }
 
 export const EMPTY_TAB_PANEL: TabPanelState = {
-  view: null, width: 430, browserExpanded: false, browserRestoreWidth: 430
+  view: null, width: 430, panelExpanded: false, expandRestoreWidth: 430
 };
 
 export interface ChatTab {

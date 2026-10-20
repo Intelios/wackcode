@@ -1,5 +1,6 @@
 mod backgrounds;
 mod browser;
+mod canvas_render;
 mod chat_refs;
 mod chat_tabs;
 mod checkpoints;
@@ -58,6 +59,7 @@ pub fn run() {
         .manage(worker::ManagerState::default())
         .manage(terminal::TerminalState::default())
         .manage(visuals::VisualStore::new())
+        .manage(canvas_render::CanvasRenderer::default())
         .manage(run_command::RunState::default())
         .manage(menu_bar::MenuBarState::default())
         .setup(|app| {
@@ -245,6 +247,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + 
             commands::execute_command,
             commands::init_agents,
             commands::start_skill_creator,
+            commands::start_canvas,
             commands::publish_skill_draft,
             commands::skill_draft_status,
             commands::read_skill_draft,
@@ -300,6 +303,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + 
             run_command::resize_run,
             menu_bar::take_menu_navigation,
             visuals::stage_visual,
+            visuals::set_visual_theme,
             commands::tool_image,
             commands::message_image,
             computer_use::computer_use_status,

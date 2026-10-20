@@ -1137,6 +1137,9 @@ describe("Pi worker integration", () => {
       "browser_open",
       "browser_screenshot",
       "browser_snapshot",
+      "canvas",
+      "canvas_guide",
+      "canvas_look",
       "computer_act",
       "computer_apps",
       "computer_open",
@@ -1203,13 +1206,13 @@ describe("Pi worker integration", () => {
         "browser_console"
       ]
     });
-    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.length === 11);
+    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.length === 14);
     // `find`/`grep` availability varies by host; the companion stays on even without bash.
     const beforeSecondRun = provider.requests.length;
     worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-2", message: "Again." });
     await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.snapshot === undefined && provider.requests.length > beforeSecondRun);
 
-    expect(offered(provider.requests[beforeSecondRun])).toEqual(["ask_user_question", "bash_job", "edit", "plan_mode_complete", "read", "read_chat", "show_visual", "skill_creator", "suggest_task", "todo", "write"]);
+    expect(offered(provider.requests[beforeSecondRun])).toEqual(["ask_user_question", "bash_job", "canvas", "canvas_guide", "canvas_look", "edit", "plan_mode_complete", "read", "read_chat", "show_visual", "skill_creator", "suggest_task", "todo", "write"]);
     expect(worker.child.exitCode).toBeNull();
   });
 

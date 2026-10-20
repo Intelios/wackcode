@@ -1,0 +1,61 @@
+<!doctype html>
+<!--
+  The page `canvas_look` renders an artboard in (`canvas_render.rs`), served only to the offscreen
+  `canvas-render` webview from `wcvisual://localhost/render/<token>`.
+
+  The artboard itself runs in the same opaque-origin, `sandbox="allow-scripts"` frame it has on
+  the canvas, so its script is exactly as isolated here as on screen: this page is the webview's
+  main frame (the one Tauri's init scripts reach) and runs only the code below. It listens to the
+  frame's own size and error reports and exposes them as `window.__wcRender`, which the host reads
+  before taking its snapshot. `__TOKEN__` is the artboard's hex token, checked before splicing.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Artboard</title>
+<style>
+html,body{margin:0;padding:0;overflow:hidden;background:transparent}
+iframe{display:block;border:0;width:100vw;height:100vh;background:transparent}
+</style>
+<script>
+(function () {
+  "use strict";
+  var MAX_ERRORS = 5;
+  var state = { token: "__TOKEN__", loaded: false, ready: false, height: 0, width: 0, errors: [] };
+  var frame = null;
+  var timer = 0;
+  Object.defineProperty(window, "__wcRender", { value: state, configurable: false });
+
+  // Ready once the frame has loaded and its reports have gone quiet for a moment.
+  function settle() {
+    state.ready = false;
+    window.clearTimeout(timer);
+    timer = window.setTimeout(function () {
+      window.requestAnimationFrame(function () {
+        window.requestAnimationFrame(function () { state.ready = state.loaded; });
+      });
+    }, 300);
+  }
+
+  window.addEventListener("message", function (event) {
+    if (!frame || event.source !== frame.contentWindow) return;
+    var data = event.data;
+    if (!data || typeof data !== "object") return;
+    if (data.type === "wackcode-visual:size") {
+      if (typeof data.height === "number" && isFinite(data.height)) state.height = data.height;
+      if (typeof data.width === "number" && isFinite(data.width)) state.width = data.width;
+      settle();
+    } else if (data.type === "wackcode-visual:error" && typeof data.message === "string" && state.errors.length < MAX_ERRORS) {
+      state.errors.push(data.message.slice(0, 300));
+    }
+  });
+
+  document.addEventListener("DOMContentLoaded", function () {
+    frame = document.getElementById("artboard");
+    frame.addEventListener("load", function () { state.loaded = true; settle(); });
+  });
+})();
+</script>
+</head>
+<body><iframe id="artboard" title="Artboard" sandbox="allow-scripts" referrerpolicy="no-referrer" src="wcvisual://localhost/__TOKEN__"></iframe></body>
+</html>

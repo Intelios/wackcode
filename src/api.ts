@@ -71,6 +71,7 @@ import type {
   TerminalFrame,
   TerminalInfo,
   ToolConfig,
+  VisualKind,
   VisualThemeVars,
   WorkspaceFiles
 } from "./types";
@@ -132,8 +133,10 @@ export const api = {
   toolImage: (taskId: string, toolCallId: string, index = 0) => invoke<ImageContent | null>("tool_image", { taskId, toolCallId, index }),
   /** The original image a sent message attached, or null when it's gone. */
   messageImage: (taskId: string, entryId: string, index = 0) => invoke<ImageContent | null>("message_image", { taskId, entryId, index }),
-  /** Stages a visual reply's HTML in Rust and returns the `wcvisual:` URL its frame loads. */
-  stageVisual: (html: string, theme: VisualThemeVars) => invoke<string>("stage_visual", { html, theme }),
+  /** Stages a visual reply's (or a canvas artboard's) HTML in Rust and returns the `wcvisual:` URL its frame loads. */
+  stageVisual: (html: string, theme: VisualThemeVars, kind: VisualKind = "reply") => invoke<string>("stage_visual", { html, theme, kind }),
+  /** Tells Rust the app's theme, for the artboards it renders itself (`canvas_look`). */
+  setVisualTheme: (theme: VisualThemeVars) => invoke<void>("set_visual_theme", { theme }),
   browserReset: (taskId: string) => invoke<BrowserState>("browser_reset", { taskId }),
   browserReturnFromPopup: (taskId: string) => invoke<BrowserState>("browser_return_from_popup", { taskId }),
   /** Opens the native picker in Rust (several images at once); null when the user cancels. */
@@ -261,6 +264,7 @@ export const api = {
   executeCommand: (input: { taskId: string; commandId: string; args: string; startedAt: number; images?: ImageContent[]; name?: string }) => invoke<string>("execute_command", { input }),
   initAgents: (taskId: string, startedAt: number) => invoke<string>("init_agents", { taskId, startedAt }),
   startSkillCreator: (taskId: string, request: string, startedAt: number) => invoke<string>("start_skill_creator", { taskId, request, startedAt }),
+  startCanvas: (taskId: string, request: string, startedAt: number) => invoke<string>("start_canvas", { taskId, request, startedAt }),
   publishSkillDraft: (taskId: string, draftId: string, revision: string) =>
     invoke<{ path: string; name: string; overwritten: boolean }>("publish_skill_draft", { taskId, draftId, revision }),
   skillDraftStatus: (taskId: string) => invoke<import("./types").SkillDraftStatus[]>("skill_draft_status", { taskId }),

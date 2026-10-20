@@ -2874,6 +2874,60 @@ pub async fn start_skill_creator(
     Ok(run_id)
 }
 
+/// `/canvas`: start a canvas exploration. Unlike /skill-creator it runs in any mode — the canvas
+/// changes no file — but never in a Chat mode chat, which has no canvas.
+#[tauri::command]
+pub async fn start_canvas(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    task_id: String,
+    request: String,
+    started_at: u64,
+) -> Result<String, String> {
+    if request.len() > 100_000 {
+        return Err("That request is too long.".into());
+    }
+    let lock = task_lock(&app, &task_id);
+    let _guard = lock.lock().await;
+    let _checkout = checkout_dispatch_guard(&app, &state, &task_id).await;
+    let (task, provider) = task_and_provider(&state, &task_id)?;
+    refuse_chat(&task, "/canvas")?;
+    if matches!(task.status, TaskStatus::Running | TaskStatus::Stopping) {
+        return Err("Wait for this chat to finish before running /canvas.".into());
+    }
+    // /canvas can be a chat's opening run too; the worker titles from the request.
+    let (title_attempt, title_config) = begin_auto_title(
+        &app,
+        &state,
+        &task_id,
+        &command_opening(Some("canvas"), &request),
+    )?;
+    let api_key = credential_for(&app, &state, &provider)?;
+    worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
+    set_status(&state, &task.id, TaskStatus::Running)?;
+    let checkpoint = match checkpoint_location(&app, &state, &task) {
+        Ok(location) => snapshot_quietly(&app, &task.id, &location).await,
+        Err(_) => None,
+    };
+    let run_id = Uuid::new_v4().to_string();
+    let auto_title = finish_auto_title(&app, &state, &task.id, title_attempt, &title_config);
+    let result = worker::request(
+        &app,
+        &task.id,
+        json!({
+            "id": Uuid::new_v4().to_string(), "type": "start_canvas", "request": request,
+            "startedAt": started_at, "runId": run_id, "checkpoint": checkpoint, "autoTitle": auto_title
+        }),
+        REQUEST_TIMEOUT,
+    )
+    .await;
+    if let Err(error) = result {
+        let _ = set_status(&state, &task.id, TaskStatus::Idle);
+        return Err(error);
+    }
+    Ok(run_id)
+}
+
 /// Save a reviewed skill draft into the shared library — the review card's Save button. The
 /// chat must be idle and in Build mode; the skill creator validates the reviewed revision
 /// again under the library lock before anything is written. Needs no model and no worker.

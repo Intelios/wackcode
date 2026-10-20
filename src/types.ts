@@ -721,6 +721,9 @@ export interface AppearanceConfig {
  * before the model's markup runs, read from the applied theme (`visualThemeVars`). Mirrors
  * `VisualTheme` in visuals.rs.
  */
+/** What a staged `wcvisual:` document is: a visual reply, or an artboard on a canvas (`visuals.rs`). */
+export type VisualKind = "reply" | "artboard";
+
 export interface VisualThemeVars {
   bg: string;
   surface: string;

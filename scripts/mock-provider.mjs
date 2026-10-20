@@ -46,7 +46,10 @@ const server = createServer(async (request, response) => {
   for await (const chunk of request) chunks.push(Buffer.from(chunk));
   const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
   const messages = Array.isArray(body.messages) ? body.messages : [];
-  const latestUser = [...messages].reverse().find((message) => message?.role === "user");
+  // For a vision model Pi carries a tool result's images in a user message right after the tool
+  // reply; that message isn't the user speaking, so it never counts as the latest prompt.
+  const imageCarrier = (index) => messages[index]?.role === "user" && messages[index - 1]?.role === "tool";
+  const latestUser = [...messages].reverse().find((message, index) => message?.role === "user" && !imageCarrier(messages.length - 1 - index));
   response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
   if (textOf(latestUser?.content).toLowerCase().includes("wait until stopped")) {
     response.write(": waiting for cancellation\n\n");
@@ -72,7 +75,7 @@ const server = createServer(async (request, response) => {
     if (!response.destroyed) { chunk({}, "stop"); response.end("data: [DONE]\n\n"); }
     return;
   }
-  const hasToolResult = messages.at(-1)?.role === "tool";
+  const hasToolResult = messages.at(-1)?.role === "tool" || imageCarrier(messages.length - 1);
   const prompt = textOf(latestUser?.content);
   const background = prompt.toLowerCase().includes("background fixture");
   // Chat mode's confinement check: the write aims one folder above the workspace.
@@ -81,6 +84,17 @@ const server = createServer(async (request, response) => {
   // "suggest fixture" files one suggested task (when the built-in is on), then finishes the turn.
   const suggestFixture = /^suggest fixture/i.test(prompt);
   const suggest = suggestFixture && !hasToolResult && body.tools?.some((tool) => tool.function?.name === "suggest_task");
+  // "canvas fixture" draws a base artboard and two theme variants, looks at them, then answers.
+  // It also matches inside /canvas's generated prompt ("/canvas canvas fixture").
+  const canvasFixture = prompt.toLowerCase().includes("canvas fixture");
+  const sinceUser = messages.slice(messages.lastIndexOf(latestUser) + 1);
+  const calledTool = (name) => sinceUser.some((message) => message.role === "assistant" && message.tool_calls?.some((call) => call.function?.name === name));
+  const offers = (name) => body.tools?.some((tool) => tool.function?.name === name);
+  const canvasCall = canvasFixture && offers("canvas") && !calledTool("canvas")
+    ? { name: "canvas", arguments: JSON.stringify(canvasFixtureArguments()) }
+    : canvasFixture && offers("canvas_look") && calledTool("canvas") && !calledTool("canvas_look")
+      ? { name: "canvas_look", arguments: JSON.stringify({ canvas: "billing-settings-themes" }) }
+      : undefined;
   // "search fixture: <query>" calls web_search when Settings › Web offers it.
   const searchQuery = /^search fixture:\s*(.+)$/i.exec(prompt)?.[1];
   const search = searchQuery && body.tools?.some((tool) => tool.function?.name === "web_search") ? searchQuery : undefined;
@@ -105,7 +119,7 @@ const server = createServer(async (request, response) => {
   const backgroundLaunched = messages.slice(messages.lastIndexOf(latestUser) + 1).some((message) => message.role === "assistant" && message.tool_calls?.some((call) => call.function?.name === "subagent"));
   const resultsArrived = prompt.includes("Job ");
   const backgroundLaunch = background && subagent && !backgroundLaunched && !resultsArrived;
-  if (backgroundLaunch || suggest || (!background && !suggestFixture && !child && !resultsArrived && !hasToolResult && body.tools?.length && (!browserMatch || browser) && (!computerMatch || computer))) {
+  if (backgroundLaunch || suggest || canvasCall || (!background && !suggestFixture && !canvasFixture && !child && !resultsArrived && !hasToolResult && body.tools?.length && (!browserMatch || browser) && (!computerMatch || computer))) {
     send(response, {
       id: "fixture-tool",
       object: "chat.completion.chunk",
@@ -120,8 +134,8 @@ const server = createServer(async (request, response) => {
             id: `fixture-tool-${messages.length}`,
             type: "function",
             function: {
-              name: backgroundLaunch ? "subagent" : suggest ? "suggest_task" : browser ? browser.name : computer ? computer.name : search ? "web_search" : "write",
-              arguments: suggest
+              name: backgroundLaunch ? "subagent" : canvasCall ? canvasCall.name : suggest ? "suggest_task" : browser ? browser.name : computer ? computer.name : search ? "web_search" : "write",
+              arguments: canvasCall ? canvasCall.arguments : suggest
                 ? JSON.stringify({
                   title: "Dismiss button stays disabled after a failed save",
                   kind: "bug",
@@ -152,7 +166,7 @@ const server = createServer(async (request, response) => {
       object: "chat.completion.chunk",
       created: 2,
       model: body.model,
-      choices: [{ index: 0, delta: { role: "assistant", content: suggestFixture ? "Layout fixed. I noted one follow-up below." : browserMatch ? "Browser fixture complete." : computerMatch ? "Computer fixture complete." : child ? "Background fixture child completed." : searchQuery ? "I searched the web; the results are in the card above." : resultsArrived ? "The background child finished; its result has arrived." : background ? "I launched a background helper and finished my own work. You can send another message while it runs." : escape ? "I tried to write `../wackcode-escape.txt`, outside the workspace." : "Created `wackcode-live.txt`." }, finish_reason: null }]
+      choices: [{ index: 0, delta: { role: "assistant", content: canvasFixture ? "Three themes for the billing page are on the canvas: **Base**, **Ember** and **Pine**, plus Base on a phone. Which direction should I take forward?" : suggestFixture ? "Layout fixed. I noted one follow-up below." : browserMatch ? "Browser fixture complete." : computerMatch ? "Computer fixture complete." : child ? "Background fixture child completed." : searchQuery ? "I searched the web; the results are in the card above." : resultsArrived ? "The background child finished; its result has arrived." : background ? "I launched a background helper and finished my own work. You can send another message while it runs." : escape ? "I tried to write `../wackcode-escape.txt`, outside the workspace." : "Created `wackcode-live.txt`." }, finish_reason: null }]
     });
     send(response, {
       id: "fixture-done",
@@ -172,4 +186,37 @@ server.listen(port, "127.0.0.1", () => {
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => server.close(() => process.exit(0)));
+}
+
+/** The canvas fixture's one drawing call: a themable base, two variants and a phone artboard. */
+function canvasFixtureArguments() {
+  const html = `<style>
+:root{--bg:#f4f4f1;--surface:#fff;--text:#1d1d1b;--muted:#6b6b66;--line:#e2e2dc;--accent:#2f6df6;--on-accent:#fff;--radius:10px}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,"SF Pro Text",system-ui,sans-serif}
+.shell{display:grid;grid-template-columns:220px 1fr;min-height:100vh}
+nav{padding:28px 18px;border-right:1px solid var(--line)}nav b{display:block;margin-bottom:24px;font-size:15px}
+nav a{display:block;padding:7px 10px;border-radius:var(--radius);color:var(--muted);text-decoration:none}nav a.on{background:var(--surface);color:var(--text);font-weight:600}
+main{padding:40px 48px;max-width:860px}h1{margin:0 0 4px;font-size:26px}p.lead{margin:0 0 28px;color:var(--muted)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:22px 24px;margin-bottom:18px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:16px}.plan{font-size:20px;font-weight:650}.muted{color:var(--muted)}
+button{border:0;border-radius:calc(var(--radius) - 2px);padding:9px 16px;font:inherit;font-weight:600;background:var(--accent);color:var(--on-accent);cursor:pointer}
+button.ghost{background:transparent;color:var(--text);border:1px solid var(--line)}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}td{padding:10px 0;border-top:1px solid var(--line)}td:last-child{text-align:right}
+@media (max-width:600px){.shell{grid-template-columns:1fr}nav{display:none}main{padding:28px 20px}}
+</style>
+<div class="shell"><nav><b>Acme</b><a>Profile</a><a>Team</a><a class="on">Billing</a><a>Security</a></nav>
+<main><h1>Billing</h1><p class="lead">Your plan, payment method and invoices.</p>
+<div class="card row"><div><div class="muted">Current plan</div><div class="plan">Team · $48/month</div><div class="muted">Renews on 1 November · 6 of 10 seats used</div></div><div class="row"><button class="ghost">Change plan</button><button>Add seats</button></div></div>
+<div class="card row"><div><div class="muted">Payment method</div><div>Visa ending 4242 · expires 08/28</div></div><button class="ghost">Update</button></div>
+<div class="card"><div class="muted" style="margin-bottom:6px">Invoices</div><table><tr><td>October 2026</td><td>$48.00</td></tr><tr><td>September 2026</td><td>$48.00</td></tr><tr><td>August 2026</td><td>$40.00</td></tr></table></div>
+</main></div>`;
+  return {
+    title: "Billing settings — themes",
+    artboards: [
+      { name: "Base", group: "Desktop", width: 1280, height: 800, notes: "Neutral reference", html },
+      { name: "Ember", group: "Desktop", width: 1280, height: 800, basedOn: "base", notes: "Warm and high-contrast", css: ":root{--bg:#17110d;--surface:#221913;--text:#f6eee8;--muted:#b8a598;--line:#3a2c22;--accent:#ff7a3d;--on-accent:#1b0e05;--radius:6px}" },
+      { name: "Pine", group: "Desktop", width: 1280, height: 800, basedOn: "base", notes: "Calm, rounded", css: ":root{--bg:#eef3ef;--surface:#fbfdfb;--text:#13241a;--muted:#5d7466;--line:#d6e2d9;--accent:#1f7a4d;--on-accent:#fff;--radius:16px}" },
+      { name: "Base · Phone", group: "Phone", width: 390, height: 844, basedOn: "base" }
+    ]
+  };
 }

@@ -34,7 +34,7 @@ interface BuiltinExtension {
   description: string;
   tools: readonly string[];
   icon: IconName;
-  kind?: "subagents" | "auto_titles" | "web_fetch" | "web_search" | "browser" | "computer_use" | "mcp" | "memory" | "show_visual" | "suggest_task";
+  kind?: "subagents" | "auto_titles" | "web_fetch" | "web_search" | "browser" | "computer_use" | "mcp" | "memory" | "show_visual" | "suggest_task" | "canvas";
 }
 
 /**
@@ -95,6 +95,14 @@ const BUILTIN_EXTENSIONS: readonly BuiltinExtension[] = [
     tools: ["show_visual"],
     icon: "visual",
     kind: "show_visual"
+  },
+  {
+    name: "Canvas",
+    description:
+      "A board of full mockups beside the chat that you pan and zoom like a design tool — theme options, layout directions, desktop beside phone. The agent draws and revises artboards, checks how they render, and you pick a direction. Start one yourself with /canvas. Artboards run sandboxed with no network access; Code chats only.",
+    tools: ["canvas", "canvas_guide", "canvas_look"],
+    icon: "canvas",
+    kind: "canvas"
   },
   {
     name: "Task suggestions",
@@ -232,6 +240,9 @@ interface Props extends PackageActions {
   /** On unless `show_visual` is in the tool denylist; its switch is on this card. */
   visualEnabled?: boolean;
   onToggleVisual?: (enabled: boolean) => Promise<void>;
+  /** On unless the canvas tools are in the tool denylist; saved canvases still render when off. */
+  canvasEnabled?: boolean;
+  onToggleCanvas?: (enabled: boolean) => Promise<void>;
   /** On unless `suggest_task` is in the tool denylist; saved cards still render when off. */
   suggestionsEnabled?: boolean;
   onToggleSuggestions?: (enabled: boolean) => Promise<void>;
@@ -258,7 +269,7 @@ interface Props extends PackageActions {
 type Tab = "installed" | "browse";
 
 export function PackagesSection({
-  packages, agentName = "WackCode", subagentsEnabled = false, webFetchEnabled = true, webSearchEnabled = false, onConfigureWeb, browserEnabled = true, visualEnabled = true, onToggleVisual, suggestionsEnabled = true, onToggleSuggestions, computerUseEnabled = false, computerUseSupported = true, memoryEnabled = true,
+  packages, agentName = "WackCode", subagentsEnabled = false, webFetchEnabled = true, webSearchEnabled = false, onConfigureWeb, browserEnabled = true, visualEnabled = true, onToggleVisual, canvasEnabled = true, onToggleCanvas, suggestionsEnabled = true, onToggleSuggestions, computerUseEnabled = false, computerUseSupported = true, memoryEnabled = true,
   autoTitlesEnabled = false, autoTitlesConfigured = false,
   onToggleSubagents, onToggleBrowser, onToggleComputerUse, onConfigureComputerUse, onToggleAutoTitles, onConfigureSubagents, onConfigureAutoTitles, onConfigureMemory, onConfigureMcp,
   onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
@@ -316,6 +327,7 @@ export function PackagesSection({
     : extension.kind === "browser" ? browserEnabled
     : extension.kind === "show_visual" ? visualEnabled
     : extension.kind === "suggest_task" ? suggestionsEnabled
+    : extension.kind === "canvas" ? canvasEnabled
     : extension.kind === "computer_use" ? computerUseEnabled
     : extension.kind === "web_fetch" ? webFetchEnabled
     : extension.kind === "web_search" ? webSearchEnabled
@@ -444,6 +456,8 @@ export function PackagesSection({
                       ? (enabled) => void run(() => onToggleVisual(enabled)).catch(() => undefined)
                       : extension.kind === "suggest_task" && onToggleSuggestions
                       ? (enabled) => void run(() => onToggleSuggestions(enabled)).catch(() => undefined)
+                      : extension.kind === "canvas" && onToggleCanvas
+                      ? (enabled) => void run(() => onToggleCanvas(enabled)).catch(() => undefined)
                       : extension.kind === "computer_use" && onToggleComputerUse
                       ? (enabled) => void run(() => onToggleComputerUse(enabled)).catch(() => undefined)
                       : extension.kind === "auto_titles" && onToggleAutoTitles

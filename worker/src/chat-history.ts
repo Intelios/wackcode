@@ -15,6 +15,7 @@ import type { FileEntry, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { transcriptEntries } from "./transcript.js";
 import { buildTreeIndex, type EntryLike } from "./tree.js";
 import { MAX_VISUAL_TITLE, SHOW_VISUAL_TOOL_NAME } from "./builtin/visual.js";
+import { CANVAS_TOOL_NAME, MAX_CANVAS_TITLE } from "./builtin/canvas/state.js";
 import { MAX_SUGGESTION_TITLE, SUGGEST_TASK_TOOL_NAME } from "./builtin/suggest-task.js";
 
 /** What the host knows about the chat, beyond its session file. */
@@ -109,6 +110,15 @@ function toolCalls(content: unknown): string[] {
     if (value.name === SHOW_VISUAL_TOOL_NAME) {
       const title = (value.arguments as { title?: unknown } | undefined)?.title;
       return [typeof title === "string" && title.trim() ? `[visual: ${clip(title, MAX_VISUAL_TITLE)}]` : "[visual]"];
+    }
+    // A canvas call's markup is the other chat's board; the marker says what it drew.
+    if (value.name === CANVAS_TOOL_NAME) {
+      const input = (value.arguments ?? {}) as { title?: unknown; canvas?: unknown; artboards?: unknown };
+      const label = typeof input.title === "string" && input.title.trim() ? input.title : typeof input.canvas === "string" ? input.canvas : "";
+      const names = Array.isArray(input.artboards)
+        ? input.artboards.map((entry) => (entry as { name?: unknown; id?: unknown } | null)?.name ?? (entry as { id?: unknown } | null)?.id).filter((name): name is string => typeof name === "string" && !!name.trim())
+        : [];
+      return [`[canvas${label.trim() ? `: ${clip(label, MAX_CANVAS_TITLE)}` : ""}${names.length ? ` — ${clip(names.join(", "), MAX_ARGS_CHARS)}` : ""}]`];
     }
     // A suggestion's brief is written for the user's card, not for another chat's context.
     if (value.name === SUGGEST_TASK_TOOL_NAME) {

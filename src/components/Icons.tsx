@@ -1,7 +1,7 @@
 import type { SVGProps } from "react";
 import { quillIconPaths } from "./QuillMark";
 
-export type IconName = "markupArrow" | "markupBox" | "markupText" | "redo" | "star" | "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "browser" | "expand" | "collapse" | "copy" | "archive" | "unarchive" | "send" | "shuffle" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "checklist" | "terminal" | "file" | "paperclip" | "pencil" | "quill" | "external" | "brain" | "hammer" | "search" | "wrench" | "question" | "image" | "close" | "rewind" | "agents" | "flame" | "palette" | "plug" | "book" | "comment" | "commit" | "push" | "pullRequest" | "slash" | "erase" | "cursor" | "memory" | "accessibility" | "viewfinder" | "lock" | "dock" | "clock" | "pull" | "fetch" | "pin" | "split" | "unified" | "undo" | "code" | "filePlus" | "textSearch" | "globe" | "play" | "gamepad" | "link" | "help" | "alert" | "visual" | "bulb";
+export type IconName = "markupArrow" | "markupBox" | "markupText" | "redo" | "star" | "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "browser" | "expand" | "collapse" | "copy" | "archive" | "unarchive" | "send" | "shuffle" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "checklist" | "terminal" | "file" | "paperclip" | "pencil" | "quill" | "external" | "brain" | "hammer" | "search" | "wrench" | "question" | "image" | "close" | "rewind" | "agents" | "flame" | "palette" | "plug" | "book" | "comment" | "commit" | "push" | "pullRequest" | "slash" | "erase" | "cursor" | "memory" | "accessibility" | "viewfinder" | "lock" | "dock" | "clock" | "pull" | "fetch" | "pin" | "split" | "unified" | "undo" | "code" | "filePlus" | "textSearch" | "globe" | "play" | "gamepad" | "link" | "help" | "alert" | "visual" | "bulb" | "canvas" | "minus";
 
 const paths: Record<IconName, React.ReactNode> = {
   markupArrow: <path d="M5 19 19 5M8 5h11v11" />,
@@ -82,6 +82,8 @@ const paths: Record<IconName, React.ReactNode> = {
   image: <><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="1.8" /><path d="m21 16-5-5-9 9" /></>,
   // Visual replies: a chart drawn inside a frame — the answer as something you look at.
   visual: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M7 16v-4M11 16V8M15 16v-6M7 16h10" /></>,
+  canvas: <><rect x="3.5" y="5" width="7.5" height="9" rx="1.4" /><rect x="13" y="5" width="7.5" height="5.5" rx="1.4" /><rect x="13" y="13" width="7.5" height="6" rx="1.4" /><path d="M3.5 18.5h7.5" /></>,
+  minus: <><path d="M5 12h14" /></>,
   // A lightbulb: a task the agent spotted along the way (`SuggestionTray`).
   bulb: <><path d="M9 17.5h6" /><path d="M10 20.5h4" /><path d="M12 3.5a5.5 5.5 0 0 0-3.2 9.97c.5.37.8.95.8 1.57v.46h4.8v-.46c0-.62.3-1.2.8-1.57A5.5 5.5 0 0 0 12 3.5Z" /></>,
   close: <path d="M6 6l12 12M18 6 6 18" />,

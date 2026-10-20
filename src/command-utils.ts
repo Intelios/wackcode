@@ -28,13 +28,14 @@ export const APP_SLASH_COMMANDS: SlashCommand[] = [
   { id: "app:name", name: "name", description: "Rename this chat", source: "app", sourceLabel: "WackCode", argumentHint: "<name>" },
   { id: "app:copy", name: "copy", description: "Copy the latest assistant message", source: "app", sourceLabel: "WackCode" },
   { id: "app:goal", name: "goal", description: "Keep iterating until the goal is verified. /goal pause, resume, clear control it.", source: "app", sourceLabel: "WackCode", argumentHint: "<objective>" },
-  { id: "app:skill-creator", name: "skill-creator", description: "Create or improve an Agent Skill, then review and save it", source: "app", sourceLabel: "WackCode", argumentHint: "[request]" }
+  { id: "app:skill-creator", name: "skill-creator", description: "Create or improve an Agent Skill, then review and save it", source: "app", sourceLabel: "WackCode", argumentHint: "[request]" },
+  { id: "app:canvas", name: "canvas", description: "Explore UI on a pan-and-zoom canvas: themes, layouts, devices side by side", source: "app", sourceLabel: "WackCode", argumentHint: "[what to explore]" }
 ];
 
 /** The app commands that make sense without a project or a coding agent. */
 const CHAT_APP_COMMANDS: ReadonlySet<string> = new Set(["app:compact", "app:new", "app:name", "app:copy"]);
 
-/** The app's own commands one area offers. Chat mode has no /init, /goal or /skill-creator. */
+/** The app's own commands one area offers. Chat mode has no /init, /goal, /skill-creator or /canvas. */
 export function appCommandsFor(area: Area, commands: SlashCommand[] = APP_SLASH_COMMANDS): SlashCommand[] {
   return area === "chat" ? commands.filter((command) => CHAT_APP_COMMANDS.has(command.id)) : commands;
 }

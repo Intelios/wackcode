@@ -26,7 +26,7 @@ Everything runs locally. Your conversations go straight from your Mac to the mod
 - **Review and ship.** A built-in diff view with line comments, generated commit messages, push, and GitHub pull requests.
 - **Sees what it builds.** A shared browser preview for web apps, and optional computer use for native Mac and iOS Simulator apps.
 - **Follow-ups, not footnotes.** When the agent spots an unrelated bug or rough edge, it files it as a suggested task under its answer — start it here or in a new chat whenever you want.
-- **Answers you can look at.** The agent can draw a chart, comparison, diagram or small interactive mockup right in the conversation instead of describing it.
+- **Answers you can look at.** The agent can draw a chart, comparison, diagram or small interactive mockup right in the conversation instead of describing it, or lay out whole UI directions side by side on a canvas you pan and zoom.
 - **Extensible.** MCP servers, Agent Skills, slash commands, Pi packages, per-project memory, and optional sub-agents.
 - **Just chat, too.** A separate Chat area turns the same connections into a general-purpose chat, with no project and no coding tools.
 - **Yours.** Six themes or your own colours, image backdrops, Liquid Glass, dynamic backgrounds that respond to chat activity, and your agent's name. Appearance never changes what the model does.
@@ -102,6 +102,7 @@ Open Changes with <kbd>⌘ ⇧ C</kbd> to review staged and unstaged changes fil
 - **Sub-agents** *(optional)*: the agent can hand self-contained tasks to helpers with their own context windows, using WackCode's scout, reviewer and worker roles. Each helper costs extra model usage, so they're off by default; switch them on in **Settings › Packages**.
 - **Auto titles** *(optional)*: an `auto-titles` agent, run on a small, cheap model, gives each new chat a title from its first message.
 - **Task suggestions:** the agent can file a follow-up it noticed while working — a bug, a rough edge, missing polish — as a card under its answer instead of burying it in the final message. Nothing starts on its own: the card waits, and can start the task in this chat or in a new one. Sub-agents never file them; switch the whole thing off in **Settings › Packages**.
+- **Canvas:** a board of full mockups beside the chat that you pan and zoom like a design tool — theme options, layout directions, desktop beside phone. The agent draws and revises artboards, checks how they render, and you pick a direction; start one yourself with `/canvas`. Code chats only.
 
 Switch any tool off in **Settings › Tools**, and customise the system prompts in **Settings › Prompts**.
 
@@ -178,7 +179,7 @@ It's still an agent with real access to your Mac, so a few things are worth know
 - MCP servers you add over HTTP/SSE: only their own address, with the headers you gave. Headers are refused over plain `http://` except to your own Mac.
 - Your Git remote when you push, and GitHub (through `gh`) when you open a PR. Reading changes and switching branches use local Git state without fetching.
 
-Generating a commit message sends a bounded diff of your changes to the chat's model. Computer use contacts nothing itself, but window captures and accessibility text of apps you allow go to your model provider like any other tool result. A visual reply is drawn in a sandboxed frame that cannot reach the network or the app itself, so neither the model nor the visual can phone home from it.
+Generating a commit message sends a bounded diff of your changes to the chat's model. Computer use contacts nothing itself, but window captures and accessibility text of apps you allow go to your model provider like any other tool result. A visual reply or canvas artboard is drawn in a sandboxed frame that cannot reach the network or the app itself, so neither the model nor the visual can phone home from it.
 
 </details>
 

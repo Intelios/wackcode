@@ -134,6 +134,11 @@ export interface BuiltinHost {
    * is decided there (`chat_refs.rs`), and the answer carries that chat's session file.
    */
   readChat(request: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>;
+  /**
+   * Ask the host to render canvas artboards offscreen (`canvas_look`): Rust owns the render view,
+   * the staged documents and the snapshots (`canvas_render.rs`).
+   */
+  canvas(request: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>;
   /** Whether this chat's current model can receive an image tool result. */
   supportsVision(): boolean;
 }

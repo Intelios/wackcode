@@ -727,6 +727,17 @@ export type WorkerCommand =
       /** The chat's one title chance when /skill-creator opens it; the worker titles from the request. */
       autoTitle?: AutoTitleRequest | null;
     }
+  | {
+      id: string;
+      type: "start_canvas";
+      /** The user's request after /canvas: may be empty (the agent asks what to explore). */
+      request: string;
+      runId: string;
+      startedAt?: number;
+      checkpoint?: CheckpointRef | null;
+      /** The chat's one title chance when /canvas opens it; the worker titles from the request. */
+      autoTitle?: AutoTitleRequest | null;
+    }
   | { id: string; type: "compact"; runId: string; startedAt?: number; instructions?: string }
   | {
       id: string;
@@ -831,6 +842,9 @@ export type WorkerCommand =
   /** The host's answer to `read_chat`: a referenced chat's metadata and session file, or a refusal. */
   | { id: string; type: "chat_response"; requestId: string; success: true; result: unknown }
   | { id: string; type: "chat_response"; requestId: string; success: false; error: string }
+  /** The host's answer to `canvas_look`: each artboard's render report and, when asked, its screenshot. */
+  | { id: string; type: "canvas_response"; requestId: string; success: true; result: unknown }
+  | { id: string; type: "canvas_response"; requestId: string; success: false; error: string }
   /**
    * The original of an image a tool result returned (answered with an `ImageContent` or null),
    * for the transcript's lightbox. Bypasses the command queue once the session exists.
@@ -1120,6 +1134,9 @@ export type WorkerOutput =
   /** `read_chat`: resolve a referenced chat id; Rust enforces who may read whom (`chat_refs.rs`). */
   | { type: "chat_request"; taskId: string; requestId: string; request: Record<string, unknown> }
   | { type: "chat_cancel"; taskId: string; requestId: string }
+  /** `canvas_look`: render artboards offscreen; Rust stages and snapshots them (`canvas_render.rs`). */
+  | { type: "canvas_request"; taskId: string; requestId: string; request: Record<string, unknown> }
+  | { type: "canvas_cancel"; taskId: string; requestId: string }
   | ({ type: "extension_ui_request"; taskId: string; requestId: string } & ExtensionUIRequest)
   | { type: "extension_ui_resolved"; taskId: string; requestId: string; cancelled: boolean }
   | { type: "extension_notice"; taskId: string; message: string; level: "info" | "warning" | "error" }

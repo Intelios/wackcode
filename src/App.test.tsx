@@ -17,7 +17,7 @@ vi.mock("./api", () => ({ api: {
   queueMessage: vi.fn().mockResolvedValue(undefined),
   bootstrap: vi.fn(), refreshSubscriptionModels: vi.fn().mockResolvedValue([]),
   takeMenuNavigation: vi.fn().mockResolvedValue(null), setChatTabMenu: vi.fn().mockResolvedValue(undefined),
-  computerUseCursorAppearance: vi.fn().mockResolvedValue(undefined), openTask: vi.fn().mockResolvedValue(undefined),
+  computerUseCursorAppearance: vi.fn().mockResolvedValue(undefined), setVisualTheme: vi.fn().mockResolvedValue(undefined), startCanvas: vi.fn().mockResolvedValue("run"), openTask: vi.fn().mockResolvedValue(undefined),
   computerUseRespondAccess: vi.fn(), computerUseRevokeApp: vi.fn(),
   gitPublishInfo: vi.fn().mockResolvedValue({ branch: "main", upstream: null, remotes: [] }),
   gitChanges: vi.fn().mockResolvedValue({ isGit: false, files: [] }), listDraftCommands: vi.fn().mockResolvedValue([]),

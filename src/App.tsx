@@ -18,7 +18,7 @@ import { composeFileSection, splitFileSection, terminalOutputFile, type FileAtta
 import { CENTRED } from "./backdrop-crop";
 import { BROWSER_TOOL_NAMES, displayAgentName, hasSubagentCall, pruneDisabledTools, sameToolCatalog, subagentDetailsFor, parseSkillPreviewDetails, SKILL_CREATOR_TOOL_NAME } from "./tool-utils";
 import { LinkOpenerContext, openExternally, type LinkOpener } from "./link-opener";
-import { CHANGES_VIEW, GAMES_VIEW, TERMINAL_VIEW, RUN_VIEW, durableView, isDurable, rememberedView, toggleView, viewForChat, viewKey, type PanelViewKind, type SidePanelView } from "./side-panel";
+import { CHANGES_VIEW, GAMES_VIEW, TERMINAL_VIEW, RUN_VIEW, canExpand, durableView, isDurable, isTaskBound, rememberedView, toggleView, viewForChat, viewKey, type PanelViewKind, type SidePanelView } from "./side-panel";
 import { applyRunEvent, EMPTY_RUN_REGISTRY } from "./run-state";
 import { APP_SLASH_COMMANDS, appCommandsFor } from "./command-utils";
 import { AREA_KEY, areaDirection, parseArea, taskArea, tasksInArea, type Area } from "./areas";
@@ -31,7 +31,8 @@ import { ChatTabBar, type ChatTabItem } from "./components/ChatTabBar";
 import { NavigationScope } from "./components/ui/NavigationScope";
 import { LAST_CHAT_MODEL_KEY, useModelMemory } from "./hooks/useModelMemory";
 import { useModelFavorites } from "./hooks/useModelFavorites";
-import { DEFAULT_APPEARANCE, applyTheme, cacheTheme } from "./theme";
+import { DEFAULT_APPEARANCE, applyTheme, cacheTheme, visualThemeVars } from "./theme";
+import { canvasActivity, canvasesFromMessages, latestCanvasId, type CanvasBoard } from "./canvas-state";
 import { computerCursorAppearance } from "./computer-cursor";
 import { AssistantNameContext, agentName } from "./agentName";
 import { DynamicBackdrop, type DynamicBackdropHandle } from "./components/DynamicBackdrop";
@@ -90,6 +91,7 @@ import { BrowserPanel } from "./components/BrowserPanel";
 import { RunPanel } from "./components/RunPanel";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { SidePanel } from "./components/SidePanel";
+import { CanvasPanel } from "./components/canvas/CanvasPanel";
 import { GamesPanel } from "./components/GamesPanel";
 import { exitToArcade } from "./games/session";
 import { SubagentPanelLink } from "./components/SubagentChip";
@@ -282,8 +284,8 @@ export default function App() {
   const [legacySidePanel, setLegacySidePanel] = useState<SidePanelView | null>(rememberedPanelView);
   const [legacyPanelWidth, setLegacyPanelWidth] = useState(() => loadJSON(PANEL_WIDTH_KEY, 430));
   const [browsers, setBrowsers] = useState<Record<string, BrowserState>>({});
-  const [legacyBrowserExpanded, setLegacyBrowserExpanded] = useState(false);
-  const [legacyBrowserRestoreWidth, setLegacyBrowserRestoreWidth] = useState(430);
+  const [legacyPanelExpanded, setLegacyPanelExpanded] = useState(false);
+  const [legacyExpandRestoreWidth, setLegacyExpandRestoreWidth] = useState(430);
   /** Per-chat nonce bumped when the title model names it — drives the header's swipe + glint
    *  and the sidebar row's crossfade (TextSwap keys on it). */
   const [titlePulses, setTitlePulses] = useState<Record<string, number>>({});
@@ -344,8 +346,8 @@ export default function App() {
   };
   const sidePanel = tabsEnabled ? activeTab?.panel.view ?? null : legacySidePanel;
   const panelWidth = tabsEnabled ? activeTab?.panel.width ?? 430 : legacyPanelWidth;
-  const browserExpanded = tabsEnabled ? activeTab?.panel.browserExpanded ?? false : legacyBrowserExpanded;
-  const browserRestoreWidth = tabsEnabled ? activeTab?.panel.browserRestoreWidth ?? 430 : legacyBrowserRestoreWidth;
+  const panelExpanded = tabsEnabled ? activeTab?.panel.panelExpanded ?? false : legacyPanelExpanded;
+  const expandRestoreWidth = tabsEnabled ? activeTab?.panel.expandRestoreWidth ?? 430 : legacyExpandRestoreWidth;
   const updateTabPanel = useCallback((change: (panel: TabPanelState) => TabPanelState) => {
     const id = tabs.ref.current.activeId;
     if (!id) return;
@@ -362,13 +364,13 @@ export default function App() {
     if (tabsEnabledRef.current) updateTabPanel((panel) => ({ ...panel, width }));
     else setLegacyPanelWidth(width);
   }, [updateTabPanel]);
-  const setBrowserExpanded = useCallback((next: SetStateAction<boolean>) => {
-    if (tabsEnabledRef.current) updateTabPanel((panel) => ({ ...panel, browserExpanded: typeof next === "function" ? next(panel.browserExpanded) : next }));
-    else setLegacyBrowserExpanded(next);
+  const setPanelExpanded = useCallback((next: SetStateAction<boolean>) => {
+    if (tabsEnabledRef.current) updateTabPanel((panel) => ({ ...panel, panelExpanded: typeof next === "function" ? next(panel.panelExpanded) : next }));
+    else setLegacyPanelExpanded(next);
   }, [updateTabPanel]);
-  const setBrowserRestoreWidth = useCallback((width: number) => {
-    if (tabsEnabledRef.current) updateTabPanel((panel) => ({ ...panel, browserRestoreWidth: width }));
-    else setLegacyBrowserRestoreWidth(width);
+  const setExpandRestoreWidth = useCallback((width: number) => {
+    if (tabsEnabledRef.current) updateTabPanel((panel) => ({ ...panel, expandRestoreWidth: width }));
+    else setLegacyExpandRestoreWidth(width);
   }, [updateTabPanel]);
   /** The file list behind `@` mentions, for one chat (`task:<id>`) or draft project (`project:<id>`). */
   const [mentions, setMentions] = useState<{ source: string; files?: string[]; truncated?: boolean; loading: boolean; error?: string }>();
@@ -450,12 +452,18 @@ export default function App() {
     to: modelDisplayName(data.providers, entry.to)
   })), [runtime?.snapshot?.modelSwitches, data.providers]);
 
+  // The chat's canvases, folded out of its transcript (`canvas-state.ts`): a rewind past a call
+  // takes its artboards away, exactly as it takes the call's chip.
+  const canvasMessages = runtime?.snapshot?.messages;
+  const selectedCanvases = useMemo(() => canvasMessages ? canvasesFromMessages(canvasMessages) : new Map<string, CanvasBoard>(), [canvasMessages]);
   // Task-bound views never show in another chat, even for the render before the effect below
   // moves the panel back to the remembered durable view.
   const missingSubagent = sidePanel?.kind === "subagent" && sidePanel.taskId === selectedTaskId && runtime?.snapshot !== undefined
     && !hasSubagentCall(runtime.snapshot.messages, runtime.partial, sidePanel.toolCallId);
-  const panelView = selectedTask?.archived || missingSubagent || (area === "chat" && sidePanel?.kind !== "browser") ? null
-    : (sidePanel?.kind === "subagent" || sidePanel?.kind === "browser") && sidePanel.taskId !== selectedTaskId
+  const missingCanvas = sidePanel?.kind === "canvas" && sidePanel.taskId === selectedTaskId && runtime?.snapshot !== undefined
+    && !selectedCanvases.has(sidePanel.canvasId);
+  const panelView = selectedTask?.archived || missingSubagent || missingCanvas || (area === "chat" && sidePanel?.kind !== "browser") ? null
+    : isTaskBound(sidePanel) && sidePanel.taskId !== selectedTaskId
       ? tabsEnabled ? null : rememberedPanelView() : sidePanel;
   const shownSubagent = panelView?.kind === "subagent" ? panelView : undefined;
   const snapshotMessages = runtime?.snapshot?.messages;
@@ -467,40 +475,62 @@ export default function App() {
   );
 
   const toggleChanges = useCallback(() => {
-    if (browserExpanded) {
-      setPanelWidth(browserRestoreWidth);
-      setBrowserExpanded(false);
+    if (panelExpanded) {
+      setPanelWidth(expandRestoreWidth);
+      setPanelExpanded(false);
     }
     setSidePanel((current) => toggleView(current, CHANGES_VIEW));
-  }, [browserExpanded, browserRestoreWidth, setSidePanel, setPanelWidth, setBrowserExpanded]);
+  }, [panelExpanded, expandRestoreWidth, setSidePanel, setPanelWidth, setPanelExpanded]);
   const toggleBrowser = useCallback(() => {
     const taskId = selectedTaskRef.current;
     if (!taskId) return;
     if (sidePanel?.kind === "browser" && sidePanel.taskId === taskId) {
-      if (browserExpanded) setPanelWidth(browserRestoreWidth);
-      setBrowserExpanded(false);
+      if (panelExpanded) setPanelWidth(expandRestoreWidth);
+      setPanelExpanded(false);
       setSidePanel(null);
     } else {
       setSidePanel({ kind: "browser", taskId });
     }
-  }, [sidePanel, browserExpanded, browserRestoreWidth, setSidePanel, setPanelWidth, setBrowserExpanded]);
+  }, [sidePanel, panelExpanded, expandRestoreWidth, setSidePanel, setPanelWidth, setPanelExpanded]);
   const toggleTerminal = useCallback(() => {
-    if (browserExpanded) {
-      setPanelWidth(browserRestoreWidth);
-      setBrowserExpanded(false);
+    if (panelExpanded) {
+      setPanelWidth(expandRestoreWidth);
+      setPanelExpanded(false);
     }
     setSidePanel((current) => toggleView(current, TERMINAL_VIEW));
-  }, [browserExpanded, browserRestoreWidth, setSidePanel, setPanelWidth, setBrowserExpanded]);
+  }, [panelExpanded, expandRestoreWidth, setSidePanel, setPanelWidth, setPanelExpanded]);
   const toggleGames = useCallback(() => {
-    if (browserExpanded) {
-      setPanelWidth(browserRestoreWidth);
-      setBrowserExpanded(false);
+    if (panelExpanded) {
+      setPanelWidth(expandRestoreWidth);
+      setPanelExpanded(false);
     }
     // Toggling the Games panel away is a real close, not a view swap: the next open starts at
     // the Arcade home rather than the game that was left open.
     if (panelView?.kind === "games") exitToArcade();
     setSidePanel((current) => toggleView(current, GAMES_VIEW));
-  }, [browserExpanded, browserRestoreWidth, panelView, setSidePanel, setPanelWidth, setBrowserExpanded]);
+  }, [panelExpanded, expandRestoreWidth, panelView, setSidePanel, setPanelWidth, setPanelExpanded]);
+  /** A transcript card's request to show some artboards; a new nonce is a new request. */
+  const [canvasFocus, setCanvasFocus] = useState<{ canvasId: string; ids: string[]; nonce: number }>();
+  const openCanvas = useCallback((canvasId: string, ids: string[] = []) => {
+    const taskId = selectedTaskRef.current;
+    if (!taskId) return;
+    setSidePanel({ kind: "canvas", taskId, canvasId });
+    setCanvasFocus((current) => ({ canvasId, ids, nonce: (current?.nonce ?? 0) + 1 }));
+  }, [setSidePanel]);
+  const closeExpandable = useCallback(() => {
+    if (panelExpanded) setPanelWidth(expandRestoreWidth);
+    setPanelExpanded(false);
+    setSidePanel(null);
+  }, [panelExpanded, expandRestoreWidth, setSidePanel, setPanelWidth, setPanelExpanded]);
+  const toggleCanvas = useCallback(() => {
+    const taskId = selectedTaskRef.current;
+    if (!taskId) return;
+    if (sidePanel?.kind === "canvas" && sidePanel.taskId === taskId) closeExpandable();
+    else {
+      const canvasId = latestCanvasId(canvasMessages ?? []);
+      if (canvasId) openCanvas(canvasId);
+    }
+  }, [sidePanel, canvasMessages, closeExpandable, openCanvas]);
   const closeSidePanel = useCallback(() => setSidePanel(null), [setSidePanel]);
   /** The Games panel's "back to chat": close the panel and put the caret back in the composer. */
   const backToChat = useCallback(() => {
@@ -522,34 +552,34 @@ export default function App() {
     void api.browserOpen(taskId, url).then(updateBrowser).catch((reason) => setGlobalError(String(reason)));
   }, [browserBuiltinOn, setSidePanel, updateBrowser]);
   useEffect(() => {
-    if (!browserExpanded) return;
+    if (!panelExpanded) return;
     const shell = document.querySelector<HTMLElement>(".app-shell");
     if (!shell) return;
     const update = () => {
       const composer = shell.querySelector<HTMLElement>(area === "chat" ? ".chat-composer-wrap" : ".composer-wrap");
       const dialog = shell.querySelector<HTMLElement>(".inline-dialog-wrap");
-      shell.style.setProperty("--browser-dock-h", `${(composer?.offsetHeight ?? 140) + (dialog?.offsetHeight ?? 0)}px`);
+      shell.style.setProperty("--panel-dock-h", `${(composer?.offsetHeight ?? 140) + (dialog?.offsetHeight ?? 0)}px`);
       if (composer) observer.observe(composer);
       if (dialog) observer.observe(dialog);
     };
     const observer = new ResizeObserver(update);
     const changes = new MutationObserver(update);
     changes.observe(shell, { childList: true, subtree: true }); update();
-    return () => { observer.disconnect(); changes.disconnect(); shell.style.removeProperty("--browser-dock-h"); };
-  }, [browserExpanded, composerDraftKey, area]);
-  const toggleBrowserExpanded = useCallback(() => {
-    if (!browserExpanded) setBrowserRestoreWidth(panelWidth);
-    setBrowserExpanded(!browserExpanded);
+    return () => { observer.disconnect(); changes.disconnect(); shell.style.removeProperty("--panel-dock-h"); };
+  }, [panelExpanded, composerDraftKey, area]);
+  const togglePanelExpanded = useCallback(() => {
+    if (!panelExpanded) setExpandRestoreWidth(panelWidth);
+    setPanelExpanded(!panelExpanded);
     requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(".composer-input textarea, .chat-composer textarea")?.focus());
-  }, [browserExpanded, setBrowserExpanded, setBrowserRestoreWidth, panelWidth]);
+  }, [panelExpanded, setPanelExpanded, setExpandRestoreWidth, panelWidth]);
   const openSubagent = useCallback((toolCallId: string, index: number) => {
     const taskId = selectedTaskRef.current;
-    if (browserExpanded) {
-      setPanelWidth(browserRestoreWidth);
-      setBrowserExpanded(false);
+    if (panelExpanded) {
+      setPanelWidth(expandRestoreWidth);
+      setPanelExpanded(false);
     }
     if (taskId) setSidePanel((current) => toggleView(current, { kind: "subagent", taskId, toolCallId, index }));
-  }, [browserExpanded, browserRestoreWidth, setSidePanel, setPanelWidth, setBrowserExpanded]);
+  }, [panelExpanded, expandRestoreWidth, setSidePanel, setPanelWidth, setPanelExpanded]);
   const selectSubagentSibling = useCallback((index: number) => {
     setSidePanel((current) => current?.kind === "subagent" ? { ...current, index } : current);
   }, [setSidePanel]);
@@ -663,7 +693,7 @@ export default function App() {
     // Leaving Code force-closes the Games panel, a real close: the Arcade comes next.
     if (next !== "code") exitToArcade();
     setLegacySidePanel(next === "code" ? rememberedPanelView() : null);
-    setLegacyBrowserExpanded(false);
+    setLegacyPanelExpanded(false);
     const parked = parkedViews.current[next];
     const task = parked?.taskId ? data.tasks.find((item) => item.id === parked.taskId && taskArea(item) === next) : undefined;
     if (task && parked) {
@@ -746,8 +776,8 @@ export default function App() {
   useEffect(() => {
     if (tabsEnabled) return;
     setSidePanel((current) => viewForChat(current, selectedTaskId, areaRef.current === "chat" ? null : rememberedPanelKind()));
-    if (browserExpanded) setPanelWidth(browserRestoreWidth);
-    setBrowserExpanded(false);
+    if (panelExpanded) setPanelWidth(expandRestoreWidth);
+    setPanelExpanded(false);
   }, [selectedTaskId]);
   useEffect(() => { localStorage.setItem(COLLAPSED_PROJECTS_KEY, JSON.stringify([...collapsedProjects])); }, [collapsedProjects]);
   useEffect(() => { localStorage.setItem(PINNED_PROJECTS_KEY, JSON.stringify([...pinnedProjects])); }, [pinnedProjects]);
@@ -881,9 +911,9 @@ export default function App() {
   }
 
   function showRunOutput() {
-    if (browserExpanded) {
-      setPanelWidth(browserRestoreWidth);
-      setBrowserExpanded(false);
+    if (panelExpanded) {
+      setPanelWidth(expandRestoreWidth);
+      setPanelExpanded(false);
     }
     setSidePanel(RUN_VIEW);
   }
@@ -895,9 +925,29 @@ export default function App() {
 
   // Rewinding past a call takes its chips away, and the panel follows.
   useEffect(() => {
-    if (!missingSubagent) return;
+    if (!missingSubagent && !missingCanvas) return;
+    if (missingCanvas && panelExpanded) {
+      setPanelWidth(expandRestoreWidth);
+      setPanelExpanded(false);
+    }
     setSidePanel(tabsEnabled ? null : rememberedPanelView());
-  }, [missingSubagent, tabsEnabled, setSidePanel]);
+  }, [missingSubagent, missingCanvas, tabsEnabled, setSidePanel]);
+
+  // The first canvas a live run starts in the open chat opens beside it, unless the panel is
+  // already showing something; then the header's Canvas button pulses instead.
+  const seenCanvases = useRef(new Map<string, Set<string>>());
+  const [canvasPulse, setCanvasPulse] = useState(0);
+  useEffect(() => {
+    if (!selectedTaskId || !runtime?.snapshot) return;
+    const ids = new Set(selectedCanvases.keys());
+    const seen = seenCanvases.current.get(selectedTaskId);
+    seenCanvases.current.set(selectedTaskId, ids);
+    if (!seen) return;
+    const fresh = [...ids].filter((id) => !seen.has(id));
+    if (!fresh.length || selectedTask?.status !== "running") return;
+    if (!sidePanel) openCanvas(fresh[fresh.length - 1]);
+    else if (sidePanel.kind !== "canvas") setCanvasPulse((current) => current + 1);
+  }, [selectedCanvases, selectedTaskId]);
 
   const refreshChanges = useCallback(async (taskId = selectedTaskRef.current) => {
     // A Chat mode chat's scratchpad is not a checkout; the host would refuse the request.
@@ -1423,7 +1473,7 @@ export default function App() {
       if (legacySelectedTaskId) {
         const next = tabs.update((state) => openChatTab(state, legacySelectedTaskId, true, taskComposerKeys.current.get(legacySelectedTaskId), areaRef.current));
         if (next.activeId) tabs.update((state) => patchTab(state, next.activeId!, {
-          panel: { ...findTab(state, next.activeId!)!.panel, view: legacySidePanel, width: legacyPanelWidth, browserExpanded: legacyBrowserExpanded, browserRestoreWidth: legacyBrowserRestoreWidth }
+          panel: { ...findTab(state, next.activeId!)!.panel, view: legacySidePanel, width: legacyPanelWidth, panelExpanded: legacyPanelExpanded, expandRestoreWidth: legacyExpandRestoreWidth }
         }));
       }
       else {
@@ -1449,8 +1499,8 @@ export default function App() {
         composerKeyRef.current = tab.composerKey;
         setLegacySidePanel(tab.panel.view);
         setLegacyPanelWidth(tab.panel.width);
-        setLegacyBrowserExpanded(tab.panel.browserExpanded);
-        setLegacyBrowserRestoreWidth(tab.panel.browserRestoreWidth);
+        setLegacyPanelExpanded(tab.panel.panelExpanded);
+        setLegacyExpandRestoreWidth(tab.panel.expandRestoreWidth);
       }
     }
     // Only a mode change transfers selection. Draft/model edits stay owned by their tab.
@@ -1666,6 +1716,7 @@ export default function App() {
       if (name === "compact") await api.compactTask(id, args, startedAt);
       else if (name === "init") await api.initAgents(id, startedAt);
       else if (name === "skill-creator") await api.startSkillCreator(id, args, startedAt);
+      else if (name === "canvas") await api.startCanvas(id, args, startedAt);
       else if (name === "goal") await api.goalControl(id, "set", args.trim(), startedAt);
       else {
         const command = runtime?.slashCommands?.find((entry) => entry.name === name) ?? draftCommand;
@@ -1826,6 +1877,8 @@ export default function App() {
     const appearance = data.appearance.backdrop === "image" && !shownBackground(data.appearance) ? { ...data.appearance, backdrop: "solid" as const } : data.appearance;
     const theme = applyTheme(appearance);
     cacheTheme(appearance);
+    // Artboards Rust renders for canvas_look wear the same theme as the ones on screen.
+    void api.setVisualTheme(visualThemeVars()).catch(() => undefined);
     void api.computerUseCursorAppearance(computerCursorAppearance(appearance, theme)).catch(() => undefined);
   }, [booting, data.appearance]);
 
@@ -2619,6 +2672,7 @@ export default function App() {
   const onSkillDraftAction = useCallback((action: SkillDraftAction) => void handlers.current.skillDraftAction(action), []);
   const onUndoRewind = useCallback(() => handlers.current.undoRewind(), []);
   const onVisualSend = useCallback((text: string, title: string) => handlers.current.visualSend(text, title), []);
+  const canvasScope = useMemo(() => ({ boards: selectedCanvases, onOpen: openCanvas }), [selectedCanvases, openCanvas]);
   const onSuggestionAction = useCallback((action: SuggestionAction) => void handlers.current.suggestionAction(action), []);
   /**
    * What the selected chat's suggested-task cards may do. `started` and `busy` are the
@@ -3035,7 +3089,7 @@ export default function App() {
         { label: "Settings…", icon: <Icon name="settings" />, hint: "⌘,", onSelect: openSettings }
       ]}
     >
-    <div className={`app-shell${rebuilding ? " rebuild" : ""}${browserExpanded && panelView?.kind === "browser" ? " browser-expanded" : ""}${showChatTabBar ? " browser-has-tabs" : ""}`} data-area={area} data-dynamic-space onClickCapture={(event) => {
+    <div className={`app-shell${rebuilding ? " rebuild" : ""}${panelExpanded && canExpand(panelView) ? " panel-expanded" : ""}${showChatTabBar ? " panel-has-tabs" : ""}`} data-area={area} data-dynamic-space onClickCapture={(event) => {
       if (event.button === 0 && !settingsOpen && !confirm && !restoreDialog && !subscriptionLogin && isBackgroundClick(event.target)) {
         dynamicBackdrop.current?.ripple(event.clientX, event.clientY);
       }
@@ -3178,6 +3232,7 @@ export default function App() {
               onToggleTerminal={toggleTerminal}
               gamesOpen={panelView?.kind === "games"}
               onToggleGames={toggleGames}
+              canvas={selectedCanvases.size > 0 ? { open: panelView?.kind === "canvas", onToggle: toggleCanvas, pulse: canvasPulse } : undefined}
               onRename={(name) => void renameTask(selectedTask.id, name)}
               onTaskAction={(task, action) => void taskAction(task, action)}
               titlePulse={titlePulses[selectedTask.id] ?? 0}
@@ -3246,6 +3301,7 @@ export default function App() {
               loadImage={loadMessageImage}
               chatLinks={chatLinks}
               suggestions={selectedSuggestions}
+              canvases={canvasScope}
             />
             </ToolImageSource.Provider>
             </SubagentPanelLink.Provider>
@@ -3387,6 +3443,7 @@ export default function App() {
         width={panelWidth}
         onWidthChange={setPanelWidth}
         label={panelView?.kind === "browser" ? "Browser"
+          : panelView?.kind === "canvas" ? "Canvas"
           : panelView?.kind === "run" ? "Run"
           : panelView?.kind === "terminal" ? "Terminal"
           : panelView?.kind === "games" ? "Games"
@@ -3398,7 +3455,7 @@ export default function App() {
           taskId={view.taskId}
           state={browsers[view.taskId]}
           visible={!confirm && !restoreDialog && !subscriptionLogin && !extensionRequests.some((request) => request.taskId === view.taskId) && !accessRequests.some((request) => request.taskId === view.taskId)}
-          expanded={browserExpanded}
+          expanded={panelExpanded}
           onState={updateBrowser}
           onAttach={(context) => {
             const key = composerDraftKey;
@@ -3409,7 +3466,7 @@ export default function App() {
             composerDrafts.update(key, (draft) => ({ ...draft, browserContexts: [...(draft.browserContexts ?? []), context] }));
             requestAnimationFrame(() => { if (composerKeyRef.current === key) document.querySelector<HTMLTextAreaElement>(".composer-input textarea, .chat-composer textarea")?.focus(); });
           }}
-          onExpand={toggleBrowserExpanded}
+          onExpand={togglePanelExpanded}
           onReset={() => setConfirm({
             title: "Reset browser session?",
             body: "This closes the page and clears this chat's cookies and site data.",
@@ -3418,11 +3475,33 @@ export default function App() {
             run: async () => updateBrowser(await api.browserReset(view.taskId))
           })}
           onClose={() => {
-            if (browserExpanded) setPanelWidth(browserRestoreWidth);
-            setBrowserExpanded(false);
+            if (panelExpanded) setPanelWidth(expandRestoreWidth);
+            setPanelExpanded(false);
             closeSidePanel();
           }}
         />
+      ) : view.kind === "canvas" ? (
+        selectedCanvases.get(view.canvasId) ? (
+          <CopyText.Provider value={writeText}>
+          <CanvasPanel
+            key={view.canvasId}
+            taskId={view.taskId}
+            board={selectedCanvases.get(view.canvasId)!}
+            boards={[...selectedCanvases.values()]}
+            activity={selectedBusy ? canvasActivity(runtime?.snapshot?.messages ?? [], runtime?.partial) : undefined}
+            expanded={panelExpanded}
+            focus={canvasFocus?.canvasId === view.canvasId ? canvasFocus : undefined}
+            onSelectCanvas={(canvasId) => openCanvas(canvasId)}
+            onExpand={togglePanelExpanded}
+            onClose={closeExpandable}
+            onMention={(text) => {
+              const key = composerDraftKey;
+              composerDrafts.update(key, (draft) => ({ ...draft, text: draft.text.trim() ? `${draft.text.replace(/\s+$/, "")} ${text} ` : `${text} ` }));
+              requestAnimationFrame(() => { if (composerKeyRef.current === key) document.querySelector<HTMLTextAreaElement>(".composer-input textarea")?.focus(); });
+            }}
+          />
+          </CopyText.Provider>
+        ) : null
       ) : view.kind === "run" ? (
         <RunPanel run={selectedRun} appearance={data.appearance} configured={Boolean(!selectedTask.archived && selectedProject?.runCommand)}
           onRun={() => void launchRun(selectedTask.id).catch((reason) => setGlobalError(String(reason)))}

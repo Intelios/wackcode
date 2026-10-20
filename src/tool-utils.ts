@@ -1,6 +1,7 @@
 import type { NormalizedBlock, NormalizedMessage, SearchProviderKind, SkillPreviewDetails, SubagentDetails, SubagentResult, SubagentStatus, ToolCatalogEntry, WebSearchDetails } from "./types";
 import { displayPath } from "./chat-utils";
 import { SUGGEST_TASK_TOOL_NAME } from "./suggestions";
+import { CANVAS_GUIDE_TOOL_NAME, CANVAS_LOOK_TOOL_NAME, CANVAS_TOOL_NAME } from "./canvas-state";
 
 /** The built-in sub-agents tool. Its calls render as SubAgent chips rather than a tool row. */
 export const SUBAGENT_TOOL_NAME = "subagent";
@@ -231,6 +232,17 @@ export function summarizeTool(call: NormalizedBlock, result?: NormalizedBlock): 
       return { kind: "other", activeVerb: "Drawing", doneVerb: "Drew", subject: str(toolArgs.title) };
     case SUGGEST_TASK_TOOL_NAME:
       return { kind: "other", activeVerb: "Spotting", doneVerb: "Spotted", subject: str(toolArgs.title) };
+    case CANVAS_TOOL_NAME: {
+      const names = Array.isArray(toolArgs.artboards)
+        ? toolArgs.artboards.map((entry) => str((entry as Record<string, unknown> | null)?.name) || str((entry as Record<string, unknown> | null)?.id)).filter(Boolean)
+        : [];
+      const label = str(toolArgs.title) || str(toolArgs.canvas);
+      return { kind: "other", activeVerb: "Drawing on canvas", doneVerb: "Drew on canvas", subject: [label, names.join(", ")].filter(Boolean).join(" — ") };
+    }
+    case CANVAS_GUIDE_TOOL_NAME:
+      return { kind: "other", activeVerb: "Reading canvas guide", doneVerb: "Read canvas guide", subject: Array.isArray(toolArgs.sections) ? toolArgs.sections.map(str).join(", ") : "" };
+    case CANVAS_LOOK_TOOL_NAME:
+      return { kind: "other", activeVerb: "Looking at canvas", doneVerb: "Looked at canvas", subject: Array.isArray(toolArgs.artboards) ? toolArgs.artboards.map(str).join(", ") : str(toolArgs.canvas) };
     case "memory_save": {
       const updated = typeof toolArgs.name === "string" && toolArgs.name.trim();
       return { kind: "other", activeVerb: updated ? "Updating memory" : "Saving memory", doneVerb: updated ? "Updated memory" : "Saved memory", subject: str(toolArgs.title) };

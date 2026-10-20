@@ -4,6 +4,7 @@ import { agentName } from "../agentName";
 import { modelIsReady } from "../model-utils";
 import { BROWSER_TOOL_NAMES, SHOW_VISUAL_TOOL_NAME, WEB_FETCH_TOOL_NAME } from "../tool-utils";
 import { SUGGEST_TASK_TOOL_NAME } from "../suggestions";
+import { CANVAS_TOOL_NAMES } from "../canvas-state";
 import type { ExecutionPolicyConfig, AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CommandsConfig, ComputerAppGrant, ComputerUseConfig, GitConfig, McpConfig, MemoryConfig, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ToolCatalogEntry, WebConfig } from "../types";
 import { Icon, type IconName } from "./Icons";
 import { AboutSection } from "./AboutSection";
@@ -349,6 +350,12 @@ export function SettingsPage({
               enabled
                 ? disabledTools.filter((name) => name !== SHOW_VISUAL_TOOL_NAME)
                 : [...disabledTools.filter((name) => name !== SHOW_VISUAL_TOOL_NAME), SHOW_VISUAL_TOOL_NAME]
+            )}
+            canvasEnabled={CANVAS_TOOL_NAMES.every((name) => !disabledTools.includes(name))}
+            onToggleCanvas={(enabled) => onSetDisabledTools(
+              enabled
+                ? disabledTools.filter((name) => !(CANVAS_TOOL_NAMES as readonly string[]).includes(name))
+                : [...disabledTools.filter((name) => !(CANVAS_TOOL_NAMES as readonly string[]).includes(name)), ...CANVAS_TOOL_NAMES]
             )}
             suggestionsEnabled={!disabledTools.includes(SUGGEST_TASK_TOOL_NAME)}
             onToggleSuggestions={(enabled) => onSetDisabledTools(

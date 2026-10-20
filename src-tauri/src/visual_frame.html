@@ -4,14 +4,18 @@
   model's HTML into the two markers below and serves it from `wcvisual://localhost/<token>` under
   a `default-src 'none'` CSP: no network, no fonts, no frames, no forms.
 
-  The bridge is the only way out. It reports the content's height, forwards a link the user
+  The bridge is the only way out. It reports the content's size, forwards a link the user
   clicked, and answers `wackcode.send()` — which the card validates, rate-limits and hands to the
   ordinary send path. Nothing else crosses.
+
+  A canvas artboard (`data-kind="artboard"`) is a screen rather than a card: it paints the theme's
+  background unless its markup paints its own, never sends or opens anything, and reports script
+  errors instead, for `canvas_look`'s render report.
 
   Keep this document small and dependency-free: it is served on every visual, and the model's own
   markup has to feel like part of it.
 -->
-<html lang="en">
+<html lang="en" data-kind="__KIND__">
 <head>
 <meta charset="utf-8">
 <meta name="color-scheme" content="light dark">
@@ -48,7 +52,10 @@
   --warning: #e6ba69;
   --wc-success: #a8d883;
 }
-html,body{margin:0;padding:0;background:transparent;color:var(--text);font:13.5px/1.55 var(--font);-webkit-font-smoothing:antialiased}
+html,body{margin:0;padding:0;color:var(--text);font:13.5px/1.55 var(--font);-webkit-font-smoothing:antialiased}
+/* Defaults without weight, so any background the markup sets on html or body wins. */
+:where(html,body){background:transparent}
+:where(html[data-kind="artboard"] body){background:var(--bg)}
 *{box-sizing:border-box}
 a{color:var(--accent-text);text-underline-offset:2px}
 button,input,select,textarea{font:inherit;color:inherit}
@@ -61,6 +68,9 @@ h1,h2,h3,h4{margin:0 0 .35em;line-height:1.25;color:var(--text);font-weight:600}
   // A visual's height is reported, never assumed; the card clamps it to its own cap.
   var MAX_HEIGHT = 4000;
   var MAX_TEXT = 2000;
+  var MAX_ERRORS = 20;
+  var ARTBOARD = document.documentElement.getAttribute("data-kind") === "artboard";
+  var errors = 0;
   var seq = 0;
   var waiting = {};
   var lastHeight = 0;
@@ -80,7 +90,8 @@ h1,h2,h3,h4{margin:0 0 .35em;line-height:1.25;color:var(--text);font-weight:600}
     ));
     if (height <= 0 || height === lastHeight) return;
     lastHeight = height;
-    post({ type: "wackcode-visual:size", height: Math.min(height, MAX_HEIGHT) });
+    var width = Math.ceil(Math.max(root ? root.scrollWidth : 0, body ? body.scrollWidth : 0));
+    post({ type: "wackcode-visual:size", height: Math.min(height, MAX_HEIGHT), width: width });
   }
 
   function scheduleMeasure() {
@@ -105,6 +116,8 @@ h1,h2,h3,h4{margin:0 0 .35em;line-height:1.25;color:var(--text);font-weight:600}
     version: 1,
     send: function (text) {
       return new Promise(function (resolve) {
+        // A canvas is for looking: its buttons never speak for the user.
+        if (ARTBOARD) { resolve({ ok: false, reason: "canvas" }); return; }
         if (typeof text !== "string" || !text.trim()) { resolve({ ok: false, reason: "invalid" }); return; }
         var id = ++seq;
         waiting[id] = resolve;
@@ -135,7 +148,7 @@ h1,h2,h3,h4{margin:0 0 .35em;line-height:1.25;color:var(--text);font-weight:600}
       if (node.tagName === "A") {
         var href = node.getAttribute("href") || "";
         event.preventDefault();
-        if (/^https?:\/\//i.test(href)) post({ type: "wackcode-visual:link", href: href });
+        if (!ARTBOARD && /^https?:\/\//i.test(href)) post({ type: "wackcode-visual:link", href: href });
         return;
       }
       node = node.parentNode;
@@ -143,6 +156,27 @@ h1,h2,h3,h4{margin:0 0 .35em;line-height:1.25;color:var(--text);font-weight:600}
   }, true);
 
   document.addEventListener("submit", function (event) { event.preventDefault(); }, true);
+
+  // Registered before the markup's own scripts run, so their first failure is caught too.
+  function reportError(message) {
+    if (!ARTBOARD || errors >= MAX_ERRORS) return;
+    errors += 1;
+    post({ type: "wackcode-visual:error", message: String(message || "Unknown error").slice(0, 300) });
+  }
+  window.addEventListener("error", function (event) {
+    reportError(event.error && event.error.message ? event.error.name + ": " + event.error.message : event.message);
+  });
+  window.addEventListener("unhandledrejection", function (event) {
+    var reason = event.reason;
+    reportError("Unhandled rejection: " + (reason && reason.message ? reason.message : String(reason)));
+  });
+
+  // Inside an artboard the user stepped into, Esc steps back out to the board.
+  if (ARTBOARD) {
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") post({ type: "wackcode-visual:escape" });
+    }, true);
+  }
 
   if (window.ResizeObserver) {
     var observer = new ResizeObserver(scheduleMeasure);

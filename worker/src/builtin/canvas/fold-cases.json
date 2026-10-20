@@ -1,0 +1,425 @@
+{
+  "note": "Accepted canvas calls (arguments + result details) and what the board holds after them. The worker (state.test) and the renderer (canvas-state.test) both fold these, so their rules stay identical.",
+  "cases": [
+    {
+      "name": "a base and two variants, then the base is revised",
+      "calls": [
+        {
+          "args": {
+            "title": "Themes",
+            "artboards": [
+              {
+                "name": "Base",
+                "group": "Themes",
+                "width": 1280,
+                "height": 800,
+                "html": "<main>v1</main>"
+              },
+              {
+                "name": "Ember",
+                "group": "Themes",
+                "width": 1280,
+                "height": 800,
+                "basedOn": "Base",
+                "css": ":root{--bg:#000}"
+              },
+              {
+                "name": "Pine",
+                "group": "Themes",
+                "width": 1280,
+                "basedOn": "base",
+                "css": ":root{--bg:#0f0}"
+              }
+            ]
+          },
+          "details": {
+            "v": 1,
+            "canvas": "themes",
+            "title": "Themes",
+            "removed": [],
+            "applied": [
+              {
+                "index": 0,
+                "id": "base",
+                "op": "add"
+              },
+              {
+                "index": 1,
+                "id": "ember",
+                "op": "add",
+                "basedOn": "base"
+              },
+              {
+                "index": 2,
+                "id": "pine",
+                "op": "add",
+                "basedOn": "base"
+              }
+            ]
+          }
+        },
+        {
+          "args": {
+            "canvas": "themes",
+            "artboards": [
+              {
+                "id": "base",
+                "html": "<main>v2</main>"
+              }
+            ]
+          },
+          "details": {
+            "v": 1,
+            "canvas": "themes",
+            "title": "Themes",
+            "removed": [],
+            "applied": [
+              {
+                "index": 0,
+                "id": "base",
+                "op": "update"
+              }
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "themes": {
+          "title": "Themes",
+          "lastChanged": [
+            "base"
+          ],
+          "artboards": [
+            {
+              "id": "base",
+              "name": "Base",
+              "group": "Themes",
+              "width": 1280,
+              "height": 800,
+              "html": "<main>v2</main>"
+            },
+            {
+              "id": "ember",
+              "name": "Ember",
+              "group": "Themes",
+              "width": 1280,
+              "height": 800,
+              "html": "<main>v2</main>\n<style>:root{--bg:#000}</style>"
+            },
+            {
+              "id": "pine",
+              "name": "Pine",
+              "group": "Themes",
+              "width": 1280,
+              "height": null,
+              "html": "<main>v2</main>\n<style>:root{--bg:#0f0}</style>"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "a revision keeps its place, renames, and a variant turned plain drops its base",
+      "calls": [
+        {
+          "args": {
+            "title": "Inbox",
+            "artboards": [
+              {
+                "name": "  Calm  list ",
+                "group": "A",
+                "width": 1440,
+                "height": 900,
+                "html": "<p>calm</p>"
+              },
+              {
+                "name": "Dense",
+                "group": "B",
+                "width": 1440,
+                "height": 900,
+                "basedOn": "calm-list",
+                "css": "p{margin:0}"
+              }
+            ]
+          },
+          "details": {
+            "v": 1,
+            "canvas": "inbox",
+            "title": "Inbox",
+            "removed": [],
+            "applied": [
+              {
+                "index": 0,
+                "id": "calm-list",
+                "op": "add"
+              },
+              {
+                "index": 1,
+                "id": "dense",
+                "op": "add",
+                "basedOn": "calm-list"
+              }
+            ]
+          }
+        },
+        {
+          "args": {
+            "canvas": "inbox",
+            "title": "Inbox v2",
+            "artboards": [
+              {
+                "id": "dense",
+                "html": "<p>dense</p>",
+                "name": "Dense+"
+              }
+            ]
+          },
+          "details": {
+            "v": 1,
+            "canvas": "inbox",
+            "title": "Inbox v2",
+            "removed": [],
+            "applied": [
+              {
+                "index": 0,
+                "id": "dense",
+                "op": "update"
+              }
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "inbox": {
+          "title": "Inbox v2",
+          "lastChanged": [
+            "dense"
+          ],
+          "artboards": [
+            {
+              "id": "calm-list",
+              "name": "Calm list",
+              "group": "A",
+              "width": 1440,
+              "height": 900,
+              "html": "<p>calm</p>"
+            },
+            {
+              "id": "dense",
+              "name": "Dense+",
+              "group": "B",
+              "width": 1440,
+              "height": 900,
+              "html": "<p>dense</p>\n<style>p{margin:0}</style>"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "removal, and two canvases side by side",
+      "calls": [
+        {
+          "args": {
+            "title": "One",
+            "artboards": [
+              {
+                "name": "A",
+                "width": 390,
+                "html": "<b>a</b>"
+              },
+              {
+                "name": "B",
+                "width": 390,
+                "html": "<b>b</b>"
+              }
+            ]
+          },
+          "details": {
+            "v": 1,
+            "canvas": "one",
+            "title": "One",
+            "removed": [],
+            "applied": [
+              {
+                "index": 0,
+                "id": "a",
+                "op": "add"
+              },
+              {
+                "index": 1,
+                "id": "b",
+                "op": "add"
+              }
+            ]
+          }
+        },
+        {
+          "args": {
+            "title": "Two",
+            "artboards": [
+              {
+                "name": "Solo",
+                "width": 800,
+                "html": "<i>solo</i>"
+              }
+            ]
+          },
+          "details": {
+            "v": 1,
+            "canvas": "two",
+            "title": "Two",
+            "removed": [],
+            "applied": [
+              {
+                "index": 0,
+                "id": "solo",
+                "op": "add"
+              }
+            ]
+          }
+        },
+        {
+          "args": {
+            "canvas": "one",
+            "remove": [
+              "a"
+            ]
+          },
+          "details": {
+            "v": 1,
+            "canvas": "one",
+            "title": "One",
+            "removed": [
+              "a"
+            ],
+            "applied": []
+          }
+        }
+      ],
+      "expect": {
+        "one": {
+          "title": "One",
+          "lastChanged": [],
+          "artboards": [
+            {
+              "id": "b",
+              "name": "B",
+              "group": null,
+              "width": 390,
+              "height": null,
+              "html": "<b>b</b>"
+            }
+          ]
+        },
+        "two": {
+          "title": "Two",
+          "lastChanged": [
+            "solo"
+          ],
+          "artboards": [
+            {
+              "id": "solo",
+              "name": "Solo",
+              "group": null,
+              "width": 800,
+              "height": null,
+              "html": "<i>solo</i>"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "a variant with no size takes its base's, unless it gives its own width",
+      "calls": [
+        {
+          "args": {
+            "title": "Sizes",
+            "artboards": [
+              {
+                "name": "Desk",
+                "width": 1280,
+                "height": 1100,
+                "html": "<main>desk</main>"
+              },
+              {
+                "name": "Dusk",
+                "basedOn": "desk",
+                "css": "body{background:#111}"
+              },
+              {
+                "name": "Phone",
+                "width": 390,
+                "basedOn": "desk"
+              }
+            ]
+          },
+          "details": {
+            "v": 1,
+            "canvas": "sizes",
+            "title": "Sizes",
+            "removed": [],
+            "applied": [
+              {
+                "index": 0,
+                "id": "desk",
+                "op": "add"
+              },
+              {
+                "index": 1,
+                "id": "dusk",
+                "op": "add",
+                "basedOn": "desk",
+                "width": 1280,
+                "height": 1100
+              },
+              {
+                "index": 2,
+                "id": "phone",
+                "op": "add",
+                "basedOn": "desk"
+              }
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "sizes": {
+          "title": "Sizes",
+          "lastChanged": [
+            "desk",
+            "dusk",
+            "phone"
+          ],
+          "artboards": [
+            {
+              "id": "desk",
+              "name": "Desk",
+              "group": null,
+              "width": 1280,
+              "height": 1100,
+              "html": "<main>desk</main>"
+            },
+            {
+              "id": "dusk",
+              "name": "Dusk",
+              "group": null,
+              "width": 1280,
+              "height": 1100,
+              "html": "<main>desk</main>\n<style>body{background:#111}</style>"
+            },
+            {
+              "id": "phone",
+              "name": "Phone",
+              "group": null,
+              "width": 390,
+              "height": null,
+              "html": "<main>desk</main>"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -26,6 +26,7 @@ import { turnExcerpt, type RailTurn } from "../scroll-rail";
 import { splitVisualAction, type VisualSendResult } from "../visual-action";
 import { splitSuggestedTask, startedHere, type SuggestionLink } from "../suggestions";
 import { SuggestionNote, SuggestionScopeContext, SuggestionTray, type SuggestionScope } from "./SuggestionTray";
+import { CanvasCard, CanvasScopeContext, type CanvasScope } from "./canvas/CanvasCard";
 import { SubagentGroup } from "./SubagentChip";
 import { ThinkingExpansion, ThinkingRow } from "./ThinkingRow";
 import { FLY, OrphanResult, ToolChips, ToolExpansion, ToolRow, useTranscriptMotion, type ChipCall } from "./ToolRow";
@@ -98,6 +99,8 @@ interface Props {
    * read here (this chat's own messages, and whether a run is live), so they are not passed in.
    */
   suggestions?: SuggestionScopeInput;
+  /** This chat's canvases as they are now, and how a card under a turn opens one. */
+  canvases?: CanvasScope;
 }
 
 /** Everything about suggested tasks the transcript cannot know by itself. */
@@ -150,6 +153,7 @@ const NO_SLOTS: TranscriptSlot[] = [];
 /** Stable empties, so the suggestion scope's memo does not churn with a fresh object each render. */
 const EMPTY_LINKS: ReadonlyMap<string, SuggestionLink> = new Map();
 const EMPTY_SUGGESTIONS: ReadonlySet<string> = new Set();
+const NO_CANVASES: CanvasScope = { boards: new Map() };
 
 type LocalAction = MessageAction | { type: "start-edit"; id: string } | { type: "cancel-edit" };
 
@@ -707,7 +711,7 @@ function activityLabel(activity?: string): string {
   return "Working…";
 }
 
-export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, compaction, runTimings = [], collapseCompletedWork = true, scopeKey = "", viewState, historyReady = true, status, liveToolText, liveToolDetails, planState, onPlanAction, onVisualSend, onVisualLink, skillDrafts, skillDraftsSaving, taskId, onSkillAction, loadSkillDocument, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind, loadImage, chatLinks, empty, suggestions }: Props) {
+export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, compaction, runTimings = [], collapseCompletedWork = true, scopeKey = "", viewState, historyReady = true, status, liveToolText, liveToolDetails, planState, onPlanAction, onVisualSend, onVisualLink, skillDrafts, skillDraftsSaving, taskId, onSkillAction, loadSkillDocument, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind, loadImage, chatLinks, empty, suggestions, canvases }: Props) {
   const scroll = useFollowScroll(viewState, historyReady);
   const { ref, onScroll, onWheel, detached, pauseFollowing, jumpToLatest } = scroll;
   const [expandedWork, setExpandedWork] = useState(() => viewState?.work ?? new Set<string>());
@@ -924,6 +928,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
           <ToolExpansion.Provider value={toolExpansions}>
           <VisualCardScope.Provider value={visualScope}>
           <SuggestionScopeContext.Provider value={suggestionScope}>
+          <CanvasScopeContext.Provider value={canvases ?? NO_CANVASES}>
             <div className="transcript">
               {messages.map((message, messageIndex) => {
                 const turn = workTurns.get(messageIndex);
@@ -941,7 +946,10 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
                 return <Fragment key={key}>
                   {renderSwitches(messageIndex)}
                   <WorkTurn turn={turn} scopeKey={scopeKey} user={renderMessage(message)} duration={duration} durationMs={timingsByMessage.get(message.id)}
-                    after={turn.settled && turn.suggestions.length > 0 ? <SuggestionTray suggestions={turn.suggestions} /> : undefined}
+                    after={turn.settled && (turn.canvases.length > 0 || turn.suggestions.length > 0) ? <>
+                      {turn.canvases.map((touch, index) => <CanvasCard key={touch.canvas} touch={touch} index={index} />)}
+                      {turn.suggestions.length > 0 && <SuggestionTray suggestions={turn.suggestions} />}
+                    </> : undefined}
                     enabled={collapseCompletedWork} open={expandedWork.has(expansionKey)} renderRows={renderRows} scroll={scroll}
                     onAutoCollapse={() => setExpandedWork((current) => {
                       if (!current.has(expansionKey)) return current;
@@ -972,6 +980,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
               {!compaction && waiting && label && <WorkingPresence label={label} />}
               {rewindBar}
             </div>
+          </CanvasScopeContext.Provider>
           </SuggestionScopeContext.Provider>
           </VisualCardScope.Provider>
           </ToolExpansion.Provider>

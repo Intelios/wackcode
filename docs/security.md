@@ -115,8 +115,28 @@ never in the renderer. Rust (`src-tauri/src/visuals.rs`) is the boundary:
   `<visual-action-v1>` tail, so model-authored script can never steer the chat on its own — the
   user always presses the button, and Pi never expands it as a slash command.
 
-The `frame-src wcvisual:` directive in `tauri.conf.json` is the only CSP change this feature
-needs; `default-src`, `connect-src`, `script-src` and the asset protocol's scope are untouched.
+**Canvas artboards** are visual documents too (`kind: artboard`), in the same frame under the
+same CSP and navigation guard. Their bridge is narrower: no `wackcode.send`, no link forwarding,
+only a size, script errors and Esc. `canvas_look` renders them offscreen in Rust
+(`canvas_render.rs`):
+
+- **One render webview** (`canvas-render`), a child of the main window parked offscreen,
+  incognito, allowed to navigate only to `wcvisual:` and `about:blank`, with downloads and new
+  windows refused and the Tauri globals removed.
+- **Audiences.** Documents staged for it are served to it alone, and the renderer's documents
+  only to the main webview; the shell page that frames a render (`/render/<token>`, its own
+  `default-src 'none'` policy with `frame-src wcvisual:`) exists only for the render webview.
+  Each render's document is dropped once drawn.
+- **The model's markup never runs in its main frame**: the shell frames it with the same
+  `sandbox="allow-scripts"` opaque origin it has on the canvas, and only reads its reports.
+- **No capability.** Tauri counts a registered scheme such as `wcvisual:` as a local origin and
+  matches a capability by webview *or* window label, so `capabilities/default.json` names only
+  the `main` webview (no `windows`): no child of the main window — the render webview or a
+  browser preview — gets a permission. `canvas_render.rs` pins this in a test. Don't add the
+  window back.
+
+The `frame-src wcvisual:` directive in `tauri.conf.json` is the only CSP change these features
+need; `default-src`, `connect-src`, `script-src` and the asset protocol's scope are untouched.
 Do not loosen the frame's own CSP: a visual with network access would be a new origin the user
 never chose.
 

@@ -14,6 +14,7 @@ import { MEMORY_TOOL_NAMES } from "../memory/index.js";
 import { SUBAGENT_TOOL_NAME } from "../subagents/types.js";
 import { SUGGEST_TASK_TOOL_NAME } from "../suggest-task.js";
 import { SHOW_VISUAL_TOOL_NAME } from "../visual.js";
+import { CANVAS_GUIDE_TOOL_NAME, CANVAS_TOOL_NAME } from "../canvas/index.js";
 import { WEB_FETCH_TOOL_NAME } from "../web-fetch/index.js";
 import { WEB_SEARCH_TOOL_NAME } from "../web-search/index.js";
 
@@ -151,6 +152,9 @@ export function buildCodeGuide({ activeTools, toolDefinitions, hasMcpTools, hasS
   }
   if (has(SHOW_VISUAL_TOOL_NAME)) {
     capabilities.push(`Visual replies (${SHOW_VISUAL_TOOL_NAME}): use a chart, diagram or mockup when it explains better than prose. Skip it for single facts.`);
+  }
+  if (has(CANVAS_TOOL_NAME)) {
+    capabilities.push(`Canvas (${CANVAS_TOOL_NAME}): for comparing UI alternatives side by side — themes, layouts, devices.${has(CANVAS_GUIDE_TOOL_NAME) ? ` Read ${CANVAS_GUIDE_TOOL_NAME} before your first canvas.` : ""}`);
   }
   if (has(SUGGEST_TASK_TOOL_NAME)) {
     capabilities.push(`Follow-up tasks (${SUGGEST_TASK_TOOL_NAME}): file a card for real out-of-scope work you noticed, never for work you're about to do.`);

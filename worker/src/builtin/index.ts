@@ -3,12 +3,12 @@
  * mechanism rather than the trusted-package path. They are ordinary code in this repo — no
  * trust gate applies because nothing external can reach this list. All are always on except
  * sub-agents, computer use and web search, which the user switches on in Settings (their tools
- * stay inactive until then), browser preview, web fetch and visual replies, which are on until
- * the user switches them off (see `SWITCHABLE_BUILTIN_TOOLS`), and MCP, whose tools come from
- * the servers the user adds.
+ * stay inactive until then), browser preview, web fetch, visual replies, task suggestions and the
+ * canvas, which are on until the user switches them off (see `SWITCHABLE_BUILTIN_TOOLS`), and
+ * MCP, whose tools come from the servers the user adds.
  *
  * A Chat mode chat loads `chatFactories` instead of `factories`: no shell, planning, todo,
- * sub-agents, goal loop, computer use, skill creator or coding compaction, plus the guard that enforces the rest
+ * sub-agents, goal loop, computer use, skill creator, canvas, task suggestions or coding compaction, plus the guard that enforces the rest
  * (`chat-mode/`). The controllers of the built-ins it leaves out still exist and report their
  * resting state, so the worker reads them without asking which kind of chat it is.
  */
@@ -19,6 +19,7 @@ import { type BashJobsController, createBashJobsExtension } from "./bash-jobs.js
 import { createChatGuardExtension } from "./chat-mode/index.js";
 import { createCompactionExtension } from "./compaction/index.js";
 import { createChatRefsExtension } from "./chat-refs.js";
+import { CANVAS_TOOL_NAMES, createCanvasExtension } from "./canvas/index.js";
 import { type ComputerUseController, createComputerUseExtension } from "./computer-use/index.js";
 import { createAutoTitleExtension, type AutoTitleController } from "./auto-title.js";
 import { createImageBudgetExtension } from "./image-budget.js";
@@ -41,7 +42,7 @@ import { SHOW_VISUAL_TOOL_NAME, createVisualExtension } from "./visual.js";
  * Built-in tools the user's Settings denylist applies to. Every other built-in tool is part of
  * how the app works (a disabled plan_mode_complete would break Plan mode) and ignores it.
  */
-export const SWITCHABLE_BUILTIN_TOOLS: ReadonlySet<string> = new Set([WEB_FETCH_TOOL_NAME, SHOW_VISUAL_TOOL_NAME, SUGGEST_TASK_TOOL_NAME, ...BROWSER_TOOL_NAMES]);
+export const SWITCHABLE_BUILTIN_TOOLS: ReadonlySet<string> = new Set([WEB_FETCH_TOOL_NAME, SHOW_VISUAL_TOOL_NAME, SUGGEST_TASK_TOOL_NAME, ...BROWSER_TOOL_NAMES, ...CANVAS_TOOL_NAMES]);
 
 export interface BuiltinExtensions {
   /** Factories handed to `DefaultResourceLoader.extensionFactories`. */
@@ -113,6 +114,9 @@ export function createBuiltinExtensions(host: BuiltinHost, options: {
   // No host either: a suggestion card is drawn from the call's arguments (`suggest-task.ts`).
   const suggestTask: InlineExtension = { name: "wackcode-suggest-task", factory: createSuggestTaskExtension(), hidden: true };
   const chatRefs: InlineExtension = { name: "wackcode-chat-refs", factory: createChatRefsExtension(host), hidden: true };
+  // The board is drawn by the desktop from the calls' own arguments; the host only renders
+  // artboards for `canvas_look` (`canvas/`).
+  const canvas: InlineExtension = { name: "wackcode-canvas", factory: createCanvasExtension(host), hidden: true };
   const computerUse = createComputerUseExtension(host);
   const skillCreator = createSkillCreatorExtension(host, {
     commandEnabled: () => options.commandEnabled?.("app:skill-creator") ?? true,
@@ -144,6 +148,7 @@ export function createBuiltinExtensions(host: BuiltinHost, options: {
       browser,
       visual,
       suggestTask,
+      canvas,
       chatRefs,
       { name: "wackcode-computer-use", factory: computerUse.factory, hidden: true },
       { name: "wackcode-skill-creator", factory: skillCreator.factory, hidden: true },

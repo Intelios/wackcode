@@ -7,7 +7,7 @@
 - **`App.tsx`** owns all cross-cutting state: `data` (the `AppData` from `bootstrap`) and each chat's runtime. Update it immutably through `patchTask`, `patchRuntime` and `setData`.
 - **Events:** `App.tsx` is the only place that listens to Tauri events: `worker-event`, `run-event`, `subscription-login-event` and `native-chat-navigation` (the menu bar). A worker protocol change ends in its `worker-event` switch; see [worker.md](worker.md#protocol-changes). `title_changed` carries a `source` — `"opening"` for the first-run stand-in, `"auto"` for the model's title; only the latter bumps `titlePulses`, which drives the header's swipe+glint and the sidebar row's crossfade.
 - **`api.ts`** is the only bridge to Rust: one typed `invoke` wrapper per command. Terminal output arrives on a `Channel`, not an event.
-- **Components are presentational.** The exceptions call `api` directly because they wrap one self-contained surface: `SettingsPage.tsx` (and `IntegrationsSection.tsx`, `AboutSection.tsx`), `BrowserPanel.tsx` (positions the native web view), `TerminalPanel.tsx` and `RunPanel.tsx` (stream their PTYs), `VisualCard.tsx` (stages each frame's document through `stageVisual`, the one call that fits its own sandboxed surface) and `markdown-components.tsx` (its link override routes http(s) clicks through `revealPath`; the webview cannot open links itself) and `link-opener.ts` (a web_search result opens in the chat's browser preview through App's opener, otherwise through `revealPath`). Don't add more without the same reason.
+- **Components are presentational.** The exceptions call `api` directly because they wrap one self-contained surface: `SettingsPage.tsx` (and `IntegrationsSection.tsx`, `AboutSection.tsx`), `BrowserPanel.tsx` (positions the native web view), `TerminalPanel.tsx` and `RunPanel.tsx` (stream their PTYs), `hooks/useStagedVisual.ts` (stages a visual reply's or a canvas artboard's document through `stageVisual` for `VisualCard` and `CanvasArtboard`, the one call that fits their own sandboxed surface) and `markdown-components.tsx` (its link override routes http(s) clicks through `revealPath`; the webview cannot open links itself) and `link-opener.ts` (a web_search result opens in the chat's browser preview through App's opener, otherwise through `revealPath`). Don't add more without the same reason.
 
 ## Context menus
 
@@ -36,6 +36,15 @@ link the user clicked (opened through `revealPath`, as a Markdown link is) and a
 `wackcode.send` text, which is refused when the visual is not on the latest answer, while a
 reply is running, or twice within a second. A message a visual sent travels as a
 `<visual-action-v1>` tail (`visual-action.ts`) and shows as "Sent from “Title”" under its words.
+
+**Canvases** (`components/canvas/`) are the boards the agent draws with the `canvas` tool.
+`canvas-state.ts` folds the snapshot's accepted calls into boards (the worker's fold, rule for
+rule), `canvas-layout.ts` places artboards (one row per group, in creation order, so additions
+never move anything sideways) and `canvas-camera.ts` is the pure pan/zoom maths. The calls stay
+chips in the turn's work; `layoutWorkTurns` collects what each settled turn drew (`canvases`,
+merged per canvas) and `WorkTurn`'s `after` slot draws a `CanvasCard` per canvas — an outline
+map of the board as it is now with that turn's artboards lit — which opens the side panel there
+through `CanvasScopeContext`. Older turns keep their cards.
 
 **Suggested tasks** (`SuggestionTray.tsx`) are the follow-ups a turn filed with `suggest_task`,
 drawn as one tray under that turn's answer. `layoutWorkTurns` collects the turn's accepted
@@ -168,11 +177,13 @@ queue actions dispatch while stopping. App captures the originating task id for 
 
 ## Side panel
 
-`SidePanel` shows one `SidePanelView` (`src/side-panel.ts`) at a time: Changes, Browser, Terminal, Run, Games, or one sub-agent's transcript.
+`SidePanel` shows one `SidePanelView` (`src/side-panel.ts`) at a time: Changes, Browser, Terminal, Run, Games, one of the chat's canvases, or one sub-agent's transcript.
 
 - A new view is a union member, a component `SidePanel` renders, and a trigger that opens it (`toggleView`). Give it the shared head: `.panel-header` with a `.panel-mark`, a `.panel-kicker` over an `h3`, and `.panel-header-actions` ([design.md](design.md)).
 - In the original layout, Changes, Terminal, Run and Games are durable: which one is showing is remembered across chats and launches (`wackcode:sidePanel`). With chat tabs enabled, every tab keeps its own panel for the session and a new draft starts closed. Run follows the selected checkout and restoring it never launches a command. Browser and sub-agent views belong to one chat; the original layout falls back to the remembered durable view when the chat changes.
 - Sub-agent transcripts reach the panel only through `watch_subagent` frames, never through snapshots.
+- **Expand** (`panelExpanded`, `canExpand`) spans the main area with the composer docked below, for the browser and the canvas alike; changing view or chat restores the panel's width.
+- **Canvas** (`CanvasPanel`) is chat-bound like Browser (`isTaskBound`), and a rewind that takes its canvas away closes it. The header's Canvas button appears once the chat has a canvas and opens the latest one; the first canvas a live run starts opens the panel if it was closed, otherwise the button pings. The panel owns the camera (saved per canvas in `localStorage`, else fitted), selection, stepping into an artboard (its frame takes the pointer only then, since frames swallow wheel and drag), and the choreography around the agent's changes: new artboards pop, revised ones glint, and the camera glides to them unless the user panned away, in which case a pill offers to. Frames mount once near the screen and stay mounted. "Mention in chat" puts plain text in the draft; nothing about a canvas rides a message.
 - **Games** (`GamesPanel`, one entry per game in its `GAMES` list): the panel opens on an Arcade home of poster cards; which game was entered lives beside the runs in `games/session.ts`, so a view or tab swap comes back to it paused, while every real close (`exitToArcade`, from the panel's own close paths in `GamesPanel` and `App`'s games toggle) resets to the picker. Each game is a pure simulation under `src/games/` plus a component that owns its canvas and rAF loop. The panel's page remounts on every view or tab switch, so a run in progress lives in `games/session.ts` and comes back paused. Both games autosave through their own versioned `localStorage` envelope, normalised on the way back out (`games/save.ts`, `games/doodle-save.ts`), so a run survives quitting the app; pausing offers **Save & quit**, which hands you back to the chat. Best scores are a `localStorage` convenience (`games/scores.ts`, with a one-time fallback to a game's pre-rename key). The panel takes only the open chat's `status`, so streaming never re-renders it.
 
 ## Areas

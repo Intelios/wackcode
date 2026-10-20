@@ -15,10 +15,12 @@ import { BROWSER_TOOL_NAMES } from "./builtin/browser.js";
 import { COMPUTER_TOOL_NAMES } from "./builtin/computer-use/params.js";
 import { VISUAL_TOOL_NAMES } from "./builtin/visual.js";
 import { SUGGEST_TASK_TOOL_NAMES } from "./builtin/suggest-task.js";
+import { CANVAS_TOOL_NAME, CANVAS_TOOL_NAMES } from "./builtin/canvas/index.js";
 import { WEB_SEARCH_TOOL_NAME } from "./builtin/web-search/index.js";
 import { GOAL_VERIFIER_SYSTEM } from "./builtin/goal/prompt.js";
 import { runGoalVerification } from "./builtin/goal/verify.js";
 import { buildSkillCreatorPrompt } from "./builtin/skill-creator/guide.js";
+import { buildCanvasPrompt } from "./builtin/canvas/guide.js";
 import type { BuiltinHost, SubagentOutcome } from "./builtin/host.js";
 import { normalizeMessage as normalizeSavedMessage, textFromContent, THUMBNAIL_OPTIONS } from "./message-normalization.js";
 import { BACKGROUND_SUBAGENT_MESSAGE, backgroundCalls, interruptedDetails, projectBackgroundCards } from "./builtin/subagents/state.js";
@@ -160,8 +162,8 @@ let disabledTools = new Set<string>();
 let subagentRunner: SubagentRunner | undefined;
 /** Aborts the wait for MCP servers at the start of a run, when the user presses Stop. */
 let mcpWait: AbortController | undefined;
-/** Which native host subsystem a request goes to: the per-chat browser, computer use, the skill-creator's managed drafts, Settings › Web's search provider, or `read_chat`'s referenced-chat lookup. */
-type NativeChannel = "browser" | "computer" | "skill_creator" | "web" | "chat";
+/** Which native host subsystem a request goes to: the per-chat browser, computer use, the skill-creator's managed drafts, Settings › Web's search provider, `read_chat`'s referenced-chat lookup, or `canvas_look`'s offscreen renderer. */
+type NativeChannel = "browser" | "computer" | "skill_creator" | "web" | "chat" | "canvas";
 interface PendingNativeRequest {
   channel: NativeChannel;
   resolve(value: unknown): void;
@@ -177,6 +179,7 @@ const NATIVE_CANCELLED: Record<NativeChannel, string> = {
   skill_creator: "The skill-creator action was stopped.",
   web: "The web request was stopped.",
   chat: "Reading that chat was stopped.",
+  canvas: "Looking at the canvas was stopped.",
 };
 const NATIVE_WORKER_STOPPED: Record<NativeChannel, string> = {
   browser: "Browser action cancelled because the worker stopped.",
@@ -184,6 +187,7 @@ const NATIVE_WORKER_STOPPED: Record<NativeChannel, string> = {
   skill_creator: "The skill-creator action was stopped because the chat's worker stopped.",
   web: "The web request was stopped because the chat's worker stopped.",
   chat: "Reading that chat was stopped because the chat's worker stopped.",
+  canvas: "Looking at the canvas was stopped because the chat's worker stopped.",
 };
 
 /** Rejects every pending native request and tells the host, which stops the work it can. */
@@ -324,11 +328,12 @@ const builtinHost: BuiltinHost = {
     return withUsage("goal_verification", () => runGoalVerification(modelRuntime!, model, GOAL_VERIFIER_SYSTEM, input, signal, session?.sessionId));
   },
   // web_search has its own setting rather than the denylist: a child gets it while it is offered.
-  // Visual replies and task suggestions stay out: a child has no transcript to draw a card in
-  // (`visual.ts`, `suggest-task.ts`), so it reports what it noticed and the parent decides.
+  // Visual replies, task suggestions and the canvas stay out: a child has no transcript to draw
+  // a card or a canvas in (`visual.ts`, `suggest-task.ts`, `canvas/`), so it reports what it
+  // noticed and the parent decides.
   childToolNames: () =>
     toolCatalog()
-      .filter((tool) => !BROWSER_TOOL_NAMES.includes(tool.name as typeof BROWSER_TOOL_NAMES[number]) && !COMPUTER_TOOL_NAMES.includes(tool.name as typeof COMPUTER_TOOL_NAMES[number]) && !VISUAL_TOOL_NAMES.includes(tool.name as typeof VISUAL_TOOL_NAMES[number]) && !SUGGEST_TASK_TOOL_NAMES.includes(tool.name as typeof SUGGEST_TASK_TOOL_NAMES[number]) && (tool.source.kind === "builtin" || SWITCHABLE_BUILTIN_TOOLS.has(tool.name) || tool.name === WEB_SEARCH_TOOL_NAME) && tool.available && !disabledTools.has(tool.name) && !builtins.webSearch.inactiveTools().includes(tool.name))
+      .filter((tool) => !BROWSER_TOOL_NAMES.includes(tool.name as typeof BROWSER_TOOL_NAMES[number]) && !COMPUTER_TOOL_NAMES.includes(tool.name as typeof COMPUTER_TOOL_NAMES[number]) && !VISUAL_TOOL_NAMES.includes(tool.name as typeof VISUAL_TOOL_NAMES[number]) && !SUGGEST_TASK_TOOL_NAMES.includes(tool.name as typeof SUGGEST_TASK_TOOL_NAMES[number]) && !CANVAS_TOOL_NAMES.includes(tool.name as typeof CANVAS_TOOL_NAMES[number]) && (tool.source.kind === "builtin" || SWITCHABLE_BUILTIN_TOOLS.has(tool.name) || tool.name === WEB_SEARCH_TOOL_NAME) && tool.available && !disabledTools.has(tool.name) && !builtins.webSearch.inactiveTools().includes(tool.name))
       .map((tool) => tool.name),
   runSubagent: async (request) => {
     if (!subagentRunner) throw new Error("Worker is not initialized");
@@ -352,6 +357,7 @@ const builtinHost: BuiltinHost = {
   skillCreator: (request, signal) => nativeRequest("skill_creator", request, signal),
   web: (request, signal) => nativeRequest("web", request, signal),
   readChat: (request, signal) => nativeRequest("chat", request, signal),
+  canvas: (request, signal) => nativeRequest("canvas", request, signal),
   supportsVision: () => Boolean((session?.model?.input as string[] | undefined)?.includes("image")),
 };
 const builtins = createBuiltinExtensions(builtinHost, {
@@ -1872,7 +1878,7 @@ async function handle(command: WorkerCommand): Promise<void> {
       await initialize(command);
     } else if (!session || !taskId) {
       throw new Error("Worker is not initialized");
-    } else if (command.type === "browser_response" || command.type === "computer_response" || command.type === "skill_creator_response" || command.type === "web_response" || command.type === "chat_response") {
+    } else if (command.type === "browser_response" || command.type === "computer_response" || command.type === "skill_creator_response" || command.type === "web_response" || command.type === "chat_response" || command.type === "canvas_response") {
       const pending = pendingNativeRequests.get(command.requestId);
       if (!pending) return;
       pendingNativeRequests.delete(command.requestId);
@@ -1986,6 +1992,27 @@ async function handle(command: WorkerCommand): Promise<void> {
       if (outcome === "failed" && taskId) {
         notice("The skill-creator run failed. Check the transcript, then run /skill-creator again.", "warning");
       }
+      return;
+    } else if (command.type === "start_canvas") {
+      // Planning modes allow it: the canvas changes no file.
+      refuseInChat("/canvas");
+      if ((userCommandsPayload?.disabled ?? []).includes("app:canvas")) {
+        throw new Error("That command is switched off in Settings › Commands.");
+      }
+      if (disabledTools.has(CANVAS_TOOL_NAME)) throw new Error("The canvas is switched off in Settings › Tools. Switch it on to use /canvas.");
+      if (chatModelMissing()) throw new Error(missingModelReason);
+      // /canvas can be a chat's opening run: its title chance labels the user's request.
+      if (command.autoTitle) startAutoTitle(command.autoTitle, command.request.trim() || "/canvas");
+      await runPrompt(
+        command.id,
+        command.runId,
+        runStartedAt(command.startedAt),
+        buildCanvasPrompt(command.request),
+        undefined,
+        command.checkpoint,
+        true,
+        { id: "app:canvas", name: "canvas", arguments: command.request.trim(), kind: "command" }
+      );
       return;
     } else if (command.type === "compact") {
       requireSettled();
@@ -2262,7 +2289,7 @@ async function handle(command: WorkerCommand): Promise<void> {
     if (!REQUEST_COMMANDS.has(command.type)) send({ type: "worker_error", taskId, message: safeError(error) });
     // The host marks a chat running before it sends a prompt; one refused before it started
     // must say it is idle again. (A run that did start reports its own end.)
-    if (taskId && (command.type === "prompt" || command.type === "resend" || command.type === "execute_command" || command.type === "init_agents" || command.type === "skill_creator" || command.type === "compact" || (command.type === "goal_control" && command.action === "set")) && activeRun?.runId !== command.runId) {
+    if (taskId && (command.type === "prompt" || command.type === "resend" || command.type === "execute_command" || command.type === "init_agents" || command.type === "skill_creator" || command.type === "start_canvas" || command.type === "compact" || (command.type === "goal_control" && command.action === "set")) && activeRun?.runId !== command.runId) {
       send({ type: "run_state", taskId, runId: command.runId, state: "idle" });
     }
   }
@@ -2305,7 +2332,7 @@ function shutdownProcess(code = 0, commandId?: string): void {
 }
 
 /** Commands the host sends with `worker::request` and whose failures it reports itself. */
-const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "list_commands", "execute_command", "init_agents", "skill_creator", "compact", "dequeue", "queue_message", "steer_message", "goal_control", "watch_subagent", "tool_image", "message_image", "set_mode"]);
+const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "list_commands", "execute_command", "init_agents", "skill_creator", "start_canvas", "compact", "dequeue", "queue_message", "steer_message", "goal_control", "watch_subagent", "tool_image", "message_image", "set_mode"]);
 
 /**
  * The original of an image a tool result returned, for the transcript's lightbox: the image at
@@ -2430,6 +2457,7 @@ function bypassesQueue(command: WorkerCommand): boolean {
     case "skill_creator_response":
     case "web_response":
     case "chat_response":
+    case "canvas_response":
     case "extension_ui_response":
     case "queue_message":
     case "steer_message":

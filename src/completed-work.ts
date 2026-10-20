@@ -2,6 +2,7 @@ import type { NormalizedBlock, NormalizedMessage, TaskStatus } from "./types";
 import type { TranscriptLayout, TranscriptSlot } from "./explore-utils";
 import { SHOW_VISUAL_TOOL_NAME, SKILL_CREATOR_TOOL_NAME, parseSkillPreviewDetails } from "./tool-utils";
 import { SUGGEST_TASK_TOOL_NAME, suggestionFromCall, type SuggestionCard } from "./suggestions";
+import { CANVAS_TOOL_NAME, canvasTouch, mergeTouches, type CanvasTouch } from "./canvas-state";
 
 /**
  * Presentation only: each user starts a turn on the visible session branch. The worker's
@@ -34,6 +35,8 @@ export interface WorkTurn {
   settled: boolean;
   /** The suggested tasks this turn filed, drawn under the outcome (`SuggestionTray`). */
   suggestions: SuggestionCard[];
+  /** One entry per canvas this turn drew on, drawn under the outcome (`CanvasCard`). */
+  canvases: CanvasTouch[];
 }
 
 /** The result is authoritative: rejected or unfinished plan calls are never plan cards. */
@@ -89,6 +92,7 @@ export function layoutWorkTurns(messages: NormalizedMessage[], options: Options)
     let skill: { index: number; block: number; id: string } | undefined;
     const visuals: Array<{ index: number; block: number }> = [];
     const suggestions: SuggestionCard[] = [];
+    const touches: CanvasTouch[] = [];
     let systemNotice = false;
     let unfinishedCall = false;
     let backgroundDelegation = false;
@@ -133,6 +137,11 @@ export function layoutWorkTurns(messages: NormalizedMessage[], options: Options)
             const card = suggestionFromCall(block, result);
             if (card) suggestions.push(card);
           }
+          // Likewise a canvas call: its chip stays in the work, its card goes under the answer.
+          if (block.toolName === CANVAS_TOOL_NAME) {
+            const touch = canvasTouch(block, result);
+            if (touch) touches.push(touch);
+          }
         });
       }
     }
@@ -145,12 +154,13 @@ export function layoutWorkTurns(messages: NormalizedMessage[], options: Options)
       : (running || Boolean(activeRun)) && !settledUserIds?.has(user.id);
     const unsettled = active || (tail && (Boolean(partial) || status === "interrupted" || status === "error" || status === "stopping"));
     const answer = terminal >= 0 ? messages[terminal] : undefined;
+    const canvases = mergeTouches(touches);
     const turn: WorkTurn = {
       userIndex, userKey: identity(user), endIndex,
-      key: JSON.stringify([identity(user), answer ? identity(answer) : null, plan?.id ?? null, skill?.id ?? null, visuals.map((visual) => `${visual.index}:${visual.block}`).join(","), suggestions.map((card) => card.id).join(",")]),
+      key: JSON.stringify([identity(user), answer ? identity(answer) : null, plan?.id ?? null, skill?.id ?? null, visuals.map((visual) => `${visual.index}:${visual.block}`).join(","), suggestions.map((card) => card.id).join(","), touches.map((touch) => touch.toolCallId).join(",")]),
       // The tray waits for the run, not for the answer text: a stopped or failed turn still
       // keeps the suggestions it filed, while the live turn never shows cards above its stream.
-      body, settled: !active, suggestions
+      body, settled: !active, suggestions, canvases
     };
     turns.set(userIndex, turn);
     if (staleAnnotation || systemNotice || unfinishedCall || !answer || failed(answer)) return;

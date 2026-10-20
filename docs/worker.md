@@ -17,7 +17,7 @@ Then run `pnpm test:worker`. Commands whose outcome the caller awaits go through
 
 Commands run one at a time on a serial queue, and a prompt holds the queue until its run settles. So anything that has to reach a *running* run bypasses the queue, or it deadlocks behind that run. The bypass list lives in the stdin dispatch at the bottom of `index.ts`:
 
-- `abort`, `extension_ui_response`, `browser_response`, `computer_response`, `web_response`, `chat_response`: answers the running run is waiting on.
+- `abort`, `extension_ui_response`, `browser_response`, `computer_response`, `web_response`, `chat_response`, `canvas_response`: answers the running run is waiting on.
 - `queue_message`, `dequeue`: the user's steering and follow-up messages.
 - `goal_control` except `set`: pause, resume and clear act on a live loop. `set` starts a run, so it queues.
 - `watch_subagent`, `tool_image`: read-only peeks; the panel opens on a child during blocking or background delegation.
@@ -59,7 +59,7 @@ The transcript reaches the host as a full `snapshot`, then as `snapshot_delta`s 
 ## Tools
 
 - Never pass `tools:` to the chat's `createAgentSession`: Pi treats it as a registry filter and erases extension tools. Apply the user's denylist with `setActiveToolsByName`, and re-apply it after anything that can re-activate tools (extension `session_start`, `navigateTree`, a roster change).
-- The Settings › Tools denylist covers Pi's tools and package tools. Built-in extension tools are exempt (a disabled `plan_mode_complete` would silently break Plan mode), except the ones in `SWITCHABLE_BUILTIN_TOOLS` (browser, `web_fetch`, `show_visual`, `suggest_task`).
+- The Settings › Tools denylist covers Pi's tools and package tools. Built-in extension tools are exempt (a disabled `plan_mode_complete` would silently break Plan mode), except the ones in `SWITCHABLE_BUILTIN_TOOLS` (browser, `web_fetch`, `show_visual`, `suggest_task`, and the three canvas tools, which switch together).
 - Sub-agents, memory, computer use and web search have their own settings and keep their tools out through `inactiveTools()`; they never appear on the denylist. `web_search` is offered while `set_web` (or `init`'s `web`) names an active provider, and reaches sub-agents through its own clause in `childToolNames`.
 - MCP tools (`mcp__<server>__<tool>`) have their own per-server and per-tool switches and stay out while their server is off or unreachable. Keep the built-in and MCP switch rules separate.
 - `powershell` is removed from the registry; `grep`/`find` are reported unavailable when ripgrep/fd are missing (the worker is offline and can't download them).
@@ -107,10 +107,10 @@ lightbox and `tool_image` keep every original. Sub-agents load it too.
 
 ## Built-in extensions (`worker/src/builtin/`)
 
-WackCode's own extensions load as inline factories, so they bypass the package trust gate by construction. They are: `ask-user-question`, `auto-title`, `bash-jobs`, `browser`, `chat-refs`, `computer-use`, `goal`, `image-budget`, `mcp`, `memory`, `plan-mode`, `skill-creator`, `subagents`, `suggest-task`, `todo`, `visual`, `web-fetch`, `web-search`, and `chat-mode`, a guard with no tools of its own that only Chat mode chats load.
+WackCode's own extensions load as inline factories, so they bypass the package trust gate by construction. They are: `ask-user-question`, `auto-title`, `bash-jobs`, `browser`, `canvas`, `chat-refs`, `computer-use`, `goal`, `image-budget`, `mcp`, `memory`, `plan-mode`, `skill-creator`, `subagents`, `suggest-task`, `todo`, `visual`, `web-fetch`, `web-search`, and `chat-mode`, a guard with no tools of its own that only Chat mode chats load.
 
 - Adding or renaming one also updates `BUILTIN_EXTENSIONS` in `src/components/PackagesSection.tsx`, which shows them so nobody installs a duplicate package.
-- Sub-agents never get browser, computer-use, MCP, memory, visual or suggestion tools, or skills. A child session loads its role's tool allowlist, its own shell check-in extension and the extensions the built-in hands it.
+- Sub-agents never get browser, computer-use, MCP, memory, visual, canvas or suggestion tools, or skills. A child session loads its role's tool allowlist, its own shell check-in extension and the extensions the built-in hands it.
 - Foreground sub-agent transcripts are saved on the `subagent` result's `details` but kept out of snapshots (`withoutTranscripts` in `normalizeMessage`) and live card updates (`snapshotDetails`). The side panel gets them only through `watch_subagent` frames.
 
 ### Visual replies (`visual.ts`)
@@ -134,6 +134,45 @@ arguments, which Pi saves, so cold history needs nothing extra and the result do
   the renderer gates (see [security.md](security.md#visual-replies)).
 - `read_chat` collapses the call to `[visual: Title]`, and a message a visual sent to
   `[sent from visual: Title]`.
+
+### Canvas (`canvas/`)
+
+A canvas is a board of artboards — full HTML mockups at real sizes — that the user pans and zooms
+beside the chat, for comparing UI alternatives (themes, layouts, desktop beside phone). Three
+tools, all read-only, so Plan and Ultra Plan allow them (the plan-mode helper list):
+
+- **`canvas_guide`** is the authoring guide (`guide.ts`): basics, exploring directions, theme
+  variants, fidelity to the project, craft, checking work, an example. It is served on demand so
+  the long rules never ride in the system prompt; the tools' own `promptGuidelines` only say when
+  to reach for the canvas and to read the guide first. `/canvas` puts the whole guide in its prompt.
+- **`canvas`** starts a canvas (`title`) or changes one (`canvas` id): up to 6 artboards per call
+  added or revised (an existing `id` changes only the fields given), and `remove`. An artboard has
+  a `name`, a `group` (its row), a `width`, an optional `height` (absent: fit the content) and
+  either `html` or `basedOn` another artboard plus `css` appended after it, so theme variants cost
+  a few hundred bytes and follow their base; a variant that gives no width takes its base's size
+  (recorded in `applied`, since the arguments lack it). Limits are in `state.ts` (64 KiB per artboard,
+  192 KiB per call, 24 per canvas; a base is never a variant and can't be removed under one).
+- **`canvas_look`** asks the host to render artboards offscreen, 4 at a time (more are named for
+  a next call rather than refused, since Pi rejects a call that breaks a schema's `maxItems`) (`canvas_request`, answered
+  by `canvas_response`, which bypasses the queue like the browser channel) and returns a
+  screenshot of each when the model has vision, a report (rendered size, overflow, script
+  errors), and optionally the resolved markup — what an agent needs to implement a chosen design
+  after compaction.
+
+**The branch is the record.** The markup stays in the call's arguments, which Pi saves; the
+result's `details` (`{ v: 1, canvas, title, applied: [{ index, id, op, basedOn?, width?, height? }], removed }`)
+say which artboard each argument became, with no HTML. `canvasesFromBranch` folds the accepted
+calls, so rewinds, forks and restarts need nothing else, and the renderer folds the snapshot the
+same way (`src/canvas-state.ts`). Both suites run the same `fold-cases.json`; keep the two folds
+identical.
+
+- Code chats only: never in `chatFactories`, and `start_canvas` and `/canvas` are refused in Chat
+  mode. Sub-agents never get the tools (`childToolNames`): a child has no canvas.
+- **An exploration changes no project file**: the guide and `/canvas`'s prompt say so, because a
+  live run once "fixed" a mockup by editing the project's own tokens.
+- `/canvas [request]` is an app command (`start_canvas`), like `/skill-creator` but allowed in
+  every mode. It is refused while switched off in Settings › Commands or while the tools are off.
+- `read_chat` collapses a call to `[canvas: Title — names]`. Nothing joins the fingerprint.
 
 ### Task suggestions (`suggest-task.ts`)
 
@@ -310,7 +349,7 @@ how the agent actually reads it.
 ## Slash commands and skills
 
 - A command's key (`commandKey` in `worker/src/slash.ts`) must stay identical across the Settings denylist, `commands-scan.ts` and the worker's catalog.
-- WackCode owns seven names (`APP_COMMAND_NAMES`: `/init`, `/compact`, `/new`, `/name`, `/copy`, `/goal`, `/skill-creator`). The first entry to claim any other name wins it; a later clash is renamed `<source>:<name>` (`resolveCommandNames`), and a switched-off command frees its name.
+- WackCode owns eight names (`APP_COMMAND_NAMES`: `/init`, `/compact`, `/new`, `/name`, `/copy`, `/goal`, `/skill-creator`, `/canvas`). The first entry to claim any other name wins it; a later clash is renamed `<source>:<name>` (`resolveCommandNames`), and a switched-off command frees its name.
 - Skill and command folders are re-read before every run, so edits on disk apply from the next message. Where they may load from is a security rule; see [security.md](security.md#pi-lockdown).
 
 ## Errors and redaction

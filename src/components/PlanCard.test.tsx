@@ -27,7 +27,7 @@ describe("PlanCard", () => {
     expect(screen.getByText("Ship it")).toBeInTheDocument();
   });
 
-  it("says a decision is owed only on the current proposal, and wears Ultra Plan's fire when told to", () => {
+  it("says a decision is owed only on the current proposal, and wears Ultra's prism when told to", () => {
     const { container, rerender } = render(<PlanCard plan={plan} current onAction={vi.fn()} />);
     expect(screen.getByText("Awaiting you")).toBeInTheDocument();
     expect(container.querySelector(".plan-card")).not.toHaveClass("ultra");

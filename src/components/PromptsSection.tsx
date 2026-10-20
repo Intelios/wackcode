@@ -3,6 +3,7 @@ import { motion, useReducedMotion } from "motion/react";
 import { DEFAULT_CHAT_PROMPT, DEFAULT_PLAN_PROMPT, DEFAULT_SYSTEM_PROMPT, DEFAULT_ULTRA_PLAN_PROMPT, DEFAULT_ULTRA_PROMPT } from "../promptDefaults";
 import type { PromptConfig } from "../types";
 import { Icon, type IconName } from "./Icons";
+import { UltraMark } from "./UltraMark";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 
 /** Mirrors MAX_PROMPT_OVERRIDE_CHARS in commands.rs, which enforces it for real. */
@@ -16,7 +17,8 @@ interface PromptSpec {
   description: string;
   /** What the editor is prefilled with: the user's text, or the built-in text to start from. */
   defaultText: string;
-  icon: IconName;
+  /** "ultra" draws the Ultra mark, which is not a stroke icon. */
+  icon: IconName | "ultra";
   /** Ultra Plan and Ultra keep their fixed warm palette in every theme; the rest follow the accent. */
   tone: "accent" | "ultra";
   /** Explain the app-owned guidance outside this editable text. */
@@ -48,7 +50,7 @@ const PROMPTS: PromptSpec[] = [
     title: "Ultra Plan",
     description: "The instructions steering a chat while Ultra Plan is on.",
     defaultText: DEFAULT_ULTRA_PLAN_PROMPT,
-    icon: "flame",
+    icon: "ultra",
     tone: "ultra",
     note: "WackCode adds one hidden header line above this text to recognise the contract; everything you write here is the contract the model sees."
   },
@@ -57,7 +59,7 @@ const PROMPTS: PromptSpec[] = [
     title: "Ultra",
     description: "Added to a chat's system prompt while its reasoning is set to Ultra, in the Code and Chat areas.",
     defaultText: DEFAULT_ULTRA_PROMPT,
-    icon: "brain",
+    icon: "ultra",
     tone: "ultra",
     note: "Ultra also runs the model at its highest reasoning level; this text is the extra instruction."
   },
@@ -194,7 +196,7 @@ export function PromptsSection({ unrestrictedPlanning, config, agentName, onChan
             >
               <header className="prompt-card-head">
                 <span className="prompt-mark" aria-hidden="true">
-                  <Icon name={spec.icon} />
+                  {spec.icon === "ultra" ? <UltraMark /> : <Icon name={spec.icon} />}
                 </span>
                 <div className="prompt-card-title">
                   <h4>

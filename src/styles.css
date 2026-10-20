@@ -81,10 +81,18 @@
   --wc-placeholder: #6d7467;
   --text-faint: #5d6458;
   /* Fixed semantic colours: an accent recolours interaction, never meaning. */
-  /* Ultra Plan: a warm accent, so the interview mode never reads as ordinary Plan. */
-  --wc-ultra: #ffb45a;
-  --wc-ultra-hot: #ff7b47;
-  --wc-ultra-glow: #fff1d6;
+  /* Ultra (Ultra Plan and the Ultra reasoning level): a fixed prism, cyan through peach, so no
+     accent can ever match it. The lavender base carries text, tints and lines; the glow is the
+     near-white core; the stops colour the mark's pixels, the glyph field and the labels. */
+  --wc-ultra: #cfc6ff;
+  --wc-ultra-glow: #f6f2ff;
+  --wc-ultra-ink: #4b3fa3;
+  --wc-ultra-cyan: #7fd8ff;
+  --wc-ultra-violet: #a9a6ff;
+  --wc-ultra-orchid: #e59cff;
+  --wc-ultra-pink: #ff9fc6;
+  --wc-ultra-peach: #ffc48a;
+  --wc-ultra-spectrum: linear-gradient(90deg, var(--wc-ultra-cyan), var(--wc-ultra-violet), var(--wc-ultra-orchid), var(--wc-ultra-pink), var(--wc-ultra-peach));
   --danger: #f08080;
   --danger-bg: #351d1d;
   --warning: #e6ba69;
@@ -2072,30 +2080,17 @@ button.reasoning-toggle.at-max .reasoning-toggle-label {
   -webkit-background-clip: text; background-clip: text; color: transparent;
   animation: reasoning-text-sheen 3.4s var(--ease) infinite;
 }
-/* Ultra, above the model's own top level, wears Ultra Plan's fixed warm palette so "Ultra" reads
-   the same in every theme: the pill radiates heat on Ultra Plan's own rhythm (`ultra-heat`), the
-   brain runs hot, and a warm sheen crosses the label faster than Max's. */
+/* Ultra, above the model's own top level, wears the fixed prism so "Ultra" reads the same in
+   every theme: a lavender tint and ring, the Ultra mark in place of the brain (its LED cycle is
+   the motion, so nothing here loops), and the decoding label (UltraLabel). Disabled during a run,
+   the mark holds its settled wildcard. */
 button.reasoning-toggle.at-ultra {
   color: var(--wc-ultra);
-  background: color-mix(in srgb, var(--wc-ultra) 11%, var(--surface-hover));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wc-ultra) 30%, transparent), 0 0 12px -3px color-mix(in srgb, var(--wc-ultra-hot) 55%, transparent);
-  animation: ultra-heat 5.4s ease-in-out infinite;
+  background: color-mix(in srgb, var(--wc-ultra) 10%, var(--surface-hover));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wc-ultra) 28%, transparent), 0 0 12px -4px color-mix(in srgb, var(--wc-ultra-violet) 50%, transparent);
 }
-button.reasoning-toggle.at-ultra .reasoning-icon {
-  color: var(--wc-ultra-hot);
-  animation: reasoning-ultra-glint 2.6s ease-in-out infinite;
-}
-button.reasoning-toggle.at-ultra .reasoning-toggle-label {
-  background: linear-gradient(90deg, var(--wc-ultra) 36%, var(--wc-ultra-glow) 50%, var(--wc-ultra) 64%);
-  background-size: 260% 100%;
-  -webkit-background-clip: text; background-clip: text; color: transparent;
-  animation: reasoning-text-sheen 2.6s var(--ease) infinite;
-}
-/* A run owns the reasoning: hold the heat still, as Ultra Plan's toggle does, rather than animate
-   a control the user can't use. The warm colours stay. */
-button.reasoning-toggle.at-ultra:disabled,
-button.reasoning-toggle.at-ultra:disabled .reasoning-icon,
-button.reasoning-toggle.at-ultra:disabled .reasoning-toggle-label { animation: none; }
+button.reasoning-toggle.at-ultra:hover:not(:disabled) { background: color-mix(in srgb, var(--wc-ultra) 15%, var(--surface-hover)); }
+button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
 
 /* Send is the one accent object in the toolbar: grey until there is something to send, then
    lit with a soft glow. It leans into a hover like Chat's and dips when pressed. Queue is the
@@ -2284,49 +2279,34 @@ button.reasoning-toggle.at-ultra:disabled .reasoning-toggle-label { animation: n
 .reasoning-tick.selected .reasoning-tick-label { color: var(--text); font-weight: 600; }
 .reasoning-tick-label { display: block; font-size: 10px; line-height: 1; white-space: nowrap; }
 
-/* Ultra's panel: the track turns molten — amber running to ember red at the top end, a slow heat
-   wave rolling through it and coals that swell on an uneven beat — sparks lift off its top edge
-   into the gap under the header, and the thumb becomes a white-hot core. Max's light and
-   particles belong to the model's own top level and never show here. */
+/* Ultra's panel: the head's mark becomes the animated Ultra mark and the level name decodes in
+   the prism; the fill turns to a dark lavender well that UltraGlyphField writes its glyph field
+   into, so the step dots step aside; and the thumb is a white core wearing the settled mark in
+   ink. Max's breathing, sheen and particles belong to the model's own top level and never show
+   here. */
 .reasoning-panel.at-ultra .reasoning-header .reasoning-head-mark {
-  background: color-mix(in srgb, var(--wc-ultra) 14%, var(--surface-hover)); color: var(--wc-ultra-hot);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wc-ultra) 34%, transparent), 0 0 14px -3px color-mix(in srgb, var(--wc-ultra-hot) 60%, transparent);
+  background: color-mix(in srgb, var(--wc-ultra) 14%, var(--surface-hover));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wc-ultra) 34%, transparent), 0 0 14px -3px color-mix(in srgb, var(--wc-ultra-violet) 60%, transparent);
 }
-.reasoning-panel.at-ultra .reasoning-level-name {
-  color: var(--wc-ultra);
-  text-shadow: 0 0 16px color-mix(in srgb, var(--wc-ultra-hot) 55%, transparent);
-}
+.reasoning-panel.at-ultra .reasoning-head-icon { width: 14px; height: 14px; }
+.reasoning-panel.at-ultra .reasoning-level-name .ultra-label { filter: drop-shadow(0 0 10px color-mix(in srgb, var(--wc-ultra-violet) 45%, transparent)); }
 .reasoning-panel.at-ultra .reasoning-fill {
-  background: linear-gradient(90deg, var(--wc-ultra) 0%, color-mix(in srgb, var(--wc-ultra) 55%, var(--wc-ultra-hot)) 62%, var(--wc-ultra-hot) 100%);
-  box-shadow: 0 0 18px -2px color-mix(in srgb, var(--wc-ultra-hot) 60%, transparent);
-  animation: reasoning-ultra-heat 3.3s ease-in-out infinite;
+  background: color-mix(in srgb, var(--wc-ultra) 13%, var(--wc-track));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wc-ultra) 20%, transparent);
 }
-.reasoning-panel.at-ultra .reasoning-fill::after {
-  content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 55%;
-  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--wc-ultra-glow) 55%, transparent), transparent);
-  transform: translateX(-120%);
-  animation: reasoning-ultra-wave 2.4s ease-in-out infinite;
-}
-.reasoning-panel.at-ultra .reasoning-dot.on { background: color-mix(in srgb, var(--wc-ultra-glow) 70%, transparent); }
+.reasoning-panel.at-ultra .reasoning-dot { opacity: 0; }
 .reasoning-panel.at-ultra .reasoning-thumb {
+  display: grid; place-items: center;
   background: var(--wc-ultra-glow);
   box-shadow:
     0 1px 5px rgb(0 0 0 / .55), 0 0 0 1px rgb(0 0 0 / .18),
     0 0 0 3px color-mix(in srgb, var(--wc-ultra) 32%, transparent),
-    0 0 14px 2px color-mix(in srgb, var(--wc-ultra-hot) 62%, transparent);
+    0 0 14px 2px color-mix(in srgb, var(--wc-ultra-violet) 55%, transparent);
 }
+.reasoning-thumb-mark { width: 11px; height: 11px; }
 .reasoning-panel.at-ultra .reasoning-tick.selected .reasoning-tick-label { color: var(--wc-ultra); }
-/* Sparks are born on the track's top rim and climb 14–19px on `ultra-ember`, the same throw as
-   Ultra Plan's flame embers: bright on the way out, thinning only over the last stretch. */
-.reasoning-ultra-fx { position: absolute; inset: 0; pointer-events: none; }
-.reasoning-ultra-fx span {
-  position: absolute; bottom: calc(100% - 3px); border-radius: 50%;
-  background: var(--wc-ultra-glow); opacity: 0;
-  box-shadow:
-    0 0 4px 1px color-mix(in srgb, var(--wc-ultra-hot) 90%, transparent),
-    0 0 9px 3px color-mix(in srgb, var(--wc-ultra-hot) 30%, transparent);
-  animation: ultra-ember 1.6s ease-out infinite;
-}
+.reasoning-ultra-fx { position: absolute; top: 0; bottom: 0; left: 0; pointer-events: none; }
+.reasoning-ultra-fx canvas { display: block; }
 
 /* ── Chat area (src/components/chat/) ───────────────
    Chat mode's own messenger UI: bubbles, the duck's typing bubble, activity chips, the hero
@@ -2739,6 +2719,7 @@ button.reasoning-toggle.at-ultra:disabled .reasoning-toggle-label { animation: n
 .menu-item:disabled { opacity: .45; cursor: default; }
 .menu-icon { display: inline-grid; place-items: center; width: 14px; }
 .menu-icon svg { width: 13px; height: 13px; }
+.menu-icon .ultra-mark { width: 11px; height: 11px; }
 .menu-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu-check { color: var(--wc-accent); font-size: 11px; }
 .menu-hint { color: var(--text-faint); font-size: 10.5px; }
@@ -3366,22 +3347,6 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   0% { background-position: 110% 0; }
   45%, 100% { background-position: -8% 0; }
 }
-/* Coals, not a metronome: the fill swells and dips on an uneven beat. */
-@keyframes reasoning-ultra-heat {
-  0%, 100% { filter: brightness(1) saturate(1); }
-  18% { filter: brightness(1.1) saturate(1.08); }
-  34% { filter: brightness(.97) saturate(1); }
-  57% { filter: brightness(1.14) saturate(1.12); }
-  78% { filter: brightness(1.02) saturate(1.02); }
-}
-@keyframes reasoning-ultra-wave {
-  0% { transform: translateX(-120%); }
-  100% { transform: translateX(240%); }
-}
-@keyframes reasoning-ultra-glint {
-  0%, 100% { filter: drop-shadow(0 0 2px color-mix(in srgb, var(--wc-ultra-hot) 55%, transparent)); }
-  50% { filter: brightness(1.25) drop-shadow(0 0 4px color-mix(in srgb, var(--wc-ultra-hot) 85%, transparent)); }
-}
 @keyframes reasoning-icon-glint {
   0%, 3% { filter: brightness(1); }
   9% { filter: brightness(1.7) drop-shadow(0 0 3px color-mix(in srgb, var(--wc-accent-hover) 80%, transparent)); }
@@ -3406,14 +3371,8 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   .reasoning-max-fx span { animation: none; opacity: .6; transform: none; }
   button.reasoning-toggle.at-max .reasoning-icon,
   button.reasoning-toggle.at-max .reasoning-toggle-label { animation: none; }
-  /* Ultra holds still but stays warm: the molten fill with its wave parked, sparks hanging where
-     they would be mid-climb, and the pill's resting glow. */
-  .reasoning-panel.at-ultra .reasoning-fill { animation: none; }
-  .reasoning-panel.at-ultra .reasoning-fill::after { animation: none; opacity: .5; transform: translateX(70%); }
-  .reasoning-ultra-fx span { animation: none; opacity: .75; transform: translate(calc(var(--drift) * .5), calc(var(--rise) * -.5)); }
-  button.reasoning-toggle.at-ultra,
-  button.reasoning-toggle.at-ultra .reasoning-icon,
-  button.reasoning-toggle.at-ultra .reasoning-toggle-label { animation: none; }
+  /* Ultra needs nothing here: its mark, label and glyph field read reduced motion themselves and
+     settle on their still frames. */
   .command-word:hover, .command-word:focus-visible { animation: none; background-position: 0 0; }
   .settings-subnav { transform: none !important; }
   .settings-back-button svg { transform: none !important; }
@@ -3458,7 +3417,7 @@ html[data-force-reduced-motion] *::after {
 .mode-pill.plan { background: color-mix(in srgb, var(--wc-accent) 14%, var(--surface-hover)); }
 .mode-pill.ultra {
   background: color-mix(in srgb, var(--wc-ultra) 11%, var(--surface-hover));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wc-ultra) 30%, transparent), 0 0 12px -3px color-mix(in srgb, var(--wc-ultra-hot) 55%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wc-ultra) 30%, transparent), 0 0 12px -4px color-mix(in srgb, var(--wc-ultra-violet) 55%, transparent);
 }
 .mode-option {
   position: relative; z-index: 1;
@@ -3474,7 +3433,7 @@ html[data-force-reduced-motion] *::after {
 .mode-option.plan.ultra.active {
   color: var(--wc-ultra);
   background: color-mix(in srgb, var(--wc-ultra) 11%, var(--surface-hover));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wc-ultra) 30%, transparent), 0 0 12px -3px color-mix(in srgb, var(--wc-ultra-hot) 55%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wc-ultra) 30%, transparent), 0 0 12px -4px color-mix(in srgb, var(--wc-ultra-violet) 55%, transparent);
 }
 /* In .sliding the pill is the background, so the option itself paints none. Must follow the
    two rules above, which SubagentsSection's plain toggle still relies on. */
@@ -3486,101 +3445,42 @@ html[data-force-reduced-motion] *::after {
 .mode-toggle.sliding .mode-option { height: 24px; padding: 0 10px; font-size: 11.5px; }
 .mode-toggle.sliding .mode-pill.disabled { opacity: .55; animation: none; }
 
-/* ── Ultra Plan fire ─────────────────────────────────
-   The flame is the animation: it flickers, a heat bloom breathes behind it, and three embers
-   race off its top. Ember periods (1.5s/1.3s/1.7s) are deliberately near each other so the fire
-   keeps a steady pulse, while the flame (2.3s), bloom (3.1s) and pill heat (5.4s) are chosen not
-   to divide them — the slower layers never land on the same beat twice, which is what stops the
-   whole thing reading as a cheap synchronized loop.
-
-   The flicker is scale only, anchored at the flame's base (transform-origin 50% 90%): never a
-   translateY, which lifts the whole icon and reads as bouncing, and never a rotate, which tips
-   it over. A flame stays planted and changes height. The label is left static and solid; only
-   the fire moves. */
-.mode-flame { position: relative; display: inline-grid; place-items: center; }
-/* z-index -1 keeps the bloom behind the flame: an absolutely-positioned ::before would otherwise
-   paint over the statically-positioned svg. .mode-option (position: relative, z-index: 1) is the
-   stacking context, so the bloom lands above the pill and below the icon. */
-.mode-flame::before {
-  content: ""; position: absolute; inset: -5px; border-radius: 50%; z-index: -1;
-  background: radial-gradient(circle, color-mix(in srgb, var(--wc-ultra-hot) 55%, transparent) 0%, transparent 68%);
-  animation: ultra-heat-bloom 3.1s ease-in-out infinite;
+/* ── Ultra mark and label ────────────────────────────
+   Ultra (Ultra Plan and the Ultra reasoning level) is a 3×3 pixel wildcard (UltraMark) in the
+   fixed prism, beside a label that decodes from glyph noise (UltraLabel). The mark's LED cycle
+   is clocked in JS (ultra-fx.ts), so the only CSS motion here is its one-shot arrival and the
+   question tile's pixel; nothing about Ultra loops in CSS. Ring cells take a spectrum stop by
+   their place on the ring, the centre is the near-white core, and "ink" is the one-colour mark
+   on the slider's white thumb. */
+.ultra-mark { display: block; flex: 0 0 auto; overflow: visible; }
+.ultra-mark rect { transition: opacity 90ms linear; }
+.ultra-mark .cyan { fill: var(--wc-ultra-cyan); }
+.ultra-mark .violet { fill: var(--wc-ultra-violet); }
+.ultra-mark .orchid { fill: var(--wc-ultra-orchid); }
+.ultra-mark .pink { fill: var(--wc-ultra-pink); }
+.ultra-mark .peach { fill: var(--wc-ultra-peach); }
+.ultra-mark .core { fill: var(--wc-ultra-glow); }
+.ultra-mark.ink rect { fill: var(--wc-ultra-ink); }
+/* Booting: the grid pops in a quarter-turn as its orbit starts. Only a mark that starts animating
+   plays it (`.live`), so static marks and reduced motion never do. */
+.ultra-mark.live { animation: ultra-mark-in .45s cubic-bezier(.34, 1.56, .64, 1) both; }
+@keyframes ultra-mark-in {
+  0% { transform: scale(.45) rotate(-90deg); opacity: 0; }
+  60% { transform: scale(1.12); opacity: 1; }
+  100% { transform: none; opacity: 1; }
 }
-.mode-option.ultra.active .mode-flame svg {
-  stroke-width: 1.1; transform-origin: 50% 90%; animation: ultra-flame-flicker 2.3s linear infinite;
+/* The real text stays in place under the noise (turned transparent, never removed), which keeps
+   the label's width and its accessible name. Both layers paint the spectrum through the text. */
+.ultra-label { position: relative; display: inline-block; white-space: nowrap; }
+.ultra-label-text, .ultra-label-noise {
+  background: var(--wc-ultra-spectrum); -webkit-background-clip: text; background-clip: text; color: transparent;
 }
-/* Fill and rim: a bright gold body with a hotter edge, so the 11px flame still reads at a glance. */
-.mode-option.ultra.active .mode-flame svg path { fill: color-mix(in srgb, var(--wc-ultra) 34%, var(--wc-ultra-glow)); }
-.mode-option.ultra.active .mode-flame svg { color: var(--wc-ultra-hot); }
-/* Embers are born at the flame's tip (bottom: 9px — the tip is the path's topmost point
-   (12,3) of the icon's 24-unit viewBox, ~1.4px below the top of the 11px box) and climb
-   15–18px: most of the flight is visibly above the toggle, which nothing clips (neither
-   .mode-toggle nor .composer has overflow), into the composer's empty footer space. The
-   fade is back-loaded — an ember is still ~87% bright as it clears the box, so the escape
-   itself reads as a rising spark instead of a dot dissolving on the spot; only the last
-   tenth thins out. Each is a hot core with a warm halo: at this size a flat dot reads as a
-   dead pixel. Cycles stay fast (1.3–1.7s): embers drift up, they do not float. */
-.flame-ember {
-  position: absolute; left: 52%; bottom: 9px; width: 3.5px; height: 3.5px; margin-left: -1.75px;
-  border-radius: 50%; background: var(--wc-ultra-glow); opacity: 0; pointer-events: none;
-  box-shadow:
-    0 0 5px 1.5px color-mix(in srgb, var(--wc-ultra-hot) 90%, transparent),
-    0 0 10px 4px color-mix(in srgb, var(--wc-ultra-hot) 32%, transparent);
-  --drift: -2px; --rise: 15px; animation: ultra-ember 1.5s ease-out 0s infinite;
-}
-.flame-ember + .flame-ember {
-  left: 40%; bottom: 9px; width: 3px; height: 3px; margin-left: -1.5px;
-  --drift: -3.5px; --rise: 17px; animation: ultra-ember 1.3s ease-out .5s infinite;
-}
-.flame-ember + .flame-ember + .flame-ember {
-  left: 60%; bottom: 9px; width: 2.5px; height: 2.5px; margin-left: -1.25px;
-  --drift: 3px; --rise: 16px; animation: ultra-ember 1.7s ease-out 1s infinite;
-}
-/* Scale only, anchored at the base — the flame stretches and settles without leaving the spot. */
-@keyframes ultra-flame-flicker {
-  0%, 100% { transform: scaleX(1) scaleY(1); filter: brightness(1); }
-  6% { transform: scaleX(.96) scaleY(1.12); filter: brightness(1.26); }
-  12% { transform: scaleX(1.03) scaleY(.94); filter: brightness(.94); }
-  20% { transform: scaleX(.95) scaleY(1.16); filter: brightness(1.32); }
-  31% { transform: scaleX(1.02) scaleY(1); filter: brightness(1.06); }
-  45% { transform: scaleX(.97) scaleY(1.09); filter: brightness(1.2); }
-  60% { transform: scaleX(1.03) scaleY(.96); filter: brightness(.92); }
-  74% { transform: scaleX(.96) scaleY(1.13); filter: brightness(1.28); }
-  88% { transform: scaleX(1.01) scaleY(1.02); filter: brightness(1.04); }
-}
-@keyframes ultra-heat-bloom {
-  0%, 100% { opacity: .28; transform: scale(.88); }
-  45% { opacity: .52; transform: scale(1.12); }
-  70% { opacity: .34; transform: scale(.96); }
-}
-/* Pops out of the flame at full brightness, then holds that brightness for most of the climb —
-   the ember is still ~87% at the toggle's top edge and only thins over the last stretch above
-   the box. It grows on the way out (scale .5 → 1) rather than shrinking from the start, so it
-   reads as being thrown off the fire instead of as a dot that was always there and faded. */
-@keyframes ultra-ember {
-  0% { opacity: 0; transform: translate(0, 0) scale(.5); }
-  7% { opacity: 1; transform: translate(calc(var(--drift) * .1), calc(var(--rise) * -.09)) scale(1); }
-  45% { opacity: 1; transform: translate(calc(var(--drift) * .45), calc(var(--rise) * -.45)) scale(.94); }
-  72% { opacity: .85; transform: translate(calc(var(--drift) * .72), calc(var(--rise) * -.73)) scale(.8); }
-  91% { opacity: .45; transform: translate(calc(var(--drift) * .92), calc(var(--rise) * -.92)) scale(.62); }
-  100% { opacity: 0; transform: translate(var(--drift), calc(var(--rise) * -1)) scale(.5); }
-}
-/* Slow heat radiating off the pill, well behind the flame's rhythm. */
-.mode-pill.ultra { animation: ultra-heat 5.4s ease-in-out infinite; }
-@keyframes ultra-heat {
-  0%, 100% {
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wc-ultra) 30%, transparent), 0 0 12px -3px color-mix(in srgb, var(--wc-ultra-hot) 55%, transparent);
-  }
-  50% {
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wc-ultra) 44%, transparent), 0 0 18px -2px color-mix(in srgb, var(--wc-ultra-hot) 72%, transparent);
-  }
-}
-/* A run owns the mode: hold the fire still rather than animating a control the user can't use. */
-.mode-option.ultra.active:disabled .mode-flame svg, .mode-option.ultra.active:disabled .mode-flame::before { animation: none; }
-.mode-option.ultra.active:disabled .flame-ember { animation: none; }
+.ultra-label-noise { position: absolute; inset: 0; overflow: hidden; opacity: 0; pointer-events: none; }
+.ultra-label[data-decoding] .ultra-label-text { opacity: 0; }
+.ultra-label[data-decoding] .ultra-label-noise { opacity: 1; }
 
 /* ── Build & Plan activation nudge ───────────────────
-   Ultra Plan's fire is the loud moment; switching into Build or Plan gets a short one-shot
+   Ultra Plan's boot is the loud moment; switching into Build or Plan gets a short one-shot
    instead, so every mode change lands with some motion but nothing loops. The hammer lifts
    and taps once (pivoting on its handle's base, 21% 83% of the icon box), the brain swells
    twice like a thought settling, and behind the option a soft wash blooms out as the pill
@@ -3610,8 +3510,8 @@ html[data-force-reduced-motion] *::after {
   80% { transform: scale(1.06); filter: drop-shadow(0 0 2px color-mix(in srgb, var(--wc-accent) 35%, transparent)); }
   100% { transform: scale(1); filter: drop-shadow(0 0 0 transparent); }
 }
-/* z-index -1 is the flame bloom's stacking trick: over the pill, under the icon and label
-   (the button's z-index: 1 is the stacking context). Inset 0 matches the pill's box, which
+/* z-index -1 sits the wash over the pill, under the icon and label (the button's z-index: 1 is
+   the stacking context). Inset 0 matches the pill's box, which
    is measured from these buttons. The base opacity 0 also keeps it invisible if its
    animation never runs. */
 .mode-glow {
@@ -3624,15 +3524,10 @@ html[data-force-reduced-motion] *::after {
   0% { opacity: .75; transform: scale(.92); }
   100% { opacity: 0; transform: scale(1.08); }
 }
-/* After the rules above (the global reduced-motion block precedes this section): hold the
-   gradient still instead of flickering at the global .01ms duration, and skip the one-shot
-   nudge outright — the mode change itself is feedback enough. */
+/* After the rules above (the global reduced-motion block precedes this section): skip the
+   one-shot nudge outright — the mode change itself is feedback enough. */
 @media (prefers-reduced-motion: reduce) {
   .mode-pill.settled { transition: none; }
-  .mode-pill.ultra { animation: none; }
-  .mode-option.ultra.active .mode-flame svg { animation: none; }
-  .mode-option.ultra.active .mode-flame::before { animation: none; opacity: .34; }
-  .mode-option.ultra .flame-ember { animation: none; }
   .mode-option.mode-in .mode-icon { animation: none; }
   .mode-glow { animation: none; }
 }
@@ -3643,8 +3538,7 @@ html[data-force-reduced-motion] *::after {
 }
 .task-mode-chip { display: inline-grid; place-items: center; width: 18px; height: 18px; padding: 0; }
 .task-mode-chip svg { width: 11px; height: 11px; }
-.task-mode-chip.ultra svg { color: var(--wc-ultra-hot); stroke-width: 1.4; }
-.task-mode-chip.ultra svg path { fill: color-mix(in srgb, var(--wc-ultra) 34%, var(--wc-ultra-glow)); }
+.task-mode-chip.ultra .ultra-mark { width: 9px; height: 9px; }
 /* Clipped, not removed: the mode is still read out. */
 .task-mode-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .task-mode-chip.ultra {
@@ -3658,7 +3552,7 @@ html[data-force-reduced-motion] *::after {
    as a mark of its own, and the decision in a footer. While a decision is owed the card wears a
    halo, its mark breathes a ring (the access card's "this is asking for something") and a pill
    says so; an earlier proposal keeps the shape and drops the light. `--card-*` carry the
-   palette, so Ultra Plan's result burns warm and a saved skill turns the success green.
+   palette, so Ultra Plan's result takes the prism and a saved skill turns the success green.
    The /skill-creator review card is the same family, book-flavoured. */
 .plan-card, .skill-draft-card {
   --card-accent: var(--wc-accent); --card-ink: var(--wc-accent-text); --card-tint: var(--wc-accent-tint);
@@ -3669,7 +3563,7 @@ html[data-force-reduced-motion] *::after {
 }
 .plan-card.ultra {
   --card-accent: var(--wc-ultra); --card-ink: var(--wc-ultra); --card-tint: color-mix(in srgb, var(--wc-ultra) 12%, var(--surface));
-  --card-line: color-mix(in srgb, var(--wc-ultra) 48%, var(--border)); --card-line-soft: color-mix(in srgb, var(--wc-ultra-hot) 26%, var(--border));
+  --card-line: color-mix(in srgb, var(--wc-ultra) 48%, var(--border)); --card-line-soft: color-mix(in srgb, var(--wc-ultra-violet) 26%, var(--border));
 }
 .skill-draft-card.saved {
   --card-accent: var(--wc-success); --card-ink: var(--wc-success); --card-tint: color-mix(in srgb, var(--wc-success) 12%, var(--surface));
@@ -3703,8 +3597,7 @@ html[data-force-reduced-motion] *::after {
   content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 1.5px solid var(--card-line);
   animation: computer-access-ring 2.4s var(--ease) infinite;
 }
-.plan-card.ultra .plan-card-mark svg path { fill: color-mix(in srgb, var(--wc-ultra) 34%, var(--wc-ultra-glow)); }
-.plan-card.ultra .plan-card-mark svg { color: var(--wc-ultra-hot); stroke-width: 1.3; }
+.plan-card.ultra .plan-card-mark .ultra-mark { width: 15px; height: 15px; }
 .plan-card-title { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
 .plan-card-title strong { color: var(--text); font-size: 15px; font-weight: 650; letter-spacing: -.2px; line-height: 1.3; }
 .plan-card-title span { color: var(--text-dim); font-size: 11.5px; line-height: 1.4; }
@@ -4452,16 +4345,25 @@ html[data-force-reduced-motion] *::after {
 .question-presence-wrap { animation: none; overflow: hidden; }
 .question-card .eyebrow { display: flex; align-items: center; gap: 5px; }
 .question-card .eyebrow svg { width: 13px; height: 13px; }
+/* Ultra Plan's tell on the duck's tile: one pixel of the Ultra mark at its shoulder, stepping
+   through the prism and blinking between stops. */
 .question-ultra .question-duck-tile::after {
-  content: ""; position: absolute; right: 5px; top: 0; width: 3px; height: 3px;
-  border-radius: 50%; background: var(--wc-ultra-glow); pointer-events: none;
-  animation: question-ember 2.1s ease-out infinite;
+  content: ""; position: absolute; right: 4px; top: 3px; width: 3.5px; height: 3.5px;
+  border-radius: 1px; background: var(--wc-ultra-violet); pointer-events: none;
+  animation: question-pixel 2.5s steps(1, end) infinite;
 }
-@keyframes question-ember { 0% { opacity: 0; transform: translateY(5px); } 30% { opacity: .8; } 100% { opacity: 0; transform: translateY(-12px); } }
+@keyframes question-pixel {
+  0% { background: var(--wc-ultra-cyan); opacity: 1; }
+  20% { background: var(--wc-ultra-violet); opacity: .35; }
+  40% { background: var(--wc-ultra-orchid); opacity: 1; }
+  60% { background: var(--wc-ultra-pink); opacity: .35; }
+  80% { background: var(--wc-ultra-peach); opacity: 1; }
+}
+.question-card .eyebrow .ultra-mark { width: 10px; height: 10px; }
 .question-marker svg path { stroke-dasharray: 30; animation: question-tick .22s ease-out; }
 @keyframes question-tick { from { stroke-dashoffset: 30; } to { stroke-dashoffset: 0; } }
 @media (prefers-reduced-motion: reduce) {
-  .question-ultra .question-duck-tile::after { animation: none; opacity: .5; }
+  .question-ultra .question-duck-tile::after { animation: none; opacity: .8; }
 }
 .question-card {
   --question-accent: var(--wc-accent);
@@ -4482,8 +4384,8 @@ html[data-force-reduced-motion] *::after {
   --question-line: color-mix(in srgb, var(--wc-ultra) 48%, var(--border));
   --question-tint: color-mix(in srgb, var(--wc-ultra) 10%, var(--surface));
   --question-glow: var(--wc-ultra-glow);
-  --question-surface: color-mix(in srgb, var(--wc-ultra-hot) 4%, var(--surface));
-  --question-border: color-mix(in srgb, var(--wc-ultra-hot) 22%, var(--border));
+  --question-surface: color-mix(in srgb, var(--wc-ultra-violet) 4%, var(--surface));
+  --question-border: color-mix(in srgb, var(--wc-ultra-violet) 22%, var(--border));
 }
 .question-card :focus-visible { outline-color: var(--question-accent); }
 .question-head { display: flex; align-items: center; gap: 11px; margin-bottom: 16px; }
@@ -6240,7 +6142,7 @@ label > span small.mcp-invalid { color: var(--warning); }
 }
 .prompt-card.ultra {
   --tone: var(--wc-ultra); --tone-text: var(--wc-ultra); --tone-tint: color-mix(in srgb, var(--wc-ultra) 11%, var(--surface));
-  --tone-line: color-mix(in srgb, var(--wc-ultra) 32%, transparent); --tone-wash: color-mix(in srgb, var(--wc-ultra-hot) 9%, var(--surface));
+  --tone-line: color-mix(in srgb, var(--wc-ultra) 32%, transparent); --tone-wash: color-mix(in srgb, var(--wc-ultra-violet) 9%, var(--surface));
 }
 .prompt-card.customized { border-color: var(--tone-line); background: linear-gradient(100deg, var(--tone-wash), var(--surface) 70%); }
 .prompt-card.editing { border-color: var(--tone-line); }
@@ -6251,6 +6153,7 @@ label > span small.mcp-invalid { color: var(--warning); }
   transition: background .25s var(--ease), border-color .25s var(--ease), color .25s var(--ease);
 }
 .prompt-mark svg { width: 19px; height: 19px; }
+.prompt-mark .ultra-mark { width: 15px; height: 15px; }
 .prompt-card.ultra .prompt-mark { color: var(--wc-ultra); }
 .prompt-card.customized .prompt-mark, .prompt-card.editing .prompt-mark { background: var(--tone-tint); border-color: var(--tone-line); color: var(--tone-text); }
 .prompt-card-title { flex: 1; min-width: 0; }

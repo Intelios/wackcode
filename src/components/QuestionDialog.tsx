@@ -3,6 +3,7 @@ import { AnimatePresence, motion, useIsPresent, useReducedMotion } from "motion/
 import type { ExtensionUIRequest, QuestionAnswer } from "../types";
 import { DuckMark } from "./DuckMark";
 import { Icon } from "./Icons";
+import { UltraMark } from "./UltraMark";
 
 type QuestionsRequest = Extract<ExtensionUIRequest, { method: "questions" }>;
 
@@ -151,7 +152,7 @@ export function QuestionCard({ request, onRespond }: Props) {
           {bubbles > 0 && !reduced && <span key={bubbles} className="question-bubbles"><i /><i /><i /></span>}
         </div>
         <div className="question-head-copy">
-          <span className="eyebrow">{request.offerWrapUp && <Icon name="flame" />}{request.offerWrapUp ? "Ultra Plan · Question" : "Question"}</span>
+          <span className="eyebrow">{request.offerWrapUp && <UltraMark />}{request.offerWrapUp ? "Ultra Plan · Question" : "Question"}</span>
           <span className="question-active-header">{question.header}</span>
         </div>
         {questions.length > 1 && (

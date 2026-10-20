@@ -3,6 +3,8 @@ import { planButtonTarget } from "../chat-utils";
 import type { TaskMode } from "../types";
 import { Icon } from "./Icons";
 import { Tooltip } from "./ui/Tooltip";
+import { UltraLabel } from "./UltraLabel";
+import { UltraMark } from "./UltraMark";
 
 interface ModeToggleProps {
   mode: TaskMode;
@@ -18,13 +20,14 @@ interface ModeToggleProps {
  *
  * A pill behind the options slides to the active one. Its geometry is measured from the
  * button itself rather than hardcoded, because the Plan button resizes when it becomes
- * Ultra Plan (wider label, flame instead of brain).
+ * Ultra Plan (wider label, the Ultra mark instead of the brain).
  *
  * Switching into Build or Plan plays a one-shot nudge on the icon that just became active
  * (the hammer taps, the brain swells) plus a soft wash behind the option — subtle, but the
- * mode change lands. Ultra Plan is deliberately exempt: swapping in its fire is its own,
- * much louder, moment. The nudge is keyed by a nonce so each switch remounts the icon and
- * replays the animation; see the activation block in styles.css.
+ * mode change lands. Ultra Plan is deliberately exempt: its own entrance is the louder
+ * moment, the Ultra mark booting into its orbit while the label decodes. The nudge is keyed by
+ * a nonce so each switch remounts the icon and replays the animation; see the activation block
+ * in styles.css.
  */
 export function ModeToggle({ mode, disabled, onChange }: ModeToggleProps) {
   const planning = mode !== "build";
@@ -43,7 +46,7 @@ export function ModeToggle({ mode, disabled, onChange }: ModeToggleProps) {
         ? "Click to go back to Plan (⇧Tab)"
         : "Switch mode (⇧Tab)";
 
-  // A run that owns the mode gets no motion (like the held-still flame): only an actual
+  // A run that owns the mode gets no motion (like the held-still Ultra mark): only an actual
   // switch the user made replays the nudge, never the mount of a fresh composer.
   useEffect(() => {
     if (lastMode.current === mode) return;
@@ -108,21 +111,14 @@ export function ModeToggle({ mode, disabled, onChange }: ModeToggleProps) {
           onClick={() => onChange(planButtonTarget(mode))}
         >
           {ultra ? (
-            <span className="mode-flame">
-              <Icon name="flame" className="mode-icon" />
-              {/* Embers drift off the flame; the wrapper carries the bloom and they ride above it.
-                  Three, on staggered delays, so the fire keeps a pulse instead of pulsing twice. */}
-              <span className="flame-ember" aria-hidden="true" />
-              <span className="flame-ember" aria-hidden="true" />
-              <span className="flame-ember" aria-hidden="true" />
-            </span>
+            <UltraMark animated={!disabled} className="mode-icon" />
           ) : (
             <>
               {pulseClass("plan") && <span key={pulseKey("plan")} className="mode-glow plan" aria-hidden="true" />}
               <Icon key={pulseKey("plan")} name="brain" className="mode-icon" />
             </>
           )}
-          <span className="mode-label">{ultra ? "Ultra Plan" : "Plan"}</span>
+          <span className="mode-label">{ultra ? <UltraLabel text="Ultra Plan" /> : "Plan"}</span>
         </button>
       </div>
     </Tooltip>

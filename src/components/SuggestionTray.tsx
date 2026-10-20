@@ -23,6 +23,7 @@ import {
   type SuggestionLink,
 } from "../suggestions";
 import { Icon } from "./Icons";
+import { UltraMark } from "./UltraMark";
 import { Markdown } from "./Markdown";
 import { MenuButton } from "./ui/MenuButton";
 import { Tooltip } from "./ui/Tooltip";
@@ -147,8 +148,8 @@ function SuggestionItem({ card, index, scope, reduce }: ItemProps) {
   const menu: MenuEntry[] = started ? [] : [
     { label: "Plan it in a new chat", icon: <Icon name="brain" />, disabled: starting, onSelect: () => start("new", "plan") },
     { label: "Plan it here", icon: <Icon name="brain" />, disabled: starting || scope.busy || scope.modelMissing, onSelect: () => start("here", "plan") },
-    { label: "Ultra Plan it in a new chat", icon: <Icon name="flame" />, disabled: starting, onSelect: () => start("new", "ultraplan") },
-    { label: "Ultra Plan it here", icon: <Icon name="flame" />, disabled: starting || scope.busy || scope.modelMissing, onSelect: () => start("here", "ultraplan") },
+    { label: "Ultra Plan it in a new chat", icon: <UltraMark />, disabled: starting, onSelect: () => start("new", "ultraplan") },
+    { label: "Ultra Plan it here", icon: <UltraMark />, disabled: starting || scope.busy || scope.modelMissing, onSelect: () => start("here", "ultraplan") },
     "separator",
     { label: "Copy as prompt", icon: <Icon name="copy" />, onSelect: () => act({ type: "copy", card }) },
   ];

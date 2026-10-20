@@ -1,4 +1,5 @@
 import { Icon } from "./Icons";
+import { UltraMark } from "./UltraMark";
 import { Markdown } from "./Markdown";
 
 export type PlanAction = "implement" | "copy" | "save" | "discard";
@@ -10,7 +11,7 @@ interface PlanCardProps {
   /** A run is in progress — actions are disabled. */
   busy?: boolean;
   onAction?: (action: PlanAction) => void;
-  /** The plan came out of Ultra Plan: the card wears its warm palette and flame. */
+  /** The plan came out of Ultra Plan: the card wears the prism and the Ultra mark. */
   ultra?: boolean;
 }
 
@@ -29,7 +30,7 @@ export function PlanCard({ plan, current, busy, onAction, ultra = false }: PlanC
   return (
     <div className={`plan-card${current ? " current" : ""}${ultra ? " ultra" : ""}`}>
       <div className="plan-card-head">
-        <span className="plan-card-mark" aria-hidden="true"><Icon name={ultra ? "flame" : "brain"} /></span>
+        <span className="plan-card-mark" aria-hidden="true">{ultra ? <UltraMark animated={current} /> : <Icon name="brain" />}</span>
         <div className="plan-card-title">
           <strong>Proposed plan</strong>
           {decide && <span>Approve it, or type feedback below to revise it.</span>}

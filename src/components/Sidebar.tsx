@@ -7,6 +7,7 @@ import { formatRelativeTime } from "../chat-utils";
 import { groupByRecency, matchingChats, newestChats } from "../sidebar-utils";
 import type { ProjectRecord, TaskRecord } from "../types";
 import { Icon } from "./Icons";
+import { UltraMark } from "./UltraMark";
 import { ArchivedList } from "./ArchivedList";
 import { AreaSwitch } from "./AreaSwitch";
 import { chatMenu } from "./chat-menu";
@@ -185,7 +186,7 @@ export function Sidebar({ projects, pinnedProjectIds, area, areaAttention, onSwi
             )}
             {/* A round mark, to leave the single line to the name; the words stay for readers and the tooltip. */}
             {task.mode === "plan" && <span className="task-mode-chip" title="Plan"><Icon name="brain" /><span className="task-mode-text">Plan</span></span>}
-            {task.mode === "ultraplan" && <span className="task-mode-chip ultra" title="Ultra Plan"><Icon name="flame" /><span className="task-mode-text">Ultra Plan</span></span>}
+            {task.mode === "ultraplan" && <span className="task-mode-chip ultra" title="Ultra Plan"><UltraMark /><span className="task-mode-text">Ultra Plan</span></span>}
             {task.usesWorktree && <Icon name="branch" className="task-branch-icon" />}
           </span>
         </span>

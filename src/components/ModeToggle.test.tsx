@@ -58,7 +58,7 @@ describe("ModeToggle", () => {
     expect(plan).not.toHaveClass("mode-in");
   });
 
-  it("leaves Ultra Plan's swap to its fire: no nudge on the flame", () => {
+  it("leaves Ultra Plan's swap to its own boot: no nudge on the Ultra mark", () => {
     const onChange = vi.fn();
     const { rerender } = render(<ModeToggle mode="plan" onChange={onChange} />);
     rerender(<ModeToggle mode="ultraplan" onChange={onChange} />);

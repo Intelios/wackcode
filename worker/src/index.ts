@@ -6,10 +6,11 @@ import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 // Type-only: erased at build time, so Pi still loads solely through the dynamic import in initialize().
-import type { PromptTemplate, ResourceLoader, SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { CompactionResult, PromptTemplate, ResourceLoader, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { SWITCHABLE_BUILTIN_TOOLS, createBuiltinExtensions } from "./builtin/index.js";
 import { chatToolAllowed } from "./builtin/chat-mode/policy.js";
 import { DEFAULT_CHAT_PROMPT, buildChatGuide, chatGuideDate } from "./builtin/chat-mode/prompt.js";
+import { DEFAULT_CODE_PROMPT, buildCodeGuide } from "./builtin/code-prompt/prompt.js";
 import { BROWSER_TOOL_NAMES } from "./builtin/browser.js";
 import { COMPUTER_TOOL_NAMES } from "./builtin/computer-use/params.js";
 import { VISUAL_TOOL_NAMES } from "./builtin/visual.js";
@@ -114,7 +115,10 @@ let workspacePath: string | undefined;
 // decided here, in the worker, so an app-wide `set_*` broadcast can never widen such a chat.
 let chatKind = false;
 // The guide last served to Pi, so a run can tell when it went stale (a new day, a tool change).
-let servedChatGuide: string | undefined;
+let servedGuide: string | undefined;
+let workspaceIsGitRepo = false;
+// An installed package handles session_before_compact: WackCode's compaction leaves it to them.
+let packageCompacts = false;
 let session: AgentSession | undefined;
 let piModule: PiModule | undefined;
 let modelRuntime: ModelRuntime | undefined;
@@ -297,6 +301,14 @@ const builtinHost: BuiltinHost = {
       } catch (error) { stream.finish(); throw new Error(safeError(error)); }
       finally { run.dispose(); }
     } };
+  },
+  runDefaultCompaction: async (preparation, instructions, signal, reason) => {
+    // Pi's default summarizer is private, but it is the one path that applies model routing,
+    // credentials, retries and the usage ledger's stream wrapper. Pi is pinned; the compaction
+    // integration tests fail if it moves. An installed package's own compaction wins.
+    const run = (session as unknown as { _runDefaultCompaction?: (...args: unknown[]) => Promise<CompactionResult> } | undefined)?._runDefaultCompaction;
+    if (!session?.model || packageCompacts || typeof run !== "function") return undefined;
+    return run.call(session, preparation, session.model, instructions, signal, reason);
   },
   runGoalVerification: (input, signal) => {
     // The verifier shares the chat's connection and model — like auto-title it is cheap
@@ -763,6 +775,22 @@ function chatGuide(): string {
   });
 }
 
+function codeGuide(): string {
+  const activeTools = new Set(activeToolNames());
+  return buildCodeGuide({
+    activeTools,
+    toolDefinitions: [...activeTools].map((name) => {
+      const tool = session?.getToolDefinition(name);
+      return { name, snippet: tool?.promptSnippet, guidelines: tool?.promptGuidelines };
+    }),
+    hasMcpTools: [...activeTools].some((name) => builtins.mcp.serverOf(name) !== undefined),
+    hasSkills: (activeTools.has("read") || activeTools.has("bash")) && (session?.resourceLoader.getSkills().skills.length ?? 0) > 0,
+    searchLabel: builtins.webSearch.label(),
+    today: chatGuideDate(),
+    isGitRepo: workspaceIsGitRepo,
+  });
+}
+
 // Rebuilt only when the session gains entries: snapshots are sent at every message boundary.
 let treeCache: { count: number; index: TreeIndex } | undefined;
 // Run timings only change when the session gains entries (a run-end marker, or navigation's
@@ -1146,7 +1174,9 @@ async function prepareImages(images: ImageContent[] | undefined): Promise<ImageC
 /**
  * Layer the app's live settings over the loader:
  *
- * - The user's custom persona (Settings → Prompts) replaces the loader's system prompt. The text
+ * - The user's custom core (Settings → Prompts) replaces the loader's system prompt, falling
+ *   back to SYSTEM.md and then the app's coding core. An app-owned guide re-serves the active
+ *   tools' snippets and guidelines, which Pi omits whenever a custom preamble is set. The text
  *   deliberately never enters `DefaultResourceLoaderOptions.systemPrompt`: the loader resolves
  *   that option as a file path when one exists on disk.
  * - The user's own skill folders (Settings › Skills) sit ahead of the package skills.
@@ -1178,17 +1208,16 @@ function withAppLayers(loader: ResourceLoader): ResourceLoader {
     // Pi walks every ancestor of the cwd for these, so a scratch folder would otherwise pick up
     // an AGENTS.md or CLAUDE.md sitting in the user's home folder.
     getAgentsFiles: () => chatKind ? { agentsFiles: [] } : loader.getAgentsFiles(),
-    getSystemPrompt: () => chatKind
-      ? promptOverrides().chatPrompt ?? DEFAULT_CHAT_PROMPT
-      : promptOverrides().systemPrompt ?? loader.getSystemPrompt(),
+    getSystemPrompt: () => {
+      if (chatKind) return promptOverrides().chatPrompt ?? DEFAULT_CHAT_PROMPT;
+      const loaded = loader.getSystemPrompt();
+      return promptOverrides().systemPrompt ?? (loaded?.trim() ? loaded : DEFAULT_CODE_PROMPT);
+    },
     getSystemPromptSource: () => chatKind ? undefined : loader.getSystemPromptSource(),
     getAppendSystemPrompt: () => {
       const memory = builtins.memory.appendPrompt();
-      if (chatKind) {
-        servedChatGuide = chatGuide();
-        return memory ? [servedChatGuide, memory] : [servedChatGuide];
-      }
-      return memory ? [...loader.getAppendSystemPrompt(), memory] : loader.getAppendSystemPrompt();
+      servedGuide = chatKind ? chatGuide() : codeGuide();
+      return [servedGuide, ...(chatKind ? [] : loader.getAppendSystemPrompt()), ...(memory ? [memory] : [])];
     },
     getAppendSystemPromptSources: () => {
       const path = builtins.memory.sourcePath();
@@ -1247,6 +1276,12 @@ async function initialize(command: InitCommand): Promise<void> {
   taskId = command.taskId;
   workspacePath = command.cwd;
   chatKind = command.kind === "chat";
+  workspaceIsGitRepo = !chatKind && spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
+    cwd: command.cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 3_000,
+  }).stdout?.trim() === "true";
   activeCredential = command.apiKey;
   activeAuthPath = command.authPath;
   activeProviderId = command.provider.id;
@@ -1364,6 +1399,8 @@ async function initialize(command: InitCommand): Promise<void> {
     ...(sessionStartEvent ? { sessionStartEvent } : {})
   });
   session = created.session;
+  packageCompacts = created.extensionsResult.extensions.some((extension) =>
+    !String(extension.path).startsWith("<inline:") && (extension.handlers.get("session_before_compact")?.length ?? 0) > 0);
   disabledTools = new Set(command.disabledTools ?? []);
   applyDisabledTools();
 
@@ -1640,8 +1677,9 @@ async function runPrompt(
       const skillsChanged = refreshUserSkills();
       const commandsChanged = refreshUserCommands();
       const memoryChanged = builtins.memory.refresh();
-      // Chat mode's guide names today's date and the active tools; rebuild when either moved.
-      const guideChanged = chatKind && chatGuide() !== servedChatGuide;
+      // Both guides name today's date and the active tools; keep them stable until these or
+      // their guidance change. Live settings still apply only between runs.
+      const guideChanged = (chatKind ? chatGuide() : codeGuide()) !== servedGuide;
       if (skillsChanged || commandsChanged || memoryChanged || guideChanged) applyDisabledTools();
       recordCheckpoint(checkpoint);
       // A null marker prevents an edited version from inheriting the command marker that sits

@@ -19,7 +19,7 @@ interface PromptSpec {
   icon: IconName;
   /** Ultra Plan keeps its fixed warm palette in every theme; the rest follow the accent. */
   tone: "accent" | "ultra";
-  /** Plan contracts carry an app-owned marker line above the user's text. */
+  /** Explain the app-owned guidance outside this editable text. */
   note?: string;
 }
 
@@ -28,10 +28,11 @@ const PROMPTS: PromptSpec[] = [
     key: "systemPrompt",
     title: "Default system prompt",
     description:
-      "The persona every coding chat opens with. Your text replaces this opening paragraph; the tool docs, rules and project context are always assembled after it.",
+      "The core instructions every coding chat opens with: how to work, act with care, verify changes and communicate. Your text replaces this core; project context and skills follow it.",
     defaultText: DEFAULT_SYSTEM_PROMPT,
     icon: "spark",
-    tone: "accent"
+    tone: "accent",
+    note: "WackCode adds a guide after this text, written from the tools that are switched on: when to use them, their rules, today's date and whether the project uses Git. This guide stays in place when you customise the core."
   },
   {
     key: "planPrompt",
@@ -230,7 +231,7 @@ export function PromptsSection({ unrestrictedPlanning, config, agentName, onChan
                     value={draft}
                     onChange={(event) => setDraft(event.target.value)}
                     aria-label={`${spec.title} text`}
-                    rows={spec.key === "systemPrompt" ? 5 : spec.key === "chatPrompt" ? 9 : 16}
+                    rows={spec.key === "chatPrompt" ? 9 : 16}
                     spellCheck={false}
                   />
                   <div className="prompt-editor-actions">

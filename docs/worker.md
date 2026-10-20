@@ -59,7 +59,7 @@ The transcript reaches the host as a full `snapshot`, then as `snapshot_delta`s 
 ## Tools
 
 - Never pass `tools:` to the chat's `createAgentSession`: Pi treats it as a registry filter and erases extension tools. Apply the user's denylist with `setActiveToolsByName`, and re-apply it after anything that can re-activate tools (extension `session_start`, `navigateTree`, a roster change).
-- The Settings › Tools denylist covers Pi's tools and package tools. Built-in extension tools are exempt (a disabled `plan_mode_complete` would silently break Plan mode), except the ones in `SWITCHABLE_BUILTIN_TOOLS` (browser, `web_fetch`).
+- The Settings › Tools denylist covers Pi's tools and package tools. Built-in extension tools are exempt (a disabled `plan_mode_complete` would silently break Plan mode), except the ones in `SWITCHABLE_BUILTIN_TOOLS` (browser, `web_fetch`, `show_visual`, `suggest_task`).
 - Sub-agents, memory, computer use and web search have their own settings and keep their tools out through `inactiveTools()`; they never appear on the denylist. `web_search` is offered while `set_web` (or `init`'s `web`) names an active provider, and reaches sub-agents through its own clause in `childToolNames`.
 - MCP tools (`mcp__<server>__<tool>`) have their own per-server and per-tool switches and stay out while their server is off or unreachable. Keep the built-in and MCP switch rules separate.
 - `powershell` is removed from the registry; `grep`/`find` are reported unavailable when ripgrep/fd are missing (the worker is offline and can't download them).
@@ -205,6 +205,41 @@ A guided workflow for creating and improving Agent Skills (Anthropic's skill-cre
 - `preview` has the host validate the draft with Pi's own keyless skill scan, hash it, and write an immutable review snapshot. The result carries versioned `details` (`SkillPreviewDetails`, hard-capped like the sub-agent card's) and `terminate: true`, so the review card is the turn's outcome; the desktop renders it from the tool result like a Plan card, and only the newest preview on the branch is actionable.
 
 The tool exists only while the workflow is active on the branch (or the command's run is live), is Build-only, and is withheld while `/skill-creator` is switched off (its `app:` key in the command denylist drives `inactiveTools`). The agent never writes into `~/.agents/skills`: publication is the card's native Save button (`publish_skill_draft` in Rust), which re-verifies the reviewed revision under the shared skill-library lock (`skills::library_guard`, also held by Settings' save/delete/import/copy), commits with exclusive rename (new skills) or `RENAME_SWAP` (folder updates), and journals a receipt that `skill_draft_status` reconciles after an interrupted save. `set_skills` then carries the new skill to live workers on their next turn.
+
+## Coding prompt
+
+`builtin/code-prompt/prompt.ts` owns the coding core and `buildCodeGuide`. The preamble is the
+Settings › Prompts override, then the loader's trusted project/global `SYSTEM.md`, then
+`DEFAULT_CODE_PROMPT`. The addendum is the app-owned guide, the loader's `APPEND_SYSTEM.md`
+text, then the memory index. Pi still supplies project instructions, skills and the cwd.
+
+Pi omits its tools, rules and documentation sections whenever a custom preamble is set. The
+guide re-serves every active tool's `promptSnippet` and deduplicated `promptGuidelines` from
+`session.getToolDefinition`, including trusted package tools, so custom personas retain tool
+rules. Capability sections describe only enabled tools, and the trust rule is always present.
+The guide is not editable; Settings edits replace only the core. Pi's own documentation block
+is deliberately omitted. Sub-agent children keep their existing prompts.
+
+The core plus guide with every built-in enabled is bounded at 23,000 characters (roughly
+5,750 tokens by characters ÷ 4), before project context, skills, memory or user-supplied tool
+metadata. Active tools' rules are preserved in full rather than truncated.
+
+Like Chat mode's guide, the coding guide is refreshed between runs when its date, active tools
+or guidance change; it stays stable during a run. Settings remain queued and apply from the next
+message. The Git-repository context is checked once at worker initialization, never for Chat mode.
+
+## Coding compaction
+
+`builtin/compaction/` handles `session_before_compact` in coding chats only. Pi still picks the
+cut point and the kept tail, and its private default summarizer runs through
+`runDefaultCompaction` so routing, credentials, retries and the usage ledger stay Pi's; WackCode
+only adds instructions to it (attribute instructions to the user alone, record failed approaches).
+Around Pi's summary it adds, in code: a line saying only the quoted user messages are the user's
+words, the user's own messages from the compacted span (first request always, then the newest
+within a budget), the todo list and the skills in use. `details.body` keeps Pi's part so the next
+compaction updates it alone; WackCode also carries the file lists Pi drops for extension
+compactions. Any failure falls back to Pi's default, and a package that handles
+`session_before_compact` itself takes over. Chat mode keeps Pi's default.
 
 ## Chat mode (`init.kind === "chat"`)
 

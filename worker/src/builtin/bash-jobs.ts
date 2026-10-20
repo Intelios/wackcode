@@ -152,7 +152,7 @@ export function createBashJobsExtension(operations: BashOperations = createLocal
       promptGuidelines: [
         ...(base.promptGuidelines ?? []),
         `Shell calls yield after at most ${BASH_CHECKIN_SECONDS} seconds. A running job is not success: use bash_job to check, wait or stop it; never launch a duplicate. If check-ins show no progress, inspect the cause or stop it instead of blindly waiting.`,
-        "Finish or stop foreground shell jobs before concluding your run. Unfinished jobs are stopped when the run ends; use the project's Run command for long-lived servers.",
+        "Finish or stop foreground shell jobs before concluding your run; any still running are stopped when it ends.",
       ],
       parameters: {
         ...base.parameters,

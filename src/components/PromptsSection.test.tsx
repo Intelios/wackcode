@@ -42,6 +42,18 @@ describe("PromptsSection", () => {
     await waitFor(() => expect(onChange).toHaveBeenCalledWith({ chatPrompt: "You are Quill." }));
   });
 
+  it("explains the coding guide and gives the core a full-sized editor", () => {
+    renderPrompts();
+    const card = screen.getByRole("article", { name: "Default system prompt" });
+    expect(card.querySelector(".prompt-view")).toHaveClass("clamped");
+    customise("Default system prompt");
+    const editor = screen.getByRole("textbox", { name: "Default system prompt text" });
+    expect(editor).toHaveValue(DEFAULT_SYSTEM_PROMPT);
+    expect(editor).toHaveAttribute("rows", "16");
+    expect(within(card).getByText(/guide stays in place when you customise the core/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+  });
+
   it("counts customised prompts in the hero", () => {
     renderPrompts({ planPrompt: "My plan rules.", ultraPlanPrompt: "My ultra rules." });
     expect(within(screen.getByRole("region", { name: "Prompts overview" })).getByText("2 customised")).toBeInTheDocument();
@@ -55,7 +67,9 @@ describe("PromptsSection", () => {
     fireEvent.click(within(planCard).getByRole("button", { name: "Show full text" }));
     expect(preview).not.toHaveClass("clamped");
     expect(within(planCard).getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true");
-    // The persona is two sentences: nothing to clamp, so no toggle.
+    // A short custom core needs no toggle.
+    cleanup();
+    renderPrompts({ systemPrompt: "A short custom core." });
     const personaCard = screen.getByRole("article", { name: "Default system prompt" });
     expect(within(personaCard).queryByRole("button", { name: /Show/ })).not.toBeInTheDocument();
   });

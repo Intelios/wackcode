@@ -4,6 +4,7 @@ import { DEFAULT_CHAT_PROMPT, DEFAULT_PLAN_PROMPT, DEFAULT_SYSTEM_PROMPT, DEFAUL
 // the moment either copy drifts, which is the whole point of this test.
 import { buildPlanModePrompt } from "../worker/src/builtin/plan-mode/prompt.js";
 import { DEFAULT_CHAT_PROMPT as WORKER_CHAT_PROMPT } from "../worker/src/builtin/chat-mode/prompt.js";
+import { DEFAULT_CODE_PROMPT } from "../worker/src/builtin/code-prompt/prompt.js";
 
 describe("prompt default display copies", () => {
   it("match the worker's Plan and Ultra Plan builders byte for byte", () => {
@@ -15,10 +16,9 @@ describe("prompt default display copies", () => {
     expect(DEFAULT_CHAT_PROMPT).toBe(WORKER_CHAT_PROMPT);
   });
 
-  it("keeps the persona copy honest in shape while the worker suite pins its exact text", () => {
-    // The byte-exact pin against Pi's live preamble lives in worker/src/builtin.test.ts, which
-    // can import the pi package. Here we only guard against an accidental placeholder.
-    expect(DEFAULT_SYSTEM_PROMPT).toMatch(/^You are an expert coding assistant/);
-    expect(DEFAULT_SYSTEM_PROMPT).toContain("coding agent harness");
+  it("matches the worker's coding core byte for byte", () => {
+    expect(DEFAULT_SYSTEM_PROMPT).toBe(DEFAULT_CODE_PROMPT);
+    expect(DEFAULT_SYSTEM_PROMPT).toMatch(/^You are a coding agent working inside WackCode/);
+    expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/\bpi\b/i);
   });
 });

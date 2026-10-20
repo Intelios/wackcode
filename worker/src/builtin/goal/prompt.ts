@@ -10,10 +10,14 @@
  */
 import type { GoalState } from "../../protocol.js";
 
+/** Opening lines that mark the loop's own user-role turns (compaction keeps them out of the user's words). */
+export const GOAL_KICKOFF_LEAD = "The user has set a goal. Work on it now.";
+export const GOAL_CONTINUATION_LEAD = "Goal continuation — round ";
+
 /** What the working model hears on the first round of `/goal <objective>`. */
 export function goalKickoffPrompt(objective: string): string {
   return [
-    "The user has set a goal. Work on it now.",
+    GOAL_KICKOFF_LEAD,
     "",
     "<objective>",
     objective,
@@ -33,7 +37,7 @@ export function goalKickoffPrompt(objective: string): string {
 /** The injected next turn after a `passed:false` verdict. Re-states everything the loop needs. */
 export function goalContinuationPrompt(state: GoalState, reason: string | undefined, nextAction: string): string {
   return [
-    `Goal continuation — round ${state.iteration + 1} of ${state.maxIterations}.`,
+    `${GOAL_CONTINUATION_LEAD}${state.iteration + 1} of ${state.maxIterations}.`,
     "",
     "<objective>",
     state.objective,

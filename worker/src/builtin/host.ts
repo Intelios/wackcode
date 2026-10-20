@@ -1,5 +1,5 @@
 import type { Usage } from "@earendil-works/pi-ai";
-import type { InlineExtension } from "@earendil-works/pi-coding-agent";
+import type { CompactionResult, InlineExtension, SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import type { AskQuestion, CommandPresentation, GoalState, PlanState, QuestionAnswer, SkillCreatorState, SubagentSpec, SubagentTranscript, TodoState } from "../protocol.js";
 import type { GoalVerdict, GoalVerifyInput } from "./goal/verify.js";
 
@@ -87,6 +87,17 @@ export interface BuiltinHost {
    * come back as `inconclusive` (fail-open) or `aborted` verdicts.
    */
   runGoalVerification(input: GoalVerifyInput, signal?: AbortSignal): Promise<GoalVerdict>;
+  /**
+   * Pi's own compaction summary for this preparation, with `instructions` as its additional
+   * focus: the same routing, credentials, retries and usage accounting as Pi's default.
+   * Undefined when an installed package compacts instead or the session can't run it.
+   */
+  runDefaultCompaction(
+    preparation: SessionBeforeCompactEvent["preparation"],
+    instructions: string,
+    signal: AbortSignal,
+    reason: SessionBeforeCompactEvent["reason"],
+  ): Promise<CompactionResult | undefined>;
   /** Tools a sub-agent could be given (Pi's own, plus `web_fetch` and `web_search`) that are
    *  available here and that the user has not switched off. */
   childToolNames(): string[];

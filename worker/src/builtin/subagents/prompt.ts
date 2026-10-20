@@ -33,6 +33,6 @@ export function subagentGuidelines(trigger: SubagentTrigger, readOnlyPlanning = 
     `${SUBAGENT_TOOL_NAME}: choose blocking delegation when you need the answer immediately; choose background: true when you have independent work to do. Assign distinct files to yourself and editing children. Use subagent_job action wait when you need their results; never relaunch a job just to check it. You may answer while children work and continue when results arrive. Finish or stop children before submitting a plan or skill preview.`,
     readOnlyPlanning
       ? `In read-only Plan or Ultra Plan mode, ${SUBAGENT_TOOL_NAME} only runs read-only sub-agents.`
-      : `${SUBAGENT_TOOL_NAME} follows each role's effective access shown above. During Plan or Ultra Plan, editing children may support planning but must not implement the finished plan before approval.`,
+      : `${SUBAGENT_TOOL_NAME} children keep the access the tool description lists for their role (read-only or can edit files). During Plan or Ultra Plan, editing children may support planning but must not implement the finished plan before approval.`,
   ];
 }

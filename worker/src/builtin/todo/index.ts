@@ -13,7 +13,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { TodoState } from "../../protocol.js";
 import type { BuiltinHost } from "../host.js";
 import { buildToolResult } from "./envelope.js";
-import { TODO_PROMPT_GUIDELINES, TODO_PROMPT_SNIPPET } from "./prompt.js";
+import { TODO_DESCRIPTION, TODO_PROMPT_GUIDELINES, TODO_PROMPT_SNIPPET } from "./prompt.js";
 import { applyTaskMutation } from "./reducer.js";
 import { EMPTY_STATE, type TaskState, replayFromBranch } from "./state.js";
 import {
@@ -48,8 +48,7 @@ export function createTodoExtension(host: BuiltinHost) {
     bound.registerTool({
       name: TODO_TOOL_NAME,
       label: TODO_TOOL_LABEL,
-      description:
-        "Manage a task list for tracking multi-step progress. Actions: create (new task), update (change status/fields/dependencies), list (all tasks, optionally filtered by status), get (single task details), delete (tombstone), clear (reset all). Status: pending → in_progress → completed, plus deleted tombstone. Use this to plan and track multi-step work like research, design, and implementation.",
+      description: TODO_DESCRIPTION,
       promptSnippet: TODO_PROMPT_SNIPPET,
       promptGuidelines: TODO_PROMPT_GUIDELINES,
       parameters: TODO_PARAMS,

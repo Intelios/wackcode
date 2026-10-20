@@ -8,7 +8,7 @@
  * the servers the user adds.
  *
  * A Chat mode chat loads `chatFactories` instead of `factories`: no shell, planning, todo,
- * sub-agents, goal loop, computer use or skill creator, plus the guard that enforces the rest
+ * sub-agents, goal loop, computer use, skill creator or coding compaction, plus the guard that enforces the rest
  * (`chat-mode/`). The controllers of the built-ins it leaves out still exist and report their
  * resting state, so the worker reads them without asking which kind of chat it is.
  */
@@ -17,6 +17,7 @@ import { BROWSER_TOOL_NAMES, createBrowserExtension } from "./browser.js";
 import { createAskUserQuestionExtension } from "./ask-user-question.js";
 import { type BashJobsController, createBashJobsExtension } from "./bash-jobs.js";
 import { createChatGuardExtension } from "./chat-mode/index.js";
+import { createCompactionExtension } from "./compaction/index.js";
 import { createChatRefsExtension } from "./chat-refs.js";
 import { type ComputerUseController, createComputerUseExtension } from "./computer-use/index.js";
 import { createAutoTitleExtension, type AutoTitleController } from "./auto-title.js";
@@ -147,6 +148,7 @@ export function createBuiltinExtensions(host: BuiltinHost, options: {
       { name: "wackcode-computer-use", factory: computerUse.factory, hidden: true },
       { name: "wackcode-skill-creator", factory: skillCreator.factory, hidden: true },
       mcpExtension,
+      { name: "wackcode-compaction", factory: createCompactionExtension(host, todo.handle.getState), hidden: true },
     ],
     chatFactories: [
       // First, so its tool_call block runs ahead of every other handler.

@@ -49,8 +49,8 @@ export const SHOW_VISUAL_PARAMS = {
 } as const;
 
 /**
- * What the model must know about the tool, in one place: Pi's `promptGuidelines` in Code mode,
- * and the same words in Chat mode's guide, which replaces them (`buildChatGuide`).
+ * What the model must know about the tool, in one place: the coding guide re-serves these
+ * `promptGuidelines`, and Chat mode's guide includes the same words (`buildChatGuide`).
  */
 export const VISUAL_GUIDE_LINES: readonly string[] = [
   "Use show_visual when seeing an answer beats reading it: a chart or a comparison, a diagram or flow, a mockup of proposed UI, a small interactive calculator or picker. Keep plain lists, code and short answers as Markdown.",

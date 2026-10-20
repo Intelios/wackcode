@@ -98,8 +98,10 @@ never in the renderer. Rust (`src-tauri/src/visuals.rs`) is the boundary:
   `frontendDist`) and a `wcvisual:` frame — the app gains **no new network origin**, and no
   visual can become one. It is registered as a small Tauri plugin (`navigation_plugin`), because
   this window comes from `tauri.conf.json` and a config-built window carries no navigation
-  handler of its own. Do not remove it, and do not add an origin to the list for a feature that
-  does not need to navigate.
+  handler of its own. A plugin's hook runs for every webview, so it rules only the main webview
+  (visual frames are iframes inside it); the browser preview and the canvas renderer keep their
+  own handlers. Do not remove it, and do not add an origin to the list for a feature that does
+  not need to navigate.
 - **The wrapper's theme values.** A staged document splices the renderer's CSS variables into one
   `<style>`. Each value is checked against a fixed character set and length, so no value can end
   the rule or the style element; a value that fails refuses the whole staging call.

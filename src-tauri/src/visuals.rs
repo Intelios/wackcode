@@ -348,12 +348,23 @@ fn app_origins<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Vec<tauri::Url> 
     origins
 }
 
+/// Whether the navigation plugin rules on this webview. A plugin's hook runs for every webview
+/// in the app, so it must step aside for the ones that bring their own handler: the per-chat
+/// browser (`browser.rs`, any HTTP(S) page the user or agent opens) and the canvas renderer
+/// (`canvas_render.rs`). Applying the app's origin list to them refused every page the browser
+/// was asked to open. A visual's frame is an iframe inside the main webview, so it stays covered.
+fn navigation_ruled_here(label: &str) -> bool {
+    label == MAIN_WEBVIEW
+}
+
 /// Refuses every navigation outside the app's own origins and a visual's frame
-/// (`navigation_allowed`). Registered as a plugin, because Tauri only attaches a navigation
-/// handler where one is built, and this window comes from `tauri.conf.json`.
+/// (`navigation_allowed`) in the main webview. Registered as a plugin, because Tauri only
+/// attaches a navigation handler where one is built, and this window comes from `tauri.conf.json`.
 pub fn navigation_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     tauri::plugin::Builder::new("wackcode-navigation")
-        .on_navigation(|webview, url| navigation_allowed(url, &app_origins(webview.app_handle())))
+        .on_navigation(|webview, url| {
+            !navigation_ruled_here(webview.label()) || navigation_allowed(url, &app_origins(webview.app_handle()))
+        })
         .build()
 }
 
@@ -575,6 +586,14 @@ mod tests {
         assert!(!allows("data:text/html,<script>alert(1)</script>"));
         assert!(!allows("file:///etc/passwd"));
         assert!(!allows("about:srcdoc"));
+    }
+
+    #[test]
+    fn rules_only_the_main_webview() {
+        // The browser preview and the canvas renderer carry their own navigation handlers.
+        assert!(navigation_ruled_here(MAIN_WEBVIEW));
+        assert!(!navigation_ruled_here("browser-chat-1"));
+        assert!(!navigation_ruled_here(RENDER_WEBVIEW));
     }
 
     #[test]

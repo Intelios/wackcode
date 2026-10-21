@@ -731,6 +731,25 @@ describe("Transcript exploration groups", () => {
     expect(Array.from(view.container.querySelectorAll(".explore-head .explore-mark")).map((mark) => mark.classList[1])).toEqual(["file", "search"]);
   });
 
+  it("keeps the run's next step in the lane under the head, and waits there instead of below", () => {
+    // The search landed and the model hasn't answered yet: the wait sits in the group's lane.
+    const view = render(<Transcript messages={[user, first, result("r1"), second, result("g1")]} running />);
+    const head = screen.getByRole("button", { name: "Exploring 1 file, 1 search" });
+    expect(within(view.container.querySelector(".explore-live") as HTMLElement).getByRole("status", { name: "Working…" })).toBeInTheDocument();
+    expect(view.container.querySelector(".agent-working")).toBeNull();
+
+    // Reasoning after the last call takes the wait's place in the lane.
+    view.rerender(<Transcript messages={[user, first, result("r1"), second, result("g1")]} running partial={{ id: "s-5000", role: "assistant", timestamp: 5_000, blocks: [{ type: "thinking", text: "Next", startedAt: 1 }] }} />);
+    expect(within(view.container.querySelector(".explore-live") as HTMLElement).getByRole("button", { name: /Thinking/ })).toBeInTheDocument();
+    expect(head).toHaveAccessibleName("Exploring 1 file, 1 search");
+
+    // Prose ends the run: the reasoning is back outside, and the head has explored.
+    view.rerender(<Transcript messages={[user, first, result("r1"), second, result("g1")]} running partial={{ id: "s-5000", role: "assistant", timestamp: 5_000, blocks: [{ type: "thinking", text: "Next", durationMs: 100 }, { type: "text", text: "Here it is" }] }} />);
+    expect(view.container.querySelector(".explore-live")).toBeNull();
+    expect(screen.getByRole("button", { name: "Explored 1 file, 1 search" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Thought for/ })).toBeInTheDocument();
+  });
+
   it("opens to its calls as one chip strip, with reasoning between them in order", () => {
     const thought: NormalizedMessage = { id: "a-2500", role: "assistant", timestamp: 2_500, blocks: [{ type: "thinking", text: "Now search", durationMs: 1_000 }, read("r2", "src/two.ts")] };
     const view = render(<Transcript messages={[user, first, result("r1"), thought, result("r2"), second, result("g1"), answer]} running={false} collapseCompletedWork={false} />);

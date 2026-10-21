@@ -69,9 +69,12 @@ export function ToolImages({ call, result, caption = false }: { call: Normalized
   );
 }
 
-/** Chat's springs (ChatActivity.tsx): chips pop in, and fly into an Explored head. */
+/**
+ * Chat's springs (ChatActivity.tsx): chips pop in, and fly into an Explored head. The fly is
+ * critically damped: an overshoot would squash the landing mark below its size and back.
+ */
 const POP = { type: "spring", stiffness: 520, damping: 28 } as const;
-export const FLY = { type: "spring", stiffness: 420, damping: 30, mass: 0.8 } as const;
+export const FLY = { type: "spring", stiffness: 380, damping: 36, mass: 0.8 } as const;
 const SHEET = { duration: 0.24, ease: [0.33, 1, 0.68, 1] } as const;
 
 /** True where transcript motion may play: not reduced, and a real browser (jsdom stays still). */

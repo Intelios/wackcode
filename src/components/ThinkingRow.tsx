@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, type Transition } from "motion/react";
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { formatThinkingDuration, thinkingStream } from "../chat-utils";
 import { useFollowScroll } from "../hooks/useFollowScroll";
 import { motionAllowed, useSmoothText } from "../hooks/useSmoothText";
@@ -7,6 +7,7 @@ import type { ThinkingTimerPrecision as Precision } from "../types";
 import { Markdown } from "./Markdown";
 import { PonderingDuck } from "./PonderingDuck";
 import { Icon } from "./Icons";
+import { registerDuck } from "./thoughtFlight";
 
 /**
  * The rows a user has expanded, by `expansionKey`. A streamed message and the saved message
@@ -46,6 +47,12 @@ interface ThinkingRowProps {
   live?: boolean;
   /** Identifies the block in both the streamed and the saved message. */
   expansionKey?: string;
+  /**
+   * `explore-utils.ts` flyId, for reasoning an Explored group may take in: the duck is where
+   * the head's thought mark (the same 18px circle) flies from (`thoughtFlight.ts`), rather
+   * than the whole row stretching into it.
+   */
+  flyId?: string;
 }
 
 /** Only the elapsed label ticks; the reasoning body and preview need not re-render each tick. */
@@ -92,7 +99,7 @@ function StreamTail({ tail }: { tail: string }) {
   );
 }
 
-export function ThinkingRow({ text, durationMs, startedAt, live = false, expansionKey }: ThinkingRowProps) {
+export function ThinkingRow({ text, durationMs, startedAt, live = false, expansionKey, flyId }: ThinkingRowProps) {
   const expanded = useContext(ThinkingExpansion);
   const [open, setOpen] = useState(() => expansionKey !== undefined && expanded?.has(expansionKey) === true);
   const previewEnabled = useContext(ThinkingPreviewEnabled);
@@ -131,10 +138,16 @@ export function ThinkingRow({ text, durationMs, startedAt, live = false, expansi
     return () => window.clearTimeout(timer);
   }, [live]);
 
+  const duck = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    if (!animate || flyId === undefined || !duck.current) return;
+    return registerDuck(flyId, duck.current);
+  }, [animate, flyId]);
+
   return (
     <div className={`thinking-row ${open ? "open" : ""} ${showStream ? "streaming" : ""}`}>
       <button type="button" className="thinking-head" onClick={toggle} aria-expanded={open}>
-        <PonderingDuck live={live} className="thinking-icon" />
+        <span ref={duck} className="thinking-duck"><PonderingDuck live={live} className="thinking-icon" /></span>
         {/* `key` remounts the label when the block finishes, so it eases in (styles.css)
             rather than snapping from "Thinking… 12s" to "Thought for 12s". */}
         {live

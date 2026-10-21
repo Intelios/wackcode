@@ -1257,11 +1257,21 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
   animation: explore-join .6s var(--ease) both;
 }
 @keyframes explore-join { 0% { opacity: 0; transform: scale(.98); } 30% { opacity: 1; transform: scale(1.025); } 100% { opacity: 0; transform: scale(1); } }
-.explore-live { width: 100%; padding-left: 14px; }
-.explore-live .tool-chips { margin: 0; }
+/* The lane: what the run is doing now (ExploreGroup.tsx). Its parts share one height, so a chip
+   giving way to reasoning or the wait leaves the transcript below where it was. The negative
+   margin cancels the group's gap while the lane is shut, so it costs nothing at rest. */
+.explore-live { width: 100%; margin-top: -6px; padding-left: 14px; display: flex; flex-direction: column; }
+.explore-live > * { margin-top: 6px; }
+.explore-live .tool-chips { margin: 6px 0 0; }
+.explore-live > .thinking-row { margin-bottom: 0; }
+.explore-live > .thinking-row > .thinking-head, .explore-wait { min-height: 28px; }
+.explore-wait { display: flex; align-items: center; padding-left: 6px; animation: explore-wait-in .3s var(--ease) .25s both; }
+@keyframes explore-wait-in { from { opacity: 0; } to { opacity: 1; } }
+.thinking-duck { display: inline-grid; place-items: center; flex: 0 0 auto; }
 @media (prefers-reduced-motion: reduce) {
   .explore-head { transition: none; }
   .explore-pulse { display: none; }
+  .explore-wait { animation: none; }
 }
 .explore-verb { font-weight: 550; flex: 0 0 auto; }
 .explore-verb:not(.thinking-shimmer) { color: var(--text-soft); }

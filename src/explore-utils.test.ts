@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { exploreActivity, exploreCounts, exploreLabel, exploreLabelParts, exploreLiveItems, exploreMarks, flyId, layoutTranscript, settledGroup, type TranscriptSlot } from "./explore-utils";
+import { exploreActivity, exploreCounts, exploreLabel, exploreLabelParts, exploreLiveItems, exploreMarks, flyId, layoutTranscript, settledGroup, tailGroupKey, type TranscriptSlot } from "./explore-utils";
 import type { NormalizedBlock, NormalizedMessage } from "./types";
 
 const read = (id: string, path = `${id}.ts`): NormalizedBlock => ({ type: "tool-call", toolName: "read", toolCallId: id, arguments: { path } });
@@ -83,6 +83,35 @@ describe("layoutTranscript", () => {
     const key = (slots?: TranscriptSlot[]) => slots?.[0]?.type === "explore" ? slots[0].group.key : undefined;
     expect(key(streamed.result.partial)).toBe("r1");
     expect(key(saved.result.messages.get("a1"))).toBe("r1");
+  });
+
+  it("holds live reasoning after an open run's last call in the group's lane, until the run closes", () => {
+    const saved = [assistant("a1", [read("r1"), read("r2")]), tool("t1", "r1", "r2")];
+    const open = layout(saved, assistant("a2", [thinking("Next, the tests")]), "a1");
+    expect(open.slots).toEqual({ a1: ["[r1 r2]"] });
+    expect(open.partial).toEqual([]);
+    const group = open.result.messages.get("a1")![0];
+    expect(group.type === "explore" && group.group.trailing?.map((item) => item.block.text)).toEqual(["Next, the tests"]);
+
+    // Prose closes the run: the reasoning is back outside, before it.
+    const closed = layout(saved, assistant("a2", [thinking("Next, the tests"), text("Found it.")]), "a1");
+    expect(closed.partial).toEqual(["b0", "b1"]);
+    // So does the run ending: settled history never holds a lane.
+    expect(layout([...saved, assistant("a2", [thinking("Done")])]).slots).toEqual({ a1: ["[r1 r2]"], a2: ["b0"] });
+    // A lone call has no group, so no lane.
+    expect(layout([assistant("a1", [read("r1")])], assistant("a2", [thinking("Hm")]), "a1").partial).toEqual(["b0"]);
+  });
+
+  it("names the group a transcript ends with", () => {
+    const saved = [user("u1"), assistant("a1", [read("r1"), read("r2")]), tool("t1", "r1", "r2")];
+    expect(tailGroupKey(saved, layout(saved).result)).toBe("r1");
+    // Folded messages that render nothing are passed over.
+    const folded = [...saved, assistant("a2", [read("r3")]), tool("t2", "r3")];
+    expect(tailGroupKey(folded, layout(folded).result)).toBe("r1");
+    const answered = [...saved, assistant("a2", [text("Done.")])];
+    expect(tailGroupKey(answered, layout(answered).result)).toBeUndefined();
+    const asked = [...saved, user("u2")];
+    expect(tailGroupKey(asked, layout(asked).result)).toBeUndefined();
   });
 
   it("folds nothing when switched off", () => {

@@ -6,14 +6,15 @@ import { AssistantNameContext } from "../agentName";
 import { useFollowScroll } from "../hooks/useFollowScroll";
 import { motionAllowed, useSmoothText } from "../hooks/useSmoothText";
 import { formatRunDuration } from "../chat-utils";
-import { blockKey, flyId, layoutTranscript, type TranscriptSlot } from "../explore-utils";
+import { blockKey, flyId, layoutTranscript, tailGroupKey, type TranscriptSlot } from "../explore-utils";
 import { completedPlan, layoutWorkTurns, type WorkRow } from "../completed-work";
 import { splitFileSection, type FileAttachment } from "../attachment-utils";
 import { chatMentionToken } from "../chat-refs";
 import { splitMentions } from "../mention-utils";
 import { SUBAGENT_TOOL_NAME, SHOW_VISUAL_TOOL_NAME, SKILL_CREATOR_TOOL_NAME, currentVisualIds, exploreKind, parseSkillPreviewDetails, parseSubagentDetails, parseVisualArgs, pendingSubagentDetails, toolPresentation } from "../tool-utils";
 import { hasVisibleMessages, latestTurn, messageText } from "../tree-utils";
-import { ExploreExpansion, ExploreGroup, ExploreGroupingEnabled } from "./ExploreGroup";
+import { ExploreExpansion, ExploreGroup, ExploreGroupingEnabled, ExploreLaneWait } from "./ExploreGroup";
+import { ThoughtFlightScope } from "./thoughtFlight";
 import { Icon } from "./Icons";
 import { Markdown } from "./Markdown";
 import { MessageActions, type MessageActionItem } from "./MessageActions";
@@ -269,18 +270,6 @@ function ModelSwitchDivider({ entry }: { entry: DisplayModelSwitch }) {
 }
 
 /**
- * A reasoning row outside an Explored group carries the id its landing mark in the group's head
- * will use, so when a run takes it in, it visibly flies into the head (`ExploreGroup.tsx`).
- * Only that hand-off moves it: `layoutDependency` stays fixed so streamed text never re-measures
- * (and differs from the mark's, or motion wouldn't resume the mark from this row).
- */
-function FlyingThought({ id, children }: { id: string; children: ReactNode }) {
-  const animate = useTranscriptMotion();
-  if (!animate) return <>{children}</>;
-  return <motion.div className="fly-thought" layoutId={id} layoutDependency="thought" transition={{ layout: FLY }}>{children}</motion.div>;
-}
-
-/**
  * The cards some tool calls render as instead of a plain call: a plan, sub-agent chips, a
  * skill review. Undefined for an ordinary call, which `renderSlots` draws as a chip or row.
  */
@@ -352,11 +341,8 @@ function renderBlock(
 ): ReactNode {
   if (block.type === "thinking") {
     // A streamed block is still being written until the worker has clocked its end.
-    return (
-      <FlyingThought id={flyId({ block, key })}>
-        <ThinkingRow text={block.text ?? ""} durationMs={block.durationMs} startedAt={block.startedAt} live={running && streaming === true && block.durationMs === undefined} expansionKey={key} />
-      </FlyingThought>
-    );
+    // Reasoning outside a group may yet be taken in: its duck then flies into the head.
+    return <ThinkingRow text={block.text ?? ""} durationMs={block.durationMs} startedAt={block.startedAt} live={running && streaming === true && block.durationMs === undefined} expansionKey={key} flyId={flyId({ block, key })} />;
   }
   if (block.type === "tool-call") {
     const special = renderSpecialCall(block, results, liveToolDetails, live, planState, onPlanAction, running, skillCard);
@@ -471,7 +457,8 @@ function signature(
     // An exploration group also renders blocks from the later messages its run spans.
     slots.map((slot) => slot.type === "block" ? slot.index : [
       slot.group.key,
-      slot.group.items.map((item) => [item.key, item.live, item.streaming, signatureBlock(item.block), callInputs(item.block, results, liveToolText, liveToolDetails)])
+      slot.group.items.map((item) => [item.key, item.live, item.streaming, signatureBlock(item.block), callInputs(item.block, results, liveToolText, liveToolDetails)]),
+      (slot.group.trailing ?? []).map((item) => [item.key, item.streaming, signatureBlock(item.block)])
     ])
   ]);
 }
@@ -507,6 +494,8 @@ function cachedSignature(
       deps.push(item.block, item.live, item.streaming);
       pushInputs(item.block);
     }
+    deps.push(slot.group.trailing?.length ?? 0);
+    for (const item of slot.group.trailing ?? []) deps.push(item.block, item.streaming);
   }
   const variants = signatureCache.get(message) ?? new Map<string, { deps: unknown[]; sig: string }>();
   const cached = variants.get(variant);
@@ -896,6 +885,9 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
 
   const waiting = running && (Boolean(compaction) || !partial || partial.blocks.length === 0);
   const label = compaction ? "Compacting context…" : activityLabel(activity);
+  // A run that ends with an Explored group waits in the group's lane instead (`ExploreGroup`).
+  const laneKey = waiting && !compaction ? tailGroupKey(messages, layout) : undefined;
+  const laneWait = useMemo(() => laneKey === undefined ? undefined : { key: laneKey, label }, [laneKey, label]);
 
   const rewindBar = onUndoRewind && actionsEnabled ? (
     <div className="rewind-bar" role="status">
@@ -925,6 +917,8 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
       <motion.div data-dynamic-space className="conversation-scroll" ref={ref} onScroll={onScroll} onWheel={onWheel} layoutScroll>
         <ThinkingExpansion.Provider value={expandedThinking}>
           <ExploreExpansion.Provider value={expandedGroups}>
+          <ExploreLaneWait.Provider value={laneWait}>
+          <ThoughtFlightScope>
           <ToolExpansion.Provider value={toolExpansions}>
           <VisualCardScope.Provider value={visualScope}>
           <SuggestionScopeContext.Provider value={suggestionScope}>
@@ -977,13 +971,15 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
               <AnimatePresence>
                 {compaction ? <CompactingStage key="compacting" reason={compaction.reason} /> : null}
               </AnimatePresence>
-              {!compaction && waiting && label && <WorkingPresence label={label} />}
+              {!compaction && waiting && label && !laneWait && <WorkingPresence label={label} />}
               {rewindBar}
             </div>
           </CanvasScopeContext.Provider>
           </SuggestionScopeContext.Provider>
           </VisualCardScope.Provider>
           </ToolExpansion.Provider>
+          </ThoughtFlightScope>
+          </ExploreLaneWait.Provider>
           </ExploreExpansion.Provider>
         </ThinkingExpansion.Provider>
       </motion.div>

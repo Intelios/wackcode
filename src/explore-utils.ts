@@ -13,6 +13,10 @@ import { exploreKind, summarizeTool, type ExploreKind } from "./tool-utils";
  * - passes over `tool` messages and empty text;
  * - takes in reasoning that sits between two of its calls (reasoning before its first call or
  *   after its last stays outside, so a model that thinks between calls still gets one group);
+ * - while it is still open at the end of a live run, holds the reasoning after its last call as
+ *   `trailing`: the group shows it in its lane under the head, where the next call would land, so
+ *   the space under the head doesn't swap between a row outside and a chip inside as the model
+ *   alternates. Once something else closes the run, that reasoning is back outside;
  * - is folded only from `MIN_GROUP_CALLS` calls: a lone read stays a plain row.
  */
 
@@ -38,6 +42,8 @@ export interface ExploreGroup {
   /** The first call's id: the group keeps it as it grows and once its messages are saved. */
   key: string;
   items: ExploreItem[];
+  /** Live reasoning after the last call of a run that may yet take another (see above). */
+  trailing?: ExploreItem[];
 }
 
 /** What an assistant message renders, in order: one of its own blocks, or a whole group. */
@@ -89,10 +95,11 @@ export function layoutTranscript(
     let run: Unit[] = [];
     // Reasoning after the run's latest call: it joins only if another call follows.
     let trailing: Unit[] = [];
-    const close = () => {
+    const close = (tail: Unit[] = []) => {
       if (run.filter((unit) => unit.call).length >= MIN_GROUP_CALLS) {
         const group: ExploreGroup = { key: run[0].item.block.toolCallId ?? run[0].item.key, items: run.map((unit) => unit.item) };
-        run.forEach((unit, position) => {
+        if (tail.length) group.trailing = tail.map((unit) => unit.item);
+        [...run, ...tail].forEach((unit, position) => {
           const own = marks.get(unit.ordinal) ?? new Map<number, ExploreGroup | null>();
           own.set(unit.index, position === 0 ? group : null);
           marks.set(unit.ordinal, own);
@@ -120,7 +127,7 @@ export function layoutTranscript(
       });
       if (message.stopReason === "error" || message.stopReason === "aborted") close();
     });
-    close();
+    close(trailing.every((unit) => unit.item.live) ? trailing : []);
   }
 
   const slotsOf = (message: NormalizedMessage, ordinal: number): TranscriptSlot[] => {
@@ -249,6 +256,22 @@ export function exploreMarks(group: ExploreGroup, results: Map<string, Normalize
     if (mark) latest.set(mark, flyId(item));
   }
   return MARK_ORDER.filter((mark) => latest.has(mark)).map((mark) => ({ mark, id: latest.get(mark)! }));
+}
+
+/**
+ * The group a running transcript currently ends with, if any: the last assistant slot drawn
+ * since the latest user or system message. While the run waits on the model, that group's lane
+ * holds the wait instead of a separate "Working…" row beneath it.
+ */
+export function tailGroupKey(messages: NormalizedMessage[], layout: TranscriptLayout): string | undefined {
+  const last = (slots?: TranscriptSlot[]) => slots?.length ? slots[slots.length - 1] : undefined;
+  let slot = last(layout.partial);
+  for (let index = messages.length - 1; !slot && index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === "user" || message.role === "system") break;
+    if (message.role === "assistant") slot = last(layout.messages.get(message.id));
+  }
+  return slot?.type === "explore" ? slot.group.key : undefined;
 }
 
 /** The call in flight, as the header shows it while the group runs: "Reading src/App.tsx". */

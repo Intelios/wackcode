@@ -69,6 +69,17 @@ pub struct WindowEntry {
     pub number: u32,
     pub pid: i32,
     pub bounds: Rect,
+    /// The window server layer: 0 for ordinary app windows, higher for panels, menus, the Dock.
+    pub layer: i32,
+    /// 0 for windows that are on screen but fully transparent (some utilities keep these).
+    pub alpha: f64,
+}
+
+impl WindowEntry {
+    /// An opaque window on the normal layer.
+    pub fn new(number: u32, pid: i32, bounds: Rect) -> Self {
+        Self { number, pid, bounds, layer: 0, alpha: 1.0 }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,12 +173,12 @@ mod tests {
             7 => ("Terminal".to_string(), true),
             _ => ("Notes".to_string(), false),
         };
-        let target = WindowEntry { number: 1, pid: 42, bounds: rect(0.0, 0.0, 800.0, 600.0) };
-        let popover = WindowEntry { number: 2, pid: 42, bounds: rect(100.0, 100.0, 50.0, 50.0) };
-        let wackcode = WindowEntry { number: 3, pid: 100, bounds: rect(500.0, 0.0, 400.0, 400.0) };
-        let terminal = WindowEntry { number: 4, pid: 7, bounds: rect(0.0, 500.0, 200.0, 200.0) };
-        let notes = WindowEntry { number: 5, pid: 9, bounds: rect(300.0, 300.0, 100.0, 100.0) };
-        let overlay = WindowEntry { number: 6, pid: 100, bounds: rect(0.0, 0.0, 800.0, 600.0) };
+        let target = WindowEntry::new(1, 42, rect(0.0, 0.0, 800.0, 600.0));
+        let popover = WindowEntry::new(2, 42, rect(100.0, 100.0, 50.0, 50.0));
+        let wackcode = WindowEntry::new(3, 100, rect(500.0, 0.0, 400.0, 400.0));
+        let terminal = WindowEntry::new(4, 7, rect(0.0, 500.0, 200.0, 200.0));
+        let notes = WindowEntry::new(5, 9, rect(300.0, 300.0, 100.0, 100.0));
+        let overlay = WindowEntry::new(6, 100, rect(0.0, 0.0, 800.0, 600.0));
         let windows = vec![overlay.clone(), popover, wackcode, terminal, notes, target];
         let hit = |x: f64, y: f64| topmost_owner(&windows, (x, y), 42, 100, &[6], describe);
         assert_eq!(hit(10.0, 10.0), HitOwner::Target);
@@ -183,10 +194,10 @@ mod tests {
     #[test]
     fn overlay_exemption_is_a_window_number_not_an_app_exemption() {
         let bounds = rect(0.0, 0.0, 800.0, 600.0);
-        let overlay = WindowEntry { number: 99, pid: 100, bounds };
-        let own_window = WindowEntry { number: 3, pid: 100, bounds };
-        let blocked = WindowEntry { number: 4, pid: 7, bounds };
-        let target = WindowEntry { number: 1, pid: 42, bounds };
+        let overlay = WindowEntry::new(99, 100, bounds);
+        let own_window = WindowEntry::new(3, 100, bounds);
+        let blocked = WindowEntry::new(4, 7, bounds);
+        let target = WindowEntry::new(1, 42, bounds);
         let describe = |_| ("Terminal".to_string(), true);
         assert_eq!(topmost_owner(&[overlay.clone(), own_window, target.clone()], (10.0, 10.0), 42, 100, &[99], describe), HitOwner::Own);
         assert_eq!(topmost_owner(&[overlay.clone(), blocked, target.clone()], (10.0, 10.0), 42, 100, &[99], describe), HitOwner::Blocked("Terminal".into()));

@@ -8,7 +8,7 @@ use super::geometry::{Rect, WindowEntry};
 use super::keys::{self, Chord};
 use objc2_core_foundation::{CFArray, CFBoolean, CFDictionary, CFNumber, CFRetained, CFString, CFType, CGPoint, CGRect};
 use objc2_core_graphics::{
-    kCGWindowBounds, kCGWindowNumber, kCGWindowOwnerPID, CGEvent, CGEventField, CGEventFlags, CGEventSource,
+    kCGWindowAlpha, kCGWindowBounds, kCGWindowLayer, kCGWindowNumber, kCGWindowOwnerPID, CGEvent, CGEventField, CGEventFlags, CGEventSource,
     CGEventSourceStateID, CGEventTapLocation, CGEventType, CGMouseButton, CGRectMakeWithDictionaryRepresentation,
     CGScrollEventUnit, CGSessionCopyCurrentDictionary, CGWindowListCopyWindowInfo, CGWindowListOption,
 };
@@ -109,6 +109,8 @@ pub fn window_list() -> Vec<WindowEntry> {
                 number,
                 pid,
                 bounds: Rect { x: rect.origin.x, y: rect.origin.y, width: rect.size.width, height: rect.size.height },
+                layer: number_value(&window, unsafe { kCGWindowLayer }).unwrap_or(0.0) as i32,
+                alpha: number_value(&window, unsafe { kCGWindowAlpha }).unwrap_or(1.0),
             })
         })
         .collect()

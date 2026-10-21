@@ -709,25 +709,29 @@ impl ActContext<'_> {
         self.token.is_stopped()
     }
 
-    /// Visual geometry is best-effort and cannot make an otherwise valid AX action fail.
-    fn visual_point(&self, window: &ax::Element, point: (f64, f64)) -> Option<cursor::Target> {
-        let frame = ax::frame(window)?;
-        if !point.0.is_finite() || !point.1.is_finite() || !frame.contains(point.0, point.1) { return None; }
-        Some(cursor::Target { pid: self.pid, window: input::window_number(window, self.pid)?, frame, point })
+    /// Visual geometry is best-effort and cannot make an otherwise valid AX action fail. The
+    /// point anchors to whichever of the app's windows is under it: menus, popovers and sheets
+    /// are windows of their own.
+    fn visual_point(&self, point: (f64, f64)) -> Option<cursor::Target> {
+        cursor::Target::in_window(self.pid, point, &input::window_list(), &cursor::overlay_windows())
     }
 
     fn show_element(&self, element: &ax::Element) {
         if let Some(feedback) = &self.feedback {
             let target = ax::frame(element).filter(|frame| frame.width > 0.0 && frame.height > 0.0).and_then(|frame| {
-                let window = ax::element(element, "AXWindow").unwrap_or_else(|| self.observation.window.clone());
-                self.visual_point(&window, frame.center())
+                // Menu bar titles sit in no window of the app.
+                if ax::string(element, "AXRole").as_deref() == Some("AXMenuBarItem") {
+                    cursor::Target::on_screen(self.pid, frame.center())
+                } else {
+                    self.visual_point(frame.center())
+                }
             });
             feedback.at(target);
         }
     }
 
     fn pointer(&mut self, point: (f64, f64)) -> Result<&mut pointer::Foreground, String> {
-        let target = self.visual_point(&self.observation.window, point);
+        let target = self.visual_point(point);
         let feedback = self.feedback.clone().zip(target);
         let foreground = self.foreground()?;
         foreground.set_feedback(feedback);

@@ -52,13 +52,17 @@ export function formatCost(cost: number): string {
   return cost >= 0.01 ? `$${cost.toFixed(2)}` : `$${cost.toFixed(4)}`;
 }
 
+/** `59s`, `2m`, `2m 1s`, `1h 24m`: trailing zero units drop out, but a zero minute before seconds stays. */
 export function formatRunDuration(durationMs: number): string {
   const seconds = Math.floor(Math.max(0, durationMs) / 1000);
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   const remainder = seconds % 60;
-  if (hours > 0) return `${hours}h ${minutes}m ${remainder}s`;
-  if (minutes > 0) return `${minutes}m ${remainder}s`;
+  if (hours > 0) {
+    if (remainder > 0) return `${hours}h ${minutes}m ${remainder}s`;
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  }
+  if (minutes > 0) return remainder > 0 ? `${minutes}m ${remainder}s` : `${minutes}m`;
   return `${remainder}s`;
 }
 

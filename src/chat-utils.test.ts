@@ -75,9 +75,17 @@ describe("formatRunDuration", () => {
   it("formats seconds, minutes, and hours", () => {
     expect(formatRunDuration(999)).toBe("0s");
     expect(formatRunDuration(59_000)).toBe("59s");
-    expect(formatRunDuration(60_000)).toBe("1m 0s");
     expect(formatRunDuration(2 * 60_000 + 21_000)).toBe("2m 21s");
     expect(formatRunDuration(60 * 60_000 + 24 * 60_000 + 20_000)).toBe("1h 24m 20s");
+  });
+
+  it("drops zero trailing units: a whole minute reads 2m, then 2m 1s", () => {
+    expect(formatRunDuration(119_000)).toBe("1m 59s");
+    expect(formatRunDuration(120_000)).toBe("2m");
+    expect(formatRunDuration(121_000)).toBe("2m 1s");
+    expect(formatRunDuration(60 * 60_000)).toBe("1h");
+    expect(formatRunDuration(60 * 60_000 + 24 * 60_000)).toBe("1h 24m");
+    expect(formatRunDuration(60 * 60_000 + 5_000)).toBe("1h 0m 5s");
   });
 
   it("clamps negative values to zero", () => {
@@ -92,6 +100,7 @@ describe("formatThinkingDuration", () => {
     expect(formatThinkingDuration(1_000, "second")).toBe("1s");
     expect(formatThinkingDuration(4_200, "second")).toBe("4s");
     expect(formatThinkingDuration(75_000, "second")).toBe("1m 15s");
+    expect(formatThinkingDuration(120_000, "second")).toBe("2m");
     expect(formatThinkingDuration(60 * 60_000 + 24 * 60_000 + 20_000, "second")).toBe("1h 24m 20s");
   });
 

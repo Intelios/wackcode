@@ -422,6 +422,24 @@ describe("Transcript run durations", () => {
     expect(row()[0]).toHaveTextContent("Worked for 4s");
     expect(row()[0]).not.toHaveClass("live");
   });
+
+  it("shows a whole minute as 2m on the live clock, then 2m 1s a second later", () => {
+    vi.useFakeTimers();
+    const startedAt = Date.now() - 119_000;
+    const messages: NormalizedMessage[] = [
+      { id: "user-1", role: "user", timestamp: startedAt, blocks: [{ type: "text", text: "Do the work" }] },
+      { id: "assistant-1", role: "assistant", blocks: [{ type: "text", text: "Working" }] }
+    ];
+    const view = render(<Transcript messages={messages} running activeRun={{ startedAt }} />);
+    const chip = () => view.container.querySelector(".run-duration");
+    expect(chip()).toHaveTextContent(/Working for 1m 59s$/);
+
+    act(() => { vi.advanceTimersByTime(1_000); });
+    expect(chip()).toHaveTextContent(/Working for 2m$/);
+
+    act(() => { vi.advanceTimersByTime(1_000); });
+    expect(chip()).toHaveTextContent(/Working for 2m 1s$/);
+  });
 });
 
 describe("Transcript message actions", () => {

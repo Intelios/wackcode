@@ -28,8 +28,10 @@ assistant's small HTML answer — a chart, a comparison, a mockup — in a card 
 fence (mark, title, Expand, copy) over a sandboxed frame. `VisualCallCard` reads the scope the
 transcript provides (`VisualCardScope`): the tool-call ids on the newest answer, which alone may
 send, and the App's send/link handlers. A running or refused call keeps its chip and its error;
-`completed-work.ts` treats a settled visual as an outcome, never as work to fold away. The frame
-is staged through Rust (`visuals.rs`), reports its own height (clamped to 96–640 px), and takes
+`completed-work.ts` treats a settled visual as an outcome, never as work to fold away. Only
+work before the first successful, settled visual may fold: later prose, calls and visuals stay
+below it in their original order, both live and settled. The frame is staged through Rust
+(`visuals.rs`), reports its own height (clamped to 96–640 px), and takes
 its colours from `visualThemeVars`/`visualVariables` in `theme.ts`, repainted in place when the
 appearance changes. Only messages from that frame's own `contentWindow` are accepted: a height, a
 link the user clicked (opened through `revealPath`, as a Markdown link is) and a

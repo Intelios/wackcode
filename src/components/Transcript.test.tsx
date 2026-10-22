@@ -1074,6 +1074,45 @@ describe("Transcript visual replies", () => {
     expect(screen.getByRole("button", { name: "Expand visual" })).toBeInTheDocument();
   });
 
+  it("keeps visuals before later work while streaming, after completion, and when work is expanded", () => {
+    const messages: NormalizedMessage[] = [visual()[0],
+      { id: "before", role: "assistant", blocks: [{ type: "text", text: "Preparing the chart." }] },
+      { ...visual()[1], turn: undefined, stopReason: "toolUse" },
+      { id: "check", role: "assistant", blocks: [
+        { type: "text", text: "Now checking the chart." },
+        { type: "tool-call", toolCallId: "check", toolName: "bash", arguments: { command: "pnpm test" } }
+      ] },
+      { id: "checked", role: "tool", blocks: [{ type: "tool-result", toolCallId: "check", toolName: "bash", text: "Passed" }] },
+      { id: "second", role: "assistant", blocks: [
+        { type: "tool-call", toolCallId: "v2", toolName: "show_visual", arguments: { title: "Comparison", html: "<p>43</p>" } },
+        { type: "tool-result", toolCallId: "v2", toolName: "show_visual", text: "Shown." }
+      ] },
+      { id: "answer", entryId: "answer", role: "assistant", stopReason: "stop", turn: { userEntryId: "u", endEntryId: "answer" }, blocks: [{ type: "text", text: "All checked." }] }
+    ];
+    const assertOrder = () => {
+      const first = screen.getByRole("figure", { name: "Visual: Latency by region" });
+      const laterProse = screen.getByText("Now checking the chart.");
+      const check = screen.getByRole("button", { name: /pnpm test/ });
+      const second = screen.getByRole("figure", { name: "Visual: Comparison" });
+      const answer = screen.getByText("All checked.");
+      for (const [before, after] of [[first, laterProse], [laterProse, check], [check, second], [second, answer]]) {
+        expect(before.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      }
+    };
+    const view = render(<Transcript messages={messages.slice(0, -1)} running activeRun={{ startedAt: 100 }}
+      partial={{ ...messages[messages.length - 1], id: "partial", turn: undefined }} />);
+    assertOrder();
+    view.rerender(<Transcript messages={messages} running={false} />);
+    assertOrder();
+    expect(screen.queryByText("Preparing the chart.")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /View work/ }));
+    assertOrder();
+    expect(screen.getByText("Preparing the chart.")).toBeInTheDocument();
+    view.unmount();
+    render(<Transcript messages={messages} running={false} collapseCompletedWork={false} />);
+    assertOrder();
+  });
+
   it("keeps a running or refused visual on its plain row", () => {
     const running = visual();
     running[1] = { ...running[1], blocks: running[1].blocks.slice(0, 2) };

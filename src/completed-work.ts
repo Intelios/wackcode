@@ -190,11 +190,17 @@ export function layoutWorkTurns(messages: NormalizedMessage[], options: Options)
       && !messages[row.index].blocks.some((block) => block.type === "tool-call") ? [row.index] : []) : []);
     const visible = (index: number, slot: TranscriptSlot) => slot.type === "block"
       && ((index === terminal && textIndices.has(slot.index)) || (earlierAnswers.has(index) && messages[index].blocks[slot.index]?.type === "text") || (index === plan?.index && slot.index === plan.block) || (index === skill?.index && slot.index === skill.block) || visualSlots.some((visual) => visual.index === index && visual.block === slot.index));
+    let afterVisual = false;
     for (const row of body) {
       if (row.type === "compaction") { outcome.push(row); continue; }
-      if (row.type !== "message") { work.push(row); continue; }
-      const outcomeSlots = row.slots.filter((slot) => visible(row.index, slot));
-      const workSlots = row.slots.filter((slot) => !visible(row.index, slot));
+      if (row.type !== "message") { (afterVisual ? outcome : work).push(row); continue; }
+      const outcomeSlots: TranscriptSlot[] = [];
+      const workSlots: TranscriptSlot[] = [];
+      for (const slot of row.slots) {
+        // Folding later work above an earlier visual would move the reply out of chronology.
+        if (slot.type === "block" && visualSlots.some((visual) => visual.index === row.index && visual.block === slot.index)) afterVisual = true;
+        (afterVisual || visible(row.index, slot) ? outcomeSlots : workSlots).push(slot);
+      }
       if (workSlots.length) work.push({ ...row, slots: workSlots, actions: false });
       // Keep the terminal footer even if a plan or skill card, not this message, is the outcome.
       if (outcomeSlots.length || (row.index === terminal && answer.turn)) {

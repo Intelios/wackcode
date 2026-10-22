@@ -84,6 +84,35 @@ describe("completed work layout", () => {
     expect(slots(project([user(), visual, refused]).get(0)!, "outcome")).toEqual([[1, 2, true]]);
   });
 
+  it("keeps later work and multiple visuals in chronological order, live and settled", () => {
+    const visual = (id: string): NormalizedBlock => ({ type: "tool-call", toolCallId: id, toolName: "show_visual", arguments: { title: id, html: "<p/>" } });
+    const messages = [user(), progress, result(),
+      assistant("first", [text("First chart"), visual("v1")]), result("v1"),
+      assistant("reads", [text("Checking the chart"), call("read1", "read"), call("read2", "read")]), result("read1"), result("read2"),
+      result("orphan"), assistant("second", [visual("v2"), text("Comparing the charts"), call("check")]), result("v2"), result("check"), answer];
+    for (const grouping of [false, true]) {
+      const options = { layout: layoutTranscript(messages, undefined, { grouping }), switchPositions: new Set([5]) };
+      const turn = project(messages, options).get(0)!;
+      expect(turn.folded?.work.filter((row) => row.type === "message").map((row) => row.index)).toEqual([1, 3]);
+      expect(turn.folded?.outcome.map((row) => row.type === "switches" ? [row.type, row.position] : [row.type, row.index]))
+        .toEqual([["message", 3], ["switches", 5], ["message", 5], ["orphans", 8], ["message", 9], ["message", 12]]);
+      expect(turn.folded?.outcome.find((row) => row.type === "message" && row.index === 9))
+        .toMatchObject({ slots: [{ type: "block", index: 0 }, { type: "block", index: 1 }, { type: "block", index: 2 }] });
+      const live = project(messages, { ...options, running: true, activeRun: { startedAt: 100 } }).get(0)!;
+      expect(live.partition).toEqual(turn.folded);
+      expect(live.folded).toBeUndefined();
+    }
+  });
+
+  it("keeps work after a visual in the same message below it", () => {
+    const messages = [user(), assistant("a", [text("Before"),
+      { type: "tool-call", toolCallId: "v1", toolName: "show_visual", arguments: { title: "Chart", html: "<p/>" } },
+      text("After"), call(), text("Finished")]), result("v1"), result()];
+    const turn = project(messages).get(0)!;
+    expect(slots(turn, "work")).toEqual([[1, 0, false]]);
+    expect(slots(turn, "outcome")).toEqual([[1, 1, true], [1, 2, true], [1, 3, true], [1, 4, true]]);
+  });
+
   it("supports legacy metadata/timing and does not create a fold for a direct answer", () => {
     expect(project([user(), assistant("p", [text("Reading")]), assistant("a", [text("Finished")])]).get(0)?.folded).toBeDefined();
     expect(project([user(), answer]).get(0)?.folded).toBeUndefined();

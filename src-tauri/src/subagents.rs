@@ -176,6 +176,7 @@ pub fn validate(input: &SubagentConfig, providers: &[ProviderRecord]) -> Result<
         trigger: input.trigger,
         max_concurrency: input.max_concurrency,
         agents,
+        team_default: input.team_default.clone(),
     };
     normalize(&mut config);
 
@@ -192,15 +193,45 @@ pub fn validate(input: &SubagentConfig, providers: &[ProviderRecord]) -> Result<
             if let Some(problem) = model_problem(&agent.name, choice, providers) { return Err(problem); }
         }
     }
+    if let Some(choice) = &config.team_default {
+        if let Some(problem) = model_problem("the Team default", choice, providers) { return Err(problem); }
+    }
     Ok(config)
 }
 
-/// Enabled agents whose own model lives on `provider_id`, for refusing to delete it.
+/// Enabled agents whose own model lives on `provider_id`, for refusing to delete it. The Team
+/// default counts too: deleting its connection would silently deactivate every new Team.
 pub fn agents_using(config: &SubagentConfig, provider_id: &str) -> Vec<String> {
-    config.agents.iter()
+    let mut users: Vec<String> = config.agents.iter()
         .filter(|agent| agent.model.as_ref().is_some_and(|model| model.provider_id == provider_id))
         .map(|agent| agent.name.clone())
-        .collect()
+        .collect();
+    if config.team_default.as_ref().is_some_and(|model| model.provider_id == provider_id) {
+        users.push("the Team default".into());
+    }
+    users
+}
+
+/// Why the chat's Team can't run right now, mirroring `model_problem` plus connection state.
+/// `None` means it can: the crew model is configured and its connection can supply credentials.
+pub fn team_problem(
+    team: &SubagentModel,
+    providers: &[ProviderRecord],
+    credential: impl Fn(&ProviderRecord) -> bool,
+) -> Option<String> {
+    if let Some(problem) = model_problem("Team", team, providers) { return Some(problem); }
+    let provider = providers.iter().find(|provider| provider.id == team.provider_id)?;
+    if !provider.enabled {
+        return Some(format!("The Team's model is on {}, which is turned off. Enable it in Settings → Providers, or pick another model.", provider.name));
+    }
+    if !credential(provider) {
+        return Some(if provider.kind == ProviderKind::Subscription {
+            format!("The Team's model is on {}, which is signed out. Sign in again, or pick another model.", provider.name)
+        } else {
+            format!("The Team's model is on {}, which has no API key. Add one, or pick another model.", provider.name)
+        });
+    }
+    None
 }
 
 /// How a worker reaches one connection: an API key or a Pi auth file. `None` when signed out.
@@ -209,15 +240,28 @@ pub struct ProviderCredential {
     pub auth_path: Option<String>,
 }
 
-/// The worker's `subagents` value: `null` while the feature is off. Otherwise the enabled
-/// agents, and every connection their own models use with its credential — sent only over the
-/// worker's stdin. A worker whose chat already uses one of them reuses its own runtime.
+/// The worker's `subagents` value for one chat: `null` while the feature is off. Otherwise
+/// the enabled agents, and every connection their own models use with its credential — sent
+/// only over the worker's stdin. A worker whose chat already uses one of them reuses its own
+/// runtime.
+///
+/// `team` is the chat's Team crew model: while usable (and the built-in worker role is on),
+/// every built-in agent's model is overridden to it, its connection joins `providers`, and the
+/// payload gains `team` — the flag the worker reads for the lead's addendum and retained
+/// sessions. An unusable Team is omitted entirely, leaving the chat's roster untouched.
 pub fn runtime_payload(
     config: &SubagentConfig,
     providers: &[ProviderRecord],
+    team: Option<&SubagentModel>,
     credential: impl Fn(&ProviderRecord) -> Option<ProviderCredential>,
 ) -> Value {
     if !config.enabled { return Value::Null; }
+    let worker_on = config.agents.iter().any(|agent| agent.id == "builtin:worker" && agent.enabled);
+    let crew = team.filter(|team| {
+        worker_on && team_problem(team, providers, |provider| credential(provider).is_some()).is_none()
+    });
+    let crew_provider = crew
+        .and_then(|team| providers.iter().find(|provider| provider.id == team.provider_id));
     let mut names = HashSet::new();
     let mut agents = Vec::new();
     let mut connections: Vec<Value> = Vec::new();
@@ -232,7 +276,9 @@ pub fn runtime_payload(
             "tools": agent.tools,
             "readOnly": agent.read_only,
         });
-        if let Some(choice) = &agent.model {
+        // The Team crew replaces a built-in's own choice; a custom agent's stands.
+        let model = if agent.builtin && crew.is_some() { crew } else { agent.model.as_ref() };
+        if let Some(choice) = model {
             entry["model"] = json!({
                 "providerId": choice.provider_id,
                 "modelId": choice.model_id,
@@ -266,12 +312,18 @@ pub fn runtime_payload(
         }
         agents.push(entry);
     }
-    json!({
+    let mut payload = json!({
         "trigger": match config.trigger { SubagentTrigger::OnRequest => "on_request", SubagentTrigger::Auto => "auto" },
         "maxConcurrency": config.max_concurrency.clamp(1, MAX_CONCURRENCY),
         "agents": agents,
         "providers": connections,
-    })
+    });
+    if let (Some(crew), Some(provider)) = (crew, crew_provider) {
+        payload["team"] = json!({
+            "label": format!("{} · {}", provider.name, provider.models.iter().find(|model| model.id == crew.model_id).and_then(|model| if model.name.is_empty() { None } else { Some(model.name.as_str()) }).unwrap_or(&crew.model_id)),
+        });
+    }
+    payload
 }
 
 /// A side-panel watch can only name a child a `subagent` call could have: a tool call id as a
@@ -287,7 +339,7 @@ pub fn validate_watch_target(target: &SubagentWatchTarget) -> Result<(), String>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::ModelRecord;
+    use crate::models::{ModelRecord, TaskRecord};
     use std::collections::BTreeMap;
 
     fn provider(id: &str, kind: ProviderKind) -> ProviderRecord {
@@ -410,7 +462,7 @@ mod tests {
         let mut config = SubagentConfig::default();
         normalize(&mut config);
         config.agents[0].model = choice("p", "low");
-        let payload = runtime_payload(&config, &[provider("p", ProviderKind::Custom)], |_| panic!("no credential may be read"));
+        let payload = runtime_payload(&config, &[provider("p", ProviderKind::Custom)], None, |_| panic!("no credential may be read"));
         assert!(payload.is_null());
     }
 
@@ -422,7 +474,7 @@ mod tests {
         config.agents[1].enabled = false;
         config.agents[2].model = choice("signed-out", "off");
         let providers = [provider("p", ProviderKind::Custom), provider("unused", ProviderKind::Custom), provider("signed-out", ProviderKind::Subscription)];
-        let payload = runtime_payload(&config, &providers, |provider| match provider.id.as_str() {
+        let payload = runtime_payload(&config, &providers, None, |provider| match provider.id.as_str() {
             "p" => Some(ProviderCredential { api_key: Some("sk-test-key".into()), auth_path: None }),
             _ => None,
         });
@@ -443,7 +495,7 @@ mod tests {
         config.agents[0].model = choice("p", "low");
         let mut off = provider("p", ProviderKind::Custom);
         off.enabled = false;
-        let payload = runtime_payload(&config, &[off], |_| panic!("a turned-off connection must not yield a credential"));
+        let payload = runtime_payload(&config, &[off], None, |_| panic!("a turned-off connection must not yield a credential"));
         assert!(payload["providers"].as_array().unwrap().is_empty());
         assert!(payload["agents"][0]["unavailable"].as_str().unwrap().contains("turned off"));
     }
@@ -455,6 +507,69 @@ mod tests {
         config.agents[1].model = choice("p", "low");
         assert_eq!(agents_using(&config, "p"), ["reviewer"]);
         assert!(agents_using(&config, "other").is_empty());
+        config.team_default = choice("other", "off");
+        assert_eq!(agents_using(&config, "other"), ["the Team default"]);
+    }
+
+    #[test]
+    fn team_overrides_builtin_models_and_adds_its_connection_once() {
+        let mut config = SubagentConfig { enabled: true, trigger: SubagentTrigger::Auto, ..SubagentConfig::default() };
+        normalize(&mut config);
+        // A custom agent keeps its own model; the built-ins take the crew's.
+        config.agents.push(SubagentRecord { model: choice("own", "low"), ..custom("docs") });
+        let team = choice("crew", "low").unwrap();
+        let providers = [provider("crew", ProviderKind::Custom), provider("own", ProviderKind::Custom)];
+        let payload = runtime_payload(&config, &providers, Some(&team), |provider| match provider.id.as_str() {
+            "crew" => Some(ProviderCredential { api_key: Some("sk-crew".into()), auth_path: None }),
+            "own" => Some(ProviderCredential { api_key: Some("sk-own".into()), auth_path: None }),
+            _ => None,
+        });
+        assert_eq!(payload["team"]["label"], "Provider crew · Small");
+        // Every built-in got the crew model; the custom agent kept its own.
+        for agent in payload["agents"].as_array().unwrap() {
+            let model = &agent["model"];
+            if agent["builtin"] == true {
+                assert_eq!(model["providerId"], "crew", "{} should crew", agent["name"]);
+                assert_eq!(model["thinkingLevel"], "low");
+            } else {
+                assert_eq!(model["providerId"], "own");
+            }
+        }
+        // Each used connection appears once, with its credential.
+        let ids: Vec<&str> = payload["providers"].as_array().unwrap().iter().map(|entry| entry["provider"]["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["crew", "own"]);
+    }
+
+    #[test]
+    fn an_unusable_team_stays_out_of_the_payload() {
+        let mut config = SubagentConfig { enabled: true, ..SubagentConfig::default() };
+        normalize(&mut config);
+        // A crew on a connection nobody can reach changes nothing.
+        let team = choice("gone", "low").unwrap();
+        let payload = runtime_payload(&config, &[provider("p", ProviderKind::Custom)], Some(&team), |_| None);
+        assert!(payload.get("team").is_none());
+        assert!(payload["agents"].as_array().unwrap().iter().all(|agent| agent.get("model").is_none()));
+        // The worker role switched off means nothing to crew, either.
+        config.agents[2].enabled = false;
+        let team = choice("p", "low").unwrap();
+        let payload = runtime_payload(&config, &[provider("p", ProviderKind::Custom)], Some(&team), |_| {
+            Some(ProviderCredential { api_key: Some("k".into()), auth_path: None })
+        });
+        assert!(payload.get("team").is_none());
+    }
+
+    #[test]
+    fn a_chat_saved_before_teams_loads_without_one() {
+        let task: TaskRecord = serde_json::from_str(
+            r#"{"id":"t","projectId":null,"name":"n","workspacePath":"/tmp","usesWorktree":false,"providerId":"p","modelId":"m","thinkingLevel":"off","createdAt":"c","updatedAt":"u"}"#,
+        ).unwrap();
+        assert!(task.team.is_none());
+        let data: crate::models::AppData = serde_json::from_str(r#"{"version":1}"#).unwrap();
+        assert!(data.subagents.team_default.is_none());
+        // And a saved Team round-trips.
+        let task = TaskRecord { team: choice("p", "low"), ..task };
+        let saved: TaskRecord = serde_json::from_value(serde_json::to_value(&task).unwrap()).unwrap();
+        assert_eq!(saved.team, choice("p", "low"));
     }
 
     #[test]

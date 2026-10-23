@@ -64,6 +64,7 @@ export function createDetails(mode: SubagentMode, tasks: { input: SubagentTaskIn
     results: tasks.map(({ input, readOnly }) => ({
       agent: input.agent,
       task: input.task,
+      ...(input.round && input.round > 1 ? { round: input.round } : {}),
       readOnly,
       status: "queued",
       activity: [],

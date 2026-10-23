@@ -265,6 +265,13 @@ export interface SubagentRuntimeConfig {
   agents: SubagentSpec[];
   /** Connections referenced by agents' own models. Credentials travel only over stdin. */
   providers: SubagentProvider[];
+  /**
+   * The chat's Team crew, while Team is on: built-in agents' models were already overridden to
+   * it in this payload, and its label renders in the composer's split model pill. Presence is
+   * what turns the chat's lead on — the delegation-first addendum, `job` continuations and
+   * retained worker sessions all key off it.
+   */
+  team?: { label: string };
 }
 
 export type SubagentStatus = "queued" | "running" | "done" | "failed" | "aborted" | "interrupted";
@@ -285,8 +292,14 @@ export interface SubagentUsage {
 }
 
 export interface SubagentResult {
-  /** Session-local job handle; present on background launches. */
+  /** Session-local job handle; present on background launches, and on every child in a Team
+   *  chat (the handle `job` continuations name). */
   jobId?: string;
+  /**
+   * Which prompt round this call is for the worker's retained session. Absent is round 1;
+   * a `job` continuation shows 2 or more. Only Team chats retain sessions.
+   */
+  round?: number;
   agent: string;
   task: string;
   readOnly: boolean;
@@ -379,6 +392,8 @@ export interface PromptOverrides {
   ultraPlanPrompt?: string;
   /** Replaces the instruction an Ultra chat's system prompt gains (`builtin/ultra.ts`). */
   ultraPrompt?: string;
+  /** Replaces the addendum a Team chat's system prompt gains (`builtin/team.ts`). */
+  teamPrompt?: string;
 }
 
 /** How WackCode reaches an MCP server. */

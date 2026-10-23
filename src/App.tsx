@@ -11,7 +11,7 @@ import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { DEFAULT_EXECUTION_POLICY } from "./execution-policy";
 import { api } from "./api";
 import { PINNED_PROJECTS_KEY } from "./project-display";
-import { chatModelGone, modelDisplayName, modelIsReady, pickThinkingLevel, type ModelChoice } from "./model-utils";
+import { chatModelGone, modelDisplayName, modelIsReady, pickThinkingLevel, subagentModelIssue, type ModelChoice } from "./model-utils";
 import { titleFromPrompt, samePlanState, sameTodoState, sameGoalState, applySnapshotDelta, applySubagentFrame, pendingSubagentView, pendingEchoMessage, withPendingEcho, validateInitCommand, nextMode, isPlanMode } from "./chat-utils";
 import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix } from "./tree-utils";
 import { composeFileSection, splitFileSection, terminalOutputFile, type FileAttachment } from "./attachment-utils";
@@ -78,6 +78,7 @@ import type {
   SaveProviderInput,
   SlashCommand,
   SubagentConfig,
+  SubagentModel,
   SubagentTarget,
   SubscriptionLoginEvent,
   TaskMode,
@@ -107,7 +108,7 @@ import { AreaHop } from "./components/AreaHop";
 import { ProjectBar } from "./components/ProjectBar";
 import { TextSwap } from "./components/TextSwap";
 import type { McpActions } from "./components/McpSection";
-import { SettingsPage } from "./components/SettingsPage";
+import { SettingsPage, type SectionId } from "./components/SettingsPage";
 import { Sidebar, NO_PROJECT_KEY, type ProjectAction, type TaskAction } from "./components/Sidebar";
 import { Transcript, type MessageAction } from "./components/Transcript";
 import { RestoreDialog, type RestoreChoice } from "./components/RestoreDialog";
@@ -298,6 +299,8 @@ export default function App() {
   /** Watch commands, one at a time: two racing to the worker could leave it on the wrong child. */
   const watchQueue = useRef<Promise<void>>(Promise.resolve());
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** The section the next Settings mount opens on; undefined means Providers. */
+  const [settingsSection, setSettingsSection] = useState<SectionId | undefined>(undefined);
   /** Arms the rebuild choreography on `.app-shell`: whichever screen just mounted assembles
       piece by piece. Cleared by the timer so later remounts don't replay it. */
   const [rebuilding, setRebuilding] = useState(false);
@@ -655,8 +658,13 @@ export default function App() {
     clearTimeout(rebuildTimer.current);
     rebuildTimer.current = setTimeout(() => setRebuilding(false), 800);
   }
+  // Keep the button callback argument-free: React passes its click event to it.
   function openSettings() {
+    openSettingsAt();
+  }
+  function openSettingsAt(section?: SectionId) {
     armRebuild();
+    setSettingsSection(section);
     setSettingsOpen(true);
   }
   function closeSettings() {
@@ -1581,7 +1589,8 @@ export default function App() {
         projectId: active.projectId,
         useWorktree: active.useWorktree && Boolean(draftProject?.gitHasHead),
         name: "New chat",
-        ...choice
+        ...choice,
+        team: active.team ?? null
       });
       if (!chat && active.mode && active.mode !== "build") {
         try { task = await api.setTaskMode(task.id, active.mode); }
@@ -1735,11 +1744,11 @@ export default function App() {
 
   function setDraftProject(projectId: string | null) {
     localStorage.setItem(LAST_PROJECT_KEY, JSON.stringify(projectId));
-    setDraft((current) => ({ projectId, useWorktree: false, choice: current?.choice, mode: current?.mode }));
+    setDraft((current) => ({ projectId, useWorktree: false, choice: current?.choice, mode: current?.mode, team: current?.team }));
   }
 
   function setDraftWorktree(useWorktree: boolean) {
-    setDraft((current) => ({ projectId: current?.projectId ?? null, useWorktree, choice: current?.choice, mode: current?.mode }));
+    setDraft((current) => ({ projectId: current?.projectId ?? null, useWorktree, choice: current?.choice, mode: current?.mode, team: current?.team }));
   }
 
   /** Lists a project's branches, relabelling it if its checkout moved since launch. */
@@ -2025,7 +2034,7 @@ export default function App() {
     if (!providerId || !modelId) return;
     const choice = { providerId, modelId, thinkingLevel };
     rememberModel(choice);
-    setDraft((current) => ({ projectId: current?.projectId ?? null, useWorktree: current?.useWorktree ?? false, choice, mode: current?.mode }));
+    setDraft((current) => ({ projectId: current?.projectId ?? null, useWorktree: current?.useWorktree ?? false, choice, mode: current?.mode, team: current?.team }));
   }
 
   async function sendPrompt(message: string, options: { images?: ImageContent[]; files?: FileAttachment[]; mode?: TaskMode; literal?: boolean; queue?: boolean } = {}): Promise<boolean> {
@@ -2056,7 +2065,7 @@ export default function App() {
         task = pendingSlash ? await pendingSlash : await api.createTask(chat ? { kind: "chat", name: title, ...choice } : {
           projectId: active.projectId,
           useWorktree: active.useWorktree && Boolean(draftProject?.gitHasHead),
-          name: title, ...choice
+          name: title, ...choice, team: active.team ?? null
         });
         if (!task) return false;
         if (stillHere()) setTransitioning({ message, taskId: task.id, fromSelectedId: selectedTaskId, composerKey: key });
@@ -2212,6 +2221,30 @@ export default function App() {
   }
 
   /**
+   * Turn the chat's Team on or switch its crew model (null turns it off). For a draft the
+   * choice is held locally; for a task it saves on the record and reaches the worker through
+   * `set_subagents` on the next turn — never a respawn, so a running chat is refused upstream.
+   */
+  async function setTaskTeam(team: SubagentModel | null) {
+    if (!selectedTask) {
+      setDraft((current) => ({
+        projectId: current?.projectId ?? lastProjectId(),
+        useWorktree: current?.useWorktree ?? false,
+        choice: current?.choice,
+        mode: current?.mode,
+        team: team ?? undefined
+      }));
+      return;
+    }
+    try {
+      const updated = await api.setTaskTeam({ taskId: selectedTask.id, team });
+      setData((current) => ({ ...current, tasks: current.tasks.map((task) => task.id === updated.id ? updated : task) }));
+    } catch (reason) {
+      patchRuntime(selectedTask.id, { error: String(reason) });
+    }
+  }
+
+  /**
    * Switch Build / Plan / Ultra Plan. For a draft the choice is just held locally; for a task it
    * is persisted on the record and pushed to the worker (which refuses while a run is active).
    */
@@ -2222,7 +2255,8 @@ export default function App() {
         projectId: current?.projectId ?? lastProjectId(),
         useWorktree: current?.useWorktree ?? false,
         choice: current?.choice,
-        mode
+        mode,
+        team: current?.team
       }));
       return;
     }
@@ -2968,7 +3002,22 @@ export default function App() {
   });
 
   const canReview = data.subagents.enabled && data.subagents.agents.some((agent) => agent.id === "builtin:reviewer" && agent.enabled);
+
+  /**
+   * Why this chat's Team can't run right now, or undefined when it can: sub-agents or the
+   * worker role switched off in Settings, or the crew model unreachable. Mirrors
+   * `runtime_payload`'s crew gate in `src-tauri/src/subagents.rs`.
+   */
+  function teamProblem(team: SubagentModel | null | undefined): string | undefined {
+    const worker = data.subagents.agents.find((agent) => agent.id === "builtin:worker");
+    if (!data.subagents.enabled) return "Sub-agents are off in Settings › Sub-agents";
+    if (!worker?.enabled) return "The Worker sub-agent is off in Settings › Sub-agents";
+    if (!team) return undefined;
+    return subagentModelIssue(team, data.providers);
+  }
   const reviewReason = !data.subagents.enabled ? "Enable sub-agents in Settings" : !canReview ? "Enable Reviewer in Settings" : undefined;
+  /** The Team row's "Open Settings" lands on the sub-agents page (or Packages when it's off). */
+  const openSubagentSettings = () => openSettingsAt(data.subagents.enabled ? "subagents" : "packages");
 
   // Served by the asset protocol, which may read only <app data>/backgrounds/ (tauri.conf.json).
   const backgroundImageUrlFor = useCallback(
@@ -3113,6 +3162,7 @@ export default function App() {
       )}
       {settingsOpen ? (
         <SettingsPage
+          initialSection={settingsSection}
           providers={data.providers}
           favoriteModels={data.favoriteModels}
           favoriteSaving={favoriteSaving}
@@ -3337,7 +3387,7 @@ export default function App() {
             <p>{data.providers.length > 0
               ? "Every connection is turned off. Switch one back on in Settings to start chatting."
               : "Sign in with a subscription or add an OpenAI-compatible endpoint and API key to start chatting."}</p>
-            <button className="primary-button" onClick={openSettings}><Icon name="key" /> Open settings</button>
+            <button className="primary-button" onClick={() => openSettings()}><Icon name="key" /> Open settings</button>
           </div>
         ) : null}
         </AnimatePresence>
@@ -3409,6 +3459,13 @@ export default function App() {
               executionPolicy={data.executionPolicy ?? DEFAULT_EXECUTION_POLICY}
               appliedExecutionPolicy={runtime?.snapshot?.executionPolicy}
               onModeChange={(mode) => void setTaskMode(mode)}
+              team={{
+                team: selectedTask?.team ?? draft?.team ?? null,
+                teamDefault: data.subagents.teamDefault ?? null,
+                teamAvailable: teamProblem(selectedTask?.team ?? draft?.team ?? null),
+                onOpenSettings: openSubagentSettings,
+                onTeamChange: (team) => void setTaskTeam(team)
+              }}
               onConfigure={selectedTask ? (patch) => void configure(patch) : configureDraft}
               onSend={(message, images, files, queue) => sendPrompt(message, { images, files, queue })}
               onLiteral={(message, images, files) => sendPrompt(message, { images, files, literal: true })}

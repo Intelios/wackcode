@@ -164,6 +164,18 @@ snapshots don't clear the queue, and steering never optimistically removes a row
 status or adds a pending echo. Queue actions are single-flight per draft key, and no sends or
 queue actions dispatch while stopping. App captures the originating task id for async errors.
 
+**Team** (`TaskRecord.team`, `TeamPillProps` on `ModelPicker`) splits the model pill: the lead
+segment opens the normal picker, a second crew segment slides in and opens the popover's third
+panel — a flat cross-provider list with inline reasoning chips (no favourites, no Ultra). The
+footer row is a toggle over the row's copy: on writes `set_task_team` (or the draft's `team`,
+copied to the new chat's first send), off writes `null`. `teamAvailable` carries one refusal
+reason (sub-agents off, the worker role off, or the crew model's own problem); a real reason
+with no crew set disables the switch and shows an **Open Settings** link, while a stale crew
+keeps the switch usable — off must always be possible — and dims the segment to `.stale`.
+Nothing renders without the `team` prop, which only Code-area composers get. Defaults live in
+`SubagentConfig.teamDefault` (Settings › Sub-agents' Team card); new chats start with Team off
+and forks copy it.
+
 ## New-chat project picker
 
 `ProjectBar` (the composer's `header` on the welcome screen) hosts `ProjectPicker`, `BranchPicker` and the Local/Worktree toggle. The picker reads and writes the same `pinnedProjects` set as the sidebar, so a pin made anywhere shows everywhere; it never keeps its own copy. Its display rules (`shortPath`, `monogram`, search) are pure functions in `project-display.ts`. ⌘O stays a global shortcut in `App`; the picker's footer only calls `onAddProject`.

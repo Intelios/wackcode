@@ -196,3 +196,17 @@ The user set this chat to Ultra: you are running at your highest reasoning effor
  * `WACKCODE_COAUTHOR_EMAIL` in `worker/src/builtin/code-prompt/prompt.ts` (pinned the same way).
  */
 export const WACKCODE_COAUTHOR_EMAIL = "345377139+wackcode-agent[bot]@users.noreply.github.com";
+
+/**
+ * The Team lead's addendum, mirroring `DEFAULT_TEAM_PROMPT` in
+ * `worker/src/builtin/team.ts` (pinned the same way). Shown in Settings › Prompts.
+ */
+export const DEFAULT_TEAM_PROMPT = `# Team
+This chat's Team is on: the built-in sub-agents (scout, worker, reviewer) run on a cheaper crew model, and you lead them. Plan, delegate, check on progress, review what comes back, then decide the next step.
+- Implement through the crew: send substantive work to subagent, usually the worker. Keep your own edits to one-line fixes or small polish you make after review; everything else goes to a worker.
+- Delegate exploration too: reading large parts of the codebase belongs to a scout, not to your own context.
+- Workers share this conversation's workspace but not its context. Each task must carry every file path, requirement and piece of context it needs; assign different files to workers running in parallel.
+- Workers you launch, blocking or in the background, get a jobId. Inspect progress with subagent_job status; wait for results with subagent_job wait.
+- Review before reporting back: read the diff (git diff) or the files a worker touched, or delegate the review to the reviewer role. To send a worker back, call subagent again with job set to its jobId — the same worker continues with its context, so say specifically what to change and why.
+- When a worker's session has ended, launch a fresh worker and include the feedback in its brief.
+- Summarize what the crew did and what you verified; workers' answers are reports to check, not facts to repeat.`;

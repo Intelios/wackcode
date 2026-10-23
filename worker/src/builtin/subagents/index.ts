@@ -84,7 +84,11 @@ export function createSubagentsExtension(host: BuiltinHost, currentMode: () => T
   const outstanding = (job: Job) => !job.outcome || !job.delivered;
   const textFor = (targets: Job[]) => targets.map((job) => {
     const result = job.call.details.results[job.index];
-    if (!job.outcome) return `Job ${job.id}: ${result.agent} ${result.status}. Task: ${result.task}${result.model ? ` · ${result.model}` : ""}.`;
+    if (!job.outcome) {
+      // A check-in on a running child: what it is doing now, not just that it is alive.
+      const activity = result.activity.slice(-5).map((entry) => `  - ${entry.tool}: ${entry.subject}`).join("\n");
+      return `Job ${job.id}: ${result.agent} ${result.status}. Task: ${result.task}${result.model ? ` · ${result.model}` : ""}.${result.usage.turns ? ` Turns so far: ${result.usage.turns}.` : ""}${activity ? `\nRecent activity:\n${activity}` : ""}`;
+    }
     return `Job ${job.id}: ` + modelContent({ v: 1, mode: "single", results: [result] }, [job.outcome?.output]);
   }).join("\n\n");
 
@@ -102,12 +106,33 @@ export function createSubagentsExtension(host: BuiltinHost, currentMode: () => T
   async function execute(toolCallId: string, params: unknown, signal: AbortSignal | undefined, onUpdate: ((result: { content: { type: "text"; text: string }[]; details: unknown }) => void) | undefined) {
     const current = config;
     if (!current || !current.agents.length) throw new Error("Sub-agents are switched off in Settings.");
-    const parsed = normalizeSubagentParams(params);
+    const team = current.team;
+    const parsed = normalizeSubagentParams(params, team !== undefined);
     if (!parsed.ok) throw new Error(parsed.error);
     if (signal?.aborted) throw new Error("Sub-agent launch was stopped.");
     const mode = currentMode();
     const policy = executionPolicy();
+    // One continuation per worker per call: two tasks on the same job would race for its session.
+    const continued = new Set<string>();
     const specs = parsed.tasks.map((input) => {
+      if (input.job) {
+        if (continued.has(input.job)) throw new Error("The same worker cannot be continued twice in one call.");
+        continued.add(input.job);
+        const previous = jobs.get(input.job);
+        if (previous && !previous.outcome) throw new Error("That worker is still running. Wait for or stop it first.");
+        if (previous && !previous.delivered) throw new Error("That worker's result has not reached you yet. Deliver it with subagent_job wait before continuing it.");
+        const kept = host.retainedSubagent?.(input.job);
+        if (!kept) throw new Error("That worker's session has ended (the chat restarted or it was cleared). Launch a fresh worker and include the feedback in its brief.");
+        if (kept.busy) throw new Error("That worker is still running. Wait for or stop it first.");
+        // A retained session supplies identity and history, never a saved grant of access.
+        // Resolve the role afresh so disabling it or restoring read-only restrictions applies.
+        const saved = current.agents.find((agent) => agent.name === kept.spec.name);
+        if (!saved) throw new Error("That worker's role is no longer enabled. Launch an enabled sub-agent instead.");
+        input.agent = saved.name;
+        input.round = kept.rounds + 1;
+        if (isReadOnlyPlanning(mode, policy) && !saved.readOnly) throw new Error(`Plan mode only runs read-only sub-agents, and ${saved.name} can edit files. Continue a read-only sub-agent while planning.`);
+        return resolveSubagentSpec(structuredClone(saved), mode, policy);
+      }
       const saved = current.agents.find((agent) => agent.name === input.agent);
       if (!saved) throw new Error(`There is no sub-agent called '${input.agent}'. Available: ${current.agents.map((agent) => agent.name).join(", ") || "none"}.`);
       if (isReadOnlyPlanning(mode, policy) && !saved.readOnly) throw new Error(`Plan mode only runs read-only sub-agents, and ${saved.name} can edit files. Use a read-only sub-agent while planning.`);
@@ -132,11 +157,15 @@ export function createSubagentsExtension(host: BuiltinHost, currentMode: () => T
       const spec = specs[index];
       const result = details.results[index];
       const controller = new AbortController();
-      const job: Job = { id: randomUUID(), call, index, background: parsed.background === true, controller, done: Promise.resolve(), delivered: !parsed.background, reserved: false };
-      if (parsed.background) result.jobId = job.id;
+      // A continuation keeps the worker's own jobId, so status/wait and the next
+      // follow-up always name its latest round.
+      const job: Job = { id: input.job ?? randomUUID(), call, index, background: parsed.background === true, controller, done: Promise.resolve(), delivered: !parsed.background, reserved: false };
+      if (parsed.background || team) result.jobId = job.id;
       const tools = resolveChildTools(spec.tools, spec.readOnly, available);
       const request: SubagentRunRequest = {
         toolCallId, index, spec, task: input.task, tools, signal: controller.signal,
+        ...(team ? { jobId: job.id } : {}),
+        ...(input.job ? { continuation: input.job } : {}),
         extensions: [
           ...(spec.readOnly ? [readOnlyGuard()] : []),
           ...(tools.includes(WEB_FETCH_TOOL_NAME) ? [webFetch] : []),
@@ -205,7 +234,9 @@ export function createSubagentsExtension(host: BuiltinHost, currentMode: () => T
     try { await Promise.all(launched.map((job) => job.done)); }
     finally { signal?.removeEventListener("abort", abort); updates.cancel(); }
     if (!details.results.some((result) => result.status === "done")) failedCalls.add(toolCallId);
-    return { content: [{ type: "text" as const, text: modelContent(details, outputs) }], details, usage: launched.reduce((total, job) => addUsage(total, job.outcome?.usage), emptyUsage()) };
+    // A Team lead needs the jobId to send a worker back: name each child's own handle.
+    const handles = team ? "\n\n" + launched.map((job) => `${job.call.details.results[job.index].agent}: jobId ${job.id}`).join("; ") + " — pass a finished child's jobId back as `job` to continue it with feedback." : "";
+    return { content: [{ type: "text" as const, text: modelContent(details, outputs) + handles }], details, usage: launched.reduce((total, job) => addUsage(total, job.outcome?.usage), emptyUsage()) };
   }
 
   async function control(params: unknown, signal?: AbortSignal) {
@@ -216,7 +247,9 @@ export function createSubagentsExtension(host: BuiltinHost, currentMode: () => T
       ? [...jobs.values()].filter((job) => job.background && outstanding(job))
       : [...new Set(input.jobIds as string[])].map((id) => {
         const job = jobs.get(id);
-        if (!job?.background) throw new Error("That sub-agent job is no longer available in this worker. It may have restarted; do not assume the task succeeded.");
+        // Any job a call launched is inspectable; outside Team chats only background jobIds are
+        // ever handed out, so a wrong id still lands here.
+        if (!job) throw new Error("That sub-agent job is no longer available in this worker. It may have restarted; do not assume the task succeeded.");
         return job;
       });
     if (input.action === "status") return { content: [{ type: "text" as const, text: targets.length ? textFor(targets) : "No outstanding sub-agent jobs." }] };
@@ -241,8 +274,9 @@ export function createSubagentsExtension(host: BuiltinHost, currentMode: () => T
 
   const register = () => {
     if (!pi) return;
+    const team = config?.team !== undefined;
     const agents = (config?.agents ?? []).map((spec) => resolveSubagentSpec(spec, currentMode(), executionPolicy()));
-    const definition = { name: SUBAGENT_TOOL_NAME, label: SUBAGENT_TOOL_LABEL, description: subagentDescription(agents), promptSnippet: SUBAGENT_PROMPT_SNIPPET, promptGuidelines: subagentGuidelines(config?.trigger ?? "on_request", isReadOnlyPlanning(currentMode(), executionPolicy())), parameters: subagentParams(agents.map((agent) => agent.name)) };
+    const definition = { name: SUBAGENT_TOOL_NAME, label: SUBAGENT_TOOL_LABEL, description: subagentDescription(agents, team), promptSnippet: SUBAGENT_PROMPT_SNIPPET, promptGuidelines: subagentGuidelines(config?.trigger ?? "on_request", isReadOnlyPlanning(currentMode(), executionPolicy()), team), parameters: subagentParams(agents.map((agent) => agent.name), team) };
     const key = JSON.stringify(definition);
     if (key === registeredKey) return;
     registeredKey = key;
@@ -260,6 +294,7 @@ export function createSubagentsExtension(host: BuiltinHost, currentMode: () => T
     refresh: register,
     async configure(next) {
       if (!next) await stopAll();
+      if (!next?.team) host.dropRetainedSubagents?.();
       config = next;
       if (next) pool.configure(next.maxConcurrency);
       register();

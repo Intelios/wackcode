@@ -1,7 +1,7 @@
 use crate::{
     models::{
-        BuiltinModelSuggestion, PackageRecord, ProviderKind, ProviderRecord, TaskKind, TaskMode, TaskRecord,
-        ParentActivity, TaskStatus, ToolCatalogEntry, WorkActivity,
+        BuiltinModelSuggestion, PackageRecord, ProviderKind, ProviderRecord, SubagentModel, TaskKind, TaskMode,
+        TaskRecord, ParentActivity, TaskStatus, ToolCatalogEntry, WorkActivity,
     },
     storage::MetadataState,
     subscriptions,
@@ -548,7 +548,7 @@ pub async fn ensure_worker_with(
         // it with whatever the restored session says. A fork takes the mode its fork point had.
         "mode": if chat || options.fork_from.is_some() { Value::Null } else { json!(task.mode) },
         "forkFrom": options.fork_from,
-        "subagents": if chat { Value::Null } else { subagent_payload(app)? },
+        "subagents": if chat { Value::Null } else { subagent_payload(app, task.team.as_ref())? },
         // Custom built-in prompts (Settings → Prompts); `{}` when every prompt is at its default.
         // Deliberately not part of the fingerprint: changes reach workers live via set_prompts.
         "prompts": prompts,
@@ -688,7 +688,11 @@ pub fn worker_provider_json(provider: &ProviderRecord) -> Value {
 /// The `subagents` value for `init` and `set_subagents`: null while sub-agents are off, and
 /// otherwise the roster plus the credentials of the connections agents' own models use. Like
 /// `init`'s own key, those credentials only ever travel over the worker's stdin.
-pub fn subagent_payload(app: &AppHandle) -> Result<Value, String> {
+///
+/// The payload is per chat: `task.team` rewrites the built-in agents' models to the crew's and
+/// adds its connection, so two workers can differ. `team: Option<&SubagentModel>`; `None` for
+/// Chat mode workers (they never receive sub-agents at all).
+pub fn subagent_payload(app: &AppHandle, team: Option<&SubagentModel>) -> Result<Value, String> {
     let state = app.state::<MetadataState>();
     let (config, providers) = {
         let data = state
@@ -700,6 +704,7 @@ pub fn subagent_payload(app: &AppHandle) -> Result<Value, String> {
     Ok(crate::subagents::runtime_payload(
         &config,
         &providers,
+        team,
         |provider| {
             if provider.kind == ProviderKind::Subscription {
                 if !subscriptions::has_credential(app, &provider.id) {
@@ -721,11 +726,26 @@ pub fn subagent_payload(app: &AppHandle) -> Result<Value, String> {
     ))
 }
 
-/// Push the current sub-agent settings to every running worker. Applied live on the worker's
-/// next turn — never a restart, so a running chat is never interrupted by a settings change.
+/// Push the current sub-agent settings to every running coding worker, each chat's own Team
+/// shaping its payload. Applied live on the worker's next turn — never a restart, so a running
+/// chat is never interrupted by a settings change.
 pub async fn broadcast_subagents(app: &AppHandle) -> Result<(), String> {
-    let payload = subagent_payload(app)?;
-    broadcast_coding(app, &json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "set_subagents", "subagents": payload })).await
+    let state = app.state::<MetadataState>();
+    let teams: std::collections::HashMap<String, Option<SubagentModel>> = {
+        let data = state
+            .data
+            .lock()
+            .map_err(|_| "Metadata lock was poisoned".to_string())?;
+        data.tasks
+            .iter()
+            .map(|task| (task.id.clone(), task.team.clone()))
+            .collect()
+    };
+    for task_id in app.state::<WorkerState>().coding_task_ids()? {
+        let payload = subagent_payload(app, teams.get(&task_id).and_then(|team| team.as_ref()))?;
+        let _ = send(app, &task_id, &json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "set_subagents", "subagents": payload })).await;
+    }
+    Ok(())
 }
 
 /// The `computerUse` value for `init` and `set_computer_use`: on only while the user switched it
@@ -1715,7 +1735,7 @@ mod tests {
             thinking_level: "off".into(), session_file: None, status,
             mode: TaskMode::Build, archived: false, archived_at: None, last_error: None,
             created_at: "now".into(), updated_at: "now".into(), last_activity_at: None,
-            origin_suggestion: None, dismissed_suggestions: Vec::new(),
+            origin_suggestion: None, dismissed_suggestions: Vec::new(), team: None,
         };
         MetadataState {
             data: Mutex::new(crate::models::AppData { tasks: vec![task], ..Default::default() }),

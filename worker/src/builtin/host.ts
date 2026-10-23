@@ -18,6 +18,13 @@ export interface SubagentRunRequest {
    *  panel watches it by. */
   toolCallId: string;
   index: number;
+  /**
+   * The child's jobId. With Team on every launch carries one; its presence is also what
+   *   retains a finished child's session for `continuation`.
+   */
+  jobId?: string;
+  /** A finished child's jobId to re-prompt instead of creating a session (Team chats). */
+  continuation?: string;
   spec: SubagentSpec;
   task: string;
   /** The final tool list: role allowlist, filtered for availability and the user's denylist. */
@@ -81,6 +88,14 @@ export interface BuiltinHost {
   recordSubagentUsage?(usage: Usage, spec: SubagentSpec): void;
   /** Capture a child's model/runtime when admitted, before it waits for a scheduler slot. */
   prepareSubagent?(request: SubagentRunRequest): { run(): Promise<SubagentOutcome>; dispose(): void };
+  /**
+   * The retained session behind a finished child's jobId (Team chats only), for a `job`
+   *   continuation: its last spec (for role identity only, never an access grant), how many
+   *   prompt rounds it has run, whether it is mid-round, and its current jobId.
+   */
+  retainedSubagent?(jobId: string): { spec: SubagentSpec; rounds: number; busy: boolean; jobId: string } | undefined;
+  /** Dispose every retained child session (sub-agents switched off, or Team turned off). */
+  dropRetainedSubagents?(): void;
   /**
    * Run the goal loop's completion verifier: one no-tools `completeSimple` on the chat's own
    * model, implemented by the worker which owns the model runtime. Never rejects — failures

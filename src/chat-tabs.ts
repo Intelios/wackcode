@@ -1,7 +1,7 @@
 import type { Area } from "./areas";
 import type { ModelChoice } from "./model-utils";
 import type { SidePanelView } from "./side-panel";
-import type { TaskMode } from "./types";
+import type { SubagentModel, TaskMode } from "./types";
 
 /** Session-only workspace. A tab's identity and composer key survive draft → chat,
  * including a send completing after the tab was closed. Closing never stops work.
@@ -20,6 +20,8 @@ export interface ChatDraft {
   useWorktree: boolean;
   choice?: ModelChoice;
   mode?: TaskMode;
+  /** The Team crew the chat is created with; the draft turns it on at send, off by default. */
+  team?: SubagentModel;
 }
 
 export interface TabPanelState {

@@ -28,7 +28,8 @@ vi.mock("./api", () => ({ api: {
   goalControl: vi.fn().mockResolvedValue(undefined), browserState: vi.fn(), browserPresent: vi.fn(), browserRetirePresentation: vi.fn().mockResolvedValue(undefined),
   setSuggestionDismissed: vi.fn()
 } }));
-vi.mock("./components/SettingsPage", () => ({ SettingsPage: (props: { appearance: typeof DEFAULT_APPEARANCE; toolCatalog: { name: string }[]; computerUse?: ComputerUseConfig; onRevokeComputerApp?: (grant: ComputerAppGrant) => Promise<void>; onSetAppearance: (value: typeof DEFAULT_APPEARANCE) => void; onClose: () => void }) => <>
+vi.mock("./components/SettingsPage", () => ({ SettingsPage: (props: { initialSection?: string; appearance: typeof DEFAULT_APPEARANCE; toolCatalog: { name: string }[]; computerUse?: ComputerUseConfig; onRevokeComputerApp?: (grant: ComputerAppGrant) => Promise<void>; onSetAppearance: (value: typeof DEFAULT_APPEARANCE) => void; onClose: () => void }) => <>
+  <output aria-label="Initial Settings section">{props.initialSection ?? "providers"}</output>
   <output aria-label="Tool catalogue">{props.toolCatalog.map((tool) => tool.name).join(",")}</output>
   <output aria-label="Saved computer app approvals">{props.computerUse?.alwaysAllow.map((grant) => grant.name).join(",")}</output>
   {props.computerUse?.alwaysAllow[0] && <button onClick={() => void props.onRevokeComputerApp?.(props.computerUse!.alwaysAllow[0])}>Revoke first app</button>}
@@ -55,10 +56,10 @@ const provider: ProviderRecord = {
 const task = (id: string): TaskRecord => ({ id, projectId: null, name: `Chat ${id}`, workspacePath: `/tmp/${id}`, worktreePath: null,
   branch: null, usesWorktree: false, providerId: "p", modelId: "first", thinkingLevel: "off", sessionFile: null, status: "idle", mode: "build",
   archived: false, archivedAt: null, lastError: null, kind: "code", lastActivityAt: null, originSuggestion: null, dismissedSuggestions: [], createdAt: "2026-01-01", updatedAt: "2026-01-01", autoTitleEligible: false, autoTitleAttemptId: null });
-function bootstrap(enabled = true, dynamic = false) {
+function bootstrap(enabled = true, dynamic = false, overrides: Partial<AppData> = {}) {
   const data: AppData = { version: 1, providers: [provider], favoriteModels: [], projects: [], tasks: [task("a"), task("b")], diffComments: {},
     toolConfig: { disabled: [] }, toolCatalog: [], packages: [], subagents: { enabled: false, trigger: "on_request", maxConcurrency: 4, agents: [] },
-    autoTitle: { enabled: false, providerId: null, modelId: null }, appearance: { ...DEFAULT_APPEARANCE, chatTabs: enabled, backdrop: dynamic ? "dynamic" : "solid" }, prompts: {}, mcp: { servers: [] } };
+    autoTitle: { enabled: false, providerId: null, modelId: null }, appearance: { ...DEFAULT_APPEARANCE, chatTabs: enabled, backdrop: dynamic ? "dynamic" : "solid" }, prompts: {}, mcp: { servers: [] }, ...overrides };
   vi.mocked(api.bootstrap).mockResolvedValue({ data, appDataPath: "/tmp", glassSupported: false, computerUseSupported: false, devBuild: false });
   return render(<App />);
 }
@@ -83,6 +84,44 @@ beforeEach(() => {
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+describe("App Settings entry points", () => {
+  it("opens Providers from the sidebar button without treating the click event as a section", async () => {
+    bootstrap(false);
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    expect(screen.getByLabelText("Initial Settings section")).toHaveTextContent("providers");
+  });
+
+  it.each([false, true])("opens the Team requirement's Settings section (sub-agents enabled=%s)", async (enabled) => {
+    bootstrap(false, false, { subagents: { enabled, trigger: "on_request", maxConcurrency: 4, agents: [] } });
+    fireEvent.click(await screen.findByRole("button", { name: "first" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open Settings" }));
+    expect(screen.getByLabelText("Initial Settings section")).toHaveTextContent(enabled ? "subagents" : "packages");
+  });
+});
+
+describe("App Team drafts", () => {
+  const crew = { providerId: "p", modelId: "second", thinkingLevel: "off" as const };
+  const subagents: AppData["subagents"] = {
+    enabled: true, trigger: "on_request", maxConcurrency: 4, teamDefault: crew,
+    agents: [{ id: "builtin:worker", builtin: true, enabled: true, name: "worker", description: "Edits", prompt: "Edit", tools: ["write"], readOnly: false, model: null }],
+  };
+
+  it.each(["Implement this", "/goal Implement this", "/canvas Explore this"])("preserves the selected crew when a draft starts with %s", async (message) => {
+    vi.mocked(api.createTask).mockImplementation(async (input) => ({ ...task("crew"), team: input.team ?? null }));
+    bootstrap(false, false, { subagents });
+    fireEvent.click(await screen.findByRole("button", { name: "first" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Team" }));
+    expect(screen.getByRole("switch", { name: "Team" })).toHaveAttribute("aria-checked", "true");
+    fireEvent.keyDown(document, { key: "Escape" });
+    type(message);
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(api.createTask).toHaveBeenCalledWith(expect.objectContaining({ team: crew })));
+    if (message.startsWith("/goal")) await waitFor(() => expect(api.goalControl).toHaveBeenCalledWith("crew", "set", "Implement this", expect.any(Number)));
+    else if (message.startsWith("/canvas")) await waitFor(() => expect(api.startCanvas).toHaveBeenCalled());
+    else await waitFor(() => expect(api.prompt).toHaveBeenCalled());
+  });
+});
 
 describe("App computer app approvals", () => {
   const access: ComputerAccessRequest = { taskId: "a", requestId: "access-a", launch: false, canAlwaysAllow: true,

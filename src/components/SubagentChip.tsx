@@ -110,6 +110,7 @@ function SubagentChip({ toolCallId, index, result, live }: ChipProps) {
       <RobotMark status={status} />
       <span className="subagent-chip-kind">SubAgent</span>
       <span className="subagent-chip-role">{role}</span>
+      {(result.round ?? 1) > 1 && <span className="subagent-tag">round {result.round}</span>}
       {!result.readOnly && <span className="subagent-tag">edits</span>}
       <span className="subagent-chip-task">{result.task}</span>
       <span className="subagent-chip-status">

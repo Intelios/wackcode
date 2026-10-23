@@ -232,6 +232,25 @@ history or restarting a worker never relaunches them. Only watched transcripts s
 background usage is appended once as Pi usage entries; status/wait calls carry no extra usage,
 and the published usage ledger is unchanged.
 
+### Team
+
+`SubagentRuntimeConfig.team` is the per-chat Team flag; Rust sets it when the chat's `TaskRecord.team`
+model resolves (crew plus its connection's credential), so it rides the same `set_subagents` push as
+everything else. While it's on, the system prompt gets the delegation addendum (`builtin/team.ts`,
+overridable in Settings › Prompts), every built-in agent's model is overridden to the crew's, the
+`subagent` schema gains `job` (a task form that continues a finished child by jobId, refusing one
+that is gone, busy, undelivered or used twice in a call), and `subagent_job` status cards report
+turns and recent activity. Finished children stay alive in `KeptSessions` (8 per chat, LRU) for a
+later `job` continuation; they are dropped on `configure` when Team is off or the feature is
+disabled, and never survive a worker restart. A continuation reuses its first jobId — the launch's
+own ID stays valid via an alias — and `SubagentResult.round` counts rounds from two. The host's
+`runSubagent` gets `request.continuation` (the retained history) alongside a freshly resolved
+role. Each round rebuilds its Pi session from that in-memory history with the current roster,
+tool switches, access policy and credentials; a disabled role cannot be continued, and keeping
+context never preserves revoked access. Active rounds are pinned against LRU eviction. The
+switch itself is `set_task_team` in Rust: refused while the chat runs, and no-op-quiet when the
+chat has no live worker.
+
 ## Multi-run loops (`/goal`)
 
 A built-in that iterates past one run queues its next turn from its `agent_settled` handler via `pi.sendUserMessage`. The run is already inactive there, so this starts a fresh nested run. The worker suppresses `run_state: idle` while `willContinue()` is true, so the chat never flashes idle between rounds. The verifier is a separate no-tools call on the chat's own model.

@@ -374,6 +374,104 @@ function AutoTitleCard({ config, providers, favoriteModels, favoriteSaving, onSe
   );
 }
 
+interface TeamCardProps extends ModelFavoritesProps {
+  team: SubagentModel | null;
+  providers: ProviderRecord[];
+  busy: boolean;
+  open: boolean;
+  onToggleOpen: () => void;
+  onSave: (team: SubagentModel | null) => Promise<void>;
+  onOpenProviders: () => void;
+}
+
+/**
+ * The default Team crew model. A chat turns its Team on from the model pill and takes this
+ * crew if it has none; each chat's own choice wins after that. No switch of its own — Team is
+ * a per-chat setting; this card only picks what "on" defaults to.
+ */
+function TeamCard({ team, providers, favoriteModels, favoriteSaving, onSetFavorite, busy, open, onToggleOpen, onSave, onOpenProviders }: TeamCardProps) {
+  const available = providers.filter((provider) => provider.enabled !== false && provider.connected && provider.models.some(modelIsReady));
+  const provider = providers.find((item) => item.id === team?.providerId);
+  const record = provider?.models.find((item) => item.id === team?.modelId);
+  const issue = subagentModelIssue(team, providers);
+  const summary = team ? modelSummary(team, providers) : "No default";
+
+  function choose(patch: { providerId?: string; modelId?: string; thinkingLevel?: ReasoningEffort }) {
+    const providerId = patch.providerId ?? team?.providerId ?? available[0]?.id;
+    const chosen = available.find((item) => item.id === providerId);
+    const modelId = patch.modelId ?? (patch.providerId || !team ? chosen?.models.find(modelIsReady)?.id : team.modelId);
+    const model = chosen?.models.find((item) => item.id === modelId);
+    if (!providerId || !modelId) return;
+    void onSave({ providerId, modelId, thinkingLevel: pickThinkingLevel(model, patch.thinkingLevel, team?.thinkingLevel, { ultra: false }) });
+  }
+
+  return (
+    <article className={`subagent-setting ${open ? "open" : ""} ${team ? "" : "off"}`}>
+      <div className="subagent-setting-head">
+        <button type="button" className={`package-disclosure ${open ? "open" : ""}`} aria-expanded={open} onClick={onToggleOpen}>
+          <Icon name="chevron" />
+          <span className="subagent-setting-name">team</span>
+          <span className="subagent-badge">Built-in</span>
+        </button>
+        <span className={`subagent-model-summary ${issue ? "warning" : ""}`} title={issue}>
+          {summary}
+        </span>
+      </div>
+      <p className="subagent-setting-description">
+        The default crew for a chat&rsquo;s Team: while a Team is on, the chat&rsquo;s model plans, delegates and reviews, and scout, worker and reviewer run on the crew model instead.
+      </p>
+      {issue && <p className="subagent-issue">{issue} New Teams can't run until you pick another default.</p>}
+      {open && (
+        <div className="subagent-setting-body">
+          <div className="subagent-model-field">
+            <span className="subagent-field-label">Crew model</span>
+            <div className="subagent-model-row">
+              <div className="mode-toggle" role="radiogroup" aria-label="Team default">
+                <button type="button" role="radio" aria-checked={!team} className={`mode-option ${team ? "" : "active"}`} disabled={busy} onClick={() => { if (team) void onSave(null); }}>
+                  No default
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={Boolean(team)}
+                  className={`mode-option ${team ? "active" : ""}`}
+                  disabled={busy || available.length === 0}
+                  onClick={() => { if (!team) choose({}); }}
+                >
+                  Specific model
+                </button>
+              </div>
+              {team && (
+                <>
+                  <ModelPicker providers={available} favoriteModels={favoriteModels} favoriteSaving={favoriteSaving} onSetFavorite={onSetFavorite} providerId={team.providerId} modelId={team.modelId} disabled={busy} popoverSide="bottom" onConfigure={choose} />
+                  <ReasoningToggle
+                    providers={available}
+                    providerId={team.providerId}
+                    modelId={team.modelId}
+                    thinkingLevel={team.thinkingLevel}
+                    allowUltra={false}
+                    disabled={busy}
+                    popoverSide="bottom"
+                    onConfigure={choose}
+                  />
+                </>
+              )}
+            </div>
+            <small className="subagent-hint">
+              {team
+                ? "A chat's own crew choice wins over this default. A small, inexpensive model is the idea."
+                : available.length > 0
+                  ? "Turning a chat's Team on picks the first available model when there is no default."
+                  : "The Team needs a connected provider and model."}
+            </small>
+            {available.length === 0 && <button type="button" className="secondary-button" onClick={onOpenProviders}>Add a connection</button>}
+          </div>
+        </div>
+      )}
+    </article>
+  );
+}
+
 /**
  * Settings → Sub-agents. Only shown while the built-in is switched on (from Settings →
  * Packages). Switches and model choices save at once; a custom agent's text is edited as a
@@ -617,6 +715,21 @@ export function SubagentsSection({ executionPolicy, config, providers, favoriteM
           <small className="subagent-hint subagent-usage-hint">Per chat, across foreground and background jobs. Give the main agent and editing helpers separate files.</small>
         </section>
 
+        <section className="settings-block" style={stagger(2)} aria-labelledby="subagents-team-title">
+          <h3 className="settings-block-title" id="subagents-team-title">Team</h3>
+          <p className="settings-block-sub">Each chat turns its Team on from the model pill: its model leads, and the built-in agents work on the crew model. Continued workers keep their context between rounds.</p>
+          <TeamCard
+            {...favorites}
+            team={config.teamDefault ?? null}
+            providers={providers}
+            busy={busy}
+            open={expanded === "team"}
+            onToggleOpen={() => setExpanded(expanded === "team" ? undefined : "team")}
+            onSave={async (team) => { await commit({ ...config, teamDefault: team }); }}
+            onOpenProviders={onOpenProviders}
+          />
+        </section>
+
         {editing?.key === "new" && (
           <article className="subagent-setting open new">
             <AgentEditor
@@ -633,7 +746,7 @@ export function SubagentsSection({ executionPolicy, config, providers, favoriteM
           </article>
         )}
 
-        <section className="settings-block" style={stagger(2)} aria-labelledby="subagents-agents-title">
+        <section className="settings-block" style={stagger(3)} aria-labelledby="subagents-agents-title">
           <h3 className="settings-block-title" id="subagents-agents-title">Agents</h3>
           <p className="settings-block-sub">Switched-off agents are not offered to the model. Each one uses the chat&rsquo;s model unless you give it its own.</p>
           <section className="subagent-group" aria-label="Built-in agents">
@@ -648,7 +761,7 @@ export function SubagentsSection({ executionPolicy, config, providers, favoriteM
           )}
         </section>
 
-        <section className="settings-block" style={stagger(3)} aria-labelledby="subagents-auto-title">
+        <section className="settings-block" style={stagger(4)} aria-labelledby="subagents-auto-title">
           <h3 className="settings-block-title" id="subagents-auto-title">Automatic</h3>
           <p className="settings-block-sub">WackCode runs this one itself; the model can never call it.</p>
           <AutoTitleCard

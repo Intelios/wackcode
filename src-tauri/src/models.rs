@@ -743,6 +743,9 @@ pub struct PromptConfig {
     /// Replaces the instruction a chat's system prompt gains while its reasoning is on Ultra.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ultra_prompt: Option<String>,
+    /// Replaces the addendum a coding chat's system prompt gains while its Team is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_prompt: Option<String>,
 }
 
 /// When the chat's agent should reach for sub-agents. Only changes the tool's guidance text.
@@ -828,6 +831,10 @@ pub struct SubagentConfig {
     pub max_concurrency: u32,
     #[serde(default)]
     pub agents: Vec<SubagentRecord>,
+    /// The crew model the composer offers when a coding chat turns its Team on without one.
+    /// A chat's own `TaskRecord::team` stays authoritative once set; this is only the default.
+    #[serde(default)]
+    pub team_default: Option<SubagentModel>,
 }
 
 pub const DEFAULT_SUBAGENT_CONCURRENCY: u32 = 4;
@@ -1051,6 +1058,7 @@ impl Default for SubagentConfig {
             trigger: SubagentTrigger::OnRequest,
             max_concurrency: DEFAULT_SUBAGENT_CONCURRENCY,
             agents: Vec::new(),
+            team_default: None,
         }
     }
 }
@@ -1202,6 +1210,10 @@ pub struct TaskRecord {
     /// the oldest entry is dropped first. Card state only — never a filter on what may run.
     #[serde(default)]
     pub dismissed_suggestions: Vec<String>,
+    /// The chat's Team crew model: while set, built-in sub-agents run on it and the chat's model
+    /// leads instead of doing the work itself. Chat-mode chats never carry one.
+    #[serde(default)]
+    pub team: Option<SubagentModel>,
 }
 
 /// Which suggestion on which chat a new chat was started from.
@@ -1364,6 +1376,9 @@ pub struct CreateTaskInput {
     /// The suggested task this chat starts from (`suggest_task`); absent for a normal chat.
     #[serde(default)]
     pub origin: Option<SuggestionOrigin>,
+    /// The Team crew model the chat opens with (validated the same way as a later change).
+    #[serde(default)]
+    pub team: Option<SubagentModel>,
 }
 
 #[derive(Debug, Deserialize)]

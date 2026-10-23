@@ -91,7 +91,7 @@ const WEB_OFF: WebConfig = { enabled: false, providers: [], activeProviderId: nu
 /** Rust fills `git` in for every metadata file; this only covers fixtures without it. */
 const GIT_DEFAULT: GitConfig = { commitAttribution: true };
 
-type SectionId = "providers" | "packages" | "skills" | "commands" | "memory" | "tools" | "git" | "mcp" | "web" | "appearance" | "prompts" | "subagents" | "computer_use" | "integrations" | "developer" | "about";
+export type SectionId = "providers" | "packages" | "skills" | "commands" | "memory" | "tools" | "git" | "mcp" | "web" | "appearance" | "prompts" | "subagents" | "computer_use" | "integrations" | "developer" | "about";
 
 interface Section {
   id: SectionId;
@@ -170,6 +170,8 @@ interface Props extends PackageActions, ModelFavoritesProps {
   mcpActions?: McpActions;
   /** Dev build: Settings › Developer is listed, and the DEV badge shows. */
   devBuild?: boolean;
+  /** The section an entry point asked for (the Team row opens "subagents"); defaults to Providers. */
+  initialSection?: SectionId;
   /** Settings › Web; absent in metadata from before it existed. */
   web?: WebConfig;
   onWebChanged?: (config: WebConfig) => void;
@@ -181,9 +183,9 @@ interface Props extends PackageActions, ModelFavoritesProps {
 export function SettingsPage({
   executionPolicy, onSetExecutionPolicy, providers, favoriteModels, favoriteSaving, onSetFavorite, packages, toolCatalog, disabledTools, appDataPath,
   onClose, onSave, onDelete, onSetProviderEnabled, onConnectSubscription, onSignOutSubscription, connectedSubscriptionId, onSetDisabledTools,
-  subagents, onSetSubagents, computerUse = COMPUTER_USE_OFF, computerUseSupported = false, onSetComputerUse, onRevokeComputerApp, autoTitle, onSetAutoTitle, appearance, glassSupported, onSetAppearance, onPreviewAppearance, backgroundImageUrlFor, onChooseBackgroundImage, onRemoveBackgroundImage, onSelectBackgroundImage, onShuffleBackgroundImage, prompts, onSetPrompts, onCommandsChanged, memory, onSetMemory, mcp, mcpActions, devBuild, web = WEB_OFF, onWebChanged, git = GIT_DEFAULT, onSetGit, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
+  subagents, onSetSubagents, computerUse = COMPUTER_USE_OFF, computerUseSupported = false, onSetComputerUse, onRevokeComputerApp, autoTitle, onSetAutoTitle, appearance, glassSupported, onSetAppearance, onPreviewAppearance, backgroundImageUrlFor, onChooseBackgroundImage, onRemoveBackgroundImage, onSelectBackgroundImage, onShuffleBackgroundImage, prompts, onSetPrompts, onCommandsChanged, memory, onSetMemory, mcp, mcpActions, devBuild, web = WEB_OFF, onWebChanged, git = GIT_DEFAULT, onSetGit, onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources, initialSection
 }: Props) {
-  const [chosenSection, setSection] = useState<SectionId>("providers");
+  const [chosenSection, setSection] = useState<SectionId>(initialSection ?? "providers");
   const [computerSetup, setComputerSetup] = useState(false);
   // Switching sub-agents or computer use off while its page is open lands on Packages, where the switch is.
   const section: SectionId =

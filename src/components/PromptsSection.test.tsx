@@ -22,8 +22,8 @@ describe("PromptsSection", () => {
     expect(screen.getByText(/restore the built-in text whenever you like/i)).toBeInTheDocument();
     expect(screen.getByText(/including chats that are already planning/i)).toBeInTheDocument();
     expect(within(screen.getByRole("region", { name: "Prompts overview" })).getByText("Built-in")).toBeInTheDocument();
-    // The coding persona, Plan, Ultra Plan, Ultra and Chat mode.
-    expect(screen.getAllByText("Default")).toHaveLength(5);
+    // The coding persona, Plan, Ultra Plan, Ultra, Team and Chat mode.
+    expect(screen.getAllByText("Default")).toHaveLength(6);
     // Nothing to restore while every prompt is at its default.
     expect(screen.queryByRole("button", { name: "Restore default" })).not.toBeInTheDocument();
     // The default texts are on screen for review, starting with the persona paragraph.

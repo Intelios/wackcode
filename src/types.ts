@@ -421,6 +421,9 @@ export interface TaskRecord {
   originSuggestion: SuggestionOrigin | null;
   /** Suggested-task ids the user dismissed in this chat. Card state only. */
   dismissedSuggestions: string[];
+  /** The chat's Team crew model: while set, built-in sub-agents run on it and the chat's model
+   *  leads instead of doing the work itself. Chat-mode chats never carry one. */
+  team?: SubagentModel | null;
 }
 
 /** Which suggestion on which chat a new chat was started from. */
@@ -777,6 +780,8 @@ export interface PromptConfig {
   ultraPlanPrompt?: string | null;
   /** Replaces the instruction a chat's system prompt gains while its reasoning is on Ultra. */
   ultraPrompt?: string | null;
+  /** Replaces the addendum a coding chat's system prompt gains while its Team is on. */
+  teamPrompt?: string | null;
 }
 
 /** When the chat's agent should reach for sub-agents. Only changes the tool's guidance. */
@@ -816,6 +821,8 @@ export interface SubagentConfig {
   trigger: SubagentTrigger;
   maxConcurrency: number;
   agents: SubagentRecord[];
+  /** The crew model the composer offers when a coding chat turns its Team on without one. */
+  teamDefault?: SubagentModel | null;
 }
 
 export interface AutoTitleConfig {
@@ -832,8 +839,10 @@ export type SubagentStatus = "queued" | "running" | "done" | "failed" | "aborted
  * streams it to the side panel instead (`watch_subagent`).
  */
 export interface SubagentResult {
-  /** Session-local job handle; present on background launches. */
+  /** Session-local job handle; present on background launches, and on every child in a Team chat. */
   jobId?: string;
+  /** Which prompt round this call is for the worker's retained session; absent is round 1. */
+  round?: number;
   agent: string;
   task: string;
   readOnly: boolean;

@@ -29,6 +29,7 @@ import { createModelRuntime, findModel, MODEL_MISSING_MESSAGE, missingModelMessa
 import { sameExecutionPolicy } from "./execution-policy.js";
 import { promptOverrides, setPromptOverrides } from "./prompt-overrides.js";
 import { isUltra, piThinkingLevel, ultraPrompt } from "./builtin/ultra.js";
+import { teamPrompt } from "./builtin/team.js";
 import { INLINE_IMAGE_LIMITS } from "./image-limits.js";
 import { describeProviderError } from "./provider-error.js";
 import { SubagentRunner } from "./subagent-runner.js";
@@ -122,6 +123,9 @@ let servedGuide: string | undefined;
 // The chat's reasoning is Ultra (`builtin/ultra.ts`): Pi runs at the model's top level and the
 // system prompt gains the Ultra instruction. Set from `init` before the session exists.
 let ultra = false;
+// The chat's Team (`builtin/team.ts`): the sub-agents payload carries it live via set_subagents,
+// so it flips from the next message without a respawn — like every other set_* setting.
+let team = false;
 let workspaceIsGitRepo = false;
 // Settings › Git: the coding guide asks for a Co-authored-by trailer naming the chat's model.
 let commitAttribution = false;
@@ -348,6 +352,8 @@ const builtinHost: BuiltinHost = {
     const transcript = stream.finish();
     return transcript ? { ...outcome, transcript } : outcome;
   },
+  retainedSubagent: (jobId) => subagentRunner?.keptSubagent(jobId),
+  dropRetainedSubagents: () => subagentRunner?.dropKept(),
   redact: (text) => redactCredentials(text),
   notice: (message, level) => notice(safeError(message), level),
   workspace: () => workspacePath,
@@ -379,6 +385,11 @@ function refuseInChat(what: string): void {
  */
 async function applySubagents(config: SubagentRuntimeConfig | null): Promise<void> {
   await builtins.subagents.configure(config ? { ...config, providers: [] } : null);
+  const wasTeam = team;
+  team = Boolean(config?.team);
+  // Leaving Team retires every kept worker session; its credentials stay registered only
+  // while the child they belong to is still around.
+  if (wasTeam && !team) subagentRunner?.dropKept();
   subagentRunner?.setProviders(config?.providers ?? []);
 }
 
@@ -1234,6 +1245,8 @@ function withAppLayers(loader: ResourceLoader): ResourceLoader {
         servedGuide,
         ...(chatKind ? [] : loader.getAppendSystemPrompt()),
         ...(memory ? [memory] : []),
+        // The Team addendum sits just ahead of Ultra's, like the two pills beside the composer.
+        ...(team ? [teamPrompt()] : []),
         ...(ultra ? [ultraPrompt()] : [])
       ];
     },

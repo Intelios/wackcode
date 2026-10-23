@@ -240,6 +240,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + 
             commands::add_project,
             commands::create_task,
             commands::configure_task,
+            commands::set_task_team,
             commands::open_task,
             commands::watch_subagent,
             commands::list_draft_commands,

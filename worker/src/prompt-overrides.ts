@@ -18,7 +18,8 @@ export function setPromptOverrides(next: PromptOverrides | null | undefined): vo
     chatPrompt: nonEmpty(next?.chatPrompt),
     planPrompt: nonEmpty(next?.planPrompt),
     ultraPlanPrompt: nonEmpty(next?.ultraPlanPrompt),
-    ultraPrompt: nonEmpty(next?.ultraPrompt)
+    ultraPrompt: nonEmpty(next?.ultraPrompt),
+    teamPrompt: nonEmpty(next?.teamPrompt)
   };
 }
 

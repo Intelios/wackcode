@@ -12,7 +12,7 @@ import { activeSlashCommand } from "../command-utils";
 import { EMPTY_DRAFT, type ComposerDraft, type ComposerDraftState } from "../hooks/useComposerDrafts";
 import { Icon, type IconName } from "./Icons";
 import { ContextPanel } from "./ContextPanel";
-import { ModelPicker, ReasoningToggle, type ModelFavoritesProps } from "./ModelPicker";
+import { ModelPicker, ReasoningToggle, type ModelFavoritesProps, type TeamPillProps } from "./ModelPicker";
 import { ModeToggle } from "./ModeToggle";
 import { Tooltip } from "./ui/Tooltip";
 import { ImageLightbox } from "./ui/ImageLightbox";
@@ -67,6 +67,9 @@ interface ComposerProps extends ModelFavoritesProps {
   appliedExecutionPolicy?: ExecutionPolicyConfig;
   onModeChange?: (mode: TaskMode) => void;
   onConfigure: (patch: { providerId?: string; modelId?: string; thinkingLevel?: ReasoningEffort }) => void;
+  /** Team, on coding composers only: adds the crew segment and the picker's Team footer. */
+  /** Code-area only: the Team row and split crew segment. Chat mode's composer has none. */
+  team?: TeamPillProps;
   /** Resolves false when the send failed; the composer then restores the draft and attachments.
    * Attached text files travel as `files` and join the message text at the wire; `queue` is true
    * while running so the message waits for the active work to finish. */
@@ -108,7 +111,7 @@ interface ComposerProps extends ModelFavoritesProps {
   agentName?: string;
 }
 
-export function Composer({ draftState, status, backgroundWorking = false, providerId, modelId, thinkingLevel, providers, favoriteModels, favoriteSaving, onSetFavorite, stats, header, placeholder, popoverSide = "top", mode, executionPolicy = DEFAULT_EXECUTION_POLICY, appliedExecutionPolicy, onModeChange, onConfigure, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, mentionFiles, mentionChats, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, queuedMessages, onSteer, onDequeue, onStop, onOpenSettings, disabled, seed, comet, frozen, agentName = DEFAULT_AGENT_NAME }: ComposerProps) {
+export function Composer({ draftState, status, backgroundWorking = false, providerId, modelId, thinkingLevel, providers, favoriteModels, favoriteSaving, onSetFavorite, stats, header, placeholder, popoverSide = "top", mode, executionPolicy = DEFAULT_EXECUTION_POLICY, appliedExecutionPolicy, onModeChange, onConfigure, team, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, mentionFiles, mentionChats, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, queuedMessages, onSteer, onDequeue, onStop, onOpenSettings, disabled, seed, comet, frozen, agentName = DEFAULT_AGENT_NAME }: ComposerProps) {
   const [localDraft, setLocalDraft] = useState<ComposerDraft>(EMPTY_DRAFT);
   const value = draftState?.value ?? localDraft;
   const updateDraft = draftState?.update ?? setLocalDraft;
@@ -676,6 +679,7 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
                   disabled={busy}
                   popoverSide={popoverSide}
                   onConfigure={onConfigure}
+                  team={team}
                 />
                 {stats && <ContextPanel stats={stats} popoverSide={popoverSide} />}
                 <ReasoningToggle

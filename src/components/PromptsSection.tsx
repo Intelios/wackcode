@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
-import { DEFAULT_CHAT_PROMPT, DEFAULT_PLAN_PROMPT, DEFAULT_SYSTEM_PROMPT, DEFAULT_ULTRA_PLAN_PROMPT, DEFAULT_ULTRA_PROMPT } from "../promptDefaults";
+import { DEFAULT_CHAT_PROMPT, DEFAULT_PLAN_PROMPT, DEFAULT_SYSTEM_PROMPT, DEFAULT_TEAM_PROMPT, DEFAULT_ULTRA_PLAN_PROMPT, DEFAULT_ULTRA_PROMPT } from "../promptDefaults";
 import type { PromptConfig } from "../types";
 import { Icon, type IconName } from "./Icons";
 import { UltraMark } from "./UltraMark";
@@ -62,6 +62,15 @@ const PROMPTS: PromptSpec[] = [
     icon: "ultra",
     tone: "ultra",
     note: "Ultra also runs the model at its highest reasoning level; this text is the extra instruction."
+  },
+  {
+    key: "teamPrompt",
+    title: "Team",
+    description: "Added to a coding chat's system prompt while its Team is on: the lead delegates to the crew instead of doing the work itself.",
+    defaultText: DEFAULT_TEAM_PROMPT,
+    icon: "agents",
+    tone: "accent",
+    note: "A chat turns its Team on from the model pill. This text is only the lead's part; the crew's roles are set in Settings › Sub-agents."
   },
   {
     key: "chatPrompt",

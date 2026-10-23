@@ -45,10 +45,11 @@ export function siblingLabels(results: SubagentResult[]): string[] {
   const seen = new Map<string, number>();
   return results.map((result) => {
     const role = displayAgentName(result.agent);
-    if ((totals.get(result.agent) ?? 0) < 2) return role;
+    const round = (result.round ?? 1) > 1 ? ` · round ${result.round}` : "";
+    if ((totals.get(result.agent) ?? 0) < 2) return `${role}${round}`;
     const nth = (seen.get(result.agent) ?? 0) + 1;
     seen.set(result.agent, nth);
-    return `${role} ${nth}`;
+    return `${role} ${nth}${round}`;
   });
 }
 

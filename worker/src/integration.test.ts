@@ -558,7 +558,7 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
   }
   // These scripts call their tool once per prompt, so one chat can make several calls.
   const answeredSinceUser = messages.slice(messages.map((message) => message.role).lastIndexOf("user") + 1).some((message) => message.role === "tool");
-  const repeatable = lastUserText.startsWith("mcp: ") || lastUserText.startsWith("subagent ") || lastUserText.startsWith("finish plan");
+  const repeatable = lastUserText.startsWith("mcp: ") || lastUserText.startsWith("subagent ") || lastUserText.startsWith("child-") || lastUserText.startsWith("finish plan");
   const backgroundText = lastUserText.startsWith("The user has set a goal.")
     ? /<objective>\n([^\n]+)\n<\/objective>/.exec(lastUserText)?.[1] ?? lastUserText : lastUserText;
   const backgroundScript = backgroundText.startsWith("subagent background: ")
@@ -4030,7 +4030,7 @@ describe("sub-agents", () => {
     v: number;
     mode: string;
     background?: boolean;
-    results: Array<{ jobId?: string; agent: string; task: string; readOnly: boolean; status: string; model?: string; output?: string; error?: string; activity: Array<{ tool: string; subject: string }>; usage: { input: number; output: number; turns: number } }>;
+    results: Array<{ jobId?: string; round?: number; agent: string; task: string; readOnly: boolean; status: string; model?: string; output?: string; error?: string; activity: Array<{ tool: string; subject: string }>; usage: { input: number; output: number; turns: number } }>;
   };
 
   function subagentResult(worker: WorkerHarness): (ToolResultBlock & { details: Details }) | undefined {
@@ -4064,6 +4064,90 @@ describe("sub-agents", () => {
   const backgroundPrompt = (tag: string, launch: Record<string, unknown>, next?: { name: string; args: Record<string, unknown> }) => `subagent background: ${JSON.stringify({ tag, launch, next })}`;
   const parentRequests = (provider: MockProvider) => provider.requests.filter((request) => !JSON.stringify(request.body.messages).includes("SCOUT-PROMPT-MARKER") && !JSON.stringify(request.body.messages).includes("WORKER-PROMPT-MARKER"));
   const backgroundResultText = (provider: MockProvider) => parentRequests(provider).filter((request) => JSON.stringify(request.body.messages).includes("Job "));
+
+  describe("Team continuations", () => {
+    async function run(worker: WorkerHarness, runId: string, input: { agent?: string; job?: string; task: string }) {
+      const before = worker.outputs.length;
+      worker.send({ id: crypto.randomUUID(), type: "prompt", runId, message: `subagent access: ${JSON.stringify(input)}` });
+      await worker.waitFor((output) => output.type === "run_state" && output.runId === runId && output.state === "idle");
+      const resultOf = (view?: SnapshotView) => view?.messages.flatMap((message) => message.blocks)
+        .find((block) => block.type === "tool-result" && block.toolName === "subagent" && (block.details as Details | undefined)?.results[0]?.task === input.task);
+      const settled = await worker.waitFor((output) => worker.outputs.indexOf(output) >= before && emitted(output) && Boolean(resultOf(output.view)));
+      return (resultOf(settled.view)!.details as Details).results[0];
+    }
+
+    it("applies disabled tools to later rounds, preserves history and can re-enable tools", async () => {
+      const { provider, worker, workspace } = await start("team-tool-switches", { subagents: config({ team: { label: "Crew" } }) });
+      const first = await run(worker, "first", { agent: "worker", task: "child-write: team-first" });
+      expect(await readFile(join(workspace, "team-first.txt"), "utf8")).toContain("from a sub-agent");
+      expect(first.jobId).toBeTruthy();
+      expect((await request(worker, { type: "set_tools", disabledTools: ["write"] })).success).toBe(true);
+      const second = await run(worker, "disabled", { job: first.jobId, task: "child-write: team-disabled" });
+      expect(second).toMatchObject({ jobId: first.jobId, round: 2 });
+      await expect(readFile(join(workspace, "team-disabled.txt"), "utf8")).rejects.toThrow();
+      const continued = provider.requests.filter((entry) => entry.text === "child-write: team-disabled");
+      expect(continued.length).toBeGreaterThan(0);
+      expect(continued.every((entry) => !offered(entry).includes("write"))).toBe(true);
+      expect(JSON.stringify(continued[0].body.messages)).toContain("child-write: team-first");
+      expect((await request(worker, { type: "set_tools", disabledTools: [] })).success).toBe(true);
+      const third = await run(worker, "enabled", { job: first.jobId, task: "child-write: team-enabled" });
+      expect(third.round).toBe(3);
+      expect(await readFile(join(workspace, "team-enabled.txt"), "utf8")).toContain("from a sub-agent");
+    });
+
+    it.each(["build", "plan"] as const)("restores read-only tools and shell guards on continued scouts in %s", async (mode) => {
+      const { provider, worker, workspace } = await start(`team-readonly-${mode}`, {
+        subagents: config({ team: { label: "Crew" } }),
+        executionPolicy: { unrestrictedSubagents: true, unrestrictedPlanning: false },
+      });
+      const first = await run(worker, "unrestricted", { agent: "scout", task: "child-write: scout-unrestricted" });
+      expect(await readFile(join(workspace, "scout-unrestricted.txt"), "utf8")).toContain("from a sub-agent");
+      expect(first.readOnly).toBe(false);
+      expect((await request(worker, { type: "set_execution_policy", executionPolicy: { unrestrictedSubagents: false, unrestrictedPlanning: false } })).success).toBe(true);
+      if (mode === "plan") expect((await request(worker, { type: "set_mode", mode })).success).toBe(true);
+      const second = await run(worker, "readonly", { job: first.jobId, task: "child-write: scout-readonly" });
+      expect(second).toMatchObject({ readOnly: true, round: 2 });
+      await expect(readFile(join(workspace, "scout-readonly.txt"), "utf8")).rejects.toThrow();
+      expect(provider.requests.filter((entry) => entry.text === "child-write: scout-readonly").every((entry) => !offered(entry).includes("write"))).toBe(true);
+      const third = await run(worker, "shell-guard", { job: first.jobId, task: "child-shell: touch shell-denied.txt" });
+      expect(third).toMatchObject({ readOnly: true, round: 3 });
+      await expect(readFile(join(workspace, "shell-denied.txt"), "utf8")).rejects.toThrow();
+      const shell = provider.requests.filter((entry) => entry.text === "child-shell: touch shell-denied.txt");
+      expect(toolResultContents(shell.at(-1)!.body).at(-1)).toContain("This sub-agent is read-only");
+    });
+
+    it("uses a rotated crew credential while keeping older history redacted", async () => {
+      const crew = await startMockProvider();
+      cleanup.push(crew.close);
+      const connection = {
+        provider: {
+          id: "crew-connection", name: "Crew", kind: "custom", baseUrl: crew.baseUrl, api: "openai-completions",
+          models: [{ id: "small-model", name: "Small", contextWindow: 16_384, maxTokens: 256, reasoning: false, thinkingLevels: ["off"], thinkingLevelMap: { off: null } }],
+        },
+        apiKey: "old-crew-secret",
+      };
+      const agents = [{ ...scout, model: { providerId: connection.provider.id, modelId: "small-model", thinkingLevel: "off" } }];
+      const team = config({ agents, providers: [connection], team: { label: "Crew" } });
+      const { worker } = await start("team-credentials", { subagents: team });
+      const first = await run(worker, "old-key", { agent: "scout", task: "child-ls: quote old-crew-secret" });
+      expect(first.output).not.toContain(connection.apiKey);
+      expect((await request(worker, { type: "set_subagents", subagents: { ...team, providers: [{ ...connection, apiKey: "new-crew-secret" }] } })).success).toBe(true);
+      await run(worker, "new-key", { job: first.jobId, task: "child-ls: after rotation" });
+      const continued = crew.requests.filter((entry) => entry.text === "child-ls: after rotation");
+      expect(continued.length).toBeGreaterThan(0);
+      expect(continued.every((entry) => entry.authorization === "Bearer new-crew-secret")).toBe(true);
+      expect(JSON.stringify(continued[0].body.messages)).toContain(connection.apiKey);
+      const toolCallId = worker.view!.messages.flatMap((message) => message.blocks)
+        .filter((block) => block.type === "tool-result" && block.toolName === "subagent").at(-1)!.toolCallId;
+      const before = worker.outputs.length;
+      expect((await request(worker, { type: "watch_subagent", target: { toolCallId, index: 0 } })).success).toBe(true);
+      const frame = await worker.waitFor((output) => worker.outputs.indexOf(output) >= before && output.type === "subagent_stream" && output.reset === true);
+      const transcript = JSON.stringify(frame.upserts);
+      expect(transcript).toContain("[credential redacted]");
+      expect(transcript).not.toContain("old-crew-secret");
+      expect(transcript).not.toContain("new-crew-secret");
+    });
+  });
 
   it("the live UI mock launches once, settles the parent, and resumes once without a launch loop", async () => {
     const mock = spawn(process.execPath, [resolve("../scripts/mock-provider.mjs")], { env: { ...process.env, WACKCODE_MOCK_PORT: "0", WACKCODE_MOCK_DELAY_MS: "1000" }, stdio: ["ignore", "pipe", "pipe"] });

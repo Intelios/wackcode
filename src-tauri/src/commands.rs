@@ -17,7 +17,7 @@ use crate::{
         SetPackageResourcesInput, SetTaskModeInput, SetToolConfigInput, SkillDocument,
         SkillFolderKind, SkillFolderRecord, SkillSearchPage, SkillsChange, SkillsOverview,
         SlashCommand, SlashCommandDocument, SlashCommandsChange, SlashCommandsOverview,
-        SteerMessageInput, SubagentConfig, SubagentWatchTarget, SuggestionOrigin, TaskKind, TaskMode, TaskRecord, TaskStatus,
+        SteerMessageInput, SubagentConfig, SubagentModel, SubagentWatchTarget, SuggestionOrigin, TaskKind, TaskMode, TaskRecord, TaskStatus,
         ToolConfig, MAX_DISMISSED_SUGGESTIONS, WorkspaceFiles,
     },
     memory, skills, slash_commands,
@@ -381,24 +381,28 @@ fn update_model_favorite(
     Ok(())
 }
 
+/// A saved chat keeps both its lead's connection and its Team crew's connection in use,
+/// including while archived. Refuse before removing credentials that a live worker may hold.
+fn validate_provider_task_references(tasks: &[TaskRecord], provider_id: &str) -> Result<(), String> {
+    if tasks.iter().any(|task| {
+        task.provider_id == provider_id
+            || task.team.as_ref().is_some_and(|team| team.provider_id == provider_id)
+    }) {
+        return Err("This connection is still used by a saved chat or its Team. Change those chats to another connection, or turn their Teams off, before deleting it.".into());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn delete_provider(
     app: AppHandle,
     state: State<'_, MetadataState>,
     provider_id: String,
 ) -> Result<(), String> {
-    let task_ids: Vec<String> = state
-        .data
-        .lock()
-        .map_err(|_| "Metadata lock was poisoned".to_string())?
-        .tasks
-        .iter()
-        .filter(|task| task.provider_id == provider_id)
-        .map(|task| task.id.clone())
-        .collect();
-    if !task_ids.is_empty() {
-        return Err("This connection is still used by a saved task. Change those tasks to another connection before deleting it.".into());
-    }
+    validate_provider_task_references(
+        &state.data.lock().map_err(|_| "Metadata lock was poisoned".to_string())?.tasks,
+        &provider_id,
+    )?;
     let agents = subagents::agents_using(
         &state
             .data
@@ -2308,6 +2312,22 @@ pub fn create_task(
         (project, provider)
     };
     validate_model_selection(&provider, &input.model_id, &input.thinking_level)?;
+    if let Some(team) = &input.team {
+        if input.kind == TaskKind::Chat {
+            return Err("Team isn't available in Chat mode.".into());
+        }
+        let providers = state
+            .data
+            .lock()
+            .map_err(|_| "Metadata lock was poisoned".to_string())?
+            .providers
+            .clone();
+        if let Some(problem) = crate::subagents::team_problem(team, &providers, |provider| {
+            has_credential(&app, &state, provider)
+        }) {
+            return Err(problem);
+        }
+    }
     let id = Uuid::new_v4().to_string();
     let mut workspace_path = project.as_ref().map(|project| PathBuf::from(&project.path));
     let mut worktree_path = None;
@@ -2378,12 +2398,72 @@ pub fn create_task(
         last_activity_at: None,
         origin_suggestion: origin,
         dismissed_suggestions: Vec::new(),
+        // Validated the same way a later change is; a coding chat only.
+        team: input.team.filter(|_| input.kind != TaskKind::Chat),
     };
     state.mutate(|data| {
         data.tasks.push(record.clone());
         Ok(())
     })?;
     Ok(record)
+}
+
+/// Whether one connection can supply a sub-agent with credentials right now (an API key in
+/// `secrets.json`, or a subscription sign-in). For the Team crew's own `team_problem` check.
+fn has_credential(app: &AppHandle, state: &State<'_, MetadataState>, provider: &ProviderRecord) -> bool {
+    if provider.kind == ProviderKind::Subscription {
+        subscriptions::has_credential(app, &provider.id)
+    } else {
+        state.secrets.get(&provider.id).is_ok()
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetTaskTeamInput {
+    pub task_id: String,
+    #[serde(default)]
+    pub team: Option<SubagentModel>,
+}
+
+/// The chat's Team crew model, or `None` to lead alone again. Like a mode switch it changes
+/// only the next turn: the new `set_subagents` payload queues on the worker (which is why a
+/// running chat is refused), and the flag never enters the worker fingerprint, so nothing
+/// restarts. A coding chat only — Chat mode has no sub-agents to crew.
+#[tauri::command]
+pub async fn set_task_team(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    input: SetTaskTeamInput,
+) -> Result<TaskRecord, String> {
+    let task = state.mutate(|data| {
+        let task = data
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == input.task_id)
+            .ok_or_else(|| "Task not found".to_string())?;
+        refuse_chat(task, "Team")?;
+        refuse_busy(task)?;
+        if let Some(team) = &input.team {
+            if let Some(problem) = crate::subagents::team_problem(team, &data.providers, |provider| {
+                has_credential(&app, &state, provider)
+            }) {
+                return Err(problem);
+            }
+        }
+        task.team = input.team.clone();
+        task.updated_at = Utc::now().to_rfc3339();
+        Ok(task.clone())
+    })?;
+    // Reach the worker if one exists; the next `init` picks the record up either way.
+    let payload = worker::subagent_payload(&app, task.team.as_ref())?;
+    let _ = worker::send(
+        &app,
+        &task.id,
+        &json!({ "id": Uuid::new_v4().to_string(), "type": "set_subagents", "subagents": payload }),
+    )
+    .await;
+    Ok(task)
 }
 
 #[derive(Debug, Deserialize)]
@@ -3610,6 +3690,7 @@ pub async fn fork_task(
         // own state. Forking never inherits either.
         origin_suggestion: None,
         dismissed_suggestions: Vec::new(),
+        team: source.team.clone(),
     };
     let git_root = project
         .as_ref()
@@ -5403,6 +5484,7 @@ fn validate_prompt_config(input: PromptConfig) -> Result<PromptConfig, String> {
         plan_prompt: normalize_override("Plan mode prompt", input.plan_prompt)?,
         ultra_plan_prompt: normalize_override("Ultra Plan prompt", input.ultra_plan_prompt)?,
         ultra_prompt: normalize_override("Ultra prompt", input.ultra_prompt)?,
+        team_prompt: normalize_override("Team prompt", input.team_prompt)?,
     })
 }
 
@@ -5585,6 +5667,22 @@ mod tests {
     use super::*;
 
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn provider_deletion_refuses_lead_and_team_connections_even_for_archived_chats() {
+        let mut task: TaskRecord = serde_json::from_value(json!({
+            "id": "chat", "name": "Saved chat", "projectId": null, "workspacePath": "/tmp/chat",
+            "usesWorktree": false, "providerId": "lead", "modelId": "model", "thinkingLevel": "off",
+            "createdAt": "now", "updatedAt": "now", "archived": true,
+            "team": { "providerId": "crew", "modelId": "small", "thinkingLevel": "off" }
+        })).unwrap();
+        assert!(validate_provider_task_references(&[task.clone()], "lead").is_err());
+        assert!(validate_provider_task_references(&[task.clone()], "crew").unwrap_err().contains("Team"));
+        assert!(validate_provider_task_references(&[task.clone()], "unused").is_ok());
+        task.team = None;
+        assert!(validate_provider_task_references(&[task.clone()], "crew").is_ok());
+        assert!(validate_provider_task_references(&[task], "lead").is_err());
+    }
 
     #[test]
     fn favorites_belong_to_the_connection_and_never_edit_its_worker_configuration() {

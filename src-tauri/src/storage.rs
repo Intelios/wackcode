@@ -452,7 +452,7 @@ mod tests {
                 thinking_level: "off".into(), session_file: Some("session.jsonl".into()),
                 status: TaskStatus::Running, mode: crate::models::TaskMode::Build, archived: false, archived_at: None, last_error: None,
                 created_at: "now".into(), updated_at: "now".into(), last_activity_at: None,
-                origin_suggestion: None, dismissed_suggestions: Vec::new(),
+                origin_suggestion: None, dismissed_suggestions: Vec::new(), team: None,
             }],
             ..AppData::default()
         };

@@ -62,6 +62,7 @@ import type {
   SlashCommandsChange,
   SlashCommandsOverview,
   SubagentConfig,
+  SubagentModel,
   SubagentTarget,
   SuggestionOrigin,
   SubscriptionProviderInfo,
@@ -236,6 +237,8 @@ export const api = {
     thinkingLevel: ReasoningEffort;
     /** Set when the chat starts from a suggested task; the origin chat's card links to it. */
     origin?: SuggestionOrigin;
+    /** The Team crew model the chat opens with (coding chats only). */
+    team?: SubagentModel | null;
   }) => invoke<TaskRecord>("create_task", { input }),
   renameTask: (taskId: string, name: string) => invoke<TaskRecord>("rename_task", { taskId, name }),
   /** Dismiss or restore one suggested task's card; the state lives in `wackcode.json`. */
@@ -246,6 +249,8 @@ export const api = {
   deleteTask: (taskId: string) => invoke<void>("delete_task", { taskId }),
   convertToWorktree: (taskId: string) => invoke<TaskRecord>("convert_task_to_worktree", { taskId }),
   removeProject: (projectId: string) => invoke<void>("remove_project", { projectId }),
+  /** The chat's Team crew model, or null to lead alone; validated by the host. */
+  setTaskTeam: (input: { taskId: string; team?: SubagentModel | null }) => invoke<TaskRecord>("set_task_team", { input }),
   configureTask: (input: {
     taskId: string;
     providerId: string;

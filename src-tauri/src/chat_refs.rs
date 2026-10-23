@@ -120,6 +120,7 @@ mod tests {
             last_activity_at: None,
             origin_suggestion: None,
             dismissed_suggestions: Vec::new(),
+            team: None,
         }
     }
 

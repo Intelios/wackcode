@@ -5,7 +5,7 @@ import { ProjectPicker } from "./ProjectPicker";
 
 afterEach(cleanup);
 
-const project = (id: string, name: string, path: string): ProjectRecord => ({ id, name, path, gitRoot: null, gitHasHead: false, runCommand: null, branch: null, createdAt: "now" });
+const project = (id: string, name: string, path: string): ProjectRecord => ({ id, name, path, gitRoot: null, gitHasHead: false, runCommand: null, buildCommand: null, branch: null, createdAt: "now" });
 const projects = [
   project("p1", "TokenTrail", "/Users/jack/code/tokentrail"),
   project("p2", "StickCity", "/Users/jack/code/stickcity"),

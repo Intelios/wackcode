@@ -295,6 +295,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + 
             terminal::restart_terminal,
             terminal::close_terminal,
             run_command::save_project_run_command,
+            run_command::save_project_build_command,
             run_command::start_run,
             run_command::stop_run,
             run_command::get_run,

@@ -1107,6 +1107,8 @@ pub struct ProjectRecord {
     pub git_has_head: bool,
     #[serde(default)]
     pub run_command: Option<String>,
+    #[serde(default)]
+    pub build_command: Option<String>,
     #[serde(default, skip_deserializing)]
     pub branch: Option<String>,
     pub created_at: String,
@@ -2137,6 +2139,11 @@ pub struct ResizeTerminalInput {
     pub rows: u16,
 }
 
+/// Run and Build own independent commands and PTYs in each canonical checkout.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum ProjectCommandKind { #[default] Run, Build }
+
 /// A foreground project command. Generation orders replacements; revision orders its states.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -2145,6 +2152,7 @@ pub enum RunStatus { Running, Stopping, Finished, Failed, Stopped }
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunInfo {
+    pub kind: ProjectCommandKind,
     pub session_id: String,
     pub generation: u64,
     pub revision: u64,
@@ -2159,12 +2167,13 @@ pub struct RunInfo {
 pub enum RunEvent {
     Changed { run: RunInfo },
     #[serde(rename_all = "camelCase")]
-    Removed { cwd: String, session_id: String, generation: u64 },
+    Removed { kind: ProjectCommandKind, cwd: String, session_id: String, generation: u64 },
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunLookup {
+    pub kind: ProjectCommandKind,
     pub generation: u64,
     pub cwd: String,
     pub run: Option<RunInfo>,

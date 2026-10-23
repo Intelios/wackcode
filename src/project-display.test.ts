@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { matchesProject, monogram, orderProjects, shortPath } from "./project-display";
 import type { ProjectRecord } from "./types";
 
-const project = (name: string, path: string): ProjectRecord => ({ id: name, name, path, gitRoot: null, gitHasHead: false, runCommand: null, branch: null, createdAt: "now" });
+const project = (name: string, path: string): ProjectRecord => ({ id: name, name, path, gitRoot: null, gitHasHead: false, runCommand: null, buildCommand: null, branch: null, createdAt: "now" });
 
 describe("shortPath", () => {
   it("replaces the home folder with a tilde", () => {

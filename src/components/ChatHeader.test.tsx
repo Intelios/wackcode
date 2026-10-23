@@ -1,9 +1,10 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { TaskRecord } from "../types";
+import type { ProjectRecord, TaskRecord } from "../types";
 import { ChatHeader } from "./ChatHeader";
 
 afterEach(cleanup);
+const project: ProjectRecord = { id: "p1", name: "Project", path: "/tmp", gitRoot: null, gitHasHead: false, runCommand: "pnpm dev", buildCommand: "pnpm build", branch: null, createdAt: "now" };
 
 function task(id: string, name: string): TaskRecord {
   return {
@@ -20,6 +21,10 @@ function props(t: TaskRecord, titlePulse = 0) {
     onRun: vi.fn(async () => {}),
     onStopRun: vi.fn(async () => {}),
     onShowRunOutput: vi.fn(),
+    onSaveBuildCommand: vi.fn(async () => {}),
+    onBuild: vi.fn(async () => {}),
+    onStopBuild: vi.fn(async () => {}),
+    onShowBuildOutput: vi.fn(),
     changesOpen: false,
     browserOpen: false,
     onToggleChanges: vi.fn(),
@@ -77,6 +82,22 @@ describe("ChatHeader title", () => {
 });
 
 describe("ChatHeader panel buttons", () => {
+  it("builds independently while the project's run command is active", async () => {
+    const p = props(task("t1", "Chat"));
+    render(<ChatHeader {...p} project={project} run={{ kind: "run", sessionId: "server", generation: 1, revision: 1, cwd: "/tmp", command: "pnpm dev", status: "running", exit: null }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Build" }));
+    await waitFor(() => expect(p.onBuild).toHaveBeenCalledOnce());
+    expect(p.onRun).not.toHaveBeenCalled();
+    expect(p.onStopRun).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Stop run" })).toBeInTheDocument();
+  });
+
+  it("hides project commands for archived chats", () => {
+    render(<ChatHeader {...props({ ...task("t1", "Archived"), archived: true })} project={project} />);
+    expect(screen.queryByRole("button", { name: "Build" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Run" })).toBeNull();
+  });
+
   it("groups the side panel's views into one control and fills only the open one", () => {
     const p = props(task("t1", "Chat"));
     const { rerender } = render(<ChatHeader {...p} changesCount={4} />);
@@ -102,11 +123,11 @@ describe("ChatHeader panel buttons", () => {
 describe("ChatHeader in Chat mode", () => {
   it("offers the scratchpad and the browser, and none of a project's chrome", () => {
     const p = props({ ...task("c1", "Trip plan"), kind: "chat", projectId: null, workspacePath: "/data/scratch/c1" });
-    render(<ChatHeader {...p} git={{ branch: "main" }} />);
+    render(<ChatHeader {...p} project={project} git={{ branch: "main" }} />);
     fireEvent.click(screen.getByRole("button", { name: "Reveal scratchpad" }));
     expect(p.onTaskAction).toHaveBeenCalledWith(p.task, "reveal");
     expect(screen.getByRole("button", { name: "Browser" })).toBeInTheDocument();
-    for (const name of ["Changes", "Terminal", "Games"]) expect(screen.queryByRole("button", { name })).toBeNull();
+    for (const name of ["Changes", "Terminal", "Games", "Build", "Run"]) expect(screen.queryByRole("button", { name })).toBeNull();
     // Neither the folder's path nor a branch: a scratchpad is not a checkout.
     expect(screen.queryByText(/scratch\/c1/)).toBeNull();
     expect(screen.queryByText("main")).toBeNull();

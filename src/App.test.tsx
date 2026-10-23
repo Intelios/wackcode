@@ -1,7 +1,7 @@
 import { useImperativeHandle, type Ref } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppData, BrowserState, ComputerAccessRequest, ComputerAppGrant, ComputerUseConfig, NormalizedMessage, ProviderRecord, SessionSnapshot, TaskRecord } from "./types";
+import type { AppData, BrowserState, ComputerAccessRequest, ComputerAppGrant, ComputerUseConfig, NormalizedMessage, ProviderRecord, RunInfo, SessionSnapshot, TaskRecord } from "./types";
 import { DEFAULT_APPEARANCE } from "./theme";
 import App from "./App";
 import { api } from "./api";
@@ -21,7 +21,8 @@ vi.mock("./api", () => ({ api: {
   computerUseRespondAccess: vi.fn(), computerUseRevokeApp: vi.fn(),
   gitPublishInfo: vi.fn().mockResolvedValue({ branch: "main", upstream: null, remotes: [] }),
   gitChanges: vi.fn().mockResolvedValue({ isGit: false, files: [] }), listDraftCommands: vi.fn().mockResolvedValue([]),
-  listCommands: vi.fn().mockResolvedValue([]), getRun: vi.fn().mockResolvedValue({ cwd: "/tmp", run: null, generation: 0 }),
+  listCommands: vi.fn().mockResolvedValue([]), getRun: vi.fn(async (_taskId, kind = "run") => ({ kind, cwd: "/tmp", run: null, generation: 0 })),
+  saveProjectRunCommand: vi.fn(), saveProjectBuildCommand: vi.fn(), startRun: vi.fn(), stopRun: vi.fn(),
   createTask: vi.fn(), prompt: vi.fn(), setTaskMode: vi.fn(), executeCommand: vi.fn().mockResolvedValue(undefined),
   stopTask: vi.fn().mockResolvedValue(undefined), setAppearanceConfig: vi.fn(async (config) => config),
   watchSubagent: vi.fn().mockResolvedValue(undefined), archiveTask: vi.fn(), deleteTask: vi.fn().mockResolvedValue(undefined),
@@ -47,6 +48,7 @@ vi.mock("./components/TerminalPanel", () => ({ TerminalPanel: ({ taskId, onAttac
   terminalAttach.current = onAttach;
   return <div aria-label={`Terminal ${taskId}`} />;
 } }));
+vi.mock("./components/RunPanel", () => ({ RunPanel: ({ kind, run }: { kind: string; run?: RunInfo }) => <output aria-label={`${kind} output`}>{run?.command}:{run?.status}</output> }));
 
 const provider: ProviderRecord = {
   id: "p", name: "Mock", baseUrl: "http://127.0.0.1:43127/v1", apiFormat: "openai-completions", kind: "custom",
@@ -81,9 +83,40 @@ function deferred<T>() { let resolve!: (value: T) => void; let reject!: (reason:
 
 beforeEach(() => {
   localStorage.clear(); events.clear(); vi.clearAllMocks(); vi.mocked(api.prompt).mockResolvedValue("run");
+  vi.mocked(api.getRun).mockImplementation(async (_taskId, kind = "run") => ({ kind, cwd: "/tmp", run: null, generation: 0 }));
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+describe("App project builds", () => {
+  it("saves and launches a build beside Run, shares its output across chats, and stops only the build", async () => {
+    const project = { id: "project", name: "Project", path: "/tmp", gitRoot: null, gitHasHead: false, runCommand: "pnpm dev", buildCommand: null, branch: null, createdAt: "now" };
+    const run: RunInfo = { kind: "run", sessionId: "server", generation: 1, revision: 1, cwd: "/tmp", command: "pnpm dev", status: "running", exit: null };
+    const build: RunInfo = { ...run, kind: "build", sessionId: "build", generation: 2, command: "pnpm build" };
+    vi.mocked(api.getRun).mockImplementation(async (_taskId, kind = "run") => ({ kind, cwd: "/tmp", run: kind === "run" ? run : null, generation: 1 }));
+    vi.mocked(api.saveProjectBuildCommand).mockResolvedValue({ ...project, buildCommand: "pnpm build" });
+    vi.mocked(api.startRun).mockResolvedValue(build);
+    vi.mocked(api.stopRun).mockResolvedValue({ ...build, revision: 2, status: "stopped" });
+    bootstrap(false, false, { projects: [project], tasks: ["a", "b"].map((id) => ({ ...task(id), projectId: "project", workspacePath: "/tmp" })) });
+    fireEvent.click(await screen.findByRole("button", { name: "Chat a" }));
+    await screen.findByRole("button", { name: "Stop run" });
+    fireEvent.click(screen.getByRole("button", { name: "Build" }));
+    fireEvent.change(screen.getByLabelText("Command"), { target: { value: "pnpm build" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save & Build" }));
+    await waitFor(() => expect(api.startRun).toHaveBeenCalledWith("a", "build"));
+    expect(api.saveProjectBuildCommand).toHaveBeenCalledWith("project", "pnpm build");
+    expect(api.saveProjectRunCommand).not.toHaveBeenCalled();
+    expect(await screen.findByLabelText("build output")).toHaveTextContent("pnpm build:running");
+    expect(screen.getByRole("button", { name: "Stop run" })).toBeInTheDocument();
+    chat("b");
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Chat b" })).toBeInTheDocument());
+    expect(screen.getByLabelText("build output")).toHaveTextContent("pnpm build:running");
+    fireEvent.click(screen.getByRole("button", { name: "Stop build" }));
+    await waitFor(() => expect(api.stopRun).toHaveBeenCalledExactlyOnceWith("build"));
+    await waitFor(() => expect(screen.getByLabelText("build output")).toHaveTextContent("pnpm build:stopped"));
+    expect(screen.getByRole("button", { name: "Stop run" })).toBeInTheDocument();
+  });
+});
 
 describe("App Settings entry points", () => {
   it("opens Providers from the sidebar button without treating the click event as a section", async () => {
@@ -677,7 +710,7 @@ describe("App areas", () => {
 
 describe("Changes after Git Mode removal", () => {
   it.each([false, true])("keeps the chat and Changes panel accessible with tabs=%s and old Git preferences", async (enabled) => {
-    const project = { id: "project", name: "Project", path: "/tmp/a", gitRoot: "/tmp/a", gitHasHead: true, runCommand: null, branch: "main", createdAt: "now" };
+    const project = { id: "project", name: "Project", path: "/tmp/a", gitRoot: "/tmp/a", gitHasHead: true, runCommand: null, buildCommand: null, branch: "main", createdAt: "now" };
     localStorage.setItem("wackcode:gitProject", project.id);
     localStorage.setItem("wackcode:diffLayout", "split");
     localStorage.setItem("wackcode:pinnedProjects", JSON.stringify([project.id]));
@@ -741,7 +774,7 @@ describe("App dynamic background wiring", () => {
 
 describe("App suggested tasks", () => {
   const brief = "**Where:** `src/components/Composer.tsx:88`\n\nThe stop button stays disabled after a failed save.";
-  const project = { id: "proj", name: "Project", path: "/tmp/proj", gitRoot: null, gitHasHead: false, runCommand: null, branch: null, createdAt: "2026-01-01" };
+  const project = { id: "proj", name: "Project", path: "/tmp/proj", gitRoot: null, gitHasHead: false, runCommand: null, buildCommand: null, branch: null, createdAt: "2026-01-01" };
   const suggestedTask = (id: string, patch: Partial<TaskRecord> = {}): TaskRecord => ({ ...task(id), projectId: "proj", ...patch });
   const startedChat = (id: string, originId: string): TaskRecord => suggestedTask(id, {
     name: "Dismiss stays disabled",

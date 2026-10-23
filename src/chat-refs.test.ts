@@ -20,7 +20,7 @@ function task(id: string, name: string, overrides: Partial<TaskRecord> = {}): Ta
 }
 
 const project = (id: string, name: string): ProjectRecord => ({
-  id, name, path: `/tmp/${id}`, gitRoot: null, gitHasHead: false, runCommand: null, branch: null, createdAt: "2026-01-01"
+  id, name, path: `/tmp/${id}`, gitRoot: null, gitHasHead: false, runCommand: null, buildCommand: null, branch: null, createdAt: "2026-01-01"
 });
 
 describe("encodeChatRefs", () => {

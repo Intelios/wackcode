@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CHANGES_VIEW, GAMES_VIEW, TERMINAL_VIEW, RUN_VIEW, rememberedView, sameView, swapDirection, swapKey, toggleView, viewForChat, viewKey, type SidePanelView } from "./side-panel";
+import { BUILD_VIEW, CHANGES_VIEW, GAMES_VIEW, TERMINAL_VIEW, RUN_VIEW, rememberedView, sameView, swapDirection, swapKey, toggleView, viewForChat, viewKey, type SidePanelView } from "./side-panel";
 
 const scout: SidePanelView = { kind: "subagent", taskId: "chat-1", toolCallId: "call-1", index: 0 };
 const sibling: SidePanelView = { kind: "subagent", taskId: "chat-1", toolCallId: "call-1", index: 1 };
@@ -30,6 +30,8 @@ describe("side panel views", () => {
   });
 
   it("slides durable views in header order", () => {
+    expect(swapDirection(BUILD_VIEW, RUN_VIEW)).toBe(1);
+    expect(swapDirection(RUN_VIEW, BUILD_VIEW)).toBe(-1);
     expect(swapDirection(RUN_VIEW, CHANGES_VIEW)).toBe(1);
     expect(swapDirection(CHANGES_VIEW, RUN_VIEW)).toBe(-1);
     expect(swapDirection(CHANGES_VIEW, TERMINAL_VIEW)).toBe(1);
@@ -56,6 +58,7 @@ describe("side panel views", () => {
     expect(rememberedView(CHANGES_VIEW)).toBe("changes");
     expect(rememberedView(TERMINAL_VIEW)).toBe("terminal");
     expect(rememberedView(RUN_VIEW)).toBe("run");
+    expect(rememberedView(BUILD_VIEW)).toBe("build");
     expect(rememberedView(GAMES_VIEW)).toBe("games");
     expect(rememberedView(null)).toBeNull();
     expect(rememberedView(scout)).toBeUndefined();
@@ -71,6 +74,8 @@ describe("side panel views", () => {
     expect(viewForChat(browser, "chat-2", null)).toBeNull();
     expect(viewForChat(TERMINAL_VIEW, "chat-2", null)).toBe(TERMINAL_VIEW);
     expect(viewForChat(RUN_VIEW, "chat-2", null)).toBe(RUN_VIEW);
+    expect(viewForChat(BUILD_VIEW, "chat-2", null)).toBe(BUILD_VIEW);
+    expect(viewForChat(browser, "chat-2", "build")).toBe(BUILD_VIEW);
     expect(viewForChat(browser, "chat-2", "run")).toBe(RUN_VIEW);
     expect(viewForChat(CHANGES_VIEW, "chat-2", null)).toBe(CHANGES_VIEW);
     expect(viewForChat(null, "chat-2", "terminal")).toBeNull();

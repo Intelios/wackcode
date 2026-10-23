@@ -628,7 +628,7 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .panel-switch .changes-badge { position: static; min-width: 16px; padding: 0 5px; font-size: 10px; line-height: 16px; text-align: center; }
 
 /* A project command launches from the header; the chevron keeps setup within reach. */
-/* Run is a split pill: the command on the left, its settings behind the chevron. */
+/* Run and Build share a split pill: the command on the left, settings behind the chevron. */
 .project-run-control {
   display: inline-flex; align-items: center; height: 32px; border-radius: var(--wc-radius-pill);
   background: color-mix(in srgb, var(--wc-accent) 12%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wc-accent) 26%, transparent);

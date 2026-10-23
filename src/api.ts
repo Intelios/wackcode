@@ -40,6 +40,7 @@ import type {
   PackageRecord,
   PackageSearchResult,
   ProjectRecord,
+  ProjectCommandKind,
   PromptConfig,
   ProviderRecord,
   QuestionAnswer,
@@ -358,9 +359,10 @@ export const api = {
    *  executables such as the running app, which plain `open` would launch. */
   revealPath: (path: string, select = false) => invoke<void>("reveal_path", { path, select }),
   saveProjectRunCommand: (projectId: string, command: string) => invoke<ProjectRecord>("save_project_run_command", { projectId, command }),
-  startRun: (taskId: string) => invoke<RunInfo>("start_run", { taskId }),
+  saveProjectBuildCommand: (projectId: string, command: string) => invoke<ProjectRecord>("save_project_build_command", { projectId, command }),
+  startRun: (taskId: string, kind: ProjectCommandKind = "run") => invoke<RunInfo>("start_run", { taskId, kind }),
   stopRun: (sessionId: string) => invoke<RunInfo>("stop_run", { sessionId }),
-  getRun: (taskId: string) => invoke<RunLookup>("get_run", { taskId }),
+  getRun: (taskId: string, kind: ProjectCommandKind = "run") => invoke<RunLookup>("get_run", { taskId, kind }),
   attachRun: (sessionId: string, attachmentId: string, cols: number, rows: number, onFrame: (frame: RunFrame) => void) => {
     const on_frame = new Channel<RunFrame>();
     on_frame.onmessage = onFrame;

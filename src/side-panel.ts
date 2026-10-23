@@ -1,11 +1,11 @@
 /**
  * The right-hand side panel shows one view at a time: the chat's Git changes, browser,
- * terminal, project Run output, the Games arcade, one of the chat's canvases, or one sub-agent's transcript. Views are this union; adding one means a member
+ * terminal, project Run/Build output, the Games arcade, one of the chat's canvases, or one sub-agent's transcript. Views are this union; adding one means a member
  * here, a view component rendered in `SidePanel`, and a trigger that opens it (`toggleView`).
  *
- * Changes, Terminal, Run and Games are durable: which of them is showing is remembered across launches and
+ * Changes, Terminal, Run, Build and Games are durable: which of them is showing is remembered across launches and
  * chats (`wackcode:sidePanel`; terminal shows the open chat's own shell, spawning lazily on
- * first attach; Run only attaches to an explicitly launched command; a game in progress lives in
+ * first attach; Run/Build only attach to an explicitly launched command; a game in progress lives in
  * `games/session.ts`, so it survives chat switches paused). Browser, canvas and sub-agent views belong to one chat and fall back to that remembered
  * state when the chat changes or the call leaves the conversation.
  */
@@ -14,25 +14,27 @@ export type SidePanelView =
   | { kind: "browser"; taskId: string }
   | { kind: "terminal" }
   | { kind: "run" }
+  | { kind: "build" }
   | { kind: "games" }
   | { kind: "canvas"; taskId: string; canvasId: string }
   | { kind: "subagent"; taskId: string; toolCallId: string; index: number };
 
 export const CHANGES_VIEW: SidePanelView = { kind: "changes" };
 export const RUN_VIEW: SidePanelView = { kind: "run" };
+export const BUILD_VIEW: SidePanelView = { kind: "build" };
 export const TERMINAL_VIEW: SidePanelView = { kind: "terminal" };
 export const GAMES_VIEW: SidePanelView = { kind: "games" };
 
 /** The views the panel can remember showing, in their header order. */
-export type PanelViewKind = "changes" | "terminal" | "run" | "games";
-const PANEL_ORDER: Record<PanelViewKind, number> = { run: 0, changes: 1, terminal: 2, games: 3 };
+export type PanelViewKind = "changes" | "terminal" | "run" | "build" | "games";
+const PANEL_ORDER: Record<PanelViewKind, number> = { build: 0, run: 1, changes: 2, terminal: 3, games: 4 };
 
 export function isDurable(kind: unknown): kind is PanelViewKind {
-  return kind === "changes" || kind === "terminal" || kind === "run" || kind === "games";
+  return kind === "changes" || kind === "terminal" || kind === "run" || kind === "build" || kind === "games";
 }
 
 export function durableView(kind: PanelViewKind): SidePanelView {
-  return kind === "run" ? RUN_VIEW : kind === "terminal" ? TERMINAL_VIEW : kind === "games" ? GAMES_VIEW : CHANGES_VIEW;
+  return kind === "build" ? BUILD_VIEW : kind === "run" ? RUN_VIEW : kind === "terminal" ? TERMINAL_VIEW : kind === "games" ? GAMES_VIEW : CHANGES_VIEW;
 }
 
 /** Stable per view: keys the panel's swap animation and tells two views apart. */
@@ -85,7 +87,7 @@ export function toggleView(current: SidePanelView | null, next: SidePanelView): 
 }
 
 /**
- * What the remembered durable view becomes: its kind for Changes/Terminal/Run/Games, null when the panel
+ * What the remembered durable view becomes: its kind for Changes/Terminal/Run/Build/Games, null when the panel
  * closes, and undefined while a task-bound Browser or sub-agent view is showing.
  */
 export function rememberedView(view: SidePanelView | null): PanelViewKind | null | undefined {

@@ -4,7 +4,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { api } from "../api";
-import type { AppearanceConfig, RunInfo } from "../types";
+import type { AppearanceConfig, ProjectCommandKind, RunInfo } from "../types";
 import { runIsActive, runStatusLabel } from "../run-state";
 import { resolveTheme } from "../theme";
 import { terminalTheme } from "../terminal-theme";
@@ -13,6 +13,7 @@ import { useContextClipboard, useContextMenu } from "./ui/ContextMenu";
 import { Tooltip } from "./ui/Tooltip";
 
 interface RunPanelProps {
+  kind?: ProjectCommandKind;
   run?: RunInfo;
   appearance: AppearanceConfig;
   configured: boolean;
@@ -22,7 +23,9 @@ interface RunPanelProps {
 }
 
 /** A self-contained PTY surface. Mounting attaches only; launching belongs to App. */
-export function RunPanel({ run, appearance, configured, onRun, onStop, onClose }: RunPanelProps) {
+export function RunPanel({ kind = "run", run, appearance, configured, onRun, onStop, onClose }: RunPanelProps) {
+  const title = kind === "build" ? "Build" : "Run";
+  const icon = kind === "build" ? "hammer" : "play";
   const reduce = useReducedMotion();
   const contextMenu = useContextMenu();
   const clipboard = useContextClipboard();
@@ -98,14 +101,14 @@ export function RunPanel({ run, appearance, configured, onRun, onStop, onClose }
   return (
     <div className="terminal-panel run-panel">
       <header className="panel-header terminal-header">
-        <span className="panel-mark" aria-hidden="true"><Icon name="play" /></span>
-        <div className="panel-title"><span className="panel-kicker">Run</span><h3 title={run?.command}>{run?.command ?? "Project command"}</h3></div>
+        <span className="panel-mark" aria-hidden="true"><Icon name={icon} /></span>
+        <div className="panel-title"><span className="panel-kicker">{title}</span><h3 title={run?.command}>{run?.command ?? `Project ${kind} command`}</h3></div>
         <div className="panel-header-actions">
           <Tooltip label="Clear screen" side="bottom">
-            <button type="button" className="icon-button" aria-label="Clear Run terminal" disabled={!run} onClick={() => termRef.current?.clear()}><Icon name="erase" /></button>
+            <button type="button" className="icon-button" aria-label={`Clear ${title} terminal`} disabled={!run} onClick={() => termRef.current?.clear()}><Icon name="erase" /></button>
           </Tooltip>
-          {runIsActive(run) && <button type="button" className="icon-button" aria-label="Stop run" disabled={!live} onClick={onStop}><Icon name="stop" /></button>}
-          <button type="button" className="icon-button" aria-label="Close Run panel" onClick={onClose}><Icon name="close" /></button>
+          {runIsActive(run) && <button type="button" className="icon-button" aria-label={`Stop ${kind}`} disabled={!live} onClick={onStop}><Icon name="stop" /></button>}
+          <button type="button" className="icon-button" aria-label={`Close ${title} panel`} onClick={onClose}><Icon name="close" /></button>
         </div>
       </header>
       {run && <div className="run-panel-meta">
@@ -126,13 +129,13 @@ export function RunPanel({ run, appearance, configured, onRun, onStop, onClose }
             } },
             { label: "Select all", hint: "⌘A", disabled: !term, onSelect: () => term?.selectAll() },
             { label: "Clear screen", icon: <Icon name="erase" />, disabled: !term, onSelect: () => term?.clear() }
-          ], "Run terminal menu", false);
+          ], `${title} terminal menu`, false);
         }} />
         {!run && <div className="terminal-notice">
-          <strong>No command running</strong><span>{configured ? "Run your project command to see its output here." : "Choose a project chat and set its command beside Run in the top bar."}</span>
-          {configured && <button type="button" className="secondary-button compact" onClick={onRun}><Icon name="play" />Run</button>}
+          <strong>{kind === "build" ? "No build started" : "No command running"}</strong><span>{configured ? `${title} your project to see its output here.` : `Choose a project chat and set its command beside ${title} in the top bar.`}</span>
+          {configured && <button type="button" className="secondary-button compact" onClick={onRun}><Icon name={icon} />{title}</button>}
         </div>}
-        {error && <div className="terminal-notice" role="alert"><strong>Run terminal error</strong><span>{error}</span></div>}
+        {error && <div className="terminal-notice" role="alert"><strong>{title} terminal error</strong><span>{error}</span></div>}
       </div>
     </div>
   );

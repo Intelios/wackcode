@@ -1,13 +1,14 @@
-//! User-launched foreground commands, shared by canonical checkout, never by the worker.
+//! User-launched foreground commands, shared by canonical checkout and kind, never by the worker.
 //!
 //! The registry lock serializes starts. A run's command/cwd are immutable snapshots; editing
 //! configuration affects the next launch. Output replay and attachment changes share Core's
 //! lock. Session + attachment identities prevent a dying panel from detaching its successor.
 //! Child wait, independently of PTY EOF, determines completion. Lifecycle cleanup runs before
 //! deleting a worktree, and only stops a shared local run when its last eligible chat leaves.
+//! Run and Build have separate registry entries so building never replaces a dev server.
 
 use crate::{
-    models::{ProjectRecord, RunEvent, RunFrame, RunInfo, RunLookup, RunStatus, TerminalExit},
+    models::{ProjectCommandKind, ProjectRecord, RunEvent, RunFrame, RunInfo, RunLookup, RunStatus, TaskKind, TerminalExit},
     pty_output::{append_scrollback, read_output, size},
     storage::MetadataState,
 };
@@ -108,7 +109,8 @@ impl Session {
 
     /// Serialize repeat Stop/cleanup requests; signal jobs as well as their parent shell.
     fn stop(&self) -> Result<RunInfo, String> {
-        let _stop = self.stop_lock.lock().map_err(|_| "Could not lock this run.".to_string())?;
+        let name = self.info().kind.name();
+        let _stop = self.stop_lock.lock().map_err(|_| format!("Could not lock this {name}."))?;
         if !self.active() { return Ok(self.info()); }
         self.mark_stopping();
         let processes = process_groups();
@@ -135,7 +137,7 @@ impl Session {
         self.wait_for_exit(Duration::from_secs(1));
         let stopped = {
             let mut info = self.info.lock().unwrap_or_else(|e| e.into_inner());
-            if info.exit.is_none() { return Err("Could not stop this run. Try Stop again.".into()); }
+            if info.exit.is_none() { return Err(format!("Could not stop this {name}. Try Stop again.")); }
             info.status = RunStatus::Stopped;
             info.revision += 1;
             info.clone()
@@ -181,9 +183,19 @@ fn wait_groups(groups: &HashSet<i32>, duration: Duration) {
 
 #[derive(Clone, Default)]
 pub struct RunState {
-    sessions: Arc<Mutex<HashMap<PathBuf, Arc<Session>>>>,
+    sessions: Arc<Mutex<HashMap<(PathBuf, ProjectCommandKind), Arc<Session>>>>,
     generation: Arc<AtomicU64>,
     shutdown: Arc<AtomicBool>,
+}
+
+impl ProjectCommandKind {
+    fn name(self) -> &'static str {
+        match self { Self::Run => "run", Self::Build => "build" }
+    }
+
+    fn title(self) -> &'static str {
+        match self { Self::Run => "Run", Self::Build => "Build" }
+    }
 }
 
 fn canonical_folder(path: &Path) -> PathBuf {
@@ -196,12 +208,14 @@ fn emitter(app: &AppHandle) -> Emit {
 }
 
 fn spawn(
-    cwd: &Path, command: &str, generation: u64, emit: Emit, shell: &str, login: bool,
+    cwd: &Path, kind: ProjectCommandKind, command: &str, generation: u64, emit: Emit, shell: &str, login: bool,
 ) -> Result<(Arc<Session>, Box<dyn portable_pty::Child + Send + Sync>, Box<dyn std::io::Read + Send>), String> {
+    let title = kind.title();
+    let name = kind.name();
     let pair = native_pty_system().openpty(size(80, 24))
-        .map_err(|e| format!("Could not open the Run terminal: {e}"))?;
-    let reader = pair.master.try_clone_reader().map_err(|e| format!("Could not read Run output: {e}"))?;
-    let writer = pair.master.take_writer().map_err(|e| format!("Could not write to Run: {e}"))?;
+        .map_err(|e| format!("Could not open the {title} terminal: {e}"))?;
+    let reader = pair.master.try_clone_reader().map_err(|e| format!("Could not read {title} output: {e}"))?;
+    let writer = pair.master.take_writer().map_err(|e| format!("Could not write to {title}: {e}"))?;
     let mut builder = CommandBuilder::new(shell);
     if login { builder.arg("-l"); }
     builder.args(["-i", "-c", command]);
@@ -211,14 +225,15 @@ fn spawn(
     builder.env("TERM_PROGRAM", "WackCode");
     if std::env::var_os("LANG").is_none() { builder.env("LANG", "en_US.UTF-8"); }
     let mut child = pair.slave.spawn_command(builder)
-        .map_err(|e| format!("Could not start the run: {e}"))?;
+        .map_err(|e| format!("Could not start the {name}: {e}"))?;
     let Some(pid) = child.process_id().filter(|pid| *pid > 0) else {
         let _ = child.kill();
-        return Err("Could not identify the run's process.".into());
+        return Err(format!("Could not identify the {name}'s process."));
     };
     drop(pair.slave);
     let session = Arc::new(Session {
         info: Mutex::new(RunInfo {
+            kind,
             session_id: Uuid::new_v4().to_string(), generation, revision: 1,
             cwd: cwd.to_string_lossy().into_owned(), command: command.to_string(),
             status: RunStatus::Running, exit: None,
@@ -231,16 +246,17 @@ fn spawn(
 }
 
 impl RunState {
-    fn start(&self, cwd: &Path, command: &str, emit: Emit, shell: &str, login: bool) -> Result<RunInfo, String> {
+    fn start(&self, cwd: &Path, kind: ProjectCommandKind, command: &str, emit: Emit, shell: &str, login: bool) -> Result<RunInfo, String> {
         let cwd = cwd.canonicalize().map_err(|_| "This chat's folder no longer exists.".to_string())?;
+        let key = (cwd.clone(), kind);
         let mut sessions = self.sessions.lock().map_err(|_| "Could not lock the runs.".to_string())?;
         if self.shutdown.load(Ordering::SeqCst) { return Err("WackCode is quitting.".into()); }
-        if let Some(session) = sessions.get(&cwd).filter(|session| session.active()) { return Ok(session.info()); }
-        if command.trim().is_empty() { return Err("Set a project run command first.".into()); }
+        if let Some(session) = sessions.get(&key).filter(|session| session.active()) { return Ok(session.info()); }
+        if command.trim().is_empty() { return Err(format!("Set a project {} command first.", kind.name())); }
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        let (session, mut child, reader) = spawn(&cwd, command, generation, emit, shell, login)?;
+        let (session, mut child, reader) = spawn(&cwd, kind, command, generation, emit, shell, login)?;
         let info = session.info();
-        sessions.insert(cwd, session.clone());
+        sessions.insert(key, session.clone());
         (session.emit)(RunEvent::Changed { run: info.clone() });
         let output_session = session.clone();
         thread::spawn(move || read_output(reader, |text| output_session.push(text)));
@@ -272,24 +288,30 @@ impl RunState {
     /// Metadata is checked before reserving cleanup; no metadata/registry lock crosses a wait.
     pub async fn release_workspace(&self, state: &MetadataState, workspace: &str, removing: bool) -> Result<(), String> {
         let cwd = canonical_folder(Path::new(workspace));
-        let session = {
+        let sessions: Vec<_> = {
             let data = state.data.lock().map_err(|_| "Could not read the chats.".to_string())?;
             if !removing && has_chat(&data.tasks, &cwd) { return Ok(()); }
             let sessions = self.sessions.lock().map_err(|_| "Could not lock the runs.".to_string())?;
-            let session = sessions.get(&cwd).cloned();
-            if let Some(session) = &session { session.mark_stopping(); }
-            session
+            sessions.iter().filter(|((folder, _), _)| folder == &cwd).map(|(key, session)| {
+                session.mark_stopping();
+                (key.clone(), session.clone())
+            }).collect()
         };
-        if let Some(session) = session {
+        // Stop both commands before releasing the checkout, in one grace period.
+        let stops: Vec<_> = sessions.into_iter().map(|(key, session)| {
             let stopping = session.clone();
-            tauri::async_runtime::spawn_blocking(move || stopping.stop()).await
+            (key, session, tauri::async_runtime::spawn_blocking(move || stopping.stop()))
+        }).collect();
+        for (key, session, stop) in stops {
+            stop.await
                 .map_err(|e| format!("Could not stop the run: {e}"))??;
             let data = state.data.lock().map_err(|_| "Could not read the chats.".to_string())?;
             if removing || !has_chat(&data.tasks, &cwd) {
                 let mut sessions = self.sessions.lock().map_err(|_| "Could not lock the runs.".to_string())?;
-                if sessions.get(&cwd).is_some_and(|current| Arc::ptr_eq(current, &session)) {
-                    sessions.remove(&cwd);
-                    (session.emit)(RunEvent::Removed { cwd: session.info().cwd, session_id: session.info().session_id, generation: session.info().generation });
+                if sessions.get(&key).is_some_and(|current| Arc::ptr_eq(current, &session)) {
+                    sessions.remove(&key);
+                    let info = session.info();
+                    (session.emit)(RunEvent::Removed { kind: info.kind, cwd: info.cwd, session_id: info.session_id, generation: info.generation });
                 }
             }
         }
@@ -306,67 +328,79 @@ impl RunState {
 }
 
 fn has_chat(tasks: &[crate::models::TaskRecord], cwd: &Path) -> bool {
-    tasks.iter().any(|task| !task.archived && task.project_id.is_some() && canonical_folder(Path::new(&task.workspace_path)) == cwd)
+    tasks.iter().any(|task| task.kind == TaskKind::Code && !task.archived && task.project_id.is_some() && canonical_folder(Path::new(&task.workspace_path)) == cwd)
 }
 
-fn resolve(state: &MetadataState, task_id: &str) -> Result<(PathBuf, Option<String>), String> {
+fn resolve(state: &MetadataState, task_id: &str, kind: ProjectCommandKind) -> Result<(PathBuf, Option<String>), String> {
     let data = state.data.lock().map_err(|_| "Could not read the project.".to_string())?;
     let task = data.tasks.iter().find(|task| task.id == task_id && !task.archived)
         .ok_or_else(|| "This chat is missing or archived.".to_string())?;
+    if task.kind == TaskKind::Chat { return Err("Project commands are available only in coding chats.".into()); }
     let project = task.project_id.as_ref().and_then(|id| data.projects.iter().find(|project| &project.id == id))
         .ok_or_else(|| "Choose a project before running a command.".to_string())?;
     let cwd = Path::new(&task.workspace_path).canonicalize()
         .map_err(|_| "This chat's folder no longer exists.".to_string())?;
     if !cwd.is_dir() { return Err("This chat's folder no longer exists.".into()); }
-    Ok((cwd, project.run_command.clone()))
+    let command = match kind { ProjectCommandKind::Run => &project.run_command, ProjectCommandKind::Build => &project.build_command };
+    Ok((cwd, command.clone()))
 }
 
 #[tauri::command]
 pub fn save_project_run_command(state: State<'_, MetadataState>, project_id: String, command: String) -> Result<ProjectRecord, String> {
-    save_command(&state, &project_id, &command)
+    save_command(&state, &project_id, ProjectCommandKind::Run, &command)
 }
 
-fn save_command(state: &MetadataState, project_id: &str, command: &str) -> Result<ProjectRecord, String> {
-    if command.contains('\0') { return Err("The run command contains an invalid character.".into()); }
+#[tauri::command]
+pub fn save_project_build_command(state: State<'_, MetadataState>, project_id: String, command: String) -> Result<ProjectRecord, String> {
+    save_command(&state, &project_id, ProjectCommandKind::Build, &command)
+}
+
+fn save_command(state: &MetadataState, project_id: &str, kind: ProjectCommandKind, command: &str) -> Result<ProjectRecord, String> {
+    if command.contains('\0') { return Err(format!("The {} command contains an invalid character.", kind.name())); }
     state.mutate(|data| {
         let project = data.projects.iter_mut().find(|project| project.id == project_id)
             .ok_or_else(|| "This project no longer exists.".to_string())?;
-        project.run_command = if command.trim().is_empty() { None } else { Some(command.trim().to_string()) };
+        let target = match kind { ProjectCommandKind::Run => &mut project.run_command, ProjectCommandKind::Build => &mut project.build_command };
+        *target = if command.trim().is_empty() { None } else { Some(command.trim().to_string()) };
         Ok(project.clone())
     })
 }
 
 #[tauri::command]
-pub async fn start_run(app: AppHandle, state: State<'_, MetadataState>, runs: State<'_, RunState>, task_id: String) -> Result<RunInfo, String> {
+pub async fn start_run(app: AppHandle, state: State<'_, MetadataState>, runs: State<'_, RunState>, task_id: String, kind: Option<ProjectCommandKind>) -> Result<RunInfo, String> {
+    let kind = kind.unwrap_or_default();
     let _task = crate::commands::task_lock(&app, &task_id).lock_owned().await;
-    let (cwd, command) = resolve(&state, &task_id)?;
+    let (cwd, command) = resolve(&state, &task_id, kind)?;
     let shell = std::env::var("SHELL").ok().filter(|shell| shell.starts_with('/')).unwrap_or_else(|| "/bin/zsh".into());
     let runs = runs.inner().clone();
     let emit = emitter(&app);
-    tauri::async_runtime::spawn_blocking(move || runs.start(&cwd, command.as_deref().unwrap_or(""), emit, &shell, true))
-        .await.map_err(|e| format!("Could not start the run: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || runs.start(&cwd, kind, command.as_deref().unwrap_or(""), emit, &shell, true))
+        .await.map_err(|e| format!("Could not start the {}: {e}", kind.name()))?
 }
 
 #[tauri::command]
-pub fn get_run(state: State<'_, MetadataState>, runs: State<'_, RunState>, task_id: String) -> Result<RunLookup, String> {
-    let (cwd, _) = resolve(&state, &task_id)?;
+pub fn get_run(state: State<'_, MetadataState>, runs: State<'_, RunState>, task_id: String, kind: Option<ProjectCommandKind>) -> Result<RunLookup, String> {
+    let kind = kind.unwrap_or_default();
+    let (cwd, _) = resolve(&state, &task_id, kind)?;
     let sessions = runs.sessions.lock().map_err(|_| "Could not lock the runs.".to_string())?;
-    let run = sessions.get(&cwd).map(|s| s.info());
+    let run = sessions.get(&(cwd.clone(), kind)).map(|s| s.info());
     let generation = runs.generation.load(Ordering::SeqCst);
-    Ok(RunLookup { generation, cwd: cwd.to_string_lossy().into_owned(), run })
+    Ok(RunLookup { kind, generation, cwd: cwd.to_string_lossy().into_owned(), run })
 }
 
 #[tauri::command]
 pub async fn stop_run(runs: State<'_, RunState>, session_id: String) -> Result<RunInfo, String> {
     let session = runs.by_id(&session_id)?;
-    tauri::async_runtime::spawn_blocking(move || session.stop()).await.map_err(|e| format!("Could not stop the run: {e}"))?
+    let name = session.info().kind.name();
+    tauri::async_runtime::spawn_blocking(move || session.stop()).await.map_err(|e| format!("Could not stop the {name}: {e}"))?
 }
 
 #[tauri::command]
 pub fn attach_run(runs: State<'_, RunState>, session_id: String, attachment_id: String, cols: u16, rows: u16, on_frame: Channel<RunFrame>) -> Result<RunInfo, String> {
     let session = runs.by_id(&session_id)?;
-    if let Some(master) = session.master.lock().map_err(|_| "Could not resize Run.".to_string())?.as_ref() {
-        master.resize(size(cols, rows)).map_err(|e| format!("Could not resize Run: {e}"))?;
+    let title = session.info().kind.title();
+    if let Some(master) = session.master.lock().map_err(|_| format!("Could not resize {title}."))?.as_ref() {
+        master.resize(size(cols, rows)).map_err(|e| format!("Could not resize {title}: {e}"))?;
     }
     Ok(session.attach(attachment_id, Arc::new(move |frame| { let _ = on_frame.send(frame); })))
 }
@@ -380,17 +414,21 @@ pub fn detach_run(runs: State<'_, RunState>, session_id: String, attachment_id: 
 #[tauri::command]
 pub fn write_run(runs: State<'_, RunState>, session_id: String, data: String) -> Result<(), String> {
     let session = runs.by_id(&session_id)?;
-    if session.info().status != RunStatus::Running { return Err("This run is no longer accepting input.".into()); }
-    let mut writer = session.writer.lock().map_err(|_| "Could not write to Run.".to_string())?;
-    writer.as_mut().ok_or_else(|| "This run has ended.".to_string())?
-        .write_all(data.as_bytes()).map_err(|e| format!("Could not write to Run: {e}"))
+    let info = session.info();
+    let name = info.kind.name();
+    let title = info.kind.title();
+    if info.status != RunStatus::Running { return Err(format!("This {name} is no longer accepting input.")); }
+    let mut writer = session.writer.lock().map_err(|_| format!("Could not write to {title}."))?;
+    writer.as_mut().ok_or_else(|| format!("This {name} has ended."))?
+        .write_all(data.as_bytes()).map_err(|e| format!("Could not write to {title}: {e}"))
 }
 
 #[tauri::command]
 pub fn resize_run(runs: State<'_, RunState>, session_id: String, cols: u16, rows: u16) -> Result<(), String> {
     let session = runs.by_id(&session_id)?;
-    if let Some(master) = session.master.lock().map_err(|_| "Could not resize Run.".to_string())?.as_ref() {
-        master.resize(size(cols, rows)).map_err(|e| format!("Could not resize Run: {e}"))?;
+    let title = session.info().kind.title();
+    if let Some(master) = session.master.lock().map_err(|_| format!("Could not resize {title}."))?.as_ref() {
+        master.resize(size(cols, rows)).map_err(|e| format!("Could not resize {title}: {e}"))?;
     }
     Ok(())
 }
@@ -407,7 +445,7 @@ mod tests {
         fn new() -> Self { Self(RunState::default()) }
         fn start(&self, cwd: &Path, command: &str) -> RunInfo {
             // Test real PTYs without sourcing the owner's login profiles.
-            self.0.start(cwd, command, Arc::new(|_| {}), "/bin/sh", false).unwrap()
+            self.0.start(cwd, ProjectCommandKind::Run, command, Arc::new(|_| {}), "/bin/sh", false).unwrap()
         }
     }
     impl Drop for Harness { fn drop(&mut self) { self.0.terminate_all(); } }
@@ -444,16 +482,44 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let state = metadata(directory.path(), vec![task("a", directory.path())]);
         assert!(state.data.lock().unwrap().projects[0].run_command.is_none());
-        save_command(&state, "p", "  printf '%s' 'hello world'  ").unwrap();
+        assert!(state.data.lock().unwrap().projects[0].build_command.is_none());
+        save_command(&state, "p", ProjectCommandKind::Run, "  printf '%s' 'hello world'  ").unwrap();
+        save_command(&state, "p", ProjectCommandKind::Build, "  printf build  ").unwrap();
         let data: AppData = serde_json::from_slice(&fs::read(&state.data_path).unwrap()).unwrap();
         assert_eq!(data.projects[0].run_command.as_deref(), Some("printf '%s' 'hello world'"));
+        assert_eq!(data.projects[0].build_command.as_deref(), Some("printf build"));
+        assert_eq!(resolve(&state, "a", ProjectCommandKind::Build).unwrap().1.as_deref(), Some("printf build"));
         let runs = Harness::new();
         let running = runs.start(directory.path(), "sleep 30");
-        save_command(&state, "p", "printf next").unwrap();
+        save_command(&state, "p", ProjectCommandKind::Run, "printf next").unwrap();
         assert_eq!(runs.0.by_id(&running.session_id).unwrap().info().command, "sleep 30");
-        save_command(&state, "p", " \n ").unwrap();
+        save_command(&state, "p", ProjectCommandKind::Run, " \n ").unwrap();
         assert!(state.data.lock().unwrap().projects[0].run_command.is_none());
-        assert!(save_command(&state, "p", "bad\0command").is_err());
+        assert_eq!(state.data.lock().unwrap().projects[0].build_command.as_deref(), Some("printf build"));
+        save_command(&state, "p", ProjectCommandKind::Build, " \n ").unwrap();
+        assert!(state.data.lock().unwrap().projects[0].build_command.is_none());
+        assert!(save_command(&state, "p", ProjectCommandKind::Run, "bad\0command").is_err());
+        assert!(save_command(&state, "p", ProjectCommandKind::Build, "bad\0command").is_err());
+    }
+
+    #[test]
+    fn builds_run_beside_a_dev_server_and_can_be_repeated_without_replacing_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let runs = Harness::new();
+        let run = runs.start(directory.path(), "sleep 30");
+        let build = runs.0.start(directory.path(), ProjectCommandKind::Build, "printf build; exit 7", Arc::new(|_| {}), "/bin/sh", false).unwrap();
+        assert_eq!(build.kind, ProjectCommandKind::Build);
+        assert_ne!(run.session_id, build.session_id);
+        let session = runs.0.by_id(&build.session_id).unwrap();
+        eventually(|| session.info().status == RunStatus::Failed);
+        assert_eq!(session.info().exit.unwrap().code, 7);
+        assert!(runs.0.by_id(&run.session_id).unwrap().active());
+        let next = runs.0.start(directory.path(), ProjectCommandKind::Build, "sleep 30", Arc::new(|_| {}), "/bin/sh", false).unwrap();
+        assert_ne!(build.session_id, next.session_id);
+        let shared = runs.0.start(directory.path(), ProjectCommandKind::Build, "echo never", Arc::new(|_| {}), "/bin/sh", false).unwrap();
+        assert_eq!(next.session_id, shared.session_id);
+        runs.0.by_id(&next.session_id).unwrap().stop().unwrap();
+        assert!(runs.0.by_id(&run.session_id).unwrap().active());
     }
 
     #[test]
@@ -486,7 +552,7 @@ mod tests {
             let cwd = directory.path().to_path_buf();
             thread::spawn(move || {
                 barrier.wait();
-                state.start(&cwd, "sleep 30", Arc::new(|_| {}), "/bin/sh", false).unwrap()
+                state.start(&cwd, ProjectCommandKind::Run, "sleep 30", Arc::new(|_| {}), "/bin/sh", false).unwrap()
             })
         }).collect();
         barrier.wait();
@@ -593,16 +659,21 @@ mod tests {
         let metadata = metadata(directory.path(), vec![task("a", &cwd), task("b", &cwd)]);
         let runs = Harness::new();
         let run = runs.start(&cwd, "sleep 30");
+        let build = runs.0.start(&cwd, ProjectCommandKind::Build, "sleep 30", Arc::new(|_| {}), "/bin/sh", false).unwrap();
         metadata.mutate(|data| { data.tasks[0].archived = true; Ok(()) }).unwrap();
         runs.0.release_workspace(&metadata, cwd.to_str().unwrap(), false).await.unwrap();
         assert!(runs.0.by_id(&run.session_id).unwrap().active());
+        assert!(runs.0.by_id(&build.session_id).unwrap().active());
         metadata.mutate(|data| { data.tasks[1].archived = true; Ok(()) }).unwrap();
         runs.0.release_workspace(&metadata, cwd.to_str().unwrap(), false).await.unwrap();
         assert!(runs.0.by_id(&run.session_id).is_err());
+        assert!(runs.0.by_id(&build.session_id).is_err());
         let run = runs.start(&cwd, "sleep 30");
+        let build = runs.0.start(&cwd, ProjectCommandKind::Build, "sleep 30", Arc::new(|_| {}), "/bin/sh", false).unwrap();
         metadata.mutate(|data| { data.tasks[0].archived = false; Ok(()) }).unwrap();
         runs.0.release_workspace(&metadata, cwd.to_str().unwrap(), true).await.unwrap();
         assert!(runs.0.by_id(&run.session_id).is_err());
+        assert!(runs.0.by_id(&build.session_id).is_err());
         fs::remove_dir(&cwd).unwrap();
         });
     }
@@ -621,7 +692,7 @@ mod tests {
         metadata.mutate(|data| { data.tasks[0].workspace_path = new.to_string_lossy().into_owned(); Ok(()) }).unwrap();
         runs.0.release_workspace(&metadata, old.to_str().unwrap(), false).await.unwrap();
         assert!(runs.0.by_id(&run.session_id).is_err());
-        assert!(resolve(&metadata, "a").unwrap().0.ends_with("new"));
+        assert!(resolve(&metadata, "a", ProjectCommandKind::Run).unwrap().0.ends_with("new"));
         });
     }
 
@@ -633,7 +704,7 @@ mod tests {
         let session = runs.0.by_id(&run.session_id).unwrap();
         runs.0.terminate_all();
         assert!(!session.active());
-        assert!(runs.0.start(directory.path(), "echo never", Arc::new(|_| {}), "/bin/sh", false).is_err());
+        assert!(runs.0.start(directory.path(), ProjectCommandKind::Run, "echo never", Arc::new(|_| {}), "/bin/sh", false).is_err());
         runs.0.terminate_all();
     }
 
@@ -642,8 +713,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let metadata = metadata(directory.path(), vec![task("a", directory.path())]);
         metadata.mutate(|data| { data.tasks[0].archived = true; Ok(()) }).unwrap();
-        assert!(resolve(&metadata, "a").is_err());
+        assert!(resolve(&metadata, "a", ProjectCommandKind::Run).is_err());
+        assert!(resolve(&metadata, "a", ProjectCommandKind::Build).is_err());
+        metadata.mutate(|data| { data.tasks[0].archived = false; data.tasks[0].kind = TaskKind::Chat; Ok(()) }).unwrap();
+        assert!(resolve(&metadata, "a", ProjectCommandKind::Build).is_err());
         let runs = Harness::new();
-        assert!(runs.0.start(&directory.path().join("missing"), "echo never", Arc::new(|_| {}), "/bin/sh", false).is_err());
+        assert!(runs.0.start(&directory.path().join("missing"), ProjectCommandKind::Run, "echo never", Arc::new(|_| {}), "/bin/sh", false).is_err());
     }
 }

@@ -191,10 +191,10 @@ and forks copy it.
 
 ## Side panel
 
-`SidePanel` shows one `SidePanelView` (`src/side-panel.ts`) at a time: Changes, Browser, Terminal, Run, Games, one of the chat's canvases, or one sub-agent's transcript.
+`SidePanel` shows one `SidePanelView` (`src/side-panel.ts`) at a time: Changes, Browser, Terminal, Run, Build, Games, one of the chat's canvases, or one sub-agent's transcript.
 
 - A new view is a union member, a component `SidePanel` renders, and a trigger that opens it (`toggleView`). Give it the shared head: `.panel-header` with a `.panel-mark`, a `.panel-kicker` over an `h3`, and `.panel-header-actions` ([design.md](design.md)).
-- In the original layout, Changes, Terminal, Run and Games are durable: which one is showing is remembered across chats and launches (`wackcode:sidePanel`). With chat tabs enabled, every tab keeps its own panel for the session and a new draft starts closed. Run follows the selected checkout and restoring it never launches a command. Browser and sub-agent views belong to one chat; the original layout falls back to the remembered durable view when the chat changes.
+- In the original layout, Changes, Terminal, Run, Build and Games are durable: which one is showing is remembered across chats and launches (`wackcode:sidePanel`). With chat tabs enabled, every tab keeps its own panel for the session and a new draft starts closed. Run and Build follow the selected checkout and restoring either never launches a command. Browser and sub-agent views belong to one chat; the original layout falls back to the remembered durable view when the chat changes.
 - Sub-agent transcripts reach the panel only through `watch_subagent` frames, never through snapshots.
 - **Expand** (`panelExpanded`, `canExpand`) spans the main area with the composer docked below, for the browser and the canvas alike; changing view or chat restores the panel's width.
 - **Canvas** (`CanvasPanel`) is chat-bound like Browser (`isTaskBound`), and a rewind that takes its canvas away closes it. The header's Canvas button appears once the chat has a canvas and opens the latest one; the first canvas a live run starts opens the panel if it was closed, otherwise the button pings. The panel owns the camera (saved per canvas in `localStorage`, else fitted), selection, stepping into an artboard (its frame takes the pointer only then, since frames swallow wheel and drag), and the choreography around the agent's changes: new artboards pop, revised ones glint, and the camera glides to them unless the user panned away, in which case a pill offers to. Frames mount once near the screen and stay mounted. "Mention in chat" puts plain text in the draft; nothing about a canvas rides a message.
@@ -250,15 +250,17 @@ The user's own shell, in `src-tauri/src/terminal.rs`. The agent never sees it.
 - Output streams over a `Channel<TerminalFrame>` straight into xterm, never through React state. A ~256 KiB scrollback ring buffer replays on reattach; one lock orders replay and live output so nothing is lost or duplicated.
 - The agent never sees any of it unless the user says so: a selection rests an **Add to draft** pill at its end row (and a context-menu item), which hands the tidied text to the composer as a `Terminal output N.txt` text-file chip (`terminalOutputFile`/`normalizeTerminalSelection` in `attachment-utils.ts`, `onAttach` follows `BrowserPanel`'s contract). A refusal (the shared file caps) shows as a small notice in the panel.
 
-## Project Run commands
+## Project Run and Build commands
 
-The chat header's split Run/Stop control saves one nullable `ProjectRecord.runCommand` through
-`save_project_run_command`. The editor lives beside the button; edits affect only the next run.
+The Code chat header's split Build/Stop and Run/Stop controls share `RunButton`, saving nullable
+`ProjectRecord.buildCommand` and `runCommand` through `save_project_build_command` and
+`save_project_run_command`. The editors live beside each button; edits affect only the next launch.
 `App` owns launch/stop callbacks, the `run-event` listener and checkout lookup. `run-state.ts`
 reconciles events and invoke replies by generation/revision, retaining removal watermarks so
-late output-state events cannot resurrect a retired session.
+late output-state events cannot resurrect a retired session. Session keys and watermarks include
+both the canonical folder and command kind, keeping builds independent of dev servers.
 
-`RunPanel` attaches xterm to an existing run with a unique attachment id. Output goes directly
+`RunPanel` renders either command's output, attaching xterm with a unique attachment id. Output goes directly
 from a Channel to xterm, never through React. Session and attachment ids guard stale frames;
 detaching a superseded attachment does not disconnect the current one. Input, resize and
 screen clearing work like the manual Terminal. A finished/stopped run keeps its screen until

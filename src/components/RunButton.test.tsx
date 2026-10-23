@@ -4,13 +4,32 @@ import type { ProjectRecord, RunInfo } from "../types";
 import { RunButton } from "./RunButton";
 
 afterEach(cleanup);
-const project: ProjectRecord = { id: "p", name: "Project", path: "/project", gitRoot: null, gitHasHead: false, runCommand: null, branch: null, createdAt: "now" };
-const run: RunInfo = { sessionId: "one", generation: 1, revision: 1, cwd: "/tree", command: "pnpm dev", status: "running", exit: null };
+const project: ProjectRecord = { id: "p", name: "Project", path: "/project", gitRoot: null, gitHasHead: false, runCommand: null, buildCommand: null, branch: null, createdAt: "now" };
+const run: RunInfo = { kind: "run", sessionId: "one", generation: 1, revision: 1, cwd: "/tree", command: "pnpm dev", status: "running", exit: null };
 function props() {
   return { project, workspacePath: "/tree", onSave: vi.fn(async () => {}), onRun: vi.fn(async () => {}), onStop: vi.fn(async () => {}), onShowOutput: vi.fn() };
 }
 
 describe("Run control", () => {
+  it("configures a separate build command, saves it before building, and reuses it", async () => {
+    const actions = props();
+    const view = render(<RunButton {...actions} kind="build" project={{ ...project, runCommand: "pnpm dev" }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Build" }));
+    expect(screen.getByRole("dialog", { name: "Project build command" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Command")).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Save & Build" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Command"), { target: { value: "pnpm build" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save & Build" }));
+    await waitFor(() => expect(actions.onRun).toHaveBeenCalledOnce());
+    expect(actions.onSave).toHaveBeenCalledWith("pnpm build");
+    expect(actions.onSave.mock.invocationCallOrder[0]).toBeLessThan(actions.onRun.mock.invocationCallOrder[0]);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    view.rerender(<RunButton {...actions} kind="build" project={{ ...project, buildCommand: "pnpm build" }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Build" }));
+    await waitFor(() => expect(actions.onRun).toHaveBeenCalledTimes(2));
+    expect(actions.onSave).toHaveBeenCalledOnce();
+  });
+
   it("opens setup on first use and saves before launching", async () => {
     const actions = props();
     render(<RunButton {...actions} />);
@@ -31,7 +50,7 @@ describe("Run control", () => {
     actions.onRun.mockImplementation(() => new Promise<void>((done) => { resolve = done; }));
     render(<RunButton {...actions} project={{ ...project, runCommand: "pnpm dev" }} />);
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
-    expect(screen.getByRole("button", { name: "Starting…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Starting run…" })).toBeDisabled();
     expect(actions.onRun).toHaveBeenCalledOnce();
     await act(async () => resolve());
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -48,8 +67,8 @@ describe("Run control", () => {
     expect(actions.onRun).not.toHaveBeenCalled();
     // onSave resolving is not yet the button re-enabling: it stays disabled while the save's
     // pending state clears, and jsdom drops clicks on disabled buttons.
-    await waitFor(() => expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Stop run" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Stop run" }));
     await waitFor(() => expect(actions.onStop).toHaveBeenCalledOnce());
   });
 

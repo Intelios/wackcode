@@ -18,8 +18,8 @@ import { composeFileSection, splitFileSection, terminalOutputFile, type FileAtta
 import { CENTRED } from "./backdrop-crop";
 import { BROWSER_TOOL_NAMES, displayAgentName, hasSubagentCall, pruneDisabledTools, sameToolCatalog, subagentDetailsFor, parseSkillPreviewDetails, SKILL_CREATOR_TOOL_NAME } from "./tool-utils";
 import { LinkOpenerContext, openExternally, type LinkOpener } from "./link-opener";
-import { CHANGES_VIEW, GAMES_VIEW, TERMINAL_VIEW, RUN_VIEW, canExpand, durableView, isDurable, isTaskBound, rememberedView, toggleView, viewForChat, viewKey, type PanelViewKind, type SidePanelView } from "./side-panel";
-import { applyRunEvent, EMPTY_RUN_REGISTRY } from "./run-state";
+import { BUILD_VIEW, CHANGES_VIEW, GAMES_VIEW, TERMINAL_VIEW, RUN_VIEW, canExpand, durableView, isDurable, isTaskBound, rememberedView, toggleView, viewForChat, viewKey, type PanelViewKind, type SidePanelView } from "./side-panel";
+import { applyRunEvent, EMPTY_RUN_REGISTRY, runKey } from "./run-state";
 import { APP_SLASH_COMMANDS, appCommandsFor } from "./command-utils";
 import { AREA_KEY, areaDirection, parseArea, taskArea, tasksInArea, type Area } from "./areas";
 import { performChatNavigation, withoutResolvedDialog } from "./menu-navigation";
@@ -71,6 +71,7 @@ import type {
   PackageRecord,
   PackageResourceKind,
   ProjectRecord,
+  ProjectCommandKind,
   ProviderRecord,
   RestoreResult,
   RunEvent,
@@ -420,8 +421,10 @@ export default function App() {
   composerKeyRef.current = composerDraftKey;
   const composerTab = [...tabs.state.tabs, ...tabs.state.closed.map((entry) => entry.tab)].find((tab) => tab.composerKey === composerDraftKey);
   const selectedProject = data.projects.find((project) => project.id === selectedTask?.projectId);
-  const selectedRun = selectedTask && !selectedTask.archived ? runs.sessions[runFolder?.workspacePath === selectedTask.workspacePath
-    ? runFolder.cwd : selectedTask.workspacePath] : undefined;
+  const commandFolder = selectedTask?.kind === "code" && !selectedTask.archived
+    ? runFolder?.workspacePath === selectedTask.workspacePath ? runFolder.cwd : selectedTask.workspacePath : undefined;
+  const selectedRun = commandFolder ? runs.sessions[runKey(commandFolder, "run")] : undefined;
+  const selectedBuild = commandFolder ? runs.sessions[runKey(commandFolder, "build")] : undefined;
   const runtime = selectedTaskId ? runtimes[selectedTaskId] : undefined;
   const sharedWorkers = selectedTask ? data.tasks.filter((task) => !task.archived && task.id !== selectedTask.id && task.workspacePath === selectedTask.workspacePath && task.status === "running") : [];
   // The worker's latest plan_state is the freshest mode signal; the record (or the draft's
@@ -890,26 +893,26 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!selectedTask?.projectId || selectedTask.archived) { setRunFolder(undefined); return; }
+    if (!selectedTask?.projectId || selectedTask.kind === "chat" || selectedTask.archived) { setRunFolder(undefined); return; }
     let disposed = false;
     const taskId = selectedTask.id;
     const workspacePath = selectedTask.workspacePath;
-    void api.getRun(taskId).then((lookup) => {
+    void Promise.all([api.getRun(taskId, "run"), api.getRun(taskId, "build")]).then((lookups) => {
       if (disposed) return;
-      setRunFolder({ taskId, workspacePath, cwd: lookup.cwd });
-      setRuns((current) => applyRunEvent(current, lookup.run ? { type: "changed", run: lookup.run }
-        : { type: "removed", cwd: lookup.cwd, sessionId: "", generation: lookup.generation }));
+      setRunFolder({ taskId, workspacePath, cwd: lookups[0].cwd });
+      setRuns((current) => lookups.reduce((registry, lookup) => applyRunEvent(registry, lookup.run ? { type: "changed", run: lookup.run }
+        : { type: "removed", kind: lookup.kind, cwd: lookup.cwd, sessionId: "", generation: lookup.generation }), current));
     }).catch((reason) => { if (!disposed) setGlobalError(String(reason)); });
     return () => { disposed = true; };
-  }, [selectedTask?.id, selectedTask?.workspacePath, selectedTask?.projectId, selectedTask?.archived]);
+  }, [selectedTask?.id, selectedTask?.kind, selectedTask?.workspacePath, selectedTask?.projectId, selectedTask?.archived]);
 
-  async function launchRun(taskId: string) {
-    const run = await api.startRun(taskId);
+  async function launchRun(taskId: string, kind: ProjectCommandKind = "run") {
+    const run = await api.startRun(taskId, kind);
     setRuns((current) => applyRunEvent(current, { type: "changed", run }));
     if (selectedTaskRef.current === taskId) {
       const task = data.tasks.find((item) => item.id === taskId);
       if (task) setRunFolder({ taskId, workspacePath: task.workspacePath, cwd: run.cwd });
-      showRunOutput();
+      showRunOutput(kind);
     }
   }
 
@@ -918,17 +921,18 @@ export default function App() {
     setRuns((current) => applyRunEvent(current, { type: "changed", run: stopped }));
   }
 
-  function showRunOutput() {
+  function showRunOutput(kind: ProjectCommandKind = "run") {
     if (panelExpanded) {
       setPanelWidth(expandRestoreWidth);
       setPanelExpanded(false);
     }
-    setSidePanel(RUN_VIEW);
+    setSidePanel(kind === "build" ? BUILD_VIEW : RUN_VIEW);
   }
 
-  async function saveRunCommand(projectId: string, command: string) {
-    const project = await api.saveProjectRunCommand(projectId, command);
-    setData((current) => ({ ...current, projects: current.projects.map((item) => item.id === projectId ? { ...item, runCommand: project.runCommand } : item) }));
+  async function saveRunCommand(projectId: string, command: string, kind: ProjectCommandKind = "run") {
+    const project = await (kind === "build" ? api.saveProjectBuildCommand(projectId, command) : api.saveProjectRunCommand(projectId, command));
+    const field = kind === "build" ? "buildCommand" : "runCommand";
+    setData((current) => ({ ...current, projects: current.projects.map((item) => item.id === projectId ? { ...item, [field]: project[field] } : item) }));
   }
 
   // Rewinding past a call takes its chips away, and the panel follows.
@@ -3269,7 +3273,12 @@ export default function App() {
               onSaveRunCommand={(command) => selectedProject ? saveRunCommand(selectedProject.id, command) : Promise.reject("Choose a project first.")}
               onRun={() => launchRun(selectedTask.id)}
               onStopRun={() => selectedRun ? stopRun(selectedRun) : Promise.resolve()}
-              onShowRunOutput={showRunOutput}
+              onShowRunOutput={() => showRunOutput()}
+              build={selectedBuild}
+              onSaveBuildCommand={(command) => selectedProject ? saveRunCommand(selectedProject.id, command, "build") : Promise.reject("Choose a project first.")}
+              onBuild={() => launchRun(selectedTask.id, "build")}
+              onStopBuild={() => selectedBuild ? stopRun(selectedBuild) : Promise.resolve()}
+              onShowBuildOutput={() => showRunOutput("build")}
               git={changes ? (changes.isGit ? { branch: changes.branch } : undefined) : selectedTask.branch ? { branch: selectedTask.branch } : undefined}
               onListBranches={() => api.gitBranches({ taskId: selectedTask.id })}
               onCheckoutBranch={(name, kind) => checkoutBranch({ taskId: selectedTask.id }, name, kind)}
@@ -3502,6 +3511,7 @@ export default function App() {
         label={panelView?.kind === "browser" ? "Browser"
           : panelView?.kind === "canvas" ? "Canvas"
           : panelView?.kind === "run" ? "Run"
+          : panelView?.kind === "build" ? "Build"
           : panelView?.kind === "terminal" ? "Terminal"
           : panelView?.kind === "games" ? "Games"
           : shownSubagent
@@ -3559,10 +3569,14 @@ export default function App() {
           />
           </CopyText.Provider>
         ) : null
-      ) : view.kind === "run" ? (
-        <RunPanel run={selectedRun} appearance={data.appearance} configured={Boolean(!selectedTask.archived && selectedProject?.runCommand)}
-          onRun={() => void launchRun(selectedTask.id).catch((reason) => setGlobalError(String(reason)))}
-          onStop={() => { if (selectedRun) void stopRun(selectedRun).catch((reason) => setGlobalError(String(reason))); }}
+      ) : view.kind === "run" || view.kind === "build" ? (
+        <RunPanel kind={view.kind} run={view.kind === "build" ? selectedBuild : selectedRun} appearance={data.appearance}
+          configured={Boolean(!selectedTask.archived && (view.kind === "build" ? selectedProject?.buildCommand : selectedProject?.runCommand))}
+          onRun={() => void launchRun(selectedTask.id, view.kind).catch((reason) => setGlobalError(String(reason)))}
+          onStop={() => {
+            const run = view.kind === "build" ? selectedBuild : selectedRun;
+            if (run) void stopRun(run).catch((reason) => setGlobalError(String(reason)));
+          }}
           onClose={closeSidePanel} />
       ) : view.kind === "terminal" ? (
         <TerminalPanel

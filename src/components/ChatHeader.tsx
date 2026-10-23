@@ -19,6 +19,11 @@ interface ChatHeaderProps {
   onRun: () => Promise<void>;
   onStopRun: () => Promise<void>;
   onShowRunOutput: () => void;
+  build?: RunInfo;
+  onSaveBuildCommand: (command: string) => Promise<void>;
+  onBuild: () => Promise<void>;
+  onStopBuild: () => Promise<void>;
+  onShowBuildOutput: () => void;
   project?: ProjectRecord;
   /** The chat's checkout when it is a Git repository; `branch` is null on a detached HEAD. */
   git?: { branch: string | null };
@@ -41,7 +46,7 @@ interface ChatHeaderProps {
   onCheckoutBranch: (name: string, kind: GitCheckoutKind) => Promise<void>;
 }
 
-export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStopRun, onShowRunOutput, git, onListBranches, onCheckoutBranch, changesCount, changesOpen, browserOpen, onToggleChanges, onToggleBrowser, terminalOpen, onToggleTerminal, gamesOpen, onToggleGames, canvas, onRename, onTaskAction, titlePulse = 0 }: ChatHeaderProps) {
+export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStopRun, onShowRunOutput, build, onSaveBuildCommand, onBuild, onStopBuild, onShowBuildOutput, git, onListBranches, onCheckoutBranch, changesCount, changesOpen, browserOpen, onToggleChanges, onToggleBrowser, terminalOpen, onToggleTerminal, gamesOpen, onToggleGames, canvas, onRename, onTaskAction, titlePulse = 0 }: ChatHeaderProps) {
   const contextMenu = useContextMenu();
   const [renaming, setRenaming] = useState(false);
   const [value, setValue] = useState(task.name);
@@ -104,8 +109,12 @@ export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStop
         </div>
       </div>
       <div className="header-actions">
-        {project && !task.archived && <RunButton key={task.id} project={project} workspacePath={task.workspacePath} run={run}
-          onSave={onSaveRunCommand} onRun={onRun} onStop={onStopRun} onShowOutput={onShowRunOutput} />}
+        {project && !chat && !task.archived && <>
+          <RunButton key={`build:${task.id}`} kind="build" project={project} workspacePath={task.workspacePath} run={build}
+            onSave={onSaveBuildCommand} onRun={onBuild} onStop={onStopBuild} onShowOutput={onShowBuildOutput} />
+          <RunButton key={`run:${task.id}`} project={project} workspacePath={task.workspacePath} run={run}
+            onSave={onSaveRunCommand} onRun={onRun} onStop={onStopRun} onShowOutput={onShowRunOutput} />
+        </>}
         {/* The side panel shows one view at a time, so its triggers are one control: a track whose
             fill glides to whichever view is open, and rests nowhere while the panel is closed. */}
         <div className="panel-switch" role="group" aria-label="Side panel">

@@ -2254,6 +2254,7 @@ pub fn add_project(state: State<'_, MetadataState>, path: String) -> Result<Proj
             .map(|root| root.to_string_lossy().into_owned()),
         git_has_head: git_info.has_head,
         run_command: None,
+        build_command: None,
         branch: git::current_branch(&canonical),
         created_at: Utc::now().to_rfc3339(),
     };

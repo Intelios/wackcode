@@ -384,6 +384,7 @@ export interface ProjectRecord {
   gitRoot: string | null;
   gitHasHead: boolean;
   runCommand: string | null;
+  buildCommand: string | null;
   branch: string | null;
   createdAt: string;
 }
@@ -1682,9 +1683,11 @@ export type TerminalFrame =
   | { type: "exit"; code: number | null; signal: string | null }
   | { type: "busy"; busy: boolean };
 
+export type ProjectCommandKind = "run" | "build";
 export type RunStatus = "running" | "stopping" | "finished" | "failed" | "stopped";
-/** Runtime-only snapshot of a command, shared by canonical checkout folder. */
+/** Runtime-only snapshot, shared by canonical checkout folder and command kind. */
 export interface RunInfo {
+  kind: ProjectCommandKind;
   sessionId: string;
   generation: number;
   revision: number;
@@ -1693,8 +1696,8 @@ export interface RunInfo {
   status: RunStatus;
   exit: TerminalExit | null;
 }
-export interface RunLookup { cwd: string; generation: number; run: RunInfo | null }
+export interface RunLookup { kind: ProjectCommandKind; cwd: string; generation: number; run: RunInfo | null }
 export interface RunFrame { sessionId: string; attachmentId: string; data: string }
 export type RunEvent =
   | { type: "changed"; run: RunInfo }
-  | { type: "removed"; cwd: string; sessionId: string; generation: number };
+  | { type: "removed"; kind: ProjectCommandKind; cwd: string; sessionId: string; generation: number };

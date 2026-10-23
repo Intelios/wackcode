@@ -23,7 +23,7 @@ vi.mock("@xterm/xterm", () => ({
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit = vi.fn(); } }));
 vi.mock("../api", () => ({ api: { attachRun: vi.fn(), detachRun: vi.fn(async () => {}), resizeRun: vi.fn(async () => {}), writeRun: vi.fn(async () => {}) } }));
 
-const run: RunInfo = { sessionId: "one", generation: 1, revision: 1, cwd: "/tree", command: "pnpm dev", status: "running", exit: null };
+const run: RunInfo = { kind: "run", sessionId: "one", generation: 1, revision: 1, cwd: "/tree", command: "pnpm dev", status: "running", exit: null };
 type MockTerm = { write: ReturnType<typeof vi.fn>; clear: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn>; dataHandler?: (data: string) => void; options: Record<string, unknown> };
 const instances = () => (Terminal as unknown as { instances: MockTerm[] }).instances;
 let frame: (frame: RunFrame) => void;
@@ -41,6 +41,25 @@ beforeEach(() => {
 });
 
 describe("Run output panel", () => {
+  it("restores Build without launching and shows build failures with their output intact", async () => {
+    const props = actions();
+    const view = render(<RunPanel {...props} kind="build" />);
+    expect(screen.getByText("No build started")).toBeInTheDocument();
+    expect(props.onRun).not.toHaveBeenCalled();
+    expect(api.attachRun).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Build" }));
+    expect(props.onRun).toHaveBeenCalledOnce();
+    const build: RunInfo = { ...run, kind: "build", sessionId: "build", command: "pnpm build" };
+    view.rerender(<RunPanel {...props} kind="build" run={build} />);
+    await waitFor(() => expect(api.attachRun).toHaveBeenCalledWith("build", expect.any(String), 80, 24, expect.any(Function)));
+    expect(screen.getByRole("status")).toHaveTextContent("Building");
+    view.rerender(<RunPanel {...props} kind="build" run={{ ...build, status: "failed", exit: { code: 2, signal: null } }} />);
+    expect(screen.getByRole("status")).toHaveTextContent("Failed (code 2)");
+    expect(instances()[0].dispose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Clear Build terminal" }));
+    expect(instances()[0].clear).toHaveBeenCalledOnce();
+  });
+
   it("keeps the cursor still with reduced motion while accepting input", async () => {
     vi.mocked(useReducedMotion).mockReturnValue(true);
     render(<RunPanel {...actions()} run={run} />);

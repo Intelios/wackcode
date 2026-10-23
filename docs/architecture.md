@@ -81,12 +81,14 @@ A `chat` task never has a project or a worktree (`validate_task_kind`). The host
 3. Add one typed wrapper in `src/api.ts`.
 4. Add any new plugin permission in `src-tauri/capabilities/default.json`.
 
-## Project Run lifecycle
+## Project Run and Build lifecycle
 
-`RunState` owns one foreground command per canonical workspace folder, separate from chat
+`RunState` owns one Run and one Build command per canonical workspace folder, separate from chat
 terminals and workers. The registry lock serializes starts; the task lock prevents a launch
 from racing archive/delete/worktree conversion. Commands and working folders are immutable
-runtime snapshots. Only the project's nullable command is persisted, via `MetadataState::mutate`.
+runtime snapshots. Only the project's nullable `runCommand` and `buildCommand` are persisted,
+via `MetadataState::mutate`. The two commands have independent sessions and output, so a build
+can run beside a dev server. Chat mode cannot launch either command.
 
 Commands run on a PTY through the user's interactive login shell, with the whole command as
 one argument. `pty_output.rs` shares UTF-8 decoding, bounded scrollback and PTY sizing with

@@ -45,7 +45,7 @@ const TIMER_PRECISIONS: { value: ThinkingTimerPrecision; label: string }[] = [
 
 /** The chat switches each show a miniature of what they change, so the effect is visible
  *  before it is switched on. */
-const CHAT_OPTIONS: { key: "chatTabs" | "thinkingPreview" | "messageBubbles" | "groupExploration" | "collapseCompletedWork"; label: string; description: (name: string) => string; preview: "tabs" | "bubble" | "thinking" | "explore" | "work" }[] = [
+const CHAT_OPTIONS: { key: "chatTabs" | "thinkingPreview" | "messageBubbles" | "groupExploration" | "collapseCompletedWork" | "visualBanner"; label: string; description: (name: string) => string; preview: "tabs" | "bubble" | "thinking" | "explore" | "work" | "visual" }[] = [
   {
     key: "chatTabs",
     label: "Chat tabs",
@@ -75,6 +75,12 @@ const CHAT_OPTIONS: { key: "chatTabs" | "thinkingPreview" | "messageBubbles" | "
     label: "Collapse completed work",
     description: () => "Keep the final reply visible and fold its steps behind “Worked for…”. Live work stays open.",
     preview: "work"
+  },
+  {
+    key: "visualBanner",
+    label: "Visual banner",
+    description: () => "The title strip above a visual reply, with Expand and Copy. Switch it off and the card is the visual alone — the actions go with it.",
+    preview: "visual"
   }
 ];
 
@@ -513,6 +519,23 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrlFo
                         )}
                         <span className="mini-msg mini-assistant flat">Done — the tests pass.</span>
                       </>
+                    ) : option.preview === "visual" ? (
+                      /* The card's head band wears the switch: present when on, gone when off. */
+                      <span className="mini-visual">
+                        {on && (
+                          <span className="mini-visual-head">
+                            <span className="mini-visual-mark" />
+                            <span className="mini-visual-title" />
+                            <span className="mini-visual-action" />
+                          </span>
+                        )}
+                        <span className="mini-visual-body">
+                          <span style={{ height: "50%" }} />
+                          <span style={{ height: "85%" }} />
+                          <span style={{ height: "35%" }} />
+                          <span style={{ height: "65%" }} />
+                        </span>
+                      </span>
                     ) : (
                       <>
                         <span className="mini-thinking">

@@ -227,6 +227,22 @@ describe("AppearanceSection completed work", () => {
   });
 });
 
+describe("AppearanceSection visual banner", () => {
+  it.each([false, true])("shows the %s miniature and saves the opposite choice", async (visualBanner) => {
+    const config: AppearanceConfig = { ...DEFAULT_APPEARANCE, visualBanner };
+    const { onChange, onPreview } = renderSection(config);
+    const toggle = screen.getByRole("switch", { name: "Visual banner" });
+    expect(toggle).toHaveAttribute("aria-checked", String(visualBanner));
+    const card = toggle.closest(".chat-preview-card") as HTMLElement;
+    // The miniature's head band is present only while the switch is on; the card body stays.
+    expect(card.querySelector(".mini-visual-head") !== null).toBe(visualBanner);
+    expect(card.querySelector(".mini-visual-body")).not.toBeNull();
+    fireEvent.click(toggle);
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ ...config, visualBanner: !visualBanner }));
+    expect(onPreview).not.toHaveBeenCalled();
+  });
+});
+
 describe("AppearanceSection agent name", () => {
   it("shows the stored name", () => {
     renderSection({ agentName: "Nova" });

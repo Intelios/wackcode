@@ -5538,6 +5538,7 @@ fn validate_appearance_config(
         message_bubbles: input.message_bubbles,
         group_exploration: input.group_exploration,
         collapse_completed_work: input.collapse_completed_work,
+        visual_banner: input.visual_banner,
         accent: colour("accent", input.accent)?,
         background: colour("background", input.background)?,
         backdrop: input.backdrop,
@@ -6058,6 +6059,16 @@ mod tests {
         assert!(!old.chat_tabs);
         let input = AppearanceConfig { chat_tabs: true, ..old.clone() };
         assert_eq!(validate_appearance_config(input.clone(), &old, true).unwrap(), input);
+    }
+
+    #[test]
+    fn visual_banner_defaults_on_and_saves_without_changing_other_preferences() {
+        let old: AppearanceConfig = serde_json::from_str("{}").unwrap();
+        assert!(old.visual_banner);
+        for visual_banner in [false, true] {
+            let input = AppearanceConfig { visual_banner, ..old.clone() };
+            assert_eq!(validate_appearance_config(input.clone(), &old, true).unwrap(), input);
+        }
     }
 
     #[test]

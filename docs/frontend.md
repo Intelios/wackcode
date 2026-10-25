@@ -25,7 +25,9 @@ Images a tool returned (a picture `read`, a screenshot, an MCP tool's output) sh
 
 **Visual replies** (`VisualCard.tsx`) draw a settled `show_visual` call where it landed: the
 assistant's small HTML answer — a chart, a comparison, a mockup — in a card shaped like a code
-fence (mark, title, Expand, copy) over a sandboxed frame. `VisualCallCard` reads the scope the
+fence (mark, title, Expand, copy) over a sandboxed frame. The head band is an Appearance
+preference (`visualBanner`, provided as `VisualBannerEnabled`): switched off the card is the
+frame alone and Expand/copy go with it. `VisualCallCard` reads the scope the
 transcript provides (`VisualCardScope`): the tool-call ids on the newest answer, which alone may
 send, and the App's send/link handlers. A running or refused call keeps its chip and its error;
 `completed-work.ts` treats a settled visual as an outcome, never as work to fold away. Only

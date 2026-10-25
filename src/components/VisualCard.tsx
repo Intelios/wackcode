@@ -162,6 +162,11 @@ export interface VisualScope {
 
 export const VisualCardScope = createContext<VisualScope>({ currentIds: new Set(), busy: false });
 
+/** Settings › Appearance: the card's head band (title, Expand, Copy). Off, a visual is just
+ *  its frame in the transcript's well — the actions go with the band. Provided by
+ *  `ChatContexts`; the expanded overlay always keeps its own head. */
+export const VisualBannerEnabled = createContext(true);
+
 /** A `show_visual` call, drawn as its card. The caller has already checked the result is settled
  *  and successful; arguments that do not parse fall back to the ordinary call row. */
 export function VisualCallCard({ block }: { block: NormalizedBlock }) {
@@ -213,6 +218,7 @@ interface VisualCardProps {
  */
 export function VisualCard({ title, html, current, busy, onSend, onOpenLink }: VisualCardProps) {
   const reduce = useReducedMotion();
+  const banner = useContext(VisualBannerEnabled);
   const [expanded, setExpanded] = useState(false);
   const [note, setNote] = useState<string>();
   const openLink = useCallback((href: string) => { onOpenLink?.(href); }, [onOpenLink]);
@@ -235,6 +241,7 @@ export function VisualCard({ title, html, current, busy, onSend, onOpenLink }: V
 
   return (
     <figure className="visual-card" aria-label={`Visual: ${title}`}>
+      {banner && (
       <figcaption className="visual-card-head">
         <span className="visual-card-mark" aria-hidden="true"><Icon name="visual" /></span>
         <span className="visual-card-title">{title}</span>
@@ -250,6 +257,7 @@ export function VisualCard({ title, html, current, busy, onSend, onOpenLink }: V
           <CopyButton text={html} label="Copy visual HTML" />
         </span>
       </figcaption>
+      )}
       <div className="visual-card-body">
         <VisualFrame html={html} title={title} maxHeight={CARD_MAX_HEIGHT} controls={controls} onRefusal={onRefusal} />
       </div>

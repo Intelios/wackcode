@@ -694,6 +694,8 @@ export interface AppearanceConfig {
   groupExploration: boolean;
   /** Fold work steps only after completion; live work stays expanded. On by default. */
   collapseCompletedWork: boolean;
+  /** The title strip above a visual reply (title, Expand, Copy). Off draws the frame alone. */
+  visualBanner: boolean;
   /** `#rrggbb`; absent is WackCode green. */
   accent?: string | null;
   /** `#rrggbb` as displayed (already darkened for readability); absent is the default. */

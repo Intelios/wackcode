@@ -747,6 +747,19 @@ describe("SettingsPage appearance section", () => {
     await waitFor(() => expect(again.onSetAppearance).toHaveBeenCalledWith(appearance));
   });
 
+  it("switches the visual banner off and back on", async () => {
+    const { onSetAppearance } = renderAppearance({ ...DEFAULT_APPEARANCE, visualBanner: true });
+    const toggle = screen.getByRole("switch", { name: "Visual banner" });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(toggle);
+    await waitFor(() => expect(onSetAppearance).toHaveBeenCalledWith({ ...DEFAULT_APPEARANCE, visualBanner: false }));
+    cleanup();
+
+    const again = renderAppearance({ ...DEFAULT_APPEARANCE, visualBanner: false });
+    fireEvent.click(screen.getByRole("switch", { name: "Visual banner" }));
+    await waitFor(() => expect(again.onSetAppearance).toHaveBeenCalledWith({ ...DEFAULT_APPEARANCE, visualBanner: true }));
+  });
+
   it("sets the thinking timer to tenths and back to whole seconds", async () => {
     const { onSetAppearance } = renderAppearance({ ...DEFAULT_APPEARANCE, thinkingTimerPrecision: "second" });
     const group = screen.getByRole("radiogroup", { name: "Thinking timer" });

@@ -27,6 +27,7 @@ export const DEFAULT_APPEARANCE: AppearanceConfig = {
   messageBubbles: false,
   groupExploration: true,
   collapseCompletedWork: true,
+  visualBanner: true,
   backdrop: "solid",
   dynamicStyle: "colourDrift",
   dynamicPalette: "theme",

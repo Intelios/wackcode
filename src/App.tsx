@@ -127,6 +127,7 @@ import type { SystemNote } from "./components/chat/ChatBubbles";
 import { SubscriptionLoginDialog } from "./components/SubscriptionLoginDialog";
 import { ExploreGroupingEnabled } from "./components/ExploreGroup";
 import { ThinkingPreviewEnabled, ThinkingTimerPrecision } from "./components/ThinkingRow";
+import { VisualBannerEnabled } from "./components/VisualCard";
 import { composeVisualAction, splitVisualAction, type VisualSendResult } from "./visual-action";
 import { composeSuggestedTask, splitSuggestedTask, suggestionLinks, type SuggestionCard } from "./suggestions";
 
@@ -233,7 +234,9 @@ function ChatContexts({ appearance, openLink, children }: { appearance: Appearan
       <ThinkingPreviewEnabled.Provider value={appearance.thinkingPreview}>
         <ThinkingTimerPrecision.Provider value={appearance.thinkingTimerPrecision}>
           <ExploreGroupingEnabled.Provider value={appearance.groupExploration}>
-            <CopyText.Provider value={writeText}>{children}</CopyText.Provider>
+            <VisualBannerEnabled.Provider value={appearance.visualBanner}>
+              <CopyText.Provider value={writeText}>{children}</CopyText.Provider>
+            </VisualBannerEnabled.Provider>
           </ExploreGroupingEnabled.Provider>
         </ThinkingTimerPrecision.Provider>
       </ThinkingPreviewEnabled.Provider>

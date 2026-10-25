@@ -531,6 +531,9 @@ pub struct AppearanceConfig {
     /// Fold work steps only after completion; live work stays expanded. On by default.
     #[serde(default = "default_true")]
     pub collapse_completed_work: bool,
+    /// The title strip above a visual reply (title, Expand, Copy). Off draws the frame alone.
+    #[serde(default = "default_true")]
+    pub visual_banner: bool,
     /// `#rrggbb`; `None` is WackCode green, so a future default reaches users who never picked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accent: Option<String>,
@@ -677,6 +680,7 @@ impl Default for AppearanceConfig {
             message_bubbles: false,
             group_exploration: true,
             collapse_completed_work: true,
+            visual_banner: true,
             accent: None,
             background: None,
             backdrop: BackdropMode::Solid,

@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
-import { VisualCallCard, VisualCard } from "./VisualCard";
+import { VisualBannerEnabled, VisualCallCard, VisualCard } from "./VisualCard";
 
 vi.mock("../api", () => ({
   api: { stageVisual: vi.fn().mockResolvedValue("wcvisual://localhost/abc123"), revealPath: vi.fn().mockResolvedValue(undefined) }
@@ -84,6 +84,24 @@ describe("VisualCard", () => {
     render(<VisualCard title="Chart" html="<p>42</p>" current busy={false} />);
     expect(screen.getByRole("button", { name: "Expand visual" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy visual HTML" })).toBeInTheDocument();
+  });
+
+  it("drops the head band — and its actions — when the visual banner is switched off", async () => {
+    render(
+      <VisualBannerEnabled.Provider value={false}>
+        <VisualCard title="Chart" html="<p>42</p>" current busy={false} />
+      </VisualBannerEnabled.Provider>
+    );
+    expect(screen.getByRole("figure", { name: "Visual: Chart" })).toBeInTheDocument();
+    expect(document.querySelector(".visual-card-head")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Expand visual" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy visual HTML" })).toBeNull();
+    // The frame itself still stages and reports.
+    const doc = await frame();
+    expect(doc.src).toBe("wcvisual://localhost/abc123");
+    const well = doc.parentElement as HTMLElement;
+    fromFrame(doc, { type: "wackcode-visual:size", height: 240 });
+    await waitFor(() => expect(well.style.height).toBe("240px"));
   });
 
   it("opens an expanded frame at window size and closes it on Escape", async () => {

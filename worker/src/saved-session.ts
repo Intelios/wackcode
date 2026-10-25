@@ -115,7 +115,7 @@ export async function readSavedSession(options: SavedSessionOptions): Promise<Se
     rev: 0, sessionId: header?.id ?? options.taskId,
     workActivity: { parent: "idle", subagents: 0, pendingResults: 0 },
     ...(options.sessionFile ? { sessionFile: options.sessionFile } : {}), messages,
-    modelSwitches: modelSwitchesOnPath(path as EntryLike[], positions),
+    modelSwitches: modelSwitchesOnPath(path as EntryLike[], positions, messages.length),
     runTimings: resolveRunTimings(path, users.map((message) => message.entryId!), users.map((message) => message.id)),
     tree: { leafId: leaf?.id ?? null, undo: undoTarget(leaf as EntryLike | undefined) },
     stats: { tokens, cost, ...(context && options.contextWindow ? await contextStats(context, path, options.contextWindow, tokens) : {}) }, thinkingLevel: options.thinkingLevel, availableThinkingLevels: [],

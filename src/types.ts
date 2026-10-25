@@ -1290,7 +1290,9 @@ export interface ModelRef {
 export interface ModelSwitch {
   /** Pi's model_change entry id, stable across snapshots and reloads. */
   id: string;
-  /** Zero-based insertion point: messages before this index render above the divider. */
+  /** Zero-based insertion point: messages before this index render above the divider. Always
+   *  the next user turn (or the end): a switch can only happen between runs, and any other
+   *  index would fold into that turn's hidden work. */
   at: number;
   from: ModelRef;
   to: ModelRef;

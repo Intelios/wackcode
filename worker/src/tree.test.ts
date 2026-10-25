@@ -163,25 +163,47 @@ describe("session tree helpers", () => {
       message("a2", "opus", "assistant")
     ];
     const positions = new Map([["u1", 0], ["a1", 1], ["u2", 2], ["a2", 3]]);
-    expect(modelSwitchesOnPath(path, positions)).toEqual([
+    expect(modelSwitchesOnPath(path, positions, 4)).toEqual([
       {
         id: "sonnet", at: 2,
         from: { providerId: "openai", modelId: "gpt-5" },
         to: { providerId: "anthropic", modelId: "sonnet-4" }
       },
       {
-        id: "opus", at: 3,
+        id: "opus", at: 4,
         from: { providerId: "anthropic", modelId: "sonnet-4" },
         to: { providerId: "anthropic", modelId: "opus-4" }
       }
     ]);
-    expect(modelSwitchesOnPath(path.slice(0, 4), positions)).toEqual([]);
+    expect(modelSwitchesOnPath(path.slice(0, 4), positions, 2)).toEqual([]);
     // As after compaction, switches above the first still-visible conversation message are a
-    // baseline, not a divider stranded at the top of the transcript.
-    expect(modelSwitchesOnPath(path, new Map([["u2", 0], ["a2", 1]]))).toEqual([{
-      id: "opus", at: 1,
+    // baseline, not a divider stranded at the top of the transcript. The mid-turn change below
+    // the last user anchors at the transcript's end instead.
+    expect(modelSwitchesOnPath(path, new Map([["u2", 0], ["a2", 1]]), 2)).toEqual([{
+      id: "opus", at: 2,
       from: { providerId: "anthropic", modelId: "sonnet-4" },
       to: { providerId: "anthropic", modelId: "opus-4" }
+    }]);
+  });
+
+  it("anchors a switch at the next turn, past redeclared system rows", () => {
+    // A respawned worker appends the change at the old leaf; Pi can write a fresh system
+    // declaration before the next user message. That row belongs to the previous turn's body
+    // in the transcript, where a divider positioned on it folds away unseen.
+    const path = [
+      model("initial", null, "openai", "gpt-4"),
+      message("u1", "initial", "user"),
+      message("a1", "u1", "assistant"),
+      model("sonnet", "a1", "anthropic", "sonnet-4"),
+      message("sys2", "sonnet", "system"),
+      message("u2", "sys2", "user"),
+      message("a2", "u2", "assistant")
+    ];
+    const positions = new Map([["u1", 0], ["a1", 1], ["sys2", 2], ["u2", 3], ["a2", 4]]);
+    expect(modelSwitchesOnPath(path, positions, 5)).toEqual([{
+      id: "sonnet", at: 3,
+      from: { providerId: "openai", modelId: "gpt-4" },
+      to: { providerId: "anthropic", modelId: "sonnet-4" }
     }]);
   });
 });

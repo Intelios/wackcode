@@ -1302,6 +1302,51 @@ describe("Pi worker integration", () => {
     expect(saved.match(/"type":"model_change"/g)).toHaveLength(2);
   });
 
+  it("anchors a recorded switch at the next user turn, past a rewritten system row", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-switch-anchor-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const first = await initializeWorker(provider.baseUrl, "anchor-secret", workspace, "anchor-task");
+    cleanup.push(() => first.worker.shutdown());
+    first.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "anchor-run-1", message: "First model." });
+    await first.worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === "anchor-run-1");
+    const sessionFile = first.worker.view?.sessionFile;
+    expect(sessionFile).toBeTruthy();
+    await first.worker.shutdown();
+
+    // The respawn records the switch at the old leaf. A changed tool loadout makes Pi rewrite
+    // its system declaration before the next user message, so the change no longer sits
+    // directly above it: `at` must still land on the new turn, not inside the settled one.
+    const alternateProvider = {
+      id: "provider-anchor-task",
+      name: "Provider anchor-task",
+      kind: "custom",
+      baseUrl: provider.baseUrl,
+      api: "openai-completions",
+      models: [{
+        id: "alternate-model", name: "Alternate model", contextWindow: 16_384, maxTokens: 321,
+        reasoning: false, thinkingLevels: ["off"], thinkingLevelMap: { off: null }, vision: false
+      }]
+    };
+    const second = await initializeWorker(provider.baseUrl, "anchor-secret", workspace, "anchor-task", sessionFile, ["read"], undefined, undefined, false, {
+      provider: alternateProvider, modelId: "alternate-model", thinkingLevel: "off"
+    });
+    cleanup.push(() => second.worker.shutdown());
+    second.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "anchor-run-2", message: "Second model." });
+    await second.worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === "anchor-run-2");
+
+    const messages = second.worker.view?.messages ?? [];
+    const userIndex = messages.findLastIndex((message) => message.role === "user");
+    expect(messages[userIndex - 1]?.role).toBe("system");
+    expect(second.worker.view?.modelSwitches).toMatchObject([{
+      at: userIndex,
+      from: { providerId: "provider-anchor-task", modelId: "shared-model" },
+      to: { providerId: "provider-anchor-task", modelId: "alternate-model" }
+    }]);
+    await expectSavedHistory(second.worker.view!);
+  });
+
   it("opens a chat read-only when its model left the connection, and runs again once another is picked", async () => {
     const provider = await startMockProvider();
     cleanup.push(provider.close);

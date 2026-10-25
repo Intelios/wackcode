@@ -861,7 +861,7 @@ function getSnapshot(rev: number): SessionSnapshot {
   messages.forEach((message, position) => {
     if (message.entryId) messagePositions.set(message.entryId, position);
   });
-  const modelSwitches = modelSwitchesOnPath(path, messagePositions);
+  const modelSwitches = modelSwitchesOnPath(path, messagePositions, messages.length);
   const visibleUsers = messages.filter((message) => message.role === "user" && message.entryId);
   const leaf = session.sessionManager.getLeafEntry() as EntryLike | undefined;
   if (!runTimingsCache || runTimingsCache.count !== treeCache?.count) {

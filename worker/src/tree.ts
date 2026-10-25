@@ -89,27 +89,35 @@ function modelRef(entry: EntryLike): ModelRef | undefined {
 /**
  * Model changes on the active branch, positioned among the normalized messages. Changes before
  * the first conversational message establish the initial model and stay out of the transcript.
+ *
+ * `at` is always a turn boundary — the position of the first user message after the change, or
+ * the transcript's end. Anything else would sit inside a turn (a redeclared system message or
+ * tool results can follow the change before the next prompt), where the transcript folds it into
+ * that turn's hidden work.
  */
-export function modelSwitchesOnPath(path: EntryLike[], messagePositions: Map<string, number>): ModelSwitch[] {
+export function modelSwitchesOnPath(path: EntryLike[], messagePositions: Map<string, number>, messageCount: number): ModelSwitch[] {
   const switches: ModelSwitch[] = [];
+  const nextUser = new Array<number>(path.length + 1).fill(messageCount);
+  for (let index = path.length - 1; index >= 0; index -= 1) {
+    const position = messagePositions.get(path[index].id);
+    nextUser[index] = position !== undefined && isUserMessage(path[index]) ? position : nextUser[index + 1];
+  }
   let current: ModelRef | undefined;
   let conversationSeen = false;
-  let at = 0;
 
-  for (const entry of path) {
+  path.forEach((entry, index) => {
     const position = messagePositions.get(entry.id);
-    if (position !== undefined) at = Math.max(at, position + 1);
     // Compaction can leave older messages on the path but outside the normalized transcript;
     // those must not make a historical switch appear above the first message still shown.
     if (position !== undefined && isConversationMessage(entry)) conversationSeen = true;
 
     const next = modelRef(entry);
-    if (!next) continue;
+    if (!next) return;
     if (current && conversationSeen && (current.providerId !== next.providerId || current.modelId !== next.modelId)) {
-      switches.push({ id: entry.id, at, from: current, to: next });
+      switches.push({ id: entry.id, at: nextUser[index + 1], from: current, to: next });
     }
     current = next;
-  }
+  });
   return switches;
 }
 

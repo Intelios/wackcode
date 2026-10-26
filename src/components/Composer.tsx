@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { DEFAULT_EXECUTION_POLICY } from "../execution-policy";
 import { DEFAULT_AGENT_NAME } from "../agentName";
 import { ExecutionPolicyNotice } from "./ExecutionPolicyNotice";
-import type { ExecutionPolicyConfig, ImageContent, ProviderRecord, QueuedMessage, ReasoningEffort, RestoredPrompt, SessionSnapshot, SlashCommand, TaskMode, TaskStatus } from "../types";
+import type { ComposerStyle, ExecutionPolicyConfig, ImageContent, ProviderRecord, QueuedMessage, ReasoningEffort, RestoredPrompt, SessionSnapshot, SlashCommand, TaskMode, TaskStatus } from "../types";
 import { attachmentProblem, attachFiles, filesFrom, largePasteText, pastedTextFile, splitFileSection, type FileAttachment } from "../attachment-utils";
 import { activeMention, mentionValue, type ChatMentionSuggestion, type MentionSuggestion } from "../mention-utils";
 import { chatMentionToken, encodeChatRefs, rankSuggestions, survivingChatRefs } from "../chat-refs";
@@ -107,11 +107,13 @@ interface ComposerProps extends ModelFavoritesProps {
   comet?: boolean;
   /** Shows this text read-only instead of the draft while the hero composer hands off to the docked one. */
   frozen?: string;
+  /** How this Code composer is drawn (Settings › Appearance). Chat mode has its own composer. */
+  composerStyle?: ComposerStyle;
   /** The configured persona name in the built-in placeholder and busy copy. */
   agentName?: string;
 }
 
-export function Composer({ draftState, status, backgroundWorking = false, providerId, modelId, thinkingLevel, providers, favoriteModels, favoriteSaving, onSetFavorite, stats, header, placeholder, popoverSide = "top", mode, executionPolicy = DEFAULT_EXECUTION_POLICY, appliedExecutionPolicy, onModeChange, onConfigure, team, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, mentionFiles, mentionChats, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, queuedMessages, onSteer, onDequeue, onStop, onOpenSettings, disabled, seed, comet, frozen, agentName = DEFAULT_AGENT_NAME }: ComposerProps) {
+export function Composer({ draftState, status, backgroundWorking = false, providerId, modelId, thinkingLevel, providers, favoriteModels, favoriteSaving, onSetFavorite, stats, header, placeholder, popoverSide = "top", mode, executionPolicy = DEFAULT_EXECUTION_POLICY, appliedExecutionPolicy, onModeChange, onConfigure, team, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, mentionFiles, mentionChats, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, queuedMessages, onSteer, onDequeue, onStop, onOpenSettings, disabled, seed, comet, frozen, composerStyle = "classic", agentName = DEFAULT_AGENT_NAME }: ComposerProps) {
   const [localDraft, setLocalDraft] = useState<ComposerDraft>(EMPTY_DRAFT);
   const value = draftState?.value ?? localDraft;
   const updateDraft = draftState?.update ?? setLocalDraft;
@@ -493,10 +495,215 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
   const queuedEntries = queuedDisplay(queuedMessages);
   const queueActionsDisabled = disabled || frozen !== undefined || status === "stopping" || queuePending;
 
+  // The draft's own furniture — queue, attachments and notices — sits above the writing area in
+  // every style; Split Bar moves it inside the input card.
+  const drafting = (
+    <>
+      <QueuedRows entries={queuedEntries} agentName={agentName} disabled={queueActionsDisabled}
+        canSteer={status === "running" && Boolean(onSteer)} canRestore={Boolean(onDequeue)}
+        onSteer={(id) => void queue.steer(id)} onRestore={() => void queue.restore()} />
+      <AttachmentTray images={attachments} files={files} onOpenImage={(index, url) => setShownImage({ index, url })}
+        browserContexts={contexts} onRemoveContext={(index) => setField("browserContexts", contexts.filter((_, i) => i !== index))}
+        onRemoveImage={removeAttachment} onRemoveFile={removeFile} />
+      {pasteNotice && (
+        <div className="attachment-notice paste-notice" role="status">
+          <PasteNotice file={pasteNotice} onInsert={insertPastedText} disabled={disabled || frozen !== undefined} />
+        </div>
+      )}
+      {(attachNotice || blockedByModel) && (
+        <div className="attachment-notice" role="status">{attachmentError || (blockedByModel ? `${noVisionMessage} Or remove the images to send.` : attachNotice)}</div>
+      )}
+      {slashNotice && <div className="attachment-notice" role="status">{slashNotice} <button type="button" disabled={disabled || frozen !== undefined || status === "stopping" || blockedByModel || !onLiteral} onClick={() => void sendLiteral()}>Send as message</button></div>}
+      <AnimatePresence initial={false}>
+        {argNote && (
+          <motion.div
+            className="arg-hint"
+            role="note"
+            initial={{ opacity: 0, y: -3 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -3, transition: { duration: 0.12, ease: EASE } }}
+            transition={{ duration: 0.18, ease: EASE }}
+          >{argNote}</motion.div>
+        )}
+      </AnimatePresence>
+    </>
+  );
+
+  const connectProvider = (
+    <button type="button" className="model-pill callout" onClick={onOpenSettings}>
+      <Icon name="key" /> Connect a provider
+    </button>
+  );
+
+  const attachControl = (
+    <>
+      <Tooltip label="Attach files or images">
+        <button
+          type="button"
+          className="attach-button"
+          aria-label="Attach files"
+          disabled={disabled}
+          onClick={() => fileRef.current?.click()}
+        >
+          <Icon name="paperclip" />
+        </button>
+      </Tooltip>
+      <input
+        ref={fileRef}
+        type="file"
+        multiple
+        hidden
+        data-testid="attach-input"
+        onChange={(event) => {
+          const picked = filesFrom(event.target.files);
+          event.target.value = "";
+          void addFiles(picked);
+        }}
+      />
+    </>
+  );
+
+  // Every style carries the same controls in the same order; only where they sit changes.
+  const modelControls = (
+    <>
+      <ModelPicker
+        providers={providers}
+        favoriteModels={favoriteModels}
+        favoriteSaving={favoriteSaving}
+        onSetFavorite={onSetFavorite}
+        providerId={providerId}
+        modelId={modelId}
+        disabled={busy}
+        popoverSide={popoverSide}
+        onConfigure={onConfigure}
+        team={team}
+      />
+      {stats && <ContextPanel stats={stats} popoverSide={popoverSide} />}
+      <ReasoningToggle
+        providers={providers}
+        providerId={providerId}
+        modelId={modelId}
+        thinkingLevel={thinkingLevel}
+        disabled={busy}
+        popoverSide={popoverSide}
+        onConfigure={onConfigure}
+      />
+      {onModeChange && <ModeToggle mode={mode ?? "build"} disabled={busy} onChange={onModeChange} />}
+    </>
+  );
+
+  const policyNotice = providers.length > 0 && onModeChange
+    ? <ExecutionPolicyNotice saved={executionPolicy} applied={appliedExecutionPolicy} running={busy} />
+    : null;
+
+  const toolbarControls = providers.length === 0 ? connectProvider : <>{attachControl}{modelControls}</>;
+
+  const sendControls = (
+    <div className="composer-right">
+      {busy && (
+        <Tooltip label={status === "stopping" ? "Stopping…" : "Stop"}>
+          <button type="button" className="send-button stop" onClick={onStop} disabled={disabled || frozen !== undefined || status === "stopping"} aria-label="Stop">
+            <Icon name="stop" />
+          </button>
+        </Tooltip>
+      )}
+      <Tooltip label={status === "stopping" ? `Wait for ${agentName} to stop` : queueButton ? `Queue for after ${agentName} finishes (⏎)` : "Send (⏎)"}>
+        <button type="button" className={`send-button${queueButton ? " queue" : ""}`} onClick={() => void send()} disabled={disabled || frozen !== undefined || providers.length === 0 || status === "stopping" || (!draft.trim() && files.length === 0 && contexts.length === 0) || blockedByModel} aria-label={queueButton ? "Queue message" : "Send message"}>
+          <Icon name="send" />
+          {queueButton && <span>Queue</span>}
+          {composerStyle === "terminal" && !queueButton && <span className="send-return" aria-hidden="true">⏎</span>}
+        </button>
+      </Tooltip>
+    </div>
+  );
+
+  const messageField = (
+    <div className={`composer-input${highlightedCommand ? " highlighted" : ""}`}>
+      {composerStyle === "terminal" && <span className="composer-prompt-glyph" aria-hidden="true">❯</span>}
+      <div className="composer-field">
+        {highlightedCommand && <div ref={highlightRef} className="composer-highlight" aria-hidden="true">
+          {highlightedCommand[1]}<span className="composer-command">/{highlightedCommand[2]}</span>{composerText.slice(highlightedCommand[0].length)}{"\n"}
+        </div>}
+        <textarea
+          aria-label="Message"
+          ref={areaRef}
+          aria-controls={showCommands ? "slash-command-list" : showMentions ? "mention-list" : undefined}
+          aria-expanded={showCommands || showMentions}
+          aria-activedescendant={showCommands && suggestions.length ? `slash-option-${Math.min(slashIndex, suggestions.length - 1)}`
+            : showMentions && mentionSuggestions.length ? `mention-option-${Math.min(mentionIndex, mentionSuggestions.length - 1)}` : undefined}
+          value={composerText}
+          rows={1}
+          readOnly={frozen !== undefined}
+          onChange={(event) => {
+            if (frozen !== undefined) return;
+            const value = event.target.value;
+            setDraft(value);
+            setCaret(event.target.selectionStart);
+            setSlashIndex(0);
+            setMentionIndex(0);
+            setMentionDismissedAt((at) => at !== undefined && value[at] === "@" ? at : undefined);
+            setSlashNotice(undefined);
+            setSlashDismissedAt(undefined);
+          }}
+          onClick={(event) => setCaret(event.currentTarget.selectionStart)}
+          onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
+          onScroll={syncHighlightScroll}
+          onPaste={(event) => {
+            if (disabled || frozen !== undefined) return;
+            // A paste this large would swamp the draft; it becomes a text file like a picked one.
+            const pasted = largePasteText(event.clipboardData);
+            if (pasted !== undefined) {
+              const plan = pastedTextFile(pasted, files);
+              if ("file" in plan) {
+                event.preventDefault();
+                const file = plan.file;
+                setFiles((current) => [...current, file]);
+                setPasteNotice(file);
+                setAttachNotice(undefined);
+              } else {
+                // The caps refused it: leave the insertion to the browser and say where it went.
+                setPasteNotice(undefined);
+                setAttachNotice(`${plan.error} The paste went into the draft.`);
+              }
+              return;
+            }
+            // Rich-text apps put an image rendition next to copied text; that is a text paste.
+            if (event.clipboardData.types.includes("text/plain")) return;
+            const picked = filesFrom(event.clipboardData);
+            if (picked.length === 0) return;
+            event.preventDefault();
+            void addFiles(picked);
+          }}
+          onKeyDown={(event) => {
+            if (showCommands && !event.nativeEvent.isComposing) {
+              if (event.key === "ArrowDown" && suggestions.length) { event.preventDefault(); setSlashIndex((index) => (index + 1) % suggestions.length); return; }
+              if (event.key === "ArrowUp" && suggestions.length) { event.preventDefault(); setSlashIndex((index) => (index - 1 + suggestions.length) % suggestions.length); return; }
+              if ((event.key === "Tab" || event.key === "Enter") && suggestions.length && !event.shiftKey) { event.preventDefault(); insertCommand(suggestions[Math.min(slashIndex, suggestions.length - 1)].name); return; }
+              if (event.key === "Escape") { event.preventDefault(); setSlashDismissedAt(slash.start); return; }
+            }
+            if (showMentions && !event.nativeEvent.isComposing) {
+              const count = mentionSuggestions.length;
+              if (event.key === "ArrowDown" && count) { event.preventDefault(); setMentionIndex((index) => (index + 1) % count); return; }
+              if (event.key === "ArrowUp" && count) { event.preventDefault(); setMentionIndex((index) => (index - 1 + count) % count); return; }
+              if ((event.key === "Tab" || event.key === "Enter") && count && !event.shiftKey) { event.preventDefault(); insertMention(mentionSuggestions[Math.min(mentionIndex, count - 1)]); return; }
+              if (event.key === "Escape") { event.preventDefault(); setMentionDismissedAt(mention.start); return; }
+            }
+            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              void send();
+            }
+          }}
+          placeholder={placeholder ?? (providers.length === 0 ? "Connect a provider to start…" : status === "stopping" ? `${agentName} is stopping — keep your next message here…` : queueButton ? `${agentName} is working — ⏎ queues for after…` : mode === "plan" ? `Describe the work — in Plan mode ${agentName} inspects and proposes a plan for your approval…` : mode === "ultraplan" ? `Describe the work — in Ultra Plan ${agentName} interviews you one question at a time…` : `Ask ${agentName} to inspect, change, or run something…`)}
+          disabled={disabled || providers.length === 0}
+        />
+      </div>
+    </div>
+  );
+
   return (
     <div
       ref={wrapRef}
-      className={`composer-wrap ${disabled ? "disabled" : ""} ${dragging ? "dropping" : ""}`}
+      className={`composer-wrap ${disabled ? "disabled" : ""} ${dragging ? "dropping" : ""}${composerStyle === "classicGlass" ? " glass" : ""}`}
       onDragOver={(event) => {
         if (!acceptsDrop(event)) return;
         event.preventDefault();
@@ -517,7 +724,7 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
         {header && <motion.div key="composer-header" className="composer-header" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, y: -12, transition: { duration: 0.18, ease: EASE } }} transition={{ duration: 0.25, ease: EASE }}>{header}</motion.div>}
       </AnimatePresence>
       <motion.div
-        className={`composer${comet ? " comet" : ""}${frozen !== undefined ? " frozen" : ""}`}
+        className={`composer composer-${composerStyle}${comet ? " comet" : ""}${frozen !== undefined ? " frozen" : ""}`}
         aria-disabled={disabled || undefined}
         layout="position"
         transition={{ duration: 0.55, ease: GLIDE_EASE }}
@@ -534,186 +741,44 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
           notice={mentionsError ? <div className="slash-picker-status">{mentionsError} <button type="button" onClick={onRequestMentions}>Retry</button></div> : undefined}
           empty={mentionsError ? "No matching chats" : !mentionFiles && !mentionChats?.length ? (mentionsLoading ? "Loading files…" : "No files") : "No matching files or chats"}
           footnote={mentionFiles && mentionsTruncated ? <div className="slash-picker-status">Only the first 20,000 files are listed.</div> : undefined} />}
-        <QueuedRows entries={queuedEntries} agentName={agentName} disabled={queueActionsDisabled}
-          canSteer={status === "running" && Boolean(onSteer)} canRestore={Boolean(onDequeue)}
-          onSteer={(id) => void queue.steer(id)} onRestore={() => void queue.restore()} />
-        <AttachmentTray images={attachments} files={files} onOpenImage={(index, url) => setShownImage({ index, url })}
-          browserContexts={contexts} onRemoveContext={(index) => setField("browserContexts", contexts.filter((_, i) => i !== index))}
-          onRemoveImage={removeAttachment} onRemoveFile={removeFile} />
-        {pasteNotice && (
-          <div className="attachment-notice paste-notice" role="status">
-            <PasteNotice file={pasteNotice} onInsert={insertPastedText} disabled={disabled || frozen !== undefined} />
-          </div>
-        )}
-        {(attachNotice || blockedByModel) && (
-          <div className="attachment-notice" role="status">{attachmentError || (blockedByModel ? `${noVisionMessage} Or remove the images to send.` : attachNotice)}</div>
-        )}
-        {slashNotice && <div className="attachment-notice" role="status">{slashNotice} <button type="button" disabled={disabled || frozen !== undefined || status === "stopping" || blockedByModel || !onLiteral} onClick={() => void sendLiteral()}>Send as message</button></div>}
-        <AnimatePresence initial={false}>
-          {argNote && (
-            <motion.div
-              className="arg-hint"
-              role="note"
-              initial={{ opacity: 0, y: -3 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -3, transition: { duration: 0.12, ease: EASE } }}
-              transition={{ duration: 0.18, ease: EASE }}
-            >{argNote}</motion.div>
-          )}
-        </AnimatePresence>
-        <div className={`composer-input${highlightedCommand ? " highlighted" : ""}`}>
-          {highlightedCommand && <div ref={highlightRef} className="composer-highlight" aria-hidden="true">
-            {highlightedCommand[1]}<span className="composer-command">/{highlightedCommand[2]}</span>{composerText.slice(highlightedCommand[0].length)}{"\n"}
-          </div>}
-            <textarea
-              aria-label="Message"
-            ref={areaRef}
-            aria-controls={showCommands ? "slash-command-list" : showMentions ? "mention-list" : undefined}
-            aria-expanded={showCommands || showMentions}
-            aria-activedescendant={showCommands && suggestions.length ? `slash-option-${Math.min(slashIndex, suggestions.length - 1)}`
-              : showMentions && mentionSuggestions.length ? `mention-option-${Math.min(mentionIndex, mentionSuggestions.length - 1)}` : undefined}
-            value={composerText}
-            rows={1}
-            readOnly={frozen !== undefined}
-            onChange={(event) => {
-              if (frozen !== undefined) return;
-              const value = event.target.value;
-              setDraft(value);
-              setCaret(event.target.selectionStart);
-              setSlashIndex(0);
-              setMentionIndex(0);
-              setMentionDismissedAt((at) => at !== undefined && value[at] === "@" ? at : undefined);
-              setSlashNotice(undefined);
-              setSlashDismissedAt(undefined);
-            }}
-            onClick={(event) => setCaret(event.currentTarget.selectionStart)}
-            onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
-            onScroll={syncHighlightScroll}
-            onPaste={(event) => {
-              if (disabled || frozen !== undefined) return;
-              // A paste this large would swamp the draft; it becomes a text file like a picked one.
-              const pasted = largePasteText(event.clipboardData);
-              if (pasted !== undefined) {
-                const plan = pastedTextFile(pasted, files);
-                if ("file" in plan) {
-                  event.preventDefault();
-                  const file = plan.file;
-                  setFiles((current) => [...current, file]);
-                  setPasteNotice(file);
-                  setAttachNotice(undefined);
-                } else {
-                  // The caps refused it: leave the insertion to the browser and say where it went.
-                  setPasteNotice(undefined);
-                  setAttachNotice(`${plan.error} The paste went into the draft.`);
-                }
-                return;
-              }
-              // Rich-text apps put an image rendition next to copied text; that is a text paste.
-              if (event.clipboardData.types.includes("text/plain")) return;
-              const picked = filesFrom(event.clipboardData);
-              if (picked.length === 0) return;
-              event.preventDefault();
-              void addFiles(picked);
-            }}
-            onKeyDown={(event) => {
-              if (showCommands && !event.nativeEvent.isComposing) {
-                if (event.key === "ArrowDown" && suggestions.length) { event.preventDefault(); setSlashIndex((index) => (index + 1) % suggestions.length); return; }
-                if (event.key === "ArrowUp" && suggestions.length) { event.preventDefault(); setSlashIndex((index) => (index - 1 + suggestions.length) % suggestions.length); return; }
-                if ((event.key === "Tab" || event.key === "Enter") && suggestions.length && !event.shiftKey) { event.preventDefault(); insertCommand(suggestions[Math.min(slashIndex, suggestions.length - 1)].name); return; }
-                if (event.key === "Escape") { event.preventDefault(); setSlashDismissedAt(slash.start); return; }
-              }
-              if (showMentions && !event.nativeEvent.isComposing) {
-                const count = mentionSuggestions.length;
-                if (event.key === "ArrowDown" && count) { event.preventDefault(); setMentionIndex((index) => (index + 1) % count); return; }
-                if (event.key === "ArrowUp" && count) { event.preventDefault(); setMentionIndex((index) => (index - 1 + count) % count); return; }
-                if ((event.key === "Tab" || event.key === "Enter") && count && !event.shiftKey) { event.preventDefault(); insertMention(mentionSuggestions[Math.min(mentionIndex, count - 1)]); return; }
-                if (event.key === "Escape") { event.preventDefault(); setMentionDismissedAt(mention.start); return; }
-              }
-              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                event.preventDefault();
-                void send();
-              }
-            }}
-            placeholder={placeholder ?? (providers.length === 0 ? "Connect a provider to start…" : status === "stopping" ? `${agentName} is stopping — keep your next message here…` : queueButton ? `${agentName} is working — ⏎ queues for after…` : mode === "plan" ? `Describe the work — in Plan mode ${agentName} inspects and proposes a plan for your approval…` : mode === "ultraplan" ? `Describe the work — in Ultra Plan ${agentName} interviews you one question at a time…` : `Ask ${agentName} to inspect, change, or run something…`)}
-            disabled={disabled || providers.length === 0}
-          />
-        </div>
-        <div className="composer-toolbar">
-          <div className="composer-left">
-            {providers.length === 0 ? (
-              <button type="button" className="model-pill callout" onClick={onOpenSettings}>
-                <Icon name="key" /> Connect a provider
-              </button>
-            ) : (
-              <>
-                <Tooltip label="Attach files or images">
-                  <button
-                    type="button"
-                    className="attach-button"
-                    aria-label="Attach files"
-                    disabled={disabled}
-                    onClick={() => fileRef.current?.click()}
-                  >
-                    <Icon name="paperclip" />
-                  </button>
-                </Tooltip>
-                <input
-                  ref={fileRef}
-                  type="file"
-                  multiple
-                  hidden
-                  data-testid="attach-input"
-                  onChange={(event) => {
-                    const picked = filesFrom(event.target.files);
-                    event.target.value = "";
-                    void addFiles(picked);
-                  }}
-                />
-                <ModelPicker
-                  providers={providers}
-                  favoriteModels={favoriteModels}
-                  favoriteSaving={favoriteSaving}
-                  onSetFavorite={onSetFavorite}
-                  providerId={providerId}
-                  modelId={modelId}
-                  disabled={busy}
-                  popoverSide={popoverSide}
-                  onConfigure={onConfigure}
-                  team={team}
-                />
-                {stats && <ContextPanel stats={stats} popoverSide={popoverSide} />}
-                <ReasoningToggle
-                  providers={providers}
-                  providerId={providerId}
-                  modelId={modelId}
-                  thinkingLevel={thinkingLevel}
-                  disabled={busy}
-                  popoverSide={popoverSide}
-                  onConfigure={onConfigure}
-                />
-                {onModeChange && <>
-                  <ModeToggle mode={mode ?? "build"} disabled={busy} onChange={onModeChange} />
-                  <ExecutionPolicyNotice saved={executionPolicy} applied={appliedExecutionPolicy} running={busy} />
-                </>}
-              </>
+        {composerStyle === "split" ? (
+          <>
+            <div className="composer-split-card">
+              {drafting}
+              {policyNotice && <div className="composer-policy">{policyNotice}</div>}
+              <div className="composer-split-row">
+                {messageField}
+                {sendControls}
+              </div>
+            </div>
+            <div className="composer-toolbar composer-split-bar">
+              <div className="composer-left">{toolbarControls}</div>
+            </div>
+          </>
+        ) : composerStyle === "capsule" ? (
+          <>
+            {drafting}
+            <div className="composer-capsule-row">
+              {providers.length === 0 ? connectProvider : attachControl}
+              {messageField}
+              {sendControls}
+            </div>
+            {providers.length > 0 && (
+              <div className="composer-toolbar composer-subbar">
+                <div className="composer-left">{modelControls}{policyNotice}</div>
+              </div>
             )}
-          </div>
-          <div className="composer-right">
-            {busy && (
-              <Tooltip label={status === "stopping" ? "Stopping…" : "Stop"}>
-                <button type="button" className="send-button stop" onClick={onStop} disabled={disabled || frozen !== undefined || status === "stopping"} aria-label="Stop">
-                  <Icon name="stop" />
-                </button>
-              </Tooltip>
-            )}
-            <Tooltip label={status === "stopping" ? `Wait for ${agentName} to stop` : queueButton ? `Queue for after ${agentName} finishes (⏎)` : "Send (⏎)"}>
-              <button type="button" className={`send-button${queueButton ? " queue" : ""}`} onClick={() => void send()} disabled={disabled || frozen !== undefined || providers.length === 0 || status === "stopping" || (!draft.trim() && files.length === 0 && contexts.length === 0) || blockedByModel} aria-label={queueButton ? "Queue message" : "Send message"}>
-                <Icon name="send" />
-                {queueButton && <span>Queue</span>}
-              </button>
-            </Tooltip>
-          </div>
-        </div>
+          </>
+        ) : (
+          <>
+            {drafting}
+            {messageField}
+            <div className="composer-toolbar">
+              <div className="composer-left">{toolbarControls}{policyNotice}</div>
+              {sendControls}
+            </div>
+          </>
+        )}
       </motion.div>
       {shownImage && <ImageLightbox preview={shownImage.url} alt={`Attached image ${shownImage.index + 1}`} onClose={() => setShownImage(null)} />}
     </div>

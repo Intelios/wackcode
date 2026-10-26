@@ -23,6 +23,7 @@ import { buildSkillCreatorPrompt } from "./builtin/skill-creator/guide.js";
 import { buildCanvasPrompt } from "./builtin/canvas/guide.js";
 import type { BuiltinHost, SubagentOutcome } from "./builtin/host.js";
 import { normalizeMessage as normalizeSavedMessage, textFromContent, THUMBNAIL_OPTIONS } from "./message-normalization.js";
+import { visualDocument } from "./visual-document.js";
 import { BACKGROUND_SUBAGENT_MESSAGE, backgroundCalls, interruptedDetails, projectBackgroundCards } from "./builtin/subagents/state.js";
 import { SUBAGENT_TOOL_NAME } from "./builtin/subagents/types.js";
 import { createModelRuntime, findModel, MODEL_MISSING_MESSAGE, missingModelMessage, missingModelPlaceholder, workerSettings, type PiModel } from "./model-runtime.js";
@@ -775,6 +776,10 @@ function toolCatalog(): ToolCatalogEntry[] {
 // A Chat mode chat narrows all of that to its allowlist; the chat guard enforces it at call time.
 function activeToolNames(): string[] {
   const inactive = new Set([...builtins.subagents.inactiveTools(), ...builtins.mcp.inactiveTools(), ...builtins.computerUse.inactiveTools(), ...builtins.memory.inactiveTools(), ...builtins.skillCreator.inactiveTools(), ...builtins.webSearch.inactiveTools()]);
+  // Publishing and previewing share one visual capability, including for older saved denylists.
+  if (VISUAL_TOOL_NAMES.some((name) => disabledTools.has(name))) {
+    for (const name of VISUAL_TOOL_NAMES) inactive.add(name);
+  }
   return toolCatalog()
     .filter((tool) => tool.available && !inactive.has(tool.name))
     .filter((tool) => !disabledTools.has(tool.name) || tool.source.kind === "mcp" || (tool.source.kind === "wackcode" && !SWITCHABLE_BUILTIN_TOOLS.has(tool.name)))
@@ -1907,6 +1912,9 @@ async function handle(command: WorkerCommand): Promise<void> {
     } else if (command.type === "tool_image") {
       respond(command.id, toolResultImage(command.toolCallId, command.index ?? 0));
       return;
+    } else if (command.type === "visual_document") {
+      respond(command.id, visualDocument(transcriptEntries(session.sessionManager.getBranch()).map((entry) => entry.raw), command.toolCallId));
+      return;
     } else if (command.type === "message_image") {
       respond(command.id, userMessageImage(command.entryId, command.index ?? 0));
       return;
@@ -2345,7 +2353,7 @@ function shutdownProcess(code = 0, commandId?: string): void {
 }
 
 /** Commands the host sends with `worker::request` and whose failures it reports itself. */
-const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "list_commands", "execute_command", "init_agents", "skill_creator", "start_canvas", "compact", "dequeue", "queue_message", "steer_message", "goal_control", "watch_subagent", "tool_image", "message_image", "set_mode"]);
+const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "list_commands", "execute_command", "init_agents", "skill_creator", "start_canvas", "compact", "dequeue", "queue_message", "steer_message", "goal_control", "watch_subagent", "tool_image", "visual_document", "message_image", "set_mode"]);
 
 /**
  * The original of an image a tool result returned, for the transcript's lightbox: the image at
@@ -2477,6 +2485,7 @@ function bypassesQueue(command: WorkerCommand): boolean {
     case "dequeue":
     case "watch_subagent":
     case "tool_image":
+    case "visual_document":
     case "message_image":
       return true;
     case "goal_control":

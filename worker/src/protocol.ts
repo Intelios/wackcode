@@ -865,6 +865,8 @@ export type WorkerCommand =
    * for the transcript's lightbox. Bypasses the command queue once the session exists.
    */
   | { id: string; type: "tool_image"; toolCallId: string; index?: number }
+  /** Saved visual HTML with inlined images, fetched on demand rather than in snapshots. */
+  | { id: string; type: "visual_document"; toolCallId: string }
   /**
    * The original image a user message attached (answered with an `ImageContent` or null), for
    * the transcript's lightbox. Keyed by the message's session entry and the image's position

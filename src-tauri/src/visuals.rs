@@ -18,9 +18,9 @@
 //!   visual cannot assign `location.href` and turn its frame into a remote page — the one way a
 //!   CSP cannot close by itself, because a policy travels with the document that leaves.
 //!
-//! A canvas artboard (`kind: artboard`) is the same document in the same frame with a different
-//! bridge: it paints its own background, never sends a message or opens a link, and reports its
-//! script errors so `canvas_look` can show them (`canvas_render.rs`).
+//! Artboards and visual previews use the same frame with a narrower bridge: they paint the
+//! theme background, never send a message or open a link, and report their script errors
+//! (`canvas_render.rs`). Previews retain reply layout and are served only to the render webview.
 //!
 //! Documents have an audience. The renderer's (`stage_visual`) are served to the main webview
 //! only; the ones `canvas_look` stages for its offscreen `canvas-render` webview are served to
@@ -39,11 +39,11 @@ pub const VISUAL_SCHEME: &str = "wcvisual";
 pub const MAIN_WEBVIEW: &str = "main";
 /// The offscreen webview `canvas_look` renders artboards in (`canvas_render.rs`).
 pub const RENDER_WEBVIEW: &str = "canvas-render";
-/// A visual is capped at 64 KiB by the tool (`worker/src/builtin/visual.ts`); this is the host's
-/// own backstop for anything that reaches the command another way.
-pub const MAX_STAGE_BYTES: usize = 256 * 1024;
+/// Authored markup is capped at 128 KiB in the worker; inlined local images can grow the
+/// finished document to 8 MiB. This is the same backstop for every staging path.
+pub const MAX_STAGE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_ENTRIES: usize = 128;
-const MAX_STORE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_STORE_BYTES: usize = 48 * 1024 * 1024;
 /// Long enough for any colour, font stack or length, short enough that a value cannot carry a
 /// second declaration.
 const MAX_VALUE_CHARS: usize = 200;
@@ -89,6 +89,31 @@ impl VisualTheme {
             radius: "14px".into(),
             scheme: "dark".into(),
         }
+    }
+
+    /// A preview may inspect a light or dark appearance without changing the app's theme.
+    /// Keep the exact live theme when it matches; otherwise use a readable built-in palette.
+    fn for_scheme(&self, scheme: &str) -> Result<Self, String> {
+        if scheme != "light" && scheme != "dark" {
+            return Err("scheme must be light or dark.".into());
+        }
+        if self.scheme == scheme {
+            return Ok(self.clone());
+        }
+        let mut theme = Self::fallback();
+        if scheme == "light" {
+            theme.bg = "#f7f8f5".into();
+            theme.surface = "#ffffff".into();
+            theme.text = "#242820".into();
+            theme.text_soft = "#50594a".into();
+            theme.text_dim = "#6b7465".into();
+            theme.border = "#d5dbcf".into();
+            theme.accent = "#527b04".into();
+            theme.accent_text = "#426600".into();
+            theme.on_accent = "#ffffff".into();
+            theme.scheme = "light".into();
+        }
+        Ok(theme)
     }
 
     /// `(name, value)` pairs as the wrapper writes them. A value that is not a plain CSS value
@@ -155,6 +180,8 @@ pub enum VisualKind {
     #[default]
     Reply,
     Artboard,
+    /// A visual reply rendered offscreen for inspection and content-height measurement.
+    Preview,
 }
 
 impl VisualKind {
@@ -162,6 +189,7 @@ impl VisualKind {
         match self {
             VisualKind::Reply => "reply",
             VisualKind::Artboard => "artboard",
+            VisualKind::Preview => "preview",
         }
     }
 }
@@ -219,13 +247,20 @@ impl VisualStore {
 
     /// Keep `html` under a fresh token for the renderer, evicting the oldest documents past the caps.
     pub fn stage(&self, html: String, theme: VisualTheme, kind: VisualKind) -> Result<String, String> {
+        if kind == VisualKind::Preview {
+            return Err("Visual previews can only be staged for the render webview.".into());
+        }
         self.keep(html, theme, kind, Audience::App)
     }
 
-    /// Keep an artboard for `canvas_look`'s render webview, in the app's current theme.
-    pub fn stage_for_render(&self, html: String) -> Result<String, String> {
-        let theme = self.current_theme();
-        self.keep(html, theme, VisualKind::Artboard, Audience::Render)
+    /// Keep an artboard or visual preview for the render webview, in the app's current theme.
+    pub fn stage_for_render(&self, html: String, kind: VisualKind, appearance: Option<&str>) -> Result<String, String> {
+        if kind == VisualKind::Reply {
+            return Err("Render an artboard or a visual preview.".into());
+        }
+        let current = self.current_theme();
+        let theme = match appearance { Some(scheme) => current.for_scheme(scheme)?, None => current };
+        self.keep(html, theme, kind, Audience::Render)
     }
 
     /// Drop a document nobody needs any more (a finished render's).
@@ -304,11 +339,12 @@ impl VisualStore {
 
 fn wrapper(html: &str, theme: &VisualTheme, kind: VisualKind) -> Result<String, String> {
     let declarations = theme.declarations()?;
-    // Both markers are filled before the model's markup goes in, so markup that happens to
+    // Wrapper markers are filled before the model's markup goes in, so markup that happens to
     // contain one is never rewritten.
     Ok(include_str!("visual_frame.html")
         .replace("/*__THEME__*/", &declarations)
         .replace("__KIND__", kind.as_str())
+        .replace("__SCHEME__", &theme.scheme)
         .replace("<!--__BODY__-->", html))
 }
 
@@ -464,6 +500,8 @@ mod tests {
         assert!(document.contains("<p>hi</p>"));
         assert!(document.contains("--accent:#d0f664;"));
         assert!(document.contains("color-scheme:dark;"));
+        assert!(document.contains("data-scheme=\"dark\""));
+        assert!(!document.contains("__SCHEME__"));
         assert!(!document.contains("/*__THEME__*/"));
         assert!(!document.contains("<!--__BODY__-->"));
     }
@@ -490,6 +528,53 @@ mod tests {
         let artboard = store.document(&store.stage("<p/>".into(), theme(), VisualKind::Artboard).unwrap()).unwrap();
         assert!(artboard.contains("data-kind=\"artboard\""));
         assert!(!artboard.contains("__KIND__"));
+    }
+
+    #[test]
+    fn previews_are_refused_by_renderer_staging_and_served_only_to_the_render_audience() {
+        let store = VisualStore::new();
+        assert!(store.stage("<p/>".into(), theme(), VisualKind::Preview).is_err());
+        assert!(store.stage_for_render("<p/>".into(), VisualKind::Reply, None).is_err());
+        let token = store.stage_for_render("<p>preview</p>".into(), VisualKind::Preview, None).unwrap();
+        assert!(store.document(&token).is_none());
+        let document = store.document_for(&token, Audience::Render).unwrap();
+        assert!(document.contains("data-kind=\"preview\""));
+        assert!(document.contains("<p>preview</p>"));
+        let request = http::Request::builder().uri(format!("{VISUAL_SCHEME}://localhost/{token}")).body(Vec::new()).unwrap();
+        assert_eq!(protocol_response(&store, &request, MAIN_WEBVIEW).status(), http::StatusCode::NOT_FOUND);
+        assert_eq!(protocol_response(&store, &request, RENDER_WEBVIEW).status(), http::StatusCode::OK);
+    }
+
+    #[test]
+    fn splices_validated_light_scheme_before_the_authored_markup() {
+        let mut light = theme();
+        light.scheme = "light".into();
+        let document = wrapper("<p>__SCHEME__</p>", &light, VisualKind::Reply).unwrap();
+        assert!(document.contains("data-scheme=\"light\""));
+        assert!(document.contains("<p>__SCHEME__</p>"));
+        // Meaning colours vary with the scheme; the interaction accent remains supplied by the app.
+        assert!(document.contains(":root[data-scheme=\"light\"]"));
+        assert!(document.contains("--chart-1: var(--accent)"));
+        for name in ["--background:", "--foreground:", "--card:", "--muted:", "--muted-foreground:", "--primary:", "--primary-foreground:", "--border:", "--ring:", "--destructive:", "--font-sans:", "--font-mono:", "--success:", "--info:", "--chart-6:"] {
+            assert!(document.contains(name), "{name} is missing from the frame");
+        }
+    }
+
+    #[test]
+    fn preview_appearance_preserves_a_matching_live_theme_and_does_not_change_it() {
+        let store = VisualStore::new();
+        let mut custom = theme();
+        custom.accent = "#ba70ee".into();
+        store.set_theme(custom).unwrap();
+        let dark = store.stage_for_render("<p/>".into(), VisualKind::Preview, Some("dark")).unwrap();
+        assert!(store.document_for(&dark, Audience::Render).unwrap().contains("--accent:#ba70ee;"));
+        let light = store.stage_for_render("<p/>".into(), VisualKind::Preview, Some("light")).unwrap();
+        let document = store.document_for(&light, Audience::Render).unwrap();
+        assert!(document.contains("data-scheme=\"light\""));
+        assert!(document.contains("--bg:#f7f8f5;"));
+        assert_eq!(store.current_theme().accent, "#ba70ee");
+        assert_eq!(store.current_theme().scheme, "dark");
+        assert!(store.stage_for_render("<p/>".into(), VisualKind::Preview, Some("dark; color:red")).is_err());
     }
 
     #[test]
@@ -547,7 +632,7 @@ mod tests {
     fn serves_each_webview_only_its_own_documents_and_the_shell_only_to_the_renderer() {
         let store = VisualStore::new();
         let app_token = store.stage("<p>app</p>".into(), theme(), VisualKind::Reply).unwrap();
-        let render_token = store.stage_for_render("<p>render</p>".into()).unwrap();
+        let render_token = store.stage_for_render("<p>render</p>".into(), VisualKind::Artboard, None).unwrap();
         let get = |path: String| http::Request::builder().method("GET").uri(format!("{VISUAL_SCHEME}://localhost{path}")).body(Vec::new()).unwrap();
         let status = |path: String, label: &str| protocol_response(&store, &get(path), label).status();
         assert_eq!(status(format!("/{app_token}"), MAIN_WEBVIEW), http::StatusCode::OK);

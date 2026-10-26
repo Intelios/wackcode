@@ -24,18 +24,24 @@ The composer never states the active policy: a persistent read-only badge lived 
 Images a tool returned (a picture `read`, a screenshot, an MCP tool's output) show as small previews under the tool's row or chip strip (`ToolImages`), each opening in `ui/ImageLightbox` with the original from `api.toolImage`. Inside a folded Explored group they sit in a captioned strip under the fold and move under their own chips when it opens. Chat mode's chips show the same previews inline.
 
 **Visual replies** (`VisualCard.tsx`) draw a settled `show_visual` call where it landed: the
-assistant's small HTML answer — a chart, a comparison, a mockup — in a card shaped like a code
-fence (mark, title, Expand, copy) over a sandboxed frame. The head band is an Appearance
-preference (`visualBanner`, provided as `VisualBannerEnabled`): switched off the card is the
-frame alone and Expand/copy go with it. `VisualCallCard` reads the scope the
+assistant's small HTML answer — a chart, a comparison, a mockup — as a borderless document in the
+conversation. Expand and Copy float over its top-right corner on hover and keyboard focus;
+there is no title band or Appearance setting. The expanded overlay keeps its title and head.
+Over an image backdrop or Liquid Glass, the card gets a solid surface, radius and 16 px padding
+for readability. `VisualCallCard` reads the scope the
 transcript provides (`VisualCardScope`): the tool-call ids on the newest answer, which alone may
 send, and the App's send/link handlers. A running or refused call keeps its chip and its error;
 `completed-work.ts` treats a settled visual as an outcome, never as work to fold away. Only
 work before the first successful, settled visual may fold: later prose, calls and visuals stay
 below it in their original order, both live and settled. The frame is staged through Rust
-(`visuals.rs`), reports its own height (clamped to 96–640 px), and takes
+(`visuals.rs`), reports its own height (up to 20,000 px), and takes
 its colours from `visualThemeVars`/`visualVariables` in `theme.ts`, repainted in place when the
-appearance changes. Only messages from that frame's own `contentWindow` are accepted: a height, a
+appearance changes. New calls carry pre-measured heights at 360, 560 and 720 px: the card starts
+at the taller adjacent measurement for its width and fades in on its first size report, then
+springs through later changes. Reduced motion skips both; older calls retain their 96 px start.
+Inlined-image documents are fetched on demand through `api.visualDocument` (`visual_document`)
+by `useStagedVisual`, while ordinary visuals stage the call's HTML. Only messages from that
+frame's own `contentWindow` are accepted: a height, a
 link the user clicked (opened through `revealPath`, as a Markdown link is) and a
 `wackcode.send` text, which is refused when the visual is not on the latest answer, while a
 reply is running, or twice within a second. A message a visual sent travels as a
@@ -177,6 +183,16 @@ keeps the switch usable — off must always be possible — and dims the segment
 Nothing renders without the `team` prop, which only Code-area composers get. Defaults live in
 `SubagentConfig.teamDefault` (Settings › Sub-agents' Team card); new chats start with Team off
 and forks copy it.
+
+## Composer styles
+
+`appearance.composerStyle` picks the Code composer's silhouette: `classic`, `classicGlass`,
+`capsule`, `split` or `terminal`. Chat mode's `ChatComposer` ignores it. `Composer.tsx` renders the
+same state, hooks, pickers and accessible names in every style — only the arrangement changes —
+and its `composer-<style>` class carries the look. `classicGlass` needs `glassSupported`
+(macOS 26+, like the Liquid Glass backdrop): Settings disables it, `validate_appearance_config`
+refuses it, and `App` falls back to `classic` for a configuration copied from another Mac.
+`applyTheme` mirrors the choice on `data-composer-style` for CSS.
 
 ## New-chat project picker
 

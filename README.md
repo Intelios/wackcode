@@ -29,7 +29,7 @@ Everything runs locally. Your conversations go straight from your Mac to the mod
 - **Answers you can look at.** The agent can draw a chart, comparison, diagram or small interactive mockup right in the conversation instead of describing it, or lay out whole UI directions side by side on a canvas you pan and zoom.
 - **Extensible.** MCP servers, Agent Skills, slash commands, Pi packages, per-project memory, and optional sub-agents.
 - **Just chat, too.** A separate Chat area turns the same connections into a general-purpose chat, with no project and no coding tools.
-- **Yours.** Six themes or your own colours, image backdrops, Liquid Glass, dynamic backgrounds that respond to chat activity, and your agent's name. Appearance never changes what the model does.
+- **Yours.** Six themes or your own colours, image backdrops, Liquid Glass, five composer styles, dynamic backgrounds that respond to chat activity, and your agent's name. Appearance never changes what the model does.
 
 ## Features
 
@@ -51,7 +51,7 @@ Don't open Chat mode chats in a WackCode build from before Chat mode: an older b
 
 Some answers are easier to see than to read: the agent can reply with a chart, a comparison, a
 diagram, a mockup of a UI it is proposing, or a small widget you can actually use, drawn in the
-conversation in the app's own colours. It works in both areas — most at home in Chat mode, and
+conversation in the app's own colours, including local images. It works in both areas — most at home in Chat mode, and
 handy in Code mode when the agent describes a change to an interface. A visual runs in a sandbox
 of its own with no network access at all, and a button inside one can send a message for you only
 when you click it. Switch it off in **Settings › Tools › Built-ins**.

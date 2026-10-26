@@ -133,6 +133,8 @@ export const api = {
   computerUseListApps: () => invoke<{ name: string; bundleId: string }[]>("computer_use_list_apps"),
   /** The original image of a screenshot tool result, or null when it's gone. */
   toolImage: (taskId: string, toolCallId: string, index = 0) => invoke<ImageContent | null>("tool_image", { taskId, toolCallId, index }),
+  /** A visual's saved document, including images inlined when it was published. */
+  visualDocument: (taskId: string, toolCallId: string) => invoke<string>("visual_document", { taskId, toolCallId }),
   /** The original image a sent message attached, or null when it's gone. */
   messageImage: (taskId: string, entryId: string, index = 0) => invoke<ImageContent | null>("message_image", { taskId, entryId, index }),
   /** Stages a visual reply's (or a canvas artboard's) HTML in Rust and returns the `wcvisual:` URL its frame loads. */

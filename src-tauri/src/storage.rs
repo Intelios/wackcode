@@ -308,7 +308,6 @@ mod tests {
         assert!(!data.appearance.message_bubbles);
         assert!(data.appearance.group_exploration);
         assert!(data.appearance.collapse_completed_work);
-        assert!(data.appearance.visual_banner);
         // The thinking timer counts whole seconds until the user picks tenths.
         assert_eq!(data.appearance.thinking_timer_precision, crate::models::ThinkingTimerPrecision::Second);
         let data: AppData = serde_json::from_str(r#"{"version":1,"appearance":{"thinkingPreview":false,"messageBubbles":true,"groupExploration":false,"collapseCompletedWork":false,"visualBanner":false,"thinkingTimerPrecision":"tenth"}}"#).unwrap();
@@ -316,14 +315,14 @@ mod tests {
         assert!(data.appearance.message_bubbles);
         assert!(!data.appearance.group_exploration);
         assert!(!data.appearance.collapse_completed_work);
-        assert!(!data.appearance.visual_banner);
         assert_eq!(data.appearance.thinking_timer_precision, crate::models::ThinkingTimerPrecision::Tenth);
         let saved = serde_json::to_string(&data).unwrap();
         assert!(saved.contains(r#""thinkingPreview":false"#));
         assert!(saved.contains(r#""messageBubbles":true"#));
         assert!(saved.contains(r#""groupExploration":false"#));
         assert!(saved.contains(r#""collapseCompletedWork":false"#));
-        assert!(saved.contains(r#""visualBanner":false"#));
+        // Older files may retain the removed title-band preference; it is ignored on load.
+        assert!(!saved.contains("visualBanner"));
         assert!(saved.contains(r#""thinkingTimerPrecision":"tenth""#));
     }
 
@@ -376,10 +375,11 @@ mod tests {
 
     #[test]
     fn appearance_files_from_before_theming_load_with_the_default_look() {
-        use crate::models::{AppearanceConfig, BackdropMode};
+        use crate::models::{AppearanceConfig, BackdropMode, ComposerStyle};
         let data: AppData = serde_json::from_str(r#"{"version":1,"appearance":{"thinkingPreview":false}}"#).unwrap();
         assert_eq!(data.appearance, AppearanceConfig { thinking_preview: false, ..AppearanceConfig::default() });
         assert_eq!(data.appearance.backdrop, BackdropMode::Solid);
+        assert_eq!(data.appearance.composer_style, ComposerStyle::Classic);
         assert_eq!((data.appearance.image_dim, data.appearance.image_blur, data.appearance.glass_tint), (65, 12, 40));
         // Files from before image cropping show the picture centred and uncropped.
         assert_eq!(BackgroundImage::fresh("a.png".into()), BackgroundImage { name: "a.png".into(), zoom: 100, x: 500, y: 500 });

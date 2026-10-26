@@ -694,8 +694,6 @@ export interface AppearanceConfig {
   groupExploration: boolean;
   /** Fold work steps only after completion; live work stays expanded. On by default. */
   collapseCompletedWork: boolean;
-  /** The title strip above a visual reply (title, Expand, Copy). Off draws the frame alone. */
-  visualBanner: boolean;
   /** `#rrggbb`; absent is WackCode green. */
   accent?: string | null;
   /** `#rrggbb` as displayed (already darkened for readability); absent is the default. */
@@ -718,6 +716,11 @@ export interface AppearanceConfig {
   glassStyle: GlassStyle;
   /** How much the background colour tints the glass, 0–90 %. */
   glassTint: number;
+  /**
+   * How the Code area's composer is drawn (Settings › Appearance). Chat mode keeps its own
+   * messenger pill. `classicGlass` needs macOS 26+, like the Liquid Glass backdrop.
+   */
+  composerStyle: ComposerStyle;
   /** What the app calls the agent in its own copy; absent is `WackCode`. */
   agentName?: string | null;
 }
@@ -729,6 +732,19 @@ export interface AppearanceConfig {
  */
 /** What a staged `wcvisual:` document is: a visual reply, or an artboard on a canvas (`visuals.rs`). */
 export type VisualKind = "reply" | "artboard";
+
+/** Small persisted metadata; an inlined document is fetched on demand, outside snapshots. */
+export interface VisualResultDetails {
+  v: 1;
+  title: string;
+  heights?: VisualHeight[];
+  inlined?: true;
+}
+
+export interface VisualHeight {
+  width: number;
+  height: number;
+}
 
 export interface VisualThemeVars {
   bg: string;
@@ -764,6 +780,11 @@ export type BackdropMode = "solid" | "image" | "glass" | "dynamic";
 export type DynamicBackgroundStyle = "colourDrift" | "glyphFlow";
 export type DynamicBackgroundPalette = "theme" | "aurora" | "sunset";
 export type GlassStyle = "frosted" | "clear";
+/**
+ * The Code composer's layout. `classicGlass` is the classic card in a translucent pane; it is
+ * offered only where Liquid Glass exists, since it borrows the same macOS 26 material.
+ */
+export type ComposerStyle = "classic" | "classicGlass" | "capsule" | "split" | "terminal";
 /** How the thinking timer counts, in Settings → Appearance. Mirrors the Rust enum. */
 export type ThinkingTimerPrecision = "second" | "tenth";
 

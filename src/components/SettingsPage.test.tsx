@@ -627,6 +627,20 @@ describe("SettingsPage sub-agents", () => {
     await waitFor(() => expect(onSetGit).toHaveBeenCalledWith({ commitAttribution: false }));
   });
 
+  it("switches visual publishing and preview together, including a legacy disabled visual", async () => {
+    const { rerender, props, subagents } = renderPage(false);
+    props.onSetDisabledTools.mockResolvedValue(undefined);
+    rerender(<SettingsPage {...noFavorites} {...props} subagents={subagents} disabledTools={["bash"]} />);
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Settings sections" })).getByRole("button", { name: /^Packages$/ }));
+    fireEvent.click(await screen.findByRole("switch", { name: "Visual replies" }));
+    await waitFor(() => expect(props.onSetDisabledTools).toHaveBeenCalledWith(["bash", "show_visual", "preview_visual"]));
+
+    rerender(<SettingsPage {...noFavorites} {...props} subagents={subagents} disabledTools={["bash", "show_visual"]} />);
+    expect(screen.getByRole("switch", { name: "Visual replies" })).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(screen.getByRole("switch", { name: "Visual replies" }));
+    await waitFor(() => expect(props.onSetDisabledTools).toHaveBeenLastCalledWith(["bash"]));
+  });
+
   it("switches Web Fetch on Settings › Web through the tool denylist, keeping the rest of it", async () => {
     const { rerender, props, subagents } = renderPage(false);
     props.onSetDisabledTools.mockResolvedValue(undefined);
@@ -745,19 +759,6 @@ describe("SettingsPage appearance section", () => {
     expect(off).toHaveAttribute("aria-checked", "false");
     fireEvent.click(off);
     await waitFor(() => expect(again.onSetAppearance).toHaveBeenCalledWith(appearance));
-  });
-
-  it("switches the visual banner off and back on", async () => {
-    const { onSetAppearance } = renderAppearance({ ...DEFAULT_APPEARANCE, visualBanner: true });
-    const toggle = screen.getByRole("switch", { name: "Visual banner" });
-    expect(toggle).toHaveAttribute("aria-checked", "true");
-    fireEvent.click(toggle);
-    await waitFor(() => expect(onSetAppearance).toHaveBeenCalledWith({ ...DEFAULT_APPEARANCE, visualBanner: false }));
-    cleanup();
-
-    const again = renderAppearance({ ...DEFAULT_APPEARANCE, visualBanner: false });
-    fireEvent.click(screen.getByRole("switch", { name: "Visual banner" }));
-    await waitFor(() => expect(again.onSetAppearance).toHaveBeenCalledWith({ ...DEFAULT_APPEARANCE, visualBanner: true }));
   });
 
   it("sets the thinking timer to tenths and back to whole seconds", async () => {

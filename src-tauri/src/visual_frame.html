@@ -10,12 +10,13 @@
 
   A canvas artboard (`data-kind="artboard"`) is a screen rather than a card: it paints the theme's
   background unless its markup paints its own, never sends or opens anything, and reports script
-  errors instead, for `canvas_look`'s render report.
+  errors instead, for `canvas_look`'s render report. A preview keeps reply styling over the
+  painted theme background and has the same read-only bridge, for screenshot inspection.
 
   Keep this document small and dependency-free: it is served on every visual, and the model's own
   markup has to feel like part of it.
 -->
-<html lang="en" data-kind="__KIND__">
+<html lang="en" data-kind="__KIND__" data-scheme="__SCHEME__">
 <head>
 <meta charset="utf-8">
 <meta name="color-scheme" content="light dark">
@@ -50,12 +51,45 @@
   --danger: #f08080;
   --danger-bg: #351d1d;
   --warning: #e6ba69;
-  --wc-success: #a8d883;
+  --success: #a8d883;
+  --info: #8dbbfa;
+  --chart-1: var(--accent);
+  --chart-2: #8dbbfa;
+  --chart-3: #c3a1e8;
+  --chart-4: #e6ba69;
+  --chart-5: #eb93b2;
+  --chart-6: #78c9bc;
+  --wc-success: var(--success);
+  --background: var(--bg);
+  --foreground: var(--text);
+  --card: var(--surface);
+  --card-foreground: var(--text);
+  --muted: var(--surface-raised);
+  --muted-foreground: var(--text-soft);
+  --primary: var(--accent);
+  --primary-foreground: var(--on-accent);
+  /* --border is already the app's border token. */
+  --ring: var(--accent);
+  --destructive: var(--danger);
+  --font-sans: var(--font);
+  --font-mono: var(--mono);
+}
+:root[data-scheme="light"]{
+  --danger: #a93535;
+  --danger-bg: #f8dddd;
+  --warning: #8a590f;
+  --success: #3b6f24;
+  --info: #2864ac;
+  --chart-2: #2864ac;
+  --chart-3: #7950a8;
+  --chart-4: #8a590f;
+  --chart-5: #a83d68;
+  --chart-6: #24786b;
 }
 html,body{margin:0;padding:0;color:var(--text);font:13.5px/1.55 var(--font);-webkit-font-smoothing:antialiased}
 /* Defaults without weight, so any background the markup sets on html or body wins. */
 :where(html,body){background:transparent}
-:where(html[data-kind="artboard"] body){background:var(--bg)}
+:where(html[data-kind="artboard"] body,html[data-kind="preview"],html[data-kind="preview"] body){background:var(--bg)}
 *{box-sizing:border-box}
 a{color:var(--accent-text);text-underline-offset:2px}
 button,input,select,textarea{font:inherit;color:inherit}
@@ -65,11 +99,13 @@ h1,h2,h3,h4{margin:0 0 .35em;line-height:1.25;color:var(--text);font-weight:600}
 <script>
 (function () {
   "use strict";
-  // A visual's height is reported, never assumed; the card clamps it to its own cap.
-  var MAX_HEIGHT = 4000;
+  // Replies fit the conversation; artboards keep the canvas height limit.
+  var ARTBOARD = document.documentElement.getAttribute("data-kind") === "artboard";
+  var PREVIEW = document.documentElement.getAttribute("data-kind") === "preview";
+  var READ_ONLY = ARTBOARD || PREVIEW;
+  var MAX_HEIGHT = ARTBOARD ? 4000 : 20000;
   var MAX_TEXT = 2000;
   var MAX_ERRORS = 20;
-  var ARTBOARD = document.documentElement.getAttribute("data-kind") === "artboard";
   var errors = 0;
   var seq = 0;
   var waiting = {};
@@ -84,7 +120,9 @@ h1,h2,h3,h4{margin:0 0 .35em;line-height:1.25;color:var(--text);font-weight:600}
     var root = document.documentElement;
     var body = document.body;
     var height = Math.ceil(Math.max(
-      root ? root.scrollHeight : 0,
+      // The scrolling element's scrollHeight is at least the viewport height. Replies use
+      // intrinsic content size so a short page can shrink below its starting frame height.
+      ARTBOARD && root ? root.scrollHeight : 0,
       body ? body.scrollHeight : 0,
       root ? root.offsetHeight : 0
     ));
@@ -96,7 +134,11 @@ h1,h2,h3,h4{margin:0 0 .35em;line-height:1.25;color:var(--text);font-weight:600}
 
   function scheduleMeasure() {
     if (frame) return;
-    frame = window.requestAnimationFrame(function () { frame = 0; measure(); });
+    var report = function () { frame = 0; measure(); };
+    // WebKit can pause rAF while the first-paint fade keeps this iframe invisible. The first
+    // report must make it visible without depending on a compositor frame, including when a
+    // script supplies its content after DOMContentLoaded. Later changes keep their rAF debounce.
+    frame = lastHeight ? window.requestAnimationFrame(report) : window.setTimeout(report, 0);
   }
 
   function applyTheme(message) {
@@ -108,7 +150,10 @@ h1,h2,h3,h4{margin:0 0 .35em;line-height:1.25;color:var(--text);font-weight:600}
         root.style.setProperty(name, vars[name]);
       }
     }
-    if (message.scheme === "light" || message.scheme === "dark") root.style.colorScheme = message.scheme;
+    if (message.scheme === "light" || message.scheme === "dark") {
+      root.style.colorScheme = message.scheme;
+      root.setAttribute("data-scheme", message.scheme);
+    }
   }
 
   // The whole API a visual gets. Frozen, so markup cannot hand itself more.
@@ -116,8 +161,8 @@ h1,h2,h3,h4{margin:0 0 .35em;line-height:1.25;color:var(--text);font-weight:600}
     version: 1,
     send: function (text) {
       return new Promise(function (resolve) {
-        // A canvas is for looking: its buttons never speak for the user.
-        if (ARTBOARD) { resolve({ ok: false, reason: "canvas" }); return; }
+        // Artboards and previews are for looking: their buttons never speak for the user.
+        if (READ_ONLY) { resolve({ ok: false, reason: PREVIEW ? "preview" : "canvas" }); return; }
         if (typeof text !== "string" || !text.trim()) { resolve({ ok: false, reason: "invalid" }); return; }
         var id = ++seq;
         waiting[id] = resolve;
@@ -148,7 +193,7 @@ h1,h2,h3,h4{margin:0 0 .35em;line-height:1.25;color:var(--text);font-weight:600}
       if (node.tagName === "A") {
         var href = node.getAttribute("href") || "";
         event.preventDefault();
-        if (!ARTBOARD && /^https?:\/\//i.test(href)) post({ type: "wackcode-visual:link", href: href });
+        if (!READ_ONLY && /^https?:\/\//i.test(href)) post({ type: "wackcode-visual:link", href: href });
         return;
       }
       node = node.parentNode;
@@ -159,7 +204,7 @@ h1,h2,h3,h4{margin:0 0 .35em;line-height:1.25;color:var(--text);font-weight:600}
 
   // Registered before the markup's own scripts run, so their first failure is caught too.
   function reportError(message) {
-    if (!ARTBOARD || errors >= MAX_ERRORS) return;
+    if (!READ_ONLY || errors >= MAX_ERRORS) return;
     errors += 1;
     post({ type: "wackcode-visual:error", message: String(message || "Unknown error").slice(0, 300) });
   }
@@ -186,9 +231,9 @@ h1,h2,h3,h4{margin:0 0 .35em;line-height:1.25;color:var(--text);font-weight:600}
   if (window.MutationObserver) {
     new MutationObserver(scheduleMeasure).observe(document.documentElement, { childList: true, characterData: true, subtree: true });
   }
-  window.addEventListener("load", scheduleMeasure);
+  window.addEventListener("load", measure);
   window.addEventListener("resize", scheduleMeasure);
-  document.addEventListener("DOMContentLoaded", scheduleMeasure);
+  document.addEventListener("DOMContentLoaded", measure);
   scheduleMeasure();
 })();
 </script>

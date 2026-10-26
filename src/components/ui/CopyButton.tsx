@@ -5,7 +5,7 @@ import { Icon } from "../Icons";
 export const CopyText = createContext<((text: string) => Promise<void>) | undefined>(undefined);
 
 /** Copies source text, never the highlighted or shortened DOM representation. */
-export function CopyButton({ text, label, floating }: { text: string; label: string; floating?: boolean }) {
+export function CopyButton({ text, label, floating, iconOnly }: { text: string; label: string; floating?: boolean; iconOnly?: boolean }) {
   const copy = useContext(CopyText);
   const [status, setStatus] = useState<"idle" | "copying" | "copied" | "failed">("idle");
   useEffect(() => {
@@ -30,10 +30,10 @@ export function CopyButton({ text, label, floating }: { text: string; label: str
   const className = `copy-control${floating ? " copy-control-floating" : ""}${status === "copied" || status === "failed" ? " copy-control-revealed" : ""}`;
   return (
     <span className={className}>
-      <button type="button" className="secondary-button compact copy-button" aria-label={label}
+      <button type="button" className={iconOnly ? "icon-button copy-button" : "secondary-button compact copy-button"} aria-label={label}
         disabled={!copy || status === "copying"} onClick={() => void copyText()}>
         <Icon name={status === "copied" ? "check" : "copy"} />
-        {status === "copied" ? "Copied" : status === "failed" ? "Try again" : "Copy"}
+        {!iconOnly && (status === "copied" ? "Copied" : status === "failed" ? "Try again" : "Copy")}
       </button>
       <span className="copy-feedback" role="status">
         {status === "copied" ? "Copied to clipboard." : status === "failed" ? "Couldn’t copy. Try again." : ""}

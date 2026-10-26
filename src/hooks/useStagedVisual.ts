@@ -3,28 +3,38 @@ import { api } from "../api";
 import { visualThemeVars, visualVariables } from "../theme";
 import type { VisualKind, VisualThemeVars } from "../types";
 
+/** A visual whose persisted document includes local images, absent from transcript snapshots. */
+export interface SavedVisualDocument {
+  taskId?: string;
+  toolCallId?: string;
+}
+
 /**
- * Stages model-authored HTML through Rust (`visuals.rs`) and returns the `wcvisual:` URL its
- * sandboxed frame loads: a visual reply's (`VisualCard`) or a canvas artboard's
- * (`CanvasArtboard`). The one `api` call these frames make, because the staged document is the
- * whole surface they wrap. `retry` stages the same document again; nothing is staged while
- * `enabled` is false (an off-screen artboard).
+ * Stages model-authored HTML through Rust (`visuals.rs`) for a sandboxed reply or artboard.
+ * Saved image documents are fetched on demand from their chat before staging. `retry` loads
+ * the document again; disabled, off-screen artboards do not stage anything.
  */
-export function useStagedVisual(html: string, kind: VisualKind = "reply", enabled = true) {
+export function useStagedVisual(html: string, kind: VisualKind = "reply", enabled = true, saved?: SavedVisualDocument) {
   const [src, setSrc] = useState<string>();
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
+
+  const { taskId, toolCallId } = saved ?? {};
+  const inlined = saved !== undefined;
 
   useEffect(() => {
     let mounted = true;
     setSrc(undefined);
     setFailed(false);
     if (!enabled) return;
-    api.stageVisual(html, visualThemeVars(), kind)
+    const document = inlined
+      ? taskId && toolCallId ? api.visualDocument(taskId, toolCallId) : Promise.reject(new Error("This visual has no saved document."))
+      : Promise.resolve(html);
+    document.then((body) => mounted ? api.stageVisual(body, visualThemeVars(), kind) : undefined)
       .then((url) => { if (mounted) setSrc(url); })
       .catch(() => { if (mounted) setFailed(true); });
     return () => { mounted = false; };
-  }, [html, kind, enabled, attempt]);
+  }, [html, kind, enabled, attempt, inlined, taskId, toolCallId]);
 
   return {
     src,

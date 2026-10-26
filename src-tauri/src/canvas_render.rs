@@ -1,4 +1,5 @@
-//! `canvas_look`'s renderer: draws canvas artboards offscreen, the way the canvas shows them, and
+//! Shared renderer for `canvas_look`, visual previews and reply height measurements: draws
+//! documents offscreen, the way the app shows them, and
 //! reports back what came out — a screenshot (only when the chat's model can see images), the
 //! rendered size, how far content runs past it, and the artboard's script errors.
 //!
@@ -13,7 +14,7 @@
 //! origin and `FRAME_CSP` it has on the canvas, then reads the frame's own size and error reports.
 //! Renders run one at a time, each artboard's document is dropped once it is drawn, and the
 //! webview closes after two idle minutes.
-use crate::visuals::{VisualStore, RENDER_WEBVIEW, VISUAL_SCHEME};
+use crate::visuals::{VisualKind, VisualStore, RENDER_WEBVIEW, VISUAL_SCHEME};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -32,6 +33,7 @@ const MAX_ARTBOARDS: usize = 4;
 const MIN_SIZE: f64 = 200.0;
 const MAX_WIDTH: f64 = 2560.0;
 const MAX_HEIGHT: f64 = 4000.0;
+const MAX_PREVIEW_HEIGHT: f64 = 20_000.0;
 /// What an auto-height artboard is laid out at before it reports its own height.
 const AUTO_START_HEIGHT: f64 = 900.0;
 const READY_TIMEOUT: Duration = Duration::from_secs(8);
@@ -60,15 +62,41 @@ struct RenderRequest {
     op: String,
     #[serde(default)]
     images: bool,
+    appearance: Option<RenderAppearance>,
     artboards: Vec<ArtboardRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum RenderAppearance {
+    Light,
+    Dark,
+}
+
+impl RenderAppearance {
+    fn scheme(&self) -> &str {
+        match self { Self::Light => "light", Self::Dark => "dark" }
+    }
 }
 
 #[derive(Debug, Deserialize)]
 struct ArtboardRequest {
     id: String,
+    #[serde(default = "default_render_kind")]
+    kind: VisualKind,
     html: String,
     width: f64,
     height: Option<f64>,
+}
+
+fn default_render_kind() -> VisualKind {
+    VisualKind::Artboard
+}
+
+impl ArtboardRequest {
+    fn max_height(&self) -> f64 {
+        if self.kind == VisualKind::Preview { MAX_PREVIEW_HEIGHT } else { MAX_HEIGHT }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -96,14 +124,19 @@ fn validate(request: &RenderRequest) -> Result<(), String> {
         return Err(format!("Render at most {MAX_ARTBOARDS} artboards at a time."));
     }
     for artboard in &request.artboards {
+        if artboard.kind == VisualKind::Reply {
+            return Err("Render an artboard or a visual preview.".into());
+        }
         if artboard.id.is_empty() || artboard.id.len() > 64 {
             return Err("An artboard id is missing or too long.".into());
         }
-        if !(MIN_SIZE..=MAX_WIDTH).contains(&artboard.width) {
-            return Err(format!("“{}” must be {MIN_SIZE}–{MAX_WIDTH} pixels wide.", artboard.id));
+        let (min_width, max_width) = if artboard.kind == VisualKind::Preview { (240.0, 1600.0) } else { (MIN_SIZE, MAX_WIDTH) };
+        if !(min_width..=max_width).contains(&artboard.width) {
+            return Err(format!("“{}” must be {min_width}–{max_width} pixels wide.", artboard.id));
         }
-        if artboard.height.is_some_and(|height| !(MIN_SIZE..=MAX_HEIGHT).contains(&height)) {
-            return Err(format!("“{}” must be {MIN_SIZE}–{MAX_HEIGHT} pixels tall.", artboard.id));
+        let max_height = artboard.max_height();
+        if artboard.height.is_some_and(|height| !(MIN_SIZE..=max_height).contains(&height)) {
+            return Err(format!("“{}” must be {MIN_SIZE}–{max_height} pixels tall.", artboard.id));
         }
     }
     Ok(())
@@ -127,7 +160,7 @@ pub async fn execute_agent_request(app: AppHandle, _task_id: String, _request_id
     };
     let mut results = Vec::with_capacity(request.artboards.len());
     for artboard in &request.artboards {
-        results.push(render_one(&app, &view, artboard, request.images).await);
+        results.push(render_one(&app, &view, artboard, request.images, request.appearance.as_ref().map(RenderAppearance::scheme)).await);
     }
     if let Ok(blank) = "about:blank".parse() {
         let _ = view.navigate(blank);
@@ -162,9 +195,9 @@ fn failure(artboard: &ArtboardRequest, message: String) -> Value {
     json!({ "id": artboard.id, "width": artboard.width, "height": artboard.height.unwrap_or(AUTO_START_HEIGHT), "errors": [message] })
 }
 
-async fn render_one(app: &AppHandle, view: &Webview, artboard: &ArtboardRequest, images: bool) -> Value {
+async fn render_one(app: &AppHandle, view: &Webview, artboard: &ArtboardRequest, images: bool, appearance: Option<&str>) -> Value {
     let store = app.state::<VisualStore>();
-    let token = match store.stage_for_render(artboard.html.clone()) {
+    let token = match store.stage_for_render(artboard.html.clone(), artboard.kind, appearance) {
         Ok(token) => token,
         Err(error) => return failure(artboard, error),
     };
@@ -183,7 +216,7 @@ async fn render_token(view: &Webview, token: &str, artboard: &ArtboardRequest, i
         .map_err(|error| format!("Could not load the artboard: {error}"))?;
     let mut report = wait_ready(view, token).await?;
     if fixed.is_none() {
-        let measured = report.height.clamp(MIN_SIZE, MAX_HEIGHT).round();
+        let measured = report.height.clamp(MIN_SIZE, artboard.max_height()).round();
         if (measured - height).abs() >= 1.0 {
             height = measured;
             resize(view, width, height)?;
@@ -271,6 +304,31 @@ mod tests {
         let mut other = request(json!([{ "id": "a", "html": "<p/>", "width": 400 }]));
         other.op = "navigate".into();
         assert!(validate(&other).is_err());
+    }
+
+    #[test]
+    fn defaults_to_artboard_and_accepts_preview_sizes_without_widening_artboards() {
+        let default = request(json!([{ "id": "a", "html": "<p/>", "width": 720 }]));
+        assert_eq!(default.artboards[0].kind, VisualKind::Artboard);
+        let preview = request(json!([{ "id": "p", "kind": "preview", "html": "<p/>", "width": 720, "height": 20_000 }]));
+        assert!(validate(&preview).is_ok());
+        assert_eq!(preview.artboards[0].kind, VisualKind::Preview);
+        for (width, height) in [(239, 900), (1601, 900), (720, 20_001)] {
+            assert!(validate(&request(json!([{ "id": "p", "kind": "preview", "html": "<p/>", "width": width, "height": height }]))).is_err());
+        }
+        assert!(validate(&request(json!([{ "id": "p", "kind": "reply", "html": "<p/>", "width": 720 }]))).is_err());
+        assert!(validate(&request(json!([{ "id": "a", "html": "<p/>", "width": 720, "height": 20_000 }]))).is_err());
+        assert!(serde_json::from_value::<RenderRequest>(json!({ "op": "render", "artboards": [{ "id": "p", "kind": "remote", "html": "<p/>", "width": 720 }] })).is_err());
+    }
+
+    #[test]
+    fn accepts_only_explicit_light_or_dark_render_appearances() {
+        for appearance in ["light", "dark"] {
+            let request: RenderRequest = serde_json::from_value(json!({ "op": "render", "appearance": appearance, "artboards": [{ "id": "p", "kind": "preview", "html": "<p/>", "width": 720 }] })).unwrap();
+            assert_eq!(request.appearance.as_ref().unwrap().scheme(), appearance);
+            assert!(validate(&request).is_ok());
+        }
+        assert!(serde_json::from_value::<RenderRequest>(json!({ "op": "render", "appearance": "auto", "artboards": [] })).is_err());
     }
 
     #[test]

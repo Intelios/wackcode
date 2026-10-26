@@ -4,6 +4,13 @@ import { normalizeMessage, type ImageNormalizer } from "./message-normalization.
 const imageBlock: ImageNormalizer = () => ({ type: "image", imageId: "image-1" });
 const thinking = (text: string) => ({ type: "thinking", thinking: text });
 
+it("keeps saved visual images out of live and cold snapshots without mutating the session", () => {
+  const details = { v: 1, title: "Collage", inlined: true, heights: [{ width: 720, height: 450 }], html: '<img src="data:image/png;base64,original">' };
+  const message = normalizeMessage({ role: "toolResult", toolName: "show_visual", toolCallId: "visual", content: [], details }, 0, undefined, imageBlock);
+  expect(message?.blocks[0].details).toEqual({ v: 1, title: "Collage", inlined: true, heights: [{ width: 720, height: 450 }] });
+  expect(details.html).toContain("original");
+});
+
 describe("normalizeMessage thinking timing", () => {
   it("maps starts and durations by thinking ordinal, not raw content index", () => {
     const normalizeImage = vi.fn(imageBlock);

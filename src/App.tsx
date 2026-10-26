@@ -127,7 +127,6 @@ import type { SystemNote } from "./components/chat/ChatBubbles";
 import { SubscriptionLoginDialog } from "./components/SubscriptionLoginDialog";
 import { ExploreGroupingEnabled } from "./components/ExploreGroup";
 import { ThinkingPreviewEnabled, ThinkingTimerPrecision } from "./components/ThinkingRow";
-import { VisualBannerEnabled } from "./components/VisualCard";
 import { composeVisualAction, splitVisualAction, type VisualSendResult } from "./visual-action";
 import { composeSuggestedTask, splitSuggestedTask, suggestionLinks, type SuggestionCard } from "./suggestions";
 
@@ -234,9 +233,7 @@ function ChatContexts({ appearance, openLink, children }: { appearance: Appearan
       <ThinkingPreviewEnabled.Provider value={appearance.thinkingPreview}>
         <ThinkingTimerPrecision.Provider value={appearance.thinkingTimerPrecision}>
           <ExploreGroupingEnabled.Provider value={appearance.groupExploration}>
-            <VisualBannerEnabled.Provider value={appearance.visualBanner}>
-              <CopyText.Provider value={writeText}>{children}</CopyText.Provider>
-            </VisualBannerEnabled.Provider>
+            <CopyText.Provider value={writeText}>{children}</CopyText.Provider>
           </ExploreGroupingEnabled.Provider>
         </ThinkingTimerPrecision.Provider>
       </ThinkingPreviewEnabled.Provider>
@@ -3439,6 +3436,9 @@ export default function App() {
             <Composer
               comet={!selectedTask || transitioning !== undefined}
               frozen={transitioning?.composerKey === composerDraftKey ? transitioning.message : undefined}
+              // Liquid Glass styles need the macOS 26 material; a config copied from another Mac
+              // falls back to the classic card rather than an unsupported pane.
+              composerStyle={data.appearance.composerStyle === "classicGlass" && !glassSupported ? "classic" : data.appearance.composerStyle}
               status={selectedTask?.status ?? "idle"}
               backgroundWorking={selectedTask?.status === "running" && runtime?.workActivity?.parent === "idle"}
               providerId={selectedTask?.providerId ?? draftChoice?.providerId}

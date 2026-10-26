@@ -250,8 +250,7 @@ describe("Composer seed", () => {
   });
 });
 
-describe("Composer comet and frozen", () => {
-  const base = {
+describe("Composer comet and frozen", () => {  const base = {
     status: "idle" as const,
     providers,
     providerId: "p",
@@ -277,6 +276,62 @@ describe("Composer comet and frozen", () => {
     expect(area).toHaveAttribute("readonly");
     fireEvent.change(area, { target: { value: "Edited" } });
     expect(area).toHaveValue("Off it goes");
+  });
+});
+
+describe("Composer styles", () => {
+  const base = {
+    status: "idle" as const,
+    providers,
+    providerId: "p",
+    modelId: "sees",
+    thinkingLevel: "off" as const,
+    onConfigure: vi.fn(),
+    onModeChange: vi.fn(),
+    onSend: vi.fn().mockResolvedValue(true),
+    onStop: vi.fn(),
+    onOpenSettings: vi.fn()
+  };
+
+  it.each(["classic", "classicGlass", "capsule", "split", "terminal"] as const)("keeps every control working in the %s style", async (composerStyle) => {
+    const onSend = vi.fn().mockResolvedValue(true);
+    const { container } = render(<Composer {...noFavorites} {...base} composerStyle={composerStyle} onSend={onSend} comet />);
+    expect(container.querySelector(".composer")).toHaveClass("composer", `composer-${composerStyle}`, "comet");
+    attach(png());
+    await screen.findByAltText("Attached image 1");
+    fireEvent.change(screen.getByRole("textbox", { name: "Message" }), { target: { value: "Look" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("Look", [{ type: "image", mimeType: "image/png", data: "iVBORw==" }], []));
+  });
+
+  it("moves the writing and its controls into separate surfaces for Split Bar", () => {
+    const { container } = render(<Composer {...noFavorites} {...base} composerStyle="split" />);
+    const card = container.querySelector(".composer-split-card") as HTMLElement;
+    expect(within(card).getByRole("textbox", { name: "Message" })).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "Send message" })).toBeInTheDocument();
+    const bar = container.querySelector(".composer-split-bar") as HTMLElement;
+    expect(within(bar).getByRole("button", { name: "Attach files" })).toBeInTheDocument();
+    expect(within(bar).getByRole("radio", { name: "Build" })).toBeInTheDocument();
+    // One copy of each control: the notice and the pickers never render twice.
+    expect(container.querySelectorAll(".composer-right")).toHaveLength(1);
+  });
+
+  it("puts Attach and Send in the writing row for Capsule, with the rest in a quiet sub-row", () => {
+    const { container } = render(<Composer {...noFavorites} {...base} composerStyle="capsule" />);
+    const row = container.querySelector(".composer-capsule-row") as HTMLElement;
+    expect(within(row).getByRole("button", { name: "Attach files" })).toBeInTheDocument();
+    expect(within(row).getByRole("textbox", { name: "Message" })).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Send message" })).toBeInTheDocument();
+    const subbar = container.querySelector(".composer-subbar") as HTMLElement;
+    expect(within(subbar).getByRole("radio", { name: "Build" })).toBeInTheDocument();
+  });
+
+  it("gives Terminal its prompt glyph and a return badge on Send", () => {
+    const { container } = render(<Composer {...noFavorites} {...base} composerStyle="terminal" />);
+    const glyph = container.querySelector(".composer-prompt-glyph")!;
+    expect(glyph).toHaveTextContent("❯");
+    expect(glyph).toHaveAttribute("aria-hidden", "true");
+    expect(within(screen.getByRole("button", { name: "Send message" })).getByText("⏎")).toBeInTheDocument();
   });
 });
 

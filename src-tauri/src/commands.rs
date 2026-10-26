@@ -2,7 +2,7 @@ use crate::{
     backgrounds, checkpoints, files, git, glass, mcp,
     models::{
         AppData, AppearanceConfig, AppInfo, AutoTitleConfig, BackdropMode, BackgroundImage, BootstrapPayload, BuiltinModelSuggestion,
-        CheckpointChange, CheckpointRef, CreateTaskInput, DiffComment, ExportPlanInput,
+        CheckpointChange, CheckpointRef, ComposerStyle, CreateTaskInput, DiffComment, ExportPlanInput,
         ExecutionPolicyConfig, ExtensionUiResponseInput, FavoriteModelRef, ForkTaskInput, GitBranches, GitChanges, GitConfig,
         GitCheckoutResult, GitGeneratedMessage, GitPrInfo,
         GitPublishInfo, ImageContent,
@@ -2670,6 +2670,39 @@ pub async fn tool_image(
         REQUEST_TIMEOUT,
     )
     .await
+}
+
+/// A published visual's saved HTML, including local images. Fetch only the requested call;
+/// snapshots never carry this document. The worker reads its current branch outside its prompt
+/// queue, so opening a saved visual also works while a new reply is running, in either area.
+#[tauri::command]
+pub async fn visual_document(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    task_id: String,
+    tool_call_id: String,
+) -> Result<String, String> {
+    if tool_call_id.is_empty() || tool_call_id.len() > 256 {
+        return Err("That visual is no longer in this chat.".into());
+    }
+    let (task, provider) = task_and_provider(&state, &task_id)?;
+    let api_key = credential_for(&app, &state, &provider)?;
+    {
+        let lock = task_lock(&app, &task_id);
+        let _guard = lock.lock().await;
+        worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
+    }
+    let document = worker::request(
+        &app,
+        &task_id,
+        json!({
+            "id": Uuid::new_v4().to_string(), "type": "visual_document", "toolCallId": tool_call_id
+        }),
+        REQUEST_TIMEOUT,
+    )
+    .await?;
+    document.as_str().map(str::to_owned)
+        .ok_or_else(|| "That visual is no longer in this chat.".into())
 }
 
 /// The original image a user message attached, for the transcript's lightbox. Keyed by the
@@ -5538,7 +5571,6 @@ fn validate_appearance_config(
         message_bubbles: input.message_bubbles,
         group_exploration: input.group_exploration,
         collapse_completed_work: input.collapse_completed_work,
-        visual_banner: input.visual_banner,
         accent: colour("accent", input.accent)?,
         background: colour("background", input.background)?,
         backdrop: input.backdrop,
@@ -5560,10 +5592,14 @@ fn validate_appearance_config(
         },
         glass_style: input.glass_style,
         glass_tint: percent("Glass tint", input.glass_tint)?,
+        composer_style: input.composer_style,
         // A persona label for the app's own copy; blank means back to the WackCode default.
         agent_name: normalize_override("agent name", input.agent_name)?,
     };
     if config.backdrop == BackdropMode::Glass && !glass_supported {
+        return Err("Liquid Glass needs macOS 26 or later.".into());
+    }
+    if config.composer_style == ComposerStyle::ClassicGlass && !glass_supported {
         return Err("Liquid Glass needs macOS 26 or later.".into());
     }
     if config.backdrop == BackdropMode::Image {
@@ -6054,21 +6090,27 @@ mod tests {
     }
 
     #[test]
+    fn composer_style_defaults_to_classic_and_its_glass_variant_needs_glass() {
+        let old: AppearanceConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.composer_style, ComposerStyle::Classic);
+        for style in [ComposerStyle::Classic, ComposerStyle::Capsule, ComposerStyle::Split, ComposerStyle::Terminal] {
+            let input = AppearanceConfig { composer_style: style, ..old.clone() };
+            assert_eq!(validate_appearance_config(input.clone(), &old, false).unwrap(), input);
+        }
+        let glass = AppearanceConfig { composer_style: ComposerStyle::ClassicGlass, ..old.clone() };
+        assert_eq!(validate_appearance_config(glass.clone(), &old, true).unwrap(), glass);
+        assert_eq!(
+            validate_appearance_config(glass, &old, false).unwrap_err(),
+            "Liquid Glass needs macOS 26 or later."
+        );
+    }
+
+    #[test]
     fn chat_tabs_default_off_and_save_without_changing_other_preferences() {
         let old: AppearanceConfig = serde_json::from_str("{}").unwrap();
         assert!(!old.chat_tabs);
         let input = AppearanceConfig { chat_tabs: true, ..old.clone() };
         assert_eq!(validate_appearance_config(input.clone(), &old, true).unwrap(), input);
-    }
-
-    #[test]
-    fn visual_banner_defaults_on_and_saves_without_changing_other_preferences() {
-        let old: AppearanceConfig = serde_json::from_str("{}").unwrap();
-        assert!(old.visual_banner);
-        for visual_banner in [false, true] {
-            let input = AppearanceConfig { visual_banner, ..old.clone() };
-            assert_eq!(validate_appearance_config(input.clone(), &old, true).unwrap(), input);
-        }
     }
 
     #[test]

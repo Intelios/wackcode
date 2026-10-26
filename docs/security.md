@@ -83,7 +83,7 @@ An installed extension is unsandboxed code inside the worker that holds the API 
 never in the renderer. Rust (`src-tauri/src/visuals.rs`) is the boundary:
 
 - **Staging.** The renderer hands the document to `stage_visual`, which keeps it in memory (128
-  entries / 16 MiB, oldest evicted) and returns a `wcvisual://localhost/<token>` URL. Nothing is
+  entries / 48 MiB, oldest evicted, at most 8 MiB per document) and returns a `wcvisual://localhost/<token>` URL. Nothing is
   written to disk, no path is involved, and the app's own webview is the only one served: the
   handler 404s for any other webview, any other method, and any unknown or non-hex token.
 - **The frame's own CSP.** The document is served with `default-src 'none'; script-src
@@ -117,12 +117,27 @@ never in the renderer. Rust (`src-tauri/src/visuals.rs`) is the boundary:
   `<visual-action-v1>` tail, so model-authored script can never steer the chat on its own — the
   user always presses the button, and Pi never expands it as a slash command.
 
+**Local images** in `show_visual` and `preview_visual` are inlined in the worker. Absolute image
+paths in quoted attributes or CSS `url(...)` are read only after Chat mode's `confine("read")`
+check; coding chats have their ordinary read access. File signatures (including an SVG root),
+not extensions, decide whether bytes are images. A renamed text file is refused. Each image is
+limited to 4 MiB and the finished HTML to 8 MiB. Missing, invalid and out-of-scratchpad images
+refuse the tool call. No asset-protocol scope or network access is added. Published copies stay
+in that chat's local session; `visual_document` retrieves only a requested visual on the current
+branch, and snapshots omit its HTML. Deleting the chat deletes the saved copies.
+For a vision model, `preview_visual` returns a screenshot through the ordinary tool-image
+pipeline, so those pixels reach the configured model when it checks the result; the frame
+itself still makes no network requests.
+
 **Canvas artboards** are visual documents too (`kind: artboard`), in the same frame under the
 same CSP and navigation guard. Their bridge is narrower: no `wackcode.send`, no link forwarding,
 only a size, script errors and Esc. `canvas_look` renders them offscreen in Rust
-(`canvas_render.rs`):
+(`canvas_render.rs`). The same renderer measures replies at three widths and serves
+`preview_visual`: its `preview` kind uses reply layout over the theme background and reports
+script errors, but cannot send or forward links. Only `stage_for_render` can stage a preview;
+the renderer-facing `stage_visual` refuses it.
 
-- **One render webview** (`canvas-render`), a child of the main window parked offscreen,
+- **One render webview** (`canvas-render`), shared by artboards and previews, a child of the main window parked offscreen,
   incognito, allowed to navigate only to `wcvisual:` and `about:blank`, with downloads and new
   windows refused and the Tauri globals removed.
 - **Audiences.** Documents staged for it are served to it alone, and the renderer's documents

@@ -20,7 +20,7 @@ Commands run one at a time on a serial queue, and a prompt holds the queue until
 - `abort`, `extension_ui_response`, `browser_response`, `computer_response`, `web_response`, `chat_response`, `canvas_response`: answers the running run is waiting on.
 - `queue_message`, `dequeue`: the user's steering and follow-up messages.
 - `goal_control` except `set`: pause, resume and clear act on a live loop. `set` starts a run, so it queues.
-- `watch_subagent`, `tool_image`: read-only peeks; the panel opens on a child during blocking or background delegation.
+- `watch_subagent`, `tool_image`, `message_image`, `visual_document`: read-only peeks; panels and saved visuals can open while a run holds the queue.
 - `set_subagents` when disabling: cancels children even if the parent is blocked waiting for them.
 
 Before the first `init` settles there is no session to act on, so a bypass command is held on `initSettled` rather than bounced with "Worker is not initialized": the host sends `init` and the first prompt back to back, and a stop or a follow-up sent in that window must survive it. The gate opens one macrotask later — after the microtasks queued behind `init` have run — so a held stop finds the just-started first run live and stops it through the ordinary path, and a held follow-up finds a streaming session to queue onto.
@@ -59,7 +59,7 @@ The transcript reaches the host as a full `snapshot`, then as `snapshot_delta`s 
 ## Tools
 
 - Never pass `tools:` to the chat's `createAgentSession`: Pi treats it as a registry filter and erases extension tools. Apply the user's denylist with `setActiveToolsByName`, and re-apply it after anything that can re-activate tools (extension `session_start`, `navigateTree`, a roster change).
-- The Settings › Tools denylist covers Pi's tools and package tools. Built-in extension tools are exempt (a disabled `plan_mode_complete` would silently break Plan mode), except the ones in `SWITCHABLE_BUILTIN_TOOLS` (browser, `web_fetch`, `show_visual`, `suggest_task`, and the three canvas tools, which switch together).
+- The Settings › Tools denylist covers Pi's tools and package tools. Built-in extension tools are exempt (a disabled `plan_mode_complete` would silently break Plan mode), except the ones in `SWITCHABLE_BUILTIN_TOOLS` (browser, `web_fetch`, the paired `show_visual` / `preview_visual`, `suggest_task`, and the three canvas tools, which switch together).
 - Sub-agents, memory, computer use and web search have their own settings and keep their tools out through `inactiveTools()`; they never appear on the denylist. `web_search` is offered while `set_web` (or `init`'s `web`) names an active provider, and reaches sub-agents through its own clause in `childToolNames`.
 - MCP tools (`mcp__<server>__<tool>`) have their own per-server and per-tool switches and stay out while their server is off or unreachable. Keep the built-in and MCP switch rules separate.
 - `powershell` is removed from the registry; `grep`/`find` are reported unavailable when ripgrep/fd are missing (the worker is offline and can't download them).
@@ -118,19 +118,34 @@ WackCode's own extensions load as inline factories, so they bypass the package t
 `show_visual` lets the agent answer part of a turn with a small HTML document — a chart, a
 comparison, a diagram, a mockup of proposed UI, a tiny widget — that the desktop draws where the
 call landed (`src/components/VisualCard.tsx`). It takes a `title` (60 characters) and an `html`
-body (64 KiB), and returns only `{ v: 1, title }`: the markup itself stays in the call's
-arguments, which Pi saves, so cold history needs nothing extra and the result does not repeat a
-64 KiB document into the context.
+body (128 KiB). It measures at 360, 560 and 720 px in one offscreen render request, returning
+`{ v: 1, title, heights? }` with width/height pairs; a rendering failure still publishes without
+measurements. Markup stays in the saved call's arguments. CSS `vh` units are refused in styles
+and style attributes; the guide asks for content-sized pages, transparent roots and fixed-height
+charts, with no outer card, side padding or title banner.
 
-- It is read-only, so Plan and Ultra Plan let it through; Chat mode allows it
+`preview_visual` takes `html`, an optional width (240–1600, default 720), and an optional
+`appearance` (`light` or `dark`). It uses that same renderer with reply styling, returning the
+content height and script errors plus a PNG only for models with vision. The guide asks the
+agent to preview first, fix what it sees, and publish without announcing or restating the page.
+
+Both tools inline absolute local image paths after checking file signatures and, in Chat mode,
+scratchpad confinement (4 MiB per file, 8 MiB per finished page). When images were inlined,
+`show_visual` saves `details.inlined = true` and `details.html`; the shared message normalizer
+removes the HTML from live and cold snapshots. `visual_document` fetches the saved document by
+tool-call id from the current branch, bypassing the command queue, so images survive the source
+file moving or disappearing. These images reach the frame as data URLs.
+
+- Both tools are read-only, so Plan and Ultra Plan let them through; Chat mode allows them
   (`CHAT_BUILTIN_TOOLS`), where its guide carries the same words as the tool's
   `promptGuidelines` (Pi drops those once a chat prompt is set). Sub-agents never get it: a child
   has no transcript to draw in.
-- It is switchable (`SWITCHABLE_BUILTIN_TOOLS`), so Settings › Tools can take it away; the
+- They switch together (`SWITCHABLE_BUILTIN_TOOLS`), so Settings › Tools can take them away; the
   Packages built-in card carries that switch. Saved visuals still render — the switch is a
   capability, not a display preference.
 - The document runs in a sandboxed frame with no network at all, so the guidelines say to inline
-  every asset and to colour from the app's CSS variables. `wackcode.send(text)` posts the message
+  every asset and to colour from the app's CSS variables (including semantic colours, six chart
+  colours and shadcn aliases). `wackcode.send(text)` posts the message
   the renderer gates (see [security.md](security.md#visual-replies)).
 - `read_chat` collapses the call to `[visual: Title]`, and a message a visual sent to
   `[sent from visual: Title]`.

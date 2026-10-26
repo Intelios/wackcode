@@ -91,8 +91,8 @@ const BUILTIN_EXTENSIONS: readonly BuiltinExtension[] = [
   {
     name: "Visual replies",
     description:
-      "Lets the agent answer with a chart, a comparison, a diagram or a small interactive mockup drawn right in the conversation — in Chat mode and in Code chats. A visual runs sandboxed with no network access at all, and a button in one can send a message on your behalf only when you click it.",
-    tools: ["show_visual"],
+      "Lets the agent answer with a chart, a comparison, a diagram or a small interactive mockup drawn right in the conversation — in Chat mode and in Code chats. The agent can preview its work and include local images. A visual runs sandboxed with no network access at all, and a button in one can send a message on your behalf only when you click it.",
+    tools: ["show_visual", "preview_visual"],
     icon: "visual",
     kind: "show_visual"
   },
@@ -237,7 +237,7 @@ interface Props extends PackageActions {
   /** Opens Settings › Web, where Web Fetch's and Web Search's switches live. */
   onConfigureWeb?: () => void;
   browserEnabled?: boolean;
-  /** On unless `show_visual` is in the tool denylist; its switch is on this card. */
+  /** Publishing and preview share the Visual replies switch. */
   visualEnabled?: boolean;
   onToggleVisual?: (enabled: boolean) => Promise<void>;
   /** On unless the canvas tools are in the tool denylist; saved canvases still render when off. */

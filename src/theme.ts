@@ -13,7 +13,7 @@
  * user's theme, while each token keeps its own hue slot so the palette stays readable.
  */
 
-import type { AppearanceConfig, BackdropMode, VisualThemeVars } from "./types";
+import type { AppearanceConfig, BackdropMode, ComposerStyle, VisualThemeVars } from "./types";
 
 export const DEFAULT_ACCENT = "#c2ee4a";
 /** Also `DEFAULT_BACKGROUND` in `src-tauri/src/glass.rs`, which paints the native window. */
@@ -27,7 +27,6 @@ export const DEFAULT_APPEARANCE: AppearanceConfig = {
   messageBubbles: false,
   groupExploration: true,
   collapseCompletedWork: true,
-  visualBanner: true,
   backdrop: "solid",
   dynamicStyle: "colourDrift",
   dynamicPalette: "theme",
@@ -37,7 +36,8 @@ export const DEFAULT_APPEARANCE: AppearanceConfig = {
   imageDim: 65,
   imageBlur: 12,
   glassStyle: "frosted",
-  glassTint: 40
+  glassTint: 40,
+  composerStyle: "classic"
 };
 
 /** One-click accent + background pairs (Settings › Appearance). The first is the default. */
@@ -353,6 +353,8 @@ export interface ThemeInput {
   background?: string | null;
   backdrop?: BackdropMode;
   glassTint?: number;
+  /** How the Code composer is drawn; only drives `data-composer-style` on the root. */
+  composerStyle?: ComposerStyle;
   /** Drives `data-message-bubbles` on the root; the transcript styles from it. */
   messageBubbles?: boolean;
 }
@@ -492,7 +494,8 @@ export function applyTheme(input: ThemeInput, root: HTMLElement = document.docum
   const theme = resolveTheme(input);
   for (const [name, value] of Object.entries(theme.variables)) root.style.setProperty(name, value);
   root.dataset.backdrop = input.backdrop ?? "solid";
-  // CSS-only switch, like the backdrop: the transcript styles from it without a re-render.
+  // CSS-only switches, like the backdrop: the composer styles itself without a re-render.
+  root.dataset.composerStyle = input.composerStyle ?? "classic";
   root.dataset.messageBubbles = input.messageBubbles === true ? "on" : "off";
   return theme;
 }
@@ -505,7 +508,7 @@ const THEME_CACHE_KEY = "wackcode:theme";
  */
 export function cacheTheme(input: ThemeInput): void {
   try {
-    const cached: ThemeInput = { accent: input.accent ?? null, background: input.background ?? null, backdrop: input.backdrop, glassTint: input.glassTint };
+    const cached: ThemeInput = { accent: input.accent ?? null, background: input.background ?? null, backdrop: input.backdrop, glassTint: input.glassTint, composerStyle: input.composerStyle };
     localStorage.setItem(THEME_CACHE_KEY, JSON.stringify(cached));
   } catch {
     // Storage can be unavailable; the first frame then shows the default theme.

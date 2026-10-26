@@ -17,7 +17,7 @@ import { MEMORY_TOOL_NAMES } from "../memory/index.js";
 import { TODO_TOOL_NAME } from "../todo/types.js";
 import { WEB_FETCH_TOOL_NAME } from "../web-fetch/index.js";
 import { WEB_SEARCH_TOOL_NAME } from "../web-search/index.js";
-import { SHOW_VISUAL_TOOL_NAME } from "../visual.js";
+import { VISUAL_TOOL_NAMES } from "../visual.js";
 import { SUGGEST_TASK_TOOL_NAME } from "../suggest-task.js";
 import { CANVAS_TOOL_NAMES } from "../canvas/index.js";
 import { BASH_JOB_TOOL_NAME } from "../bash-jobs.js";
@@ -193,7 +193,7 @@ export function createPlanModeExtension(host: BuiltinHost, mcpTools?: PlanModeMc
         event.toolName === WEB_FETCH_TOOL_NAME ||
         event.toolName === WEB_SEARCH_TOOL_NAME ||
         event.toolName === READ_CHAT_TOOL_NAME ||
-        event.toolName === SHOW_VISUAL_TOOL_NAME ||
+        (VISUAL_TOOL_NAMES as readonly string[]).includes(event.toolName) ||
         event.toolName === SUGGEST_TASK_TOOL_NAME ||
         (CANVAS_TOOL_NAMES as readonly string[]).includes(event.toolName) ||
         (MEMORY_TOOL_NAMES as readonly string[]).includes(event.toolName) ||

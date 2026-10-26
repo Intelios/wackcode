@@ -1,4 +1,4 @@
-import type { NormalizedBlock, NormalizedMessage, SearchProviderKind, SkillPreviewDetails, SubagentDetails, SubagentResult, SubagentStatus, ToolCatalogEntry, WebSearchDetails } from "./types";
+import type { NormalizedBlock, NormalizedMessage, SearchProviderKind, SkillPreviewDetails, SubagentDetails, SubagentResult, SubagentStatus, ToolCatalogEntry, VisualResultDetails, WebSearchDetails } from "./types";
 import { displayPath } from "./chat-utils";
 import { SUGGEST_TASK_TOOL_NAME } from "./suggestions";
 import { CANVAS_GUIDE_TOOL_NAME, CANVAS_LOOK_TOOL_NAME, CANVAS_TOOL_NAME } from "./canvas-state";
@@ -9,6 +9,8 @@ export const SUBAGENT_TOOL_NAME = "subagent";
 export const SKILL_CREATOR_TOOL_NAME = "skill_creator";
 /** The built-in visual replies tool; a settled call renders as the visual card. */
 export const SHOW_VISUAL_TOOL_NAME = "show_visual";
+/** A visual reply and its read-only preview share one Settings switch. */
+export const VISUAL_TOOL_NAMES = [SHOW_VISUAL_TOOL_NAME, "preview_visual"] as const;
 /** The one WackCode built-in tool the user can switch off, through the tool denylist (on Settings › Web). */
 export const WEB_FETCH_TOOL_NAME = "web_fetch";
 /** Web search: its own setting (Settings › Web), never the tool denylist. */
@@ -175,6 +177,20 @@ export function parseVisualArgs(call: NormalizedBlock): { title: string; html: s
   return { title, html };
 }
 
+/** Saved visual metadata stays small; the document with images never travels in a snapshot. */
+export function parseVisualDetails(value: unknown): VisualResultDetails | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const details = value as Record<string, unknown>;
+  if (details.v !== 1 || typeof details.title !== "string" || !details.title.trim()) return undefined;
+  const heights = Array.isArray(details.heights) ? details.heights.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const { width, height } = entry as Record<string, unknown>;
+    return typeof width === "number" && Number.isFinite(width) && width > 0
+      && typeof height === "number" && Number.isFinite(height) && height > 0 ? [{ width, height }] : [];
+  }) : [];
+  return { v: 1, title: details.title, ...(heights.length ? { heights } : {}), ...(details.inlined === true ? { inlined: true } : {}) };
+}
+
 /**
  * A path subject (`displayPath` output) as a dim directory tail and the name to anchor on.
  * `dir` keeps its trailing slash; anything without a slash stays a single `name`.
@@ -228,6 +244,8 @@ export function summarizeTool(call: NormalizedBlock, result?: NormalizedBlock): 
       return { kind: "other", activeVerb: "Fetching", doneVerb: "Fetched", subject: displayUrl(str(toolArgs.url)) };
     case WEB_SEARCH_TOOL_NAME:
       return { kind: "other", activeVerb: "Searching the web", doneVerb: "Searched the web", subject: str(toolArgs.query) };
+    case "preview_visual":
+      return { kind: "other", activeVerb: "Previewing visual", doneVerb: "Previewed visual", subject: "" };
     case SHOW_VISUAL_TOOL_NAME:
       return { kind: "other", activeVerb: "Drawing", doneVerb: "Drew", subject: str(toolArgs.title) };
     case SUGGEST_TASK_TOOL_NAME:

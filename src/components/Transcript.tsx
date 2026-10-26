@@ -292,7 +292,7 @@ function renderSpecialCall(
   if (block.toolName === SHOW_VISUAL_TOOL_NAME) {
     // The card is this call's settled outcome; while it runs the ordinary chip shows progress,
     // and a refused call keeps its error on the plain row.
-    if (result && !result.isError && parseVisualArgs(block)) return <VisualCallCard block={block} />;
+    if (result && !result.isError && parseVisualArgs(block)) return <VisualCallCard block={block} result={result} />;
   }
   if (block.toolName === SUBAGENT_TOOL_NAME) {
     // The final result is authoritative; while running, the latest live update, or the
@@ -776,11 +776,12 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
   // Only the newest answer's visuals may send: their buttons stay live, older ones go inert
   // (`VisualCard`), so a scrollback full of widgets cannot each start a turn.
   const visualScope = useMemo<VisualScope>(() => ({
+    taskId,
     currentIds: currentVisualIds(messages, partial),
     busy: running,
     onSend: onVisualSend,
     onOpenLink: onVisualLink
-  }), [messages, partial, running, onVisualSend, onVisualLink]);
+  }), [taskId, messages, partial, running, onVisualSend, onVisualLink]);
 
   // What a suggested-task card may do here: this chat's own started ones, the chats they opened,
   // and what the user dismissed. Nothing is ever started by accident: `busy` is this run.

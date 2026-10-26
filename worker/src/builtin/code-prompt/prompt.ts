@@ -13,7 +13,7 @@ import { COMPUTER_TOOL_NAMES } from "../computer-use/params.js";
 import { MEMORY_TOOL_NAMES } from "../memory/index.js";
 import { SUBAGENT_TOOL_NAME } from "../subagents/types.js";
 import { SUGGEST_TASK_TOOL_NAME } from "../suggest-task.js";
-import { SHOW_VISUAL_TOOL_NAME } from "../visual.js";
+import { PREVIEW_VISUAL_TOOL_NAME, SHOW_VISUAL_TOOL_NAME } from "../visual.js";
 import { CANVAS_GUIDE_TOOL_NAME, CANVAS_TOOL_NAME } from "../canvas/index.js";
 import { WEB_FETCH_TOOL_NAME } from "../web-fetch/index.js";
 import { WEB_SEARCH_TOOL_NAME } from "../web-search/index.js";
@@ -151,7 +151,7 @@ export function buildCodeGuide({ activeTools, toolDefinitions, hasMcpTools, hasS
     capabilities.push(`Web (${[WEB_SEARCH_TOOL_NAME, WEB_FETCH_TOOL_NAME].filter(has).join(", ")}): use it for current or external facts.${search && searchLabel ? ` Search uses ${searchLabel}.` : ""}${search ? ` Keep private details out of queries.${web ? ` Read the best results with ${WEB_FETCH_TOOL_NAME} before relying on them.` : " Read results with an available page-reading tool; say when you couldn't read a source."}` : " Page reading cannot search; use known URLs."}`);
   }
   if (has(SHOW_VISUAL_TOOL_NAME)) {
-    capabilities.push(`Visual replies (${SHOW_VISUAL_TOOL_NAME}): use a chart, diagram or mockup when it explains better than prose. Skip it for single facts.`);
+    capabilities.push(`Visual replies (${SHOW_VISUAL_TOOL_NAME}, ${PREVIEW_VISUAL_TOOL_NAME}): preview charts, diagrams or mockups, fix them, then publish. Skip single facts.`);
   }
   if (has(CANVAS_TOOL_NAME)) {
     capabilities.push(`Canvas (${CANVAS_TOOL_NAME}): for comparing UI alternatives side by side — themes, layouts, devices.${has(CANVAS_GUIDE_TOOL_NAME) ? ` Read ${CANVAS_GUIDE_TOOL_NAME} before your first canvas.` : ""}`);

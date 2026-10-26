@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { DEFAULT_ACCENT, DEFAULT_BACKGROUND, THEME_PRESETS, clampBackground, resolveTheme, swatchTint } from "../theme";
 import { DEFAULT_AGENT_NAME, agentName } from "../agentName";
 import type { ImageCrop } from "../backdrop-crop";
-import type { AppearanceConfig, BackdropMode, GlassStyle, ThinkingTimerPrecision } from "../types";
+import type { AppearanceConfig, BackdropMode, ComposerStyle, GlassStyle, ThinkingTimerPrecision } from "../types";
 import { Icon } from "./Icons";
 import { PonderingDuck } from "./PonderingDuck";
 import { BackdropCropEditor } from "./BackdropCropEditor";
@@ -37,6 +37,15 @@ const GLASS_STYLES: { value: GlassStyle; label: string; note: string }[] = [
   { value: "clear", label: "Clear", note: "More desktop" }
 ];
 
+/** The Code composer's five layouts, each tile drawing the silhouette it picks. */
+const COMPOSER_STYLES: { value: ComposerStyle; label: string; note: string }[] = [
+  { value: "classic", label: "WackCode Classic", note: "Rounded card, toolbar below" },
+  { value: "classicGlass", label: "Classic Liquid Glass", note: "The same card, translucent" },
+  { value: "capsule", label: "Capsule", note: "Attach and send inside a deep pill" },
+  { value: "split", label: "Split Bar", note: "Input card over a floating dock" },
+  { value: "terminal", label: "Terminal", note: "Prompt line with a status strip" }
+];
+
 /** The Chat group's thinking timer choice (ThinkingRow.tsx counts from it). */
 const TIMER_PRECISIONS: { value: ThinkingTimerPrecision; label: string }[] = [
   { value: "second", label: "1s" },
@@ -45,7 +54,7 @@ const TIMER_PRECISIONS: { value: ThinkingTimerPrecision; label: string }[] = [
 
 /** The chat switches each show a miniature of what they change, so the effect is visible
  *  before it is switched on. */
-const CHAT_OPTIONS: { key: "chatTabs" | "thinkingPreview" | "messageBubbles" | "groupExploration" | "collapseCompletedWork" | "visualBanner"; label: string; description: (name: string) => string; preview: "tabs" | "bubble" | "thinking" | "explore" | "work" | "visual" }[] = [
+const CHAT_OPTIONS: { key: "chatTabs" | "thinkingPreview" | "messageBubbles" | "groupExploration" | "collapseCompletedWork"; label: string; description: (name: string) => string; preview: "tabs" | "bubble" | "thinking" | "explore" | "work" }[] = [
   {
     key: "chatTabs",
     label: "Chat tabs",
@@ -75,12 +84,6 @@ const CHAT_OPTIONS: { key: "chatTabs" | "thinkingPreview" | "messageBubbles" | "
     label: "Collapse completed work",
     description: () => "Keep the final reply visible and fold its steps behind “Worked for…”. Live work stays open.",
     preview: "work"
-  },
-  {
-    key: "visualBanner",
-    label: "Visual banner",
-    description: () => "The title strip above a visual reply, with Expand and Copy. Switch it off and the card is the visual alone — the actions go with it.",
-    preview: "visual"
   }
 ];
 
@@ -448,6 +451,59 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrlFo
         </section>
 
         <section className="tool-setting-group" style={enter(2)}>
+          <h4>Composer</h4>
+          <p className="appearance-group-note">How the Code composer looks and arranges its controls. On the welcome screen, the comet adapts to match the style you pick.</p>
+          <div className="appearance-tiles composer-style-tiles" role="radiogroup" aria-label="Composer style">
+            {COMPOSER_STYLES.map((option) => {
+              const unavailable = option.value === "classicGlass" && !glassSupported;
+              const selected = config.composerStyle === option.value;
+              const tile = (
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  aria-label={option.label}
+                  key={option.value}
+                  className={`appearance-tile composer-style-tile ${selected ? "selected" : ""}`}
+                  disabled={busy || unavailable}
+                  onClick={() => void save({ ...config, composerStyle: option.value })}
+                >
+                  <span className="composer-art" aria-hidden="true">
+                    {option.value === "split" ? (
+                      <>
+                        <span className="mini-split-card"><span className="mini-line" /><span className="mini-send" /></span>
+                        <span className="mini-split-dock"><span className="mini-dot" /><span className="mini-dot" /><span className="mini-dot" /></span>
+                      </>
+                    ) : option.value === "capsule" ? (
+                      <>
+                        <span className="mini-pill-row"><span className="mini-dot" /><span className="mini-line" /><span className="mini-send" /></span>
+                        <span className="mini-subrow"><span className="mini-dot" /><span className="mini-dot" /><span className="mini-dot" /></span>
+                      </>
+                    ) : option.value === "terminal" ? (
+                      <span className="mini-term">
+                        <span className="mini-term-line"><span className="mini-prompt">❯</span><span className="mini-line" /></span>
+                        <span className="mini-term-bar"><span className="mini-dot" /><span className="mini-dot" /><span className="mini-send square" /></span>
+                      </span>
+                    ) : (
+                      <span className={`mini-card${option.value === "classicGlass" ? " glassy" : ""}`}>
+                        <span className="mini-line" />
+                        <span className="mini-line short" />
+                        <span className="mini-row"><span className="mini-dot" /><span className="mini-dot" /><span className="mini-dot" /><span className="mini-send" /></span>
+                      </span>
+                    )}
+                  </span>
+                  <span className="appearance-tile-text">
+                    <span className="appearance-tile-label">{option.label}</span>
+                    <span className="appearance-tile-note">{option.note}</span>
+                  </span>
+                </button>
+              );
+              return unavailable ? <Tooltip key={option.value} label="Liquid Glass needs macOS 26 or later">{tile}</Tooltip> : tile;
+            })}
+          </div>
+        </section>
+
+        <section className="tool-setting-group" style={enter(3)}>
           <h4>Chat</h4>
           <p className="appearance-group-note">How the conversation itself is drawn. Each switch shows its effect as you flip it.</p>
           <div className="appearance-pair">
@@ -519,23 +575,6 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrlFo
                         )}
                         <span className="mini-msg mini-assistant flat">Done — the tests pass.</span>
                       </>
-                    ) : option.preview === "visual" ? (
-                      /* The card's head band wears the switch: present when on, gone when off. */
-                      <span className="mini-visual">
-                        {on && (
-                          <span className="mini-visual-head">
-                            <span className="mini-visual-mark" />
-                            <span className="mini-visual-title" />
-                            <span className="mini-visual-action" />
-                          </span>
-                        )}
-                        <span className="mini-visual-body">
-                          <span style={{ height: "50%" }} />
-                          <span style={{ height: "85%" }} />
-                          <span style={{ height: "35%" }} />
-                          <span style={{ height: "65%" }} />
-                        </span>
-                      </span>
                     ) : (
                       <>
                         <span className="mini-thinking">
@@ -594,7 +633,7 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrlFo
           </div>
         </section>
 
-        <section className="tool-setting-group" style={enter(3)}>
+        <section className="tool-setting-group" style={enter(4)}>
           <h4>Agent</h4>
           <p className="appearance-group-note">The name the app uses for your assistant. The miniature follows the field as you type.</p>
           {/* Same card as the chat switches, showing the empty chat the name will meet. */}

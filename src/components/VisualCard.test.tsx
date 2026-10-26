@@ -1,14 +1,23 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
-import { VisualBannerEnabled, VisualCallCard, VisualCard } from "./VisualCard";
+import { fittedVisualHeight, VisualCallCard, VisualCard, VisualCardScope } from "./VisualCard";
+import { CopyText } from "./ui/CopyButton";
+
+const motionPreferences = vi.hoisted(() => ({ reduce: false }));
+vi.mock("motion/react", async (importOriginal) => ({
+  ...await importOriginal<typeof import("motion/react")>(),
+  useReducedMotion: () => motionPreferences.reduce
+}));
 
 vi.mock("../api", () => ({
-  api: { stageVisual: vi.fn().mockResolvedValue("wcvisual://localhost/abc123"), revealPath: vi.fn().mockResolvedValue(undefined) }
+  api: { visualDocument: vi.fn().mockResolvedValue("<img src=\"data:image/png;base64,AA==\">"), stageVisual: vi.fn().mockResolvedValue("wcvisual://localhost/abc123"), revealPath: vi.fn().mockResolvedValue(undefined) }
 }));
 
 afterEach(cleanup);
 beforeEach(() => {
+  motionPreferences.reduce = false;
+  vi.mocked(api.visualDocument).mockClear();
   vi.mocked(api.stageVisual).mockClear();
   vi.mocked(api.stageVisual).mockResolvedValue("wcvisual://localhost/abc123");
 });
@@ -52,8 +61,8 @@ describe("VisualCard", () => {
     const well = doc.parentElement as HTMLElement;
     fromFrame(doc, { type: "wackcode-visual:size", height: 240 });
     await waitFor(() => expect(well.style.height).toBe("240px"));
-    fromFrame(doc, { type: "wackcode-visual:size", height: 5000 });
-    await waitFor(() => expect(well.style.height).toBe("640px"));
+    fromFrame(doc, { type: "wackcode-visual:size", height: 50000 });
+    await waitFor(() => expect(well.style.height).toBe("20000px"));
     fromFrame(doc, { type: "wackcode-visual:size", height: 4 });
     await waitFor(() => expect(well.style.height).toBe("96px"));
   });
@@ -86,22 +95,49 @@ describe("VisualCard", () => {
     expect(screen.getByRole("button", { name: "Copy visual HTML" })).toBeInTheDocument();
   });
 
-  it("drops the head band — and its actions — when the visual banner is switched off", async () => {
+  it("has no head band and reveals actions that can receive keyboard focus", async () => {
     render(
-      <VisualBannerEnabled.Provider value={false}>
+      <CopyText.Provider value={vi.fn().mockResolvedValue(undefined)}>
         <VisualCard title="Chart" html="<p>42</p>" current busy={false} />
-      </VisualBannerEnabled.Provider>
+      </CopyText.Provider>
     );
-    expect(screen.getByRole("figure", { name: "Visual: Chart" })).toBeInTheDocument();
-    expect(document.querySelector(".visual-card-head")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Expand visual" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Copy visual HTML" })).toBeNull();
-    // The frame itself still stages and reports.
+    const card = screen.getByRole("figure", { name: "Visual: Chart" });
+    expect(card.querySelector("figcaption")).toBeNull();
+    const expand = screen.getByRole("button", { name: "Expand visual" });
+    const copy = screen.getByRole("button", { name: "Copy visual HTML" });
+    expand.focus();
+    expect(expand).toHaveFocus();
+    expect(card).toContainElement(document.activeElement as HTMLElement);
+    copy.focus();
+    expect(copy).toHaveFocus();
+    expect(copy).toHaveTextContent("");
+    await frame();
+  });
+
+  it("starts at the taller neighbouring measurement, then accepts the first live report", async () => {
+    const bounds = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ width: 600 } as DOMRect);
+    try {
+      render(<VisualCard title="Chart" html="<p>42</p>" heights={[{ width: 360, height: 900 }, { width: 560, height: 620 }, { width: 720, height: 500 }]} current busy={false} />);
+      const doc = await frame();
+      expect(doc.parentElement?.style.height).toBe("620px");
+      expect(doc.style.opacity).toBe("0");
+      fromFrame(doc, { type: "wackcode-visual:size", height: 580 });
+      await waitFor(() => expect(doc.parentElement?.style.height).toBe("580px"));
+      expect(doc.parentElement).not.toHaveClass("loading");
+    } finally {
+      bounds.mockRestore();
+    }
+  });
+
+  it("shows the measured document immediately with reduced motion", async () => {
+    motionPreferences.reduce = true;
+    render(<VisualCard title="Chart" html="<p>42</p>" heights={[{ width: 720, height: 500 }]} current busy={false} />);
     const doc = await frame();
-    expect(doc.src).toBe("wcvisual://localhost/abc123");
-    const well = doc.parentElement as HTMLElement;
-    fromFrame(doc, { type: "wackcode-visual:size", height: 240 });
-    await waitFor(() => expect(well.style.height).toBe("240px"));
+    expect(doc.style.opacity).toBe("1");
+    expect(doc.parentElement?.style.height).toBe("500px");
+    fromFrame(doc, { type: "wackcode-visual:size", height: 640 });
+    await waitFor(() => expect(doc.parentElement?.style.height).toBe("640px"));
+    expect(doc.style.opacity).toBe("1");
   });
 
   it("opens an expanded frame at window size and closes it on Escape", async () => {
@@ -194,8 +230,50 @@ describe("VisualCallCard", () => {
     await waitFor(() => expect(document.querySelector("iframe.visual-frame-doc")).not.toBeNull());
   });
 
+  it("fetches an inlined document from the saved result before staging", async () => {
+    render(
+      <VisualCardScope.Provider value={{ taskId: "chat-1", currentIds: new Set(), busy: false }}>
+        <VisualCallCard
+          block={{ type: "tool-call", toolName: "show_visual", toolCallId: "call-1", arguments: { title: "Images", html: "<img src=\"/tmp/photo.png\">" } }}
+          result={{ type: "tool-result", details: { v: 1, title: "Images", inlined: true, heights: [{ width: 720, height: 440 }] } }}
+        />
+      </VisualCardScope.Provider>
+    );
+    await frame();
+    expect(api.visualDocument).toHaveBeenCalledWith("chat-1", "call-1");
+    expect(vi.mocked(api.stageVisual).mock.calls[0][0]).toBe('<img src="data:image/png;base64,AA==">');
+  });
+
+  it("keeps the failure recoverable when an inlined document cannot be fetched", async () => {
+    vi.mocked(api.visualDocument).mockRejectedValueOnce(new Error("missing"));
+    render(
+      <VisualCardScope.Provider value={{ taskId: "chat-1", currentIds: new Set(), busy: false }}>
+        <VisualCallCard
+          block={{ type: "tool-call", toolName: "show_visual", toolCallId: "call-1", arguments: { title: "Images", html: "<img src=\"/tmp/photo.png\">" } }}
+          result={{ type: "tool-result", details: { v: 1, title: "Images", inlined: true } }}
+        />
+      </VisualCardScope.Provider>
+    );
+    expect(await screen.findByText("This visual couldn’t be shown.")).toBeInTheDocument();
+    expect(api.stageVisual).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await frame();
+    expect(api.visualDocument).toHaveBeenCalledTimes(2);
+  });
+
   it("renders nothing for arguments that do not parse", () => {
     const { container } = render(<VisualCallCard block={{ type: "tool-call", toolName: "show_visual", toolCallId: "call-1", arguments: { title: "" } }} />);
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe("fittedVisualHeight", () => {
+  const heights = [{ width: 360, height: 900 }, { width: 560, height: 620 }, { width: 720, height: 500 }];
+  it("uses the taller neighbours and the closest edge outside the measured range", () => {
+    expect(fittedVisualHeight(heights, 450)).toBe(900);
+    expect(fittedVisualHeight(heights, 600)).toBe(620);
+    expect(fittedVisualHeight(heights, 200)).toBe(900);
+    expect(fittedVisualHeight(heights, 1000)).toBe(500);
+    expect(fittedVisualHeight([{ width: 720, height: 30000 }], 720)).toBe(20000);
   });
 });

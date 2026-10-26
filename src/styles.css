@@ -1812,7 +1812,7 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
   position: absolute;
   inset: -1.5px;
   padding: 1.5px;
-  border-radius: 19.5px;
+  border-radius: var(--composer-comet-radius, 19.5px);
   background: conic-gradient(from var(--comet-angle), transparent 70%, var(--wc-accent) 88%, transparent 100%);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
@@ -1827,6 +1827,8 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
 .composer.comet.frozen::before { animation-duration: .7s; }
 .composer.frozen { pointer-events: none; }
 .composer-input { position: relative; }
+/* The text field's own box, so the decorative highlight mirrors exactly what the textarea draws. */
+.composer-field { position: relative; min-width: 0; }
 /* Mirror the textarea's metrics exactly: only the command's colour changes, so
    native caret, selection, wrapping and IME editing keep their usual geometry. */
 .composer textarea, .composer-highlight {
@@ -2124,6 +2126,206 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
 .send-button.stop svg { width: 13px; height: 13px; }
 @media (prefers-reduced-motion: reduce) {
   .send-button:not(:disabled):hover, .send-button:not(:disabled):active { transform: none; }
+}
+
+/* ── Composer styles (Settings › Appearance) ─────────
+   One composer, five silhouettes. Every style keeps the same controls, roles and focus
+   behaviour; only the surface and where those controls sit change. Classic is the card above.
+   Classic Liquid Glass is that card in a translucent pane; Capsule pulls Attach and Send into
+   the writing row; Split Bar detaches the controls into their own dock; Terminal draws the
+   well as a prompt with a status strip. Chat mode has its own composer and none of this. */
+
+/* Classic Liquid Glass: the classic card as one slab of smoked glass. A single heavy blur
+   (with a little extra saturation, so colour behind it glows instead of greying) under a dark
+   tint keeps text readable over any backdrop; a hairline rim catches light along the top edge
+   and fades down the sides, and a long soft shadow lifts the slab off what is behind it. The
+   transcript scrolls beneath the docked composer (see below), so there is always something to
+   refract. Controls inside drop their solid chips for translucent fills, or they read as
+   stickers on the glass. Chosen explicitly, so it is the one content surface that is not solid. */
+.composer-classicGlass {
+  border-color: transparent;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--text) 5%, transparent), transparent 38%),
+    color-mix(in srgb, var(--wc-composer) 46%, transparent);
+  backdrop-filter: blur(26px) saturate(1.8) brightness(.78);
+  -webkit-backdrop-filter: blur(26px) saturate(1.8) brightness(.78);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 22%), 0 22px 56px -14px rgb(0 0 0 / 60%);
+}
+.composer-classicGlass::after {
+  content: ""; position: absolute; inset: -1px; padding: 1px; border-radius: 19px; pointer-events: none;
+  background: linear-gradient(172deg,
+    color-mix(in srgb, var(--text) 30%, transparent),
+    color-mix(in srgb, var(--text) 9%, transparent) 26%,
+    color-mix(in srgb, var(--text) 4%, transparent) 70%,
+    color-mix(in srgb, var(--text) 10%, transparent));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  transition: opacity .2s var(--ease);
+}
+.composer-classicGlass:focus-within {
+  border-color: transparent;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 22%), 0 22px 56px -14px rgb(0 0 0 / 60%),
+    0 0 0 1px color-mix(in srgb, var(--wc-accent) 34%, transparent), 0 0 0 4px color-mix(in srgb, var(--wc-accent) 8%, transparent);
+}
+.composer-classicGlass:focus-within::after { opacity: .6; }
+.composer-classicGlass textarea::placeholder { color: color-mix(in srgb, var(--text) 42%, transparent); }
+.composer-classicGlass .model-pill:hover, .composer-classicGlass .attach-button:hover,
+.composer-classicGlass .reasoning-toggle:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
+.composer-classicGlass .mode-toggle.sliding { background: color-mix(in srgb, var(--text) 6%, transparent); }
+.composer-classicGlass .mode-toggle.sliding .mode-pill:not(.plan):not(.ultra) {
+  background: color-mix(in srgb, var(--text) 13%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 12%, transparent);
+}
+.composer-classicGlass .send-button:disabled:not(.stop) { background: color-mix(in srgb, var(--text) 8%, transparent); }
+/* A refractive head: the accent trails into the glint where it bends over the rim. */
+.composer-classicGlass.comet::before {
+  background: conic-gradient(from var(--comet-angle), transparent 64%, color-mix(in srgb, var(--wc-accent) 60%, transparent) 82%, var(--wc-accent-glint) 89%, transparent 100%);
+}
+/* The project bar above the hero composer wears the same glass in miniature. */
+.composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch, .segmented) {
+  border-color: color-mix(in srgb, var(--text) 10%, transparent);
+  background: color-mix(in srgb, var(--wc-composer) 40%, transparent);
+  backdrop-filter: blur(18px) saturate(1.7) brightness(.82);
+  -webkit-backdrop-filter: blur(18px) saturate(1.7) brightness(.82);
+}
+.composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch):hover { background: color-mix(in srgb, var(--wc-composer) 55%, transparent); }
+.composer-wrap.glass .project-bar .segmented-thumb {
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 14%, transparent);
+}
+/* Docked, the transcript runs on under the glass: the column gives back the composer's reserved
+   space and the transcript pads its end by the same amount, so the last message still rests
+   above the composer. Only while nothing (a question, the todo list) sits between them. The
+   scroller's foot fades out so nothing shows in the gap below the slab. */
+.composer-wrap.glass { background: none; }
+.workspace:has(.composer-wrap.glass) .chat-view > .chat-transcript:last-child {
+  margin-bottom: calc(-1 * var(--composer-h, 0px));
+}
+.workspace:has(.composer-wrap.glass) .chat-view > .chat-transcript:last-child .transcript {
+  padding-bottom: calc(26px + var(--composer-h, 0px));
+}
+.workspace:has(.composer-wrap.glass) .chat-view > .chat-transcript:last-child .conversation-scroll {
+  -webkit-mask-image: linear-gradient(to top, transparent 4px, #000 30px);
+  mask-image: linear-gradient(to top, transparent 4px, #000 30px);
+}
+.workspace:has(.composer-wrap.glass) .chat-view > .chat-transcript:last-child .scroll-rail {
+  bottom: calc(10px + var(--composer-h, 0px));
+}
+/* macOS › Accessibility › Reduce transparency: the classic solid card. */
+@media (prefers-reduced-transparency: reduce) {
+  .composer-classicGlass { background: var(--wc-composer); backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch, .segmented) { background: var(--surface); backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
+
+/* Capsule: the writing row owns the pill, and the metadata keeps a quiet strip beneath it. */
+.composer-capsule {
+  --composer-comet-radius: 27.5px;
+  border-radius: 26px;
+}
+.composer-capsule-row { display: flex; align-items: flex-end; gap: 4px; padding: 7px 8px 3px 10px; }
+.composer-capsule-row .composer-input { flex: 1; min-width: 0; }
+.composer-capsule textarea, .composer-capsule .composer-highlight { min-height: 38px; padding: 8px 2px 6px; }
+.composer-capsule .attach-button { width: 32px; height: 32px; margin-bottom: 4px; }
+.composer-capsule .composer-right { padding-bottom: 4px; }
+.composer-subbar { padding: 0 10px 6px 8px; gap: 4px; }
+.composer-subbar .composer-left { gap: 2px; }
+
+/* Split Bar: the composer element becomes a transparent frame, so the hero→dock glide still
+   carries both surfaces together; the input card and the dock own the look. */
+.composer-split {
+  display: flex; flex-direction: column; gap: 6px;
+  border: 0; border-radius: 0; background: transparent; box-shadow: none;
+}
+.composer-split:focus-within { box-shadow: none; }
+.composer-split-card {
+  position: relative;
+  border: 1px solid var(--border-bright); border-radius: 18px;
+  background: var(--wc-composer); box-shadow: 0 10px 30px rgb(0 0 0 / 20%);
+  transition: border-color .2s var(--ease), box-shadow .25s var(--ease);
+}
+.composer-split-card:focus-within {
+  border-color: var(--wc-accent-line-mid);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 24%), 0 0 0 4px color-mix(in srgb, var(--wc-accent) 10%, transparent);
+}
+.composer-split-row { display: flex; align-items: flex-end; gap: 6px; }
+.composer-split-row .composer-input { flex: 1; min-width: 0; }
+.composer-split-row .composer-right { padding: 0 8px 8px 0; }
+.composer-policy { padding: 8px 12px 0; }
+.composer-split-bar {
+  position: relative; align-self: center; flex-direction: row; justify-content: center;
+  width: auto; max-width: 100%; padding: 4px 9px 4px 6px; gap: 4px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--surface);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 22%);
+}
+.composer-split-bar .composer-left { flex-wrap: nowrap; gap: 2px; min-width: 0; }
+.composer-split-bar .model-pill { min-width: 0; }
+.composer-wrap.dropping .composer-split { border: 0; box-shadow: none; }
+.composer-wrap.dropping .composer-split-card { border-color: var(--wc-accent); box-shadow: 0 0 0 5px color-mix(in srgb, var(--wc-accent) 18%, transparent); }
+/* The comet splits with the composer: one ring on the card, one on the dock half a turn later,
+   so the pair reads as one orbit passing through both surfaces. */
+.composer-split.comet::before { content: none; }
+.composer-split.comet .composer-split-card::before,
+.composer-split.comet .composer-split-bar::before {
+  content: ""; position: absolute; inset: -1.5px; padding: 1.5px;
+  background: conic-gradient(from var(--comet-angle), transparent 70%, var(--wc-accent) 88%, transparent 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: comet-spin 2.5s linear infinite;
+  pointer-events: none; transition: opacity .3s var(--ease);
+}
+.composer-split.comet .composer-split-card::before { border-radius: 19.5px; }
+.composer-split.comet .composer-split-bar::before {
+  border-radius: 999px;
+  background: conic-gradient(from calc(var(--comet-angle) + 180deg), transparent 70%, var(--wc-accent) 88%, transparent 100%);
+}
+.composer-split.comet .composer-split-card:focus-within::before,
+.composer-split.comet .composer-split-bar:focus-within::before { opacity: 0; }
+.composer-split.comet.frozen .composer-split-card::before,
+.composer-split.comet.frozen .composer-split-bar::before { animation-duration: .7s; }
+
+/* Terminal: the well as a command line. The prompt glyph and the monospace field share one
+   baseline, and the strip beneath carries the controls on a quiet status band. */
+.composer-terminal {
+  --composer-comet-radius: 11.5px;
+  border-radius: 10px;
+  background: var(--wc-well);
+  border-color: var(--wc-code-border);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 5%, transparent), 0 10px 30px rgb(0 0 0 / 24%);
+}
+.composer-terminal:focus-within {
+  border-color: var(--wc-accent-line-mid);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 5%, transparent), 0 0 0 3px color-mix(in srgb, var(--wc-accent) 12%, transparent);
+}
+.composer-terminal .composer-input { display: flex; align-items: flex-start; gap: 9px; padding: 11px 12px 3px; }
+.composer-prompt-glyph {
+  flex: 0 0 auto; color: var(--wc-accent); user-select: none; pointer-events: none;
+  font: 600 13px/1.55 "SFMono-Regular", Consolas, monospace;
+}
+.composer-terminal .composer-field { flex: 1; min-width: 0; }
+.composer-terminal textarea, .composer-terminal .composer-highlight {
+  min-height: 21px; padding: 0 0 3px;
+  font: 13px/1.55 "SFMono-Regular", Consolas, monospace;
+}
+.composer-terminal-bar {
+  margin-top: 2px; padding: 5px 8px 6px 30px; border-top: 1px solid var(--border);
+  border-radius: 0 0 9px 9px; background: color-mix(in srgb, var(--wc-input) 60%, transparent);
+}
+.composer-terminal .attach-button { border-radius: 8px; }
+.composer-terminal .send-button { width: auto; display: inline-flex; gap: 6px; padding: 0 9px; border-radius: 8px; }
+.composer-terminal .send-button.stop { width: 32px; padding: 0; }
+.composer-terminal .send-button.queue { padding: 0 13px 0 11px; }
+.send-return { font: 600 10.5px/1 "SFMono-Regular", Consolas, monospace; opacity: .8; }
+/* A crisper head for the command line: the trail is tighter and ends on the glint. */
+.composer-terminal.comet::before {
+  background: conic-gradient(from var(--comet-angle), transparent 78%, var(--wc-accent) 92%, var(--wc-accent-glint) 96%, transparent 100%);
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-split-card, .composer-split.comet .composer-split-card::before,
+  .composer-split.comet .composer-split-bar::before { transition: none; }
 }
 
 /* model picker popover (sliding panels: providers, models, and the Team crew) */
@@ -3459,7 +3661,9 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   .settings-back-button svg { transform: none !important; }
   * { transition-duration: .01ms !important; animation-duration: .01ms !important; }
   /* The welcome comet is a deliberate ambient exception and keeps its full speed. */
-  .composer.comet::before { animation-duration: 2.5s !important; }
+  .composer.comet::before,
+  .composer-split.comet .composer-split-card::before,
+  .composer-split.comet .composer-split-bar::before { animation-duration: 2.5s !important; }
 }
 
 /* Settings › Developer's "Force reduced motion" (html[data-force-reduced-motion], set by
@@ -4555,32 +4759,35 @@ html[data-force-reduced-motion] *::after {
 .extension-notice button:hover { opacity: 1; }
 
 /* ── Visual replies (VisualCard.tsx, visuals.rs) ───────
-   The agent's HTML answer, drawn in the conversation. It wears the code fence's well and head
-   band so it reads as transcript furniture, not an embedded page: the app's surface, the app's
-   head, and a sandboxed frame whose body is the visual itself. Every colour is a theme token,
-   and the frame is themed in place by `visualThemeVars`. */
+   The visual is part of the conversation, with no surrounding chrome. Over a translucent
+   shell its own content surface stays solid. The frame theme is repainted in place. */
 .visual-card {
-  margin: 12px 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden;
-  background: var(--wc-well); border: 1px solid color-mix(in srgb, var(--border-bright) 70%, transparent);
-  border-radius: var(--wc-radius-card);
+  position: relative; margin: 12px 0; min-width: 0; display: flex; flex-direction: column;
 }
-.visual-card-head { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 5px 9px 5px 8px; background: var(--surface); border-bottom: 2px dotted var(--wc-accent-line); }
+:is([data-backdrop="image"], [data-backdrop="glass"], [data-backdrop="dynamic"]) .visual-card {
+  background: var(--surface); border-radius: var(--wc-radius-card); padding: 16px;
+}
+.visual-hover-actions {
+  position: absolute; z-index: 1; top: 6px; right: 6px; display: flex; align-items: center; gap: 4px;
+  padding: 3px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--wc-radius-pill);
+  opacity: 0; pointer-events: none; transition: opacity .15s var(--ease);
+}
+.visual-card:hover > .visual-hover-actions, .visual-card:focus-within > .visual-hover-actions { opacity: 1; pointer-events: auto; }
+.visual-hover-actions .icon-button { width: 26px; height: 26px; border-radius: 50%; }
+.visual-hover-actions .icon-button svg { width: 13px; height: 13px; }
 .visual-card-mark { display: grid; place-items: center; width: 22px; height: 22px; flex: 0 0 auto; border-radius: 50%; background: var(--wc-accent-tint); color: var(--wc-accent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wc-accent) 26%, transparent); }
 .visual-card-mark svg { width: 12px; height: 12px; }
 .visual-card-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--text-soft); }
 .visual-card-actions { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
-.visual-card-action.secondary-button.compact { height: 24px; padding: 3px 10px 3px 8px; gap: 5px; font-size: 11px; border-radius: var(--wc-radius-pill); }
-.visual-card-action.secondary-button.compact svg { width: 12px; height: 12px; }
-/* A visual's frame is content, so it stays solid over an image backdrop or Liquid Glass. */
-.visual-card-body { background: var(--surface); }
-.visual-frame { position: relative; overflow: hidden; background: var(--surface); transition: background .2s var(--ease); }
+.visual-card-body { min-width: 0; }
+.visual-frame { position: relative; overflow: hidden; background: transparent; }
 /* Until the frame reports its height there is nothing to show: a still, quiet well. */
 .visual-frame.loading { background-image: linear-gradient(100deg, transparent 20%, color-mix(in srgb, var(--text) 6%, transparent) 40%, transparent 60%); background-size: 220% 100%; animation: visual-shimmer 1.5s linear infinite; }
 @keyframes visual-shimmer { from { background-position: 140% 0; } to { background-position: -40% 0; } }
 .visual-frame-doc { display: block; width: 100%; height: 100%; border: 0; background: transparent; color-scheme: light dark; }
-.visual-frame-state { display: flex; align-items: center; gap: 10px; padding: 14px 14px; min-height: 96px; color: var(--text-dim); font-size: 12px; }
+.visual-frame-state { display: flex; align-items: center; gap: 10px; padding: 14px; min-height: 96px; color: var(--text-dim); font-size: 12px; }
 .visual-frame-state > span { flex: 1; min-width: 0; }
-.visual-card-note { margin: 0; padding: 8px 12px; border-top: 1px solid var(--border); color: var(--text-dim); font-size: 11.5px; }
+.visual-card-note { margin: 0; padding: 8px 12px; color: var(--text-dim); font-size: 11.5px; }
 /* Under a user's message whose words came from a visual ("Sent from …"). */
 .visual-sent { display: flex; align-items: center; gap: 5px; margin: 4px 2px 0; color: var(--text-dim); font-size: 11px; }
 .visual-sent svg { width: 12px; height: 12px; flex: 0 0 auto; }
@@ -4597,6 +4804,8 @@ html[data-force-reduced-motion] *::after {
   border: 1px solid var(--border-bright); border-radius: var(--wc-radius-card); background: var(--wc-well);
   box-shadow: 0 24px 70px rgb(0 0 0 / 45%);
 }
+.visual-expanded-head { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 5px 9px 5px 8px; background: var(--surface); border-bottom: 2px dotted var(--wc-accent-line); }
+.visual-expanded .visual-card-body { background: var(--surface); }
 .visual-expanded .visual-card-actions { gap: 8px; }
 .visual-expanded-close { position: static; width: 24px; height: 24px; }
 .visual-expanded-close svg { width: 12px; height: 12px; }
@@ -5141,6 +5350,71 @@ html[data-force-reduced-motion] *::after {
 .appearance-tiles > .tooltip-wrap { display: flex; }
 .appearance-tiles > .tooltip-wrap > .appearance-tile { flex: 1; }
 
+/* Composer: each tile draws the silhouette it picks, so the choice reads before it is made.
+   Five fit one row on the page's column; the selected one wears the comet's arc on its rim. */
+.composer-style-tiles { grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); }
+.composer-art {
+  position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
+  height: 74px; padding: 10px 12px; border-radius: 7px; overflow: hidden;
+  background: var(--wc-well); box-shadow: inset 0 0 0 1px rgb(255 255 255 / 7%);
+  transition: background .12s var(--ease);
+}
+.composer-style-tile.selected .composer-art { background: color-mix(in srgb, var(--wc-accent) 4%, var(--wc-well)); }
+.composer-style-tile.selected .composer-art::after {
+  content: ""; position: absolute; inset: 2px; padding: 1.5px; border-radius: 6px; pointer-events: none;
+  background: conic-gradient(from 210deg, transparent 76%, var(--wc-accent) 88%, transparent 98%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+.composer-art .mini-line { display: block; height: 3px; width: 100%; border-radius: 2px; background: var(--border-bright); }
+.composer-art .mini-line.short { width: 52%; }
+.composer-art .mini-dot { width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: var(--wc-toggle); }
+.composer-art .mini-send { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: var(--wc-accent); }
+.composer-art .mini-card {
+  display: flex; flex-direction: column; gap: 4px; width: 100%; padding: 6px 7px;
+  border: 1px solid var(--border-bright); border-radius: 6px; background: var(--wc-composer);
+}
+.composer-art .mini-card.glassy {
+  background: color-mix(in srgb, var(--wc-composer) 40%, transparent);
+  border-color: color-mix(in srgb, var(--text) 22%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 24%, transparent);
+}
+.composer-art .mini-row { display: flex; align-items: center; gap: 3px; }
+.composer-art .mini-row .mini-send { margin-left: auto; }
+.composer-art .mini-pill-row {
+  display: flex; align-items: center; gap: 4px; width: 100%; height: 22px; padding: 0 6px;
+  border: 1px solid var(--border-bright); border-radius: 11px; background: var(--wc-composer);
+}
+.composer-art .mini-pill-row .mini-line { flex: 1; width: auto; }
+.composer-art .mini-subrow { display: flex; align-items: center; gap: 3px; }
+.composer-art .mini-split-card {
+  display: flex; align-items: flex-end; gap: 4px; width: 100%; padding: 6px 7px;
+  border: 1px solid var(--border-bright); border-radius: 6px; background: var(--wc-composer);
+}
+.composer-art .mini-split-card .mini-line { flex: 1; width: auto; }
+.composer-art .mini-split-dock {
+  display: flex; align-items: center; gap: 3px; padding: 3px 7px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--surface);
+}
+.composer-art .mini-term {
+  display: flex; flex-direction: column; width: 100%; overflow: hidden;
+  border: 1px solid var(--wc-code-border); border-radius: 5px; background: var(--wc-well);
+}
+.composer-art .mini-term-line { display: flex; align-items: center; gap: 4px; padding: 6px 7px; }
+.composer-art .mini-term-line .mini-line { flex: 1; width: auto; }
+.composer-art .mini-prompt { color: var(--wc-accent); font: 700 8px/1 "SFMono-Regular", Consolas, monospace; }
+.composer-art .mini-term-bar {
+  display: flex; align-items: center; gap: 3px; padding: 3px 7px;
+  border-top: 1px solid var(--border); background: color-mix(in srgb, var(--wc-input) 60%, transparent);
+}
+.composer-art .mini-term-bar .mini-send { margin-left: auto; }
+.composer-art .mini-send.square { border-radius: 3px; }
+@media (prefers-reduced-motion: reduce) {
+  .composer-art { transition: none; }
+}
+
 /* Below the tiles, whatever a mode adds sits in one soft inset block. */
 .appearance-subgroup { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in srgb, var(--surface) 55%, transparent); }
 .appearance-subgroup .tool-setting { background: var(--surface); }
@@ -5194,16 +5468,6 @@ html[data-force-reduced-motion] *::after {
 .mini-work-label { color: var(--text-soft); font-weight: 550; }
 .mini-work .mini-tool-chevron { margin-left: auto; }
 .mini-work-steps { display: flex; flex-direction: column; gap: 5px; padding: 1px 0 1px 7px; border-left: 1px solid var(--border); }
-/* Visual banner miniature: the card is the well with a chart inside; the head band only
-   exists when the switch is on, like the card itself. */
-.mini-visual { align-self: stretch; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border); border-radius: 6px; }
-.mini-visual-head { display: flex; align-items: center; gap: 4px; padding: 4px 6px; background: var(--surface); border-bottom: 1px dotted var(--wc-accent-line); }
-.mini-visual-mark { width: 9px; height: 9px; border-radius: 50%; background: var(--wc-accent-tint); box-shadow: inset 0 0 0 1px var(--wc-accent-line); }
-.mini-visual-title { flex: 1; height: 5px; border-radius: 3px; background: var(--border-bright); }
-.mini-visual-action { flex: 0 0 auto; width: 18px; height: 8px; border-radius: 4px; background: var(--surface-raised); box-shadow: inset 0 0 0 1px var(--border); }
-.mini-visual-body { display: flex; align-items: flex-end; gap: 4px; height: 26px; padding: 5px 7px; background: var(--surface); }
-.mini-visual-body > span { flex: 1; border-radius: 2px 2px 0 0; background: color-mix(in srgb, var(--wc-accent) 45%, var(--surface)); }
-
 /* The agent-name card reuses the chat-preview-card grid; its input takes the corner cell
    where a chat toggle would sit, centred against the two-line description. */
 .agent-name-card .agent-name-input { width: 220px; align-self: center; }

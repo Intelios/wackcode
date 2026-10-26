@@ -193,6 +193,34 @@ describe("AppearanceSection backdrop", () => {
   });
 });
 
+describe("AppearanceSection composer styles", () => {
+  it("defaults to WackCode Classic and saves a picked layout", async () => {
+    const { onChange } = renderSection();
+    expect(screen.getByRole("radio", { name: "WackCode Classic" })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(screen.getByRole("radio", { name: "Capsule" }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ composerStyle: "capsule" })));
+  });
+
+  it("offers Classic Liquid Glass only where Liquid Glass exists", () => {
+    renderSection({}, { glassSupported: false });
+    expect(screen.getByRole("radio", { name: "Classic Liquid Glass" })).toBeDisabled();
+    cleanup();
+    renderSection({ composerStyle: "classicGlass" });
+    const glass = screen.getByRole("radio", { name: "Classic Liquid Glass" });
+    expect(glass).toBeEnabled();
+    expect(glass).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("saves Split Bar and Terminal without touching the rest of the appearance", async () => {
+    const config = { ...DEFAULT_APPEARANCE, backdrop: "dynamic" as const, agentName: "Nova" };
+    const { onChange } = renderSection(config);
+    fireEvent.click(screen.getByRole("radio", { name: "Split Bar" }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ ...config, composerStyle: "split" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Terminal" }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ ...config, composerStyle: "terminal" }));
+  });
+});
+
 describe("AppearanceSection completed work", () => {
   it("defaults to folding completed steps and explains that live work stays open", () => {
     renderSection();
@@ -223,22 +251,6 @@ describe("AppearanceSection completed work", () => {
     expect(card.getByText("Done — the tests pass.")).toBeInTheDocument();
     fireEvent.click(toggle);
     await waitFor(() => expect(onChange).toHaveBeenCalledWith({ ...config, collapseCompletedWork: !collapseCompletedWork }));
-    expect(onPreview).not.toHaveBeenCalled();
-  });
-});
-
-describe("AppearanceSection visual banner", () => {
-  it.each([false, true])("shows the %s miniature and saves the opposite choice", async (visualBanner) => {
-    const config: AppearanceConfig = { ...DEFAULT_APPEARANCE, visualBanner };
-    const { onChange, onPreview } = renderSection(config);
-    const toggle = screen.getByRole("switch", { name: "Visual banner" });
-    expect(toggle).toHaveAttribute("aria-checked", String(visualBanner));
-    const card = toggle.closest(".chat-preview-card") as HTMLElement;
-    // The miniature's head band is present only while the switch is on; the card body stays.
-    expect(card.querySelector(".mini-visual-head") !== null).toBe(visualBanner);
-    expect(card.querySelector(".mini-visual-body")).not.toBeNull();
-    fireEvent.click(toggle);
-    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ ...config, visualBanner: !visualBanner }));
     expect(onPreview).not.toHaveBeenCalled();
   });
 });

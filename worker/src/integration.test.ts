@@ -1153,6 +1153,7 @@ describe("Pi worker integration", () => {
       "memory_recall",
       "memory_save",
       "plan_mode_complete",
+      "preview_visual",
       "read",
       "read_chat",
       "show_visual",
@@ -1206,13 +1207,13 @@ describe("Pi worker integration", () => {
         "browser_console"
       ]
     });
-    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.length === 14);
+    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.length === 15);
     // `find`/`grep` availability varies by host; the companion stays on even without bash.
     const beforeSecondRun = provider.requests.length;
     worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-2", message: "Again." });
     await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.snapshot === undefined && provider.requests.length > beforeSecondRun);
 
-    expect(offered(provider.requests[beforeSecondRun])).toEqual(["ask_user_question", "bash_job", "canvas", "canvas_guide", "canvas_look", "edit", "plan_mode_complete", "read", "read_chat", "show_visual", "skill_creator", "suggest_task", "todo", "write"]);
+    expect(offered(provider.requests[beforeSecondRun])).toEqual(["ask_user_question", "bash_job", "canvas", "canvas_guide", "canvas_look", "edit", "plan_mode_complete", "preview_visual", "read", "read_chat", "show_visual", "skill_creator", "suggest_task", "todo", "write"]);
     expect(worker.child.exitCode).toBeNull();
   });
 
@@ -2160,6 +2161,60 @@ describe("built-in extensions", () => {
     const saved = cold.messages.flatMap((message) => message.blocks).find((block) => block.type === "tool-result" && block.images);
     expect(saved?.images?.[0]?.thumbnail).toMatch(/^data:image\//);
     expect(JSON.stringify(cold.messages)).not.toContain(sent);
+  });
+
+  it("retrieves an inlined visual outside the prompt queue and after restart with its original files gone", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-visual-document-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const image = solidPng(32, 24);
+    const imagePath = join(workspace, "local.png");
+    await writeFile(imagePath, Buffer.from(image, "base64"));
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "visual-document");
+    cleanup.push(() => worker.shutdown());
+    const html = `<img src="${imagePath}" alt="Saved picture">`;
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "visual-run", message: `mcp: show_visual ${JSON.stringify({ title: "Saved picture", html })}` });
+    const measure = await worker.waitFor((output) => output.type === "canvas_request");
+    expect(measure.request).toMatchObject({ op: "render", images: false, artboards: [
+      expect.objectContaining({ kind: "preview", width: 360 }),
+      expect.objectContaining({ kind: "preview", width: 560 }),
+      expect.objectContaining({ kind: "preview", width: 720 }),
+    ] });
+    worker.send({ id: crypto.randomUUID(), type: "canvas_response", requestId: measure.requestId, success: true, result: {
+      artboards: [360, 560, 720].map((width) => ({ id: `visual-${width}`, width, height: 900, contentHeight: 240, errors: [] }))
+    } });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "visual-run" && output.state === "idle");
+    const result = worker.view!.messages.flatMap((message) => message.blocks).find((block) => block.type === "tool-result" && block.toolName === "show_visual")!;
+    expect(result.details).toMatchObject({ v: 1, inlined: true });
+    expect(result.details).not.toHaveProperty("html");
+    const sessionFile = worker.view!.sessionFile!;
+    const cold = await readSavedSession({ sessionFile, taskId: "visual-document", mode: "build", thinkingLevel: "off" });
+    expect(JSON.stringify(cold.messages)).not.toContain(image);
+    // Native render requests carry the document; transcript and activity frames must not.
+    expect(JSON.stringify(worker.outputs.filter((output) => emitted(output) || output.type === "ready" || output.type === "activity"))).not.toContain(image);
+
+    // A live model request holds the serial queue. Visual retrieval must still answer.
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "held-run", message: "wait until stopped" });
+    await provider.waitForSlowRequest();
+    const fetch = crypto.randomUUID();
+    worker.send({ id: fetch, type: "visual_document", toolCallId: result.toolCallId });
+    const answer = await worker.waitFor((output) => output.type === "response" && output.id === fetch);
+    expect(answer).toMatchObject({ success: true, result: `<img src="data:image/png;base64,${image}" alt="Saved picture">` });
+    worker.send({ id: crypto.randomUUID(), type: "abort" });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "held-run" && output.state === "idle");
+    await worker.shutdown();
+    await rm(imagePath);
+
+    const restored = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "visual-document", sessionFile);
+    cleanup.push(() => restored.worker.shutdown());
+    const fetchSaved = crypto.randomUUID();
+    restored.worker.send({ id: fetchSaved, type: "visual_document", toolCallId: result.toolCallId });
+    expect(await restored.worker.waitFor((output) => output.type === "response" && output.id === fetchSaved)).toMatchObject({ success: true, result: answer.result });
+    const missing = crypto.randomUUID();
+    restored.worker.send({ id: missing, type: "visual_document", toolCallId: "missing" });
+    expect(await restored.worker.waitFor((output) => output.type === "response" && output.id === missing)).toMatchObject({ success: false, error: "That visual is no longer in this chat." });
+    expect(restored.worker.outputs.filter((output) => output.type === "worker_error")).toEqual([]);
   });
 
   it("keeps computer use off until it is switched on, then round-trips a screenshot while the prompt holds the queue", async () => {
@@ -5671,7 +5726,7 @@ describe("chat references", () => {
 
 describe("Chat mode", () => {
   const ALLOWED = new Set([
-    "read", "write", "edit", "ls", "grep", "find", "web_fetch", "web_search", "ask_user_question", "read_chat", "show_visual",
+    "read", "write", "edit", "ls", "grep", "find", "web_fetch", "web_search", "ask_user_question", "read_chat", "show_visual", "preview_visual",
     "memory_save", "memory_recall", "memory_forget",
     "browser_open", "browser_snapshot", "browser_act", "browser_screenshot", "browser_console",
   ]);

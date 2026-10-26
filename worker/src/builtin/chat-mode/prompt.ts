@@ -66,7 +66,7 @@ export function buildChatGuide({ activeTools, hasMcpTools, today, searchLabel }:
   }
   if (has(SHOW_VISUAL_TOOL_NAME)) {
     // The same words the tool carries as promptGuidelines in Code mode, where Pi serves them.
-    lines.push("", `Visual replies: ${VISUAL_GUIDE_LINES[0]} ${VISUAL_GUIDE_LINES[1]} ${VISUAL_GUIDE_LINES[2]} ${VISUAL_GUIDE_LINES[3]} ${VISUAL_GUIDE_LINES[4]} ${VISUAL_GUIDE_LINES[5]}`);
+    lines.push("", `Visual replies: ${VISUAL_GUIDE_LINES.join(" ")}`);
   }
   if (hasMcpTools) {
     lines.push("", "Connected tools: tools whose names start with mcp__ come from servers the user added. Use them when they fit, and say what you did.");

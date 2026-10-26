@@ -531,9 +531,6 @@ pub struct AppearanceConfig {
     /// Fold work steps only after completion; live work stays expanded. On by default.
     #[serde(default = "default_true")]
     pub collapse_completed_work: bool,
-    /// The title strip above a visual reply (title, Expand, Copy). Off draws the frame alone.
-    #[serde(default = "default_true")]
-    pub visual_banner: bool,
     /// `#rrggbb`; `None` is WackCode green, so a future default reaches users who never picked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accent: Option<String>,
@@ -572,6 +569,9 @@ pub struct AppearanceConfig {
     /// How much the background colour tints the glass, 0–90 %.
     #[serde(default = "default_glass_tint")]
     pub glass_tint: u8,
+    /// How the Code area's composer is drawn. Chat mode keeps its own messenger pill.
+    #[serde(default)]
+    pub composer_style: ComposerStyle,
     /// What the app calls the agent in its own copy ("Nova is working…"); `None` is WackCode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
@@ -642,6 +642,19 @@ pub enum GlassStyleSetting {
     Clear,
 }
 
+/// How the Code composer is drawn (Settings → Appearance). `ClassicGlass` uses a translucent
+/// pane over the app's own backdrop, so it needs the macOS 26 material the backdrop tile does.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ComposerStyle {
+    #[default]
+    Classic,
+    ClassicGlass,
+    Capsule,
+    Split,
+    Terminal,
+}
+
 /// How the thinking timer counts: whole seconds (`1s`) or tenths (`1.1s`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -680,7 +693,6 @@ impl Default for AppearanceConfig {
             message_bubbles: false,
             group_exploration: true,
             collapse_completed_work: true,
-            visual_banner: true,
             accent: None,
             background: None,
             backdrop: BackdropMode::Solid,
@@ -694,6 +706,7 @@ impl Default for AppearanceConfig {
             image_blur: default_image_blur(),
             glass_style: GlassStyleSetting::Frosted,
             glass_tint: default_glass_tint(),
+            composer_style: ComposerStyle::Classic,
             agent_name: None,
         }
     }

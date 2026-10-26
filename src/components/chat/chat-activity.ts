@@ -71,6 +71,7 @@ export function activityLabel(call: NormalizedBlock, live: boolean): { label: st
     case "ask_user_question": return { icon: "question", label: pick("Asking you", "Asked you") };
     // Only a visual that is still being drawn, or one that failed, reaches a chip: a settled one
     // is its own card (`ChatBubbles.tsx`).
+    case "preview_visual": return { icon: "visual", label: pick("Previewing a visual", "Previewed a visual") };
     case "show_visual": return { icon: "visual", label: join(pick("Drawing", "Drew"), str(a.title) ? quoted(str(a.title)) : "a visual") };
     case "browser_open": return { icon: "browser", label: join(pick("Opening", "Opened"), str(a.url) ? displayUrl(str(a.url)) : "the browser") };
     case "browser_snapshot": return { icon: "browser", label: pick("Reading the page", "Read the page") };

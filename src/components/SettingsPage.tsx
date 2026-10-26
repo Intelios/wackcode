@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import { api } from "../api";
 import { agentName } from "../agentName";
 import { modelIsReady } from "../model-utils";
-import { BROWSER_TOOL_NAMES, SHOW_VISUAL_TOOL_NAME, WEB_FETCH_TOOL_NAME } from "../tool-utils";
+import { BROWSER_TOOL_NAMES, VISUAL_TOOL_NAMES, WEB_FETCH_TOOL_NAME } from "../tool-utils";
 import { SUGGEST_TASK_TOOL_NAME } from "../suggestions";
 import { CANVAS_TOOL_NAMES } from "../canvas-state";
 import type { ExecutionPolicyConfig, AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CommandsConfig, ComputerAppGrant, ComputerUseConfig, GitConfig, McpConfig, MemoryConfig, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ToolCatalogEntry, WebConfig } from "../types";
@@ -347,11 +347,11 @@ export function SettingsPage({
             webSearchEnabled={web.enabled && web.providers.some((record) => record.id === web.activeProviderId)}
             onConfigureWeb={() => setSection("web")}
             browserEnabled={BROWSER_TOOL_NAMES.every((name) => !disabledTools.includes(name))}
-            visualEnabled={!disabledTools.includes(SHOW_VISUAL_TOOL_NAME)}
+            visualEnabled={VISUAL_TOOL_NAMES.every((name) => !disabledTools.includes(name))}
             onToggleVisual={(enabled) => onSetDisabledTools(
               enabled
-                ? disabledTools.filter((name) => name !== SHOW_VISUAL_TOOL_NAME)
-                : [...disabledTools.filter((name) => name !== SHOW_VISUAL_TOOL_NAME), SHOW_VISUAL_TOOL_NAME]
+                ? disabledTools.filter((name) => !(VISUAL_TOOL_NAMES as readonly string[]).includes(name))
+                : [...disabledTools.filter((name) => !(VISUAL_TOOL_NAMES as readonly string[]).includes(name)), ...VISUAL_TOOL_NAMES]
             )}
             canvasEnabled={CANVAS_TOOL_NAMES.every((name) => !disabledTools.includes(name))}
             onToggleCanvas={(enabled) => onSetDisabledTools(

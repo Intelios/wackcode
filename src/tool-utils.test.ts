@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bashExploreKind, currentVisualIds, diffStats, displayAgentName, editStats, exploreKind, firstSentence, groupTools, imageReadNote, parseSubagentDetails, parseWebSearchDetails, pendingSubagentDetails, pruneDisabledTools, sameToolCatalog, splitPathSubject, subagentDetailsFor, summarizeTool, toolPresentation } from "./tool-utils";
+import { bashExploreKind, currentVisualIds, diffStats, displayAgentName, editStats, exploreKind, firstSentence, groupTools, imageReadNote, parseSubagentDetails, parseVisualArgs, parseVisualDetails, parseWebSearchDetails, pendingSubagentDetails, pruneDisabledTools, sameToolCatalog, splitPathSubject, subagentDetailsFor, summarizeTool, toolPresentation } from "./tool-utils";
 import type { NormalizedBlock, NormalizedMessage, ToolCatalogEntry } from "./types";
 
 function call(toolName: string, args: unknown): NormalizedBlock {
@@ -344,5 +344,20 @@ describe("currentVisualIds", () => {
     const messages = [user("u1"), assistant("a1", [visual("v1")]), user("u2"), assistant("a2", [{ type: "text", text: "Sure" }])];
     expect([...currentVisualIds(messages)]).toEqual([]);
     expect([...currentVisualIds(messages, assistant("p", [visual("v2")]))]).toEqual(["v2"]);
+  });
+});
+
+describe("visual metadata", () => {
+  it("reads legacy arguments without needing result metadata", () => {
+    expect(parseVisualArgs({ type: "tool-call", arguments: { title: " Chart ", html: "<p>42</p>" } })).toEqual({ title: "Chart", html: "<p>42</p>" });
+    expect(parseVisualArgs({ type: "tool-call", arguments: { title: "", html: "<p>42</p>" } })).toBeUndefined();
+  });
+
+  it("keeps valid measurements and image markers, excluding the large document", () => {
+    expect(parseVisualDetails({ v: 1, title: "Chart", inlined: true, html: "huge", heights: [{ width: 720, height: 2000 }, { width: 0, height: 10 }, { width: 360, height: Infinity }, null] })).toEqual({
+      v: 1, title: "Chart", inlined: true, heights: [{ width: 720, height: 2000 }]
+    });
+    expect(parseVisualDetails({ v: 1, title: "Chart" })).toEqual({ v: 1, title: "Chart" });
+    expect(parseVisualDetails({ v: 2, title: "Chart" })).toBeUndefined();
   });
 });

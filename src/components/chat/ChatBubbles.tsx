@@ -270,7 +270,7 @@ export function AgentReply({ pieces, results, first, live, files, copyText, onRe
             const result = piece.call.toolCallId ? results.get(piece.call.toolCallId) : undefined;
             // Settled and successful is a card; anything else keeps today's chip, with its error.
             if (result && !result.isError && parseVisualArgs(piece.call)) {
-              return <div key={piece.key} className="chat-visual"><VisualCallCard block={piece.call} /></div>;
+              return <div key={piece.key} className="chat-visual"><VisualCallCard block={piece.call} result={result} /></div>;
             }
             return <ActivityChips key={piece.key} calls={[piece.call]} results={results} live={live} />;
           }

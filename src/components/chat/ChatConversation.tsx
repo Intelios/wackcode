@@ -88,11 +88,12 @@ export function ChatConversation({ task, messages, partial, running, compaction,
   // Only the newest answer's visuals may send; older cards keep working but go inert
   // (`VisualCard`), so a scrollback of widgets cannot each start a turn.
   const visualScope = useMemo<VisualScope>(() => ({
+    taskId: task.id,
     currentIds: currentVisualIds(messages, partial),
     busy: running,
     onSend: onVisualSend,
     onOpenLink: onVisualLink
-  }), [messages, partial, running, onVisualSend, onVisualLink]);
+  }), [task.id, messages, partial, running, onVisualSend, onVisualLink]);
 
   const entries = useMemo(() => clusterMessages(messages), [messages]);
   const latest = useMemo(() => latestTurn(messages), [messages]);

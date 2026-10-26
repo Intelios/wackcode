@@ -86,8 +86,14 @@ export function normalizeMessage(message: unknown, index: number, thinking: Thin
       block.toolName = typeof raw.toolName === "string" ? raw.toolName : undefined;
       block.toolCallId = typeof raw.toolCallId === "string" ? raw.toolCallId : undefined;
       block.isError = raw.isError === true;
-      // A sub-agent call's saved transcripts are the side panel's alone (`watch_subagent`).
-      if (raw.details !== undefined) block.details = raw.toolName === SUBAGENT_TOOL_NAME ? withoutTranscripts(raw.details) : raw.details;
+      // Large saved payloads are fetched on demand, never repeated across snapshot frames.
+      if (raw.details !== undefined) {
+        if (raw.toolName === SUBAGENT_TOOL_NAME) block.details = withoutTranscripts(raw.details);
+        else if (raw.toolName === "show_visual" && raw.details && typeof raw.details === "object" && !Array.isArray(raw.details)) {
+          const { html: _document, ...details } = raw.details as Record<string, unknown>;
+          block.details = details;
+        } else block.details = raw.details;
+      }
     }
   }
   const timestamp = typeof raw.timestamp === "number" ? raw.timestamp : undefined;

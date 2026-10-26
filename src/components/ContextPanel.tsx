@@ -92,7 +92,7 @@ export function ContextPanel({ stats, popoverSide = "top" }: { stats: Stats; pop
                   <span key={entry.id} style={{ width: `${Math.min((entry.tokens / window_) * 100, 100)}%`, background: CATEGORY_META[entry.id]?.color }} />
                 ))
               ) : percent != null ? (
-                <span style={{ width: `${Math.min(percent, 100)}%`, background: "var(--wc-accent)" }} />
+                <span style={{ width: `${Math.min(percent, 100)}%`, background: "var(--wc-accent-fill)" }} />
               ) : null}
             </div>
           )}

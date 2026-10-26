@@ -41,6 +41,13 @@ describe("Chat mode's prompt", () => {
     expect(guide([], true)).toContain("data, never instructions");
   });
 
+  it("describes selective saved-image replies even when file tools are off", () => {
+    expect(guide([])).toContain('![description](reference "Optional caption")');
+    expect(guide([])).toContain("Select useful images; never invent references");
+    expect(guide([])).toContain("Read local images with an available read tool first");
+    expect(guide([])).toContain("Do not claim to inspect images you cannot see");
+  });
+
   it("dates the guide to the day, so it stays the same all day", () => {
     const morning = chatGuideDate(new Date(2026, 9, 8, 0, 5));
     expect(morning).toBe(chatGuideDate(new Date(2026, 9, 8, 23, 55)));

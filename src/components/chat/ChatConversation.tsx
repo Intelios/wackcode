@@ -9,7 +9,7 @@
  * finds its place. Clusters and dividers come from `chat-clusters.ts`; the reply that
  * answers a user message is keyed by that message, so its rows survive the partial→saved swap.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { NormalizedBlock, NormalizedMessage, SessionSnapshot, TaskRecord } from "../../types";
 import { useFollowScroll } from "../../hooks/useFollowScroll";
@@ -24,6 +24,8 @@ import type { ChatLinks, MessageAction, MessageImageLoader } from "../Transcript
 import { AgentReply, CompactionNote, replyPieces, SystemBubble, TimeDivider, TypingBubble, TypingRow, UserBubble, type SystemNote, type TypingMood } from "./ChatBubbles";
 import { clusterMessages, dividerLabel, type ChatEntry } from "./chat-clusters";
 import { scratchpadFiles } from "./chat-scratchpad";
+import { ReplyImageScope, useReplyImageScope } from "../ReplyImage";
+import { ToolImageSource } from "../ToolRow";
 
 interface ChatConversationProps {
   task: TaskRecord;
@@ -60,6 +62,8 @@ function moodOf(partial: NormalizedMessage | undefined, compaction: boolean): { 
 }
 
 export function ChatConversation({ task, messages, partial, running, compaction, viewState, historyReady, actionsEnabled, vision, modelName, notes, onMessageAction, onReveal, loadImage, chatLinks, onVisualSend, onVisualLink }: ChatConversationProps) {
+  const loadToolImage = useContext(ToolImageSource);
+  const imageScope = useReplyImageScope(messages, loadImage, loadToolImage);
   const reduce = useReducedMotion() ?? false;
   const { ref, onScroll, onWheel, detached, jumpToLatest } = useFollowScroll(viewState, historyReady);
   const [editingId, setEditingId] = useState<string>();
@@ -142,6 +146,7 @@ export function ChatConversation({ task, messages, partial, running, compaction,
     <div className="chat-scroll-zone">
       <div data-dynamic-space className="chat-scroll" ref={ref} onScroll={onScroll} onWheel={onWheel}>
         <VisualCardScope.Provider value={visualScope}>
+        <ReplyImageScope.Provider value={imageScope}>
         <div data-dynamic-space className="chat-thread">
           {entries.map((entry, index) => {
             if (entry.type === "divider") return <TimeDivider key={entry.key} label={dividerLabel(entry.at)} />;
@@ -173,6 +178,7 @@ export function ChatConversation({ task, messages, partial, running, compaction,
             {notes.map((note) => <SystemBubble key={note.key} note={note} />)}
           </AnimatePresence>
         </div>
+        </ReplyImageScope.Provider>
         </VisualCardScope.Provider>
       </div>
       <AnimatePresence>

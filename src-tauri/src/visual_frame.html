@@ -29,6 +29,9 @@
 :root{
   --wc-accent: var(--accent);
   --wc-accent-hover: color-mix(in srgb, var(--accent) 78%, white);
+  /* Gradient themes only change surfaces inside the app; a frame gets the flat fill. */
+  --wc-accent-fill: var(--accent);
+  --wc-accent-fill-hover: var(--wc-accent-hover);
   --wc-accent-text: var(--accent-text);
   --wc-on-accent: var(--on-accent);
   --wc-accent-line: color-mix(in srgb, var(--accent) 40%, var(--border));

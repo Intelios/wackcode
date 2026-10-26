@@ -17,6 +17,7 @@ import { ExploreExpansion, ExploreGroup, ExploreGroupingEnabled, ExploreLaneWait
 import { ThoughtFlightScope } from "./thoughtFlight";
 import { Icon } from "./Icons";
 import { Markdown } from "./Markdown";
+import { ReplyImageScope, useReplyImageScope } from "./ReplyImage";
 import { MessageActions, type MessageActionItem } from "./MessageActions";
 import { MessageEditor } from "./MessageEditor";
 import { PlanCard, type PlanAction } from "./PlanCard";
@@ -30,7 +31,7 @@ import { SuggestionNote, SuggestionScopeContext, SuggestionTray, type Suggestion
 import { CanvasCard, CanvasScopeContext, type CanvasScope } from "./canvas/CanvasCard";
 import { SubagentGroup } from "./SubagentChip";
 import { ThinkingExpansion, ThinkingRow } from "./ThinkingRow";
-import { FLY, OrphanResult, ToolChips, ToolExpansion, ToolRow, useTranscriptMotion, type ChipCall } from "./ToolRow";
+import { FLY, OrphanResult, ToolChips, ToolExpansion, ToolImageSource, ToolRow, useTranscriptMotion, type ChipCall } from "./ToolRow";
 import { PonderingDuck } from "./PonderingDuck";
 import { useContextMenu } from "./ui/ContextMenu";
 import { useNavigationDismiss } from "./ui/NavigationScope";
@@ -160,7 +161,7 @@ type LocalAction = MessageAction | { type: "start-edit"; id: string } | { type: 
 
 function StreamingText({ text }: { text: string }) {
   const shown = useSmoothText(text, true);
-  return <div className="stream-text assistant-text"><Markdown streaming>{shown}</Markdown></div>;
+  return <div className="stream-text assistant-text"><Markdown streaming replyImages>{shown}</Markdown></div>;
 }
 
 export function MentionText({ text, chatRefs, chatLinks }: { text: string; chatRefs?: ChatRefRecord[]; chatLinks?: ChatLinks }) {
@@ -358,7 +359,7 @@ function renderBlock(
   if (streaming) return <StreamingText text={block.text} />;
   // `.assistant-text` is the bubble when Settings › Appearance › Message bubbles is on;
   // off it styles nothing and the prose lays out as it always has.
-  return <div className="assistant-text"><Markdown>{block.text}</Markdown></div>;
+  return <div className="assistant-text"><Markdown replyImages>{block.text}</Markdown></div>;
 }
 
 function renderSlots(
@@ -701,6 +702,8 @@ function activityLabel(activity?: string): string {
 }
 
 export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, compaction, runTimings = [], collapseCompletedWork = true, scopeKey = "", viewState, historyReady = true, status, liveToolText, liveToolDetails, planState, onPlanAction, onVisualSend, onVisualLink, skillDrafts, skillDraftsSaving, taskId, onSkillAction, loadSkillDocument, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind, loadImage, chatLinks, empty, suggestions, canvases }: Props) {
+  const loadToolImage = useContext(ToolImageSource);
+  const imageScope = useReplyImageScope(messages, loadImage, loadToolImage, Boolean(taskId));
   const scroll = useFollowScroll(viewState, historyReady);
   const { ref, onScroll, onWheel, detached, pauseFollowing, jumpToLatest } = scroll;
   const [expandedWork, setExpandedWork] = useState(() => viewState?.work ?? new Set<string>());
@@ -924,6 +927,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
           <VisualCardScope.Provider value={visualScope}>
           <SuggestionScopeContext.Provider value={suggestionScope}>
           <CanvasScopeContext.Provider value={canvases ?? NO_CANVASES}>
+          <ReplyImageScope.Provider value={imageScope}>
             <div className="transcript">
               {messages.map((message, messageIndex) => {
                 const turn = workTurns.get(messageIndex);
@@ -975,6 +979,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
               {!compaction && waiting && label && !laneWait && <WorkingPresence label={label} />}
               {rewindBar}
             </div>
+          </ReplyImageScope.Provider>
           </CanvasScopeContext.Provider>
           </SuggestionScopeContext.Provider>
           </VisualCardScope.Provider>

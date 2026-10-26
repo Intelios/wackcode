@@ -82,6 +82,13 @@ describe("coding prompt", () => {
     expect(guide()).toContain("Follow project instructions supplied by the app");
   });
 
+  it("keeps selective image replies in the app-owned guide even without tools", () => {
+    expect(guide()).toContain('![description](reference "Optional caption")');
+    expect(guide()).toContain("Select useful images; never invent references");
+    expect(guide()).toContain("Read local images with an available read tool first");
+    expect(guide()).toContain("file paths and remote image URLs cannot display");
+  });
+
   it("asks for the co-author trailer only while attribution names a model, Git repository or not", () => {
     const trailer = "Co-authored-by: GPT-5.6 (WackCode) <345377139+wackcode-agent[bot]@users.noreply.github.com>";
     expect(guide([], { coAuthor: "GPT-5.6" })).toContain(`Commit attribution: end each commit message you write with a blank line and then exactly this trailer, which names the model running now: ${trailer}. A final -m adds it correctly.`);

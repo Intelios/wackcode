@@ -512,7 +512,7 @@ mod tests {
         // the frame must answer those names, or the model's literal fallbacks take over.
         let store = VisualStore::new();
         let document = store.document(&store.stage("<p/>".into(), theme(), VisualKind::Reply).unwrap()).unwrap();
-        for name in ["--wc-accent:", "--wc-accent-line:", "--wc-toggle-on:", "--wc-knob:", "--wc-radius-card:", "--border-bright:", "--danger:"] {
+        for name in ["--wc-accent:", "--wc-accent-fill:", "--wc-accent-line:", "--wc-toggle-on:", "--wc-knob:", "--wc-radius-card:", "--border-bright:", "--danger:"] {
             assert!(document.contains(name), "{name} is missing from the frame's stylesheet");
         }
         // The frame is still served with its own policy.

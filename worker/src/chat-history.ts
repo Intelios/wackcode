@@ -100,6 +100,16 @@ function textOf(content: unknown): string {
   }).join("\n");
 }
 
+/** A saved image belongs to its original chat; another chat receives only its description. */
+function imageReferenceMarkers(text: string): string {
+  return text
+    .replace(/!\[((?:\\.|[^\]\\])*)\]\(\s*<?wackcode-image:\/\/[^\s<>)]*>?(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g, (_image, alt: string) => {
+      const label = clip(alt.replace(/\\([\\\[\]])/g, "$1"), MAX_ARGS_CHARS);
+      return label ? `[image: ${label}]` : "[image]";
+    })
+    .replace(/wackcode-image:\/\/[^\s<>)"'`]+/g, "[image]");
+}
+
 function toolCalls(content: unknown): string[] {
   if (!Array.isArray(content)) return [];
   return content.flatMap((block) => {
@@ -193,5 +203,5 @@ export function renderChatHistory(fileEntries: FileEntry[], meta: ChatHistoryMet
     }
   }
   if (turns.length === 0) blocks.push("[This chat has no saved messages.]");
-  return blocks.join("\n\n");
+  return imageReferenceMarkers(blocks.join("\n\n"));
 }

@@ -9,10 +9,58 @@ import { ExploreGroupingEnabled } from "./ExploreGroup";
 import { SubagentPanelLink } from "./SubagentChip";
 import { ThinkingPreviewEnabled } from "./ThinkingRow";
 import { Transcript } from "./Transcript";
+import { ToolImageSource } from "./ToolRow";
+import { ReplyImageScope } from "./ReplyImage";
+import { replyImages } from "../reply-images";
 
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+});
+
+describe("Transcript reply images", () => {
+  const thumbnail = "data:image/png;base64,dGh1bWI=";
+  const user: NormalizedMessage = { id: "image-user", entryId: "upload", role: "user", blocks: [{ type: "image" }] };
+  const answer: NormalizedMessage = { id: "image-answer", role: "assistant", stopReason: "stop", blocks: [
+    { type: "text", text: "Here it is.\n\n![Original screenshot](wackcode-image://entry/upload/0)" }
+  ] };
+
+  it("updates an image inside memoized prose when its source thumbnail arrives, and drops off-branch sources", () => {
+    const { rerender } = render(<Transcript taskId="chat" messages={[user, answer]} running={false} />);
+    expect(screen.getByRole("img", { name: "Preparing image: Original screenshot" })).toBeInTheDocument();
+    const ready = { ...user, blocks: [{ type: "image" as const, thumbnail }] };
+    rerender(<Transcript taskId="chat" messages={[ready, answer]} running={false} />);
+    expect(screen.getByRole("button", { name: "Open image: Original screenshot" })).toBeInTheDocument();
+    expect(screen.getByAltText("Original screenshot")).toHaveAttribute("src", thumbnail);
+    rerender(<Transcript taskId="chat" messages={[{ ...user, entryId: "other-upload", blocks: [] }, answer]} running={false} />);
+    expect(screen.getByRole("img", { name: "Image unavailable: Original screenshot" })).toBeInTheDocument();
+  });
+
+  it("keeps the selected image visible and loadable when its source work folds", async () => {
+    const loadTool = vi.fn().mockResolvedValue(undefined);
+    const history: NormalizedMessage[] = [
+      { ...user, blocks: [{ type: "text", text: "Show the finished UI" }] },
+      { id: "read", role: "assistant", stopReason: "toolUse", blocks: [{ type: "tool-call", toolCallId: "read-image", toolName: "read", arguments: { path: "screen.png" } }] },
+      { id: "image-result", entryId: "saved-result", role: "tool", blocks: [{ type: "tool-result", toolCallId: "read-image", text: "Read image", images: [{ imageId: "preview", thumbnail }] }] },
+      { ...answer, turn: { userEntryId: "upload", endEntryId: "finished" }, blocks: [{ type: "text", text: "![Finished UI](wackcode-image://entry/saved-result/0)" }] }
+    ];
+    render(<ToolImageSource.Provider value={loadTool}><Transcript taskId="chat" messages={history} running={false} /></ToolImageSource.Provider>);
+    expect(screen.getByRole("button", { name: /Show work transcript/ })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "Open image screen.png" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Open image: Finished UI" }));
+    expect(loadTool).toHaveBeenCalledWith("read-image", 0);
+    expect(screen.getByRole("dialog", { name: "Finished UI" })).toBeInTheDocument();
+    await act(async () => {});
+  });
+
+  it("does not let a sub-agent transcript inherit the parent image scope", () => {
+    const messages = [{ ...user, blocks: [{ type: "image" as const, thumbnail }] }, answer];
+    render(<ReplyImageScope.Provider value={{ images: replyImages(messages) }}>
+      <Transcript messages={messages} running={false} />
+    </ReplyImageScope.Provider>);
+    expect(screen.getByRole("img", { name: "Image unavailable: Original screenshot" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open image: Original screenshot" })).toBeNull();
+  });
 });
 
 describe("Transcript model switches", () => {

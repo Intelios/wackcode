@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { DEFAULT_ACCENT, DEFAULT_BACKGROUND, THEME_PRESETS, clampBackground, resolveTheme, swatchTint } from "../theme";
+import { DEFAULT_ACCENT, DEFAULT_BACKGROUND, THEME_PRESETS, accentGradient, clampBackground, presetFill, resolveTheme, swatchTint } from "../theme";
 import { DEFAULT_AGENT_NAME, agentName } from "../agentName";
 import type { ImageCrop } from "../backdrop-crop";
 import type { AppearanceConfig, BackdropMode, ComposerStyle, GlassStyle, ThinkingTimerPrecision } from "../types";
@@ -186,7 +186,7 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrlFo
                       <span className="theme-preset-line" style={{ background: variables["--border-bright"] }} />
                       <span className="theme-preset-line short" style={{ background: variables["--border"] }} />
                       <span className="theme-preset-composer" style={{ background: variables["--wc-composer"], borderColor: variables["--border-bright"] }}>
-                        <span className="theme-preset-send" style={{ background: preset.accent }} />
+                        <span className="theme-preset-send" style={{ background: presetFill(preset) }} />
                       </span>
                     </span>
                   </span>
@@ -199,9 +199,9 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrlFo
           <div className="appearance-pair">
             <ColourRow
               label="Accent colour"
-              description={theme.accentAdjusted ? "Lightened slightly on this background so it reads as text." : "Buttons, links, focus rings and highlights."}
+              description={theme.accentAdjusted ? "Lightened slightly on this background so it reads as text." : accentGradient(accent) ? "A spectrum on this theme — buttons, links, focus rings and highlights keep its colours." : "Buttons, links, focus rings and highlights."}
               value={accent}
-              choices={THEME_PRESETS.map((preset) => ({ name: preset.name, value: preset.accent }))}
+              choices={THEME_PRESETS.map((preset) => ({ name: preset.name, value: preset.accent, fill: preset.gradient ? presetFill(preset) : undefined }))}
               isDefault={!config.accent}
               disabled={busy}
               onPick={(value) => void save(withAccent(value))}
@@ -673,7 +673,8 @@ interface ColourRowProps {
   label: string;
   description: string;
   value: string;
-  choices: { name: string; value: string }[];
+  /** `fill` paints the dot when the choice is a gradient theme; `value` stays its accent. */
+  choices: { name: string; value: string; fill?: string }[];
   isDefault: boolean;
   disabled: boolean;
   /** Ring each swatch in its own lifted tint: the backgrounds are near-black and would
@@ -720,7 +721,7 @@ function ColourRow({ label, description, value, choices, isDefault, disabled, ti
             aria-label={`${choice.name} ${label.toLowerCase()}`}
             key={choice.value}
             className={`swatch ${tinted ? "swatch-tint" : ""}`}
-            style={fill(choice.value)}
+            style={choice.fill ? { background: choice.fill } : fill(choice.value)}
             disabled={disabled}
             onClick={() => onPick(choice.value)}
           />

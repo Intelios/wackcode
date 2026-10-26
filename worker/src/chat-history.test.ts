@@ -99,6 +99,27 @@ describe("renderChatHistory", () => {
   it("says so for a chat with no messages", () => {
     expect(renderChatHistory(session([]), { name: "Empty" })).toContain("[This chat has no saved messages.]");
   });
+
+  it("describes reply images without carrying another chat's image handles", () => {
+    const withImages = session([
+      message("u1", null, "user", "Show the result."),
+      message("a1", "u1", "assistant", [{ type: "text", text: [
+        "Here is the result: ![New layout](wackcode-image://entry/result/0)",
+        '![Dark \\] theme](<wackcode-image://entry/result/1> "Expanded")',
+        "![](wackcode-image://entry/attachment/0)",
+        "[Earlier image](wackcode-image://entry/result/0)",
+        "![Normal remote](https://example.com/image.png)",
+      ].join("\n") }]),
+      { type: "compaction", id: "c1", parentId: "a1", timestamp: "2026-01-01T00:00:00Z", summary: "Image: wackcode-image://entry/result/0" },
+    ]);
+    const rendered = renderChatHistory(withImages, { name: "Images" });
+    expect(rendered).toContain("Here is the result: [image: New layout]");
+    expect(rendered).toContain("[image: Dark ] theme]");
+    expect(rendered).toContain("\n[image]\n");
+    expect(rendered).toContain("![Normal remote](https://example.com/image.png)");
+    expect(rendered).toContain("Image: [image]");
+    expect(rendered).not.toContain("wackcode-image:");
+  });
 });
 
 describe("stripTailSections", () => {

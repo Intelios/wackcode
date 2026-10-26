@@ -12,6 +12,19 @@ function textOf(content) {
   return content.map((part) => typeof part?.text === "string" ? part.text : "").join("");
 }
 
+function promptOf(content) {
+  return textOf(content)
+    .replace(/<wackcode-image-references-v1>[\s\S]*?<\/wackcode-image-references-v1>/g, "")
+    .replace(/\(image omitted: model does not support images\)/g, "")
+    .trimEnd();
+}
+
+function toolImageCarrier(message) {
+  return message?.role === "user" && Array.isArray(message.content) && message.content.length > 1
+    && message.content[0]?.type === "text" && message.content[0].text === "Attached image(s) from tool result:"
+    && message.content.slice(1).every((part) => part?.type === "image_url");
+}
+
 const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
   if (request.method === "GET" && url.pathname === "/v1/models") {
@@ -46,19 +59,18 @@ const server = createServer(async (request, response) => {
   for await (const chunk of request) chunks.push(Buffer.from(chunk));
   const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
   const messages = Array.isArray(body.messages) ? body.messages : [];
-  // For a vision model Pi carries a tool result's images in a user message right after the tool
-  // reply; that message isn't the user speaking, so it never counts as the latest prompt.
-  const imageCarrier = (index) => messages[index]?.role === "user" && messages[index - 1]?.role === "tool";
-  const latestUser = [...messages].reverse().find((message, index) => message?.role === "user" && !imageCarrier(messages.length - 1 - index));
+  // Pi's synthetic vision carrier is not a new user prompt. It may follow an assistant bridge.
+  const latestUser = messages.findLast((message) => message?.role === "user" && !toolImageCarrier(message));
+  const prompt = promptOf(latestUser?.content);
   response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
-  if (textOf(latestUser?.content).toLowerCase().includes("wait until stopped")) {
+  if (prompt.toLowerCase().includes("wait until stopped")) {
     response.write(": waiting for cancellation\n\n");
     process.stdout.write("slow request started\n");
     return;
   }
   // A long, tool-free turn for dynamic backgrounds and streaming/scroll performance checks.
   // Stays entirely on localhost and can be stopped at any time from either area.
-  if (textOf(latestUser?.content).trim().toLowerCase() === "dynamic background fixture") {
+  if (prompt.trim().toLowerCase() === "dynamic background fixture") {
     const chunk = (delta, finish_reason = null) => send(response, {
       id: "fixture-dynamic", object: "chat.completion.chunk", created: 1, model: body.model,
       choices: [{ index: 0, delta, finish_reason }]
@@ -75,8 +87,7 @@ const server = createServer(async (request, response) => {
     if (!response.destroyed) { chunk({}, "stop"); response.end("data: [DONE]\n\n"); }
     return;
   }
-  const hasToolResult = messages.at(-1)?.role === "tool" || imageCarrier(messages.length - 1);
-  const prompt = textOf(latestUser?.content);
+  const hasToolResult = messages.at(-1)?.role === "tool" || toolImageCarrier(messages.at(-1));
   const background = prompt.toLowerCase().includes("background fixture");
   // Chat mode's confinement check: the write aims one folder above the workspace.
   const escape = prompt.toLowerCase().includes("escape fixture");
@@ -90,6 +101,12 @@ const server = createServer(async (request, response) => {
   const sinceUser = messages.slice(messages.lastIndexOf(latestUser) + 1);
   const calledTool = (name) => sinceUser.some((message) => message.role === "assistant" && message.tool_calls?.some((call) => call.function?.name === name));
   const offers = (name) => body.tools?.some((tool) => tool.function?.name === name);
+  // Attach an image, or name a local image after the colon, to exercise inline replies in
+  // either area. Read still goes through the real worker (including Chat's confinement).
+  const imageFixture = /^image reply fixture(?:[ \t]*:[ \t]*([^\n]+))?(?:\n|$)/i.exec(prompt);
+  const imageCall = imageFixture?.[1] && offers("read") && !calledTool("read")
+    ? { name: "read", arguments: JSON.stringify({ path: imageFixture[1].trim() }) }
+    : undefined;
   const canvasCall = canvasFixture && offers("canvas") && !calledTool("canvas")
     ? { name: "canvas", arguments: JSON.stringify(canvasFixtureArguments()) }
     : canvasFixture && offers("canvas_look") && calledTool("canvas") && !calledTool("canvas_look")
@@ -119,7 +136,7 @@ const server = createServer(async (request, response) => {
   const backgroundLaunched = messages.slice(messages.lastIndexOf(latestUser) + 1).some((message) => message.role === "assistant" && message.tool_calls?.some((call) => call.function?.name === "subagent"));
   const resultsArrived = prompt.includes("Job ");
   const backgroundLaunch = background && subagent && !backgroundLaunched && !resultsArrived;
-  if (backgroundLaunch || suggest || canvasCall || (!background && !suggestFixture && !canvasFixture && !child && !resultsArrived && !hasToolResult && body.tools?.length && (!browserMatch || browser) && (!computerMatch || computer))) {
+  if (backgroundLaunch || suggest || canvasCall || imageCall || (!background && !suggestFixture && !canvasFixture && !imageFixture && !child && !resultsArrived && !hasToolResult && body.tools?.length && (!browserMatch || browser) && (!computerMatch || computer))) {
     send(response, {
       id: "fixture-tool",
       object: "chat.completion.chunk",
@@ -134,8 +151,8 @@ const server = createServer(async (request, response) => {
             id: `fixture-tool-${messages.length}`,
             type: "function",
             function: {
-              name: backgroundLaunch ? "subagent" : canvasCall ? canvasCall.name : suggest ? "suggest_task" : browser ? browser.name : computer ? computer.name : search ? "web_search" : "write",
-              arguments: canvasCall ? canvasCall.arguments : suggest
+              name: backgroundLaunch ? "subagent" : imageCall ? imageCall.name : canvasCall ? canvasCall.name : suggest ? "suggest_task" : browser ? browser.name : computer ? computer.name : search ? "web_search" : "write",
+              arguments: imageCall ? imageCall.arguments : canvasCall ? canvasCall.arguments : suggest
                 ? JSON.stringify({
                   title: "Dismiss button stays disabled after a failed save",
                   kind: "bug",
@@ -161,12 +178,13 @@ const server = createServer(async (request, response) => {
       usage: { prompt_tokens: 30, completion_tokens: 12, total_tokens: 42 }
     });
   } else {
+    const imageReply = imageFixture ? imageFixtureReply([latestUser, ...sinceUser]) : undefined;
     send(response, {
       id: "fixture-done",
       object: "chat.completion.chunk",
       created: 2,
       model: body.model,
-      choices: [{ index: 0, delta: { role: "assistant", content: canvasFixture ? "Three themes for the billing page are on the canvas: **Base**, **Ember** and **Pine**, plus Base on a phone. Which direction should I take forward?" : suggestFixture ? "Layout fixed. I noted one follow-up below." : browserMatch ? "Browser fixture complete." : computerMatch ? "Computer fixture complete." : child ? "Background fixture child completed." : searchQuery ? "I searched the web; the results are in the card above." : resultsArrived ? "The background child finished; its result has arrived." : background ? "I launched a background helper and finished my own work. You can send another message while it runs." : escape ? "I tried to write `../wackcode-escape.txt`, outside the workspace." : "Created `wackcode-live.txt`." }, finish_reason: null }]
+      choices: [{ index: 0, delta: { role: "assistant", content: imageReply ?? (canvasFixture ? "Three themes for the billing page are on the canvas: **Base**, **Ember** and **Pine**, plus Base on a phone. Which direction should I take forward?" : suggestFixture ? "Layout fixed. I noted one follow-up below." : browserMatch ? "Browser fixture complete." : computerMatch ? "Computer fixture complete." : child ? "Background fixture child completed." : searchQuery ? "I searched the web; the results are in the card above." : resultsArrived ? "The background child finished; its result has arrived." : background ? "I launched a background helper and finished my own work. You can send another message while it runs." : escape ? "I tried to write `../wackcode-escape.txt`, outside the workspace." : "Created `wackcode-live.txt`.") }, finish_reason: null }]
     });
     send(response, {
       id: "fixture-done",
@@ -186,6 +204,17 @@ server.listen(port, "127.0.0.1", () => {
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => server.close(() => process.exit(0)));
+}
+
+function imageFixtureReply(messages) {
+  const references = new Set(messages.flatMap((message) =>
+    textOf(message?.content).match(/wackcode-image:\/\/entry\/[A-Za-z0-9_-]{1,256}\/(?:0|[1-9]\d*)(?!\d)/g) ?? []
+  ));
+  if (!references.size) return "Attach an image, or use `image reply fixture: /absolute/path/image.png`.";
+  const images = [...references].slice(0, 3).map((reference, index) =>
+    `![Selected image ${index + 1}](${reference} "Image ${index + 1}")`
+  );
+  return `Here are the selected images.\n\n${images.join("\n\n")}\n\nOpen an image to inspect it.`;
 }
 
 /** The canvas fixture's one drawing call: a themable base, two variants and a phone artboard. */

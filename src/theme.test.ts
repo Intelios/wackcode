@@ -159,6 +159,60 @@ describe("theme tokens", () => {
   });
 });
 
+describe("gradient accent presets", () => {
+  const gradientPresets = THEME_PRESETS.filter((preset) => preset.gradient);
+
+  it("has at least the four curated gradient themes", () => {
+    expect(gradientPresets.map((preset) => preset.id)).toEqual(
+      expect.arrayContaining(["solar", "lagoon", "verdant", "nebula"]),
+    );
+  });
+
+  it("keeps --wc-accent solid while --wc-accent-fill carries the spectrum", () => {
+    for (const preset of gradientPresets) {
+      const { variables } = resolveTheme(preset);
+      expect(variables["--wc-accent"], preset.name).toMatch(/^#[0-9a-f]{6}$/);
+      expect(variables["--wc-accent-fill"], preset.name).toBe(
+        `linear-gradient(135deg, ${preset.gradient!.join(", ")})`,
+      );
+      // Hover is a lifted copy of the same spectrum, not a flat colour.
+      expect(variables["--wc-accent-fill-hover"], preset.name).toMatch(/^linear-gradient\(/);
+      expect(variables["--wc-accent-fill-hover"], preset.name).not.toBe(variables["--wc-accent-fill"]);
+      // The Theme dynamic palette blooms in the gradient's own stops.
+      preset.gradient!.forEach((stop, index) => {
+        expect(variables[`--wc-dynamic-theme-${index + 1}`], `${preset.name} stop ${index}`).toBe(stop);
+      });
+    }
+  });
+
+  it("keeps dark on-accent text readable on every stop of every gradient", () => {
+    for (const preset of gradientPresets) {
+      const theme = resolveTheme(preset);
+      expect(theme.variables["--wc-on-accent"], preset.name).not.toBe("#f7f8f5");
+      for (const stop of preset.gradient!) {
+        expect(contrast(theme.variables["--wc-on-accent"], stop), `${preset.name} ${stop}`).toBeGreaterThanOrEqual(MIN_ACCENT_CONTRAST);
+      }
+    }
+  });
+
+  it("uses the flat accent fill for solid and custom themes", () => {
+    const solid = resolveTheme({ accent: "#6cc4ff" }).variables;
+    expect(solid["--wc-accent-fill"]).toBe("#6cc4ff");
+    expect(solid["--wc-accent-fill-hover"]).toBe(solid["--wc-accent-hover"]);
+    const custom = resolveTheme({ accent: "#123456" }).variables;
+    expect(custom["--wc-accent-fill"]).not.toMatch(/^linear-gradient/);
+  });
+
+  it("writes and clears the gradient on the root element when the theme changes", () => {
+    const root = document.createElement("div");
+    const solar = THEME_PRESETS.find((preset) => preset.id === "solar")!;
+    applyTheme(solar, root);
+    expect(root.style.getPropertyValue("--wc-accent-fill")).toContain("linear-gradient");
+    applyTheme({ accent: "#6cc4ff", background: "#0f1218" }, root);
+    expect(root.style.getPropertyValue("--wc-accent-fill")).toBe("#6cc4ff");
+  });
+});
+
 describe("visual replies' theme", () => {
   it("hands a visual the app's own colours and font", () => {
     const root = document.createElement("div");

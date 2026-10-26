@@ -23,6 +23,7 @@ import { CANVAS_TOOL_NAMES, createCanvasExtension } from "./canvas/index.js";
 import { type ComputerUseController, createComputerUseExtension } from "./computer-use/index.js";
 import { createAutoTitleExtension, type AutoTitleController } from "./auto-title.js";
 import { createImageBudgetExtension } from "./image-budget.js";
+import { createImageReferencesExtension } from "./image-references.js";
 import { type GoalController, createGoalExtension } from "./goal/index.js";
 import { type MemoryController, createMemoryExtension } from "./memory/index.js";
 import type { BuiltinHost } from "./host.js";
@@ -106,6 +107,7 @@ export function createBuiltinExtensions(host: BuiltinHost, options: {
   subagents = createSubagentsExtension(host, () => planMode.controller.getState().mode, webFetch, () => policy, webSearchExtension);
   const autoTitle = createAutoTitleExtension(host);
   const imageBudget: InlineExtension = { name: "wackcode-image-budget", factory: createImageBudgetExtension(), hidden: true };
+  const imageReferences: InlineExtension = { name: "wackcode-image-references", factory: createImageReferencesExtension(), hidden: true };
   const goal = createGoalExtension(host, () => planMode.controller.getState().mode !== "build");
   const memory = createMemoryExtension(() => options.isChat?.() ? "chat" : "project");
   const browser: InlineExtension = { name: "wackcode-browser", factory: createBrowserExtension(host), hidden: true };
@@ -134,6 +136,7 @@ export function createBuiltinExtensions(host: BuiltinHost, options: {
     factories: [
       // First: clean up foreground jobs before the goal loop can launch another round.
       { name: "wackcode-bash-jobs", factory: bashJobs.factory, hidden: true },
+      imageReferences,
       imageBudget,
       ask,
       { name: "wackcode-plan-mode", factory: planMode.factory, hidden: true },
@@ -162,6 +165,7 @@ export function createBuiltinExtensions(host: BuiltinHost, options: {
       }),
       ask,
       autoTitleExtension,
+      imageReferences,
       imageBudget,
       memoryExtension,
       webFetch,

@@ -55,6 +55,19 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("ChatArea", () => {
+  it("shows selected attachments and tool images inline in the agent reply", () => {
+    const thumbnail = "data:image/png;base64,dGh1bWI=";
+    renderArea({ task: task(), messages: [
+      msg("u1", "user", "Compare the screens", { entryId: "upload", blocks: [{ type: "text", text: "Compare the screens" }, { type: "image", thumbnail }] }),
+      { id: "result", entryId: "result-entry", role: "tool", blocks: [{ type: "tool-result", toolCallId: "screenshot", toolName: "browser_screenshot", text: "Screenshot", images: [{ imageId: "one", thumbnail }] }] },
+      msg("a1", "assistant", "Before.\n\n![Original](wackcode-image://entry/upload/0)\n\nAfter.\n\n![Updated](wackcode-image://entry/result-entry/0 \"New layout\")")
+    ] });
+    expect(screen.getByRole("button", { name: "Open image: Original" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open image: Updated" })).toBeInTheDocument();
+    expect(screen.getByAltText("Updated")).toHaveAttribute("src", thumbnail);
+    expect(screen.getByText("New layout")).toBeInTheDocument();
+  });
+
   it("shows the hero pond and ideas when no chat is selected, and fills the draft from an idea", () => {
     renderArea();
     expect(screen.getByRole("heading", { name: /What's on your mind\?/ })).toBeInTheDocument();

@@ -40,15 +40,41 @@ export const DEFAULT_APPEARANCE: AppearanceConfig = {
   composerStyle: "classic"
 };
 
-/** One-click accent + background pairs (Settings › Appearance). The first is the default. */
-export const THEME_PRESETS: { id: string; name: string; accent: string; background: string }[] = [
+/**
+ * One-click accent + background pairs (Settings › Appearance). The first is the default.
+ *
+ * A preset's `gradient` paints the accent's surfaces (buttons, badges, composer send and every
+ * other `--wc-accent-fill`) as a spectrum instead of a flat colour. `accent` stays its solid
+ * colour for text, mixes and borders — every stop must still read under `--wc-on-accent` — and
+ * the accent itself identifies the gradient, so picking the same accent in the colour row or
+ * a custom field keeps the spectrum. Gradients are 3-stop linear sweeps, away from Ultra's
+ * five-colour prism: Ultra's prism is identity, and these must never read as it.
+ */
+export const THEME_PRESETS: { id: string; name: string; accent: string; background: string; gradient?: string[] }[] = [
   { id: "wackcode", name: "WackCode", accent: DEFAULT_ACCENT, background: DEFAULT_BACKGROUND },
   { id: "midnight", name: "Midnight", accent: "#6cc4ff", background: "#0f1218" },
+  { id: "lagoon", name: "Lagoon", accent: "#5fd4c8", background: "#0d1517", gradient: ["#54e0a8", "#4fd4e0", "#6aa8f2"] },
+  { id: "verdant", name: "Verdant", accent: "#6fd99e", background: "#0a1410", gradient: ["#a8e268", "#4fd9a8", "#3ec9d4"] },
   { id: "grape", name: "Grape", accent: "#b69cff", background: "#14111b" },
+  { id: "nebula", name: "Nebula", accent: "#c085f0", background: "#1a0e20", gradient: ["#9f8cf7", "#d47ae8", "#f77fb2"] },
   { id: "rose", name: "Rosé", accent: "#ff8fb8", background: "#181114" },
+  { id: "solar", name: "Solar", accent: "#ff9f70", background: "#1c1606", gradient: ["#ffc15e", "#ff8a66", "#f26d9b"] },
   { id: "ember", name: "Ember", accent: "#ff9a5c", background: "#17120f" },
   { id: "mono", name: "Mono", accent: "#e6e6e6", background: "#111111" }
 ];
+
+/** The gradient a preset declares for its accent, undefined when none matches. */
+export function accentGradient(accent: string): string[] | undefined {
+  const rgb = parseHex(accent);
+  if (!rgb) return undefined;
+  const hex = toHex(rgb);
+  return THEME_PRESETS.find((preset) => preset.gradient && toHex(parseHex(preset.accent)!) === hex)?.gradient;
+}
+
+/** The CSS image behind accent surfaces: the gradient when one exists, else the accent. */
+export function presetFill(input: { accent: string; gradient?: string[] }, angle = 135): string {
+  return input.gradient ? `linear-gradient(${angle}deg, ${input.gradient.join(", ")})` : input.accent;
+}
 
 type Rgb = [number, number, number];
 type Lab = [number, number, number];
@@ -385,6 +411,23 @@ export function resolveTheme(input: ThemeInput): ResolvedTheme {
   variables["--bg"] = background;
   // Mid-tone accents may not reach 4.5:1 with either; take whichever reads better.
   if (contrast(NEAR_WHITE, accent) > contrast(variables["--wc-on-accent"], accent)) variables["--wc-on-accent"] = NEAR_WHITE;
+
+  // Accent-painted surfaces (`--wc-accent-fill`) may carry a gradient while `--wc-accent` stays
+  // a single colour: color-mix, borders and text need a solid. The gradient belongs to the
+  // picked accent, so a lightened-but-unmatched accent keeps its own solid fill. Its Theme
+  // dynamic palette blooms in the same three colours.
+  const gradient = accentGradient(pickedAccent);
+  variables["--wc-accent-fill"] = accent;
+  variables["--wc-accent-fill-hover"] = variables["--wc-accent-hover"];
+  if (gradient) {
+    const lifted = gradient.map((stop) => {
+      const lch = toLch(parseHex(stop)!);
+      return toHex(fromLch({ ...lch, l: Math.min(1, lch.l + 0.04) }));
+    });
+    variables["--wc-accent-fill"] = presetFill({ accent, gradient });
+    variables["--wc-accent-fill-hover"] = presetFill({ accent, gradient: lifted });
+    gradient.forEach((stop, index) => { variables[`--wc-dynamic-theme-${index + 1}`] = stop; });
+  }
   Object.assign(variables, shellVariables(input.backdrop ?? "solid", variables, input.glassTint ?? DEFAULT_APPEARANCE.glassTint));
 
   return {

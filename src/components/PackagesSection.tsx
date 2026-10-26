@@ -89,6 +89,13 @@ const BUILTIN_EXTENSIONS: readonly BuiltinExtension[] = [
     kind: "browser"
   },
   {
+    name: "Images in replies",
+    description:
+      "Lets the agent include selected screenshots, image files it reads and your attachments alongside its reply in Code and Chat. Click an image to open it full size. The saved images stay with the chat, even when their source files move or disappear.",
+    tools: [],
+    icon: "image"
+  },
+  {
     name: "Visual replies",
     description:
       "Lets the agent answer with a chart, a comparison, a diagram or a small interactive mockup drawn right in the conversation — in Chat mode and in Code chats. The agent can preview its work and include local images. A visual runs sandboxed with no network access at all, and a button in one can send a message on your behalf only when you click it.",

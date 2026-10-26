@@ -161,6 +161,17 @@ never chose.
 
 Enabled only for `$APPDATA/backgrounds/*`. Only `choose_background_image` writes there: the native picker opens in Rust and the file is checked by magic bytes. The renderer never passes it a path. Don't widen the scope.
 
+## Images in replies
+
+Assistant prose can include `wackcode-image://entry/<entryId>/<imageIndex>` references to images
+already saved in that chat. These are identifiers, not a registered protocol: the renderer
+resolves them against the current branch and displays only its saved thumbnails. Full images
+use the existing `message_image` and `tool_image` commands, which check the branch again.
+Remote URLs, file paths and model-supplied data URLs stay blocked; no network, filesystem or
+asset-protocol access is added. Chat mode can reuse its attachments and tool images, while new
+local files still pass through its confined `read` tool. Other chats receive descriptive image
+markers through `read_chat`, never reusable image references.
+
 ## Computer use
 
 Off by default. Rust `computer_use/` is the security boundary; the worker's tools only describe requests.

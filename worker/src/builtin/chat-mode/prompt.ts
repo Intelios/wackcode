@@ -15,6 +15,7 @@ import { MEMORY_SAVE_TOOL_NAME } from "../memory/index.js";
 import { WEB_FETCH_TOOL_NAME } from "../web-fetch/index.js";
 import { WEB_SEARCH_TOOL_NAME } from "../web-search/index.js";
 import { SHOW_VISUAL_TOOL_NAME, VISUAL_GUIDE_LINES } from "../visual.js";
+import { IMAGE_REPLY_GUIDANCE } from "../image-references.js";
 
 export const DEFAULT_CHAT_PROMPT = `You are a helpful, knowledgeable assistant in a desktop chat app. People come to you to think things through, learn, write, plan, analyse and get everyday things done.
 
@@ -41,7 +42,7 @@ export function buildChatGuide({ activeTools, hasMcpTools, today, searchLabel }:
   const web = has(WEB_FETCH_TOOL_NAME);
   const search = has(WEB_SEARCH_TOOL_NAME);
   const browser = has(BROWSER_OPEN_TOOL_NAME);
-  const lines = ["## Working in this chat", "", `Today is ${today}.`];
+  const lines = ["## Working in this chat", "", `Today is ${today}.`, "", IMAGE_REPLY_GUIDANCE];
   if (files.length > 0) {
     lines.push("", `Files: this chat has a private scratchpad folder, which is your working directory. Your file tools (${files.join(", ")}) work only inside it and anything outside is refused, so do not try. Use it for drafts and for files the user asks you to make, and say the file's name when you create or change one. The user opens the folder with the Reveal scratchpad button and can drop files into it for you to read.`);
   } else {

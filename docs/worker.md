@@ -107,9 +107,18 @@ turn, whatever the model, so a chat's images are bounded twice:
 The budget never changes the session: it rewrites only the copy Pi sends, so the transcript, the
 lightbox and `tool_image` keep every original. Sub-agents load it too.
 
+Before the budget, parent chats also run `builtin/image-references.ts`. It matches each
+request's user and tool-result images to one saved source in Pi's session projection, by role,
+timestamp and image contents (plus tool-call id for results), then adds complete
+`wackcode-image://entry/<entryId>/<imageIndex>` references to the request copy. Unmatched or
+ambiguous images get no reference. The agent can select these in Markdown replies in either
+area; pruning pixels leaves the references usable. Nothing is added to saved source messages,
+and sub-agents do not load this extension. `read_chat` reduces reply images to descriptive
+markers rather than passing another chat's references along.
+
 ## Built-in extensions (`worker/src/builtin/`)
 
-WackCode's own extensions load as inline factories, so they bypass the package trust gate by construction. They are: `ask-user-question`, `auto-title`, `bash-jobs`, `browser`, `canvas`, `chat-refs`, `computer-use`, `goal`, `image-budget`, `mcp`, `memory`, `plan-mode`, `skill-creator`, `subagents`, `suggest-task`, `todo`, `visual`, `web-fetch`, `web-search`, and `chat-mode`, a guard with no tools of its own that only Chat mode chats load.
+WackCode's own extensions load as inline factories, so they bypass the package trust gate by construction. They are: `ask-user-question`, `auto-title`, `bash-jobs`, `browser`, `canvas`, `chat-refs`, `computer-use`, `goal`, `image-budget`, `image-references`, `mcp`, `memory`, `plan-mode`, `skill-creator`, `subagents`, `suggest-task`, `todo`, `visual`, `web-fetch`, `web-search`, and `chat-mode`, a guard with no tools of its own that only Chat mode chats load.
 
 - Adding or renaming one also updates `BUILTIN_EXTENSIONS` in `src/components/PackagesSection.tsx`, which shows them so nobody installs a duplicate package.
 - Sub-agents never get browser, computer-use, MCP, memory, visual, canvas or suggestion tools, or skills. A child session loads its role's tool allowlist, its own shell check-in extension and the extensions the built-in hands it.

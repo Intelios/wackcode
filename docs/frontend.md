@@ -23,6 +23,14 @@ The composer never states the active policy: a persistent read-only badge lived 
 
 Images a tool returned (a picture `read`, a screenshot, an MCP tool's output) show as small previews under the tool's row or chip strip (`ToolImages`), each opening in `ui/ImageLightbox` with the original from `api.toolImage`. Inside a folded Explored group they sit in a captioned strip under the fold and move under their own chips when it opens. Chat mode's chips show the same previews inline.
 
+Assistant prose in Code and Chat can select saved images with Markdown references of the form
+`![Description](wackcode-image://entry/<entryId>/<imageIndex> "Optional caption")`.
+`ReplyImageScope` indexes only the current branch's user attachments and tool-result images;
+`ReplyImage` renders their thumbnails and opens the existing lightbox through `messageImage`
+or `toolImage`. The internal reference is never an image URL the webview loads. Images stay in
+the answer when source tool rows fold, and scope updates deliver newly prepared previews to
+memoized replies. Other Markdown surfaces keep images blocked, including child transcripts.
+
 **Visual replies** (`VisualCard.tsx`) draw a settled `show_visual` call where it landed: the
 assistant's small HTML answer — a chart, a comparison, a mockup — as a borderless document in the
 conversation. Expand and Copy float over its top-right corner on hover and keyboard focus;

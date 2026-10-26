@@ -2,10 +2,10 @@
  * Shared react-markdown component overrides, used by `Markdown.tsx` for the transcript, plans,
  * sub-agent output and thinking rows. `pre` is where syntax highlighting happens: the fenced
  * block's `code` child is re-rendered from highlight.js tokens (src/highlight.ts), with a
- * hover-revealed copy action using the original text. Inline code needs no override at all. The img override is
- * the original from Markdown.tsx; the a override intercepts clicks (the webview cannot open
- * links itself) and routes http(s) URLs
- * through `api.revealPath`.
+ * hover-revealed copy action using the original text. Inline code needs no override at all.
+ * Only assistant prose opts into saved image references; every other image stays blocked.
+ * The a override intercepts clicks (the webview cannot open links itself) and routes http(s)
+ * URLs through `api.revealPath`.
  *
  * `streamingTail` gates streaming: it carries the content of a fence that is still being
  * written (openFenceTail), and any block matching it renders plain so a growing fence neither
@@ -20,8 +20,12 @@ import { api } from "./api";
 import { highlightBlock } from "./highlight";
 import { Icon } from "./components/Icons";
 import { CopyButton } from "./components/ui/CopyButton";
+import { ReplyImage } from "./components/ReplyImage";
+import { parseReplyImageReference } from "./reply-images";
 
 interface ComponentsOptions {
+  /** Assistant prose alone may resolve saved images supplied by its transcript. */
+  replyImages?: boolean;
   /** Content of the trailing unterminated fence while streaming; undefined once settled. */
   streamingTail?: string;
   /** Fresh ink (a live thinking body): word-split the source's final block so newly written
@@ -136,12 +140,20 @@ function inkWords(children: ReactNode): ReactNode {
   });
 }
 
+function containsImage(node: Element | undefined): boolean {
+  return node?.tagName === "img" || Boolean(node?.children.some((child) => child.type === "element" && containsImage(child)));
+}
+
 export function markdownComponents(options: ComponentsOptions = {}): Components {
   const streamingTail = options.streamingTail;
   const base: Components = {
     pre: ({ node, children }) => <CodePre node={node} streamingTail={streamingTail}>{children}</CodePre>,
-    img: ({ alt }) => <span className="blocked-image">[Remote image blocked{alt ? `: ${alt}` : ""}]</span>,
-    a: ({ href, children: linkChildren }) => (
+    img: ({ src, alt, title }) => options.replyImages && typeof src === "string" && (parseReplyImageReference(src) || src === "wackcode-image://unavailable")
+      ? <ReplyImage key={src} reference={src} alt={alt} caption={title} />
+      : <span className="blocked-image">[Image blocked{alt ? `: ${alt}` : ""}]</span>,
+    a: ({ href, children: linkChildren, node }) => options.replyImages && containsImage(node)
+      ? <span>{linkChildren}</span>
+      : (
       <a
         href={href}
         target="_blank"

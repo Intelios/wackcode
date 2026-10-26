@@ -168,7 +168,7 @@ export const UserBubble = memo(function UserBubble({ message, first, actionsEnab
 /** Text that types itself in while it streams. */
 function StreamingProse({ text }: { text: string }) {
   const shown = useSmoothText(text, true);
-  return <Markdown streaming>{shown}</Markdown>;
+  return <Markdown streaming replyImages>{shown}</Markdown>;
 }
 
 function ThoughtCaption({ text }: { text: string }) {
@@ -281,7 +281,7 @@ export function AgentReply({ pieces, results, first, live, files, copyText, onRe
               // A reply pops out of the duck's beak: from the avatar's corner.
               initial={reduce || !live ? false : { opacity: 0, scale: 0.86, x: -10 }}
               animate={{ opacity: 1, scale: 1, x: 0 }} transition={SPRING} style={{ transformOrigin: "0% 0%" }}>
-              {piece.streaming ? <StreamingProse text={piece.text} /> : <Markdown>{piece.text}</Markdown>}
+              {piece.streaming ? <StreamingProse text={piece.text} /> : <Markdown replyImages>{piece.text}</Markdown>}
             </motion.div>
           );
         })}

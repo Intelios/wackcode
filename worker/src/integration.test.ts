@@ -219,7 +219,9 @@ class WorkerHarness {
       const match = this.outputs.find(predicate);
       if (match) return match;
       if (Date.now() - started >= timeoutMs) {
-        throw new Error(`Timed out waiting for worker output. stderr: ${this.stderr}\noutputs: ${JSON.stringify(this.outputs)}`);
+        const recent = JSON.stringify(this.outputs.slice(-20), (key, value) =>
+          key === "view" || key === "snapshot" ? undefined : typeof value === "string" && value.length > 500 ? `${value.slice(0, 500)}…` : value);
+        throw new Error(`Timed out waiting for worker output. stderr: ${this.stderr}\nrecent outputs: ${recent}`);
       }
       await new Promise<void>((resolvePromise) => {
         const timer = setTimeout(resolvePromise, 50);
@@ -343,13 +345,27 @@ async function startMockProvider(): Promise<MockProvider> {
   };
 }
 
+function isToolImageCarrier(message: { role?: string; content?: unknown }): boolean {
+  if (message.role !== "user" || !Array.isArray(message.content) || message.content.length < 2) return false;
+  const [head, ...images] = message.content as Array<{ type?: string; text?: string }>;
+  // Pi's OpenAI adapter moves tool pixels into this synthetic user message. Real steering
+  // and follow-ups can also immediately follow a tool result, so role adjacency is not enough.
+  return head.type === "text" && head.text === "Attached image(s) from tool result:"
+    && images.every((part) => part.type === "image_url");
+}
+
+function latestUserIndex(messages: readonly { role?: string; content?: unknown }[]): number {
+  return messages.findLastIndex((message) => message.role === "user" && !isToolImageCarrier(message));
+}
+
 function userTextOf(body: Record<string, unknown>): string {
   const messages = Array.isArray(body.messages) ? body.messages as Array<{ role?: string; content?: unknown }> : [];
-  const lastUser = [...messages].reverse().find((message) => message.role === "user");
+  const lastUser = messages[latestUserIndex(messages)];
   if (typeof lastUser?.content === "string") return lastUser.content;
   if (!Array.isArray(lastUser?.content)) return "";
   return (lastUser.content as Array<{ type?: string; text?: string }>)
-    .filter((part) => part.type === "text")
+    .filter((part) => part.type === "text" && !part.text?.trimStart().startsWith("<wackcode-image-references-v1>")
+      && part.text !== "(image omitted: model does not support images)")
     .map((part) => part.text ?? "")
     .join("");
 }
@@ -366,7 +382,7 @@ type ProviderMessage = {
 
 function messagesAfterUser(body: Record<string, unknown>): ProviderMessage[] {
   const messages = (body.messages ?? []) as ProviderMessage[];
-  return messages.slice(messages.map((message) => message.role).lastIndexOf("user") + 1);
+  return messages.slice(latestUserIndex(messages) + 1);
 }
 
 function toolResultContents(body: Record<string, unknown>): string[] {
@@ -514,6 +530,31 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
     response.end("data: [DONE]\n\n");
     return;
   }
+  const imageReply = /^image reply:(?: ([^\n]+))?/.exec(userText);
+  if (imageReply) {
+    const providerMessages = body.messages as ProviderMessage[];
+    const latestUser = latestUserIndex(providerMessages);
+    const hasRead = providerMessages.slice(latestUser + 1).some((message) => message.tool_calls?.some((call) => call.function.name === "read"));
+    const path = imageReply[1];
+    const refs = [...new Set(providerMessages.filter((message) => message.role === "user" || message.role === "tool").flatMap((message) =>
+      JSON.stringify(message.content).match(/wackcode-image:\/\/entry\/[A-Za-z0-9_-]{1,256}\/(?:0|[1-9]\d*)/g) ?? []))];
+    const content = refs.length
+      ? `Here are the selected images.\n\n${refs.map((ref, index) => `![Selected image ${index + 1}](${ref} "View ${index + 1}")`).join("\n\n")}\n\nThese remain saved with this chat.`
+      : "No images available.";
+    send({
+      id: "image-reply", object: "chat.completion.chunk", created: 1, model: "shared-model",
+      choices: [{ index: 0, delta: path && !hasRead
+        ? { role: "assistant", tool_calls: [{ index: 0, id: "image-reply-read", type: "function", function: { name: "read", arguments: JSON.stringify({ path }) } }] }
+        : { role: "assistant", content }, finish_reason: null }]
+    });
+    send({
+      id: "image-reply", object: "chat.completion.chunk", created: 1, model: "shared-model",
+      choices: [{ index: 0, delta: {}, finish_reason: path && !hasRead ? "tool_calls" : "stop" }],
+      usage: { prompt_tokens: 20, completion_tokens: 8, total_tokens: 28 }
+    });
+    response.end("data: [DONE]\n\n");
+    return;
+  }
   // The last user message steers which tool the fake model "decides" to call, so tests can
   // exercise specific tool paths through the real agent loop. Content arrives as an array
   // of parts, not a bare string. A sub-agent's last user message is its task, so "child-"
@@ -557,7 +598,7 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
     return;
   }
   // These scripts call their tool once per prompt, so one chat can make several calls.
-  const answeredSinceUser = messages.slice(messages.map((message) => message.role).lastIndexOf("user") + 1).some((message) => message.role === "tool");
+  const answeredSinceUser = messagesAfterUser(body).some((message) => message.role === "tool");
   const repeatable = lastUserText.startsWith("mcp: ") || lastUserText.startsWith("subagent ") || lastUserText.startsWith("child-") || lastUserText.startsWith("finish plan");
   const backgroundText = lastUserText.startsWith("The user has set a goal.")
     ? /<objective>\n([^\n]+)\n<\/objective>/.exec(lastUserText)?.[1] ?? lastUserText : lastUserText;
@@ -1766,7 +1807,7 @@ describe("compaction continuity", () => {
     const timestamp = Date.now() - 60_000;
     const input = reason === "overflow" ? 28 : 55_000;
     const usage = { input, output: 4, cacheRead: 0, cacheWrite: 0, totalTokens: input + 4, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
-    const assistant = (id: string, parentId: string) => ({ type: "message", id, parentId, timestamp: new Date(timestamp).toISOString(), message: { role: "assistant", content: [{ type: "text", text: id }], api: "openai-completions", provider: "provider-compaction", model: "shared-model", usage, stopReason: "stop", timestamp } });
+    const assistant = (id: string, parentId: string, text = id) => ({ type: "message", id, parentId, timestamp: new Date(timestamp).toISOString(), message: { role: "assistant", content: [{ type: "text", text }], api: "openai-completions", provider: "provider-compaction", model: "shared-model", usage, stopReason: "stop", timestamp } });
     const image = solidPng(24, 24);
     const oldText = "Compacted source prompt. " + "Earlier context. ".repeat(8_000);
     const entries = [
@@ -1774,7 +1815,7 @@ describe("compaction continuity", () => {
       { type: "message", id: "initial-user", parentId: null, message: { role: "user", timestamp, content: "Initial task." } },
       assistant("initial-answer", "initial-user"),
       { type: "message", id: "old-user", parentId: "initial-answer", message: { role: "user", timestamp, content: [{ type: "text", text: oldText }, { type: "image", data: solidPng(12, 12), mimeType: "image/png" }] } },
-      assistant("old-answer", "old-user"),
+      assistant("old-answer", "old-user", "Earlier attachment:\n\n![Earlier attachment](wackcode-image://entry/old-user/0)"),
       { type: "context_edit", id: "image-edit", parentId: "old-answer", targetId: "old-user", replacement: { content: [{ type: "text", text: oldText }, { type: "image", data: image, mimeType: "image/png" }] } },
       { type: "custom", id: "old-timing", parentId: "image-edit", customType: "wackcode-run-timing", data: { version: 1, runId: "old", userMessageEntryId: "old-user", startedAt: timestamp - 3_000, endedAt: timestamp, durationMs: 3_000 } },
       { type: "message", id: "latest-user", parentId: "old-timing", message: { role: "user", timestamp, content: "Latest source prompt." } },
@@ -1817,6 +1858,7 @@ describe("compaction continuity", () => {
     expect(compacted.compaction).toBeUndefined();
     expect(worker.outputs.filter((output) => output.type === "worker_error").map((output) => output.message)).toEqual([]);
     expect(compacted.messages.filter((message) => !message.compaction)).toEqual(before.messages);
+    expect(compacted.messages.find((message) => message.id === "old-answer")?.blocks[0]?.text).toContain("![Earlier attachment](wackcode-image://entry/old-user/0)");
     expect(compacted.runTimings).toEqual(before.runTimings);
     const marker = compacted.messages.find((message) => message.compaction);
     expect(marker?.compaction).toMatchObject({ summary: expect.stringContaining("Continue the fixture"), tokensBefore: expect.any(Number), estimatedTokensAfter: expect.any(Number) });
@@ -3239,6 +3281,83 @@ describe("custom prompts (Settings → Prompts)", () => {
     const after = messageTextOf(provider, provider.requests.length - 1);
     expect(after).toContain("Custom plan rules, second take.");
     expect(after.lastIndexOf("second take.")).toBeGreaterThan(after.lastIndexOf("first take."));
+  });
+});
+
+describe("inline image replies", () => {
+  it.each([
+    ["code", true], ["chat", true], ["code", false], ["chat", false],
+  ] as const)("selects saved attachments and a read image in %s with vision %s, preserving references through restart and rewind", async (kind, vision) => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-image-reply-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const picturePath = join(workspace, "shot.png");
+    const picture = solidPng(1200, 300);
+    await writeFile(picturePath, Buffer.from(picture, "base64"));
+    const attachments = [solidPng(600, 300), solidPng(640, 200)].map((data) => ({ type: "image", data, mimeType: "image/png" }));
+    const taskId = `image-reply-${kind}-${vision}`;
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, taskId,
+      undefined, undefined, undefined, undefined, vision, { kind });
+    cleanup.push(() => worker.shutdown());
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "select-images", message: "image reply: shot.png", images: attachments });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "select-images" && output.state === "idle");
+    await worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) =>
+      message.role === "tool" && message.blocks.some((block) => block.images?.[0]?.thumbnail !== undefined)) === true);
+    const user = worker.view!.messages.find((message) => message.role === "user")!;
+    const tool = worker.view!.messages.find((message) => message.role === "tool" && message.blocks.some((block) => block.toolName === "read"))!;
+    const toolCallId = tool.blocks.find((block) => block.toolName === "read")!.toolCallId!;
+    const references = [
+      `wackcode-image://entry/${user.entryId}/0`,
+      `wackcode-image://entry/${user.entryId}/1`,
+      `wackcode-image://entry/${tool.entryId}/0`,
+    ];
+    const answer = worker.view!.messages.filter((message) => message.role === "assistant").flatMap((message) => message.blocks)
+      .filter((block) => block.type === "text").map((block) => block.text).join("\n");
+    references.forEach((reference, index) => expect(answer).toContain(`![Selected image ${index + 1}](${reference} "View ${index + 1}")`));
+    expect(provider.requests).toHaveLength(2);
+    expect(JSON.stringify(provider.requests[0].body.messages)).toContain(references[0]);
+    expect(JSON.stringify(provider.requests[0].body.messages)).toContain(references[1]);
+    expect(JSON.stringify(provider.requests[0].body.messages)).not.toContain(references[2]);
+    expect(JSON.stringify(provider.requests[1].body.messages)).toContain(references[2]);
+    // References augment only the provider copy. Saved source messages and snapshots retain
+    // their original text, while the assistant's deliberate Markdown is ordinary saved prose.
+    for (const source of [user, tool]) expect(JSON.stringify(source.blocks)).not.toContain("wackcode-image-references-v1");
+    const sessionFile = worker.view!.sessionFile!;
+    const savedSources = (await readFile(sessionFile, "utf8")).trim().split("\n").map((line) => JSON.parse(line))
+      .filter((entry) => entry.type === "message" && (entry.message.role === "user" || entry.message.role === "toolResult"));
+    expect(JSON.stringify(savedSources)).not.toContain("wackcode-image://");
+    expect(JSON.stringify(savedSources)).not.toContain("wackcode-image-references-v1");
+    const cold = await readSavedSession({ sessionFile, taskId, mode: "build", thinkingLevel: "high" });
+    references.forEach((reference) => expect(JSON.stringify(cold.messages)).toContain(reference));
+    expect(cold.messages.find((message) => message.entryId === user.entryId)?.blocks.filter((block) => block.type === "image")).toHaveLength(2);
+    expect(cold.messages.find((message) => message.entryId === tool.entryId)?.blocks.some((block) => Boolean(block.images?.[0]?.thumbnail))).toBe(true);
+    await worker.shutdown();
+    await rm(picturePath);
+
+    const restored = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, taskId,
+      sessionFile, undefined, undefined, undefined, vision, { kind });
+    cleanup.push(() => restored.worker.shutdown());
+    references.forEach((reference) => expect(JSON.stringify(restored.ready.snapshot!.messages)).toContain(reference));
+    async function request(command: Record<string, unknown>) {
+      const id = crypto.randomUUID();
+      restored.worker.send({ id, ...command });
+      return restored.worker.waitFor((output) => output.type === "response" && output.id === id);
+    }
+    expect((await request({ type: "message_image", entryId: user.entryId, index: 1 })).result).toEqual(attachments[1]);
+    expect((await request({ type: "tool_image", toolCallId, index: 0 })).result).toEqual({ type: "image", data: picture, mimeType: "image/png" });
+    restored.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "select-after-restart", message: "image reply:" });
+    await restored.worker.waitFor((output) => output.type === "run_state" && output.runId === "select-after-restart" && output.state === "idle");
+    references.forEach((reference) => expect(JSON.stringify(provider.requests.at(-1)!.body.messages)).toContain(reference));
+
+    expect((await request({ type: "navigate", entryId: user.entryId, target: "before", kind: "rewind" })).success).toBe(true);
+    expect((await request({ type: "message_image", entryId: user.entryId, index: 0 })).result).toBeNull();
+    expect((await request({ type: "tool_image", toolCallId, index: 0 })).result).toBeNull();
+    restored.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "after-rewind", message: "image reply:" });
+    await restored.worker.waitFor((output) => output.type === "run_state" && output.runId === "after-rewind" && output.state === "idle");
+    references.forEach((reference) => expect(JSON.stringify(provider.requests.at(-1)!.body.messages)).not.toContain(reference));
+    expect(JSON.stringify(restored.worker.view!.messages)).toContain("No images available.");
+    expect(restored.worker.outputs.filter((output) => output.type === "worker_error")).toEqual([]);
   });
 });
 

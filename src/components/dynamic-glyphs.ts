@@ -46,7 +46,8 @@ export function createGlyphField(canvas: HTMLCanvasElement, colours: string[]) {
         .reduce((sum, [sx, sy]) => sum + ellipse(x, y, sx, sy, .14, .14), 0));
     }
   }
-  function draw(time: number, energy: number, direction: number, ripples: Ripple[], swell: number) {
+  // `motion` scales how far glyphs stray from their cells; the caller keeps it 1 for the still frame.
+  function draw(time: number, energy: number, direction: number, ripples: Ripple[], swell: number, motion = 1) {
     if (!ctx) return;
     ctx.clearRect(0, 0, width, height);
     const { columns, rows, cell } = grid;
@@ -59,12 +60,17 @@ export function createGlyphField(canvas: HTMLCanvasElement, colours: string[]) {
       const x = px / width, y = py / height;
       const radius = Math.hypot(x - .55, y - .48);
       const angle = Math.atan2(y - .48, x - .55);
-      const wave = (Math.sin(x * 12 + y * 5 + time * .19)
-        + Math.sin(radius * 19 - angle * 2 + time * (.3 + energy * .5))
-        + Math.cos(y * 13 - time * .23)) / 3;
+      const wave = (Math.sin(x * 12 + y * 5 + time * .38)
+        + Math.sin(radius * 19 - angle * 2 + time * (.6 + energy))
+        + Math.cos(y * 13 - time * .46)) / 3;
       let light = (.1 + Math.max(0, wave) * .82) * (1 - shapeMix) + masks[i * 3 + shape] * shapeMix;
-      let dx = Math.sin(y * 7 + time * .3) * cell * .35;
-      let dy = direction * Math.sin(radius * 10 - time) * cell * energy;
+      // Bounded drift plus a slow diagonal wander: glyphs visibly travel, never escape their cell.
+      let dx = (Math.sin(y * 7 + time * .65) * cell * 1.05
+        + Math.sin(time * .21 + y * 1.3) * cell * .6
+        + Math.cos(time * .14 - x * 1.7) * cell * .4) * motion;
+      let dy = direction * Math.sin(radius * 10 - time) * cell * energy
+        + (Math.cos(x * 9 + time * .55) * cell * .5
+        + Math.sin(time * .17 + x * 2.1) * cell * .35) * motion;
       for (const ripple of ripples) {
         const rx = px - ripple.x * width, ry = py - ripple.y * height;
         const distance = Math.hypot(rx, ry);

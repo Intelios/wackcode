@@ -339,6 +339,8 @@ Only exact elements marked `data-dynamic-space` accept decorative ripples; desce
 controls, text and titlebar drag strips do not. The canvas never receives pointer input.
 App subscribes to native window focus through `api`; the component handles document visibility.
 Its bounded 30 fps loop writes only canvas pixels and bloom transforms/opacity, with cached
-colours/glyphs. A hidden/unfocused window or zero intensity cancels it. Reduce Motion draws
+colours/glyphs. Intensity scales movement speed and drift amplitude as well as ink opacity,
+and the background-colour veil eases as it climbs so the motion shows behind chats; a
+hidden/unfocused window or zero intensity cancels the loop. Reduce Motion draws
 one still composition and ignores pulses. Theme/style changes rebuild the paint resources;
-activity and scene changes retain them. The background-colour veil protects unboxed text.
+activity and scene changes retain them. The veil protects unboxed text.

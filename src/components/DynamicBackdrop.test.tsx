@@ -51,6 +51,15 @@ describe("dynamic animation lifecycle", () => {
     expect(disconnect).toHaveBeenCalledOnce();
     expect(frames.size).toBe(0);
   });
+  it("moves further as intensity climbs", () => {
+    const translateX = (bloom: HTMLElement) => Number(bloom.style.transform.match(/translate\((-?[\d.e-]+)%/)?.[1]);
+    const low = render(<DynamicBackdrop {...props} intensity={20} />);
+    const high = render(<DynamicBackdrop {...props} intensity={100} />);
+    advance(10); advance(50); // One 40ms draw on each field, still near angle zero.
+    const lowX = translateX(low.container.querySelector<HTMLElement>(".bloom-1")!);
+    const highX = translateX(high.container.querySelector<HTMLElement>(".bloom-1")!);
+    expect(highX).toBeGreaterThan(lowX + 20);
+  });
   it("keeps reduced-motion compositions still across activity and pointer input", () => {
     motion.reduced = true;
     const ref = createRef<DynamicBackdropHandle>();

@@ -20,6 +20,7 @@ import { useConfirmAction } from "./ui/useConfirmAction";
 import { TextSwap } from "./TextSwap";
 import { OrbitSpinner } from "./OrbitSpinner";
 
+// Deleting a chat happens only from the Archived view: archive first, delete there.
 export type TaskAction = "rename" | "worktree" | "fork" | "reveal" | "reveal-file" | "copy" | "archive" | "unarchive" | "delete" | "delete-direct";
 export type ProjectAction = "reveal" | "remove" | "pin" | "unpin";
 
@@ -120,18 +121,11 @@ export function Sidebar({ projects, pinnedProjectIds, area, areaAttention, onSwi
 
   function handleArchiveClick(event: React.MouseEvent, task: TaskRecord) {
     event.stopPropagation();
-    const action: TaskAction = task.archived ? "unarchive" : "archive";
-    if (confirm(task.id, action)) onTaskAction(task, action);
-  }
-
-  function handleDeleteClick(event: React.MouseEvent, task: TaskRecord) {
-    event.stopPropagation();
-    if (confirm(task.id, "delete")) onTaskAction(task, "delete-direct");
+    if (confirm(task.id, "archive")) onTaskAction(task, "archive");
   }
 
   function renderTask(task: TaskRecord) {
-    const isConfirmingArchive = confirming?.taskId === task.id && (confirming.action === "archive" || confirming.action === "unarchive");
-    const isConfirmingDelete = confirming?.taskId === task.id && confirming.action === "delete";
+    const isConfirmingArchive = confirming?.taskId === task.id && confirming.action === "archive";
     // The Chat area orders by last use, so that is the time its rows show.
     const stamp = area === "chat" ? task.lastActivityAt ?? task.createdAt : task.createdAt;
     const age = formatRelativeTime(stamp, now);
@@ -202,21 +196,6 @@ export function Sidebar({ projects, pinnedProjectIds, area, areaAttention, onSwi
                 <span className="confirm-label">Archive?</span>
               ) : (
                 <span className="row-menu-icon"><Icon name="archive" /></span>
-              )}
-            </button>
-          </Tooltip>
-
-          <Tooltip label="Delete chat" disabled={Boolean(isConfirmingDelete)}>
-            <button
-              type="button"
-              className={`ghost-button row-menu danger${isConfirmingDelete ? " confirming task-confirming" : ""}`}
-              onClick={(event) => handleDeleteClick(event, task)}
-              aria-label={isConfirmingDelete ? `Confirm delete ${task.name}` : `Delete ${task.name}`}
-            >
-              {isConfirmingDelete ? (
-                <span className="confirm-label">Delete?</span>
-              ) : (
-                <span className="row-menu-icon"><Icon name="trash" /></span>
               )}
             </button>
           </Tooltip>

@@ -62,19 +62,22 @@ export function DynamicBackdrop({ ref, style, palette, intensity, accent, backgr
       profileFrames = 0; profileMs = 0; profileMax = 0;
     }, 10000);
     let ripples: Ripple[] = [];
+    // Intensity now also buys movement: low values stay gentle, zero still turns the effect off.
+    const motion = () => .4 + 1.15 * Math.max(0, Math.min(100, current.current.intensity)) / 100;
     const draw = (still = false) => {
       const profileStart = performance.now();
       const t = still ? 0 : time;
       const e = still ? .18 : energy;
       const d = still ? 0 : direction;
-      if (glyphs) glyphs.draw(t, e, d, still ? [] : ripples, still ? 0 : swell);
+      const m = still ? 1 : motion();
+      if (glyphs) glyphs.draw(t, e, d, still ? [] : ripples, still ? 0 : swell, m);
       if (style === "colourDrift") blooms.current.forEach((bloom, i) => {
         if (!bloom) return;
-        const angle = t * (.08 + e * .04) + i * Math.PI * 2 / 3;
+        const angle = t * (.19 + e * .1) + i * Math.PI * 2 / 3;
         const spread = 1 + d * .22;
-        const x = Math.cos(angle) * 18 * spread;
-        const y = Math.sin(angle * .83) * 14 * spread;
-        bloom.style.transform = `translate(${x}%, ${y}%) rotate(${Math.sin(angle * .7) * 30}deg) scale(${1 + Math.sin(angle) * .12 + e * .16 + (still ? 0 : swell * .18)})`;
+        const x = Math.cos(angle) * 45 * spread * m;
+        const y = Math.sin(angle * .83) * 34 * spread * m;
+        bloom.style.transform = `translate(${x}%, ${y}%) rotate(${Math.sin(angle * .7) * 30}deg) scale(${1 + Math.sin(angle) * .18 * m + e * .16 + (still ? 0 : swell * .18)})`;
         bloom.style.opacity = String(.6 + Math.sin(angle + i) * .12 + e * .14);
       });
       const profileElapsed = performance.now() - profileStart; profileFrames++; profileMs += profileElapsed; profileMax = Math.max(profileMax, profileElapsed);
@@ -97,7 +100,7 @@ export function DynamicBackdrop({ ref, style, palette, intensity, accent, backgr
         const blend = 1 - Math.exp(-dt * 2);
         energy += (target.energy - energy) * blend;
         direction += (target.direction - direction) * blend;
-        time += dt;
+        time += dt * 2.2 * motion();
         swell = Math.max(0, swell - dt / 1.8);
         ripples = ripples.filter((ripple) => (ripple.age += dt) < 2.4);
         draw();

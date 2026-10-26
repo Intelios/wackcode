@@ -19,7 +19,7 @@ export function chatMenu(task: TaskRecord, project: ProjectRecord | undefined, r
     { label: "Reveal chat file", icon: <Icon name="file" />, disabled: !task.sessionFile, onSelect: () => action(task, "reveal-file") },
     { label: chat ? "Copy scratchpad path" : "Copy path", icon: <Icon name="copy" />, onSelect: () => action(task, "copy") },
     "separator",
-    { label: task.archived ? "Unarchive" : "Archive", icon: <Icon name={task.archived ? "unarchive" : "archive"} />, onSelect: () => action(task, task.archived ? "unarchive" : "archive") },
-    { label: "Delete", icon: <Icon name="trash" />, danger: true, onSelect: () => action(task, "delete") }
+    // Delete is deliberately absent: a chat goes through Archived before it can be removed.
+    { label: task.archived ? "Unarchive" : "Archive", icon: <Icon name={task.archived ? "unarchive" : "archive"} />, onSelect: () => action(task, task.archived ? "unarchive" : "archive") }
   ];
 }

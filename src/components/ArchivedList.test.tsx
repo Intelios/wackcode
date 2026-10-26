@@ -88,6 +88,17 @@ describe("ArchivedList", () => {
     expect(onTaskAction).toHaveBeenCalledWith(t, "delete-direct");
   });
 
+  it("switches confirmation between unarchive and delete on the same row", () => {
+    renderList([task("t1")]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Unarchive Chat t1" }));
+    expect(screen.getByRole("button", { name: "Confirm unarchive Chat t1" })).toHaveTextContent("Unarchive?");
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete Chat t1" }));
+    expect(screen.queryByRole("button", { name: "Confirm unarchive Chat t1" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Confirm delete Chat t1" })).toHaveTextContent("Delete?");
+  });
+
   it("cancels confirmation when Escape is pressed", () => {
     renderList([task("t1")]);
     fireEvent.click(screen.getByRole("button", { name: "Delete Chat t1" }));

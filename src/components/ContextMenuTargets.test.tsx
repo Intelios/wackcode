@@ -22,7 +22,7 @@ function menus(children: ReactNode) {
 }
 
 describe("context menu targets", () => {
-  it("acts on a background chat without selecting it, and dispatches Delete through confirmation", () => {
+  it("acts on a background chat without selecting it, and keeps Delete out of its menu", () => {
     const action = vi.fn(); const select = vi.fn();
     render(menus(<Sidebar area="code" onSwitchArea={() => undefined} projects={[project]} tasks={[chat]} selectedTaskId="selected" pinnedProjectIds={new Set()} pendingDialogTaskIds={new Set()} titlePulses={{}} collapsedProjectIds={new Set()}
       archivedOpen={false} onSelectTask={select} onTaskAction={action} onNewChat={vi.fn()} onNewDraft={vi.fn()} onAddProject={vi.fn()} onToggleArchived={vi.fn()}
@@ -37,8 +37,8 @@ describe("context menu targets", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Copy path" }));
     expect(action).toHaveBeenLastCalledWith(chat, "copy");
     fireEvent.contextMenu(row);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
-    expect(action).toHaveBeenLastCalledWith(chat, "delete");
+    // Deleting a chat happens only from the Archived view.
+    expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
     expect(select).not.toHaveBeenCalled();
   });
 

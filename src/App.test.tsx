@@ -458,7 +458,12 @@ describe("App tab workspace", () => {
     await native("reopen");
     expect(screen.queryByLabelText("Terminal a")).toBeNull();
     expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    // Deleting happens only from the Archived view; the chat menu no longer offers it.
     fireEvent.click(screen.getByRole("button", { name: "Chat menu" }));
+    expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "Show archived" }));
+    fireEvent.contextMenu(await within(await screen.findByRole("navigation", { name: "Archived chats" })).findByText("Chat a"));
     fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
     fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(screen.queryByRole("tab", { name: "Chat a" })).toBeNull());

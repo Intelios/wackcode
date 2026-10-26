@@ -132,8 +132,9 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .dynamic-bloom.bloom-1 { left: -8%; top: 2%; background: radial-gradient(ellipse, var(--wc-dynamic-paint-1), transparent 68%); }
 .dynamic-bloom.bloom-2 { right: -8%; top: -12%; background: radial-gradient(ellipse, var(--wc-dynamic-paint-2), transparent 68%); }
 .dynamic-bloom.bloom-3 { left: 18%; bottom: -25%; background: radial-gradient(ellipse, var(--wc-dynamic-paint-3), transparent 68%); }
-.dynamic-veil { position: absolute; inset: 0; background: var(--bg); opacity: .93; transition: opacity 1s var(--ease); }
-.dynamic-backdrop[data-scene="hero"] .dynamic-veil { opacity: .65; }
+/* The veil eases as Intensity climbs, so stronger settings show the motion behind chats too. */
+.dynamic-veil { position: absolute; inset: 0; background: var(--bg); opacity: calc(.97 - var(--wc-dynamic-strength) * .15); transition: opacity 1s var(--ease); }
+.dynamic-backdrop[data-scene="hero"] .dynamic-veil { opacity: calc(.75 - var(--wc-dynamic-strength) * .15); }
 /* Keep the hero's small secondary text clear without hiding the field around its edges. */
 .dynamic-backdrop[data-scene="hero"]::after { content: ""; position: absolute; inset: 0; background: radial-gradient(ellipse at 60% 45%, color-mix(in srgb, var(--bg) 85%, transparent), transparent 70%); }
 @media (prefers-reduced-motion: reduce) {

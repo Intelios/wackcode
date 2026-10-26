@@ -71,7 +71,7 @@ describe("Transcript compaction", () => {
   it("keeps the live clock under its prompt through compaction and continuation, then settles it", () => {
     vi.useFakeTimers();
     vi.setSystemTime(5_000);
-    const { container, rerender } = render(<Transcript messages={[user, answer]} running activeRun={{ runId: "r", startedAt: 1_000 }} compaction={{ reason: "overflow" }} />);
+    const { container, rerender } = render(<Transcript messages={[user, answer]} running activeRun={{ runId: "r", startedAt: 1_000 }} compaction={{ reason: "overflow", startedAt: 2_000 }} />);
     expect(screen.getByRole("status")).toHaveTextContent("Compacting context…");
     // The shimmer row is replaced by the stage while compaction runs.
     expect(container.querySelector(".compacting-stage")).not.toBeNull();
@@ -98,7 +98,7 @@ describe("Transcript compaction", () => {
 
   it("shows manual compaction status without creating an unanchored work timer", () => {
     vi.useFakeTimers();
-    const view = render(<Transcript messages={[user, answer]} running compaction={{ reason: "manual" }} />);
+    const view = render(<Transcript messages={[user, answer]} running compaction={{ reason: "manual", startedAt: 2_000 }} />);
     expect(screen.getByRole("status")).toHaveTextContent("Compacting context…");
     expect(screen.queryByText("Working for", { exact: false })).not.toBeInTheDocument();
     view.rerender(<Transcript messages={[user, answer, marker]} running={false} />);

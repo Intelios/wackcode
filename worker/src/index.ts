@@ -146,6 +146,10 @@ let activeRun: {
   finalized: boolean;
 } | undefined;
 let compaction: SessionSnapshot["compaction"];
+/** When the manual compaction currently running began: the command's runStartedAt, so the
+ *  snapshot's clock and the `run_state` running frame agree exactly. Automatic compactions
+ *  leave this undefined and stamp the event's own arrival instead. */
+let compactionStartedAt: number | undefined;
 let manualCompactionAborted = false;
 let activeCredential: string | undefined;
 let activeAuthPath: string | undefined;
@@ -1014,7 +1018,10 @@ function emitBoundary(): void {
     && emitted.activeRun?.startedAt === snapshot.activeRun?.startedAt
     ? undefined
     : snapshot.activeRun ?? null;
-  const compaction = emitted.compaction?.reason === snapshot.compaction?.reason ? undefined : snapshot.compaction ?? null;
+  const compaction = emitted.compaction?.reason === snapshot.compaction?.reason
+    && emitted.compaction?.startedAt === snapshot.compaction?.startedAt
+    ? undefined
+    : snapshot.compaction ?? null;
   const workActivity = JSON.stringify(emitted.workActivity) === JSON.stringify(snapshot.workActivity) ? undefined : snapshot.workActivity;
   if (
     diff.upserts.length === 0 && diff.removed.length === 0
@@ -1500,10 +1507,11 @@ async function initialize(command: InitCommand): Promise<void> {
     const eventMessage = value.message as Record<string, unknown> | undefined;
     if (eventType === "compaction_start") {
       const reason = value.reason;
-      compaction = { reason: reason === "manual" || reason === "overflow" ? reason : "threshold" };
+      compaction = { reason: reason === "manual" || reason === "overflow" ? reason : "threshold", startedAt: compactionStartedAt ?? Date.now() };
       scheduleSnapshot();
     } else if (eventType === "compaction_end") {
       compaction = undefined;
+      compactionStartedAt = undefined;
       if (value.reason === "manual") manualCompactionAborted = value.aborted === true;
       if (value.aborted === true) notice("Context compaction stopped.", "info");
       else if (!value.result && value.reason !== "manual" && typeof value.errorMessage === "string") {
@@ -1533,7 +1541,7 @@ async function initialize(command: InitCommand): Promise<void> {
       eventType.startsWith("summarization_retry_")
     ) {
       send({ type: "activity", taskId: command.taskId, event: eventType, detail: eventType.startsWith("compaction_")
-        ? { reason: value.reason, aborted: value.aborted, willRetry: value.willRetry } : value });
+        ? { reason: value.reason, aborted: value.aborted, willRetry: value.willRetry, startedAt: compaction?.startedAt } : value });
     }
     // A Stop during a tool call still lets Pi start the next model request, which fails at once
     // on the aborted signal ("This operation was aborted"). That is the stop, not a failure.
@@ -2042,10 +2050,11 @@ async function handle(command: WorkerCommand): Promise<void> {
         throw new Error("There is not enough conversation to compact yet.");
       }
       compacting = true;
+      compactionStartedAt = runStartedAt(command.startedAt);
       manualCompactionAborted = false;
       stopRequested = false;
       let compactOutcome: PromptOutcome = "completed";
-      send({ type: "run_state", taskId, runId: command.runId, startedAt: runStartedAt(command.startedAt), operation: "compaction", state: "running" });
+      send({ type: "run_state", taskId, runId: command.runId, startedAt: compactionStartedAt, operation: "compaction", state: "running" });
       response(command.id, true);
       try {
         await session.compact(command.instructions || undefined);
@@ -2056,6 +2065,7 @@ async function handle(command: WorkerCommand): Promise<void> {
         if (stopRequested) compactOutcome = "stopped";
         compacting = false;
         compaction = undefined;
+        compactionStartedAt = undefined;
         stopRequested = false;
         forceFullSnapshot = true;
         emitSnapshot();

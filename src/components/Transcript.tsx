@@ -970,7 +970,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
               ) : null}
               {/* AnimatePresence must outlive the stage for its collapse exit to play. */}
               <AnimatePresence>
-                {compaction ? <CompactingStage key="compacting" reason={compaction.reason} /> : null}
+                {compaction ? <CompactingStage key="compacting" reason={compaction.reason} startedAt={compaction.startedAt} /> : null}
               </AnimatePresence>
               {!compaction && waiting && label && !laneWait && <WorkingPresence label={label} />}
               {rewindBar}

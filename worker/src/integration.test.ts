@@ -1848,6 +1848,7 @@ describe("compaction continuity", () => {
     worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "automatic", startedAt, message: "Resume the fixture" });
     const compacting = await worker.waitFor((output) => emitted(output) && output.view?.compaction?.reason === "threshold");
     expect(compacting.view?.activeRun).toEqual({ runId: "automatic", startedAt });
+    expect(compacting.view?.compaction?.startedAt).toEqual(expect.any(Number));
     const finished = await worker.waitFor((output) => output.type === "run_state" && output.runId === "automatic" && output.state === "idle");
     expect(finished.view?.compaction).toBeUndefined();
     expect(finished.view?.activeRun).toBeUndefined();
@@ -1954,7 +1955,13 @@ describe("compaction continuity", () => {
   it("sends a message queued during manual compaction once it settles", async () => {
     const { worker, provider, workspace } = await start();
     worker.send({ id: crypto.randomUUID(), type: "compact", runId: "held-compact", instructions: "hold" });
-    await worker.waitFor((output) => emitted(output) && output.view?.compaction?.reason === "manual");
+    const compacting = await worker.waitFor((output) => emitted(output) && output.view?.compaction?.reason === "manual");
+    // The stage's clock anchors to the snapshot's compaction.startedAt — for a manual
+    // compaction exactly the run_state running frame's startedAt, so the provisional and
+    // snapshot clocks agree.
+    const running = worker.outputs.find((output) => output.type === "run_state" && output.runId === "held-compact" && output.state === "running");
+    expect(running?.startedAt).toEqual(expect.any(Number));
+    expect(compacting.view?.compaction?.startedAt).toBe(running?.startedAt);
     const queuedId = crypto.randomUUID();
     worker.send({ id: queuedId, type: "queue_message", message: "Queued while compacting." });
     await worker.waitFor((output) => output.type === "queue_state" && output.messages?.some((message) => message.id === queuedId));

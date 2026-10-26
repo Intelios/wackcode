@@ -1331,8 +1331,9 @@ export interface SessionSnapshot {
   runTimings: RunTiming[];
   activeRun?: { runId: string; startedAt: number };
   workActivity?: WorkActivity;
-  /** Present only while compaction is running; separate from the prompt's clock. */
-  compaction?: { reason: "manual" | "threshold" | "overflow" };
+  /** Present only while compaction is running; separate from the prompt's clock. `startedAt`
+   *  anchors the stage's timer so it survives remounts (chat and area switches). */
+  compaction?: { reason: "manual" | "threshold" | "overflow"; startedAt: number };
   /** Where the conversation currently ends in the session tree. */
   tree?: {
     leafId: string | null;

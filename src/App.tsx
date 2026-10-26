@@ -1107,7 +1107,7 @@ export default function App() {
               ...current[taskId],
               activeRun: payload.operation === "compaction" ? undefined
                 : { runId: payload.runId, startedAt: payload.startedAt ?? current[taskId]?.activeRun?.startedAt ?? Date.now() },
-              compaction: payload.operation === "compaction" ? { reason: "manual" } : undefined,
+              compaction: payload.operation === "compaction" ? { reason: "manual", startedAt: payload.startedAt ?? Date.now() } : undefined,
               activity: undefined,
               liveToolText: {},
               liveToolDetails: {}
@@ -1136,7 +1136,8 @@ export default function App() {
         patchRuntime(taskId, {
           activity: payload.event === "compaction_end" ? undefined : payload.event,
           ...(payload.event === "compaction_start" ? { compaction: {
-            reason: payload.detail?.reason === "manual" || payload.detail?.reason === "overflow" ? payload.detail.reason : "threshold"
+            reason: payload.detail?.reason === "manual" || payload.detail?.reason === "overflow" ? payload.detail.reason : "threshold",
+            startedAt: typeof payload.detail?.startedAt === "number" ? payload.detail.startedAt : Date.now()
           } } : payload.event === "compaction_end" ? { compaction: undefined } : {})
         });
         const callId = payload.detail?.toolCallId;
@@ -1725,7 +1726,7 @@ export default function App() {
       const startedAt = Date.now();
       patchTask(id, { status: "running", lastError: null });
       patchRuntime(id, { error: undefined, activity: "starting", activeRun: name === "compact" ? undefined : { startedAt },
-        compaction: name === "compact" ? { reason: "manual" } : undefined, slashCommandsError: undefined });
+        compaction: name === "compact" ? { reason: "manual", startedAt } : undefined, slashCommandsError: undefined });
       if (name === "compact") await api.compactTask(id, args, startedAt);
       else if (name === "init") await api.initAgents(id, startedAt);
       else if (name === "skill-creator") await api.startSkillCreator(id, args, startedAt);

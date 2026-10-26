@@ -23,7 +23,7 @@ describe("selected chat background activity", () => {
     for (const status of ["idle", "stopping", "interrupted", "error"] as const) {
       expect(backgroundPhase({ status, runtime: partial("thinking") })).toBe("idle");
     }
-    expect(backgroundPhase({ status: "running", runtime: { ...partial("thinking"), compaction: { reason: "manual" } } })).toBe("working");
+    expect(backgroundPhase({ status: "running", runtime: { ...partial("thinking"), compaction: { reason: "manual", startedAt: 1_000 } } })).toBe("working");
     expect(backgroundPhase({ status: "running", runtime: { ...partial("text"), workActivity: { parent: "idle", subagents: 1, pendingResults: 0 } } })).toBe("background");
     expect(backgroundPhase({ status: "running", runtime: { workActivity: { parent: "waiting", subagents: 1, pendingResults: 0 } } })).toBe("working");
     expect(backgroundPhase({ status: "running", runtime: { workActivity: { parent: "idle", subagents: 0, pendingResults: 0 } } })).toBe("idle");

@@ -120,6 +120,8 @@ as an unanchored row at the response tail. While compaction runs the tail shows
 `CompactingStage`, a canvas gravity well that escalates through calm/busy/dramatic acts at
 20s/60s (with a rare duck cameo) and collapses into the newly-saved boundary row when it
 finishes; the status line under it carries the trigger reason and a wall-clock elapsed timer.
+The timer anchors to `compaction.startedAt`, not the stage's mount, so it survives remounts
+(chat and area switches) instead of restarting at 0.
 
 ## Optional chat tabs
 

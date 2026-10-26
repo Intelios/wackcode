@@ -32,15 +32,20 @@ const formatElapsed = (ms: number) => {
  *   collapses (all remaining fragments fall in, the core shrinks, a ring pings) and
  *   `onEnded` → `safeToRemove()` frees it. A `FINALE_MS + 30` timeout covers environments
  *   where rAF doesn't run — the stage can never wedge in the DOM.
- * - Simulation `now` is wall-clock since mount, so a hidden tab resumes into the right act;
- *   frame `dt` is clamped to 50ms so a resume never produces a physics jump.
+ * - Simulation `now` and the status timer are wall-clock since the compaction actually
+ *   started (`startedAt`, falling back to mount time): remounting on a chat or area switch
+ *   resumes clock and act instead of restarting them, and a hidden tab resumes into the
+ *   right act. Frame `dt` is clamped to 50ms so a resume never produces a physics jump.
  * - Reduced motion draws `stillFrame` once (a static warm well) — no rAF loop — while the
  *   clock keeps ticking and the finale resolves immediately.
  * - jsdom's canvas returns a null context: everything except drawing still works.
  * - The palette is polled once a second rather than observing theme mutations.
  */
-export function CompactingStage({ reason, ending = false, onEnded }: {
+export function CompactingStage({ reason, startedAt, ending = false, onEnded }: {
   reason: CompactionReason;
+  /** When the compaction began (worker clock); defaults to mount time. Fixes the timer
+   *  and act escalation across remounts — without it every remount restarts them at 0. */
+  startedAt?: number;
   /** Forces the collapse without `AnimatePresence` (tests, embeds). */
   ending?: boolean;
   /** Fires once the finale has finished — `safeToRemove` is called at the same moment. */
@@ -49,7 +54,7 @@ export function CompactingStage({ reason, ending = false, onEnded }: {
   const reduced = useReducedMotion() ?? false;
   const [isPresent, safeToRemove] = usePresence();
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const startRef = useRef(Date.now());
+  const startRef = useRef(startedAt ?? Date.now());
   const wellRef = useRef<WellState | null>(null);
   const paletteRef = useRef<Palette>({ accent: "#9fe870", text: "#d5d5d5", textDim: "#8a8a8a", surface: "#1a1a1a" });
   const ctxRef = useRef<CanvasRenderingContext2D | null | undefined>(undefined);
@@ -61,9 +66,9 @@ export function CompactingStage({ reason, ending = false, onEnded }: {
   const onEndedRef = useRef(onEnded);
   onEndedRef.current = onEnded;
   const endedRef = useRef(false);
-  const [elapsedMs, setElapsedMs] = useState(0);
 
   const now = () => Date.now() - startRef.current;
+  const [elapsedMs, setElapsedMs] = useState(() => Math.max(0, now()));
 
   const finish = () => {
     if (endedRef.current) return;
@@ -106,7 +111,7 @@ export function CompactingStage({ reason, ending = false, onEnded }: {
     };
     if (reduced) renderStill();
 
-    const clock = window.setInterval(() => setElapsedMs(now()), 250);
+    const clock = window.setInterval(() => setElapsedMs(Math.max(0, now())), 250);
 
     let raf = 0;
     if (!reduced) {

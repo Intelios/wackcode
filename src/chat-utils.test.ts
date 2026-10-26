@@ -260,8 +260,8 @@ describe("applySnapshotDelta", () => {
 
   it("keeps the prompt clock across compaction and clears compaction status on its end delta", () => {
     const base = { ...snapshot([message("a")], 1), activeRun: { runId: "r", startedAt: 5 } };
-    const compacting = applySnapshotDelta(base, delta({ rev: 2, compaction: { reason: "overflow" } }));
-    expect(compacting.compaction).toEqual({ reason: "overflow" });
+    const compacting = applySnapshotDelta(base, delta({ rev: 2, compaction: { reason: "overflow", startedAt: 1_000 } }));
+    expect(compacting.compaction).toEqual({ reason: "overflow", startedAt: 1_000 });
     expect(compacting.activeRun).toBe(base.activeRun);
     expect(applySnapshotDelta(compacting, delta({ rev: 3 })).compaction).toBe(compacting.compaction);
     const resumed = applySnapshotDelta(compacting, delta({ rev: 3, compaction: null }));

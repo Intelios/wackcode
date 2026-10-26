@@ -37,6 +37,29 @@ describe("CompactingStage", () => {
     expect(screen.getByRole("status")).toHaveTextContent("1:24");
   });
 
+  it("counts from the compaction's startedAt, not from mount", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    render(<CompactingStage reason="manual" startedAt={7_000} />);
+    // No interval tick needed: the first frame already shows the true elapsed time.
+    expect(screen.getByRole("status")).toHaveTextContent("0:03");
+    act(() => { vi.advanceTimersByTime(1_000); });
+    expect(screen.getByRole("status")).toHaveTextContent("0:04");
+  });
+
+  it("keeps the clock running across a remount (chat or area switch)", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const view = render(<CompactingStage reason="manual" startedAt={9_000} />);
+    act(() => { vi.advanceTimersByTime(2_000); });
+    view.unmount();
+    vi.setSystemTime(14_000);
+    render(<CompactingStage reason="manual" startedAt={9_000} />);
+    expect(screen.getByRole("status")).toHaveTextContent("0:05");
+    act(() => { vi.advanceTimersByTime(1_000); });
+    expect(screen.getByRole("status")).toHaveTextContent("0:06");
+  });
+
   it("escalates through calm, busy and dramatic acts", () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
@@ -46,6 +69,14 @@ describe("CompactingStage", () => {
     expect(screen.getByRole("status")).toHaveAttribute("data-act", "busy");
     act(() => { vi.advanceTimersByTime(40_100); });
     expect(screen.getByRole("status")).toHaveAttribute("data-act", "dramatic");
+  });
+
+  it("resumes into the act matching the compaction's age, not the mount's", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(75_000);
+    render(<CompactingStage reason="manual" startedAt={10_000} />);
+    expect(screen.getByRole("status")).toHaveAttribute("data-act", "dramatic");
+    expect(screen.getByRole("status")).toHaveTextContent("1:05");
   });
 
   it("runs the rAF sim while live", () => {

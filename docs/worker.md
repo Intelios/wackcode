@@ -53,8 +53,10 @@ The transcript reaches the host as a full `snapshot`, then as `snapshot_delta`s 
 - Compaction rows use Pi's saved entry ids and summaries. Their after-count estimates Pi's
   projection at that entry, so later messages cannot change an old boundary's count. Tool-result
   images and saved sub-agent transcripts remain fetchable throughout the displayed branch.
-- `compaction` is live snapshot/delta state, cleared on every compaction end. Manual compaction's
-  `run_state` has `operation: "compaction"`; it never starts a prompt clock or records a turn duration.
+- `compaction` is live snapshot/delta state, cleared on every compaction end. It carries the
+  `startedAt` the stage's timer mounts from (a manual compaction's equals the `run_state`
+  running frame's). Manual compaction's `run_state` has `operation: "compaction"`; it never
+  starts a prompt clock or records a turn duration.
 
 ## Tools
 

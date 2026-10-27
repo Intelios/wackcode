@@ -83,4 +83,47 @@ describe("custom-connection compat lookup", () => {
     expect(builtinCompat("openai-completions", "claude-haiku-9-9", "https://api.anthropic.com/v1")).toBeUndefined();
     expect(builtinCompat("anthropic-messages", "my-haiku-5-5", "https://mirror.example")).toBeUndefined();
   });
+
+  it("shapes requests for Google Cloud's strict chat-completions endpoint", () => {
+    // Unknown fields 400 there, so Pi's lenient-host defaults (store, developer role,
+    // max_completion_tokens, stream_options) all have to be switched off or renamed.
+    const vertex = "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/proj/locations/us-central1/endpoints/openapi";
+    expect(builtinCompat("openai-completions", "gemini-3.8-flash", vertex)).toEqual({
+      supportsStore: false,
+      supportsDeveloperRole: false,
+      supportsUsageInStreaming: false,
+      supportsReasoningEffort: true,
+      thinkingFormat: "openai",
+      maxTokensField: "max_tokens",
+      sendSessionAffinityHeaders: false,
+      supportsLongCacheRetention: false
+    });
+    // The global Vertex host too.
+    const global = vertex.replace("us-central1-", "");
+    expect(builtinCompat("openai-completions", "gemini-2.5-flash", global)).toMatchObject({ supportsStore: false });
+  });
+
+  it("keeps streamed usage on the Gemini API's OpenAI route, which documents it", () => {
+    const compat = builtinCompat("openai-completions", "gemini-3.8-flash", "https://generativelanguage.googleapis.com/v1beta/openai");
+    expect(compat).toMatchObject({ supportsStore: false, maxTokensField: "max_tokens" });
+    expect(compat).not.toHaveProperty("supportsUsageInStreaming");
+  });
+
+  it("overrides a matching catalogue entry: OpenRouter Gemini flags never reach Google's endpoint", () => {
+    const compat = builtinCompat("openai-completions", "google/gemini-2.5-pro",
+      "https://aiplatform.googleapis.com/v1beta1/projects/proj/locations/global/endpoints/openapi");
+    expect(compat).not.toHaveProperty("supportsStrictMode");
+    expect(compat).toMatchObject({ thinkingFormat: "openai", sendSessionAffinityHeaders: false, supportsStore: false });
+  });
+
+  it("leaves dedicated Model Garden deployments and other APIs on aiplatform alone", () => {
+    // Outside …/endpoints/openapi the host runs vLLM/TGI containers, which keep Pi's
+    // defaults and any catalogue match (here: OpenRouter's entry for the same ID).
+    expect(builtinCompat("openai-completions", "meta/llama-4-maverick",
+      "https://us-central1-aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/endpoints/99"))
+      .toMatchObject({ thinkingFormat: "openrouter" });
+    expect(builtinCompat("anthropic-messages", "claude-opus-4-6",
+      "https://aiplatform.googleapis.com/v1beta1/projects/p/locations/g/endpoints/openapi"))
+      .toMatchObject({ forceAdaptiveThinking: true });
+  });
 });

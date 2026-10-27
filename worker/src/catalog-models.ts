@@ -94,14 +94,58 @@ function catalogCompatIndex(): Map<string, CatalogEntry[]> {
 }
 
 /**
- * The catalogue `compat` for a configured model, or undefined when no entry matches — the model
- * then behaves exactly as before (Pi's defaults). `api` is the API the model will actually speak
- * (its own override, else the connection's), so e.g. a Completions entry never colours a Messages
- * model of the same ID. Between candidate entries for one ID a matching base-URL host wins, then
- * the leanest compat: a gateway that serves another vendor's model but supports only part of its
- * surface should send the smallest request shape rather than the vendor's quirks.
+ * The request shape Google's OpenAI-compatible endpoints accept, or undefined for other hosts.
+ * Both layers parse requests strictly — a field outside their documented surface answers
+ * `INVALID_ARGUMENT` with a proto-JSON "Unknown name" 400 (`store` is the one every client trips
+ * over) — while Pi's URL detection treats an unrecognized host as a lenient OpenAI one and sends
+ * `store`, a `developer` system message and `max_completion_tokens`. Matching catalogue entries
+ * don't describe these endpoints either, so their compat is replaced wholesale rather than
+ * merged.
+ */
+function googleOpenAiCompat(api: string, baseUrl: string | undefined): Record<string, unknown> | undefined {
+  if (api !== "openai-completions" || !baseUrl) return undefined;
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    return undefined;
+  }
+  const host = url.hostname;
+  // Vertex AI's hosted OpenAI route, on the global host and its regional `us-central1-…` forms.
+  const vertex = host === "aiplatform.googleapis.com" || host.endsWith("-aiplatform.googleapis.com");
+  if (!vertex && host !== "generativelanguage.googleapis.com") return undefined;
+  // A dedicated Model Garden deployment (`…/endpoints/<id>`) shares Vertex's host but runs a
+  // vLLM or TGI container there, which keeps Pi's lenient defaults.
+  if (vertex && !url.pathname.includes("/endpoints/openapi")) return undefined;
+  return {
+    supportsStore: false,
+    supportsDeveloperRole: false,
+    // Vertex's parameter list has no stream_options, so usage is never requested and a stream
+    // may arrive without one; the Gemini API's own OpenAI route documents it, so it is kept.
+    ...(vertex ? { supportsUsageInStreaming: false } : {}),
+    supportsReasoningEffort: true,
+    thinkingFormat: "openai",
+    // Vertex documents max_tokens and max_completion_tokens alike; the former is the spelling
+    // every compatibility layer accepts.
+    maxTokensField: "max_tokens",
+    sendSessionAffinityHeaders: false,
+    supportsLongCacheRetention: false
+  };
+}
+
+/**
+ * The `compat` for a configured model: Google's strict request shape when the connection points
+ * at one of its OpenAI-compatible hosts, else the bundled catalogue's entry. Undefined when
+ * neither applies — the model then behaves exactly as before (Pi's defaults). `api` is the API
+ * the model will actually speak (its own override, else the connection's), so e.g. a Completions
+ * entry never colours a Messages model of the same ID. Between candidate entries for one ID a
+ * matching base-URL host wins, then the leanest compat: a gateway that serves another vendor's
+ * model but supports only part of its surface should send the smallest request shape rather
+ * than the vendor's quirks.
  */
 export function builtinCompat(api: string, modelId: string, baseUrl?: string): Record<string, unknown> | undefined {
+  const google = googleOpenAiCompat(api, baseUrl);
+  if (google) return google;
   const index = catalogCompatIndex();
   const host = hostOf(baseUrl);
   // Every catalogue entry the configured ID could name, tagged by how specific that spelling is.

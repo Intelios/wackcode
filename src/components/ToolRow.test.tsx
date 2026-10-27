@@ -360,3 +360,73 @@ describe("ToolRow work rows", () => {
     expect(document.querySelector(".tool-row .tool-command")?.textContent).toBe("pnpm install");
   });
 });
+
+describe("ToolRow commit rows", () => {
+  const commitCall: NormalizedBlock = {
+    type: "tool-call", toolCallId: "call-c", toolName: "bash",
+    arguments: { command: "git add src/a.ts && git commit -m \"Fix the flaky upload test\"" }
+  };
+  const commitResult: NormalizedBlock = {
+    type: "tool-result", toolCallId: "call-c",
+    text: "[main a1b2c3d] Fix the flaky upload test\n 2 files changed, 12 insertions(+), 3 deletions(-)"
+  };
+
+  it("gives a commit its own face: the milestone wash, the hash in a pill, git's message and stats", () => {
+    const view = render(<ToolRow call={commitCall} result={commitResult} />);
+    const row = view.container.querySelector(".tool-row")!;
+    expect(row).toHaveClass("commit");
+    expect(row).not.toHaveClass("command", "error");
+    const bar = screen.getByRole("button", { name: /Committed/ });
+    expect(bar).toHaveAccessibleName(/a1b2c3d/);
+    expect(bar).toHaveAccessibleName(/Fix the flaky upload test/);
+    expect(bar.querySelector(".tool-commit-hash")?.textContent).toBe("a1b2c3d");
+    expect(row.querySelector(".tool-row-stats .files")?.textContent).toBe("2 files");
+    expect(row.querySelector(".tool-row-stats .add .rolling-number")).toHaveAttribute("aria-label", "+12");
+    expect(row.querySelector(".tool-row-stats .del .rolling-number")).toHaveAttribute("aria-label", "\u22123");
+  });
+
+  it("opens into the command and its output, keeping the message in the bar", () => {
+    render(<ToolRow call={commitCall} result={commitResult} />);
+    fireEvent.click(screen.getByRole("button", { name: /Committed/ }));
+    const row = document.querySelector(".tool-row.open")!;
+    expect(row).toHaveClass("commit");
+    expect(document.querySelector(".tool-command")?.textContent).toContain('git commit -m "Fix the flaky upload test"');
+    expect(document.querySelector(".tool-text pre")?.textContent).toContain("2 files changed");
+  });
+
+  it("shows the message it is about to commit while it runs, before any hash exists", () => {
+    render(<ToolRow call={commitCall} running />);
+    const bar = screen.getByRole("button", { name: /Committing/ });
+    expect(bar).toHaveTextContent("Fix the flaky upload test");
+    expect(document.querySelector(".tool-commit-hash")).toBeNull();
+  });
+
+  it("keeps a commit that never happened in the plain error look", () => {
+    const result: NormalizedBlock = {
+      type: "tool-result", toolCallId: "call-c", isError: true,
+      text: "On branch main\nnothing to commit, working tree clean\n\nCommand exited with code 1"
+    };
+    const view = render(<ToolRow call={commitCall} result={result} />);
+    const row = view.container.querySelector(".tool-row")!;
+    expect(row).toHaveClass("commit", "error");
+    const bar = screen.getByRole("button", { name: /Couldn't commit/ });
+    expect(bar).toHaveTextContent("Fix the flaky upload test");
+    expect(row.querySelector(".tool-commit-hash")).toBeNull();
+    expect(row.querySelector(".tool-row-failed")).toBeNull();
+  });
+
+  it("keeps the milestone look when the commit landed but a later part of the command failed", () => {
+    const result: NormalizedBlock = {
+      type: "tool-result", toolCallId: "call-c", isError: true,
+      text: "[main a1b2c3d] Fix the flaky upload test\n 2 files changed, 12 insertions(+), 3 deletions(-)\n ! [rejected] main -> main\n\nCommand exited with code 1"
+    };
+    const view = render(<ToolRow call={commitCall} result={result} />);
+    const row = view.container.querySelector(".tool-row")!;
+    expect(row).toHaveClass("commit");
+    expect(row).not.toHaveClass("error");
+    expect(row.querySelector(".tool-commit-hash")?.textContent).toBe("a1b2c3d");
+    expect(row.querySelector(".tool-row-failed")?.textContent).toBe("failed");
+    fireEvent.click(screen.getByRole("button", { name: /Committed/ }));
+    expect(screen.getByText("exit 1")).toHaveClass("tool-pill", "failed");
+  });
+});

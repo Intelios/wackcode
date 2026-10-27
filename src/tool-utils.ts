@@ -1,5 +1,6 @@
 import type { NormalizedBlock, NormalizedMessage, SearchProviderKind, SkillPreviewDetails, SubagentDetails, SubagentResult, SubagentStatus, ToolCatalogEntry, VisualResultDetails, WebSearchDetails } from "./types";
 import { displayPath } from "./chat-utils";
+import { parseCommit } from "./tool-output";
 import { SUGGEST_TASK_TOOL_NAME } from "./suggestions";
 import { CANVAS_GUIDE_TOOL_NAME, CANVAS_LOOK_TOOL_NAME, CANVAS_TOOL_NAME } from "./canvas-state";
 
@@ -76,8 +77,12 @@ export interface ToolSummary {
   subject: string;
   additions?: number;
   deletions?: number;
+  /** How many files a commit changed, when git said so; drawn before the ± stats. */
+  files?: number;
+  /** Git's own summary of the commit it made, present once it landed ("commit" kind only). */
+  commit?: { hash: string };
   /** Kind controls what the expanded body shows. */
-  kind: "read" | "edit" | "write" | "bash" | "search" | "other";
+  kind: "read" | "edit" | "write" | "bash" | "commit" | "search" | "other";
 }
 
 /** A call's arguments as an object: {} while they are still streaming in as partial JSON. */
@@ -223,8 +228,26 @@ export function summarizeTool(call: NormalizedBlock, result?: NormalizedBlock): 
       const isNew = detailsOf(result).created === true || detailsOf(result).existed === false;
       return { kind: "write", activeVerb: "Writing", doneVerb: isNew ? "Created" : "Wrote", subject: displayPath(str(toolArgs.path)), additions: content ? countLines(content) : undefined };
     }
-    case "bash":
-      return { kind: "bash", activeVerb: "Running", doneVerb: "Ran", subject: str(toolArgs.command) };
+    case "bash": {
+      const command = str(toolArgs.command);
+      if (isGitCommit(command)) {
+        const commit = parseCommit(str(result?.text));
+        const failed = result?.isError === true;
+        return {
+          kind: "commit",
+          activeVerb: "Committing",
+          // A failure whose output still shows a landed commit (a push failed after it) keeps
+          // the verb that tells the truth about the commit itself.
+          doneVerb: failed && !commit ? "Couldn't commit" : "Committed",
+          subject: commit ? commit.subject : commitMessageSubject(command) ?? command,
+          files: commit?.files,
+          additions: commit?.additions,
+          deletions: commit?.deletions,
+          commit: commit ? { hash: commit.hash } : undefined
+        };
+      }
+      return { kind: "bash", activeVerb: "Running", doneVerb: "Ran", subject: command };
+    }
     case "grep":
       return { kind: "search", activeVerb: "Searching", doneVerb: "Searched", subject: str(toolArgs.pattern) };
     case "find":
@@ -461,6 +484,64 @@ function splitShell(command: string): string[][] | undefined {
   if (afterOperator) return undefined;
   endCommand();
   return commands;
+}
+
+/**
+ * A `git` invocation as the subcommand it runs, past git's own leading options, and where the
+ * rest of its words begin. Undefined for anything that isn't `git …`.
+ */
+function gitInvocation(words: string[]): { subcommand: string; next: number } | undefined {
+  if (words[0] !== "git") return undefined;
+  let index = 1;
+  while (index < words.length) {
+    const word = words[index];
+    if (word === "-C" || word === "-c") { index += 2; continue; }
+    if (/^-C/.test(word) || /^-c/.test(word)) { index += 1; continue; }
+    return { subcommand: word, next: index + 1 };
+  }
+  return undefined;
+}
+
+/**
+ * A shell command that makes a Git commit: every simple command in it is `git` (a `cd` on the
+ * way is fine) and one of them commits — `git commit …`, not `--dry-run`. This decides what
+ * the transcript draws, never what may run, so anything it doesn't model exactly (a command
+ * substitution, an unknown option before the subcommand) stays an ordinary command row.
+ */
+export function isGitCommit(command: string): boolean {
+  const commands = splitShell(command);
+  if (!commands?.length) return false;
+  let commits = false;
+  for (const words of commands) {
+    if (words[0] === "cd") continue;
+    const invocation = gitInvocation(words);
+    if (!invocation) return false;
+    if (invocation.subcommand === "commit" && !words.includes("--dry-run")) commits = true;
+  }
+  return commits;
+}
+
+/**
+ * The subject line of the message a commit command gives itself: the first `-m` after the
+ * commit — only the first, since a later one is the body, where the co-author trailer rides.
+ * What the row shows until git's own summary lands; undefined when the command says nothing.
+ */
+export function commitMessageSubject(command: string): string | undefined {
+  for (const words of splitShell(command) ?? []) {
+    const invocation = gitInvocation(words);
+    if (invocation?.subcommand !== "commit") continue;
+    for (let index = invocation.next; index < words.length; index += 1) {
+      const word = words[index];
+      if (word === "-m" || word === "--message") return messageSubject(words[index + 1] ?? "");
+      if (word.startsWith("--message=")) return messageSubject(word.slice("--message=".length));
+    }
+  }
+  return undefined;
+}
+
+function messageSubject(message: string): string | undefined {
+  const subject = (message.split("\n")[0] ?? "").trim();
+  return subject || undefined;
 }
 
 const GIT_READ_COMMANDS: Record<string, ExploreKind> = {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bashExploreKind, currentVisualIds, diffStats, displayAgentName, editStats, exploreKind, firstSentence, groupTools, imageReadNote, parseSubagentDetails, parseVisualArgs, parseVisualDetails, parseWebSearchDetails, pendingSubagentDetails, pruneDisabledTools, sameToolCatalog, splitPathSubject, subagentDetailsFor, summarizeTool, toolPresentation } from "./tool-utils";
+import { bashExploreKind, commitMessageSubject, currentVisualIds, diffStats, displayAgentName, editStats, exploreKind, firstSentence, groupTools, imageReadNote, isGitCommit, parseSubagentDetails, parseVisualArgs, parseVisualDetails, parseWebSearchDetails, pendingSubagentDetails, pruneDisabledTools, sameToolCatalog, splitPathSubject, subagentDetailsFor, summarizeTool, toolPresentation } from "./tool-utils";
 import type { NormalizedBlock, NormalizedMessage, ToolCatalogEntry } from "./types";
 
 function call(toolName: string, args: unknown): NormalizedBlock {
@@ -54,6 +54,41 @@ describe("summarizeTool", () => {
     const summary = summarizeTool(call("bash", { command: "pnpm test" }));
     expect(summary.doneVerb).toBe("Ran");
     expect(summary.subject).toBe("pnpm test");
+  });
+
+  it("summarizes a commit by git's own words once it lands", () => {
+    const command = "git add src/a.ts src/b.ts && git commit -m \"Fix the flaky upload test\"";
+    const result: NormalizedBlock = {
+      type: "tool-result", toolCallId: "c1",
+      text: "[main a1b2c3d] Fix the flaky upload test\n 2 files changed, 12 insertions(+), 3 deletions(-)"
+    };
+    expect(summarizeTool(call("bash", { command }), result)).toMatchObject({
+      kind: "commit", activeVerb: "Committing", doneVerb: "Committed",
+      subject: "Fix the flaky upload test", files: 2, additions: 12, deletions: 3, commit: { hash: "a1b2c3d" }
+    });
+  });
+
+  it("reads the commit's message from the command until git answers", () => {
+    const running = summarizeTool(call("bash", { command: "git commit -m \"Fix upload\" -m \"Co-authored-by: GPT-5.6 (WackCode)\"" }));
+    expect(running).toMatchObject({ kind: "commit", doneVerb: "Committed", subject: "Fix upload" });
+    expect(running.commit).toBeUndefined();
+    // No message to read: the command itself is the subject, as for any other command.
+    expect(summarizeTool(call("bash", { command: "git commit --amend --no-edit" })).subject).toBe("git commit --amend --no-edit");
+  });
+
+  it("names a commit that never happened, and keeps a landed one true when a later part failed", () => {
+    const command = "git commit -m \"Fix upload\" && git push";
+    const refused = summarizeTool(call("bash", { command: "git commit -m \"Fix upload\"" }), {
+      type: "tool-result", toolCallId: "c1", isError: true,
+      text: "On branch main\nnothing to commit, working tree clean\n\nCommand exited with code 1"
+    });
+    expect(refused).toMatchObject({ kind: "commit", doneVerb: "Couldn't commit", subject: "Fix upload" });
+    expect(refused.commit).toBeUndefined();
+    const pushed = summarizeTool(call("bash", { command }), {
+      type: "tool-result", toolCallId: "c1", isError: true,
+      text: "[main a1b2c3d] Fix upload\n 1 file changed, 2 insertions(+)\n ! [rejected] main -> main\n\nCommand exited with code 1"
+    });
+    expect(pushed).toMatchObject({ doneVerb: "Committed", subject: "Fix upload", files: 1, additions: 2, commit: { hash: "a1b2c3d" } });
   });
 
   it("computes edit stats from the result diff", () => {
@@ -305,6 +340,51 @@ describe("bashExploreKind", () => {
       "ls |& cat"
     ];
     for (const command of cases) expect(bashExploreKind(command), command).toBeUndefined();
+  });
+});
+
+describe("isGitCommit", () => {
+  it("spots a commit whatever else it stages on the way", () => {
+    for (const command of [
+      "git commit -m 'Fix upload'",
+      "git commit --amend --no-edit",
+      "git add src/a.ts && git commit -m 'Fix upload'",
+      "git -c commit.gpgsign=false commit -m 'Fix upload'",
+      "cd src && git add . && git commit -m 'Fix upload'",
+      "git commit -m 'Fix upload' && git push"
+    ]) expect(isGitCommit(command), command).toBe(true);
+  });
+
+  it("refuses anything that doesn't model exactly to a commit", () => {
+    for (const command of [
+      "git status",
+      "git add .",
+      "git add . && git push",
+      "git commit-tree HEAD -p HEAD -m message",
+      "git commit --dry-run -m 'Fix upload'",
+      "echo done && git commit -m 'x'",
+      "GIT_EDITOR=true git commit",
+      "git commit -m \"$(cat message.txt)\"",
+      "pnpm test",
+      ""
+    ]) expect(isGitCommit(command), command).toBe(false);
+  });
+
+  it("finds the message's subject in the first -m, and nothing when the command doesn't say", () => {
+    expect(commitMessageSubject("git commit -m 'Fix upload' -m 'Co-authored-by: GPT-5.6 (WackCode)'"))
+      .toBe("Fix upload");
+    expect(commitMessageSubject("git commit --message=\"Two lines\n\\nBody\""))
+      .toBe("Two lines");
+    expect(commitMessageSubject("git add . && git commit -m 'Fix upload'"))
+      .toBe("Fix upload");
+    expect(commitMessageSubject("git commit --amend --no-edit")).toBeUndefined();
+    expect(commitMessageSubject("git commit -F message.txt")).toBeUndefined();
+  });
+
+  it("keeps a commit a full-width row, never a chip or an Explored fold", () => {
+    const commit = call("bash", { command: "git add . && git commit -m 'Fix upload'" });
+    expect(toolPresentation(commit)).toBe("row");
+    expect(exploreKind(commit)).toBeUndefined();
   });
 });
 

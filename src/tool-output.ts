@@ -134,6 +134,50 @@ export function splitMatches(text: string, matcher: RegExp | undefined): { text:
   return parts.length ? parts : [{ text, hit: false }];
 }
 
+export interface CommitSummary {
+  /** The abbreviated hash exactly as git printed it. */
+  hash: string;
+  /** The commit's subject line; empty for a message with no subject. */
+  subject: string;
+  /** How much the commit changed, when git printed its stats line. */
+  files?: number;
+  additions?: number;
+  deletions?: number;
+}
+
+/** The summary line git prints for a commit it made: "[main a1b2c3d] Fix the upload". */
+const COMMIT_LINE = /^\[([^\]]+) ([0-9a-f]{7,40})\] (.*)$/;
+/** The stats line that follows it (past the "Date:" line an amend prints): " 2 files changed, 12 insertions(+), 3 deletions(-)". */
+const COMMIT_STATS = /^ (\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?$/;
+
+/**
+ * What `git commit` printed about the commit it made. The ref may carry spaces ("master
+ * (root-commit)", "detached HEAD") and the subject may carry brackets of its own, so the
+ * hash is the hex word the first closing bracket follows. The LAST summary line wins: a
+ * command that commits twice names the newer commit, and its stats are the lines right
+ * after it. Undefined when the output shows no summary line — a refused commit, a dry run,
+ * a quiet run — and whatever the command printed stays whole.
+ */
+export function parseCommit(text: string): CommitSummary | undefined {
+  const lines = text.split("\n");
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const match = COMMIT_LINE.exec(lines[index]);
+    if (!match) continue;
+    const summary: CommitSummary = { hash: match[2], subject: match[3] };
+    for (const follow of lines.slice(index + 1, index + 3)) {
+      const stats = COMMIT_STATS.exec(follow);
+      if (stats) {
+        summary.files = Number(stats[1]);
+        if (stats[2]) summary.additions = Number(stats[2]);
+        if (stats[3]) summary.deletions = Number(stats[3]);
+        break;
+      }
+    }
+    return summary;
+  }
+  return undefined;
+}
+
 export interface ArgRow {
   key: string;
   value: string;

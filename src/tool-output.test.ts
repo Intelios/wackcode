@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { argRows, askedQuestions, grepMatcher, parseGrep, readRange, splitCommandStatus, splitMatches, splitNotice } from "./tool-output";
+import { argRows, askedQuestions, grepMatcher, parseCommit, parseGrep, readRange, splitCommandStatus, splitMatches, splitNotice } from "./tool-output";
 
 describe("splitNotice", () => {
   it("lifts Pi's cut-short note off a result and drops the advice meant for the model", () => {
@@ -33,6 +33,38 @@ describe("readRange", () => {
     expect(readRange({ offset: 40, limit: 3 }, "a\nb\nc")).toEqual({ first: 40, label: "lines 40–42" });
     expect(readRange({ offset: 40, limit: 3 }, "a\nb\nc", "10 more lines in file")).toEqual({ first: 40, label: "lines 40–42 of 52" });
     expect(readRange({}, "a\nb", "Showing lines 1-2 of 900")).toEqual({ first: 1, label: "lines 1–2 of 900" });
+  });
+});
+
+describe("parseCommit", () => {
+  it("reads git's own summary of a commit it made", () => {
+    expect(parseCommit("[main a1b2c3d] Fix the flaky upload test\n 2 files changed, 12 insertions(+), 3 deletions(-)\n create mode 100644 src/upload.ts")).toEqual({
+      hash: "a1b2c3d", subject: "Fix the flaky upload test", files: 2, additions: 12, deletions: 3
+    });
+  });
+
+  it("takes refs with spaces, and stats that may be missing or partial", () => {
+    expect(parseCommit("[master (root-commit) b143e10] First commit\n 1 file changed, 1 insertion(+)"))
+      .toEqual({ hash: "b143e10", subject: "First commit", files: 1, additions: 1 });
+    expect(parseCommit("[detached HEAD ab37977] Detached commit\n 1 file changed, 1 deletion(-)"))
+      .toEqual({ hash: "ab37977", subject: "Detached commit", files: 1, deletions: 1 });
+    // An amend prints its Date: line between the summary and the stats.
+    expect(parseCommit("[main c733120] Amend it\n Date: Tue Oct 27 20:35:50 2026 +0000\n 2 files changed")).toEqual({ hash: "c733120", subject: "Amend it", files: 2 });
+    // An empty commit prints no stats line at all.
+    expect(parseCommit("[feature/x 75a5a34] Empty")).toEqual({ hash: "75a5a34", subject: "Empty" });
+    expect(parseCommit("[main 1f2e3d4] ")).toEqual({ hash: "1f2e3d4", subject: "" });
+  });
+
+  it("keeps the newest commit of two, and a subject that carries brackets", () => {
+    expect(parseCommit("[main 1111111] First\n 1 file changed, 1 insertion(+)\n[main 2222222] Second\n 2 files changed, 4 insertions(+)"))
+      .toEqual({ hash: "2222222", subject: "Second", files: 2, additions: 4 });
+    expect(parseCommit("[main abc1234] Fix [beefcafe] warnings")).toEqual({ hash: "abc1234", subject: "Fix [beefcafe] warnings" });
+  });
+
+  it("gives up on anything that is not git's summary line", () => {
+    expect(parseCommit("On branch main\nnothing to commit, working tree clean\n\nCommand exited with code 1")).toBeUndefined();
+    expect(parseCommit("")).toBeUndefined();
+    expect(parseCommit("[main 12345] too short a hash")).toBeUndefined();
   });
 });
 

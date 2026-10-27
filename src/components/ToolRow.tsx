@@ -133,6 +133,35 @@ function CallWords({ summary, pending, failed }: { summary: ToolSummary; pending
   );
 }
 
+/**
+ * A commit call's face: git's own summary of what it did. The landed hash rides in a pill — a
+ * commit node on the branch — the message is the sentence it stands on, and git's stats say
+ * the scale of it. "failed" names only a failing tail after a commit that landed (a push,
+ * say): a commit that never happened is "Couldn't commit" with the plain error look instead.
+ */
+function CommitWords({ summary, pending, failed }: { summary: ToolSummary; pending: boolean; failed: boolean }) {
+  const landed = summary.commit;
+  return (
+    <>
+      <span className="tool-row-verb">{pending ? summary.activeVerb : summary.doneVerb}</span>
+      {landed && <code className="tool-commit-hash">{landed.hash}</code>}
+      {summary.subject && (
+        <code className="tool-row-subject" title={summary.subject}>
+          <span className="tool-row-subject-name">{summary.subject}</span>
+        </code>
+      )}
+      {(summary.files || summary.additions || summary.deletions) ? (
+        <span className="tool-row-stats">
+          {summary.files ? <em className="files">{summary.files} {summary.files === 1 ? "file" : "files"}</em> : null}
+          {summary.additions ? <em className="add"><RollingNumber prefix="+" value={summary.additions} /></em> : null}
+          {summary.deletions ? <em className="del"><RollingNumber prefix="−" value={summary.deletions} /></em> : null}
+        </span>
+      ) : null}
+      {failed && landed && <span className="tool-row-failed">failed</span>}
+    </>
+  );
+}
+
 /** A call drawn as a chip, inside a `ToolChips` strip. */
 export interface ChipCall {
   call: NormalizedBlock;
@@ -250,7 +279,7 @@ function ToolCallRow({ call, result, liveText, running }: ToolRowProps) {
 
   return (
     <motion.div
-      className={`tool-row ${summary.kind === "bash" ? "command" : ""} ${open ? "open" : ""} ${failed ? "error" : ""}`}
+      className={`tool-row ${summary.kind === "bash" ? "command" : ""} ${summary.kind === "commit" ? "commit" : ""} ${open ? "open" : ""} ${failed && !summary.commit ? "error" : ""}`}
       initial={animate && pops ? { opacity: 0, scale: 0.96, y: 4 } : false}
       animate={{ opacity: 1, scale: 1, y: 0 }}
       transition={POP}
@@ -263,7 +292,7 @@ function ToolCallRow({ call, result, liveText, running }: ToolRowProps) {
         ) : (
           <Icon name={toolIcon(call, result, summary)} className="tool-row-icon" />
         )}
-        <CallWords summary={summary} pending={pending} failed={failed} />
+        {summary.kind === "commit" ? <CommitWords summary={summary} pending={pending} failed={failed} /> : <CallWords summary={summary} pending={pending} failed={failed} />}
         <span className="tool-row-status">
           <OrbitSpinner active={pending} failed={failed} />
           {expandable && <Icon name="chevron" className="tool-chevron" />}

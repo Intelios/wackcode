@@ -1165,10 +1165,30 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
 .tool-row-stats { display: inline-flex; gap: 5px; flex: 0 0 auto; }
 .tool-row-stats em { font-style: normal; font-family: "SFMono-Regular", monospace; font-size: 10.5px; }
 .tool-row-stats .add { color: #a8d883; } .tool-row-stats .del { color: #e3a2a2; }
+.tool-row-stats .files { color: var(--text-faint); }
 .tool-row-failed { color: var(--danger); font-size: 11px; }
 .tool-row-status { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 .tool-chevron { width: 12px; height: 12px; color: var(--text-faint); transition: transform .15s var(--ease); }
 .tool-row.open .tool-chevron { transform: rotate(90deg); }
+/* A git commit row (ToolCallRow, kind "commit"): the one work row that lands something on a
+   branch, so at rest it wears a quiet accent wash — a milestone among bars — and its mark is
+   the commit node. A commit that never happened keeps the plain error look; one that landed
+   before a later part of the command failed keeps the wash, its "failed" tag carrying the
+   failure. The wash is a content surface of the row: solid, never see-through. */
+.tool-row.commit { border-color: var(--wc-accent-line-soft); background: var(--wc-accent-wash); }
+.tool-row.commit:has(> .tool-row-head:not(:disabled):hover) { border-color: var(--wc-accent-line-mid); }
+.tool-row.commit.error {
+  border-color: color-mix(in srgb, var(--danger) 32%, var(--border)); background: var(--surface);
+}
+/* The landed hash's pill: the commit node itself, popping in the way a chip does when the
+   result lands. */
+.tool-commit-hash {
+  display: inline-flex; align-items: center; flex: 0 0 auto; height: 18px; padding: 0 7px;
+  border: 1px solid var(--wc-accent-line-mid); border-radius: var(--wc-radius-pill);
+  background: var(--wc-accent-tint); color: var(--wc-accent);
+  font: 10.5px "SFMono-Regular", Consolas, monospace; line-height: 1;
+  animation: tool-mark-in .34s var(--ease) backwards;
+}
 /* Tool chips (ToolRow.tsx ToolChips): Chat's activity chips, carrying the Code transcript's
    precise words. Calls that only looked or talked to something are pills flowing in a wrapping
    strip; one sheet opens beneath the strip for the chip clicked. Rows above stay for edits and

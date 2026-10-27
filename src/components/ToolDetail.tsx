@@ -70,6 +70,7 @@ const TOOL_ICONS: Record<string, IconName> = {
 };
 
 export function toolIcon(call: NormalizedBlock, result: NormalizedBlock | undefined, summary: ToolSummary): IconName {
+  if (summary.kind === "commit") return "commit";
   if (summary.kind === "read" && result?.images?.length) return "image";
   return TOOL_ICONS[call.toolName ?? ""] ?? (mcpToolParts(call.toolName ?? "") ? "plug" : "terminal");
 }
@@ -174,14 +175,14 @@ function CodePane({ text, path, start = 1, ...pane }: { text: string; path: stri
 }
 
 /** A command as it was written, then what it printed; a failure wears how it ended as a pill. */
-function RunSheet({ command, result, failed, expansionKey }: { command: string; result?: NormalizedBlock; failed: boolean; expansionKey?: string }) {
+function RunSheet({ icon, command, result, failed, expansionKey }: { icon: IconName; command: string; result?: NormalizedBlock; failed: boolean; expansionKey?: string }) {
   const text = result?.text ?? "";
   const ended = failed ? splitCommandStatus(text) : { output: text, status: undefined };
   const { body, notice } = splitNotice(ended.output);
   return (
     <>
       {/* Copy follows what the agent authored — the command — never the output it got back. */}
-      <SheetHead icon="terminal" meta={<>{ended.status && <span className="tool-pill failed">{ended.status}</span>}<CopyButton text={command} label="Copy command" /></>}>
+      <SheetHead icon={icon} meta={<>{ended.status && <span className="tool-pill failed">{ended.status}</span>}<CopyButton text={command} label="Copy command" /></>}>
         <pre className="tool-command">{highlightBlock(command, "bash")}</pre>
       </SheetHead>
       {body && <ToolText text={body} expansionKey={expansionKey} />}
@@ -414,8 +415,8 @@ export function ToolDetail({ call, result, live = false, head = true }: { call: 
         </div>
       </>
     );
-  } else if (summary.kind === "bash") {
-    sheet = <RunSheet command={typeof args.command === "string" ? args.command : ""} result={result} failed={failed} expansionKey={key} />;
+  } else if (summary.kind === "bash" || summary.kind === "commit") {
+    sheet = <RunSheet icon={icon} command={typeof args.command === "string" ? args.command : ""} result={result} failed={failed} expansionKey={key} />;
   } else if (summary.kind === "write" && typeof args.content === "string") {
     sheet = (
       <>

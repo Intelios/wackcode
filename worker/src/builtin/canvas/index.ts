@@ -1,5 +1,5 @@
 /**
- * Built-in canvas: a board of artboards the user pans and zooms beside the chat, for exploring
+ * Built-in canvas: a board of artboards the user pans and zooms in the chat transcript, for exploring
  * UI alternatives side by side (themes, layout directions, desktop and phone).
  *
  * Three tools, all read-only (they change no file, so Plan and Ultra Plan allow them):
@@ -108,7 +108,7 @@ export function summarizeCall(canvas: Canvas, details: CanvasDetails, created: b
   if (updated.length) lines.push(`Revised: ${updated.map(describeArtboard).join("; ")}.`);
   if (details.removed.length) lines.push(`Removed: ${details.removed.join(", ")}.`);
   lines.push(`On the canvas now (${canvas.artboards.length}): ${canvas.artboards.map((artboard) => artboard.id).join(", ") || "nothing"}.`);
-  lines.push("The user sees it in the Canvas panel beside the chat. Check what you changed with canvas_look, then keep your reply short instead of describing what they can see.");
+  lines.push("The user sees it inline in the chat transcript and can expand it above the composer. Check what you changed with canvas_look, then keep your reply short instead of describing what they can see.");
   return lines.join("\n");
 }
 
@@ -169,7 +169,7 @@ export function createCanvasExtension(host: BuiltinHost) {
     pi.registerTool({
       name: CANVAS_TOOL_NAME,
       label: "Draw on canvas",
-      description: "Add, revise or remove artboards on a canvas: a board of full HTML mockups the user pans and zooms beside the chat to compare UI alternatives. Start a canvas with a title; later calls pass its id. Each artboard is a self-contained, offline HTML document at a fixed width.",
+      description: "Add, revise or remove artboards on a canvas: a board of full HTML mockups the user pans and zooms in the chat transcript to compare UI alternatives. Start a canvas with a title; later calls pass its id. Each artboard is a self-contained, offline HTML document at a fixed width.",
       promptSnippet: "draw UI mockups side by side on a pan-and-zoom canvas",
       promptGuidelines: [...CANVAS_GUIDE_LINES],
       parameters: CANVAS_PARAMS,

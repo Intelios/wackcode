@@ -17,7 +17,7 @@ export interface Size {
 
 export const MIN_ZOOM = 0.05;
 export const MAX_ZOOM = 4;
-/** One ⌘+/⌘− step, and the zoom pill's buttons. */
+/** One ⌘+/⌘− step, and one press of + or − on a focused board. */
 export const ZOOM_STEP = 1.25;
 const FIT_PADDING = 48;
 

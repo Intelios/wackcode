@@ -8,9 +8,6 @@ import { CanvasArtboard, type ArtboardMotion } from "./CanvasArtboard";
 const CLICK_SLOP = 4;
 /** Off-screen artboards within this many screen pixels mount ahead of a pan. */
 const MOUNT_MARGIN = 600;
-/** Dot spacing in world pixels at 100 %; it doubles back up whenever dots get denser than this. */
-const DOT_SPACING = 24;
-const MIN_DOT_SCREEN = 10;
 /** Labels keep their screen size as the board zooms out, down to about 1/12 of life size. */
 const MAX_LABEL_SCALE = 12;
 /** Below this zoom only the artboards' names stay: sizes, notes and row labels would crowd. */
@@ -18,6 +15,10 @@ const FAR_ZOOM = 0.25;
 
 interface CanvasBoardProps {
   board: Board;
+  active: boolean;
+  visible: boolean;
+  onActivate: () => void;
+  onDeactivate: () => void;
   layout: CanvasLayout;
   camera: Camera;
   /** `user` for the user's own pans and zooms; the panel stops auto-following after one. */
@@ -59,7 +60,7 @@ function neighbour(layout: CanvasLayout, from: string | undefined, key: string):
 }
 
 /**
- * The board itself: a world layer under one transform over a dot grid that moves with it.
+ * The board itself: a world layer under one transform, over the plain well.
  *
  * Dragging anywhere pans (artboard frames ignore the pointer until stepped into), a two-finger
  * scroll pans, a pinch or ⌘-scroll zooms about the pointer. Click selects, double-click steps
@@ -67,7 +68,7 @@ function neighbour(layout: CanvasLayout, from: string | undefined, key: string):
  * move the selection; Enter steps in; + and − zoom; ⇧1 fits; ⌘0 is 100 %.
  */
 export function CanvasBoard({
-  board, layout, camera, onCamera, onViewport, selected, entered, motions,
+  board, active, visible, onActivate, onDeactivate, layout, camera, onCamera, onViewport, selected, entered, motions,
   onSelect, onEnter, onZoomTo, onMeasure, onMention, onFit, onZoomStep, onZoomReset,
 }: CanvasBoardProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -75,8 +76,8 @@ export function CanvasBoard({
   const [panning, setPanning] = useState(false);
   const [hand, setHand] = useState(false);
   const drag = useRef<{ x: number; y: number; camera: Camera; moved: boolean; pointer: number } | undefined>(undefined);
-  const live = useRef({ camera, onCamera });
-  live.current = { camera, onCamera };
+  const live = useRef({ camera, onCamera, active });
+  live.current = { camera, onCamera, active };
   const seen = useRef(new Set<string>());
 
   useEffect(() => {
@@ -96,7 +97,9 @@ export function CanvasBoard({
     const element = viewportRef.current;
     if (!element) return;
     const onWheel = (event: WheelEvent) => {
+      if (!live.current.active) return;
       event.preventDefault();
+      event.stopPropagation();
       const { camera: current, onCamera: update } = live.current;
       const rect = element.getBoundingClientRect();
       const point = { x: event.clientX - rect.left, y: event.clientY - rect.top };
@@ -130,10 +133,11 @@ export function CanvasBoard({
 
   const pointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 && event.button !== 1) return;
+    onActivate();
     // Buttons in a label act on their own; the board doesn't pan from them.
     if (event.target instanceof Element && event.target.closest("button, a, input")) return;
     drag.current = { x: event.clientX, y: event.clientY, camera, moved: false, pointer: event.pointerId };
-    event.currentTarget.setPointerCapture(event.pointerId);
+    event.currentTarget.setPointerCapture?.(event.pointerId);
     viewportRef.current?.focus({ preventScroll: true });
   };
 
@@ -161,6 +165,10 @@ export function CanvasBoard({
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return;
     const key = event.key;
+    if (!active) {
+      if (key === "Enter" || event.code === "Space") { event.preventDefault(); onActivate(); }
+      return;
+    }
     if (event.code === "Space") { event.preventDefault(); setHand(true); return; }
     if (key.startsWith("Arrow")) {
       event.preventDefault();
@@ -171,8 +179,7 @@ export function CanvasBoard({
       onEnter(selected);
     } else if (key === "Escape") {
       if (entered) onEnter(undefined);
-      else if (selected) onSelect(undefined);
-      else return;
+      else onDeactivate();
       event.preventDefault();
       event.stopPropagation();
     } else if (key === "!" || (event.shiftKey && event.code === "Digit1")) {
@@ -194,7 +201,7 @@ export function CanvasBoard({
   };
 
   const byId = useMemo(() => new Map(board.artboards.map((artboard) => [artboard.id, artboard])), [board]);
-  const select = useCallback((id: string) => onSelect(id), [onSelect]);
+  const select = useCallback((id: string) => { onActivate(); onSelect(id); }, [onSelect, onActivate]);
   const stepOut = useCallback(() => {
     onEnter(undefined);
     viewportRef.current?.focus({ preventScroll: true });
@@ -202,30 +209,27 @@ export function CanvasBoard({
 
   // Frames mount once they come near the screen, then stay mounted so panning back never reloads.
   for (const placed of layout.artboards) {
-    if (seen.current.has(placed.id) || !size.width) continue;
+    if (seen.current.has(placed.id) || !size.width || !visible) continue;
     const near = { x: placed.x - MOUNT_MARGIN / camera.zoom, y: placed.y - MOUNT_MARGIN / camera.zoom, width: placed.width + (MOUNT_MARGIN * 2) / camera.zoom, height: placed.height + (MOUNT_MARGIN * 2) / camera.zoom };
     if (intersects(camera, near, size)) seen.current.add(placed.id);
   }
 
-  let spacing = DOT_SPACING * camera.zoom;
-  while (spacing < MIN_DOT_SCREEN) spacing *= 4;
-
   return (
     <div
       ref={viewportRef}
-      className={`canvas-viewport${panning ? " panning" : ""}${hand ? " hand" : ""}${entered ? " has-entered" : ""}${camera.zoom < FAR_ZOOM ? " far" : ""}`}
+      className={`canvas-viewport${active ? " active" : ""}${panning ? " panning" : ""}${hand ? " hand" : ""}${entered ? " has-entered" : ""}${camera.zoom < FAR_ZOOM ? " far" : ""}`}
       role="region"
       aria-label={`Canvas: ${board.title}`}
       aria-roledescription="canvas"
+      aria-description={active ? "Scroll to pan, pinch to zoom. Escape returns to the chat." : "Press Enter or click to interact. Scrolling continues the chat."}
       tabIndex={0}
-      style={{ backgroundSize: `${spacing}px ${spacing}px`, backgroundPosition: `${camera.x}px ${camera.y}px` }}
       onPointerDown={pointerDown}
       onPointerMove={pointerMove}
       onPointerUp={pointerUp}
       onPointerCancel={() => { drag.current = undefined; setPanning(false); }}
       onDoubleClick={(event) => {
         const id = artboardAt(event.target);
-        if (id) onEnter(id);
+        if (id) { onActivate(); onEnter(id); }
       }}
       onKeyDown={keyDown}
     >
@@ -254,7 +258,7 @@ export function CanvasBoard({
                   notes={artboard.notes}
                   html={resolveArtboardHtml(board, artboard)}
                   fixedHeight={artboard.height !== undefined}
-                  mounted={seen.current.has(placed.id)}
+                  mounted={visible && seen.current.has(placed.id)}
                   selected={selected === placed.id}
                   entered={entered === placed.id}
                   motion={motions[placed.id]}

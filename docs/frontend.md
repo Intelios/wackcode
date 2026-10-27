@@ -59,15 +59,37 @@ reply is running, or twice within a second. A message a visual sent travels as a
 `canvas-state.ts` folds the snapshot's accepted calls into boards (the worker's fold, rule for
 rule), `canvas-layout.ts` places artboards (one row per group, in creation order, so additions
 never move anything sideways) and `canvas-camera.ts` is the pure pan/zoom maths. The calls stay
-chips in the turn's work; `layoutWorkTurns` collects what each settled turn drew (`canvases`,
-merged per canvas) and `WorkTurn`'s `after` slot draws a `CanvasCard` per canvas — an outline
-map of the board as it is now with that turn's artboards lit — which opens the side panel there
-through `CanvasScopeContext`. Older turns keep their cards.
+chips in the turn's work; `layoutWorkTurns` collects accepted touches (`canvases`, merged per
+canvas) while a turn is live too. The latest modifying turn owns one wide, interactive board
+outside the completed-work fold; older turns keep compact references with change counts and a
+“View latest” action. Ownership uses the turn's stable `userKey`, never its changing work key.
+References retain their turn-specific scroll anchors when a board moves, so a reader stays in
+place. A board being interacted with or expanded defers relocation until interaction ends,
+while accepted revisions continue to appear in its current location.
+
+The board spans the chat pane with 24 px gutters, independent of the prose column, starts at
+about 420 px tall and has a pointer- and keyboard-accessible resize handle. Camera, selection,
+measurements and following state survive relocation through a per-chat/per-canvas session;
+camera and inline height are remembered locally. Idle boards let wheel events scroll the
+transcript. Clicking or pressing Enter gives the board pan/zoom input; an outside click or
+Esc returns it. Esc first steps out of an entered artboard, whose frame alone takes
+pointer input. Active wheel events never reach transcript follow-scrolling. Resizing holds
+the pane's top edge rather than pulling the transcript toward its bottom.
+
+A reference's View latest navigates to the live board and focuses the surviving artboards its
+turn touched. Expand is independent of the
+side panel: it fills the workspace above the composer and pending questions, temporarily hides
+the right panel (including its native browser view), then restores its unchanged view and
+width. Navigation, archive or a rewind removing the board closes expansion. New artboards
+still pop, revised ones glint, and the camera follows changes until the user pans away, then
+offers an arrival pill. Frames stage lazily near the transcript viewport and the board camera;
+inline and expanded hosts never duplicate a live board. “Mention in chat” still inserts plain
+text in the draft. Canvas remains Code-only and its sandbox and worker tools are unchanged.
 
 **Suggested tasks** (`SuggestionTray.tsx`) are the follow-ups a turn filed with `suggest_task`,
 drawn as one tray under that turn's answer. `layoutWorkTurns` collects the turn's accepted
 suggestions (`suggestions`, `completed-work.ts`) and reports `settled` — the run is over, not
-merely the answer text — so `WorkTurn`'s `after` slot never puts cards above a live stream. The
+merely the answer text — so its tray waits until the live stream has finished. The
 call itself stays an ordinary chip inside the turn's work; the tray is the actionable card.
 
 - State is never kept in the component. `SuggestionScopeContext` carries what the transcript
@@ -219,13 +241,12 @@ refuses it, and `App` falls back to `classic` for a configuration copied from an
 
 ## Side panel
 
-`SidePanel` shows one `SidePanelView` (`src/side-panel.ts`) at a time: Changes, Browser, Terminal, Run, Build, Games, one of the chat's canvases, or one sub-agent's transcript.
+`SidePanel` shows one `SidePanelView` (`src/side-panel.ts`) at a time: Changes, Browser, Terminal, Run, Build, Games, or one sub-agent's transcript.
 
 - A new view is a union member, a component `SidePanel` renders, and a trigger that opens it (`toggleView`). Give it the shared head: `.panel-header` with a `.panel-mark`, a `.panel-kicker` over an `h3`, and `.panel-header-actions` ([design.md](design.md)).
 - In the original layout, Changes, Terminal, Run, Build and Games are durable: which one is showing is remembered across chats and launches (`wackcode:sidePanel`). With chat tabs enabled, every tab keeps its own panel for the session and a new draft starts closed. Run and Build follow the selected checkout and restoring either never launches a command. Browser and sub-agent views belong to one chat; the original layout falls back to the remembered durable view when the chat changes.
 - Sub-agent transcripts reach the panel only through `watch_subagent` frames, never through snapshots.
-- **Expand** (`panelExpanded`, `canExpand`) spans the main area with the composer docked below, for the browser and the canvas alike; changing view or chat restores the panel's width.
-- **Canvas** (`CanvasPanel`) is chat-bound like Browser (`isTaskBound`), and a rewind that takes its canvas away closes it. The header's Canvas button appears once the chat has a canvas and opens the latest one; the first canvas a live run starts opens the panel if it was closed, otherwise the button pings. The panel owns the camera (saved per canvas in `localStorage`, else fitted), selection, stepping into an artboard (its frame takes the pointer only then, since frames swallow wheel and drag), and the choreography around the agent's changes: new artboards pop, revised ones glint, and the camera glides to them unless the user panned away, in which case a pill offers to. Frames mount once near the screen and stay mounted. "Mention in chat" puts plain text in the draft; nothing about a canvas rides a message.
+- **Expand** (`panelExpanded`, `canExpand`) spans the main area with the composer docked below for the browser; changing view or chat restores the panel's width. Canvas has its own expanded workspace above the composer and preserves this panel's state.
 - **Games** (`GamesPanel`, one entry per game in its `GAMES` list): the panel opens on an Arcade home of poster cards; which game was entered lives beside the runs in `games/session.ts`, so a view or tab swap comes back to it paused, while every real close (`exitToArcade`, from the panel's own close paths in `GamesPanel` and `App`'s games toggle) resets to the picker. Each game is a pure simulation under `src/games/` plus a component that owns its canvas and rAF loop. The panel's page remounts on every view or tab switch, so a run in progress lives in `games/session.ts` and comes back paused. Both games autosave through their own versioned `localStorage` envelope, normalised on the way back out (`games/save.ts`, `games/doodle-save.ts`), so a run survives quitting the app; pausing offers **Save & quit**, which hands you back to the chat. Best scores are a `localStorage` convenience (`games/scores.ts`, with a one-time fallback to a game's pre-rename key). The panel takes only the open chat's `status`, so streaming never re-renders it.
 
 ## Areas

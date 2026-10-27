@@ -253,7 +253,19 @@ describe("useFollowScroll", () => {
     const { el, stream } = setup();
     fireEvent.wheel(el, { deltaX: -10 });
     fireEvent.wheel(el, { deltaY: -10, ctrlKey: true });
+    fireEvent.wheel(el, { deltaY: -10, metaKey: true });
     act(() => stream(30));
+    expect(el.scrollTop).toBe(730);
+    expect(screen.getByText("Following")).toBeInTheDocument();
+  });
+
+  it("ignores a wheel already consumed by an interactive canvas", () => {
+    const { el, stream } = setup();
+    const canvas = document.createElement("div");
+    canvas.addEventListener("wheel", (event) => event.preventDefault(), { passive: false });
+    el.append(canvas);
+    fireEvent.wheel(canvas, { deltaY: -10 });
+    stream(30);
     expect(el.scrollTop).toBe(730);
     expect(screen.getByText("Following")).toBeInTheDocument();
   });

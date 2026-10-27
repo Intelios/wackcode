@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { ZOOM_STEP, cameraStorageKey, fitBounds, parseCamera, zoomTo, type Camera, type Size } from "../../canvas-camera";
+import { fitBounds, zoomTo, type Camera, type Size } from "../../canvas-camera";
 import { boundsOf, layoutCanvas } from "../../canvas-layout";
 import { artboardMention, resolveArtboardHtml, type CanvasBoard as Board } from "../../canvas-state";
 import { Icon } from "../Icons";
-import { MenuButton } from "../ui/MenuButton";
 import { CanvasBoard } from "./CanvasBoard";
 import type { ArtboardMotion } from "./CanvasArtboard";
+import { createCanvasSession, useCanvasView, type CanvasSession } from "../../canvas-session";
+import { canvasScopeActivity, type CanvasScope } from "./CanvasCard";
 
 const GLIDE_MS = 420;
 /** How long a new artboard's pop or a revised one's glint plays. */
@@ -19,18 +20,15 @@ export type CanvasActivity = "drawing" | "looking" | undefined;
 interface CanvasPanelProps {
   taskId: string;
   board: Board;
-  /** Every canvas in this chat, for the switcher. */
-  boards: Board[];
-  /** The agent is working on this canvas right now. */
-  activity: CanvasActivity;
-  expanded: boolean;
-  /** A transcript card asked to show these artboards; a new nonce is a new request. */
+  session?: CanvasSession;
+  activity?: CanvasActivity;
+  expanded?: boolean;
+  /** A reference asked to select these artboards; a new nonce is a new request. */
   focus?: { ids: string[]; nonce: number };
-  onSelectCanvas: (canvasId: string) => void;
   onExpand: () => void;
-  onClose: () => void;
-  /** Puts an artboard's plain-text mention in the draft. */
   onMention: (text: string) => void;
+  /** Offscreen transcript panes keep their layout without staging any artboard documents. */
+  visible?: boolean;
 }
 
 function signature(board: Board, id: string): string {
@@ -38,40 +36,65 @@ function signature(board: Board, id: string): string {
   return artboard ? JSON.stringify([artboard.name, artboard.width, artboard.height, artboard.notes, resolveArtboardHtml(board, artboard)]) : "";
 }
 
-function savedCamera(taskId: string, canvasId: string): Camera | undefined {
-  try {
-    const raw = localStorage.getItem(cameraStorageKey(taskId, canvasId));
-    return raw ? parseCamera(JSON.parse(raw)) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 const ease = (t: number) => 1 - (1 - t) ** 3;
 
 /**
- * One canvas in the side panel: the shared panel head (switcher, zoom, Expand, close) over the
- * board. It owns the camera — restored per canvas from `localStorage`, otherwise fitted — and the
- * small choreography around the agent's changes: new artboards pop in, revised ones glint, and
- * the camera glides to them unless the user has panned away since, in which case a pill offers
- * to. Reduced motion drops the glides and the effects; everything still lands.
+ * One live Canvas surface, shared by its inline and expanded hosts. The session owns durable
+ * viewer state; this host only owns its viewport and short-lived animation frames. Frames stay
+ * pointer-inert until stepped into, and an idle inline board leaves wheel events to the chat.
  */
-export function CanvasPanel({ taskId, board, boards, activity, expanded, focus, onSelectCanvas, onExpand, onClose, onMention }: CanvasPanelProps) {
+export function CanvasPanel({ taskId, board, session: suppliedSession, activity, expanded = false, focus, onExpand, onMention, visible = true }: CanvasPanelProps) {
   const reduce = useReducedMotion() ?? false;
-  const [camera, setCamera] = useState<Camera>(() => savedCamera(taskId, board.id) ?? { x: 0, y: 0, zoom: 1 });
+  const [fallbackSession] = useState(createCanvasSession);
+  const session = suppliedSession ?? fallbackSession;
+  const state = useCanvasView(session, taskId, board.id);
+  const { camera, measured, selected, entered } = state;
+  const active = expanded || state.active;
+  const root = useRef<HTMLElement>(null);
   const [viewport, setViewport] = useState<Size>({ width: 0, height: 0 });
-  const [measured, setMeasured] = useState<Record<string, number>>({});
-  const [selected, setSelected] = useState<string>();
-  const [entered, setEntered] = useState<string>();
   const [motions, setMotions] = useState<Record<string, ArtboardMotion>>({});
-  const [arrivals, setArrivals] = useState<string[]>([]);
+  const arrivals = state.arrivals;
   const cameraRef = useRef(camera);
   cameraRef.current = camera;
   const glideFrame = useRef(0);
-  /** Follow the agent's changes until the user moves the camera themself. */
-  const following = useRef(true);
-  const fitted = useRef(savedCamera(taskId, board.id) !== undefined);
-  const signatures = useRef<Map<string, string> | undefined>(undefined);
+  const motionTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const update = useCallback((patch: Parameters<CanvasSession["update"]>[1]) => session.update(board.id, patch), [session, board.id]);
+  const setCamera = useCallback((next: Camera) => update({ camera: next }), [update]);
+  const setArrivals = useCallback((next: string[] | ((current: string[]) => string[])) => {
+    update({ arrivals: typeof next === "function" ? next(session.get(board.id)?.arrivals ?? []) : next });
+  }, [update, session, board.id]);
+  const setSelected = useCallback((id: string | undefined) => update({ selected: id }), [update]);
+  const setEntered = useCallback((id: string | undefined) => update({ entered: id }), [update]);
+  const done = useCallback(() => {
+    update({ active: false, entered: undefined });
+    if (expanded) onExpand();
+  }, [update, expanded, onExpand]);
+  const activate = useCallback(() => session.activate(board.id), [session, board.id]);
+
+  useEffect(() => {
+    if (!active || expanded) return;
+    const outside = (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof Element) || root.current?.contains(target) || root.current?.closest("[data-canvas-inline]")?.contains(target)) return;
+      done();
+    };
+    let blurTimer: ReturnType<typeof setTimeout> | undefined;
+    const blur = () => {
+      // Moving focus into an artboard blurs the parent window too. Wait for that handoff:
+      // hasFocus includes descendant frames, but becomes false when the user leaves the app.
+      clearTimeout(blurTimer);
+      blurTimer = setTimeout(() => { if (!document.hasFocus()) done(); }, 0);
+    };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("focusin", outside);
+    window.addEventListener("blur", blur);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("focusin", outside);
+      window.removeEventListener("blur", blur);
+      clearTimeout(blurTimer);
+    };
+  }, [active, expanded, done]);
 
   const layout = useMemo(() => layoutCanvas(board, measured), [board, measured]);
   const layoutRef = useRef(layout);
@@ -81,7 +104,10 @@ export function CanvasPanel({ taskId, board, boards, activity, expanded, focus, 
     if (glideFrame.current) cancelAnimationFrame(glideFrame.current);
     glideFrame.current = 0;
   };
-  useEffect(() => stopGlide, []);
+  useEffect(() => () => {
+    stopGlide();
+    for (const timer of motionTimers.current.values()) clearTimeout(timer);
+  }, []);
 
   const glide = useCallback((target: Camera) => {
     stopGlide();
@@ -95,7 +121,7 @@ export function CanvasPanel({ taskId, board, boards, activity, expanded, focus, 
       glideFrame.current = t < 1 ? requestAnimationFrame(step) : 0;
     };
     glideFrame.current = requestAnimationFrame(step);
-  }, [reduce]);
+  }, [reduce, setCamera]);
 
   const showIds = useCallback((ids: readonly string[], maxZoom = FOCUS_MAX_ZOOM) => {
     const bounds = boundsOf(layoutRef.current.artboards.filter((item) => ids.includes(item.id)));
@@ -103,89 +129,90 @@ export function CanvasPanel({ taskId, board, boards, activity, expanded, focus, 
   }, [glide, viewport]);
 
   const fit = useCallback(() => {
-    following.current = true;
+    update({ following: true });
     setArrivals([]);
     if (viewport.width && layoutRef.current.artboards.length) glide(fitBounds(layoutRef.current.bounds, viewport, FOCUS_MAX_ZOOM));
   }, [glide, viewport]);
 
   // The first sight of a canvas with no saved camera fits it whole.
   useEffect(() => {
-    if (fitted.current || !viewport.width || !layout.artboards.length) return;
-    fitted.current = true;
+    if (session.get(board.id)?.fitted || !viewport.width || !layout.artboards.length) return;
+    update({ fitted: true });
     setCamera(fitBounds(layout.bounds, viewport, FOCUS_MAX_ZOOM));
   }, [viewport, layout]);
 
   // Expanding, restoring or resizing the panel refits the board, until the user takes the camera.
-  const fittedViewport = useRef<Size>({ width: 0, height: 0 });
   useEffect(() => {
-    const before = fittedViewport.current;
-    fittedViewport.current = viewport;
-    if (!before.width || !viewport.width || !layoutRef.current.artboards.length || !following.current) return;
-    if (Math.abs(before.width - viewport.width) < 40 && Math.abs(before.height - viewport.height) < 40) return;
-    glide(fitBounds(layoutRef.current.bounds, viewport, FOCUS_MAX_ZOOM));
-  }, [viewport, glide]);
-
-  // Remembered per canvas, written once the camera settles.
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      try { localStorage.setItem(cameraStorageKey(taskId, board.id), JSON.stringify(camera)); } catch { /* a convenience only */ }
-    }, 300);
-    return () => window.clearTimeout(timer);
-  }, [camera, taskId, board.id]);
+    if (!viewport.width || !viewport.height) return;
+    const before = session.get(board.id)?.viewport;
+    update({ viewport });
+    if (!before?.width || !layoutRef.current.artboards.length) return;
+    if (before.width === viewport.width && before.height === viewport.height) return;
+    if (session.get(board.id)?.following) glide(fitBounds(layoutRef.current.bounds, viewport, FOCUS_MAX_ZOOM));
+    else {
+      const current = cameraRef.current;
+      setCamera({ ...current, x: current.x + (viewport.width - before.width) / 2, y: current.y + (viewport.height - before.height) / 2 });
+    }
+  }, [viewport, glide, session, board.id, update, setCamera]);
 
   // What changed since the last board: new artboards pop, revised ones glint.
   useEffect(() => {
     const next = new Map(board.artboards.map((artboard) => [artboard.id, signature(board, artboard.id)]));
-    const previous = signatures.current;
-    signatures.current = next;
+    const previous = session.get(board.id)?.signatures;
+    if (previous && Object.keys(previous).length === next.size && [...next].every(([id, value]) => previous[id] === value)) return;
+    update({ signatures: Object.fromEntries(next) });
     if (!previous) return;
     const changes: Record<string, ArtboardMotion> = {};
     for (const [id, value] of next) {
-      if (!previous.has(id)) changes[id] = "pop";
-      else if (previous.get(id) !== value) changes[id] = "glint";
+      if (!(id in previous)) changes[id] = "pop";
+      else if (previous[id] !== value) changes[id] = "glint";
     }
     const ids = Object.keys(changes);
     if (!ids.length) return;
     if (!reduce) setMotions((current) => ({ ...current, ...changes }));
-    if (following.current) showIds(ids);
+    if (session.get(board.id)?.following) showIds(ids);
     else setArrivals((current) => [...new Set([...current, ...ids])]);
     if (reduce) return;
-    const timer = window.setTimeout(() => setMotions((current) => {
-      const rest = { ...current };
-      for (const id of ids) delete rest[id];
-      return rest;
-    }), MOTION_MS);
-    return () => window.clearTimeout(timer);
+    // Each artboard's timer survives unrelated board snapshots. A new revision restarts only
+    // that artboard's effect; cancelling a prior snapshot cannot leave a glint class stuck.
+    for (const id of ids) {
+      clearTimeout(motionTimers.current.get(id));
+      motionTimers.current.set(id, setTimeout(() => {
+        setMotions((current) => { const rest = { ...current }; delete rest[id]; return rest; });
+        motionTimers.current.delete(id);
+      }, MOTION_MS));
+    }
   }, [board]);
 
   // A card in the transcript asked for these artboards.
   useEffect(() => {
-    if (!focus || !viewport.width) return;
+    if (!focus || !viewport.width || session.get(board.id)?.focusNonce === focus.nonce) return;
+    update({ focusNonce: focus.nonce });
     const ids = focus.ids.filter((id) => board.artboards.some((artboard) => artboard.id === id));
-    following.current = true;
+    if (!ids.length) return;
+    update({ following: true });
     setArrivals([]);
-    if (ids.length) {
-      setSelected(ids[0]);
-      showIds(ids);
-    } else {
-      fit();
-    }
+    setSelected(ids[0]);
+    showIds(ids);
   }, [focus?.nonce, viewport.width > 0]);
 
   // An artboard that left the board can't stay selected or stepped into.
   useEffect(() => {
     if (selected && !board.artboards.some((artboard) => artboard.id === selected)) setSelected(undefined);
     if (entered && !board.artboards.some((artboard) => artboard.id === entered)) setEntered(undefined);
-  }, [board, selected, entered]);
+    const remaining = arrivals.filter((id) => board.artboards.some((artboard) => artboard.id === id));
+    if (remaining.length !== arrivals.length) setArrivals(remaining);
+  }, [board, selected, entered, arrivals, setArrivals]);
 
   const userCamera = useCallback((next: Camera) => {
     stopGlide();
-    following.current = false;
+    update({ following: false });
     setCamera(next);
-  }, []);
+  }, [update, setCamera]);
   const onMeasure = useCallback((id: string, height: number) => {
-    setMeasured((current) => current[id] === height ? current : { ...current, [id]: height });
-  }, []);
+    const current = session.get(board.id)?.measured ?? {};
+    if (current[id] !== height) update({ measured: { ...current, [id]: height } });
+  }, [session, board.id, update]);
   const zoomToArtboard = useCallback((id: string) => {
     setSelected(id);
     showIds([id]);
@@ -202,67 +229,32 @@ export function CanvasPanel({ taskId, board, boards, activity, expanded, focus, 
     if (artboard) onMention(artboardMention(board, artboard));
   }, [board, onMention]);
   const zoomStep = useCallback((factor: number) => {
-    following.current = false;
+    update({ following: false });
     glide(zoomTo(cameraRef.current, cameraRef.current.zoom * factor, viewport));
   }, [glide, viewport]);
   const zoomExact = useCallback((zoom: number) => {
-    following.current = false;
+    update({ following: false });
     glide(zoomTo(cameraRef.current, zoom, viewport));
   }, [glide, viewport]);
 
   const selectedArtboard = selected ? board.artboards.find((item) => item.id === selected) : undefined;
-  const percent = Math.round(camera.zoom * 100);
   const count = board.artboards.length;
   return (
-    <section className="canvas-panel">
-      <header className="panel-header" data-tauri-drag-region>
-        <span className={`panel-mark ${activity ? "live" : ""}`} aria-hidden="true"><Icon name="canvas" /></span>
-        <div className="panel-title" data-tauri-drag-region>
-          <span className="panel-kicker" data-tauri-drag-region>Canvas · {count} artboard{count === 1 ? "" : "s"}</span>
-          {boards.length > 1 ? (
-            <MenuButton
-              className="canvas-switcher"
-              label={`Canvas: ${board.title}. Switch canvas`}
-              align="start"
-              icon={<><h3>{board.title}</h3><Icon name="chevron" /></>}
-              items={boards.map((item) => ({ label: item.title, selected: item.id === board.id, onSelect: () => onSelectCanvas(item.id) }))}
-            />
-          ) : (
-            <h3 data-tauri-drag-region>{board.title}</h3>
-          )}
-        </div>
-        {activity && (
-          <span className="terminal-pill running" role="status">
-            <span className="terminal-pill-dot" aria-hidden="true" />{activity === "looking" ? "Checking artboards" : "Drawing"}
-          </span>
-        )}
-        <div className="panel-header-actions">
-          <div className="canvas-zoom" role="group" aria-label="Zoom">
-            <button type="button" className="icon-button" aria-label="Zoom out" title="Zoom out (−)" onClick={() => zoomStep(1 / ZOOM_STEP)}><Icon name="minus" /></button>
-            <MenuButton
-              className="canvas-zoom-level"
-              label={`Zoom ${percent}%. Zoom options`}
-              icon={<span>{percent}%</span>}
-              items={[
-                { label: "Zoom to fit", hint: "⇧1", onSelect: fit },
-                { label: "Zoom to selection", hint: "⇧2", disabled: !selected, onSelect: () => selected && zoomToArtboard(selected) },
-                "separator",
-                { label: "50%", onSelect: () => zoomExact(0.5) },
-                { label: "100%", hint: "⌘0", onSelect: () => zoomExact(1) },
-                { label: "200%", onSelect: () => zoomExact(2) },
-              ]}
-            />
-            <button type="button" className="icon-button" aria-label="Zoom in" title="Zoom in (+)" onClick={() => zoomStep(ZOOM_STEP)}><Icon name="plus" /></button>
-          </div>
-          <button type="button" className="icon-button" title={expanded ? "Restore canvas" : "Expand canvas"} aria-label={expanded ? "Restore canvas" : "Expand canvas"} onClick={onExpand}>
-            <Icon name={expanded ? "collapse" : "expand"} />
-          </button>
-          <button type="button" className="icon-button" title="Close canvas panel" aria-label="Close canvas panel" onClick={onClose}><Icon name="close" /></button>
-        </div>
-      </header>
+    <section ref={root} className={`canvas-panel${active ? " interactive" : ""}`} onKeyDown={(event) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (entered) setEntered(undefined);
+      else if (active) done();
+      else return;
+      event.preventDefault();
+      event.stopPropagation();
+    }}>
       <div className="canvas-stage">
         <CanvasBoard
           board={board}
+          active={active}
+          visible={visible}
+          onActivate={activate}
+          onDeactivate={done}
           layout={layout}
           camera={camera}
           onCamera={userCamera}
@@ -285,6 +277,16 @@ export function CanvasPanel({ taskId, board, boards, activity, expanded, focus, 
             <p>Nothing on this canvas any more.</p>
           </div>
         )}
+        <div className="canvas-controls">
+          {activity && (
+            <span className="terminal-pill running" role="status">
+              <span className="terminal-pill-dot" aria-hidden="true" />{activity === "looking" ? "Checking artboards" : "Drawing"}
+            </span>
+          )}
+          <button type="button" className="canvas-expand" title={expanded ? "Restore canvas" : "Expand canvas"} aria-label={expanded ? "Restore canvas" : "Expand canvas"} onClick={onExpand}>
+            <Icon name={expanded ? "collapse" : "expand"} />
+          </button>
+        </div>
         <div className="canvas-arrivals-dock">
         <AnimatePresence>
           {arrivals.length > 0 && (
@@ -297,7 +299,7 @@ export function CanvasPanel({ taskId, board, boards, activity, expanded, focus, 
               exit={reduce ? { opacity: 0 } : { opacity: 0, y: 8, scale: 0.96 }}
               transition={{ type: "spring", stiffness: 520, damping: 34 }}
               onClick={() => {
-                following.current = true;
+                update({ following: true });
                 showIds(arrivals);
                 setArrivals([]);
               }}
@@ -321,4 +323,35 @@ export function CanvasPanel({ taskId, board, boards, activity, expanded, focus, 
       </div>
     </section>
   );
+}
+
+/** Expanded host shares the same session as its inline placeholder, never a second live board. */
+export function CanvasExpanded({ scope, canvasId }: { scope: CanvasScope; canvasId: string }) {
+  const board = scope.boards.get(canvasId);
+  const [fallbackSession] = useState(createCanvasSession);
+  const session = scope.session ?? fallbackSession;
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!board) return;
+    session.ensure(scope.taskId ?? "", canvasId);
+    session.setExpanded(canvasId);
+  }, [session, scope.taskId, canvasId, Boolean(board)]);
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || event.cancelBubble) return;
+      if (event.target instanceof Element && event.target.closest(".popover, [role=dialog], .inline-dialog-wrap")) return;
+      if (session.get(canvasId)?.entered) session.update(canvasId, { entered: undefined });
+      else scope.onRestore?.();
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    document.addEventListener("keydown", key);
+    root.current?.querySelector<HTMLElement>(".canvas-viewport")?.focus({ preventScroll: true });
+    return () => document.removeEventListener("keydown", key);
+  }, [session, canvasId, scope.onRestore]);
+  if (!board) return null;
+  const activity = canvasScopeActivity(scope, canvasId);
+  return <div ref={root} className="canvas-expanded-content"><CanvasPanel taskId={scope.taskId ?? ""} board={board} session={session} activity={activity}
+    expanded focus={scope.focus?.canvasId === canvasId ? scope.focus : undefined}
+    onExpand={() => scope.onRestore?.()} onMention={scope.onMention ?? (() => {})} /></div>;
 }

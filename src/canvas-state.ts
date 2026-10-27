@@ -185,21 +185,10 @@ export function artboardMention(board: CanvasBoard, artboard: CanvasArtboard): s
   return `“${artboard.name}” (canvas “${board.title}”)`;
 }
 
-/** The canvas the latest accepted call drew on: the one the header's Canvas button opens. */
-export function latestCanvasId(messages: readonly NormalizedMessage[]): string | undefined {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const blocks = messages[index].blocks;
-    for (let block = blocks.length - 1; block >= 0; block -= 1) {
-      const entry = blocks[block];
-      if (entry.type === "tool-result" && entry.toolName === CANVAS_TOOL_NAME && !entry.isError && isCanvasDetails(entry.details)) return entry.details.canvas;
-    }
-  }
-  return undefined;
-}
-
 /** What the agent is doing on a canvas right now: a `canvas` or `canvas_look` call still in flight. */
-export function canvasActivity(messages: readonly NormalizedMessage[], partial?: NormalizedMessage): "drawing" | "looking" | undefined {
-  const pending = (block: NormalizedBlock) => block.type === "tool-call" && (block.toolName === CANVAS_TOOL_NAME || block.toolName === CANVAS_LOOK_TOOL_NAME);
+export function canvasActivity(messages: readonly NormalizedMessage[], partial?: NormalizedMessage, canvasId?: string): "drawing" | "looking" | undefined {
+  const pending = (block: NormalizedBlock) => block.type === "tool-call" && (block.toolName === CANVAS_TOOL_NAME || block.toolName === CANVAS_LOOK_TOOL_NAME)
+    && (canvasId === undefined || (block.arguments as { canvas?: unknown } | undefined)?.canvas === canvasId);
   const last = (blocks: readonly NormalizedBlock[], test: (block: NormalizedBlock) => boolean) => [...blocks].reverse().find(test);
   const streaming = partial ? last(partial.blocks, pending) : undefined;
   if (streaming) return streaming.toolName === CANVAS_LOOK_TOOL_NAME ? "looking" : "drawing";

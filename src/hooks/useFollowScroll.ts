@@ -34,7 +34,7 @@ export function useFollowScroll(memory?: TranscriptViewState, historyReady = tru
 
   const onWheel = (event: WheelEvent<HTMLDivElement>) => {
     const el = ref.current;
-    if (!el || event.deltaY === 0 || event.ctrlKey) return;
+    if (!el || event.defaultPrevented || event.deltaY === 0 || event.ctrlKey || event.metaKey) return;
     if (!(event.target instanceof Element) || !el.contains(event.target)) return;
     // Tool output/previews can scroll independently. A consumed wheel must not release
     // the reading anchor while a disclosure is animating around that nested scroller.

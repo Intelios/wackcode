@@ -1,12 +1,12 @@
 /**
  * The right-hand side panel shows one view at a time: the chat's Git changes, browser,
- * terminal, project Run/Build output, the Games arcade, one of the chat's canvases, or one sub-agent's transcript. Views are this union; adding one means a member
+ * terminal, project Run/Build output, the Games arcade, or one sub-agent's transcript. Views are this union; adding one means a member
  * here, a view component rendered in `SidePanel`, and a trigger that opens it (`toggleView`).
  *
  * Changes, Terminal, Run, Build and Games are durable: which of them is showing is remembered across launches and
  * chats (`wackcode:sidePanel`; terminal shows the open chat's own shell, spawning lazily on
  * first attach; Run/Build only attach to an explicitly launched command; a game in progress lives in
- * `games/session.ts`, so it survives chat switches paused). Browser, canvas and sub-agent views belong to one chat and fall back to that remembered
+ * `games/session.ts`, so it survives chat switches paused). Browser and sub-agent views belong to one chat and fall back to that remembered
  * state when the chat changes or the call leaves the conversation.
  */
 export type SidePanelView =
@@ -16,7 +16,6 @@ export type SidePanelView =
   | { kind: "run" }
   | { kind: "build" }
   | { kind: "games" }
-  | { kind: "canvas"; taskId: string; canvasId: string }
   | { kind: "subagent"; taskId: string; toolCallId: string; index: number };
 
 export const CHANGES_VIEW: SidePanelView = { kind: "changes" };
@@ -41,29 +40,26 @@ export function durableView(kind: PanelViewKind): SidePanelView {
 export function viewKey(view: SidePanelView): string {
   if (view.kind === "subagent") return `subagent:${view.taskId}:${view.toolCallId}#${view.index}`;
   if (view.kind === "browser") return `browser:${view.taskId}`;
-  if (view.kind === "canvas") return `canvas:${view.taskId}:${view.canvasId}`;
   return view.kind;
 }
 
 /**
  * Views that animate in as a new page. A call's children share one: moving between sibling tabs
- * slides only the transcript (`swapDirection`), and the tabs stay put. A chat's canvases share one
- * too: the switcher swaps the board in place.
+ * slides only the transcript (`swapDirection`), and the tabs stay put.
  */
 export function swapKey(view: SidePanelView): string {
   if (view.kind === "subagent") return `subagent:${view.taskId}:${view.toolCallId}`;
-  if (view.kind === "canvas") return `canvas:${view.taskId}`;
   return view.kind;
 }
 
 /** Views bound to one chat, which never show in another. */
 export function isTaskBound(view: SidePanelView | null): view is Extract<SidePanelView, { taskId: string }> {
-  return view?.kind === "browser" || view?.kind === "canvas" || view?.kind === "subagent";
+  return view?.kind === "browser" || view?.kind === "subagent";
 }
 
 /** Views that can span the main area with the composer docked below (`panelExpanded`). */
 export function canExpand(view: SidePanelView | null): boolean {
-  return view?.kind === "browser" || view?.kind === "canvas";
+  return view?.kind === "browser";
 }
 
 /** Which way a change of view slides: 1 enters from the right, -1 from the left. */

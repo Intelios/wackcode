@@ -3219,6 +3219,14 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
 .panel-expanded .chat-transcript, .panel-expanded .chat-scroll-zone { visibility: hidden; }
 .panel-expanded .composer-layer, .panel-expanded .chat-composer-layer { z-index: 4; }
 .panel-expanded .inline-dialog-wrap { position: absolute; bottom: var(--composer-h, 140px); left: 0; right: 0; z-index: 5; }
+/* Canvas expansion is independent of the side panel: park it without resetting its view,
+   width, PTY or native browser presentation, and leave the same composer and questions live. */
+.app-shell.canvas-expanded > .side-panel { position: absolute; right: 0; top: 0; bottom: 0; visibility: hidden; pointer-events: none; }
+.canvas-workspace-expanded.transcript-zone { position: absolute; left: 240px; right: 0; top: 0; bottom: var(--panel-dock-h, 150px); z-index: 3; overflow: hidden; background: var(--wc-well); }
+.canvas-expanded.panel-has-tabs > .canvas-workspace-expanded { top: 42px; }
+.canvas-expanded .workspace-header, .canvas-expanded .chat-transcript { visibility: hidden; }
+.canvas-expanded .composer-layer { z-index: 4; }
+.canvas-expanded .inline-dialog-wrap { position: absolute; bottom: var(--composer-h, 140px); left: 0; right: 0; z-index: 5; }
 .browser-context-chip { display: inline-flex; max-width: 280px; min-width: 0; align-items: center; gap: 3px; border: 1px solid var(--wc-accent-line-soft); border-radius: var(--wc-radius-card); background: var(--wc-well); overflow: hidden; }
 .browser-context-open { display: flex; min-width: 0; gap: 9px; align-items: center; border: 0; background: transparent; color: var(--text); padding: 6px 8px; text-align: left; cursor: pointer; }
 .browser-context-open > img { width: 42px; height: 32px; object-fit: cover; border-radius: 5px; }
@@ -4842,26 +4850,44 @@ html[data-force-reduced-motion] *::after {
 .visual-expanded-close svg { width: 12px; height: 12px; }
 
 /* ── Canvas (components/canvas/, canvas_render.rs) ─────
-   A board of artboards beside the chat: a dot-grid well the user pans and zooms, the agent's
-   mockups on it at their real sizes, each named by a label that keeps its screen size while the
-   board scales (`--canvas-label-scale`). The board and its artboards are content, so they stay
-   solid over an image backdrop or Liquid Glass. The transcript card wears the visual card's
-   anatomy: head band, dotted seam, an outline map of the board on the well. */
-.canvas-panel { height: 100%; min-height: 0; display: flex; flex-direction: column; }
-.canvas-switcher.icon-button { width: auto; max-width: 100%; height: auto; min-height: 0; padding: 0 4px 0 0; gap: 4px; justify-content: flex-start; border-radius: 6px; background: transparent; color: var(--text); }
-.canvas-switcher.icon-button:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
-.canvas-switcher h3 { margin: 0; font-size: 13.5px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.canvas-switcher svg { width: 11px; height: 11px; flex: 0 0 auto; transform: rotate(90deg); color: var(--text-dim); }
-.canvas-zoom { display: inline-flex; align-items: center; margin-right: 4px; padding: 1px; border-radius: var(--wc-radius-pill); box-shadow: inset 0 0 0 1px var(--border); }
-.canvas-zoom .icon-button { width: 24px; height: 24px; border-radius: 50%; }
-.canvas-zoom .icon-button svg { width: 12px; height: 12px; }
-.canvas-zoom .canvas-zoom-level.icon-button { width: auto; min-width: 46px; padding: 0 6px; border-radius: var(--wc-radius-pill); font: 11px/1 "SFMono-Regular", Consolas, monospace; font-variant-numeric: tabular-nums; color: var(--text-soft); }
-.canvas-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--wc-well); }
-.canvas-viewport {
-  position: absolute; inset: 0; overflow: hidden; outline: none; cursor: grab; touch-action: none; user-select: none;
-  background-color: var(--wc-well);
-  background-image: radial-gradient(circle, color-mix(in srgb, var(--text-dim) 30%, transparent) 1px, transparent 1.5px);
+   Wide transcript content, sized against its own scroller rather than the window. The live
+   board moves to its latest modifying turn; older turns keep compact references. The well,
+   its controls and the artboards stay solid over an image backdrop or Liquid Glass. */
+.canvas-inline {
+  width: var(--canvas-inline-width, 100%); margin: 16px calc((100% - var(--canvas-inline-width, 100%)) / 2); min-width: 0;
+  display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border-bright); border-radius: var(--wc-radius-card);
+  background: var(--wc-well); box-shadow: 0 12px 36px -20px color-mix(in srgb, var(--wc-well) 80%, transparent);
 }
+.canvas-expanded-content { height: 100%; min-height: 0; }
+.canvas-panel { height: 100%; min-height: 0; min-width: 0; flex: 1; display: flex; flex-direction: column; }
+.canvas-height-resizer { flex: 0 0 13px; display: grid; place-items: center; cursor: ns-resize; touch-action: none; background: var(--wc-well); }
+.canvas-height-resizer > span { width: 38px; height: 4px; border-radius: var(--wc-radius-pill); background: var(--border-bright); transition: background .15s var(--ease), width .15s var(--ease); }
+.canvas-height-resizer:hover > span, .canvas-height-resizer:focus-visible > span { width: 52px; background: var(--wc-accent); }
+.canvas-inline-placeholder { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--text-dim); font-size: 12px; }
+.canvas-inline-placeholder strong { color: var(--text); font-weight: 600; }
+.canvas-reference-summary { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--text-dim); }
+.canvas-reference .canvas-card-head { border-bottom: 0; gap: 9px; padding: 9px 10px; }
+.canvas-reference .canvas-card-title { flex-wrap: wrap; row-gap: 2px; }
+.canvas-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--wc-well); }
+/* Only a floating activity pill and the expand control sit over the board. */
+.canvas-controls { position: absolute; top: 10px; left: 10px; right: 10px; z-index: 2; display: flex; align-items: flex-start; justify-content: space-between; pointer-events: none; }
+.canvas-controls > * { pointer-events: auto; }
+.canvas-expand {
+  margin-left: auto;
+  display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--border-bright) 75%, transparent);
+  background: color-mix(in srgb, var(--wc-elevated) 92%, transparent); color: var(--text-soft);
+  box-shadow: 0 3px 12px color-mix(in srgb, var(--wc-well) 55%, transparent);
+  cursor: pointer; transition: color .15s var(--ease), background .15s var(--ease), border-color .15s var(--ease), scale .15s var(--ease);
+}
+.canvas-expand:hover, .canvas-expand:focus-visible { color: var(--wc-accent-text); background: var(--wc-accent-tint); border-color: var(--wc-accent-line); }
+.canvas-expand:active { scale: .94; }
+.canvas-expand svg { width: 13px; height: 13px; }
+.canvas-viewport {
+  position: absolute; inset: 0; overflow: hidden; outline: none; cursor: default; touch-action: pan-y; user-select: none;
+  background: var(--wc-well);
+}
+.canvas-viewport.active { cursor: grab; touch-action: none; }
 .canvas-viewport.panning { cursor: grabbing; }
 .canvas-viewport:focus-visible { box-shadow: inset 0 0 0 2px var(--wc-focus-line); }
 .canvas-world { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
@@ -4936,7 +4962,7 @@ html[data-force-reduced-motion] *::after {
 .canvas-hint > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .canvas-hint-keys { color: var(--text-dim); }
 .canvas-hint kbd { font: 10.5px "SFMono-Regular", Consolas, monospace; }
-.panel-expanded .canvas-arrivals-dock { bottom: 22px; }
+.canvas-workspace-expanded .canvas-arrivals-dock { bottom: 22px; }
 /* Zoomed far out, the names stay readable and everything else steps aside so rows don't crowd. */
 .canvas-viewport.far .canvas-group-label, .canvas-viewport.far .canvas-artboard-size,
 .canvas-viewport.far .canvas-artboard:not(.selected) .canvas-artboard-actions { display: none; }
@@ -4959,16 +4985,6 @@ html[data-force-reduced-motion] *::after {
 .canvas-card-title strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; color: var(--text); }
 .canvas-card-open.secondary-button.compact { height: 24px; padding: 3px 10px 3px 8px; gap: 5px; font-size: 11px; border-radius: var(--wc-radius-pill); }
 .canvas-card-open.secondary-button.compact svg { width: 12px; height: 12px; }
-.canvas-card-map {
-  display: block; width: 100%; height: 136px; padding: 14px 16px; border: 0; cursor: pointer;
-  background-color: var(--surface);
-  background-image: radial-gradient(circle, color-mix(in srgb, var(--text-dim) 22%, transparent) 1px, transparent 1.5px); background-size: 14px 14px;
-}
-.canvas-card-map:disabled { cursor: default; }
-.canvas-card-map svg { display: block; width: 100%; height: 100%; overflow: visible; }
-.canvas-card-map rect { fill: color-mix(in srgb, var(--text) 6%, transparent); stroke: var(--border-bright); stroke-width: 1; vector-effect: non-scaling-stroke; transition: fill .18s var(--ease); }
-.canvas-card-map rect.lit { fill: color-mix(in srgb, var(--wc-accent) 26%, transparent); stroke: var(--wc-accent); }
-.canvas-card-map:hover rect.lit { fill: color-mix(in srgb, var(--wc-accent) 40%, transparent); }
 .canvas-card-foot { margin: 0; padding: 7px 12px; border-top: 1px solid var(--border); display: flex; align-items: baseline; gap: 10px; min-width: 0; font-size: 11.5px; color: var(--text-soft); }
 .canvas-card-foot > span:first-child { flex: 0 0 auto; }
 .canvas-card-names { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }

@@ -164,7 +164,7 @@ file moving or disappearing. These images reach the frame as data URLs.
 ### Canvas (`canvas/`)
 
 A canvas is a board of artboards — full HTML mockups at real sizes — that the user pans and zooms
-beside the chat, for comparing UI alternatives (themes, layouts, desktop beside phone). Three
+inside the transcript, for comparing UI alternatives (themes, layouts, desktop beside phone). Three
 tools, all read-only, so Plan and Ultra Plan allow them (the plan-mode helper list):
 
 - **`canvas_guide`** is the authoring guide (`guide.ts`): basics, exploring directions, theme

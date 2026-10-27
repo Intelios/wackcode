@@ -16,7 +16,7 @@ export type CanvasGuideSection = typeof CANVAS_GUIDE_SECTIONS[number];
 const SECTIONS: Record<CanvasGuideSection, string> = {
   basics: `## Basics
 
-A canvas is a board the user pans and zooms beside the chat, holding artboards: full mockups drawn side by side so they can be compared. It opens in the side panel and can expand over the whole window while the user keeps chatting with you.
+A canvas is a board in the chat transcript holding artboards: full mockups drawn side by side so they can be compared. It appears as a wide inline panel; the user clicks to interact, pans and zooms, and can expand it above the composer while keeping the chat available.
 
 - **Start one** with \`canvas\` and a \`title\` (e.g. "Settings page directions"). Later calls pass the returned \`canvas\` id instead. A chat can hold several canvases; start a new one only for a genuinely different subject.
 - **Artboards** have a \`name\` the user will say out loud ("Dusk", "Compact list"), a \`width\`, an optional \`height\` and an \`html\` body. Omit \`height\` for a component or long page that should be as tall as its content; give one for a fixed screen.

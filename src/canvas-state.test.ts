@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import foldCases from "../worker/src/builtin/canvas/fold-cases.json";
 import type { NormalizedMessage } from "./types";
-import { artboardMention, canvasActivity, canvasTouch, canvasesFromMessages, latestCanvasId, mergeTouches, resolveArtboardHtml, type CanvasBoard, type CanvasDetails } from "./canvas-state";
+import { artboardMention, canvasActivity, canvasTouch, canvasesFromMessages, mergeTouches, resolveArtboardHtml, type CanvasBoard, type CanvasDetails } from "./canvas-state";
 
 type Call = { args: unknown; details: CanvasDetails | Record<string, unknown> };
 
@@ -72,15 +72,10 @@ describe("canvas touches", () => {
   });
 });
 
-describe("latestCanvasId and canvasActivity", () => {
+describe("canvasActivity", () => {
   const call = (id: string, name = "canvas"): NormalizedMessage => ({ id: `a-${id}`, role: "assistant", blocks: [{ type: "tool-call", toolName: name, toolCallId: id }] } as NormalizedMessage);
   const result = (id: string, canvas: string, name = "canvas"): NormalizedMessage => ({ id: `t-${id}`, role: "tool", blocks: [{ type: "tool-result", toolName: name, toolCallId: id, details: { v: 1, canvas, title: canvas, applied: [], removed: [] } }] } as NormalizedMessage);
   const user: NormalizedMessage = { id: "u", role: "user", blocks: [{ type: "text", text: "go" }] } as NormalizedMessage;
-
-  it("names the canvas drawn on last", () => {
-    expect(latestCanvasId([call("1"), result("1", "one"), call("2"), result("2", "two"), call("3"), result("3", "one")])).toBe("one");
-    expect(latestCanvasId([user])).toBeUndefined();
-  });
 
   it("reports a call still in flight on the current turn", () => {
     expect(canvasActivity([user, call("1")])).toBe("drawing");
@@ -88,5 +83,14 @@ describe("latestCanvasId and canvasActivity", () => {
     expect(canvasActivity([user, call("1"), result("1", "one"), call("2", "canvas_look")])).toBe("looking");
     expect(canvasActivity([call("1"), user])).toBeUndefined();
     expect(canvasActivity([user], call("9", "canvas_look"))).toBe("looking");
+  });
+
+  it("marks only the canvas targeted by an in-flight call", () => {
+    const look = call("9", "canvas_look");
+    look.blocks[0].arguments = { canvas: "one" };
+    expect(canvasActivity([user], look, "one")).toBe("looking");
+    expect(canvasActivity([user], look, "two")).toBeUndefined();
+    expect(canvasActivity([user, look], undefined, "one")).toBe("looking");
+    expect(canvasActivity([user, look, result("9", "one", "canvas_look")], undefined, "one")).toBeUndefined();
   });
 });

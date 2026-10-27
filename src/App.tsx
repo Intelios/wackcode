@@ -32,7 +32,8 @@ import { NavigationScope } from "./components/ui/NavigationScope";
 import { LAST_CHAT_MODEL_KEY, useModelMemory } from "./hooks/useModelMemory";
 import { useModelFavorites } from "./hooks/useModelFavorites";
 import { DEFAULT_APPEARANCE, applyTheme, cacheTheme, visualThemeVars } from "./theme";
-import { canvasActivity, canvasesFromMessages, latestCanvasId, type CanvasBoard } from "./canvas-state";
+import { canvasActivity, canvasesFromMessages, type CanvasBoard } from "./canvas-state";
+import { createCanvasSession, type CanvasSession } from "./canvas-session";
 import { computerCursorAppearance } from "./computer-cursor";
 import { AssistantNameContext, agentName } from "./agentName";
 import { DynamicBackdrop, type DynamicBackdropHandle } from "./components/DynamicBackdrop";
@@ -93,7 +94,8 @@ import { BrowserPanel } from "./components/BrowserPanel";
 import { RunPanel } from "./components/RunPanel";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { SidePanel } from "./components/SidePanel";
-import { CanvasPanel } from "./components/canvas/CanvasPanel";
+import { CanvasExpanded } from "./components/canvas/CanvasPanel";
+import type { CanvasScope } from "./components/canvas/CanvasCard";
 import { GamesPanel } from "./components/GamesPanel";
 import { exitToArcade } from "./games/session";
 import { SubagentPanelLink } from "./components/SubagentChip";
@@ -461,14 +463,42 @@ export default function App() {
   // The chat's canvases, folded out of its transcript (`canvas-state.ts`): a rewind past a call
   // takes its artboards away, exactly as it takes the call's chip.
   const canvasMessages = runtime?.snapshot?.messages;
-  const selectedCanvases = useMemo(() => canvasMessages ? canvasesFromMessages(canvasMessages) : new Map<string, CanvasBoard>(), [canvasMessages]);
+  const selectedCanvases = useMemo(() => selectedTask?.kind === "code" && canvasMessages ? canvasesFromMessages(canvasMessages) : new Map<string, CanvasBoard>(), [canvasMessages, selectedTask?.kind]);
+  // Canvas belongs to the conversation, independently of its current turn or the side panel.
+  // Keep its controller alive across host moves and chat switches; only camera/height are durable.
+  const canvasSessions = useRef(new Map<string, CanvasSession>());
+  const selectedCanvasSession = useMemo(() => {
+    if (!selectedTaskId || selectedTask?.kind !== "code") return undefined;
+    let session = canvasSessions.current.get(selectedTaskId);
+    if (!session) {
+      session = createCanvasSession();
+      canvasSessions.current.set(selectedTaskId, session);
+    }
+    return session;
+  }, [selectedTaskId, selectedTask?.kind]);
+  const [expandedCanvas, setExpandedCanvas] = useState<{ taskId: string; canvasId: string }>();
+  const expandedCanvasId = expandedCanvas && expandedCanvas.taskId === selectedTaskId && area === "code" && !settingsOpen
+    && !selectedTask?.archived && selectedCanvases.has(expandedCanvas.canvasId) ? expandedCanvas.canvasId : undefined;
+  useLayoutEffect(() => {
+    selectedCanvasSession?.setExpanded(expandedCanvasId);
+    return () => {
+      selectedCanvasSession?.setExpanded(undefined);
+      selectedCanvasSession?.deactivate();
+    };
+  }, [selectedCanvasSession, expandedCanvasId]);
+  useEffect(() => {
+    if (expandedCanvas && !expandedCanvasId) setExpandedCanvas(undefined);
+  }, [expandedCanvas, expandedCanvasId]);
+  useEffect(() => {
+    for (const id of canvasSessions.current.keys()) {
+      if (!data.tasks.some((task) => task.id === id)) canvasSessions.current.delete(id);
+    }
+  }, [data.tasks]);
   // Task-bound views never show in another chat, even for the render before the effect below
   // moves the panel back to the remembered durable view.
   const missingSubagent = sidePanel?.kind === "subagent" && sidePanel.taskId === selectedTaskId && runtime?.snapshot !== undefined
     && !hasSubagentCall(runtime.snapshot.messages, runtime.partial, sidePanel.toolCallId);
-  const missingCanvas = sidePanel?.kind === "canvas" && sidePanel.taskId === selectedTaskId && runtime?.snapshot !== undefined
-    && !selectedCanvases.has(sidePanel.canvasId);
-  const panelView = selectedTask?.archived || missingSubagent || missingCanvas || (area === "chat" && sidePanel?.kind !== "browser") ? null
+  const panelView = selectedTask?.archived || missingSubagent || (area === "chat" && sidePanel?.kind !== "browser") ? null
     : isTaskBound(sidePanel) && sidePanel.taskId !== selectedTaskId
       ? tabsEnabled ? null : rememberedPanelView() : sidePanel;
   const shownSubagent = panelView?.kind === "subagent" ? panelView : undefined;
@@ -515,28 +545,31 @@ export default function App() {
     if (panelView?.kind === "games") exitToArcade();
     setSidePanel((current) => toggleView(current, GAMES_VIEW));
   }, [panelExpanded, expandRestoreWidth, panelView, setSidePanel, setPanelWidth, setPanelExpanded]);
-  /** A transcript card's request to show some artboards; a new nonce is a new request. */
-  const [canvasFocus, setCanvasFocus] = useState<{ canvasId: string; ids: string[]; nonce: number }>();
+  /** Requests belong to this visit, so returning to a chat restores its reading position
+   * rather than replaying an earlier Canvas jump before a clearing effect can run. */
+  const canvasNavigationKey = JSON.stringify([selectedTaskId, area, settingsOpen]);
+  const canvasNavigation = useRef({ key: canvasNavigationKey, visit: 0 });
+  if (canvasNavigation.current.key !== canvasNavigationKey) canvasNavigation.current = { key: canvasNavigationKey, visit: canvasNavigation.current.visit + 1 };
+  const canvasVisit = canvasNavigation.current.visit;
+  const [canvasFocus, setCanvasFocus] = useState<{ taskId: string; canvasId: string; ids: string[]; nonce: number; visit: number }>();
   const openCanvas = useCallback((canvasId: string, ids: string[] = []) => {
     const taskId = selectedTaskRef.current;
     if (!taskId) return;
-    setSidePanel({ kind: "canvas", taskId, canvasId });
-    setCanvasFocus((current) => ({ canvasId, ids, nonce: (current?.nonce ?? 0) + 1 }));
-  }, [setSidePanel]);
-  const closeExpandable = useCallback(() => {
-    if (panelExpanded) setPanelWidth(expandRestoreWidth);
-    setPanelExpanded(false);
-    setSidePanel(null);
-  }, [panelExpanded, expandRestoreWidth, setSidePanel, setPanelWidth, setPanelExpanded]);
-  const toggleCanvas = useCallback(() => {
+    const visit = canvasNavigation.current.visit;
+    setCanvasFocus((current) => ({ taskId, canvasId, ids, nonce: (current?.nonce ?? 0) + 1, visit }));
+  }, []);
+  const expandCanvas = useCallback((canvasId: string) => {
     const taskId = selectedTaskRef.current;
     if (!taskId) return;
-    if (sidePanel?.kind === "canvas" && sidePanel.taskId === taskId) closeExpandable();
-    else {
-      const canvasId = latestCanvasId(canvasMessages ?? []);
-      if (canvasId) openCanvas(canvasId);
-    }
-  }, [sidePanel, canvasMessages, closeExpandable, openCanvas]);
+    selectedCanvasSession?.setExpanded(canvasId);
+    setExpandedCanvas({ taskId, canvasId });
+  }, [selectedCanvasSession]);
+  const restoreCanvas = useCallback(() => {
+    selectedCanvasSession?.setExpanded(undefined);
+    selectedCanvasSession?.deactivate();
+    setExpandedCanvas(undefined);
+    if (expandedCanvas && expandedCanvas.taskId === selectedTaskRef.current) openCanvas(expandedCanvas.canvasId);
+  }, [expandedCanvas, openCanvas, selectedCanvasSession]);
   const closeSidePanel = useCallback(() => setSidePanel(null), [setSidePanel]);
   /** The Games panel's "back to chat": close the panel and put the caret back in the composer. */
   const backToChat = useCallback(() => {
@@ -558,7 +591,7 @@ export default function App() {
     void api.browserOpen(taskId, url).then(updateBrowser).catch((reason) => setGlobalError(String(reason)));
   }, [browserBuiltinOn, setSidePanel, updateBrowser]);
   useEffect(() => {
-    if (!panelExpanded) return;
+    if (!panelExpanded && !expandedCanvasId) return;
     const shell = document.querySelector<HTMLElement>(".app-shell");
     if (!shell) return;
     const update = () => {
@@ -572,7 +605,7 @@ export default function App() {
     const changes = new MutationObserver(update);
     changes.observe(shell, { childList: true, subtree: true }); update();
     return () => { observer.disconnect(); changes.disconnect(); shell.style.removeProperty("--panel-dock-h"); };
-  }, [panelExpanded, composerDraftKey, area]);
+  }, [panelExpanded, expandedCanvasId, composerDraftKey, area]);
   const togglePanelExpanded = useCallback(() => {
     if (!panelExpanded) setExpandRestoreWidth(panelWidth);
     setPanelExpanded(!panelExpanded);
@@ -937,29 +970,9 @@ export default function App() {
 
   // Rewinding past a call takes its chips away, and the panel follows.
   useEffect(() => {
-    if (!missingSubagent && !missingCanvas) return;
-    if (missingCanvas && panelExpanded) {
-      setPanelWidth(expandRestoreWidth);
-      setPanelExpanded(false);
-    }
+    if (!missingSubagent) return;
     setSidePanel(tabsEnabled ? null : rememberedPanelView());
-  }, [missingSubagent, missingCanvas, tabsEnabled, setSidePanel]);
-
-  // The first canvas a live run starts in the open chat opens beside it, unless the panel is
-  // already showing something; then the header's Canvas button pulses instead.
-  const seenCanvases = useRef(new Map<string, Set<string>>());
-  const [canvasPulse, setCanvasPulse] = useState(0);
-  useEffect(() => {
-    if (!selectedTaskId || !runtime?.snapshot) return;
-    const ids = new Set(selectedCanvases.keys());
-    const seen = seenCanvases.current.get(selectedTaskId);
-    seenCanvases.current.set(selectedTaskId, ids);
-    if (!seen) return;
-    const fresh = [...ids].filter((id) => !seen.has(id));
-    if (!fresh.length || selectedTask?.status !== "running") return;
-    if (!sidePanel) openCanvas(fresh[fresh.length - 1]);
-    else if (sidePanel.kind !== "canvas") setCanvasPulse((current) => current + 1);
-  }, [selectedCanvases, selectedTaskId]);
+  }, [missingSubagent, tabsEnabled, setSidePanel]);
 
   const refreshChanges = useCallback(async (taskId = selectedTaskRef.current) => {
     // A Chat mode chat's scratchpad is not a checkout; the host would refuse the request.
@@ -2711,7 +2724,21 @@ export default function App() {
   const onSkillDraftAction = useCallback((action: SkillDraftAction) => void handlers.current.skillDraftAction(action), []);
   const onUndoRewind = useCallback(() => handlers.current.undoRewind(), []);
   const onVisualSend = useCallback((text: string, title: string) => handlers.current.visualSend(text, title), []);
-  const canvasScope = useMemo(() => ({ boards: selectedCanvases, onOpen: openCanvas }), [selectedCanvases, openCanvas]);
+  const mentionCanvas = useCallback((text: string) => {
+    const key = composerDraftKey;
+    composerDrafts.update(key, (draft) => ({ ...draft, text: draft.text.trim() ? `${draft.text.replace(/\s+$/, "")} ${text} ` : `${text} ` }));
+    requestAnimationFrame(() => { if (composerKeyRef.current === key) document.querySelector<HTMLTextAreaElement>(".composer-input textarea")?.focus(); });
+  }, [composerDraftKey, composerDrafts.update]);
+  const selectedCanvasActivity = useMemo(() => new Map([...selectedCanvases.keys()].map((id) => [id,
+    selectedBusy ? canvasActivity(canvasMessages ?? [], runtime?.partial, id) : undefined
+  ])), [selectedCanvases, selectedBusy, canvasMessages, runtime?.partial]);
+  const canvasScope = useMemo<CanvasScope>(() => ({
+    boards: selectedCanvases, taskId: selectedTaskId, session: selectedCanvasSession,
+    activity: selectedCanvasActivity, expandedId: expandedCanvasId,
+    focus: canvasFocus && canvasFocus.taskId === selectedTaskId && canvasFocus.visit === canvasVisit ? canvasFocus : undefined,
+    onOpen: openCanvas, onExpand: expandCanvas, onRestore: restoreCanvas, onMention: mentionCanvas
+  }), [selectedCanvases, selectedTaskId, selectedCanvasSession, selectedCanvasActivity, expandedCanvasId, canvasFocus, canvasVisit,
+    openCanvas, expandCanvas, restoreCanvas, mentionCanvas]);
   const onSuggestionAction = useCallback((action: SuggestionAction) => void handlers.current.suggestionAction(action), []);
   /**
    * What the selected chat's suggested-task cards may do. `started` and `busy` are the
@@ -3143,7 +3170,7 @@ export default function App() {
         { label: "Settings…", icon: <Icon name="settings" />, hint: "⌘,", onSelect: openSettings }
       ]}
     >
-    <div className={`app-shell${rebuilding ? " rebuild" : ""}${panelExpanded && canExpand(panelView) ? " panel-expanded" : ""}${showChatTabBar ? " panel-has-tabs" : ""}`} data-area={area} data-dynamic-space onClickCapture={(event) => {
+    <div className={`app-shell${rebuilding ? " rebuild" : ""}${expandedCanvasId ? " canvas-expanded" : panelExpanded && canExpand(panelView) ? " panel-expanded" : ""}${showChatTabBar ? " panel-has-tabs" : ""}`} data-area={area} data-dynamic-space onClickCapture={(event) => {
       if (event.button === 0 && !settingsOpen && !confirm && !restoreDialog && !subscriptionLogin && isBackgroundClick(event.target)) {
         dynamicBackdrop.current?.ripple(event.clientX, event.clientY);
       }
@@ -3292,7 +3319,6 @@ export default function App() {
               onToggleTerminal={toggleTerminal}
               gamesOpen={panelView?.kind === "games"}
               onToggleGames={toggleGames}
-              canvas={selectedCanvases.size > 0 ? { open: panelView?.kind === "canvas", onToggle: toggleCanvas, pulse: canvasPulse } : undefined}
               onRename={(name) => void renameTask(selectedTask.id, name)}
               onTaskAction={(task, action) => void taskAction(task, action)}
               titlePulse={titlePulses[selectedTask.id] ?? 0}
@@ -3513,7 +3539,6 @@ export default function App() {
         width={panelWidth}
         onWidthChange={setPanelWidth}
         label={panelView?.kind === "browser" ? "Browser"
-          : panelView?.kind === "canvas" ? "Canvas"
           : panelView?.kind === "run" ? "Run"
           : panelView?.kind === "build" ? "Build"
           : panelView?.kind === "terminal" ? "Terminal"
@@ -3525,7 +3550,7 @@ export default function App() {
         <BrowserPanel
           taskId={view.taskId}
           state={browsers[view.taskId]}
-          visible={!confirm && !restoreDialog && !subscriptionLogin && !extensionRequests.some((request) => request.taskId === view.taskId) && !accessRequests.some((request) => request.taskId === view.taskId)}
+          visible={!expandedCanvasId && !confirm && !restoreDialog && !subscriptionLogin && !extensionRequests.some((request) => request.taskId === view.taskId) && !accessRequests.some((request) => request.taskId === view.taskId)}
           expanded={panelExpanded}
           onState={updateBrowser}
           onAttach={(context) => {
@@ -3551,28 +3576,6 @@ export default function App() {
             closeSidePanel();
           }}
         />
-      ) : view.kind === "canvas" ? (
-        selectedCanvases.get(view.canvasId) ? (
-          <CopyText.Provider value={writeText}>
-          <CanvasPanel
-            key={view.canvasId}
-            taskId={view.taskId}
-            board={selectedCanvases.get(view.canvasId)!}
-            boards={[...selectedCanvases.values()]}
-            activity={selectedBusy ? canvasActivity(runtime?.snapshot?.messages ?? [], runtime?.partial) : undefined}
-            expanded={panelExpanded}
-            focus={canvasFocus?.canvasId === view.canvasId ? canvasFocus : undefined}
-            onSelectCanvas={(canvasId) => openCanvas(canvasId)}
-            onExpand={togglePanelExpanded}
-            onClose={closeExpandable}
-            onMention={(text) => {
-              const key = composerDraftKey;
-              composerDrafts.update(key, (draft) => ({ ...draft, text: draft.text.trim() ? `${draft.text.replace(/\s+$/, "")} ${text} ` : `${text} ` }));
-              requestAnimationFrame(() => { if (composerKeyRef.current === key) document.querySelector<HTMLTextAreaElement>(".composer-input textarea")?.focus(); });
-            }}
-          />
-          </CopyText.Provider>
-        ) : null
       ) : view.kind === "run" || view.kind === "build" ? (
         <RunPanel kind={view.kind} run={view.kind === "build" ? selectedBuild : selectedRun} appearance={data.appearance}
           configured={Boolean(!selectedTask.archived && (view.kind === "build" ? selectedProject?.buildCommand : selectedProject?.runCommand))}
@@ -3656,6 +3659,20 @@ export default function App() {
         onComments={saveDiffComments}
         onAddressComments={addressDiffComments}
       />}</SidePanel>}
+      {expandedCanvasId && (
+          <motion.section
+            key={`${selectedTaskId}:${expandedCanvasId}`}
+            className="canvas-workspace-expanded transcript-zone"
+            aria-label="Expanded canvas"
+            initial={reduce ? false : { opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: reduce ? 0 : 0.18, ease: EASE }}
+          >
+            <CopyText.Provider value={writeText}>
+              <CanvasExpanded scope={canvasScope} canvasId={expandedCanvasId} />
+            </CopyText.Provider>
+          </motion.section>
+      )}
         </>
       )}
 

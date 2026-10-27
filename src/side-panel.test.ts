@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BUILD_VIEW, CHANGES_VIEW, GAMES_VIEW, TERMINAL_VIEW, RUN_VIEW, rememberedView, sameView, swapDirection, swapKey, toggleView, viewForChat, viewKey, type SidePanelView } from "./side-panel";
+import { BUILD_VIEW, CHANGES_VIEW, GAMES_VIEW, TERMINAL_VIEW, RUN_VIEW, canExpand, rememberedView, sameView, swapDirection, swapKey, toggleView, viewForChat, viewKey, type SidePanelView } from "./side-panel";
 
 const scout: SidePanelView = { kind: "subagent", taskId: "chat-1", toolCallId: "call-1", index: 0 };
 const sibling: SidePanelView = { kind: "subagent", taskId: "chat-1", toolCallId: "call-1", index: 1 };
@@ -63,6 +63,14 @@ describe("side panel views", () => {
     expect(rememberedView(null)).toBeNull();
     expect(rememberedView(scout)).toBeUndefined();
     expect(rememberedView(browser)).toBeUndefined();
+  });
+
+  it("keeps browser expansion independent of the other panel views", () => {
+    expect(canExpand(browser)).toBe(true);
+    expect(canExpand(CHANGES_VIEW)).toBe(false);
+    expect(canExpand(TERMINAL_VIEW)).toBe(false);
+    expect(canExpand(scout)).toBe(false);
+    expect(canExpand(null)).toBe(false);
   });
 
   it("keeps task-bound views in their own chat and falls back to the remembered durable view", () => {

@@ -36,8 +36,6 @@ interface ChatHeaderProps {
   onToggleTerminal: () => void;
   gamesOpen: boolean;
   onToggleGames: () => void;
-  /** Present once the chat has a canvas. A new `pulse` rings the button: the agent drew on one. */
-  canvas?: { open: boolean; onToggle: () => void; pulse: number };
   onRename: (name: string) => void;
   onTaskAction: (task: TaskRecord, action: TaskAction) => void;
   /** Bumps when the title model names the chat: the title swipes to the new name and glints. */
@@ -46,7 +44,7 @@ interface ChatHeaderProps {
   onCheckoutBranch: (name: string, kind: GitCheckoutKind) => Promise<void>;
 }
 
-export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStopRun, onShowRunOutput, build, onSaveBuildCommand, onBuild, onStopBuild, onShowBuildOutput, git, onListBranches, onCheckoutBranch, changesCount, changesOpen, browserOpen, onToggleChanges, onToggleBrowser, terminalOpen, onToggleTerminal, gamesOpen, onToggleGames, canvas, onRename, onTaskAction, titlePulse = 0 }: ChatHeaderProps) {
+export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStopRun, onShowRunOutput, build, onSaveBuildCommand, onBuild, onStopBuild, onShowBuildOutput, git, onListBranches, onCheckoutBranch, changesCount, changesOpen, browserOpen, onToggleChanges, onToggleBrowser, terminalOpen, onToggleTerminal, gamesOpen, onToggleGames, onRename, onTaskAction, titlePulse = 0 }: ChatHeaderProps) {
   const contextMenu = useContextMenu();
   const [renaming, setRenaming] = useState(false);
   const [value, setValue] = useState(task.name);
@@ -63,9 +61,8 @@ export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStop
   const chat = task.kind === "chat";
   const reduce = useReducedMotion() ?? false;
   const pillId = useId();
-  const panels: { label: string; icon: IconName; keys?: string; count?: number; open: boolean; onToggle: () => void; pulse?: number }[] = [
+  const panels: { label: string; icon: IconName; keys?: string; count?: number; open: boolean; onToggle: () => void }[] = [
     { label: "Browser", icon: "browser", open: browserOpen, onToggle: onToggleBrowser },
-    ...(chat || !canvas ? [] : [{ label: "Canvas", icon: "canvas" as const, open: canvas.open, onToggle: canvas.onToggle, pulse: canvas.pulse }]),
     ...(chat ? [] : [
       { label: "Changes", icon: "panel" as const, keys: "⌘⇧C", count: changesCount, open: changesOpen, onToggle: onToggleChanges },
       { label: "Terminal", icon: "terminal" as const, keys: "⌘⇧T", open: terminalOpen, onToggle: onToggleTerminal },
@@ -122,7 +119,6 @@ export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStop
             <Tooltip key={panel.label} label={panel.keys ? <>{panel.label} <kbd>{panel.keys}</kbd></> : panel.label} side="bottom">
               <button type="button" className={`panel-button panel-switch-tab ${panel.open ? "active" : ""}`} onClick={panel.onToggle}
                 aria-label={panel.count ? `${panel.label} (${panel.count})` : panel.label} aria-pressed={panel.open}>
-                {panel.pulse ? <span key={panel.pulse} className="panel-switch-ping" aria-hidden="true" /> : null}
                 {panel.open && (
                   <motion.span className="panel-switch-pill" aria-hidden="true" layoutId={reduce ? undefined : pillId}
                     style={{ borderRadius: 999 }} transition={{ type: "spring", stiffness: 480, damping: 36 }} />

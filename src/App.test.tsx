@@ -17,7 +17,7 @@ vi.mock("./api", () => ({ api: {
   queueMessage: vi.fn().mockResolvedValue(undefined),
   bootstrap: vi.fn(), refreshSubscriptionModels: vi.fn().mockResolvedValue([]),
   takeMenuNavigation: vi.fn().mockResolvedValue(null), setChatTabMenu: vi.fn().mockResolvedValue(undefined),
-  computerUseCursorAppearance: vi.fn().mockResolvedValue(undefined), setVisualTheme: vi.fn().mockResolvedValue(undefined), startCanvas: vi.fn().mockResolvedValue("run"), openTask: vi.fn().mockResolvedValue(undefined),
+  computerUseCursorAppearance: vi.fn().mockResolvedValue(undefined), setVisualTheme: vi.fn().mockResolvedValue(undefined), stageVisual: vi.fn().mockResolvedValue("wcvisual://localhost/artboard"), startCanvas: vi.fn().mockResolvedValue("run"), openTask: vi.fn().mockResolvedValue(undefined),
   computerUseRespondAccess: vi.fn(), computerUseRevokeApp: vi.fn(),
   gitPublishInfo: vi.fn().mockResolvedValue({ branch: "main", upstream: null, remotes: [] }),
   gitChanges: vi.fn().mockResolvedValue({ isGit: false, files: [] }), listDraftCommands: vi.fn().mockResolvedValue([]),
@@ -115,6 +115,146 @@ describe("App project builds", () => {
     await waitFor(() => expect(api.stopRun).toHaveBeenCalledExactlyOnceWith("build"));
     await waitFor(() => expect(screen.getByLabelText("build output")).toHaveTextContent("pnpm build:stopped"));
     expect(screen.getByRole("button", { name: "Stop run" })).toBeInTheDocument();
+  });
+});
+
+describe("App inline Canvas", () => {
+  let scrollTo: PropertyDescriptor | undefined;
+  beforeEach(() => {
+    scrollTo = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollTo");
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: function (this: HTMLElement, options: ScrollToOptions) {
+      this.scrollTop = options.top ?? this.scrollTop;
+    } });
+  });
+  afterEach(() => {
+    if (scrollTo) Object.defineProperty(HTMLElement.prototype, "scrollTo", scrollTo);
+    else Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
+  });
+  const canvasMessages = (): NormalizedMessage[] => [
+    { id: "canvas-user", entryId: "canvas-user", role: "user", timestamp: 100, blocks: [{ type: "text", text: "Explore a billing screen" }] },
+    { id: "canvas-call", role: "assistant", timestamp: 200, blocks: [{ type: "tool-call", toolName: "canvas", toolCallId: "canvas-create", arguments: {
+      title: "Billing themes", artboards: [{ id: "base", name: "Base", width: 1280, height: 800, html: "<main>Billing</main>" }]
+    } }] },
+    { id: "canvas-result", role: "tool", timestamp: 300, blocks: [{ type: "tool-result", toolName: "canvas", toolCallId: "canvas-create", text: "Created Billing themes", details: {
+      v: 1, canvas: "themes", title: "Billing themes", applied: [{ index: 0, id: "base", op: "add" }], removed: []
+    } }] }
+  ];
+
+  const canvasReferenceMessages = (): NormalizedMessage[] => [
+    ...canvasMessages(),
+    { id: "canvas-user-2", entryId: "canvas-user-2", role: "user", timestamp: 400, blocks: [{ type: "text", text: "Add a phone layout" }] },
+    { id: "canvas-revise-call", role: "assistant", timestamp: 500, blocks: [{ type: "tool-call", toolName: "canvas", toolCallId: "canvas-revise", arguments: {
+      canvas: "themes", artboards: [{ id: "phone", name: "Phone", width: 390, basedOn: "base" }]
+    } }] },
+    { id: "canvas-revise-result", role: "tool", timestamp: 600, blocks: [{ type: "tool-result", toolName: "canvas", toolCallId: "canvas-revise", text: "Revised Billing themes", details: {
+      v: 1, canvas: "themes", title: "Billing themes", applied: [{ index: 0, id: "phone", op: "add", basedOn: "base", width: 390 }], removed: []
+    } }] }
+  ];
+
+  async function showCanvas(tabs = false, messages = canvasMessages()) {
+    bootstrap(tabs);
+    await screen.findByRole("button", { name: "Settings" });
+    chat("a");
+    await worker({ type: "snapshot", taskId: "a", snapshot: snapshot(messages) });
+    return screen.findByRole("button", { name: "Expand canvas" });
+  }
+
+  it("shows an accepted board during a run and expands without replacing the composer or Changes", async () => {
+    await showCanvas();
+    await worker({ type: "run_state", taskId: "a", state: "running", runId: "drawing", startedAt: 100 });
+    expect(screen.getByRole("region", { name: "Canvas: Billing themes" })).toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "Canvas" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Changes" }));
+    const changes = await screen.findByRole("complementary", { name: "Changes" });
+    const panelWidth = changes.querySelector<HTMLElement>(".side-panel-inner")!.style.width;
+    type("Keep this draft");
+    const composer = input();
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand canvas" }));
+    expect(document.querySelector(".app-shell")).toHaveClass("canvas-expanded");
+    expect(screen.getByRole("region", { name: "Expanded canvas" })).toBeInTheDocument();
+    expect(input()).toBe(composer);
+    expect(composer).toHaveValue("Keep this draft");
+    expect(screen.getAllByRole("region", { name: "Canvas: Billing themes" })).toHaveLength(1);
+
+    await worker({ type: "extension_ui_request", taskId: "a", requestId: "canvas-question", method: "questions", title: "Choose a direction", questions: [
+      { id: "direction", header: "Direction", question: "Which billing direction should I refine?", options: [{ label: "Base", description: "Refine the base screen." }] }
+    ] });
+    expect(screen.getByRole("region", { name: "Questions" })).toBeInTheDocument();
+    expect(input()).toBe(composer);
+    fireEvent.click(within(screen.getByRole("region", { name: "Expanded canvas" })).getByRole("button", { name: "Restore canvas" }));
+    await waitFor(() => expect(document.querySelector(".app-shell")).not.toHaveClass("canvas-expanded"));
+    expect(screen.getByRole("complementary", { name: "Changes" })).toBe(changes);
+    expect(changes.querySelector<HTMLElement>(".side-panel-inner")!.style.width).toBe(panelWidth);
+    expect(composer).toHaveValue("Keep this draft");
+    expect(screen.getByRole("region", { name: "Questions" })).toBeInTheDocument();
+    expect(api.stopTask).not.toHaveBeenCalled();
+  });
+
+  it("hides the native browser while expanded and restores its presentation", async () => {
+    vi.mocked(api.browserState).mockImplementation(async (id) => browser(id));
+    vi.mocked(api.browserPresent).mockImplementation(async ({ taskId }) => browser(taskId));
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("browser-surface") ? new DOMRect(1000, 100, 430, 700) : new DOMRect();
+    });
+    await showCanvas();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "requestAnimationFrame", "cancelAnimationFrame", "performance"] });
+    const settle = async () => {
+      await act(async () => { vi.advanceTimersByTime(500); });
+      await act(async () => { vi.advanceTimersByTime(500); });
+    };
+    fireEvent.click(screen.getByRole("button", { name: "Browser" }));
+    await settle();
+    expect(api.browserPresent).toHaveBeenLastCalledWith(expect.objectContaining({ taskId: "a", visible: true }));
+    const address = screen.getByRole("textbox", { name: "Browser address" });
+    fireEvent.click(screen.getByRole("button", { name: "Expand canvas" }));
+    await settle();
+    expect(api.browserPresent).toHaveBeenLastCalledWith(expect.objectContaining({ taskId: "a", visible: false }));
+    fireEvent.click(within(screen.getByRole("region", { name: "Expanded canvas" })).getByRole("button", { name: "Restore canvas" }));
+    await settle();
+    expect(api.browserPresent).toHaveBeenLastCalledWith(expect.objectContaining({ taskId: "a", visible: true }));
+    expect(screen.getByRole("textbox", { name: "Browser address" })).toBe(address);
+    expect(address).toHaveValue("http://localhost/a");
+    expect(api.stopTask).not.toHaveBeenCalled();
+  });
+
+  it.each(["chat", "settings"])("does not replay Canvas navigation when returning from %s", async (navigation) => {
+    await showCanvas(true, canvasReferenceMessages());
+    const navigate = vi.fn(function (this: HTMLElement, options: ScrollToOptions) {
+      this.scrollTop = options.top ?? this.scrollTop;
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: navigate });
+    fireEvent.click(screen.getByRole("button", { name: "View latest" }));
+    expect(navigate).toHaveBeenCalledOnce();
+
+    // The user can read elsewhere after the explicit jump. Returning should use the
+    // transcript's saved reading state rather than replay that old Canvas request.
+    const scroller = document.querySelector<HTMLElement>(".conversation-scroll")!;
+    scroller.scrollTop = 180;
+    fireEvent.scroll(scroller);
+    if (navigation === "chat") {
+      chat("b");
+      expect(screen.getByRole("heading", { name: "Chat b" })).toBeInTheDocument();
+      chat("a");
+    } else {
+      fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+      fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
+    }
+    expect(await screen.findByRole("region", { name: "Canvas: Billing themes" })).toBeInTheDocument();
+    expect(navigate).toHaveBeenCalledOnce();
+  });
+
+  it.each(["rewind", "chat", "area", "settings"])("closes expansion on %s without stopping the chat", async (navigation) => {
+    await showCanvas();
+    fireEvent.click(screen.getByRole("button", { name: "Expand canvas" }));
+    expect(document.querySelector(".app-shell")).toHaveClass("canvas-expanded");
+    if (navigation === "rewind") await worker({ type: "snapshot", taskId: "a", snapshot: snapshot([]) });
+    else if (navigation === "chat") chat("b");
+    else if (navigation === "area") fireEvent.click(screen.getByRole("button", { name: "Chat" }));
+    else fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Expanded canvas" })).toBeNull());
+    expect(document.querySelector(".app-shell")).not.toHaveClass("canvas-expanded");
+    expect(api.stopTask).not.toHaveBeenCalled();
   });
 });
 

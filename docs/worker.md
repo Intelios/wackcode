@@ -31,6 +31,21 @@ Settings pushed with `set_*` (tools, prompts, execution policy, sub-agents, MCP,
 
 Saved history opens without a model or worker. When a worker starts for a chat whose configured model left its connection (removed in Settings, or dropped by a subscription), `init` restores the session on a stand-in model (`missingModelPlaceholder` in `model-runtime.ts`), the snapshot carries `modelMissing`, and the transcript, tree and checkpoints stay readable. Everything that needs the model — prompts, `/compact`, commit-message generation, the goal verifier — is refused with "This chat's model is no longer configured. Pick another to continue." Picking a model stops the old worker through `configure_task` (the model is in the fingerprint); the next worker records the durable switch when it starts.
 
+## Custom connection request shaping
+
+A custom connection's `models.json` re-declares its models, so Pi's request shaping
+(`forceAdaptiveThinking`, `supportsStore`, `maxTokensField`…) is lost unless `builtinCompat`
+(`catalog-models.ts`) re-derives it: Google's strict OpenAI-compatible hosts get a fixed shape,
+otherwise the bundled catalogue's entry is copied over. Two stream-level instrumentations wrap
+the runtime's `stream`/`streamSimple`/`streamDeferred` (`model-runtime.ts`):
+`instrumentOpenCodeHeaders` adds OpenCode's session headers, and
+`instrumentGoogleThoughtSignatures` (`thought-signatures.ts`) round-trips the `extra_content`
+vendor extension Google's thinking models put on each `tool_calls` delta — required back
+verbatim or the next request 400s. It rides Pi's own hooks (`onProviderStreamEvent` in,
+`onPayload` out, both chained to the SDK's) and persists the signature in the tool call's
+`thoughtSignature` field — which the session file keeps — as `{"extra_content": …}`, a marker
+only this instrumentation writes. Don't repurpose that field or strip it on save.
+
 ## Saved history
 
 `session-reader.ts` opens saved history without a chat worker. It shares the live message

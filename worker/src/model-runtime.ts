@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { builtinCompat } from "./catalog-models.js";
 import { instrumentUsage } from "./usage.js";
 import { instrumentOpenCodeHeaders } from "./opencode-headers.js";
+import { instrumentGoogleThoughtSignatures } from "./thought-signatures.js";
 import { INLINE_IMAGE_LIMITS } from "./image-limits.js";
 import { THINKING_LEVELS, type WorkerModel, type WorkerProvider } from "./protocol.js";
 
@@ -157,6 +158,7 @@ export async function createModelRuntime(
     await runtime.setRuntimeApiKey(provider.id, credential.apiKey);
   }
   instrumentOpenCodeHeaders(runtime);
+  instrumentGoogleThoughtSignatures(runtime);
   instrumentUsage(runtime);
   return runtime;
 }

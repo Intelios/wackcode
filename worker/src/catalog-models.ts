@@ -94,6 +94,27 @@ function catalogCompatIndex(): Map<string, CatalogEntry[]> {
 }
 
 /**
+ * Whether a base URL is one of Google's OpenAI-compatible endpoints: Vertex AI's hosted OpenAI
+ * route (`…/endpoints/openapi` on the global host and its regional `us-central1-…` forms) or the
+ * Gemini API's own OpenAI route. A dedicated Model Garden deployment (`…/endpoints/<id>`) shares
+ * Vertex's host but runs a vLLM or TGI container there, which is no Gemini and keeps Pi's
+ * lenient defaults. Shared by `googleOpenAiCompat` and the thought-signature instrumentation.
+ */
+export function isGoogleOpenAiEndpoint(baseUrl: string | undefined): boolean {
+  if (!baseUrl) return false;
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    return false;
+  }
+  const host = url.hostname;
+  const vertex = host === "aiplatform.googleapis.com" || host.endsWith("-aiplatform.googleapis.com");
+  if (vertex) return url.pathname.includes("/endpoints/openapi");
+  return host === "generativelanguage.googleapis.com";
+}
+
+/**
  * The request shape Google's OpenAI-compatible endpoints accept, or undefined for other hosts.
  * Both layers parse requests strictly — a field outside their documented surface answers
  * `INVALID_ARGUMENT` with a proto-JSON "Unknown name" 400 (`store` is the one every client trips
@@ -104,19 +125,9 @@ function catalogCompatIndex(): Map<string, CatalogEntry[]> {
  */
 function googleOpenAiCompat(api: string, baseUrl: string | undefined): Record<string, unknown> | undefined {
   if (api !== "openai-completions" || !baseUrl) return undefined;
-  let url: URL;
-  try {
-    url = new URL(baseUrl);
-  } catch {
-    return undefined;
-  }
-  const host = url.hostname;
-  // Vertex AI's hosted OpenAI route, on the global host and its regional `us-central1-…` forms.
+  if (!isGoogleOpenAiEndpoint(baseUrl)) return undefined;
+  const host = new URL(baseUrl).hostname;
   const vertex = host === "aiplatform.googleapis.com" || host.endsWith("-aiplatform.googleapis.com");
-  if (!vertex && host !== "generativelanguage.googleapis.com") return undefined;
-  // A dedicated Model Garden deployment (`…/endpoints/<id>`) shares Vertex's host but runs a
-  // vLLM or TGI container there, which keeps Pi's lenient defaults.
-  if (vertex && !url.pathname.includes("/endpoints/openapi")) return undefined;
   return {
     supportsStore: false,
     supportsDeveloperRole: false,

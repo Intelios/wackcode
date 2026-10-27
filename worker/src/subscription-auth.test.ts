@@ -1,12 +1,15 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Model, Provider } from "@earendil-works/pi-ai";
 
 const directories: string[] = [];
-afterEach(async () => { await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
+afterEach(async () => {
+  vi.unstubAllGlobals();
+  await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
 
 async function runtime(providerId: string, credential: Record<string, unknown>) {
   const directory = await mkdtemp(join(tmpdir(), "wackcode-subscription-"));
@@ -35,6 +38,27 @@ describe("subscription model runtime", () => {
 
     const second = await runtime("openai-codex", { type: "oauth", access: "second-token", refresh: "refresh-token", expires: Date.now() + 3_600_000 });
     expect((await second.getAuth(second.getModel("openai-codex", model!.id)!))?.auth.apiKey).toBe("second-token");
+  });
+
+  it("resolves an existing Kimi subscription model to Pi's updated API", async () => {
+    const fetch = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response([
+      `data: ${JSON.stringify({ id: "kimi", object: "chat.completion.chunk", created: 1, model: "kimi-for-coding", choices: [{ index: 0, delta: { role: "assistant", content: "Ready" }, finish_reason: null }] })}`,
+      `data: ${JSON.stringify({ id: "kimi", object: "chat.completion.chunk", created: 1, model: "kimi-for-coding", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}`,
+      "data: [DONE]",
+      ""
+    ].join("\n\n"), { headers: { "Content-Type": "text/event-stream" } }));
+    vi.stubGlobal("fetch", fetch);
+    const current = await runtime("kimi-coding", { type: "oauth", access: "token", refresh: "refresh", expires: Date.now() + 3_600_000 });
+    const kimi = (await current.getAvailable("kimi-coding")).find((model) => model.id === "kimi-for-coding");
+    expect(kimi).toMatchObject({ api: "openai-completions", baseUrl: "https://api.kimi.com/coding/v1" });
+    expect((await current.getAuth(kimi!))?.auth.headers).toMatchObject({ Authorization: "Bearer token" });
+    const result = await current.completeSimple(kimi!, { messages: [{ role: "user", content: "Hello", timestamp: Date.now() }] }, { maxRetries: 0 });
+    expect(result.errorMessage).toBeUndefined();
+    expect(result.content).toContainEqual(expect.objectContaining({ type: "text", text: "Ready" }));
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const [input, init] = fetch.mock.calls[0];
+    expect(input instanceof Request ? input.url : input.toString()).toBe("https://api.kimi.com/coding/v1/chat/completions");
+    expect(new Headers(input instanceof Request ? input.headers : init?.headers).get("authorization")).toBe("Bearer token");
   });
 
   it("honours Copilot's account model allowlist", async () => {

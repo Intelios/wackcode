@@ -51,6 +51,8 @@ describe("expandCommandPreview", () => {
     expect(expandCommandPreview("${@:2}", "a b c")).toBe("b c");
     expect(expandCommandPreview("Say 'x y' $1", "a b")).toBe("Say 'x y' a");
     expect(expandCommandPreview("Split $2", "'two words' end")).toBe("Split end");
+    expect(expandCommandPreview("${1:-first} | $2 | ${3:-third} | ${@:2}", `"" next '' last`))
+      .toBe("first | next | third | next  last");
   });
 });
 

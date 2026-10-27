@@ -262,8 +262,8 @@ export function createPlanModeExtension(host: BuiltinHost, mcpTools?: PlanModeMc
     // A fresh prompt consumes the proposal in any mode: planning feedback needs a new
     // submission, and a Build turn starts work. Keep it ready until the turn actually starts
     // so a rejected prompt does not lose the review actions.
-    pi.on("before_agent_start", () => {
-      if (readyPlan !== undefined) {
+    pi.on("before_agent_start", (event) => {
+      if (event.messageType === "user" && readyPlan !== undefined) {
         readyPlan = undefined;
         persist();
         emit();

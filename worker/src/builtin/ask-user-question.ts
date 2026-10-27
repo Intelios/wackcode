@@ -180,7 +180,9 @@ export function createAskUserQuestionExtension(host: BuiltinHost, interviewing: 
     const resetWrapUp = () => {
       wrapUpRequested = false;
     };
-    pi.on("before_agent_start", resetWrapUp);
+    // Pi also emits this for extension-triggered continuations. Only a user message lifts
+    // the request to finish the plan; background results must not reopen the interview.
+    pi.on("before_agent_start", (event) => { if (event.messageType === "user") resetWrapUp(); });
     pi.on("session_start", resetWrapUp);
     pi.on("session_tree", resetWrapUp);
 

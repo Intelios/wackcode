@@ -31,6 +31,16 @@ async function load(connection: WorkerProvider) {
 }
 
 describe("connection models in Pi", () => {
+  it("does not fetch OpenRouter's new per-key catalogue while loading a connection", async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    const connection = provider({ id: "openrouter", name: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1" });
+    const runtime = await load(connection);
+    expect((await findModel(runtime, connection, "named"))?.id).toBe("named");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("keeps every model on a connection where one has a blank name", async () => {
     const connection = provider({});
     const runtime = await load(connection);

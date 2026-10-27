@@ -69,21 +69,22 @@ export function resolveInvocationNames<T extends { name: string }>(commands: T[]
   });
 }
 
-/** Pi 0.86.1's prompt-template argument rules, applied to the exact selected template. */
+/** Pi's prompt-template argument rules, applied to the exact selected template. */
 export function expandTemplate(content: string, input: string): string {
   const args: string[] = [];
   let current = "";
+  let hasToken = false;
   let quote: string | null = null;
   for (const char of input) {
     if (quote) {
       if (char === quote) quote = null;
       else current += char;
-    } else if (char === "'" || char === '"') quote = char;
+    } else if (char === "'" || char === '"') { quote = char; hasToken = true; }
     else if (/\s/.test(char)) {
-      if (current) { args.push(current); current = ""; }
-    } else current += char;
+      if (hasToken) { args.push(current); current = ""; hasToken = false; }
+    } else { current += char; hasToken = true; }
   }
-  if (current) args.push(current);
+  if (hasToken) args.push(current);
   const all = args.join(" ");
   return content.replace(/\$\{(\d+|ARGUMENTS|@):-([^}]*)\}|\$\{@:(\d+)(?::(\d+))?\}|\$(ARGUMENTS|@|\d+)/g,
     (_match, target: string | undefined, fallback: string | undefined, sliceFrom: string | undefined, sliceCount: string | undefined, simple: string | undefined) => {

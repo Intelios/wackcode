@@ -40,4 +40,9 @@ describe("prompt-template arguments", () => {
   it("does not expand placeholders introduced by an argument", () => {
     expect(expandTemplate("$1", "'$ARGUMENTS'")).toBe("$ARGUMENTS");
   });
+
+  it("preserves empty quoted arguments and their positions", () => {
+    expect(expandTemplate("${1:-first} | $2 | ${3:-third} | ${@:2}", `"" next '' last`))
+      .toBe("first | next | third | next  last");
+  });
 });

@@ -25,6 +25,7 @@ import {
   modeContractFromMessage,
   reconcileModeContract,
 } from "./builtin/plan-mode/contract.js";
+import { createPlanModeExtension } from "./builtin/plan-mode/index.js";
 import {
   classifyPlanTool,
   findBlockedCommandSegment,
@@ -223,7 +224,7 @@ describe("ask_user_question wrap-up (Ultra Plan)", () => {
 
   function harness(interviewing: () => boolean, reply: Reply) {
     const offers: Array<boolean | undefined> = [];
-    const handlers = new Map<string, Array<() => void>>();
+    const handlers = new Map<string, Array<(event: unknown) => void>>();
     let execute: ((...args: unknown[]) => Promise<ToolResult>) | undefined;
     const host = {
       askQuestions: async (_questions: unknown, options?: { offerWrapUp?: boolean }) => {
@@ -233,7 +234,7 @@ describe("ask_user_question wrap-up (Ultra Plan)", () => {
     } as unknown as BuiltinHost;
     const pi = {
       registerTool: (definition: { execute: typeof execute }) => { execute = definition.execute; },
-      on: (event: string, handler: () => void) => handlers.set(event, [...(handlers.get(event) ?? []), handler]),
+      on: (event: string, handler: (event: unknown) => void) => handlers.set(event, [...(handlers.get(event) ?? []), handler]),
     };
     createAskUserQuestionExtension(host, interviewing)(pi as never);
     const params = {
@@ -245,7 +246,7 @@ describe("ask_user_question wrap-up (Ultra Plan)", () => {
     return {
       offers,
       ask: () => execute!("call", params, undefined, undefined, { hasUI: true }),
-      fire: (event: string) => handlers.get(event)?.forEach((handler) => handler()),
+      fire: (event: string, payload?: unknown) => handlers.get(event)?.forEach((handler) => handler(payload)),
     };
   }
 
@@ -268,10 +269,37 @@ describe("ask_user_question wrap-up (Ultra Plan)", () => {
     const second = await ask();
     expect(second.details.reason).toBe("wrap_up");
     expect(offers).toHaveLength(1);
+    // An extension continuation is not a user request to resume the interview.
+    fire("before_agent_start", { messageType: "custom" });
+    await ask();
+    expect(offers).toHaveLength(1);
     // A new user message ("keep grilling me on X") lifts it.
-    fire("before_agent_start");
+    fire("before_agent_start", { messageType: "user" });
     await ask();
     expect(offers).toHaveLength(2);
+  });
+});
+
+describe("plan review across extension continuations", () => {
+  it("keeps a submitted plan until a user starts the next turn", async () => {
+    const handlers = new Map<string, (event: { messageType: string }) => void>();
+    let complete: ((...args: unknown[]) => Promise<unknown>) | undefined;
+    const host = { publishPlanState: () => {} } as unknown as BuiltinHost;
+    const pi = {
+      on: (event: string, handler: (event: { messageType: string }) => void) => handlers.set(event, handler),
+      registerTool: (definition: { execute: typeof complete }) => { complete = definition.execute; },
+      sendMessage: () => {},
+      appendEntry: () => {},
+    };
+    const { factory, controller } = createPlanModeExtension(host);
+    factory(pi as never);
+    controller.setMode("plan");
+    await complete!("call", { plan: "A reviewed plan" });
+
+    handlers.get("before_agent_start")?.({ messageType: "custom" });
+    expect(controller.getState()).toEqual({ mode: "plan", phase: "ready", plan: "A reviewed plan" });
+    handlers.get("before_agent_start")?.({ messageType: "user" });
+    expect(controller.getState()).toEqual({ mode: "plan", phase: "planning" });
   });
 });
 

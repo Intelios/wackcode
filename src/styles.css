@@ -910,6 +910,27 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
 .msg.assistant a:hover, .stream-text a:hover { text-decoration: underline; }
 .blocked-image { display: inline-block; color: var(--text-dim); font-size: 12px; border: 1px dashed var(--border); padding: 4px 8px; border-radius: 5px; }
 
+/* GFM task lists (`- [x]` in any rendered Markdown). remark-gfm writes a disabled checkbox into
+   each item, which would otherwise take the global 37px text-input styling and push the item's
+   text onto its own line. The box is drawn here as a small static control in the list's gutter,
+   so the item text keeps a normal list's indent and the box wears the user's accent. */
+.contains-task-list { padding-left: 22px; list-style: none; }
+.task-list-item > input[type="checkbox"],
+.task-list-item > p:first-child > input[type="checkbox"] {
+  -webkit-appearance: none; appearance: none; position: relative;
+  width: 14px; height: 14px; margin: 0 4px 0 -22px; padding: 0;
+  border: 1.2px solid var(--border-bright); border-radius: 3.5px; background: transparent;
+  vertical-align: -.15em; pointer-events: none;
+}
+.task-list-item > input[type="checkbox"]:checked,
+.task-list-item > p:first-child > input[type="checkbox"]:checked { border-color: var(--wc-accent); background: var(--wc-accent-fill); }
+.task-list-item > input[type="checkbox"]:checked::after,
+.task-list-item > p:first-child > input[type="checkbox"]:checked::after {
+  content: ""; position: absolute; inset: 0; background: var(--wc-on-accent);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.6 8.4l2.3 2.3 4.5-5' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/14px no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.6 8.4l2.3 2.3 4.5-5' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/14px no-repeat;
+}
+
 /* Reply images use only saved transcript pixels, with the same viewer as tool previews. */
 .reply-image { display: inline-flex; flex-direction: column; vertical-align: top; max-width: min(100%, 480px); gap: 5px; }
 .reply-image-button {

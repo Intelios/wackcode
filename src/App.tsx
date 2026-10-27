@@ -432,7 +432,6 @@ export default function App() {
   const selectedRun = commandFolder ? runs.sessions[runKey(commandFolder, "run")] : undefined;
   const selectedBuild = commandFolder ? runs.sessions[runKey(commandFolder, "build")] : undefined;
   const runtime = selectedTaskId ? runtimes[selectedTaskId] : undefined;
-  const sharedWorkers = selectedTask ? data.tasks.filter((task) => !task.archived && task.id !== selectedTask.id && task.workspacePath === selectedTask.workspacePath && task.status === "running") : [];
   // The worker's latest plan_state is the freshest mode signal; the record (or the draft's
   // choice before a task exists) is the durable fallback.
   const currentMode: TaskMode = runtime?.planState?.mode ?? selectedTask?.mode ?? draft?.mode ?? "build";
@@ -3420,7 +3419,6 @@ export default function App() {
               titlePulse={titlePulses[selectedTask.id] ?? 0}
               />
             </motion.div>
-            {sharedWorkers.length > 0 && <div className="shared-notice"><span>!</span><strong>{sharedWorkers[0].name}</strong> is also running in this folder. File edits are shared.</div>}
             {(runtime?.error || selectedTask.lastError) && <div className="error-banner workspace-error"><span>{runtime?.error || selectedTask.lastError}</span><button onClick={() => dismissError(selectedTask.id)}>Dismiss</button></div>}
             {selectedModelGone && (
               <div className="model-missing-notice" role="status">

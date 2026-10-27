@@ -10,6 +10,8 @@
 export const SIDEBAR_W = 240;
 export const CHAT_MIN = 400;
 export const PANEL_MIN = 320;
+/** A canvas is a board to look around, so its tab asks for most of what the sidebar leaves. */
+export const CANVAS_SHARE = 0.62;
 
 /** The chat column's width class, which its header, gutters and composer follow. */
 export type ChatSize = "wide" | "compact" | "narrow";
@@ -72,4 +74,14 @@ export function clampPanelDrag(width: number, windowWidth: number): number {
 export function balancedPanelWidth(windowWidth: number, sidebarOpen: boolean): number {
   const sidebar = sidebarOpen ? SIDEBAR_W : 0;
   return Math.round(Math.max(PANEL_MIN, Math.min(panelRoom(windowWidth, sidebar), (windowWidth - sidebar) / 2)));
+}
+
+/**
+ * The canvas tab's width until the user drags it: most of the room beside the sidebar, leaving
+ * the chat a comfortable column (never less than `CHAT_MIN`). It has its own preference, so a
+ * roomy board never widens Changes or the terminal.
+ */
+export function canvasPanelWidth(windowWidth: number, sidebarOpen: boolean): number {
+  const sidebar = sidebarOpen ? SIDEBAR_W : 0;
+  return Math.round(Math.max(PANEL_MIN, Math.min(panelRoom(windowWidth, sidebar), (windowWidth - sidebar) * CANVAS_SHARE)));
 }

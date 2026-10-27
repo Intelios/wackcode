@@ -272,6 +272,9 @@ export const api = {
   executeCommand: (input: { taskId: string; commandId: string; args: string; startedAt: number; images?: ImageContent[]; name?: string }) => invoke<string>("execute_command", { input }),
   initAgents: (taskId: string, startedAt: number) => invoke<string>("init_agents", { taskId, startedAt }),
   startSkillCreator: (taskId: string, request: string, startedAt: number) => invoke<string>("start_skill_creator", { taskId, request, startedAt }),
+  /** Saves one artboard where the user picks in the native save panel; false when they cancel. */
+  exportArtboard: (artboard: { name: string; html: string; width: number; height: number; format: "png" | "html" }) =>
+    invoke<boolean>("export_artboard", { artboard }),
   startCanvas: (taskId: string, request: string, startedAt: number) => invoke<string>("start_canvas", { taskId, request, startedAt }),
   publishSkillDraft: (taskId: string, draftId: string, revision: string) =>
     invoke<{ path: string; name: string; overwritten: boolean }>("publish_skill_draft", { taskId, draftId, revision }),

@@ -146,6 +146,10 @@ the renderer-facing `stage_visual` refuses it.
   Each render's document is dropped once drawn.
 - **The model's markup never runs in its main frame**: the shell frames it with the same
   `sandbox="allow-scripts"` opaque origin it has on the canvas, and only reads its reports.
+- **Saving an artboard** (`export_artboard`) renders a PNG through the same webview, or wraps the
+  markup as a page, and writes it only where the user picks in the native save panel opened in
+  Rust; the renderer sends the document and never a path, and no new capability or origin is
+  involved.
 - **No capability.** Tauri counts a registered scheme such as `wcvisual:` as a local origin and
   matches a capability by webview *or* window label, so `capabilities/default.json` names only
   the `main` webview (no `windows`): no child of the main window — the render webview or a

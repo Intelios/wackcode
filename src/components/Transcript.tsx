@@ -29,8 +29,6 @@ import { splitVisualAction, type VisualSendResult } from "../visual-action";
 import { splitSuggestedTask, startedHere, type SuggestionLink } from "../suggestions";
 import { SuggestionNote, SuggestionScopeContext, SuggestionTray, type SuggestionScope } from "./SuggestionTray";
 import { CanvasCard, CanvasScopeContext, type CanvasScope } from "./canvas/CanvasCard";
-import { CanvasInline } from "./canvas/CanvasInline";
-import { canvasAnchor, canvasOwners } from "../canvas-placement";
 import { SubagentGroup } from "./SubagentChip";
 import { ThinkingExpansion, ThinkingRow } from "./ThinkingRow";
 import { FLY, OrphanResult, ToolChips, ToolExpansion, ToolImageSource, ToolRow, useTranscriptMotion, type ChipCall } from "./ToolRow";
@@ -103,7 +101,7 @@ interface Props {
    * read here (this chat's own messages, and whether a run is live), so they are not passed in.
    */
   suggestions?: SuggestionScopeInput;
-  /** This chat's living canvases, their shared controllers and navigation/expansion actions. */
+  /** This chat's canvases and how a card opens one in the side panel. */
   canvases?: CanvasScope;
 }
 
@@ -158,8 +156,6 @@ const NO_SLOTS: TranscriptSlot[] = [];
 const EMPTY_LINKS: ReadonlyMap<string, SuggestionLink> = new Map();
 const EMPTY_SUGGESTIONS: ReadonlySet<string> = new Set();
 const NO_CANVASES: CanvasScope = { boards: new Map() };
-const subscribeNoCanvases = () => () => {};
-const noCanvasLocks = () => "";
 
 type LocalAction = MessageAction | { type: "start-edit"; id: string } | { type: "cancel-edit" };
 
@@ -854,61 +850,6 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
     running, activeRun, partial, status, settledUserIds: new Set(timingsByMessage.keys())
   }), [messages, layout, results, callIds, switchesByPosition, running, activeRun, partial, status, timingsByMessage]);
 
-  // Controllers outlive the owning turn. A lock holds the current occurrence while the user
-  // interacts or expands it; unlocking applies the latest accepted owner immediately.
-  const canvasSession = canvases?.session;
-  const canvasBoards = canvases?.boards;
-  // Camera glides emit viewer updates too; only lock changes should rerender the transcript.
-  const getCanvasLocks = useCallback(() => JSON.stringify(Array.from(canvasBoards?.keys() ?? []).filter((canvasId) => canvasSession?.isLocked(canvasId))), [canvasSession, canvasBoards]);
-  useSyncExternalStore(canvasSession?.subscribe ?? subscribeNoCanvases, getCanvasLocks, noCanvasLocks);
-  const committedCanvasOwners = useRef<{ scope: string; owners: ReadonlyMap<string, string> }>({ scope: scopeKey, owners: new Map() });
-  const owners = canvasOwners(workTurns.values(), committedCanvasOwners.current.scope === scopeKey ? committedCanvasOwners.current.owners : undefined,
-    (canvasId) => canvases?.session?.isLocked(canvasId) ?? false);
-  const canvasPlacementKey = JSON.stringify([...owners]);
-  useLayoutEffect(() => { committedCanvasOwners.current = { scope: scopeKey, owners }; });
-
-  // Wide boards break out of the prose column, never the actual conversation pane. These
-  // inherited values also let the inline surface constrain its height without window math.
-  useLayoutEffect(() => {
-    const element = ref.current;
-    if (!element || !canvases?.boards.size) return;
-    const measure = () => {
-      // The chat column's gutters (--chat-gutter) narrow beside a wide side panel.
-      const gutter = parseFloat(getComputedStyle(element).getPropertyValue("--chat-gutter")) || 24;
-      if (element.clientWidth > 0) element.style.setProperty("--canvas-inline-width", `${Math.max(0, element.clientWidth - 2 * gutter)}px`);
-      if (element.clientHeight > 0) element.style.setProperty("--canvas-available-height", `${element.clientHeight}px`);
-    };
-    measure();
-    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(measure);
-    observer?.observe(element);
-    return () => observer?.disconnect();
-  }, [ref, scopeKey, canvases?.boards.size]);
-
-  const canvasSlot = (userKey: string, canvasId: string) => Array.from(ref.current?.querySelectorAll<HTMLElement>("[data-canvas-slot]") ?? [])
-    .find((node) => node.dataset.transcriptAnchor === canvasAnchor(userKey, canvasId));
-  const handledCanvasFocus = useRef<string | undefined>(undefined);
-  useLayoutEffect(() => {
-    const request = canvases?.focus;
-    const requestKey = request ? JSON.stringify([scopeKey, request.canvasId, request.nonce]) : undefined;
-    if (!request || requestKey === handledCanvasFocus.current) return;
-    const owner = owners.get(request.canvasId);
-    const element = ref.current;
-    const slot = owner ? canvasSlot(owner, request.canvasId) : undefined;
-    if (!element || !slot) return;
-    handledCanvasFocus.current = requestKey;
-    pauseFollowing();
-    const top = Math.max(0, element.scrollTop + slot.getBoundingClientRect().top - element.getBoundingClientRect().top - 16);
-    element.scrollTo({ top, behavior: reduced ? "auto" : "smooth" });
-    slot.querySelector<HTMLElement>(".canvas-viewport")?.focus({ preventScroll: true });
-  }, [canvases?.focus, canvasPlacementKey, scopeKey, pauseFollowing, reduced]);
-
-  const holdCanvasForResize = (userKey: string, canvasId: string) => {
-    pauseFollowing();
-    const element = ref.current;
-    const slot = canvasSlot(userKey, canvasId);
-    if (element && slot) scroll.keepAnchor(slot, slot.getBoundingClientRect().top - element.getBoundingClientRect().top);
-  };
-
   const renderCompaction = (message: NormalizedMessage) => {
     const key = JSON.stringify([scopeKey, message.id]);
     const row = <CompactionRow message={message} open={expandedCompactions.has(key)} onToggle={() => {
@@ -1003,16 +944,9 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
                   : timingsByMessage.has(message.id) ? <RunDuration durationMs={timingsByMessage.get(message.id)} /> : null;
                 return <Fragment key={key}>
                   {renderSwitches(messageIndex)}
-                  <WorkTurn turn={turn} scopeKey={scopeKey} presentationKey={canvasPlacementKey} user={renderMessage(message)} duration={duration} durationMs={timingsByMessage.get(message.id)}
+                  <WorkTurn turn={turn} scopeKey={scopeKey} user={renderMessage(message)} duration={duration} durationMs={timingsByMessage.get(message.id)}
                     after={turn.canvases.length > 0 || (turn.settled && turn.suggestions.length > 0) ? <>
-                      {turn.canvases.map((touch, index) => {
-                        const owner = owners.get(touch.canvas) === turn.userKey && canvases?.boards.has(touch.canvas);
-                        return <div key={touch.canvas} data-canvas-slot={touch.canvas} data-canvas-owner={owner ? touch.canvas : undefined}
-                          data-transcript-anchor={canvasAnchor(turn.userKey, touch.canvas)}>
-                          {owner ? <CanvasInline touch={touch} ownerKey={turn.userKey} onResizeStart={() => holdCanvasForResize(turn.userKey, touch.canvas)} onResizeEnd={scroll.reconcile} />
-                            : <CanvasCard touch={touch} index={index} />}
-                        </div>;
-                      })}
+                      {turn.canvases.map((touch, index) => <CanvasCard key={touch.canvas} touch={touch} index={index} />)}
                       {turn.settled && turn.suggestions.length > 0 && <SuggestionTray suggestions={turn.suggestions} />}
                     </> : undefined}
                     enabled={collapseCompletedWork} open={expandedWork.has(expansionKey)} renderRows={renderRows} scroll={scroll}

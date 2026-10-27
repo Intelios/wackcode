@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { fitBounds, zoomTo, type Camera, type Size } from "../../canvas-camera";
+import { ZOOM_STEP, fitBounds, zoomTo, type Camera, type Size } from "../../canvas-camera";
 import { boundsOf, layoutCanvas } from "../../canvas-layout";
 import { artboardMention, resolveArtboardHtml, type CanvasBoard as Board } from "../../canvas-state";
 import { Icon } from "../Icons";
+import { MenuButton } from "../ui/MenuButton";
 import { CanvasBoard } from "./CanvasBoard";
 import type { ArtboardMotion } from "./CanvasArtboard";
-import { createCanvasSession, useCanvasView, type CanvasSession } from "../../canvas-session";
-import { canvasScopeActivity, type CanvasScope } from "./CanvasCard";
+import { CanvasPresent } from "./CanvasPresent";
+import { useCanvasView, type CanvasSession, type CanvasTool } from "../../canvas-session";
 
 const GLIDE_MS = 420;
 /** How long a new artboard's pop or a revised one's glint plays. */
@@ -17,18 +18,27 @@ const FOCUS_MAX_ZOOM = 1;
 
 export type CanvasActivity = "drawing" | "looking" | undefined;
 
+/** What saving one artboard needs: its resolved document at its real size. */
+export interface ArtboardExport {
+  name: string;
+  html: string;
+  width: number;
+  height: number;
+  format: "png" | "html";
+}
+
 interface CanvasPanelProps {
   taskId: string;
+  /** Every canvas in this chat, for the switcher. */
+  boards: readonly Board[];
   board: Board;
-  session?: CanvasSession;
+  session: CanvasSession;
   activity?: CanvasActivity;
-  expanded?: boolean;
-  /** A reference asked to select these artboards; a new nonce is a new request. */
+  /** A transcript card asked to show these artboards; a new nonce is a new request. */
   focus?: { ids: string[]; nonce: number };
-  onExpand: () => void;
+  onSelectCanvas: (canvasId: string) => void;
   onMention: (text: string) => void;
-  /** Offscreen transcript panes keep their layout without staging any artboard documents. */
-  visible?: boolean;
+  onExport: (artboard: ArtboardExport) => void;
 }
 
 function signature(board: Board, id: string): string {
@@ -39,18 +49,17 @@ function signature(board: Board, id: string): string {
 const ease = (t: number) => 1 - (1 - t) ** 3;
 
 /**
- * One live Canvas surface, shared by its inline and expanded hosts. The session owns durable
- * viewer state; this host only owns its viewport and short-lived animation frames. Frames stay
- * pointer-inert until stepped into, and an idle inline board leaves wheel events to the chat.
+ * The Canvas tab: one of the chat's boards filling the side-panel page edge to edge, with its
+ * tools floating over it rather than a header taking rows from it (the reason this view skips
+ * `.panel-header`). The session owns durable viewer state; this host only owns its viewport,
+ * short-lived animation frames and Present. Frames stay pointer-inert until played.
  */
-export function CanvasPanel({ taskId, board, session: suppliedSession, activity, expanded = false, focus, onExpand, onMention, visible = true }: CanvasPanelProps) {
+export function CanvasPanel({ taskId, boards, board, session, activity, focus, onSelectCanvas, onMention, onExport }: CanvasPanelProps) {
   const reduce = useReducedMotion() ?? false;
-  const [fallbackSession] = useState(createCanvasSession);
-  const session = suppliedSession ?? fallbackSession;
   const state = useCanvasView(session, taskId, board.id);
-  const { camera, measured, selected, entered } = state;
-  const active = expanded || state.active;
+  const { camera, measured, selected, entered, tool } = state;
   const root = useRef<HTMLElement>(null);
+  const [presenting, setPresenting] = useState(false);
   const [viewport, setViewport] = useState<Size>({ width: 0, height: 0 });
   const [motions, setMotions] = useState<Record<string, ArtboardMotion>>({});
   const arrivals = state.arrivals;
@@ -65,37 +74,6 @@ export function CanvasPanel({ taskId, board, session: suppliedSession, activity,
   }, [update, session, board.id]);
   const setSelected = useCallback((id: string | undefined) => update({ selected: id }), [update]);
   const setEntered = useCallback((id: string | undefined) => update({ entered: id }), [update]);
-  const done = useCallback(() => {
-    update({ active: false, entered: undefined });
-    if (expanded) onExpand();
-  }, [update, expanded, onExpand]);
-  const activate = useCallback(() => session.activate(board.id), [session, board.id]);
-
-  useEffect(() => {
-    if (!active || expanded) return;
-    const outside = (event: Event) => {
-      const target = event.target;
-      if (!(target instanceof Element) || root.current?.contains(target) || root.current?.closest("[data-canvas-inline]")?.contains(target)) return;
-      done();
-    };
-    let blurTimer: ReturnType<typeof setTimeout> | undefined;
-    const blur = () => {
-      // Moving focus into an artboard blurs the parent window too. Wait for that handoff:
-      // hasFocus includes descendant frames, but becomes false when the user leaves the app.
-      clearTimeout(blurTimer);
-      blurTimer = setTimeout(() => { if (!document.hasFocus()) done(); }, 0);
-    };
-    document.addEventListener("pointerdown", outside);
-    document.addEventListener("focusin", outside);
-    window.addEventListener("blur", blur);
-    return () => {
-      document.removeEventListener("pointerdown", outside);
-      document.removeEventListener("focusin", outside);
-      window.removeEventListener("blur", blur);
-      clearTimeout(blurTimer);
-    };
-  }, [active, expanded, done]);
-
   const layout = useMemo(() => layoutCanvas(board, measured), [board, measured]);
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
@@ -194,6 +172,7 @@ export function CanvasPanel({ taskId, board, session: suppliedSession, activity,
     setArrivals([]);
     setSelected(ids[0]);
     showIds(ids);
+    root.current?.querySelector<HTMLElement>(".canvas-viewport")?.focus({ preventScroll: true });
   }, [focus?.nonce, viewport.width > 0]);
 
   // An artboard that left the board can't stay selected or stepped into.
@@ -237,24 +216,46 @@ export function CanvasPanel({ taskId, board, session: suppliedSession, activity,
     glide(zoomTo(cameraRef.current, zoom, viewport));
   }, [glide, viewport]);
 
+  const setTool = useCallback((next: CanvasTool) => update({ tool: next }), [update]);
+  const exportArtboard = useCallback((id: string, format: "png" | "html") => {
+    const artboard = board.artboards.find((item) => item.id === id);
+    const placed = layoutRef.current.artboards.find((item) => item.id === id);
+    if (artboard && placed) onExport({ name: artboard.name, html: resolveArtboardHtml(board, artboard), width: placed.width, height: placed.height, format });
+  }, [board, onExport]);
+  const presented = useMemo(() => layout.artboards.flatMap((placed) => {
+    const artboard = board.artboards.find((item) => item.id === placed.id);
+    return artboard ? [{ id: artboard.id, name: artboard.name, group: artboard.group, width: placed.width, height: placed.height,
+      fixedHeight: artboard.height !== undefined, html: resolveArtboardHtml(board, artboard) }] : [];
+  }), [layout, board]);
+  const present = () => {
+    update({ entered: undefined });
+    setPresenting(true);
+  };
+  const endPresent = useCallback((lastId: string | undefined) => {
+    setPresenting(false);
+    if (lastId) { setSelected(lastId); showIds([lastId]); }
+    requestAnimationFrame(() => root.current?.querySelector<HTMLElement>(".canvas-viewport")?.focus({ preventScroll: true }));
+  }, [setSelected, showIds]);
+
   const selectedArtboard = selected ? board.artboards.find((item) => item.id === selected) : undefined;
   const count = board.artboards.length;
+  const percent = Math.round(camera.zoom * 100);
   return (
-    <section ref={root} className={`canvas-panel${active ? " interactive" : ""}`} onKeyDown={(event) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
-      if (entered) setEntered(undefined);
-      else if (active) done();
-      else return;
-      event.preventDefault();
-      event.stopPropagation();
+    <section ref={root} className="canvas-panel" onKeyDown={(event) => {
+      if (event.defaultPrevented) return;
+      if (event.key === "Escape" && (entered || selected)) {
+        if (entered) setEntered(undefined);
+        else setSelected(undefined);
+        event.preventDefault();
+        event.stopPropagation();
+      }
     }}>
       <div className="canvas-stage">
         <CanvasBoard
           board={board}
-          active={active}
-          visible={visible}
-          onActivate={activate}
-          onDeactivate={done}
+          visible
+          tool={tool}
+          onTool={setTool}
           layout={layout}
           camera={camera}
           onCamera={userCamera}
@@ -267,6 +268,7 @@ export function CanvasPanel({ taskId, board, session: suppliedSession, activity,
           onZoomTo={zoomToArtboard}
           onMeasure={onMeasure}
           onMention={mention}
+          onExport={exportArtboard}
           onFit={fit}
           onZoomStep={zoomStep}
           onZoomReset={() => zoomExact(1)}
@@ -277,15 +279,49 @@ export function CanvasPanel({ taskId, board, session: suppliedSession, activity,
             <p>Nothing on this canvas any more.</p>
           </div>
         )}
-        <div className="canvas-controls">
+        <div className="canvas-toolbar canvas-toolbar-start" role="toolbar" aria-label="Canvas tools">
+          {boards.length > 1 && <>
+            <MenuButton
+              className="canvas-switcher"
+              label={`Canvas: ${board.title}. Switch canvas`}
+              align="start"
+              icon={<><span>{board.title}</span><Icon name="chevron" /></>}
+              items={boards.map((item) => ({ label: item.title, selected: item.id === board.id, onSelect: () => onSelectCanvas(item.id) }))}
+            />
+            <span className="canvas-toolbar-divider" aria-hidden="true" />
+          </>}
+          {([["select", "pointer", "Select", "V"], ["hand", "hand", "Hand", "H"]] as const).map(([value, icon, label, key]) => (
+            <button key={value} type="button" className={`icon-button canvas-tool${tool === value ? " on" : ""}`} aria-pressed={tool === value}
+              aria-label={label} title={`${label} (${key})`} onClick={() => setTool(value)}>
+              <Icon name={icon} />
+            </button>
+          ))}
           {activity && (
-            <span className="terminal-pill running" role="status">
+            <span className="canvas-activity" role="status">
               <span className="terminal-pill-dot" aria-hidden="true" />{activity === "looking" ? "Checking artboards" : "Drawing"}
             </span>
           )}
-          <button type="button" className="canvas-expand" title={expanded ? "Restore canvas" : "Expand canvas"} aria-label={expanded ? "Restore canvas" : "Expand canvas"} onClick={onExpand}>
-            <Icon name={expanded ? "collapse" : "expand"} />
+        </div>
+        <div className="canvas-toolbar canvas-toolbar-end" role="toolbar" aria-label="View">
+          <button type="button" className="icon-button" aria-label="Present" title="Present" disabled={count === 0} onClick={present}>
+            <Icon name="present" />
           </button>
+          <span className="canvas-toolbar-divider" aria-hidden="true" />
+          <button type="button" className="icon-button" aria-label="Zoom out" title="Zoom out (−)" onClick={() => zoomStep(1 / ZOOM_STEP)}><Icon name="minus" /></button>
+          <MenuButton
+            className="canvas-zoom-level"
+            label={`Zoom ${percent}%. Zoom options`}
+            icon={<><span>{percent}%</span><Icon name="chevron" /></>}
+            items={[
+              { label: "Zoom to fit", hint: "⇧1", onSelect: fit },
+              { label: "Zoom to selection", hint: "⇧2", disabled: !selected, onSelect: () => selected && zoomToArtboard(selected) },
+              "separator",
+              { label: "50%", onSelect: () => zoomExact(0.5) },
+              { label: "100%", hint: "⌘0", onSelect: () => zoomExact(1) },
+              { label: "200%", onSelect: () => zoomExact(2) },
+            ]}
+          />
+          <button type="button" className="icon-button" aria-label="Zoom in" title="Zoom in (+)" onClick={() => zoomStep(ZOOM_STEP)}><Icon name="plus" /></button>
         </div>
         <div className="canvas-arrivals-dock">
         <AnimatePresence>
@@ -311,47 +347,17 @@ export function CanvasPanel({ taskId, board, session: suppliedSession, activity,
         </AnimatePresence>
         </div>
         {entered ? (
-          <p className="canvas-hint" role="status">Interacting with “{board.artboards.find((item) => item.id === entered)?.name}”. Press <kbd>Esc</kbd> to step out.</p>
+          <p className="canvas-hint" role="status">Playing “{board.artboards.find((item) => item.id === entered)?.name}”. Press <kbd>Esc</kbd> to stop.</p>
         ) : selectedArtboard ? (
           <p className="canvas-hint">
             <strong>{selectedArtboard.name}</strong>
             <span>{selectedArtboard.width}×{selectedArtboard.height ?? "auto"}{selectedArtboard.group ? ` · ${selectedArtboard.group}` : ""}</span>
             {selectedArtboard.notes && <span>{selectedArtboard.notes}</span>}
-            <span className="canvas-hint-keys"><kbd>↩</kbd> step in</span>
+            <span className="canvas-hint-keys"><kbd>↩</kbd> play</span>
           </p>
         ) : null}
       </div>
+      {presenting && <CanvasPresent title={board.title} artboards={presented} startId={selected} onClose={endPresent} />}
     </section>
   );
-}
-
-/** Expanded host shares the same session as its inline placeholder, never a second live board. */
-export function CanvasExpanded({ scope, canvasId }: { scope: CanvasScope; canvasId: string }) {
-  const board = scope.boards.get(canvasId);
-  const [fallbackSession] = useState(createCanvasSession);
-  const session = scope.session ?? fallbackSession;
-  const root = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!board) return;
-    session.ensure(scope.taskId ?? "", canvasId);
-    session.setExpanded(canvasId);
-  }, [session, scope.taskId, canvasId, Boolean(board)]);
-  useEffect(() => {
-    const key = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented || event.cancelBubble) return;
-      if (event.target instanceof Element && event.target.closest(".popover, [role=dialog], .inline-dialog-wrap")) return;
-      if (session.get(canvasId)?.entered) session.update(canvasId, { entered: undefined });
-      else scope.onRestore?.();
-      event.preventDefault();
-      event.stopPropagation();
-    };
-    document.addEventListener("keydown", key);
-    root.current?.querySelector<HTMLElement>(".canvas-viewport")?.focus({ preventScroll: true });
-    return () => document.removeEventListener("keydown", key);
-  }, [session, canvasId, scope.onRestore]);
-  if (!board) return null;
-  const activity = canvasScopeActivity(scope, canvasId);
-  return <div ref={root} className="canvas-expanded-content"><CanvasPanel taskId={scope.taskId ?? ""} board={board} session={session} activity={activity}
-    expanded focus={scope.focus?.canvasId === canvasId ? scope.focus : undefined}
-    onExpand={() => scope.onRestore?.()} onMention={scope.onMention ?? (() => {})} /></div>;
 }

@@ -306,6 +306,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + 
             menu_bar::take_menu_navigation,
             visuals::stage_visual,
             visuals::set_visual_theme,
+            canvas_render::export_artboard,
             commands::tool_image,
             commands::visual_document,
             commands::message_image,

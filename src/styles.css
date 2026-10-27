@@ -3309,14 +3309,6 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
 .panel-expanded .chat-transcript, .panel-expanded .chat-scroll-zone { visibility: hidden; }
 .panel-expanded .composer-layer, .panel-expanded .chat-composer-layer { z-index: 4; }
 .panel-expanded .inline-dialog-wrap { position: absolute; bottom: var(--composer-h, 140px); left: 0; right: 0; z-index: 5; }
-/* Canvas expansion is independent of the side panel: park it without resetting its view,
-   width, PTY or native browser presentation, and leave the same composer and questions live. */
-.app-shell.canvas-expanded > .side-panel { position: absolute; right: 0; top: 0; bottom: 0; visibility: hidden; pointer-events: none; }
-.canvas-workspace-expanded.transcript-zone { position: absolute; left: var(--sidebar-w, 240px); right: 0; top: 0; bottom: var(--panel-dock-h, 150px); z-index: 3; overflow: hidden; background: var(--wc-well); }
-.canvas-expanded.panel-has-tabs > .canvas-workspace-expanded { top: 42px; }
-.canvas-expanded .workspace-header, .canvas-expanded .chat-transcript { visibility: hidden; }
-.canvas-expanded .composer-layer { z-index: 4; }
-.canvas-expanded .inline-dialog-wrap { position: absolute; bottom: var(--composer-h, 140px); left: 0; right: 0; z-index: 5; }
 .browser-context-chip { display: inline-flex; max-width: 280px; min-width: 0; align-items: center; gap: 3px; border: 1px solid var(--wc-accent-line-soft); border-radius: var(--wc-radius-card); background: var(--wc-well); overflow: hidden; }
 .browser-context-open { display: flex; min-width: 0; gap: 9px; align-items: center; border: 0; background: transparent; color: var(--text); padding: 6px 8px; text-align: left; cursor: pointer; }
 .browser-context-open > img { width: 42px; height: 32px; object-fit: cover; border-radius: 5px; }
@@ -4968,44 +4960,43 @@ html[data-force-reduced-motion] *::after {
 .visual-expanded-close svg { width: 12px; height: 12px; }
 
 /* ── Canvas (components/canvas/, canvas_render.rs) ─────
-   Wide transcript content, sized against its own scroller rather than the window. The live
-   board moves to its latest modifying turn; older turns keep compact references. The well,
-   its controls and the artboards stay solid over an image backdrop or Liquid Glass. */
-.canvas-inline {
-  width: var(--canvas-inline-width, 100%); margin: 16px calc((100% - var(--canvas-inline-width, 100%)) / 2); min-width: 0;
-  display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border-bright); border-radius: var(--wc-radius-card);
-  background: var(--wc-well); box-shadow: 0 12px 36px -20px color-mix(in srgb, var(--wc-well) 80%, transparent);
-}
-.canvas-expanded-content { height: 100%; min-height: 0; }
+   The Canvas tab: a board filling its side-panel page edge to edge, its tools floating over it
+   in two pills (tools at the start, view at the end) so nothing takes rows from the board. The
+   well, the pills and the artboards are content, so they stay solid over an image backdrop or
+   Liquid Glass. The transcript keeps one compact card per canvas a turn touched. */
 .canvas-panel { height: 100%; min-height: 0; min-width: 0; flex: 1; display: flex; flex-direction: column; }
-.canvas-height-resizer { flex: 0 0 13px; display: grid; place-items: center; cursor: ns-resize; touch-action: none; background: var(--wc-well); }
-.canvas-height-resizer > span { width: 38px; height: 4px; border-radius: var(--wc-radius-pill); background: var(--border-bright); transition: background .15s var(--ease), width .15s var(--ease); }
-.canvas-height-resizer:hover > span, .canvas-height-resizer:focus-visible > span { width: 52px; background: var(--wc-accent); }
-.canvas-inline-placeholder { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--text-dim); font-size: 12px; }
-.canvas-inline-placeholder strong { color: var(--text); font-weight: 600; }
-.canvas-reference-summary { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--text-dim); }
-.canvas-reference .canvas-card-head { border-bottom: 0; gap: 9px; padding: 9px 10px; }
-.canvas-reference .canvas-card-title { flex-wrap: wrap; row-gap: 2px; }
 .canvas-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--wc-well); }
-/* Only a floating activity pill and the expand control sit over the board. */
-.canvas-controls { position: absolute; top: 10px; left: 10px; right: 10px; z-index: 2; display: flex; align-items: flex-start; justify-content: space-between; pointer-events: none; }
-.canvas-controls > * { pointer-events: auto; }
-.canvas-expand {
-  margin-left: auto;
-  display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border-radius: 50%;
-  border: 1px solid color-mix(in srgb, var(--border-bright) 75%, transparent);
-  background: color-mix(in srgb, var(--wc-elevated) 92%, transparent); color: var(--text-soft);
-  box-shadow: 0 3px 12px color-mix(in srgb, var(--wc-well) 55%, transparent);
-  cursor: pointer; transition: color .15s var(--ease), background .15s var(--ease), border-color .15s var(--ease), scale .15s var(--ease);
+.canvas-toolbar {
+  position: absolute; top: 12px; z-index: 2; display: flex; align-items: center; gap: 2px; height: 38px; padding: 0 5px; max-width: calc(100% - 24px);
+  border: 1px solid var(--border-bright); border-radius: 12px; background: var(--wc-elevated);
+  box-shadow: 0 6px 22px -8px color-mix(in srgb, var(--wc-well) 80%, transparent);
 }
-.canvas-expand:hover, .canvas-expand:focus-visible { color: var(--wc-accent-text); background: var(--wc-accent-tint); border-color: var(--wc-accent-line); }
-.canvas-expand:active { scale: .94; }
-.canvas-expand svg { width: 13px; height: 13px; }
+.canvas-toolbar-start { left: 12px; }
+.canvas-toolbar-end { right: 12px; }
+.canvas-toolbar .icon-button { width: 28px; height: 28px; border-radius: 8px; color: var(--text-soft); }
+.side-panel .canvas-toolbar .icon-button { border-radius: 8px; }
+.canvas-toolbar .icon-button svg { width: 15px; height: 15px; }
+.canvas-toolbar .icon-button:hover:not(:disabled) { color: var(--text); }
+.canvas-tool.on, .canvas-tool.on:hover:not(:disabled) { color: var(--wc-accent-text); background: var(--wc-accent-tint); box-shadow: inset 0 0 0 1px var(--wc-accent-line); }
+.canvas-toolbar-divider { width: 1px; height: 18px; margin: 0 4px; background: var(--border-bright); }
+.canvas-toolbar .canvas-switcher, .canvas-toolbar .canvas-zoom-level {
+  width: auto; display: inline-flex; align-items: center; gap: 4px; padding: 0 6px 0 8px; font-size: 12.5px; font-weight: 600; color: var(--text);
+}
+.canvas-toolbar .canvas-switcher > span { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.canvas-toolbar .canvas-switcher svg, .canvas-toolbar .canvas-zoom-level svg { width: 11px; height: 11px; transform: rotate(90deg); color: var(--text-dim); }
+.canvas-toolbar .canvas-zoom-level { min-width: 58px; justify-content: center; font-variant-numeric: tabular-nums; font-weight: 550; }
+.canvas-activity { display: inline-flex; align-items: center; gap: 6px; margin: 0 4px 0 6px; font-size: 11.5px; color: var(--wc-accent-text); white-space: nowrap; }
+.canvas-activity .terminal-pill-dot { background: var(--wc-accent); animation: panel-mark-live 1.7s var(--ease) infinite; }
+/* A narrow panel keeps the tools and stacks the view pill under them. */
+@container (max-width: 520px) {
+  .canvas-toolbar-end { top: 58px; left: 12px; right: auto; }
+  .canvas-activity { display: none; }
+}
 .canvas-viewport {
-  position: absolute; inset: 0; overflow: hidden; outline: none; cursor: default; touch-action: pan-y; user-select: none;
+  position: absolute; inset: 0; overflow: hidden; outline: none; cursor: default; touch-action: none; user-select: none;
   background: var(--wc-well);
 }
-.canvas-viewport.active { cursor: grab; touch-action: none; }
+.canvas-viewport.hand { cursor: grab; }
 .canvas-viewport.panning { cursor: grabbing; }
 .canvas-viewport:focus-visible { box-shadow: inset 0 0 0 2px var(--wc-focus-line); }
 .canvas-world { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
@@ -5038,7 +5029,14 @@ html[data-force-reduced-motion] *::after {
 .canvas-artboard:hover .canvas-artboard-actions, .canvas-artboard.selected .canvas-artboard-actions, .canvas-artboard-label:focus-within .canvas-artboard-actions { opacity: 1; }
 .canvas-artboard-actions .icon-button { width: 22px; height: 22px; border-radius: 50%; }
 .canvas-artboard-actions .icon-button svg { width: 12px; height: 12px; }
-.canvas-artboard-actions .copy-button.secondary-button.compact { height: 22px; padding: 2px 8px; font-size: 10.5px; border-radius: var(--wc-radius-pill); }
+.canvas-artboard-play {
+  height: 22px; margin-left: 3px; padding: 0 9px 0 7px; display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
+  border: 1px solid var(--border-bright); border-radius: var(--wc-radius-pill); background: var(--wc-elevated); color: var(--text-soft);
+  font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  transition: color .15s var(--ease), background .15s var(--ease), border-color .15s var(--ease);
+}
+.canvas-artboard-play svg { width: 10px; height: 10px; }
+.canvas-artboard-play:hover, .canvas-artboard-play:focus-visible, .canvas-artboard-play.playing { color: var(--wc-accent-text); background: var(--wc-accent-tint); border-color: var(--wc-accent-line); }
 .canvas-artboard-frame {
   position: absolute; inset: 0; overflow: hidden; border-radius: 4px; background: var(--surface);
   box-shadow: 0 0 0 1px var(--border), 0 10px 34px color-mix(in srgb, var(--wc-well) 65%, transparent);
@@ -5080,7 +5078,6 @@ html[data-force-reduced-motion] *::after {
 .canvas-hint > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .canvas-hint-keys { color: var(--text-dim); }
 .canvas-hint kbd { font: 10.5px "SFMono-Regular", Consolas, monospace; }
-.canvas-workspace-expanded .canvas-arrivals-dock { bottom: 22px; }
 /* Zoomed far out, the names stay readable and everything else steps aside so rows don't crowd. */
 .canvas-viewport.far .canvas-group-label, .canvas-viewport.far .canvas-artboard-size,
 .canvas-viewport.far .canvas-artboard:not(.selected) .canvas-artboard-actions { display: none; }
@@ -5091,24 +5088,48 @@ html[data-force-reduced-motion] *::after {
   from { box-shadow: 0 0 0 0 color-mix(in srgb, var(--wc-accent) 55%, transparent); }
   to { box-shadow: 0 0 0 9px color-mix(in srgb, var(--wc-accent) 0%, transparent); }
 }
+.canvas-card-wrap { margin: 10px 0; }
 .canvas-card {
-  margin: 12px 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden;
-  background: var(--wc-well); border: 1px solid color-mix(in srgb, var(--border-bright) 70%, transparent); border-radius: var(--wc-radius-card);
+  width: min(100%, 380px); min-height: 44px; display: flex; align-items: center; gap: 10px; padding: 7px 12px 7px 9px; text-align: left; cursor: pointer;
+  border: 1px solid var(--border-bright); border-radius: 12px; background: var(--surface); color: var(--text);
+  transition: border-color .15s var(--ease), background .15s var(--ease), transform .15s var(--ease);
 }
-.canvas-card-head { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 5px 9px 5px 8px; background: var(--surface); border-bottom: 2px dotted var(--wc-accent-line); }
-.canvas-card-mark { display: grid; place-items: center; width: 22px; height: 22px; flex: 0 0 auto; border-radius: 50%; background: var(--wc-accent-tint); color: var(--wc-accent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wc-accent) 26%, transparent); }
-.canvas-card-mark svg { width: 12px; height: 12px; }
-.canvas-card-title { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 7px; overflow: hidden; }
-.canvas-card-kicker { flex: 0 0 auto; color: var(--wc-accent); font-size: 10px; font-weight: 750; letter-spacing: .06em; }
-.canvas-card-title strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; color: var(--text); }
-.canvas-card-open.secondary-button.compact { height: 24px; padding: 3px 10px 3px 8px; gap: 5px; font-size: 11px; border-radius: var(--wc-radius-pill); }
-.canvas-card-open.secondary-button.compact svg { width: 12px; height: 12px; }
-.canvas-card-foot { margin: 0; padding: 7px 12px; border-top: 1px solid var(--border); display: flex; align-items: baseline; gap: 10px; min-width: 0; font-size: 11.5px; color: var(--text-soft); }
-.canvas-card-foot > span:first-child { flex: 0 0 auto; }
-.canvas-card-names { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
+.canvas-card:hover:not(:disabled), .canvas-card:focus-visible { border-color: var(--wc-accent-line); background: color-mix(in srgb, var(--wc-accent) 5%, var(--surface)); }
+.canvas-card:active:not(:disabled) { transform: scale(.985); }
+.canvas-card:disabled { cursor: default; opacity: .7; }
+.canvas-card.shown { border-color: var(--wc-accent-line); }
+.canvas-card-mark { display: grid; place-items: center; width: 26px; height: 26px; flex: 0 0 auto; border-radius: 8px; background: var(--wc-accent-tint); color: var(--wc-accent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wc-accent) 26%, transparent); }
+.canvas-card-mark svg { width: 14px; height: 14px; }
+.canvas-card.live .canvas-card-mark { animation: panel-mark-live 1.7s var(--ease) infinite; }
+.canvas-card-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
+.canvas-card-summary { flex: 0 0 auto; font-size: 11px; color: var(--text-dim); white-space: nowrap; }
+.canvas-card.live .canvas-card-summary { color: var(--wc-accent-text); }
+.canvas-card-chevron { flex: 0 0 auto; width: 13px; height: 13px; color: var(--text-dim); transition: transform .15s var(--ease), color .15s var(--ease); }
+.canvas-card:hover:not(:disabled) .canvas-card-chevron { color: var(--wc-accent-text); transform: translateX(2px); }
+/* Present: one artboard at a time over the whole window, the bar floating under it. */
+.canvas-present {
+  position: fixed; inset: 0; z-index: 90; display: flex; flex-direction: column; outline: none;
+  background: color-mix(in srgb, var(--wc-well) 96%, transparent); backdrop-filter: blur(10px);
+}
+.canvas-present-stage { position: relative; flex: 1; min-height: 0; display: grid; place-items: center; overflow: hidden; }
+.canvas-present-slide { position: relative; border-radius: 6px; overflow: hidden; box-shadow: 0 30px 80px -24px color-mix(in srgb, var(--wc-well) 90%, transparent), 0 0 0 1px var(--border-bright); }
+.canvas-present-frame { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.canvas-present-bar {
+  align-self: center; margin: 0 0 18px; height: 44px; display: flex; align-items: center; gap: 4px; padding: 0 6px; max-width: calc(100% - 32px);
+  border: 1px solid var(--border-bright); border-radius: var(--wc-radius-pill); background: var(--wc-elevated);
+}
+.canvas-present-bar .icon-button { width: 32px; height: 32px; border-radius: 50%; }
+.canvas-present-bar .icon-button svg { width: 15px; height: 15px; }
+.canvas-present-caption { min-width: 0; display: flex; align-items: baseline; gap: 8px; padding: 0 8px; font-size: 12.5px; color: var(--text-soft); white-space: nowrap; overflow: hidden; }
+.canvas-present-caption strong { color: var(--text); font-weight: 650; overflow: hidden; text-overflow: ellipsis; }
+.canvas-present-count { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.canvas-present-divider { width: 1px; height: 20px; margin: 0 4px; background: var(--border-bright); }
+.canvas-present-bar .secondary-button.compact { border-radius: var(--wc-radius-pill); gap: 6px; }
+.canvas-present-bar kbd { font: 10px "SFMono-Regular", Consolas, monospace; color: var(--text-dim); }
 @media (prefers-reduced-motion: reduce) {
   .canvas-artboard-loading { animation: none; background-size: 100% 100%; }
-  .canvas-artboard.pop, .canvas-artboard.glint .canvas-artboard-frame::after, .panel-switch-ping { animation: none; }
+  .canvas-artboard.pop, .canvas-artboard.glint .canvas-artboard-frame::after, .panel-switch-ping,
+  .canvas-activity .terminal-pill-dot, .canvas-card.live .canvas-card-mark { animation: none; }
   .canvas-artboard-doc { transition: none; }
 }
 

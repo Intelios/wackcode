@@ -9,8 +9,6 @@ import { Icon } from "./Icons";
 interface Props {
   turn: Turn;
   scopeKey: string;
-  /** Canvas ownership can move without changing either turn's work/fold identity. */
-  presentationKey?: string;
   user: ReactNode;
   duration: ReactNode;
   durationMs?: number;
@@ -19,15 +17,14 @@ interface Props {
   onToggle: () => void;
   onAutoCollapse: () => void;
   renderRows: (rows: WorkRow[], part?: "work" | "outcome") => ReactNode;
-  /** Drawn outside folded work: live canvases and settled suggested-task trays. */
+  /** Drawn outside folded work: canvas cards and settled suggested-task trays. */
   after?: ReactNode;
   scroll: Pick<ReturnType<typeof useFollowScroll>, "ref" | "isFollowing" | "keepAnchor" | "reconcile">;
 }
 
 interface BoundaryProps extends Props { regionId: string; animate: boolean }
 interface Snapshot {
-  anchor?: { key: string; offset: number; workRoot?: HTMLElement; canvasOwner?: boolean };
-  canvasFocus?: { key: string; node: HTMLElement };
+  anchor?: { key: string; offset: number; workRoot?: HTMLElement };
   focus: boolean;
 }
 
@@ -58,29 +55,23 @@ class WorkTurnBoundary extends Component<BoundaryProps, Record<string, never>, S
     const afterFold = this.props.enabled && Boolean(this.props.turn.folded);
     const beforeOpen = !beforeFold || previous.open;
     const afterOpen = !afterFold || (this.props.open && !this.completedNow());
-    if (beforeFold === afterFold && beforeOpen === afterOpen && previous.turn.key === this.props.turn.key && previous.presentationKey === this.props.presentationKey) return null;
+    if (beforeFold === afterFold && beforeOpen === afterOpen && previous.turn.key === this.props.turn.key) return null;
     const scroller = this.props.scroll.ref.current;
     if (!scroller) return null;
     const focus = !afterOpen && this.focusedWork !== null && this.focusedWork === document.activeElement;
-    const focusedNode = document.activeElement;
-    const focusedCanvas = focusedNode instanceof HTMLElement && scroller.contains(focusedNode)
-      ? focusedNode.closest<HTMLElement>("[data-canvas-slot][data-canvas-owner]") : null;
-    const canvasFocus = focusedCanvas && focusedNode instanceof HTMLElement
-      ? { key: focusedCanvas.dataset.transcriptAnchor!, node: focusedNode } : undefined;
-    if (this.props.scroll.isFollowing()) return { focus, canvasFocus };
+    if (this.props.scroll.isFollowing()) return { focus };
 
     // User toggles always hold the clicked disclosure. Automatic changes hold the reading
     // row, unless it disappears into the fold, in which case the new disclosure is the anchor.
     const manual = beforeFold && afterFold && previous.open !== this.props.open;
     if (manual && this.button.current) {
-      return { focus, canvasFocus, anchor: { key: `work:${this.props.turn.userKey}`, offset: offset(this.button.current, scroller) } };
+      return { focus, anchor: { key: `work:${this.props.turn.userKey}`, offset: offset(this.button.current, scroller) } };
     }
     const top = scroller.getBoundingClientRect().top;
     const reading = anchors(scroller).find((node) => node.getBoundingClientRect().bottom > top);
-    if (!reading) return { focus, canvasFocus };
-    return { focus, canvasFocus, anchor: {
+    if (!reading) return { focus };
+    return { focus, anchor: {
       key: reading.dataset.transcriptAnchor!, offset: offset(reading, scroller),
-      canvasOwner: reading.hasAttribute("data-canvas-owner"),
       workRoot: reading.closest(".work-transcript-region")?.closest<HTMLElement>(".transcript-turn") ?? undefined
     } };
   }
@@ -96,15 +87,6 @@ class WorkTurnBoundary extends Component<BoundaryProps, Record<string, never>, S
     if (!snapshot) return;
     if (snapshot.focus) this.button.current?.focus({ preventScroll: true });
     const scroller = this.props.scroll.ref.current;
-    if (scroller && snapshot.canvasFocus && !snapshot.canvasFocus.node.isConnected
-      && (document.activeElement === document.body || document.activeElement === document.documentElement)) {
-      // Done/Esc may release a deferred relocation and retire the focused board. Keep keyboard
-      // navigation at its local reference; a click/focus already outside Canvas remains there.
-      const reference = anchors(scroller).find((node) => node.dataset.transcriptAnchor === snapshot.canvasFocus!.key);
-      if (reference && !reference.hasAttribute("data-canvas-owner")) {
-        reference.querySelector<HTMLButtonElement>(".canvas-reference .canvas-card-open:not(:disabled)")?.focus({ preventScroll: true });
-      }
-    }
     if (scroller && snapshot.anchor) {
       const disclosure = snapshot.anchor.workRoot?.querySelector<HTMLButtonElement>(".work-disclosure-button");
       // Every sibling captured the old layout. After all DOM mutations, resolve work owned
@@ -114,13 +96,7 @@ class WorkTurnBoundary extends Component<BoundaryProps, Record<string, never>, S
         this.props.scroll.keepAnchor(disclosure, 0);
       } else {
         const anchor = anchors(scroller).find((node) => node.dataset.transcriptAnchor === snapshot.anchor!.key);
-        if (anchor) {
-          // A reader inside the old tall pane stays with its local reference after relocation,
-          // rather than chasing the live board or retaining a now-impossible interior offset.
-          const anchorOffset = snapshot.anchor.canvasOwner && !anchor.hasAttribute("data-canvas-owner")
-            ? Math.max(0, snapshot.anchor.offset) : snapshot.anchor.offset;
-          this.props.scroll.keepAnchor(anchor, anchorOffset);
-        }
+        if (anchor) this.props.scroll.keepAnchor(anchor, snapshot.anchor.offset);
       }
     }
     this.props.scroll.reconcile();

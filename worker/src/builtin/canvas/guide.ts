@@ -16,7 +16,7 @@ export type CanvasGuideSection = typeof CANVAS_GUIDE_SECTIONS[number];
 const SECTIONS: Record<CanvasGuideSection, string> = {
   basics: `## Basics
 
-A canvas is a board in the chat transcript holding artboards: full mockups drawn side by side so they can be compared. It appears as a wide inline panel; the user clicks to interact, pans and zooms, and can expand it above the composer while keeping the chat available.
+A canvas is a board holding artboards: full mockups drawn side by side so they can be compared. It opens in a roomy Canvas tab in the side panel beside the chat, where the user pans, zooms, plays artboards, presents them one at a time and saves them as PNG or HTML; the chat keeps a small card for each turn that changed it.
 
 - **Start one** with \`canvas\` and a \`title\` (e.g. "Settings page directions"). Later calls pass the returned \`canvas\` id instead. A chat can hold several canvases; start a new one only for a genuinely different subject.
 - **Artboards** have a \`name\` the user will say out loud ("Dusk", "Compact list"), a \`width\`, an optional \`height\` and an \`html\` body. Omit \`height\` for a component or long page that should be as tall as its content; give one for a fixed screen.
@@ -28,7 +28,7 @@ A canvas is a board in the chat transcript holding artboards: full mockups drawn
 
 **Sizes:** Desktop 1440×900, Laptop 1280×800, Tablet 834×1194, Phone 390×844. A single component sits well at 480–800 wide with no height.
 
-**The document.** Each artboard is its own sandboxed page sized exactly to the artboard, so \`100vh\` and \`100vw\` are the artboard's. It has no network at all: inline every style, script, image and icon (inline SVG, data: URLs) and never reference a URL, a web font or a CDN. Use system font stacks (\`-apple-system, "SF Pro Text", Inter, system-ui, sans-serif\`; \`ui-monospace, "SF Mono", Menlo, monospace\`). Scripts run, so hover states, tabs and small interactions work when the user steps into an artboard, but nothing can send a message or open a link from a canvas.
+**The document.** Each artboard is its own sandboxed page sized exactly to the artboard, so \`100vh\` and \`100vw\` are the artboard's. It has no network at all: inline every style, script, image and icon (inline SVG, data: URLs) and never reference a URL, a web font or a CDN. Use system font stacks (\`-apple-system, "SF Pro Text", Inter, system-ui, sans-serif\`; \`ui-monospace, "SF Mono", Menlo, monospace\`). Scripts run, so hover states, tabs and small interactions work when the user plays or presents an artboard, but nothing can send a message or open a link from a canvas.
 
 **Background.** An artboard is a screen, not a chat card: paint its own background on \`body\` and size it to fill. The app's theme variables (\`--bg\`, \`--surface\`, \`--text\`, \`--accent\`…) are defined if you are mocking up WackCode itself; for the user's own product, use that product's colours.
 

@@ -4,6 +4,8 @@ import { BUILD_VIEW, CHANGES_VIEW, GAMES_VIEW, NO_PANEL_TABS, TERMINAL_VIEW, RUN
 const scout: SidePanelView = { kind: "subagent", taskId: "chat-1", toolCallId: "call-1", index: 0 };
 const sibling: SidePanelView = { kind: "subagent", taskId: "chat-1", toolCallId: "call-1", index: 1 };
 const browser: SidePanelView = { kind: "browser", taskId: "chat-1" };
+const poster: SidePanelView = { kind: "canvas", taskId: "chat-1", canvasId: "c-poster" };
+const tickets: SidePanelView = { kind: "canvas", taskId: "chat-1", canvasId: "c-tickets" };
 
 describe("side panel views", () => {
   it("tells views apart by what they show", () => {
@@ -27,6 +29,18 @@ describe("side panel views", () => {
     expect(swapDirection(scout, CHANGES_VIEW)).toBe(-1);
     expect(swapDirection(scout, TERMINAL_VIEW)).toBe(-1);
     expect(swapDirection(null, browser)).toBe(1);
+  });
+
+  it("keeps a chat's canvases in one tab that the switcher swaps in place", () => {
+    expect(viewKey(poster)).toBe("canvas:chat-1:c-poster");
+    expect(swapKey(poster)).toBe(swapKey(tickets));
+    expect(sameView(poster, tickets)).toBe(false);
+    const swapped = openTab(openTab(NO_PANEL_TABS, poster), tickets);
+    expect(swapped.tabs).toEqual([tickets]);
+    expect(shownTab(swapped)).toEqual(tickets);
+    // It belongs to its chat, like the browser.
+    expect(forChat(swapped, "chat-2")).toEqual(NO_PANEL_TABS);
+    expect(storedTabs(openTab(openTab(NO_PANEL_TABS, CHANGES_VIEW), poster)).tabs).toEqual(["changes"]);
   });
 
   it("slides durable views in header order", () => {

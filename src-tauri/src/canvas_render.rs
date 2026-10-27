@@ -14,9 +14,13 @@
 //! origin and `FRAME_CSP` it has on the canvas, then reads the frame's own size and error reports.
 //! Renders run one at a time, each artboard's document is dropped once it is drawn, and the
 //! webview closes after two idle minutes.
+//!
+//! The Canvas tab's Download menu uses the same renderer for a PNG (`export_artboard`): the user
+//! picks where it goes in the native save panel, so the renderer process never names a path.
 use crate::visuals::{VisualKind, VisualStore, RENDER_WEBVIEW, VISUAL_SCHEME};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::Deserialize;
+use tauri_plugin_dialog::DialogExt;
 use serde_json::{json, Value};
 use std::{
     sync::atomic::{AtomicU64, Ordering},
@@ -150,14 +154,7 @@ pub async fn execute_agent_request(app: AppHandle, _task_id: String, _request_id
     let renderer = app.state::<CanvasRenderer>();
     let mut slot = renderer.view.lock().await;
     let generation = renderer.generation.fetch_add(1, Ordering::SeqCst) + 1;
-    let view = match slot.as_ref() {
-        Some(view) => view.clone(),
-        None => {
-            let view = create(&app)?;
-            *slot = Some(view.clone());
-            view
-        }
-    };
+    let view = current_view(&app, &mut slot)?;
     let mut results = Vec::with_capacity(request.artboards.len());
     for artboard in &request.artboards {
         results.push(render_one(&app, &view, artboard, request.images, request.appearance.as_ref().map(RenderAppearance::scheme)).await);
@@ -168,6 +165,114 @@ pub async fn execute_agent_request(app: AppHandle, _task_id: String, _request_id
     drop(slot);
     schedule_teardown(app.clone(), generation);
     Ok(json!({ "artboards": results }))
+}
+
+fn current_view(app: &AppHandle, slot: &mut Option<Webview>) -> Result<Webview, String> {
+    if let Some(view) = slot.as_ref() {
+        return Ok(view.clone());
+    }
+    let view = create(app)?;
+    *slot = Some(view.clone());
+    Ok(view)
+}
+
+/// What the Canvas tab's Download menu saves: one artboard's resolved document at its real size.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtboardExport {
+    name: String,
+    html: String,
+    width: f64,
+    height: f64,
+    format: ExportFormat,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum ExportFormat {
+    Png,
+    Html,
+}
+
+/// A resolved artboard is its markup plus a variant's stylesheet; the worker caps both well below this.
+const MAX_EXPORT_HTML: usize = 512 * 1024;
+
+fn validate_export(export: &ArtboardExport) -> Result<(), String> {
+    if export.html.len() > MAX_EXPORT_HTML {
+        return Err("That artboard is too large to save.".into());
+    }
+    if !(MIN_SIZE..=MAX_WIDTH).contains(&export.width) || !(MIN_SIZE..=MAX_HEIGHT).contains(&export.height) {
+        return Err("That artboard's size is outside what the canvas draws.".into());
+    }
+    Ok(())
+}
+
+/// The artboard's name as a file name: letters, digits, spaces, dashes and underscores only.
+fn export_file_stem(name: &str) -> String {
+    let kept: String = name.chars().filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_')).take(80).collect();
+    // Dropping a separator such as "·" leaves its spaces behind; keep one.
+    let stem = kept.split_whitespace().collect::<Vec<_>>().join(" ");
+    if stem.is_empty() { "Artboard".into() } else { stem }
+}
+
+/// A standalone page around an artboard's body markup, so it opens in any browser.
+fn export_html_document(name: &str, html: &str) -> String {
+    let title = name.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+    format!("<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{title}</title>\n<style>html, body {{ margin: 0; }}</style>\n</head>\n<body>\n{html}\n</body>\n</html>\n")
+}
+
+/// Saves one artboard as a PNG (drawn offscreen at the screen's scale) or a standalone HTML page,
+/// wherever the user picks in the native save panel. `false` when they cancel.
+#[tauri::command]
+pub async fn export_artboard(app: AppHandle, artboard: ArtboardExport) -> Result<bool, String> {
+    validate_export(&artboard)?;
+    let (extension, label) = if artboard.format == ExportFormat::Png { ("png", "PNG image") } else { ("html", "HTML page") };
+    let Some(picked) = app
+        .dialog()
+        .file()
+        .set_title("Save artboard")
+        .set_file_name(format!("{}.{extension}", export_file_stem(&artboard.name)))
+        .add_filter(label, &[extension])
+        .blocking_save_file()
+    else {
+        return Ok(false);
+    };
+    let path = picked.into_path().map_err(|_| "That location can't be saved to.".to_string())?;
+    let bytes = match artboard.format {
+        ExportFormat::Html => export_html_document(&artboard.name, &artboard.html).into_bytes(),
+        ExportFormat::Png => render_png(&app, &artboard).await?,
+    };
+    std::fs::write(&path, bytes).map_err(|error| format!("Couldn't save the artboard: {error}"))?;
+    Ok(true)
+}
+
+async fn render_png(app: &AppHandle, export: &ArtboardExport) -> Result<Vec<u8>, String> {
+    let request = ArtboardRequest { id: "export".into(), kind: VisualKind::Artboard, html: export.html.clone(), width: export.width, height: Some(export.height.round()) };
+    let renderer = app.state::<CanvasRenderer>();
+    let mut slot = renderer.view.lock().await;
+    let generation = renderer.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    let view = current_view(app, &mut slot)?;
+    let store = app.state::<VisualStore>();
+    let outcome = match store.stage_for_render(request.html.clone(), request.kind, None) {
+        Ok(token) => {
+            let rendered = render_token(&view, &token, &request, true).await;
+            store.forget(&token);
+            rendered
+        }
+        Err(error) => Err(error),
+    };
+    if let Ok(blank) = "about:blank".parse() {
+        let _ = view.navigate(blank);
+    }
+    drop(slot);
+    schedule_teardown(app.clone(), generation);
+    let data = outcome?
+        .get("image")
+        .and_then(|image| image.get("data"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| "The artboard couldn't be drawn.".to_string())?;
+    BASE64.decode(data).map_err(|_| "The artboard couldn't be drawn.".to_string())
 }
 
 fn create(app: &AppHandle) -> Result<Webview, String> {
@@ -329,6 +434,26 @@ mod tests {
             assert!(validate(&request).is_ok());
         }
         assert!(serde_json::from_value::<RenderRequest>(json!({ "op": "render", "appearance": "auto", "artboards": [] })).is_err());
+    }
+
+    #[test]
+    fn names_exports_safely_and_wraps_html_as_a_page() {
+        assert_eq!(export_file_stem("Ticket screen (interactive)"), "Ticket screen interactive");
+        assert_eq!(export_file_stem("../../etc/passwd"), "etcpasswd");
+        assert_eq!(export_file_stem("  ✦  "), "Artboard");
+        assert_eq!(export_file_stem("Base · Phone"), "Base Phone");
+        let page = export_html_document("A <b>", "<main>Hi</main>");
+        assert!(page.starts_with("<!doctype html>"));
+        assert!(page.contains("<title>A &lt;b&gt;</title>"));
+        assert!(page.contains("<main>Hi</main>"));
+    }
+
+    #[test]
+    fn refuses_exports_outside_the_canvas_sizes() {
+        let export = |width: f64, height: f64| ArtboardExport { name: "A".into(), html: String::new(), width, height, format: ExportFormat::Png };
+        assert!(validate_export(&export(390.0, 844.0)).is_ok());
+        assert!(validate_export(&export(100.0, 844.0)).is_err());
+        assert!(validate_export(&export(390.0, 99_999.0)).is_err());
     }
 
     #[test]

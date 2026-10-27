@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import { useFrameTheme, useStagedVisual } from "../../hooks/useStagedVisual";
 import { Icon } from "../Icons";
 import { CopyButton } from "../ui/CopyButton";
+import { MenuButton } from "../ui/MenuButton";
 import type { PlacedArtboard } from "../../canvas-layout";
 
 /** A frame reports its size as soon as it lays out; past this an artboard is not coming. */
@@ -27,18 +28,21 @@ interface CanvasArtboardProps {
   onSelect: (id: string) => void;
   onZoomTo: (id: string) => void;
   onMention: (id: string) => void;
-  /** Esc pressed inside the stepped-into frame. */
+  onExport: (id: string, format: "png" | "html") => void;
+  /** Play the artboard: its frame takes the pointer and keyboard until Esc. */
+  onPlay: (id: string) => void;
+  /** Esc pressed inside the played frame, or Stop. */
   onEscape: () => void;
 }
 
 /**
  * One artboard on the board: its label (name, size, actions) above a sandboxed frame staged as
- * an `artboard` document (`visuals.rs`). The frame ignores the pointer until the user steps into
- * the artboard, because a frame swallows the wheel and drag events the board pans with. Its
+ * an `artboard` document (`visuals.rs`). The frame ignores the pointer until the user plays the
+ * artboard, because a frame swallows the wheel and drag events the board pans with. Its
  * document can't send or open anything; it only reports its size and its script errors.
  */
 export const CanvasArtboard = memo(function CanvasArtboard({
-  placed, name, notes, html, fixedHeight, mounted, selected, entered, motion, onMeasure, onSelect, onZoomTo, onMention, onEscape,
+  placed, name, notes, html, fixedHeight, mounted, selected, entered, motion, onMeasure, onSelect, onZoomTo, onMention, onExport, onPlay, onEscape,
 }: CanvasArtboardProps) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const { src, failed, fail, retry } = useStagedVisual(html, "artboard", mounted);
@@ -106,7 +110,16 @@ export const CanvasArtboard = memo(function CanvasArtboard({
           <button type="button" className="icon-button" aria-label={`Zoom to “${name}”`} title="Zoom to" onClick={() => onZoomTo(placed.id)}>
             <Icon name="viewfinder" />
           </button>
-          <CopyButton text={html} label={`Copy “${name}” HTML`} />
+          <CopyButton text={html} label={`Copy “${name}” HTML`} iconOnly />
+          <MenuButton className="canvas-artboard-download" label={`Download “${name}”`} icon={<Icon name="download" />} align="start" items={[
+            { label: "Save as PNG…", onSelect: () => onExport(placed.id, "png") },
+            { label: "Save as HTML…", onSelect: () => onExport(placed.id, "html") },
+          ]} />
+          <button type="button" className={`canvas-artboard-play${entered ? " playing" : ""}`} aria-pressed={entered}
+            aria-label={entered ? `Stop playing “${name}”` : `Play “${name}”`} title={entered ? "Stop (Esc)" : "Play: use it like the real thing"}
+            onClick={() => entered ? onEscape() : onPlay(placed.id)}>
+            <Icon name={entered ? "stop" : "play"} />{entered ? "Stop" : "Play"}
+          </button>
         </span>
       </div>
       <div className="canvas-artboard-frame">

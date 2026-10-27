@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CHAT_MIN, PANEL_MIN, SIDEBAR_W, balancedPanelWidth, chatSize, clampPanelDrag, solveShell } from "./shell-layout";
+import { CHAT_MIN, PANEL_MIN, SIDEBAR_W, balancedPanelWidth, canvasPanelWidth, chatSize, clampPanelDrag, solveShell } from "./shell-layout";
 
 describe("shell layout", () => {
   it("gives the panel its preferred width when the chat keeps its minimum", () => {
@@ -46,6 +46,14 @@ describe("shell layout", () => {
   it("balances the panel against the chat", () => {
     expect(balancedPanelWidth(1440, true)).toBe(600);
     expect(balancedPanelWidth(1440, false)).toBe(720);
+  });
+
+  it("opens the canvas tab roomy, but never past the chat's minimum", () => {
+    expect(canvasPanelWidth(1440, true)).toBe(744);
+    expect(canvasPanelWidth(1728, true)).toBe(923);
+    // A tight window keeps the sidebar and the chat's minimum; the board takes the rest.
+    expect(canvasPanelWidth(1000, true)).toBe(1000 - SIDEBAR_W - CHAT_MIN);
+    expect(canvasPanelWidth(600, true)).toBe(PANEL_MIN);
   });
 
   it("classes the chat column's width", () => {

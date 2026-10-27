@@ -17,7 +17,7 @@ vi.mock("./api", () => ({ api: {
   queueMessage: vi.fn().mockResolvedValue(undefined),
   bootstrap: vi.fn(), refreshSubscriptionModels: vi.fn().mockResolvedValue([]),
   takeMenuNavigation: vi.fn().mockResolvedValue(null), setChatTabMenu: vi.fn().mockResolvedValue(undefined),
-  computerUseCursorAppearance: vi.fn().mockResolvedValue(undefined), setVisualTheme: vi.fn().mockResolvedValue(undefined), stageVisual: vi.fn().mockResolvedValue("wcvisual://localhost/artboard"), startCanvas: vi.fn().mockResolvedValue("run"), openTask: vi.fn().mockResolvedValue(undefined),
+  computerUseCursorAppearance: vi.fn().mockResolvedValue(undefined), setVisualTheme: vi.fn().mockResolvedValue(undefined), stageVisual: vi.fn().mockResolvedValue("wcvisual://localhost/artboard"), startCanvas: vi.fn().mockResolvedValue("run"), exportArtboard: vi.fn().mockResolvedValue(true), openTask: vi.fn().mockResolvedValue(undefined),
   computerUseRespondAccess: vi.fn(), computerUseRevokeApp: vi.fn(),
   gitPublishInfo: vi.fn().mockResolvedValue({ branch: "main", upstream: null, remotes: [] }),
   gitChanges: vi.fn().mockResolvedValue({ isGit: false, files: [] }), listDraftCommands: vi.fn().mockResolvedValue([]),
@@ -120,7 +120,7 @@ describe("App project builds", () => {
   });
 });
 
-describe("App inline Canvas", () => {
+describe("App Canvas tab", () => {
   let scrollTo: PropertyDescriptor | undefined;
   beforeEach(() => {
     scrollTo = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollTo");
@@ -153,110 +153,89 @@ describe("App inline Canvas", () => {
     } }] }
   ];
 
-  async function showCanvas(tabs = false, messages = canvasMessages()) {
+  async function openChat(tabs = false, messages: NormalizedMessage[] = []) {
     bootstrap(tabs);
     await screen.findByRole("button", { name: "Settings" });
     chat("a");
     await worker({ type: "snapshot", taskId: "a", snapshot: snapshot(messages) });
-    return screen.findByRole("button", { name: "Expand canvas" });
   }
+  const canvasPanel = () => screen.queryByRole("complementary", { name: "Billing themes" });
 
-  it("shows an accepted board during a run and expands without replacing the composer or Changes", async () => {
-    await showCanvas();
-    await worker({ type: "run_state", taskId: "a", state: "running", runId: "drawing", startedAt: 100 });
-    expect(screen.getByRole("region", { name: "Canvas: Billing themes" })).toBeInTheDocument();
-    expect(screen.queryByRole("complementary", { name: "Canvas" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Changes" }));
-    const changes = await screen.findByRole("complementary", { name: "Changes" });
-    const panelWidth = changes.querySelector<HTMLElement>(".side-panel-inner")!.style.width;
+  it("opens a roomy Canvas tab when the agent starts a canvas mid-run, without moving the composer", async () => {
+    await openChat();
     type("Keep this draft");
     const composer = input();
-
-    fireEvent.click(screen.getByRole("button", { name: "Expand canvas" }));
-    expect(document.querySelector(".app-shell")).toHaveClass("canvas-expanded");
-    expect(screen.getByRole("region", { name: "Expanded canvas" })).toBeInTheDocument();
+    await worker({ type: "run_state", taskId: "a", state: "running", runId: "drawing", startedAt: 100 });
+    await worker({ type: "snapshot", taskId: "a", snapshot: snapshot(canvasMessages()) });
+    const panel = await screen.findByRole("complementary", { name: "Billing themes" });
+    expect(within(panel).getByRole("region", { name: "Canvas: Billing themes" })).toBeInTheDocument();
+    expect(within(panel).getByRole("tab", { name: /Billing themes/ })).toHaveAttribute("aria-selected", "true");
+    // Most of the room beside the sidebar (`canvasPanelWidth`), wider than another tab's half.
+    expect(panel.querySelector(".side-panel-inner")).toHaveStyle({ width: "744px" });
     expect(input()).toBe(composer);
     expect(composer).toHaveValue("Keep this draft");
+    // The transcript keeps a card, never a second board.
     expect(screen.getAllByRole("region", { name: "Canvas: Billing themes" })).toHaveLength(1);
-
-    await worker({ type: "extension_ui_request", taskId: "a", requestId: "canvas-question", method: "questions", title: "Choose a direction", questions: [
-      { id: "direction", header: "Direction", question: "Which billing direction should I refine?", options: [{ label: "Base", description: "Refine the base screen." }] }
-    ] });
-    expect(screen.getByRole("region", { name: "Questions" })).toBeInTheDocument();
-    expect(input()).toBe(composer);
-    fireEvent.click(within(screen.getByRole("region", { name: "Expanded canvas" })).getByRole("button", { name: "Restore canvas" }));
-    await waitFor(() => expect(document.querySelector(".app-shell")).not.toHaveClass("canvas-expanded"));
-    expect(screen.getByRole("complementary", { name: "Changes" })).toBe(changes);
-    expect(changes.querySelector<HTMLElement>(".side-panel-inner")!.style.width).toBe(panelWidth);
-    expect(composer).toHaveValue("Keep this draft");
-    expect(screen.getByRole("region", { name: "Questions" })).toBeInTheDocument();
-    expect(api.stopTask).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /^Canvas: Billing themes\. Added 1/ })).toHaveAttribute("aria-current", "true");
   });
 
-  it("hides the native browser while expanded and restores its presentation", async () => {
-    vi.mocked(api.browserState).mockImplementation(async (id) => browser(id));
-    vi.mocked(api.browserPresent).mockImplementation(async ({ taskId }) => browser(taskId));
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-      return this.classList.contains("browser-surface") ? new DOMRect(1000, 100, 430, 700) : new DOMRect();
+  it("gives Changes back its own width when it comes forward, and remembers a dragged canvas width apart", async () => {
+    await openChat();
+    await worker({ type: "run_state", taskId: "a", state: "running", runId: "drawing", startedAt: 100 });
+    await worker({ type: "snapshot", taskId: "a", snapshot: snapshot(canvasMessages()) });
+    await screen.findByRole("complementary", { name: "Billing themes" });
+    fireEvent.click(screen.getByRole("button", { name: "Changes" }));
+    const changes = await screen.findByRole("complementary", { name: "Changes" });
+    expect(changes.querySelector(".side-panel-inner")).toHaveStyle({ width: "600px" });
+  });
+
+  it("leaves a revision quiet when another tab is in front", async () => {
+    await openChat(false, canvasMessages());
+    await worker({ type: "run_state", taskId: "a", state: "running", runId: "drawing", startedAt: 100 });
+    fireEvent.click(screen.getByRole("button", { name: "Changes" }));
+    await screen.findByRole("complementary", { name: "Changes" });
+    await worker({ type: "snapshot", taskId: "a", snapshot: snapshot(canvasReferenceMessages()) });
+    expect(screen.getByRole("complementary", { name: "Changes" })).toBeInTheDocument();
+    expect(canvasPanel()).toBeNull();
+  });
+
+  it("never opens for canvases already in a chat it loads; a card opens one on what its turn drew", async () => {
+    await openChat(false, canvasReferenceMessages());
+    expect(canvasPanel()).toBeNull();
+    const cards = screen.getAllByRole("button", { name: /^Canvas: Billing themes\./ });
+    expect(cards).toHaveLength(2);
+    // The board measures its viewport before it can frame what the card asked for.
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(private callback: () => void) {}
+      observe() { this.callback(); }
+      disconnect() {}
     });
-    await showCanvas();
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "requestAnimationFrame", "cancelAnimationFrame", "performance"] });
-    const settle = async () => {
-      await act(async () => { vi.advanceTimersByTime(500); });
-      await act(async () => { vi.advanceTimersByTime(500); });
-    };
-    fireEvent.click(screen.getByRole("button", { name: "Browser" }));
-    await settle();
-    expect(api.browserPresent).toHaveBeenLastCalledWith(expect.objectContaining({ taskId: "a", visible: true }));
-    const address = screen.getByRole("textbox", { name: "Browser address" });
-    fireEvent.click(screen.getByRole("button", { name: "Expand canvas" }));
-    await settle();
-    expect(api.browserPresent).toHaveBeenLastCalledWith(expect.objectContaining({ taskId: "a", visible: false }));
-    fireEvent.click(within(screen.getByRole("region", { name: "Expanded canvas" })).getByRole("button", { name: "Restore canvas" }));
-    await settle();
-    expect(api.browserPresent).toHaveBeenLastCalledWith(expect.objectContaining({ taskId: "a", visible: true }));
-    expect(screen.getByRole("textbox", { name: "Browser address" })).toBe(address);
-    expect(address).toHaveValue("http://localhost/a");
-    expect(api.stopTask).not.toHaveBeenCalled();
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(700);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+    fireEvent.click(cards[1]);
+    const panel = await screen.findByRole("complementary", { name: "Billing themes" });
+    await waitFor(() => expect(within(panel).getByRole("button", { name: "Phone, 390 by auto" })).toHaveAttribute("aria-pressed", "true"));
   });
 
-  it.each(["chat", "settings"])("does not replay Canvas navigation when returning from %s", async (navigation) => {
-    await showCanvas(true, canvasReferenceMessages());
-    const navigate = vi.fn(function (this: HTMLElement, options: ScrollToOptions) {
-      this.scrollTop = options.top ?? this.scrollTop;
-    });
-    Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: navigate });
-    fireEvent.click(screen.getByRole("button", { name: "View latest" }));
-    expect(navigate).toHaveBeenCalledOnce();
-
-    // The user can read elsewhere after the explicit jump. Returning should use the
-    // transcript's saved reading state rather than replay that old Canvas request.
-    const scroller = document.querySelector<HTMLElement>(".conversation-scroll")!;
-    scroller.scrollTop = 180;
-    fireEvent.scroll(scroller);
-    if (navigation === "chat") {
-      chat("b");
-      expect(screen.getByRole("heading", { name: "Chat b" })).toBeInTheDocument();
-      chat("a");
-    } else {
-      fireEvent.click(screen.getByRole("button", { name: "Settings" }));
-      fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
-    }
-    expect(await screen.findByRole("region", { name: "Canvas: Billing themes" })).toBeInTheDocument();
-    expect(navigate).toHaveBeenCalledOnce();
-  });
-
-  it.each(["rewind", "chat", "area", "settings"])("closes expansion on %s without stopping the chat", async (navigation) => {
-    await showCanvas();
-    fireEvent.click(screen.getByRole("button", { name: "Expand canvas" }));
-    expect(document.querySelector(".app-shell")).toHaveClass("canvas-expanded");
+  it.each(["rewind", "chat", "area"])("takes the Canvas tab away on %s without stopping the chat", async (navigation) => {
+    await openChat(false, canvasMessages());
+    fireEvent.click(screen.getByRole("button", { name: /^Canvas: Billing themes\./ }));
+    await screen.findByRole("complementary", { name: "Billing themes" });
     if (navigation === "rewind") await worker({ type: "snapshot", taskId: "a", snapshot: snapshot([]) });
     else if (navigation === "chat") chat("b");
-    else if (navigation === "area") fireEvent.click(screen.getByRole("button", { name: "Chat" }));
-    else fireEvent.click(screen.getByRole("button", { name: "Settings" }));
-    await waitFor(() => expect(screen.queryByRole("region", { name: "Expanded canvas" })).toBeNull());
-    expect(document.querySelector(".app-shell")).not.toHaveClass("canvas-expanded");
+    else fireEvent.click(screen.getByRole("button", { name: "Chat" }));
+    await waitFor(() => expect(canvasPanel()).toBeNull());
     expect(api.stopTask).not.toHaveBeenCalled();
+  });
+
+  it("saves an artboard through the native save panel", async () => {
+    vi.mocked(api.exportArtboard).mockResolvedValue(true);
+    await openChat(false, canvasMessages());
+    fireEvent.click(screen.getByRole("button", { name: /^Canvas: Billing themes\./ }));
+    const panel = await screen.findByRole("complementary", { name: "Billing themes" });
+    fireEvent.click(within(panel).getByRole("button", { name: "Download “Base”" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Save as HTML…" }));
+    expect(api.exportArtboard).toHaveBeenCalledWith(expect.objectContaining({ name: "Base", format: "html", width: 1280 }));
   });
 });
 

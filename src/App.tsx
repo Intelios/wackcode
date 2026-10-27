@@ -96,8 +96,8 @@ import { RunPanel } from "./components/RunPanel";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { SidePanel } from "./components/SidePanel";
 import { SidebarToggle } from "./components/SidebarToggle";
-import { SIDEBAR_W, balancedPanelWidth, chatSize as shellChatSize, panelRoom, solveShell } from "./shell-layout";
-import { CanvasExpanded } from "./components/canvas/CanvasPanel";
+import { SIDEBAR_W, balancedPanelWidth, canvasPanelWidth, chatSize as shellChatSize, panelRoom, solveShell } from "./shell-layout";
+import { CanvasPanel, type ArtboardExport } from "./components/canvas/CanvasPanel";
 import type { CanvasScope } from "./components/canvas/CanvasCard";
 import { GamesPanel } from "./components/GamesPanel";
 import { exitToArcade } from "./games/session";
@@ -174,6 +174,8 @@ const CHANGES_OPEN_KEY = "wackcode:changesOpen";
 /** The width the user dragged the side panel to. Absent, the panel opens at `balancedPanelWidth`.
  *  (Not `wackcode:changesWidth`: that old key held a fixed 430 px default for everyone.) */
 const PANEL_WIDTH_KEY = "wackcode:panelWidth";
+/** The width the user dragged the Canvas tab to; absent, it opens at `canvasPanelWidth`. */
+const CANVAS_PANEL_WIDTH_KEY = "wackcode:canvasPanelWidth";
 const COLLAPSED_PROJECTS_KEY = "wackcode:collapsedProjects";
 /** Whether the user keeps the sidebar open ("open" | "closed"); a wide panel may still hide it. */
 const SIDEBAR_KEY = "wackcode:sidebar";
@@ -285,6 +287,7 @@ export default function App() {
   const changesRequest = useRef(0);
   const [legacyPanelTabs, setLegacyPanelTabs] = useState<PanelTabs>(rememberedPanelTabs);
   const [legacyPanelWidth, setLegacyPanelWidth] = useState<number | null>(() => loadJSON<number | null>(PANEL_WIDTH_KEY, null));
+  const [canvasWidth, setCanvasWidth] = useState<number | null>(() => loadJSON<number | null>(CANVAS_PANEL_WIDTH_KEY, null));
   const [sidebarOpen, setSidebarOpen] = useState(() => loadJSON<string>(SIDEBAR_KEY, "open") !== "closed");
   /** The window's width, which `solveShell` shares out; `windowResizing` drops the panel's ease meanwhile. */
   const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
@@ -463,8 +466,8 @@ export default function App() {
   // takes its artboards away, exactly as it takes the call's chip.
   const canvasMessages = runtime?.snapshot?.messages;
   const selectedCanvases = useMemo(() => selectedTask?.kind === "code" && canvasMessages ? canvasesFromMessages(canvasMessages) : new Map<string, CanvasBoard>(), [canvasMessages, selectedTask?.kind]);
-  // Canvas belongs to the conversation, independently of its current turn or the side panel.
-  // Keep its controller alive across host moves and chat switches; only camera/height are durable.
+  // Viewer state belongs to the conversation, not the panel page: it survives tab swaps, hiding
+  // the panel and chat switches. Only the camera is durable.
   const canvasSessions = useRef(new Map<string, CanvasSession>());
   const selectedCanvasSession = useMemo(() => {
     if (!selectedTaskId || selectedTask?.kind !== "code") return undefined;
@@ -475,19 +478,11 @@ export default function App() {
     }
     return session;
   }, [selectedTaskId, selectedTask?.kind]);
-  const [expandedCanvas, setExpandedCanvas] = useState<{ taskId: string; canvasId: string }>();
-  const expandedCanvasId = expandedCanvas && expandedCanvas.taskId === selectedTaskId && area === "code" && !settingsOpen
-    && !selectedTask?.archived && selectedCanvases.has(expandedCanvas.canvasId) ? expandedCanvas.canvasId : undefined;
-  useLayoutEffect(() => {
-    selectedCanvasSession?.setExpanded(expandedCanvasId);
-    return () => {
-      selectedCanvasSession?.setExpanded(undefined);
-      selectedCanvasSession?.deactivate();
-    };
-  }, [selectedCanvasSession, expandedCanvasId]);
-  useEffect(() => {
-    if (expandedCanvas && !expandedCanvasId) setExpandedCanvas(undefined);
-  }, [expandedCanvas, expandedCanvasId]);
+  const selectedCanvasActivity = useMemo(() => new Map([...selectedCanvases.keys()].map((id) => [id,
+    selectedBusy ? canvasActivity(canvasMessages ?? [], runtime?.partial, id) : undefined
+  ])), [selectedCanvases, selectedBusy, canvasMessages, runtime?.partial]);
+  /** The newest canvas, for "+" and a Canvas tab whose own board a rewind took away. */
+  const latestCanvasId = [...selectedCanvases.keys()].at(-1);
   useEffect(() => {
     for (const id of canvasSessions.current.keys()) {
       if (!data.tasks.some((task) => task.id === id)) canvasSessions.current.delete(id);
@@ -499,16 +494,23 @@ export default function App() {
   const snapshotForTabs = runtime?.snapshot;
   const missingSubagentKey = panelTabs.tabs.find((view) => view.kind === "subagent" && view.taskId === selectedTaskId && snapshotForTabs !== undefined
     && !hasSubagentCall(snapshotForTabs.messages, runtime?.partial, view.toolCallId));
-  const visiblePanelTabs = selectedTask?.archived ? [] : panelTabs.tabs.filter((view) => view !== missingSubagentKey
+  // A rewind past every canvas call takes the Canvas tab with it (the effect below closes it).
+  const missingCanvasKey = panelTabs.tabs.find((view) => view.kind === "canvas" && view.taskId === selectedTaskId && canvasMessages !== undefined
+    && selectedCanvases.size === 0);
+  const visiblePanelTabs = selectedTask?.archived ? [] : panelTabs.tabs.filter((view) => view !== missingSubagentKey && view !== missingCanvasKey
     && (area !== "chat" || view.kind === "browser") && (!isTaskBound(view) || view.taskId === selectedTaskId));
   const panelView = panelTabs.open
     ? visiblePanelTabs.find((view) => swapKey(view) === panelTabs.active) ?? visiblePanelTabs.at(-1) ?? null
     : null;
   const shownSubagent = panelView?.kind === "subagent" ? panelView : undefined;
-  // An expanded panel or canvas floats over the chat, so the chat column gets the panel's share.
-  const panelFloats = Boolean(expandedCanvasId) || (panelExpanded && canExpand(panelView));
-  // Until the user drags it, the panel opens wide: half the room beside the sidebar.
-  const panelPref = panelWidth ?? balancedPanelWidth(windowWidth, sidebarOpen);
+  // An expanded panel floats over the chat, so the chat column gets the panel's share.
+  const panelFloats = panelExpanded && canExpand(panelView);
+  // Until the user drags it, the panel opens wide: half the room beside the sidebar. The Canvas
+  // tab keeps its own, roomier width, so a board to look around never squeezes into a diff's.
+  const canvasInFront = panelView?.kind === "canvas";
+  const panelPref = canvasInFront ? canvasWidth ?? canvasPanelWidth(windowWidth, sidebarOpen) : panelWidth ?? balancedPanelWidth(windowWidth, sidebarOpen);
+  const dragPanelWidth = canvasInFront ? setCanvasWidth : setPanelWidth;
+  const userPanelWidth = canvasInFront ? canvasWidth : panelWidth;
   const shell = solveShell({ windowWidth, sidebarOpen, panelOpen: Boolean(selectedTask && panelView) && !settingsOpen, panelPref });
   const sidebarWidth = shell.sidebarShown ? SIDEBAR_W : 0;
   const chatSize = shellChatSize(panelFloats ? windowWidth - sidebarWidth : shell.chatWidth);
@@ -521,7 +523,7 @@ export default function App() {
     // rather than hiding the sidebar again on the next layout.
     setSidebarOpen(true);
     const room = panelRoom(windowWidth, SIDEBAR_W);
-    if (shell.panelWidth > 0 && panelWidth !== null && panelWidth > room) setPanelWidth(room);
+    if (shell.panelWidth > 0 && userPanelWidth !== null && userPanelWidth > room) dragPanelWidth(room);
   };
   const snapshotMessages = runtime?.snapshot?.messages;
   const shownSubagentCall = useMemo(
@@ -542,6 +544,10 @@ export default function App() {
       case "run": return { view, label: "Run", icon: "play", live: runIsActive(selectedRun) };
       case "build": return { view, label: "Build", icon: "hammer", live: runIsActive(selectedBuild) };
       case "games": return { view, label: "Games", icon: "gamepad" };
+      case "canvas": {
+        const board = selectedCanvases.get(view.canvasId);
+        return { view, label: board?.title ?? "Canvas", icon: "canvas", live: [...selectedCanvasActivity.values()].some(Boolean) };
+      }
       case "subagent": {
         const call = view === shownSubagent ? shownSubagentCall : snapshotMessages
           ? subagentDetailsFor(snapshotMessages, runtime?.partial, runtime?.liveToolDetails, view.toolCallId, selectedBusy) : undefined;
@@ -557,6 +563,7 @@ export default function App() {
     { view: { kind: "browser", taskId: selectedTask.id }, label: "Browser", icon: "browser" },
     ...(selectedProject?.runCommand ? [{ view: RUN_VIEW, label: "Run output", icon: "play" } as const] : []),
     ...(selectedProject?.buildCommand ? [{ view: BUILD_VIEW, label: "Build output", icon: "hammer" } as const] : []),
+    ...(latestCanvasId ? [{ view: { kind: "canvas", taskId: selectedTask.id, canvasId: latestCanvasId }, label: "Canvas", icon: "canvas" } as const] : []),
     { view: GAMES_VIEW, label: "Games", icon: "gamepad" }
   ] satisfies PanelAddItem[]).filter((item) => !visiblePanelTabs.some((view) => swapKey(view) === swapKey(item.view)));
 
@@ -580,31 +587,31 @@ export default function App() {
     if (!taskId) return;
     changePanel((tabs) => panelView ? hidePanel(tabs) : showPanel(tabs, areaRef.current === "chat" ? { kind: "browser", taskId } : CHANGES_VIEW));
   }, [changePanel, panelView]);
-  /** Requests belong to this visit, so returning to a chat restores its reading position
-   * rather than replaying an earlier Canvas jump before a clearing effect can run. */
-  const canvasNavigationKey = JSON.stringify([selectedTaskId, area, settingsOpen]);
-  const canvasNavigation = useRef({ key: canvasNavigationKey, visit: 0 });
-  if (canvasNavigation.current.key !== canvasNavigationKey) canvasNavigation.current = { key: canvasNavigationKey, visit: canvasNavigation.current.visit + 1 };
-  const canvasVisit = canvasNavigation.current.visit;
-  const [canvasFocus, setCanvasFocus] = useState<{ taskId: string; canvasId: string; ids: string[]; nonce: number; visit: number }>();
+  const [canvasFocus, setCanvasFocus] = useState<{ taskId: string; canvasId: string; ids: string[]; nonce: number }>();
+  /** Show a canvas in the side panel's Canvas tab, focusing `ids` when a card asked for them. */
   const openCanvas = useCallback((canvasId: string, ids: string[] = []) => {
     const taskId = selectedTaskRef.current;
     if (!taskId) return;
-    const visit = canvasNavigation.current.visit;
-    setCanvasFocus((current) => ({ taskId, canvasId, ids, nonce: (current?.nonce ?? 0) + 1, visit }));
-  }, []);
-  const expandCanvas = useCallback((canvasId: string) => {
+    changePanel((tabs) => openTab(tabs, { kind: "canvas", taskId, canvasId }));
+    setCanvasFocus((current) => ({ taskId, canvasId, ids, nonce: (current?.nonce ?? 0) + 1 }));
+  }, [changePanel]);
+  /** The switcher swaps the board in place, keeping the tab where it is. */
+  const selectCanvas = useCallback((canvasId: string) => {
     const taskId = selectedTaskRef.current;
-    if (!taskId) return;
-    selectedCanvasSession?.setExpanded(canvasId);
-    setExpandedCanvas({ taskId, canvasId });
-  }, [selectedCanvasSession]);
-  const restoreCanvas = useCallback(() => {
-    selectedCanvasSession?.setExpanded(undefined);
-    selectedCanvasSession?.deactivate();
-    setExpandedCanvas(undefined);
-    if (expandedCanvas && expandedCanvas.taskId === selectedTaskRef.current) openCanvas(expandedCanvas.canvasId);
-  }, [expandedCanvas, openCanvas, selectedCanvasSession]);
+    if (taskId) changePanel((tabs) => openTab(tabs, { kind: "canvas", taskId, canvasId }));
+  }, [changePanel]);
+  // A canvas the agent starts while you watch opens its tab once; later revisions update it in
+  // place without pulling it forward. Canvases already there when a chat loads never open it.
+  const seenCanvases = useRef(new Map<string, Set<string>>());
+  useEffect(() => {
+    if (!selectedTaskId || canvasMessages === undefined) return;
+    const seen = seenCanvases.current.get(selectedTaskId);
+    const ids = [...selectedCanvases.keys()];
+    seenCanvases.current.set(selectedTaskId, new Set([...(seen ?? []), ...ids]));
+    if (!seen || !selectedBusy || selectedTask?.archived) return;
+    const created = ids.filter((id) => !seen.has(id));
+    if (created.length) changePanel((tabs) => openTab(tabs, { kind: "canvas", taskId: selectedTaskId, canvasId: created[created.length - 1] }));
+  }, [selectedTaskId, selectedCanvases]);
   const hideSidePanel = useCallback(() => changePanel(hidePanel), [changePanel]);
   /** A tab's ✕. Closing never stops a terminal, run or browser session; the Games tab goes back to its Arcade. */
   const closePanelView = useCallback((view: SidePanelView) => {
@@ -631,7 +638,7 @@ export default function App() {
     void api.browserOpen(taskId, url).then(updateBrowser).catch((reason) => setGlobalError(String(reason)));
   }, [browserBuiltinOn, changePanel, updateBrowser]);
   useEffect(() => {
-    if (!panelExpanded && !expandedCanvasId) return;
+    if (!panelExpanded) return;
     const shell = document.querySelector<HTMLElement>(".app-shell");
     if (!shell) return;
     const update = () => {
@@ -645,7 +652,7 @@ export default function App() {
     const changes = new MutationObserver(update);
     changes.observe(shell, { childList: true, subtree: true }); update();
     return () => { observer.disconnect(); changes.disconnect(); shell.style.removeProperty("--panel-dock-h"); };
-  }, [panelExpanded, expandedCanvasId, composerDraftKey, area]);
+  }, [panelExpanded, composerDraftKey, area]);
   const togglePanelExpanded = useCallback(() => {
     setPanelExpanded(!panelExpanded);
     requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(".composer-input textarea, .chat-composer textarea")?.focus());
@@ -856,6 +863,10 @@ export default function App() {
     if (panelWidth === null) localStorage.removeItem(PANEL_WIDTH_KEY);
     else localStorage.setItem(PANEL_WIDTH_KEY, JSON.stringify(panelWidth));
   }, [panelWidth, tabsEnabled]);
+  useEffect(() => {
+    if (canvasWidth === null) localStorage.removeItem(CANVAS_PANEL_WIDTH_KEY);
+    else localStorage.setItem(CANVAS_PANEL_WIDTH_KEY, JSON.stringify(canvasWidth));
+  }, [canvasWidth]);
   useEffect(() => { localStorage.setItem(SIDEBAR_KEY, JSON.stringify(sidebarOpen ? "open" : "closed")); }, [sidebarOpen]);
   useEffect(() => {
     let settle: ReturnType<typeof setTimeout> | undefined;
@@ -1021,6 +1032,10 @@ export default function App() {
     if (!missingSubagentKey) return;
     changePanel((tabs) => closePanelTab(tabs, swapKey(missingSubagentKey)));
   }, [missingSubagentKey, changePanel]);
+  useEffect(() => {
+    if (!missingCanvasKey) return;
+    changePanel((tabs) => closePanelTab(tabs, swapKey(missingCanvasKey)));
+  }, [missingCanvasKey, changePanel]);
 
   const refreshChanges = useCallback(async (taskId = selectedTaskRef.current) => {
     // A Chat mode chat's scratchpad is not a checkout; the host would refuse the request.
@@ -2780,16 +2795,13 @@ export default function App() {
     composerDrafts.update(key, (draft) => ({ ...draft, text: draft.text.trim() ? `${draft.text.replace(/\s+$/, "")} ${text} ` : `${text} ` }));
     requestAnimationFrame(() => { if (composerKeyRef.current === key) document.querySelector<HTMLTextAreaElement>(".composer-input textarea")?.focus(); });
   }, [composerDraftKey, composerDrafts.update]);
-  const selectedCanvasActivity = useMemo(() => new Map([...selectedCanvases.keys()].map((id) => [id,
-    selectedBusy ? canvasActivity(canvasMessages ?? [], runtime?.partial, id) : undefined
-  ])), [selectedCanvases, selectedBusy, canvasMessages, runtime?.partial]);
+  const shownCanvasId = panelView?.kind === "canvas" ? panelView.canvasId : undefined;
   const canvasScope = useMemo<CanvasScope>(() => ({
-    boards: selectedCanvases, taskId: selectedTaskId, session: selectedCanvasSession,
-    activity: selectedCanvasActivity, expandedId: expandedCanvasId,
-    focus: canvasFocus && canvasFocus.taskId === selectedTaskId && canvasFocus.visit === canvasVisit ? canvasFocus : undefined,
-    onOpen: openCanvas, onExpand: expandCanvas, onRestore: restoreCanvas, onMention: mentionCanvas
-  }), [selectedCanvases, selectedTaskId, selectedCanvasSession, selectedCanvasActivity, expandedCanvasId, canvasFocus, canvasVisit,
-    openCanvas, expandCanvas, restoreCanvas, mentionCanvas]);
+    boards: selectedCanvases, activity: selectedCanvasActivity, shownId: shownCanvasId, onOpen: openCanvas
+  }), [selectedCanvases, selectedCanvasActivity, shownCanvasId, openCanvas]);
+  const exportArtboard = useCallback((artboard: ArtboardExport) => {
+    void api.exportArtboard(artboard).catch((reason) => setGlobalError(String(reason)));
+  }, []);
   const onSuggestionAction = useCallback((action: SuggestionAction) => void handlers.current.suggestionAction(action), []);
   /**
    * What the selected chat's suggested-task cards may do. `started` and `busy` are the
@@ -3227,7 +3239,7 @@ export default function App() {
         { label: "Settings…", icon: <Icon name="settings" />, hint: "⌘,", onSelect: openSettings }
       ]}
     >
-    <div className={`app-shell${rebuilding ? " rebuild" : ""}${expandedCanvasId ? " canvas-expanded" : panelExpanded && canExpand(panelView) ? " panel-expanded" : ""}${showChatTabBar ? " panel-has-tabs" : ""}${!settingsOpen && !shell.sidebarShown ? " sidebar-hidden" : ""}`}
+    <div className={`app-shell${rebuilding ? " rebuild" : ""}${panelExpanded && canExpand(panelView) ? " panel-expanded" : ""}${showChatTabBar ? " panel-has-tabs" : ""}${!settingsOpen && !shell.sidebarShown ? " sidebar-hidden" : ""}`}
       style={{ "--sidebar-w": `${settingsOpen ? SIDEBAR_W : sidebarWidth}px` } as CSSProperties}
       data-area={area} data-dynamic-space onClickCapture={(event) => {
       if (event.button === 0 && !settingsOpen && !confirm && !restoreDialog && !subscriptionLogin && isBackgroundClick(event.target)) {
@@ -3602,8 +3614,8 @@ export default function App() {
         key={tabsEnabled ? activeTab?.id : "panel"}
         view={panelView}
         width={shell.panelWidth || panelPref}
-        onWidthChange={setPanelWidth}
-        onResetWidth={() => setPanelWidth(null)}
+        onWidthChange={dragPanelWidth}
+        onResetWidth={() => dragPanelWidth(null)}
         immediate={windowResizing}
         label={panelView?.kind === "subagent"
           ? `SubAgent ${displayAgentName(shownSubagentCall?.details.results[panelView.index]?.agent ?? "")}`.trim()
@@ -3621,7 +3633,7 @@ export default function App() {
         <BrowserPanel
           taskId={view.taskId}
           state={browsers[view.taskId]}
-          visible={!expandedCanvasId && !confirm && !restoreDialog && !subscriptionLogin && !extensionRequests.some((request) => request.taskId === view.taskId) && !accessRequests.some((request) => request.taskId === view.taskId)}
+          visible={!confirm && !restoreDialog && !subscriptionLogin && !extensionRequests.some((request) => request.taskId === view.taskId) && !accessRequests.some((request) => request.taskId === view.taskId)}
           expanded={panelExpanded}
           onState={updateBrowser}
           onAttach={(context) => {
@@ -3665,7 +3677,17 @@ export default function App() {
             requestAnimationFrame(() => { if (composerKeyRef.current === key) document.querySelector<HTMLTextAreaElement>(".composer-input textarea, .chat-composer textarea")?.focus(); });
           }}
         />
-      ) : view.kind === "games" ? (
+      ) : view.kind === "canvas" ? (() => {
+        const board = selectedCanvases.get(view.canvasId) ?? (latestCanvasId ? selectedCanvases.get(latestCanvasId) : undefined);
+        return board && selectedCanvasSession ? (
+          <CopyText.Provider value={writeText}>
+            <CanvasPanel key={board.id} taskId={selectedTask.id} boards={[...selectedCanvases.values()]} board={board} session={selectedCanvasSession}
+              activity={selectedCanvasActivity.get(board.id)}
+              focus={canvasFocus?.taskId === selectedTask.id && canvasFocus.canvasId === board.id ? canvasFocus : undefined}
+              onSelectCanvas={selectCanvas} onMention={mentionCanvas} onExport={exportArtboard} />
+          </CopyText.Provider>
+        ) : null;
+      })() : view.kind === "games" ? (
         <GamesPanel
           status={selectedTask.status}
           watchKey={selectedTask.id}
@@ -3719,20 +3741,6 @@ export default function App() {
         onComments={saveDiffComments}
         onAddressComments={addressDiffComments}
       />}</SidePanel>}
-      {expandedCanvasId && (
-          <motion.section
-            key={`${selectedTaskId}:${expandedCanvasId}`}
-            className="canvas-workspace-expanded transcript-zone"
-            aria-label="Expanded canvas"
-            initial={reduce ? false : { opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: reduce ? 0 : 0.18, ease: EASE }}
-          >
-            <CopyText.Provider value={writeText}>
-              <CanvasExpanded scope={canvasScope} canvasId={expandedCanvasId} />
-            </CopyText.Provider>
-          </motion.section>
-      )}
         </>
       )}
 

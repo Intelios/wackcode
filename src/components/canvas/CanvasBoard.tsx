@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, 
 import { ZOOM_STEP, intersects, panBy, zoomAt, type Camera, type Size } from "../../canvas-camera";
 import { GROUP_BAND, LABEL_BAND, type CanvasLayout } from "../../canvas-layout";
 import { resolveArtboardHtml, type CanvasBoard as Board } from "../../canvas-state";
+import type { CanvasTool } from "../../canvas-session";
 import { CanvasArtboard, type ArtboardMotion } from "./CanvasArtboard";
 
 /** A press that moves less than this is a click, not a pan. */
@@ -15,10 +16,9 @@ const FAR_ZOOM = 0.25;
 
 interface CanvasBoardProps {
   board: Board;
-  active: boolean;
   visible: boolean;
-  onActivate: () => void;
-  onDeactivate: () => void;
+  tool: CanvasTool;
+  onTool: (tool: CanvasTool) => void;
   layout: CanvasLayout;
   camera: Camera;
   /** `user` for the user's own pans and zooms; the panel stops auto-following after one. */
@@ -32,6 +32,7 @@ interface CanvasBoardProps {
   onZoomTo: (id: string) => void;
   onMeasure: (id: string, height: number) => void;
   onMention: (id: string) => void;
+  onExport: (id: string, format: "png" | "html") => void;
   /** Keyboard zoom and fit, so the panel's controls and the keys do the same thing. */
   onFit: () => void;
   onZoomStep: (factor: number) => void;
@@ -60,24 +61,27 @@ function neighbour(layout: CanvasLayout, from: string | undefined, key: string):
 }
 
 /**
- * The board itself: a world layer under one transform, over the plain well.
+ * The board itself: a world layer under one transform, over the plain well. It fills its panel
+ * page and always owns the wheel there: a two-finger scroll pans, a pinch or ⌘-scroll zooms
+ * about the pointer.
  *
- * Dragging anywhere pans (artboard frames ignore the pointer until stepped into), a two-finger
- * scroll pans, a pinch or ⌘-scroll zooms about the pointer. Click selects, double-click steps
- * into an artboard so its own hover states and scrolling work, Esc steps back out. Arrow keys
- * move the selection; Enter steps in; + and − zoom; ⇧1 fits; ⌘0 is 100 %.
+ * Dragging anywhere pans (artboard frames ignore the pointer until played). With Select, a click
+ * picks an artboard and a double-click plays it, so its own hover states and scrolling work;
+ * Esc steps back out, then clears the selection. Hand (H, or Space held) only pans. Arrow keys
+ * move the selection; Enter plays it; + and − zoom; ⇧1 fits; ⇧2 zooms to the selection; ⌘0 is
+ * 100 %; V and H pick the tool.
  */
 export function CanvasBoard({
-  board, active, visible, onActivate, onDeactivate, layout, camera, onCamera, onViewport, selected, entered, motions,
-  onSelect, onEnter, onZoomTo, onMeasure, onMention, onFit, onZoomStep, onZoomReset,
+  board, visible, tool, onTool, layout, camera, onCamera, onViewport, selected, entered, motions,
+  onSelect, onEnter, onZoomTo, onMeasure, onMention, onExport, onFit, onZoomStep, onZoomReset,
 }: CanvasBoardProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState<Size>({ width: 0, height: 0 });
   const [panning, setPanning] = useState(false);
   const [hand, setHand] = useState(false);
   const drag = useRef<{ x: number; y: number; camera: Camera; moved: boolean; pointer: number } | undefined>(undefined);
-  const live = useRef({ camera, onCamera, active });
-  live.current = { camera, onCamera, active };
+  const live = useRef({ camera, onCamera });
+  live.current = { camera, onCamera };
   const seen = useRef(new Set<string>());
 
   useEffect(() => {
@@ -97,7 +101,6 @@ export function CanvasBoard({
     const element = viewportRef.current;
     if (!element) return;
     const onWheel = (event: WheelEvent) => {
-      if (!live.current.active) return;
       event.preventDefault();
       event.stopPropagation();
       const { camera: current, onCamera: update } = live.current;
@@ -133,7 +136,6 @@ export function CanvasBoard({
 
   const pointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 && event.button !== 1) return;
-    onActivate();
     // Buttons in a label act on their own; the board doesn't pan from them.
     if (event.target instanceof Element && event.target.closest("button, a, input")) return;
     drag.current = { x: event.clientX, y: event.clientY, camera, moved: false, pointer: event.pointerId };
@@ -156,7 +158,7 @@ export function CanvasBoard({
     if (!start || start.pointer !== event.pointerId) return;
     drag.current = undefined;
     setPanning(false);
-    if (start.moved) return;
+    if (start.moved || tool === "hand") return;
     const id = artboardAt(event.target);
     if (entered && id !== entered) onEnter(undefined);
     onSelect(id);
@@ -165,10 +167,6 @@ export function CanvasBoard({
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return;
     const key = event.key;
-    if (!active) {
-      if (key === "Enter" || event.code === "Space") { event.preventDefault(); onActivate(); }
-      return;
-    }
     if (event.code === "Space") { event.preventDefault(); setHand(true); return; }
     if (key.startsWith("Arrow")) {
       event.preventDefault();
@@ -177,11 +175,14 @@ export function CanvasBoard({
     } else if (key === "Enter" && selected) {
       event.preventDefault();
       onEnter(selected);
-    } else if (key === "Escape") {
+    } else if (key === "Escape" && (entered || selected)) {
       if (entered) onEnter(undefined);
-      else onDeactivate();
+      else onSelect(undefined);
       event.preventDefault();
       event.stopPropagation();
+    } else if ((key === "v" || key === "h") && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      event.preventDefault();
+      onTool(key === "h" ? "hand" : "select");
     } else if (key === "!" || (event.shiftKey && event.code === "Digit1")) {
       event.preventDefault();
       onFit();
@@ -201,7 +202,7 @@ export function CanvasBoard({
   };
 
   const byId = useMemo(() => new Map(board.artboards.map((artboard) => [artboard.id, artboard])), [board]);
-  const select = useCallback((id: string) => { onActivate(); onSelect(id); }, [onSelect, onActivate]);
+  const select = useCallback((id: string) => onSelect(id), [onSelect]);
   const stepOut = useCallback(() => {
     onEnter(undefined);
     viewportRef.current?.focus({ preventScroll: true });
@@ -217,19 +218,19 @@ export function CanvasBoard({
   return (
     <div
       ref={viewportRef}
-      className={`canvas-viewport${active ? " active" : ""}${panning ? " panning" : ""}${hand ? " hand" : ""}${entered ? " has-entered" : ""}${camera.zoom < FAR_ZOOM ? " far" : ""}`}
+      className={`canvas-viewport${panning ? " panning" : ""}${hand || tool === "hand" ? " hand" : ""}${entered ? " has-entered" : ""}${camera.zoom < FAR_ZOOM ? " far" : ""}`}
       role="region"
       aria-label={`Canvas: ${board.title}`}
       aria-roledescription="canvas"
-      aria-description={active ? "Scroll to pan, pinch to zoom. Escape returns to the chat." : "Press Enter or click to interact. Scrolling continues the chat."}
+      aria-description="Scroll to pan, pinch to zoom. Arrow keys pick an artboard and Enter plays it."
       tabIndex={0}
       onPointerDown={pointerDown}
       onPointerMove={pointerMove}
       onPointerUp={pointerUp}
       onPointerCancel={() => { drag.current = undefined; setPanning(false); }}
       onDoubleClick={(event) => {
-        const id = artboardAt(event.target);
-        if (id) { onActivate(); onEnter(id); }
+        const id = tool === "select" ? artboardAt(event.target) : undefined;
+        if (id) onEnter(id);
       }}
       onKeyDown={keyDown}
     >
@@ -266,6 +267,8 @@ export function CanvasBoard({
                   onSelect={select}
                   onZoomTo={onZoomTo}
                   onMention={onMention}
+                  onExport={onExport}
+                  onPlay={onEnter}
                   onEscape={stepOut}
                 />
               </li>

@@ -2,10 +2,9 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../api";
 import type { CanvasBoard } from "../../canvas-state";
-import { CanvasPanel, CanvasExpanded } from "./CanvasPanel";
-import { CanvasInline } from "./CanvasInline";
-import { createCanvasSession, canvasHeightStorageKey } from "../../canvas-session";
-import { CanvasCard, CanvasScopeContext, type CanvasScope } from "./CanvasCard";
+import { CanvasPanel } from "./CanvasPanel";
+import { createCanvasSession } from "../../canvas-session";
+import { CanvasCard, CanvasScopeContext } from "./CanvasCard";
 
 vi.mock("../../api", () => ({
   api: { stageVisual: vi.fn().mockResolvedValue("wcvisual://localhost/abc123") }
@@ -45,8 +44,8 @@ afterEach(() => {
 
 function panel(overrides: Partial<Parameters<typeof CanvasPanel>[0]> = {}) {
   const props = {
-    taskId: "t1", board, session: createCanvasSession(), activity: undefined, expanded: false,
-    onExpand: vi.fn(), onMention: vi.fn(), ...overrides,
+    taskId: "t1", boards: [board], board, session: createCanvasSession(), activity: undefined,
+    onSelectCanvas: vi.fn(), onMention: vi.fn(), onExport: vi.fn(), ...overrides,
   };
   return { props, view: render(<CanvasPanel {...props} />) };
 }
@@ -80,29 +79,102 @@ describe("CanvasPanel", () => {
     expect(props.onMention).toHaveBeenCalledWith("“Ember” (canvas “Billing themes”)");
   });
 
-  it("steps into an artboard with Enter and back out with Esc", () => {
+  it("plays an artboard with Enter or its Play button, and Esc stops, then clears the selection", () => {
     panel();
     const region = screen.getByRole("region", { name: "Canvas: Billing themes" });
     fireEvent.click(screen.getByRole("button", { name: "Base, 1280 by 800" }));
     fireEvent.keyDown(region, { key: "Enter" });
-    expect(screen.getByText(/Interacting with “Base”/)).toBeInTheDocument();
+    expect(screen.getByText(/Playing “Base”/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop playing “Base”" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.keyDown(region, { key: "Escape" });
-    expect(screen.queryByText(/Interacting with/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Playing/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Base, 1280 by 800" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.keyDown(region, { key: "Escape" });
+    expect(screen.getByRole("button", { name: "Base, 1280 by 800" })).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(screen.getByRole("button", { name: "Play “Phone”" }));
+    expect(screen.getByText(/Playing “Phone”/)).toBeInTheDocument();
   });
 
-  it("condenses to a floating expand control, with no toolbar", () => {
+  it("always owns the wheel: it pans the board and never scrolls what's behind it", () => {
+    const onWheel = vi.fn();
+    const session = createCanvasSession();
+    render(<div onWheel={onWheel}><CanvasPanel taskId="t1" boards={[board]} board={board} session={session} onSelectCanvas={vi.fn()} onMention={vi.fn()} onExport={vi.fn()} /></div>);
+    const region = screen.getByRole("region", { name: "Canvas: Billing themes" });
+    const before = session.get(board.id)!.camera;
+    const wheel = new WheelEvent("wheel", { deltaY: -50, bubbles: true, cancelable: true });
+    act(() => { region.dispatchEvent(wheel); });
+    expect(wheel.defaultPrevented).toBe(true);
+    expect(onWheel).not.toHaveBeenCalled();
+    expect(session.get(board.id)!.camera.y).toBe(before.y + 50);
+  });
+
+  it("switches between Select and Hand from the toolbar or with V and H; Hand never selects", () => {
     const { props } = panel();
-    expect(screen.queryByText("Canvas · 3 artboards")).toBeNull();
-    expect(screen.queryByRole("group", { name: "Zoom" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Interact with canvas" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Expand canvas" }));
-    expect(props.onExpand).toHaveBeenCalledOnce();
+    const select = screen.getByRole("button", { name: "Select" });
+    const hand = screen.getByRole("button", { name: "Hand" });
+    expect(select).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(hand);
+    expect(hand).toHaveAttribute("aria-pressed", "true");
+    expect(props.session.get(board.id)!.tool).toBe("hand");
+    const base = screen.getByRole("button", { name: "Base, 1280 by 800" });
+    const frame = base.closest<HTMLElement>("[data-artboard]")!;
+    fireEvent.pointerDown(frame, { button: 0, pointerId: 1 });
+    fireEvent.pointerUp(frame, { button: 0, pointerId: 1 });
+    expect(base).toHaveAttribute("aria-pressed", "false");
+    fireEvent.keyDown(screen.getByRole("region", { name: "Canvas: Billing themes" }), { key: "v" });
+    expect(select).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("floats a restore control over the expanded board", () => {
-    const { props } = panel({ expanded: true });
-    fireEvent.click(screen.getByRole("button", { name: "Restore canvas" }));
-    expect(props.onExpand).toHaveBeenCalledOnce();
+  it("zooms from the view toolbar and its menu", () => {
+    const { props } = panel();
+    const level = () => screen.getByRole("button", { name: /^Zoom \d+%/ });
+    const before = props.session.get(board.id)!.camera.zoom;
+    expect(level()).toHaveAccessibleName(`Zoom ${Math.round(before * 100)}%. Zoom options`);
+    fireEvent.click(level());
+    expect(screen.getByRole("menuitem", { name: /Zoom to selection/ })).toBeDisabled();
+  });
+
+  it("swaps canvases from the switcher only when the chat has more than one", () => {
+    const other: CanvasBoard = { id: "onboarding", title: "Onboarding", lastChanged: [], artboards: [] };
+    const { view, props } = panel();
+    expect(screen.queryByRole("button", { name: /Switch canvas/ })).toBeNull();
+    view.rerender(<CanvasPanel {...props} boards={[board, other]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Canvas: Billing themes. Switch canvas" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Onboarding/ }));
+    expect(props.onSelectCanvas).toHaveBeenCalledWith("onboarding");
+  });
+
+  it("saves an artboard's resolved document at its real size", () => {
+    const { props } = panel();
+    fireEvent.click(screen.getByRole("button", { name: "Download “Ember”" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Save as PNG…" }));
+    expect(props.onExport).toHaveBeenCalledWith({
+      name: "Ember", html: "<main>base</main>\n<style>:root{--bg:#000}</style>", width: 1280, height: 800, format: "png",
+    });
+  });
+
+  it("presents artboards one at a time in board order, stepping with the arrows and leaving with Esc", () => {
+    panel();
+    fireEvent.click(screen.getByRole("button", { name: "Ember, 1280 by 800. Warm" }));
+    fireEvent.click(screen.getByRole("button", { name: "Present" }));
+    const dialog = screen.getByRole("dialog", { name: "Presenting Billing themes" });
+    expect(within(dialog).getByText("2 / 3")).toBeInTheDocument();
+    fireEvent.keyDown(dialog, { key: "ArrowRight" });
+    expect(within(dialog).getByText("3 / 3")).toBeInTheDocument();
+    fireEvent.keyDown(dialog, { key: "ArrowRight" });
+    expect(within(dialog).getByText("1 / 3")).toBeInTheDocument();
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // Leaving lands on the artboard last shown.
+    expect(screen.getByRole("button", { name: "Base, 1280 by 800" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("focuses the artboards a transcript card asked for, once per request", () => {
+    const { view, props } = panel({ focus: { ids: ["phone"], nonce: 1 } });
+    expect(screen.getByRole("button", { name: "Phone, 390 by auto" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Base, 1280 by 800" }));
+    view.rerender(<CanvasPanel {...props} focus={{ ids: ["phone"], nonce: 1 }} board={{ ...board }} />);
+    expect(screen.getByRole("button", { name: "Base, 1280 by 800" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("finishes artboard effects even when another snapshot repeats the board", () => {
@@ -124,7 +196,6 @@ describe("CanvasPanel", () => {
   it("offers to fly to new artboards once the user has panned away", () => {
     const { view, props } = panel();
     const region = screen.getByRole("region", { name: "Canvas: Billing themes" });
-    fireEvent.keyDown(region, { key: "Enter" });
     act(() => {
       region.dispatchEvent(new WheelEvent("wheel", { deltaX: 40, deltaY: 40, bubbles: true, cancelable: true }));
     });
@@ -132,146 +203,46 @@ describe("CanvasPanel", () => {
     view.rerender(<CanvasPanel {...props} board={next} />);
     expect(screen.getByRole("button", { name: "1 new or revised artboard" })).toBeInTheDocument();
   });
+
+  it("keeps its viewer state when the panel page remounts", () => {
+    const session = createCanvasSession();
+    const { view } = panel({ session });
+    fireEvent.click(screen.getByRole("button", { name: "Ember, 1280 by 800. Warm" }));
+    fireEvent.click(screen.getByRole("button", { name: "Hand" }));
+    view.unmount();
+    panel({ session });
+    expect(screen.getByRole("button", { name: "Ember, 1280 by 800. Warm" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Hand" })).toHaveAttribute("aria-pressed", "true");
+  });
 });
 
 describe("CanvasCard", () => {
-  it("names what a turn drew and opens the canvas at those artboards", () => {
+  const touch = { toolCallId: "c1", canvas: "themes", title: "Billing themes", added: ["ember", "phone"], updated: ["base"], removed: [] };
+
+  it("names what a turn drew and opens the canvas in the side panel at those artboards", () => {
     const onOpen = vi.fn();
     render(
       <CanvasScopeContext.Provider value={{ boards: new Map([[board.id, board]]), onOpen }}>
-        <CanvasCard touch={{ toolCallId: "c1", canvas: "themes", title: "Billing themes", added: ["ember", "phone"], updated: ["base"], removed: [] }} />
+        <CanvasCard touch={touch} />
       </CanvasScopeContext.Provider>
     );
-    expect(screen.getByRole("figure", { name: "Canvas: Billing themes" })).toBeInTheDocument();
     expect(screen.getByText("Added 2 · Revised 1")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "View latest" }));
+    fireEvent.click(screen.getByRole("button", { name: "Canvas: Billing themes. Added 2 · Revised 1. Open in the side panel" }));
     expect(onOpen).toHaveBeenCalledWith("themes", ["base", "ember", "phone"]);
+  });
+
+  it("marks the canvas the panel is showing, and says when the agent is drawing on it", () => {
+    render(
+      <CanvasScopeContext.Provider value={{ boards: new Map([[board.id, board]]), shownId: "themes", activity: new Map([["themes", "drawing"]]), onOpen: vi.fn() }}>
+        <CanvasCard touch={touch} />
+      </CanvasScopeContext.Provider>
+    );
+    expect(screen.getByRole("button", { name: /Canvas: Billing themes/ })).toHaveAttribute("aria-current", "true");
+    expect(screen.getByText("Drawing…")).toBeInTheDocument();
   });
 
   it("says when its canvas is gone", () => {
     render(<CanvasCard touch={{ toolCallId: "c1", canvas: "gone", title: "Old", added: ["a"], updated: [], removed: [] }} />);
-    expect(screen.getByText("This canvas is gone")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "View latest" })).toBeDisabled();
-  });
-});
-
-describe("inline Canvas interaction and rehosting", () => {
-  it("leaves idle wheel events to the chat and consumes active wheel without bubbling", () => {
-    const onWheel = vi.fn();
-    const session = createCanvasSession();
-    render(<div onWheel={onWheel}><CanvasPanel taskId="t1" board={board} session={session} onExpand={() => {}} onMention={() => {}} /></div>);
-    const region = screen.getByRole("region", { name: "Canvas: Billing themes" });
-    const before = session.get(board.id)!.camera;
-    const idle = new WheelEvent("wheel", { deltaY: -50, bubbles: true, cancelable: true });
-    act(() => { region.dispatchEvent(idle); });
-    expect(idle.defaultPrevented).toBe(false);
-    expect(onWheel).toHaveBeenCalledOnce();
-    expect(session.get(board.id)!.camera).toEqual(before);
-    fireEvent.keyDown(region, { key: "Enter" });
-    expect(session.isLocked(board.id)).toBe(true);
-    const active = new WheelEvent("wheel", { deltaY: -50, bubbles: true, cancelable: true });
-    act(() => { region.dispatchEvent(active); });
-    expect(active.defaultPrevented).toBe(true);
-    expect(onWheel).toHaveBeenCalledOnce();
-    expect(session.get(board.id)!.camera.y).toBe(before.y + 50);
-    fireEvent.keyDown(region, { key: "Escape" });
-    expect(session.isLocked(board.id)).toBe(false);
-  });
-
-  it("ends inline interaction when focus or a click moves outside", () => {
-    const { props } = panel();
-    const enter = () => fireEvent.keyDown(screen.getByRole("region", { name: "Canvas: Billing themes" }), { key: "Enter" });
-    enter();
-    fireEvent.pointerDown(document.body);
-    expect(props.session.isLocked(board.id)).toBe(false);
-    enter();
-    fireEvent.focusIn(document.body);
-    expect(props.session.isLocked(board.id)).toBe(false);
-  });
-
-  it("unlocks when the app loses focus even if the active element is an artboard frame", async () => {
-    const { props } = panel();
-    fireEvent.keyDown(screen.getByRole("region", { name: "Canvas: Billing themes" }), { key: "Enter" });
-    const frame = await waitFor(() => {
-      const element = screen.getAllByTitle("Base").find((item) => item instanceof HTMLIFrameElement);
-      expect(element).toBeDefined();
-      return element!;
-    });
-    frame.focus();
-    expect(document.activeElement).toBe(frame);
-    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
-    vi.useFakeTimers();
-    fireEvent(window, new Event("blur"));
-    act(() => { vi.advanceTimersByTime(0); });
-    expect(props.session.isLocked(board.id)).toBe(true);
-    hasFocus.mockReturnValue(false);
-    fireEvent(window, new Event("blur"));
-    act(() => { vi.advanceTimersByTime(0); });
-    expect(props.session.isLocked(board.id)).toBe(false);
-    hasFocus.mockRestore();
-  });
-
-  it("preserves selection, arrivals, zoom and world center when an expanded host replaces the inline host", () => {
-    const session = createCanvasSession();
-    const { view } = panel({ session, focus: { ids: ["base"], nonce: 1 } });
-    fireEvent.click(screen.getByRole("button", { name: "Ember, 1280 by 800. Warm" }));
-    const region = screen.getByRole("region", { name: "Canvas: Billing themes" });
-    act(() => { region.dispatchEvent(new WheelEvent("wheel", { deltaX: 30, deltaY: 50, bubbles: true, cancelable: true })); });
-    act(() => { session.update(board.id, { arrivals: ["base"] }); });
-    const before = session.get(board.id)!.camera;
-    view.unmount();
-    viewportWidth = 1200;
-    viewportHeight = 800;
-    const onRestore = vi.fn();
-    render(<CanvasExpanded canvasId={board.id} scope={{ taskId: "t1", boards: new Map([[board.id, board]]), session, onRestore, focus: { canvasId: board.id, ids: ["base"], nonce: 1 } }} />);
-    expect(session.get(board.id)!.camera).toEqual({ zoom: before.zoom, x: before.x + 200, y: before.y + 100 });
-    expect(screen.getByRole("button", { name: "Ember, 1280 by 800. Warm" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "1 new or revised artboard" })).toBeInTheDocument();
-    fireEvent.keyDown(document.body, { key: "Escape" });
-    expect(onRestore).toHaveBeenCalledOnce();
-  });
-
-  it("keeps only a placeholder inline while expanded and remembers keyboard-resized height", async () => {
-    const session = createCanvasSession();
-    const onResizeStart = vi.fn();
-    const onResizeEnd = vi.fn();
-    const scope: CanvasScope = { taskId: "t1", boards: new Map([[board.id, board]]), session };
-    const touch = { toolCallId: "c1", canvas: board.id, title: board.title, added: ["base"], updated: [], removed: [] };
-    const draw = (expandedId?: string) => <CanvasScopeContext.Provider value={{ ...scope, expandedId }}>
-      <div className="conversation-scroll"><CanvasInline touch={touch} ownerKey="u1" onResizeStart={onResizeStart} onResizeEnd={onResizeEnd} /></div>
-    </CanvasScopeContext.Provider>;
-    const view = render(draw());
-    const handle = screen.getByRole("separator", { name: "Canvas height" });
-    expect(handle).toHaveAttribute("aria-valuenow", "420");
-    fireEvent.keyDown(handle, { key: "ArrowDown" });
-    expect(handle).toHaveAttribute("aria-valuenow", "444");
-    expect(localStorage.getItem(canvasHeightStorageKey("t1", board.id))).toBe("444");
-    expect(onResizeStart).toHaveBeenCalledOnce();
-    expect(onResizeEnd).toHaveBeenCalledOnce();
-    await waitFor(() => expect(api.stageVisual).toHaveBeenCalled());
-    view.rerender(draw(board.id));
-    expect(screen.queryByRole("region", { name: "Canvas: Billing themes" })).not.toBeInTheDocument();
-    expect(screen.getByText("Expanded above the composer")).toBeInTheDocument();
-    view.rerender(draw());
-    expect(screen.getByRole("separator", { name: "Canvas height" })).toHaveAttribute("aria-valuenow", "444");
-    view.unmount();
-    const restored = createCanvasSession();
-    expect(restored.ensure("t1", board.id).height).toBe(444);
-  });
-
-  it("does not stage artboards until its transcript pane approaches the viewport", async () => {
-    let show: IntersectionObserverCallback | undefined;
-    vi.stubGlobal("IntersectionObserver", class {
-      constructor(callback: IntersectionObserverCallback) { show = callback; }
-      observe() {}
-      disconnect() {}
-    });
-    const session = createCanvasSession();
-    render(<CanvasScopeContext.Provider value={{ taskId: "t1", boards: new Map([[board.id, board]]), session }}>
-      <CanvasInline touch={{ toolCallId: "c1", canvas: board.id, title: board.title, added: ["base"], updated: [], removed: [] }} ownerKey="u1" />
-    </CanvasScopeContext.Provider>);
-    expect(api.stageVisual).not.toHaveBeenCalled();
-    act(() => { show?.([{ isIntersecting: true }] as IntersectionObserverEntry[], {} as IntersectionObserver); });
-    await waitFor(() => expect(api.stageVisual).toHaveBeenCalledTimes(3));
+    expect(screen.getByRole("button", { name: "Canvas: Old. This canvas is gone" })).toBeDisabled();
   });
 });

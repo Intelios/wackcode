@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useEffect } from "react";
-import type { ImageContent, ProviderRecord, QueuedMessage } from "../types";
+import type { ImageContent, ProviderRecord, QueuedMessage, SessionSnapshot } from "../types";
 import { composeFileSection, MAX_FILE_BYTES, type FileAttachment } from "../attachment-utils";
 import { Composer } from "./Composer";
 import { useComposerDrafts } from "../hooks/useComposerDrafts";
@@ -293,6 +293,13 @@ describe("Composer styles", () => {
     onOpenSettings: vi.fn()
   };
 
+  const stats: SessionSnapshot["stats"] = {
+    tokens: { input: 18_000, output: 2_200, cacheRead: 0, cacheWrite: 0, total: 20_200 },
+    cost: 0.0421,
+    contextUsage: { tokens: 84_000, contextWindow: 200_000, percent: 42 },
+    contextBreakdown: { entries: [{ id: "user", tokens: 84_000 }], cacheHitRate: 0.5 }
+  };
+
   it.each(["classic", "classicGlass", "capsule", "split", "terminal"] as const)("keeps every control working in the %s style", async (composerStyle) => {
     const onSend = vi.fn().mockResolvedValue(true);
     const { container } = render(<Composer {...noFavorites} {...base} composerStyle={composerStyle} onSend={onSend} comet />);
@@ -332,6 +339,21 @@ describe("Composer styles", () => {
     expect(glyph).toHaveTextContent("❯");
     expect(glyph).toHaveAttribute("aria-hidden", "true");
     expect(within(screen.getByRole("button", { name: "Send message" })).getByText("⏎")).toBeInTheDocument();
+  });
+
+  it("smokes the model and context popovers only for Classic Liquid Glass", () => {
+    const { unmount } = render(<Composer {...noFavorites} {...base} stats={stats} composerStyle="classicGlass" />);
+    fireEvent.click(screen.getByRole("button", { name: /Sees/ }));
+    expect(document.body.querySelector(".model-picker-pop")).toHaveClass("glass");
+    fireEvent.click(screen.getByRole("button", { name: /Context window/ }));
+    expect(document.body.querySelector(".context-pop")).toHaveClass("glass");
+    unmount();
+
+    render(<Composer {...noFavorites} {...base} stats={stats} composerStyle="classic" />);
+    fireEvent.click(screen.getByRole("button", { name: /Sees/ }));
+    expect(document.body.querySelector(".model-picker-pop")).not.toHaveClass("glass");
+    fireEvent.click(screen.getByRole("button", { name: /Context window/ }));
+    expect(document.body.querySelector(".context-pop")).not.toHaveClass("glass");
   });
 });
 

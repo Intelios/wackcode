@@ -36,6 +36,8 @@ export interface ModelPickerProps extends ModelFavoritesProps {
   modelId?: string;
   disabled?: boolean;
   popoverSide?: "top" | "bottom";
+  /** Smoked glass on the popover panel (the Classic Liquid Glass composer passes this). */
+  glass?: boolean;
   onConfigure: (patch: { providerId?: string; modelId?: string; thinkingLevel?: ReasoningEffort }) => void;
   /** Present on coding chats only: adds the Team footer to the popover and, while a chat
    *  carries a crew, a second segment to the pill. */
@@ -51,6 +53,8 @@ export interface ReasoningToggleProps {
   allowUltra?: boolean;
   disabled?: boolean;
   popoverSide?: "top" | "bottom";
+  /** Smoked glass on the popover panel (the Classic Liquid Glass composer passes this). */
+  glass?: boolean;
   onConfigure: (patch: { thinkingLevel: ReasoningEffort }) => void;
 }
 
@@ -78,6 +82,7 @@ export function ModelPicker({
   favoriteSaving,
   onSetFavorite,
   popoverSide = "top",
+  glass = false,
   onConfigure,
   team
 }: ModelPickerProps) {
@@ -214,7 +219,7 @@ export function ModelPicker({
         onClose={() => setOpen(false)}
         side={popoverSide}
         align="start"
-        className="model-picker-pop"
+        className={`model-picker-pop${glass ? " glass" : ""}`}
       >
         <div id={pickerId} className="picker-viewport" role="dialog" aria-label="Choose model">
           <div className={`picker-panels ${view === "crew" ? "show-crew" : view === "providers" ? "show-providers" : "show-models"}`}>
@@ -463,6 +468,7 @@ export function ReasoningToggle({
   allowUltra = true,
   disabled,
   popoverSide = "top",
+  glass = false,
   onConfigure
 }: ReasoningToggleProps) {
   const [open, setOpen] = useState(false);
@@ -527,7 +533,7 @@ export function ReasoningToggle({
         onClose={() => setOpen(false)}
         side={popoverSide}
         align="start"
-        className="reasoning-pop"
+        className={`reasoning-pop${glass ? " glass" : ""}`}
       >
         <div className={`reasoning-panel${peak}`}>
           <div className="reasoning-header">

@@ -577,10 +577,11 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
         modelId={modelId}
         disabled={busy}
         popoverSide={popoverSide}
+        glass={composerStyle === "classicGlass"}
         onConfigure={onConfigure}
         team={team}
       />
-      {stats && <ContextPanel stats={stats} popoverSide={popoverSide} />}
+      {stats && <ContextPanel stats={stats} popoverSide={popoverSide} glass={composerStyle === "classicGlass"} />}
       <ReasoningToggle
         providers={providers}
         providerId={providerId}
@@ -588,6 +589,7 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
         thinkingLevel={thinkingLevel}
         disabled={busy}
         popoverSide={popoverSide}
+        glass={composerStyle === "classicGlass"}
         onConfigure={onConfigure}
       />
       {onModeChange && <ModeToggle mode={mode ?? "build"} disabled={busy} onChange={onModeChange} />}

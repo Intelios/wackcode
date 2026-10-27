@@ -43,4 +43,15 @@ describe("ContextPanel", () => {
     expect(screen.getByRole("button", { name: "Context window usage unknown" })).toBeInTheDocument();
     expect(container.querySelector(".context-ring-fill")).toBeNull();
   });
+
+  it("wears the glass class on its popover only when asked", () => {
+    render(<ContextPanel stats={stats(42)} glass />);
+    fireEvent.mouseEnter(screen.getByRole("button", { name: /Context window/ }));
+    expect(document.querySelector(".context-pop")).toHaveClass("glass");
+    cleanup();
+
+    render(<ContextPanel stats={stats(42)} />);
+    fireEvent.mouseEnter(screen.getByRole("button", { name: /Context window/ }));
+    expect(document.querySelector(".context-pop")).not.toHaveClass("glass");
+  });
 });

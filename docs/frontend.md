@@ -228,7 +228,7 @@ same state, hooks, pickers and accessible names in every style — only the arra
 and its `composer-<style>` class carries the look. `classicGlass` needs `glassSupported`
 (macOS 26+, like the Liquid Glass backdrop): Settings disables it, `validate_appearance_config`
 refuses it, and `App` falls back to `classic` for a configuration copied from another Mac.
-`applyTheme` mirrors the choice on `data-composer-style` for CSS.
+`applyTheme` mirrors the choice on `data-composer-style` for CSS. Under `classicGlass` the model, context and reasoning popovers render as smoked glass too: the composer passes a `glass` prop down and each popover panel adds the `glass` class, since popovers portal to `document.body` where no ancestor selector can reach them.
 
 The two Classic silhouettes also own the floating status pills (`ComposerPills`, rendered
 through the composer's `pills` slot inside `.composer-wrap`, so their height rides

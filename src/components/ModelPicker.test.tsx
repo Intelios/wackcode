@@ -410,3 +410,59 @@ describe("ReasoningToggle", () => {
     expect(document.querySelector(".reasoning-max-fx")).toBeNull();
   });
 });
+
+describe("popover glass", () => {
+  it("wears the glass class on the model picker popover only when asked", () => {
+    render(
+      <ModelPicker {...noFavorites}
+        providers={testProviders}
+        providerId="openrouter"
+        modelId="anthropic/claude-3.5-sonnet"
+        glass
+        onConfigure={() => undefined}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Claude 3.5 Sonnet/i }));
+    expect(document.querySelector(".model-picker-pop")).toHaveClass("glass");
+    cleanup();
+
+    render(
+      <ModelPicker {...noFavorites}
+        providers={testProviders}
+        providerId="openrouter"
+        modelId="anthropic/claude-3.5-sonnet"
+        onConfigure={() => undefined}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Claude 3.5 Sonnet/i }));
+    expect(document.querySelector(".model-picker-pop")).not.toHaveClass("glass");
+  });
+
+  it("wears the glass class on the reasoning popover only when asked", () => {
+    render(
+      <ReasoningToggle
+        providers={testProviders}
+        providerId="openrouter"
+        modelId="anthropic/claude-3.5-sonnet"
+        thinkingLevel="medium"
+        glass
+        onConfigure={() => undefined}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /medium/i }));
+    expect(document.querySelector(".reasoning-pop")).toHaveClass("glass");
+    cleanup();
+
+    render(
+      <ReasoningToggle
+        providers={testProviders}
+        providerId="openrouter"
+        modelId="anthropic/claude-3.5-sonnet"
+        thinkingLevel="medium"
+        onConfigure={() => undefined}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /medium/i }));
+    expect(document.querySelector(".reasoning-pop")).not.toHaveClass("glass");
+  });
+});

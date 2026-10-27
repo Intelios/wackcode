@@ -109,6 +109,20 @@ describe("Transcript pending echo", () => {
     // for a running chat).
     expect(screen.queryByRole("button", { name: /retry/i })).toBeNull();
   });
+
+  it("hides the live clock chip when the Classic composer carries it as a floating pill", () => {
+    const startedAt = 1_000;
+    const messages: NormalizedMessage[] = [
+      { id: "u", role: "user", timestamp: startedAt, blocks: [{ type: "text", text: "Ship it" }] },
+      { id: "a", role: "assistant", blocks: [{ type: "text", text: "On it" }] }
+    ];
+    const view = render(<Transcript messages={messages} running activeRun={{ startedAt }} hideLiveDuration />);
+    expect(screen.queryByText("Working for", { exact: false })).not.toBeInTheDocument();
+    // Settled turns still report their total under the prompt as usual.
+    view.rerender(<Transcript messages={messages} running={false} hideLiveDuration
+      runTimings={[{ userMessageId: "u", durationMs: 5_000 }]} />);
+    expect(screen.getByText(/Worked for/)).toBeInTheDocument();
+  });
 });
 
 describe("Transcript compaction", () => {

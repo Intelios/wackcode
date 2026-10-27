@@ -66,6 +66,8 @@ interface ComposerProps extends ModelFavoritesProps {
   executionPolicy?: ExecutionPolicyConfig;
   appliedExecutionPolicy?: ExecutionPolicyConfig;
   onModeChange?: (mode: TaskMode) => void;
+  /** Floating status pills above the card (classic styles: run timer, todos). */
+  pills?: ReactNode;
   onConfigure: (patch: { providerId?: string; modelId?: string; thinkingLevel?: ReasoningEffort }) => void;
   /** Team, on coding composers only: adds the crew segment and the picker's Team footer. */
   /** Code-area only: the Team row and split crew segment. Chat mode's composer has none. */
@@ -113,7 +115,7 @@ interface ComposerProps extends ModelFavoritesProps {
   agentName?: string;
 }
 
-export function Composer({ draftState, status, backgroundWorking = false, providerId, modelId, thinkingLevel, providers, favoriteModels, favoriteSaving, onSetFavorite, stats, header, placeholder, popoverSide = "top", mode, executionPolicy = DEFAULT_EXECUTION_POLICY, appliedExecutionPolicy, onModeChange, onConfigure, team, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, mentionFiles, mentionChats, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, queuedMessages, onSteer, onDequeue, onStop, onOpenSettings, disabled, seed, comet, frozen, composerStyle = "classic", agentName = DEFAULT_AGENT_NAME }: ComposerProps) {
+export function Composer({ draftState, status, backgroundWorking = false, providerId, modelId, thinkingLevel, providers, favoriteModels, favoriteSaving, onSetFavorite, stats, header, placeholder, popoverSide = "top", mode, executionPolicy = DEFAULT_EXECUTION_POLICY, appliedExecutionPolicy, onModeChange, onConfigure, team, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, mentionFiles, mentionChats, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, queuedMessages, onSteer, onDequeue, onStop, onOpenSettings, disabled, seed, comet, frozen, composerStyle = "classic", agentName = DEFAULT_AGENT_NAME, pills }: ComposerProps) {
   const [localDraft, setLocalDraft] = useState<ComposerDraft>(EMPTY_DRAFT);
   const value = draftState?.value ?? localDraft;
   const updateDraft = draftState?.update ?? setLocalDraft;
@@ -723,6 +725,7 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
       <AnimatePresence initial={false} mode="popLayout">
         {header && <motion.div key="composer-header" className="composer-header" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, y: -12, transition: { duration: 0.18, ease: EASE } }} transition={{ duration: 0.25, ease: EASE }}>{header}</motion.div>}
       </AnimatePresence>
+      {pills}
       <motion.div
         className={`composer composer-${composerStyle}${comet ? " comet" : ""}${frozen !== undefined ? " frozen" : ""}`}
         aria-disabled={disabled || undefined}

@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { TodoTask } from "../types";
-import { TodoPanel } from "./TodoPanel";
+import { TodoPanel, TodoPill } from "./TodoPanel";
 
 afterEach(cleanup);
 
@@ -82,5 +82,60 @@ describe("TodoPanel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Expand todos" }));
     expect(screen.getByText("Set up renderer")).toBeInTheDocument();
+  });
+});
+
+describe("TodoPill", () => {
+  const tasks: TodoTask[] = [
+    { id: 1, subject: "Set up renderer", status: "completed" },
+    { id: 2, subject: "Run provider tests", status: "in_progress", activeForm: "running tests" },
+    { id: 3, subject: "Write tests", status: "pending" }
+  ];
+
+  it("compresses the list to its progress and the task in hand", () => {
+    render(<TodoPill tasks={tasks} />);
+    const pill = screen.getByRole("button", { name: "Todos: 1 of 3 tasks done, Run provider tests" });
+    expect(pill).toHaveTextContent("1/3Run provider tests");
+    expect(pill.querySelector(".todo-mark-circle.in_progress")).not.toBeNull();
+    expect(pill).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("shows the next pending subject when nothing is running, and a check when all are done", () => {
+    const { rerender } = render(<TodoPill tasks={[{ id: 1, subject: "Solo task", status: "pending" }]} />);
+    expect(screen.getByRole("button", { name: "Todos: 0 of 1 tasks done, Solo task" })).toBeInTheDocument();
+    rerender(<TodoPill tasks={[{ id: 1, subject: "Solo task", status: "completed" }]} />);
+    expect(screen.getByRole("button", { name: "Todos: 1 of 1 tasks done, All tasks complete" })).toBeInTheDocument();
+  });
+
+  it("hides itself when the list is empty or only tombstones remain", () => {
+    expect(render(<TodoPill tasks={[]} />).container.firstChild).toBeNull();
+    expect(render(<TodoPill tasks={[{ id: 1, subject: "Gone", status: "deleted" }]} />).container.firstChild).toBeNull();
+  });
+
+  it("opens the full tree in a popover and closes it again", () => {
+    render(<TodoPill tasks={tasks} />);
+    const pill = screen.getByRole("button", { name: /Todos: 1 of 3/ });
+    // The collapsed pill carries no list; the popover shows every row.
+    expect(screen.queryByRole("listitem", { name: "Set up renderer, completed" })).not.toBeInTheDocument();
+
+    fireEvent.click(pill);
+    expect(pill).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("dialog", { name: "Todos" })).toBeInTheDocument();
+    expect(screen.getByRole("listitem", { name: "Set up renderer, completed" })).toBeInTheDocument();
+    expect(screen.getByRole("listitem", { name: "Run provider tests, in progress" })).toBeInTheDocument();
+    expect(screen.getByRole("listitem", { name: "Write tests, pending" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close todos" }));
+    expect(screen.queryByRole("dialog", { name: "Todos" })).not.toBeInTheDocument();
+    expect(pill).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("keeps the completed-task folding inside the popover, folding at run start", () => {
+    const { rerender } = render(<TodoPill tasks={tasks} />);
+    rerender(<TodoPill tasks={tasks} busy />);
+    fireEvent.click(screen.getByRole("button", { name: /Todos: 1 of 3/ }));
+    expect(screen.queryByRole("listitem", { name: "Set up renderer, completed" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("+1 done"));
+    expect(screen.getByRole("listitem", { name: "Set up renderer, completed" })).toBeInTheDocument();
   });
 });

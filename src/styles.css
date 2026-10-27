@@ -2017,6 +2017,56 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
 .attach-button.unavailable { opacity: .45; cursor: default; }
 .attach-button.unavailable:hover { background: transparent; color: var(--text-dim); }
 
+/* Floating status pills (Classic and Classic Liquid Glass): the live run clock and the todo
+   summary hover as centred pills above the card — run status the transcript used to carry
+   sits here now. They are shell furniture over the wrap's fade: solid on Classic, the same
+   smoked glass as the project bar on Classic Liquid Glass (the todo tree popover stays a
+   solid surface — see .todo-popover with the todo panel). */
+.composer-pills { display: flex; justify-content: center; align-items: center; gap: 8px; margin: 4px auto 10px; max-width: 760px; }
+.composer-pill {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; min-width: 0; max-width: min(360px, 50%);
+  padding: 0 12px; border: 1px solid var(--border-bright); border-radius: var(--wc-radius-pill);
+  background: var(--surface); color: var(--text-soft); font-size: 11.5px; line-height: 1; white-space: nowrap;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 22%); transition: border-color .2s var(--ease), box-shadow .25s var(--ease), background .15s var(--ease), color .15s var(--ease);
+}
+.composer-pill svg { width: 13px; height: 13px; flex: 0 0 auto; }
+.composer-pill strong { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+/* The "· detail" half of either pill: the separator is drawn, so wrapping stays inside. */
+.composer-pill-detail { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.composer-pill-detail::before { content: "·"; color: var(--text-faint); flex: 0 0 auto; }
+.composer-pill-detail > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-pill-detail .mono { font-family: "SFMono-Regular", Consolas, monospace; font-size: 10.5px; }
+.composer-pill-working { flex: 0 1 auto; }
+.composer-pill-working.live { border-color: var(--wc-accent-line); }
+.composer-pill-working.live > svg { color: var(--wc-accent); }
+.composer-pill-working.live .clock-hand { transform-box: view-box; transform-origin: 12px 12px; animation: spin 3s linear infinite; }
+.composer-pill-todo { flex: 0 1 auto; cursor: pointer; }
+.composer-pill-todo:hover { background: var(--surface-hover); color: var(--text); border-color: var(--border-bright); }
+.composer-pill-todo.open { border-color: var(--wc-accent-line); color: var(--text); }
+.composer-pill-todo .todo-mark { width: 11px; height: 11px; margin: 0 -1px; }
+.composer-pill-todo .todo-mark-circle { width: 8.5px; height: 8.5px; }
+.composer-pill-todo .todo-check { width: 10px; height: 10px; }
+/* Right-pointing glyph faces down at rest (the list opens upward) and up while open. */
+.composer-pill-todo .todo-pill-chevron { color: var(--text-faint); transform: rotate(90deg); transition: transform .15s var(--ease); }
+.composer-pill-todo.open .todo-pill-chevron { transform: rotate(-90deg); }
+.composer-pill-todo:focus-visible { outline: 2px solid var(--wc-focus-line); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .composer-pill-working.live .clock-hand { animation: none; }
+  .composer-pill-todo .todo-pill-chevron { transition: none; }
+}
+/* Classic Liquid Glass: the pills smoke like the project bar; the popover stays solid. */
+.composer-wrap.glass .composer-pill {
+  border-color: color-mix(in srgb, var(--text) 10%, transparent);
+  background: color-mix(in srgb, var(--wc-composer) 40%, transparent);
+  backdrop-filter: blur(18px) saturate(1.7) brightness(.82);
+  -webkit-backdrop-filter: blur(18px) saturate(1.7) brightness(.82);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 28%);
+}
+.composer-wrap.glass .composer-pill-todo:hover { background: color-mix(in srgb, var(--wc-composer) 55%, transparent); }
+@media (prefers-reduced-transparency: reduce) {
+  .composer-wrap.glass .composer-pill { background: var(--surface); backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
+
 /* draft hero + project bar */
 .draft-title { margin: 0 auto 22px; max-width: 760px; width: 100%; padding: 0 24px; font-size: 24px; letter-spacing: -.5px; font-weight: 650; text-align: center; }
 /* Overlay layer for the persistent composer: it travels between the centered
@@ -4283,6 +4333,10 @@ html[data-force-reduced-motion] *::after {
 .todo-panel-more:focus-visible, .todo-panel-collapse:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--wc-accent) 70%, transparent); outline-offset: 1px;
 }
+/* The Classic composers' todo pill opens this panel as a floating popover: the popover
+   already supplies the surface and shadow, so the panel inside loses its own border. */
+.todo-popover .todo-panel { border: 0; border-radius: 0; background: transparent; }
+.todo-popover-panel { width: min(360px, 90vw); }
 @media (prefers-reduced-motion: reduce) {
   .todo-root-dot { animation: none; }
 }
@@ -5561,6 +5615,16 @@ html[data-force-reduced-motion] *::after {
 .composer-art .mini-card {
   display: flex; flex-direction: column; gap: 4px; width: 100%; padding: 6px 7px;
   border: 1px solid var(--border-bright); border-radius: 6px; background: var(--wc-composer);
+}
+/* The Classic styles' floating status pills, in miniature above the card. */
+.composer-art .mini-pills { display: flex; justify-content: center; gap: 4px; width: 100%; }
+.composer-art .mini-pill-seg {
+  display: block; width: 34px; height: 6px; border-radius: 999px;
+  border: 1px solid var(--border-bright); background: var(--surface);
+}
+.composer-art .mini-pills.glassy .mini-pill-seg {
+  background: color-mix(in srgb, var(--wc-composer) 40%, transparent);
+  border-color: color-mix(in srgb, var(--text) 22%, transparent);
 }
 .composer-art .mini-card.glassy {
   background: color-mix(in srgb, var(--wc-composer) 40%, transparent);

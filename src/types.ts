@@ -1542,6 +1542,8 @@ export interface TaskRuntime {
   liveToolText?: Record<string, string>;
   /** Structured progress from in-flight tools that report it (sub-agents), keyed like liveToolText. */
   liveToolDetails?: Record<string, unknown>;
+  /** The tool calls currently executing, keyed by tool call id — the working pill's detail. */
+  liveToolCalls?: Record<string, NormalizedBlock>;
   error?: string;
   /** Extension output and load failures. Informational only — never blocks a chat. */
   notices?: ExtensionNotice[];

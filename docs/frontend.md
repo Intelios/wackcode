@@ -230,6 +230,15 @@ and its `composer-<style>` class carries the look. `classicGlass` needs `glassSu
 refuses it, and `App` falls back to `classic` for a configuration copied from another Mac.
 `applyTheme` mirrors the choice on `data-composer-style` for CSS.
 
+The two Classic silhouettes also own the floating status pills (`ComposerPills`, rendered
+through the composer's `pills` slot inside `.composer-wrap`, so their height rides
+`--composer-h`): the live "Working for" clock with the tool in flight — tracked on
+`TaskRuntime.liveToolCalls` from `tool_execution_start`/`_end` events — and the todo list
+compressed to a pill that opens the full tree in a popover (`TodoPill`, sharing `TodoPanel`'s
+fold state via `useTodoView`). With the pills active the transcript drops its live
+`RunDuration` chip (`hideLiveDuration`), settled turns keep "Worked for", and the other
+styles keep the pinned `TodoPanel` in the chat column instead.
+
 ## New-chat project picker
 
 `ProjectBar` (the composer's `header` on the welcome screen) hosts `ProjectPicker`, `BranchPicker` and the Local/Worktree toggle. The picker reads and writes the same `pinnedProjects` set as the sidebar, so a pin made anywhere shows everywhere; it never keeps its own copy. Its display rules (`shortPath`, `monogram`, search) are pure functions in `project-display.ts`. ⌘O stays a global shortcut in `App`; the picker's footer only calls `onAddProject`.

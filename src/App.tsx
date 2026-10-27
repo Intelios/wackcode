@@ -46,6 +46,7 @@ import type {
   AppearanceConfig,
   BrowserState,
   CommandsConfig,
+  ComposerStyle,
   WebConfig,
   MemoryConfig,
   PromptConfig,
@@ -119,6 +120,7 @@ import { Sidebar, NO_PROJECT_KEY, type ProjectAction, type TaskAction } from "./
 import { Transcript, type MessageAction } from "./components/Transcript";
 import { RestoreDialog, type RestoreChoice } from "./components/RestoreDialog";
 import { TodoPanel } from "./components/TodoPanel";
+import { ComposerPills } from "./components/composer/ComposerPills";
 import { GoalBanner } from "./components/GoalBanner";
 import { ComputerUseBanner } from "./components/ComputerUseBanner";
 import { InlineDialog, type ExtensionUIResponse } from "./components/InlineDialog";
@@ -439,6 +441,10 @@ export default function App() {
     [extensionRequests, accessRequests]
   );
   const selectedBusy = selectedTask?.status === "running" || selectedTask?.status === "stopping";
+  // The composer style after the macOS 26 gate: Classic Liquid Glass falls back to the
+  // classic card on older systems. The floating pills belong to both Classic looks only.
+  const effectiveComposerStyle: ComposerStyle = data.appearance.composerStyle === "classicGlass" && !glassSupported ? "classic" : data.appearance.composerStyle;
+  const composerFloatingPills = effectiveComposerStyle === "classic" || effectiveComposerStyle === "classicGlass";
   // Every list an area shows is built from its own chats; Code and Chat lists never overlap.
   const codeTasks = useMemo(() => tasksInArea(data.tasks, "code"), [data.tasks]);
   const areaTasks = useMemo(() => area === "code" ? codeTasks : tasksInArea(data.tasks, area), [data.tasks, codeTasks, area]);
@@ -1175,7 +1181,7 @@ export default function App() {
         });
         patchRuntime(taskId, { workActivity: payload.workActivity });
         if (payload.state === "running" && payload.workActivity?.parent === "idle") {
-          patchRuntime(taskId, { activeRun: undefined, activity: undefined, partial: undefined, pendingMessage: undefined });
+          patchRuntime(taskId, { activeRun: undefined, activity: undefined, partial: undefined, pendingMessage: undefined, liveToolCalls: {} });
         } else if (payload.state === "running" && (payload.runId !== undefined || payload.operation !== undefined || payload.workActivity === undefined)) {
           setRuntimes((current) => ({
             ...current,
@@ -1186,14 +1192,15 @@ export default function App() {
               compaction: payload.operation === "compaction" ? { reason: "manual", startedAt: payload.startedAt ?? Date.now() } : undefined,
               activity: undefined,
               liveToolText: {},
-              liveToolDetails: {}
+              liveToolDetails: {},
+              liveToolCalls: {}
             }
           }));
         } else if (payload.state === "idle" || payload.state === "interrupted") {
           setRuntimes((current) => ({
             ...current,
             [taskId]: {
-              ...current[taskId], activeRun: undefined, compaction: undefined, activity: undefined, liveToolText: {}, liveToolDetails: {},
+              ...current[taskId], activeRun: undefined, compaction: undefined, activity: undefined, liveToolText: {}, liveToolDetails: {}, liveToolCalls: {},
               // The run settled: whatever it was still echoing has either long since arrived or
               // was never recorded (a refused or stopped run) — either way the echo is over.
               pendingMessage: undefined,
@@ -1219,8 +1226,18 @@ export default function App() {
         const callId = payload.detail?.toolCallId;
         const liveText = payload.detail?.text;
         const liveDetails = payload.detail?.details;
+        const liveToolName = payload.detail?.toolName;
         if (typeof callId === "string" && callId) {
-          if (payload.event === "tool_execution_update" && typeof liveText === "string") {
+          if (payload.event === "tool_execution_start" && typeof liveToolName === "string") {
+            // The working pill above the Classic composers names the tool in flight.
+            setRuntimes((current) => ({
+              ...current,
+              [taskId]: {
+                ...current[taskId],
+                liveToolCalls: { ...current[taskId]?.liveToolCalls, [callId]: { type: "tool-call", toolName: liveToolName, toolCallId: callId, arguments: payload.detail?.args } }
+              }
+            }));
+          } else if (payload.event === "tool_execution_update" && typeof liveText === "string") {
             setRuntimes((current) => ({
               ...current,
               [taskId]: {
@@ -1237,7 +1254,9 @@ export default function App() {
             setRuntimes((current) => {
               const next = { ...current[taskId]?.liveToolText };
               delete next[callId];
-              return { ...current, [taskId]: { ...current[taskId], liveToolText: next } };
+              const nextCalls = { ...current[taskId]?.liveToolCalls };
+              delete nextCalls[callId];
+              return { ...current, [taskId]: { ...current[taskId], liveToolText: next, liveToolCalls: nextCalls } };
             });
           }
         }
@@ -3439,6 +3458,7 @@ export default function App() {
               partial={runtime?.partial}
               running={(selectedTask.status === "running" || selectedTask.status === "stopping") && runtime?.workActivity?.parent !== "idle"}
               activeRun={runtime?.activeRun}
+              hideLiveDuration={composerFloatingPills}
               compaction={runtime?.compaction}
               runTimings={runtime?.snapshot?.runTimings}
               collapseCompletedWork={data.appearance.collapseCompletedWork}
@@ -3481,11 +3501,15 @@ export default function App() {
             {selectedTask.kind !== "chat" && (
               <>
                 <ComputerUseBanner computer={runtime?.computer} onStop={() => void stopTask()} />
-                <TodoPanel
-                  key={selectedTask.id}
-                  tasks={runtime?.todoState?.tasks}
-                  busy={selectedTask.status === "running" || selectedTask.status === "stopping"}
-                />
+                {/* The Classic styles carry the list as a floating pill on the composer
+                    instead; the other silhouettes keep the pinned panel. */}
+                {!composerFloatingPills && (
+                  <TodoPanel
+                    key={selectedTask.id}
+                    tasks={runtime?.todoState?.tasks}
+                    busy={selectedTask.status === "running" || selectedTask.status === "stopping"}
+                  />
+                )}
                 <GoalBanner
                   goal={runtime?.goalState}
                   onAction={(action) => void api.goalControl(selectedTask.id, action)
@@ -3542,7 +3566,19 @@ export default function App() {
               frozen={transitioning?.composerKey === composerDraftKey ? transitioning.message : undefined}
               // Liquid Glass styles need the macOS 26 material; a config copied from another Mac
               // falls back to the classic card rather than an unsupported pane.
-              composerStyle={data.appearance.composerStyle === "classicGlass" && !glassSupported ? "classic" : data.appearance.composerStyle}
+              composerStyle={effectiveComposerStyle}
+              pills={selectedTask && composerFloatingPills ? (
+                <ComposerPills
+                  key={selectedTask.id}
+                  run={runtime?.activeRun}
+                  liveToolCalls={runtime?.liveToolCalls}
+                  partial={runtime?.partial}
+                  compaction={runtime?.compaction}
+                  activity={runtime?.activity}
+                  todos={selectedTask.kind !== "chat" ? runtime?.todoState?.tasks : undefined}
+                  todoBusy={selectedTask.status === "running" || selectedTask.status === "stopping"}
+                />
+              ) : undefined}
               status={selectedTask?.status ?? "idle"}
               backgroundWorking={selectedTask?.status === "running" && runtime?.workActivity?.parent === "idle"}
               providerId={selectedTask?.providerId ?? draftChoice?.providerId}

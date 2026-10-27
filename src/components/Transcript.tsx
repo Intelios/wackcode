@@ -48,6 +48,9 @@ interface Props {
   modelSwitches?: DisplayModelSwitch[];
   partial?: NormalizedMessage;
   running: boolean;
+  /** Classic composer styles draw the live run clock as a floating pill above the composer,
+   *  so this transcript omits the in-transcript "Working for" chip (settled totals remain). */
+  hideLiveDuration?: boolean;
   activity?: string;
   activeRun?: { runId?: string; startedAt: number };
   compaction?: SessionSnapshot["compaction"];
@@ -701,7 +704,7 @@ function activityLabel(activity?: string): string {
   return "Working…";
 }
 
-export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, compaction, runTimings = [], collapseCompletedWork = true, scopeKey = "", viewState, historyReady = true, status, liveToolText, liveToolDetails, planState, onPlanAction, onVisualSend, onVisualLink, skillDrafts, skillDraftsSaving, taskId, onSkillAction, loadSkillDocument, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind, loadImage, chatLinks, empty, suggestions, canvases }: Props) {
+export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, compaction, runTimings = [], collapseCompletedWork = true, hideLiveDuration = false, scopeKey = "", viewState, historyReady = true, status, liveToolText, liveToolDetails, planState, onPlanAction, onVisualSend, onVisualLink, skillDrafts, skillDraftsSaving, taskId, onSkillAction, loadSkillDocument, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind, loadImage, chatLinks, empty, suggestions, canvases }: Props) {
   const loadToolImage = useContext(ToolImageSource);
   const imageScope = useReplyImageScope(messages, loadImage, loadToolImage, Boolean(taskId));
   const scroll = useFollowScroll(viewState, historyReady);
@@ -940,7 +943,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
                 // The disclosure preference uses the actual entry/outcome instead.
                 const key = message.versions?.group ?? message.id;
                 const expansionKey = JSON.stringify([scopeKey, turn.key]);
-                const duration = message.id === activeUserId ? <RunDuration startedAt={activeRun?.startedAt} />
+                const duration = message.id === activeUserId ? (hideLiveDuration ? null : <RunDuration startedAt={activeRun?.startedAt} />)
                   : timingsByMessage.has(message.id) ? <RunDuration durationMs={timingsByMessage.get(message.id)} /> : null;
                 return <Fragment key={key}>
                   {renderSwitches(messageIndex)}

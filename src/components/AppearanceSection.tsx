@@ -485,11 +485,16 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrlFo
                         <span className="mini-term-bar"><span className="mini-dot" /><span className="mini-dot" /><span className="mini-send square" /></span>
                       </span>
                     ) : (
-                      <span className={`mini-card${option.value === "classicGlass" ? " glassy" : ""}`}>
-                        <span className="mini-line" />
-                        <span className="mini-line short" />
-                        <span className="mini-row"><span className="mini-dot" /><span className="mini-dot" /><span className="mini-dot" /><span className="mini-send" /></span>
-                      </span>
+                      <>
+                        <span className={`mini-pills${option.value === "classicGlass" ? " glassy" : ""}`}>
+                          <span className="mini-pill-seg" /><span className="mini-pill-seg" />
+                        </span>
+                        <span className={`mini-card${option.value === "classicGlass" ? " glassy" : ""}`}>
+                          <span className="mini-line" />
+                          <span className="mini-line short" />
+                          <span className="mini-row"><span className="mini-dot" /><span className="mini-dot" /><span className="mini-dot" /><span className="mini-send" /></span>
+                        </span>
+                      </>
                     )}
                   </span>
                   <span className="appearance-tile-text">

@@ -62,7 +62,10 @@ export function WorkingPill({ run, detail }: WorkingPillProps) {
  */
 export function runDetail({ liveToolCalls, partial, compaction, activity }: Pick<ComposerPillsProps, "liveToolCalls" | "partial" | "compaction" | "activity">): PillDetail | undefined {
   const calls = Object.values(liveToolCalls ?? {});
-  const latest = calls[calls.length - 1];
+  // Generating a canvas's arguments can take minutes before tool_execution_start. Name that
+  // streamed call immediately, rather than leaving the composer blank after thinking ends.
+  const last = partial?.blocks[partial.blocks.length - 1];
+  const latest = calls[calls.length - 1] ?? (last?.type === "tool-call" ? last : undefined);
   if (latest) {
     const summary = summarizeTool(latest);
     // A command or path is the detail on its own; other tools read as verb + subject, and a
@@ -71,7 +74,6 @@ export function runDetail({ liveToolCalls, partial, compaction, activity }: Pick
     if (!summary.subject) return { subject: summary.activeVerb };
     return { verb: summary.activeVerb, subject: summary.subject, subjectMono: summary.kind === "read" || summary.kind === "write" || summary.kind === "edit" || summary.kind === "search" };
   }
-  const last = partial?.blocks[partial.blocks.length - 1];
   if (last?.type === "thinking" && last.durationMs === undefined) return { subject: "Thinking…" };
   if (compaction) return { subject: "Compacting context…" };
   if (activity === "mcp_connect_start") return { subject: "Starting MCP servers…" };

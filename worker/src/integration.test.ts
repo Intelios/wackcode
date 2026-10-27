@@ -1480,6 +1480,35 @@ describe("Pi worker integration", () => {
     expect(firstPartial).toBeLessThan(finalIndex);
   });
 
+  it("streams growing canvas arguments before execution and discards an interrupted draft", async () => {
+    const mock = spawn(process.execPath, [resolve("../scripts/mock-provider.mjs")], { env: { ...process.env, WACKCODE_MOCK_PORT: "0", WACKCODE_MOCK_CANVAS_CHUNK_MS: "40" }, stdio: ["ignore", "pipe", "pipe"] });
+    cleanup.push(async () => { mock.kill("SIGKILL"); });
+    const baseUrl = await new Promise<string>((resolve, reject) => {
+      mock.once("error", reject);
+      mock.once("exit", () => reject(new Error("Canvas mock exited before startup")));
+      mock.stdout.on("data", (data: Buffer) => { const match = /http:\/\/127\.0\.0\.1:\d+\/v1/.exec(data.toString()); if (match) resolve(match[0]); });
+    });
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-canvas-stream-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(baseUrl, "mock-only", workspace, "canvas-stream");
+    cleanup.push(() => worker.shutdown());
+    const markupSize = (output: Output) => {
+      const message = (output as unknown as { message?: SessionSnapshot["messages"][number] }).message;
+      const block = output.type === "partial" ? message?.blocks.find((block) => block.toolName === "canvas") : undefined;
+      const args = block?.arguments as { artboards?: { html?: string }[] } | undefined;
+      return args?.artboards?.[0]?.html?.length ?? 0;
+    };
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "canvas-stop", message: "slow canvas fixture" });
+    const first = await worker.waitFor((output) => markupSize(output) > 0);
+    await worker.waitFor((output) => markupSize(output) > markupSize(first));
+    expect(worker.outputs.some((output) => output.event === "tool_execution_start" && output.detail?.toolName === "canvas")).toBe(false);
+    worker.send({ id: crypto.randomUUID(), type: "abort" });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    expect(worker.view?.messages.flatMap((message) => message.blocks).some((block) => block.type === "tool-result" && block.toolName === "canvas" && !block.isError)).toBe(false);
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "canvas-finish", message: "slow canvas fixture" });
+    await worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) => message.blocks.some((block) => block.type === "tool-result" && block.toolName === "canvas" && !block.isError)) === true);
+  });
+
   it("sends message boundaries as deltas chained by revision, not whole-session snapshots", async () => {
     const provider = await startMockProvider();
     cleanup.push(provider.close);

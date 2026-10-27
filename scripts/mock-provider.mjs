@@ -107,11 +107,32 @@ const server = createServer(async (request, response) => {
   const imageCall = imageFixture?.[1] && offers("read") && !calledTool("read")
     ? { name: "read", arguments: JSON.stringify({ path: imageFixture[1].trim() }) }
     : undefined;
+  const canvasArgs = canvasFixtureArguments();
   const canvasCall = canvasFixture && offers("canvas") && !calledTool("canvas")
-    ? { name: "canvas", arguments: JSON.stringify(canvasFixtureArguments()) }
+    ? { name: "canvas", arguments: JSON.stringify(prompt.toLowerCase().includes("revise")
+      ? { canvas: "billing-settings-themes", artboards: [{ ...canvasArgs.artboards[0], id: "base" }] }
+      : canvasArgs) }
     : canvasFixture && offers("canvas_look") && calledTool("canvas") && !calledTool("canvas_look")
       ? { name: "canvas_look", arguments: JSON.stringify({ canvas: "billing-settings-themes" }) }
       : undefined;
+  // Slow authoring exposes the long argument-generation phase before tool execution. Use
+  // "slow canvas fixture pause" to include a quiet stream, or Stop before the call is accepted.
+  if (canvasCall?.name === "canvas" && prompt.toLowerCase().includes("slow canvas fixture")) {
+    const chunk = (delta, finish_reason = null) => send(response, {
+      id: "fixture-canvas-stream", object: "chat.completion.chunk", created: 1, model: body.model,
+      choices: [{ index: 0, delta, finish_reason }]
+    });
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    chunk({ role: "assistant", reasoning_content: "Preparing the canvas directions." });
+    await wait(150);
+    chunk({ tool_calls: [{ index: 0, id: `fixture-canvas-${messages.length}`, type: "function", function: { name: "canvas", arguments: "" } }] });
+    for (let offset = 0; offset < canvasCall.arguments.length && !response.destroyed; offset += 80) {
+      chunk({ tool_calls: [{ index: 0, function: { arguments: canvasCall.arguments.slice(offset, offset + 80) } }] });
+      await wait(offset === 240 && prompt.toLowerCase().includes("pause") ? 18_000 : Number(process.env.WACKCODE_MOCK_CANVAS_CHUNK_MS ?? 180));
+    }
+    if (!response.destroyed) { chunk({}, "tool_calls"); response.end("data: [DONE]\n\n"); }
+    return;
+  }
   // "search fixture: <query>" calls web_search when Settings › Web offers it.
   const searchQuery = /^search fixture:\s*(.+)$/i.exec(prompt)?.[1];
   const search = searchQuery && body.tools?.some((tool) => tool.function?.name === "web_search") ? searchQuery : undefined;

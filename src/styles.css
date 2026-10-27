@@ -5176,6 +5176,26 @@ html[data-force-reduced-motion] *::after {
   box-shadow: 0 8px 24px color-mix(in srgb, var(--wc-accent) 30%, transparent);
 }
 .canvas-arrivals svg { width: 13px; height: 13px; }
+.canvas-progress {
+  min-width: 0; overflow: hidden; border: 1px solid var(--wc-accent-line); border-radius: var(--wc-radius-card);
+  background: var(--wc-well); color: var(--text-soft);
+}
+.canvas-progress-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--surface); border-bottom: 2px dotted var(--wc-accent-line); }
+.canvas-progress-head > .quill-mark { width: 32px; height: 32px; flex: 0 0 auto; color: var(--wc-accent-text); }
+.canvas-progress-heading { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 3px; }
+.canvas-progress-heading > span { font-size: 10.5px; color: var(--wc-accent-text); }
+.canvas-progress-heading > strong { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.canvas-progress-body { display: flex; flex-direction: column; gap: 6px; padding: 12px; }
+.canvas-progress-step { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--text); }
+.canvas-progress-count { font-size: 11.5px; color: var(--wc-accent-text); font-variant-numeric: tabular-nums; }
+.canvas-progress-note { font-size: 11px; color: var(--text-dim); }
+.canvas-progress.quiet .canvas-progress-count { color: var(--text-dim); }
+.canvas-progress-dock { position: absolute; z-index: 2; bottom: 60px; left: 16px; right: 16px; display: flex; justify-content: center; pointer-events: none; }
+.canvas-progress.compact { width: min(320px, 100%); box-shadow: 0 6px 22px -8px color-mix(in srgb, var(--wc-well) 80%, transparent); }
+.canvas-progress.compact .canvas-progress-head { padding: 7px 10px; }
+.canvas-progress.compact .canvas-progress-head > .quill-mark { width: 26px; height: 26px; }
+.canvas-progress.compact .canvas-progress-body { padding: 9px 10px; }
+.canvas-arrivals-dock.above-progress { bottom: 240px; }
 .canvas-hint {
   position: absolute; left: 12px; bottom: 12px; max-width: calc(100% - 24px); margin: 0; padding: 5px 11px; display: flex; align-items: baseline; gap: 8px;
   border-radius: var(--wc-radius-pill); background: var(--wc-elevated); color: var(--text-soft); font-size: 11px; pointer-events: none; white-space: nowrap; overflow: hidden;

@@ -21,6 +21,24 @@ const cards = () => screen.queryAllByRole("button", { name: /^Canvas: Ideas\./ }
 
 // The board itself lives in the side panel (`CanvasPanel`); the transcript only keeps cards.
 describe("Transcript canvas cards", () => {
+  it("shows canvas progress before the first call executes, then retires it on success, refusal or stop", () => {
+    const all = canvasTurn("u1");
+    const partial = all[1];
+    const view = render(<Transcript messages={[all[0]]} partial={partial} running taskId="chat" canvases={scope()} />);
+    expect(screen.getByText("Writing Base")).toBeInTheDocument();
+    expect(screen.getByText("17 characters received")).toBeInTheDocument();
+    expect(cards()).toHaveLength(0);
+    view.rerender(<Transcript messages={all.slice(0, 3)} running taskId="chat" canvases={scope()} />);
+    expect(screen.queryByText("Writing Base")).toBeNull();
+    expect(cards()).toHaveLength(1);
+    view.rerender(<Transcript messages={[...all.slice(0, 2), { ...all[2], blocks: [{ ...all[2].blocks[0], isError: true, text: "Invalid canvas" }] }]} running taskId="chat" canvases={scope()} />);
+    expect(screen.queryByText("Writing Base")).toBeNull();
+    view.rerender(<Transcript messages={all.slice(0, 2)} running={false} taskId="chat" canvases={scope()} />);
+    expect(screen.queryByText("Writing Base")).toBeNull();
+    // The next run can start before its new user message arrives in the snapshot.
+    view.rerender(<Transcript messages={[all[0], { ...all[1], stopReason: "aborted" }]} running taskId="chat" canvases={scope()} />);
+    expect(screen.queryByText("Writing Base")).toBeNull();
+  });
   it("shows a card as soon as a call is accepted during a live run, while pending and rejected calls stay as work", () => {
     const all = canvasTurn("u1");
     const canvases = scope();

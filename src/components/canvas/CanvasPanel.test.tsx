@@ -193,6 +193,16 @@ describe("CanvasPanel", () => {
     expect(screen.getByText("Checking artboards")).toHaveAttribute("role", "status");
   });
 
+  it("reports streamed revisions while keeping the accepted artboard visible", async () => {
+    const { view, props } = panel({ activity: "drawing", progress: { type: "tool-call", toolName: "canvas", toolCallId: "revise", arguments: { canvas: board.id, artboards: [{ id: "base", html: "<main>Draft" }] } } });
+    expect(screen.getByText("Writing Base")).toBeInTheDocument();
+    expect(screen.getByText("11 characters received")).toBeInTheDocument();
+    await waitFor(() => expect(api.stageVisual).toHaveBeenCalledTimes(3));
+    expect(vi.mocked(api.stageVisual).mock.calls.some(([html]) => html.includes("Draft"))).toBe(false);
+    view.rerender(<CanvasPanel {...props} progress={undefined} activity={undefined} />);
+    expect(screen.queryByText("Writing Base")).toBeNull();
+  });
+
   it("offers to fly to new artboards once the user has panned away", () => {
     const { view, props } = panel();
     const region = screen.getByRole("region", { name: "Canvas: Billing themes" });

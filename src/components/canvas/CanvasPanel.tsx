@@ -8,6 +8,8 @@ import { MenuButton } from "../ui/MenuButton";
 import { CanvasBoard } from "./CanvasBoard";
 import type { ArtboardMotion } from "./CanvasArtboard";
 import { CanvasPresent } from "./CanvasPresent";
+import { CanvasProgress } from "./CanvasProgress";
+import type { NormalizedBlock } from "../../types";
 import { useCanvasView, type CanvasSession, type CanvasTool } from "../../canvas-session";
 
 const GLIDE_MS = 420;
@@ -34,6 +36,8 @@ interface CanvasPanelProps {
   board: Board;
   session: CanvasSession;
   activity?: CanvasActivity;
+  /** The in-flight call, including content arriving before execution starts. */
+  progress?: NormalizedBlock;
   /** A transcript card asked to show these artboards; a new nonce is a new request. */
   focus?: { ids: string[]; nonce: number };
   onSelectCanvas: (canvasId: string) => void;
@@ -54,7 +58,7 @@ const ease = (t: number) => 1 - (1 - t) ** 3;
  * `.panel-header`). The session owns durable viewer state; this host only owns its viewport,
  * short-lived animation frames and Present. Frames stay pointer-inert until played.
  */
-export function CanvasPanel({ taskId, boards, board, session, activity, focus, onSelectCanvas, onMention, onExport }: CanvasPanelProps) {
+export function CanvasPanel({ taskId, boards, board, session, activity, progress, focus, onSelectCanvas, onMention, onExport }: CanvasPanelProps) {
   const reduce = useReducedMotion() ?? false;
   const state = useCanvasView(session, taskId, board.id);
   const { camera, measured, selected, entered, tool } = state;
@@ -323,7 +327,8 @@ export function CanvasPanel({ taskId, boards, board, session, activity, focus, o
           />
           <button type="button" className="icon-button" aria-label="Zoom in" title="Zoom in (+)" onClick={() => zoomStep(ZOOM_STEP)}><Icon name="plus" /></button>
         </div>
-        <div className="canvas-arrivals-dock">
+        {progress && <div className="canvas-progress-dock"><CanvasProgress key={progress.toolCallId} call={progress} board={board} compact /></div>}
+        <div className={`canvas-arrivals-dock${progress ? " above-progress" : ""}`}>
         <AnimatePresence>
           {arrivals.length > 0 && (
             <motion.button

@@ -29,6 +29,8 @@ import { splitVisualAction, type VisualSendResult } from "../visual-action";
 import { splitSuggestedTask, startedHere, type SuggestionLink } from "../suggestions";
 import { SuggestionNote, SuggestionScopeContext, SuggestionTray, type SuggestionScope } from "./SuggestionTray";
 import { CanvasCard, CanvasScopeContext, type CanvasScope } from "./canvas/CanvasCard";
+import { CanvasProgress } from "./canvas/CanvasProgress";
+import { CANVAS_TOOL_NAME } from "../canvas-state";
 import { SubagentGroup } from "./SubagentChip";
 import { ThinkingExpansion, ThinkingRow } from "./ThinkingRow";
 import { FLY, OrphanResult, ToolChips, ToolExpansion, ToolImageSource, ToolRow, useTranscriptMotion, type ChipCall } from "./ToolRow";
@@ -288,6 +290,7 @@ function renderSpecialCall(
   skillCard: SkillCardContext | undefined
 ): ReactNode | undefined {
   const result = block.toolCallId ? results.get(block.toolCallId) : undefined;
+  if (block.toolName === CANVAS_TOOL_NAME && live && running && !result) return <CanvasProgress call={block} />;
   const plan = block.toolName === "plan_mode_complete" ? completedPlan(result) : undefined;
   if (plan !== undefined) {
     const current = planState?.phase === "ready" && planState.plan === plan;
@@ -650,7 +653,7 @@ const Message = memo(function Message({ message, slots, results, liveToolText, l
   if (slots.length === 0 && !failed && !(turnActions && message.turn)) return null;
   return (
     <div className="msg assistant" data-transcript-anchor={scrollAnchor} onContextMenu={(event) => contextMenu(event, turnMenu(message, actionsEnabled && turnActions && Boolean(message.turn), retry, onAction).map((item) => ({ label: item.label, icon: <Icon name={item.icon} />, onSelect: item.onClick })), "Message menu")}>
-      {renderSlots(message, slots, results, liveToolText, liveToolDetails, live, planState, onPlanAction, running, skillCard)}
+      {renderSlots(message, slots, results, liveToolText, liveToolDetails, live && message.stopReason !== "aborted" && message.stopReason !== "error", planState, onPlanAction, running, skillCard)}
       {message.stopReason === "error" && <div className="message-error">{message.errorMessage || "The provider rejected the request."}</div>}
       {message.stopReason === "aborted" && <span className="aborted-label">Stopped</span>}
       {turnActions && message.turn && <TurnActions message={message} actionsEnabled={actionsEnabled} retry={retry} onAction={onAction} />}

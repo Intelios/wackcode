@@ -65,6 +65,13 @@ opens the board in the side panel on the artboards that turn touched.
 
 The board lives in the side panel's **Canvas tab** (`CanvasPanel`), never in the transcript:
 
+While a `canvas` call's arguments stream, `CanvasProgress` replaces its tool chip with the
+current artboard, the received markup character count and a quiet-stream notice after 15s
+without new arguments. Existing canvases show the same progress in the panel. This is only
+feedback: partial markup never enters the accepted board fold or stages a document. Success,
+refusal and Stop retire the progress card; the normal tool chip preserves its result/error.
+Chat mode has no canvas tools and never shows this feedback.
+
 - **One tab per chat** (`{ kind: "canvas", taskId, canvasId }`, `swapKey` per chat); the switcher
   in its tool pill swaps canvases in place. It is task-bound like the browser, closes when a rewind
   takes every canvas away (a stale `canvasId` falls back to the newest canvas), and "+" offers it

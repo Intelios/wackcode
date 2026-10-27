@@ -16,7 +16,7 @@ import { titleFromPrompt, samePlanState, sameTodoState, sameGoalState, applySnap
 import { defaultSelection, latestTurn, messageText, userOfTurn, workspacePrefix } from "./tree-utils";
 import { composeFileSection, splitFileSection, terminalOutputFile, type FileAttachment } from "./attachment-utils";
 import { CENTRED } from "./backdrop-crop";
-import { BROWSER_TOOL_NAMES, displayAgentName, hasSubagentCall, pruneDisabledTools, sameToolCatalog, subagentDetailsFor, parseSkillPreviewDetails, SKILL_CREATOR_TOOL_NAME } from "./tool-utils";
+import { BROWSER_TOOL_NAMES, callArguments, displayAgentName, hasSubagentCall, pruneDisabledTools, sameToolCatalog, subagentDetailsFor, parseSkillPreviewDetails, SKILL_CREATOR_TOOL_NAME } from "./tool-utils";
 import { LinkOpenerContext, openExternally, type LinkOpener } from "./link-opener";
 import { BUILD_VIEW, CHANGES_VIEW, GAMES_VIEW, NO_PANEL_TABS, TERMINAL_VIEW, RUN_VIEW, canExpand, closeTab as closePanelTab, forChat, hidePanel, isTaskBound, openTab, restoreTabs, showPanel, shownTab, storedTabs, swapKey, toggleTab, updateTab, viewKey, type PanelTabs, type SidePanelView } from "./side-panel";
 import { applyRunEvent, EMPTY_RUN_REGISTRY, runIsActive, runKey } from "./run-state";
@@ -33,6 +33,7 @@ import { LAST_CHAT_MODEL_KEY, useModelMemory } from "./hooks/useModelMemory";
 import { useModelFavorites } from "./hooks/useModelFavorites";
 import { DEFAULT_APPEARANCE, applyTheme, cacheTheme, visualThemeVars } from "./theme";
 import { canvasActivity, canvasesFromMessages, type CanvasBoard } from "./canvas-state";
+import { pendingCanvasCalls } from "./canvas-progress";
 import { createCanvasSession, type CanvasSession } from "./canvas-session";
 import { computerCursorAppearance } from "./computer-cursor";
 import { AssistantNameContext, agentName } from "./agentName";
@@ -486,6 +487,8 @@ export default function App() {
   const selectedCanvasActivity = useMemo(() => new Map([...selectedCanvases.keys()].map((id) => [id,
     selectedBusy ? canvasActivity(canvasMessages ?? [], runtime?.partial, id) : undefined
   ])), [selectedCanvases, selectedBusy, canvasMessages, runtime?.partial]);
+  const selectedCanvasProgress = useMemo(() => selectedBusy && selectedTask?.kind === "code"
+    ? pendingCanvasCalls(canvasMessages ?? [], runtime?.partial) : [], [selectedBusy, selectedTask?.kind, canvasMessages, runtime?.partial]);
   /** The newest canvas, for "+" and a Canvas tab whose own board a rewind took away. */
   const latestCanvasId = [...selectedCanvases.keys()].at(-1);
   useEffect(() => {
@@ -3717,6 +3720,7 @@ export default function App() {
           <CopyText.Provider value={writeText}>
             <CanvasPanel key={board.id} taskId={selectedTask.id} boards={[...selectedCanvases.values()]} board={board} session={selectedCanvasSession}
               activity={selectedCanvasActivity.get(board.id)}
+              progress={[...selectedCanvasProgress].reverse().find((call) => callArguments(call).canvas === board.id)}
               focus={canvasFocus?.taskId === selectedTask.id && canvasFocus.canvasId === board.id ? canvasFocus : undefined}
               onSelectCanvas={selectCanvas} onMention={mentionCanvas} onExport={exportArtboard} />
           </CopyText.Provider>

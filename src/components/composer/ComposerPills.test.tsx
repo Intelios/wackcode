@@ -9,6 +9,12 @@ const bashCall: NormalizedBlock = { type: "tool-call", toolName: "bash", toolCal
 const readCall: NormalizedBlock = { type: "tool-call", toolName: "read", toolCallId: "r", arguments: { path: "src/App.tsx" } };
 
 describe("runDetail", () => {
+  it("names a canvas while the model is still generating tool arguments", () => {
+    expect(runDetail({ partial: { id: "p", role: "assistant", blocks: [
+      { type: "thinking", text: "Thinking", durationMs: 1000 },
+      { type: "tool-call", toolName: "canvas", toolCallId: "c", arguments: { title: "Billing", artboards: [{ name: "Phone", html: "<" }] } }
+    ] } })).toEqual({ verb: "Drawing on canvas", subject: "Billing — Phone", subjectMono: false });
+  });
   it("names the latest in-flight tool, a command by itself and a file by verb and path", () => {
     expect(runDetail({ liveToolCalls: { b: bashCall } })).toEqual({ subject: "pnpm test providers", subjectMono: true });
     expect(runDetail({ liveToolCalls: { b: bashCall, r: readCall } })).toEqual({ verb: "Reading", subject: "src/App.tsx", subjectMono: true });

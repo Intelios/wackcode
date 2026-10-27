@@ -1,6 +1,6 @@
 import type { Area } from "./areas";
 import type { ModelChoice } from "./model-utils";
-import type { SidePanelView } from "./side-panel";
+import { NO_PANEL_TABS, type PanelTabs } from "./side-panel";
 import type { SubagentModel, TaskMode } from "./types";
 
 /** Session-only workspace. A tab's identity and composer key survive draft → chat,
@@ -25,15 +25,15 @@ export interface ChatDraft {
 }
 
 export interface TabPanelState {
-  view: SidePanelView | null;
-  width: number;
+  tabs: PanelTabs;
+  /** The width the user dragged the panel to; null opens it at `balancedPanelWidth`. */
+  width: number | null;
   panelExpanded: boolean;
-  expandRestoreWidth: number;
   changesSelection?: { path: string; layer: "staged" | "working" };
 }
 
 export const EMPTY_TAB_PANEL: TabPanelState = {
-  view: null, width: 430, panelExpanded: false, expandRestoreWidth: 430
+  tabs: NO_PANEL_TABS, width: null, panelExpanded: false
 };
 
 export interface ChatTab {

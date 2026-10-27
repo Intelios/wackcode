@@ -65,6 +65,8 @@ function bootstrap(enabled = true, dynamic = false, overrides: Partial<AppData> 
   vi.mocked(api.bootstrap).mockResolvedValue({ data, appDataPath: "/tmp", glassSupported: false, computerUseSupported: false, devBuild: false });
   return render(<App />);
 }
+/** The chat tab bar's tabs (the side panel has a tab list of its own). */
+const chatTabs = () => within(screen.getByRole("tablist", { name: "Open chats" })).getAllByRole("tab");
 const newTab = () => fireEvent.click(screen.getByRole("button", { name: "New chat tab" }));
 const chat = (id: string) => fireEvent.click(screen.getByRole("button", { name: `Chat ${id}` }));
 const input = () => within(document.querySelector(".composer-input") as HTMLElement).getByRole("textbox");
@@ -258,6 +260,47 @@ describe("App inline Canvas", () => {
   });
 });
 
+describe("App window layout", () => {
+  afterEach(() => { window.innerWidth = 1440; });
+
+  it("hides and shows the sidebar with ⌃⌘S, remembering the choice", async () => {
+    bootstrap(false);
+    await screen.findByRole("button", { name: "Chat a" });
+    fireEvent.keyDown(window, { key: "s", code: "KeyS", metaKey: true, ctrlKey: true });
+    expect(document.querySelector(".sidebar")).toHaveClass("collapsed");
+    expect(screen.getByRole("button", { name: "Show sidebar" })).toHaveAttribute("aria-expanded", "false");
+    expect(localStorage.getItem("wackcode:sidebar")).toBe(JSON.stringify("closed"));
+    fireEvent.click(screen.getByRole("button", { name: "Show sidebar" }));
+    expect(document.querySelector(".sidebar")).not.toHaveClass("collapsed");
+  });
+
+  it("opens the panel wide by default: half the room beside the sidebar", async () => {
+    bootstrap(false);
+    await screen.findByRole("button", { name: "Chat a" });
+    chat("a");
+    fireEvent.keyDown(window, { key: "t", metaKey: true, shiftKey: true });
+    await screen.findByRole("tab", { name: "Terminal" });
+    // The drawer animates its own width; its content holds the final one.
+    expect(screen.getByRole("complementary", { name: "Terminal" }).querySelector(".side-panel-inner")).toHaveStyle({ width: "600px" });
+    expect(document.querySelector(".sidebar")).not.toHaveClass("collapsed");
+    expect(document.querySelector(".workspace")).toHaveAttribute("data-chat-size", "compact");
+  });
+
+  it("steps the sidebar aside for a dragged width that needs its room, and keeps the chat column usable", async () => {
+    window.innerWidth = 1000;
+    localStorage.setItem("wackcode:panelWidth", "560");
+    bootstrap(false);
+    await screen.findByRole("button", { name: "Chat a" });
+    chat("a");
+    fireEvent.keyDown(window, { key: "t", metaKey: true, shiftKey: true });
+    await screen.findByRole("tab", { name: "Terminal" });
+    expect(document.querySelector(".sidebar")).toHaveClass("collapsed");
+    expect(screen.getByRole("button", { name: "Show sidebar" })).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Terminal" }).querySelector(".side-panel-inner")).toHaveStyle({ width: "560px" });
+    expect(document.querySelector(".workspace")).toHaveAttribute("data-chat-size", "narrow");
+  });
+});
+
 describe("App Settings entry points", () => {
   it("opens Providers from the sidebar button without treating the click event as a section", async () => {
     bootstrap(false);
@@ -410,14 +453,14 @@ describe("App tab workspace", () => {
     expect(screen.queryByRole("tablist")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     fireEvent.click(screen.getByText("Toggle tabs")); fireEvent.click(screen.getByText("Close settings"));
-    await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(3));
+    await waitFor(() => expect(chatTabs()).toHaveLength(3));
     expect(screen.getByRole("tab", { name: "Chat b" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("preserves independent draft text, attachments, model choice and recovery", async () => {
     bootstrap(); await screen.findByRole("button", { name: "Settings" });
     await native("new");
-    const first = screen.getAllByRole("tab")[0].id;
+    const first = chatTabs()[0].id;
     fireEvent.click(document.getElementById(first)!);
     type("First draft");
     fireEvent.change(screen.getByTestId("attach-input"), { target: { files: [new File(["notes"], "notes.txt", { type: "text/plain" })] } });
@@ -479,7 +522,7 @@ describe("App tab workspace", () => {
     await screen.findByLabelText("Terminal a");
     chat("b"); expect(screen.queryByLabelText("Terminal a")).toBeNull();
     chat("a"); await screen.findByLabelText("Terminal a");
-    expect(screen.getAllByRole("tab")).toHaveLength(3);
+    expect(chatTabs()).toHaveLength(3);
     await native("close");
     expect(api.stopTask).not.toHaveBeenCalled();
     expect(api.deleteTask).not.toHaveBeenCalled();
@@ -516,7 +559,7 @@ describe("App tab workspace", () => {
     expect(input()).toHaveValue("New draft");
     expect(screen.queryByRole("tablist")).toBeNull();
     await native("reopen");
-    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect(chatTabs()).toHaveLength(2);
     await waitFor(() => expect(input()).toHaveValue("Recover me"));
     expect(screen.getByText(/Fixture failure/)).toBeInTheDocument();
   });
@@ -540,7 +583,7 @@ describe("App tab workspace", () => {
     vi.mocked(api.createTask).mockReturnValue(creation.promise); vi.mocked(api.prompt).mockReturnValue(dispatch.promise);
     bootstrap(); await screen.findByRole("button", { name: "Settings" });
     await native("new");
-    const origin = screen.getAllByRole("tab")[0].id;
+    const origin = chatTabs()[0].id;
     fireEvent.click(document.getElementById(origin)!);
     type("Sidebar race"); fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await native("close"); type("Other draft");
@@ -548,7 +591,7 @@ describe("App tab workspace", () => {
     await waitFor(() => expect(api.prompt).toHaveBeenCalled());
     fireEvent.click(screen.getByRole("button", { name: "Sidebar race" }));
     expect(document.getElementById(origin)).toHaveAttribute("aria-selected", "true");
-    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect(chatTabs()).toHaveLength(2);
     await act(async () => dispatch.reject(new Error("Fixture failure")));
     await waitFor(() => expect(input()).toHaveValue("Sidebar race"));
     await native("select-1"); expect(input()).toHaveValue("Other draft");
@@ -584,7 +627,7 @@ describe("App tab workspace", () => {
     expect(input()).toHaveValue("Independent draft");
     expect(screen.queryByRole("tablist")).toBeNull();
     await native("reopen");
-    expect(screen.getAllByRole("tab")).toHaveLength(2); expect(input()).toHaveValue("");
+    expect(chatTabs()).toHaveLength(2); expect(input()).toHaveValue("");
   });
 
   it("closes archived tabs, restores them read-only and removes deleted recovery entries", async () => {
@@ -619,7 +662,7 @@ describe("App tab workspace", () => {
     await native("select-9"); expect(screen.getByRole("tab", { name: "Chat b" })).toHaveAttribute("aria-selected", "true");
     fireEvent.click(screen.getByRole("button", { name: "Settings" })); await native("close");
     fireEvent.click(screen.getByText("Close settings"));
-    expect(within(screen.getByRole("tablist")).getAllByRole("tab")).toHaveLength(3);
+    expect(chatTabs()).toHaveLength(3);
   });
 
   it("uses the current controller selection for rapid native shortcut sequences", async () => {
@@ -826,17 +869,17 @@ describe("App areas", () => {
     expect(screen.queryByRole("tablist")).toBeNull();
     chat("a");
     await screen.findByRole("tablist");
-    await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
+    await waitFor(() => expect(chatTabs()).toHaveLength(2));
     enter("Chat");
     // A fresh draft tab; Code's two are not in this bar, which hides again.
     expect(screen.queryByRole("tablist")).toBeNull();
     fireEvent.click(await screen.findByRole("button", { name: "Trip plan" }));
     await screen.findByRole("tablist");
-    await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
+    await waitFor(() => expect(chatTabs()).toHaveLength(2));
     expect(screen.getByRole("tab", { name: /Trip plan/ })).toHaveAttribute("aria-selected", "true");
     enter("Code");
     await waitFor(() => expect(screen.getByRole("tab", { name: /Chat a/ })).toHaveAttribute("aria-selected", "true"));
-    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect(chatTabs()).toHaveLength(2);
     expect(screen.queryByRole("tab", { name: /Trip plan/ })).toBeNull();
     enter("Chat");
     await waitFor(() => expect(screen.getByRole("tab", { name: /Trip plan/ })).toHaveAttribute("aria-selected", "true"));
@@ -881,7 +924,7 @@ describe("Changes after Git Mode removal", () => {
     expect(shortcut.defaultPrevented).toBe(false);
     expect(screen.getByRole("complementary", { name: "Changes" })).toBeInTheDocument();
     expect(editor).toHaveValue("Draft survives");
-    expect(screen.getByRole("button", { name: "Close changes panel" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Close Changes tab" })).toBeInTheDocument();
   });
 });
 

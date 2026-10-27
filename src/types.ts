@@ -1424,7 +1424,8 @@ export interface ExtensionNotice {
 }
 
 /** Compact runtime state for one chat's native, ephemeral browser session. */
-export type BrowserViewportPreset = "desktop" | "laptop" | "tablet" | "phone";
+/** "fit" sizes the page to the panel at real scale (`BrowserViewport::fitted` in Rust); the rest are fixed. */
+export type BrowserViewportPreset = "fit" | "desktop" | "laptop" | "tablet" | "phone";
 export interface BrowserViewport { preset: BrowserViewportPreset; width: number; height: number }
 export interface BrowserBounds { x: number; y: number; width: number; height: number }
 /** A locator is capture-time evidence, never an actionable browser tool ref. */

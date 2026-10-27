@@ -1,6 +1,6 @@
 import { Fragment, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { hunkLabel, lineAnchor, sectionComments, splitPath } from "../changes-utils";
+import { hunkLabel, lineAnchor, sectionComments, splitHunkRows, splitPath } from "../changes-utils";
 import { highlightDiffLines, languageForPath } from "../highlight";
 import type { DiffComment, GitChangeFile, GitDiffHunk, GitDiffLine, GitDiffSection } from "../types";
 import { Icon } from "./Icons";
@@ -37,6 +37,8 @@ interface DiffViewProps {
   onAction?: (file: GitChangeFile, section: GitDiffSection, hunkId?: number) => void;
   /** Extra header content after the path. */
   headerExtra?: ReactNode;
+  /** One column, or removed and added lines side by side (`splitHunkRows`) when the panel is wide. */
+  layout?: "unified" | "split";
 }
 
 function ActionButtons({ file, section, hunkId, disabled, onAction }: {
@@ -147,8 +149,8 @@ function SectionHunks(props: DiffViewProps & { section: GitDiffSection; commenti
     );
   }
 
-  function gutterButton(line: GitDiffLine) {
-    if (!commenting) return null;
+  function gutterButton(line: GitDiffLine | undefined) {
+    if (!commenting || !line) return null;
     return (
       <button
         type="button"
@@ -186,7 +188,39 @@ function SectionHunks(props: DiffViewProps & { section: GitDiffSection; commenti
                 <span className="diff-hunk-actions"><ActionButtons file={file} section={section} hunkId={hunk.id} disabled={disabled} onAction={props.onAction} /></span>
               )}
             </div>
-            {hunk.lines.map((line, index) => (
+            {props.layout === "split" ? splitHunkRows(hunk.lines).map((row, index) => {
+              if (row.meta !== undefined) {
+                return (
+                  <div key={index} className="diff-line meta diff-split-meta">
+                    <code>{lineNodes[row.meta]}</code>
+                  </div>
+                );
+              }
+              const left = row.left === undefined ? undefined : hunk.lines[row.left];
+              const right = row.right === undefined ? undefined : hunk.lines[row.right];
+              // A context line is one line on both sides: it takes its comments (and its comment
+              // button) on the new side only, as `lineAnchor` does in the unified layout.
+              const shared = row.left === row.right;
+              const cell = (line: GitDiffLine | undefined, at: number | undefined, side: "old" | "new") => line && at !== undefined ? (
+                <div className={"diff-line diff-split-cell " + line.kind}>
+                  <span className="diff-gutter">
+                    {side === "new" || !shared ? gutterButton(line) : <span className="diff-comment-spacer" />}
+                    <span className="diff-line-number">{side === "old" ? line.oldLine ?? "" : line.newLine ?? ""}</span>
+                  </span>
+                  <code>{lineNodes[at]}</code>
+                </div>
+              ) : <div className="diff-line diff-split-cell blank" aria-hidden="true" />;
+              return (
+                <Fragment key={index}>
+                  <div className="diff-split-row">
+                    {cell(left, row.left, "old")}
+                    {cell(right, row.right, "new")}
+                  </div>
+                  {left && !shared && commentsAfter(left)}
+                  {right && commentsAfter(right)}
+                </Fragment>
+              );
+            }) : hunk.lines.map((line, index) => (
               <Fragment key={index}>
                 <div className={"diff-line " + line.kind}>
                   <span className="diff-gutter">
@@ -234,7 +268,7 @@ export function DiffView(props: DiffViewProps) {
           <ActionButtons file={file} section={sections[0]} disabled={disabled} onAction={props.onAction} />
         )}
       </div>
-      <div className="diff-scroll" aria-label={"Diff for " + file.path}>
+      <div className={`diff-scroll${props.layout === "split" ? " split" : ""}`} aria-label={"Diff for " + file.path}>
         <AnimatePresence mode="wait" initial={false} custom={direction}>
           <motion.div
             key={bodyKey}

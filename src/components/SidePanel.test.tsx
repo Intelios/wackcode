@@ -1,6 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CHANGES_VIEW, TERMINAL_VIEW, RUN_VIEW, type SidePanelView } from "../side-panel";
+import { CHANGES_VIEW, GAMES_VIEW, TERMINAL_VIEW, RUN_VIEW, type SidePanelView } from "../side-panel";
+import { CHAT_MIN } from "../shell-layout";
+import type { PanelTabItem } from "./PanelTabStrip";
 import { SidePanel } from "./SidePanel";
 
 afterEach(cleanup);
@@ -17,8 +19,11 @@ const content = (view: SidePanelView) => (
     : `SubAgent view ${view.index}`}</p>
 );
 
-function panel(view: SidePanelView | null, label: string, onWidthChange = vi.fn()) {
-  return <SidePanel view={view} width={430} onWidthChange={onWidthChange} label={label}>{content}</SidePanel>;
+const item = (view: SidePanelView): PanelTabItem => ({ view, label: view.kind === "subagent" ? "Scout" : view.kind[0].toUpperCase() + view.kind.slice(1), icon: "panel" });
+
+function panel(view: SidePanelView | null, label: string, onWidthChange = vi.fn(), handlers: Partial<Parameters<typeof SidePanel>[0]> = {}, tabs = view ? [item(view)] : []) {
+  return <SidePanel view={view} width={430} onWidthChange={onWidthChange} onResetWidth={vi.fn()} label={label}
+    tabs={tabs} addable={[]} expanded={false} onSelectTab={vi.fn()} onCloseTab={vi.fn()} onAddTab={vi.fn()} onToggleExpand={vi.fn()} onHide={vi.fn()} {...handlers}>{content}</SidePanel>;
 }
 
 describe("SidePanel", () => {
@@ -70,6 +75,40 @@ describe("SidePanel", () => {
     await waitFor(() => expect(screen.queryByRole("complementary")).not.toBeInTheDocument());
   });
 
+  it("shows its tabs, the front one selected, and closes or walks them from the keyboard", () => {
+    const onCloseTab = vi.fn();
+    const onSelectTab = vi.fn();
+    const onHide = vi.fn();
+    render(panel(TERMINAL_VIEW, "Terminal", vi.fn(), { onCloseTab, onSelectTab, onHide }, [item(CHANGES_VIEW), item(TERMINAL_VIEW), item(GAMES_VIEW)]));
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs.map((tab) => tab.textContent)).toEqual(["Changes", "Terminal", "Games"]);
+    expect(screen.getByRole("tab", { name: "Terminal" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel")).toHaveTextContent("Terminal view");
+    fireEvent.click(screen.getByRole("button", { name: "Close Games tab" }));
+    expect(onCloseTab).toHaveBeenCalledWith(GAMES_VIEW);
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Terminal" }), { key: "ArrowLeft" });
+    expect(onSelectTab).toHaveBeenCalledWith(CHANGES_VIEW);
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Terminal" }), { key: "End" });
+    expect(onSelectTab).toHaveBeenLastCalledWith(GAMES_VIEW);
+    fireEvent.click(screen.getByRole("button", { name: "Hide panel" }));
+    expect(onHide).toHaveBeenCalledOnce();
+  });
+
+  it("offers the views not open yet behind its + menu", () => {
+    const onAddTab = vi.fn();
+    render(panel(CHANGES_VIEW, "Changes", vi.fn(), { onAddTab, addable: [{ view: TERMINAL_VIEW, label: "Terminal", icon: "terminal", keys: "⌘⇧T" }] }));
+    fireEvent.click(screen.getByRole("button", { name: "Open a tab" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Terminal/ }));
+    expect(onAddTab).toHaveBeenCalledWith(TERMINAL_VIEW);
+  });
+
+  it("resets to a balanced split on a double-click of its edge", () => {
+    const onResetWidth = vi.fn();
+    const { container } = render(panel(CHANGES_VIEW, "Changes", vi.fn(), { onResetWidth }));
+    fireEvent.doubleClick(container.querySelector(".panel-resizer")!);
+    expect(onResetWidth).toHaveBeenCalledOnce();
+  });
+
   it("resizes from its left edge, within its limits", () => {
     const onWidthChange = vi.fn();
     const { container } = render(panel(CHANGES_VIEW, "Changes", onWidthChange));
@@ -77,7 +116,8 @@ describe("SidePanel", () => {
     fireEvent.pointerMove(window, { clientX: 400 });
     expect(onWidthChange).toHaveBeenLastCalledWith(530);
     fireEvent.pointerMove(window, { clientX: -1_000 });
-    expect(onWidthChange).toHaveBeenLastCalledWith(1200);
+    // As wide as the window allows once the sidebar steps aside: the chat keeps its minimum.
+    expect(onWidthChange).toHaveBeenLastCalledWith(window.innerWidth - CHAT_MIN);
     fireEvent.pointerUp(window);
     fireEvent.pointerMove(window, { clientX: 300 });
     expect(onWidthChange).toHaveBeenCalledTimes(2);

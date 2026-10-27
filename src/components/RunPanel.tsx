@@ -19,11 +19,10 @@ interface RunPanelProps {
   configured: boolean;
   onRun: () => void;
   onStop: () => void;
-  onClose: () => void;
 }
 
 /** A self-contained PTY surface. Mounting attaches only; launching belongs to App. */
-export function RunPanel({ kind = "run", run, appearance, configured, onRun, onStop, onClose }: RunPanelProps) {
+export function RunPanel({ kind = "run", run, appearance, configured, onRun, onStop }: RunPanelProps) {
   const title = kind === "build" ? "Build" : "Run";
   const icon = kind === "build" ? "hammer" : "play";
   const reduce = useReducedMotion();
@@ -101,14 +100,12 @@ export function RunPanel({ kind = "run", run, appearance, configured, onRun, onS
   return (
     <div className="terminal-panel run-panel">
       <header className="panel-header terminal-header">
-        <span className="panel-mark" aria-hidden="true"><Icon name={icon} /></span>
-        <div className="panel-title"><span className="panel-kicker">{title}</span><h3 title={run?.command}>{run?.command ?? `Project ${kind} command`}</h3></div>
+        <div className="panel-title"><h3 title={run?.command}>{run?.command ?? `Project ${kind} command`}</h3></div>
         <div className="panel-header-actions">
           <Tooltip label="Clear screen" side="bottom">
             <button type="button" className="icon-button" aria-label={`Clear ${title} terminal`} disabled={!run} onClick={() => termRef.current?.clear()}><Icon name="erase" /></button>
           </Tooltip>
           {runIsActive(run) && <button type="button" className="icon-button" aria-label={`Stop ${kind}`} disabled={!live} onClick={onStop}><Icon name="stop" /></button>}
-          <button type="button" className="icon-button" aria-label={`Close ${title} panel`} onClick={onClose}><Icon name="close" /></button>
         </div>
       </header>
       {run && <div className="run-panel-meta">

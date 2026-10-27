@@ -36,6 +36,9 @@ interface ChatHeaderProps {
   onToggleTerminal: () => void;
   gamesOpen: boolean;
   onToggleGames: () => void;
+  /** The side panel is showing: the narrow chat column's single panel button reflects it. */
+  panelOpen: boolean;
+  onTogglePanel: () => void;
   onRename: (name: string) => void;
   onTaskAction: (task: TaskRecord, action: TaskAction) => void;
   /** Bumps when the title model names the chat: the title swipes to the new name and glints. */
@@ -44,7 +47,7 @@ interface ChatHeaderProps {
   onCheckoutBranch: (name: string, kind: GitCheckoutKind) => Promise<void>;
 }
 
-export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStopRun, onShowRunOutput, build, onSaveBuildCommand, onBuild, onStopBuild, onShowBuildOutput, git, onListBranches, onCheckoutBranch, changesCount, changesOpen, browserOpen, onToggleChanges, onToggleBrowser, terminalOpen, onToggleTerminal, gamesOpen, onToggleGames, onRename, onTaskAction, titlePulse = 0 }: ChatHeaderProps) {
+export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStopRun, onShowRunOutput, build, onSaveBuildCommand, onBuild, onStopBuild, onShowBuildOutput, git, onListBranches, onCheckoutBranch, changesCount, changesOpen, browserOpen, onToggleChanges, onToggleBrowser, terminalOpen, onToggleTerminal, gamesOpen, onToggleGames, panelOpen, onTogglePanel, onRename, onTaskAction, titlePulse = 0 }: ChatHeaderProps) {
   const contextMenu = useContextMenu();
   const [renaming, setRenaming] = useState(false);
   const [value, setValue] = useState(task.name);
@@ -128,6 +131,13 @@ export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStop
             </Tooltip>
           ))}
         </div>
+        {/* A narrow chat column trades the track for one button; the panel's own tabs pick the view. */}
+        <Tooltip label={panelOpen ? "Hide panel" : "Show panel"} side="bottom">
+          <button type="button" className={`panel-button panel-toggle-button${panelOpen ? " active" : ""}`} onClick={onTogglePanel}
+            aria-label={panelOpen ? "Hide panel" : "Show panel"} aria-pressed={panelOpen}>
+            <Icon name="panel" />
+          </button>
+        </Tooltip>
         <MenuButton label="Chat menu" items={menu} />
       </div>
     </header>

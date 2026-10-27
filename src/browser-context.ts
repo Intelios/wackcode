@@ -5,7 +5,9 @@
  */
 import type { BrowserContextAttachment, BrowserContextRecord, BrowserContextTarget, BrowserViewport, ImageContent } from "./types";
 
+/** The device track's presets, in order. Fit's size is a placeholder until the panel shows the page. */
 export const BROWSER_VIEWPORTS: Record<BrowserViewport["preset"], BrowserViewport> = {
+  fit: { preset: "fit", width: 1280, height: 800 },
   desktop: { preset: "desktop", width: 1440, height: 900 },
   laptop: { preset: "laptop", width: 1280, height: 800 },
   tablet: { preset: "tablet", width: 768, height: 1024 },

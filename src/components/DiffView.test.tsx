@@ -25,6 +25,27 @@ function file(sections: GitDiffSection[]): GitChangeFile {
 }
 
 describe("DiffView", () => {
+  it("lays removed and added lines side by side, commenting on each side's own line", () => {
+    const working = section("working", "w1");
+    const onAddComment = vi.fn();
+    const { container } = render(<DiffView layout="split" file={file([working])} sections={[working]} disabled={false} onAddComment={onAddComment}
+      comments={[{ id: "c1", path: "src/file.ts", layer: "working", side: "old", line: 2, revision: "w1", excerpt: "const gone = 2;", text: "Why remove this?" }]} />);
+    const rows = [...container.querySelectorAll(".diff-split-row")];
+    expect(rows).toHaveLength(3);
+    expect(rows.map((row) => [...row.children].map((cell) => cell.className.replace("diff-line diff-split-cell ", "")))).toEqual([
+      ["context", "context"], ["deletion", "addition"], ["blank", "addition"]
+    ]);
+    // A context line has one comment button, on its new side.
+    expect(screen.getAllByRole("button", { name: "Comment on src/file.ts line 1" })).toHaveLength(1);
+    // Removed line 2 on the left, added line 2 on the right: each anchors its own side.
+    const [removed, added] = screen.getAllByRole("button", { name: "Comment on src/file.ts line 2" });
+    fireEvent.click(removed);
+    expect(onAddComment).toHaveBeenLastCalledWith(working, working.hunks[0].lines[1]);
+    fireEvent.click(added);
+    expect(onAddComment).toHaveBeenLastCalledWith(working, working.hunks[0].lines[2]);
+    expect(screen.getByText("Why remove this?")).toBeInTheDocument();
+  });
+
   it("anchors a comment to the line's own section", () => {
     const working = section("working", "w1");
     const onAddComment = vi.fn();

@@ -1,7 +1,7 @@
 import type { SVGProps } from "react";
 import { quillIconPaths } from "./QuillMark";
 
-export type IconName = "markupArrow" | "markupBox" | "markupText" | "redo" | "star" | "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "browser" | "expand" | "collapse" | "copy" | "archive" | "unarchive" | "send" | "shuffle" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "checklist" | "terminal" | "file" | "paperclip" | "pencil" | "quill" | "external" | "brain" | "hammer" | "search" | "wrench" | "question" | "image" | "close" | "rewind" | "agents" | "flame" | "palette" | "plug" | "book" | "comment" | "commit" | "push" | "pullRequest" | "slash" | "erase" | "cursor" | "memory" | "accessibility" | "viewfinder" | "lock" | "dock" | "clock" | "pull" | "fetch" | "pin" | "split" | "unified" | "undo" | "code" | "filePlus" | "textSearch" | "globe" | "play" | "gamepad" | "link" | "help" | "alert" | "visual" | "bulb" | "canvas" | "minus" | "desktop" | "laptop" | "tablet" | "phone";
+export type IconName = "markupArrow" | "markupBox" | "markupText" | "redo" | "star" | "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "sidebar" | "browser" | "expand" | "collapse" | "copy" | "archive" | "unarchive" | "send" | "shuffle" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "checklist" | "terminal" | "file" | "paperclip" | "pencil" | "quill" | "external" | "brain" | "hammer" | "search" | "wrench" | "question" | "image" | "close" | "rewind" | "agents" | "flame" | "palette" | "plug" | "book" | "comment" | "commit" | "push" | "pullRequest" | "slash" | "erase" | "cursor" | "memory" | "accessibility" | "viewfinder" | "lock" | "dock" | "clock" | "pull" | "fetch" | "pin" | "split" | "unified" | "undo" | "code" | "filePlus" | "textSearch" | "globe" | "play" | "gamepad" | "link" | "help" | "alert" | "visual" | "bulb" | "canvas" | "minus" | "fitPanel" | "desktop" | "laptop" | "tablet" | "phone";
 
 const paths: Record<IconName, React.ReactNode> = {
   markupArrow: <path d="M5 19 19 5M8 5h11v11" />,
@@ -17,6 +17,7 @@ const paths: Record<IconName, React.ReactNode> = {
   git: <><circle cx="6" cy="5" r="2" /><circle cx="18" cy="7" r="2" /><circle cx="8" cy="19" r="2" /><path d="M6 7v3c0 3 2 3 2 7M8 13c0-4 8-1 10-4" /></>,
   refresh: <><path d="M20 7v5h-5" /><path d="M19 12a7 7 0 1 0-2 5" /></>,
   panel: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M15 4v16" /></>,
+  sidebar: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16M5.5 8h1.5M5.5 11h1.5" /></>,
   // Games: a rounded controller with a d-pad and two buttons.
   gamepad: <><path d="M7.5 7h9a5 5 0 0 1 4.9 6l-.8 3.6a2.4 2.4 0 0 1-4.1 1.1L14.3 15.5H9.7l-2.2 2.2a2.4 2.4 0 0 1-4.1-1.1L2.6 13a5 5 0 0 1 4.9-6z" /><path d="M8 9.8v3.4M6.3 11.5h3.4" /><circle cx="15.6" cy="10.4" r=".6" fill="currentColor" /><circle cx="17.4" cy="12.4" r=".6" fill="currentColor" /></>,
   // Computer use: a window with a pointer resting on its corner.
@@ -27,7 +28,8 @@ const paths: Record<IconName, React.ReactNode> = {
   lock: <><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></>,
   dock: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 8h18" /><rect x="7" y="14.5" width="10" height="3.5" rx="1.2" /></>,
   browser: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 8h18" /><circle cx="6" cy="6" r=".45" fill="currentColor" stroke="none" /><circle cx="8" cy="6" r=".45" fill="currentColor" stroke="none" /></>,
-  // Browser viewports: a monitor on its stand, a laptop, a tablet and a phone.
+  // Browser viewports: Fit (a frame with the page stretched across it), a monitor on its stand, a laptop, a tablet and a phone.
+  fitPanel: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M7 12h10M7 12l2.5-2.5M7 12l2.5 2.5M17 12l-2.5-2.5M17 12l-2.5 2.5" /></>,
   desktop: <><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M12 16v4M8 20h8" /></>,
   laptop: <><rect x="5" y="5" width="14" height="10" rx="1.6" /><path d="M2.5 19h19l-1.6-4H4.1z" /></>,
   tablet: <><rect x="5" y="3" width="14" height="18" rx="2.2" /><path d="M11 18h2" /></>,

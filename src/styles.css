@@ -125,7 +125,7 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 
 /* ── Shell ─────────────────────────────────────────── */
 /* isolation: the backdrop sits at z-index -1 inside the shell, behind every panel. */
-.app-shell { position: relative; isolation: isolate; display: flex; width: 100%; height: 100%; background: var(--wc-shell); }
+.app-shell { --shell-head-h: 62px; position: relative; isolation: isolate; display: flex; width: 100%; height: 100%; background: var(--wc-shell); }
 
 /* Dynamic backgrounds: only transforms/opacity change on prepainted blooms. Canvas glyphs
    share the same bounded ink layer. The veil protects unboxed transcript prose at 100%. */
@@ -187,7 +187,7 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .titlebar-drag { height: 48px; flex: 0 0 48px; }
 /* The sidebar's strip: the traffic lights sit in its first 80px (tauri.conf.json's
    `trafficLightPosition`), and the Code | Chat switch fills the rest, centred on their line. */
-.sidebar-titlebar { display: flex; align-items: center; gap: 6px; padding: 0 8px 0 84px; }
+.sidebar-titlebar { display: flex; align-items: center; gap: 6px; padding: 0 40px 0 84px; }
 .sidebar-titlebar .dev-badge { float: none; flex: 0 0 auto; margin: 0; }
 /* A dev build's badge takes a third of the room, so there the segments are words alone. */
 .sidebar-titlebar:has(.dev-badge) .area-tab-label svg { display: none; }
@@ -258,6 +258,28 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
   background: var(--wc-sidebar);
   border-right: 1px solid var(--border);
   user-select: none;
+  transition: margin-left .34s var(--ease), visibility 0s;
+}
+/* Collapsed (by ⌃⌘S, or stepping aside for a wide side panel): the sidebar slides out whole at its
+   full width, so its rows never reflow on the way, and leaves focus order once it is gone. */
+.sidebar.collapsed { margin-left: -240px; visibility: hidden; transition: margin-left .34s var(--ease), visibility 0s .34s; }
+/* The sidebar toggle (SidebarToggle.tsx): one button that rides at the end of the sidebar's title
+   strip and glides beside the traffic lights when the sidebar goes. */
+.sidebar-toggle { position: absolute; top: 11px; left: 84px; z-index: 6; transform: translateX(0); transition: transform .34s var(--ease); }
+.sidebar-toggle.open { transform: translateX(122px); }
+.sidebar-toggle-button { position: relative; width: 26px; height: 26px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--text-dim); cursor: pointer; }
+.sidebar-toggle-button:hover { color: var(--text); background: color-mix(in srgb, var(--text) 9%, transparent); }
+.sidebar-toggle-button:active { transform: scale(.92); }
+.sidebar-toggle-button svg { width: 15px; height: 15px; }
+/* Open by choice, stepped aside for the panel: an accent dot says it will come back. */
+.sidebar-toggle-dot { position: absolute; top: 3px; right: 2px; width: 6px; height: 6px; border-radius: 50%; background: var(--wc-accent); box-shadow: 0 0 0 2px var(--wc-shell); }
+/* Without the sidebar, whatever leads the workspace clears the traffic lights and the toggle. */
+.app-shell.sidebar-hidden > .workspace:not(.has-chat-tabs) :is(.workspace-header, .chat-header) { padding-left: 124px; }
+.app-shell.sidebar-hidden .chat-tab-strip { padding-left: 116px; }
+.workspace-drag { position: absolute; top: 0; left: 0; right: 0; height: 48px; }
+.workspace-header, .chat-header, .chat-tab-strip { transition: padding-left .34s var(--ease); }
+@media (prefers-reduced-motion: reduce) {
+  .sidebar, .sidebar.collapsed, .sidebar-toggle, .workspace-header, .chat-header, .chat-tab-strip { transition: none; }
 }
 /* The chat list (Sidebar.tsx). A project is a row led by a round monogram mark: grey while it
    has no open chats, lit with the accent once it does, filled solid for the project you are in.
@@ -556,13 +578,32 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .mini-tabs.enabled span { background: color-mix(in srgb, var(--text) 5%, transparent); }
 .mini-tabs.enabled span:first-child { background: color-mix(in srgb, var(--wc-accent) 13%, transparent); box-shadow: inset 0 0 0 1px var(--wc-accent-line); color: var(--text-soft); }
 .mini-tabs svg { width: 11px; height: 11px; }
-.workspace { min-width: 0; flex: 1; display: flex; flex-direction: column; position: relative; }
+.workspace { --chat-gutter: 24px; min-width: 0; flex: 1; display: flex; flex-direction: column; position: relative; }
+/* Beside a wide side panel the chat column tightens rather than breaks (`data-chat-size`, from
+   `solveShell`): slimmer gutters, Build and Run down to their icons, and under "narrow" the folder
+   pill gives way to the branch. Everything in the column takes its side margin from --chat-gutter. */
+.workspace:not([data-chat-size="wide"]) { --chat-gutter: 14px; }
+.workspace:not([data-chat-size="wide"]) .workspace-header { padding-left: 16px; gap: 8px; }
+.workspace:not([data-chat-size="wide"]) .chat-header { padding-left: 16px; }
+.workspace:not([data-chat-size="wide"]) .project-run-label { display: none; }
+.workspace:not([data-chat-size="wide"]) .project-run-control .project-run-main { min-width: 0; padding: 0 7px 0 10px; }
+.workspace[data-chat-size="narrow"] .workspace-meta > button:first-child { display: none; }
+.panel-toggle-button, .header-actions > .tooltip-wrap:has(> .panel-toggle-button) { display: none; }
+.workspace[data-chat-size="narrow"] .header-actions > .tooltip-wrap:has(> .panel-toggle-button) { display: inline-flex; }
+.workspace[data-chat-size="narrow"] .panel-toggle-button { display: inline-grid; place-items: center; width: 32px; height: 28px; padding: 0; border-radius: 999px; }
+.workspace[data-chat-size="narrow"] .panel-toggle-button.active { color: var(--wc-accent-text); background: color-mix(in srgb, var(--wc-accent) 13%, transparent); box-shadow: inset 0 0 0 1px var(--wc-accent-line); }
+.workspace[data-chat-size="narrow"] .panel-switch { display: none; }
+/* Narrow, Build and Run are one round button each: their command editors wait for a wider column. */
+.workspace[data-chat-size="narrow"] .project-run-control .project-run-more { display: none; }
+.workspace[data-chat-size="narrow"] .project-run-control .project-run-main { width: 30px; padding: 0; justify-content: center; border-radius: 999px; }
+.workspace[data-chat-size="narrow"] .header-actions { gap: 5px; }
 /* Draft hero and chat view overlay each other during the welcome→chat transition
    so the exiting hero can fade while the chat (and the gliding composer) mounts. */
 .chat-view { position: absolute; inset: 0; display: flex; flex-direction: column; padding-bottom: var(--composer-h, 0px); transition: top .22s var(--ease); }
 .chat-transcript { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* As tall as the side panel's tab strip (--shell-head-h), so one line runs across the window. */
 .workspace-header {
-  min-height: 58px; padding: 10px 14px 9px 20px; display: flex; align-items: center; gap: 12px;
+  min-height: var(--shell-head-h, 62px); padding: 10px 14px 9px 20px; display: flex; align-items: center; gap: 12px;
   border-bottom: 1px solid var(--border); background: var(--wc-header);
 }
 .task-title { min-width: 0; flex: 1; }
@@ -600,7 +641,7 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .workspace-meta button:hover { background: color-mix(in srgb, var(--text) 10%, transparent); color: var(--text); }
 .workspace-meta span { display: flex; align-items: center; gap: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-meta svg { width: 12px; height: 12px; flex: 0 0 auto; color: var(--wc-accent-text); }
-.header-actions { display: flex; gap: 8px; align-items: center; }
+.header-actions { display: flex; flex: 0 1 auto; min-width: 0; gap: 8px; align-items: center; }
 .header-actions .icon-button { border-radius: 50%; }
 .icon-button { display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--text-soft); cursor: pointer; transition: .12s var(--ease); }
 .icon-button:hover { background: var(--surface-hover); border-color: var(--border); color: var(--text); }
@@ -669,7 +710,7 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
    the native scrollbar is hidden — .scroll-rail replaces it. */
 .conversation-scroll { position: relative; flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: none; }
 .conversation-scroll::-webkit-scrollbar { display: none; }
-.transcript { width: min(760px, calc(100% - 48px)); margin: 0 auto; padding: 28px 0 26px; }
+.transcript { width: min(760px, calc(100% - 2 * var(--chat-gutter, 24px))); margin: 0 auto; padding: 28px 0 26px; }
 .block-slot { display: contents; }
 
 .msg { margin-bottom: 20px; }
@@ -1693,7 +1734,7 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
 .conversation-empty p { margin: 0; color: var(--text-dim); line-height: 1.55; font-size: 13px; }
 
 /* ── Inline dialog (above composer) ────────────────── */
-.inline-dialog-wrap { flex: 0 0 auto; padding: 0 24px 6px; animation: slide-in-dialog .18s var(--ease); }
+.inline-dialog-wrap { flex: 0 0 auto; padding: 0 var(--chat-gutter, 24px) 6px; animation: slide-in-dialog .18s var(--ease); }
 .inline-dialog-card {
   max-width: 760px; margin: 0 auto; border: 1px solid var(--wc-accent-line-mid); border-radius: 18px;
   background: var(--wc-composer); padding: 18px 20px;
@@ -1738,7 +1779,7 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
 }
 
 /* ── Composer ──────────────────────────────────────── */
-.composer-wrap { flex: 0 0 auto; padding: 4px 24px 16px; background: linear-gradient(0deg, var(--wc-composer-fade) 78%, transparent); }
+.composer-wrap { flex: 0 0 auto; padding: 4px var(--chat-gutter, 24px) 16px; background: linear-gradient(0deg, var(--wc-composer-fade) 78%, transparent); }
 .composer-wrap.disabled .composer { opacity: 0.45; pointer-events: none; }
 .composer {
   position: relative;
@@ -1873,6 +1914,8 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
 .composer-input.highlighted textarea { color: transparent; caret-color: var(--text); }
 .composer-input.highlighted textarea::selection { color: var(--text); }
 .composer textarea::placeholder { color: var(--wc-placeholder); }
+/* A narrow column keeps the placeholder to its one line rather than clipping a second. */
+.workspace:not([data-chat-size="wide"]) .composer textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* The toolbar: every control is a 28px round or pill shape at one resting weight, so what
    stands out is state (a lit reasoning level, the mode pill, a ready send), never chrome. */
 .composer-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px 8px 9px; gap: 8px; }
@@ -2598,7 +2641,7 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
 
 /* Header: airy, with the duck that mirrors what the agent is doing. */
 .chat-header {
-  min-height: 60px; padding: 10px 14px 10px 20px; display: flex; align-items: center; gap: 12px;
+  min-height: var(--shell-head-h, 62px); padding: 10px 14px 10px 20px; display: flex; align-items: center; gap: 12px;
   background: var(--wc-header); border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 .chat-header-title { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
@@ -2631,7 +2674,7 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
 .chat-scroll { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border-bright) transparent; }
 .chat-scroll::-webkit-scrollbar { width: 8px; }
 .chat-scroll::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
-.chat-thread { width: min(720px, calc(100% - 48px)); margin: 0 auto; padding: 26px 0 28px; display: flex; flex-direction: column; font-size: 15px; line-height: 1.55; }
+.chat-thread { width: min(720px, calc(100% - 2 * var(--chat-gutter, 24px))); margin: 0 auto; padding: 26px 0 28px; display: flex; flex-direction: column; font-size: 15px; line-height: 1.55; }
 
 .chat-row { display: flex; gap: 10px; margin-top: 4px; }
 .chat-row.first { margin-top: 18px; }
@@ -2838,7 +2881,7 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
 .chat-composer-layer.dock { justify-content: flex-end; }
 .chat-composer-layer > * { pointer-events: auto; }
 .chat-area-hero { pointer-events: auto; }
-.chat-composer-wrap { flex: 0 0 auto; padding: 6px 24px 18px; background: linear-gradient(0deg, var(--wc-composer-fade) 70%, transparent); }
+.chat-composer-wrap { flex: 0 0 auto; padding: 6px var(--chat-gutter, 24px) 18px; background: linear-gradient(0deg, var(--wc-composer-fade) 70%, transparent); }
 .chat-composer-wrap.hero { background: none; }
 .chat-composer-wrap.disabled .chat-composer { opacity: .5; pointer-events: none; }
 .chat-composer {
@@ -3064,9 +3107,54 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
    inner wrapper keeps the final one, so a view rides in with the panel's edge instead of
    reflowing every frame; the wrapper is also the size container the dock's tabs query to
    collapse to icons. Pages stack so an outgoing view can fade over the incoming one. */
-.side-panel { position: relative; flex: 0 0 auto; max-width: 1200px; height: 100%; border-left: 1px solid var(--border); background: var(--wc-panel); overflow: hidden; }
-.side-panel-inner { container-type: inline-size; position: relative; height: 100%; min-width: 290px; max-width: 1200px; }
+.side-panel { position: relative; flex: 0 0 auto; height: 100%; border-left: 1px solid var(--border); background: var(--wc-panel); overflow: hidden; }
+.side-panel-inner { container-type: inline-size; position: relative; height: 100%; min-width: 320px; display: flex; flex-direction: column; }
+.side-panel-pages { position: relative; flex: 1; min-height: 0; }
 .side-panel-page { position: absolute; inset: 0; display: flex; flex-direction: column; }
+
+/* The tab strip (PanelTabStrip.tsx): the panel's own top bar, as tall as the chat header so one
+   line runs across the window. Tabs are pills on the shell, tinted rather than filled so the strip
+   stays see-through over an image or Liquid Glass; the front one wears a fill that glides between
+   them like the header's view track. Whatever the strip leaves bare drags the window. */
+.panel-tabstrip { flex: 0 0 var(--shell-head-h, 62px); height: var(--shell-head-h, 62px); display: flex; align-items: center; gap: 4px; padding: 0 8px 0 10px; border-bottom: 1px solid var(--border); background: var(--wc-header); transition: padding-left .34s var(--ease); }
+.app-shell.panel-expanded.sidebar-hidden > .side-panel .panel-tabstrip { padding-left: 116px; }
+.panel-tabs { display: flex; align-items: center; gap: 3px; flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; padding: 4px 1px; }
+.panel-tabs::-webkit-scrollbar { display: none; }
+/* Tabs give up their words before the strip has to scroll: the front tab keeps its full name. */
+.panel-tab { position: relative; isolation: isolate; display: flex; align-items: center; flex: 0 1 auto; min-width: 54px; max-width: 200px; height: 30px; border-radius: var(--wc-radius-pill); color: var(--text-dim); transition: color .15s var(--ease), background-color .15s var(--ease); }
+.panel-tab:hover { color: var(--text-soft); background: color-mix(in srgb, var(--text) 6%, transparent); }
+.panel-tab.active, .panel-tab.active:hover { color: var(--text); background: transparent; }
+.panel-tab.active { flex-shrink: 0; }
+/* A narrow panel keeps only the front tab's name; the others are their icons (and accessible names). */
+@container (max-width: 560px) {
+  .panel-tab:not(.active) .panel-tab-label, .panel-tab:not(.active) .panel-tab-close { display: none; }
+  .panel-tab:not(.active) { min-width: 0; }
+  .panel-tab:not(.active) .panel-tab-select { padding: 0 6px; }
+}
+.panel-tab-pill { position: absolute; inset: 0; z-index: -1; pointer-events: none; background: color-mix(in srgb, var(--wc-accent) 13%, transparent); box-shadow: inset 0 0 0 1px var(--wc-accent-line); }
+.panel-tab-select { display: flex; align-items: center; gap: 7px; min-width: 0; height: 100%; padding: 0 3px 0 9px; border: 0; border-radius: inherit; background: transparent; color: inherit; font-size: 12px; font-weight: 600; cursor: pointer; user-select: none; }
+.panel-tab-select:focus-visible { outline: 2px solid color-mix(in srgb, var(--wc-accent) 70%, transparent); outline-offset: -2px; }
+.panel-tab-icon { flex: 0 0 auto; width: 18px; height: 18px; display: grid; place-items: center; border-radius: 50%; }
+.panel-tab.active .panel-tab-icon { color: var(--wc-accent-text); }
+.panel-tab-icon svg { width: 13px; height: 13px; }
+/* The agent is at work in this view: its icon sends out the ring the view's mark used to. */
+.panel-tab-icon.live { color: var(--wc-accent-text); animation: panel-mark-live 1.7s var(--ease) infinite; }
+.panel-tab-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-tab .changes-badge { min-width: 16px; padding: 0 5px; line-height: 16px; text-align: center; }
+.panel-tab-close { flex: 0 0 auto; width: 20px; height: 20px; margin: 0 5px 0 1px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; opacity: 0; transition: opacity .12s var(--ease), background-color .12s var(--ease); }
+.panel-tab:hover .panel-tab-close, .panel-tab.active .panel-tab-close, .panel-tab:focus-within .panel-tab-close { opacity: .7; }
+.panel-tab-close:hover, .panel-tab-close:focus-visible { opacity: 1; background: color-mix(in srgb, var(--text) 10%, transparent); }
+.panel-tab-close svg { width: 11px; height: 11px; }
+.side-panel .panel-tab-add { flex: 0 0 auto; width: 28px; height: 28px; color: var(--text-dim); }
+.panel-tabstrip-drag { flex: 1; align-self: stretch; min-width: 12px; }
+.panel-tabstrip-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 2px; }
+/* Under the strip, each view's head is a slim toolbar: the tab already names the view. */
+.side-panel-page > * > .panel-header { min-height: 46px; padding: 7px 10px 7px 14px; }
+/* With the chat tab bar showing, the strip takes the bar's height so the two rows of tabs read as
+   one, and each view's toolbar takes the chat header's, so the line under it runs across too. */
+.app-shell.panel-has-tabs > .side-panel .panel-tabstrip { flex-basis: 42px; height: 42px; }
+.app-shell.panel-has-tabs > .side-panel .side-panel-page > * > .panel-header { min-height: var(--shell-head-h, 62px); }
+.side-panel-page .panel-title h3 { font-size: 13px; }
 .panel-resizer { position: absolute; left: -4px; width: 8px; top: 0; bottom: 0; cursor: col-resize; z-index: 5; }
 /* A grab pill surfaces just inside the edge, rather than the whole edge lighting up. */
 .panel-resizer::after { content: ""; position: absolute; left: 6px; top: 50%; width: 4px; height: 44px; margin-top: -22px; border-radius: var(--wc-radius-pill); background: var(--wc-accent-fill); opacity: 0; transform: scaleY(.45); transition: opacity .15s var(--ease), transform .28s cubic-bezier(.3, 1.4, .4, 1); pointer-events: none; }
@@ -3111,7 +3199,8 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
 .panel-empty-mark svg { width: 20px; height: 20px; }
 @media (prefers-reduced-motion: reduce) {
   .panel-mark.live { animation: none; box-shadow: inset 0 0 0 1px var(--wc-accent-line), 0 0 0 4px color-mix(in srgb, var(--wc-accent) 14%, transparent); }
-  .panel-resizer::after { transition: none; }
+  .panel-tab-icon.live { animation: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--wc-accent) 18%, transparent); }
+  .panel-resizer::after, .panel-tabstrip, .panel-tab, .panel-tab-close { transition: none; }
 }
 
 /* ── Browser panel ─────────────────────────────────── */
@@ -3163,7 +3252,8 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
    at rest, accent while you hold the page, a ring sent out while the agent uses it. */
 .browser-stage { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 12px; background-color: var(--wc-well); background-image: radial-gradient(circle, color-mix(in srgb, var(--text) 9%, transparent) 1px, transparent 1.3px); background-size: 16px 16px; background-position: center; }
 .browser-surface { position: relative; flex: 1; min-width: 0; min-height: 0; container-type: size; }
-.browser-frame { position: absolute; left: 50%; top: 50%; width: min(100cqw, calc(100cqh * var(--browser-aspect))); height: min(100cqh, calc(100cqw / var(--browser-aspect))); transform: translate(-50%, -50%); border-radius: 2px; background: var(--surface); box-shadow: 0 0 0 1px var(--border-bright), 0 0 0 5px color-mix(in srgb, var(--text) 4%, transparent), 0 24px 48px -20px rgb(0 0 0 / 70%); transition: box-shadow .25s var(--ease); animation: browser-frame-in .3s cubic-bezier(.3, 1.3, .4, 1) both; }
+/* Fitted to the surface, but never past the page's real size: Rust caps the scale at 1 too. */
+.browser-frame { position: absolute; left: 50%; top: 50%; width: min(100cqw, calc(100cqh * var(--browser-aspect)), var(--browser-vw, 100cqw)); height: min(100cqh, calc(100cqw / var(--browser-aspect)), var(--browser-vh, 100cqh)); transform: translate(-50%, -50%); border-radius: 2px; background: var(--surface); box-shadow: 0 0 0 1px var(--border-bright), 0 0 0 5px color-mix(in srgb, var(--text) 4%, transparent), 0 24px 48px -20px rgb(0 0 0 / 70%); transition: box-shadow .25s var(--ease); animation: browser-frame-in .3s cubic-bezier(.3, 1.3, .4, 1) both; }
 /* A new viewport sets the frame down with a small bounce; the page lands in it once placement settles. */
 @keyframes browser-frame-in { from { opacity: 0; transform: translate(-50%, -50%) scale(.94); } }
 .browser-frame.user { box-shadow: 0 0 0 1px var(--wc-accent-line), 0 0 0 5px color-mix(in srgb, var(--wc-accent) 14%, transparent), 0 24px 48px -20px rgb(0 0 0 / 70%); }
@@ -3211,7 +3301,7 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
 .project-row .repo-pin { margin-right: 4px; }
 
 /* Expanded presentation leaves the same composer mounted and the transcript parked behind it. */
-.app-shell.panel-expanded > .side-panel { position: absolute; left: 240px; right: 0; top: 0; bottom: var(--panel-dock-h, 150px); width: auto !important; max-width: none; height: auto; z-index: 3; border-left: 0; }
+.app-shell.panel-expanded > .side-panel { position: absolute; left: var(--sidebar-w, 240px); right: 0; top: 0; bottom: var(--panel-dock-h, 150px); width: auto !important; max-width: none; height: auto; z-index: 3; border-left: 0; }
 .app-shell.panel-expanded.panel-has-tabs > .side-panel { top: 42px; }
 .panel-expanded .side-panel-inner { width: 100% !important; max-width: none; }
 .panel-expanded .panel-resizer { display: none; }
@@ -3222,7 +3312,7 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
 /* Canvas expansion is independent of the side panel: park it without resetting its view,
    width, PTY or native browser presentation, and leave the same composer and questions live. */
 .app-shell.canvas-expanded > .side-panel { position: absolute; right: 0; top: 0; bottom: 0; visibility: hidden; pointer-events: none; }
-.canvas-workspace-expanded.transcript-zone { position: absolute; left: 240px; right: 0; top: 0; bottom: var(--panel-dock-h, 150px); z-index: 3; overflow: hidden; background: var(--wc-well); }
+.canvas-workspace-expanded.transcript-zone { position: absolute; left: var(--sidebar-w, 240px); right: 0; top: 0; bottom: var(--panel-dock-h, 150px); z-index: 3; overflow: hidden; background: var(--wc-well); }
 .canvas-expanded.panel-has-tabs > .canvas-workspace-expanded { top: 42px; }
 .canvas-expanded .workspace-header, .canvas-expanded .chat-transcript { visibility: hidden; }
 .canvas-expanded .composer-layer { z-index: 4; }
@@ -3331,6 +3421,29 @@ button.compact.primary:hover:not(:disabled) { background: var(--wc-accent-fill-h
 .rename-tag { color: var(--text-faint); font-style: normal; font-family: "SFMono-Regular", monospace; font-size: 10px; margin-left: 8px; overflow: hidden; text-overflow: ellipsis; }
 /* A size container so pinned bands can be exactly as wide as the visible diff (100cqw). */
 .diff-scroll { container-type: inline-size; flex: 1; min-height: 0; overflow: auto; background: var(--wc-well); font: 11px/1.6 "SFMono-Regular", Consolas, monospace; color: var(--text-soft); tab-size: 4; }
+/* A wide panel (ChangesPanel's TWO_PANE_WIDTH) puts the file list beside the diff; narrower, it
+   stacks above it as before. The dock spans both. */
+.changes-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.changes-diff { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+@container (min-width: 720px) {
+  .changes-body { flex-direction: row; }
+  .changes-body > .changed-files { flex: 0 0 clamp(220px, 28%, 320px); max-height: none; padding-top: 8px; border-bottom: 0; border-right: 1px solid var(--border); }
+}
+/* Unified | Side by side, in the diff's header: icons on a sliding thumb, as in the project bar. */
+.diff-layout-switch { position: relative; flex: 0 0 auto; height: 26px; }
+.diff-layout-switch .segmented-option { position: relative; display: grid; place-items: center; height: 20px; padding: 0 8px; transition: color .15s var(--ease); }
+.diff-layout-switch .segmented-option.selected { background: transparent; box-shadow: none; color: var(--text); }
+.diff-layout-switch svg { display: block; width: 13px; height: 13px; }
+/* Side by side: removed lines on the left, added on the right, wrapping rather than scrolling so
+   both halves stay in view. Blank cells are hatched so an uneven run reads as nothing there. */
+.diff-scroll.split .diff-body, .diff-scroll.split .diff-line { min-width: 0; }
+.diff-split-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.diff-split-cell + .diff-split-cell { border-left: 1px solid var(--border); }
+.diff-scroll.split .diff-gutter { position: static; }
+.diff-scroll.split .diff-line code { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.diff-split-cell.blank { background: repeating-linear-gradient(135deg, transparent 0 6px, color-mix(in srgb, var(--text) 3%, transparent) 6px 7px); }
+.diff-comment-spacer { flex: none; width: 20px; }
+.diff-split-meta code { padding-left: 76px; }
 .diff-body { padding: 2px 0 26px; min-width: max-content; }
 /* Sticky, and only as wide as the viewport: a band as wide as the longest line has no room to stick,
    so its hunk actions would sit off-screen past the end of that line. */
@@ -4092,7 +4205,7 @@ html[data-force-reduced-motion] *::after {
    status marker — a square stub mid-tree, a rounded └ bend on the last row. The rail sits
    3.5px inside each row, exactly under the root dot's centre (12px head padding + half the
    7px dot). Rows never wrap (subjects ellipsize), so the 50% marker maths stays true. */
-.todo-panel-wrap { flex: 0 0 auto; padding: 0 24px 8px; }
+.todo-panel-wrap { flex: 0 0 auto; padding: 0 var(--chat-gutter, 24px) 8px; }
 .todo-panel { max-width: 760px; margin: 0 auto; border: 1px solid var(--border); background: var(--surface); border-radius: 10px; overflow: hidden; }
 .todo-panel-head { position: relative; display: flex; align-items: center; gap: 8px; padding: 6px 12px 3px; }
 /* The stub that drops from the root dot into the list's rail while the panel is expanded. */
@@ -4183,7 +4296,7 @@ html[data-force-reduced-motion] *::after {
 }
 
 /* ── Built-in goal banner ──────────────────────────── */
-.goal-banner-wrap { flex: 0 0 auto; padding: 0 24px 8px; }
+.goal-banner-wrap { flex: 0 0 auto; padding: 0 var(--chat-gutter, 24px) 8px; }
 .goal-banner {
   max-width: 760px; margin: 0 auto; display: flex; align-items: center; gap: 8px;
   padding: 7px 12px; border: 1px solid var(--border); background: var(--surface); border-radius: 10px;
@@ -4219,7 +4332,7 @@ html[data-force-reduced-motion] *::after {
 
 /* ── Computer use banner (ComputerUseBanner.tsx) ───── */
 /* While the agent is using an app: the pointer in the icon taps, so the banner reads as live. */
-.computer-banner-wrap { flex: 0 0 auto; padding: 0 24px 8px; animation: slide-in-dialog .18s var(--ease); }
+.computer-banner-wrap { flex: 0 0 auto; padding: 0 var(--chat-gutter, 24px) 8px; animation: slide-in-dialog .18s var(--ease); }
 .computer-banner {
   max-width: 760px; margin: 0 auto; display: flex; align-items: center; gap: 8px;
   padding: 6px 8px 6px 11px; border: 1px solid var(--wc-accent-line-soft); border-radius: 10px;
@@ -4377,7 +4490,7 @@ html[data-force-reduced-motion] *::after {
 .subagent-pages { position: relative; flex: 1; min-height: 0; }
 .subagent-page { position: absolute; inset: 0; display: flex; flex-direction: column; }
 .subagent-page-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.subagent-page .transcript { width: calc(100% - 32px); padding: 14px 0 20px; }
+.subagent-page .transcript { width: min(760px, calc(100% - 32px)); padding: 14px 0 20px; }
 .subagent-page .scroll-rail { top: 6px; bottom: 6px; right: 2px; }
 .subagent-page .scroll-rail-label { max-width: 190px; }
 .subagent-page > .subagent-error { margin: 0 14px 10px; }
@@ -4622,6 +4735,11 @@ html[data-force-reduced-motion] *::after {
 /* The Arcade home: one poster card per game, centred in the panel's body. A block column with
    auto margins rather than a centring flexbox, so a short panel scrolls instead of clipping. */
 .games-arcade { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; padding: 22px 18px; }
+/* A wide panel lays the posters out side by side rather than one narrow column in a big room. */
+@container (min-width: 760px) {
+  .games-arcade { display: flex; flex-wrap: wrap; align-content: flex-start; justify-content: center; gap: 12px; }
+  .games-arcade > .game-card { margin: 0; }
+}
 .game-card {
   display: flex; align-items: center; gap: 14px; width: min(340px, 100%); margin: 6px auto; padding: 12px;
   text-align: left; cursor: pointer; border-radius: 14px;
@@ -6791,10 +6909,6 @@ label > span small.mcp-invalid { color: var(--warning); }
   .prompt-stage.live .prompt-stage-caret { animation: none; opacity: 1; }
 }
 
-@media (max-width: 1120px) {
-  .sidebar { width: 216px; flex-basis: 216px; }
-  .side-panel, .side-panel-inner { max-width: 460px; }
-}
 
 /* ── Settings › Tools (ToolsSection.tsx) ───────────── */
 /* A Settings page (SettingsHero): Pi's tools as cards in two groups, then package tools, then

@@ -33,7 +33,6 @@ interface SubagentPanelProps {
   /** The watched transcript (`TaskRuntime.subagentView`), when it is this child's. */
   stream?: SubagentView;
   onSelect: (index: number) => void;
-  onClose: () => void;
   /** Watch again after the watch itself failed. */
   onRetry: () => void;
 }
@@ -228,7 +227,7 @@ function Body({ result, status, stream, onRetry }: { result: SubagentResult; sta
  * slides the page and leaves the tabs in place. Presentational: App watches the child and
  * passes its transcript in as `stream`.
  */
-export function SubagentPanel({ toolCallId, index, details, live, stream, onSelect, onClose, onRetry }: SubagentPanelProps) {
+export function SubagentPanel({ toolCallId, index, details, live, stream, onSelect, onRetry }: SubagentPanelProps) {
   const reduce = useReducedMotion();
   const known = useRef(details);
   if (details) known.current = details;
@@ -248,13 +247,9 @@ export function SubagentPanel({ toolCallId, index, details, live, stream, onSele
       <header className="panel-header subagent-panel-header">
         <RobotMark status={status} boot className="subagent-panel-robot" />
         <div className="panel-title">
-          <span className="panel-kicker">SubAgent</span>
           <h3>{labels[index] ?? "SubAgent"}</h3>
         </div>
         {result && <StatusPill status={status} startedAt={result.startedAt} endedAt={result.endedAt} />}
-        <div className="panel-header-actions">
-          <button type="button" className="icon-button" onClick={onClose} aria-label="Close SubAgent panel"><Icon name="close" /></button>
-        </div>
         {status === "running" && <span className="panel-loading" aria-hidden="true" />}
       </header>
       {results.length > 1 && (

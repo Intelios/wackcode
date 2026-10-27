@@ -873,7 +873,9 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
     const element = ref.current;
     if (!element || !canvases?.boards.size) return;
     const measure = () => {
-      if (element.clientWidth > 0) element.style.setProperty("--canvas-inline-width", `${Math.max(0, element.clientWidth - 48)}px`);
+      // The chat column's gutters (--chat-gutter) narrow beside a wide side panel.
+      const gutter = parseFloat(getComputedStyle(element).getPropertyValue("--chat-gutter")) || 24;
+      if (element.clientWidth > 0) element.style.setProperty("--canvas-inline-width", `${Math.max(0, element.clientWidth - 2 * gutter)}px`);
       if (element.clientHeight > 0) element.style.setProperty("--canvas-available-height", `${element.clientHeight}px`);
     };
     measure();

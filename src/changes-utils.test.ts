@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DiffComment, GitChangeFile, GitDiffSection } from "./types";
-import { changeEntries, hunkLabel, isFresh, lineAnchor, sectionComments, splitPath } from "./changes-utils";
+import { changeEntries, hunkLabel, isFresh, lineAnchor, sectionComments, splitHunkRows, splitPath } from "./changes-utils";
 
 const section: GitDiffSection = {
   layer: "working", revision: "rev-1", diff: "", truncated: false, additions: 2, deletions: 1,
@@ -82,4 +82,32 @@ describe("changes-utils", () => {
   });
 
 
+});
+
+describe("splitHunkRows", () => {
+  const line = (kind: string, n: number) => ({ kind, text: kind, oldLine: kind === "addition" ? null : n, newLine: kind === "deletion" ? null : n });
+
+  it("pairs a replacement line by line and keeps context on both sides", () => {
+    expect(splitHunkRows(section.hunks[0].lines)).toEqual([
+      { left: 0, right: 0 },
+      { left: 1, right: 2 },
+      { left: undefined, right: 3 }
+    ]);
+  });
+
+  it("fills an uneven run with blanks on the short side and spans meta lines", () => {
+    const lines = [line("deletion", 1), line("deletion", 2), line("deletion", 3), line("addition", 1), line("meta", 0), line("addition", 2), line("context", 4)];
+    expect(splitHunkRows(lines)).toEqual([
+      { left: 0, right: 3 },
+      { left: 1, right: undefined },
+      { left: 2, right: undefined },
+      { meta: 4 },
+      { left: undefined, right: 5 },
+      { left: 6, right: 6 }
+    ]);
+  });
+
+  it("keeps an addition-only hunk on the right", () => {
+    expect(splitHunkRows([line("addition", 1), line("addition", 2)])).toEqual([{ left: undefined, right: 0 }, { left: undefined, right: 1 }]);
+  });
 });

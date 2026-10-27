@@ -14,7 +14,7 @@ const state: BrowserState = {
   loading: false, canGoBack: false, canGoForward: false,
   agentActive: false, userControl: false, popup: false
 };
-const actions = { onState: vi.fn(), onExpand: vi.fn(), onReset: vi.fn(), onClose: vi.fn() };
+const actions = { onState: vi.fn(), onReset: vi.fn() };
 let bounds: DOMRect;
 const observers: { targets: Set<Element>; notify: () => void }[] = [];
 
@@ -157,7 +157,9 @@ describe("BrowserPanel positioning", () => {
   });
   it("releases a capture reservation as its drawer starts closing", () => {
     vi.mocked(api.browserCapture).mockReturnValue(new Promise(() => {}));
-    const drawer = (open: boolean) => <SidePanel view={open ? { kind: "browser", taskId: state.taskId } : null} width={430} onWidthChange={vi.fn()} label="Browser">
+    const drawer = (open: boolean) => <SidePanel view={open ? { kind: "browser", taskId: state.taskId } : null} width={430} onWidthChange={vi.fn()} onResetWidth={vi.fn()} label="Browser"
+      tabs={open ? [{ view: { kind: "browser", taskId: state.taskId }, label: "Browser", icon: "browser" }] : []} addable={[]} expanded={false}
+      onSelectTab={vi.fn()} onCloseTab={vi.fn()} onAddTab={vi.fn()} onToggleExpand={vi.fn()} onHide={vi.fn()}>
       {() => <BrowserPanel taskId={state.taskId} state={state} visible expanded={false} {...actions} onAttach={vi.fn()} />}
     </SidePanel>;
     const view = render(drawer(true));

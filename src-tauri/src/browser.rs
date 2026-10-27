@@ -1068,7 +1068,18 @@ fn set_viewport(
     cancel_capture(app, task_id, None);
     let manager = app.state::<BrowserManager>();
     let webview = manager.webview(task_id)?;
-    let viewport: BrowserViewport = preset.into();
+    // Fit follows the panel: its size comes from where the page is shown, or the last size it had.
+    let viewport: BrowserViewport = if preset == BrowserViewportPreset::Fit {
+        let (shown, current) = manager.sessions.lock().ok().and_then(|sessions| {
+            sessions.get(task_id).map(|session| (session.display_rect, session.state.viewport.clone()))
+        }).unwrap_or((None, BrowserViewport::default()));
+        match shown {
+            Some((_, _, width, height)) => BrowserViewport::fitted(width, height),
+            None => BrowserViewport::fitted(current.width, current.height),
+        }
+    } else {
+        preset.into()
+    };
     mutate_session(app, task_id, |session| {
         session.state.viewport = viewport.clone();
         session.width = viewport.width;
@@ -1369,7 +1380,8 @@ fn fit_rect(
     (x, y, width, height): (f64, f64, f64, f64),
     (vw, vh): (f64, f64),
 ) -> (f64, f64, f64, f64) {
-    let scale = (width / vw).min(height / vh);
+    // Never larger than real size: a wide panel shows a fixed preset at 1:1, centred.
+    let scale = (width / vw).min(height / vh).min(1.0);
     (
         x + (width - vw * scale) / 2.0,
         y + (height - vh * scale) / 2.0,
@@ -1448,6 +1460,7 @@ pub fn browser_present(app: AppHandle, input: BrowserPresentInput) -> Result<Bro
         cancel_capture(&app, &task, None);
         park_webview(&view, width, height)?;
     }
+    let mut resized = false;
     let has_page = {
         let mut sessions = manager
             .sessions
@@ -1459,11 +1472,25 @@ pub fn browser_present(app: AppHandle, input: BrowserPresentInput) -> Result<Bro
         session.visible = true;
         session.presentation_id = input.presentation_id;
         session.display_rect = Some((input.x, input.y, input.width, input.height));
+        // A Fit page resizes with the panel; like any viewport change, that retires old targets.
+        if session.state.viewport.preset == BrowserViewportPreset::Fit {
+            let fitted = BrowserViewport::fitted(input.width, input.height);
+            if fitted != session.state.viewport {
+                session.state.viewport = fitted;
+                session.epoch = session.epoch.wrapping_add(1);
+                session.targets.clear();
+                resized = true;
+            }
+        }
         session.width = session.state.viewport.width;
         session.height = session.state.viewport.height;
         session.revealed_to_user = true;
         !session.state.url.is_empty()
     };
+    if resized {
+        cancel_capture(&app, &input.task_id, None);
+        emit_state(&app, manager.state(&input.task_id), false);
+    }
     if has_page {
         let viewport = manager.state(&input.task_id).viewport;
         native::place(
@@ -1565,7 +1592,7 @@ mod tests {
     #[test]
     fn viewport_fit_centres_without_changing_the_logical_page() {
         use crate::models::{BrowserViewport, BrowserViewportPreset};
-        let desktop = BrowserViewport::default();
+        let desktop: BrowserViewport = BrowserViewportPreset::Desktop.into();
         assert_eq!((desktop.width, desktop.height), (1440.0, 900.0));
         let (_, y, width, height) =
             super::fit_rect((0.0, 100.0, 430.0, 700.0), (desktop.width, desktop.height));
@@ -1578,6 +1605,24 @@ mod tests {
         assert!((height - 700.0).abs() < 0.001);
         assert!((x - (100.0 + (430.0 - width) / 2.0)).abs() < 0.001);
         assert!(serde_json::from_str::<BrowserViewportPreset>("\"unknown\"").is_err());
+        // A panel wider than the preset shows it at real size rather than blowing it up.
+        let (x, y, width, height) = super::fit_rect((0.0, 0.0, 2000.0, 1200.0), (desktop.width, desktop.height));
+        assert_eq!((x, y, width, height), (280.0, 150.0, 1440.0, 900.0));
+    }
+
+    #[test]
+    fn fit_viewport_follows_the_panel_within_bounds() {
+        use crate::models::{BrowserViewport, BrowserViewportPreset};
+        assert_eq!(BrowserViewport::default().preset, BrowserViewportPreset::Fit);
+        let fitted = BrowserViewport::fitted(812.4, 655.6);
+        assert_eq!((fitted.width, fitted.height), (812.0, 656.0));
+        let tiny = BrowserViewport::fitted(120.0, 90.0);
+        assert_eq!((tiny.width, tiny.height), (320.0, 320.0));
+        let huge = BrowserViewport::fitted(5000.0, 3000.0);
+        assert_eq!((huge.width, huge.height), (2560.0, 1600.0));
+        let (_, _, width, height) = super::fit_rect((0.0, 0.0, 812.4, 655.6), (fitted.width, fitted.height));
+        assert!((width - 812.0).abs() < 0.5 && (height - 656.0).abs() < 0.5);
+        assert_eq!(serde_json::from_str::<BrowserViewportPreset>("\"fit\"").unwrap(), BrowserViewportPreset::Fit);
     }
 
     #[test]

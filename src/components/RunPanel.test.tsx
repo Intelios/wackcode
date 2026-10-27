@@ -28,7 +28,7 @@ type MockTerm = { write: ReturnType<typeof vi.fn>; clear: ReturnType<typeof vi.f
 const instances = () => (Terminal as unknown as { instances: MockTerm[] }).instances;
 let frame: (frame: RunFrame) => void;
 let attachment: string;
-const actions = () => ({ appearance: DEFAULT_APPEARANCE, configured: true, onRun: vi.fn(), onStop: vi.fn(), onClose: vi.fn() });
+const actions = () => ({ appearance: DEFAULT_APPEARANCE, configured: true, onRun: vi.fn(), onStop: vi.fn() });
 
 afterEach(cleanup);
 beforeEach(() => {

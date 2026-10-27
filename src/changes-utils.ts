@@ -78,3 +78,30 @@ export function sectionComments(path: string, section: GitDiffSection, comments:
   }
   return { inline, orphans };
 }
+
+/**
+ * One row of a side-by-side diff, as indices into the hunk's lines: the removed side on the left,
+ * the added side on the right. A context line sits on both sides; a run of deletions pairs line by
+ * line with the additions that follow it, and blanks fill an uneven run. Meta lines ("\ No newline
+ * at end of file") span the row.
+ */
+export interface SplitRow { left?: number; right?: number; meta?: number }
+
+export function splitHunkRows(lines: GitDiffLine[]): SplitRow[] {
+  const rows: SplitRow[] = [];
+  let at = 0;
+  while (at < lines.length) {
+    const kind = lines[at].kind;
+    if (kind === "deletion" || kind === "addition") {
+      const removed: number[] = [];
+      const added: number[] = [];
+      while (at < lines.length && lines[at].kind === "deletion") removed.push(at++);
+      while (at < lines.length && lines[at].kind === "addition") added.push(at++);
+      for (let row = 0; row < Math.max(removed.length, added.length); row++) rows.push({ left: removed[row], right: added[row] });
+      continue;
+    }
+    rows.push(kind === "meta" ? { meta: at } : { left: at, right: at });
+    at++;
+  }
+  return rows;
+}

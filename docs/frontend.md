@@ -239,15 +239,66 @@ refuses it, and `App` falls back to `classic` for a configuration copied from an
 - Attached files never ride a `/`-command message: Pi expands commands and would swallow the section. Sending the same text literally is the deliberate escape hatch.
 - **`@` chat references** (`src/chat-refs.ts`) are the same gesture as file mentions, with a different payload: the draft keeps `@"Chat name"` and the message carries only the id in a `<referenced-chats-v1>` tail, so the agent reads that chat on demand (`read_chat`) instead of the prompt carrying it. `rankSuggestions` lists files first, exactly as before, then ≤5 matching chats under a "Chats" heading; `chatRefCandidates` applies the kind rule (Chat mode chats only, for a Chat mode chat) so the picker never offers what the host would refuse. A ref survives only while its token is in the text, at send and in the editor; the transcript highlights it as a chat token and clicks through to that chat (a deleted one stays a plain token).
 
+## Window layout
+
+`solveShell` (`src/shell-layout.ts`) shares the window's width between the sidebar (240 px), the
+chat column and the side panel. The chat column keeps `CHAT_MIN` (400 px). Until the user drags
+it (`wackcode:panelWidth`, or the chat tab's `panel.width`; null means never), the panel opens at
+`balancedPanelWidth`, half the room beside the sidebar, so it is wide on any window and grows with
+it; a double-click on its edge goes back to that. It gets the width the user dragged it to while
+that fits beside the sidebar; past that the sidebar steps
+aside (`sidebarAutoHidden`, its toggle wears a dot) and comes back once there is room, and only
+then is the panel clamped. The stored width is a preference that layout never rewrites. App
+measures the window and writes `--sidebar-w` on `.app-shell` and `data-chat-size`
+(`wide` / `compact` < 640 / `narrow` < 480) on `.workspace`. It is an attribute, not a container
+query, on purpose: `container-type` would make the workspace the containing block of every
+`position: fixed` popover and tooltip inside it.
+
+- **The chat column** takes its side margins from `--chat-gutter` (24 px, 14 px when not wide):
+  transcript, composer, dialogs, banners, the Chat area's thread and the canvas board's inline
+  width all read it. Compact drops Build/Run to their icons (their `aria-label` keeps the name);
+  narrow also hides the folder pill and Build/Run's command editors (their chevrons), and trades the header's view track for one panel button.
+- **The sidebar** collapses by `wackcode:sidebar` (⌃⌘S, also in the native Go menu so it works
+  while a browser page has focus) by sliding out whole at its full width; it goes `inert` once
+  hidden. Its one toggle (`SidebarToggle`) lives on `.app-shell`, not inside `.sidebar`, and glides
+  between the end of the sidebar's title strip and the spot beside the traffic lights. Without the
+  sidebar, whatever leads the workspace (`.workspace-header`, `.chat-header`, the chat tab strip)
+  pads past the lights, and `.workspace-drag` keeps the top edge draggable on the welcome screen.
+  Opening the sidebar while a wide panel hides it shrinks the panel's width to what fits.
+
 ## Side panel
 
-`SidePanel` shows one `SidePanelView` (`src/side-panel.ts`) at a time: Changes, Browser, Terminal, Run, Build, Games, or one sub-agent's transcript.
+`SidePanel` holds tabs (`PanelTabs` in `src/side-panel.ts`): an ordered list of `SidePanelView`s,
+the front one's `swapKey`, and whether the panel is showing. Kinds are singletons (one browser per
+chat); a sub-agent call's siblings share one tab. Every change goes through App's `changePanel`
+with the pure operations (`openTab`, `toggleTab`, `closeTab`, `hidePanel`, `showPanel`,
+`forChat`); one that leaves nothing showing also ends expansion.
 
-- A new view is a union member, a component `SidePanel` renders, and a trigger that opens it (`toggleView`). Give it the shared head: `.panel-header` with a `.panel-mark`, a `.panel-kicker` over an `h3`, and `.panel-header-actions` ([design.md](design.md)).
-- In the original layout, Changes, Terminal, Run, Build and Games are durable: which one is showing is remembered across chats and launches (`wackcode:sidePanel`). With chat tabs enabled, every tab keeps its own panel for the session and a new draft starts closed. Run and Build follow the selected checkout and restoring either never launches a command. Browser and sub-agent views belong to one chat; the original layout falls back to the remembered durable view when the chat changes.
+- **The strip** (`PanelTabStrip`) is the panel's top bar, as tall as the chat header
+  (`--shell-head-h`) so one line runs across the window. Tabs are a `tablist` (arrow keys, Home and
+  End walk them) whose ✕ shows on hover and focus; "+" offers the Code views not open yet; then
+  Expand and Hide. A tab's icon sends out the old mark's ring while the agent works there
+  (`live`: the browser in use, a sub-agent running, a command running). App words each tab in
+  `panelTabItems`.
+- **A new view** is a union member, a component `SidePanel` renders, a `panelTabItems` case, and a
+  trigger that opens it. Its head is a slim toolbar under the strip: `.panel-header` with a
+  `.panel-title` `h3` (what it is showing), a status pill when there is something to say, and
+  `.panel-header-actions` ([design.md](design.md)). No mark, kicker or Close: the tab has them.
+- **Triggers:** the header's view track and ⌘⇧C/⌘⇧T are `toggleTab` (hide when that tab is in
+  front, otherwise show and bring forward or add it). Links, browser reveals, Run/Build output and
+  sub-agent chips open their tab. Hiding keeps the tabs; closing a tab never stops a terminal, run
+  or browser session.
+- **Remembering:** in the original layout, the durable tabs (Changes, Terminal, Run, Build, Games)
+  and which is in front persist in `wackcode:sidePanel` (`storedTabs`/`restoreTabs`, which also read
+  the older single-view and Changes-flag formats). Browser and sub-agent tabs belong to one chat
+  and drop out when another is selected (`forChat`). With chat tabs enabled, every tab keeps its
+  own `PanelTabs` for the session and a new draft starts closed. Run and Build follow the selected
+  checkout and restoring either never launches a command. Only the front tab's page mounts.
 - Sub-agent transcripts reach the panel only through `watch_subagent` frames, never through snapshots.
-- **Expand** (`panelExpanded`, `canExpand`) spans the main area with the composer docked below for the browser; changing view or chat restores the panel's width. Canvas has its own expanded workspace above the composer and preserves this panel's state.
-- **Games** (`GamesPanel`, one entry per game in its `GAMES` list): the panel opens on an Arcade home of poster cards; which game was entered lives beside the runs in `games/session.ts`, so a view or tab swap comes back to it paused, while every real close (`exitToArcade`, from the panel's own close paths in `GamesPanel` and `App`'s games toggle) resets to the picker. Each game is a pure simulation under `src/games/` plus a component that owns its canvas and rAF loop. The panel's page remounts on every view or tab switch, so a run in progress lives in `games/session.ts` and comes back paused. Both games autosave through their own versioned `localStorage` envelope, normalised on the way back out (`games/save.ts`, `games/doodle-save.ts`), so a run survives quitting the app; pausing offers **Save & quit**, which hands you back to the chat. Best scores are a `localStorage` convenience (`games/scores.ts`, with a one-time fallback to a game's pre-rename key). The panel takes only the open chat's `status`, so streaming never re-renders it.
+- **Expand** (`panelExpanded`) spans the main area with the composer docked below, for every view,
+  and survives switching tabs. Canvas has its own expanded workspace above the composer and
+  preserves this panel's state.
+- **Games** (`GamesPanel`, one entry per game in its `GAMES` list): the panel opens on an Arcade home of poster cards; which game was entered lives beside the runs in `games/session.ts`, so a tab swap or hiding the panel comes back to it paused, while every real close (`exitToArcade`: closing the Games tab in `App`'s `closePanelView`, a game's back-to-chat, leaving the Code area) resets to the picker. Each game is a pure simulation under `src/games/` plus a component that owns its canvas and rAF loop. The panel's page remounts on every tab switch, so a run in progress lives in `games/session.ts` and comes back paused. Both games autosave through their own versioned `localStorage` envelope, normalised on the way back out (`games/save.ts`, `games/doodle-save.ts`), so a run survives quitting the app; pausing offers **Save & quit**, which hands you back to the chat. Best scores are a `localStorage` convenience (`games/scores.ts`, with a one-time fallback to a game's pre-rename key). The panel takes only the open chat's `status`, so streaming never re-renders it.
 
 ## Areas
 
@@ -257,7 +308,7 @@ The app has two peer areas, Code and Chat (`src/areas.ts`). `App` holds which on
 - **Switching parks, never abandons.** With tabs, both areas' tabs live in one store, each tagged with its `area`; `switchTabArea` parks the open tab and restores the other area's. Without tabs, `parkedViews` holds each area's chat or unsent draft. One store rather than two because a send finishing or a chat binding must find its tab after the user has switched area.
 - **A draft's kind is the area on screen when the send starts**, captured before anything is awaited. It is not a `ChatDraft` field: draft edits rebuild that object field by field and would drop it.
 - **The Chat area renders nothing from the Code UI.** Instead of `Transcript`, `ChatHeader`, the scroll rail and `Composer`, App renders one `ChatArea` (`src/components/chat/`) with the same state and callbacks. Errors, model problems and notices reach it as `SystemNote` bubbles, not banners. `chatMenu` and `ArchivedList` read `task.kind`.
-- **Its side panel is the browser only.** `panelView` is null for anything else there, and the remembered durable view stays Code's: the persistence effect skips Chat.
+- **Its side panel is the browser only.** Only a browser tab is visible there and "+" offers nothing; the remembered durable tabs stay Code's: the persistence effect skips Chat. Sidebar collapse and the window layout apply to both areas.
 - **Never call Git for a Chat mode chat** (`refreshChanges` returns early) and never take its snapshot's tool list as the catalogue; see the host's matching rules in [architecture.md](architecture.md).
 - **The switch** (`AreaSwitch`) lives in the sidebar's title strip (`.sidebar-titlebar`), beside the traffic lights; the strip's left padding clears them and must follow `trafficLightPosition` in `tauri.conf.json`. A dev build's DEV badge shares the strip, so the segments flex. Don't add a child to `.sidebar`: the Settings rebuild animation addresses its children by position.
 - **The duck hops every switch** (`AreaHop`, the last `.app-shell` child): a real change of `area` dims the window for a beat and sends a spotlit duck across in the travel direction — rarely a somersault — then the lights come back up on the arriving area. The overlay is click-through and `aria-hidden`, keyed per switch so rapid toggling restarts it mid-flight instead of stacking. Reduced motion skips it entirely; nothing ever unmounts a finished hop.
@@ -289,6 +340,10 @@ Chat mode never exposes this view or calls Git.
   and a danger confirmation, for either a file or one hunk.
 - Generated messages use the chat’s own worker and model. Review uses the Reviewer sub-agent.
 - Push and PR creation are explicit actions. Local refreshes and branch lists never fetch.
+- From `TWO_PANE_WIDTH` (720 px of panel) the file list sits beside the diff, and the diff header
+  offers Unified | Side by side (`wackcode:diffLayout`; until the user picks, side by side from
+  1000 px). `splitHunkRows` pairs each run of removed lines with the added run after it; comments
+  keep their `lineAnchor` side, and a context line comments on its new side only.
 
 ## Terminal
 
@@ -318,8 +373,12 @@ another launch. Switching between chats in one checkout reuses the same session.
 ## Browser preview
 
 `browser.rs` owns an ephemeral native WebKit session per chat. A main-thread AppKit container
-scales a fixed CSS viewport into `.browser-surface`; changing panel/window size never changes
-responsive breakpoints. Presets are mirrored in `browser-context.ts` and Rust's models.
+places the page's CSS viewport into `.browser-surface`, never above real size. **Fit** (the
+default) sizes the viewport to the surface at 1:1: each settled `browser_present` refits it
+(`BrowserViewport::fitted`, bumping the epoch and clearing targets like any viewport change), so
+the page reflows as the panel resizes. The fixed presets (desktop, laptop, tablet, phone) scale
+down to fit and never change breakpoints with the panel. Presets are mirrored in
+`browser-context.ts`, Rust's models and the agent's browser tool schema.
 Hidden views remain attached at the selected viewport size for background tool use. Native
 window actions use `get_window("main")`: the single-webview wrapper cannot resolve a window
 with preview children. Keep observing both the surface and outer drawer, and wait for the

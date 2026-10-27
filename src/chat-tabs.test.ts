@@ -13,7 +13,7 @@ describe("session chat tabs", () => {
     const first = draftTab("one", { projectId: "project", useWorktree: true, choice: { providerId: "p", modelId: "one", thinkingLevel: "high" }, mode: "plan" });
     const second = draftTab("two", { projectId: null, useWorktree: false, choice: { providerId: "p", modelId: "two", thinkingLevel: "off" } });
     let state = addDraftTab(addDraftTab(EMPTY_CHAT_TABS, first), second);
-    state = patchTab(state, first.id, { panel: { ...first.panel, view: { kind: "browser", taskId: "task" }, width: 600 } });
+    state = patchTab(state, first.id, { panel: { ...first.panel, tabs: { tabs: [{ kind: "browser", taskId: "task" }], active: "browser:task", open: true }, width: 600 } });
     state = bindTab(state, first.id, "task");
     expect(state.activeId).toBe("two");
     expect(state.tabs[0]).toMatchObject({ id: "one", composerKey: "new:one", taskId: "task", panel: { width: 600 } });

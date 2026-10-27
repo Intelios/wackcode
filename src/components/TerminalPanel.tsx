@@ -20,7 +20,6 @@ interface TerminalPanelProps {
   taskId: string;
   /** Appearance drives the xterm palette; the theme re-reads it live as it changes. */
   appearance: AppearanceConfig;
-  onClose: () => void;
   /** Takes the tidied selection into the composer draft (App's handler), throwing a
    *  user-facing sentence when the draft refuses it — the same contract as BrowserPanel's
    *  `onAttach`. Omit to hide the add-to-draft affordances. */
@@ -46,9 +45,9 @@ function StatusPill({ exited, busy }: { exited: boolean; busy: boolean }) {
  * The side panel's Terminal view: the chat's own login shell on a PTY (`terminal.rs`). xterm
  * renders output straight off a Tauri channel — no React state in the hot path — and keystrokes
  * go back over `write_terminal`. The panel owns the PTY's lifetime only while attached: hiding
- * it detaches and leaves the shell running; `onClose` just closes the panel.
+ * it detaches and leaves the shell running, and so does closing its tab.
  */
-export function TerminalPanel({ taskId, appearance, onClose, onAttach }: TerminalPanelProps) {
+export function TerminalPanel({ taskId, appearance, onAttach }: TerminalPanelProps) {
   const contextMenu = useContextMenu();
   const clipboard = useContextClipboard();
   const reduce = useReducedMotion();
@@ -242,9 +241,7 @@ export function TerminalPanel({ taskId, appearance, onClose, onAttach }: Termina
   return (
     <div className="terminal-panel">
       <header className="panel-header terminal-header">
-        <span className="panel-mark" aria-hidden="true"><Icon name="terminal" /></span>
         <div className="panel-title" title={info?.cwd}>
-          <span className="panel-kicker">Terminal</span>
           <h3>{title}</h3>
         </div>
         <StatusPill exited={exit !== null || ended} busy={busy && live} />
@@ -266,7 +263,6 @@ export function TerminalPanel({ taskId, appearance, onClose, onAttach }: Termina
               </button>
             </Tooltip>
           )}
-          <button type="button" className="icon-button" onClick={onClose} aria-label="Close Terminal panel"><Icon name="close" /></button>
         </div>
         {busy && live && <span className="panel-loading" aria-hidden="true" />}
       </header>

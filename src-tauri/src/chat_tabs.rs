@@ -82,8 +82,8 @@ pub fn setup(app: &AppHandle) -> Result<(), String> {
     }
     menu.append(&submenu).map_err(|e| e.to_string())?;
     let go = Submenu::new(app, "Go", true).map_err(|e| e.to_string())?;
-    for (command, title, accelerator) in AREA_COMMANDS {
-        let item = MenuItem::with_id(app, format!("{PREFIX}{command}"), title, true, Some(accelerator))
+    for (command, title, accelerator) in AREA_COMMANDS.iter().chain(VIEW_COMMANDS.iter()) {
+        let item = MenuItem::with_id(app, format!("{PREFIX}{command}"), *title, true, Some(*accelerator))
             .map_err(|e| format!("Could not create the Go menu: {e}"))?;
         go.append(&item).map_err(|e| e.to_string())?;
     }
@@ -123,8 +123,12 @@ const AREA_COMMANDS: [(&str, &str, &str); 2] = [
     ("area-chat", "Chat", "Cmd+Alt+2"),
 ];
 
+/// Window layout commands that live in the Go menu beside the areas, so they work while a
+/// browser page has focus. Like the areas, they never depend on tab availability.
+const VIEW_COMMANDS: [(&str, &str, &str); 1] = [("toggle-sidebar", "Toggle Sidebar", "Ctrl+Cmd+S")];
+
 fn is_area_command(command: &str) -> bool {
-    AREA_COMMANDS.iter().any(|(name, _, _)| *name == command)
+    AREA_COMMANDS.iter().chain(VIEW_COMMANDS.iter()).any(|(name, _, _)| *name == command)
 }
 
 fn action_enabled(command: &str, input: &TabMenuAvailability) -> bool {
@@ -189,6 +193,7 @@ mod tests {
     fn area_switches_are_their_own_commands_and_never_collide_with_tab_shortcuts() {
         assert!(is_area_command("area-code"));
         assert!(is_area_command("area-chat"));
+        assert!(is_area_command("toggle-sidebar"));
         for command in ["new", "close", "reopen", "next", "select-1", "area-", "area-git"] {
             assert!(!is_area_command(command), "{command}");
         }

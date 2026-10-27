@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { LayoutGroup, motion, useReducedMotion } from "motion/react";
 import type { DiffComment, GitChangeFile, GitChanges, GitDiffLine, GitDiffSection, GitGeneratedMessage, GitPrInfo, GitPublishInfo, TaskMode } from "../types";
 import type { ChangeEntry } from "../changes-utils";
 import { changeEntries, lineAnchor } from "../changes-utils";
@@ -7,6 +8,27 @@ import { ChangesDock, type DockTab } from "./ChangesDock";
 import { DiffView, type CommentAnchor } from "./DiffView";
 import { Icon } from "./Icons";
 import { Tooltip } from "./ui/Tooltip";
+
+/** The diff's layout as the user last chose it; until they do, it follows the panel's width. */
+const DIFF_LAYOUT_KEY = "wackcode:diffLayout";
+type DiffLayoutChoice = "auto" | "unified" | "split";
+/** From this width the file list sits beside the diff, and Unified/Split is offered. */
+export const TWO_PANE_WIDTH = 720;
+/** "auto" goes side by side from here. */
+const AUTO_SPLIT_WIDTH = 1000;
+
+function storedDiffLayout(): DiffLayoutChoice {
+  try {
+    const value = localStorage.getItem(DIFF_LAYOUT_KEY);
+    return value === "split" || value === "unified" ? value : "auto";
+  } catch { return "auto"; }
+}
+
+/** The layout a panel this wide shows: always one column when narrow, otherwise the user's pick. */
+export function diffLayoutFor(width: number, choice: DiffLayoutChoice): "unified" | "split" {
+  if (width < TWO_PANE_WIDTH) return "unified";
+  return choice === "auto" ? (width >= AUTO_SPLIT_WIDTH ? "split" : "unified") : choice;
+}
 
 interface Props {
   selectedEntry?: { path: string; layer: "staged" | "working" };
@@ -18,7 +40,6 @@ interface Props {
   canReview: boolean;
   reviewReason?: string;
   comments: DiffComment[];
-  onClose: () => void;
   onRefresh: () => void;
   onSettings: () => void;
   onReview: () => Promise<boolean>;
@@ -54,6 +75,25 @@ export function ChangesPanel(props: Props) {
   const [localBusy, setLocalBusy] = useState(false);
   const [flash, setFlash] = useState<string>();
   const flashTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const reduce = useReducedMotion();
+  const root = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+  const [layoutChoice, setLayoutChoice] = useState<DiffLayoutChoice>(storedDiffLayout);
+  useLayoutEffect(() => {
+    const element = root.current;
+    if (!element) return;
+    const measure = () => setWidth(element.clientWidth);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const diffLayout = diffLayoutFor(width, layoutChoice);
+  function chooseLayout(choice: "unified" | "split") {
+    setLayoutChoice(choice);
+    try { localStorage.setItem(DIFF_LAYOUT_KEY, choice); } catch { /* the choice still holds for this panel */ }
+  }
 
   const entries = changeEntries(changes?.files ?? []);
   const selection = props.onSelectEntry ? props.selectedEntry : selected;
@@ -195,11 +235,9 @@ export function ChangesPanel(props: Props) {
   );
 
   return (
-    <div className="changes-panel">
+    <div className="changes-panel" ref={root}>
       <header className="panel-header">
-        <span className="panel-mark" aria-hidden="true"><Icon name="git" /></span>
         <div className="panel-title">
-          <span className="panel-kicker">Changes</span>
           <h3 className="changes-summary">
             {!changes?.isGit ? "No repository" : (
               <>
@@ -216,7 +254,6 @@ export function ChangesPanel(props: Props) {
         <div className="panel-header-actions">
           {reviewUnavailable && reviewReason ? <Tooltip label={reviewReason}>{review}</Tooltip> : review}
           <button className="icon-button" onClick={props.onRefresh} aria-label="Refresh changes"><Icon name="refresh" className={loading ? "spinning" : ""} /></button>
-          <button className="icon-button" onClick={props.onClose} aria-label="Close changes panel"><Icon name="close" /></button>
         </div>
         {loading && <span className="panel-loading" aria-hidden="true" />}
       </header>
@@ -225,7 +262,7 @@ export function ChangesPanel(props: Props) {
       ) : files.length === 0 ? (
         <div className="panel-empty"><span className="panel-empty-mark good" aria-hidden="true"><Icon name="check" /></span><strong>Working tree clean</strong><span>No staged, unstaged, or untracked files.</span></div>
       ) : (
-        <>
+        <div className="changes-body">
           <ChangesFileList
             entries={entries}
             selected={current ? { path: current.file.path, layer: current.section.layer } : undefined}
@@ -240,7 +277,24 @@ export function ChangesPanel(props: Props) {
             onAction={entryAction}
           />
           {current && (
+            <div className="changes-diff">
             <DiffView
+              layout={diffLayout}
+              headerExtra={width >= TWO_PANE_WIDTH && !current.file.binary ? (
+                <LayoutGroup id="diff-layout">
+                  <div className="segmented diff-layout-switch" role="group" aria-label="Diff layout">
+                    {(["unified", "split"] as const).map((option) => (
+                      <button key={option} type="button" className={`segmented-option${diffLayout === option ? " selected" : ""}`}
+                        aria-pressed={diffLayout === option} aria-label={option === "split" ? "Side by side" : "Unified"}
+                        title={option === "split" ? "Side by side" : "Unified"} onClick={() => chooseLayout(option)}>
+                        {diffLayout === option && <motion.span layoutId="diff-layout-thumb" className="segmented-thumb"
+                          transition={reduce ? { duration: 0 } : { type: "spring", stiffness: 520, damping: 36 }} />}
+                        <span className="segmented-label"><Icon name={option} /></span>
+                      </button>
+                    ))}
+                  </div>
+                </LayoutGroup>
+              ) : undefined}
               file={current.file}
               sections={[current.section]}
               comments={comments}
@@ -257,8 +311,9 @@ export function ChangesPanel(props: Props) {
               onRemoveComment={(id) => void run(() => props.onComments(comments.filter((item) => item.id !== id)))}
               onAction={(file, section, hunkId) => entryAction({ file, section }, hunkId)}
             />
+            </div>
           )}
-        </>
+        </div>
       )}
       {changes?.isGit && (
         <ChangesDock

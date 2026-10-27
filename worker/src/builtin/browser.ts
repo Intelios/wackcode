@@ -28,7 +28,7 @@ interface ScreenshotDetails {
   viewport?: { width?: number; height?: number };
 }
 
-const VIEWPORT = { type: "string", enum: ["desktop", "laptop", "tablet", "phone"], description: "CSS viewport preset: desktop 1440×900 (default), laptop 1280×800, tablet 768×1024, phone 390×844. The last choice stays in this chat." } as const;
+const VIEWPORT = { type: "string", enum: ["fit", "desktop", "laptop", "tablet", "phone"], description: "CSS viewport preset: fit (default) sizes the page to the user's browser panel at real scale, so it changes as they resize it; desktop 1440×900, laptop 1280×800, tablet 768×1024, phone 390×844. The last choice stays in this chat." } as const;
 
 const EMPTY = { type: "object", additionalProperties: false, properties: {} } as const;
 

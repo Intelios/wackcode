@@ -13,22 +13,20 @@ interface BrowserPanelProps {
   visible: boolean;
   expanded: boolean;
   onState: (state: BrowserState) => void;
-  onExpand: () => void;
   onReset: () => void;
-  onClose: () => void;
   onAttach?: (context: BrowserContextAttachment) => void;
 }
 
 /** The page's host, for the header while a page has no title yet. */
-function pageHost(url: string | undefined): string {
+export function pageHost(url: string | undefined): string {
   if (!url) return "";
   try { return new URL(url).host; } catch { return ""; }
 }
 
-const VIEWPORT_LABELS: Record<BrowserViewportPreset, string> = { desktop: "Desktop", laptop: "Laptop", tablet: "Tablet", phone: "Phone" };
+const VIEWPORT_LABELS: Record<BrowserViewportPreset, string> = { fit: "Fit to panel", desktop: "Desktop", laptop: "Laptop", tablet: "Tablet", phone: "Phone" };
 
 /** React owns the chrome; Rust places the untrusted native WKWebView over `browser-surface`. */
-export function BrowserPanel({ taskId, state, visible, expanded, onState, onExpand, onReset, onClose, onAttach }: BrowserPanelProps) {
+export function BrowserPanel({ taskId, state, visible, expanded, onState, onReset, onAttach }: BrowserPanelProps) {
   const surface = useRef<HTMLDivElement>(null);
   const addressFocused = useRef(false);
   const [address, setAddress] = useState(state?.url ?? "");
@@ -44,7 +42,10 @@ export function BrowserPanel({ taskId, state, visible, expanded, onState, onExpa
   const agent = useContext(AssistantNameContext);
   const captureAllowed = useRef(visible && isPresent);
   captureAllowed.current = visible && isPresent;
-  const viewport = state?.viewport ?? BROWSER_VIEWPORTS.desktop;
+  const viewport = state?.viewport ?? BROWSER_VIEWPORTS.fit;
+  // Fit's size follows each placement, so only a fixed preset's size re-runs placement below;
+  // otherwise every settle would park the page and settle again.
+  const placementSize = viewport.preset === "fit" ? "fit" : `${viewport.width}x${viewport.height}`;
   const presented = visible && isPresent && !modalOpen && !markup;
 
   useEffect(() => {
@@ -109,7 +110,7 @@ export function BrowserPanel({ taskId, state, visible, expanded, onState, onExpa
         }
         frame = undefined;
         if (bounds.width < 1 || bounds.height < 1) return;
-        setDisplayScale(Math.min(bounds.width / viewport.width, bounds.height / viewport.height));
+        setDisplayScale(viewport.preset === "fit" ? 1 : Math.min(1, bounds.width / viewport.width, bounds.height / viewport.height));
         void api.browserPresent({ taskId, presentationId: owner, visible: true, x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height })
           .then(onState).catch((reason) => setError(String(reason)));
       };
@@ -128,7 +129,7 @@ export function BrowserPanel({ taskId, state, visible, expanded, onState, onExpa
       window.removeEventListener("resize", place);
       hide();
     };
-  }, [taskId, presented, expanded, state?.url, viewport.width, viewport.height, presentationId, onState]);
+  }, [taskId, presented, expanded, state?.url, placementSize, presentationId, onState]);
 
   async function capture(kind: "pick" | "capture") {
     const id = crypto.randomUUID(); captureId.current = id; setBusy(kind); setError(undefined);
@@ -172,9 +173,7 @@ export function BrowserPanel({ taskId, state, visible, expanded, onState, onExpa
   return (
     <section className="browser-panel">
       <header className="panel-header" data-tauri-drag-region>
-        <span className={`panel-mark ${state?.agentActive ? "live" : ""}`} aria-hidden="true"><Icon name="browser" /></span>
         <div className="panel-title" title={state?.url || undefined} data-tauri-drag-region>
-          <span className="panel-kicker" data-tauri-drag-region>Browser</span>
           <h3 data-tauri-drag-region>{state?.title || pageHost(state?.url) || "No page open"}</h3>
         </div>
         {state?.agentActive ? (
@@ -184,8 +183,6 @@ export function BrowserPanel({ taskId, state, visible, expanded, onState, onExpa
         ) : null}
         <div className="panel-header-actions">
           <button type="button" className="icon-button" aria-label="Reset browser session" title="Reset browser session" disabled={!state?.exists} onClick={onReset}><Icon name="trash" /></button>
-          <button type="button" className="icon-button" title={expanded ? "Restore browser" : "Expand browser"} aria-label={expanded ? "Restore browser" : "Expand browser"} onClick={onExpand}><Icon name={expanded ? "collapse" : "expand"} /></button>
-          <button type="button" className="icon-button" title="Close browser panel" aria-label="Close browser panel" onClick={onClose}><Icon name="close" /></button>
         </div>
         {state?.loading && <span className="panel-loading" aria-hidden="true" />}
       </header>
@@ -211,14 +208,14 @@ export function BrowserPanel({ taskId, state, visible, expanded, onState, onExpa
         <div className="browser-viewports" role="radiogroup" aria-label="Browser viewport">
           {Object.values(BROWSER_VIEWPORTS).map((preset) => {
             const selected = preset.preset === viewport.preset;
-            const label = `${VIEWPORT_LABELS[preset.preset]}, ${preset.width} × ${preset.height}`;
+            const label = preset.preset === "fit" ? VIEWPORT_LABELS.fit : `${VIEWPORT_LABELS[preset.preset]}, ${preset.width} × ${preset.height}`;
             return (
               <button key={preset.preset} type="button" role="radio" aria-checked={selected} aria-label={label} title={label}
                 className={`browser-viewport${selected ? " selected" : ""}`} disabled={Boolean(busy)}
                 onClick={() => { if (!selected) void run(() => api.browserSetViewport(taskId, preset.preset).then(onState)); }}>
                 {selected && <motion.span className="browser-viewport-pill" aria-hidden="true" layoutId={reduceMotion ? undefined : `browser-viewport-${taskId}`}
                   style={{ borderRadius: 999 }} transition={{ type: "spring", stiffness: 480, damping: 36 }} />}
-                <Icon name={preset.preset} />
+                <Icon name={preset.preset === "fit" ? "fitPanel" : preset.preset} />
               </button>
             );
           })}
@@ -233,7 +230,7 @@ export function BrowserPanel({ taskId, state, visible, expanded, onState, onExpa
       <div className="browser-stage">
         {state?.popup && <button type="button" className="browser-popup-return" onClick={() => void run(() => api.browserReturnFromPopup(taskId).then(onState))}><Icon name="back" /> Return to page</button>}
         {message && <div className="browser-error" role="alert"><Icon name="alert" /><span>{message}</span><button type="button" onClick={() => setError(undefined)}>Dismiss</button></div>}
-        <div className="browser-surface" ref={surface} style={{ "--browser-aspect": viewport.width / viewport.height } as React.CSSProperties}>
+        <div className="browser-surface" ref={surface} style={{ "--browser-aspect": viewport.width / viewport.height, "--browser-vw": `${viewport.width}px`, "--browser-vh": `${viewport.height}px` } as React.CSSProperties}>
           {state?.url ? (
             <span key={viewport.preset} className={`browser-frame${hands ? ` ${hands}` : ""}`} aria-hidden="true" />
           ) : (

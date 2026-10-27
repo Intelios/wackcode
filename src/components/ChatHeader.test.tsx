@@ -33,6 +33,8 @@ function props(t: TaskRecord, titlePulse = 0) {
     onToggleTerminal: vi.fn(),
     gamesOpen: false,
     onToggleGames: vi.fn(),
+    panelOpen: false,
+    onTogglePanel: vi.fn(),
     onRename: vi.fn(),
     onTaskAction: vi.fn(),
     onListBranches: vi.fn(async () => ({ current: "main", branches: [] })),

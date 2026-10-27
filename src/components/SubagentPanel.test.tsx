@@ -29,19 +29,18 @@ function stream(overrides: Partial<SubagentView> = {}): SubagentView {
 const answer: NormalizedMessage = { id: "assistant-2", role: "assistant", blocks: [{ type: "text", text: "Sessions are restored in session.ts." }] };
 
 function panel(props: Partial<Parameters<typeof SubagentPanel>[0]> = {}) {
-  const handlers = { onSelect: vi.fn(), onClose: vi.fn(), onRetry: vi.fn() };
+  const handlers = { onSelect: vi.fn(), onRetry: vi.fn() };
   render(<SubagentPanel toolCallId="call-1" index={0} details={details([child()])} live stream={stream()} {...handlers} {...props} />);
   return handlers;
 }
 
 describe("SubagentPanel", () => {
   it("shows who it is, what it was asked, and its transcript as it works", () => {
-    const { onClose } = panel({
+    panel({
       details: details([child({ model: "OpenAI · Small", startedAt: Date.now() - 5_000 })]),
       stream: stream({ messages: [answer] })
     });
     expect(screen.getByRole("heading", { name: "Scout" })).toBeInTheDocument();
-    expect(screen.getByText("SubAgent")).toBeInTheDocument();
     expect(screen.getByText("Working")).toBeInTheDocument();
     expect(within(screen.getByRole("region", { name: "Brief" })).getByText("Find where sessions are restored")).toBeInTheDocument();
     expect(screen.getByText("Brief from WackCode")).toBeInTheDocument();
@@ -50,15 +49,13 @@ describe("SubagentPanel", () => {
     expect(screen.getByText("3 turns")).toBeInTheDocument();
     expect(screen.getByText("↑1.2k ↓300")).toBeInTheDocument();
     expect(screen.getByText("$0.01")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Close SubAgent panel" }));
-    expect(onClose).toHaveBeenCalled();
   });
 
   it("ticks live thinking and stops an unfinished timer with the watched stream", () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
     const partial: NormalizedMessage = { id: "partial", role: "assistant", blocks: [{ type: "thinking", text: "Unfinished", startedAt: 8_000 }] };
-    const props = { toolCallId: "call-1", index: 0, details: details([child()]), onSelect: vi.fn(), onClose: vi.fn(), onRetry: vi.fn() };
+    const props = { toolCallId: "call-1", index: 0, details: details([child()]), onSelect: vi.fn(), onRetry: vi.fn() };
     const view = render(<SubagentPanel {...props} live stream={stream({ partial })} />);
     expect(screen.getByRole("button", { name: "Thinking… 2s" })).toBeInTheDocument();
     act(() => vi.advanceTimersByTime(3_000));

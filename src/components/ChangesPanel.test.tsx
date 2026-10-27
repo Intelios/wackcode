@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GitChanges } from "../types";
-import { ChangesPanel } from "./ChangesPanel";
+import { ChangesPanel, diffLayoutFor } from "./ChangesPanel";
 
 afterEach(cleanup);
 
@@ -27,7 +27,7 @@ function props() {
   return {
     changes, loading: false, busy: false, mode: "build" as const,
     canReview: true, comments: [],
-    onClose: vi.fn(), onRefresh: vi.fn(), onSettings: vi.fn(),
+    onRefresh: vi.fn(), onSettings: vi.fn(),
     onReview: vi.fn(async () => true), onAction: vi.fn(async () => {}),
     onCommit: vi.fn(async () => {}), onGenerate: vi.fn(async () => ({ message: "Update file", revision: "index-1" })),
     onPublishInfo: vi.fn(async () => ({ branch: "topic", upstream: null, remotes: ["origin"] })),
@@ -116,5 +116,15 @@ describe("ChangesPanel", () => {
 
     view.rerender(<ChangesPanel {...props()} changes={{ isGit: false, root: null, branch: null, changesRevision: "", files: [] } as unknown as GitChanges} />);
     expect(screen.getByRole("heading", { name: "No repository" })).toBeInTheDocument();
+  });
+});
+
+describe("diffLayoutFor", () => {
+  it("keeps one column in a narrow panel, then follows the user's pick or the width", () => {
+    expect(diffLayoutFor(600, "split")).toBe("unified");
+    expect(diffLayoutFor(800, "auto")).toBe("unified");
+    expect(diffLayoutFor(800, "split")).toBe("split");
+    expect(diffLayoutFor(1100, "auto")).toBe("split");
+    expect(diffLayoutFor(1100, "unified")).toBe("unified");
   });
 });

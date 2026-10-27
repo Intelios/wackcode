@@ -2,7 +2,7 @@ import { restoreContexts } from "./browser-context";
 import type { RestoredPrompt } from "./types";
 import { attachmentProblem } from "./attachment-utils";
 import { chatRefCandidates } from "./chat-refs";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type SetStateAction } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type SetStateAction } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -18,8 +18,8 @@ import { composeFileSection, splitFileSection, terminalOutputFile, type FileAtta
 import { CENTRED } from "./backdrop-crop";
 import { BROWSER_TOOL_NAMES, displayAgentName, hasSubagentCall, pruneDisabledTools, sameToolCatalog, subagentDetailsFor, parseSkillPreviewDetails, SKILL_CREATOR_TOOL_NAME } from "./tool-utils";
 import { LinkOpenerContext, openExternally, type LinkOpener } from "./link-opener";
-import { BUILD_VIEW, CHANGES_VIEW, GAMES_VIEW, TERMINAL_VIEW, RUN_VIEW, canExpand, durableView, isDurable, isTaskBound, rememberedView, toggleView, viewForChat, viewKey, type PanelViewKind, type SidePanelView } from "./side-panel";
-import { applyRunEvent, EMPTY_RUN_REGISTRY, runKey } from "./run-state";
+import { BUILD_VIEW, CHANGES_VIEW, GAMES_VIEW, NO_PANEL_TABS, TERMINAL_VIEW, RUN_VIEW, canExpand, closeTab as closePanelTab, forChat, hidePanel, isTaskBound, openTab, restoreTabs, showPanel, shownTab, storedTabs, swapKey, toggleTab, updateTab, viewKey, type PanelTabs, type SidePanelView } from "./side-panel";
+import { applyRunEvent, EMPTY_RUN_REGISTRY, runIsActive, runKey } from "./run-state";
 import { APP_SLASH_COMMANDS, appCommandsFor } from "./command-utils";
 import { AREA_KEY, areaDirection, parseArea, taskArea, tasksInArea, type Area } from "./areas";
 import { performChatNavigation, withoutResolvedDialog } from "./menu-navigation";
@@ -90,10 +90,13 @@ import type {
   WorkerEvent
 } from "./types";
 import { ChangesPanel } from "./components/ChangesPanel";
-import { BrowserPanel } from "./components/BrowserPanel";
+import { BrowserPanel, pageHost } from "./components/BrowserPanel";
+import type { PanelAddItem, PanelTabItem } from "./components/PanelTabStrip";
 import { RunPanel } from "./components/RunPanel";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { SidePanel } from "./components/SidePanel";
+import { SidebarToggle } from "./components/SidebarToggle";
+import { SIDEBAR_W, balancedPanelWidth, chatSize as shellChatSize, panelRoom, solveShell } from "./shell-layout";
 import { CanvasExpanded } from "./components/canvas/CanvasPanel";
 import type { CanvasScope } from "./components/canvas/CanvasCard";
 import { GamesPanel } from "./components/GamesPanel";
@@ -164,25 +167,20 @@ function commentsPrompt(comments: DiffComment[], mode: TaskMode): string {
 }
 
 const LAST_PROJECT_KEY = "wackcode:lastProject";
-/** Which durable view the side panel shows ("changes" | "terminal" | "run" | "games" | null = closed). */
+/** The side panel's durable tabs (`StoredPanelTabs`); once a single view kind or null. */
 const PANEL_VIEW_KEY = "wackcode:sidePanel";
 /** The pre-Terminal flag, still read once to migrate it into `PANEL_VIEW_KEY`. */
 const CHANGES_OPEN_KEY = "wackcode:changesOpen";
-/** The side panel's width, named for its first view so existing widths carry over. */
-const PANEL_WIDTH_KEY = "wackcode:changesWidth";
+/** The width the user dragged the side panel to. Absent, the panel opens at `balancedPanelWidth`.
+ *  (Not `wackcode:changesWidth`: that old key held a fixed 430 px default for everyone.) */
+const PANEL_WIDTH_KEY = "wackcode:panelWidth";
 const COLLAPSED_PROJECTS_KEY = "wackcode:collapsedProjects";
+/** Whether the user keeps the sidebar open ("open" | "closed"); a wide panel may still hide it. */
+const SIDEBAR_KEY = "wackcode:sidebar";
 
-/** The durable view the panel should come back to — the stored pick, or the migrated Changes flag. */
-function rememberedPanelKind(): PanelViewKind | null {
-  const stored = loadJSON<PanelViewKind | null | undefined>(PANEL_VIEW_KEY, undefined);
-  if (isDurable(stored)) return stored;
-  if (stored === null) return null;
-  return loadJSON<boolean>(CHANGES_OPEN_KEY, false) ? "changes" : null;
-}
-
-function rememberedPanelView(): SidePanelView | null {
-  const kind = rememberedPanelKind();
-  return kind ? durableView(kind) : null;
+/** The durable tabs the panel should come back to, migrating the older single-view and Changes-flag formats. */
+function rememberedPanelTabs(): PanelTabs {
+  return restoreTabs(loadJSON<unknown>(PANEL_VIEW_KEY, undefined), loadJSON<boolean>(CHANGES_OPEN_KEY, false));
 }
 
 type Draft = ChatDraft;
@@ -285,11 +283,14 @@ export default function App() {
   const [changes, setChanges] = useState<GitChanges>();
   const [changesLoading, setChangesLoading] = useState(false);
   const changesRequest = useRef(0);
-  const [legacySidePanel, setLegacySidePanel] = useState<SidePanelView | null>(rememberedPanelView);
-  const [legacyPanelWidth, setLegacyPanelWidth] = useState(() => loadJSON(PANEL_WIDTH_KEY, 430));
+  const [legacyPanelTabs, setLegacyPanelTabs] = useState<PanelTabs>(rememberedPanelTabs);
+  const [legacyPanelWidth, setLegacyPanelWidth] = useState<number | null>(() => loadJSON<number | null>(PANEL_WIDTH_KEY, null));
+  const [sidebarOpen, setSidebarOpen] = useState(() => loadJSON<string>(SIDEBAR_KEY, "open") !== "closed");
+  /** The window's width, which `solveShell` shares out; `windowResizing` drops the panel's ease meanwhile. */
+  const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
+  const [windowResizing, setWindowResizing] = useState(false);
   const [browsers, setBrowsers] = useState<Record<string, BrowserState>>({});
   const [legacyPanelExpanded, setLegacyPanelExpanded] = useState(false);
-  const [legacyExpandRestoreWidth, setLegacyExpandRestoreWidth] = useState(430);
   /** Per-chat nonce bumped when the title model names it — drives the header's swipe + glint
    *  and the sidebar row's crossfade (TextSwap keys on it). */
   const [titlePulses, setTitlePulses] = useState<Record<string, number>>({});
@@ -350,10 +351,12 @@ export default function App() {
     });
     if (!tabsEnabledRef.current && composerKeyRef.current === composerDraftKey && !selectedTaskRef.current) setLegacyDraft(next);
   };
-  const sidePanel = tabsEnabled ? activeTab?.panel.view ?? null : legacySidePanel;
-  const panelWidth = tabsEnabled ? activeTab?.panel.width ?? 430 : legacyPanelWidth;
+  const panelTabs = tabsEnabled ? activeTab?.panel.tabs ?? NO_PANEL_TABS : legacyPanelTabs;
+  const panelTabsRef = useRef(panelTabs);
+  panelTabsRef.current = panelTabs;
+  const sidePanel = shownTab(panelTabs);
+  const panelWidth = tabsEnabled ? activeTab?.panel.width ?? null : legacyPanelWidth;
   const panelExpanded = tabsEnabled ? activeTab?.panel.panelExpanded ?? false : legacyPanelExpanded;
-  const expandRestoreWidth = tabsEnabled ? activeTab?.panel.expandRestoreWidth ?? 430 : legacyExpandRestoreWidth;
   const updateTabPanel = useCallback((change: (panel: TabPanelState) => TabPanelState) => {
     const id = tabs.ref.current.activeId;
     if (!id) return;
@@ -362,21 +365,17 @@ export default function App() {
       return tab ? patchTab(state, id, { panel: change(tab.panel) }) : state;
     });
   }, [tabs.update]);
-  const setSidePanel = useCallback((next: SetStateAction<SidePanelView | null>) => {
-    if (tabsEnabledRef.current) updateTabPanel((panel) => ({ ...panel, view: typeof next === "function" ? next(panel.view) : next }));
-    else setLegacySidePanel(next);
+  const setPanelTabs = useCallback((change: (tabs: PanelTabs) => PanelTabs) => {
+    if (tabsEnabledRef.current) updateTabPanel((panel) => ({ ...panel, tabs: change(panel.tabs) }));
+    else setLegacyPanelTabs(change);
   }, [updateTabPanel]);
-  const setPanelWidth = useCallback((width: number) => {
+  const setPanelWidth = useCallback((width: number | null) => {
     if (tabsEnabledRef.current) updateTabPanel((panel) => ({ ...panel, width }));
     else setLegacyPanelWidth(width);
   }, [updateTabPanel]);
   const setPanelExpanded = useCallback((next: SetStateAction<boolean>) => {
     if (tabsEnabledRef.current) updateTabPanel((panel) => ({ ...panel, panelExpanded: typeof next === "function" ? next(panel.panelExpanded) : next }));
     else setLegacyPanelExpanded(next);
-  }, [updateTabPanel]);
-  const setExpandRestoreWidth = useCallback((width: number) => {
-    if (tabsEnabledRef.current) updateTabPanel((panel) => ({ ...panel, expandRestoreWidth: width }));
-    else setLegacyExpandRestoreWidth(width);
   }, [updateTabPanel]);
   /** The file list behind `@` mentions, for one chat (`task:<id>`) or draft project (`project:<id>`). */
   const [mentions, setMentions] = useState<{ source: string; files?: string[]; truncated?: boolean; loading: boolean; error?: string }>();
@@ -494,14 +493,36 @@ export default function App() {
       if (!data.tasks.some((task) => task.id === id)) canvasSessions.current.delete(id);
     }
   }, [data.tasks]);
-  // Task-bound views never show in another chat, even for the render before the effect below
-  // moves the panel back to the remembered durable view.
-  const missingSubagent = sidePanel?.kind === "subagent" && sidePanel.taskId === selectedTaskId && runtime?.snapshot !== undefined
-    && !hasSubagentCall(runtime.snapshot.messages, runtime.partial, sidePanel.toolCallId);
-  const panelView = selectedTask?.archived || missingSubagent || (area === "chat" && sidePanel?.kind !== "browser") ? null
-    : isTaskBound(sidePanel) && sidePanel.taskId !== selectedTaskId
-      ? tabsEnabled ? null : rememberedPanelView() : sidePanel;
+  // The tabs this chat can show. Task-bound tabs never show in another chat, even for the render
+  // before `forChat` drops them; Chat mode's panel only ever holds its browser; a sub-agent tab
+  // goes once a rewind takes its call away (the effect below closes it).
+  const snapshotForTabs = runtime?.snapshot;
+  const missingSubagentKey = panelTabs.tabs.find((view) => view.kind === "subagent" && view.taskId === selectedTaskId && snapshotForTabs !== undefined
+    && !hasSubagentCall(snapshotForTabs.messages, runtime?.partial, view.toolCallId));
+  const visiblePanelTabs = selectedTask?.archived ? [] : panelTabs.tabs.filter((view) => view !== missingSubagentKey
+    && (area !== "chat" || view.kind === "browser") && (!isTaskBound(view) || view.taskId === selectedTaskId));
+  const panelView = panelTabs.open
+    ? visiblePanelTabs.find((view) => swapKey(view) === panelTabs.active) ?? visiblePanelTabs.at(-1) ?? null
+    : null;
   const shownSubagent = panelView?.kind === "subagent" ? panelView : undefined;
+  // An expanded panel or canvas floats over the chat, so the chat column gets the panel's share.
+  const panelFloats = Boolean(expandedCanvasId) || (panelExpanded && canExpand(panelView));
+  // Until the user drags it, the panel opens wide: half the room beside the sidebar.
+  const panelPref = panelWidth ?? balancedPanelWidth(windowWidth, sidebarOpen);
+  const shell = solveShell({ windowWidth, sidebarOpen, panelOpen: Boolean(selectedTask && panelView) && !settingsOpen, panelPref });
+  const sidebarWidth = shell.sidebarShown ? SIDEBAR_W : 0;
+  const chatSize = shellChatSize(panelFloats ? windowWidth - sidebarWidth : shell.chatWidth);
+  const toggleSidebar = () => {
+    if (shell.sidebarShown) {
+      setSidebarOpen(false);
+      return;
+    }
+    // Opening asks for the sidebar's room: a panel wider than what is left gives way to it,
+    // rather than hiding the sidebar again on the next layout.
+    setSidebarOpen(true);
+    const room = panelRoom(windowWidth, SIDEBAR_W);
+    if (shell.panelWidth > 0 && panelWidth !== null && panelWidth > room) setPanelWidth(room);
+  };
   const snapshotMessages = runtime?.snapshot?.messages;
   const shownSubagentCall = useMemo(
     () => shownSubagent && snapshotMessages
@@ -509,42 +530,56 @@ export default function App() {
       : undefined,
     [shownSubagent, snapshotMessages, runtime?.partial, runtime?.liveToolDetails, selectedBusy]
   );
-
-  const toggleChanges = useCallback(() => {
-    if (panelExpanded) {
-      setPanelWidth(expandRestoreWidth);
-      setPanelExpanded(false);
+  /** How each of this chat's tabs reads in the strip: its name, and a ring while the agent works there. */
+  const panelTabItems = visiblePanelTabs.map((view): PanelTabItem => {
+    switch (view.kind) {
+      case "changes": return { view, label: "Changes", icon: "git", count: changes?.files.length };
+      case "browser": {
+        const browser = browsers[view.taskId];
+        return { view, label: browser?.title || pageHost(browser?.url) || "Browser", icon: "browser", live: browser?.agentActive };
+      }
+      case "terminal": return { view, label: "Terminal", icon: "terminal" };
+      case "run": return { view, label: "Run", icon: "play", live: runIsActive(selectedRun) };
+      case "build": return { view, label: "Build", icon: "hammer", live: runIsActive(selectedBuild) };
+      case "games": return { view, label: "Games", icon: "gamepad" };
+      case "subagent": {
+        const call = view === shownSubagent ? shownSubagentCall : snapshotMessages
+          ? subagentDetailsFor(snapshotMessages, runtime?.partial, runtime?.liveToolDetails, view.toolCallId, selectedBusy) : undefined;
+        const agent = call?.details.results[view.index]?.agent;
+        return { view, label: agent ? displayAgentName(agent) : "SubAgent", icon: "agents", live: call !== undefined && !call.finished };
+      }
     }
-    setSidePanel((current) => toggleView(current, CHANGES_VIEW));
-  }, [panelExpanded, expandRestoreWidth, setSidePanel, setPanelWidth, setPanelExpanded]);
+  });
+  /** What "+" offers: the Code views not open yet. Chat mode's panel is only ever its browser. */
+  const panelAddItems: PanelAddItem[] = area === "chat" || !selectedTask ? [] : ([
+    { view: CHANGES_VIEW, label: "Changes", icon: "git", keys: "⌘⇧C" },
+    { view: TERMINAL_VIEW, label: "Terminal", icon: "terminal", keys: "⌘⇧T" },
+    { view: { kind: "browser", taskId: selectedTask.id }, label: "Browser", icon: "browser" },
+    ...(selectedProject?.runCommand ? [{ view: RUN_VIEW, label: "Run output", icon: "play" } as const] : []),
+    ...(selectedProject?.buildCommand ? [{ view: BUILD_VIEW, label: "Build output", icon: "hammer" } as const] : []),
+    { view: GAMES_VIEW, label: "Games", icon: "gamepad" }
+  ] satisfies PanelAddItem[]).filter((item) => !visiblePanelTabs.some((view) => swapKey(view) === swapKey(item.view)));
+
+  /** Every change to the panel's tabs goes through here: one that leaves nothing showing also ends expansion. */
+  const changePanel = useCallback((change: (tabs: PanelTabs) => PanelTabs) => {
+    setPanelTabs(change);
+    if (panelExpanded && !shownTab(change(panelTabsRef.current))) setPanelExpanded(false);
+  }, [panelExpanded, setPanelTabs, setPanelExpanded]);
+  const toggleChanges = useCallback(() => changePanel((tabs) => toggleTab(tabs, CHANGES_VIEW)), [changePanel]);
   const toggleBrowser = useCallback(() => {
     const taskId = selectedTaskRef.current;
+    if (taskId) changePanel((tabs) => toggleTab(tabs, { kind: "browser", taskId }));
+  }, [changePanel]);
+  const toggleTerminal = useCallback(() => changePanel((tabs) => toggleTab(tabs, TERMINAL_VIEW)), [changePanel]);
+  // Hiding the panel on a game pauses it like any tab swap; closing the Games tab is the real
+  // close (`closePanelView`), after which the Arcade home comes next.
+  const toggleGames = useCallback(() => changePanel((tabs) => toggleTab(tabs, GAMES_VIEW)), [changePanel]);
+  /** The header's single panel button (a narrow chat column): show the panel's tabs, or hide them. */
+  const togglePanel = useCallback(() => {
+    const taskId = selectedTaskRef.current;
     if (!taskId) return;
-    if (sidePanel?.kind === "browser" && sidePanel.taskId === taskId) {
-      if (panelExpanded) setPanelWidth(expandRestoreWidth);
-      setPanelExpanded(false);
-      setSidePanel(null);
-    } else {
-      setSidePanel({ kind: "browser", taskId });
-    }
-  }, [sidePanel, panelExpanded, expandRestoreWidth, setSidePanel, setPanelWidth, setPanelExpanded]);
-  const toggleTerminal = useCallback(() => {
-    if (panelExpanded) {
-      setPanelWidth(expandRestoreWidth);
-      setPanelExpanded(false);
-    }
-    setSidePanel((current) => toggleView(current, TERMINAL_VIEW));
-  }, [panelExpanded, expandRestoreWidth, setSidePanel, setPanelWidth, setPanelExpanded]);
-  const toggleGames = useCallback(() => {
-    if (panelExpanded) {
-      setPanelWidth(expandRestoreWidth);
-      setPanelExpanded(false);
-    }
-    // Toggling the Games panel away is a real close, not a view swap: the next open starts at
-    // the Arcade home rather than the game that was left open.
-    if (panelView?.kind === "games") exitToArcade();
-    setSidePanel((current) => toggleView(current, GAMES_VIEW));
-  }, [panelExpanded, expandRestoreWidth, panelView, setSidePanel, setPanelWidth, setPanelExpanded]);
+    changePanel((tabs) => panelView ? hidePanel(tabs) : showPanel(tabs, areaRef.current === "chat" ? { kind: "browser", taskId } : CHANGES_VIEW));
+  }, [changePanel, panelView]);
   /** Requests belong to this visit, so returning to a chat restores its reading position
    * rather than replaying an earlier Canvas jump before a clearing effect can run. */
   const canvasNavigationKey = JSON.stringify([selectedTaskId, area, settingsOpen]);
@@ -570,12 +605,17 @@ export default function App() {
     setExpandedCanvas(undefined);
     if (expandedCanvas && expandedCanvas.taskId === selectedTaskRef.current) openCanvas(expandedCanvas.canvasId);
   }, [expandedCanvas, openCanvas, selectedCanvasSession]);
-  const closeSidePanel = useCallback(() => setSidePanel(null), [setSidePanel]);
-  /** The Games panel's "back to chat": close the panel and put the caret back in the composer. */
+  const hideSidePanel = useCallback(() => changePanel(hidePanel), [changePanel]);
+  /** A tab's ✕. Closing never stops a terminal, run or browser session; the Games tab goes back to its Arcade. */
+  const closePanelView = useCallback((view: SidePanelView) => {
+    if (view.kind === "games") exitToArcade();
+    changePanel((tabs) => closePanelTab(tabs, swapKey(view)));
+  }, [changePanel]);
+  /** The Games panel's "back to chat": hide the panel and put the caret back in the composer. */
   const backToChat = useCallback(() => {
-    setSidePanel(null);
+    hideSidePanel();
     requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(".composer-input textarea")?.focus());
-  }, [setSidePanel]);
+  }, [hideSidePanel]);
   const updateBrowser = useCallback((state: BrowserState) => {
     setBrowsers((current) => current[state.taskId] === state ? current : { ...current, [state.taskId]: state });
   }, []);
@@ -587,9 +627,9 @@ export default function App() {
       openExternally(url);
       return;
     }
-    setSidePanel({ kind: "browser", taskId });
+    changePanel((tabs) => openTab(tabs, { kind: "browser", taskId }));
     void api.browserOpen(taskId, url).then(updateBrowser).catch((reason) => setGlobalError(String(reason)));
-  }, [browserBuiltinOn, setSidePanel, updateBrowser]);
+  }, [browserBuiltinOn, changePanel, updateBrowser]);
   useEffect(() => {
     if (!panelExpanded && !expandedCanvasId) return;
     const shell = document.querySelector<HTMLElement>(".app-shell");
@@ -607,21 +647,19 @@ export default function App() {
     return () => { observer.disconnect(); changes.disconnect(); shell.style.removeProperty("--panel-dock-h"); };
   }, [panelExpanded, expandedCanvasId, composerDraftKey, area]);
   const togglePanelExpanded = useCallback(() => {
-    if (!panelExpanded) setExpandRestoreWidth(panelWidth);
     setPanelExpanded(!panelExpanded);
     requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(".composer-input textarea, .chat-composer textarea")?.focus());
-  }, [panelExpanded, setPanelExpanded, setExpandRestoreWidth, panelWidth]);
+  }, [panelExpanded, setPanelExpanded]);
   const openSubagent = useCallback((toolCallId: string, index: number) => {
     const taskId = selectedTaskRef.current;
-    if (panelExpanded) {
-      setPanelWidth(expandRestoreWidth);
-      setPanelExpanded(false);
-    }
-    if (taskId) setSidePanel((current) => toggleView(current, { kind: "subagent", taskId, toolCallId, index }));
-  }, [panelExpanded, expandRestoreWidth, setSidePanel, setPanelWidth, setPanelExpanded]);
+    if (taskId) changePanel((tabs) => toggleTab(tabs, { kind: "subagent", taskId, toolCallId, index }));
+  }, [changePanel]);
   const selectSubagentSibling = useCallback((index: number) => {
-    setSidePanel((current) => current?.kind === "subagent" ? { ...current, index } : current);
-  }, [setSidePanel]);
+    setPanelTabs((tabs) => {
+      const shown = shownTab(tabs);
+      return shown?.kind === "subagent" ? updateTab(tabs, swapKey(shown), () => ({ ...shown, index })) : tabs;
+    });
+  }, [setPanelTabs]);
   const subagentLink = useMemo(() => ({
     open: shownSubagent ? { toolCallId: shownSubagent.toolCallId, index: shownSubagent.index } : undefined,
     onOpen: openSubagent
@@ -736,7 +774,7 @@ export default function App() {
     // The durable side-panel view is Code's alone; Chat mode's panel only ever shows its browser.
     // Leaving Code force-closes the Games panel, a real close: the Arcade comes next.
     if (next !== "code") exitToArcade();
-    setLegacySidePanel(next === "code" ? rememberedPanelView() : null);
+    setLegacyPanelTabs(next === "code" ? rememberedPanelTabs() : NO_PANEL_TABS);
     setLegacyPanelExpanded(false);
     const parked = parkedViews.current[next];
     const task = parked?.taskId ? data.tasks.find((item) => item.id === parked.taskId && taskArea(item) === next) : undefined;
@@ -809,18 +847,32 @@ export default function App() {
 
   useEffect(() => { selectedTaskRef.current = selectedTaskId; }, [selectedTaskId]);
   useEffect(() => {
-    // Chat mode's panel is not the durable one: closing its browser must not forget Code's view.
+    // Chat mode's panel is not the durable one: closing its browser must not forget Code's tabs.
     if (tabsEnabled || area === "chat") return;
-    const remembered = rememberedView(sidePanel);
-    if (remembered !== undefined) localStorage.setItem(PANEL_VIEW_KEY, JSON.stringify(remembered));
-  }, [sidePanel, tabsEnabled, area]);
-  useEffect(() => { if (!tabsEnabled) localStorage.setItem(PANEL_WIDTH_KEY, JSON.stringify(panelWidth)); }, [panelWidth, tabsEnabled]);
+    localStorage.setItem(PANEL_VIEW_KEY, JSON.stringify(storedTabs(panelTabs)));
+  }, [panelTabs, tabsEnabled, area]);
+  useEffect(() => {
+    if (tabsEnabled) return;
+    if (panelWidth === null) localStorage.removeItem(PANEL_WIDTH_KEY);
+    else localStorage.setItem(PANEL_WIDTH_KEY, JSON.stringify(panelWidth));
+  }, [panelWidth, tabsEnabled]);
+  useEffect(() => { localStorage.setItem(SIDEBAR_KEY, JSON.stringify(sidebarOpen ? "open" : "closed")); }, [sidebarOpen]);
+  useEffect(() => {
+    let settle: ReturnType<typeof setTimeout> | undefined;
+    const onResize = () => {
+      setWindowWidth(window.innerWidth);
+      setWindowResizing(true);
+      clearTimeout(settle);
+      settle = setTimeout(() => setWindowResizing(false), 160);
+    };
+    window.addEventListener("resize", onResize);
+    return () => { window.removeEventListener("resize", onResize); clearTimeout(settle); };
+  }, []);
   // Browser and sub-agent views belong to their chat: another chat opens with the remembered
   // durable view. Browser expansion also belongs to the chat being left.
   useEffect(() => {
     if (tabsEnabled) return;
-    setSidePanel((current) => viewForChat(current, selectedTaskId, areaRef.current === "chat" ? null : rememberedPanelKind()));
-    if (panelExpanded) setPanelWidth(expandRestoreWidth);
+    setPanelTabs((tabs) => forChat(tabs, selectedTaskId));
     setPanelExpanded(false);
   }, [selectedTaskId]);
   useEffect(() => { localStorage.setItem(COLLAPSED_PROJECTS_KEY, JSON.stringify([...collapsedProjects])); }, [collapsedProjects]);
@@ -955,11 +1007,7 @@ export default function App() {
   }
 
   function showRunOutput(kind: ProjectCommandKind = "run") {
-    if (panelExpanded) {
-      setPanelWidth(expandRestoreWidth);
-      setPanelExpanded(false);
-    }
-    setSidePanel(kind === "build" ? BUILD_VIEW : RUN_VIEW);
+    changePanel((tabs) => openTab(tabs, kind === "build" ? BUILD_VIEW : RUN_VIEW));
   }
 
   async function saveRunCommand(projectId: string, command: string, kind: ProjectCommandKind = "run") {
@@ -970,9 +1018,9 @@ export default function App() {
 
   // Rewinding past a call takes its chips away, and the panel follows.
   useEffect(() => {
-    if (!missingSubagent) return;
-    setSidePanel(tabsEnabled ? null : rememberedPanelView());
-  }, [missingSubagent, tabsEnabled, setSidePanel]);
+    if (!missingSubagentKey) return;
+    changePanel((tabs) => closePanelTab(tabs, swapKey(missingSubagentKey)));
+  }, [missingSubagentKey, changePanel]);
 
   const refreshChanges = useCallback(async (taskId = selectedTaskRef.current) => {
     // A Chat mode chat's scratchpad is not a checkout; the host would refuse the request.
@@ -1033,7 +1081,7 @@ export default function App() {
       if (payload.type === "browser_state") {
         updateBrowser(payload.browser);
         if (payload.reveal && selectedTaskRef.current === taskId) {
-          setSidePanel({ kind: "browser", taskId });
+          setPanelTabs((tabs) => openTab(tabs, { kind: "browser", taskId }));
         }
         return;
       }
@@ -1442,6 +1490,10 @@ export default function App() {
       if (!confirm && !restoreDialog && !subscriptionLogin) enterArea(command === "area-chat" ? "chat" : "code");
       return;
     }
+    if (command === "toggle-sidebar") {
+      if (!settingsOpen) toggleSidebar();
+      return;
+    }
     if (command === "new" && !tabsEnabled) {
       if (settingsOpen) closeSettings();
       openDraft(selectedTask ? selectedTask.projectId : draft?.projectId);
@@ -1499,7 +1551,7 @@ export default function App() {
       if (legacySelectedTaskId) {
         const next = tabs.update((state) => openChatTab(state, legacySelectedTaskId, true, taskComposerKeys.current.get(legacySelectedTaskId), areaRef.current));
         if (next.activeId) tabs.update((state) => patchTab(state, next.activeId!, {
-          panel: { ...findTab(state, next.activeId!)!.panel, view: legacySidePanel, width: legacyPanelWidth, panelExpanded: legacyPanelExpanded, expandRestoreWidth: legacyExpandRestoreWidth }
+          panel: { ...findTab(state, next.activeId!)!.panel, tabs: legacyPanelTabs, width: legacyPanelWidth, panelExpanded: legacyPanelExpanded }
         }));
       }
       else {
@@ -1523,10 +1575,9 @@ export default function App() {
         setLegacyDraft(tab.draft);
         setLegacyComposerKey(tab.composerKey);
         composerKeyRef.current = tab.composerKey;
-        setLegacySidePanel(tab.panel.view);
+        setLegacyPanelTabs(tab.panel.tabs);
         setLegacyPanelWidth(tab.panel.width);
         setLegacyPanelExpanded(tab.panel.panelExpanded);
-        setLegacyExpandRestoreWidth(tab.panel.expandRestoreWidth);
       }
     }
     // Only a mode change transfers selection. Draft/model edits stay owned by their tab.
@@ -2980,6 +3031,12 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      // ⌃⌘S shows or hides the sidebar, as in Finder and Mail. The Go menu normally takes it first.
+      if (event.metaKey && event.ctrlKey && !event.altKey && !event.shiftKey && event.code === "KeyS") {
+        event.preventDefault();
+        nativeTabAction.current("toggle-sidebar");
+        return;
+      }
       // ⌥⌘1 / ⌥⌘2 switch area. Matched on the physical key: ⌥ changes what `event.key` reports.
       if (event.metaKey && event.altKey && !event.ctrlKey && !event.shiftKey && (event.code === "Digit1" || event.code === "Digit2")) {
         event.preventDefault();
@@ -3170,7 +3227,9 @@ export default function App() {
         { label: "Settings…", icon: <Icon name="settings" />, hint: "⌘,", onSelect: openSettings }
       ]}
     >
-    <div className={`app-shell${rebuilding ? " rebuild" : ""}${expandedCanvasId ? " canvas-expanded" : panelExpanded && canExpand(panelView) ? " panel-expanded" : ""}${showChatTabBar ? " panel-has-tabs" : ""}`} data-area={area} data-dynamic-space onClickCapture={(event) => {
+    <div className={`app-shell${rebuilding ? " rebuild" : ""}${expandedCanvasId ? " canvas-expanded" : panelExpanded && canExpand(panelView) ? " panel-expanded" : ""}${showChatTabBar ? " panel-has-tabs" : ""}${!settingsOpen && !shell.sidebarShown ? " sidebar-hidden" : ""}`}
+      style={{ "--sidebar-w": `${settingsOpen ? SIDEBAR_W : sidebarWidth}px` } as CSSProperties}
+      data-area={area} data-dynamic-space onClickCapture={(event) => {
       if (event.button === 0 && !settingsOpen && !confirm && !restoreDialog && !subscriptionLogin && isBackgroundClick(event.target)) {
         dynamicBackdrop.current?.ripple(event.clientX, event.clientY);
       }
@@ -3279,9 +3338,13 @@ export default function App() {
         onRenameTask={(taskId, name) => void renameTask(taskId, name)}
         onArchiveAll={archiveAll}
         onDeleteAllArchived={deleteAllArchived}
+        hidden={!shell.sidebarShown}
       />
+      <SidebarToggle open={shell.sidebarShown} autoHidden={shell.sidebarAutoHidden} onToggle={toggleSidebar} />
 
-      <main data-dynamic-space className={`workspace${showChatTabBar ? " has-chat-tabs" : ""}`}>
+      <main data-dynamic-space className={`workspace${showChatTabBar ? " has-chat-tabs" : ""}`} data-chat-size={chatSize}>
+        {/* Without the sidebar the window's top edge still drags, wherever no header covers it. */}
+        {!shell.sidebarShown && <div className="workspace-drag" data-tauri-drag-region />}
         {showChatTabBar && <ChatTabBar tabs={tabItems} activeId={activeTab?.id} canReopen={areaCanReopen}
           {...tabHandlers} />}
         {tabsEnabled && !selectedTask && activeTab?.error && <div className="error-banner workspace-error" role="alert"><span>{activeTab.error}</span></div>}
@@ -3318,6 +3381,8 @@ export default function App() {
               terminalOpen={panelView?.kind === "terminal"}
               onToggleTerminal={toggleTerminal}
               gamesOpen={panelView?.kind === "games"}
+              panelOpen={panelView !== null}
+              onTogglePanel={togglePanel}
               onToggleGames={toggleGames}
               onRename={(name) => void renameTask(selectedTask.id, name)}
               onTaskAction={(task, action) => void taskAction(task, action)}
@@ -3536,16 +3601,22 @@ export default function App() {
       {selectedTask && <SidePanel
         key={tabsEnabled ? activeTab?.id : "panel"}
         view={panelView}
-        width={panelWidth}
+        width={shell.panelWidth || panelPref}
         onWidthChange={setPanelWidth}
-        label={panelView?.kind === "browser" ? "Browser"
-          : panelView?.kind === "run" ? "Run"
-          : panelView?.kind === "build" ? "Build"
-          : panelView?.kind === "terminal" ? "Terminal"
-          : panelView?.kind === "games" ? "Games"
-          : shownSubagent
-            ? `SubAgent ${displayAgentName(shownSubagentCall?.details.results[shownSubagent.index]?.agent ?? "")}`.trim()
-            : "Changes"}
+        onResetWidth={() => setPanelWidth(null)}
+        immediate={windowResizing}
+        label={panelView?.kind === "subagent"
+          ? `SubAgent ${displayAgentName(shownSubagentCall?.details.results[panelView.index]?.agent ?? "")}`.trim()
+          : panelView?.kind === "browser" ? "Browser"
+          : panelTabItems.find((item) => item.view === panelView)?.label ?? "Side panel"}
+        tabs={panelTabItems}
+        addable={panelAddItems}
+        expanded={panelExpanded}
+        onSelectTab={(view) => changePanel((tabs) => openTab(tabs, view))}
+        onCloseTab={closePanelView}
+        onAddTab={(view) => changePanel((tabs) => openTab(tabs, view))}
+        onToggleExpand={togglePanelExpanded}
+        onHide={hideSidePanel}
       >{(view) => view.kind === "browser" ? (
         <BrowserPanel
           taskId={view.taskId}
@@ -3562,7 +3633,6 @@ export default function App() {
             composerDrafts.update(key, (draft) => ({ ...draft, browserContexts: [...(draft.browserContexts ?? []), context] }));
             requestAnimationFrame(() => { if (composerKeyRef.current === key) document.querySelector<HTMLTextAreaElement>(".composer-input textarea, .chat-composer textarea")?.focus(); });
           }}
-          onExpand={togglePanelExpanded}
           onReset={() => setConfirm({
             title: "Reset browser session?",
             body: "This closes the page and clears this chat's cookies and site data.",
@@ -3570,11 +3640,6 @@ export default function App() {
             danger: true,
             run: async () => updateBrowser(await api.browserReset(view.taskId))
           })}
-          onClose={() => {
-            if (panelExpanded) setPanelWidth(expandRestoreWidth);
-            setPanelExpanded(false);
-            closeSidePanel();
-          }}
         />
       ) : view.kind === "run" || view.kind === "build" ? (
         <RunPanel kind={view.kind} run={view.kind === "build" ? selectedBuild : selectedRun} appearance={data.appearance}
@@ -3583,14 +3648,12 @@ export default function App() {
           onStop={() => {
             const run = view.kind === "build" ? selectedBuild : selectedRun;
             if (run) void stopRun(run).catch((reason) => setGlobalError(String(reason)));
-          }}
-          onClose={closeSidePanel} />
+          }} />
       ) : view.kind === "terminal" ? (
         <TerminalPanel
           key={selectedTask.id}
           taskId={selectedTask.id}
           appearance={data.appearance}
-          onClose={closeSidePanel}
           onAttach={(text) => {
             // A terminal selection joins the draft as a text-file chip, the same transport
             // every attached file uses. The caps' sentence goes back to the panel, the
@@ -3607,7 +3670,6 @@ export default function App() {
           status={selectedTask.status}
           watchKey={selectedTask.id}
           agentName={agentName(data.appearance)}
-          onClose={closeSidePanel}
           onBackToChat={backToChat}
         />
       ) : view.kind === "subagent" ? (
@@ -3619,7 +3681,6 @@ export default function App() {
             live={shownSubagentCall !== undefined && !shownSubagentCall.finished}
             stream={runtime?.subagentView}
             onSelect={selectSubagentSibling}
-            onClose={closeSidePanel}
             onRetry={() => setWatchNonce((nonce) => nonce + 1)}
           />
         </ChatContexts>
@@ -3634,7 +3695,6 @@ export default function App() {
         canReview={canReview}
         reviewReason={reviewReason}
         comments={data.diffComments[selectedTask.id] ?? []}
-        onClose={closeSidePanel}
         onRefresh={() => void refreshChanges(selectedTask.id)}
         onSettings={openSettings}
         onReview={reviewChanges}

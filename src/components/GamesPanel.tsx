@@ -50,7 +50,6 @@ interface GamesPanelProps {
   /** The open chat. A status change that comes from switching chats is not a run ending. */
   watchKey: string;
   agentName: string;
-  onClose: () => void;
   onBackToChat: () => void;
 }
 
@@ -65,12 +64,12 @@ const busy = (status: TaskStatus) => status === "running" || status === "stoppin
 /**
  * The side panel's Games view: something small to play while a slow model works. The panel is a
  * thin shell — header, the Arcade home or the entered game, the run-ended toast. Which game is
- * open lives in `games/session.ts`, so a view or tab swap comes back to it paused, while closing
- * the panel resets to the Arcade home (`exitToArcade`, called from every close path).
+ * open lives in `games/session.ts`, so a tab swap or hiding the panel comes back to it paused, while
+ * closing the Games tab resets to the Arcade home (`exitToArcade`, called from every close path).
  *
  * Memo'd: `App` re-renders on every streaming delta, and nothing here depends on the stream.
  */
-export const GamesPanel = memo(function GamesPanel({ status, watchKey, agentName, onClose, onBackToChat }: GamesPanelProps) {
+export const GamesPanel = memo(function GamesPanel({ status, watchKey, agentName, onBackToChat }: GamesPanelProps) {
   const reduce = useReducedMotion();
   const [gameId, setGameId] = useState<GameId | null>(currentGame());
   const game = GAMES.find((entry) => entry.id === gameId) ?? null;
@@ -92,8 +91,6 @@ export const GamesPanel = memo(function GamesPanel({ status, watchKey, agentName
 
   const working = busy(status);
   const message = toast?.ending === "failed" ? `${agentName} hit an error` : toast?.ending === "stopped" ? `${agentName} stopped` : `${agentName} finished`;
-  /** Closing the panel is a real close, not a view swap: the next open starts at the Arcade. */
-  const close = () => { exitToArcade(); onClose(); };
   /** A game's "back to chat" leaves too — its run stays saved, the Arcade comes next. */
   const backToChat = () => { exitToArcade(); onBackToChat(); };
   const enter = (id: GameId) => { enterGame(id); setGameId(id); };
@@ -106,13 +103,8 @@ export const GamesPanel = memo(function GamesPanel({ status, watchKey, agentName
   return (
     <div className="games-panel">
       <header className="panel-header">
-        {game ? (
-          <button type="button" className="icon-button" aria-label="All games" onClick={backToArcade}><Icon name="back" /></button>
-        ) : (
-          <span className="panel-mark" aria-hidden="true"><Icon name="gamepad" /></span>
-        )}
+        {game && <button type="button" className="icon-button" aria-label="All games" onClick={backToArcade}><Icon name="back" /></button>}
         <div className="panel-title">
-          <span className="panel-kicker">Arcade</span>
           <h3>{game ? game.name : "Games"}</h3>
         </div>
         {working && (
@@ -121,9 +113,6 @@ export const GamesPanel = memo(function GamesPanel({ status, watchKey, agentName
             {agentName} is working
           </span>
         )}
-        <div className="panel-header-actions">
-          <button type="button" className="icon-button" aria-label="Close Games panel" onClick={close}><Icon name="close" /></button>
-        </div>
       </header>
       <div className="games-body">
         {game ? (

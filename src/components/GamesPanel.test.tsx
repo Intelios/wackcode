@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 function props(overrides: Partial<React.ComponentProps<typeof GamesPanel>> = {}) {
-  return { status: "idle" as const, watchKey: "chat-1", agentName: "Nova", onClose: vi.fn(), onBackToChat: vi.fn(), ...overrides };
+  return { status: "idle" as const, watchKey: "chat-1", agentName: "Nova", onBackToChat: vi.fn(), ...overrides };
 }
 
 /** The Arcade home opens first; most flows begin by entering a game's card. */
@@ -80,12 +80,11 @@ describe("GamesPanel", () => {
   });
 
   it("closes to the Arcade home: the next open starts at the picker, not the game", () => {
-    const p = props();
-    const { unmount } = render(<GamesPanel {...p} />);
+    const { unmount } = render(<GamesPanel {...props()} />);
     enterGame(/Quack Survivors/);
     fireEvent.click(screen.getByRole("button", { name: "Play" }));
-    fireEvent.click(screen.getByRole("button", { name: "Close Games panel" }));
-    expect(p.onClose).toHaveBeenCalledOnce();
+    // Closing the Games tab (App's `closePanelView`) is the real close.
+    exitToArcade();
     unmount();
 
     render(<GamesPanel {...props()} />);
@@ -204,12 +203,5 @@ describe("GamesPanel", () => {
     const { rerender } = render(<GamesPanel {...p} />);
     rerender(<GamesPanel {...p} watchKey="chat-2" status="idle" />);
     expect(screen.queryByText(/finished/)).toBeNull();
-  });
-
-  it("closes from its header", () => {
-    const p = props();
-    render(<GamesPanel {...p} />);
-    fireEvent.click(screen.getByRole("button", { name: "Close Games panel" }));
-    expect(p.onClose).toHaveBeenCalledOnce();
   });
 });

@@ -88,7 +88,7 @@ function withMenu(node: ReactNode) {
 }
 
 function renderPanel() {
-  return render(<TerminalPanel taskId="chat-1" appearance={DEFAULT_APPEARANCE} onClose={() => {}} />);
+  return render(<TerminalPanel taskId="chat-1" appearance={DEFAULT_APPEARANCE} />);
 }
 
 afterEach(cleanup);
@@ -195,7 +195,7 @@ describe("TerminalPanel", () => {
 
   it("offers a selection to the draft — tidied — from the pill and the context menu", async () => {
     const onAttach = vi.fn();
-    render(withMenu(<TerminalPanel taskId="chat-1" appearance={DEFAULT_APPEARANCE} onClose={() => {}} onAttach={onAttach} />));
+    render(withMenu(<TerminalPanel taskId="chat-1" appearance={DEFAULT_APPEARANCE} onAttach={onAttach} />));
     await waitFor(() => expect(api.openTerminal).toHaveBeenCalled());
     expect(screen.queryByRole("button", { name: "Add to draft" })).toBeNull();
 
@@ -211,7 +211,7 @@ describe("TerminalPanel", () => {
   });
 
   it("hides the pill mid-drag so it can't steal the selection's mouse-up", async () => {
-    render(<TerminalPanel taskId="chat-1" appearance={DEFAULT_APPEARANCE} onClose={() => {}} onAttach={vi.fn()} />);
+    render(<TerminalPanel taskId="chat-1" appearance={DEFAULT_APPEARANCE} onAttach={vi.fn()} />);
     await waitFor(() => expect(api.openTerminal).toHaveBeenCalled());
     const host = document.querySelector(".terminal-screen")!;
     const term = instances()[0];
@@ -228,7 +228,7 @@ describe("TerminalPanel", () => {
 
   it("says why a selection didn't attach, and clears the note on the next change", async () => {
     const onAttach = vi.fn(() => { throw new Error("Attach at most 8 files to one message."); });
-    render(<TerminalPanel taskId="chat-1" appearance={DEFAULT_APPEARANCE} onClose={() => {}} onAttach={onAttach} />);
+    render(<TerminalPanel taskId="chat-1" appearance={DEFAULT_APPEARANCE} onAttach={onAttach} />);
     await waitFor(() => expect(api.openTerminal).toHaveBeenCalled());
 
     select("hello");
@@ -241,7 +241,7 @@ describe("TerminalPanel", () => {
   });
 
   it("disables the menu's add item while nothing is selected", async () => {
-    render(withMenu(<TerminalPanel taskId="chat-1" appearance={DEFAULT_APPEARANCE} onClose={() => {}} onAttach={vi.fn()} />));
+    render(withMenu(<TerminalPanel taskId="chat-1" appearance={DEFAULT_APPEARANCE} onAttach={vi.fn()} />));
     await waitFor(() => expect(api.openTerminal).toHaveBeenCalled());
     fireEvent.contextMenu(document.querySelector(".terminal-screen")!);
     expect(await screen.findByRole("menuitem", { name: "Add selection to draft" })).toBeDisabled();

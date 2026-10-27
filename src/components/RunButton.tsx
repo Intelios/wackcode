@@ -62,7 +62,7 @@ export function RunButton({ kind = "run", project, workspacePath, run, onSave, o
     <div className={"project-run-control " + (active ? "running" : "")}>
       <Tooltip label={active ? "Stop " + run?.command : configuredCommand ?? `Set a project ${kind} command`} side="bottom">
         <button type="button" className="panel-button project-run-main" disabled={disabled}
-          aria-label={stopping ? `Stopping ${kind}…` : pending === "start" ? `Starting ${kind}…` : undefined}
+          aria-label={stopping ? `Stopping ${kind}…` : pending === "start" ? `Starting ${kind}…` : label}
           onClick={() => active ? void action("stop", onStop) : configuredCommand ? void action("start", onRun) : edit()}>
           <AnimatePresence mode="wait" initial={false}>
             <motion.span key={active ? "stop" : "play"} className="project-run-icon"
@@ -73,7 +73,7 @@ export function RunButton({ kind = "run", project, workspacePath, run, onSave, o
               <Icon name={active ? "stop" : kind === "build" ? "hammer" : "play"} />
             </motion.span>
           </AnimatePresence>
-          <span>{label}</span>
+          <span className="project-run-label">{label}</span>
         </button>
       </Tooltip>
       <button ref={anchor} type="button" className="panel-button project-run-more"

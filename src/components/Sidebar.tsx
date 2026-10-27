@@ -66,6 +66,8 @@ interface SidebarProps {
   onDeleteAllArchived: () => void;
   /** Dev build: the DEV badge sits in the title bar. */
   devBuild?: boolean;
+  /** Collapsed out of the window: by the user, or to make room for a wide side panel. */
+  hidden?: boolean;
 }
 
 /** Pages slide by their order (chats, archived): forward enters from the right. A change
@@ -76,7 +78,7 @@ const pageVariants = {
   exit: ({ direction, reduce }: { direction: 1 | -1; reduce: boolean }) => (reduce ? { opacity: 0 } : { opacity: 0, x: -16 * direction })
 };
 
-export function Sidebar({ projects, pinnedProjectIds, area, areaAttention, onSwitchArea, tasks, selectedTaskId, archivedOpen, pendingDialogTaskIds, titlePulses, collapsedProjectIds, onSelectTask, onNewChat, onNewDraft, onAddProject, onToggleArchived, onToggleProjectCollapsed, onOpenSettings, onTaskAction, onProjectAction, onRenameTask, onArchiveAll, onDeleteAllArchived, devBuild }: SidebarProps) {
+export function Sidebar({ projects, pinnedProjectIds, area, areaAttention, onSwitchArea, tasks, selectedTaskId, archivedOpen, pendingDialogTaskIds, titlePulses, collapsedProjectIds, onSelectTask, onNewChat, onNewDraft, onAddProject, onToggleArchived, onToggleProjectCollapsed, onOpenSettings, onTaskAction, onProjectAction, onRenameTask, onArchiveAll, onDeleteAllArchived, devBuild, hidden = false }: SidebarProps) {
   const contextMenu = useContextMenu();
   const [renamingId, setRenamingId] = useState<string>();
   const [renameValue, setRenameValue] = useState("");
@@ -327,7 +329,7 @@ export function Sidebar({ projects, pinnedProjectIds, area, areaAttention, onSwi
   );
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar${hidden ? " collapsed" : ""}`} inert={hidden}>
       {/* The strip beside the traffic lights holds the Code | Chat switch; what it leaves bare still drags the window. */}
       <div className="titlebar-drag sidebar-titlebar" data-tauri-drag-region>
         <AreaSwitch area={area} attention={areaAttention} onSwitch={onSwitchArea} />

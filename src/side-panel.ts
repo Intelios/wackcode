@@ -1,13 +1,15 @@
 /**
- * The right-hand side panel shows one view at a time: the chat's Git changes, browser,
- * terminal, project Run/Build output, the Games arcade, or one sub-agent's transcript. Views are this union; adding one means a member
- * here, a view component rendered in `SidePanel`, and a trigger that opens it (`toggleView`).
+ * The right-hand side panel holds tabs, one per view: the chat's Git changes, browser, terminal,
+ * project Run/Build output, the Games arcade, or one sub-agent call's transcript. Views are this
+ * union; adding one means a member here, a view component rendered in `SidePanel`, a tab label in
+ * App's `panelTabItems` and a trigger that opens it (`openTab`/`toggleTab`).
  *
- * Changes, Terminal, Run, Build and Games are durable: which of them is showing is remembered across launches and
- * chats (`wackcode:sidePanel`; terminal shows the open chat's own shell, spawning lazily on
- * first attach; Run/Build only attach to an explicitly launched command; a game in progress lives in
- * `games/session.ts`, so it survives chat switches paused). Browser and sub-agent views belong to one chat and fall back to that remembered
- * state when the chat changes or the call leaves the conversation.
+ * A tab is identified by `swapKey`, so each kind is a singleton (one browser per chat) and a
+ * sub-agent call's siblings share one tab. Hiding the panel keeps its tabs; closing a tab never
+ * stops a terminal, run or browser session. Changes, Terminal, Run, Build and Games are durable:
+ * which of them are open is remembered across launches and chats (`wackcode:sidePanel`; Run/Build
+ * only attach to an explicitly launched command; a game in progress lives in `games/session.ts`).
+ * Browser and sub-agent tabs belong to one chat and drop out when the chat changes (`forChat`).
  */
 export type SidePanelView =
   | { kind: "changes" }
@@ -57,9 +59,9 @@ export function isTaskBound(view: SidePanelView | null): view is Extract<SidePan
   return view?.kind === "browser" || view?.kind === "subagent";
 }
 
-/** Views that can span the main area with the composer docked below (`panelExpanded`). */
+/** Views that can span the main area with the composer docked below (`panelExpanded`): all of them. */
 export function canExpand(view: SidePanelView | null): boolean {
-  return view?.kind === "browser";
+  return view !== null;
 }
 
 /** Which way a change of view slides: 1 enters from the right, -1 from the left. */
@@ -77,24 +79,94 @@ export function sameView(a: SidePanelView | null, b: SidePanelView | null): bool
   return a === null || b === null ? a === b : viewKey(a) === viewKey(b);
 }
 
-/** A trigger replaces the current view, or closes the panel when its view is already showing. */
-export function toggleView(current: SidePanelView | null, next: SidePanelView): SidePanelView | null {
-  return sameView(current, next) ? null : next;
+/** The panel's tabs: their order, which one is in front, and whether the panel is showing at all. */
+export interface PanelTabs {
+  tabs: SidePanelView[];
+  /** The front tab's `swapKey`. */
+  active: string | null;
+  open: boolean;
+}
+
+export const NO_PANEL_TABS: PanelTabs = { tabs: [], active: null, open: false };
+
+/** The front tab while the panel is showing. */
+export function shownTab(state: PanelTabs): SidePanelView | null {
+  return state.open ? state.tabs.find((view) => swapKey(view) === state.active) ?? null : null;
+}
+
+/** Show `view`: bring its tab to the front (updating it, e.g. to another sibling) or add it after the front tab. */
+export function openTab(state: PanelTabs, view: SidePanelView): PanelTabs {
+  const key = swapKey(view);
+  const at = state.tabs.findIndex((tab) => swapKey(tab) === key);
+  if (at >= 0) {
+    const tabs = sameView(state.tabs[at], view) ? state.tabs : state.tabs.map((tab, index) => index === at ? view : tab);
+    return { tabs, active: key, open: true };
+  }
+  const front = state.tabs.findIndex((tab) => swapKey(tab) === state.active);
+  const tabs = front < 0 ? [...state.tabs, view] : [...state.tabs.slice(0, front + 1), view, ...state.tabs.slice(front + 1)];
+  return { tabs, active: key, open: true };
+}
+
+/** A trigger hides the panel when its view is already in front, and shows it otherwise. */
+export function toggleTab(state: PanelTabs, view: SidePanelView): PanelTabs {
+  return state.open && sameView(shownTab(state), view) ? { ...state, open: false } : openTab(state, view);
+}
+
+/** Close one tab. The front moves to its right-hand neighbour (else the left); the last one hides the panel. */
+export function closeTab(state: PanelTabs, key: string): PanelTabs {
+  const at = state.tabs.findIndex((tab) => swapKey(tab) === key);
+  if (at < 0) return state;
+  const tabs = state.tabs.filter((_, index) => index !== at);
+  if (tabs.length === 0) return NO_PANEL_TABS;
+  if (state.active !== key) return { ...state, tabs };
+  return { ...state, tabs, active: swapKey(tabs[Math.min(at, tabs.length - 1)]) };
+}
+
+export function hidePanel(state: PanelTabs): PanelTabs {
+  return state.open ? { ...state, open: false } : state;
+}
+
+/** Show the panel again on its front tab, or on `fallback` when it has none. */
+export function showPanel(state: PanelTabs, fallback: SidePanelView): PanelTabs {
+  return state.tabs.length > 0 && state.active ? { ...state, open: true } : openTab(state, fallback);
+}
+
+/** Change the tab `key` holds in place (a sub-agent call's sibling), without bringing it forward. */
+export function updateTab(state: PanelTabs, key: string, change: (view: SidePanelView) => SidePanelView): PanelTabs {
+  return { ...state, tabs: state.tabs.map((tab) => swapKey(tab) === key ? change(tab) : tab) };
+}
+
+/** Another chat is selected: its own browser and sub-agent tabs stay, any other chat's drop. */
+export function forChat(state: PanelTabs, taskId: string | undefined): PanelTabs {
+  let next = state;
+  for (const tab of state.tabs) {
+    if (isTaskBound(tab) && tab.taskId !== taskId) next = closeTab(next, swapKey(tab));
+  }
+  return next;
+}
+
+/** What `wackcode:sidePanel` keeps: the durable tabs only. */
+export interface StoredPanelTabs { tabs: PanelViewKind[]; active: PanelViewKind | null; open: boolean }
+
+export function storedTabs(state: PanelTabs): StoredPanelTabs {
+  const tabs = state.tabs.map((view) => view.kind).filter(isDurable);
+  const active = isDurable(state.active) ? state.active : tabs[0] ?? null;
+  return { tabs, active, open: state.open && active !== null };
 }
 
 /**
- * What the remembered durable view becomes: its kind for Changes/Terminal/Run/Build/Games, null when the panel
- * closes, and undefined while a task-bound Browser or sub-agent view is showing.
+ * Bring stored tabs back. Before tabs, the key held one durable kind (or null for closed), and
+ * before that a Changes flag (`legacyChangesOpen`).
  */
-export function rememberedView(view: SidePanelView | null): PanelViewKind | null | undefined {
-  if (view === null) return null;
-  return isDurable(view.kind) ? view.kind : undefined;
-}
-
-/** The view to show in `taskId`'s chat: task-bound views fall back to the remembered durable one. */
-export function viewForChat(view: SidePanelView | null, taskId: string | undefined, remembered: PanelViewKind | null): SidePanelView | null {
-  if (isTaskBound(view)) {
-    return view.taskId === taskId ? view : remembered ? durableView(remembered) : null;
+export function restoreTabs(stored: unknown, legacyChangesOpen: boolean): PanelTabs {
+  if (isDurable(stored)) return openTab(NO_PANEL_TABS, durableView(stored));
+  if (stored === null) return NO_PANEL_TABS;
+  if (stored && typeof stored === "object" && Array.isArray((stored as StoredPanelTabs).tabs)) {
+    const { tabs: kinds, active, open } = stored as StoredPanelTabs;
+    const tabs = [...new Set(kinds.filter(isDurable))].map(durableView);
+    if (tabs.length === 0) return NO_PANEL_TABS;
+    const front = isDurable(active) && kinds.includes(active) ? active : swapKey(tabs[0]);
+    return { tabs, active: front, open: open === true };
   }
-  return view;
+  return legacyChangesOpen ? openTab(NO_PANEL_TABS, CHANGES_VIEW) : NO_PANEL_TABS;
 }

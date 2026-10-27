@@ -1777,7 +1777,7 @@ pub struct ImageContent {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
-pub enum BrowserViewportPreset { #[default] Desktop, Laptop, Tablet, Phone }
+pub enum BrowserViewportPreset { #[default] Fit, Desktop, Laptop, Tablet, Phone }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -1785,13 +1785,21 @@ pub struct BrowserViewport { pub preset: BrowserViewportPreset, pub width: f64, 
 impl From<BrowserViewportPreset> for BrowserViewport {
     fn from(preset: BrowserViewportPreset) -> Self {
         let (width, height) = match preset {
+            // Fit takes the panel's own size (`BrowserViewport::fitted`) once the page is shown.
+            BrowserViewportPreset::Fit => (1280.0, 800.0),
             BrowserViewportPreset::Desktop => (1440.0, 900.0), BrowserViewportPreset::Laptop => (1280.0, 800.0),
             BrowserViewportPreset::Tablet => (768.0, 1024.0), BrowserViewportPreset::Phone => (390.0, 844.0),
         };
         Self { preset, width, height }
     }
 }
-impl Default for BrowserViewport { fn default() -> Self { BrowserViewportPreset::Desktop.into() } }
+impl Default for BrowserViewport { fn default() -> Self { BrowserViewportPreset::default().into() } }
+impl BrowserViewport {
+    /// The Fit preset: the page is as large as the panel shows it, at real scale, within sane bounds.
+    pub fn fitted(width: f64, height: f64) -> Self {
+        Self { preset: BrowserViewportPreset::Fit, width: width.round().clamp(320.0, 2560.0), height: height.round().clamp(320.0, 1600.0) }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -1,11 +1,11 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { agentName } from "../agentName";
 import { modelIsReady } from "../model-utils";
 import { BROWSER_TOOL_NAMES, VISUAL_TOOL_NAMES, WEB_FETCH_TOOL_NAME } from "../tool-utils";
 import { SUGGEST_TASK_TOOL_NAME } from "../suggestions";
 import { CANVAS_TOOL_NAMES } from "../canvas-state";
-import type { ExecutionPolicyConfig, AppearanceConfig, AutoTitleConfig, BuiltinModelSuggestion, CommandsConfig, ComputerAppGrant, ComputerUseConfig, GitConfig, McpConfig, MemoryConfig, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ToolCatalogEntry, WebConfig } from "../types";
+import type { ExecutionPolicyConfig, AppearanceConfig, AutoTitleConfig, ModelCatalog, CommandsConfig, ComputerAppGrant, ComputerUseConfig, GitConfig, McpConfig, MemoryConfig, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ToolCatalogEntry, WebConfig } from "../types";
 import { Icon, type IconName } from "./Icons";
 import { AboutSection } from "./AboutSection";
 import { CommandsSection, type SlashCommandActions } from "./CommandsSection";
@@ -196,11 +196,33 @@ export function SettingsPage({
   const [selectedProviderId, setSelectedProviderId] = useState<string>();
   /** Bumped on every navigation between connections, so each opens in a fresh editor. */
   const [providerEditor, setProviderEditor] = useState(0);
-  const [builtinModels, setBuiltinModels] = useState<BuiltinModelSuggestion[]>([]);
+  const [modelCatalog, setModelCatalog] = useState<ModelCatalog>();
+  const [catalogRefreshing, setCatalogRefreshing] = useState(false);
+  const [catalogNotice, setCatalogNotice] = useState<string>();
+  const catalogRequest = useRef(0);
+  const catalogMounted = useRef(true);
   const [catalogLoading, setCatalogLoading] = useState(true);
   const [catalogError, setCatalogError] = useState<string>();
   const [subscriptionProviders, setSubscriptionProviders] = useState<SubscriptionProviderInfo[]>([]);
   const [subscriptionError, setSubscriptionError] = useState<string>();
+  async function refreshCatalog() {
+    const request = ++catalogRequest.current;
+    setCatalogRefreshing(true);
+    setCatalogError(undefined);
+    setCatalogNotice(undefined);
+    try {
+      const catalog = await api.refreshModelCatalog();
+      if (catalogMounted.current && request === catalogRequest.current) {
+        setModelCatalog(catalog);
+        setCatalogNotice(`Catalog refreshed. ${catalog.entries.length} models available.`);
+      }
+    } catch (reason) {
+      if (catalogMounted.current && request === catalogRequest.current) setCatalogError(String(reason));
+    } finally {
+      if (catalogMounted.current && request === catalogRequest.current) setCatalogRefreshing(false);
+    }
+  }
+
   const [newMethod, setNewMethod] = useState<ConnectionMethod>("apiKey");
   const selectedSection = SECTIONS.find((item) => item.id === section);
   const webFetchEnabled = !disabledTools.includes(WEB_FETCH_TOOL_NAME);
@@ -213,17 +235,19 @@ export function SettingsPage({
 
   useEffect(() => {
     let active = true;
-    api.listBuiltinModels().then((models) => {
-      if (active) setBuiltinModels(models);
+    catalogMounted.current = true;
+    const request = ++catalogRequest.current;
+    api.listModelCatalog().then((catalog) => {
+      if (active && request === catalogRequest.current) setModelCatalog(catalog);
     }).catch((reason) => {
-      if (active) setCatalogError(String(reason));
+      if (active && request === catalogRequest.current) setCatalogError(String(reason));
     }).finally(() => {
-      if (active) setCatalogLoading(false);
+      if (active && request === catalogRequest.current) setCatalogLoading(false);
     });
     api.listSubscriptionProviders().then((providers) => {
       if (active) setSubscriptionProviders(providers);
     }).catch((reason) => { if (active) setSubscriptionError(String(reason)); });
-    return () => { active = false; };
+    return () => { active = false; catalogMounted.current = false; };
   }, []);
 
   function openProvider(id?: string) {
@@ -318,7 +342,11 @@ export function SettingsPage({
             editorKey={providerEditor}
             newMethod={newMethod}
             agentName={agentName(appearance)}
-            builtinModels={builtinModels}
+            catalogEntries={modelCatalog?.entries ?? []}
+            catalog={modelCatalog}
+            catalogRefreshing={catalogRefreshing}
+            catalogNotice={catalogNotice}
+            onRefreshCatalog={() => void refreshCatalog()}
             catalogLoading={catalogLoading}
             catalogError={catalogError}
             subscriptionProviders={subscriptionProviders}

@@ -3818,6 +3818,17 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .model-catalog-options button:hover, .model-catalog-options button.active { background: var(--surface-hover); }
 .model-catalog-options strong { font-size: 12px; font-weight: 600; }
 .model-catalog-options span { color: var(--text-dim); font-size: 10px; overflow-wrap: anywhere; }
+.model-catalog-preview { margin-top: 10px; padding: 12px; border: 1px solid var(--border-bright); border-radius: var(--wc-radius-card); background: var(--wc-well); }
+.model-catalog-preview > strong { color: var(--text); font-size: 12px; }
+.model-catalog-preview > p { margin: 5px 0 10px; color: var(--text-dim); font-size: 11px; }
+.model-catalog-preview .row-actions { margin-top: 12px; }
+.model-catalog-facts { display: grid; gap: 7px; margin: 12px 0 0; font-size: 11px; }
+.model-catalog-facts > div { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 12px; }
+.model-catalog-facts dt { color: var(--text-dim); }
+.model-catalog-facts dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+.model-catalog-status .settings-block-sub { margin-bottom: 0; }
+.model-catalog-status > .settings-block-sub { margin-top: 10px; }
+.model-catalog-notice { margin: 8px 0 0; color: var(--wc-accent-text); font-size: 11px; }
 .model-limits { display: grid; grid-template-columns: 1fr 1fr 90px 90px; gap: 10px; }
 .model-limits .capability-toggle { align-items: flex-start; gap: 5px; line-height: 1; color: var(--text-dim); }
 .toggle { width: 38px; height: 22px; border-radius: 999px; padding: 2px; border: 1px solid var(--border-bright); background: var(--wc-toggle); cursor: pointer; }

@@ -1,13 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { applyBuiltinModelSuggestion, autoTitleModelIssue, chatModelGone, defaultModelChoice, favoriteModelEntries, formatTokens, mergeDiscoveredModels, modelDisplayName, pickThinkingLevel, reasoningLevels, searchBuiltinModels, subagentModelIssue } from "./model-utils";
-import type { BuiltinModelSuggestion, ModelRecord, ProviderRecord } from "./types";
-
-const flash: BuiltinModelSuggestion = {
-  sourceProvider: "deepseek", sourceApi: "openai-completions", id: "deepseek-flash", name: "DeepSeek V4.1 Flash",
-  contextWindow: 1_000_000, maxTokens: 384_000, reasoning: true,
-  thinkingLevels: ["off", "low", "high", "max"],
-  thinkingLevelMap: { off: null, low: "low", high: "high", max: "max" }, vision: true
-};
+import { autoTitleModelIssue, chatModelGone, defaultModelChoice, favoriteModelEntries, formatTokens, mergeDiscoveredModels, modelDisplayName, pickThinkingLevel, reasoningLevels, subagentModelIssue } from "./model-utils";
+import type { ModelRecord, ProviderRecord } from "./types";
 
 describe("favoriteModelEntries", () => {
   const model = (id: string, name = id): ModelRecord => ({
@@ -90,34 +83,6 @@ describe("mergeDiscoveredModels", () => {
     // Vision is a capability the user confirms, like limits — discovery never assumes it.
     expect(result[0].vision).toBe(true);
     expect(result[1].vision).toBe(false);
-  });
-});
-
-describe("Pi catalogue suggestions", () => {
-  it("finds a model by partial, punctuation-insensitive name or ID", () => {
-    expect(searchBuiltinModels([flash], "Deepseek V4 Flash")).toEqual([flash]);
-    expect(searchBuiltinModels([flash], "deepseek_flash")).toEqual([flash]);
-    expect(searchBuiltinModels([flash], "unknown")).toEqual([]);
-  });
-
-  it("keeps the direct provider visible when gateways have many closer name matches", () => {
-    const gateways = Array.from({ length: 12 }, (_, index) => ({
-      ...flash, sourceProvider: `gateway-${index}`, id: `gateway-${index}/deepseek-v4-flash`, name: "DeepSeek V4 Flash"
-    }));
-    expect(searchBuiltinModels([...gateways, flash], "Deepseek V4 Flash")).toContain(flash);
-  });
-
-  it("fills settings only when selected and preserves a provider's nonblank ID", () => {
-    const model = {
-      id: "gateway/deepseek-flash", name: "Custom", contextWindow: null, maxTokens: null,
-      reasoning: false, thinkingLevels: ["off" as const], thinkingLevelMap: { off: null }, vision: false
-    };
-    expect(applyBuiltinModelSuggestion(model, flash)).toMatchObject({
-      id: "gateway/deepseek-flash", name: flash.name, contextWindow: flash.contextWindow,
-      maxTokens: flash.maxTokens, thinkingLevels: flash.thinkingLevels, vision: true
-    });
-    expect(applyBuiltinModelSuggestion({ ...model, id: "" }, flash).id).toBe("deepseek-flash");
-    expect(model.contextWindow).toBeNull();
   });
 });
 

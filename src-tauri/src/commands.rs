@@ -1,7 +1,7 @@
 use crate::{
     backgrounds, checkpoints, files, git, glass, mcp,
     models::{
-        AppData, AppearanceConfig, AppInfo, AutoTitleConfig, BackdropMode, BackgroundImage, BootstrapPayload, BuiltinModelSuggestion,
+        AppData, AppearanceConfig, AppInfo, AutoTitleConfig, BackdropMode, BackgroundImage, BootstrapPayload,
         CheckpointChange, CheckpointRef, ComposerStyle, CreateTaskInput, DiffComment, ExportPlanInput,
         ExecutionPolicyConfig, ExtensionUiResponseInput, FavoriteModelRef, ForkTaskInput, GitBranches, GitChanges, GitConfig,
         GitCheckoutResult, GitGeneratedMessage, GitPrInfo,
@@ -579,11 +579,6 @@ pub async fn discover_models(
     }
     let api_key = state.secrets.get(&provider.id)?;
     fetch_model_ids(&provider.base_url, &provider.api_format, &api_key).await
-}
-
-#[tauri::command]
-pub async fn list_builtin_models(app: AppHandle) -> Result<Vec<BuiltinModelSuggestion>, String> {
-    worker::list_builtin_models(&app).await
 }
 
 const NPM_REGISTRY: &str = "https://registry.npmjs.org";

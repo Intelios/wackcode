@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "catalog:update": "cargo run --manifest-path src-tauri/Cargo.toml --example update_model_catalog --",
     "dev": "vite",
     "build:web": "tsc -b && vite build",
     "build:worker": "pnpm --dir worker build",

@@ -1,15 +1,16 @@
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { applyBuiltinModelSuggestion, formatTokens, mergeDiscoveredModels, modelIsReady, searchBuiltinModels } from "../model-utils";
+import { formatTokens, mergeDiscoveredModels, modelIsReady } from "../model-utils";
+import { applyCatalogProfile } from "../model-catalog";
 import type {
-  ApiFormat, BuiltinModelSuggestion, CustomProviderRecord, ModelRecord, ProviderRecord, SaveProviderInput, SubscriptionProviderInfo,
+  ApiFormat, ModelCatalog, ModelCatalogEntry, CustomProviderRecord, ModelRecord, ProviderRecord, SaveProviderInput, SubscriptionProviderInfo,
   SubscriptionProviderRecord, ThinkingLevel
 } from "../types";
 import { Icon, type IconName } from "./Icons";
 import { SettingsHero, stagger } from "./SettingsHero";
 import { Checkbox } from "./ui/Checkbox";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
-import { Popover } from "./ui/Popover";
+import { ModelCatalogSearch } from "./ModelCatalogSearch";
 import { Select } from "./ui/Select";
 
 export type ConnectionMethod = "apiKey" | "subscription";
@@ -164,9 +165,13 @@ interface Props {
   editorKey: number;
   newMethod: ConnectionMethod;
   agentName: string;
-  builtinModels: BuiltinModelSuggestion[];
+  catalogEntries: ModelCatalogEntry[];
+  catalog?: ModelCatalog;
   catalogLoading: boolean;
   catalogError?: string;
+  catalogRefreshing: boolean;
+  catalogNotice?: string;
+  onRefreshCatalog: () => void;
   subscriptionProviders: SubscriptionProviderInfo[];
   subscriptionError?: string;
   onSelect: (id?: string) => void;
@@ -202,6 +207,12 @@ export function ProvidersSection(props: Props) {
         onSelect={onSelect}
         onStartNew={onStartNew}
         onSetProviderEnabled={props.onSetProviderEnabled}
+        catalog={props.catalog}
+        catalogLoading={props.catalogLoading}
+        catalogError={props.catalogError}
+        catalogRefreshing={props.catalogRefreshing}
+        catalogNotice={props.catalogNotice}
+        onRefreshCatalog={props.onRefreshCatalog}
       />
     );
   }
@@ -257,7 +268,7 @@ export function ProvidersSection(props: Props) {
       key={editorKey}
       provider={provider?.kind === "custom" ? provider : undefined}
       lead={provider ? undefined : methodPicker}
-      builtinModels={props.builtinModels}
+      catalogEntries={props.catalogEntries}
       catalogLoading={props.catalogLoading}
       catalogError={props.catalogError}
       onBack={() => onSelect(undefined)}
@@ -315,9 +326,15 @@ interface OverviewProps {
   onSelect: (id?: string) => void;
   onStartNew: (method: ConnectionMethod) => void;
   onSetProviderEnabled: (providerId: string, enabled: boolean) => Promise<void>;
+  catalog?: ModelCatalog;
+  catalogLoading: boolean;
+  catalogError?: string;
+  catalogRefreshing: boolean;
+  catalogNotice?: string;
+  onRefreshCatalog: () => void;
 }
 
-function ProvidersOverview({ providers, agentName, subscriptionProviders, onSelect, onStartNew, onSetProviderEnabled }: OverviewProps) {
+function ProvidersOverview({ providers, agentName, subscriptionProviders, onSelect, onStartNew, onSetProviderEnabled, ...catalogProps }: OverviewProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const ready = providers.filter(usable).length;
@@ -395,8 +412,31 @@ function ProvidersOverview({ providers, agentName, subscriptionProviders, onSele
           </p>
           <MethodTiles mode="start" names={subscriptionProviders.map((item) => item.name)} onPick={onStartNew} />
         </section>
+        <CatalogStatus {...catalogProps} />
       </div>
     </div>
+  );
+}
+
+function CatalogStatus({ catalog, catalogLoading, catalogRefreshing, catalogError, catalogNotice, onRefreshCatalog }: Pick<OverviewProps, "catalog" | "catalogLoading" | "catalogRefreshing" | "catalogError" | "catalogNotice" | "onRefreshCatalog">) {
+  return (
+    <section className="settings-block model-catalog-status" style={stagger(3)} aria-label="Model catalog">
+      <div className="models-block-head">
+        <div>
+          <h3 className="settings-block-title">Model catalog</h3>
+          <p className="settings-block-sub">
+            {catalog ? `${catalog.bundled ? "Bundled" : "Refreshed"} ${new Date(catalog.capturedAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })} · ${plural(catalog.entries.length, "model")}`
+              : catalogLoading ? "Loading the offline catalog…" : "Offline catalog unavailable"}
+          </p>
+        </div>
+        <button type="button" className="secondary-button compact" disabled={catalogLoading || catalogRefreshing} onClick={onRefreshCatalog}>
+          <Icon name="refresh" /> {catalogRefreshing ? "Refreshing catalog…" : "Refresh catalog"}
+        </button>
+      </div>
+      <p className="settings-block-sub">Model specifications from Models.dev. Refresh downloads newer metadata from models.dev; your saved models keep their settings.</p>
+      {catalogError && <p className="model-warning" role="status">{catalogError}{catalog ? " Your current catalog is still available." : " Manual entry is still available."}</p>}
+      {catalogNotice && <p className="model-catalog-notice" role="status">{catalogNotice}</p>}
+    </section>
   );
 }
 
@@ -407,7 +447,7 @@ interface EditorProps {
   provider?: CustomProviderRecord;
   /** Shown first on the page: the method choice while new. */
   lead?: ReactNode;
-  builtinModels: BuiltinModelSuggestion[];
+  catalogEntries: ModelCatalogEntry[];
   catalogLoading: boolean;
   catalogError?: string;
   onBack: () => void;
@@ -427,7 +467,7 @@ interface Found {
 }
 
 function ConnectionEditor({
-  provider, lead, builtinModels, catalogLoading, catalogError, onBack, onCreated, onSave, onDelete, onSetProviderEnabled, onDiscover
+  provider, lead, catalogEntries, catalogLoading, catalogError, onBack, onCreated, onSave, onDelete, onSetProviderEnabled, onDiscover
 }: EditorProps) {
   const reduce = useReducedMotion();
   // Reseed from the saved record when its editable fields change. Keyed by content, so the
@@ -657,8 +697,8 @@ function ConnectionEditor({
                 <h3 className="settings-block-title" id="connection-models-title">Models</h3>
                 <p className="settings-block-sub">
                   {draft.models.length
-                    ? "Open one to edit it. Pi's catalogue can fill in a model's limits and reasoning."
-                    : "Fetch the list from the provider, or add a model from Pi's catalogue."}
+                    ? "Open one to edit it. The model catalog can fill in its specifications."
+                    : "Fetch the list from the provider, or look up a model's specifications."}
                 </p>
               </div>
               <div className="models-block-actions">
@@ -687,7 +727,9 @@ function ConnectionEditor({
               {adding && (
                 <AddModel
                   key="add"
-                  catalog={builtinModels}
+                  baseUrl={draft.baseUrl}
+                  connectionFormat={draft.apiFormat}
+                  catalog={catalogEntries}
                   loading={catalogLoading}
                   error={catalogError}
                   onAdd={(model) => { addModels([model], true); setAdding(false); }}
@@ -705,10 +747,11 @@ function ConnectionEditor({
                   return (
                     <ModelRow
                       key={key}
+                      baseUrl={draft.baseUrl}
                       model={model}
                       connectionFormat={draft.apiFormat}
                       open={open.has(key)}
-                      catalog={builtinModels}
+                      catalog={catalogEntries}
                       catalogLoading={catalogLoading}
                       catalogError={catalogError}
                       reduce={Boolean(reduce)}
@@ -771,10 +814,11 @@ function ConnectionEditor({
 }
 
 interface RowProps {
+  baseUrl: string;
   model: ModelRecord;
   connectionFormat: ApiFormat;
   open: boolean;
-  catalog: BuiltinModelSuggestion[];
+  catalog: ModelCatalogEntry[];
   catalogLoading: boolean;
   catalogError?: string;
   reduce: boolean;
@@ -784,7 +828,7 @@ interface RowProps {
 }
 
 /** One model: a line saying what it is and what it can do, which opens into its settings. */
-function ModelRow({ model, connectionFormat, open, catalog, catalogLoading, catalogError, reduce, onToggle, onChange, onRemove }: RowProps) {
+function ModelRow({ baseUrl, model, connectionFormat, open, catalog, catalogLoading, catalogError, reduce, onToggle, onChange, onRemove }: RowProps) {
   const ready = modelIsReady(model);
   const label = model.name || model.id || "New model";
   return (
@@ -816,7 +860,7 @@ function ModelRow({ model, connectionFormat, open, catalog, catalogLoading, cata
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.2, ease: EASE }}
         >
-          <ModelEditor model={model} connectionFormat={connectionFormat} catalog={catalog} catalogLoading={catalogLoading} catalogError={catalogError} onChange={onChange} />
+          <ModelEditor baseUrl={baseUrl} model={model} connectionFormat={connectionFormat} catalog={catalog} catalogLoading={catalogLoading} catalogError={catalogError} onChange={onChange} />
         </motion.div>
       )}
     </li>
@@ -824,15 +868,16 @@ function ModelRow({ model, connectionFormat, open, catalog, catalogLoading, cata
 }
 
 interface ModelEditorProps {
+  baseUrl: string;
   model: ModelRecord;
   connectionFormat: ApiFormat;
-  catalog: BuiltinModelSuggestion[];
+  catalog: ModelCatalogEntry[];
   catalogLoading: boolean;
   catalogError?: string;
   onChange: (patch: Partial<ModelRecord>) => void;
 }
 
-function ModelEditor({ model, connectionFormat, catalog, catalogLoading, catalogError, onChange }: ModelEditorProps) {
+function ModelEditor({ baseUrl, model, connectionFormat, catalog, catalogLoading, catalogError, onChange }: ModelEditorProps) {
   const [advanced, setAdvanced] = useState(false);
   const label = model.name || model.id || "this model";
 
@@ -871,12 +916,15 @@ function ModelEditor({ model, connectionFormat, catalog, catalogLoading, catalog
           />
         </label>
       </div>
-      <ModelSuggestionSearch
+      <ModelCatalogSearch
+        baseUrl={baseUrl}
+        apiFormat={model.apiFormat ?? connectionFormat}
+        modelId={model.id}
         modelLabel={model.name || model.id || "this model"}
         catalog={catalog}
         loading={catalogLoading}
         error={catalogError}
-        onSelect={(suggestion) => onChange(applyBuiltinModelSuggestion(model, suggestion))}
+        onSelect={(entry, profile) => onChange(applyCatalogProfile(model, entry, profile))}
       />
       <div className="model-limits">
         <label><span>Context tokens</span><input type="number" min="1" value={model.contextWindow ?? ""} onChange={(event) => onChange({ contextWindow: event.target.value ? Number(event.target.value) : null })} placeholder="Required" /></label>
@@ -934,21 +982,24 @@ function ModelEditor({ model, connectionFormat, catalog, catalogLoading, catalog
           )}
         </div>
       )}
+      {model.reasoning && !model.thinkingLevels.some((level) => level !== "off") && <p className="model-warning">Only off is selected. Choose the supported reasoning efforts for this endpoint.</p>}
       {!modelIsReady(model) && <p className="model-warning">Set the context and output limits before this model can be used.</p>}
     </>
   );
 }
 
 interface AddModelProps {
-  catalog: BuiltinModelSuggestion[];
+  baseUrl: string;
+  connectionFormat: ApiFormat;
+  catalog: ModelCatalogEntry[];
   loading: boolean;
   error?: string;
   onAdd: (model: ModelRecord) => void;
   onCancel: () => void;
 }
 
-/** Search-first: a pick from Pi's catalogue arrives with its limits; typing it in is the fallback. */
-function AddModel({ catalog, loading, error, onAdd, onCancel }: AddModelProps) {
+/** Search first, review the source's specifications, then add them to the draft. */
+function AddModel({ baseUrl, connectionFormat, catalog, loading, error, onAdd, onCancel }: AddModelProps) {
   const reduce = useReducedMotion();
   return (
     <motion.div
@@ -962,13 +1013,15 @@ function AddModel({ catalog, loading, error, onAdd, onCancel }: AddModelProps) {
         <strong>Add a model</strong>
         <button type="button" className="ghost-button" aria-label="Close" onClick={onCancel}><Icon name="close" /></button>
       </div>
-      <ModelSuggestionSearch
+      <ModelCatalogSearch
+        baseUrl={baseUrl}
+        apiFormat={connectionFormat}
         modelLabel="a new model"
         catalog={catalog}
         loading={loading}
         error={error}
         autoFocus
-        onSelect={(suggestion) => onAdd(applyBuiltinModelSuggestion(blankModel(), suggestion))}
+        onSelect={(entry, profile) => onAdd(applyCatalogProfile(blankModel(), entry, profile))}
       />
       <button type="button" className="text-button model-panel-manual" onClick={() => onAdd(blankModel())}>Enter it manually</button>
     </motion.div>
@@ -1037,97 +1090,6 @@ function FoundModels({ found, onChange, onAdd, onCancel }: FoundProps) {
         </button>
       </div>
     </motion.div>
-  );
-}
-
-interface SearchProps {
-  modelLabel: string;
-  catalog: BuiltinModelSuggestion[];
-  loading: boolean;
-  error?: string;
-  autoFocus?: boolean;
-  onSelect: (suggestion: BuiltinModelSuggestion) => void;
-}
-
-function ModelSuggestionSearch({ modelLabel, catalog, loading, error, autoFocus = false, onSelect }: SearchProps) {
-  const [query, setQuery] = useState("");
-  const [open, setOpen] = useState(false);
-  const [active, setActive] = useState(-1);
-  const [applied, setApplied] = useState<BuiltinModelSuggestion>();
-  const anchor = useRef<HTMLDivElement>(null);
-  const listId = useId();
-  const matches = useMemo(() => searchBuiltinModels(catalog, query), [catalog, query]);
-  const visible = open && matches.length > 0 && !error;
-
-  function choose(suggestion: BuiltinModelSuggestion) {
-    onSelect(suggestion);
-    setApplied(suggestion);
-    setQuery("");
-    setOpen(false);
-    setActive(-1);
-  }
-
-  return (
-    <div className="model-catalog-search" ref={anchor}>
-      <label>
-        <span>Find in Pi catalogue</span>
-        <input
-          role="combobox"
-          aria-label={`Find in Pi catalogue for ${modelLabel}`}
-          aria-autocomplete="list"
-          aria-expanded={visible}
-          aria-controls={visible ? listId : undefined}
-          aria-activedescendant={visible && active >= 0 ? `${listId}-${active}` : undefined}
-          value={query}
-          autoFocus={autoFocus}
-          onChange={(event) => { setQuery(event.target.value); setOpen(true); setActive(-1); }}
-          onFocus={() => { if (query.trim()) setOpen(true); }}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") { setOpen(false); setActive(-1); }
-            else if (event.key === "Tab") setOpen(false);
-            else if (event.key === "ArrowDown" && matches.length) {
-              event.preventDefault();
-              setOpen(true);
-              setActive((value) => (value + 1) % matches.length);
-            } else if (event.key === "ArrowUp" && matches.length) {
-              event.preventDefault();
-              setOpen(true);
-              setActive((value) => value < 0 ? matches.length - 1 : (value - 1 + matches.length) % matches.length);
-            } else if (event.key === "Enter" && visible) {
-              event.preventDefault();
-              choose(matches[active < 0 ? 0 : active]);
-            }
-          }}
-          placeholder="Search by model name or ID"
-          autoComplete="off"
-          spellCheck={false}
-        />
-      </label>
-      {loading && <small role="status">Loading bundled Pi catalogue…</small>}
-      {error && <small role="status">Could not load Pi catalogue: {error} Manual entry is still available.</small>}
-      {!loading && !error && query.trim() && matches.length === 0 && <small role="status">No Pi catalogue matches. You can enter settings manually.</small>}
-      {applied && <small>Filled from Pi&rsquo;s {applied.sourceProvider} catalogue entry. Review these settings before saving.</small>}
-      <Popover anchor={anchor} open={visible} onClose={() => { setOpen(false); setActive(-1); }} matchWidth className="model-catalog-popover">
-        <div id={listId} role="listbox" aria-label="Pi model suggestions" className="model-catalog-options">
-          {matches.map((suggestion, index) => (
-            <button
-              id={`${listId}-${index}`}
-              key={`${suggestion.sourceProvider}:${suggestion.id}`}
-              type="button"
-              role="option"
-              aria-selected={index === active}
-              className={index === active ? "active" : ""}
-              onMouseDown={(event) => event.preventDefault()}
-              onMouseEnter={() => setActive(index)}
-              onClick={() => choose(suggestion)}
-            >
-              <strong>{suggestion.name}</strong>
-              <span>{suggestion.sourceProvider} · {suggestion.sourceApi} · {suggestion.id}</span>
-            </button>
-          ))}
-        </div>
-      </Popover>
-    </div>
   );
 }
 

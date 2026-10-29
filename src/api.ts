@@ -8,7 +8,7 @@ import type {
   GitConfig,
   AppInfo,
   BootstrapPayload,
-  BuiltinModelSuggestion,
+  ModelCatalog,
   BrowserState,
   CheckpointChange,
   CheckpointRef,
@@ -92,7 +92,8 @@ export const api = {
   setModelFavorite: (reference: ModelRef, favorite: boolean) => invoke<ModelRef[]>("set_model_favorite", { ...reference, favorite }),
   deleteProvider: (providerId: string) => invoke<void>("delete_provider", { providerId }),
   discoverModels: (providerId: string) => invoke<string[]>("discover_models", { input: { providerId } }),
-  listBuiltinModels: () => invoke<BuiltinModelSuggestion[]>("list_builtin_models"),
+  listModelCatalog: () => invoke<ModelCatalog>("list_model_catalog"),
+  refreshModelCatalog: () => invoke<ModelCatalog>("refresh_model_catalog"),
   listSubscriptionProviders: () => invoke<SubscriptionProviderInfo[]>("list_subscription_providers"),
   startSubscriptionLogin: (providerId: string) => invoke<{ loginId: string; provider: ProviderRecord }>("start_subscription_login", { providerId }),
   respondSubscriptionLogin: (loginId: string, promptId: string, value?: string, cancelled = false) =>

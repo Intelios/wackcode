@@ -9,6 +9,14 @@
 - **`api.ts`** is the only bridge to Rust: one typed `invoke` wrapper per command. Terminal output arrives on a `Channel`, not an event.
 - **Components are presentational.** The exceptions call `api` directly because they wrap one self-contained surface: `SettingsPage.tsx` (and `IntegrationsSection.tsx`, `AboutSection.tsx`), `BrowserPanel.tsx` (positions the native web view), `TerminalPanel.tsx` and `RunPanel.tsx` (stream their PTYs), `hooks/useStagedVisual.ts` (stages a visual reply's or a canvas artboard's document through `stageVisual` for `VisualCard` and `CanvasArtboard`, the one call that fits their own sandboxed surface) and `markdown-components.tsx` (its link override routes http(s) clicks through `revealPath`; the webview cannot open links itself) and `link-opener.ts` (a web_search result opens in the chat's browser preview through App's opener, otherwise through `revealPath`). Don't add more without the same reason.
 
+## Model reference catalog
+
+Settings › Providers' reference catalogue is local state in `SettingsPage`, separate from
+connection drafts. `ModelCatalogSearch` groups canonical identities, previews a source, and
+applies only after **Use these specifications**. `model-catalog.ts` matches the normalized API
+base path and known protocol, never the host alone. Refresh failure leaves the current lookup
+usable, and refreshing cannot reseed an editor's draft. See [model-catalog.md](model-catalog.md).
+
 ## Context menus
 
 `ContextMenuProvider` owns one pointer-anchored renderer menu, using the shared `Menu` primitive. Components supply existing action callbacks through `useContextMenu`; they never call the bridge for menu actions. Text fields take precedence over enclosing targets; selections and HTTP(S) links add their own actions. The app supplies native clipboard callbacks (reads only after Paste text) and the usual external-link opener. Navigation, scroll, resize and loss of window focus dismiss captured actions. The per-chat native browser preview remains a separate webview with its own page interaction.

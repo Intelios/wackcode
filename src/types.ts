@@ -168,12 +168,37 @@ export interface ModelRecord {
   apiFormat?: ApiFormat;
 }
 
-/** Settings-only metadata from the Pi version bundled with WackCode. */
-export interface BuiltinModelSuggestion extends ModelRecord {
-  sourceProvider: string;
-  sourceApi: string;
-  contextWindow: number;
-  maxTokens: number;
+/** Settings-only reference data; never sent to a worker or persisted with a connection. */
+export interface ModelCatalog {
+  schemaVersion: number;
+  source: string;
+  capturedAt: string;
+  bundled: boolean;
+  entries: ModelCatalogEntry[];
+}
+
+export interface ModelCatalogEntry {
+  id: string;
+  name: string;
+  originalProvider: string;
+  profiles: ModelCatalogProfile[];
+}
+
+export interface ModelCatalogProfile {
+  key: string;
+  provider: string;
+  providerName: string;
+  id: string;
+  /** Matching hint only. Never fetched or copied into a connection. */
+  baseUrl: string | null;
+  apiFormats: ApiFormat[];
+  contextWindow: number | null;
+  maxTokens: number | null;
+  reasoning: boolean;
+  /** null means the source's controls need manual setup. */
+  thinkingLevels: ThinkingLevel[] | null;
+  thinkingLevelMap: Partial<Record<ThinkingLevel, string | null>>;
+  vision: boolean;
 }
 
 /**

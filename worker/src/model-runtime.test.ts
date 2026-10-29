@@ -3,6 +3,7 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { createModelRuntime, findModel, MODEL_MISSING_MESSAGE, missingModelMessage } from "./model-runtime.js";
 import { INLINE_IMAGE_LIMITS } from "./image-limits.js";
 import type { WorkerModel, WorkerProvider } from "./protocol.js";
@@ -31,6 +32,20 @@ async function load(connection: WorkerProvider) {
 }
 
 describe("connection models in Pi", () => {
+  it("preserves the catalog's explicit off mapping and exact supported efforts in Pi", async () => {
+    const configured: WorkerModel = {
+      ...model("new-model", "New catalog model"), reasoning: true,
+      thinkingLevels: ["off", "low", "high", "max"],
+      thinkingLevelMap: { off: "none", low: "low", high: "high", max: "max" }
+    };
+    const connection = provider({ models: [configured] });
+    const runtime = await load(connection);
+    const actual = await findModel(runtime, connection, configured.id);
+    expect(actual).toBeDefined();
+    expect(getSupportedThinkingLevels(actual!)).toEqual(configured.thinkingLevels);
+    expect(actual?.thinkingLevelMap?.off).toBe("none");
+  });
+
   it("does not fetch OpenRouter's new per-key catalogue while loading a connection", async () => {
     const fetch = vi.fn();
     vi.stubGlobal("fetch", fetch);

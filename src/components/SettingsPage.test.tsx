@@ -1,7 +1,7 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
-import type { AppearanceConfig, BuiltinModelSuggestion, PromptConfig, ProviderRecord, SubagentConfig, ToolCatalogEntry } from "../types";
+import type { AppearanceConfig, ModelCatalogEntry, PromptConfig, ProviderRecord, SubagentConfig, ToolCatalogEntry } from "../types";
 import { DEFAULT_APPEARANCE } from "../theme";
 import { SettingsPage } from "./SettingsPage";
 
@@ -12,7 +12,8 @@ vi.mock("../api", () => ({ api: {
     piVersion: "0.99.2", nodeVersion: "24.18.0", osVersion: "macOS 15.3", chip: "Apple Silicon (arm64)",
     projectCount: 1, chatCount: 2, archivedCount: 0, activeWorkers: 0
   }),
-  listBuiltinModels: vi.fn().mockResolvedValue([]),
+  listModelCatalog: vi.fn().mockResolvedValue({ schemaVersion: 1, source: "https://models.dev/catalog.json", capturedAt: "2026-10-29T00:00:00Z", bundled: true, entries: [] }),
+  refreshModelCatalog: vi.fn(),
   listSubscriptionProviders: vi.fn().mockResolvedValue([]),
   computerUseStatus: vi.fn().mockResolvedValue({ supported: true, accessibility: true, screenRecording: false, hotkeyAvailable: true, devBuild: false }),
   computerUseRequestPermission: vi.fn().mockResolvedValue(undefined),
@@ -38,7 +39,8 @@ const noFavorites = { favoriteModels: [], onSetFavorite: vi.fn().mockResolvedVal
 
 afterEach(() => {
   cleanup();
-  vi.mocked(api.listBuiltinModels).mockReset().mockResolvedValue([]);
+  vi.mocked(api.listModelCatalog).mockReset().mockResolvedValue(catalogSnapshot([]));
+  vi.mocked(api.refreshModelCatalog).mockReset();
   vi.mocked(api.listSubscriptionProviders).mockReset().mockResolvedValue([]);
 });
 
@@ -448,12 +450,18 @@ describe("SettingsPage provider enable switch", () => {
   });
 });
 
-const flashSuggestion: BuiltinModelSuggestion = {
-  sourceProvider: "deepseek", sourceApi: "openai-completions", id: "deepseek-flash", name: "DeepSeek V4.1 Flash",
-  contextWindow: 1_000_000, maxTokens: 384_000, reasoning: true,
-  thinkingLevels: ["off", "low", "high", "max"],
-  thinkingLevelMap: { off: null, low: "low", high: "high", max: "max" }, vision: true
+const flashSuggestion: ModelCatalogEntry = {
+  id: "deepseek/flash", name: "DeepSeek V4.1 Flash", originalProvider: "deepseek",
+  profiles: [{ key: "deepseek:flash", provider: "deepseek", providerName: "DeepSeek", id: "deepseek-flash",
+    baseUrl: "https://api.deepseek.com/v1", apiFormats: ["openai-completions"],
+    contextWindow: 1_000_000, maxTokens: 384_000, reasoning: true,
+    thinkingLevels: ["off", "low", "high", "max"],
+    thinkingLevelMap: { off: null, low: "low", high: "high", max: "max" }, vision: true }]
 };
+
+function catalogSnapshot(entries: ModelCatalogEntry[], bundled = true) {
+  return { schemaVersion: 1, source: "https://models.dev/catalog.json", capturedAt: "2026-10-29T00:00:00Z", bundled, entries };
+}
 
 function renderModelSettings(provider: ProviderRecord = testProviders[0]) {
   const onSave = vi.fn().mockImplementation(async (input) => ({ ...provider, models: input.models }));
@@ -469,78 +477,98 @@ function renderModelSettings(provider: ProviderRecord = testProviders[0]) {
   return { ...view, onSave };
 }
 
-describe("SettingsPage Pi catalogue suggestions", () => {
-  it("shows sourced matches and fills a blank manual model only after selection", async () => {
-    vi.mocked(api.listBuiltinModels).mockResolvedValue([
-      flashSuggestion,
-      { ...flashSuggestion, sourceProvider: "openrouter", id: "deepseek/deepseek-flash" }
-    ]);
+describe("SettingsPage model catalog", () => {
+  it("groups sources and fills a blank model only after reviewing specifications", async () => {
+    const grouped = { ...flashSuggestion, profiles: [...flashSuggestion.profiles,
+      { ...flashSuggestion.profiles[0], key: "openrouter:flash", provider: "openrouter", providerName: "OpenRouter", id: "deepseek/deepseek-flash" }] };
+    vi.mocked(api.listModelCatalog).mockResolvedValue(catalogSnapshot([grouped]));
     const { onSave } = renderModelSettings();
     openConnection("Entrim AI");
     fireEvent.click(screen.getByRole("button", { name: /Add model/ }));
-    const search = screen.getByRole("combobox", { name: /Find in Pi catalogue/ });
+    const search = screen.getByRole("combobox", { name: /Find model specifications/ });
     fireEvent.change(search, { target: { value: "Deepseek V4 Flash" } });
     const options = await screen.findAllByRole("option");
-    expect(options).toHaveLength(2);
-    expect(options[0]).toHaveTextContent("deepseek · openai-completions · deepseek-flash");
-    expect(options[1]).toHaveTextContent("openrouter");
-    // Nothing is added until a suggestion is picked.
-    expect(screen.queryByRole("textbox", { name: "Model ID" })).not.toBeInTheDocument();
-    expect(onSave).not.toHaveBeenCalled();
-
+    expect(options).toHaveLength(1);
+    expect(options[0]).toHaveTextContent("2 sources");
     fireEvent.click(options[0]);
+    expect(screen.queryByRole("textbox", { name: "Model ID" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: /Specifications for/ })).toHaveTextContent("384K tokens");
+    fireEvent.click(screen.getByRole("button", { name: "Use these specifications" }));
     expect(screen.getByRole("textbox", { name: "Model ID" })).toHaveValue("deepseek-flash");
-    expect(screen.getByRole("textbox", { name: "Display name" })).toHaveValue("DeepSeek V4.1 Flash");
     expect(screen.getByRole("spinbutton", { name: "Context tokens" })).toHaveValue(1_000_000);
-    expect(screen.getByRole("spinbutton", { name: "Max output tokens" })).toHaveValue(384_000);
     expect(screen.getByRole("switch", { name: /Vision for DeepSeek/ })).toHaveAttribute("aria-checked", "true");
     expect(onSave).not.toHaveBeenCalled();
-
     fireEvent.click(screen.getByRole("button", { name: "Save connection" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(onSave.mock.calls[0][0].models[0].thinkingLevels).toEqual(["off", "low", "high", "max"]);
   });
 
-  it("preserves a discovered provider ID and supports keyboard selection", async () => {
-    vi.mocked(api.listBuiltinModels).mockResolvedValue([flashSuggestion]);
-    const provider: ProviderRecord = {
-      ...testProviders[0], models: [{ id: "gateway/deepseek-flash", name: "gateway/deepseek-flash",
-        contextWindow: null, maxTokens: null, reasoning: false, thinkingLevels: ["off"],
-        thinkingLevelMap: { off: null }, vision: false }]
-    };
+  it("preserves a discovered ID and supports keyboard selection and escape", async () => {
+    vi.mocked(api.listModelCatalog).mockResolvedValue(catalogSnapshot([flashSuggestion]));
+    const provider: ProviderRecord = { ...testProviders[0], models: [{ id: "gateway/deepseek-flash", name: "gateway/deepseek-flash",
+      contextWindow: null, maxTokens: null, reasoning: false, thinkingLevels: ["off"], thinkingLevelMap: { off: null }, vision: false }] };
     renderModelSettings(provider);
     openConnection("Entrim AI");
-    expect(screen.getByText("Needs limits")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /^gateway\/deepseek-flash/ }));
-    const search = screen.getByRole("combobox", { name: /Find in Pi catalogue/ });
+    const search = screen.getByRole("combobox", { name: /Find model specifications/ });
     fireEvent.change(search, { target: { value: "Deepseek V4 Flash" } });
     await screen.findByRole("option");
     fireEvent.keyDown(search, { key: "Escape" });
     expect(screen.queryByRole("option")).not.toBeInTheDocument();
     expect(screen.getByRole("spinbutton", { name: "Context tokens" })).toHaveValue(null);
     fireEvent.keyDown(search, { key: "ArrowDown" });
-    expect(screen.getByRole("combobox", { name: /Find in Pi catalogue/ })).toHaveAttribute("aria-expanded", "true");
+    expect(search).toHaveAttribute("aria-expanded", "true");
     fireEvent.keyDown(search, { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "Use these specifications" }));
     expect(screen.getByRole("textbox", { name: "Model ID" })).toHaveValue("gateway/deepseek-flash");
     expect(screen.getByRole("spinbutton", { name: "Context tokens" })).toHaveValue(1_000_000);
   });
 
-  it("keeps manual entry available when there is no match or the catalogue fails", async () => {
-    const { unmount } = renderModelSettings();
-    openConnection("Entrim AI");
-    fireEvent.click(screen.getByRole("button", { name: /Add model/ }));
-    fireEvent.change(screen.getByRole("combobox", { name: /Find in Pi catalogue/ }), { target: { value: "unknown" } });
-    expect(await screen.findByText(/No Pi catalogue matches/)).toBeInTheDocument();
-    unmount();
-
-    vi.mocked(api.listBuiltinModels).mockRejectedValue(new Error("Catalogue unavailable"));
+  it("keeps manual entry available when the catalog cannot load", async () => {
+    vi.mocked(api.listModelCatalog).mockRejectedValue(new Error("Catalog unavailable"));
     renderModelSettings();
     openConnection("Entrim AI");
     fireEvent.click(screen.getByRole("button", { name: /Add model/ }));
-    expect(await screen.findByText(/Could not load Pi catalogue: Error: Catalogue unavailable/)).toBeInTheDocument();
+    expect(await screen.findByText(/Could not load model catalog: Error: Catalog unavailable/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Enter it manually" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Model ID" }), { target: { value: "my-model" } });
     expect(screen.getByRole("textbox", { name: "Model ID" })).toHaveValue("my-model");
+  });
+
+  it("refreshes only on request and preserves a draft edited while the download is running", async () => {
+    vi.mocked(api.listModelCatalog).mockResolvedValue(catalogSnapshot([flashSuggestion]));
+    let finish!: (value: ReturnType<typeof catalogSnapshot>) => void;
+    vi.mocked(api.refreshModelCatalog).mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const { onSave } = renderModelSettings();
+    const refresh = await screen.findByRole("button", { name: "Refresh catalog" });
+    await waitFor(() => expect(refresh).toBeEnabled());
+    expect(api.refreshModelCatalog).not.toHaveBeenCalled();
+    fireEvent.click(refresh);
+    expect(screen.getByRole("button", { name: "Refreshing catalog…" })).toBeDisabled();
+    openConnection("Entrim AI");
+    fireEvent.change(screen.getByLabelText("Name", { selector: "input" }), { target: { value: "Unsaved name" } });
+    await act(async () => { finish(catalogSnapshot([flashSuggestion, { ...flashSuggestion, id: "new/model", name: "New release" }], false)); });
+    expect(screen.getByLabelText("Name", { selector: "input" })).toHaveValue("Unsaved name");
+    expect(onSave).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Add model" }));
+    fireEvent.change(screen.getByRole("combobox", { name: /Find model specifications/ }), { target: { value: "New release" } });
+    expect(await screen.findByRole("option")).toHaveTextContent("New release");
+  });
+
+  it("keeps lookup and saved connections intact after a refresh fails", async () => {
+    vi.mocked(api.listModelCatalog).mockResolvedValue(catalogSnapshot([flashSuggestion]));
+    vi.mocked(api.refreshModelCatalog).mockRejectedValue(new Error("Offline"));
+    const { onSave } = renderModelSettings();
+    const refresh = await screen.findByRole("button", { name: "Refresh catalog" });
+    await waitFor(() => expect(refresh).toBeEnabled());
+    fireEvent.click(refresh);
+    expect(await screen.findByText(/Offline.*current catalog is still available/)).toBeInTheDocument();
+    openConnection("Entrim AI");
+    expect(screen.queryByRole("button", { name: "Save connection" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Add model" }));
+    fireEvent.change(screen.getByRole("combobox", { name: /Find model specifications/ }), { target: { value: "deepseek" } });
+    expect(await screen.findByRole("option")).toHaveTextContent("DeepSeek");
+    expect(onSave).not.toHaveBeenCalled();
   });
 });
 

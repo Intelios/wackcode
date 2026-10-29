@@ -147,7 +147,7 @@ The app lands in `src-tauri/target/release/bundle/macos/WackCode.app`; drag it i
 
 Open **Settings › Providers** (<kbd>⌘ ,</kbd>) and either:
 
-- **Add a connection:** any OpenAI-compatible endpoint (Chat Completions or Responses) with its API key. Fetch the provider's model list and pick the models you want; Pi's built-in catalogue fills in context limits and reasoning settings, or you can enter them yourself.
+- **Add a connection:** any OpenAI-compatible endpoint (Chat Completions or Responses) with its API key. Fetch the provider's model list and pick the models you want; WackCode's bundled model catalog helps fill in specifications, or you can enter them yourself. **Refresh catalog** downloads newer metadata from Models.dev without updating Pi.
 - **Sign in with a subscription:** OpenAI Codex (ChatGPT Plus/Pro), GitHub Copilot, Anthropic, xAI, Meta, or Kimi For Coding. Check your provider's terms for third-party apps.
 
 Then press <kbd>⌘ O</kbd> to add a project, pick a model in the composer, and send your first message. Try `/init` to have the agent write an `AGENTS.md` for your project.
@@ -174,6 +174,7 @@ It's still an agent with real access to your Mac, so a few things are worth know
 - The model providers you configure, and subscription sign-in services after you choose **Sign in**. Expired tokens refresh as part of a model request.
 - The npm registry and a package's own source, only while you browse or install packages.
 - pi.dev's skill catalogue, only while you browse **Settings › Skills › Browse** (falls back to the npm registry).
+- Models.dev's public model metadata, only when you click **Settings › Providers › Refresh catalog**. It receives no API keys, connection details or conversations.
 - Public web pages the agent reads with Web Fetch during a run: GET requests to public addresses only. Switch it off in **Settings › Web**.
 - The search provider you add in **Settings › Web**, when the agent searches or you run a Test search: only its own API (or the URL you entered), never redirected elsewhere. The key stays in WackCode's own process. If you turn on reading pages through it, the pages Web Fetch reads go to it too.
 - Pages you or the agent open in Browser preview, plus their assets, API calls and WebSockets.

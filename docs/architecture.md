@@ -14,7 +14,6 @@ How WackCode's processes fit together, where state lives, and the rules that kee
 | Commands scan | `worker/src/commands-scan.ts` | Never | Never; runs trusted extension code offline |
 | MCP probe (Test connection) | `worker/src/mcp-probe.ts` | That one server's values | That one server |
 | Saved history | `worker/src/session-reader.ts` | Never | Never; read-only session projection |
-| Model catalogue | `worker/src/catalog.ts` | Never | Never; static catalogue |
 | Subscription models, at launch | `worker/src/subscription-models.ts` | Reads the signed-in `auth.json` files Rust names | Never; static catalogue, no token refresh |
 
 Each chat worker runs one Pi session in-process. Sub-agents are in-memory child sessions inside the same worker (`subagent-runner.ts`), not separate processes. Helpers do one job each. A background child outlives its parent run, but remains owned by the chat worker: aggregate chat status stays busy until children and their result continuations finish. Stop and worker shutdown cancel all children; jobs never restart automatically. The dev app runs them from `worker/dist/`; the bundle runs `resources/worker/dist/` on a pinned Node runtime (`runtime-lock.json`).
@@ -41,6 +40,7 @@ Everything is under the app data directory (`~/Library/Application Support/com.w
 | `wackcode.json` | Settings, projects, chats. Written only through `MetadataState::mutate` (`storage.rs`). |
 | `secrets.json` (0600) | API keys, MCP header/env values keyed `mcp:<id>`, and search provider keys keyed `search:<id>`. |
 | `web-usage.json` | Settings › Web's usage meter: searches and page reads per provider per month, the last 12 months. Written a few seconds after a change (`web_usage.rs`), never sent anywhere, and not the TokenTrail ledger. |
+| `model-catalog.json` | Validated Models.dev metadata cache; separate from connections and worker state. The bundled snapshot is embedded in Rust. |
 | `subscriptions/<id>/auth.json` (0600) | OAuth credentials, one file per subscription provider. |
 | `sessions/<task>/`, `agent/<task>/` | A chat's Pi session files and Pi agent directory. |
 | `scratch/<task>/` | Workspace for chats without a project, and every Chat mode chat's scratchpad. Deleted with the chat. |
@@ -52,6 +52,11 @@ Everything is under the app data directory (`~/Library/Application Support/com.w
 | `usage/v1/` | The usage ledger ([wackcode-usage-v1.md](wackcode-usage-v1.md)); never deleted with a chat. |
 
 The renderer keeps only UI conveniences in `localStorage` (`wackcode:*` keys such as the last model, the side panel's view and width, collapsed and pinned projects).
+
+Settings' model catalogue belongs to Rust (`model_catalog.rs`), independent of Pi. Listing reads
+the newest valid bundled/cached snapshot offline; only **Refresh catalog** downloads from
+Models.dev. Applying specifications edits a connection draft, never workers or saved models.
+Both Code and Chat keep using the saved connection metadata. See [model-catalog.md](model-catalog.md).
 
 `MetadataState::mutate` restores the previous execution policy and computer-use settings on a failed operation or write, while holding the lock. Failed permission saves cannot silently change access. Other runtime state, such as a worker crash interruption, intentionally remains updated even when saving fails.
 

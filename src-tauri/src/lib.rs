@@ -13,6 +13,7 @@ mod history;
 mod mcp;
 mod memory;
 mod menu_bar;
+pub mod model_catalog;
 mod models;
 mod pty_output;
 mod run_command;
@@ -51,6 +52,7 @@ pub fn run() {
         .manage(browser::BrowserManager::default())
         .manage(computer_use::ComputerUseManager::default())
         .manage(web::WebState::default())
+        .manage(model_catalog::ModelCatalogState::default())
         .manage(worker::SelectedTask::default())
         .manage(worker::WorkerActivity::default())
         .manage(commands::TaskLocks::default())
@@ -167,7 +169,8 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + 
             commands::set_model_favorite,
             commands::delete_provider,
             commands::discover_models,
-            commands::list_builtin_models,
+            model_catalog::list_model_catalog,
+            model_catalog::refresh_model_catalog,
             subscriptions::list_subscription_providers,
             subscriptions::start_subscription_login,
             subscriptions::respond_subscription_login,

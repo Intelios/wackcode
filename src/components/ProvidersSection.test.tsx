@@ -40,7 +40,9 @@ function Harness({ providers, start, onSave, onDiscover }: {
       editorKey={editor}
       newMethod={method}
       agentName="Quack"
-      builtinModels={[]}
+      catalogEntries={[]}
+      catalogRefreshing={false}
+      onRefreshCatalog={vi.fn()}
       catalogLoading={false}
       subscriptionProviders={[{ id: "anthropic", name: "Anthropic", guidance: "Uses your Claude plan." }]}
       onSelect={open}

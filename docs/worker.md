@@ -33,6 +33,10 @@ Saved history opens without a model or worker. When a worker starts for a chat w
 
 ## Custom connection request shaping
 
+Settings' refreshable Models.dev catalogue is reference metadata owned by Rust, not part of a
+worker. `catalog-models.ts` retains Pi's pinned, offline request-compatibility lookup; downloaded
+catalogue data cannot supply `compat`, headers or credentials. Subscription lists still use Pi.
+
 A custom connection's `models.json` re-declares its models, so Pi's request shaping
 (`forceAdaptiveThinking`, `supportsStore`, `maxTokensField`…) is lost unless `builtinCompat`
 (`catalog-models.ts`) re-derives it: Google's strict OpenAI-compatible hosts get a fixed shape,

@@ -28,18 +28,46 @@ pub struct ModelRecord {
     pub api_format: Option<String>,
 }
 
-/// Local Pi catalogue metadata offered in Settings; never persisted with a connection.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Settings-only reference data. Neither the snapshot nor its endpoint hints reach a worker.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct BuiltinModelSuggestion {
-    pub source_provider: String,
-    pub source_api: String,
+pub struct ModelCatalog {
+    pub schema_version: u32,
+    pub source: String,
+    pub captured_at: String,
+    pub entries: Vec<ModelCatalogEntry>,
+    #[serde(default)]
+    pub bundled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCatalogEntry {
     pub id: String,
     pub name: String,
-    pub context_window: u64,
-    pub max_tokens: u64,
+    pub original_provider: String,
+    pub profiles: Vec<ModelCatalogProfile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCatalogProfile {
+    pub key: String,
+    pub provider: String,
+    pub provider_name: String,
+    pub id: String,
+    /// A matching hint only: never fetched or copied into a connection.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    pub api_formats: Vec<String>,
+    #[serde(default)]
+    pub context_window: Option<u64>,
+    #[serde(default)]
+    pub max_tokens: Option<u64>,
     pub reasoning: bool,
-    pub thinking_levels: Vec<String>,
+    /// None means the source does not give directly representable effort controls.
+    #[serde(default)]
+    pub thinking_levels: Option<Vec<String>>,
     pub thinking_level_map: BTreeMap<String, Option<String>>,
     pub vision: bool,
 }

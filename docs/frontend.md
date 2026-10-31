@@ -251,7 +251,10 @@ through the composer's `pills` slot inside `.composer-wrap`, so their height rid
 `--composer-h`): the live "Working for" clock with the tool in flight — tracked on
 `TaskRuntime.liveToolCalls` from `tool_execution_start`/`_end` events — and the todo list
 compressed to a pill that opens the full tree in a popover (`TodoPill`, sharing `TodoPanel`'s
-fold state via `useTodoView`). With the pills active the transcript drops its live
+fold state via `useTodoView`). Once the working tree has changes a third pill joins them
+(`ChangesPill`): the changed-files count and ± line totals from the same `gitChanges` snapshot
+the Changes view reads, and clicking it toggles that view like the header's ⌘⇧C. With the
+pills active the transcript drops its live
 `RunDuration` chip (`hideLiveDuration`), settled turns keep "Worked for", and the other
 styles keep the pinned `TodoPanel` in the chat column instead.
 

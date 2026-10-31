@@ -1,12 +1,27 @@
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
-import type { NormalizedBlock, TodoTask } from "../../types";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GitChangeFile, GitChanges, NormalizedBlock, TodoTask } from "../../types";
 import { ComposerPills, runDetail } from "./ComposerPills";
 
 afterEach(cleanup);
 
 const bashCall: NormalizedBlock = { type: "tool-call", toolName: "bash", toolCallId: "b", arguments: { command: "pnpm test providers" } };
 const readCall: NormalizedBlock = { type: "tool-call", toolName: "read", toolCallId: "r", arguments: { path: "src/App.tsx" } };
+
+/** A changed file with one diff section; pass two layers to make a partially staged file. */
+function changeFile(path: string, sections: { layer: "staged" | "working"; additions: number; deletions: number }[]): GitChangeFile {
+  return {
+    path, oldPath: null, status: "modified",
+    staged: sections.some((section) => section.layer === "staged"),
+    unstaged: sections.some((section) => section.layer === "working"),
+    untracked: false, binary: false, hunkable: true, truncated: false,
+    sections: sections.map((section) => ({ ...section, revision: "rev", diff: "", hunks: [], truncated: false }))
+  };
+}
+
+function gitChanges(files: GitChangeFile[]): GitChanges {
+  return { isGit: true, root: "/repo", branch: "main", files, changesRevision: "rev" };
+}
 
 describe("runDetail", () => {
   it("names a canvas while the model is still generating tool arguments", () => {
@@ -76,6 +91,44 @@ describe("ComposerPills", () => {
     expect(container.firstChild).toBeNull();
     const tombed: TodoTask[] = [{ id: 1, subject: "Gone", status: "deleted" }];
     rerender(<ComposerPills todos={tombed} />);
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("shows the changed-files count and ± stats last, and clicking toggles the Changes view", () => {
+    const onToggle = vi.fn();
+    const { container } = render(
+      <ComposerPills
+        run={{ startedAt: Date.now() - 30_000 }}
+        todos={todos}
+        changes={gitChanges([changeFile("a.ts", [{ layer: "working", additions: 10, deletions: 2 }]), changeFile("b.ts", [{ layer: "working", additions: 3, deletions: 0 }])])}
+        changesOpen={false}
+        onToggleChanges={onToggle}
+      />
+    );
+    const pills = container.querySelectorAll(".composer-pill");
+    expect(pills).toHaveLength(3);
+    const filesPill = pills[2];
+    expect(filesPill).toHaveTextContent(/2 files changed \+13 −2/);
+    expect(filesPill).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(filesPill);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts every section of a partially staged file like the Changes view does", () => {
+    const { container } = render(
+      <ComposerPills changes={gitChanges([changeFile("a.ts", [{ layer: "staged", additions: 4, deletions: 1 }, { layer: "working", additions: 2, deletions: 3 }])])} />
+    );
+    expect(container.querySelector(".composer-pill-files")).toHaveTextContent(/1 file changed \+6 −4/);
+  });
+
+  it("reads pressed while the panel is on Changes, and hides on a clean or non-Git tree", () => {
+    const { container, rerender } = render(
+      <ComposerPills changes={gitChanges([changeFile("a.ts", [{ layer: "working", additions: 1, deletions: 0 }])])} changesOpen onToggleChanges={vi.fn()} />
+    );
+    expect(container.querySelector(".composer-pill-files")).toHaveAttribute("aria-pressed", "true");
+    rerender(<ComposerPills changes={gitChanges([])} />);
+    expect(container.firstChild).toBeNull();
+    rerender(<ComposerPills changes={{ ...gitChanges([changeFile("a.ts", [{ layer: "working", additions: 1, deletions: 0 }])]), isGit: false }} />);
     expect(container.firstChild).toBeNull();
   });
 });

@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import type { NormalizedBlock, NormalizedMessage, SessionSnapshot, TodoTask } from "../../types";
+import type { GitChanges, NormalizedBlock, NormalizedMessage, SessionSnapshot, TodoTask } from "../../types";
+import { changeEntries } from "../../changes-utils";
 import { formatRunDuration } from "../../chat-utils";
 import { summarizeTool } from "../../tool-utils";
 import { Icon } from "../Icons";
 import { TodoPill } from "../TodoPanel";
+import { Tooltip } from "../ui/Tooltip";
 
 export interface PillDetail {
   /** Verb shown plain ("Reading"); empty when the subject carries the line ("pnpm test"). */
@@ -29,6 +31,12 @@ interface ComposerPillsProps {
   activity?: string;
   todos?: TodoTask[];
   todoBusy?: boolean;
+  /** The chat's working-tree changes; the files pill shows once any exist. */
+  changes?: GitChanges;
+  /** The side panel is already on its Changes view (the pill reads as pressed). */
+  changesOpen?: boolean;
+  /** Opens (or closes) the Changes view — the header's ⌘⇧C toggle. */
+  onToggleChanges?: () => void;
 }
 
 /** The live clock shared by the transcript's chip and the classic composer's floating pill:
@@ -83,19 +91,44 @@ export function runDetail({ liveToolCalls, partial, compaction, activity }: Pick
 
 /**
  * The floating status row above the Classic composers (classic and classicGlass only — App
- * decides): the live "Working for" timer and the todo pill, both centred pills hovering just
- * over the card. Rendered inside `.composer-wrap` so its height rides --composer-h and the
- * glass variant's backdrop styling.
+ * decides): the live "Working for" timer, the todo pill and the changed-files pill, centred
+ * pills hovering just over the card. Rendered inside `.composer-wrap` so its height rides
+ * --composer-h and the glass variant's backdrop styling.
  */
-export function ComposerPills({ run, liveToolCalls, partial, compaction, activity, todos, todoBusy }: ComposerPillsProps) {
+export function ComposerPills({ run, liveToolCalls, partial, compaction, activity, todos, todoBusy, changes, changesOpen, onToggleChanges }: ComposerPillsProps) {
   const detail = useMemo(() => runDetail({ liveToolCalls, partial, compaction, activity }), [liveToolCalls, partial, compaction, activity]);
   const working = run !== undefined || detail !== undefined;
   const hasTodos = (todos ?? []).some((task) => task.status !== "deleted");
-  if (!working && !hasTodos) return null;
+  const hasChanges = changes?.isGit === true && changes.files.length > 0;
+  if (!working && !hasTodos && !hasChanges) return null;
   return (
     <div className="composer-pills">
       {working && <WorkingPill run={run} detail={detail} />}
       {hasTodos && <TodoPill tasks={todos} busy={todoBusy} />}
+      {hasChanges && <ChangesPill changes={changes} open={changesOpen === true} onToggle={onToggleChanges} />}
     </div>
   );
+}
+
+/**
+ * The Classic composer's changes pill: the same "N files +A −D" count the Changes view's head
+ * carries, so the two never disagree (a file contributes every section it has — staged plus
+ * working — like `changeEntries` lists them). Clicking toggles that view, like the header's
+ * ⌘⇧C button; it hides entirely while the tree is clean or the workspace isn't a checkout.
+ */
+export function ChangesPill({ changes, open, onToggle }: { changes: GitChanges; open?: boolean; onToggle?: () => void }) {
+  const files = changes.files.length;
+  const totals = changeEntries(changes.files).reduce((sum, entry) => ({ add: sum.add + entry.section.additions, del: sum.del + entry.section.deletions }), { add: 0, del: 0 });
+  const button = (
+    <button
+      type="button"
+      className={`composer-pill composer-pill-files${open ? " open" : ""}`}
+      aria-pressed={open === true}
+      onClick={onToggle}
+    >
+      <Icon name="git" />
+      <span className="changes-meta"><strong>{files}</strong> {files === 1 ? "file" : "files"} changed <em className="stat-add">+{totals.add}</em> <em className="stat-del">−{totals.del}</em></span>
+    </button>
+  );
+  return onToggle ? <Tooltip label={<>Changes <kbd>⌘⇧C</kbd></>}>{button}</Tooltip> : button;
 }

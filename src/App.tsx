@@ -3578,6 +3578,9 @@ export default function App() {
                   activity={runtime?.activity}
                   todos={selectedTask.kind !== "chat" ? runtime?.todoState?.tasks : undefined}
                   todoBusy={selectedTask.status === "running" || selectedTask.status === "stopping"}
+                  changes={selectedTask.kind !== "chat" ? changes : undefined}
+                  changesOpen={panelView?.kind === "changes"}
+                  onToggleChanges={toggleChanges}
                 />
               ) : undefined}
               status={selectedTask?.status ?? "idle"}

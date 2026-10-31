@@ -215,6 +215,20 @@ function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
+/**
+ * Why the context panel's Compact cannot run, in the words the panel shows. The worker applies
+ * the same guards; saying them here keeps the button from offering an action it would refuse.
+ */
+function compactBlockedReason(task: TaskRecord, runtime: TaskRuntime | undefined): string | undefined {
+  if (runtime?.compaction) return "A compaction is already running.";
+  if (task.archived) return "Unarchive this chat to compact it.";
+  if (runtime?.snapshot?.modelMissing) return "This chat's model is no longer configured.";
+  if (task.status === "running" || task.status === "stopping") return "Wait for this chat to finish before compacting.";
+  if (!runtime?.snapshot) return "Wait for this chat to be ready.";
+  const users = runtime.snapshot.messages.filter((message) => message.role === "user").length;
+  return users < 2 ? "Not enough conversation to compact yet." : undefined;
+}
+
 interface SubscriptionLoginState {
   loginId: string;
   providerId: string;
@@ -944,6 +958,27 @@ export default function App() {
   const patchRuntime = useCallback((taskId: string, patch: Partial<TaskRuntime>) => {
     setRuntimes((current) => ({ ...current, [taskId]: { ...current[taskId], ...patch } }));
   }, []);
+
+  // The context panel's Compact takes the same path as `/compact`, without a command to type.
+  // A refusal is the worker's to give: it lands as a notice above the composer, not an error.
+  const compactNow = useCallback(async (taskId: string) => {
+    const startedAt = Date.now();
+    patchTask(taskId, { status: "running", lastError: null });
+    patchRuntime(taskId, {
+      error: undefined,
+      activity: "starting",
+      activeRun: undefined,
+      compaction: { reason: "manual", startedAt },
+      slashCommandsError: undefined
+    });
+    try {
+      await api.compactTask(taskId, "", startedAt);
+    } catch (reason) {
+      patchTask(taskId, { status: "idle" });
+      patchRuntime(taskId, { compaction: undefined, activity: undefined });
+      appendNotice(taskId, { message: String(reason), level: "error" });
+    }
+  }, [appendNotice, patchRuntime, patchTask]);
 
   // The banner reads the durable `lastError` as well as the live error, so dismissing
   // must clear both and persist, or the banner returns with the next launch.
@@ -3594,6 +3629,8 @@ export default function App() {
               favoriteSaving={favoriteSaving}
               onSetFavorite={setModelFavorite}
               stats={selectedTask ? runtime?.snapshot?.stats : undefined}
+              onCompact={selectedTask ? () => void compactNow(selectedTask.id) : undefined}
+              compactDisabledReason={selectedTask ? compactBlockedReason(selectedTask, runtime) : undefined}
               popoverSide={selectedTask ? "top" : "bottom"}
               header={!selectedTask ? (
                 <ProjectBar

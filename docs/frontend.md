@@ -236,6 +236,20 @@ Nothing renders without the `team` prop, which only Code-area composers get. Def
 `SubagentConfig.teamDefault` (Settings › Sub-agents' Team card); new chats start with Team off
 and forks copy it.
 
+**Context window** (`ContextPanel.tsx`) is the ring beside the composer's model pill and its
+popover. A live session's `stats.contextBreakdown.detail` drives the panel: one grid row per
+group (messages, summaries, the mode contract, each tool origin including one per MCP server,
+the system prompt, project instructions, skills, memory) with its share of the whole window,
+then free space. A row with more than one item expands to it in a recessed well — on Liquid
+Glass the well re-blurs its own backdrop, because WebKit drops the platter's frost underneath a
+child list. Rows without children are plain rows; the chevron column stays so counts line up.
+The hero counts down to Pi's auto-compaction threshold, and the footer's **Compact** runs the
+same path as `/compact` (`compactNow` in `App.tsx`), disabled with the worker's own reason when
+it would be refused (busy, model missing, fewer than two user messages). A saved view carries
+only the coarse `entries`, so the panel falls back to that split and hides the threshold and the
+free-space row; Compact stays, because it acts on the session rather than the measurement.
+Expansion state belongs to the mounted composer.
+
 ## Composer styles
 
 `appearance.composerStyle` picks the Code composer's silhouette: `classic`, `classicGlass`,

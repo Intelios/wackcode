@@ -59,6 +59,10 @@ interface ComposerProps extends ModelFavoritesProps {
   thinkingLevel?: ReasoningEffort;
   providers: ProviderRecord[];
   stats?: SessionSnapshot["stats"];
+  /** Runs a manual compaction from the context panel; omitted where there is no chat to act on. */
+  onCompact?: () => void;
+  /** Why Compact is unavailable right now, so the panel can say so in place of its hint. */
+  compactDisabledReason?: string;
   header?: ReactNode;
   placeholder?: string;
   popoverSide?: "top" | "bottom";
@@ -116,7 +120,7 @@ interface ComposerProps extends ModelFavoritesProps {
   agentName?: string;
 }
 
-export function Composer({ draftState, status, backgroundWorking = false, providerId, modelId, thinkingLevel, providers, favoriteModels, favoriteSaving, onSetFavorite, stats, header, placeholder, popoverSide = "top", mode, executionPolicy = DEFAULT_EXECUTION_POLICY, appliedExecutionPolicy, onModeChange, onConfigure, team, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, mentionFiles, mentionChats, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, queuedMessages, onSteer, onDequeue, onStop, onOpenSettings, disabled, seed, comet, frozen, composerStyle = "classic", agentName = DEFAULT_AGENT_NAME, pills }: ComposerProps) {
+export function Composer({ draftState, status, backgroundWorking = false, providerId, modelId, thinkingLevel, providers, favoriteModels, favoriteSaving, onSetFavorite, stats, onCompact, compactDisabledReason, header, placeholder, popoverSide = "top", mode, executionPolicy = DEFAULT_EXECUTION_POLICY, appliedExecutionPolicy, onModeChange, onConfigure, team, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, mentionFiles, mentionChats, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, queuedMessages, onSteer, onDequeue, onStop, onOpenSettings, disabled, seed, comet, frozen, composerStyle = "classic", agentName = DEFAULT_AGENT_NAME, pills }: ComposerProps) {
   const [localDraft, setLocalDraft] = useState<ComposerDraft>(EMPTY_DRAFT);
   const value = draftState?.value ?? localDraft;
   const updateDraft = draftState?.update ?? setLocalDraft;
@@ -587,7 +591,8 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
         onConfigure={onConfigure}
         team={team}
       />
-      {stats && <ContextPanel stats={stats} popoverSide={popoverSide} glass={isGlass} />}
+      {stats && <ContextPanel stats={stats} popoverSide={popoverSide} glass={isGlass} onCompact={onCompact}
+        compact={{ disabledReason: compactDisabledReason }} />}
       <ReasoningToggle
         providers={providers}
         providerId={providerId}

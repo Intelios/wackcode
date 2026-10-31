@@ -1050,6 +1050,17 @@ export interface SessionSnapshot {
     contextBreakdown?: {
       entries: { id: "system" | "user" | "assistant" | "tool"; tokens: number }[];
       cacheHitRate: number | null;
+      /** The itemised split a live session can measure; saved history carries only `entries`. */
+      detail?: {
+        groups: {
+          id: string;
+          label: string;
+          tokens: number;
+          children?: { label: string; tokens: number }[];
+        }[];
+        /** Tokens Pi keeps clear of the conversation before it compacts automatically. */
+        reserveTokens: number;
+      };
     };
   };
   thinkingLevel: ReasoningEffort;

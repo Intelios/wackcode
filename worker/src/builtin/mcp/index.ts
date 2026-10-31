@@ -65,6 +65,10 @@ export interface McpController {
   inactiveTools(): string[];
   /** The id of the server a registered tool belongs to. */
   serverOf(toolName: string): string | undefined;
+  /** The name the user gave a server, for the context breakdown's group label. */
+  serverName(serverId: string): string | undefined;
+  /** The server's own name for a registered tool, without the registration prefix. */
+  toolName(registered: string): string | undefined;
   /** The server marks this tool read-only, so Plan mode may let it through. */
   isReadOnlyTool(toolName: string): boolean;
   /** Header and environment values, for redaction. */
@@ -216,6 +220,10 @@ export function createMcpExtension(host: BuiltinHost): { factory: (pi: Extension
     },
 
     serverOf: (toolName) => registrations.get(toolName)?.serverId,
+
+    serverName: (serverId) => servers.get(serverId)?.spec.name,
+
+    toolName: (registered) => registrations.get(registered)?.tool,
 
     isReadOnlyTool: (toolName) => liveTools().get(toolName)?.tool.annotations?.readOnlyHint === true,
 

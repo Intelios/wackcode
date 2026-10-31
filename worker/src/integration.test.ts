@@ -70,7 +70,10 @@ async function expectSavedHistory(view: SnapshotView, mode: TaskMode = "build") 
   expect(history.stats.tokens).toEqual(view.stats?.tokens);
   expect(history.stats.cost).toEqual(view.stats?.cost);
   expect(history.stats.contextUsage).toEqual(view.stats?.contextUsage);
-  expect(history.stats.contextBreakdown).toEqual(view.stats?.contextBreakdown);
+  // A saved session has no request to measure, so it keeps the coarse split and no detail.
+  expect(history.stats.contextBreakdown?.entries).toEqual(view.stats?.contextBreakdown?.entries);
+  expect(history.stats.contextBreakdown?.cacheHitRate).toEqual(view.stats?.contextBreakdown?.cacheHitRate);
+  expect(history.stats.contextBreakdown?.detail).toBeUndefined();
   expect(history.planState).toEqual(view.planState);
   expect(history.todoState).toEqual(view.todoState);
   expect(history.goalState).toEqual(view.goalState);
@@ -1545,6 +1548,33 @@ describe("Pi worker integration", () => {
     expect(worker.view?.runTimings).toEqual(full.snapshot?.runTimings);
     expect(worker.view?.tree).toEqual(full.snapshot?.tree);
     expect(worker.view?.planState).toEqual(full.snapshot?.planState);
+  });
+
+  it("explains the context window down to the rows that fill it", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-context-detail-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(provider.baseUrl, "context-detail-secret", workspace, "context-detail-task");
+    cleanup.push(() => worker.shutdown());
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "context-detail-run", message: "Create the fixture." });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === "context-detail-run");
+
+    const stats = worker.view?.stats;
+    expect(stats?.contextUsage?.tokens).toBeGreaterThan(0);
+    const detail = stats?.contextBreakdown?.detail;
+    expect(detail).toBeDefined();
+    expect(detail?.reserveTokens).toBe(16_384);
+    // The provider's count for the whole request is the one exact number: the rows are scaled to it.
+    const groups = detail?.groups ?? [];
+    expect(groups.length).toBeGreaterThan(0);
+    expect(groups.reduce((sum, group) => sum + group.tokens, 0)).toBe(stats?.contextUsage?.tokens);
+    for (const group of groups) {
+      if (!group.children) continue;
+      expect(group.children.reduce((sum, child) => sum + child.tokens, 0)).toBe(group.tokens);
+    }
+    expect(groups.map((group) => group.id)).toContain("system");
   });
 
   it("forwards accumulated tool output before the final result", async () => {

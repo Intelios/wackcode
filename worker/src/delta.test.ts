@@ -131,4 +131,22 @@ describe("snapshot scalar equality", () => {
     expect(sameStats(stats, { ...stats, contextUsage: { tokens: 11, contextWindow: 100, percent: 0.11 } })).toBe(false);
     expect(sameStats(stats, { ...stats, contextBreakdown: { entries: [{ id: "user", tokens: 6 }], cacheHitRate: 0.5 } })).toBe(false);
   });
+
+  it("sameStats notices a moved item in the itemised breakdown", () => {
+    const detail = {
+      groups: [{ id: "messages", label: "Messages", tokens: 5 }],
+      reserveTokens: 16_384
+    };
+    const stats = {
+      tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, total: 10 },
+      cost: 0.5,
+      contextUsage: { tokens: 10, contextWindow: 100, percent: 0.1 },
+      contextBreakdown: { entries: [{ id: "user" as const, tokens: 5 }], cacheHitRate: 0.5, detail }
+    };
+    expect(sameStats(stats, { ...stats, contextBreakdown: { ...stats.contextBreakdown, detail: { ...detail } } })).toBe(true);
+    expect(sameStats(stats, {
+      ...stats,
+      contextBreakdown: { ...stats.contextBreakdown, detail: { ...detail, groups: [{ id: "messages", label: "Messages", tokens: 6 }] } }
+    })).toBe(false);
+  });
 });

@@ -4,12 +4,14 @@ import { setUsagePublisher, trackSession, withUsage } from "./usage.js";
 import { existsSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 // Type-only: erased at build time, so Pi still loads solely through the dynamic import in initialize().
 import type { CompactionResult, PromptTemplate, ResourceLoader, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { SWITCHABLE_BUILTIN_TOOLS, createBuiltinExtensions } from "./builtin/index.js";
 import { chatToolAllowed } from "./builtin/chat-mode/policy.js";
 import { DEFAULT_CHAT_PROMPT, buildChatGuide, chatGuideDate } from "./builtin/chat-mode/prompt.js";
+import { MODE_CONTRACT_MESSAGE_TYPE } from "./builtin/plan-mode/contract.js";
+import { charsToTokens, contextDetail, textTokens } from "./context-breakdown.js";
 import { DEFAULT_CODE_PROMPT, buildCodeGuide, coAuthorLabel } from "./builtin/code-prompt/prompt.js";
 import { BROWSER_TOOL_NAMES } from "./builtin/browser.js";
 import { COMPUTER_TOOL_NAMES } from "./builtin/computer-use/params.js";
@@ -134,6 +136,8 @@ let commitAttribution = false;
 let packageCompacts = false;
 let session: AgentSession | undefined;
 let piModule: PiModule | undefined;
+// The prompt replay and tool-declaration helpers live in Pi's model layer; loaded alongside Pi.
+let piAiModule: typeof import("@earendil-works/pi-ai") | undefined;
 let modelRuntime: ModelRuntime | undefined;
 /** The stand-in session model while the chat's configured model is gone; see `missingModelPlaceholder`. */
 let missingModel: PiModel | undefined;
@@ -700,22 +704,146 @@ function normalizeMessage(message: unknown, index: number, thinking?: ThinkingDu
 // estimateTokens walks (and stringifies) every block. The streaming message is exempt.
 const tokenEstimates = new WeakMap<object, number>();
 
-function contextBreakdown(stats: ReturnType<AgentSession["getSessionStats"]>): SessionSnapshot["stats"]["contextBreakdown"] {
-  if (!session || !piModule || !stats.contextUsage || stats.contextUsage.tokens == null) return undefined;
-  const roles = { user: 0, assistant: 0, tool: 0 };
-  for (const message of session.messages) {
-    const role = message.role === "toolResult" ? "tool" : message.role;
-    if (role === "user" || role === "assistant" || role === "tool") {
-      const cacheable = message !== streamingMessage;
-      let tokens = cacheable ? tokenEstimates.get(message) : undefined;
-      if (tokens === undefined) {
-        tokens = piModule.estimateTokens(message);
-        if (cacheable) tokenEstimates.set(message, tokens);
-      }
-      roles[role] += tokens;
+/** A tool's declaration, cached by definition: only a re-registration changes it. */
+const toolEstimates = new WeakMap<object, number>();
+
+/** Prompt sections WackCode places itself; any other section is listed under its own name. */
+const PLACED_SECTIONS = new Set(["preamble", "addendum", "project_context", "skills", "cwd"]);
+const SECTION_LABELS: Record<string, string> = { tools: "Tools list", rules: "Rules", docs: "Docs" };
+
+function sectionLabel(name: string): string {
+  const known = SECTION_LABELS[name];
+  if (known) return known;
+  const words = name.replace(/[_-]+/g, " ").trim();
+  return words ? words[0].toUpperCase() + words.slice(1) : name;
+}
+
+let sectionsCache: { message: object; sections: Record<string, string> | undefined } | undefined;
+
+/**
+ * The system prompt as the last request carried it. Pi records the prompt as a chain of section
+ * patches, so only the replay knows the current text; it is cached against the newest system
+ * message, which is what every prompt or tool change rewrites.
+ */
+function promptSections(): Record<string, string> | undefined {
+  if (!session || !piAiModule) return undefined;
+  let latest: object | undefined;
+  for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+    const message = session.messages[index];
+    if ((message as { role?: string }).role === "system") {
+      latest = message as object;
+      break;
     }
   }
+  if (!latest) return undefined;
+  if (sectionsCache?.message === latest) return sectionsCache.sections;
+  const replayed = piAiModule.getCurrentSystemMessage(session.messages as readonly { role: string }[])?.sections;
+  // A null section is a deletion marker; the replay has already applied it.
+  const sections = replayed
+    ? Object.fromEntries(Object.entries(replayed).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
+    : undefined;
+  sectionsCache = { message: latest, sections };
+  return sections;
+}
+
+function toolTokens(definition: object): number {
+  const cached = toolEstimates.get(definition);
+  if (cached !== undefined) return cached;
+  const declaration = piAiModule ? { ...piAiModule.toToolDeclaration(definition as never) } : undefined;
+  const tokens = declaration ? textTokens(JSON.stringify(declaration)) : 0;
+  toolEstimates.set(definition, tokens);
+  return tokens;
+}
+
+/** Where a tool's declaration belongs in the panel. */
+function toolOrigin(source: ToolCatalogEntry["source"] | undefined): { id: string; label: string } {
+  if (source?.kind === "mcp") {
+    const server = source.serverId ?? "unknown";
+    return { id: `mcp:${server}`, label: `MCP · ${builtins.mcp.serverName(server) ?? server}` };
+  }
+  if (source?.kind === "wackcode") return { id: "tools:app", label: "WackCode tools" };
+  if (source?.kind === "package") return { id: "tools:package", label: "Package tools" };
+  return { id: "tools:builtin", label: "Built-in tools" };
+}
+
+const TOOL_GROUP_ORDER = ["tools:builtin", "tools:app"];
+
+function contextBreakdown(stats: ReturnType<AgentSession["getSessionStats"]>, catalog: ToolCatalogEntry[]): SessionSnapshot["stats"]["contextBreakdown"] {
+  if (!session || !piModule || !stats.contextUsage || stats.contextUsage.tokens == null) return undefined;
   const used = stats.contextUsage.tokens;
+  const roles = { user: 0, assistant: 0, tool: 0, contract: 0, appContext: 0, summary: 0 };
+  for (const message of session.messages) {
+    const role = (message as { role?: string }).role;
+    if (role === "system" || role === undefined) continue;
+    const cacheable = message !== streamingMessage;
+    let tokens = cacheable ? tokenEstimates.get(message) : undefined;
+    if (tokens === undefined) {
+      tokens = piModule.estimateTokens(message);
+      if (cacheable) tokenEstimates.set(message, tokens);
+    }
+    if (role === "user") roles.user += tokens;
+    else if (role === "assistant") roles.assistant += tokens;
+    // Pi's own bash messages are tool output like any result.
+    else if (role === "toolResult" || role === "bashExecution") roles.tool += tokens;
+    else if (role === "custom") {
+      if ((message as { customType?: string }).customType === MODE_CONTRACT_MESSAGE_TYPE) roles.contract += tokens;
+      else roles.appContext += tokens;
+    } else if (role === "compactionSummary" || role === "branchSummary") roles.summary += tokens;
+  }
+
+  const sections = promptSections();
+  const memoryText = builtins.memory.appendPrompt();
+  const memoryTotal = textTokens(memoryText);
+  const projectRows = session.resourceLoader.getAgentsFiles().agentsFiles
+    .map((file) => ({ label: basename(file.path), tokens: textTokens(file.content) + textTokens(file.path) }));
+  const skillRows = session.resourceLoader.getSkills().skills
+    .filter((skill) => !skill.disableModelInvocation)
+    .map((skill) => ({ label: skill.name, tokens: textTokens(skill.name) + textTokens(skill.description) + textTokens(skill.filePath) }));
+  const memoryRows = builtins.memory.indexEntries().map((entry) => ({ label: entry.label, tokens: charsToTokens(entry.chars) }));
+
+  // The app's own pieces of the appended prompt, in the order Pi joins them. Anything the
+  // loader adds on top is not ours to name, so it stays an unlabelled remainder.
+  const addendumParts: { label: string; tokens: number }[] = [];
+  if (servedGuide) addendumParts.push({ label: "App tool guide", tokens: textTokens(servedGuide) });
+  if (team) addendumParts.push({ label: "Team instruction", tokens: textTokens(teamPrompt()) });
+  if (ultra) addendumParts.push({ label: "Ultra instruction", tokens: textTokens(ultraPrompt()) });
+  const others = sections
+    ? Object.entries(sections)
+      .filter(([name]) => !PLACED_SECTIONS.has(name))
+      .map(([name, text]) => ({ label: sectionLabel(name), tokens: textTokens(text) }))
+    : [];
+  const preamble = sections ? textTokens(sections.preamble) + textTokens(sections.cwd) : textTokens(session.systemPrompt);
+
+  const sources = new Map(catalog.map((tool) => [tool.name, tool.source] as const));
+  const toolGroups = new Map<string, { id: string; label: string; tools: { label: string; tokens: number }[] }>();
+  for (const name of session.getActiveToolNames()) {
+    const definition = session.getToolDefinition(name);
+    if (!definition) continue;
+    const origin = toolOrigin(sources.get(name));
+    const group = toolGroups.get(origin.id) ?? { ...origin, tools: [] };
+    toolGroups.set(origin.id, group);
+    group.tools.push({ label: builtins.mcp.toolName(name) ?? name, tokens: toolTokens(definition) });
+  }
+  const toolOrder = (id: string) => {
+    const known = TOOL_GROUP_ORDER.indexOf(id);
+    return known >= 0 ? known : id.startsWith("mcp:") ? TOOL_GROUP_ORDER.length : TOOL_GROUP_ORDER.length + 1;
+  };
+
+  const detail = contextDetail({
+    messages: { user: roles.user, assistant: roles.assistant, tool: roles.tool },
+    contract: roles.contract,
+    appContext: roles.appContext,
+    summary: roles.summary,
+    prompt: { preamble, addendum: Math.max(0, textTokens(sections?.addendum) - memoryTotal), addendumParts, others },
+    project: { total: textTokens(sections?.project_context), rows: projectRows },
+    skills: { total: textTokens(sections?.skills), rows: skillRows },
+    memory: { total: memoryTotal, rows: memoryRows },
+    tools: [...toolGroups.values()].sort((left, right) => toolOrder(left.id) - toolOrder(right.id) || left.label.localeCompare(right.label)),
+    used,
+    // Pi compacts once the conversation would leave less than this clear of the window.
+    reserveTokens: piModule.DEFAULT_COMPACTION_SETTINGS.reserveTokens
+  });
+
   let entries = [
     { id: "system" as const, tokens: Math.max(0, used - roles.user - roles.assistant - roles.tool) },
     { id: "user" as const, tokens: roles.user },
@@ -730,7 +858,8 @@ function contextBreakdown(stats: ReturnType<AgentSession["getSessionStats"]>): S
   const { input, cacheRead } = stats.tokens;
   return {
     entries,
-    cacheHitRate: input + cacheRead > 0 ? cacheRead / (input + cacheRead) : null
+    cacheHitRate: input + cacheRead > 0 ? cacheRead / (input + cacheRead) : null,
+    detail
   };
 }
 
@@ -872,6 +1001,7 @@ function getSnapshot(rev: number): SessionSnapshot {
   });
   const modelSwitches = modelSwitchesOnPath(path, messagePositions, messages.length);
   const visibleUsers = messages.filter((message) => message.role === "user" && message.entryId);
+  const catalog = toolCatalog();
   const leaf = session.sessionManager.getLeafEntry() as EntryLike | undefined;
   if (!runTimingsCache || runTimingsCache.count !== treeCache?.count) {
     runTimingsCache = {
@@ -894,13 +1024,13 @@ function getSnapshot(rev: number): SessionSnapshot {
       tokens: stats.tokens,
       cost: stats.cost,
       contextUsage: stats.contextUsage,
-      contextBreakdown: contextBreakdown(stats)
+      contextBreakdown: contextBreakdown(stats, catalog)
     },
     thinkingLevel: ultra ? "ultra" : session.thinkingLevel as ThinkingLevel,
     availableThinkingLevels: session.getAvailableThinkingLevels() as ThinkingLevel[],
     model: model ? { provider: model.provider, id: model.id, name: model.name } : undefined,
     ...(chatModelMissing() ? { modelMissing: true, modelIssue: missingModelReason } : {}),
-    tools: toolCatalog(),
+    tools: catalog,
     activeTools: session.getActiveToolNames(),
     executionPolicy: builtins.getExecutionPolicy(),
     planState: builtins.planMode.getState(),
@@ -1332,6 +1462,7 @@ async function initialize(command: InitCommand): Promise<void> {
 
   const pi = await import("@earendil-works/pi-coding-agent");
   piModule = pi;
+  piAiModule = await import("@earendil-works/pi-ai");
   modelRuntime = await createModelRuntime(pi, command.provider, command.agentDir, {
     apiKey: command.apiKey,
     authPath: command.authPath

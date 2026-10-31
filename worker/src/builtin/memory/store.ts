@@ -148,34 +148,53 @@ export function parseMemory(name: string, text: string): MemoryNote | undefined 
   };
 }
 
-/**
- * The section appended to the system prompt: a one-line-per-note index the model scans to
- * decide what to recall. Details stay out of it — `memory_recall` reads the body on demand —
- * so even a large project costs the prompt one line per note. Undefined when there is nothing.
- */
-export function memoryIndex(notes: readonly MemoryNote[], scope: "project" | "chat" = "project"): string | undefined {
+interface BuiltIndex {
+  /** The lines the section lists, in display order. */
+  lines: { label: string; line: string }[];
+  /** Notes the caps kept out, for the section's own hint. */
+  hidden: number;
+}
+
+function buildIndex(notes: readonly MemoryNote[]): BuiltIndex | undefined {
   if (notes.length === 0) return undefined;
   const order = new Map(MEMORY_TYPES.map((type, index) => [type, index]));
   const sorted = [...notes].sort((a, b) =>
     (order.get(a.type) ?? order.size) - (order.get(b.type) ?? order.size) || a.title.localeCompare(b.title));
   const lines = sorted.map((note) => {
     const described = note.description ? ` — ${note.description}` : "";
-    return `- [${note.type}] ${note.title}${described} (name: ${note.name})`;
+    return { label: note.title, line: `- [${note.type}] ${note.title}${described} (name: ${note.name})` };
   });
-  let truncated = false;
-  while (lines.length > INDEX_MAX_ENTRIES || lines.join("\n").length > INDEX_MAX_CHARS) {
+  while (lines.length > INDEX_MAX_ENTRIES || lines.map((entry) => entry.line).join("\n").length > INDEX_MAX_CHARS) {
     lines.pop();
-    truncated = true;
     if (lines.length === 0) break;
   }
+  return { lines, hidden: sorted.length - lines.length };
+}
+
+/**
+ * The section appended to the system prompt: a one-line-per-note index the model scans to
+ * decide what to recall. Details stay out of it — `memory_recall` reads the body on demand —
+ * so even a large project costs the prompt one line per note. Undefined when there is nothing.
+ */
+export function memoryIndex(notes: readonly MemoryNote[], scope: "project" | "chat" = "project"): string | undefined {
+  const built = buildIndex(notes);
+  if (!built) return undefined;
   return [
     scope === "chat" ? "## Memory" : "## Project memory",
     "",
     `Notes saved from earlier ${scope === "chat" ? "chats" : "conversations in this project"}, one line each. When one is relevant to the current request, read its full text with memory_recall; otherwise leave it alone.`,
     "",
-    ...lines,
-    ...(truncated ? ["", `[… ${sorted.length - lines.length} more notes are not listed; recall them by name if you know it, and prune stale notes with memory_forget.]`] : []),
+    ...built.lines.map((entry) => entry.line),
+    ...(built.hidden > 0 ? ["", `[… ${built.hidden} more notes are not listed; recall them by name if you know it, and prune stale notes with memory_forget.]`] : []),
     "",
     "Keep memory small and current: memory_save to add or update a note, memory_forget to drop one that no longer holds."
   ].join("\n");
+}
+
+/**
+ * The notes the index lists, each sized as the line it contributes. The section's heading and
+ * footer are not a note, so callers measuring the prompt use `memoryIndex`'s length for the total.
+ */
+export function memoryIndexEntries(notes: readonly MemoryNote[]): { label: string; chars: number }[] {
+  return buildIndex(notes)?.lines.map((entry) => ({ label: entry.label, chars: entry.line.length })) ?? [];
 }

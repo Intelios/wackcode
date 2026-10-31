@@ -76,6 +76,14 @@ The transcript reaches the host as a full `snapshot`, then as `snapshot_delta`s 
   `startedAt` the stage's timer mounts from (a manual compaction's equals the `run_state`
   running frame's). Manual compaction's `run_state` has `operation: "compaction"`; it never
   starts a prompt clock or records a turn duration.
+- `stats.contextBreakdown` explains the context window. Its coarse `entries` (system / user /
+  assistant / tool) are the only split saved history has; a live session also fills `detail`
+  from `context-breakdown.ts`: the prompt's own sections (replayed with Pi's
+  `getCurrentSystemMessage`), one row per project instructions file, skill, memory note and
+  active tool declaration, plus the mode contract and carried summaries. Every row is an
+  estimate scaled so the groups sum exactly to the provider's `contextUsage.tokens`; children
+  are scaled to their group. `detail.reserveTokens` is Pi's compaction reserve, which is what
+  "until auto-compact" counts down. Never fabricate `detail` for a saved session.
 
 ## Tools
 

@@ -21,7 +21,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { MemoryPayload } from "../../protocol.js";
 import {
   MAX_BODY_CHARS, MAX_DESCRIPTION_CHARS, MAX_TITLE_CHARS, MEMORY_TYPES,
-  composeMemory, isMemoryName, isMemoryType, memoryIndex, memoryName, parseMemory,
+  composeMemory, isMemoryName, isMemoryType, memoryIndex, memoryIndexEntries, memoryName, parseMemory,
   type MemoryNote, type MemoryType
 } from "./store.js";
 
@@ -160,6 +160,8 @@ export interface MemoryController {
   refresh(): boolean;
   /** The index section for the system prompt, or undefined when memory is off or empty. */
   appendPrompt(): string | undefined;
+  /** The notes that index lists, each sized as its line, for the context breakdown. */
+  indexEntries(): { label: string; chars: number }[];
   /** The directory the served index came from, for the append prompt's source attribution. */
   sourcePath(): string | undefined;
   /** The tools that must stay out of the active set while memory is off. */
@@ -190,6 +192,7 @@ export function createMemoryExtension(scope: () => MemoryScope = () => "project"
   let root: string | undefined;
   let enabled = false;
   let servedIndex: string | undefined;
+  let servedEntries: { label: string; chars: number }[] = [];
 
   const controller: MemoryController = {
     configure(payload) {
@@ -198,11 +201,16 @@ export function createMemoryExtension(scope: () => MemoryScope = () => "project"
     },
     refresh() {
       const previous = servedIndex;
-      servedIndex = enabled && root ? memoryIndex(readNotes(root), scope()) : undefined;
+      const notes = enabled && root ? readNotes(root) : [];
+      servedIndex = enabled && root ? memoryIndex(notes, scope()) : undefined;
+      servedEntries = servedIndex ? memoryIndexEntries(notes) : [];
       return servedIndex !== previous;
     },
     appendPrompt() {
       return servedIndex;
+    },
+    indexEntries() {
+      return servedEntries;
     },
     sourcePath() {
       return enabled && root ? root : undefined;

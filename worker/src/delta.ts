@@ -126,7 +126,8 @@ export function sameStats(a: SessionSnapshot["stats"], b: SessionSnapshot["stats
     && a.contextBreakdown?.cacheHitRate === b.contextBreakdown?.cacheHitRate
     && a.contextBreakdown?.entries.length === b.contextBreakdown?.entries.length
     && (a.contextBreakdown?.entries ?? []).every((entry, index) =>
-      entry.id === b.contextBreakdown?.entries[index]?.id && entry.tokens === b.contextBreakdown?.entries[index]?.tokens);
+      entry.id === b.contextBreakdown?.entries[index]?.id && entry.tokens === b.contextBreakdown?.entries[index]?.tokens)
+    && JSON.stringify(a.contextBreakdown?.detail ?? null) === JSON.stringify(b.contextBreakdown?.detail ?? null);
 }
 
 export function sameTree(a: SessionSnapshot["tree"], b: SessionSnapshot["tree"]): boolean {

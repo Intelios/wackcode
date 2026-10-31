@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
+import { GlassPlatter } from "./GlassPlatter";
 import { useNavigationDismiss } from "./NavigationScope";
 
 interface PopoverProps {
@@ -10,13 +11,15 @@ interface PopoverProps {
   align?: "start" | "center" | "end";
   offset?: number;
   matchWidth?: boolean;
+  glass?: boolean;
   className?: string;
   children: ReactNode;
 }
 
-export function Popover({ anchor, open, onClose, side = "bottom", align = "start", offset = 6, matchWidth, className, children }: PopoverProps) {
+export function Popover({ anchor, open, onClose, side = "bottom", align = "start", offset = 6, matchWidth, glass = false, className, children }: PopoverProps) {
   useNavigationDismiss(() => { if (open) onClose(); });
   const panelRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const [style, setStyle] = useState<React.CSSProperties>({ position: "fixed", top: 0, left: 0, visibility: "hidden" });
 
   useLayoutEffect(() => {
@@ -25,10 +28,11 @@ export function Popover({ anchor, open, onClose, side = "bottom", align = "start
       const anchorEl = anchor.current;
       const panel = panelRef.current;
       if (!anchorEl || !panel) return;
+      const scroller = contentRef.current ?? panel;
       const rect = anchorEl.getBoundingClientRect();
       const panelRect = panel.getBoundingClientRect();
       // Full content height in layout px: ignores an earlier maxHeight clamp and the pop-in scale.
-      const height = panel.scrollHeight + panel.offsetHeight - panel.clientHeight;
+      const height = scroller.scrollHeight + panel.offsetHeight - scroller.clientHeight;
       const margin = 8;
       const spaceBelow = window.innerHeight - (rect.bottom + offset) - margin;
       const spaceAbove = rect.top - offset - margin;
@@ -51,6 +55,7 @@ export function Popover({ anchor, open, onClose, side = "bottom", align = "start
     // Keep the preferred side anchored as content changes, including after an async save.
     const resizeObserver = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(reposition);
     if (panelRef.current) resizeObserver?.observe(panelRef.current);
+    if (contentRef.current) resizeObserver?.observe(contentRef.current);
     window.addEventListener("resize", reposition);
     window.addEventListener("scroll", reposition, true);
     return () => {
@@ -58,7 +63,7 @@ export function Popover({ anchor, open, onClose, side = "bottom", align = "start
       window.removeEventListener("resize", reposition);
       window.removeEventListener("scroll", reposition, true);
     };
-  }, [open, anchor, side, align, offset, matchWidth]);
+  }, [open, anchor, side, align, offset, matchWidth, glass]);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -83,9 +88,15 @@ export function Popover({ anchor, open, onClose, side = "bottom", align = "start
   }, [open, onClose, anchor]);
 
   if (!open) return null;
+  const classes = ["popover", className, glass ? "glass" : ""].filter(Boolean).join(" ");
   return createPortal(
-    <div ref={panelRef} className={`popover ${className ?? ""}`} style={style} role="presentation">
-      {children}
+    <div ref={panelRef} className={classes} style={style} role="presentation">
+      {glass ? (
+        <>
+          <GlassPlatter />
+          <div ref={contentRef} className="popover-glass-body">{children}</div>
+        </>
+      ) : children}
     </div>,
     document.body
   );

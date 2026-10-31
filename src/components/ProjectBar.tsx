@@ -2,6 +2,7 @@ import { LayoutGroup, motion, useReducedMotion } from "motion/react";
 import type { GitBranches, GitCheckoutKind, ProjectRecord } from "../types";
 import { BranchPicker } from "./BranchPicker";
 import { ProjectPicker } from "./ProjectPicker";
+import { GlassPlatter } from "./ui/GlassPlatter";
 import { Tooltip } from "./ui/Tooltip";
 
 interface ProjectBarProps {
@@ -10,6 +11,7 @@ interface ProjectBarProps {
   useWorktree: boolean;
   /** The sidebar's own pin set: the picker lists pinned projects first and can pin or unpin. */
   pinned: ReadonlySet<string>;
+  glass?: boolean;
   onSelectProject: (projectId: string | null) => void;
   onSetPinned: (projectId: string, pinned: boolean) => void;
   onToggleWorktree: (value: boolean) => void;
@@ -18,7 +20,7 @@ interface ProjectBarProps {
   onCheckoutBranch: (projectId: string, name: string, kind: GitCheckoutKind) => Promise<void>;
 }
 
-export function ProjectBar({ projects, projectId, useWorktree, pinned, onSelectProject, onSetPinned, onToggleWorktree, onAddProject, onListBranches, onCheckoutBranch }: ProjectBarProps) {
+export function ProjectBar({ projects, projectId, useWorktree, pinned, glass = false, onSelectProject, onSetPinned, onToggleWorktree, onAddProject, onListBranches, onCheckoutBranch }: ProjectBarProps) {
   const reduce = useReducedMotion();
   const project = projects.find((item) => item.id === projectId);
   const canWorktree = Boolean(project?.gitHasHead);
@@ -36,6 +38,7 @@ export function ProjectBar({ projects, projectId, useWorktree, pinned, onSelectP
         projects={projects}
         projectId={projectId}
         pinned={pinned}
+        glass={glass}
         onSelect={onSelectProject}
         onSetPinned={onSetPinned}
         onAddProject={onAddProject}
@@ -47,12 +50,14 @@ export function ProjectBar({ projects, projectId, useWorktree, pinned, onSelectP
           branch={project.branch}
           variant="pill"
           side="top"
+          glass={glass}
           onLoad={() => onListBranches(project.id)}
           onCheckout={(name, kind) => onCheckoutBranch(project.id, name, kind)}
         />
       )}
       <LayoutGroup id="workspace-location">
         <div className="segmented" role="group" aria-label="Workspace location">
+          {glass && <GlassPlatter />}
           <button
             type="button"
             className={`segmented-option ${!useWorktree ? "selected" : ""}`}

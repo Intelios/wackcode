@@ -341,19 +341,65 @@ describe("Composer styles", () => {
     expect(within(screen.getByRole("button", { name: "Send message" })).getByText("⏎")).toBeInTheDocument();
   });
 
-  it("smokes the model and context popovers only for Classic Liquid Glass", () => {
-    const { unmount } = render(<Composer {...noFavorites} {...base} stats={stats} composerStyle="classicGlass" />);
+  it("mounts Liquid Glass platters on the composer, slash/mention menus, and picker popovers only for Classic Liquid Glass", () => {
+    const command = { id: "extension:hello", name: "hello", description: "Say hello", source: "extension" as const, sourceLabel: "Fixture" };
+    const reasoningProviders: ProviderRecord[] = [{
+      ...providers[0],
+      models: [{ ...providers[0].models[0], reasoning: true, thinkingLevels: ["off", "low", "high"], thinkingLevelMap: { off: null, low: "low", high: "high" } }]
+    }];
+    const { container, unmount } = render(
+      <Composer
+        {...noFavorites}
+        {...base}
+        providers={reasoningProviders}
+        stats={stats}
+        composerStyle="classicGlass"
+        commands={[command]}
+        onCommand={vi.fn().mockResolvedValue(true)}
+        mentionFiles={["src/glass.rs"]}
+        onRequestMentions={vi.fn()}
+      />
+    );
+    expect(container.querySelector(".composer > .glass-platter > .glass-lens")).not.toBeNull();
+
     fireEvent.click(screen.getByRole("button", { name: /Sees/ }));
-    expect(document.body.querySelector(".model-picker-pop")).toHaveClass("glass");
+    const modelPop = document.body.querySelector(".model-picker-pop")!;
+    expect(modelPop).toHaveClass("glass");
+    expect(modelPop.querySelector(".glass-platter > .glass-lens")).not.toBeNull();
+    expect(modelPop.querySelector(".popover-glass-body")).not.toBeNull();
+
     fireEvent.click(screen.getByRole("button", { name: /Context window/ }));
-    expect(document.body.querySelector(".context-pop")).toHaveClass("glass");
+    const contextPop = document.body.querySelector(".context-pop")!;
+    expect(contextPop).toHaveClass("glass");
+    expect(contextPop.querySelector(".glass-platter")).not.toBeNull();
+
+    fireEvent.click(screen.getByTitle("Reasoning effort"));
+    const reasoningPop = document.body.querySelector(".reasoning-pop")!;
+    expect(reasoningPop).toHaveClass("glass");
+    expect(reasoningPop.querySelector(".glass-platter")).not.toBeNull();
+
+    const textbox = screen.getByRole("textbox", { name: "Message" });
+    fireEvent.change(textbox, { target: { value: "/", selectionStart: 1 } });
+    expect(container.querySelector(".slash-picker-frame.glass > .glass-platter")).not.toBeNull();
+    expect(screen.getByRole("listbox", { name: "Slash commands" })).toBeInTheDocument();
+
+    fireEvent.change(textbox, { target: { value: "@g", selectionStart: 2 } });
+    expect(container.querySelector(".slash-picker-frame.glass > #mention-list")).not.toBeNull();
     unmount();
 
-    render(<Composer {...noFavorites} {...base} stats={stats} composerStyle="classic" />);
-    fireEvent.click(screen.getByRole("button", { name: /Sees/ }));
-    expect(document.body.querySelector(".model-picker-pop")).not.toHaveClass("glass");
-    fireEvent.click(screen.getByRole("button", { name: /Context window/ }));
-    expect(document.body.querySelector(".context-pop")).not.toHaveClass("glass");
+    for (const style of ["classic", "capsule", "split", "terminal"] as const) {
+      const solid = render(<Composer {...noFavorites} {...base} providers={reasoningProviders} stats={stats} composerStyle={style} commands={[command]} />);
+      expect(solid.container.querySelector(".glass-platter")).toBeNull();
+      fireEvent.change(screen.getByRole("textbox", { name: "Message" }), { target: { value: "/", selectionStart: 1 } });
+      expect(solid.container.querySelector(".slash-picker-frame")).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: /Sees/ }));
+      expect(document.body.querySelector(".model-picker-pop")).not.toHaveClass("glass");
+      fireEvent.click(screen.getByRole("button", { name: /Context window/ }));
+      expect(document.body.querySelector(".context-pop")).not.toHaveClass("glass");
+      fireEvent.click(screen.getByTitle("Reasoning effort"));
+      expect(document.body.querySelector(".reasoning-pop")).not.toHaveClass("glass");
+      solid.unmount();
+    }
   });
 });
 

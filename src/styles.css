@@ -2105,17 +2105,42 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
   .composer-pill-working.live .clock-hand { animation: none; }
   .composer-pill-todo .todo-pill-chevron { transition: none; }
 }
-/* Classic Liquid Glass: the pills smoke like the project bar; the popover stays solid. */
+/* Classic Liquid Glass: floating status pills carry their own 3-layer GlassPlatter
+   (defined with .composer-classicGlass below); the todo popover opts into glass too. */
 .composer-wrap.glass .composer-pill {
-  border-color: color-mix(in srgb, var(--text) 10%, transparent);
-  background: color-mix(in srgb, var(--wc-composer) 40%, transparent);
-  backdrop-filter: blur(18px) saturate(1.7) brightness(.82);
-  -webkit-backdrop-filter: blur(18px) saturate(1.7) brightness(.82);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 28%);
+  position: relative;
+  --glass-inset: -1px;
+  --glass-fill: var(--wc-composer);
+  --glass-tint-pct: 44%;
+  --glass-blur: 4.5px;
+  --glass-fallback-blur: 18px;
+  --glass-shadow: 0 8px 24px rgb(0 0 0 / 30%);
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  transition: transform .14s var(--ease), color .15s var(--ease);
 }
-.composer-wrap.glass .composer-pill-todo:hover, .composer-wrap.glass .composer-pill-files:hover { background: color-mix(in srgb, var(--wc-composer) 55%, transparent); }
-@media (prefers-reduced-transparency: reduce) {
-  .composer-wrap.glass .composer-pill { background: var(--surface); backdrop-filter: none; -webkit-backdrop-filter: none; }
+.composer-wrap.glass .composer-pill-files { overflow: visible; }
+.composer-wrap.glass .composer-pill > :not(.glass-platter) { position: relative; z-index: 1; }
+.composer-wrap.glass :is(.composer-pill-working.live, .composer-pill-todo.open, .composer-pill-files.open) {
+  border-color: transparent;
+  --glass-shadow: 0 8px 24px rgb(0 0 0 / 30%), 0 0 0 1px color-mix(in srgb, var(--wc-accent) 40%, transparent);
+  --glass-rim-fill: linear-gradient(176deg,
+    color-mix(in srgb, var(--wc-accent-glint) 46%, transparent) 0%,
+    color-mix(in srgb, var(--wc-accent) 16%, transparent) 34%,
+    color-mix(in srgb, var(--wc-accent) 26%, transparent) 100%);
+}
+@media (hover: hover) and (pointer: fine) {
+  .composer-wrap.glass :is(.composer-pill-todo, .composer-pill-files):hover {
+    border-color: transparent;
+    background: transparent;
+    --glass-tint-pct: 56%;
+    --glass-sheen-pct: 12%;
+  }
+}
+.composer-wrap.glass :is(.composer-pill-todo, .composer-pill-files):active {
+  transform: scale(.985);
+  --glass-tint-pct: 60%;
 }
 
 /* draft hero + project bar */
@@ -2310,99 +2335,306 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
    the writing row; Split Bar detaches the controls into their own dock; Terminal draws the
    well as a prompt with a status strip. Chat mode has its own composer and none of this. */
 
-/* Classic Liquid Glass: the classic card as one slab of smoked glass. A single heavy blur
-   (with a little extra saturation, so colour behind it glows instead of greying) under a dark
-   tint keeps text readable over any backdrop; a hairline rim catches light along the top edge
-   and fades down the sides, and a long soft shadow lifts the slab off what is behind it. The
-   transcript scrolls beneath the docked composer (see below), so there is always something to
-   refract. Controls inside drop their solid chips for translucent fills, or they read as
-   stickers on the glass. Chosen explicitly, so it is the one content surface that is not solid. */
-.composer-classicGlass {
-  border-color: transparent;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--text) 5%, transparent), transparent 38%),
-    color-mix(in srgb, var(--wc-composer) 46%, transparent);
-  backdrop-filter: blur(26px) saturate(1.8) brightness(.78);
-  -webkit-backdrop-filter: blur(26px) saturate(1.8) brightness(.78);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 22%), 0 22px 56px -14px rgb(0 0 0 / 60%);
+/* Shared 3-layer Apple Liquid Glass platter (ui/GlassPlatter.tsx):
+   1. .glass-lens: WebKit's hosted `-apple-system-glass-material-clear` layer (macOS 26+). It
+      must stay free of box-shadow, backdrop-filter, mask and scroll clipping, or WebKit drops
+      the hosted CAHostingLayer.
+   2. .glass-frost: soft interior reading frost + theme-derived smoked tint + outer shadow/halo.
+      Steps up to a heavier frosted blur automatically where hosted glass is unavailable.
+   3. .glass-rim: 1px masked Fresnel specular bezel — bright grazing catchlights along the top
+      and bottom edges, quiet flanks — that warms with focus, hover and open states. */
+.glass-platter {
+  position: absolute;
+  inset: var(--glass-inset, 0px);
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 0;
 }
-.composer-classicGlass::after {
-  content: ""; position: absolute; inset: -1px; padding: 1px; border-radius: 19px; pointer-events: none;
-  background: linear-gradient(172deg,
-    color-mix(in srgb, var(--text) 30%, transparent),
-    color-mix(in srgb, var(--text) 9%, transparent) 26%,
-    color-mix(in srgb, var(--text) 4%, transparent) 70%,
-    color-mix(in srgb, var(--text) 10%, transparent));
+.glass-lens, .glass-frost, .glass-rim {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+.glass-lens {
+  -apple-visual-effect: -apple-system-glass-material-clear;
+}
+.glass-frost {
+  backdrop-filter: blur(var(--glass-blur, 5.5px)) saturate(1.55);
+  -webkit-backdrop-filter: blur(var(--glass-blur, 5.5px)) saturate(1.55);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--text) var(--glass-sheen-pct, 7%), transparent), transparent 42%),
+    color-mix(in srgb, var(--glass-fill, var(--wc-composer)) var(--glass-tint-pct, 48%), transparent);
+  box-shadow: var(--glass-shadow, none);
+  transition: background .18s var(--ease), box-shadow .22s var(--ease);
+}
+@supports not (-apple-visual-effect: -apple-system-glass-material-clear) {
+  .glass-frost {
+    backdrop-filter: blur(var(--glass-fallback-blur, 22px)) saturate(1.75) brightness(.8);
+    -webkit-backdrop-filter: blur(var(--glass-fallback-blur, 22px)) saturate(1.75) brightness(.8);
+  }
+}
+.glass-rim {
+  padding: 1px;
+  background: var(--glass-rim-fill, linear-gradient(176deg,
+    color-mix(in srgb, var(--text) 38%, transparent) 0%,
+    color-mix(in srgb, var(--text) 9%, transparent) 28%,
+    color-mix(in srgb, var(--text) 4%, transparent) 68%,
+    color-mix(in srgb, var(--text) 18%, transparent) 100%));
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   mask-composite: exclude;
-  transition: opacity .2s var(--ease);
+  transition: opacity .2s var(--ease), background .2s var(--ease);
+}
+
+/* Classic Liquid Glass: the classic card as a refractive slab of Apple Liquid Glass. Curved-edge
+   lensing comes from .glass-lens, a light interior frost + smoked tint on .glass-frost keeps
+   draft prose effortless to read over scrolling code, and .glass-rim paints a Fresnel bezel that
+   warms toward the accent on focus. Controls and chips inside become translucent crystal overlays
+   rather than nested glass or opaque stickers. */
+.composer-classicGlass {
+  --glass-inset: -1px;
+  --glass-fill: var(--wc-composer);
+  --glass-tint-pct: 48%;
+  --glass-blur: 5.5px;
+  --glass-fallback-blur: 26px;
+  --glass-shadow: 0 1px 2px rgb(0 0 0 / 26%), 0 22px 56px -14px rgb(0 0 0 / 64%);
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+.composer-classicGlass > :not(.glass-platter):not(.slash-picker):not(.slash-picker-frame) {
+  position: relative;
+  z-index: 1;
 }
 .composer-classicGlass:focus-within {
   border-color: transparent;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 22%), 0 22px 56px -14px rgb(0 0 0 / 60%),
-    0 0 0 1px color-mix(in srgb, var(--wc-accent) 34%, transparent), 0 0 0 4px color-mix(in srgb, var(--wc-accent) 8%, transparent);
+  box-shadow: none;
+  --glass-shadow: 0 1px 2px rgb(0 0 0 / 26%), 0 22px 56px -14px rgb(0 0 0 / 64%),
+    0 0 0 1px color-mix(in srgb, var(--wc-accent) 36%, transparent),
+    0 0 0 4px color-mix(in srgb, var(--wc-accent) 10%, transparent);
+  --glass-rim-fill: linear-gradient(176deg,
+    color-mix(in srgb, var(--wc-accent-glint) 46%, transparent) 0%,
+    color-mix(in srgb, var(--wc-accent) 15%, transparent) 30%,
+    color-mix(in srgb, var(--text) 6%, transparent) 68%,
+    color-mix(in srgb, var(--wc-accent) 26%, transparent) 100%);
 }
-.composer-classicGlass:focus-within::after { opacity: .6; }
-.composer-classicGlass textarea::placeholder { color: color-mix(in srgb, var(--text) 42%, transparent); }
-.composer-classicGlass .model-pill:hover, .composer-classicGlass .attach-button:hover,
-.composer-classicGlass .reasoning-toggle:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
-.composer-classicGlass .mode-toggle.sliding { background: color-mix(in srgb, var(--text) 6%, transparent); }
+.composer-wrap.glass.dropping .composer-classicGlass {
+  border-color: transparent;
+  box-shadow: none;
+  --glass-shadow: 0 1px 2px rgb(0 0 0 / 26%), 0 22px 56px -14px rgb(0 0 0 / 64%),
+    0 0 0 1.5px var(--wc-accent),
+    0 0 0 5px color-mix(in srgb, var(--wc-accent) 18%, transparent);
+  --glass-rim-fill: linear-gradient(176deg, var(--wc-accent-glint), color-mix(in srgb, var(--wc-accent) 45%, transparent));
+}
+.composer-classicGlass textarea::placeholder { color: color-mix(in srgb, var(--text) 44%, transparent); }
+@media (hover: hover) and (pointer: fine) {
+  .composer-classicGlass :is(.model-pill, .attach-button:not(.unavailable), .reasoning-toggle, .composer-stats):hover {
+    background: color-mix(in srgb, var(--text) 9%, transparent);
+  }
+}
+.composer-classicGlass .composer-stats.active { background: color-mix(in srgb, var(--text) 9%, transparent); }
+.composer-classicGlass :is(.model-pill, .attach-button:not(.unavailable), .reasoning-toggle, .composer-stats):active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 14%, transparent);
+  transform: scale(.97);
+}
+.composer-classicGlass .mode-toggle.sliding {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 20%);
+}
 .composer-classicGlass .mode-toggle.sliding .mode-pill:not(.plan):not(.ultra) {
-  background: color-mix(in srgb, var(--text) 13%, transparent);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 12%, transparent);
+  background: color-mix(in srgb, var(--text) 14%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 18%, transparent);
 }
 .composer-classicGlass .send-button:disabled:not(.stop) { background: color-mix(in srgb, var(--text) 8%, transparent); }
+/* Inner composer chips (attachments, browser captures, queued sends, policy notice): crystal
+   surfaces with an inset top sheen, never nested glass-on-glass or opaque stickers. */
+.composer-classicGlass .attachment-file {
+  border-color: color-mix(in srgb, var(--text) 14%, transparent);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 12%, transparent);
+}
+.composer-classicGlass .attachment-thumb img { border-color: color-mix(in srgb, var(--text) 18%, transparent); }
+.composer-classicGlass .attachment-remove {
+  border-color: color-mix(in srgb, var(--text) 18%, transparent);
+  background: color-mix(in srgb, var(--wc-elevated) 74%, transparent);
+}
+.composer-classicGlass .attachment-remove:hover { background: color-mix(in srgb, var(--wc-elevated) 90%, transparent); }
+.composer-classicGlass .browser-context-chip {
+  border-color: color-mix(in srgb, var(--wc-accent) 28%, transparent);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 10%, transparent);
+}
+.composer-classicGlass :is(.browser-context-chip:hover, .browser-context-chip:focus-within) {
+  border-color: var(--wc-accent-line);
+  background: color-mix(in srgb, var(--text) 11%, transparent);
+}
+.composer-classicGlass .composer-queue .queued-message {
+  border-color: color-mix(in srgb, var(--text) 13%, transparent);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 10%, transparent);
+}
+.composer-classicGlass :is(.queued-remove:not(:disabled):hover, .queued-remove:focus-visible) {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+.composer-classicGlass .execution-policy-notice {
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+  border-color: color-mix(in srgb, var(--warning) 32%, transparent);
+}
 /* A refractive head: the accent trails into the glint where it bends over the rim. */
 .composer-classicGlass.comet::before {
+  z-index: 2;
   background: conic-gradient(from var(--comet-angle), transparent 64%, color-mix(in srgb, var(--wc-accent) 60%, transparent) 82%, var(--wc-accent-glint) 89%, transparent 100%);
 }
-/* The project bar above the hero composer wears the same glass in miniature. */
+
+/* Slash (`/`) and mention (`@`) pickers above the Classic Liquid Glass composer: an unclipped
+   frame hosts GlassPlatter while .slash-picker scrolls inside it without dropping the lens. */
+.slash-picker-frame.glass {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 20;
+  border-radius: 16px;
+  --glass-fill: var(--wc-menu);
+  --glass-tint-pct: 52%;
+  --glass-blur: 6px;
+  --glass-fallback-blur: 20px;
+  --glass-shadow: 0 14px 36px rgb(0 0 0 / 46%), 0 2px 8px rgb(0 0 0 / 28%);
+  transform-origin: 50% 100%;
+  animation: pop-in .18s var(--ease) backwards;
+}
+.slash-picker-frame.glass > .slash-picker {
+  position: relative;
+  inset: auto;
+  z-index: 1;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  box-shadow: none;
+  animation: none;
+}
+@media (hover: hover) and (pointer: fine) {
+  .slash-picker-frame.glass .slash-option:not(.selected):hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
+}
+.slash-picker-frame.glass .slash-option:not(.selected) .slash-mark { background: color-mix(in srgb, var(--text) 8%, transparent); }
+.slash-picker-frame.glass .slash-option small { border-color: color-mix(in srgb, var(--text) 14%, transparent); }
+.slash-picker-frame.glass .mention-group { border-top-color: color-mix(in srgb, var(--text) 10%, transparent); }
+.slash-picker-frame.glass .slash-picker-foot {
+  border-top-color: color-mix(in srgb, var(--text) 10%, transparent);
+  background: color-mix(in srgb, var(--wc-menu) 95%, transparent);
+  border-radius: 0 0 16px 16px;
+}
+.slash-picker-frame.glass .slash-picker-foot kbd { background: color-mix(in srgb, var(--text) 9%, transparent); }
+
+/* The project bar above the hero composer wears the same refractive glass in miniature. */
 .composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch, .segmented) {
-  border-color: color-mix(in srgb, var(--text) 10%, transparent);
-  background: color-mix(in srgb, var(--wc-composer) 40%, transparent);
-  backdrop-filter: blur(18px) saturate(1.7) brightness(.82);
-  -webkit-backdrop-filter: blur(18px) saturate(1.7) brightness(.82);
+  position: relative;
+  --glass-inset: -1px;
+  --glass-fill: var(--wc-composer);
+  --glass-tint-pct: 44%;
+  --glass-blur: 4.5px;
+  --glass-fallback-blur: 18px;
+  --glass-shadow: 0 8px 22px rgb(0 0 0 / 26%);
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  transition: transform .14s var(--ease), color .15s var(--ease);
 }
-.composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch):hover { background: color-mix(in srgb, var(--wc-composer) 55%, transparent); }
+.composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch, .segmented) > :not(.glass-platter) {
+  position: relative;
+  z-index: 1;
+}
+.composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch)[aria-expanded="true"] {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  --glass-tint-pct: 54%;
+  --glass-shadow: 0 8px 22px rgb(0 0 0 / 28%), 0 0 0 1px var(--wc-accent-line-soft), 0 0 0 3px var(--wc-accent-wash);
+  --glass-rim-fill: linear-gradient(176deg,
+    color-mix(in srgb, var(--wc-accent-glint) 45%, transparent),
+    color-mix(in srgb, var(--wc-accent) 22%, transparent));
+}
+@media (hover: hover) and (pointer: fine) {
+  .composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch):hover {
+    border-color: transparent;
+    background: transparent;
+    --glass-tint-pct: 55%;
+    --glass-sheen-pct: 11%;
+  }
+}
+.composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch):active { transform: scale(.985); }
 .composer-wrap.glass .project-bar .segmented-thumb {
-  background: color-mix(in srgb, var(--text) 12%, transparent);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 14%, transparent);
+  background: color-mix(in srgb, var(--text) 13%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 20%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent);
 }
-/* Classic Liquid Glass popovers: the model picker, context panel and reasoning slider smoke
-   like the composer. Popovers portal to document.body, so no ancestor selector can reach them;
-   the composer passes the `glass` class down through each component's prop instead. Only the
-   classic-glass composer opts in — every other use (Chat, Settings, other styles) stays solid. */
+
+/* Classic Liquid Glass popovers: model, context, reasoning, todo, project and branch pickers.
+   Popovers portal to document.body, so each component opts in via `<Popover glass={glass}>`.
+   The outer portal stays `overflow: visible` for WebKit's hosted lens and outer shadow, while
+   `.popover-glass-body` clips and scrolls the content inside. */
 .popover.glass {
-  border-color: color-mix(in srgb, var(--text) 12%, transparent);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--text) 5%, transparent), transparent 38%),
-    color-mix(in srgb, var(--wc-elevated) 40%, transparent);
-  backdrop-filter: blur(18px) saturate(1.7) brightness(.82);
-  -webkit-backdrop-filter: blur(18px) saturate(1.7) brightness(.82);
-  box-shadow: var(--shadow-pop), inset 0 1px 0 color-mix(in srgb, var(--text) 10%, transparent);
+  --glass-fill: var(--wc-elevated);
+  --glass-tint-pct: 50%;
+  --glass-blur: 6px;
+  --glass-fallback-blur: 20px;
+  --glass-shadow: var(--shadow-pop);
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
 }
-/* Inner chips drop their solid fills so they don't read as opaque stickers on the glass. */
-.popover.glass .context-stats > div { background: color-mix(in srgb, var(--text) 7%, transparent); }
-.popover.glass .context-divider { background: color-mix(in srgb, var(--text) 10%, transparent); }
+.popover-glass-body {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: inherit;
+  overflow: hidden auto;
+  border-radius: inherit;
+}
+/* Inner chips, search fields and dividers drop solid fills so they read as crystal on glass. */
+.popover.glass .context-stats > div {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 9%, transparent);
+}
+.popover.glass :is(.context-divider, .picker-provider-divider, .branch-divider) {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
 .popover.glass .reasoning-head-mark { background: color-mix(in srgb, var(--text) 8%, transparent); }
 .popover.glass .reasoning-track { background: color-mix(in srgb, var(--text) 8%, transparent); }
-/* Keep the selected row's accent wash on hover, like the solid picker does. */
-.popover.glass .picker-item:not(.selected):hover,
-.popover.glass .picker-back-btn:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
+@media (hover: hover) and (pointer: fine) {
+  .popover.glass :is(.picker-item:not(.selected), .picker-back-btn, .project-add, .todo-panel-more, .todo-panel-collapse):hover {
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+  }
+}
+.popover.glass :is(.project-highlight, .branch-item.active) { background: color-mix(in srgb, var(--text) 8%, transparent); }
 .popover.glass .picker-provider-count { background: color-mix(in srgb, var(--text) 8%, transparent); }
 .popover.glass .picker-crew-entry {
   border-color: color-mix(in srgb, var(--text) 12%, transparent);
   background: color-mix(in srgb, var(--wc-accent) 8%, transparent);
 }
 .popover.glass .picker-crew-toggle .mode-option.active { background: color-mix(in srgb, var(--text) 12%, transparent); }
-.popover.glass .picker-provider-divider,
-.popover.glass .picker-team-footer { border-color: color-mix(in srgb, var(--text) 10%, transparent); }
-.popover.glass .picker-provider-divider { background: color-mix(in srgb, var(--text) 10%, transparent); }
-@media (prefers-reduced-transparency: reduce) {
-  .popover.glass { background: var(--wc-elevated); backdrop-filter: none; -webkit-backdrop-filter: none; }
+.popover.glass :is(.picker-provider-divider, .picker-team-footer, .branch-search, .project-picker-foot, .branch-error) {
+  border-color: color-mix(in srgb, var(--text) 10%, transparent);
 }
+.popover.glass .branch-search input {
+  border-radius: 9px;
+  border-color: color-mix(in srgb, var(--text) 12%, transparent);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+.popover.glass .branch-search :is(input:focus, input:focus-visible) {
+  outline: none;
+  border-color: var(--wc-accent-line);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wc-accent) 28%, transparent);
+}
+.popover.glass .todo-panel-more {
+  border-color: color-mix(in srgb, var(--text) 14%, transparent);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
 /* Docked, the transcript runs on under the glass: the column gives back the composer's reserved
    space and the transcript pads its end by the same amount, so the last message still rests
    above the composer. Only while nothing (a question, the todo list) sits between them. The
@@ -2421,10 +2653,83 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
 .workspace:has(.composer-wrap.glass) .chat-view > .chat-transcript:last-child .scroll-rail {
   bottom: calc(10px + var(--composer-h, 0px));
 }
-/* macOS › Accessibility › Reduce transparency: the classic solid card. */
+
+/* Accessibility modifiers on Liquid Glass: Reduce transparency flattens to solid cards;
+   Increase contrast raises tint and draws crisp borders; Reduce motion drops press scale. */
 @media (prefers-reduced-transparency: reduce) {
-  .composer-classicGlass { background: var(--wc-composer); backdrop-filter: none; -webkit-backdrop-filter: none; }
-  .composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch, .segmented) { background: var(--surface); backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .glass-platter { display: none; }
+  .composer-classicGlass {
+    border-color: var(--border-bright);
+    background: var(--wc-composer);
+    box-shadow: 0 10px 36px rgb(0 0 0 / 22%);
+  }
+  .composer-classicGlass:focus-within {
+    border-color: var(--wc-accent-line-mid);
+    box-shadow: 0 10px 36px rgb(0 0 0 / 28%), 0 0 0 4px color-mix(in srgb, var(--wc-accent) 10%, transparent);
+  }
+  .composer-wrap.glass .composer-pill {
+    border-color: var(--border-bright);
+    background: var(--surface);
+    box-shadow: 0 8px 24px rgb(0 0 0 / 22%);
+  }
+  .composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch, .segmented) {
+    border-color: var(--border);
+    background: var(--surface);
+  }
+  .popover.glass {
+    border: 1px solid var(--border-bright);
+    background: var(--wc-elevated);
+    box-shadow: var(--shadow-pop);
+  }
+  .slash-picker-frame.glass > .slash-picker {
+    border: 1px solid var(--border-bright);
+    background: var(--wc-menu);
+    box-shadow: 0 12px 28px rgb(0 0 0 / 36%);
+  }
+}
+@media (prefers-contrast: more) {
+  .composer-classicGlass,
+  .composer-wrap.glass .composer-pill,
+  .composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch, .segmented),
+  .popover.glass,
+  .slash-picker-frame.glass {
+    --glass-tint-pct: 78%;
+  }
+  .composer-classicGlass,
+  .composer-wrap.glass .composer-pill,
+  .composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch, .segmented) {
+    border-color: var(--border-bright);
+  }
+  .popover.glass,
+  .slash-picker-frame.glass {
+    outline: 1px solid var(--border-bright);
+  }
+}
+@media (forced-colors: active) {
+  .glass-platter { display: none; }
+  .composer-classicGlass,
+  .composer-wrap.glass .composer-pill,
+  .composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch, .segmented),
+  .popover.glass,
+  .slash-picker-frame.glass > .slash-picker {
+    background: Canvas;
+    color: CanvasText;
+    border: 1px solid CanvasText;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .glass-frost,
+  .glass-rim,
+  .slash-picker-frame.glass,
+  .composer-wrap.glass .composer-pill,
+  .composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch, .segmented) {
+    transition: none;
+    animation: none;
+  }
+  .composer-wrap.glass :is(.composer-pill-todo, .composer-pill-files, .project-trigger, .project-bar-branch):active,
+  .composer-classicGlass :is(.model-pill, .attach-button, .reasoning-toggle, .composer-stats):active:not(:disabled) {
+    transform: none;
+  }
 }
 
 /* Capsule: the writing row owns the pill, and the metadata keeps a quiet strip beneath it. */
@@ -5738,13 +6043,22 @@ html[data-force-reduced-motion] *::after {
   border: 1px solid var(--border-bright); background: var(--surface);
 }
 .composer-art .mini-pills.glassy .mini-pill-seg {
-  background: color-mix(in srgb, var(--wc-composer) 40%, transparent);
-  border-color: color-mix(in srgb, var(--text) 22%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--text) 16%, transparent), transparent 65%),
+    color-mix(in srgb, var(--wc-composer) 36%, transparent);
+  border-color: color-mix(in srgb, var(--text) 24%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--text) 12%, transparent);
 }
 .composer-art .mini-card.glassy {
-  background: color-mix(in srgb, var(--wc-composer) 40%, transparent);
-  border-color: color-mix(in srgb, var(--text) 22%, transparent);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 24%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--text) 14%, transparent), transparent 44%),
+    radial-gradient(120% 80% at 85% 100%, color-mix(in srgb, var(--wc-accent) 12%, transparent), transparent 65%),
+    color-mix(in srgb, var(--wc-composer) 36%, transparent);
+  border-color: color-mix(in srgb, var(--text) 20%, transparent);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--text) 34%, transparent),
+    inset 0 -1px 0 color-mix(in srgb, var(--text) 14%, transparent),
+    0 6px 14px -4px rgb(0 0 0 / 50%);
 }
 .composer-art .mini-row { display: flex; align-items: center; gap: 3px; }
 .composer-art .mini-row .mini-send { margin-left: auto; }

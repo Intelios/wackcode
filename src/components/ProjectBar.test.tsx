@@ -91,4 +91,45 @@ describe("ProjectBar", () => {
     render(<Harness worktreeable={false} />);
     expect(screen.getByRole("button", { name: "Worktree" })).toBeDisabled();
   });
+
+  it("mounts GlassPlatter on pills and project/branch popovers only when glass is enabled", async () => {
+    const { container, rerender } = render(
+      <ProjectBar
+        projects={projects}
+        projectId="p1"
+        useWorktree={false}
+        pinned={noPins}
+        glass
+        onSelectProject={() => undefined}
+        onSetPinned={() => undefined}
+        onToggleWorktree={() => undefined}
+        onAddProject={() => undefined}
+        onListBranches={async () => ({ current: "master", branches: [{ name: "master", remote: false, worktree: null }] })}
+        onCheckoutBranch={async () => undefined}
+      />
+    );
+    expect(container.querySelectorAll(".glass-platter")).toHaveLength(3);
+    fireEvent.click(screen.getByRole("button", { name: /Switch project/ }));
+    expect(document.body.querySelector(".project-pop")).toHaveClass("glass");
+    fireEvent.click(screen.getByRole("button", { name: /Switch branch/ }));
+    expect(await screen.findByRole("dialog", { name: "Switch branch" })).toBeInTheDocument();
+    expect(document.body.querySelector(".branch-pop")).toHaveClass("glass");
+
+    rerender(
+      <ProjectBar
+        projects={projects}
+        projectId="p1"
+        useWorktree={false}
+        pinned={noPins}
+        onSelectProject={() => undefined}
+        onSetPinned={() => undefined}
+        onToggleWorktree={() => undefined}
+        onAddProject={() => undefined}
+        onListBranches={async () => ({ current: "master", branches: [] })}
+        onCheckoutBranch={async () => undefined}
+      />
+    );
+    expect(container.querySelectorAll(".glass-platter")).toHaveLength(0);
+    expect(document.body.querySelector(".branch-pop")).not.toHaveClass("glass");
+  });
 });

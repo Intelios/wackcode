@@ -40,7 +40,7 @@ const GLASS_STYLES: { value: GlassStyle; label: string; note: string }[] = [
 /** The Code composer's five layouts, each tile drawing the silhouette it picks. */
 const COMPOSER_STYLES: { value: ComposerStyle; label: string; note: string }[] = [
   { value: "classic", label: "WackCode Classic", note: "Rounded card, toolbar below" },
-  { value: "classicGlass", label: "Classic Liquid Glass", note: "The same card, translucent" },
+  { value: "classicGlass", label: "Classic Liquid Glass", note: "Refractive glass, floating pills" },
   { value: "capsule", label: "Capsule", note: "Attach and send inside a deep pill" },
   { value: "split", label: "Split Bar", note: "Input card over a floating dock" },
   { value: "terminal", label: "Terminal", note: "Prompt line with a status strip" }

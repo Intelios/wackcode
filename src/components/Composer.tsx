@@ -15,6 +15,7 @@ import { ContextPanel } from "./ContextPanel";
 import { ModelPicker, ReasoningToggle, type ModelFavoritesProps, type TeamPillProps } from "./ModelPicker";
 import { ModeToggle } from "./ModeToggle";
 import { Tooltip } from "./ui/Tooltip";
+import { GlassPlatter } from "./ui/GlassPlatter";
 import { ImageLightbox } from "./ui/ImageLightbox";
 import { MentionPicker, PICKER_KEYS } from "./ui/MentionPicker";
 import { AttachmentTray } from "./composer/AttachmentTray";
@@ -565,6 +566,11 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
     </>
   );
 
+  const isGlass = composerStyle === "classicGlass";
+  const wrapPicker = (picker: ReactNode) => isGlass
+    ? <div className="slash-picker-frame glass"><GlassPlatter />{picker}</div>
+    : picker;
+
   // Every style carries the same controls in the same order; only where they sit changes.
   const modelControls = (
     <>
@@ -577,11 +583,11 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
         modelId={modelId}
         disabled={busy}
         popoverSide={popoverSide}
-        glass={composerStyle === "classicGlass"}
+        glass={isGlass}
         onConfigure={onConfigure}
         team={team}
       />
-      {stats && <ContextPanel stats={stats} popoverSide={popoverSide} glass={composerStyle === "classicGlass"} />}
+      {stats && <ContextPanel stats={stats} popoverSide={popoverSide} glass={isGlass} />}
       <ReasoningToggle
         providers={providers}
         providerId={providerId}
@@ -589,7 +595,7 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
         thinkingLevel={thinkingLevel}
         disabled={busy}
         popoverSide={popoverSide}
-        glass={composerStyle === "classicGlass"}
+        glass={isGlass}
         onConfigure={onConfigure}
       />
       {onModeChange && <ModeToggle mode={mode ?? "build"} disabled={busy} onChange={onModeChange} />}
@@ -707,7 +713,7 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
   return (
     <div
       ref={wrapRef}
-      className={`composer-wrap ${disabled ? "disabled" : ""} ${dragging ? "dropping" : ""}${composerStyle === "classicGlass" ? " glass" : ""}`}
+      className={`composer-wrap ${disabled ? "disabled" : ""} ${dragging ? "dropping" : ""}${isGlass ? " glass" : ""}`}
       onDragOver={(event) => {
         if (!acceptsDrop(event)) return;
         event.preventDefault();
@@ -734,18 +740,19 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
         layout="position"
         transition={{ duration: 0.55, ease: GLIDE_EASE }}
       >
-        {showCommands && <div id="slash-command-list" className="slash-picker" role="listbox" aria-label="Slash commands">
+        {isGlass && <GlassPlatter />}
+        {showCommands && wrapPicker(<div id="slash-command-list" className="slash-picker" role="listbox" aria-label="Slash commands">
           {commandsLoading ? <div className="slash-picker-status">Loading commands…</div> : commandsError ? <div className="slash-picker-status">{commandsError} <button type="button" onClick={onRequestCommands}>Retry</button></div> : suggestions.length ? suggestions.map((command, index) =>
             <button id={`slash-option-${index}`} type="button" role="option" aria-selected={index === slashIndex} className={`slash-option ${index === slashIndex ? "selected" : ""}`} key={command.id} onMouseDown={(event) => event.preventDefault()} onClick={() => insertCommand(command.name)}>
               <span className="slash-mark" aria-hidden="true"><Icon name={COMMAND_ICONS[command.source]} /></span>
               <strong>/{command.name}{command.argumentHint && <em> {command.argumentHint}</em>}</strong><span>{command.description}</span><small>{command.sourceLabel}</small>
             </button>) : <div className="slash-picker-status">No matching commands</div>}
           {!commandsLoading && !commandsError && suggestions.length > 0 && PICKER_KEYS}
-        </div>}
-        {showMentions && <MentionPicker id="mention-list" label="Files and chats" suggestions={mentionSuggestions} index={mentionIndex} onPick={insertMention}
+        </div>)}
+        {showMentions && wrapPicker(<MentionPicker id="mention-list" label="Files and chats" suggestions={mentionSuggestions} index={mentionIndex} onPick={insertMention}
           notice={mentionsError ? <div className="slash-picker-status">{mentionsError} <button type="button" onClick={onRequestMentions}>Retry</button></div> : undefined}
           empty={mentionsError ? "No matching chats" : !mentionFiles && !mentionChats?.length ? (mentionsLoading ? "Loading files…" : "No files") : "No matching files or chats"}
-          footnote={mentionFiles && mentionsTruncated ? <div className="slash-picker-status">Only the first 20,000 files are listed.</div> : undefined} />}
+          footnote={mentionFiles && mentionsTruncated ? <div className="slash-picker-status">Only the first 20,000 files are listed.</div> : undefined} />)}
         {composerStyle === "split" ? (
           <>
             <div className="composer-split-card">

@@ -219,7 +219,8 @@ export function ModelPicker({
         onClose={() => setOpen(false)}
         side={popoverSide}
         align="start"
-        className={`model-picker-pop${glass ? " glass" : ""}`}
+        glass={glass}
+        className="model-picker-pop"
       >
         <div id={pickerId} className="picker-viewport" role="dialog" aria-label="Choose model">
           <div className={`picker-panels ${view === "crew" ? "show-crew" : view === "providers" ? "show-providers" : "show-models"}`}>
@@ -533,7 +534,8 @@ export function ReasoningToggle({
         onClose={() => setOpen(false)}
         side={popoverSide}
         align="start"
-        className={`reasoning-pop${glass ? " glass" : ""}`}
+        glass={glass}
+        className="reasoning-pop"
       >
         <div className={`reasoning-panel${peak}`}>
           <div className="reasoning-header">

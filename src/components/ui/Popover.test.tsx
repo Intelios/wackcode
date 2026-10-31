@@ -18,7 +18,11 @@ beforeEach(() => {
   });
   Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
     configurable: true,
-    get(this: HTMLElement) { return this.classList.contains("popover") ? panelHeight : 0; }
+    get(this: HTMLElement) {
+      if (this.classList.contains("popover-glass-body")) return panelHeight;
+      if (this.classList.contains("popover") && !this.classList.contains("glass")) return panelHeight;
+      return 0;
+    }
   });
 });
 
@@ -28,12 +32,12 @@ afterEach(() => {
   delete (HTMLElement.prototype as { scrollHeight?: number }).scrollHeight;
 });
 
-function Harness({ side }: { side: "top" | "bottom" }) {
+function Harness({ side, glass = false }: { side: "top" | "bottom"; glass?: boolean }) {
   const anchor = useRef<HTMLButtonElement>(null);
   return (
     <>
       <button ref={anchor} type="button">Anchor</button>
-      <Popover anchor={anchor} open onClose={() => undefined} side={side}>
+      <Popover anchor={anchor} open onClose={() => undefined} side={side} glass={glass}>
         <div>Panel</div>
       </Popover>
     </>
@@ -41,7 +45,7 @@ function Harness({ side }: { side: "top" | "bottom" }) {
 }
 
 function panelStyle() {
-  return (screen.getByText("Panel").parentElement as HTMLElement).style;
+  return (screen.getByText("Panel").closest(".popover") as HTMLElement).style;
 }
 
 describe("Popover", () => {
@@ -87,5 +91,17 @@ describe("Popover", () => {
     render(<Harness side="bottom" />);
     expect(panelStyle().top).toBe("8px");
     expect(panelStyle().maxHeight).toBe("556px");
+  });
+
+  it("mounts a GlassPlatter and measures scrollHeight through .popover-glass-body in glass mode", () => {
+    anchorRect = { top: 570, bottom: 600 };
+    panelHeight = 180;
+    render(<Harness side="bottom" glass />);
+    const popover = screen.getByText("Panel").closest(".popover") as HTMLElement;
+    expect(popover).toHaveClass("popover", "glass");
+    expect(popover.querySelector(".glass-platter > .glass-lens")).not.toBeNull();
+    expect(popover.querySelector(".popover-glass-body")).toContainElement(screen.getByText("Panel"));
+    expect(popover.style.top).toBe("384px");
+    expect(popover.style.maxHeight).toBe("556px");
   });
 });

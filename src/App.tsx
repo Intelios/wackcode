@@ -3581,6 +3581,7 @@ export default function App() {
                   changes={selectedTask.kind !== "chat" ? changes : undefined}
                   changesOpen={panelView?.kind === "changes"}
                   onToggleChanges={toggleChanges}
+                  glass={effectiveComposerStyle === "classicGlass"}
                 />
               ) : undefined}
               status={selectedTask?.status ?? "idle"}
@@ -3600,6 +3601,7 @@ export default function App() {
                   projectId={draft?.projectId ?? null}
                   useWorktree={draft?.useWorktree ?? false}
                   pinned={pinnedProjects}
+                  glass={effectiveComposerStyle === "classicGlass"}
                   onSelectProject={setDraftProject}
                   onSetPinned={setProjectPinned}
                   onToggleWorktree={setDraftWorktree}

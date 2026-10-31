@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { GitBranch, GitBranches, GitCheckoutKind } from "../types";
 import { Icon } from "./Icons";
+import { GlassPlatter } from "./ui/GlassPlatter";
 import { Popover } from "./ui/Popover";
 
 interface BranchPickerProps {
@@ -12,6 +13,8 @@ interface BranchPickerProps {
   /** Why switching is unavailable right now; the popover still opens and says so. */
   disabledReason?: string;
   side?: "top" | "bottom";
+  /** Liquid Glass platter on the project-bar pill and its popover (Classic Liquid Glass). */
+  glass?: boolean;
   onLoad: () => Promise<GitBranches>;
   /** Rejects with a user-facing sentence, shown in the popover. */
   onCheckout: (name: string, kind: GitCheckoutKind) => Promise<void>;
@@ -21,7 +24,7 @@ type Row = { key: string; name: string; kind: GitCheckoutKind; branch?: GitBranc
 
 /** The branch label, and a searchable popover to switch the checkout to another branch,
  *  track a remote one, or create one at HEAD. Nothing is fetched: it lists the refs Git has. */
-export function BranchPicker({ branch, variant, side = "bottom", disabledReason, onLoad, onCheckout }: BranchPickerProps) {
+export function BranchPicker({ branch, variant, side = "bottom", disabledReason, glass = false, onLoad, onCheckout }: BranchPickerProps) {
   const reduce = useReducedMotion();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -127,6 +130,7 @@ export function BranchPicker({ branch, variant, side = "bottom", disabledReason,
         title={`${label} — switch branch`}
         onClick={() => (open ? close() : show())}
       >
+        {glass && variant === "pill" && <GlassPlatter />}
         <Icon name="branch" />
         <span className="branch-trigger-name">
           <AnimatePresence initial={false} mode="popLayout">
@@ -141,7 +145,7 @@ export function BranchPicker({ branch, variant, side = "bottom", disabledReason,
         </span>
         <svg className="select-chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
       </button>
-      <Popover anchor={triggerRef} open={open} onClose={close} side={side} align="start" className="branch-pop">
+      <Popover anchor={triggerRef} open={open} onClose={close} side={side} align="start" glass={glass} className="branch-pop">
         <div className="branch-picker" role="dialog" aria-label="Switch branch">
           <div className="branch-search">
             <input

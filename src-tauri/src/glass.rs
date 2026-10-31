@@ -5,13 +5,14 @@
 //! only stop drawing its background at creation. Everything here keeps it opaque, painted in
 //! the user's background colour, unless Liquid Glass is on *and* the window has focus: a
 //! transparent window costs WindowServer 25–40% GPU even while idle and unfocused.
-use objc2::runtime::AnyClass;
+use objc2::runtime::{AnyClass, AnyObject};
 use objc2::{msg_send, sel, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSColor, NSGlassEffectView, NSGlassEffectViewStyle, NSView, NSWindow,
-    NSWindowOrderingMode,
+    NSAppearance, NSAppearanceCustomization, NSAppearanceNameDarkAqua, NSAutoresizingMaskOptions,
+    NSColor, NSGlassEffectView, NSGlassEffectViewStyle, NSView, NSWindow, NSWindowOrderingMode,
 };
-use tauri::{AppHandle, Manager};
+use objc2_web_kit::WKWebView;
+use tauri::{AppHandle, Manager, WebviewWindow};
 
 use crate::models::{AppearanceConfig, BackdropMode, GlassStyleSetting};
 
@@ -74,6 +75,33 @@ pub fn sync(app: &AppHandle, config: &AppearanceConfig) -> Result<(), String> {
 
 pub fn is_supported() -> bool {
     AnyClass::get(c"NSGlassEffectView").is_some()
+}
+
+/// Unlocks WebKit's hosted `-apple-visual-effect` Liquid Glass materials on the main renderer
+/// webview (macOS 26+) and pins `darkAqua` so glass optics stay dark even when macOS is in Light
+/// mode. Child browser previews and visual render webviews never call this.
+pub fn enable_webview_glass(window: &WebviewWindow) -> Result<(), String> {
+    if !is_supported() {
+        return Ok(());
+    }
+    window
+        .with_webview(|platform| unsafe {
+            let view: &WKWebView = &*platform.inner().cast();
+            if let Some(dark) = NSAppearance::appearanceNamed(NSAppearanceNameDarkAqua) {
+                view.setAppearance(Some(&dark));
+            }
+            let preferences = view.configuration().preferences();
+            enable_system_appearance(preferences.as_ref());
+            enable_system_appearance(view.as_ref());
+        })
+        .map_err(|error| error.to_string())
+}
+
+unsafe fn enable_system_appearance(target: &AnyObject) {
+    let responds: bool = unsafe { msg_send![target, respondsToSelector: sel!(_setUseSystemAppearance:)] };
+    if responds {
+        let _: () = unsafe { msg_send![target, _setUseSystemAppearance: true] };
+    }
 }
 
 /// Brings the main window in line with `backdrop`. `focused` decides whether glass shows

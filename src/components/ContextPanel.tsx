@@ -73,7 +73,7 @@ export function ContextPanel({ stats, popoverSide = "top", glass = false }: { st
       >
         <ContextRing percent={percent} />
       </button>
-      <Popover anchor={triggerRef} open={open} onClose={() => setOpen(false)} side={popoverSide} align="center" offset={12} className={`context-pop${glass ? " glass" : ""}`}>
+      <Popover anchor={triggerRef} open={open} onClose={() => setOpen(false)} side={popoverSide} align="center" offset={12} glass={glass} className="context-pop">
         <div className="context-panel" role="dialog" aria-label="Context window" onMouseEnter={show} onMouseLeave={scheduleHide}>
           <div className="context-hero">
             <ContextRing percent={percent} size={42}>

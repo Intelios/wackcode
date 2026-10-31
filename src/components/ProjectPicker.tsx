@@ -4,6 +4,7 @@ import { orderProjects } from "../project-display";
 import { matchesProject, monogram, shortPath } from "../project-display";
 import type { ProjectRecord } from "../types";
 import { Icon } from "./Icons";
+import { GlassPlatter } from "./ui/GlassPlatter";
 import { Popover } from "./ui/Popover";
 
 /**
@@ -24,6 +25,7 @@ interface ProjectPickerProps {
   projects: ProjectRecord[];
   projectId: string | null;
   pinned: ReadonlySet<string>;
+  glass?: boolean;
   onSelect: (projectId: string | null) => void;
   onSetPinned: (projectId: string, pinned: boolean) => void;
   onAddProject: () => void;
@@ -45,7 +47,7 @@ function arrange(projects: ProjectRecord[], pinned: ReadonlySet<string>, query: 
 
 const SPRING = { type: "spring", stiffness: 520, damping: 34 } as const;
 
-export function ProjectPicker({ projects, projectId, pinned, onSelect, onSetPinned, onAddProject }: ProjectPickerProps) {
+export function ProjectPicker({ projects, projectId, pinned, glass = false, onSelect, onSetPinned, onAddProject }: ProjectPickerProps) {
   const reduce = useReducedMotion() ?? false;
   const triggerRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -174,6 +176,7 @@ export function ProjectPicker({ projects, projectId, pinned, onSelect, onSetPinn
         aria-label={`Project: ${label}. Switch project`}
         onClick={() => (open ? setOpen(false) : show())}
       >
+        {glass && <GlassPlatter />}
         <span className="project-tile-slot">
           <AnimatePresence initial={false} mode="popLayout">
             <motion.span
@@ -199,7 +202,7 @@ export function ProjectPicker({ projects, projectId, pinned, onSelect, onSetPinn
         </span>
         <svg className="select-chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
       </button>
-      <Popover anchor={triggerRef} open={open} onClose={() => setOpen(false)} side="top" align="start" className="project-pop">
+      <Popover anchor={triggerRef} open={open} onClose={() => setOpen(false)} side="top" align="start" glass={glass} className="project-pop">
         <div className="project-picker" role="dialog" aria-label="Choose project">
           <div className="branch-search">
             <input

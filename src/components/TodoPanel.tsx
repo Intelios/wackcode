@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { TodoTask } from "../types";
 import { Icon } from "./Icons";
+import { GlassPlatter } from "./ui/GlassPlatter";
 import { Popover } from "./ui/Popover";
 
 interface Props {
   tasks?: TodoTask[];
   /** A run is in progress — completed tasks fold away at the start of each run. */
   busy?: boolean;
+  /** Liquid Glass platter on the pill and its popover (Classic Liquid Glass composer). */
+  glass?: boolean;
 }
 
 const STATUS_LABEL: Record<TodoTask["status"], string> = {
@@ -169,7 +172,7 @@ export function TodoPanel({ tasks, busy }: Props) {
  * popover above it. The pill's left mark mirrors the row markers: a half-filled ring while a
  * task runs, a plain ring while tasks wait, a drawn check once all are done.
  */
-export function TodoPill({ tasks, busy }: Props) {
+export function TodoPill({ tasks, busy, glass = false }: Props) {
   const anchor = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const view = useTodoView(tasks, busy);
@@ -192,6 +195,7 @@ export function TodoPill({ tasks, busy }: Props) {
         aria-label={`Todos: ${summary}`}
         onClick={() => setOpen((value) => !value)}
       >
+        {glass && <GlassPlatter />}
         <span className="todo-mark" aria-hidden="true">
           {done
             ? <Icon name="check" className="todo-check" />
@@ -201,7 +205,7 @@ export function TodoPill({ tasks, busy }: Props) {
         <span className="composer-pill-detail"><span>{label}</span></span>
         <Icon name="chevron" className="todo-pill-chevron" />
       </button>
-      <Popover anchor={anchor} open={open} onClose={() => setOpen(false)} side="top" align="center" className="todo-popover">
+      <Popover anchor={anchor} open={open} onClose={() => setOpen(false)} side="top" align="center" glass={glass} className="todo-popover">
         <section className={`todo-panel todo-popover-panel ${view.active ? "" : "done"}`} role="dialog" aria-label="Todos">
           <TodoHead view={view} busy={busy}>
             <button type="button" className="todo-panel-collapse" aria-label="Close todos" onClick={() => setOpen(false)}>

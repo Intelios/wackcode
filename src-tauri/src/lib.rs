@@ -95,6 +95,7 @@ pub fn run() {
                 }
             }
             if let Some(window) = app.get_webview_window("main") {
+                let _ = glass::enable_webview_glass(&window);
                 if let Some(saved_window) = saved_window {
                     window_state::restore(&window, saved_window);
                 }

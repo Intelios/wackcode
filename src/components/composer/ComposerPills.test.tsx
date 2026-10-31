@@ -131,4 +131,18 @@ describe("ComposerPills", () => {
     rerender(<ComposerPills changes={{ ...gitChanges([changeFile("a.ts", [{ layer: "working", additions: 1, deletions: 0 }])]), isGit: false }} />);
     expect(container.firstChild).toBeNull();
   });
+
+  it("adds GlassPlatter to every pill and the todo popover only when glass is enabled", () => {
+    const changes = gitChanges([changeFile("a.ts", [{ layer: "working", additions: 2, deletions: 1 }])]);
+    const { container, rerender } = render(
+      <ComposerPills run={{ startedAt: Date.now() - 5_000 }} todos={todos} changes={changes} glass />
+    );
+    expect(container.querySelectorAll(".composer-pill > .glass-platter")).toHaveLength(3);
+    fireEvent.click(screen.getByRole("button", { name: /Todos: 1 of 3/ }));
+    expect(document.body.querySelector(".todo-popover")).toHaveClass("glass");
+
+    rerender(<ComposerPills run={{ startedAt: Date.now() - 5_000 }} todos={todos} changes={changes} />);
+    expect(container.querySelectorAll(".glass-platter")).toHaveLength(0);
+    expect(document.body.querySelector(".todo-popover")).not.toHaveClass("glass");
+  });
 });

@@ -63,4 +63,12 @@ describe("BranchPicker", () => {
     render(<BranchPicker branch={null} variant="pill" onLoad={async () => listed} onCheckout={async () => undefined} />);
     expect(screen.getByRole("button", { name: /Detached HEAD/ })).toBeInTheDocument();
   });
+
+  it("keeps header meta branch pickers solid by default", async () => {
+    const { container } = render(<BranchPicker branch="main" variant="meta" onLoad={async () => listed} onCheckout={async () => undefined} />);
+    expect(container.querySelector(".glass-platter")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Switch branch/ }));
+    await screen.findByRole("dialog", { name: "Switch branch" });
+    expect(document.body.querySelector(".branch-pop")).not.toHaveClass("glass");
+  });
 });

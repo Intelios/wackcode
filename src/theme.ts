@@ -21,9 +21,9 @@ export const DEFAULT_BACKGROUND = "#111310";
 
 /** Mirrors `AppearanceConfig::default()` in models.rs. */
 export const DEFAULT_APPEARANCE: AppearanceConfig = {
-  chatTabs: false,
+  chatTabs: true,
   thinkingPreview: true,
-  thinkingTimerPrecision: "second",
+  thinkingTimerPrecision: "tenth",
   messageBubbles: false,
   groupExploration: true,
   collapseCompletedWork: true,

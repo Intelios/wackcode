@@ -308,14 +308,14 @@ mod tests {
         assert!(!data.appearance.message_bubbles);
         assert!(data.appearance.group_exploration);
         assert!(data.appearance.collapse_completed_work);
-        // The thinking timer counts whole seconds until the user picks tenths.
-        assert_eq!(data.appearance.thinking_timer_precision, crate::models::ThinkingTimerPrecision::Second);
-        let data: AppData = serde_json::from_str(r#"{"version":1,"appearance":{"thinkingPreview":false,"messageBubbles":true,"groupExploration":false,"collapseCompletedWork":false,"visualBanner":false,"thinkingTimerPrecision":"tenth"}}"#).unwrap();
+        // The thinking timer counts tenths until the user picks whole seconds.
+        assert_eq!(data.appearance.thinking_timer_precision, crate::models::ThinkingTimerPrecision::Tenth);
+        let data: AppData = serde_json::from_str(r#"{"version":1,"appearance":{"thinkingPreview":false,"messageBubbles":true,"groupExploration":false,"collapseCompletedWork":false,"visualBanner":false,"thinkingTimerPrecision":"second"}}"#).unwrap();
         assert!(!data.appearance.thinking_preview);
         assert!(data.appearance.message_bubbles);
         assert!(!data.appearance.group_exploration);
         assert!(!data.appearance.collapse_completed_work);
-        assert_eq!(data.appearance.thinking_timer_precision, crate::models::ThinkingTimerPrecision::Tenth);
+        assert_eq!(data.appearance.thinking_timer_precision, crate::models::ThinkingTimerPrecision::Second);
         let saved = serde_json::to_string(&data).unwrap();
         assert!(saved.contains(r#""thinkingPreview":false"#));
         assert!(saved.contains(r#""messageBubbles":true"#));
@@ -323,7 +323,7 @@ mod tests {
         assert!(saved.contains(r#""collapseCompletedWork":false"#));
         // Older files may retain the removed title-band preference; it is ignored on load.
         assert!(!saved.contains("visualBanner"));
-        assert!(saved.contains(r#""thinkingTimerPrecision":"tenth""#));
+        assert!(saved.contains(r#""thinkingTimerPrecision":"second""#));
     }
 
     #[test]

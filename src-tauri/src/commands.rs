@@ -6101,10 +6101,10 @@ mod tests {
     }
 
     #[test]
-    fn chat_tabs_default_off_and_save_without_changing_other_preferences() {
+    fn chat_tabs_default_on_and_save_without_changing_other_preferences() {
         let old: AppearanceConfig = serde_json::from_str("{}").unwrap();
-        assert!(!old.chat_tabs);
-        let input = AppearanceConfig { chat_tabs: true, ..old.clone() };
+        assert!(old.chat_tabs);
+        let input = AppearanceConfig { chat_tabs: false, ..old.clone() };
         assert_eq!(validate_appearance_config(input.clone(), &old, true).unwrap(), input);
     }
 

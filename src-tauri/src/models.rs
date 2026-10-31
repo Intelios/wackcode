@@ -542,7 +542,7 @@ pub struct ToolConfig {
 #[serde(rename_all = "camelCase")]
 pub struct AppearanceConfig {
     /// Session-only chat tab workspace. This preference never reaches a worker.
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub chat_tabs: bool,
     /// One-line gist of the reasoning beside a live "Thinking…" row.
     #[serde(default = "default_true")]
@@ -687,8 +687,8 @@ pub enum ComposerStyle {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ThinkingTimerPrecision {
-    #[default]
     Second,
+    #[default]
     Tenth,
 }
 
@@ -715,9 +715,9 @@ fn default_glass_tint() -> u8 {
 impl Default for AppearanceConfig {
     fn default() -> Self {
         Self {
-            chat_tabs: false,
+            chat_tabs: true,
             thinking_preview: true,
-            thinking_timer_precision: ThinkingTimerPrecision::Second,
+            thinking_timer_precision: ThinkingTimerPrecision::Tenth,
             message_bubbles: false,
             group_exploration: true,
             collapse_completed_work: true,

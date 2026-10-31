@@ -789,19 +789,19 @@ describe("SettingsPage appearance section", () => {
     await waitFor(() => expect(again.onSetAppearance).toHaveBeenCalledWith(appearance));
   });
 
-  it("sets the thinking timer to tenths and back to whole seconds", async () => {
-    const { onSetAppearance } = renderAppearance({ ...DEFAULT_APPEARANCE, thinkingTimerPrecision: "second" });
+  it("sets the thinking timer to whole seconds and back to tenths", async () => {
+    const { onSetAppearance } = renderAppearance(DEFAULT_APPEARANCE);
     const group = screen.getByRole("radiogroup", { name: "Thinking timer" });
-    expect(within(group).getByRole("radio", { name: "1s" })).toHaveAttribute("aria-checked", "true");
-    fireEvent.click(within(group).getByRole("radio", { name: "0.1s" }));
-    await waitFor(() => expect(onSetAppearance).toHaveBeenCalledWith({ ...DEFAULT_APPEARANCE, thinkingTimerPrecision: "tenth" }));
+    expect(within(group).getByRole("radio", { name: "0.1s" })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(within(group).getByRole("radio", { name: "1s" }));
+    await waitFor(() => expect(onSetAppearance).toHaveBeenCalledWith({ ...DEFAULT_APPEARANCE, thinkingTimerPrecision: "second" }));
     cleanup();
 
-    const again = renderAppearance({ ...DEFAULT_APPEARANCE, thinkingTimerPrecision: "tenth" });
+    const again = renderAppearance({ ...DEFAULT_APPEARANCE, thinkingTimerPrecision: "second" });
     const switched = screen.getByRole("radiogroup", { name: "Thinking timer" });
-    expect(within(switched).getByRole("radio", { name: "0.1s" })).toHaveAttribute("aria-checked", "true");
-    fireEvent.click(within(switched).getByRole("radio", { name: "1s" }));
-    await waitFor(() => expect(again.onSetAppearance).toHaveBeenCalledWith({ ...DEFAULT_APPEARANCE, thinkingTimerPrecision: "second" }));
+    expect(within(switched).getByRole("radio", { name: "1s" })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(within(switched).getByRole("radio", { name: "0.1s" }));
+    await waitFor(() => expect(again.onSetAppearance).toHaveBeenCalledWith({ ...DEFAULT_APPEARANCE, thinkingTimerPrecision: "tenth" }));
   });
 
   it.each(["Thinking preview", "Collapse completed work"])("surfaces a failed %s save", async (label) => {

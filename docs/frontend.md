@@ -175,7 +175,7 @@ The timer anchors to `compaction.startedAt`, not the stage's mount, so it surviv
 
 ## Optional chat tabs
 
-`appearance.chatTabs` defaults off. `App` owns `useChatTabs` and the pure rules in
+`appearance.chatTabs` defaults on. `App` owns `useChatTabs` and the pure rules in
 `chat-tabs.ts`: ordered stable tab ids, selection, taskless draft configuration, panel
 state and ten closed records. The strip mounts only once the area holds a second tab —
 one open chat keeps the tabs-off layout — while every tab rule still applies

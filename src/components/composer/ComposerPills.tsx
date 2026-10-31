@@ -127,7 +127,7 @@ export function ChangesPill({ changes, open, onToggle }: { changes: GitChanges; 
       onClick={onToggle}
     >
       <Icon name="git" />
-      <span className="changes-meta"><strong>{files}</strong> {files === 1 ? "file" : "files"} changed <em className="stat-add">+{totals.add}</em> <em className="stat-del">−{totals.del}</em></span>
+      <span className="changes-meta"><strong>{files}</strong> {files === 1 ? "file" : "files"} <em className="stat-add">+{totals.add}</em> <em className="stat-del">−{totals.del}</em></span>
     </button>
   );
   return onToggle ? <Tooltip label={<>Changes <kbd>⌘⇧C</kbd></>}>{button}</Tooltip> : button;

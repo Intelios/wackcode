@@ -2088,11 +2088,18 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
 /* Right-pointing glyph faces down at rest (the list opens upward) and up while open. */
 .composer-pill-todo .todo-pill-chevron { color: var(--text-faint); transform: rotate(90deg); transition: transform .15s var(--ease); }
 .composer-pill-todo.open .todo-pill-chevron { transform: rotate(-90deg); }
-.composer-pill-files { flex: 0 1 auto; cursor: pointer; }
+/* The files pill sits inside a Tooltip's inline-flex wrapper, so it can't share .composer-pill's
+   percentage max-width — that would resolve against the shrink-to-fit wrapper, not the row, and
+   collapse the pill (this once painted its text outside the border). No cap: the label is short
+   and bounded, and the inner span still ellipsizes if the row ever squeezes it. */
+.composer-pills > .tooltip-wrap:has(> .composer-pill-files) { flex: 0 1 auto; min-width: 0; }
+.composer-pill-files { flex: 0 1 auto; max-width: none; cursor: pointer; overflow: hidden; }
 .composer-pill-files:hover { background: var(--surface-hover); color: var(--text); border-color: var(--border-bright); }
 /* While the panel sits on its Changes view the pill stays lit, like the header's track. */
 .composer-pill-files.open { border-color: var(--wc-accent-line); color: var(--text); }
-.composer-pill-files .changes-meta { overflow: hidden; text-overflow: ellipsis; }
+/* .changes-meta carries flex: 0 0 auto from the panel header — here it must give way and
+   clip like .composer-pill-detail does. */
+.composer-pill-files .changes-meta { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .composer-pill-todo:focus-visible, .composer-pill-files:focus-visible { outline: 2px solid var(--wc-focus-line); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) {
   .composer-pill-working.live .clock-hand { animation: none; }

@@ -108,7 +108,7 @@ describe("ComposerPills", () => {
     const pills = container.querySelectorAll(".composer-pill");
     expect(pills).toHaveLength(3);
     const filesPill = pills[2];
-    expect(filesPill).toHaveTextContent(/2 files changed \+13 −2/);
+    expect(filesPill).toHaveTextContent(/2 files \+13 −2/);
     expect(filesPill).toHaveAttribute("aria-pressed", "false");
     fireEvent.click(filesPill);
     expect(onToggle).toHaveBeenCalledTimes(1);
@@ -118,7 +118,7 @@ describe("ComposerPills", () => {
     const { container } = render(
       <ComposerPills changes={gitChanges([changeFile("a.ts", [{ layer: "staged", additions: 4, deletions: 1 }, { layer: "working", additions: 2, deletions: 3 }])])} />
     );
-    expect(container.querySelector(".composer-pill-files")).toHaveTextContent(/1 file changed \+6 −4/);
+    expect(container.querySelector(".composer-pill-files")).toHaveTextContent(/1 file \+6 −4/);
   });
 
   it("reads pressed while the panel is on Changes, and hides on a clean or non-Git tree", () => {

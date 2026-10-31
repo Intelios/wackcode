@@ -3297,7 +3297,7 @@ export default function App() {
     >
     <div className={`app-shell${rebuilding ? " rebuild" : ""}${panelExpanded && canExpand(panelView) ? " panel-expanded" : ""}${showChatTabBar ? " panel-has-tabs" : ""}${!settingsOpen && !shell.sidebarShown ? " sidebar-hidden" : ""}`}
       style={{ "--sidebar-w": `${settingsOpen ? SIDEBAR_W : sidebarWidth}px` } as CSSProperties}
-      data-area={area} data-dynamic-space onClickCapture={(event) => {
+      data-area={area} data-screen={settingsOpen ? "settings" : "workspace"} data-dynamic-space onClickCapture={(event) => {
       if (event.button === 0 && !settingsOpen && !confirm && !restoreDialog && !subscriptionLogin && isBackgroundClick(event.target)) {
         dynamicBackdrop.current?.ripple(event.clientX, event.clientY);
       }

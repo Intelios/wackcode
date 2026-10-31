@@ -90,6 +90,26 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
+describe("workspace presentation scope", () => {
+  it("isolates workspace styling from Settings in both areas", async () => {
+    bootstrap(false);
+    const settings = await screen.findByRole("button", { name: "Settings" });
+    const shell = document.querySelector(".app-shell")!;
+    expect(shell).toHaveAttribute("data-screen", "workspace");
+    fireEvent.click(settings);
+    expect(shell).toHaveAttribute("data-screen", "settings");
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
+    expect(shell).toHaveAttribute("data-screen", "workspace");
+    fireEvent.click(within(screen.getByRole("group", { name: "Area" })).getByRole("button", { name: "Chat" }));
+    await waitFor(() => expect(shell).toHaveAttribute("data-area", "chat"));
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect(shell).toHaveAttribute("data-screen", "settings");
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
+    expect(shell).toHaveAttribute("data-screen", "workspace");
+    expect(shell).toHaveAttribute("data-area", "chat");
+  });
+});
+
 describe("App project builds", () => {
   it("saves and launches a build beside Run, shares its output across chats, and stops only the build", async () => {
     const project = { id: "project", name: "Project", path: "/tmp", gitRoot: null, gitHasHead: false, runCommand: "pnpm dev", buildCommand: null, branch: null, createdAt: "now" };

@@ -1,9 +1,9 @@
 /**
- * Suggested-task cards: the follow-ups the agent filed with `suggest_task` while it worked —
+ * Suggested tasks: the follow-ups the agent filed with `suggest_task` while it worked —
  * a bug, a rough edge, a missing bit of polish it noticed but did not touch — drawn as a tray
  * under the turn's final answer (`WorkTurn`'s `after` slot, from `layoutWorkTurns`).
  *
- * The card is a task, not a widget: unlike a visual reply it stays actionable on older turns,
+ * Each entry flows with the answer, without card framing. Unlike a visual reply it stays actionable on older turns,
  * because "I'll come back to this" has to survive a few more messages. Nothing is started by
  * accident either — "Start here" is disabled while a run is in progress, and a new chat only
  * exists where there is a project to put it in.
@@ -192,12 +192,12 @@ function SuggestionItem({ card, index, scope, reduce }: ItemProps) {
       ) : (
         <div className="suggestion-actions">
           {scope.canStartNewChat && (
-            <button type="button" className="primary-button" disabled={starting} onClick={() => start("new", "build")}>
+            <button type="button" className="primary-button compact" disabled={starting} onClick={() => start("new", "build")}>
               <Icon name="plus" /> Start in new chat
             </button>
           )}
           <Tooltip label={scope.modelMissing ? "Pick a model for this chat first" : scope.busy ? "Wait for this reply to finish" : "Send it in this chat"}>
-            <button type="button" className={scope.canStartNewChat ? "secondary-button" : "primary-button"}
+            <button type="button" className={scope.canStartNewChat ? "secondary-button compact" : "primary-button compact"}
               disabled={starting || scope.busy || scope.modelMissing}
               onClick={() => start("here", "build")}>
               <Icon name="send" /> Start here

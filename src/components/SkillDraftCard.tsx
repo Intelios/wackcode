@@ -73,11 +73,12 @@ export function SkillDraftCard({ details, status, current, owned, busy, saving, 
   const actionable = current && owned && !busy && !saved;
   const revisionCurrent = status === undefined || status.revision === undefined || status.revision === details.revision;
   const canSave = actionable && status?.state === "ready" && revisionCurrent;
+  const awaiting = current && owned && status?.state === "ready" && revisionCurrent;
   const stale = actionable && ((status?.state === "stale") || (status?.state === "ready" && !revisionCurrent));
   const saveLabel = details.target === "library-update" ? "Update skill" : "Save skill";
 
   return (
-    <div className={`skill-draft-card ${current ? "current" : ""} ${saved ? "saved" : ""}`}>
+    <div className={`skill-draft-card ${current ? "current" : ""} ${awaiting ? "awaiting" : ""} ${saved ? "saved" : ""}`}>
       <div className="skill-draft-head">
         <span className="plan-card-mark" aria-hidden="true"><Icon name="book" /></span>
         <div className="plan-card-title">

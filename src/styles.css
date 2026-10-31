@@ -526,6 +526,14 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .archived-row .row-menu:active { transform: scale(.92); }
 .archived-row .row-menu { border-radius: var(--wc-radius-pill); }
 
+/* Workspace navigation uses indentation and selected fills. Settings keeps its existing
+   chrome; do not move these overrides onto the shared sidebar or colour tokens. */
+.app-shell[data-screen="workspace"] :is(.sidebar, .sidebar-top, .sidebar-footer, .project-tasks, .sidebar-tile, .project-mark.none, .dev-badge) { border-color: transparent; }
+.app-shell[data-screen="workspace"] :is(.task-item.active, .archived-row.active, .sidebar-new, .area-switch, .area-tab-pill) { box-shadow: none; }
+.app-shell[data-screen="workspace"] .project-group:not(.current) .project-mark { box-shadow: none; }
+.app-shell[data-screen="workspace"] .recency-heading::after { content: none; }
+.app-shell[data-screen="workspace"] .sidebar-search:not(:focus-within) { box-shadow: none; }
+
 /* ── Workspace header ──────────────────────────────── */
 .chat-tab-strip { position: relative; z-index: 3; display: flex; align-items: center; height: 42px; flex: 0 0 42px; gap: 4px; background: var(--wc-header); border-bottom: 1px solid var(--border); }
 .chat-tab-drag { flex: 0 0 8px; align-self: stretch; }
@@ -702,6 +710,12 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .run-editor-actions { display: flex; align-items: center; gap: 7px; padding-top: 5px; }
 .run-editor-spacer { flex: 1; }
 
+/* Keep the compact navigation rows and native drag space, without enclosing bands. */
+.app-shell[data-screen="workspace"] :is(.workspace-header, .chat-tab-strip) { background: transparent; border-color: transparent; }
+.app-shell[data-screen="workspace"] :is(.chat-tab-pill, .panel-switch, .panel-switch-pill, .project-run-control) { box-shadow: none; }
+.app-shell[data-screen="workspace"] .project-run-control .project-run-more { border-color: transparent; }
+.app-shell[data-screen="workspace"] .panel-toggle-button.active { box-shadow: none; }
+
 /* ── Transcript ────────────────────────────────────── */
 .transcript-zone { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 /* position: relative so turn markers' offsetTop lands in scroll-content coordinates for the rail;
@@ -710,6 +724,22 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .conversation-scroll::-webkit-scrollbar { display: none; }
 .transcript { width: min(760px, calc(100% - 2 * var(--chat-gutter, 24px))); margin: 0 auto; padding: 28px 0 26px; }
 .block-slot { display: contents; }
+
+/* One feathered reading lane protects prose and transparent reply inserts together. It lives
+   behind the scroll viewport, never on a card or a positioned transcript/turn wrapper: turn
+   offsets must continue to resolve in the conversation scroller for the scroll rail. */
+.app-shell[data-screen="workspace"] :is(.transcript-zone, .chat-scroll-zone) { isolation: isolate; }
+:is([data-backdrop="image"], [data-backdrop="glass"], [data-backdrop="dynamic"])
+  .app-shell[data-screen="workspace"] :is(.transcript-zone, .chat-scroll-zone)::before {
+  content: ""; position: absolute; z-index: -1; inset-block: 0; left: 50%;
+  width: min(100%, 856px); transform: translateX(-50%); pointer-events: none;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--bg) 64%, transparent) 8%, color-mix(in srgb, var(--bg) 64%, transparent) 92%, transparent);
+  mask-image: linear-gradient(transparent, var(--text) 28px, var(--text) calc(100% - 28px), transparent);
+}
+:is([data-backdrop="image"], [data-backdrop="glass"], [data-backdrop="dynamic"])
+  .app-shell[data-screen="workspace"] .chat-scroll-zone::before { width: min(100%, 816px); }
+/* Dynamic ink already has a backdrop-wide veil; keep its extra reading protection quieter. */
+[data-backdrop="dynamic"] .app-shell[data-screen="workspace"] :is(.transcript-zone, .chat-scroll-zone)::before { opacity: .45; }
 
 .msg { margin-bottom: 20px; }
 /* One turn streams as many assistant messages (Pi makes ~1-2 calls per message),
@@ -759,6 +789,10 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
   margin: 0; max-height: 260px; overflow: auto; padding: 8px 11px; border-top: 1px solid var(--border);
   background: var(--surface); color: var(--text-soft); font: 10.5px/1.5 "SFMono-Regular", Consolas, monospace; white-space: pre;
 }
+/* Attachments stay identifiable by their thumbnail, file mark and label, without a card. */
+.app-shell[data-screen="workspace"] :is(.message-images img, .message-images .image-pending, .file-chip) { border: 0; background: transparent; box-shadow: none; }
+.app-shell[data-screen="workspace"] .file-chip-content { border-top: 0; background: var(--wc-well); }
+.app-shell[data-screen="workspace"] .message-images .message-image:hover img { box-shadow: none; }
 .msg.user .bubble {
   max-width: 78%; background: var(--surface-raised); border: 1px solid var(--border);
   border-radius: 12px; border-bottom-right-radius: 4px;
@@ -825,6 +859,9 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
 }
 .model-switch-divider strong { color: var(--text-dim); font-weight: 600; }
 .model-switch-arrow { padding: 0 2px; color: var(--wc-accent); }
+.app-shell[data-screen="workspace"] .model-switch-divider::before,
+.app-shell[data-screen="workspace"] .model-switch-divider::after { display: none; }
+.app-shell[data-screen="workspace"] .model-switch-divider > span { padding-inline: 0; border: 0; background: transparent; }
 @keyframes model-switch-in { from { opacity: 0; transform: scale(.98); } to { opacity: 1; transform: none; } }
 
 /* Saved compaction boundaries stay inspectable beside the conversation they summarized. */
@@ -844,6 +881,10 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
 .compaction-hint { margin: 12px 0; color: var(--text-dim); font-size: 11px; }
 .compaction-body .assistant-text > :first-child { margin-top: 0; }
 .compaction-body .assistant-text > :last-child { margin-bottom: 0; }
+.app-shell[data-screen="workspace"] .compaction-row { border: 0; border-radius: 0; background: transparent; }
+.app-shell[data-screen="workspace"] .compaction-head { padding: 7px 0; }
+.app-shell[data-screen="workspace"] .compaction-head:is(:hover, :focus-visible) { background: transparent; color: var(--text); }
+.app-shell[data-screen="workspace"] .compaction-body { padding: 8px 0 12px; border-top: 0; }
 
 .msg.assistant > *:first-child, .stream-text > :first-child { margin-top: 0; }
 .msg.assistant > *:last-child, .stream-text > :last-child { margin-bottom: 0; }
@@ -908,6 +949,22 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
 .msg.assistant a:hover, .stream-text a:hover { text-decoration: underline; }
 .blocked-image { display: inline-block; color: var(--text-dim); font-size: 12px; border: 1px dashed var(--border); padding: 4px 8px; border-radius: 5px; }
 
+/* Workspace prose and source share the reading lane. Source keeps a quiet well, while its
+   language and copy control sit over that well without a separate toolbar band. Settings'
+   shared Markdown keeps its established presentation. */
+.app-shell[data-screen="workspace"] :is(.msg.assistant, .stream-text, .chat-bubble.agent) code { border: 0; }
+.app-shell[data-screen="workspace"] :is(.msg.assistant, .stream-text, .chat-bubble.agent) pre { border: 0; }
+.app-shell[data-screen="workspace"] .code-block { position: relative; border: 0; }
+.app-shell[data-screen="workspace"] .code-block-toolbar { min-height: 0; padding: 8px 12px 0; border-bottom: 0; background: transparent; }
+.app-shell[data-screen="workspace"] .code-block-mark { display: none; }
+.app-shell[data-screen="workspace"] .code-block-language { color: var(--text-dim); font-size: 10.5px; }
+.app-shell[data-screen="workspace"] .code-block > pre { padding-top: 8px; }
+.app-shell[data-screen="workspace"] :is(.msg.assistant, .stream-text, .chat-bubble.agent) blockquote { border-left: 0; padding-left: 14px; }
+.app-shell[data-screen="workspace"] :is(.msg.assistant, .stream-text, .chat-bubble.agent) :is(th, td) { border: 0; }
+.app-shell[data-screen="workspace"] :is(.msg.assistant, .stream-text, .chat-bubble.agent) th { background: transparent; }
+.app-shell[data-screen="workspace"] :is(.msg.assistant, .stream-text, .chat-bubble.agent) hr { height: 0; border: 0; }
+.app-shell[data-screen="workspace"] .blocked-image { border: 0; padding-left: 0; background: transparent; }
+
 /* GFM task lists (`- [x]` in any rendered Markdown). remark-gfm writes a disabled checkbox into
    each item, which would otherwise take the global 37px text-input styling and push the item's
    text onto its own line. The box is drawn here as a small static control in the list's gutter,
@@ -948,6 +1005,7 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
 }
 .reply-image-pending { width: min(100%, 320px); min-height: 120px; }
 .reply-image-pending svg, .reply-image-unavailable svg { width: 18px; height: 18px; flex-shrink: 0; }
+.app-shell[data-screen="workspace"] :is(.reply-image-button, .reply-image-pending, .reply-image-unavailable) { border: 0; background: transparent; }
 @keyframes reply-image-in { from { opacity: 0; transform: translateY(5px) scale(.985); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) {
   .reply-image-button { animation: none; transition: none; }
@@ -965,6 +1023,8 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
 }
 [data-message-bubbles="on"] .msg.assistant .assistant-text > :first-child { margin-top: 0; }
 [data-message-bubbles="on"] .msg.assistant .assistant-text > :last-child { margin-bottom: 0; }
+.app-shell[data-screen="workspace"] .msg.user .bubble,
+.app-shell[data-screen="workspace"] .msg.assistant .assistant-text { border-color: transparent; }
 
 /* streaming caret */
 .stream-text > :last-child::after {
@@ -1104,6 +1164,7 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
   transition: color .8s var(--ease);
 }
 .thinking-frame.live .thinking-body { color: var(--text-soft); }
+.app-shell[data-screen="workspace"] .thinking-frame { border-left: 0; }
 .thinking-body > :first-child { margin-top: 0; } .thinking-body > :last-child { margin-bottom: 0; }
 /* Fresh ink (markdown-components.tsx): a newly written word mounts as a span at the write
    head's colour — bright, accent-tinted, with a soft glow — and cools to the wet body's
@@ -1570,6 +1631,31 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
 }
 .orphan-group { margin: 2.5px 0; }
 
+/* In the workspace calls are part of the transcript: a disclosure line, then its contents.
+   Commands, source and logs retain a quiet well; metadata never becomes a header band. */
+.app-shell[data-screen="workspace"] :is(.tool-row, .tool-chip, .explore-head, .tool-detail) { border: 0; background: transparent; box-shadow: none; }
+.app-shell[data-screen="workspace"] .tool-row-head { padding-left: 0; }
+.app-shell[data-screen="workspace"] .tool-row.open > .tool-row-head { border-bottom: 0; }
+.app-shell[data-screen="workspace"] .tool-row-reveal { padding-left: 22px; }
+.app-shell[data-screen="workspace"] :is(.tool-chip, .explore-head) { padding-left: 0; }
+.app-shell[data-screen="workspace"] :is(.tool-chip, .explore-head):is(.open, .live):not(.failed) { color: var(--wc-accent-text); }
+.app-shell[data-screen="workspace"] :is(.tool-head, .tool-row .tool-head) { padding: 7px 0; background: transparent; border-bottom: 0; }
+.app-shell[data-screen="workspace"] .tool-head-mark { background: transparent; box-shadow: none; }
+.app-shell[data-screen="workspace"] :is(.tool-text, .tool-entries) { background: var(--wc-well); border-radius: var(--wc-radius-card); }
+.app-shell[data-screen="workspace"] .tool-text { margin: 5px 0; }
+.app-shell[data-screen="workspace"] :is(.tool-text + .tool-text, .tool-args + .tool-text, .tool-questions + .tool-text, .tool-foot) { border-top: 0; }
+.app-shell[data-screen="workspace"] .tool-detail .tool-head .tool-command { padding: 8px 10px; background: var(--wc-well); border-radius: 8px; }
+.app-shell[data-screen="workspace"] .tool-detail pre:is(.tool-code, .tool-matches) { background-image: none; }
+.app-shell[data-screen="workspace"] .match-file { background: transparent; }
+.app-shell[data-screen="workspace"] :is(.tool-pill, .tool-commit-hash) { border: 0; background: transparent; padding-inline: 2px; }
+.app-shell[data-screen="workspace"] .tool-question-tag { background: transparent; box-shadow: none; padding-left: 0; }
+.app-shell[data-screen="workspace"] .tool-option { border: 0; }
+.app-shell[data-screen="workspace"] .explore-mark { background: transparent; box-shadow: none; margin-right: 0; }
+.app-shell[data-screen="workspace"] .explore-body { border-left: 0; padding-left: 14px; }
+.app-shell[data-screen="workspace"] .explore-pulse { box-shadow: none; }
+.app-shell[data-screen="workspace"] .tool-image { border: 0; background: transparent; box-shadow: none; }
+.app-shell[data-screen="workspace"] .tool-image:hover { box-shadow: none; }
+
 .agent-working { display: flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: 12.5px; margin-top: 5px; }
 /* Chat's typing presence in transcript size: the pondering duck, bouncing dots, the caption. */
 .agent-working-duck { width: 18px; height: 18px; color: var(--wc-accent); flex: 0 0 auto; }
@@ -1605,6 +1691,7 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
 .compacting-sep { color: var(--text-faint); }
 .compacting-elapsed { color: var(--text-soft); font-variant-numeric: tabular-nums; }
 .compacting-stage.ending .compacting-status { opacity: 0; }
+.app-shell[data-screen="workspace"] .compacting-well { border: 0; background: transparent; box-shadow: none; }
 @media (prefers-reduced-motion: reduce) {
   .compacting-well, .compacting-status { transition: none; }
 }
@@ -1645,11 +1732,15 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
 .work-transcript-region > .work-transcript-body, .work-transcript-region > .turn-content { overflow: hidden; }
 .work-transcript-body { margin: -6px 0 16px 6px; padding: 2px 0 0 15px; border-left: 1px solid var(--border); }
 .work-transcript-body > .msg:last-child, .work-transcript-body > .orphan-group:last-child { margin-bottom: 8px; }
+.app-shell[data-screen="workspace"] .run-duration::after { display: none; }
+.app-shell[data-screen="workspace"] .run-duration-chip { padding-left: 0; border: 0; background: transparent; }
+.app-shell[data-screen="workspace"] .work-transcript-body { border-left: 0; }
 @media (prefers-reduced-motion: reduce) {
   .work-chevron { transition: none; }
 }
 .aborted-label { display: inline-flex; margin-top: 6px; color: var(--warning); font-size: 11px; }
 .message-error { margin-top: 10px; border: 1px solid #5b3030; background: var(--danger-bg); color: #ebb1b1; border-radius: 7px; padding: 9px 11px; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.app-shell[data-screen="workspace"] .message-error { padding-inline: 0; border: 0; background: transparent; color: var(--danger); }
 
 /* Message actions: copy / edit / rewind / retry / fork, revealed on hover or keyboard focus.
    The version switcher stays visible so other versions are discoverable. */
@@ -1809,6 +1900,11 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
   background: var(--surface); color: var(--text-soft); font-size: 10.5px; white-space: nowrap;
 }
 .computer-access-actions .computer-access-never { margin-right: auto; color: var(--text-dim); }
+.app-shell[data-screen="workspace"] .inline-dialog-card {
+  border-color: transparent;
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--wc-well) 18%, transparent);
+}
+.app-shell[data-screen="workspace"] .computer-access-icon::after { content: none; }
 @keyframes computer-access-ring {
   0% { opacity: .9; transform: scale(.94); }
   70%, 100% { opacity: 0; transform: scale(1.12); }
@@ -1858,6 +1954,9 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
 :is(.msg.assistant, .stream-text, .chat-bubble.agent) .web-result-snippet { margin: 3px 0 0; }
 :is(.msg.assistant, .stream-text, .chat-bubble.agent) .web-result-title { color: var(--text); text-decoration: none; }
 :is(.msg.assistant, .stream-text, .chat-bubble.agent) .web-result-title:hover { color: var(--wc-accent-text); text-decoration: underline; }
+.app-shell[data-screen="workspace"] .web-result { padding: 8px 0; border: 0; background: transparent; }
+.app-shell[data-screen="workspace"] .web-result-mark { border: 0; background: transparent; }
+.app-shell[data-screen="workspace"] .tool-web-results { padding: 4px 0 8px; }
 @media (prefers-reduced-motion: reduce) {
   .web-result, .web-result-mark { transition: none; }
 }
@@ -2874,6 +2973,23 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
   .composer-split.comet .composer-split-bar::before { transition: none; }
 }
 
+/* Composer silhouettes, solid writing surfaces and the send comet remain personal choices.
+   Their idle edges and nested control outlines yield to fills; focus still has its halo. */
+.app-shell[data-screen="workspace"] :is(.composer, .composer-split-card, .composer-split-bar, .composer-terminal-bar,
+  .composer-pill, .execution-policy-notice, .queued-message, .project-trigger, .project-bar-branch, .project-bar .segmented,
+  .project-tile.none, .slash-picker, .slash-picker-foot, .slash-option small, .mention-group) { border-color: transparent; }
+.app-shell[data-screen="workspace"] .composer-terminal-bar { background: transparent; }
+.app-shell[data-screen="workspace"] .composer-terminal:not(:focus-within) { box-shadow: 0 10px 30px color-mix(in srgb, var(--wc-well) 24%, transparent); }
+.app-shell[data-screen="workspace"] :is(.project-tile, .segmented-option.selected, .segmented-thumb, .slash-option.selected, .slash-picker .slash-mark) { box-shadow: none; }
+.app-shell[data-screen="workspace"] .composer-wrap.glass .project-bar .segmented-thumb,
+.app-shell[data-screen="workspace"] .composer-classicGlass :is(.mode-toggle.sliding, .mode-pill:not(.plan):not(.ultra), .composer-queue .queued-message) { box-shadow: none; }
+.app-shell[data-screen="workspace"] .composer-wrap.glass :is(.composer-pill, .project-trigger, .project-bar-branch, .segmented):not(:focus-within) {
+  --glass-shadow: 0 8px 24px color-mix(in srgb, var(--wc-well) 22%, transparent);
+}
+.app-shell[data-screen="workspace"] :is(.composer, .composer-pill, .project-trigger, .project-bar-branch, .segmented):not(:focus-within) > .glass-platter > .glass-rim { opacity: 0; }
+.app-shell[data-screen="workspace"] .slash-picker-frame .glass-rim { opacity: 0; }
+.app-shell[data-screen="workspace"] .team-pill::before { content: none; }
+
 /* model picker popover (sliding panels: providers, models, and the Team crew) */
 .model-picker-pop { padding: 0; }
 .picker-viewport { width: 270px; overflow: hidden; position: relative; }
@@ -3489,6 +3605,20 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
   .chat-chip:hover, .chat-file:hover, .chat-idea:hover, .chat-round-button:hover, .chat-tray-button:hover, .chat-round-button.attach:hover:not(:disabled) { transform: none; translate: none; }
 }
 
+/* Chat remains a messenger: keep the speakers' fills and the duck's activity, lose frames. */
+.app-shell[data-screen="workspace"] .chat-header { background: transparent; border-color: transparent; }
+.app-shell[data-screen="workspace"] :is(.chat-bubble, .chat-typing, .chat-chip, .chat-sheet-inner, .chat-file,
+  .chat-thought-text, .chat-divider span, .chat-compaction > button, .chat-system, .chat-jump, .chat-composer,
+  .chat-queue .queued-message, .chat-archived, .chat-idea) { border-color: transparent; }
+.app-shell[data-screen="workspace"] .chat-avatar { box-shadow: none; }
+.app-shell[data-screen="workspace"] .chat-chip:not(.open):not(.live):not(.failed):not(:hover):not(:focus-visible),
+.app-shell[data-screen="workspace"] .chat-file:not(:hover):not(:focus-visible),
+.app-shell[data-screen="workspace"] .chat-system:not(.error):not(.warning),
+.app-shell[data-screen="workspace"] .chat-divider span { background: transparent; }
+.app-shell[data-screen="workspace"] .chat-chip.failed { background: var(--danger-bg); }
+.app-shell[data-screen="workspace"] .chat-divider::before,
+.app-shell[data-screen="workspace"] .chat-divider::after { content: none; }
+
 /* ── UI primitives ─────────────────────────────────── */
 .popover {
   background: var(--wc-elevated); border: 1px solid var(--border-bright); border-radius: var(--wc-radius-card);
@@ -3573,6 +3703,31 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
 .restore-status { font-style: normal; font-size: 10.5px; color: var(--text-dim); }
 .restore-status.delete { color: var(--danger); }
 .restore-status.recreate { color: var(--wc-accent); }
+
+/* Shared primitives retain their Settings appearance. In the workspace, fills define controls
+   and overlays; focus outlines, native selection markers and semantic colours remain intact.
+   Transparent strokes keep the existing hit areas and layout measurements stable. */
+.app-shell[data-screen="workspace"] :is(.icon-button, .panel-button, .primary-button, .secondary-button, .danger-button,
+  button.compact, .select-trigger, .toggle, .confirm-dialog, .restore-files, .restore-files ul, .subscription-device-code,
+  .error-banner, .model-missing-notice, .extension-notice, .global-toast) { border-color: transparent; }
+.app-shell[data-screen="workspace"] :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), textarea) { border-color: transparent; }
+/* These surfaces portal to body, so the screen marker must be read from their owning shell. */
+body:has(.app-shell[data-screen="workspace"]) :is(.popover, .tooltip) { border-color: transparent; }
+body:has(.app-shell[data-screen="workspace"]) :is(.visual-expanded-backdrop, .image-lightbox, .canvas-present, .browser-context-backdrop)
+  :is(.icon-button, .primary-button, .secondary-button, .danger-button, button.compact, .image-lightbox-close) { border-color: transparent; }
+body:has(.app-shell[data-screen="workspace"]) .popover :is(.icon-button, .primary-button, .secondary-button, .danger-button,
+  button.compact, .select-trigger, .toggle, .segmented, .picker-crew-entry, .picker-header, .picker-team-footer,
+  .project-picker-foot, .branch-search, .branch-error) { border-color: transparent; }
+body:has(.app-shell[data-screen="workspace"]) .popover :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), textarea) { border-color: transparent; }
+body:has(.app-shell[data-screen="workspace"]) .popover :is(.picker-item.selected, .picker-crew-entry,
+  .project-tile, .context-children, .segmented-thumb, .segmented-option.selected, .reasoning-head-mark) { box-shadow: none; }
+body:has(.app-shell[data-screen="workspace"]) .popover :is(.project-tile.none, .project-row.active .project-tile) { border-color: transparent; box-shadow: none; }
+body:has(.app-shell[data-screen="workspace"]) .popover :is(.context-divider, .picker-provider-divider, .branch-divider, .menu-separator) { background: transparent; }
+body:has(.app-shell[data-screen="workspace"]) .popover .glass-rim { opacity: 0; }
+body:has(.app-shell[data-screen="workspace"]) .popover.glass .context-stats > div { box-shadow: none; }
+body:has(.app-shell[data-screen="workspace"]) .popover .reasoning-panel.at-ultra .reasoning-head-mark { box-shadow: 0 0 14px -3px color-mix(in srgb, var(--wc-ultra-violet) 60%, transparent); }
+body:has(.app-shell[data-screen="workspace"]) .popover .reasoning-panel.at-ultra .reasoning-fill { box-shadow: none; }
+body:has(.app-shell[data-screen="workspace"]) .popover .reasoning-slider-wrap:focus-within .reasoning-track { outline: 2px solid var(--wc-focus-line); outline-offset: 3px; }
 
 /* ── Side panel ────────────────────────────────────── */
 /* One view at a time beside the chat (SidePanel.tsx). The aside animates its width while the
@@ -3674,6 +3829,13 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
   .panel-tab-icon.live { animation: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--wc-accent) 18%, transparent); }
   .panel-resizer::after, .panel-tabstrip, .panel-tab, .panel-tab-close { transition: none; }
 }
+
+/* Tabs and view tools share the shell without bands; resizing and native dragging keep
+   their existing hit regions. Live marks/loading strips still communicate activity. */
+.app-shell[data-screen="workspace"] :is(.side-panel, .panel-tabstrip, .panel-header) { border-color: transparent; }
+.app-shell[data-screen="workspace"] :is(.panel-tabstrip, .panel-header) { background: transparent; }
+.app-shell[data-screen="workspace"] :is(.panel-tab-pill, .panel-mark, .panel-empty-mark) { box-shadow: none; }
+.app-shell[data-screen="workspace"] .panel-empty-mark::after { content: none; }
 
 /* ── Browser panel ─────────────────────────────────── */
 /* The page itself is a native child WKWebView placed over .browser-surface. Everything around
@@ -3791,6 +3953,8 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
 .browser-context-chip > .icon-button { flex-shrink: 0; width: 25px; height: 25px; margin-right: 4px; border-radius: 50%; }
 .browser-context-chip:hover, .browser-context-chip:focus-within { border-color: var(--wc-accent-line); background: var(--wc-elevated); }
 .message-browser-contexts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; margin: 5px 0; }
+.app-shell[data-screen="workspace"] .browser-context-chip { border: 0; background: transparent; }
+.app-shell[data-screen="workspace"] .browser-context-chip:is(:hover, :focus-within) { background: transparent; }
 .browser-context-backdrop { z-index: 1000; padding: 24px; }
 .browser-context-inspector, .browser-markup { width: min(1280px, 100%); height: min(900px, 100%); display: flex; flex-direction: column; min-height: 0; border: 1px solid var(--border-bright); border-radius: var(--wc-radius-card); background: var(--surface); overflow: hidden; }
 .browser-context-inspector-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 2fr) minmax(250px, 1fr); overflow: auto; }
@@ -3812,6 +3976,17 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
 .browser-markup-footer { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); }
 .browser-markup-footer > span { flex: 1; font-size: 11px; color: var(--text-dim); }
 @media (max-width: 1050px) { .browser-context-inspector-body { grid-template-columns: minmax(0, 3fr) minmax(230px, 2fr); } }
+
+/* Browser controls stay outside the native WKWebView rectangle. Only its idle frame loses
+   the outline; ownership and activity feedback remain tied to the page. */
+.app-shell[data-screen="workspace"] :is(.browser-nav, .browser-viewports, .browser-viewport-pill, .browser-control.active,
+  .browser-capture-actions .active, .browser-popup-return) { box-shadow: none; }
+.app-shell[data-screen="workspace"] :is(.browser-address, .browser-stagebar, .browser-error) { border-color: transparent; }
+.app-shell[data-screen="workspace"] .browser-frame:not(.user):not(.agent) { box-shadow: 0 24px 48px -20px color-mix(in srgb, var(--wc-well) 70%, transparent); }
+body:has(.app-shell[data-screen="workspace"]) .browser-context-backdrop :is(.browser-context-inspector, .browser-markup,
+  .browser-context-details, .browser-markup-toolbar, .browser-markup-footer, .panel-header, .segmented, .secondary-button, .primary-button, .icon-button, input) { border-color: transparent; }
+body:has(.app-shell[data-screen="workspace"]) .browser-context-backdrop .panel-header { background: transparent; }
+body:has(.app-shell[data-screen="workspace"]) .browser-context-backdrop :is(.browser-markup-image, .segmented button.active) { box-shadow: none; }
 
 /* ── Changes panel ─────────────────────────────────── */
 .changes-panel { height: 100%; min-height: 0; display: flex; flex-direction: column; }
@@ -4018,6 +4193,16 @@ button.compact.primary:hover:not(:disabled) { background: var(--wc-accent-fill-h
 .diff-view .heading { color: var(--wc-code-heading); font-weight: 650; }
 .tool-diff.diff-view { flex: none; }
 
+/* Changes keeps its quiet code well and fixed diff colours. Paths, hunk metadata and dock
+   actions sit directly on that workspace instead of stacked header bands and ruled boxes. */
+.app-shell[data-screen="workspace"] :is(.changed-files, .diff-file-header, .diff-hunk, .diff-gutter,
+  .diff-split-cell + .diff-split-cell, .change-file-actions, .diff-comment, .diff-comment-composer,
+  .changes-dock, .dock-sheet-inner, .dock-comment) { border-color: transparent; }
+.app-shell[data-screen="workspace"] :is(.diff-file-header, .changes-dock) { background: transparent; }
+.app-shell[data-screen="workspace"] .diff-hunk { background: var(--wc-well); }
+.app-shell[data-screen="workspace"] .change-group-head h4::after { content: none; }
+.app-shell[data-screen="workspace"] :is(.changed-files li.active, .status-letter, .review-button, .dock-tabs, .dock-tab-pill) { box-shadow: none; }
+
 /* ── Modals ────────────────────────────────────────── */
 .modal-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: rgb(3 4 3 / 68%); backdrop-filter: blur(8px); }
 /* A screenshot at full size (ui/ImageLightbox.tsx). */
@@ -4040,6 +4225,7 @@ button.compact.primary:hover:not(:disabled) { background: var(--wc-accent-fill-h
 @media (prefers-reduced-motion: reduce) {
   .image-lightbox-figure img { transition: none; }
 }
+body:has(.app-shell[data-screen="workspace"]) .image-lightbox :is(.image-lightbox-figure img, .image-lightbox-close) { border-color: transparent; }
 .subscription-login-dialog { width: min(480px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 10px; }
 .subscription-login-dialog .subscription-prompt { display: flex; flex-direction: column; gap: 8px; }
 .subscription-login-dialog .subscription-prompt input, .subscription-login-dialog .subscription-prompt select { width: 100%; }
@@ -4314,6 +4500,7 @@ html[data-force-reduced-motion] *::after {
 .extension-option { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; font-size: 12px; cursor: pointer; }
 .extension-option.selected { border-color: var(--wc-accent-line); background: var(--wc-accent-tint); }
 .extension-option input { accent-color: var(--wc-accent); cursor: pointer; }
+.app-shell[data-screen="workspace"] .extension-option { border-color: transparent; }
 
 /* ── Built-in mode toggle and Plan mode ────────────── */
 /* The pill is the active-option background: it is positioned from the button's own measured
@@ -4356,6 +4543,10 @@ html[data-force-reduced-motion] *::after {
 .mode-toggle.sliding .mode-pill, .mode-toggle.sliding .mode-option, .mode-toggle.sliding .mode-glow { border-radius: 999px; }
 .mode-toggle.sliding .mode-option { height: 24px; padding: 0 10px; font-size: 11.5px; }
 .mode-toggle.sliding .mode-pill.disabled { opacity: .55; animation: none; }
+.app-shell[data-screen="workspace"] .mode-toggle,
+body:has(.app-shell[data-screen="workspace"]) .popover .mode-toggle { border-color: transparent; }
+.app-shell[data-screen="workspace"] .mode-pill.ultra,
+body:has(.app-shell[data-screen="workspace"]) .popover .mode-option.plan.ultra.active { box-shadow: 0 0 12px -4px color-mix(in srgb, var(--wc-ultra-violet) 55%, transparent); }
 
 /* ── Ultra mark and label ────────────────────────────
    Ultra (Ultra Plan and the Ultra reasoning level) is a 3×3 pixel wildcard (UltraMark) in the
@@ -4574,6 +4765,30 @@ html[data-force-reduced-motion] *::after {
 .skill-draft-saved-pill svg { width: 12px; height: 12px; }
 .skill-draft-saved code { font-size: 11px; color: var(--text-dim); overflow-wrap: anywhere; }
 
+/* Review content follows the answer. The decision still owed gets one restrained surface;
+   history has no frame, and neither state splits into header or footer bands. */
+.app-shell[data-screen="workspace"] :is(.plan-card, .skill-draft-card) { border: 0; border-radius: 0; background: transparent; box-shadow: none; overflow: visible; }
+.app-shell[data-screen="workspace"] :is(.plan-card.current, .skill-draft-card.awaiting) { padding: 14px 16px; border-radius: var(--wc-radius-card); background: var(--surface); box-shadow: none; }
+.app-shell[data-screen="workspace"] :is(.plan-card-head, .skill-draft-head) { padding: 0 0 8px; border-bottom: 0; background: transparent; }
+.app-shell[data-screen="workspace"] :is(.plan-card.current .plan-card-head, .skill-draft-card.current .skill-draft-head) { background: transparent; }
+.app-shell[data-screen="workspace"] .plan-card-mark { width: 24px; height: 24px; background: transparent; box-shadow: none; }
+.app-shell[data-screen="workspace"] .current > :is(.plan-card-head, .skill-draft-head) .plan-card-mark { background: transparent; box-shadow: none; }
+.app-shell[data-screen="workspace"] .plan-card.current .plan-card-mark::after { display: none; }
+.app-shell[data-screen="workspace"] .plan-card-status { padding: 0; border: 0; background: transparent; }
+.app-shell[data-screen="workspace"] .plan-card-body { padding: 0; }
+.app-shell[data-screen="workspace"] .plan-card-body > ol:not([start]) > li::before { background: transparent; box-shadow: none; }
+.app-shell[data-screen="workspace"] :is(.plan-card-actions, .skill-draft-actions) { padding: 8px 0 0; border-top: 0; background: transparent; }
+.app-shell[data-screen="workspace"] .skill-draft-flag { border: 0; padding-inline: 0; }
+.app-shell[data-screen="workspace"] .skill-draft-card p.skill-draft-description { margin: 4px 0 0; }
+.app-shell[data-screen="workspace"] .skill-draft-meta { padding: 5px 0 8px; }
+.app-shell[data-screen="workspace"] .skill-draft-warnings { margin-inline: 0; padding: 4px 0 4px 18px; border: 0; color: var(--warning); }
+.app-shell[data-screen="workspace"] .skill-draft-body { padding: 2px 0 10px; }
+.app-shell[data-screen="workspace"] .skill-draft-full { padding: 8px 0; border: 0; background: transparent; }
+.app-shell[data-screen="workspace"] .skill-draft-card p.skill-draft-note { padding: 0 0 8px; background: transparent; }
+.app-shell[data-screen="workspace"] .skill-draft-card .skill-draft-actions + p.skill-draft-note { padding: 8px 0 0; background: transparent; }
+.app-shell[data-screen="workspace"] .skill-draft-saved { padding: 8px 0 0; border-top: 0; background: transparent; }
+.app-shell[data-screen="workspace"] .skill-draft-saved-pill { padding-left: 0; border: 0; background: transparent; }
+
 /* ── Suggested tasks (SuggestionTray.tsx) ───────────────────────────────
    The follow-ups the agent filed with `suggest_task`, under the turn's answer. Not the plan
    card's hero: a quiet tray that arrives once, so a turn can end with "here is the work, and
@@ -4668,6 +4883,22 @@ html[data-force-reduced-motion] *::after {
 .suggestion-sent { display: flex; align-items: center; gap: 5px; margin: 4px 2px 0; color: var(--text-dim); font-size: 11px; }
 .suggestion-sent svg { width: 12px; height: 12px; flex: 0 0 auto; color: var(--wc-accent-text); }
 .suggestion-sent-origin { color: var(--text-faint); }
+/* Follow-ups are a small continuation of the answer, with actions beside the brief. */
+.app-shell[data-screen="workspace"] .suggestion-tray { margin-top: 20px; padding: 0; border: 0; border-radius: 0; background: transparent; }
+.app-shell[data-screen="workspace"] .suggestion-tray-head { gap: 8px; padding: 0 0 10px; }
+.app-shell[data-screen="workspace"] .suggestion-tray-mark { width: 18px; height: 22px; background: transparent; box-shadow: none; }
+.app-shell[data-screen="workspace"] .suggestion-tray-mark::after { border: 0; }
+.app-shell[data-screen="workspace"] .suggestion-list { gap: 18px; }
+.app-shell[data-screen="workspace"] .suggestion-item { overflow: visible; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.app-shell[data-screen="workspace"] .suggestion-head { padding: 0; gap: 8px; flex-wrap: wrap; }
+.app-shell[data-screen="workspace"] .suggestion-kind { gap: 4px; height: auto; padding: 0; background: transparent; box-shadow: none; }
+.app-shell[data-screen="workspace"] .suggestion-title { flex-basis: 60%; }
+.app-shell[data-screen="workspace"] .suggestion-brief { padding: 4px 0 0; }
+.app-shell[data-screen="workspace"] .suggestion-more { margin-left: 0; }
+.app-shell[data-screen="workspace"] :is(.suggestion-actions, .suggestion-state) { margin-top: 6px; padding: 0; border-top: 0; background: transparent; }
+.app-shell[data-screen="workspace"] .suggestion-actions { gap: 6px; }
+.app-shell[data-screen="workspace"] .suggestion-actions .icon-button { margin-left: 0; }
+.app-shell[data-screen="workspace"] .suggestion-item.dismissed { padding: 3px 0; }
 @media (prefers-reduced-motion: reduce) {
   /* Still end state: the glint never plays, so the mark simply rests lit. */
   .suggestion-tray-mark::after { animation: none; opacity: 0; }
@@ -4770,6 +5001,8 @@ html[data-force-reduced-motion] *::after {
    already supplies the surface and shadow, so the panel inside loses its own border. */
 .todo-popover .todo-panel { border: 0; border-radius: 0; background: transparent; }
 .todo-popover-panel { width: min(360px, 90vw); }
+.app-shell[data-screen="workspace"] :is(.todo-panel, .todo-panel-more),
+body:has(.app-shell[data-screen="workspace"]) .todo-popover .todo-panel-more { border-color: transparent; }
 @media (prefers-reduced-motion: reduce) {
   .todo-root-dot { animation: none; }
 }
@@ -4830,6 +5063,8 @@ html[data-force-reduced-motion] *::after {
 }
 .computer-banner-stop:hover { color: var(--danger); border-color: var(--danger); }
 .computer-banner-stop:focus-visible { outline: 2px solid color-mix(in srgb, var(--wc-accent) 70%, transparent); outline-offset: 1px; }
+.app-shell[data-screen="workspace"] :is(.goal-banner, .computer-banner, .computer-banner-stop, .computer-banner-key, .computer-access-body kbd) { border-color: transparent; }
+.app-shell[data-screen="workspace"] .computer-banner { background: var(--surface); }
 @keyframes computer-tap {
   0%, 60%, 100% { transform: none; }
   70% { transform: translate(1px, 1px) scale(.9); }
@@ -4885,6 +5120,9 @@ html[data-force-reduced-motion] *::after {
 .subagent-chip-open { flex: 0 0 auto; width: 14px; height: 14px; color: var(--text-faint); transition: color .16s var(--ease); }
 .subagent-chip:hover .subagent-chip-open { color: var(--text-soft); }
 .subagent-chip.selected .subagent-chip-open { color: var(--wc-accent); }
+.app-shell[data-screen="workspace"] .subagent-chip { padding-inline: 0; border: 0; background: transparent; box-shadow: none; }
+.app-shell[data-screen="workspace"] .subagent-chip:is(:hover, .selected) { background: transparent; box-shadow: none; }
+.app-shell[data-screen="workspace"] .subagent-group.parallel::before { display: none; }
 /* A sheen gliding along the top edge while the child works, and a ring that pings once as the
    panel opens on the chip. The sheen ping-pongs: each leg turns around just past the far edge
    (alternate) with ease-in-out, so it sweeps right then back left with no restart jump. */
@@ -4906,6 +5144,9 @@ html[data-force-reduced-motion] *::after {
   flex: 0 0 auto; font-size: 9.5px; font-weight: 600; color: var(--warning); border: 1px solid #5c4a22;
   border-radius: 4px; padding: 1px 5px; line-height: 1.3;
 }
+.app-shell[data-screen="workspace"] .subagent-chip::before,
+.app-shell[data-screen="workspace"] .subagent-chip::after { display: none; }
+.app-shell[data-screen="workspace"] .subagent-tag { padding-inline: 0; border: 0; }
 
 /* ── SubAgent robot (RobotMark.tsx) ────────────────── */
 .robot-mark { flex: 0 0 auto; overflow: visible; color: var(--text-soft); }
@@ -5127,6 +5368,9 @@ html[data-force-reduced-motion] *::after {
 .terminal-pill.run-failed { color: var(--danger); }
 .terminal-pill.run-failed .terminal-pill-dot { background: var(--danger); }
 
+.app-shell[data-screen="workspace"] :is(.terminal-pill, .terminal-notice, .terminal-add-pill, .terminal-add-notice, .run-panel-meta) { border-color: transparent; }
+.app-shell[data-screen="workspace"] .run-panel-meta { background: transparent; }
+
 /* ── Games panel (GamesPanel.tsx, QuackSurvivors.tsx, DoodleDuck.tsx) ─── */
 /* Something to play while a slow model works. The stage is a content surface (`--wc-well`),
    solid over image and Liquid Glass backdrops like the terminal; the canvas draws with colours
@@ -5262,6 +5506,8 @@ html[data-force-reduced-motion] *::after {
   .game-card-duck { transition: none; }
 }
 
+.app-shell[data-screen="workspace"] :is(.game-overlay kbd, .game-upgrade kbd, .game-upgrade, .games-toast, .game-card, .game-card-poster) { border-color: transparent; }
+
 /* ── ask_user_question card ────────────────────────── */
 .question-presence-wrap { animation: none; overflow: hidden; }
 .question-card .eyebrow { display: flex; align-items: center; gap: 5px; }
@@ -5382,6 +5628,8 @@ html[data-force-reduced-motion] *::after {
 .question-ultra .secondary-button { border-color: var(--question-border); }
 .question-ultra .secondary-button:hover { border-color: var(--question-line); background: var(--question-tint); color: var(--question-glow); }
 .question-card .question-wrap-up { margin-right: auto; color: var(--question-accent); border-color: var(--question-line); background: var(--question-tint); }
+.app-shell[data-screen="workspace"] :is(.question-card, .question-duck-tile, .question-tab, .question-option) { border-color: transparent; }
+.app-shell[data-screen="workspace"] .question-tabs::before { content: none; }
 @media (prefers-reduced-motion: reduce) {
   .question-card, .question-card * { transform: none !important; transition: none !important; animation: none !important; }
   .question-bubbles { display: none; }
@@ -5445,6 +5693,14 @@ html[data-force-reduced-motion] *::after {
 .visual-expanded .visual-card-actions { gap: 8px; }
 .visual-expanded-close { position: static; width: 24px; height: 24px; }
 .visual-expanded-close svg { width: 12px; height: 12px; }
+/* Inline visuals remain transparent even over decorative backdrops; the shared reading lane
+   protects contrast. Saved visual markup and intentional fills inside its artwork stay intact. */
+.app-shell[data-screen="workspace"] .visual-card { padding: 0; border-radius: 0; background: transparent; }
+.app-shell[data-screen="workspace"] .visual-hover-actions { border: 0; background: var(--surface); }
+body:has(.app-shell[data-screen="workspace"]) .visual-expanded { border: 0; background: var(--bg); }
+body:has(.app-shell[data-screen="workspace"]) .visual-expanded-head { padding: 10px 14px; border-bottom: 0; background: transparent; }
+body:has(.app-shell[data-screen="workspace"]) .visual-expanded .visual-card-body { background: transparent; }
+body:has(.app-shell[data-screen="workspace"]) .visual-card-mark { background: transparent; box-shadow: none; }
 
 /* ── Canvas (components/canvas/, canvas_render.rs) ─────
    The Canvas tab: a board filling its side-panel page edge to edge, its tools floating over it
@@ -5576,6 +5832,13 @@ html[data-force-reduced-motion] *::after {
 .canvas-progress.compact .canvas-progress-head { padding: 7px 10px; }
 .canvas-progress.compact .canvas-progress-head > .quill-mark { width: 26px; height: 26px; }
 .canvas-progress.compact .canvas-progress-body { padding: 9px 10px; }
+.app-shell[data-screen="workspace"] .canvas-progress { border: 0; background: transparent; }
+.app-shell[data-screen="workspace"] .canvas-progress-head { padding: 8px 0; border-bottom: 0; background: transparent; }
+.app-shell[data-screen="workspace"] .canvas-progress-body { padding: 4px 0 8px; }
+/* Progress floating over artboards keeps a readable overlay, with no header band or outline. */
+.app-shell[data-screen="workspace"] .canvas-progress.compact { background: var(--surface); }
+.app-shell[data-screen="workspace"] .canvas-progress.compact .canvas-progress-head { padding: 9px 12px 0; }
+.app-shell[data-screen="workspace"] .canvas-progress.compact .canvas-progress-body { padding: 9px 12px; }
 .canvas-arrivals-dock.above-progress { bottom: 240px; }
 .canvas-hint {
   position: absolute; left: 12px; bottom: 12px; max-width: calc(100% - 24px); margin: 0; padding: 5px 11px; display: flex; align-items: baseline; gap: 8px;
@@ -5613,6 +5876,9 @@ html[data-force-reduced-motion] *::after {
 .canvas-card.live .canvas-card-summary { color: var(--wc-accent-text); }
 .canvas-card-chevron { flex: 0 0 auto; width: 13px; height: 13px; color: var(--text-dim); transition: transform .15s var(--ease), color .15s var(--ease); }
 .canvas-card:hover:not(:disabled) .canvas-card-chevron { color: var(--wc-accent-text); transform: translateX(2px); }
+.app-shell[data-screen="workspace"] .canvas-card { padding-left: 0; border: 0; background: transparent; }
+.app-shell[data-screen="workspace"] .canvas-card:is(:hover, :focus-visible, .shown) { background: transparent; }
+.app-shell[data-screen="workspace"] .canvas-card-mark { background: transparent; box-shadow: none; }
 /* Present: one artboard at a time over the whole window, the bar floating under it. */
 .canvas-present {
   position: fixed; inset: 0; z-index: 90; display: flex; flex-direction: column; outline: none;
@@ -5633,6 +5899,13 @@ html[data-force-reduced-motion] *::after {
 .canvas-present-divider { width: 1px; height: 20px; margin: 0 4px; background: var(--border-bright); }
 .canvas-present-bar .secondary-button.compact { border-radius: var(--wc-radius-pill); gap: 6px; }
 .canvas-present-bar kbd { font: 10px "SFMono-Regular", Consolas, monospace; color: var(--text-dim); }
+/* Toolbar pills lose their outlines; real artboard edges and the selection ring still show
+   the artwork's bounds and which board receives input. Present's toolbar is a body portal. */
+.app-shell[data-screen="workspace"] :is(.canvas-toolbar, .canvas-artboard-play) { border-color: transparent; }
+.app-shell[data-screen="workspace"] .canvas-tool.on { box-shadow: none; }
+.app-shell[data-screen="workspace"] .canvas-toolbar-divider { background: transparent; }
+body:has(.app-shell[data-screen="workspace"]) .canvas-present :is(.canvas-present-bar, .icon-button, .secondary-button) { border-color: transparent; }
+body:has(.app-shell[data-screen="workspace"]) .canvas-present-divider { background: transparent; }
 @media (prefers-reduced-motion: reduce) {
   .canvas-artboard-loading { animation: none; background-size: 100% 100%; }
   .canvas-artboard.pop, .canvas-artboard.glint .canvas-artboard-frame::after, .panel-switch-ping,

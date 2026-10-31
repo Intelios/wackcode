@@ -55,8 +55,8 @@ export const VISUAL_GUIDE_LINES: readonly string[] = [
   "Charts, comparisons, diagrams, UI mockups and widgets use show_visual; plain lists, code and short answers stay Markdown.",
   "HTML body, optional <style>/<script>, no network. Use inline SVG/data: or absolute image paths in attributes/url(); images persist. Chat mode: scratchpad only.",
   `Theme variables: ${VISUAL_THEME_VARIABLES.join(", ")}. --chart-1 follows the accent; other chart/semantic colours retain meaning. --wc-* and shadcn aliases work too. No hard-coded colours.`,
-  "About 720 px wide, content fits up to 20,000 px tall. Transparent html/body; no outer card/border/title banner/side padding. Filled inner boxes: 16 px padding, var(--radius). Charts: fixed pixel heights. No vh; no height:100% on html/body.",
-  "Before show_visual, preview_visual the html and fix its screenshot, contentHeight and script errors. Optional width: 240–1600 (default 720); appearance: light/dark (default current). Preview cannot publish/send.",
+  "720px wide; ≤20,000px tall. Transparent html/body; no outer fill/border/banner/padding or nested cards. Group by spacing/type. Keep artwork/mockups and control fills/borders/focus; --bg/--surface stay opaque. Fixed px chart heights; no vh or html/body height:100%.",
+  "Before show_visual, preview_visual and fix screenshot, contentHeight and script errors. Width: 240–1600 (default 720); appearance: light/dark (default current). Preview cannot publish/send.",
   "wackcode.send(text) sends a user message only on explicit button/choice clicks; never on load/timers or inventing the user's words. One visual per idea. Don't announce or restate the page.",
 ];
 

@@ -101,6 +101,15 @@ const server = createServer(async (request, response) => {
   const sinceUser = messages.slice(messages.lastIndexOf(latestUser) + 1);
   const calledTool = (name) => sinceUser.some((message) => message.role === "assistant" && message.tool_calls?.some((call) => call.function?.name === name));
   const offers = (name) => body.tools?.some((tool) => tool.function?.name === name);
+  // Two finite visual calls, then Markdown. Never fall through to the ordinary write fixture,
+  // including when visuals are disabled or a call is refused. Works in Code and Chat alike.
+  const visualFixture = /^visual reply fixture$/i.test(prompt.trim());
+  const visualCalls = sinceUser.flatMap((message) => message.role === "assistant" ? message.tool_calls ?? [] : [])
+    .filter((call) => call.function?.name === "show_visual").length;
+  const visualArgs = visualFixture ? visualFixtureArguments()[visualCalls] : undefined;
+  const visualCall = visualArgs && offers("show_visual")
+    ? { name: "show_visual", arguments: JSON.stringify(visualArgs) }
+    : undefined;
   // Attach an image, or name a local image after the colon, to exercise inline replies in
   // either area. Read still goes through the real worker (including Chat's confinement).
   const imageFixture = /^image reply fixture(?:[ \t]*:[ \t]*([^\n]+))?(?:\n|$)/i.exec(prompt);
@@ -168,7 +177,7 @@ const server = createServer(async (request, response) => {
   const backgroundLaunched = messages.slice(messages.lastIndexOf(latestUser) + 1).some((message) => message.role === "assistant" && message.tool_calls?.some((call) => call.function?.name === "subagent"));
   const resultsArrived = prompt.includes("Job ");
   const backgroundLaunch = background && subagent && !backgroundLaunched && !resultsArrived;
-  if (backgroundLaunch || suggest || canvasCall || imageCall || commitCall || (!background && !suggestFixture && !canvasFixture && !imageFixture && !child && !resultsArrived && !hasToolResult && body.tools?.length && (!browserMatch || browser) && (!computerMatch || computer))) {
+  if (backgroundLaunch || suggest || canvasCall || visualCall || imageCall || commitCall || (!background && !suggestFixture && !canvasFixture && !visualFixture && !imageFixture && !child && !resultsArrived && !hasToolResult && body.tools?.length && (!browserMatch || browser) && (!computerMatch || computer))) {
     send(response, {
       id: "fixture-tool",
       object: "chat.completion.chunk",
@@ -183,8 +192,8 @@ const server = createServer(async (request, response) => {
             id: `fixture-tool-${messages.length}`,
             type: "function",
             function: {
-              name: backgroundLaunch ? "subagent" : imageCall ? imageCall.name : canvasCall ? canvasCall.name : suggest ? "suggest_task" : browser ? browser.name : computer ? computer.name : commitCall ? commitCall.name : search ? "web_search" : "write",
-              arguments: imageCall ? imageCall.arguments : canvasCall ? canvasCall.arguments : suggest
+              name: backgroundLaunch ? "subagent" : imageCall ? imageCall.name : canvasCall ? canvasCall.name : visualCall ? visualCall.name : suggest ? "suggest_task" : browser ? browser.name : computer ? computer.name : commitCall ? commitCall.name : search ? "web_search" : "write",
+              arguments: imageCall ? imageCall.arguments : canvasCall ? canvasCall.arguments : visualCall ? visualCall.arguments : suggest
                 ? JSON.stringify({
                   title: "Dismiss button stays disabled after a failed save",
                   kind: "bug",
@@ -211,12 +220,13 @@ const server = createServer(async (request, response) => {
     });
   } else {
     const imageReply = imageFixture ? imageFixtureReply([latestUser, ...sinceUser]) : undefined;
+    const visualReply = visualFixture ? visualFixtureReply(visualCalls > 0 || offers("show_visual")) : undefined;
     send(response, {
       id: "fixture-done",
       object: "chat.completion.chunk",
       created: 2,
       model: body.model,
-      choices: [{ index: 0, delta: { role: "assistant", content: imageReply ?? (canvasFixture ? "Three themes for the billing page are on the canvas: **Base**, **Ember** and **Pine**, plus Base on a phone. Which direction should I take forward?" : suggestFixture ? "Layout fixed. I noted one follow-up below." : browserMatch ? "Browser fixture complete." : computerMatch ? "Computer fixture complete." : commitFixture && hasToolResult ? "Committed in the throwaway repo under /tmp. The transcript's commit row carries git's own summary: the hash in a pill and the message." : child ? "Background fixture child completed." : searchQuery ? "I searched the web; the results are in the card above." : resultsArrived ? "The background child finished; its result has arrived." : background ? "I launched a background helper and finished my own work. You can send another message while it runs." : escape ? "I tried to write `../wackcode-escape.txt`, outside the workspace." : "Created `wackcode-live.txt`.") }, finish_reason: null }]
+      choices: [{ index: 0, delta: { role: "assistant", content: imageReply ?? visualReply ?? (canvasFixture ? "Three themes for the billing page are on the canvas: **Base**, **Ember** and **Pine**, plus Base on a phone. Which direction should I take forward?" : suggestFixture ? "Layout fixed. I noted one follow-up below." : browserMatch ? "Browser fixture complete." : computerMatch ? "Computer fixture complete." : commitFixture && hasToolResult ? "Committed in the throwaway repo under /tmp. The transcript's commit row carries git's own summary: the hash in a pill and the message." : child ? "Background fixture child completed." : searchQuery ? "I searched the web; the results are in the card above." : resultsArrived ? "The background child finished; its result has arrived." : background ? "I launched a background helper and finished my own work. You can send another message while it runs." : escape ? "I tried to write `../wackcode-escape.txt`, outside the workspace." : "Created `wackcode-live.txt`.") }, finish_reason: null }]
     });
     send(response, {
       id: "fixture-done",
@@ -247,6 +257,82 @@ function imageFixtureReply(messages) {
     `![Selected image ${index + 1}](${reference} "Image ${index + 1}")`
   );
   return `Here are the selected images.\n\n${images.join("\n\n")}\n\nOpen an image to inspect it.`;
+}
+
+/** Flat chart/widget beside a deliberately filled mockup: the frame must preserve both. */
+function visualFixtureArguments() {
+  return [
+    {
+      title: "Requests through the week",
+      html: `<style>
+html,body{background:transparent}
+.chart{height:174px;display:flex;align-items:end;gap:16px;padding-top:18px;margin:0 0 16px}
+.day{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:6px;color:var(--text-dim);font-size:12px}
+.bar{width:min(48px,100%);height:calc(var(--value)*4px);background:var(--chart-1);border-radius:5px 5px 0 0}
+.value{color:var(--text);font:12px var(--mono)}
+.adjust{display:flex;align-items:center;gap:12px;flex-wrap:wrap;color:var(--text-soft)}
+input{accent-color:var(--accent);min-width:100px;flex:1;max-width:240px}
+button{border:1px solid var(--border);border-radius:999px;background:var(--surface);padding:4px 12px;cursor:pointer}
+button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+</style>
+<h3>Requests through the week</h3>
+<p style="margin:4px 0;color:var(--text-soft)">A transparent chart with a local control. Move the scale to compare the bars.</p>
+<div class="chart" role="img" aria-label="Requests: Monday 12, Tuesday 18, Wednesday 28, Thursday 22, Friday 16">
+${[["Mon", 12], ["Tue", 18], ["Wed", 28], ["Thu", 22], ["Fri", 16]].map(([day, value]) => `<div class="day"><span class="value">${value}</span><div class="bar" style="--value:${value}"></div><span>${day}</span></div>`).join("")}
+</div>
+<div class="adjust"><label for="scale">Bar scale</label><input id="scale" type="range" min="50" max="100" value="100"><output id="scale-value" for="scale">100%</output><button id="reset" type="button">Reset</button></div>
+<script>
+const scale=document.getElementById('scale');
+const update=()=>{document.getElementById('scale-value').value=scale.value+'%';document.querySelectorAll('.bar').forEach(bar=>{bar.style.height='calc(var(--value) * '+(Number(scale.value)/25)+'px)';});};
+scale.addEventListener('input',update);
+document.getElementById('reset').addEventListener('click',()=>{scale.value='100';update();});
+</script>`,
+    },
+    {
+      title: "Deliberate product mockup",
+      html: `<style>
+html,body{background:transparent}
+.mockup{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;max-width:460px;display:grid;gap:18px}
+.eyebrow{font-size:11px;color:var(--text-dim);letter-spacing:.08em;text-transform:uppercase}
+.mockup h3{margin:3px 0 0}.mockup p{margin:4px 0 0;color:var(--text-soft)}
+.product-row{display:flex;gap:12px;align-items:center;justify-content:space-between}
+.swatch{width:42px;height:42px;border-radius:12px;background:var(--accent);flex:none}
+.product-name{flex:1}.product-price{font:14px var(--mono)}
+.checkout{justify-self:start;border:1px solid var(--accent);border-radius:999px;background:var(--accent);color:var(--on-accent);padding:7px 14px;cursor:pointer}
+.checkout:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+</style>
+<section class="mockup" aria-label="Product card mockup">
+<div><span class="eyebrow">Intentional artwork</span><h3>Your weekend kit</h3><p>This product mockup keeps its own surface and border.</p></div>
+<div class="product-row"><span class="swatch" aria-hidden="true"></span><span class="product-name">Trail notebook</span><span class="product-price">£12</span></div>
+<button class="checkout" type="button" onclick="this.textContent=this.textContent==='Added to bag'?'Add to bag':'Added to bag'">Add to bag</button>
+</section>`,
+    },
+  ];
+}
+
+function visualFixtureReply(visualsAvailable) {
+  return `${visualsAvailable ? "The chart uses the conversation canvas. The product mockup keeps the surface that belongs to its design." : "Visual replies are switched off. Enable them in Settings › Tools to see the chart and mockup."}
+
+### Read the shape, then the detail
+
+The reply continues as ordinary text, with \`inline code\` and a small comparison.
+
+| Day | Requests | Change |
+| --- | ---: | --- |
+| Monday | 12 | Starting point |
+| Wednesday | 28 | Busiest day |
+| Friday | 16 | Settled down |
+
+> Keep the meaning visible while the decoration falls away.
+
+\`\`\`ts
+const requests = [12, 18, 28, 22, 16];
+const total = requests.reduce((sum, count) => sum + count, 0);
+\`\`\`
+
+- Adjust the chart and reset it without sending a message.
+- Tab through its controls, then try Copy and Expand.
+- Read this text over a solid, image, animated, or glass background.`;
 }
 
 /** The canvas fixture's one drawing call: a themable base, two variants and a phone artboard. */

@@ -20,9 +20,8 @@ interface PlanCardProps {
  * Only the plan that is *currently* awaiting review gets the action row — earlier or revised
  * proposals stay readable but inert, so there is always at most one decision on screen.
  *
- * It is the transcript's one hero card: a lit head with a large mark, the plan's numbered steps
- * drawn as marks of their own (styles.css), and, while a decision is owed, a halo, a breathing
- * ring on the mark and a status pill. An earlier proposal keeps the shape and drops the light.
+ * In the workspace it flows with the answer. Only the current decision keeps a quiet surface
+ * and its live mark; earlier proposals are unboxed. Actions stay in the same reading flow.
  */
 export function PlanCard({ plan, current, busy, onAction, ultra = false }: PlanCardProps) {
   /** The action handler, only while this card is the one a decision is owed on. */

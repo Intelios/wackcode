@@ -14,9 +14,9 @@ function harness(vision = true, canvas = vi.fn(async (request: { artboards: Arra
   artboards: request.artboards.map((item) => ({ ...item, contentHeight: item.width + 200, errors: [], image: { data: "cG5n", mimeType: "image/png" } })),
 }))) {
   type Result = { content: Array<{ type: string; text?: string; data?: string }>; details: Record<string, unknown> };
-  const tools = new Map<string, { execute: (id: string, params: unknown) => Promise<Result> }>();
+  const tools = new Map<string, { promptGuidelines: string[]; execute: (id: string, params: unknown) => Promise<Result> }>();
   createVisualExtension({ canvas, workspace: () => undefined, supportsVision: () => vision, redact: (value: string) => value } as never)({
-    registerTool: (tool: { name: string; execute: (id: string, params: unknown) => Promise<Result> }) => tools.set(tool.name, tool),
+    registerTool: (tool: { name: string; promptGuidelines: string[]; execute: (id: string, params: unknown) => Promise<Result> }) => tools.set(tool.name, tool),
   } as never);
   return { show: tools.get(SHOW_VISUAL_TOOL_NAME)!, preview: tools.get(PREVIEW_VISUAL_TOOL_NAME)!, canvas };
 }
@@ -118,6 +118,9 @@ describe("visual policy wiring", () => {
   });
 
   it("serves the complete shared guide only while visuals are active", () => {
+    const { show, preview } = harness();
+    expect(show.promptGuidelines).toEqual(VISUAL_GUIDE_LINES);
+    expect(preview.promptGuidelines).toEqual(VISUAL_GUIDE_LINES);
     const on = buildChatGuide({ activeTools: new Set([SHOW_VISUAL_TOOL_NAME]), hasMcpTools: false, today: "Today" });
     for (const line of VISUAL_GUIDE_LINES) expect(on).toContain(line);
     expect(buildChatGuide({ activeTools: new Set(), hasMcpTools: false, today: "Today" })).not.toContain("Visual replies:");

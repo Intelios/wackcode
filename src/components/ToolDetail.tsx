@@ -1,8 +1,8 @@
 /**
- * What a tool call opens into: one solid sheet, the same under a chip (`ToolChips`) and a Chat
- * mode chip (`chat/ChatActivity.tsx`), and fused into a work row (`ToolCallRow`), whose bar
- * stands in for the head. A sheet has a head — a round mark like the Explored head's, then the
- * call in full (the whole command, the whole path) — over a body shaped by what came back: a command's output, a file's numbered and highlighted
+ * What a tool call opens into, under a chip (`ToolChips`), a Chat mode chip
+ * (`chat/ChatActivity.tsx`) or a work row (`ToolCallRow`). In the workspace its opening line is
+ * inline metadata, without a surrounding card or header band. Dense source and logs retain a
+ * quiet well. The whole command or path stays over a body shaped by what came back: a command's output, a file's numbered and highlighted
  * lines, a search's hits grouped by file, a listing's entries, a question with the answer
  * picked, or the arguments as labelled rows. Result text in a shape `tool-output.ts` doesn't
  * know falls back to plain text, never to nothing.

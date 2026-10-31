@@ -4,6 +4,9 @@ WackCode is a local macOS desktop app for the [Pi coding agent](https://www.npmj
 
 **Keep this file short:** it is sent with every agent request. It holds only rules that any change could break, plus the design direction. Area detail goes in `docs/`, and a feature's invariants go in comments next to its code, so read a file's header comment before changing it.
 
+## Roles
+- The Agent working in this repo is allowed to commit freely, if you finish your work and it indeed works correctly then you may commit without asking the user for permission. A title and description of your changes inside the commit is encouraged. 
+
 ## Ground rules
 
 - macOS on Apple Silicon only. Unix-only APIs (`killpg`, `open(1)`) are deliberate; don't "fix" them for other platforms.

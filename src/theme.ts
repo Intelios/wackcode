@@ -442,7 +442,7 @@ export function resolveTheme(input: ThemeInput): ResolvedTheme {
 /**
  * The shell (window background, sidebar, header, side panels) is what turns see-through over an
  * image or Liquid Glass. Content palette values stay solid for bubbles, composer, cards and
- * controls; only visual replies blend into the CSS reading lane.
+ * controls; only visual replies blend into the window backdrop.
  */
 function shellVariables(backdrop: BackdropMode, solid: Record<string, string>, glassTint: number): Record<string, string> {
   const alpha = (name: string, amount: number) => {
@@ -485,7 +485,7 @@ const VISUAL_MONO = '"SFMono-Regular", ui-monospace, Consolas, monospace';
  * The variables a visual reply's frame is built with (`visuals.rs`): the app's own colours, font
  * and card radius, read from what is actually applied to `root`, so a card looks like part of
  * the chat in any theme, light or dark. Palette values stay solid for intentional artwork and
- * controls, while the reply document itself can be transparent over the reading lane.
+ * controls, while the reply document itself can be transparent over the window backdrop.
  */
 export function visualThemeVars(root: HTMLElement = document.documentElement): VisualThemeVars {
   const style = getComputedStyle(root);

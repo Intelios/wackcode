@@ -711,22 +711,6 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .transcript { width: min(760px, calc(100% - 2 * var(--chat-gutter, 24px))); margin: 0 auto; padding: 28px 0 26px; }
 .block-slot { display: contents; }
 
-/* One feathered reading lane protects prose and transparent reply inserts together. It lives
-   behind the scroll viewport, never on a card or a positioned transcript/turn wrapper: turn
-   offsets must continue to resolve in the conversation scroller for the scroll rail. */
-.app-shell[data-screen="workspace"] :is(.transcript-zone, .chat-scroll-zone) { isolation: isolate; }
-:is([data-backdrop="image"], [data-backdrop="glass"], [data-backdrop="dynamic"])
-  .app-shell[data-screen="workspace"] :is(.transcript-zone, .chat-scroll-zone)::before {
-  content: ""; position: absolute; z-index: -1; inset-block: 0; left: 50%;
-  width: min(100%, 856px); transform: translateX(-50%); pointer-events: none;
-  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--bg) 64%, transparent) 8%, color-mix(in srgb, var(--bg) 64%, transparent) 92%, transparent);
-  mask-image: linear-gradient(transparent, var(--text) 28px, var(--text) calc(100% - 28px), transparent);
-}
-:is([data-backdrop="image"], [data-backdrop="glass"], [data-backdrop="dynamic"])
-  .app-shell[data-screen="workspace"] .chat-scroll-zone::before { width: min(100%, 816px); }
-/* Dynamic ink already has a backdrop-wide veil; keep its extra reading protection quieter. */
-[data-backdrop="dynamic"] .app-shell[data-screen="workspace"] :is(.transcript-zone, .chat-scroll-zone)::before { opacity: .45; }
-
 .msg { margin-bottom: 20px; }
 /* One turn streams as many assistant messages (Pi makes ~1-2 calls per message),
    so consecutive assistant blocks collapse to a tight rhythm; a user message
@@ -5510,8 +5494,8 @@ html[data-force-reduced-motion] *::after {
 .visual-expanded-close { position: static; width: 24px; height: 24px; }
 .visual-expanded-close svg { width: 12px; height: 12px; }
 
-/* Inline visuals remain transparent even over decorative backdrops; the shared reading lane
-   protects contrast. Saved visual markup and intentional fills inside its artwork stay intact. */
+/* Inline visuals share the backdrop's window-wide dimming or tint. Saved visual markup and
+   intentional fills inside its artwork stay intact. */
 .app-shell[data-screen="workspace"] .visual-card { padding: 0; border-radius: 0; background: transparent; }
 .app-shell[data-screen="workspace"] .visual-hover-actions { border: 0; background: var(--surface); }
 body:has(.app-shell[data-screen="workspace"]) .visual-expanded { border: 0; background: var(--bg); }

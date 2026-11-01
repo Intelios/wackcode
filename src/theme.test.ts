@@ -144,6 +144,15 @@ describe("theme tokens", () => {
     }
   });
 
+  it("leaves both transcript viewports unpainted over the window backdrop", () => {
+    const viewportRules = [...belowRoot.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .filter(([, selector]) => /\.(?:transcript-zone|chat-scroll-zone|conversation-scroll|chat-scroll)\b\)*\s*(?:::(?:before|after))?\s*(?:,|$)/.test(selector));
+    expect(viewportRules.length).toBeGreaterThan(0);
+    for (const [, selector, declarations] of viewportRules) {
+      expect(declarations, selector.trim()).not.toMatch(/\b(?:background(?:-color|-image)?|(?:-webkit-)?backdrop-filter)\s*:/);
+    }
+  });
+
   it("writes every variable onto the root element", () => {
     const root = document.createElement("div");
     const theme = applyTheme({ accent: "#6cc4ff", background: "#0f1218" }, root);

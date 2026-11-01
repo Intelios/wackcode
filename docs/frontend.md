@@ -8,7 +8,7 @@
 - **Events:** `App.tsx` is the only place that listens to Tauri events: `worker-event`, `run-event`, `subscription-login-event` and `native-chat-navigation` (the menu bar). A worker protocol change ends in its `worker-event` switch; see [worker.md](worker.md#protocol-changes). `title_changed` carries a `source` — `"opening"` for the first-run stand-in, `"auto"` for the model's title; only the latter bumps `titlePulses`, which drives the header's swipe+glint and the sidebar row's crossfade.
 - **`api.ts`** is the only bridge to Rust: one typed `invoke` wrapper per command. Terminal output arrives on a `Channel`, not an event.
 - **Components are presentational.** The exceptions call `api` directly because they wrap one self-contained surface: `SettingsPage.tsx` (and `IntegrationsSection.tsx`, `AboutSection.tsx`), `BrowserPanel.tsx` (positions the native web view), `TerminalPanel.tsx` and `RunPanel.tsx` (stream their PTYs), `hooks/useStagedVisual.ts` (stages a visual reply's or a canvas artboard's document through `stageVisual` for `VisualCard` and `CanvasArtboard`, the one call that fits their own sandboxed surface) and `markdown-components.tsx` (its link override routes http(s) clicks through `revealPath`; the webview cannot open links itself) and `link-opener.ts` (a web_search result opens in the chat's browser preview through App's opener, otherwise through `revealPath`). Don't add more without the same reason.
-- **Reply presentation scope:** App's `.app-shell` has `data-screen="workspace"` or `"settings"` independently of `data-area`. Transparent visual overrides use that marker; expanded visual overlays use explicit `body:has(.app-shell[data-screen="workspace"])` selectors. These rules do not replace the established shell, tool sheets or shared control styling. The decorative-backdrop reading veil belongs to the positioned scroll viewport wrappers, never the transcript or turn wrappers whose offsets the scroll rail relies on.
+- **Reply presentation scope:** App's `.app-shell` has `data-screen="workspace"` or `"settings"` independently of `data-area`. Transparent visual overrides use that marker; expanded visual overlays use explicit `body:has(.app-shell[data-screen="workspace"])` selectors. These rules do not replace the established shell, tool sheets or shared control styling. Decorative backdrops handle contrast with window-wide dimming or tint, never a transcript-sized overlay. Transcript and turn wrappers stay unpositioned so their offsets resolve in the scroll viewport for the scroll rail.
 
 ## Model reference catalog
 
@@ -60,8 +60,8 @@ assistant's small HTML answer — a chart, a comparison, a mockup — as a borde
 conversation. Expand and Copy float over its top-right corner on hover and keyboard focus;
 there is no title band or Appearance setting. The expanded overlay keeps its accessible title
 and controls without a separate header band. Every backdrop uses the same transparent wrapper
-and alignment; a shared feathered reading lane protects prose and visual replies over image,
-Liquid Glass and dynamic backgrounds. `VisualCallCard` reads the scope the
+and alignment; the backdrop's own window-wide dimming or tint protects prose and visual replies
+over image, Liquid Glass and dynamic backgrounds. `VisualCallCard` reads the scope the
 transcript provides (`VisualCardScope`): the tool-call ids on the newest answer, which alone may
 send, and the App's send/link handlers. A running or refused call keeps its chip and its error;
 `completed-work.ts` treats a settled visual as an outcome, never as work to fold away. Only

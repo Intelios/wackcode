@@ -3,6 +3,7 @@ import type { TranscriptLayout, TranscriptSlot } from "./explore-utils";
 import { SHOW_VISUAL_TOOL_NAME, SKILL_CREATOR_TOOL_NAME, parseSkillPreviewDetails } from "./tool-utils";
 import { SUGGEST_TASK_TOOL_NAME, suggestionFromCall, type SuggestionCard } from "./suggestions";
 import { CANVAS_TOOL_NAME, canvasTouch, mergeTouches, type CanvasTouch } from "./canvas-state";
+import { COMPARE_IMAGES_TOOL_NAME, completedImageComparison } from "./image-comparisons";
 
 /**
  * Presentation only: each user starts a turn on the visible session branch. The worker's
@@ -129,7 +130,8 @@ export function layoutWorkTurns(messages: NormalizedMessage[], options: Options)
           if (block.toolName === SKILL_CREATOR_TOOL_NAME && completedSkillDraft(result) && block.toolCallId) {
             skill = { index, block: blockIndex, id: block.toolCallId };
           }
-          if (block.toolName === SHOW_VISUAL_TOOL_NAME && completedVisual(result)) {
+          if ((block.toolName === SHOW_VISUAL_TOOL_NAME && completedVisual(result))
+            || (block.toolName === COMPARE_IMAGES_TOOL_NAME && completedImageComparison(result))) {
             visuals.push({ index, block: blockIndex });
           }
           // A suggestion is not part of the answer: its card waits for the tray below it.

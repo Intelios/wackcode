@@ -3,9 +3,9 @@
  * mechanism rather than the trusted-package path. They are ordinary code in this repo — no
  * trust gate applies because nothing external can reach this list. All are always on except
  * sub-agents, computer use and web search, which the user switches on in Settings (their tools
- * stay inactive until then), browser preview, web fetch, visual replies, task suggestions and the
- * canvas, which are on until the user switches them off (see `SWITCHABLE_BUILTIN_TOOLS`), and
- * MCP, whose tools come from the servers the user adds.
+ * stay inactive until then), browser preview, web fetch, visual replies, image comparisons, task
+ * suggestions and the canvas, which are on until switched off (`SWITCHABLE_BUILTIN_TOOLS`),
+ * and MCP, whose tools come from the servers the user adds.
  *
  * A Chat mode chat loads `chatFactories` instead of `factories`: no shell, planning, todo,
  * sub-agents, goal loop, computer use, skill creator, canvas, task suggestions or coding compaction, plus the guard that enforces the rest
@@ -24,6 +24,7 @@ import { type ComputerUseController, createComputerUseExtension } from "./comput
 import { createAutoTitleExtension, type AutoTitleController } from "./auto-title.js";
 import { createImageBudgetExtension } from "./image-budget.js";
 import { createImageReferencesExtension } from "./image-references.js";
+import { COMPARE_IMAGES_TOOL_NAME, createCompareImagesExtension } from "./compare-images.js";
 import { type GoalController, createGoalExtension } from "./goal/index.js";
 import { type MemoryController, createMemoryExtension } from "./memory/index.js";
 import type { BuiltinHost } from "./host.js";
@@ -43,7 +44,7 @@ import { VISUAL_TOOL_NAMES, createVisualExtension } from "./visual.js";
  * Built-in tools the user's Settings denylist applies to. Every other built-in tool is part of
  * how the app works (a disabled plan_mode_complete would break Plan mode) and ignores it.
  */
-export const SWITCHABLE_BUILTIN_TOOLS: ReadonlySet<string> = new Set([WEB_FETCH_TOOL_NAME, ...VISUAL_TOOL_NAMES, SUGGEST_TASK_TOOL_NAME, ...BROWSER_TOOL_NAMES, ...CANVAS_TOOL_NAMES]);
+export const SWITCHABLE_BUILTIN_TOOLS: ReadonlySet<string> = new Set([WEB_FETCH_TOOL_NAME, ...VISUAL_TOOL_NAMES, COMPARE_IMAGES_TOOL_NAME, SUGGEST_TASK_TOOL_NAME, ...BROWSER_TOOL_NAMES, ...CANVAS_TOOL_NAMES]);
 
 export interface BuiltinExtensions {
   /** Factories handed to `DefaultResourceLoader.extensionFactories`. */
@@ -112,6 +113,7 @@ export function createBuiltinExtensions(host: BuiltinHost, options: {
   const memory = createMemoryExtension(() => options.isChat?.() ? "chat" : "project");
   const browser: InlineExtension = { name: "wackcode-browser", factory: createBrowserExtension(host), hidden: true };
   const visual: InlineExtension = { name: "wackcode-visual", factory: createVisualExtension(host, { isChat: options.isChat }), hidden: true };
+  const compareImages: InlineExtension = { name: "wackcode-compare-images", factory: createCompareImagesExtension(), hidden: true };
   // No host either: a suggestion card is drawn from the call's arguments (`suggest-task.ts`).
   const suggestTask: InlineExtension = { name: "wackcode-suggest-task", factory: createSuggestTaskExtension(), hidden: true };
   const chatRefs: InlineExtension = { name: "wackcode-chat-refs", factory: createChatRefsExtension(host), hidden: true };
@@ -149,6 +151,7 @@ export function createBuiltinExtensions(host: BuiltinHost, options: {
       webSearchExtension,
       browser,
       visual,
+      compareImages,
       suggestTask,
       canvas,
       chatRefs,
@@ -172,6 +175,7 @@ export function createBuiltinExtensions(host: BuiltinHost, options: {
       webSearchExtension,
       browser,
       visual,
+      compareImages,
       chatRefs,
       mcpExtension,
     ],

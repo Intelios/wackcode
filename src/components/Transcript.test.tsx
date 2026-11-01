@@ -25,6 +25,24 @@ describe("Transcript reply images", () => {
     { type: "text", text: "Here it is.\n\n![Original screenshot](wackcode-image://entry/upload/0)" }
   ] };
 
+  it("draws an accepted comparison outside the work fold, and retains tool feedback until it succeeds", async () => {
+    const details = { v: 1, before: "wackcode-image://entry/upload/0", after: "wackcode-image://entry/upload/1", title: "Layout", beforeLabel: "Before", afterLabel: "After" };
+    const call: NormalizedMessage = { id: "comparison", role: "assistant", blocks: [{ type: "text", text: "Preparing the comparison" }, { type: "tool-call", toolName: "compare_images", toolCallId: "pair", arguments: details }] };
+    const result: NormalizedMessage = { id: "paired", role: "tool", blocks: [{ type: "tool-result", toolName: "compare_images", toolCallId: "pair", details }] };
+    const source: NormalizedMessage = { ...user, blocks: [{ type: "image", thumbnail }, { type: "image", thumbnail }] };
+    const final = { ...answer, blocks: [{ type: "text" as const, text: "The layout is updated." }], turn: { userEntryId: "upload", endEntryId: "image-answer" } };
+    const view = render(<Transcript taskId="chat" messages={[source, call]} running />);
+    expect(screen.queryByRole("slider")).toBeNull();
+    expect(screen.getByRole("button", { name: /Comparing images.*Layout/ })).toBeInTheDocument();
+    view.rerender(<Transcript taskId="chat" messages={[source, call, result, final]} running={false} />);
+    expect(screen.getByRole("slider", { name: "Layout: comparison slider" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Show work transcript/ })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("The layout is updated.")).toBeInTheDocument();
+    view.rerender(<Transcript taskId="chat" messages={[source, call, { ...result, blocks: [{ ...result.blocks[0], isError: true, text: "Image unavailable" }] }, final]} running={false} />);
+    expect(screen.queryByRole("slider")).toBeNull();
+    await act(async () => {});
+  });
+
   it("updates an image inside memoized prose when its source thumbnail arrives, and drops off-branch sources", () => {
     const { rerender } = render(<Transcript taskId="chat" messages={[user, answer]} running={false} />);
     expect(screen.getByRole("img", { name: "Preparing image: Original screenshot" })).toBeInTheDocument();

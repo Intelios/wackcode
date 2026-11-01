@@ -16,6 +16,7 @@ import { WEB_FETCH_TOOL_NAME } from "../web-fetch/index.js";
 import { WEB_SEARCH_TOOL_NAME } from "../web-search/index.js";
 import { SHOW_VISUAL_TOOL_NAME, VISUAL_GUIDE_LINES } from "../visual.js";
 import { IMAGE_REPLY_GUIDANCE } from "../image-references.js";
+import { COMPARE_IMAGES_GUIDE_LINES, COMPARE_IMAGES_TOOL_NAME } from "../compare-images.js";
 
 export const DEFAULT_CHAT_PROMPT = `You are a helpful, knowledgeable assistant in a desktop chat app. People come to you to think things through, learn, write, plan, analyse and get everyday things done.
 
@@ -68,6 +69,9 @@ export function buildChatGuide({ activeTools, hasMcpTools, today, searchLabel }:
   if (has(SHOW_VISUAL_TOOL_NAME)) {
     // The same words the tool carries as promptGuidelines in Code mode, where Pi serves them.
     lines.push("", `Visual replies: ${VISUAL_GUIDE_LINES.join(" ")}`);
+  }
+  if (has(COMPARE_IMAGES_TOOL_NAME)) {
+    lines.push("", `Image comparisons: ${COMPARE_IMAGES_GUIDE_LINES.join(" ")}`);
   }
   if (hasMcpTools) {
     lines.push("", "Connected tools: tools whose names start with mcp__ come from servers the user added. Use them when they fit, and say what you did.");

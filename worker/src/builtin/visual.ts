@@ -52,12 +52,12 @@ export const PREVIEW_VISUAL_PARAMS = {
 
 /** Shared verbatim with Chat mode's guide, since Pi drops tool guidelines for custom prompts. */
 export const VISUAL_GUIDE_LINES: readonly string[] = [
-  "Charts, comparisons, diagrams, UI mockups and widgets use show_visual; plain lists, code and short answers stay Markdown.",
-  "HTML body, optional <style>/<script>, no network. Use inline SVG/data: or absolute image paths in attributes/url(); images persist. Chat mode: scratchpad only.",
-  `Theme variables: ${VISUAL_THEME_VARIABLES.join(", ")}. --chart-1 follows the accent; other chart/semantic colours retain meaning. --wc-* and shadcn aliases work too. No hard-coded colours.`,
-  "720px wide; ≤20,000px tall. Transparent html/body; no outer fill/border/banner/padding or nested cards. Group by spacing/type. Keep artwork/mockups and control fills/borders/focus; --bg/--surface stay opaque. Fixed px chart heights; no vh or html/body height:100%.",
-  "Before show_visual, preview_visual and fix screenshot, contentHeight and script errors. Width: 240–1600 (default 720); appearance: light/dark (default current). Preview cannot publish/send.",
-  "wackcode.send(text) sends a user message only on explicit button/choice clicks; never on load/timers or inventing the user's words. One visual per idea. Don't announce or restate the page.",
+  "show_visual: charts, structured comparisons, diagrams, mockups, widgets. Short answers: Markdown.",
+  "HTML body; <style>/<script> allowed, no network. Images: inline SVG/data: or absolute paths in attributes/url(), persisted. Chat: scratchpad only.",
+  `Variables: ${VISUAL_THEME_VARIABLES.join(", ")}. --chart-1=accent; other chart/semantic colours fixed. --wc-*/shadcn aliases allowed; no hard-coded colours.`,
+  "720px wide, ≤20,000px tall. Transparent roots; no outer fill/border/banner/padding or nested cards. Use spacing/type; keep artwork/control surfaces and focus, --bg/--surface opaque. Fixed px chart heights; no vh or root height:100%.",
+  "Preview first with preview_visual; fix screenshot, contentHeight, script errors. Width 240–1600 (720); appearance light/dark (current). Preview cannot publish/send.",
+  "wackcode.send(text): user messages on explicit button/choice clicks only; never on load/timers or with invented user words. One visual per idea; don't announce or restate it.",
 ];
 
 type HtmlValidation = { ok: true; html: string } | { ok: false; error: string };

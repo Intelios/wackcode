@@ -116,6 +116,18 @@ const server = createServer(async (request, response) => {
   const imageCall = imageFixture?.[1] && offers("read") && !calledTool("read")
     ? { name: "read", arguments: JSON.stringify({ path: imageFixture[1].trim() }) }
     : undefined;
+  const comparisonFixture = /^image comparison fixture(?:[ \t]*:[ \t]*([^\n]+))?(?:\n|$)/i.exec(prompt);
+  const comparisonRefs = comparisonFixture ? imageFixtureReferences([latestUser, ...sinceUser]) : [];
+  const comparisonPaths = comparisonFixture?.[1]?.split(" | ").map((path) => path.trim()).filter(Boolean) ?? [];
+  const pendingComparisonPath = comparisonPaths.find((path) => !sinceUser.some((message) => message.role === "assistant"
+    && message.tool_calls?.some((call) => call.function?.name === "read" && JSON.parse(call.function.arguments).path === path)));
+  const comparisonCall = comparisonFixture && offers("compare_images") && !calledTool("compare_images")
+    ? pendingComparisonPath && offers("read")
+      ? { name: "read", arguments: JSON.stringify({ path: pendingComparisonPath }) }
+      : comparisonRefs.length >= 2
+        ? { name: "compare_images", arguments: JSON.stringify({ before: comparisonRefs[0], after: comparisonRefs[1], title: "Layout comparison", beforeLabel: "Original", afterLabel: "Updated" }) }
+        : undefined
+    : undefined;
   const canvasArgs = canvasFixtureArguments();
   const canvasCall = canvasFixture && offers("canvas") && !calledTool("canvas")
     ? { name: "canvas", arguments: JSON.stringify(prompt.toLowerCase().includes("revise")
@@ -177,7 +189,7 @@ const server = createServer(async (request, response) => {
   const backgroundLaunched = messages.slice(messages.lastIndexOf(latestUser) + 1).some((message) => message.role === "assistant" && message.tool_calls?.some((call) => call.function?.name === "subagent"));
   const resultsArrived = prompt.includes("Job ");
   const backgroundLaunch = background && subagent && !backgroundLaunched && !resultsArrived;
-  if (backgroundLaunch || suggest || canvasCall || visualCall || imageCall || commitCall || (!background && !suggestFixture && !canvasFixture && !visualFixture && !imageFixture && !child && !resultsArrived && !hasToolResult && body.tools?.length && (!browserMatch || browser) && (!computerMatch || computer))) {
+  if (backgroundLaunch || suggest || canvasCall || visualCall || imageCall || comparisonCall || commitCall || (!background && !suggestFixture && !canvasFixture && !visualFixture && !imageFixture && !comparisonFixture && !child && !resultsArrived && !hasToolResult && body.tools?.length && (!browserMatch || browser) && (!computerMatch || computer))) {
     send(response, {
       id: "fixture-tool",
       object: "chat.completion.chunk",
@@ -192,8 +204,8 @@ const server = createServer(async (request, response) => {
             id: `fixture-tool-${messages.length}`,
             type: "function",
             function: {
-              name: backgroundLaunch ? "subagent" : imageCall ? imageCall.name : canvasCall ? canvasCall.name : visualCall ? visualCall.name : suggest ? "suggest_task" : browser ? browser.name : computer ? computer.name : commitCall ? commitCall.name : search ? "web_search" : "write",
-              arguments: imageCall ? imageCall.arguments : canvasCall ? canvasCall.arguments : visualCall ? visualCall.arguments : suggest
+              name: backgroundLaunch ? "subagent" : comparisonCall ? comparisonCall.name : imageCall ? imageCall.name : canvasCall ? canvasCall.name : visualCall ? visualCall.name : suggest ? "suggest_task" : browser ? browser.name : computer ? computer.name : commitCall ? commitCall.name : search ? "web_search" : "write",
+              arguments: comparisonCall ? comparisonCall.arguments : imageCall ? imageCall.arguments : canvasCall ? canvasCall.arguments : visualCall ? visualCall.arguments : suggest
                 ? JSON.stringify({
                   title: "Dismiss button stays disabled after a failed save",
                   kind: "bug",
@@ -219,7 +231,11 @@ const server = createServer(async (request, response) => {
       usage: { prompt_tokens: 30, completion_tokens: 12, total_tokens: 42 }
     });
   } else {
-    const imageReply = imageFixture ? imageFixtureReply([latestUser, ...sinceUser]) : undefined;
+    const imageReply = comparisonFixture
+      ? !offers("compare_images") ? "Image comparisons are switched off."
+        : calledTool("compare_images") ? "The updated layout gives the main action more space."
+          : "Attach two images, or use `image comparison fixture: /absolute/before.png | /absolute/after.png`."
+      : imageFixture ? imageFixtureReply([latestUser, ...sinceUser]) : undefined;
     const visualReply = visualFixture ? visualFixtureReply(visualCalls > 0 || offers("show_visual")) : undefined;
     send(response, {
       id: "fixture-done",
@@ -248,12 +264,16 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => server.close(() => process.exit(0)));
 }
 
-function imageFixtureReply(messages) {
-  const references = new Set(messages.flatMap((message) =>
+function imageFixtureReferences(messages) {
+  return [...new Set(messages.flatMap((message) =>
     textOf(message?.content).match(/wackcode-image:\/\/entry\/[A-Za-z0-9_-]{1,256}\/(?:0|[1-9]\d*)(?!\d)/g) ?? []
-  ));
-  if (!references.size) return "Attach an image, or use `image reply fixture: /absolute/path/image.png`.";
-  const images = [...references].slice(0, 3).map((reference, index) =>
+  ))];
+}
+
+function imageFixtureReply(messages) {
+  const references = imageFixtureReferences(messages);
+  if (!references.length) return "Attach an image, or use `image reply fixture: /absolute/path/image.png`.";
+  const images = references.slice(0, 3).map((reference, index) =>
     `![Selected image ${index + 1}](${reference} "Image ${index + 1}")`
   );
   return `Here are the selected images.\n\n${images.join("\n\n")}\n\nOpen an image to inspect it.`;

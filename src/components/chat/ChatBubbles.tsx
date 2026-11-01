@@ -16,6 +16,8 @@ import { useSmoothText } from "../../hooks/useSmoothText";
 import { DuckMark } from "../DuckMark";
 import { SHOW_VISUAL_TOOL_NAME, parseVisualArgs } from "../../tool-utils";
 import { VisualCallCard, VisualSentNote } from "../VisualCard";
+import { ImageComparison } from "../ImageComparison";
+import { COMPARE_IMAGES_TOOL_NAME, completedImageComparison } from "../../image-comparisons";
 import { splitVisualAction } from "../../visual-action";
 import { Icon, type IconName } from "../Icons";
 import { Markdown } from "../Markdown";
@@ -199,6 +201,7 @@ type Piece =
   | { type: "tools"; key: string; calls: NormalizedBlock[] }
   /** A `show_visual` call: the card once it settled, a chip while it runs or if it failed. */
   | { type: "visual"; key: string; call: NormalizedBlock }
+  | { type: "comparison"; key: string; call: NormalizedBlock }
   | { type: "text"; key: string; text: string; streaming: boolean }
   | { type: "error"; key: string; text: string };
 
@@ -222,6 +225,10 @@ export function replyPieces(messages: NormalizedMessage[], partial?: NormalizedM
         // the answer, sized like a bubble and outside one.
         if (block.toolName === SHOW_VISUAL_TOOL_NAME) {
           pieces.push({ type: "visual", key, call: block });
+          return;
+        }
+        if (block.toolName === COMPARE_IMAGES_TOOL_NAME) {
+          pieces.push({ type: "comparison", key, call: block });
           return;
         }
         const last = pieces[pieces.length - 1];
@@ -266,6 +273,13 @@ export function AgentReply({ pieces, results, first, live, files, copyText, onRe
         {first && <div className="chat-name">{name}</div>}
         {pieces.map((piece) => {
           if (piece.type === "thought") return <ThoughtCaption key={piece.key} text={piece.text} />;
+          if (piece.type === "comparison") {
+            const result = piece.call.toolCallId ? results.get(piece.call.toolCallId) : undefined;
+            const comparison = completedImageComparison(result);
+            return comparison
+              ? <div key={piece.key} className="chat-visual"><ImageComparison comparison={comparison} /></div>
+              : <ActivityChips key={piece.key} calls={[piece.call]} results={results} live={live} />;
+          }
           if (piece.type === "visual") {
             const result = piece.call.toolCallId ? results.get(piece.call.toolCallId) : undefined;
             // Settled and successful is a card; anything else keeps today's chip, with its error.

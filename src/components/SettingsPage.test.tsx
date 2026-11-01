@@ -669,6 +669,19 @@ describe("SettingsPage sub-agents", () => {
     await waitFor(() => expect(props.onSetDisabledTools).toHaveBeenLastCalledWith(["bash"]));
   });
 
+  it("switches image comparisons independently while preserving other disabled tools", async () => {
+    const { rerender, props, subagents } = renderPage(false);
+    props.onSetDisabledTools.mockResolvedValue(undefined);
+    rerender(<SettingsPage {...noFavorites} {...props} subagents={subagents} disabledTools={["bash", "show_visual"]} />);
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Settings sections" })).getByRole("button", { name: /^Packages$/ }));
+    fireEvent.click(await screen.findByRole("switch", { name: "Image comparisons" }));
+    await waitFor(() => expect(props.onSetDisabledTools).toHaveBeenCalledWith(["bash", "show_visual", "compare_images"]));
+    rerender(<SettingsPage {...noFavorites} {...props} subagents={subagents} disabledTools={["bash", "show_visual", "compare_images"]} />);
+    expect(screen.getByRole("switch", { name: "Image comparisons" })).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(screen.getByRole("switch", { name: "Image comparisons" }));
+    await waitFor(() => expect(props.onSetDisabledTools).toHaveBeenLastCalledWith(["bash", "show_visual"]));
+  });
+
   it("switches Web Fetch on Settings › Web through the tool denylist, keeping the rest of it", async () => {
     const { rerender, props, subagents } = renderPage(false);
     props.onSetDisabledTools.mockResolvedValue(undefined);

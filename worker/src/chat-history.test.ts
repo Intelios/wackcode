@@ -120,6 +120,16 @@ describe("renderChatHistory", () => {
     expect(rendered).toContain("Image: [image]");
     expect(rendered).not.toContain("wackcode-image:");
   });
+
+  it("describes image comparisons without exporting their image references", () => {
+    const entries = session([
+      message("u", null, "user", "Compare the images"),
+      message("a", "u", "assistant", [{ type: "toolCall", id: "compare", name: "compare_images", arguments: { before: "wackcode-image://entry/upload/0", after: "wackcode-image://entry/read/0", beforeLabel: "Original", afterLabel: "Edited" } }]),
+    ]);
+    const text = renderChatHistory(entries, { name: "Comparison" });
+    expect(text).toContain("[image comparison: Original / Edited]");
+    expect(text).not.toContain("wackcode-image:");
+  });
 });
 
 describe("stripTailSections", () => {

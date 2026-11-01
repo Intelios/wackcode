@@ -1184,6 +1184,7 @@ describe("Pi worker integration", () => {
       "canvas",
       "canvas_guide",
       "canvas_look",
+      "compare_images",
       "computer_act",
       "computer_apps",
       "computer_open",
@@ -1251,13 +1252,13 @@ describe("Pi worker integration", () => {
         "browser_console"
       ]
     });
-    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.length === 15);
+    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.length === 16);
     // `find`/`grep` availability varies by host; the companion stays on even without bash.
     const beforeSecondRun = provider.requests.length;
     worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-2", message: "Again." });
     await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.snapshot === undefined && provider.requests.length > beforeSecondRun);
 
-    expect(offered(provider.requests[beforeSecondRun])).toEqual(["ask_user_question", "bash_job", "canvas", "canvas_guide", "canvas_look", "edit", "plan_mode_complete", "preview_visual", "read", "read_chat", "show_visual", "skill_creator", "suggest_task", "todo", "write"]);
+    expect(offered(provider.requests[beforeSecondRun])).toEqual(["ask_user_question", "bash_job", "canvas", "canvas_guide", "canvas_look", "compare_images", "edit", "plan_mode_complete", "preview_visual", "read", "read_chat", "show_visual", "skill_creator", "suggest_task", "todo", "write"]);
     expect(worker.child.exitCode).toBeNull();
   });
 
@@ -3343,6 +3344,83 @@ describe("custom prompts (Settings → Prompts)", () => {
   });
 });
 
+describe("image comparisons", () => {
+  it.each([
+    ["code", "build"], ["code", "plan"], ["code", "ultraplan"], ["chat", "build"],
+  ] as const)("compares saved attachments and tool images in %s/%s through cold history, restart and rewind", async (kind, mode) => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-comparison-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const picturePath = join(workspace, "shot.png");
+    const original = solidPng(600, 300);
+    const edited = solidPng(300, 600);
+    await writeFile(picturePath, Buffer.from(edited, "base64"));
+    const taskId = `comparison-${kind}-${mode}`;
+    const initial = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, taskId, undefined, undefined, undefined, mode, true, { kind });
+    cleanup.push(() => initial.worker.shutdown());
+    expect(initial.ready.snapshot?.activeTools).toContain("compare_images");
+    const run = async (worker: WorkerHarness, runId: string, message: string, extra = {}) => {
+      worker.send({ id: crypto.randomUUID(), type: "prompt", runId, message, ...extra });
+      await worker.waitFor((output) => output.type === "run_state" && output.runId === runId && output.state === "idle");
+    };
+    const request = async (worker: WorkerHarness, command: Record<string, unknown>) => {
+      const id = crypto.randomUUID();
+      worker.send({ id, ...command });
+      return worker.waitFor((output) => output.type === "response" && output.id === id);
+    };
+    await run(initial.worker, "sources", "image reply: shot.png", { images: [{ type: "image", data: original, mimeType: "image/png" }] });
+    const source = initial.worker.view!.messages.find((message) => message.role === "user")!;
+    const result = initial.worker.view!.messages.find((message) => message.role === "tool" && message.blocks.some((block) => block.toolName === "read"))!;
+    const before = `wackcode-image://entry/${source.entryId}/0`;
+    const after = `wackcode-image://entry/${result.entryId}/0`;
+    const args = { before, after, title: "Updated layout", beforeLabel: "Original", afterLabel: "Edited" };
+    const compare = `mcp: compare_images ${JSON.stringify(args)}`;
+    await run(initial.worker, "compare", compare);
+    const accepted = (view: SnapshotView) => view.messages.flatMap((message) => message.blocks).filter((block) => block.type === "tool-result" && block.toolName === "compare_images" && (block.details as { v?: number } | undefined)?.v === 1);
+    expect(accepted(initial.worker.view!)).toHaveLength(1);
+    expect(accepted(initial.worker.view!)[0].details).toEqual({ v: 1, ...args });
+    const sessionFile = initial.worker.view!.sessionFile!;
+    const cold = await readSavedSession({ sessionFile, taskId, mode, thinkingLevel: "high" });
+    expect(accepted(cold)).toHaveLength(1);
+    expect(accepted(cold)[0].details).toEqual({ v: 1, ...args });
+    await initial.worker.shutdown();
+    await rm(picturePath);
+
+    if (kind === "code" && mode === "build") {
+      // Model context can cut away the sources; display history and tool validation must
+      // still resolve them. Exercise both readers with a saved compaction boundary.
+      const lines = (await readFile(sessionFile, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+      const lastAnswer = [...lines].reverse().find((entry) => entry.type === "message" && entry.message.role === "assistant");
+      lines.push({ type: "compaction", id: "comparison-compaction", parentId: lines.at(-1).id, timestamp: new Date().toISOString(), summary: "The layout was compared.", firstKeptEntryId: lastAnswer.id, tokensBefore: 1000 });
+      await writeFile(sessionFile, lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
+    }
+    const restored = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, taskId, sessionFile, undefined, undefined, mode, true, { kind });
+    cleanup.push(() => restored.worker.shutdown());
+    expect(accepted(restored.ready.snapshot!)).toHaveLength(1);
+    expect((await request(restored.worker, { type: "message_image", entryId: source.entryId, index: 0 })).result).toEqual({ type: "image", data: original, mimeType: "image/png" });
+    expect((await request(restored.worker, { type: "tool_image", toolCallId: result.blocks.find((block) => block.toolName === "read")!.toolCallId, index: 0 })).result).toEqual({ type: "image", data: edited, mimeType: "image/png" });
+    await run(restored.worker, "compare-again", compare);
+    expect(accepted(restored.worker.view!)).toHaveLength(2);
+
+    await request(restored.worker, { type: "set_tools", disabledTools: ["compare_images"] });
+    expect(restored.worker.view!.activeTools).not.toContain("compare_images");
+    expect(accepted(restored.worker.view!)).toHaveLength(2);
+    await run(restored.worker, "disabled", compare);
+    expect(accepted(restored.worker.view!)).toHaveLength(2);
+    const offered = ((provider.requests.at(-1)!.body.tools ?? []) as Array<{ function: { name: string } }>).map((tool) => tool.function.name);
+    expect(offered).not.toContain("compare_images");
+
+    expect((await request(restored.worker, { type: "navigate", entryId: source.entryId, target: "before", kind: "rewind" })).success).toBe(true);
+    expect(accepted(restored.worker.view!)).toHaveLength(0);
+    expect((await request(restored.worker, { type: "message_image", entryId: source.entryId, index: 0 })).result).toBeNull();
+    await request(restored.worker, { type: "set_tools", disabledTools: [] });
+    await run(restored.worker, "off-branch", compare);
+    expect(accepted(restored.worker.view!)).toHaveLength(0);
+    expect(toolResultContents(provider.requests.at(-1)!.body).at(-1)).toContain("current branch");
+  });
+});
+
 describe("inline image replies", () => {
   it.each([
     ["code", true], ["chat", true], ["code", false], ["chat", false],
@@ -4888,7 +4966,7 @@ describe("sub-agents", () => {
       const roleTools = (ready.snapshot?.tools ?? []).filter((tool) => tool.available && scout.tools.includes(tool.name)).map((tool) => tool.name);
       expect(tools).toEqual([...roleTools, "bash_job"].sort());
       // A child has no transcript to draw in, so visual replies and task suggestions stay out too.
-      for (const hidden of ["edit", "write", "subagent", "todo", "ask_user_question", "plan_mode_complete", "show_visual", "suggest_task"]) {
+      for (const hidden of ["edit", "write", "subagent", "todo", "ask_user_question", "plan_mode_complete", "show_visual", "compare_images", "suggest_task"]) {
         expect(tools).not.toContain(hidden);
       }
     }
@@ -5911,7 +5989,7 @@ describe("chat references", () => {
 
 describe("Chat mode", () => {
   const ALLOWED = new Set([
-    "read", "write", "edit", "ls", "grep", "find", "web_fetch", "web_search", "ask_user_question", "read_chat", "show_visual", "preview_visual",
+    "read", "write", "edit", "ls", "grep", "find", "web_fetch", "web_search", "ask_user_question", "read_chat", "show_visual", "preview_visual", "compare_images",
     "memory_save", "memory_recall", "memory_forget",
     "browser_open", "browser_snapshot", "browser_act", "browser_screenshot", "browser_console",
   ]);

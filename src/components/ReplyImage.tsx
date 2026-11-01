@@ -12,6 +12,20 @@ interface ReplyImageScopeValue {
 
 export const ReplyImageScope = createContext<ReplyImageScopeValue | undefined>(undefined);
 
+/** Keep loaders stable when an unrelated snapshot rebuilds the image registry. */
+export function useReplyImageLoader(image?: ReplyImageSource) {
+  const scope = useContext(ReplyImageScope);
+  const { entryId, index, kind, toolCallId } = image ?? {};
+  const loadTool = scope?.loadTool;
+  const loadMessage = scope?.loadMessage;
+  return useCallback(() => {
+    if (entryId === undefined || index === undefined) return Promise.resolve(undefined);
+    return (kind === "tool" && toolCallId
+      ? loadTool?.(toolCallId, index)
+      : loadMessage?.(entryId, index)) ?? Promise.resolve(undefined);
+  }, [entryId, index, kind, toolCallId, loadTool, loadMessage]);
+}
+
 export function useReplyImageScope(
   messages: readonly NormalizedMessage[],
   loadMessage: ReplyImageScopeValue["loadMessage"],
@@ -28,18 +42,7 @@ export function ReplyImage({ reference, alt, caption }: { reference: string; alt
   const [shown, setShown] = useState(false);
   const [failedPreview, setFailedPreview] = useState<string>();
   const description = alt?.trim() || "Image";
-  const entryId = image?.entryId;
-  const index = image?.index;
-  const kind = image?.kind;
-  const toolCallId = image?.toolCallId;
-  const loadTool = scope?.loadTool;
-  const loadMessage = scope?.loadMessage;
-  const load = useCallback(() => {
-    if (entryId === undefined || index === undefined) return Promise.resolve(undefined);
-    return (kind === "tool" && toolCallId
-      ? loadTool?.(toolCallId, index)
-      : loadMessage?.(entryId, index)) ?? Promise.resolve(undefined);
-  }, [entryId, index, kind, toolCallId, loadTool, loadMessage]);
+  const load = useReplyImageLoader(image);
   const unavailable = !image || image.failed || (image.thumbnail && failedPreview === image.thumbnail);
   const preview = image?.thumbnail;
   if (unavailable) {

@@ -970,6 +970,53 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
   .reply-image-button:hover { transform: none; }
 }
 
+/* Saved image comparisons: one viewport clip, two images sharing a camera. */
+.image-comparison { margin: 10px 0; width: min(100%, 720px, calc(480px * var(--comparison-ratio))); }
+.image-comparison-stage {
+  position: relative; width: 100%; aspect-ratio: var(--comparison-ratio); overflow: hidden; isolation: isolate;
+  border-radius: var(--wc-radius-card); background: var(--wc-well); user-select: none; touch-action: pan-y;
+  animation: reply-image-in .24s var(--ease) backwards;
+}
+.image-comparison-layer { position: absolute; inset: 0; background: var(--wc-well); pointer-events: none; }
+.image-comparison-layer img { display: block; width: 100%; height: 100%; max-width: none; max-height: none; object-fit: contain; }
+.image-comparison-label {
+  position: absolute; bottom: 12px; max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 4px 9px; border: 1px solid var(--border-bright); border-radius: var(--wc-radius-pill);
+  color: var(--text); background: var(--wc-elevated); font-size: 11px; font-weight: 600; line-height: 1.4;
+}
+.image-comparison-label.before { left: 12px; }
+.image-comparison-label.after { right: 12px; }
+.image-comparison-divider { position: absolute; top: 0; bottom: 0; width: 44px; transform: translateX(-50%); cursor: ew-resize; touch-action: none; outline: none; }
+.image-comparison-divider::before { content: ""; position: absolute; top: 0; bottom: 0; left: calc(50% - 1px); width: 2px; background: var(--text); box-shadow: 0 0 0 1px color-mix(in srgb, var(--wc-well) 50%, transparent); }
+.image-comparison-grip {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); display: flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; border: 1px solid var(--border-bright); border-radius: 50%; color: var(--text); background: var(--wc-elevated);
+  box-shadow: 0 2px 12px color-mix(in srgb, var(--wc-well) 45%, transparent); transition: border-color .15s var(--ease), background .15s var(--ease);
+}
+.image-comparison-grip svg { width: 13px; height: 13px; }
+.image-comparison-divider:hover .image-comparison-grip, .image-comparison-divider:active .image-comparison-grip { border-color: var(--wc-accent); background: var(--wc-accent-tint); }
+.image-comparison-divider:focus-visible .image-comparison-grip { outline: 2px solid var(--wc-accent); outline-offset: 3px; }
+.image-comparison-actions { position: absolute; top: 8px; right: 8px; opacity: 0; pointer-events: none; transition: opacity .15s var(--ease); }
+.image-comparison-stage:hover .image-comparison-actions, .image-comparison-stage:focus-within .image-comparison-actions, .image-comparison-stage.expanded .image-comparison-actions { opacity: 1; pointer-events: auto; }
+.image-comparison-stage .icon-button { width: 28px; height: 28px; border: 1px solid var(--border-bright); border-radius: 50%; background: var(--wc-elevated); color: var(--text); }
+.image-comparison-stage .icon-button svg { width: 14px; height: 14px; }
+.image-comparison-stage .icon-button:hover { border-color: var(--wc-accent-line); background: var(--wc-accent-tint); }
+.image-comparison-quality { margin-top: 5px; color: var(--text-dim); font-size: 11px; }
+.image-comparison-pending, .image-comparison-unavailable { display: flex; align-items: center; gap: 8px; padding: 20px; border-radius: var(--wc-radius-card); color: var(--text-dim); background: var(--wc-well); font-size: 12px; }
+.image-comparison-pending { min-height: 160px; justify-content: center; }
+.image-comparison-pending svg, .image-comparison-unavailable svg { width: 18px; height: 18px; flex-shrink: 0; }
+.image-comparison-backdrop { overflow: hidden; }
+.image-comparison-dialog { --comparison-ratio: 1.77778; width: min(calc(100vw - 64px), calc((100vh - 96px) * var(--comparison-ratio)), 1400px); }
+.image-comparison-stage.expanded { cursor: zoom-in; animation: none; }
+.image-comparison-stage.zoomed { cursor: grab; touch-action: none; }
+.image-comparison-stage.panning { cursor: grabbing; }
+.image-comparison-zoom { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 5px; padding: 4px; border: 1px solid var(--border-bright); border-radius: var(--wc-radius-pill); background: var(--wc-elevated); }
+.image-comparison-zoom .secondary-button { border: 0; border-radius: var(--wc-radius-pill); padding: 4px 10px; font-size: 11px; }
+@media (prefers-reduced-motion: reduce) {
+  .image-comparison-stage { animation: none; }
+  .image-comparison-grip, .image-comparison-actions { transition: none; }
+}
+
 /* Settings › Appearance › Message bubbles: assistant prose in a bubble like the user's,
    mirrored left. Tool rows, thinking rows and cards stay outside it; off leaves today's
    flat layout untouched, so these rules only exist under the attribute. */

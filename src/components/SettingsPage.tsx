@@ -3,6 +3,7 @@ import { api } from "../api";
 import { agentName } from "../agentName";
 import { modelIsReady } from "../model-utils";
 import { BROWSER_TOOL_NAMES, VISUAL_TOOL_NAMES, WEB_FETCH_TOOL_NAME } from "../tool-utils";
+import { COMPARE_IMAGES_TOOL_NAME } from "../image-comparisons";
 import { SUGGEST_TASK_TOOL_NAME } from "../suggestions";
 import { CANVAS_TOOL_NAMES } from "../canvas-state";
 import type { ExecutionPolicyConfig, AppearanceConfig, AutoTitleConfig, ModelCatalog, CommandsConfig, ComputerAppGrant, ComputerUseConfig, GitConfig, McpConfig, MemoryConfig, PackageRecord, PromptConfig, ProviderRecord, SaveProviderInput, SubagentConfig, SubscriptionProviderInfo, ToolCatalogEntry, WebConfig } from "../types";
@@ -376,6 +377,11 @@ export function SettingsPage({
             onConfigureWeb={() => setSection("web")}
             browserEnabled={BROWSER_TOOL_NAMES.every((name) => !disabledTools.includes(name))}
             visualEnabled={VISUAL_TOOL_NAMES.every((name) => !disabledTools.includes(name))}
+            comparisonsEnabled={!disabledTools.includes(COMPARE_IMAGES_TOOL_NAME)}
+            onToggleComparisons={(enabled) => onSetDisabledTools(
+              enabled ? disabledTools.filter((name) => name !== COMPARE_IMAGES_TOOL_NAME)
+                : [...disabledTools.filter((name) => name !== COMPARE_IMAGES_TOOL_NAME), COMPARE_IMAGES_TOOL_NAME]
+            )}
             onToggleVisual={(enabled) => onSetDisabledTools(
               enabled
                 ? disabledTools.filter((name) => !(VISUAL_TOOL_NAMES as readonly string[]).includes(name))

@@ -42,6 +42,18 @@ function slots(turn: ReturnType<typeof project> extends Map<number, infer T> ? T
 }
 
 describe("completed work layout", () => {
+  it("keeps accepted comparisons and everything after them in the outcome, without promoting failed calls", () => {
+    const comparison = { v: 1, before: "wackcode-image://entry/before/0", after: "wackcode-image://entry/after/0", title: "Layout", beforeLabel: "Before", afterLabel: "After" };
+    const compare = assistant("compare", [text("Preparing the comparison"), { type: "tool-call", toolCallId: "pair", toolName: "compare_images", arguments: comparison }]);
+    const accepted = result("pair", { toolName: "compare_images", details: comparison });
+    const later = assistant("later", [call("check")]);
+    const messages = [user(), progress, result(), compare, accepted, later, result("check"), answer];
+    expect(slots(project(messages).get(0)!, "outcome")).toEqual([[3, 1, false], [5, 0, false], [7, 0, true]]);
+    expect(slots(project(messages).get(0)!, "work")).toEqual([[1, 0, false], [1, 1, false], [3, 0, false]]);
+    messages[4] = result("pair", { toolName: "compare_images", isError: true });
+    expect(slots(project(messages).get(0)!, "outcome")).toEqual([[7, 0, true]]);
+  });
+
   it("partitions at every user, leaves originals intact, and projects actions only on the outcome", () => {
     const messages = [...history(), user("v", 200), assistant("b", [text("Another answer")])];
     const turns = project(messages);

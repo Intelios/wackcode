@@ -21,6 +21,7 @@ import { MEMORY_TOOL_NAMES } from "../memory/index.js";
 import { WEB_FETCH_TOOL_NAME } from "../web-fetch/index.js";
 import { WEB_SEARCH_TOOL_NAME } from "../web-search/index.js";
 import { VISUAL_TOOL_NAMES } from "../visual.js";
+import { COMPARE_IMAGES_TOOL_NAME } from "../compare-images.js";
 
 /** Pi's file tools. Each takes its target as `path`; ls, grep and find default it to the cwd. */
 export const CHAT_FILE_TOOLS: ReadonlySet<string> = new Set(["read", "write", "edit", "ls", "grep", "find"]);
@@ -30,7 +31,7 @@ const PATH_OPTIONAL: ReadonlySet<string> = new Set(["ls", "grep", "find"]);
  *  reaches no file or process here: Rust makes the request (`web.rs`). `show_visual` only draws
  *  in this chat's own transcript (`visual.ts`). */
 export const CHAT_BUILTIN_TOOLS: ReadonlySet<string> = new Set([
-  ASK_USER_QUESTION_TOOL_NAME, WEB_FETCH_TOOL_NAME, WEB_SEARCH_TOOL_NAME, READ_CHAT_TOOL_NAME, ...VISUAL_TOOL_NAMES, ...MEMORY_TOOL_NAMES, ...BROWSER_TOOL_NAMES
+  ASK_USER_QUESTION_TOOL_NAME, WEB_FETCH_TOOL_NAME, WEB_SEARCH_TOOL_NAME, READ_CHAT_TOOL_NAME, COMPARE_IMAGES_TOOL_NAME, ...VISUAL_TOOL_NAMES, ...MEMORY_TOOL_NAMES, ...BROWSER_TOOL_NAMES
 ]);
 
 export type ChatToolSource = "builtin" | "wackcode" | "mcp" | "package";

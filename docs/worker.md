@@ -88,7 +88,7 @@ The transcript reaches the host as a full `snapshot`, then as `snapshot_delta`s 
 ## Tools
 
 - Never pass `tools:` to the chat's `createAgentSession`: Pi treats it as a registry filter and erases extension tools. Apply the user's denylist with `setActiveToolsByName`, and re-apply it after anything that can re-activate tools (extension `session_start`, `navigateTree`, a roster change).
-- The Settings › Tools denylist covers Pi's tools and package tools. Built-in extension tools are exempt (a disabled `plan_mode_complete` would silently break Plan mode), except the ones in `SWITCHABLE_BUILTIN_TOOLS` (browser, `web_fetch`, the paired `show_visual` / `preview_visual`, `suggest_task`, and the three canvas tools, which switch together).
+- The Settings › Tools denylist covers Pi's tools and package tools. Built-in extension tools are exempt (a disabled `plan_mode_complete` would silently break Plan mode), except the ones in `SWITCHABLE_BUILTIN_TOOLS` (browser, `web_fetch`, the paired `show_visual` / `preview_visual`, `compare_images`, `suggest_task`, and the three canvas tools, which switch together).
 - Sub-agents, memory, computer use and web search have their own settings and keep their tools out through `inactiveTools()`; they never appear on the denylist. `web_search` is offered while `set_web` (or `init`'s `web`) names an active provider, and reaches sub-agents through its own clause in `childToolNames`.
 - MCP tools (`mcp__<server>__<tool>`) have their own per-server and per-tool switches and stay out while their server is off or unreachable. Keep the built-in and MCP switch rules separate.
 - `powershell` is removed from the registry; `grep`/`find` are reported unavailable when ripgrep/fd are missing (the worker is offline and can't download them).
@@ -145,11 +145,25 @@ markers rather than passing another chat's references along.
 
 ## Built-in extensions (`worker/src/builtin/`)
 
-WackCode's own extensions load as inline factories, so they bypass the package trust gate by construction. They are: `ask-user-question`, `auto-title`, `bash-jobs`, `browser`, `canvas`, `chat-refs`, `computer-use`, `goal`, `image-budget`, `image-references`, `mcp`, `memory`, `plan-mode`, `skill-creator`, `subagents`, `suggest-task`, `todo`, `visual`, `web-fetch`, `web-search`, and `chat-mode`, a guard with no tools of its own that only Chat mode chats load.
+WackCode's own extensions load as inline factories, so they bypass the package trust gate by construction. They are: `ask-user-question`, `auto-title`, `bash-jobs`, `browser`, `canvas`, `chat-refs`, `compare-images`, `computer-use`, `goal`, `image-budget`, `image-references`, `mcp`, `memory`, `plan-mode`, `skill-creator`, `subagents`, `suggest-task`, `todo`, `visual`, `web-fetch`, `web-search`, and `chat-mode`, a guard with no tools of its own that only Chat mode chats load.
 
 - Adding or renaming one also updates `BUILTIN_EXTENSIONS` in `src/components/PackagesSection.tsx`, which shows them so nobody installs a duplicate package.
-- Sub-agents never get browser, computer-use, MCP, memory, visual, canvas or suggestion tools, or skills. A child session loads its role's tool allowlist, its own shell check-in extension and the extensions the built-in hands it.
+- Sub-agents never get browser, computer-use, MCP, memory, visual, image-comparison, canvas or suggestion tools, or skills. A child session loads its role's tool allowlist, its own shell check-in extension and the extensions the built-in hands it.
 - Foreground sub-agent transcripts are saved on the `subagent` result's `details` but kept out of snapshots (`withoutTranscripts` in `normalizeMessage`) and live card updates (`snapshotDetails`). The side panel gets them only through `watch_subagent` frames.
+
+### Image comparisons (`compare-images.ts`)
+
+`compare_images` publishes two saved `wackcode-image://` references as a native comparison in
+the answer. Only `before` and `after` are required; `beforeLabel` / `afterLabel` default to
+Before / After (32 characters each), and `title` defaults to their pair (60 characters).
+The accepted result stores `{ v: 1, before, after, title, beforeLabel, afterLabel }`, without
+pixels. Validation follows `transcriptEntries` on the current branch, including context edits
+and images outside the compacted model context. Paths and remote URLs are never accepted.
+
+Both parent chat kinds load it, Plan and Ultra Plan allow it, and sub-agents never get it.
+Its independent built-in switch is on by default and only affects future calls. Saved results
+remain visible. Code serves its active tool guidelines; Chat serves the same guidance explicitly.
+`read_chat` replaces the call with `[image comparison: Title]`.
 
 ### Visual replies (`visual.ts`)
 

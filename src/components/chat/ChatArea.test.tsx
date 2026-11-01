@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedMessage, ProviderRecord, TaskRecord, TaskRuntime } from "../../types";
 import { ChatArea, type ChatAreaProps } from "./ChatArea";
@@ -55,6 +55,23 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("ChatArea", () => {
+  it("draws accepted image comparisons as answer content outside activity chips", async () => {
+    const thumbnail = "data:image/png;base64,dGh1bWI=";
+    const details = { v: 1, before: "wackcode-image://entry/upload/0", after: "wackcode-image://entry/upload/1", title: "Layout", beforeLabel: "Original", afterLabel: "Updated" };
+    renderArea({ task: task(), messages: [
+      msg("u1", "user", "Compare", { entryId: "upload", blocks: [{ type: "image", thumbnail }, { type: "image", thumbnail }] }),
+      { id: "pair", role: "assistant", blocks: [{ type: "tool-call", toolName: "compare_images", toolCallId: "pair", arguments: details }] },
+      { id: "paired", role: "tool", blocks: [{ type: "tool-result", toolName: "compare_images", toolCallId: "pair", details }] },
+      msg("a1", "assistant", "The updated layout has more space.")
+    ] });
+    expect(screen.getByRole("slider", { name: "Layout: comparison slider" })).toBeInTheDocument();
+    expect(screen.getByRole("figure", { name: "Image comparison: Layout" })).toHaveClass("image-comparison");
+    expect(screen.getByText("The updated layout has more space.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Expand image comparison" }));
+    expect(screen.getByRole("dialog", { name: "Image comparison: Layout" })).toBeInTheDocument();
+    await act(async () => {});
+  });
+
   it("shows selected attachments and tool images inline in the agent reply", () => {
     const thumbnail = "data:image/png;base64,dGh1bWI=";
     renderArea({ task: task(), messages: [

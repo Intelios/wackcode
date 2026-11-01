@@ -18,6 +18,8 @@ import { ThoughtFlightScope } from "./thoughtFlight";
 import { Icon } from "./Icons";
 import { Markdown } from "./Markdown";
 import { ReplyImageScope, useReplyImageScope } from "./ReplyImage";
+import { ImageComparison } from "./ImageComparison";
+import { COMPARE_IMAGES_TOOL_NAME, completedImageComparison } from "../image-comparisons";
 import { MessageActions, type MessageActionItem } from "./MessageActions";
 import { MessageEditor } from "./MessageEditor";
 import { PlanCard, type PlanAction } from "./PlanCard";
@@ -300,6 +302,10 @@ function renderSpecialCall(
     // The card is this call's settled outcome; while it runs the ordinary chip shows progress,
     // and a refused call keeps its error on the plain row.
     if (result && !result.isError && parseVisualArgs(block)) return <VisualCallCard block={block} result={result} />;
+  }
+  if (block.toolName === COMPARE_IMAGES_TOOL_NAME) {
+    const comparison = completedImageComparison(result);
+    if (comparison) return <ImageComparison comparison={comparison} />;
   }
   if (block.toolName === SUBAGENT_TOOL_NAME) {
     // The final result is authoritative; while running, the latest live update, or the

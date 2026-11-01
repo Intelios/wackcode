@@ -10,6 +10,7 @@
 import type { NormalizedBlock } from "../../types";
 import { displayUrl, mcpToolParts } from "../../tool-utils";
 import type { IconName } from "../Icons";
+import { COMPARE_IMAGES_TOOL_NAME } from "../../image-comparisons";
 
 export type ActivityStatus = "live" | "done" | "failed";
 
@@ -73,6 +74,7 @@ export function activityLabel(call: NormalizedBlock, live: boolean): { label: st
     // is its own card (`ChatBubbles.tsx`).
     case "preview_visual": return { icon: "visual", label: pick("Previewing a visual", "Previewed a visual") };
     case "show_visual": return { icon: "visual", label: join(pick("Drawing", "Drew"), str(a.title) ? quoted(str(a.title)) : "a visual") };
+    case COMPARE_IMAGES_TOOL_NAME: return { icon: "split", label: join(pick("Comparing", "Compared"), str(a.title) ? quoted(str(a.title)) : "two images") };
     case "browser_open": return { icon: "browser", label: join(pick("Opening", "Opened"), str(a.url) ? displayUrl(str(a.url)) : "the browser") };
     case "browser_snapshot": return { icon: "browser", label: pick("Reading the page", "Read the page") };
     case "browser_act": return { icon: "cursor", label: pick("Using the page", "Used the page") };

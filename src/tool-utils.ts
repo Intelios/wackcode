@@ -3,6 +3,7 @@ import { displayPath } from "./chat-utils";
 import { parseCommit } from "./tool-output";
 import { SUGGEST_TASK_TOOL_NAME } from "./suggestions";
 import { CANVAS_GUIDE_TOOL_NAME, CANVAS_LOOK_TOOL_NAME, CANVAS_TOOL_NAME } from "./canvas-state";
+import { COMPARE_IMAGES_TOOL_NAME } from "./image-comparisons";
 
 /** The built-in sub-agents tool. Its calls render as SubAgent chips rather than a tool row. */
 export const SUBAGENT_TOOL_NAME = "subagent";
@@ -271,6 +272,8 @@ export function summarizeTool(call: NormalizedBlock, result?: NormalizedBlock): 
       return { kind: "other", activeVerb: "Previewing visual", doneVerb: "Previewed visual", subject: "" };
     case SHOW_VISUAL_TOOL_NAME:
       return { kind: "other", activeVerb: "Drawing", doneVerb: "Drew", subject: str(toolArgs.title) };
+    case COMPARE_IMAGES_TOOL_NAME:
+      return { kind: "other", activeVerb: "Comparing images", doneVerb: "Compared images", subject: str(toolArgs.title) };
     case SUGGEST_TASK_TOOL_NAME:
       return { kind: "other", activeVerb: "Spotting", doneVerb: "Spotted", subject: str(toolArgs.title) };
     case CANVAS_TOOL_NAME: {

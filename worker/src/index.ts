@@ -17,6 +17,7 @@ import { BROWSER_TOOL_NAMES } from "./builtin/browser.js";
 import { COMPUTER_TOOL_NAMES } from "./builtin/computer-use/params.js";
 import { VISUAL_TOOL_NAMES } from "./builtin/visual.js";
 import { SUGGEST_TASK_TOOL_NAMES } from "./builtin/suggest-task.js";
+import { COMPARE_IMAGES_TOOL_NAME } from "./builtin/compare-images.js";
 import { CANVAS_TOOL_NAME, CANVAS_TOOL_NAMES } from "./builtin/canvas/index.js";
 import { WEB_SEARCH_TOOL_NAME } from "./builtin/web-search/index.js";
 import { GOAL_VERIFIER_SYSTEM } from "./builtin/goal/prompt.js";
@@ -347,6 +348,7 @@ const builtinHost: BuiltinHost = {
   childToolNames: () =>
     toolCatalog()
       .filter((tool) => !BROWSER_TOOL_NAMES.includes(tool.name as typeof BROWSER_TOOL_NAMES[number]) && !COMPUTER_TOOL_NAMES.includes(tool.name as typeof COMPUTER_TOOL_NAMES[number]) && !VISUAL_TOOL_NAMES.includes(tool.name as typeof VISUAL_TOOL_NAMES[number]) && !SUGGEST_TASK_TOOL_NAMES.includes(tool.name as typeof SUGGEST_TASK_TOOL_NAMES[number]) && !CANVAS_TOOL_NAMES.includes(tool.name as typeof CANVAS_TOOL_NAMES[number]) && (tool.source.kind === "builtin" || SWITCHABLE_BUILTIN_TOOLS.has(tool.name) || tool.name === WEB_SEARCH_TOOL_NAME) && tool.available && !disabledTools.has(tool.name) && !builtins.webSearch.inactiveTools().includes(tool.name))
+      .filter((tool) => tool.name !== COMPARE_IMAGES_TOOL_NAME)
       .map((tool) => tool.name),
   runSubagent: async (request) => {
     if (!subagentRunner) throw new Error("Worker is not initialized");

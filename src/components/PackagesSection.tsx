@@ -34,7 +34,7 @@ interface BuiltinExtension {
   description: string;
   tools: readonly string[];
   icon: IconName;
-  kind?: "subagents" | "auto_titles" | "web_fetch" | "web_search" | "browser" | "computer_use" | "mcp" | "memory" | "show_visual" | "suggest_task" | "canvas";
+  kind?: "subagents" | "auto_titles" | "web_fetch" | "web_search" | "browser" | "computer_use" | "mcp" | "memory" | "show_visual" | "compare_images" | "suggest_task" | "canvas";
 }
 
 /**
@@ -94,6 +94,14 @@ const BUILTIN_EXTENSIONS: readonly BuiltinExtension[] = [
       "Lets the agent include selected screenshots, image files it reads and your attachments alongside its reply in Code and Chat. Click an image to open it full size. The saved images stay with the chat, even when their source files move or disappear.",
     tools: [],
     icon: "image"
+  },
+  {
+    name: "Image comparisons",
+    description:
+      "Lets the agent compare two saved images with a Before / After slider in its answer, in Code and Chat. Drag the divider or expand to zoom and pan both images together. Custom labels work for alternatives too. The images stay with the chat.",
+    tools: ["compare_images"],
+    icon: "split",
+    kind: "compare_images"
   },
   {
     name: "Visual replies",
@@ -247,6 +255,8 @@ interface Props extends PackageActions {
   /** Publishing and preview share the Visual replies switch. */
   visualEnabled?: boolean;
   onToggleVisual?: (enabled: boolean) => Promise<void>;
+  comparisonsEnabled?: boolean;
+  onToggleComparisons?: (enabled: boolean) => Promise<void>;
   /** On unless the canvas tools are in the tool denylist; saved canvases still render when off. */
   canvasEnabled?: boolean;
   onToggleCanvas?: (enabled: boolean) => Promise<void>;
@@ -276,7 +286,7 @@ interface Props extends PackageActions {
 type Tab = "installed" | "browse";
 
 export function PackagesSection({
-  packages, agentName = "WackCode", subagentsEnabled = false, webFetchEnabled = true, webSearchEnabled = false, onConfigureWeb, browserEnabled = true, visualEnabled = true, onToggleVisual, canvasEnabled = true, onToggleCanvas, suggestionsEnabled = true, onToggleSuggestions, computerUseEnabled = false, computerUseSupported = true, memoryEnabled = true,
+  packages, agentName = "WackCode", subagentsEnabled = false, webFetchEnabled = true, webSearchEnabled = false, onConfigureWeb, browserEnabled = true, visualEnabled = true, onToggleVisual, comparisonsEnabled = true, onToggleComparisons, canvasEnabled = true, onToggleCanvas, suggestionsEnabled = true, onToggleSuggestions, computerUseEnabled = false, computerUseSupported = true, memoryEnabled = true,
   autoTitlesEnabled = false, autoTitlesConfigured = false,
   onToggleSubagents, onToggleBrowser, onToggleComputerUse, onConfigureComputerUse, onToggleAutoTitles, onConfigureSubagents, onConfigureAutoTitles, onConfigureMemory, onConfigureMcp,
   onRefresh, onInstall, onTrust, onSearch, onRemove, onUpdate, onSetResources
@@ -333,6 +343,7 @@ export function PackagesSection({
     extension.kind === "subagents" ? subagentsEnabled
     : extension.kind === "browser" ? browserEnabled
     : extension.kind === "show_visual" ? visualEnabled
+    : extension.kind === "compare_images" ? comparisonsEnabled
     : extension.kind === "suggest_task" ? suggestionsEnabled
     : extension.kind === "canvas" ? canvasEnabled
     : extension.kind === "computer_use" ? computerUseEnabled
@@ -461,6 +472,8 @@ export function PackagesSection({
                       ? (enabled) => void run(() => onToggleBrowser(enabled)).catch(() => undefined)
                       : extension.kind === "show_visual" && onToggleVisual
                       ? (enabled) => void run(() => onToggleVisual(enabled)).catch(() => undefined)
+                      : extension.kind === "compare_images" && onToggleComparisons
+                      ? (enabled) => void run(() => onToggleComparisons(enabled)).catch(() => undefined)
                       : extension.kind === "suggest_task" && onToggleSuggestions
                       ? (enabled) => void run(() => onToggleSuggestions(enabled)).catch(() => undefined)
                       : extension.kind === "canvas" && onToggleCanvas

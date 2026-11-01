@@ -17,6 +17,7 @@ import { buildTreeIndex, type EntryLike } from "./tree.js";
 import { MAX_VISUAL_TITLE, SHOW_VISUAL_TOOL_NAME } from "./builtin/visual.js";
 import { CANVAS_TOOL_NAME, MAX_CANVAS_TITLE } from "./builtin/canvas/state.js";
 import { MAX_SUGGESTION_TITLE, SUGGEST_TASK_TOOL_NAME } from "./builtin/suggest-task.js";
+import { COMPARE_IMAGES_TOOL_NAME, normalizeCompareImagesParams } from "./builtin/compare-images.js";
 
 /** What the host knows about the chat, beyond its session file. */
 export interface ChatHistoryMeta {
@@ -116,6 +117,10 @@ function toolCalls(content: unknown): string[] {
     if (!block || typeof block !== "object") return [];
     const value = block as { type?: unknown; name?: unknown; arguments?: unknown };
     if (value.type !== "toolCall" || typeof value.name !== "string") return [];
+    if (value.name === COMPARE_IMAGES_TOOL_NAME) {
+      const parsed = normalizeCompareImagesParams(value.arguments);
+      return [parsed.ok ? `[image comparison: ${parsed.comparison.title}]` : "[image comparison]"];
+    }
     // A visual's HTML is its whole point; the marker names it and leaves the markup out.
     if (value.name === SHOW_VISUAL_TOOL_NAME) {
       const title = (value.arguments as { title?: unknown } | undefined)?.title;

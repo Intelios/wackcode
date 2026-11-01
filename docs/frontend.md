@@ -40,6 +40,21 @@ or `toolImage`. The internal reference is never an image URL the webview loads. 
 the answer when source tool rows fold, and scope updates deliver newly prepared previews to
 memoized replies. Other Markdown surfaces keep images blocked, including child transcripts.
 
+**Image comparisons** (`ImageComparison.tsx`) render successful `compare_images` results in
+both areas, at the call's position, as answer content that stays outside completed-work folds.
+The result's versioned details are authoritative; running, refused and interrupted calls keep
+their ordinary chips. Both sources resolve through `ReplyImageScope`, never through paths.
+Thumbnails appear first; entering view fetches and decodes both saved originals before switching
+them together. A missing original keeps both previews with a quality note; missing or failed
+sources show an unavailable state. Loading callbacks remain stable across registry rebuilds.
+
+The after image supplies the frame's aspect ratio (inline height at most 480 px); both images
+are centered and contained, with a viewport-space clip and a shared camera. The divider starts
+at 50%, captures pointer drags, and supports arrow keys and Home/End. Expand keeps the same
+divider position and opens a focus-trapped, navigation-dismissed dialog with synchronized
+fit/2.5× zoom and bounded pan. Its transforms respect reduced motion. View state is local to the
+accepted call; changing its source pixels retires an open viewer and its cached originals.
+
 **Visual replies** (`VisualCard.tsx`) draw a settled `show_visual` call where it landed: the
 assistant's small HTML answer — a chart, a comparison, a mockup — as a borderless document in the
 conversation. Expand and Copy float over its top-right corner on hover and keyboard focus;

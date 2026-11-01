@@ -442,7 +442,7 @@ export function resolveTheme(input: ThemeInput): ResolvedTheme {
 /**
  * The shell (window background, sidebar, header, side panels) is what turns see-through over an
  * image or Liquid Glass. Content palette values stay solid for bubbles, composer, cards and
- * controls; only visual replies and suggested-task sections blend into the CSS reading lane.
+ * controls; only visual replies blend into the CSS reading lane.
  */
 function shellVariables(backdrop: BackdropMode, solid: Record<string, string>, glassTint: number): Record<string, string> {
   const alpha = (name: string, amount: number) => {

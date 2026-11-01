@@ -4685,22 +4685,6 @@ html[data-force-reduced-motion] *::after {
 .suggestion-sent svg { width: 12px; height: 12px; flex: 0 0 auto; color: var(--wc-accent-text); }
 .suggestion-sent-origin { color: var(--text-faint); }
 
-/* Follow-ups are a small continuation of the answer, with actions beside the brief. */
-.app-shell[data-screen="workspace"] .suggestion-tray { margin-top: 20px; padding: 0; border: 0; border-radius: 0; background: transparent; }
-.app-shell[data-screen="workspace"] .suggestion-tray-head { gap: 8px; padding: 0 0 10px; }
-.app-shell[data-screen="workspace"] .suggestion-tray-mark { width: 18px; height: 22px; background: transparent; box-shadow: none; }
-.app-shell[data-screen="workspace"] .suggestion-tray-mark::after { border: 0; }
-.app-shell[data-screen="workspace"] .suggestion-list { gap: 18px; }
-.app-shell[data-screen="workspace"] .suggestion-item { overflow: visible; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
-.app-shell[data-screen="workspace"] .suggestion-head { padding: 0; gap: 8px; flex-wrap: wrap; }
-.app-shell[data-screen="workspace"] .suggestion-kind { gap: 4px; height: auto; padding: 0; background: transparent; box-shadow: none; }
-.app-shell[data-screen="workspace"] .suggestion-title { flex-basis: 60%; }
-.app-shell[data-screen="workspace"] .suggestion-brief { padding: 4px 0 0; }
-.app-shell[data-screen="workspace"] .suggestion-more { margin-left: 0; }
-.app-shell[data-screen="workspace"] :is(.suggestion-actions, .suggestion-state) { margin-top: 6px; padding: 0; border-top: 0; background: transparent; }
-.app-shell[data-screen="workspace"] .suggestion-actions { gap: 6px; }
-.app-shell[data-screen="workspace"] .suggestion-actions .icon-button { margin-left: 0; }
-.app-shell[data-screen="workspace"] .suggestion-item.dismissed { padding: 3px 0; }
 @media (prefers-reduced-motion: reduce) {
   /* Still end state: the glint never plays, so the mark simply rests lit. */
   .suggestion-tray-mark::after { animation: none; opacity: 0; }

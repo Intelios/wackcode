@@ -127,7 +127,7 @@ export interface SkillPreviewDetails {
   revision: string;
   name: string;
   description: string;
-  /** `disable-model-invocation: true`: only `/skill:name` uses it. */
+  /** `disable-model-invocation: true`: only `/name` (or `/skill:name`) uses it. */
   manual: boolean;
   argumentHint?: string;
   /** Where the skill will be installed: a new folder, or a copy into the shared library. */
@@ -468,7 +468,7 @@ export interface ScannedSkill {
   description: string;
   filePath: string;
   baseDir: string;
-  /** `disable-model-invocation: true`: only `/skill:name` uses it. */
+  /** `disable-model-invocation: true`: only `/name` (or `/skill:name`) uses it. */
   manual: boolean;
   /** The SKILL.md's optional `argument-hint`, shown next to the name while typing. */
   argumentHint?: string;
@@ -616,6 +616,8 @@ export interface SlashCommand {
   sourceLabel: string;
   /** A prompt template's `argument-hint`, shown next to its name. */
   argumentHint?: string;
+  /** Extra names the command answers to (a skill's Pi-native `skill:<name>`); never displayed. */
+  aliases?: string[];
 }
 
 /**

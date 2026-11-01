@@ -416,7 +416,7 @@ describe("Composer slash commands", () => {
   }
 
   it("marks each command by where it comes from and keeps the key hint out of the list's semantics", () => {
-    setup({ commands: [{ ...command, argumentHint: "<name>" }, { id: "skill:pdf", name: "skill:pdf", description: "Read PDFs", source: "skill", sourceLabel: "Your skills" }] });
+    setup({ commands: [{ ...command, argumentHint: "<name>" }, { id: "skill:pdf", name: "pdf", description: "Read PDFs", source: "skill", sourceLabel: "Your skills", aliases: ["skill:pdf"] }] });
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "/", selectionStart: 1 } });
     const options = screen.getAllByRole("option");
     // The mark is decoration: an option still reads as its command, hint, description and source.
@@ -442,6 +442,16 @@ describe("Composer slash commands", () => {
     fireEvent.change(area, { target: { value: "/hello world", selectionStart: 12 } });
     fireEvent.keyDown(area, { key: "Enter" });
     await waitFor(() => expect(onCommand).toHaveBeenCalledWith("hello", "world", []));
+  });
+
+  it("offers a skill by its skill: alias and runs it by its bare name", async () => {
+    const { onCommand } = setup({ commands: [{ id: "skill:pdf", name: "pdf", description: "Read PDFs", source: "skill", sourceLabel: "Your skills", aliases: ["skill:pdf"] }] });
+    const area = screen.getByRole("textbox");
+    fireEvent.change(area, { target: { value: "/skill:pdf", selectionStart: 10 } });
+    expect(screen.getByRole("option", { name: /pdf/ })).toBeInTheDocument();
+    fireEvent.keyDown(area, { key: "Escape" });
+    fireEvent.keyDown(area, { key: "Enter" });
+    await waitFor(() => expect(onCommand).toHaveBeenCalledWith("pdf", "", []));
   });
 
   it("keeps the completed command highlighted while editing and sending multiline arguments", async () => {
@@ -471,7 +481,7 @@ describe("Composer slash commands", () => {
   });
 
   it("highlights only a recognised leading command and updates when its name is edited", () => {
-    setup({ commands: [command, { id: "skill:pdf", name: "skill:pdf", description: "Read PDFs", source: "skill", sourceLabel: "PDF" }] });
+    setup({ commands: [command, { id: "skill:pdf", name: "pdf", description: "Read PDFs", source: "skill", sourceLabel: "PDF", aliases: ["skill:pdf"] }] });
     const area = screen.getByRole("textbox");
     for (const text of ["/he argument", "/unknown argument", "Please /hello", "/hello/file", "https://example.com/hello"]) {
       fireEvent.change(area, { target: { value: text, selectionStart: text.length } });
@@ -612,7 +622,7 @@ describe("Composer slash commands", () => {
     setup({
       commands: [
         { id: "app:compact", name: "compact", description: "Summarize", source: "app", sourceLabel: "WackCode", argumentHint: "[instructions]" },
-        { id: "skill:pdf", name: "skill:pdf", description: "PDF work", source: "skill", sourceLabel: "Your skills", argumentHint: "<files>" }
+        { id: "skill:pdf", name: "pdf", description: "PDF work", source: "skill", sourceLabel: "Your skills", argumentHint: "<files>", aliases: ["skill:pdf"] }
       ]
     });
     const area = screen.getByRole("textbox");

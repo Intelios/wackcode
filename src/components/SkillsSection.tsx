@@ -63,8 +63,8 @@ const MAX_DESCRIPTION_CHARS = 1_024;
 const MAX_HINT_CHARS = 256;
 
 const WHEN_OPTIONS = [
-  { value: "auto", label: "The agent decides", hint: "Listed to the model by its description. /skill:name works too." },
-  { value: "manual", label: "Only when I type /skill:name", hint: "Kept out of the model's list." }
+  { value: "auto", label: "The agent decides", hint: "Listed to the model by its description. /name works too." },
+  { value: "manual", label: "Only when I type /name", hint: "Kept out of the model's list." }
 ];
 
 const SORT_OPTIONS = [
@@ -245,8 +245,8 @@ export function SkillsSection({
         <button type="button" className="skill-row-main" onClick={() => setView({ kind: "detail", skill, origin })}>
           <span className="skill-row-head">
             <span className="skill-name">{skill.name}</span>
-            {skill.argumentHint && <code className="command-hint">/skill:{skill.name} {skill.argumentHint}</code>}
-            {skill.manual && <span className="subagent-badge" title="Kept out of the model's list: runs only when you type /skill:name">/skill only</span>}
+            {skill.argumentHint && <code className="command-hint">/{skill.name} {skill.argumentHint}</code>}
+            {skill.manual && <span className="subagent-badge" title="Kept out of the model's list: runs only when you type /name">/skill only</span>}
             {skill.shadowedBy && <span className="subagent-badge skill-shadowed" title={shadow}>Not loaded</span>}
           </span>
           <span className="skill-description">{skill.description}</span>
@@ -510,7 +510,7 @@ export function SkillsSection({
         >
           <p>
             Instructions the agent loads when a task matches. Only each skill&rsquo;s name and description stay in context; it reads
-            the rest when it needs it. Run one yourself with <code>/skill:name</code>.
+            the rest when it needs it. Run one yourself with <code>/name</code> (or <code>/skill:name</code>).
           </p>
         </SettingsHero>
 
@@ -671,7 +671,7 @@ function SkillDetail({ skill, origin, busy, onRead, onBack, onEdit, onDelete, on
       <div className="skill-detail-head">
         <span className="subagent-setting-name">{skill.name}</span>
         <span className="subagent-badge">{origin}</span>
-        {skill.argumentHint && <code className="command-hint">/skill:{skill.name} {skill.argumentHint}</code>}
+        {skill.argumentHint && <code className="command-hint">/{skill.name} {skill.argumentHint}</code>}
         {skill.manual && <span className="subagent-badge">/skill only</span>}
         {!skill.enabled && <span className="subagent-badge">Off</span>}
       </div>

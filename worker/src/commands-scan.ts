@@ -39,6 +39,10 @@ interface PoolEntry {
   source: SlashCommand["source"];
   sourceLabel: string;
   invocation: string;
+  /** The name it tries to claim, when it differs from `invocation` (a skill's bare name). */
+  candidate?: string;
+  /** Extra names the command answers to; never displayed. */
+  aliases?: string[];
   key: string;
   description?: string;
   argumentHint?: string;
@@ -128,6 +132,8 @@ async function scan(request: CommandScanRequest, agentDir: string): Promise<neve
         source: "skill" as const,
         sourceLabel: skill.sourceInfo.source,
         invocation: `skill:${skill.name}`,
+        candidate: skill.name,
+        aliases: [`skill:${skill.name}`],
         key: commandKey("skill", skill.filePath),
         description: skill.description,
         argumentHint: argumentHint(skill, pi.parseFrontmatter),
@@ -138,7 +144,7 @@ async function scan(request: CommandScanRequest, agentDir: string): Promise<neve
     // Names resolve over the offered set only: a switched-off command frees its name, like a chat.
     const disabled = new Set(request.disabled);
     const offered = pool.filter((entry) => !disabled.has(entry.key));
-    const names = resolveCommandNames(offered.map((entry) => ({ source: entry.source, invocation: entry.invocation })));
+    const names = resolveCommandNames(offered.map((entry) => ({ source: entry.source, invocation: entry.invocation, candidate: entry.candidate })));
     const resolvedName = new Map(offered.map((entry, index) => [entry, names[index]]));
 
     const toScanned = (entry: PoolEntry & { kind: "extension" | "prompt" | "custom" }): ScannedCommand => {
@@ -163,7 +169,8 @@ async function scan(request: CommandScanRequest, agentDir: string): Promise<neve
         ...(entry.description ? { description: entry.description } : {}),
         source: entry.source,
         sourceLabel: entry.sourceLabel,
-        ...(entry.argumentHint ? { argumentHint: entry.argumentHint } : {})
+        ...(entry.argumentHint ? { argumentHint: entry.argumentHint } : {}),
+        ...(entry.aliases ? { aliases: entry.aliases } : {})
       };
     });
 

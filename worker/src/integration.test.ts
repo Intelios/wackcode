@@ -3996,13 +3996,13 @@ describe("session tree", () => {
     expect(tooSmall.error).toContain("not enough conversation");
     const listed = await request(worker, { type: "list_commands" });
     expect(listed.success).toBe(true);
-    const commands = listed.result as unknown as Array<{ id: string; name: string; source: string }>;
+    const commands = listed.result as unknown as Array<{ id: string; name: string; source: string; aliases?: string[] }>;
     expect(commands).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "hello", source: "extension" }),
       expect.objectContaining({ name: "extension:new", source: "extension" }),
       expect.objectContaining({ name: "extension:init", source: "extension" }),
       expect.objectContaining({ name: "prompt:review", source: "prompt" }),
-      expect.objectContaining({ name: "skill:fixture", source: "skill" })
+      expect.objectContaining({ name: "fixture", source: "skill" })
     ]));
     const stale = await request(worker, { type: "execute_command", commandId: "missing", args: "", runId: "stale" });
     expect(stale.success).toBe(false);
@@ -4041,12 +4041,13 @@ describe("session tree", () => {
     expect((await request(worker, { type: "resend", runId: "template-edit", entryId: retriedTemplate!.entryId, message: "Review edited files" })).success).toBe(true);
     await settle(worker, "template-edit");
     expect([...(worker.view?.messages ?? [])].reverse().find((message) => message.role === "user")?.commandPresentation).toBeUndefined();
-    const selectedSkill = commands.find((entry) => entry.name === "skill:fixture")!;
+    const selectedSkill = commands.find((entry) => entry.name === "fixture")!;
+    expect(selectedSkill.aliases).toContain("skill:fixture");
     expect((await request(worker, { type: "execute_command", commandId: selectedSkill.id, args: "details", runId: "skill-1" })).success).toBe(true);
     await settle(worker, "skill-1");
     expect(lastUserText(provider)).toContain("<skill name=\"fixture\"");
     expect([...(worker.view?.messages ?? [])].reverse().find((message) => message.role === "user")?.commandPresentation).toEqual({
-      id: selectedSkill.id, name: "skill:fixture", arguments: "details", kind: "command"
+      id: selectedSkill.id, name: "fixture", arguments: "details", kind: "command"
     });
 
     const sessionFile = worker.view?.sessionFile;
@@ -4056,7 +4057,7 @@ describe("session tree", () => {
     const restored = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "command-task", sessionFile, undefined, resources);
     cleanup.push(() => restored.worker.shutdown());
     expect([...(restored.ready.snapshot?.messages ?? [])].reverse().find((message) => message.role === "user")?.commandPresentation).toEqual({
-      id: selectedSkill.id, name: "skill:fixture", arguments: "details", kind: "command"
+      id: selectedSkill.id, name: "fixture", arguments: "details", kind: "command"
     });
   });
 });
@@ -4116,7 +4117,7 @@ describe("skills (Settings › Skills)", () => {
     );
     cleanup.push(() => worker.shutdown());
 
-    expect(await skills(worker)).toEqual([{ name: "skill:alpha", sourceLabel: "Your skills" }, { name: "skill:beta", sourceLabel: "Claude Code" }]);
+    expect(await skills(worker)).toEqual([{ name: "alpha", sourceLabel: "Your skills" }, { name: "beta", sourceLabel: "Claude Code" }]);
     await run(worker, "run-1");
     const first = systemTextOf(provider, 0);
     expect(first).toContain("MINE-ALPHA-DESCRIPTION");
@@ -4125,14 +4126,14 @@ describe("skills (Settings › Skills)", () => {
 
     // Switching the user's alpha off lets Claude Code's alpha load instead, on the next turn.
     expect((await request(worker, { type: "set_skills", skills: { roots, disabled: [mine] } })).success).toBe(true);
-    expect(await skills(worker)).toEqual([{ name: "skill:alpha", sourceLabel: "Claude Code" }, { name: "skill:beta", sourceLabel: "Claude Code" }]);
+    expect(await skills(worker)).toEqual([{ name: "alpha", sourceLabel: "Claude Code" }, { name: "beta", sourceLabel: "Claude Code" }]);
     await run(worker, "run-2");
     const after = systemTextOf(provider, provider.requests.length - 1);
     expect(after.lastIndexOf("CLAUDE-ALPHA-DESCRIPTION")).toBeGreaterThan(after.lastIndexOf("MINE-ALPHA-DESCRIPTION"));
 
     // Switching Claude Code's folder off takes all of its skills away.
     expect((await request(worker, { type: "set_skills", skills: { roots: roots.slice(0, 1), disabled: [] } })).success).toBe(true);
-    expect(await skills(worker)).toEqual([{ name: "skill:alpha", sourceLabel: "Your skills" }]);
+    expect(await skills(worker)).toEqual([{ name: "alpha", sourceLabel: "Your skills" }]);
   });
 
   it("picks up a skill added on disk at the next run", async () => {
@@ -4152,7 +4153,7 @@ describe("skills (Settings › Skills)", () => {
     await writeSkill(library, "late", "LATE-SKILL-DESCRIPTION");
     await run(worker, "run-2");
     expect(systemTextOf(provider, provider.requests.length - 1)).toContain("LATE-SKILL-DESCRIPTION");
-    expect(await skills(worker)).toEqual([{ name: "skill:late", sourceLabel: "Your skills" }]);
+    expect(await skills(worker)).toEqual([{ name: "late", sourceLabel: "Your skills" }]);
   });
 
   it("never loads a project's own skill folders", async () => {
@@ -4171,7 +4172,7 @@ describe("skills (Settings › Skills)", () => {
       { skills: { roots: [{ path: library, label: "Your skills" }], disabled: [] } }
     );
     cleanup.push(() => worker.shutdown());
-    expect(await skills(worker)).toEqual([{ name: "skill:mine", sourceLabel: "Your skills" }]);
+    expect(await skills(worker)).toEqual([{ name: "mine", sourceLabel: "Your skills" }]);
     await run(worker, "run-1");
     const prompt = systemTextOf(provider, 0);
     expect(prompt).toContain("MINE-DESCRIPTION");
@@ -5656,6 +5657,38 @@ describe("message queueing", () => {
       message.role === "user" && message.blocks.some((block) => block.text?.includes("Brief the diff")));
     expect(delivered?.commandPresentation).toEqual({
       id: `prompt:${prompt}`, name: "brief", arguments: "the diff", kind: "command"
+    });
+  });
+
+  it("expands a queued skill typed by its Pi-native name through the catalog alias", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-queued-skill-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const skill = join(workspace, "skill");
+    await mkdir(skill);
+    await writeFile(join(skill, "SKILL.md"), "---\nname: fixture\ndescription: Fixture skill\n---\nRead the fixture.\n");
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "queued-skill-task", undefined, undefined,
+      { extensions: [], skills: [skill], prompts: [], themes: [] });
+    cleanup.push(() => worker.shutdown());
+    const listId = crypto.randomUUID();
+    worker.send({ id: listId, type: "list_commands" });
+    const listed = await worker.waitFor((output) => output.type === "response" && output.id === listId && output.success === true);
+    const catalog = listed.result as unknown as Array<{ id: string; name: string; source: string; aliases?: string[] }>;
+    const entry = catalog.find((command) => command.source === "skill")!;
+    // The picker shows the bare name; the Pi-native `skill:<name>` stays a typed alias.
+    expect(entry.name).toBe("fixture");
+    expect(entry.aliases).toEqual(["skill:fixture"]);
+
+    const queueId = crypto.randomUUID();
+    worker.send({ id: queueId, type: "queue_message", message: "/skill:fixture some args" });
+    expect((await worker.waitFor((output) => output.type === "response" && output.id === queueId)).success).toBe(true);
+    await worker.waitFor(() => provider.requests.some((request) => request.text.includes("<skill name=\"fixture\"")));
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    const delivered = [...(worker.view?.messages ?? [])].reverse().find((message) =>
+      message.role === "user" && message.blocks.some((block) => block.text?.includes("<skill name=\"fixture\"")));
+    expect(delivered?.commandPresentation).toEqual({
+      id: entry.id, name: "fixture", arguments: "some args", kind: "command"
     });
   });
 

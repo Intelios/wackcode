@@ -84,7 +84,7 @@ export function SkillDraftCard({ details, status, current, owned, busy, saving, 
           <strong className="skill-draft-name">{details.name}</strong>
           <span>Skill draft</span>
         </div>
-        {details.manual && <span className="skill-draft-flag" title="Only loads when you type /skill:name">manual</span>}
+        {details.manual && <span className="skill-draft-flag" title="Only loads when you type /name">manual</span>}
       </div>
       <p className="skill-draft-description">{details.description}</p>
       <div className="skill-draft-meta">

@@ -221,6 +221,8 @@ export interface SlashCommand {
   sourceLabel: string;
   /** What the model can call with arguments: a template's or skill's `argument-hint`, shown next to its name. `<arg>` reads required, `[arg]` optional. */
   argumentHint?: string;
+  /** Extra names the command answers to (a skill's `skill:<name>` form); never displayed. */
+  aliases?: string[];
 }
 
 /**
@@ -608,7 +610,7 @@ export interface SkillEntry {
   description: string;
   filePath: string;
   baseDir: string;
-  /** `disable-model-invocation: true`: only `/skill:name` uses it. */
+  /** `disable-model-invocation: true`: only `/name` (`/skill:name` still works). */
   manual: boolean;
   /** The SKILL.md's optional `argument-hint`, shown next to the name here and in the picker. */
   argumentHint?: string;

@@ -19,21 +19,24 @@ export interface ResolvedCommandName {
 
 /**
  * The `/` picker's renaming: the first entry wins the plain name; a later entry with the same
- * name — or one of WackCode's own — is exposed as `<source>:<name>` (then `:<n>`). Callers pass
+ * name — or one of WackCode's own — is exposed as `<source>:<name>` (then `:<n>`). An entry's
+ * `candidate` is the name it tries to claim, defaulting to `invocation`: skills pass their bare
+ * name, so a skill that loses `/pdf` still falls back to the familiar `skill:pdf`. Callers pass
  * entries in catalog order (extension commands, then prompt templates, then skills), and only
  * the ones actually offered: a switched-off command frees its name.
  */
 export function resolveCommandNames(
-  entries: Array<{ source: string; invocation: string }>,
+  entries: Array<{ source: string; invocation: string; candidate?: string }>,
   taken: Iterable<string> = APP_COMMAND_NAMES
 ): ResolvedCommandName[] {
   const used = new Set(taken);
   return entries.map((entry) => {
-    let name = entry.invocation;
+    const candidate = entry.candidate ?? entry.invocation;
+    let name = candidate;
     let raw: string | undefined;
     if (used.has(name)) {
-      raw = entry.invocation;
-      const base = `${entry.source}:${entry.invocation}`;
+      raw = candidate;
+      const base = `${entry.source}:${candidate}`;
       name = base;
       let suffix = 2;
       while (used.has(name)) name = `${base}:${suffix++}`;

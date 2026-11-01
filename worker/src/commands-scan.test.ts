@@ -76,7 +76,7 @@ describe("commands scan (Settings › Commands)", () => {
     ]));
     expect(result.catalog).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: `extension:${extension}#hello`, name: "hello", source: "extension" }),
-      expect.objectContaining({ id: `skill:${skillFile}`, name: "skill:fixture-skill", source: "skill", sourceLabel: "Your skills", argumentHint: "[context]" })
+      expect.objectContaining({ id: `skill:${skillFile}`, name: "fixture-skill", aliases: ["skill:fixture-skill"], source: "skill", sourceLabel: "Your skills", argumentHint: "[context]" })
     ]));
 
     // A switched-off key frees its name for the command behind it, exactly like a chat.

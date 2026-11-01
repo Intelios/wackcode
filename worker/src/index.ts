@@ -578,7 +578,7 @@ function refreshCommandCatalog(): SlashCommand[] {
   refreshUserCommands();
   const disabled = new Set(userCommandsPayload?.disabled ?? []);
   const customPaths = new Set(userCommands.map((template) => template.filePath));
-  const entries: Array<{ source: SlashCommand["source"]; invocation: string; description?: string; label: string; key: string; templateContent?: string; argumentHint?: string; skillFile?: string; skillBaseDir?: string }> = [
+  const entries: Array<{ source: SlashCommand["source"]; invocation: string; candidate?: string; aliases?: string[]; description?: string; label: string; key: string; templateContent?: string; argumentHint?: string; skillFile?: string; skillBaseDir?: string }> = [
     ...session.extensionRunner.getRegisteredCommands()
       .filter((entry) => !entry.sourceInfo.path.startsWith("<inline:"))
       .map((entry) => ({ source: "extension" as const, invocation: entry.invocationName, description: entry.description, label: entry.sourceInfo.source, key: commandKey("extension", entry.sourceInfo.path, entry.name) })),
@@ -587,14 +587,14 @@ function refreshCommandCatalog(): SlashCommand[] {
       const kind = custom ? "custom" as const : "prompt" as const;
       return { source: kind, invocation: entry.name, description: entry.description, label: entry.sourceInfo.source, key: commandKey(kind, entry.filePath), templateContent: entry.content, argumentHint: entry.argumentHint };
     }),
-    ...session.resourceLoader.getSkills().skills.map((entry) => ({ source: "skill" as const, invocation: `skill:${entry.name}`, description: entry.description, label: entry.sourceInfo.source, key: commandKey("skill", entry.filePath), argumentHint: piModule ? argumentHint(entry, piModule.parseFrontmatter) : undefined, skillFile: entry.filePath, skillBaseDir: entry.baseDir }))
+    ...session.resourceLoader.getSkills().skills.map((entry) => ({ source: "skill" as const, invocation: `skill:${entry.name}`, candidate: entry.name, aliases: [`skill:${entry.name}`], description: entry.description, label: entry.sourceInfo.source, key: commandKey("skill", entry.filePath), argumentHint: piModule ? argumentHint(entry, piModule.parseFrontmatter) : undefined, skillFile: entry.filePath, skillBaseDir: entry.baseDir }))
   ];
   // Switched-off commands are dropped before names resolve, so an enabled command can claim
   // the freed name — the same way a switched-off skill lets the next one load.
   const active = entries.filter((entry) => !disabled.has(entry.key));
   const names = resolveCommandNames(active);
   commandCatalog = active.map((entry, index) => ({
-    item: { id: entry.key, name: names[index].name, description: entry.description, source: entry.source, sourceLabel: entry.label, ...(entry.argumentHint ? { argumentHint: entry.argumentHint } : {}) },
+    item: { id: entry.key, name: names[index].name, description: entry.description, source: entry.source, sourceLabel: entry.label, ...(entry.argumentHint ? { argumentHint: entry.argumentHint } : {}), ...(entry.aliases ? { aliases: entry.aliases } : {}) },
     invocation: entry.invocation,
     templateContent: entry.templateContent,
     skillFile: entry.skillFile,
@@ -623,7 +623,11 @@ async function expandCatalogCommand(entry: CommandCatalogEntry, args: string): P
 async function queuedCommandPresentation(input: string): Promise<{ text: string; presentation: CommandPresentation } | undefined> {
   const match = /^\/([^\s]+)(?:\s+([\s\S]*))?$/.exec(input);
   if (!match) return undefined;
-  const entry = commandCatalog.find((candidate) => candidate.item.name === match[1]);
+  const name = match[1];
+  // A name match wins over an alias, so an extension literally named `skill:x` is never shadowed
+  // by a skill's alias (catalog order puts it first anyway).
+  const entry = commandCatalog.find((candidate) => candidate.item.name === name)
+    ?? commandCatalog.find((candidate) => candidate.item.aliases?.includes(name));
   if (!entry || (entry.item.source !== "prompt" && entry.item.source !== "custom" && entry.item.source !== "skill")) return undefined;
   const args = match[2] ?? "";
   return { text: await expandCatalogCommand(entry, args), presentation: commandPresentation(entry, args) };

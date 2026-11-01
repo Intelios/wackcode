@@ -395,7 +395,7 @@ pub struct SkillEntry {
     pub description: String,
     pub file_path: String,
     pub base_dir: String,
-    /// `disable-model-invocation: true`: only `/skill:name` uses it.
+    /// `disable-model-invocation: true`: only `/name` (`/skill:name` still works).
     pub manual: bool,
     /// The SKILL.md's optional `argument-hint`, shown next to the name in Settings and the picker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1502,6 +1502,9 @@ pub struct SlashCommand {
     /// What the model can call: a prompt template's `argument-hint` or a skill's, shown next to the name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub argument_hint: Option<String>,
+    /// Extra names the command answers to (a skill's `skill:<name>`); never displayed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

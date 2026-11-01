@@ -20,7 +20,7 @@ import { BROWSER_TOOL_NAMES, callArguments, displayAgentName, hasSubagentCall, p
 import { LinkOpenerContext, openExternally, type LinkOpener } from "./link-opener";
 import { BUILD_VIEW, CHANGES_VIEW, GAMES_VIEW, NO_PANEL_TABS, TERMINAL_VIEW, RUN_VIEW, canExpand, closeTab as closePanelTab, forChat, hidePanel, isTaskBound, openTab, restoreTabs, showPanel, shownTab, storedTabs, swapKey, toggleTab, updateTab, viewKey, type PanelTabs, type SidePanelView } from "./side-panel";
 import { applyRunEvent, EMPTY_RUN_REGISTRY, runIsActive, runKey } from "./run-state";
-import { APP_SLASH_COMMANDS, appCommandsFor } from "./command-utils";
+import { APP_SLASH_COMMANDS, appCommandsFor, commandMatchesName } from "./command-utils";
 import { AREA_KEY, areaDirection, parseArea, taskArea, tasksInArea, type Area } from "./areas";
 import { performChatNavigation, withoutResolvedDialog } from "./menu-navigation";
 import { useComposerDrafts } from "./hooks/useComposerDrafts";
@@ -1805,7 +1805,7 @@ export default function App() {
   async function sendSlash(name: string, args: string, images: ImageContent[]): Promise<boolean> {
     // Capture the taskless entry before prepareSlashDraft switches the view to the new chat.
     const draftCommand = !selectedTask && draftSlash?.projectId === (draft?.projectId ?? null)
-      ? draftSlash.commands?.find((entry) => entry.name === name)
+      ? draftSlash.commands?.find((entry) => commandMatchesName(entry, name))
       : undefined;
     // `/goal pause|resume|clear` drive a live loop, so they are the one app command that is
     // allowed through while the chat is busy — the Composer mirrors this gate.
@@ -1868,10 +1868,10 @@ export default function App() {
       else if (name === "canvas") await api.startCanvas(id, args, startedAt);
       else if (name === "goal") await api.goalControl(id, "set", args.trim(), startedAt);
       else {
-        const command = runtime?.slashCommands?.find((entry) => entry.name === name) ?? draftCommand;
+        const command = runtime?.slashCommands?.find((entry) => commandMatchesName(entry, name)) ?? draftCommand;
         if (!command) throw new Error("That command changed. Open the command list and try again.");
         // The display name gives a command-opened chat its "/name args" stand-in title.
-        await api.executeCommand({ taskId: id, commandId: command.id, args, startedAt, images, name });
+        await api.executeCommand({ taskId: id, commandId: command.id, args, startedAt, images, name: command.name });
       }
       rememberModel(task);
       return true;

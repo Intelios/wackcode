@@ -8,7 +8,7 @@ import type { ComposerStyle, ExecutionPolicyConfig, ImageContent, ProviderRecord
 import { attachmentProblem, attachFiles, filesFrom, largePasteText, pastedTextFile, splitFileSection, type FileAttachment } from "../attachment-utils";
 import { activeMention, mentionValue, type ChatMentionSuggestion, type MentionSuggestion } from "../mention-utils";
 import { chatMentionToken, encodeChatRefs, rankSuggestions, survivingChatRefs } from "../chat-refs";
-import { activeSlashCommand } from "../command-utils";
+import { activeSlashCommand, commandMatchesName } from "../command-utils";
 import { EMPTY_DRAFT, type ComposerDraft, type ComposerDraftState } from "../hooks/useComposerDrafts";
 import { Icon, type IconName } from "./Icons";
 import { ContextPanel } from "./ContextPanel";
@@ -186,17 +186,19 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
   const commandToken = draft.startsWith("/") ? draft.slice(1, commandEnd) : "";
   const composerText = frozen ?? draft;
   const leadingCommand = /^(\s*)\/([^\s]+)/.exec(composerText);
-  const highlightedCommand = leadingCommand && commands.some((command) => command.name === leadingCommand[2])
+  const highlightedCommand = leadingCommand && commands.some((command) => commandMatchesName(command, leadingCommand[2]))
     ? leadingCommand : null;
   const slash = activeSlashCommand(draft, caret);
-  const suggestions = commands.filter((command) => command.name.toLowerCase().includes(slash?.query.toLowerCase() ?? ""));
+  const slashQuery = (slash?.query ?? "").toLowerCase();
+  const suggestions = commands.filter((command) => command.name.toLowerCase().includes(slashQuery)
+    || command.aliases?.some((alias) => alias.toLowerCase().includes(slashQuery)));
   const showCommands = slash !== null && slash.start !== slashDismissedAt && !disabled && frozen === undefined;
   // Once a command with a hint is selected but before any argument is typed, surface it inline.
   // `insertCommand` leaves the caret after the trailing space, so this keys off the draft being
   // a bare command token — not where the caret sits.
   const bareCommand = draft.startsWith("/") && !draft.slice(commandEnd).trim();
   const argNote = !showCommands && frozen === undefined && !disabled && bareCommand
-    ? argHintNote(commands.find((command) => command.name === commandToken))
+    ? argHintNote(commands.find((command) => commandMatchesName(command, commandToken)))
     : undefined;
   const mention = onRequestMentions && !showCommands && !disabled && frozen === undefined ? activeMention(draft, caret) : null;
   const showMentions = mention !== null && mention.start !== mentionDismissedAt;
@@ -341,7 +343,8 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
       // Pi is working: queue instead of sending. Slash commands that act on the app itself
       // cannot queue (they are not messages); skills, templates and unknown text can — Pi
       // expands the first two and refuses extension commands.
-      const appCommand = message.startsWith("/") && commands.some((command) => command.name === /^\/([^\s]+)/.exec(message)?.[1] && command.source === "app");
+      const appCommand = message.startsWith("/") && commands.some((command) =>
+        command.source === "app" && commandMatchesName(command, /^\/([^\s]+)/.exec(message)?.[1] ?? ""));
       if (appCommand) {
         // `/goal pause|resume|clear` are the exception: they drive a live loop, so they
         // dispatch exactly like an idle-time command (App's sendSlash gates the same way).
@@ -371,19 +374,19 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
       const args = match?.[2] ?? "";
       // Every command `/` may offer is in `commands` — WackCode's own filtered by Settings, so a
       // switched-off `/copy` reads as unknown like any other name.
-      const known = commands.some((command) => command.name === name);
+      const known = commands.some((command) => commandMatchesName(command, name));
       if (!known) {
         setSlashNotice(`Unknown command /${name}. You can send it as a message.`);
         setSlashDismissedAt(slash?.start);
         return;
       }
-      const selected = commands.find((command) => command.name === name);
+      const selected = commands.find((command) => commandMatchesName(command, name));
       if (images.length && (!selected || selected.source === "extension" || selected.source === "app")) {
         setSlashNotice("Remove images before running this command.");
         return;
       }
       try {
-        const ok = await onCommand(name, args, images);
+        const ok = await onCommand(selected?.name ?? name, args, images);
         if (ok) updateDraft((current) => current === value ? EMPTY_DRAFT : current);
         if (activeDraftKey.current === draftKey) {
           if (ok) { setSlashNotice(undefined); setSlashDismissedAt(slash?.start); }

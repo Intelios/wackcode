@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activeSlashCommand, APP_SLASH_COMMANDS, appCommandsFor, expandCommandPreview, validateCommandBody, validateCommandName } from "./command-utils";
+import { activeSlashCommand, APP_SLASH_COMMANDS, appCommandsFor, commandMatchesName, expandCommandPreview, validateCommandBody, validateCommandName } from "./command-utils";
 
 describe("activeSlashCommand", () => {
   it("finds commands at the caret after prose and on later lines", () => {
@@ -19,6 +19,16 @@ describe("activeSlashCommand", () => {
       expect(activeSlashCommand(text, text.length)).toBeNull();
     }
     expect(activeSlashCommand("See /tmp/hello", 8)).toBeNull();
+  });
+});
+
+describe("commandMatchesName", () => {
+  const command = { id: "skill:pdf", name: "pdf", source: "skill" as const, sourceLabel: "Your skills", aliases: ["skill:pdf"] };
+
+  it("matches the resolved name and its aliases, and nothing else", () => {
+    expect(commandMatchesName(command, "pdf")).toBe(true);
+    expect(commandMatchesName(command, "skill:pdf")).toBe(true);
+    expect(commandMatchesName(command, "skill:docx")).toBe(false);
   });
 });
 

@@ -13,6 +13,11 @@ export function activeSlashCommand(text: string, caret: number): { start: number
   return { start, end, query: text.slice(start + 1, caret) };
 }
 
+/** A command answers to its resolved name or one of its aliases (a skill's `skill:<name>`). */
+export function commandMatchesName(command: SlashCommand, name: string): boolean {
+  return command.name === name || command.aliases?.includes(name) === true;
+}
+
 /**
  * WackCode's own slash commands, run by the app itself rather than a worker. The Settings
  * "WackCode" group renders this same list, so the two always agree. The picker's resolved

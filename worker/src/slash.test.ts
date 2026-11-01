@@ -14,6 +14,22 @@ describe("resolveCommandNames", () => {
     expect(resolveCommandNames([{ source: "extension", invocation: "new" }])[0].name).toBe("extension:new");
     expect(resolveCommandNames([{ source: "extension", invocation: "goal" }])[0].name).toBe("extension:goal");
   });
+
+  it("displays a skill by its candidate name and falls back to <source>:<candidate>", () => {
+    expect(resolveCommandNames([{ source: "skill", invocation: "skill:pdf", candidate: "pdf" }]))
+      .toEqual([{ name: "pdf" }]);
+    expect(resolveCommandNames([
+      { source: "extension", invocation: "pdf" },
+      { source: "skill", invocation: "skill:pdf", candidate: "pdf" }
+    ])[1]).toEqual({ name: "skill:pdf", raw: "pdf" });
+    expect(resolveCommandNames([
+      { source: "extension", invocation: "pdf" },
+      { source: "extension", invocation: "skill:pdf" },
+      { source: "skill", invocation: "skill:pdf", candidate: "pdf" }
+    ])[2]).toEqual({ name: "skill:pdf:2", raw: "pdf" });
+    expect(resolveCommandNames([{ source: "skill", invocation: "skill:copy", candidate: "copy" }])[0])
+      .toEqual({ name: "skill:copy", raw: "copy" });
+  });
 });
 
 describe("resolveInvocationNames", () => {

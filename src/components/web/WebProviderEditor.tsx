@@ -20,6 +20,8 @@ export interface WebEditorActions {
   onTest: (input: { id?: string; draft?: SaveSearchProviderInput; query: string }) => Promise<WebTestResult>;
   /** Opens a Test search result outside the app. */
   onOpenLink: (url: string) => void;
+  /** The provider's own saved key, fetched only when the user asks to see it. */
+  onRevealKey: (providerId: string) => Promise<string>;
 }
 
 interface Props extends WebEditorActions {
@@ -52,7 +54,7 @@ type TestState = { status: "idle" } | { status: "running" } | { status: "done"; 
  * mapping, prices for the usage estimate, and a Test search that runs the form as it stands.
  * Saved from a bar that appears only while there is something to save.
  */
-export function WebProviderEditor({ record, initialDraft, providers, knownIds, active, onBack, onChanged, onSave, onDelete, onTest, onOpenLink }: Props) {
+export function WebProviderEditor({ record, initialDraft, providers, knownIds, active, onBack, onChanged, onSave, onDelete, onTest, onOpenLink, onRevealKey }: Props) {
   const reduce = useReducedMotion();
   const seed = record ? draftFromRecord(record) : initialDraft;
   const [draft, setDraft] = useState<SaveSearchProviderInput>(seed);
@@ -62,6 +64,11 @@ export function WebProviderEditor({ record, initialDraft, providers, knownIds, a
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [query, setQuery] = useState(DEFAULT_TEST_QUERY);
   const [test, setTest] = useState<TestState>({ status: "idle" });
+  // The saved key, fetched on demand: shown in the field while set, never part of the draft.
+  const [savedKey, setSavedKey] = useState<string>();
+  const [keyBusy, setKeyBusy] = useState(false);
+  // Whether a typed-in key shows itself; the fetched one always does.
+  const [peek, setPeek] = useState(false);
 
   const preset = presetFor(draft.kind);
   const isNew = !record;
@@ -110,6 +117,8 @@ export function WebProviderEditor({ record, initialDraft, providers, knownIds, a
       const config = await onSave(input);
       const saved = record?.id ?? config.providers.find((entry) => !knownIds.includes(entry.id))?.id;
       setDraft((current) => ({ ...current, apiKey: "" }));
+      setSavedKey(undefined);
+      setPeek(false);
       setNotice(draft.keySource.type === "own" && draft.apiKey?.trim() ? "Saved. The key is stored on this Mac." : "Saved.");
       onChanged(config, saved);
     } catch (reason) {
@@ -129,7 +138,31 @@ export function WebProviderEditor({ record, initialDraft, providers, knownIds, a
     }
   }
 
+  /** The eye at the key field: masks a typed key again, hides a revealed one, or fetches the saved key. */
+  async function toggleKey() {
+    if (draft.apiKey) {
+      setPeek((value) => !value);
+      return;
+    }
+    if (savedKey !== undefined) {
+      setSavedKey(undefined);
+      return;
+    }
+    if (!record) return;
+    setKeyBusy(true);
+    setError(undefined);
+    try {
+      setSavedKey(await onRevealKey(record.id));
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setKeyBusy(false);
+    }
+  }
+
   const showBar = dirty || Boolean(error) || Boolean(notice);
+  // The eye shows only when this provider has its own saved key, or something is typed.
+  const keyShown = Boolean((record?.keySource.type === "own" && record.hasKey) || draft.apiKey || savedKey !== undefined);
 
   return (
     <>
@@ -212,13 +245,33 @@ export function WebProviderEditor({ record, initialDraft, providers, knownIds, a
                       <div className="input-with-icon">
                         <Icon name="key" />
                         <input
-                          type="password"
+                          type={savedKey !== undefined || peek ? "text" : "password"}
+                          className={keyShown ? "has-reveal" : undefined}
                           autoComplete="off"
                           aria-label="API key"
-                          value={draft.apiKey ?? ""}
-                          onChange={(event) => edit({ apiKey: event.target.value })}
+                          spellCheck={false}
+                          value={draft.apiKey ? draft.apiKey : (savedKey ?? "")}
+                          onChange={(event) => {
+                            // Editing a revealed key turns it into a (still visible) replacement.
+                            if (savedKey !== undefined) {
+                              setSavedKey(undefined);
+                              setPeek(true);
+                            }
+                            edit({ apiKey: event.target.value });
+                          }}
                           placeholder={record?.keySource.type === "own" && record.hasKey ? "••••••••••••••••" : "Paste the API key"}
                         />
+                        {keyShown && (
+                          <button
+                            type="button"
+                            className="ghost-button input-reveal"
+                            aria-label={savedKey !== undefined ? "Hide saved API key" : draft.apiKey ? (peek ? "Hide API key" : "Show API key") : "Show saved API key"}
+                            disabled={keyBusy}
+                            onClick={() => void toggleKey()}
+                          >
+                            <Icon name={savedKey !== undefined || peek ? "eyeOff" : "eye"} />
+                          </button>
+                        )}
                       </div>
                       <small className="web-field-hint">
                         {record?.keySource.type === "own" && record.hasKey ? "Leave blank to keep the saved key. " : ""}
@@ -338,7 +391,7 @@ export function WebProviderEditor({ record, initialDraft, providers, knownIds, a
             </div>
             {dirty && (
               <>
-                <button type="button" className="secondary-button" disabled={busy} onClick={isNew ? onBack : () => { setDraft(seed); setError(undefined); }}>
+                <button type="button" className="secondary-button" disabled={busy} onClick={isNew ? onBack : () => { setDraft(seed); setError(undefined); setSavedKey(undefined); setPeek(false); }}>
                   {isNew ? "Cancel" : "Discard"}
                 </button>
                 <button type="button" className="primary-button" disabled={busy || !complete} onClick={() => void save()}>

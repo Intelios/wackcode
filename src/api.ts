@@ -88,6 +88,8 @@ export const api = {
   developerResetData: () => invoke<void>("developer_reset_data"),
   takeMenuNavigation: () => invoke<string | null>("take_menu_navigation"),
   saveProvider: (input: SaveProviderInput) => invoke<ProviderRecord>("save_provider", { input }),
+  /** A connection's saved API key, fetched only when Settings asks to show it. */
+  revealProviderKey: (providerId: string) => invoke<string>("reveal_provider_key", { providerId }),
   setProviderEnabled: (providerId: string, enabled: boolean) => invoke<ProviderRecord>("set_provider_enabled", { providerId, enabled }),
   setModelFavorite: (reference: ModelRef, favorite: boolean) => invoke<ModelRef[]>("set_model_favorite", { ...reference, favorite }),
   deleteProvider: (providerId: string) => invoke<void>("delete_provider", { providerId }),
@@ -169,6 +171,8 @@ export const api = {
   saveSearchProvider: (input: import("./types").SaveSearchProviderInput) =>
     invoke<import("./types").WebConfig>("save_search_provider", { input }),
   deleteSearchProvider: (providerId: string) => invoke<import("./types").WebConfig>("delete_search_provider", { providerId }),
+  /** A search provider's own saved key, fetched only when Settings asks to show it. */
+  revealSearchKey: (providerId: string) => invoke<string>("reveal_search_key", { providerId }),
   setActiveSearchProvider: (providerId: string | null) =>
     invoke<import("./types").WebConfig>("set_active_search_provider", { providerId }),
   setWebConfig: (input: { enabled: boolean; routeFetch: boolean }) => invoke<import("./types").WebConfig>("set_web_config", { input }),

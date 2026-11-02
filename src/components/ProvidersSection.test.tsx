@@ -23,11 +23,12 @@ const signedOut: ProviderRecord = {
 };
 
 /** ProvidersSection with the navigation SettingsPage gives it. */
-function Harness({ providers, start, onSave, onDiscover }: {
+function Harness({ providers, start, onSave, onDiscover, onRevealKey }: {
   providers: ProviderRecord[];
   start?: string;
   onSave: (input: SaveProviderInput) => Promise<ProviderRecord>;
   onDiscover: (id: string) => Promise<string[]>;
+  onRevealKey: (id: string) => Promise<string>;
 }) {
   const [selected, setSelected] = useState(start);
   const [editor, setEditor] = useState(0);
@@ -54,6 +55,7 @@ function Harness({ providers, start, onSave, onDiscover }: {
       onConnectSubscription={vi.fn()}
       onSignOutSubscription={vi.fn()}
       onDiscover={onDiscover}
+      onRevealKey={onRevealKey}
       onOpenAuthUrl={vi.fn()}
     />
   );
@@ -62,8 +64,9 @@ function Harness({ providers, start, onSave, onDiscover }: {
 function renderProviders(providers: ProviderRecord[] = [gateway, signedOut], start?: string, discovered: string[] = []) {
   const onSave = vi.fn().mockImplementation(async (input: SaveProviderInput) => ({ ...gateway, ...input, id: input.id ?? "p-new", apiKey: undefined }));
   const onDiscover = vi.fn().mockResolvedValue(discovered);
-  render(<Harness providers={providers} start={start} onSave={onSave} onDiscover={onDiscover} />);
-  return { onSave, onDiscover };
+  const onRevealKey = vi.fn().mockResolvedValue("sk-saved-123");
+  render(<Harness providers={providers} start={start} onSave={onSave} onDiscover={onDiscover} onRevealKey={onRevealKey} />);
+  return { onSave, onDiscover, onRevealKey };
 }
 
 describe("Settings › Providers", () => {
@@ -190,6 +193,28 @@ describe("Settings › Providers", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create connection" }));
     await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ name: "Local", baseUrl: "http://127.0.0.1:8080/v1" })));
     expect(onSave.mock.calls[0][0].id).toBeUndefined();
+  });
+
+  it("shows the saved API key on request, and turns editing it into a replacement", async () => {
+    const { onSave, onRevealKey } = renderProviders(undefined, "p1");
+    const field = screen.getByLabelText(/API key/, { selector: "input" });
+    expect(field).toHaveValue("");
+    fireEvent.click(screen.getByRole("button", { name: "Show saved API key" }));
+    await waitFor(() => expect(onRevealKey).toHaveBeenCalledWith("p1"));
+    expect(field).toHaveValue("sk-saved-123");
+    // A revealed key is just displayed: nothing to save until it (or another field) is edited.
+    expect(screen.queryByText(/Unsaved changes/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide saved API key" }));
+    expect(field).toHaveValue("");
+
+    fireEvent.click(screen.getByRole("button", { name: "Show saved API key" }));
+    await screen.findByDisplayValue("sk-saved-123");
+    fireEvent.change(field, { target: { value: "sk-edited" } });
+    expect(screen.getByText(/Unsaved changes/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Hide API key" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save connection" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ apiKey: "sk-edited" })));
   });
 
   it("shows a subscription's sign-in and models on its own page", () => {

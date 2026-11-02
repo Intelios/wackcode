@@ -1,7 +1,7 @@
 import type { SVGProps } from "react";
 import { quillIconPaths } from "./QuillMark";
 
-export type IconName = "markupArrow" | "markupBox" | "markupText" | "redo" | "star" | "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "sidebar" | "browser" | "expand" | "collapse" | "copy" | "archive" | "unarchive" | "send" | "shuffle" | "stop" | "chevron" | "back" | "key" | "trash" | "spark" | "branch" | "more" | "check" | "checklist" | "terminal" | "file" | "paperclip" | "pencil" | "quill" | "external" | "brain" | "hammer" | "search" | "wrench" | "question" | "image" | "close" | "rewind" | "agents" | "flame" | "palette" | "plug" | "book" | "comment" | "commit" | "push" | "pullRequest" | "slash" | "erase" | "cursor" | "memory" | "accessibility" | "viewfinder" | "lock" | "dock" | "clock" | "pull" | "fetch" | "pin" | "split" | "unified" | "undo" | "code" | "filePlus" | "textSearch" | "globe" | "play" | "gamepad" | "link" | "help" | "alert" | "visual" | "bulb" | "canvas" | "pointer" | "hand" | "download" | "present" | "minus" | "fitPanel" | "desktop" | "laptop" | "tablet" | "phone";
+export type IconName = "markupArrow" | "markupBox" | "markupText" | "redo" | "star" | "plus" | "settings" | "folder" | "git" | "refresh" | "panel" | "sidebar" | "browser" | "expand" | "collapse" | "copy" | "archive" | "unarchive" | "send" | "shuffle" | "stop" | "chevron" | "back" | "key" | "eye" | "eyeOff" | "trash" | "spark" | "branch" | "more" | "check" | "checklist" | "terminal" | "file" | "paperclip" | "pencil" | "quill" | "external" | "brain" | "hammer" | "search" | "wrench" | "question" | "image" | "close" | "rewind" | "agents" | "flame" | "palette" | "plug" | "book" | "comment" | "commit" | "push" | "pullRequest" | "slash" | "erase" | "cursor" | "memory" | "accessibility" | "viewfinder" | "lock" | "dock" | "clock" | "pull" | "fetch" | "pin" | "split" | "unified" | "undo" | "code" | "filePlus" | "textSearch" | "globe" | "play" | "gamepad" | "link" | "help" | "alert" | "visual" | "bulb" | "canvas" | "pointer" | "hand" | "download" | "present" | "minus" | "fitPanel" | "desktop" | "laptop" | "tablet" | "phone";
 
 const paths: Record<IconName, React.ReactNode> = {
   markupArrow: <path d="M5 19 19 5M8 5h11v11" />,
@@ -46,6 +46,9 @@ const paths: Record<IconName, React.ReactNode> = {
   chevron: <path d="m9 18 6-6-6-6" />,
   back: <path d="m15 18-6-6 6-6" />,
   key: <><circle cx="8" cy="15" r="4" /><path d="m11 12 9-9M15 8l3 3M17 6l2 2" /></>,
+  // Show / hide a saved secret: the eye that's open, and the one struck through.
+  eye: <><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="2.8" /></>,
+  eyeOff: <><path d="M4 4l16 16" /><path d="M10.6 6c.5-.1.9-.1 1.4-.1 6 0 9.5 6.1 9.5 6.1a17.2 17.2 0 0 1-2.9 3.6M6.7 7.9A16.6 16.6 0 0 0 2.5 12s3.5 6.1 9.5 6.1c1.5 0 2.8-.4 3.9-.9" /><path d="M9.9 9.9a2.8 2.8 0 0 0 4 4" /></>,
   trash: <><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13" /></>,
   spark: <><path d="m12 3 1.2 4.8L18 9l-4.8 1.2L12 15l-1.2-4.8L6 9l4.8-1.2z" /><path d="m18 15 .7 2.3L21 18l-2.3.7L18 21l-.7-2.3L15 18l2.3-.7z" /></>,
   branch: <><circle cx="7" cy="5" r="2" /><circle cx="7" cy="19" r="2" /><circle cx="17" cy="8" r="2" /><path d="M7 7v10M9 15c4 0 6-2 6-5" /></>,

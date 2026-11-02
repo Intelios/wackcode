@@ -32,6 +32,7 @@ function renderSection(config: WebConfig, overrides: Partial<Parameters<typeof W
     onUsage: vi.fn().mockResolvedValue({ month: "2026-10", providers: [{ id: "s1", searches: 142, fetches: 3, billedSearches: 140, billedFetches: 3, failed: 2 }] }),
     onResetUsage: vi.fn().mockResolvedValue({ month: "2026-10", providers: [] }),
     onOpenLink: vi.fn(),
+    onRevealKey: vi.fn().mockResolvedValue("brave-key-1"),
     ...overrides,
   };
   render(<WebSection {...props} />);
@@ -115,6 +116,18 @@ describe("Settings › Web", () => {
     fireEvent.click(screen.getByRole("button", { name: "Test search" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("DeepSeek rejected the API key.");
     expect(props.onTest).toHaveBeenCalledWith(expect.objectContaining({ draft: expect.objectContaining({ apiKey: "sk-test", keySource: { type: "own" } }) }));
+  });
+
+  it("reveals a provider's own saved key in the editor", async () => {
+    const props = renderSection({ enabled: true, providers: [brave], activeProviderId: "s2", routeFetch: false });
+    fireEvent.click(within(screen.getByRole("list", { name: "Search providers" })).getByRole("button", { name: /^Brave Search/ }));
+    const field = screen.getByLabelText("API key");
+    expect(field).toHaveValue("");
+    fireEvent.click(screen.getByRole("button", { name: "Show saved API key" }));
+    await waitFor(() => expect(props.onRevealKey).toHaveBeenCalledWith("s2"));
+    expect(field).toHaveValue("brave-key-1");
+    fireEvent.click(screen.getByRole("button", { name: "Hide saved API key" }));
+    expect(field).toHaveValue("");
   });
 
   it("deletes a provider only after a danger confirmation", async () => {

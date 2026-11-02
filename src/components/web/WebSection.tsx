@@ -19,6 +19,8 @@ export interface WebActions {
   onUsage: () => Promise<WebUsageSummary>;
   onResetUsage: (providerId?: string) => Promise<WebUsageSummary>;
   onOpenLink: (url: string) => void;
+  /** A provider's own saved key, fetched only when the user asks to see it. */
+  onRevealKey: (providerId: string) => Promise<string>;
 }
 
 interface Props extends WebActions {
@@ -50,7 +52,7 @@ function Switch({ on, label, disabled, title, onToggle }: { on: boolean; label: 
  */
 export function WebSection({
   config, providers, agentName, webFetchEnabled, onToggleWebFetch, onChanged,
-  onSave, onDelete, onSetActive, onSetConfig, onTest, onUsage, onResetUsage, onOpenLink
+  onSave, onDelete, onSetActive, onSetConfig, onTest, onUsage, onResetUsage, onOpenLink, onRevealKey
 }: Props) {
   const reduce = useReducedMotion();
   const [chosenView, setView] = useState<View>({ kind: "overview" });
@@ -105,6 +107,7 @@ export function WebSection({
         onDelete={onDelete}
         onTest={onTest}
         onOpenLink={onOpenLink}
+        onRevealKey={onRevealKey}
       />
     );
   }

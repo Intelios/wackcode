@@ -1218,6 +1218,37 @@ pub async fn delete_search_provider(app: AppHandle, state: State<'_, MetadataSta
     current_config(&state)
 }
 
+/// A search provider's own saved key, for the reveal button in Settings › Web. Like
+/// `commands::provider_api_key`, the one deliberate path a credential takes to the renderer:
+/// only a key this provider owns — a borrowed one stays where it is, in Settings › Providers.
+pub fn search_api_key(state: &MetadataState, provider_id: &str) -> Result<String, String> {
+    let record = state
+        .data
+        .lock()
+        .map_err(|_| "Metadata lock was poisoned".to_string())?
+        .web
+        .providers
+        .iter()
+        .find(|record| record.id == provider_id)
+        .cloned()
+        .ok_or_else(|| "That search provider no longer exists.".to_string())?;
+    match record.key_source {
+        SearchKeySource::Own => state
+            .secrets
+            .get_optional(&secret_id(&record.id))?
+            .ok_or_else(|| format!("Paste an API key for {} first.", record.name)),
+        SearchKeySource::Connection { .. } => {
+            Err("This provider borrows a connection's key. Show it from Settings › Providers.".into())
+        }
+        SearchKeySource::None => Err("This provider has no API key.".into()),
+    }
+}
+
+#[tauri::command]
+pub fn reveal_search_key(state: State<'_, MetadataState>, provider_id: String) -> Result<String, String> {
+    search_api_key(&state, &provider_id)
+}
+
 #[tauri::command]
 pub async fn set_active_search_provider(app: AppHandle, state: State<'_, MetadataState>, provider_id: Option<String>) -> Result<WebConfig, String> {
     state.mutate(|data| {
@@ -1600,6 +1631,34 @@ mod tests {
         let mut searxng = record(SearchProviderKind::Searxng);
         searxng.key_source = SearchKeySource::None;
         assert_eq!(resolve_key(&searxng, &[], &secrets).unwrap(), None);
+    }
+
+    #[test]
+    fn reveal_returns_only_a_providers_own_key() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut linked = record(SearchProviderKind::Deepseek);
+        linked.id = "linked".into();
+        linked.key_source = SearchKeySource::Connection { provider_id: "custom-ds".into() };
+        let mut keyless = record(SearchProviderKind::Searxng);
+        keyless.id = "keyless".into();
+        keyless.key_source = SearchKeySource::None;
+        let state = MetadataState {
+            data: Mutex::new(crate::models::AppData {
+                web: WebConfig {
+                    providers: vec![record(SearchProviderKind::Brave), linked, keyless],
+                    ..WebConfig::default()
+                },
+                ..crate::models::AppData::default()
+            }),
+            data_path: directory.path().join("wackcode.json"),
+            secrets: SecretStore::load(directory.path()).unwrap(),
+        };
+        assert!(search_api_key(&state, "s1").unwrap_err().contains("Paste an API key"));
+        state.secrets.set(&secret_id("s1"), "bk-own").unwrap();
+        assert_eq!(search_api_key(&state, "s1").unwrap(), "bk-own");
+        assert!(search_api_key(&state, "linked").unwrap_err().contains("borrows"));
+        assert!(search_api_key(&state, "keyless").unwrap_err().contains("no API key"));
+        assert!(search_api_key(&state, "gone").unwrap_err().contains("no longer exists"));
     }
 
     #[test]

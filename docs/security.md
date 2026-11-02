@@ -35,7 +35,7 @@ renderer never fetches; remote calls go through Rust or the package-manager proc
 
 - API keys, MCP header/env values (`mcp:<id>`) and search provider keys (`search:<id>`) persist only in `secrets.json` (0600). A search provider that borrows a connection's key is linked by id and reads it at send time, never copying it, and only when the provider's endpoint has the same origin as that connection (`web::linkable_connection`); Custom and SearXNG can never borrow one. A connection a search provider borrows from can't be deleted. OAuth credentials live only in per-provider 0600 `auth.json` files, never in the Pi CLI's own auth file.
 - A worker receives credentials only over its stdin (`init`, `set_subagents`, `set_mcp`, a first run's `autoTitle`), and only the auth paths it needs. `set_web` carries none: a worker asks Rust to search (`web_request`).
-- Credentials never go in argv, env vars, `wackcode.json`, Tauri events, or the renderer. The one exception is an MCP env value, which becomes its own stdio server's environment.
+- Credentials never go in argv, env vars, `wackcode.json`, or Tauri events. The renderer sees one only when the user asks: `reveal_provider_key` and `reveal_search_key` answer Settings' show-key buttons with a connection's or a search provider's own saved key — MCP values and OAuth files have no such command. Separately, an MCP env value becomes its own stdio server's environment.
 - Workers get the login-shell environment (`shell_env.rs`) with provider keys stripped afterwards (`strip_provider_env`). Keep that stripping in every process that inherits it.
 - Keep both redaction layers: `safeError` in the worker and `redact_and_limit` in Rust.
 - The macOS Keychain backend was removed on purpose; don't bring it back.

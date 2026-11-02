@@ -213,6 +213,33 @@ pub fn app_info(app: AppHandle, state: State<'_, MetadataState>) -> Result<AppIn
     })
 }
 
+/// A custom connection's saved API key, for the reveal button in Settings › Providers. The one
+/// deliberate path a credential takes to the renderer: only an API-key connection's own key, only
+/// when Settings asks, never through `wackcode.json` or an event.
+fn provider_api_key(state: &MetadataState, provider_id: &str) -> Result<String, String> {
+    let kind = state
+        .data
+        .lock()
+        .map_err(|_| "Metadata lock was poisoned".to_string())?
+        .providers
+        .iter()
+        .find(|provider| provider.id == provider_id)
+        .map(|provider| provider.kind)
+        .ok_or_else(|| "That connection no longer exists.".to_string())?;
+    if kind == ProviderKind::Subscription {
+        return Err("A subscription sign-in has no API key.".into());
+    }
+    state.secrets.get(provider_id)
+}
+
+#[tauri::command]
+pub fn reveal_provider_key(
+    state: State<'_, MetadataState>,
+    provider_id: String,
+) -> Result<String, String> {
+    provider_api_key(&state, &provider_id)
+}
+
 #[tauri::command]
 pub async fn save_provider(
     app: AppHandle,
@@ -5743,6 +5770,37 @@ mod tests {
         task.team = None;
         assert!(validate_provider_task_references(&[task.clone()], "crew").is_ok());
         assert!(validate_provider_task_references(&[task], "lead").is_err());
+    }
+
+    #[test]
+    fn provider_keys_reveal_only_for_custom_connections() {
+        let directory = tempfile::tempdir().unwrap();
+        let provider = |id: &str, kind: ProviderKind| ProviderRecord {
+            id: id.into(), name: id.into(), kind, base_url: "https://api.example.com/v1".into(),
+            api_format: "openai-completions".into(), models: vec![],
+            created_at: "c".into(), updated_at: "u".into(),
+            has_api_key: true, connected: true, enabled: true,
+        };
+        let state = MetadataState {
+            data: Mutex::new(AppData {
+                providers: vec![
+                    provider("custom-1", ProviderKind::Custom),
+                    provider("custom-2", ProviderKind::Custom),
+                    provider("sub", ProviderKind::Subscription),
+                ],
+                ..AppData::default()
+            }),
+            data_path: directory.path().join("wackcode.json"),
+            secrets: crate::secrets::SecretStore::load(directory.path()).unwrap(),
+        };
+        state.secrets.set("custom-1", "sk-one").unwrap();
+        // `mcp:` values share the file but are no connection's key to reveal.
+        state.secrets.set("mcp:s1:Authorization", "mcp-token").unwrap();
+        assert_eq!(provider_api_key(&state, "custom-1").unwrap(), "sk-one");
+        assert!(provider_api_key(&state, "custom-2").unwrap_err().contains("Add an API key"));
+        assert!(provider_api_key(&state, "sub").unwrap_err().contains("subscription"));
+        assert!(provider_api_key(&state, "mcp:s1:Authorization").unwrap_err().contains("no longer exists"));
+        assert!(provider_api_key(&state, "missing").unwrap_err().contains("no longer exists"));
     }
 
     #[test]

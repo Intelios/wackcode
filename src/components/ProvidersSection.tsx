@@ -185,6 +185,8 @@ interface Props {
   onSignOutSubscription: (providerId: string) => Promise<void>;
   /** The model IDs the provider lists, fetched with the saved key; rejects with a user-facing message. */
   onDiscover: (providerId: string) => Promise<string[]>;
+  /** The connection's saved API key, fetched only when the user asks to see it. */
+  onRevealKey: (providerId: string) => Promise<string>;
   onOpenAuthUrl: (url: string) => Promise<void>;
 }
 
@@ -277,6 +279,7 @@ export function ProvidersSection(props: Props) {
       onDelete={async (id) => { await props.onDelete(id); onSelect(undefined); }}
       onSetProviderEnabled={props.onSetProviderEnabled}
       onDiscover={props.onDiscover}
+      onRevealKey={props.onRevealKey}
     />
   );
 }
@@ -456,6 +459,7 @@ interface EditorProps {
   onDelete: (providerId: string) => Promise<void>;
   onSetProviderEnabled: (providerId: string, enabled: boolean) => Promise<void>;
   onDiscover: (providerId: string) => Promise<string[]>;
+  onRevealKey: (providerId: string) => Promise<string>;
 }
 
 interface Found {
@@ -467,7 +471,7 @@ interface Found {
 }
 
 function ConnectionEditor({
-  provider, lead, catalogEntries, catalogLoading, catalogError, onBack, onCreated, onSave, onDelete, onSetProviderEnabled, onDiscover
+  provider, lead, catalogEntries, catalogLoading, catalogError, onBack, onCreated, onSave, onDelete, onSetProviderEnabled, onDiscover, onRevealKey
 }: EditorProps) {
   const reduce = useReducedMotion();
   // Reseed from the saved record when its editable fields change. Keyed by content, so the
@@ -483,11 +487,18 @@ function ConnectionEditor({
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // The saved key, fetched on demand: shown in the field while set, never part of the draft.
+  const [savedKey, setSavedKey] = useState<string>();
+  const [keyBusy, setKeyBusy] = useState(false);
+  // Whether a typed-in key shows itself; the fetched one always does.
+  const [peek, setPeek] = useState(false);
 
   useEffect(() => {
     setDraft(seed);
     // Same count: the rows are the same models, so they keep their keys and stay open.
     setRowKeys((keys) => (keys.length === seed.models.length ? keys : newRowKeys(seed.models.length)));
+    setSavedKey(undefined);
+    setPeek(false);
   }, [seedKey]);
 
   // A save's confirmation lingers in the bar for a moment, then the bar tucks away.
@@ -566,6 +577,30 @@ function ConnectionEditor({
     setFound(undefined);
     setAdding(false);
     setError(undefined);
+    setSavedKey(undefined);
+    setPeek(false);
+  }
+
+  /** The eye at the key field: masks a typed key again, hides a revealed one, or fetches the saved key. */
+  async function toggleKey() {
+    if (draft.apiKey) {
+      setPeek((value) => !value);
+      return;
+    }
+    if (savedKey !== undefined) {
+      setSavedKey(undefined);
+      return;
+    }
+    if (!provider) return;
+    setKeyBusy(true);
+    setError(undefined);
+    try {
+      setSavedKey(await onRevealKey(provider.id));
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setKeyBusy(false);
+    }
   }
 
   /** Discovery reads the saved key, so unsaved changes are saved first, and the button says so. */
@@ -611,6 +646,8 @@ function ConnectionEditor({
   }
 
   const fetchLabel = isNew ? "Create & fetch models" : dirty ? "Save & fetch models" : "Fetch models";
+  // The eye shows when there is a key to look at: a saved one, or what's been typed.
+  const keyShown = Boolean(provider?.hasApiKey || draft.apiKey || savedKey !== undefined);
   const state = provider ? connectionState(provider) : undefined;
   const showBar = dirty || Boolean(error) || Boolean(notice);
 
@@ -674,12 +711,32 @@ function ConnectionEditor({
                 <div className="input-with-icon">
                   <Icon name="key" />
                   <input
-                    type="password"
+                    type={savedKey !== undefined || peek ? "text" : "password"}
+                    className={keyShown ? "has-reveal" : undefined}
                     autoComplete="off"
-                    value={draft.apiKey ?? ""}
-                    onChange={(event) => edit({ apiKey: event.target.value })}
+                    spellCheck={false}
+                    value={draft.apiKey ? draft.apiKey : (savedKey ?? "")}
+                    onChange={(event) => {
+                      // Editing a revealed key turns it into a (still visible) replacement.
+                      if (savedKey !== undefined) {
+                        setSavedKey(undefined);
+                        setPeek(true);
+                      }
+                      edit({ apiKey: event.target.value });
+                    }}
                     placeholder={provider?.hasApiKey ? "••••••••••••••••" : "Enter API key"}
                   />
+                  {keyShown && (
+                    <button
+                      type="button"
+                      className="ghost-button input-reveal"
+                      aria-label={savedKey !== undefined ? "Hide saved API key" : draft.apiKey ? (peek ? "Hide API key" : "Show API key") : "Show saved API key"}
+                      disabled={keyBusy}
+                      onClick={() => void toggleKey()}
+                    >
+                      <Icon name={savedKey !== undefined || peek ? "eyeOff" : "eye"} />
+                    </button>
+                  )}
                 </div>
               </label>
             </div>

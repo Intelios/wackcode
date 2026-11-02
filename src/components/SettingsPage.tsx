@@ -85,6 +85,7 @@ const WEB_ACTIONS: WebActions = {
   onTest: api.testSearchProvider,
   onUsage: api.webUsage,
   onResetUsage: api.resetWebUsage,
+  onRevealKey: api.revealSearchKey,
   // Settings has no chat to preview a page in, so a Test search result opens in the default browser.
   onOpenLink: (url) => void api.revealPath(url).catch(() => undefined)
 };
@@ -361,6 +362,7 @@ export function SettingsPage({
             onConnectSubscription={onConnectSubscription}
             onSignOutSubscription={onSignOutSubscription}
             onDiscover={api.discoverModels}
+            onRevealKey={api.revealProviderKey}
             onOpenAuthUrl={api.openSubscriptionAuthUrl}
           />
         )}

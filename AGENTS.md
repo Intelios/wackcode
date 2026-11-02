@@ -34,7 +34,7 @@ WackCode is a local macOS desktop app for the [Pi coding agent](https://www.npmj
 
 ## Rules that break things silently
 
-- **Security is not a trade-off.** Never add a network origin, let a credential travel anywhere but `secrets.json`/`auth.json` and a worker's stdin, flip one of Pi's `no*` lockdown flags, widen the asset protocol, or trust a package without the user's confirmation. If a change seems to need one, stop and say so. Full list: [docs/security.md](docs/security.md).
+- **Security is not a trade-off.** Never add a network origin, let a credential travel anywhere but `secrets.json`/`auth.json`, a worker's stdin and the Settings key-reveal commands (`reveal_provider_key`, `reveal_search_key`), flip one of Pi's `no*` lockdown flags, widen the asset protocol, or trust a package without the user's confirmation. If a change seems to need one, stop and say so. Full list: [docs/security.md](docs/security.md).
 - **Shared types** change in `models.rs`, `types.ts` and (if the worker sees them) `protocol.ts` together. New optional Rust fields need `#[serde(default)]` so existing `wackcode.json` files load. Every `wackcode.json` write goes through `MetadataState::mutate`.
 - **Worker respawns:** anything in the `worker.rs` fingerprint respawns the worker, even mid-run, so live settings stay out of it. Idle workers are reaped, so reach one only through `ensure_worker`.
 - **Worker queue:** commands that must reach an active run bypass the serial prompt queue or they deadlock (`worker/src/index.ts`).

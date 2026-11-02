@@ -1,7 +1,7 @@
 /**
  * Built-in Plan mode extension — planning is read-only by default. Forked from
  * `@narumitw/pi-plan-mode` v0.58.3 (MIT) and adapted to WackCode: mode transitions come from
- * the app's composer toggle (via `PlanModeController`) instead of `/plan` menus, and the
+ * the app's composer toggle (via `PlanModeController`) or `plan_mode_enter`, and the
  * completed plan is reviewed in the desktop UI rather than Pi's TUI. The shell/tool policy,
  * mode contract, completion tool and session restore are ports of the upstream modules in
  * this directory.
@@ -50,6 +50,7 @@ import { reconcilePlanningAccess } from "./access.js";
 import type { PlanVariant } from "./prompt.js";
 import { invalidPlanMessage, latestAssistantText, parseProposedPlan } from "./proposed-plan.js";
 import { PLAN_STATE_ENTRY_TYPE, PLAN_STATE_VERSION, restorePlanState, type PersistedPlanState } from "./state.js";
+import { PLAN_MODE_ENTER_PARAMS, PLAN_MODE_ENTER_TOOL_NAME, normalizePlanModeEntry } from "./entry.js";
 
 export interface PlanModeController {
   /** The state the desktop renders (mode, phase, ready plan). */
@@ -116,8 +117,8 @@ export function createPlanModeExtension(host: BuiltinHost, mcpTools?: PlanModeMc
       publishContract(mode);
       active = mode;
     }
-    // The composer's mode controls the next turn, independently of the proposal awaiting
-    // review. A mode switch is not approval or discard, including a switch to Build.
+    // Mode controls planning policy independently of the proposal awaiting review. A mode
+    // switch is not approval or discard, including a switch to Build.
     if (discardPlan) readyPlan = undefined;
     // Every prompt carries the composer's mode. Writing an unchanged state before each user
     // message would only bury the conversation's structure in duplicate entries.
@@ -135,6 +136,34 @@ export function createPlanModeExtension(host: BuiltinHost, mcpTools?: PlanModeMc
 
   const factory = (bound: ExtensionAPI) => {
     pi = bound;
+
+    pi.registerTool({
+      name: PLAN_MODE_ENTER_TOOL_NAME,
+      label: "Enter Plan mode",
+      description:
+        "Enter Plan mode and continue planning in this run under the selected mode contract, then submit a decision-ready plan with plan_mode_complete. Use your judgment when implementation decisions need working through; respect explicit requests to skip planning or stay in Build. Default to regular Plan; use ultraplan for an exhaustive interview. Do not use this tool for straightforward work, ordinary roadmaps, checklists or plan-file work. Finish or stop shell jobs and outstanding sub-agents first. Call this tool alone. Only the user can return to Build.",
+      promptGuidelines: ["Plan when useful."],
+      parameters: PLAN_MODE_ENTER_PARAMS,
+      // Serialize the whole batch: tools after entry must be checked under the new policy.
+      executionMode: "sequential",
+      async execute(_toolCallId, params: unknown, signal) {
+        const mode = normalizePlanModeEntry(params);
+        if (signal?.aborted) throw new Error("Entering Plan mode was cancelled.");
+        const unchanged = active === mode;
+        if (!unchanged) {
+          // Build work must settle before the mode promises planning restrictions. Never
+          // cancel it implicitly, including children whose results still need delivery.
+          if (host.hasRunningShellJobs?.()) throw new Error("Wait for or stop running shell jobs with bash_job before changing planning modes, then retry plan_mode_enter.");
+          if (host.hasOutstandingSubagents?.()) throw new Error("Wait for or stop outstanding sub-agents with subagent_job before changing planning modes, then retry plan_mode_enter.");
+          setMode(mode);
+        }
+        const label = mode === "ultraplan" ? "Ultra Plan" : "Plan";
+        return {
+          content: [{ type: "text" as const, text: `${label} mode is ${unchanged ? "already" : "now"} active. Continue planning in this run under the current mode contract and execution policy. Submit the complete plan with plan_mode_complete when it is decision-ready; the user reviews it before implementation.` }],
+          details: { mode },
+        };
+      },
+    });
 
     pi.registerTool({
       name: PLAN_MODE_COMPLETE_TOOL_NAME,
@@ -186,6 +215,7 @@ export function createPlanModeExtension(host: BuiltinHost, mcpTools?: PlanModeMc
       // the user has allowed (the access card is theirs to answer), never open or operate one.
       const helper =
         event.toolName === ASK_USER_QUESTION_TOOL_NAME ||
+        event.toolName === PLAN_MODE_ENTER_TOOL_NAME ||
         event.toolName === PLAN_MODE_COMPLETE_TOOL_NAME ||
         event.toolName === TODO_TOOL_NAME ||
         event.toolName === SUBAGENT_TOOL_NAME || event.toolName === "subagent_job" ||

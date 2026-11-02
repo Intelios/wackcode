@@ -358,7 +358,14 @@ function isToolImageCarrier(message: { role?: string; content?: unknown }): bool
 }
 
 function latestUserIndex(messages: readonly { role?: string; content?: unknown }[]): number {
-  return messages.findLastIndex((message) => message.role === "user" && !isToolImageCarrier(message));
+  // Pi converts hidden custom guidance into user messages. A mid-run mode contract and its
+  // access guidance are instructions to the model, not a new fixture prompt/tool script.
+  return messages.findLastIndex((message) => {
+    if (message.role !== "user" || isToolImageCarrier(message)) return false;
+    const text = typeof message.content === "string" ? message.content : Array.isArray(message.content)
+      ? message.content.filter((part) => part.type === "text").map((part) => part.text ?? "").join("\n") : "";
+    return !text.startsWith("[WACKCODE PLAN MODE CONTRACT v1:") && !text.startsWith("[WACKCODE CURRENT PLANNING ACCESS POLICY]");
+  });
 }
 
 function userTextOf(body: Record<string, unknown>): string {
@@ -406,6 +413,13 @@ interface ShellJobScript {
   yieldTimeout?: number;
   timeout?: number;
   actions: Array<{ action: "status" | "wait" | "stop"; waitSeconds?: number }>;
+}
+
+type ScriptedToolCall = { name: string; args: Record<string, unknown> };
+
+/** A deterministic sequence of tool batches, including calls after a mid-run mode switch. */
+function toolScriptPrompt(...batches: ScriptedToolCall[][]): string {
+  return `tool script: ${JSON.stringify(batches)}`;
 }
 
 function shellJobPrompt(script: ShellJobScript, child = false): string {
@@ -613,12 +627,20 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
   const shellScript = shellJobScriptOf(lastUserText);
   const shellResults = shellScript ? toolResultContents(body) : [];
   const shellCall = shellScript ? nextShellJobCall(shellScript, shellResults) : undefined;
-  if (backgroundScript ? backgroundCall !== undefined : shellScript ? shellCall !== undefined : repeatable ? !answeredSinceUser : !hasToolResult) {
-    const toolCall = (name: string, args: Record<string, unknown>) => ({
-      index: 0, id: backgroundScript ? `call-background-${backgroundScript.tag}-${backgroundResults.length}` : shellScript ? `call-shell-${suffix}-${shellResults.length}` : `call-${suffix}`, type: "function",
+  const toolScript = lastUserText.startsWith("tool script: ") ? JSON.parse(lastUserText.slice("tool script: ".length)) as ScriptedToolCall[][] : undefined;
+  let remainingResults = toolScript ? toolResultContents(body).length : 0;
+  const scriptCalls = toolScript?.find((batch) => {
+    if (remainingResults === 0) return true;
+    remainingResults -= batch.length;
+    return false;
+  });
+  if (toolScript ? scriptCalls !== undefined : backgroundScript ? backgroundCall !== undefined : shellScript ? shellCall !== undefined : repeatable ? !answeredSinceUser : !hasToolResult) {
+    const toolCall = (name: string, args: Record<string, unknown>, index = 0) => ({
+      index, id: toolScript ? `call-script-${suffix}-${toolResultContents(body).length}-${index}` : backgroundScript ? `call-background-${backgroundScript.tag}-${backgroundResults.length}` : shellScript ? `call-shell-${suffix}-${shellResults.length}` : `call-${suffix}`, type: "function",
       function: { name, arguments: JSON.stringify(args) }
     });
-    const calls = backgroundCall ? [toolCall(backgroundCall.name, backgroundCall.args)]
+    const calls = scriptCalls ? scriptCalls.map((call, index) => toolCall(call.name, call.args, index))
+      : backgroundCall ? [toolCall(backgroundCall.name, backgroundCall.args)]
       : shellCall ? [toolCall(shellCall.name, shellCall.args)]
       : lastUserText.startsWith("Initialize project instructions")
       ? [toolCall("write", { path: "AGENTS.md", content: "# Fixture guidance\n\nRun `pnpm test`.\n" })]
@@ -1201,6 +1223,7 @@ describe("Pi worker integration", () => {
       "memory_recall",
       "memory_save",
       "plan_mode_complete",
+      "plan_mode_enter",
       "preview_visual",
       "read",
       "read_chat",
@@ -1256,13 +1279,13 @@ describe("Pi worker integration", () => {
         "browser_console"
       ]
     });
-    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.length === 18);
+    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.length === 19);
     // `find`/`grep` availability varies by host; the companion stays on even without bash.
     const beforeSecondRun = provider.requests.length;
     worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-2", message: "Again." });
     await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.snapshot === undefined && provider.requests.length > beforeSecondRun);
 
-    expect(offered(provider.requests[beforeSecondRun])).toEqual(["ask_user_question", "bash_job", "canvas", "canvas_guide", "canvas_look", "compare_images", "edit", "list_images", "plan_mode_complete", "preview_visual", "read", "read_chat", "read_image", "show_visual", "skill_creator", "suggest_task", "todo", "write"]);
+    expect(offered(provider.requests[beforeSecondRun])).toEqual(["ask_user_question", "bash_job", "canvas", "canvas_guide", "canvas_look", "compare_images", "edit", "list_images", "plan_mode_complete", "plan_mode_enter", "preview_visual", "read", "read_chat", "read_image", "show_visual", "skill_creator", "suggest_task", "todo", "write"]);
     expect(worker.child.exitCode).toBeNull();
   });
 
@@ -1689,6 +1712,98 @@ describe("Pi worker integration", () => {
     expect(trailing?.stopReason).toBe("aborted");
     expect(trailing?.errorMessage).toBeUndefined();
     expect(worker.view?.messages.some((message) => message.stopReason === "error")).toBe(false);
+  });
+});
+
+describe("agent-initiated Plan mode", () => {
+  const enter = (mode: "plan" | "ultraplan"): ScriptedToolCall => ({ name: "plan_mode_enter", args: mode === "plan" ? {} : { mode } });
+  const write: ScriptedToolCall = { name: "write", args: { path: "after-entry.txt", content: "An attempted edit after entry." } };
+  const complete: ScriptedToolCall = { name: "plan_mode_complete", args: { plan: "# Agent-entered plan\n\n- Implement after review." } };
+
+  async function start(extra: Record<string, unknown> = {}) {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-plan-entry-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker, ready } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "plan-entry", undefined, undefined, undefined, undefined, undefined, extra);
+    cleanup.push(() => worker.shutdown());
+    return { provider, workspace, worker, ready };
+  }
+
+  async function run(worker: WorkerHarness, ...batches: ScriptedToolCall[][]) {
+    const runId = crypto.randomUUID();
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId, message: toolScriptPrompt(...batches) });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === runId);
+  }
+
+  async function request(worker: WorkerHarness, command: Record<string, unknown>) {
+    const id = crypto.randomUUID();
+    worker.send({ id, ...command });
+    const response = await worker.waitFor((output) => output.type === "response" && output.id === id);
+    expect(response.success, response.error).toBe(true);
+    return response;
+  }
+
+  const cases = (["plan", "ultraplan"] as const).flatMap((mode) => [false, true].flatMap((batch) =>
+    [false, true].map((unrestricted) => ({ mode, batch, unrestricted }))));
+  it.each(cases)("enters $mode and completes in one run (same batch=$batch, unrestricted=$unrestricted)", async ({ mode, batch, unrestricted }) => {
+    const { provider, worker, workspace } = await start({ executionPolicy: { unrestrictedPlanning: unrestricted, unrestrictedSubagents: false } });
+    await run(worker, ...(batch ? [[enter(mode), write], [complete]] : [[enter(mode)], [write], [complete]]));
+    expect(worker.view?.planState).toEqual({ mode, phase: "ready", plan: complete.args.plan });
+    expect(worker.outputs.some((output) => output.type === "plan_state" && output.mode === mode && output.phase === "planning")).toBe(true);
+    expect(provider.requests).toHaveLength(batch ? 2 : 3);
+    const nextContext = JSON.stringify(provider.requests[1].body.messages);
+    expect(nextContext).toContain(`[WACKCODE PLAN MODE CONTRACT v1: ${mode.toUpperCase()}]`);
+    expect(nextContext.match(/\[WACKCODE PLAN MODE CONTRACT v1:/g)).toHaveLength(1);
+    expect(nextContext.includes("WACKCODE CURRENT PLANNING ACCESS POLICY")).toBe(unrestricted);
+    const result = worker.view?.messages.flatMap((message) => message.blocks).find((block) => block.type === "tool-result" && block.toolName === "write");
+    if (unrestricted) {
+      expect(result?.isError).toBeFalsy();
+      expect(await readFile(join(workspace, "after-entry.txt"), "utf8")).toBe(write.args.content);
+    } else {
+      expect(result?.isError).toBe(true);
+      expect(result?.text).toContain("Plan mode");
+      await expect(readFile(join(workspace, "after-entry.txt"), "utf8")).rejects.toThrow();
+    }
+    expect(worker.outputs.filter((output) => output.type === "worker_error")).toEqual([]);
+  });
+
+  it("re-enters after Build and restores agent-entered modes on restart and navigation", async () => {
+    const { provider, worker, workspace } = await start();
+    await run(worker, [enter("plan")], [complete]);
+    await request(worker, { type: "set_mode", mode: "build" });
+    await run(worker, [enter("ultraplan")], [complete]);
+    expect(worker.view?.planState?.mode).toBe("ultraplan");
+    const sessionFile = worker.view!.sessionFile!;
+    const secondUser = worker.view!.messages.filter((message) => message.role === "user")[1];
+    await worker.shutdown();
+    // Rust mirrors each plan_state onto the record; it sends that mode on the next init.
+    const restored = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "plan-entry", sessionFile, undefined, undefined, "ultraplan");
+    cleanup.push(() => restored.worker.shutdown());
+    expect(restored.ready.snapshot?.planState).toEqual({ mode: "ultraplan", phase: "ready", plan: complete.args.plan });
+    await request(restored.worker, { type: "navigate", entryId: secondUser.entryId, target: "before", kind: "rewind" });
+    expect(restored.worker.view?.planState?.mode).toBe("build");
+    const undo = restored.worker.view!.tree!.undo!;
+    await request(restored.worker, { type: "navigate", entryId: undo, target: "latest", kind: "undo" });
+    expect(restored.worker.view?.planState?.mode).toBe("ultraplan");
+    await expectSavedHistory(restored.worker.view!, "ultraplan");
+  });
+
+  it("refuses entry while a yielded shell is running, then allows it after run cleanup", async () => {
+    const { worker, provider } = await start();
+    // The command remains owned by this run after bash yields and must not outlive entry.
+    await run(worker,
+      [{ name: "bash", args: { command: "sleep 30", yieldTimeout: 0 } }],
+      [enter("plan")]);
+    const result = worker.view?.messages.flatMap((message) => message.blocks).find((block) => block.type === "tool-result" && block.toolName === "plan_mode_enter");
+    expect(result?.isError).toBe(true);
+    expect(result?.text).toContain("bash_job");
+    expect(worker.view?.planState?.mode).toBe("build");
+    // Run settlement stops all owned shell jobs; a fresh run can now enter planning.
+    const before = provider.requests.length;
+    await run(worker, [enter("plan")], [complete]);
+    expect(worker.view?.planState?.mode).toBe("plan");
+    expect(JSON.stringify(provider.requests[before + 1].body.messages)).toContain("CONTRACT v1: PLAN");
   });
 });
 
@@ -2185,7 +2300,7 @@ describe("built-in extensions", () => {
     // Even a denylist that names them cannot switch built-in tools off.
     const { worker, ready } = await initializeWorker(
       provider.baseUrl, "alpha-secret", workspace, "builtin-task", undefined,
-      ["ask_user_question", "plan_mode_complete", "todo", "bash_job"]
+      ["ask_user_question", "plan_mode_complete", "plan_mode_enter", "todo", "bash_job"]
     );
     cleanup.push(() => worker.shutdown());
 
@@ -2195,12 +2310,14 @@ describe("built-in extensions", () => {
     const todo = catalog.find((tool) => tool.name === "todo");
     expect(ask?.source.kind).toBe("wackcode");
     expect(complete?.source.kind).toBe("wackcode");
+    expect(catalog.find((tool) => tool.name === "plan_mode_enter")?.source.kind).toBe("wackcode");
     expect(todo?.source.kind).toBe("wackcode");
     expect(catalog.find((tool) => tool.name === "web_fetch")?.source.kind).toBe("wackcode");
     expect(catalog.find((tool) => tool.name === "bash_job")?.source.kind).toBe("wackcode");
     expect(ready.snapshot?.activeTools).toContain("bash_job");
     expect(ready.snapshot?.activeTools).toContain("ask_user_question");
     expect(ready.snapshot?.activeTools).toContain("plan_mode_complete");
+    expect(ready.snapshot?.activeTools).toContain("plan_mode_enter");
     expect(ready.snapshot?.activeTools).toContain("todo");
     expect(ready.snapshot?.planState?.mode).toBe("build");
   });
@@ -4717,6 +4834,23 @@ describe("sub-agents", () => {
     await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
   });
 
+  it("refuses planning entry while background work is outstanding, then accepts a retry", async () => {
+    const { provider, worker } = await start("subagents-background-entry", { subagents: config() });
+    const child = provider.holdChildren(1);
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "background-entry", message: backgroundPrompt("entry", { agent: "worker", task: "child-write: before-plan" }, { name: "plan_mode_enter", args: {} }) });
+    await child.arrived;
+    await worker.waitFor((output) => output.workActivity?.parent === "idle" && output.workActivity.subagents === 1);
+    const result = worker.view?.messages.flatMap((message) => message.blocks).find((block) => block.type === "tool-result" && block.toolName === "plan_mode_enter");
+    expect(result?.isError).toBe(true);
+    expect(result?.text).toContain("subagent_job");
+    expect(worker.view?.planState?.mode).toBe("build");
+    child.release();
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "entry-retry", message: toolScriptPrompt([{ name: "plan_mode_enter", args: {} }]) });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.runId === "entry-retry");
+    expect(worker.view?.planState?.mode).toBe("plan");
+  });
+
   it("defers goal verification until background results have reached the parent", async () => {
     const { provider, worker } = await start("subagents-background-goal", { subagents: config() });
     const child = provider.holdChildren(1);
@@ -5064,7 +5198,7 @@ describe("sub-agents", () => {
       const roleTools = (ready.snapshot?.tools ?? []).filter((tool) => tool.available && scout.tools.includes(tool.name)).map((tool) => tool.name);
       expect(tools).toEqual([...roleTools, "bash_job"].sort());
       // A child has no transcript to draw in, so visual replies and task suggestions stay out too.
-      for (const hidden of ["edit", "write", "subagent", "todo", "ask_user_question", "plan_mode_complete", "show_visual", "compare_images", "list_images", "read_image", "suggest_task"]) {
+      for (const hidden of ["edit", "write", "subagent", "todo", "ask_user_question", "plan_mode_complete", "plan_mode_enter", "show_visual", "compare_images", "list_images", "read_image", "suggest_task"]) {
         expect(tools).not.toContain(hidden);
       }
     }
@@ -6251,7 +6385,7 @@ describe("Chat mode", () => {
   it("offers only its allowlist, and no app-wide setting can widen it", async () => {
     const { provider, worker, ready } = await start("chat-tools", { extra: { computerUse: { enabled: true }, mode: "plan" } });
     const registered = (ready.snapshot?.tools ?? []).map((tool) => tool.name);
-    for (const missing of ["bash", "bash_job", "todo", "plan_mode_complete", "subagent", "subagent_job", "skill_creator", "computer_act"]) {
+    for (const missing of ["bash", "bash_job", "todo", "plan_mode_complete", "plan_mode_enter", "subagent", "subagent_job", "skill_creator", "computer_act"]) {
       expect(registered, missing).not.toContain(missing);
     }
     expect((ready.snapshot?.activeTools ?? []).every(allowed)).toBe(true);

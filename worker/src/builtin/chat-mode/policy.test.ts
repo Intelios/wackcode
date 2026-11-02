@@ -19,7 +19,7 @@ describe("Chat mode's tool allowlist", () => {
     for (const name of [ASK_USER_QUESTION_TOOL_NAME, WEB_FETCH_TOOL_NAME, ...MEMORY_TOOL_NAMES, ...BROWSER_TOOL_NAMES]) {
       expect(chatToolAllowed(name, "wackcode")).toBe(true);
     }
-    for (const name of ["bash_job", "todo", "plan_mode_complete", "subagent", "subagent_job", "skill_creator", "computer_act", "computer_open"]) {
+    for (const name of ["bash_job", "todo", "plan_mode_enter", "plan_mode_complete", "subagent", "subagent_job", "skill_creator", "computer_act", "computer_open"]) {
       expect(chatToolAllowed(name, "wackcode")).toBe(false);
     }
   });

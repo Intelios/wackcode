@@ -309,6 +309,7 @@ const builtinHost: BuiltinHost = {
   recordCommandPresentation: (presentation) => recordCommandPresentation(presentation),
   hasQueuedMessages: () => messageQueue.hasPending,
   hasOutstandingSubagents: () => hasSubagentWork(),
+  hasRunningShellJobs: () => builtins.bashJobs.hasRunningJobs(),
   subagentsChanged: () => { scheduleSnapshot(); scheduleBackgroundResults(); },
   recordSubagentUsage: (usage, spec) => {
     if (session) session.sessionManager.appendUsage("subagent", spec.model?.providerId ?? session.model?.provider ?? "", spec.model?.modelId ?? session.model?.id ?? "", usage);

@@ -79,6 +79,8 @@ function waitSeconds(value: unknown): number {
 export interface BashJobsController {
   /** Supplied as an SDK override, keeping bash on the ordinary tool denylist and shell policy. */
   tool(cwd: string): ToolDefinition;
+  /** Includes yielded commands that can still change the workspace. */
+  hasRunningJobs(): boolean;
   stopAll(): Promise<void>;
 }
 
@@ -249,6 +251,9 @@ export function createBashJobsExtension(operations: BashOperations = createLocal
     pi.on("agent_settled", stopAll);
     pi.on("session_shutdown", stopAll);
   };
-  const controller: BashJobsController = { tool, stopAll };
+  const controller: BashJobsController = {
+    tool, stopAll,
+    hasRunningJobs: () => [...jobs.values()].some((job) => job.status === "running"),
+  };
   return { factory, controller };
 }

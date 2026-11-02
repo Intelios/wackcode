@@ -7,6 +7,14 @@ function call(toolName: string, args: unknown): NormalizedBlock {
 }
 
 describe("summarizeTool", () => {
+  it.each([undefined, "plan", "ultraplan"])("names planning entry and refusal for %s", (mode) => {
+    const block = call("plan_mode_enter", { mode });
+    const label = mode === "ultraplan" ? "Ultra Plan" : "Plan";
+    expect(summarizeTool(block)).toMatchObject({ activeVerb: `Entering ${label} mode`, doneVerb: `Entered ${label} mode`, subject: "" });
+    expect(summarizeTool(block, { type: "tool-result", isError: true }).doneVerb).toBe(`Couldn't enter ${label} mode`);
+    expect(toolPresentation(block)).toBe("chip");
+  });
+
   it("names an MCP tool and its server", () => {
     const summary = summarizeTool(call("mcp__github__search_issues", { q: "bug" }));
     expect(summary).toMatchObject({ activeVerb: "Calling", doneVerb: "Called", subject: "search_issues (github)" });

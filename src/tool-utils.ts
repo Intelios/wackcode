@@ -260,6 +260,10 @@ export function summarizeTool(call: NormalizedBlock, result?: NormalizedBlock): 
       const first = Array.isArray(questions) ? questions[0] as Record<string, unknown> | undefined : undefined;
       return { kind: "other", activeVerb: "Asking", doneVerb: "Asked", subject: str(first?.question) };
     }
+    case "plan_mode_enter": {
+      const mode = toolArgs.mode === "ultraplan" ? "Ultra Plan" : "Plan";
+      return { kind: "other", activeVerb: `Entering ${mode} mode`, doneVerb: result?.isError ? `Couldn't enter ${mode} mode` : `Entered ${mode} mode`, subject: "" };
+    }
     case "plan_mode_complete":
       return { kind: "other", activeVerb: "Submitting plan", doneVerb: "Plan submitted", subject: "" };
     case "todo":

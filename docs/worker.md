@@ -439,6 +439,12 @@ how the agent actually reads it.
 ## Planning modes
 
 - Modes are `build`, `plan` and `ultraplan`. Plan and Ultra Plan both count as planning: test `mode !== "build"` (`isPlanMode` in the frontend), never `mode === "plan"`.
+- Code chats can call `plan_mode_enter({ mode?: "plan" | "ultraplan" })` (regular Plan by
+  default) and continue planning in the same run. It shares the composer's state/contract/
+  persistence path and serializes its tool batch so later calls see the new policy. Mode
+  changes require shell jobs and outstanding sub-agent work to settle first. Re-entering the
+  current mode is a no-op; switching variants preserves a proposal. Only the user can return
+  to Build. This core tool ignores the denylist and never reaches Chat mode or sub-agents.
 - The Plan contract must stay **byte-identical**: saved chats recognise it by exact text, and an edit makes every existing Plan chat re-append it. The test pins its hash; don't just update the hash.
 - Custom prompts (Settings › Prompts) layer on top of the built-ins. Keep the Settings defaults in `src/promptDefaults.ts` aligned with the worker's prompt builders.
 

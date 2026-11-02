@@ -67,6 +67,26 @@ async function yielded(h: ReturnType<typeof harness>, signal?: AbortSignal, upda
 }
 
 describe("bounded shell check-ins", () => {
+  it("reports running jobs until they finish, fail or stop", async () => {
+    vi.useFakeTimers();
+    const { operations, commands } = backend();
+    const h = harness(operations);
+    expect(h.controller.hasRunningJobs()).toBe(false);
+    const completed = await yielded(h);
+    expect(h.controller.hasRunningJobs()).toBe(true);
+    commands[0].finish();
+    await h.manage({ action: "wait", jobId: completed });
+    expect(h.controller.hasRunningJobs()).toBe(false);
+    const failed = await yielded(h);
+    commands[1].fail("fixture failure");
+    await h.manage({ action: "wait", jobId: failed });
+    expect(h.controller.hasRunningJobs()).toBe(false);
+    const stopped = await yielded(h);
+    expect(h.controller.hasRunningJobs()).toBe(true);
+    await h.manage({ action: "stop", jobId: stopped });
+    expect(h.controller.hasRunningJobs()).toBe(false);
+  });
+
   it.each([undefined, 999_999])("returns after 60 seconds without killing a command (yieldTimeout=%s)", async (yieldTimeout) => {
     vi.useFakeTimers();
     const { operations, commands } = backend();

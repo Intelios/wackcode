@@ -82,6 +82,8 @@ export interface BuiltinHost {
   hasQueuedMessages?(): boolean;
   /** Includes pending result delivery, so terminal workflows never outrun their helpers. */
   hasOutstandingSubagents?(): boolean;
+  /** Yielded shell commands must settle before an agent-initiated planning transition. */
+  hasRunningShellJobs?(): boolean;
   /** Job progress/completion schedules snapshots and safe parent result delivery. */
   subagentsChanged?(): void;
   /** Background usage is attributed once, independently of status/wait tool calls. */

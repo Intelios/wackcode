@@ -122,6 +122,7 @@ not. Commands must remain in the foreground; detached daemons are outside this l
 
 - **`TaskLocks`** (`commands.rs`): any command that sends a chat work, moves its conversation, or touches its checkpoints holds that chat's lock.
 - **`GitLocks`**: one per checkout root. Git writes from the Changes panel (commit, discard, push), branch switches and prompt dispatch (which snapshots a checkpoint) take it, so chats sharing a folder never interleave those operations.
+- **Native UI:** release shared state locks before constructing or updating native menus. Tauri's menu calls can wait for the main thread, whose focus and geometry callbacks read metadata. The menu bar queues a coalesced refresh on main and builds from owned rows after releasing its locks; this applies to both Code and Chat activity.
 
 ## Git targets
 

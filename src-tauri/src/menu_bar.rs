@@ -1,8 +1,11 @@
+//! The menu bar follows both Code and Chat activity. Native menu APIs synchronously use the
+//! main thread: never call them while holding activity, metadata or computer-use locks.
+//! Refreshes are coalesced onto main, then render an owned snapshot with every lock released.
 use crate::{models::AppData, storage::MetadataState};
 use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    sync::Mutex,
+    sync::{atomic::{AtomicBool, Ordering}, Mutex},
 };
 use tauri::{
     image::Image,
@@ -78,7 +81,7 @@ impl DisplayStatus {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 struct ChatActivity {
     phase: RunPhase,
     pending_dialogs: HashSet<String>,
@@ -103,7 +106,7 @@ impl ChatActivity {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 struct ActivityStore {
     chats: HashMap<String, ChatActivity>,
     recent: VecDeque<String>,
@@ -205,13 +208,37 @@ impl ActivityStore {
 pub struct MenuBarState {
     activity: Mutex<ActivityStore>,
     pending_navigation: Mutex<Option<String>>,
+    refresh_pending: AtomicBool,
+}
+
+impl MenuBarState {
+    fn queue_refresh(&self, dispatch: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+        if !self.request_refresh() {
+            return Ok(());
+        }
+        dispatch().map_err(|error| {
+            self.begin_refresh();
+            error
+        })
+    }
+
+    fn request_refresh(&self) -> bool {
+        !self.refresh_pending.swap(true, Ordering::AcqRel)
+    }
+
+    fn begin_refresh(&self) {
+        // Clear before sampling: an event arriving during the snapshot or native update must
+        // queue a later refresh, rather than disappear behind the in-progress one.
+        self.refresh_pending.store(false, Ordering::Release);
+    }
 }
 
 pub fn setup(app: &App) -> Result<(), String> {
-    let menu = build_menu(
-        app.handle(),
-        &ActivityStore::default(),
-        &app.state::<MetadataState>(),
+    let menu = with_snapshot(
+        &app.state::<MenuBarState>().activity,
+        &app.state::<MetadataState>().data,
+        false,
+        |snapshot| build_menu(app.handle(), &snapshot),
     )?;
     let icon = tray_icon()?;
     TrayIconBuilder::with_id(TRAY_ID)
@@ -408,34 +435,68 @@ pub fn remove_chat(app: &AppHandle, task_id: &str) {
 
 pub fn refresh(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<MenuBarState>();
-    let activity = state
-        .activity
-        .lock()
-        .map_err(|_| "Menu bar state lock was poisoned".to_string())?;
-    let metadata = app.state::<MetadataState>();
-    let menu = build_menu(app, &activity, &metadata)?;
-    if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        tray.set_menu(Some(menu))
-            .map_err(|error| format!("Could not update the menu bar: {error}"))?;
-    }
-    Ok(())
+    let queued_app = app.clone();
+    state.queue_refresh(|| {
+        app.run_on_main_thread(move || {
+            queued_app.state::<MenuBarState>().begin_refresh();
+            if let Err(error) = refresh_on_main(&queued_app) {
+                eprintln!("Could not refresh the menu bar: {error}");
+            }
+        }).map_err(|error| format!("Could not queue the menu bar update: {error}"))
+    })
+}
+
+fn refresh_on_main(app: &AppHandle) -> Result<(), String> {
+    // Sample computer use before taking metadata: access answers hold computer-use state
+    // while saving metadata. Reversing that order here would deadlock a menu refresh with an
+    // answer or engine policy check. This advisory snapshot needs no overlapping locks.
+    let computer_active = app.state::<crate::computer_use::ComputerUseManager>().any_session();
+    with_snapshot(
+        &app.state::<MenuBarState>().activity,
+        &app.state::<MetadataState>().data,
+        computer_active,
+        |snapshot| {
+            let menu = build_menu(app, &snapshot)?;
+            if let Some(tray) = app.tray_by_id(TRAY_ID) {
+                tray.set_menu(Some(menu))
+                    .map_err(|error| format!("Could not update the menu bar: {error}"))?;
+            }
+            Ok(())
+        },
+    )
+}
+
+struct MenuSnapshot {
+    computer_active: bool,
+    active: Vec<MenuRow>,
+    recent: Vec<MenuRow>,
+}
+
+/// The sink can create native menus or reenter window callbacks: no shared lock may reach it.
+fn with_snapshot<T>(
+    activity: &Mutex<ActivityStore>,
+    metadata: &Mutex<AppData>,
+    computer_active: bool,
+    render: impl FnOnce(MenuSnapshot) -> Result<T, String>,
+) -> Result<T, String> {
+    let activity = activity.lock().map_err(|_| "Menu bar state lock was poisoned".to_string())?.clone();
+    let snapshot = {
+        let data = metadata.lock().map_err(|_| "Metadata lock was poisoned".to_string())?;
+        MenuSnapshot {
+            computer_active,
+            active: visible_rows(activity.active(), &data),
+            recent: visible_rows(activity.recent(), &data),
+        }
+    };
+    render(snapshot)
 }
 
 fn build_menu(
     manager: &impl Manager<tauri::Wry>,
-    activity: &ActivityStore,
-    metadata: &MetadataState,
+    snapshot: &MenuSnapshot,
 ) -> Result<Menu<tauri::Wry>, String> {
-    // Sample computer use before taking metadata: access answers hold computer-use state
-    // while saving metadata. Reversing that order here would deadlock a menu refresh with an
-    // answer or engine policy check. This advisory snapshot needs no overlapping locks.
-    let computer_active = manager.state::<crate::computer_use::ComputerUseManager>().any_session();
-    let data = metadata
-        .data
-        .lock()
-        .map_err(|_| "Metadata lock was poisoned".to_string())?;
     let menu = Menu::new(manager).map_err(|error| error.to_string())?;
-    if computer_active {
+    if snapshot.computer_active {
         menu.append(
             &MenuItem::with_id(manager, STOP_COMPUTER_ID, "Stop Computer Use  ⌃⌥⌘.", true, None::<&str>)
                 .map_err(|error| error.to_string())?,
@@ -444,19 +505,17 @@ fn build_menu(
         append_separator(manager, &menu)?;
     }
     append_label(manager, &menu, "menu-active-heading", "Active Chats")?;
-    let active = visible_rows(activity.active(), &data);
-    if active.is_empty() {
+    if snapshot.active.is_empty() {
         append_label(manager, &menu, "menu-no-active", "No active chats")?;
     } else {
-        for row in active {
+        for row in &snapshot.active {
             append_chat(manager, &menu, row)?;
         }
     }
-    let recent = visible_rows(activity.recent(), &data);
-    if !recent.is_empty() {
+    if !snapshot.recent.is_empty() {
         append_separator(manager, &menu)?;
         append_label(manager, &menu, "menu-recent-heading", "Recent Chats")?;
-        for row in recent {
+        for row in &snapshot.recent {
             append_chat(manager, &menu, row)?;
         }
     }
@@ -474,14 +533,14 @@ fn build_menu(
     Ok(menu)
 }
 
-struct MenuRow<'a> {
-    task_id: &'a str,
-    task_name: &'a str,
-    project_name: Option<&'a str>,
+struct MenuRow {
+    task_id: String,
+    task_name: String,
+    project_name: Option<String>,
     status: DisplayStatus,
 }
 
-fn visible_rows<'a>(rows: Vec<(&'a str, DisplayStatus)>, data: &'a AppData) -> Vec<MenuRow<'a>> {
+fn visible_rows(rows: Vec<(&str, DisplayStatus)>, data: &AppData) -> Vec<MenuRow> {
     rows.into_iter()
         .filter_map(|(task_id, status)| {
             let task = data
@@ -492,11 +551,11 @@ fn visible_rows<'a>(rows: Vec<(&'a str, DisplayStatus)>, data: &'a AppData) -> V
                 data.projects
                     .iter()
                     .find(|project| project.id == project_id)
-                    .map(|project| project.name.as_str())
+                    .map(|project| project.name.clone())
             });
             Some(MenuRow {
-                task_id,
-                task_name: &task.name,
+                task_id: task_id.to_string(),
+                task_name: task.name.clone(),
                 project_name,
                 status,
             })
@@ -507,7 +566,7 @@ fn visible_rows<'a>(rows: Vec<(&'a str, DisplayStatus)>, data: &'a AppData) -> V
 fn append_chat(
     manager: &impl Manager<tauri::Wry>,
     menu: &Menu<tauri::Wry>,
-    row: MenuRow<'_>,
+    row: &MenuRow,
 ) -> Result<(), String> {
     let title = truncate(
         &row.task_name
@@ -516,7 +575,7 @@ fn append_chat(
             .join(" "),
         42,
     );
-    let label = match row.project_name {
+    let label = match row.project_name.as_deref() {
         Some(project) => format!(
             "{title} — {} — {}",
             truncate(project, 28),
@@ -567,6 +626,87 @@ fn truncate(value: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn task(id: &str, kind: crate::models::TaskKind) -> crate::models::TaskRecord {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "kind": kind, "name": id, "workspacePath": "/tmp",
+            "usesWorktree": false, "providerId": "test", "modelId": "test",
+            "thinkingLevel": "off", "createdAt": "", "updatedAt": ""
+        })).unwrap()
+    }
+
+    #[test]
+    fn native_menu_sink_can_reenter_focus_and_activity_without_locks() {
+        let state = MenuBarState::default();
+        state.activity.lock().unwrap().start("code");
+        let mut data = AppData::default();
+        data.tasks.push(task("code", crate::models::TaskKind::Code));
+        let metadata = Mutex::new(data);
+
+        with_snapshot(&state.activity, &metadata, true, |snapshot| {
+            // Native menu APIs can wait on AppKit while a focus callback needs metadata.
+            // Acquiring both here exercises the same boundary without hanging the suite.
+            let mut metadata = metadata.try_lock().expect("native menu retained metadata");
+            let mut activity = state.activity.try_lock().expect("native menu retained activity");
+            metadata.tasks[0].name = "Renamed while building".into();
+            activity.finish("code", RunOutcome::Finished);
+            assert!(snapshot.computer_active);
+            assert_eq!(snapshot.active[0].task_name, "code");
+            assert_eq!(snapshot.active[0].status, DisplayStatus::Working);
+            Ok(())
+        }).unwrap();
+    }
+
+    #[test]
+    fn queued_refresh_coalesces_bursts_and_renders_latest_code_and_chat_state() {
+        let state = MenuBarState::default();
+        let mut data = AppData::default();
+        data.tasks.push(task("code", crate::models::TaskKind::Code));
+        data.tasks.push(task("chat", crate::models::TaskKind::Chat));
+        let metadata = Mutex::new(data);
+
+        state.activity.lock().unwrap().start("code");
+        assert!(state.request_refresh());
+        // The main-thread callback has not run yet; both later events share that refresh.
+        state.activity.lock().unwrap().start("chat");
+        assert!(!state.request_refresh());
+        state.activity.lock().unwrap().finish("code", RunOutcome::Finished);
+        assert!(!state.request_refresh());
+
+        state.begin_refresh();
+        with_snapshot(&state.activity, &metadata, false, |snapshot| {
+            assert_eq!(snapshot.active.len(), 1);
+            assert_eq!(snapshot.active[0].task_id, "chat");
+            assert_eq!(snapshot.recent[0].task_id, "code");
+            // An event during native construction must queue a follow-up, and its snapshot
+            // must be taken when that callback runs rather than reusing the stale first one.
+            state.activity.lock().unwrap().finish("chat", RunOutcome::Stopped);
+            assert!(state.request_refresh());
+            assert!(!state.request_refresh());
+            Ok(())
+        }).unwrap();
+
+        state.begin_refresh();
+        with_snapshot(&state.activity, &metadata, false, |snapshot| {
+            assert!(snapshot.active.is_empty());
+            assert_eq!(snapshot.recent[0].task_id, "chat");
+            assert_eq!(snapshot.recent[0].status, DisplayStatus::Recent(RunOutcome::Stopped));
+            Ok(())
+        }).unwrap();
+    }
+
+    #[test]
+    fn failed_queue_can_be_requested_again() {
+        let state = MenuBarState::default();
+        let error = state.queue_refresh(|| Err("Event loop stopped".into())).unwrap_err();
+        assert_eq!(error, "Event loop stopped");
+        let mut dispatched = false;
+        state.queue_refresh(|| {
+            dispatched = true;
+            Ok(())
+        }).unwrap();
+        assert!(dispatched);
+    }
 
     #[test]
     fn idle_initialization_is_not_visible() {

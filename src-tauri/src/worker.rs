@@ -1008,13 +1008,13 @@ pub fn start_idle_reaper(app: AppHandle) -> tauri::async_runtime::JoinHandle<()>
 // and scripts; Rust's debug assertions do not mean a dev server or a shell PATH is available.
 pub(crate) fn worker_entry_path(app: &AppHandle) -> Result<PathBuf, String> {
     if tauri::is_dev() {
-        Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist/index.js"))
+        Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../worker/dist/worker.js"))
     } else {
         Ok(app
             .path()
             .resource_dir()
             .map_err(|error| error.to_string())?
-            .join("resources/worker/dist/index.js"))
+            .join("resources/worker/dist/worker.js"))
     }
 }
 

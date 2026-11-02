@@ -14,7 +14,7 @@ afterEach(() => {
 function worker(preload?: string) {
   const child = spawn(process.env.WACKCODE_TEST_NODE ?? process.execPath, [
     ...(preload ? ["--import", `data:text/javascript,${encodeURIComponent(preload)}`] : []),
-    process.env.WACKCODE_TEST_WORKER ?? resolve("dist/index.js"),
+    process.env.WACKCODE_TEST_WORKER ?? resolve("dist/worker.js"),
   ], { stdio: "pipe", env: { ...process.env, PI_OFFLINE: "1", PI_TELEMETRY: "0", PI_SKIP_VERSION_CHECK: "1" } });
   children.push(child);
   child.stderr.resume();

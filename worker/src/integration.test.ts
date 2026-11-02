@@ -162,7 +162,7 @@ class WorkerHarness {
   private waiters: Array<() => void> = [];
 
   constructor(cwd: string) {
-    this.child = spawn(process.env.WACKCODE_TEST_NODE ?? process.execPath, [process.env.WACKCODE_TEST_WORKER ?? resolve("dist/index.js")], {
+    this.child = spawn(process.env.WACKCODE_TEST_NODE ?? process.execPath, [process.env.WACKCODE_TEST_WORKER ?? resolve("dist/worker.js")], {
       cwd,
       env: { ...process.env, PI_OFFLINE: "1", PI_TELEMETRY: "0", PI_SKIP_VERSION_CHECK: "1" },
       stdio: ["pipe", "pipe", "pipe"]

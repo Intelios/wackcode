@@ -2,6 +2,8 @@
 
 `worker/src/index.ts` is a Node process wrapping one Pi session per chat. The host talks to it in NDJSON over stdin/stdout (`protocol.ts`, `framing.ts`). After editing anything under `worker/src/`, run `pnpm build:worker` (the dev app runs `worker/dist/`) and start a new chat to see the change.
 
+The host runs `dist/worker.js`, a single-file esbuild bundle made after `tsc` (`worker/scripts/bundle.mjs`), because start-up time was mostly Node loading ~2,200 separate files. Every `@earendil-works/pi-coding-agent` import points at Pi's own pre-built bundle (the one its `pi` CLI runs), never at a re-bundled copy: Pi locates its package files, extension aliases and wasm relative to its own location on disk. Don't import Pi under another specifier, or the worker gets a second Pi instance. `manager.js` and `mcp-probe.js` stay unbundled.
+
 ## Protocol changes
 
 A new or changed command or event touches all of these together:

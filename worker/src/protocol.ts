@@ -889,6 +889,18 @@ export type WorkerCommand =
     }
   | { id: string; type: "shutdown" };
 
+/** A cold reader's completed thumbnail, scoped by the host to one history load. */
+export interface HistoryPreview {
+  imageId: string;
+  thumbnail?: string;
+  failed?: true;
+}
+
+/** The keyless reader's NDJSON stream; the host adds its task and load identifiers. */
+export type SavedHistoryFrame =
+  | { type: "snapshot"; snapshot: SessionSnapshot }
+  | { type: "history_previews"; previews: HistoryPreview[]; done?: true };
+
 export interface NormalizedBlock {
   type: "text" | "thinking" | "tool-call" | "tool-result" | "image";
   text?: string;
@@ -1146,7 +1158,8 @@ export type WorkerOutput =
   | { type: "response"; taskId?: string; id: string; success: true; result?: unknown }
   | { type: "response"; taskId?: string; id: string; success: false; error: string }
   | { type: "ready"; taskId: string; snapshot: SessionSnapshot }
-  | { type: "snapshot"; taskId: string; snapshot: SessionSnapshot }
+  | { type: "snapshot"; taskId: string; snapshot: SessionSnapshot; historyId?: string }
+  | { type: "history_previews"; taskId: string; historyId: string; previews: HistoryPreview[]; done?: true }
   | { type: "snapshot_delta"; taskId: string; delta: SnapshotDelta }
   | { type: "partial"; taskId: string; message: NormalizedMessage }
   | { type: "run_state"; taskId: string; runId?: string; startedAt?: number; operation?: "compaction"; workActivity?: WorkActivity; state: "running" | "idle" | "stopping" | "interrupted" }

@@ -95,7 +95,7 @@ function BubbleImages({ images, entryId, loadImage, hidden = [] }: { images: Nor
         <button key={image.imageId ?? index} type="button" className="chat-image" aria-label={`Open attached image ${index + 1}`} onClick={() => setShown({ index, image })}>
           <img src={image.thumbnail} alt={`Attached image ${index + 1}`} />
         </button>
-      ) : <span key={image.imageId ?? index} className="chat-image pending" role="img" aria-label={`Attached image ${index + 1}`} />)}
+      ) : <span key={image.imageId ?? index} className={`chat-image ${image.failed ? "unavailable" : "pending"}`} role="img" aria-label={`Attached image ${index + 1}${image.failed ? " unavailable" : ""}`}>{image.failed && <Icon name="image" />}</span>)}
       {shown?.image.thumbnail && <ImageLightbox preview={shown.image.thumbnail} load={load} alt={`Attached image ${shown.index + 1}`} onClose={() => setShown(null)} />}
     </div>
   );

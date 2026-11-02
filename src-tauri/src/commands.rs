@@ -2516,10 +2516,18 @@ pub async fn open_task(
     app: AppHandle,
     state: State<'_, MetadataState>,
     task_id: String,
+    history_id: Option<String>,
 ) -> Result<(), String> {
     app.state::<worker::SelectedTask>().set(&task_id);
+    let load = app.state::<crate::history::HistoryState>().begin(
+        &task_id,
+        history_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
+    );
     let lock = task_lock(&app, &task_id);
-    let _guard = lock.lock().await;
+    let guard = lock.lock().await;
+    if !load.is_current() {
+        return Ok(());
+    }
     let task = find_task(&state, &task_id)?;
     if app
         .state::<worker::WorkerState>()
@@ -2555,12 +2563,15 @@ pub async fn open_task(
             .cloned();
         (model, data.tool_catalog.clone())
     };
-    let mut snapshot = crate::history::read(
+    let Some(crate::history::InitialHistory { mut snapshot, reader }) = crate::history::read(
         &app,
         &task,
         model.as_ref().and_then(|model| model.context_window),
+        load,
     )
-    .await?;
+    .await? else {
+        return Ok(());
+    };
     snapshot["model"] = json!({ "provider": task.provider_id, "id": task.model_id, "name": model.as_ref().map(|model| &model.name) });
     snapshot["availableThinkingLevels"] = json!(model
         .as_ref()
@@ -2572,8 +2583,18 @@ pub async fn open_task(
     }
     // The registry is a live-worker feature; retain the latest cached catalogue.
     snapshot["tools"] = json!(tools);
-    app.state::<worker::WorkerState>()
-        .emit_history_if_cold(&app, &task.id, snapshot)
+    let emitted = app.state::<worker::WorkerState>().emit_history_if_cold(
+        &app, &task.id, reader.history_id(),
+        json!({ "type": "snapshot", "taskId": task.id, "historyId": reader.history_id(), "snapshot": snapshot }),
+    )?;
+    // Text is available now. Sending or navigating must not wait for image decoding.
+    drop(guard);
+    if emitted {
+        reader.stream(app);
+    } else {
+        reader.stop().await;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]

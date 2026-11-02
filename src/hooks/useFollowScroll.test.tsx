@@ -46,6 +46,29 @@ function setup(initialHeight = 1_000) {
 }
 
 describe("useFollowScroll", () => {
+  it("holds an unsaved reading position as image previews acquire height or disappear", () => {
+    function Images({ y = 700 }: { y?: number }) {
+      const scroll = useFollowScroll();
+      return <div ref={scroll.ref} onScroll={scroll.onScroll} onWheel={scroll.onWheel} data-testid="images-scroller">
+        <div data-transcript-anchor="reading" data-y={y}>Reading below previews</div>
+      </div>;
+    }
+    const view = render(<Images />);
+    const el = screen.getByTestId("images-scroller");
+    Object.defineProperties(el, { clientHeight: { value: 300 }, scrollHeight: { value: 2_000 } });
+    el.getBoundingClientRect = () => ({ top: 50 } as DOMRect);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return { top: 50 + Number(this.dataset.y ?? 0) - el.scrollTop } as DOMRect;
+    });
+    view.rerender(<Images />);
+    el.scrollTop = 675;
+    fireEvent.scroll(el);
+    view.rerender(<Images y={850} />);
+    expect(el.scrollTop).toBe(825);
+    view.rerender(<Images y={650} />);
+    expect(el.scrollTop).toBe(625);
+  });
+
   it("waits for cold history, restores before paint and keeps the reading anchor through streaming", () => {
     const saved = { following: false, top: 675, anchors: [{ key: "reading", offset: 25 }] };
     const memory: TranscriptViewState = { position: saved };

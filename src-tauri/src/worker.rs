@@ -97,22 +97,25 @@ pub struct WorkerState {
 }
 
 impl WorkerState {
-    fn mark_ready(&self, task_id: &str, pid: u32) {
+    fn mark_ready(&self, task_id: &str, pid: u32) -> bool {
         if let Ok(mut workers) = self.workers.lock() {
             if let Some(worker) = workers.get_mut(task_id).filter(|worker| worker.pid == pid) {
                 worker.initialized = true;
+                return true;
             }
         }
+        false
     }
 
-    /// Serialize cold emission with the ready transition. A reader finishing after a worker
-    /// becomes ready must never overwrite its newer snapshot or clear its streaming message.
+    /// Serialize every cold frame with the ready transition. Neither a late initial snapshot
+    /// nor an image preview may overwrite a live worker's newer state.
     pub fn emit_history_if_cold(
         &self,
         app: &AppHandle,
         task_id: &str,
-        snapshot: Value,
-    ) -> Result<(), String> {
+        history_id: &str,
+        event: Value,
+    ) -> Result<bool, String> {
         let workers = self
             .workers
             .lock()
@@ -121,13 +124,10 @@ impl WorkerState {
             .get(task_id)
             .is_some_and(|worker| worker.initialized)
         {
-            return Ok(());
+            return Ok(false);
         }
-        app.emit(
-            "worker-event",
-            json!({ "type": "snapshot", "taskId": task_id, "snapshot": snapshot }),
-        )
-        .map_err(|_| "Could not show this chat's saved history.".to_string())
+        app.state::<crate::history::HistoryState>()
+            .emit_if_current(app, task_id, history_id, event)
     }
 
     pub fn get(&self, task_id: &str) -> Result<Option<WorkerProcess>, String> {
@@ -342,6 +342,9 @@ pub async fn ensure_worker_with(
     api_key: Option<&str>,
     options: WorkerOptions,
 ) -> Result<(), String> {
+    // A run or branch operation takes authority before the worker is ready. Cold image work
+    // must not keep consuming resources or patch the history while that operation starts.
+    app.state::<crate::history::HistoryState>().cancel(&task.id, None);
     let worker_state = app.state::<WorkerState>();
     let wanted_fingerprint = {
         let state = app.state::<MetadataState>();
@@ -894,6 +897,7 @@ pub async fn terminate_worker(
     task_id: &str,
     graceful: bool,
 ) -> Result<(), String> {
+    app.state::<crate::history::HistoryState>().cancel(task_id, None);
     let Some(worker) = app.state::<WorkerState>().remove(task_id)? else {
         crate::menu_bar::worker_stopped(app, task_id, false);
         return Ok(());
@@ -1311,7 +1315,9 @@ fn handle_worker_line(
         .unwrap_or("")
         .to_string();
     if event_type == "ready" {
-        app.state::<WorkerState>().mark_ready(task_id, worker_pid);
+        if app.state::<WorkerState>().mark_ready(task_id, worker_pid) {
+            app.state::<crate::history::HistoryState>().cancel(task_id, None);
+        }
     }
     if event_type == "usage_record" {
         if let Some(record) = value.get("record") {

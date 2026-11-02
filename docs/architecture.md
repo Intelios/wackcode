@@ -111,7 +111,7 @@ not. Commands must remain in the foreground; detached daemons are outside this l
 
 ## Worker lifecycle (`worker.rs`)
 
-- **History:** `open_task` asks an existing worker for its live snapshot; otherwise `history.rs` reads the saved session through a keyless, read-only helper. It holds the task lock through emission, never needs a connection or workspace, and never starts a worker.
+- **History:** `open_task` asks an existing worker for its live snapshot; otherwise `history.rs` streams the saved session through a keyless, read-only helper. The task lock covers the initial text/state snapshot only; thumbnail batches follow in the background under a per-load `historyId`, outside live revisions. Navigation, replacement, live-worker takeover and app exit retire the reader. History never needs a connection or workspace and never starts a worker.
 - **Spawn:** any command that talks to a chat's worker goes through `ensure_worker`, which starts one if needed. Never assume a worker is running.
 - **Fingerprint:** provider, model and the trusted package resources resolved at spawn. When it changes, the worker is killed and respawned, even mid-run. Settings that apply live (tools, prompts, execution policy, sub-agents, MCP, skills, commands, memory, computer use, a provider's on/off switch) travel in `init` and in `set_*` commands and must stay out of the fingerprint.
 - **Idle reaper:** stops a worker 15 minutes after its last output, never the open chat (`SelectedTask`) and never the newest four. It takes the chat's task lock and re-checks status, so it can't race a run.

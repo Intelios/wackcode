@@ -18,6 +18,7 @@ vi.mock("./api", () => ({ api: {
   bootstrap: vi.fn(), refreshSubscriptionModels: vi.fn().mockResolvedValue([]),
   takeMenuNavigation: vi.fn().mockResolvedValue(null), setChatTabMenu: vi.fn().mockResolvedValue(undefined),
   computerUseCursorAppearance: vi.fn().mockResolvedValue(undefined), setVisualTheme: vi.fn().mockResolvedValue(undefined), stageVisual: vi.fn().mockResolvedValue("wcvisual://localhost/artboard"), startCanvas: vi.fn().mockResolvedValue("run"), exportArtboard: vi.fn().mockResolvedValue(true), openTask: vi.fn().mockResolvedValue(undefined),
+  cancelHistory: vi.fn().mockResolvedValue(undefined), recordHistoryTiming: vi.fn().mockResolvedValue(undefined),
   computerUseRespondAccess: vi.fn(), computerUseRevokeApp: vi.fn(),
   gitPublishInfo: vi.fn().mockResolvedValue({ branch: "main", upstream: null, remotes: [] }),
   gitChanges: vi.fn().mockResolvedValue({ isGit: false, files: [] }), listDraftCommands: vi.fn().mockResolvedValue([]),
@@ -107,6 +108,46 @@ describe("workspace presentation scope", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
     expect(shell).toHaveAttribute("data-screen", "workspace");
     expect(shell).toHaveAttribute("data-area", "chat");
+  });
+});
+
+describe("streamed saved history", () => {
+  it.each(["code", "chat"] as const)("hydrates %s previews and ignores a retired cold load after live takeover", async (kind) => {
+    bootstrap(false, false, { tasks: [{ ...task("a"), kind }] });
+    await screen.findByRole("button", { name: "Settings" });
+    if (kind === "chat") fireEvent.click(within(screen.getByRole("group", { name: "Area" })).getByRole("button", { name: "Chat" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Chat a" }));
+    const messages: NormalizedMessage[] = [
+      { id: "u", entryId: "u", role: "user", blocks: [{ type: "text", text: "Saved question" }, { type: "image", imageId: "i1", mimeType: "image/png" }] },
+      { id: "a1", entryId: "a1", role: "assistant", blocks: [{ type: "text", text: "Saved answer" }] },
+    ];
+    await worker({ type: "snapshot", taskId: "a", historyId: "cold", snapshot: snapshot(messages) });
+    expect(screen.getByText("Saved answer")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Attached image 1" })).toBeInTheDocument();
+    await worker({ type: "history_previews", taskId: "a", historyId: "obsolete", previews: [{ imageId: "i1", thumbnail: "data:obsolete" }] });
+    expect(screen.queryByRole("button", { name: "Open attached image 1" })).toBeNull();
+    await worker({ type: "history_previews", taskId: "a", historyId: "cold", previews: [{ imageId: "i1", thumbnail: "data:image/png;base64,dGh1bWI=" }] });
+    expect(screen.getByRole("button", { name: "Open attached image 1" }).querySelector("img")).toHaveAttribute("src", "data:image/png;base64,dGh1bWI=");
+    await worker({ type: "ready", taskId: "a", snapshot: snapshot(messages) });
+    await worker({ type: "history_previews", taskId: "a", historyId: "cold", previews: [{ imageId: "i1", thumbnail: "data:late" }], done: true });
+    expect(screen.queryByRole("button", { name: "Open attached image 1" })).toBeNull();
+    expect(screen.getByText("Saved answer")).toBeInTheDocument();
+  });
+
+  it("can send while previews are pending and cancels the exact load when navigating away", async () => {
+    bootstrap(false);
+    fireEvent.click(await screen.findByRole("button", { name: "Chat a" }));
+    const historyId = vi.mocked(api.openTask).mock.calls.at(-1)![1]!;
+    await worker({ type: "snapshot", taskId: "a", historyId, snapshot: snapshot([
+      { id: "u", role: "user", blocks: [{ type: "text", text: "Saved question" }, { type: "image", imageId: "i1" }] },
+    ]) });
+    type("Continue while previews load");
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(api.prompt).toHaveBeenCalled());
+    chat("b");
+    expect(api.cancelHistory).toHaveBeenCalledWith("a", historyId);
+    chat("a");
+    expect(vi.mocked(api.openTask).mock.calls.at(-1)![1]).not.toBe(historyId);
   });
 });
 
@@ -543,7 +584,7 @@ describe("App tab workspace", () => {
     expect(input()).toHaveValue("Keep my draft");
     expect(document.getElementById(original)).toHaveAttribute("aria-selected", "false");
     fireEvent.click(document.getElementById(original)!);
-    await waitFor(() => expect(api.openTask).toHaveBeenCalledWith("created"));
+    await waitFor(() => expect(api.openTask).toHaveBeenCalledWith("created", expect.any(String)));
     expect(screen.getByRole("tab", { name: /First send/ })).toHaveAttribute("aria-selected", "true");
   });
 
@@ -792,10 +833,10 @@ describe("App areas", () => {
     boot([task("a"), chatTask("c", "Trip plan")]);
     await screen.findByRole("button", { name: "Settings" });
     chat("a");
-    await waitFor(() => expect(api.openTask).toHaveBeenCalledWith("a"));
+    await waitFor(() => expect(api.openTask).toHaveBeenCalledWith("a", expect.any(String)));
     enter("Chat");
     fireEvent.click(await screen.findByRole("button", { name: "Trip plan" }));
-    await waitFor(() => expect(api.openTask).toHaveBeenCalledWith("c"));
+    await waitFor(() => expect(api.openTask).toHaveBeenCalledWith("c", expect.any(String)));
     expect(screen.getByRole("heading", { name: "Trip plan" })).toBeInTheDocument();
     enter("Code");
     expect(screen.getByRole("heading", { name: "Chat a" })).toBeInTheDocument();
@@ -813,7 +854,7 @@ describe("App areas", () => {
     await waitFor(() => expect(api.prompt).toHaveBeenCalled());
     expect(api.createTask).toHaveBeenCalledWith({ kind: "chat", name: "Hello there", providerId: "p", modelId: "first", thinkingLevel: "off" });
     expect(vi.mocked(api.prompt).mock.calls[0][0]).toMatchObject({ taskId: "made", mode: "build" });
-    await waitFor(() => expect(api.openTask).toHaveBeenCalledWith("made"));
+    await waitFor(() => expect(api.openTask).toHaveBeenCalledWith("made", expect.any(String)));
     expect(api.gitChanges).not.toHaveBeenCalledWith({ taskId: "made" });
     expect(api.setTaskMode).not.toHaveBeenCalled();
     // The chat's header offers the browser and its menu only; the scratchpad is in the menu.

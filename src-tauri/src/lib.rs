@@ -48,6 +48,7 @@ pub fn run() {
         // `wcvisual:` (`visuals::navigation_allowed`).
         .plugin(visuals::navigation_plugin())
         .manage(WorkerState::default())
+        .manage(history::HistoryState::default())
         .manage(usage::UsageState::default())
         .manage(browser::BrowserManager::default())
         .manage(computer_use::ComputerUseManager::default())
@@ -246,6 +247,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + 
             commands::configure_task,
             commands::set_task_team,
             commands::open_task,
+            history::cancel_history,
             commands::watch_subagent,
             commands::list_draft_commands,
             commands::list_commands,
@@ -334,7 +336,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + 
         ]);
     #[cfg(debug_assertions)]
     {
-        let developer: Box<dyn Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync> = Box::new(tauri::generate_handler![commands::developer_reset_data]);
+        let developer: Box<dyn Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync> = Box::new(tauri::generate_handler![commands::developer_reset_data, history::developer_record_history_timing]);
         return move |invoke: tauri::ipc::Invoke<tauri::Wry>| {
             if invoke.message.command().starts_with("developer_") {
                 developer(invoke)
@@ -353,6 +355,7 @@ pub(crate) fn cleanup_before_exit(app: &tauri::AppHandle) {
     let _ = app.state::<MetadataState>().save();
     let _ = app.state::<web_usage::WebUsageState>().flush();
     app.state::<worker::ReaperHandle>().stop();
+    app.state::<history::HistoryState>().stop();
     app.state::<WorkerState>().terminate_all();
     app.state::<browser::BrowserManager>().dispose_all();
     computer_use::dispose_all(app);

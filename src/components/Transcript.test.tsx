@@ -1106,6 +1106,15 @@ describe("Transcript attached images", () => {
     ]
   });
 
+  it("settles an unavailable saved attachment after its preview fails", () => {
+    const message: NormalizedMessage = { id: "u", role: "user", blocks: [{ type: "image", imageId: "i1" }] };
+    const view = render(<Transcript messages={[message]} running={false} />);
+    expect(screen.getByRole("img", { name: "Attached image 1" })).toBeInTheDocument();
+    view.rerender(<Transcript messages={[{ ...message, blocks: [{ ...message.blocks[0], failed: true }] }]} running={false} />);
+    expect(screen.getByRole("img", { name: "Attached image 1 unavailable" })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "Attached image 1" })).toBeNull();
+  });
+
   it("opens a sent image full size in the lightbox, and Escape closes it", async () => {
     const loadImage = vi.fn(async () => "data:image/png;base64,b3JpZ2luYWw=");
     render(<Transcript messages={[attached()]} running={false} loadImage={loadImage} />);

@@ -435,7 +435,7 @@ function renderSlots(
 // Recomputed for every message on every streamed partial, so image blocks stand in as their id
 // and readiness rather than their preview data.
 function signatureBlock(block: NormalizedBlock): unknown {
-  return block.type === "image" ? { image: block.imageId, ready: Boolean(block.thumbnail) } : block;
+  return block.type === "image" ? { image: block.imageId, ready: Boolean(block.thumbnail), failed: Boolean(block.failed) } : block;
 }
 
 /** A tool call's inputs from outside its message: its result and live progress. */
@@ -552,7 +552,7 @@ function MessageImages({ images, entryId, loadImage, hidden = [] }: { images: No
             <img src={image.thumbnail} alt={`Attached image ${index + 1}`} />
           </button>
         )
-        : <div key={image.imageId ?? index} className="image-pending" role="img" aria-label={`Attached image ${index + 1}`}><Icon name="image" /></div>
+        : <div key={image.imageId ?? index} className="image-pending" role="img" aria-label={`Attached image ${index + 1}${image.failed ? " unavailable" : ""}`}><Icon name="image" /></div>
       )}
       {shown?.image.thumbnail && (
         <ImageLightbox preview={shown.image.thumbnail} load={loadShown} alt={`Attached image ${shown.index + 1}`} onClose={() => setShown(null)} />

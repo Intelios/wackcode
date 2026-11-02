@@ -61,7 +61,10 @@ context statistics. Both views honor context edits and omissions. It receives on
 cleared environment (only PATH and offline flags remain), never loads extensions or credentials,
 and never rewrites the file (legacy migrations happen in memory). Cold snapshots use revision 0; a new worker's
 full ready snapshot establishes its own delta chain. Ready workers remain authoritative; a
-reader that finishes after a worker becomes ready discards its cold snapshot.
+reader that finishes after a worker becomes ready discards its cold snapshot. The helper emits
+NDJSON: complete text/state first, then newest-first, sequentially decoded `history_previews`
+batches (200 ms or eight previews) and a terminal `done` frame. Originals never enter these
+frames. Rust adds the per-load `historyId`; thumbnail updates never advance a live revision.
 
 ## Snapshots and deltas
 

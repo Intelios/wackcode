@@ -1531,11 +1531,19 @@ export interface QueuedMessage {
   images?: ImageContent[];
 }
 
+/** One completed preview from the keyless saved-history reader. Originals never cross here. */
+export interface HistoryPreview {
+  imageId: string;
+  thumbnail?: string;
+  failed?: true;
+}
+
 export type WorkerEvent =
   | { type: "usage_record"; taskId: string; record: UsageRecord }
   /** A name change under the chat: "opening" is the first-run stand-in, "auto" the title model's. */
   | { type: "title_changed"; taskId: string; name: string; source: "auto" | "opening" }
-  | { type: "ready" | "snapshot"; taskId: string; snapshot: SessionSnapshot }
+  | { type: "ready" | "snapshot"; taskId: string; snapshot: SessionSnapshot; historyId?: string }
+  | { type: "history_previews"; taskId: string; historyId: string; previews: HistoryPreview[]; done?: true }
   | { type: "snapshot_delta"; taskId: string; delta: SnapshotDelta }
   | { type: "partial"; taskId: string; message: NormalizedMessage }
   | { type: "run_state"; taskId: string; runId?: string; startedAt?: number; operation?: "compaction"; workActivity?: WorkActivity; state: TaskStatus }
@@ -1567,6 +1575,8 @@ export interface TaskRuntime {
   slashCommandsLoading?: boolean;
   slashCommandsError?: string;
   snapshot?: SessionSnapshot;
+  /** Only this cold load may hydrate previews. Any live snapshot retires it. Never persisted. */
+  historyId?: string;
   partial?: NormalizedMessage;
   /** The message just sent, shown in the transcript until the worker's snapshot records it.
    *  Set at send time; cleared when the run settles. `withPendingEcho` hides it once the real

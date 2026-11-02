@@ -3324,7 +3324,8 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
 .chat-images { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .chat-image { padding: 0; border: 0; border-radius: 16px; overflow: hidden; cursor: zoom-in; background: var(--wc-well); }
 .chat-image img { display: block; max-width: 220px; max-height: 180px; object-fit: cover; }
-.chat-image.pending { width: 120px; height: 90px; }
+.chat-image.pending, .chat-image.unavailable { width: 120px; height: 90px; cursor: default; }
+.chat-image.unavailable { display: grid; place-items: center; color: var(--text-faint); }
 .chat-attached { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 .chat-attached-file > button {
   display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 999px; cursor: pointer;

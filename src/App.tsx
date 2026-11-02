@@ -23,6 +23,7 @@ import { applyRunEvent, EMPTY_RUN_REGISTRY, runIsActive, runKey } from "./run-st
 import { APP_SLASH_COMMANDS, appCommandsFor, commandMatchesName } from "./command-utils";
 import { AREA_KEY, areaDirection, parseArea, taskArea, tasksInArea, type Area } from "./areas";
 import { performChatNavigation, withoutResolvedDialog } from "./menu-navigation";
+import { applyHistoryPreviews } from "./history-previews";
 import { useComposerDrafts } from "./hooks/useComposerDrafts";
 import { useChatTabs } from "./hooks/useChatTabs";
 import { activateTab, addDraftTab, bindTab, closeTab, cycleTab, draftTab, findTab, openChatTab, patchTab, removeDraftProject, removeTaskTabs, reopenTab, reorderTab, switchTabArea, tabsInArea, type ChatDraft, type TabPanelState } from "./chat-tabs";
@@ -299,6 +300,10 @@ export default function App() {
   const selectTaskRef = useRef<(id: string) => void>(() => undefined);
   const selectedTaskRef = useRef<string | undefined>(undefined);
   const [runtimes, setRuntimes] = useState<Record<string, TaskRuntime>>({});
+  const [historyReload, setHistoryReload] = useState(0);
+  // Development measurements contain only durations/counts; no session text or image data.
+  const historyTiming = useRef<{ taskId: string; historyId: string; started: number; received?: number; committed?: number }>(undefined);
+  const historySelection = useRef<{ taskId: string; at: number }>(undefined);
   const [changes, setChanges] = useState<GitChanges>();
   const [changesLoading, setChangesLoading] = useState(false);
   const changesRequest = useRef(0);
@@ -832,6 +837,7 @@ export default function App() {
   enterAreaRef.current = enterArea;
 
   function selectTask(id: string) {
+    if (import.meta.env.DEV) historySelection.current = { taskId: id, at: performance.now() };
     // A chat opened from anywhere (the tray menu, a link) brings its own area forward first.
     const target = data.tasks.find((task) => task.id === id);
     const crossing = target !== undefined && taskArea(target) !== areaRef.current;
@@ -1157,6 +1163,11 @@ export default function App() {
       }
       if (payload.type === "ready" || payload.type === "snapshot") {
         const snapshot = payload.snapshot;
+        const timing = historyTiming.current;
+        if (import.meta.env.DEV && payload.historyId && timing?.historyId === payload.historyId) {
+          timing.received = performance.now();
+          performance.mark("wackcode:history:snapshot");
+        }
         // Keep the previous plan/todo objects when they are unchanged: the transcript's message
         // memos compare them by identity, and a fresh object per snapshot would re-render the
         // whole transcript on every event.
@@ -1167,7 +1178,7 @@ export default function App() {
           const goalState = sameGoalState(runtime?.goalState, snapshot.goalState) ? runtime?.goalState : snapshot.goalState;
           return {
             ...current,
-            [taskId]: { ...runtime, snapshot, activeRun: snapshot.activeRun, workActivity: snapshot.workActivity, compaction: snapshot.compaction, planState, todoState, goalState, partial: undefined, error: undefined,
+            [taskId]: { ...runtime, snapshot, historyId: payload.historyId, activeRun: snapshot.activeRun, workActivity: snapshot.workActivity, compaction: snapshot.compaction, planState, todoState, goalState, partial: undefined, error: undefined,
               ...(payload.type === "ready" ? {
                 // Only a fresh worker resets the queue; full snapshots leave queue_state authoritative.
                 queued: [],
@@ -1186,17 +1197,24 @@ export default function App() {
         if (tools) {
           setData((current) => sameToolCatalog(current.toolCatalog, tools) ? current : { ...current, toolCatalog: tools });
         }
+      } else if (payload.type === "history_previews") {
+        setRuntimes((current) => {
+          const previous = current[taskId];
+          const next = applyHistoryPreviews(previous, payload);
+          return next && next !== previous ? { ...current, [taskId]: next } : current;
+        });
       } else if (payload.type === "snapshot_delta") {
         setRuntimes((current) => {
           const runtime = current[taskId];
           const previous = runtime?.snapshot;
           // Deltas chain onto the last full snapshot or delta; a gap means a frame went
           // missing, so this one is dropped and the next full snapshot resynchronizes.
-          if (!previous || previous.rev + 1 !== payload.delta.rev) return current;
+          if (!previous || previous.rev + 1 !== payload.delta.rev) return runtime?.historyId
+            ? { ...current, [taskId]: { ...runtime, historyId: undefined } } : current;
           const snapshot = applySnapshotDelta(previous, payload.delta);
           return {
             ...current,
-            [taskId]: { ...runtime, snapshot, activeRun: snapshot.activeRun, workActivity: snapshot.workActivity, compaction: snapshot.compaction, planState: snapshot.planState, todoState: snapshot.todoState, goalState: snapshot.goalState, partial: undefined, error: undefined }
+            [taskId]: { ...runtime, snapshot, historyId: undefined, activeRun: snapshot.activeRun, workActivity: snapshot.workActivity, compaction: snapshot.compaction, planState: snapshot.planState, todoState: snapshot.todoState, goalState: snapshot.goalState, partial: undefined, error: undefined }
           };
         });
         const delta = payload.delta;
@@ -1395,10 +1413,46 @@ export default function App() {
     setChanges(undefined);
     if (!selectedTaskId) return;
     void refreshChanges(selectedTaskId);
-    api.openTask(selectedTaskId).catch((reason) => {
-      patchRuntime(selectedTaskId, { error: String(reason) });
+  }, [selectedTaskId, refreshChanges]);
+
+  useEffect(() => {
+    if (!selectedTaskId || settingsOpen) return;
+    const historyId = crypto.randomUUID();
+    let disposed = false;
+    if (import.meta.env.DEV) {
+      historyTiming.current = { taskId: selectedTaskId, historyId,
+        started: historySelection.current?.taskId === selectedTaskId ? historySelection.current.at : performance.now() };
+      historySelection.current = undefined;
+      performance.mark("wackcode:history:open");
+    }
+    api.openTask(selectedTaskId, historyId).catch((reason) => {
+      if (!disposed) patchRuntime(selectedTaskId, { error: String(reason) });
     });
-  }, [selectedTaskId, refreshChanges, patchRuntime]);
+    return () => {
+      disposed = true;
+      setRuntimes((current) => {
+        const previous = current[selectedTaskId];
+        const next = applyHistoryPreviews(previous, { historyId, previews: [], done: true });
+        return next && next !== previous ? { ...current, [selectedTaskId]: next } : current;
+      });
+      void api.cancelHistory(selectedTaskId, historyId).catch(() => undefined);
+    };
+  }, [selectedTaskId, settingsOpen, historyReload, patchRuntime]);
+
+  useLayoutEffect(() => {
+    const timing = historyTiming.current;
+    if (!import.meta.env.DEV || !timing || timing.taskId !== selectedTaskId || timing.received === undefined || timing.committed !== undefined) return;
+    timing.committed = performance.now();
+    performance.mark("wackcode:history:commit");
+    // Two animation frames bracket a paint opportunity after the committed transcript.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (historyTiming.current !== timing || selectedTaskRef.current !== timing.taskId) return;
+      const painted = performance.now();
+      performance.mark("wackcode:history:paint");
+      void api.recordHistoryTiming(timing.received! - timing.started, timing.committed! - timing.started,
+        painted - timing.started, runtime?.snapshot?.messages.length ?? 0).catch(() => undefined);
+    }));
+  }, [selectedTaskId, runtime?.snapshot]);
 
   // Clears the first-send handoff: the frozen text leaves the docked composer once the
   // message exists in the transcript, or once the entrance has certainly finished.
@@ -2158,7 +2212,7 @@ export default function App() {
       rememberModel(updated);
       // Refresh the saved snapshot's model metadata after a switch. The durable transcript
       // divider is recorded when the next worker starts; viewing history stays read-only.
-      if (modelChanged) await api.openTask(updated.id);
+      if (modelChanged && selectedTaskRef.current === updated.id) setHistoryReload((value) => value + 1);
     } catch (reason) {
       patchRuntime(selectedTask.id, { error: String(reason) });
     }

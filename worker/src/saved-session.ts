@@ -6,7 +6,7 @@
  */
 import { readFile } from "node:fs/promises";
 import type { FileEntry, SessionEntry, SessionProjection } from "@earendil-works/pi-coding-agent";
-import type { NormalizedBlock, ReasoningEffort, SessionSnapshot, TaskMode } from "./protocol.js";
+import type { HistoryPreview, NormalizedBlock, ReasoningEffort, SavedHistoryFrame, SessionSnapshot, TaskMode } from "./protocol.js";
 import { normalizeMessage, RESULT_THUMBNAIL_OPTIONS, THUMBNAIL_OPTIONS } from "./message-normalization.js";
 import { transcriptEntries, transcriptMessages } from "./transcript.js";
 import { buildTreeIndex, modelSwitchesOnPath, undoTarget, type EntryLike } from "./tree.js";
@@ -29,9 +29,23 @@ export interface SavedSessionOptions {
   mode: TaskMode;
   thinkingLevel: ReasoningEffort;
   contextWindow?: number;
+  /** Host-owned development flag. Logs contain durations/counts only, never session contents. */
+  debugTimings?: boolean;
 }
 
-export async function readSavedSession(options: SavedSessionOptions): Promise<SessionSnapshot> {
+interface PreviewJob {
+  block: Record<string, unknown>;
+  preview: NormalizedBlock;
+  options: typeof THUMBNAIL_OPTIONS;
+}
+
+/** Test injection keeps the ordering contract verifiable without depending on image speed. */
+interface SavedSessionDependencies {
+  resizeImage?: Pi["resizeImage"];
+}
+
+async function prepareSavedSession(options: SavedSessionOptions): Promise<{ snapshot: SessionSnapshot; jobs: PreviewJob[] }> {
+  const started = performance.now();
   let fileEntries: FileEntry[] = [];
   if (options.sessionFile) {
     const text = await readFile(options.sessionFile, "utf8");
@@ -56,34 +70,26 @@ export async function readSavedSession(options: SavedSessionOptions): Promise<Se
   path.reverse();
   const context = entries.length ? (await sessionHelpers()).buildSessionProjection(entries, leaf?.id ?? null) : undefined;
 
-  // Previews use exactly the live worker's limits; originals and child transcripts never ride
-  // a snapshot. Resize sequentially, without starting a model or loading any extensions.
+  // Register image identities without importing a decoder or touching pixels. The first
+  // snapshot must be usable before ANY thumbnail work starts, including a decoder import.
   const previews = new WeakMap<object, NormalizedBlock>();
+  const jobs: PreviewJob[] = [];
   let nextImageId = 0;
-  let resize: Pi["resizeImage"] | undefined;
   const imageBlock = (block: Record<string, unknown>): NormalizedBlock => previews.get(block) ?? { type: "image", mimeType: String(block.mimeType ?? "image/png") };
-  const prepare = async (content: unknown, options = THUMBNAIL_OPTIONS) => {
+  const register = (content: unknown, options = THUMBNAIL_OPTIONS) => {
     if (!Array.isArray(content)) return;
     for (const block of content) {
       if (!block || typeof block !== "object" || block.type !== "image" || previews.has(block)) continue;
       const mimeType = typeof block.mimeType === "string" ? block.mimeType : "image/png";
       const preview: NormalizedBlock = { type: "image", mimeType, imageId: `image-${++nextImageId}` };
       previews.set(block, preview);
-      try {
-        if (typeof block.data !== "string" || !block.data) continue;
-        resize ??= (await import(new URL("utils/image-resize.js", piBase()).href)).resizeImage as Pi["resizeImage"];
-        const resized = await resize(Buffer.from(block.data, "base64"), mimeType, options);
-        if (resized) preview.thumbnail = `data:${resized.mimeType};base64,${resized.data}`;
-      } catch { /* An unreadable image must not hide the rest of the transcript. */ } finally {
-        // Nothing resizes after this pass, so a missing preview is final.
-        if (!preview.thumbnail) preview.failed = true;
-      }
+      jobs.push({ block, preview, options });
     }
   };
   for (const entry of transcriptEntries(path)) {
     const message = entry.raw as { role?: string; content?: unknown };
-    if (message.role === "user") await prepare(message.content);
-    else if (message.role === "toolResult") await prepare(message.content, RESULT_THUMBNAIL_OPTIONS);
+    if (message.role === "user") register(message.content);
+    else if (message.role === "toolResult") register(message.content, RESULT_THUMBNAIL_OPTIONS);
   }
   const tokenHelpers = path.some((entry) => entry.type === "compaction")
     ? await import(new URL("core/compaction/compaction.js", piBase()).href) as Pick<Pi, "estimateTokens"> : undefined;
@@ -111,7 +117,7 @@ export async function readSavedSession(options: SavedSessionOptions): Promise<Se
     cost += usage.cost?.total ?? 0;
   }
   tokens.total = tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite;
-  return {
+  const snapshot: SessionSnapshot = {
     rev: 0, sessionId: header?.id ?? options.taskId,
     workActivity: { parent: "idle", subagents: 0, pendingResults: 0 },
     ...(options.sessionFile ? { sessionFile: options.sessionFile } : {}), messages,
@@ -123,6 +129,77 @@ export async function readSavedSession(options: SavedSessionOptions): Promise<Se
     planState: { mode, phase: plan.plan !== undefined ? "ready" : "planning", ...(plan.plan !== undefined ? { plan: plan.plan } : {}) },
     todoState: { tasks: replayFromBranch(path).tasks }, goalState: restoreGoalState(path)
   };
+  if (options.debugTimings) process.stderr.write(`history timing: ${JSON.stringify({ phase: "prepare", durationMs: Math.round(performance.now() - started), messages: messages.length, images: jobs.length })}\n`);
+  return { snapshot, jobs };
+}
+
+/**
+ * Stream complete text/state first, then small newest-first thumbnail batches. The host owns
+ * process cancellation and its historyId: these frames never join the live revision chain.
+ * Sequential resizing bounds decoder threads and memory even for hundreds of screenshots.
+ */
+export async function streamSavedSession(options: SavedSessionOptions, emit: (frame: SavedHistoryFrame) => void | Promise<void>, dependencies: SavedSessionDependencies = {}): Promise<void> {
+  const { snapshot, jobs } = await prepareSavedSession(options);
+  await emit({ type: "snapshot", snapshot });
+  const started = performance.now();
+  let resize = dependencies.resizeImage;
+  let pending: HistoryPreview[] = [];
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let writes = Promise.resolve();
+  const flush = () => {
+    if (timer) { clearTimeout(timer); timer = undefined; }
+    if (!pending.length) return;
+    const previews = pending;
+    pending = [];
+    writes = writes.then(() => emit({ type: "history_previews", previews }));
+    // A timed flush may fail while a decoder is running. Observe it immediately, then
+    // surface the failure at the next await rather than leaking an unhandled rejection.
+    void writes.catch(() => undefined);
+  };
+  try {
+    for (let index = jobs.length - 1; index >= 0; index -= 1) {
+      // Do not build an unbounded backlog if the host stops draining its pipe.
+      await writes;
+      const job = jobs[index];
+      const preview: HistoryPreview = { imageId: job.preview.imageId! };
+      try {
+        if (typeof job.block.data === "string" && job.block.data) {
+          resize ??= (await import(new URL("utils/image-resize.js", piBase()).href)).resizeImage as Pi["resizeImage"];
+          const resized = await resize(Buffer.from(job.block.data, "base64"), job.preview.mimeType!, job.options);
+          if (resized) preview.thumbnail = `data:${resized.mimeType};base64,${resized.data}`;
+        }
+      } catch { /* An unreadable image cannot hide the rest of the transcript. */ }
+      if (!preview.thumbnail) preview.failed = true;
+      pending.push(preview);
+      if (pending.length >= 8) flush();
+      else timer ??= setTimeout(flush, 200);
+    }
+  } finally {
+    flush();
+    await writes;
+  }
+  await emit({ type: "history_previews", previews: [], done: true });
+  if (options.debugTimings) process.stderr.write(`history timing: ${JSON.stringify({ phase: "previews", durationMs: Math.round(performance.now() - started), images: jobs.length })}\n`);
+}
+
+/** Completed projection for callers that need all previews; the UI uses the stream above. */
+export async function readSavedSession(options: SavedSessionOptions): Promise<SessionSnapshot> {
+  let snapshot: SessionSnapshot | undefined;
+  const previews = new Map<string, HistoryPreview>();
+  await streamSavedSession(options, (frame) => {
+    if (frame.type === "snapshot") snapshot = frame.snapshot;
+    else for (const preview of frame.previews) previews.set(preview.imageId, preview);
+  });
+  if (!snapshot) throw new Error("This chat's saved session has no snapshot.");
+  const messages = snapshot.messages.map((message) => ({
+    ...message,
+    blocks: message.blocks.map((block) => ({
+      ...block,
+      ...(block.imageId ? previews.get(block.imageId) : {}),
+      ...(block.images ? { images: block.images.map((image) => ({ ...image, ...previews.get(image.imageId) })) } : {})
+    }))
+  }));
+  return { ...snapshot, messages };
 }
 
 /** Match Pi's live context count, including retained compaction context and messages after usage. */

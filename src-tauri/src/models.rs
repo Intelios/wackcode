@@ -3,6 +3,18 @@ use std::collections::BTreeMap;
 
 pub const DATA_VERSION: u32 = 1;
 
+/// A cold reader's image-only update. Matches `HistoryPreview` in both TypeScript layers;
+/// these runtime frames never modify saved metadata or the live snapshot revision chain.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryPreview {
+    pub image_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumbnail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelRecord {

@@ -15,6 +15,9 @@ export function useFollowScroll(memory?: TranscriptViewState, historyReady = tru
   ready.current = historyReady;
   const following = useRef(memory?.position?.following ?? true);
   const restoring = useRef(memory?.position);
+  // Even a surface without saved tab state must hold its reading position while previews
+  // decode or fail. Keep this local copy independently of cross-navigation memory.
+  const lastPosition = useRef(memory?.position);
   const lastTop = useRef(0);
   const heldAnchor = useRef<{ node: HTMLElement; offset: number } | null>(null);
   const observed = useRef<{ element: HTMLElement; content: Element | null; observer: ResizeObserver } | null>(null);
@@ -22,7 +25,11 @@ export function useFollowScroll(memory?: TranscriptViewState, historyReady = tru
 
   const savePosition = useCallback(() => {
     const el = ref.current;
-    if (memory && el && !restoring.current) memory.position = captureScroll(el, following.current);
+    if (el && ready.current && !restoring.current) {
+      const position = captureScroll(el, following.current);
+      lastPosition.current = position;
+      if (memory) memory.position = position;
+    }
   }, [memory]);
 
   const pauseFollowing = useCallback(() => {
@@ -81,10 +88,10 @@ export function useFollowScroll(memory?: TranscriptViewState, historyReady = tru
       // Anchors are viewport-relative: use rects, never a nested wrapper's offsetTop.
       const delta = anchor.node.getBoundingClientRect().top - el.getBoundingClientRect().top - anchor.offset;
       if (Math.abs(delta) > BOTTOM_EPSILON) el.scrollTop += delta;
-    } else if (memory?.position && ready.current) {
+    } else if (lastPosition.current && ready.current) {
       // A branch change can retire the held row. Resolve the nearest surviving
       // saved location before replacing that memory with the new layout.
-      const node = restoreScroll(el, memory.position);
+      const node = restoreScroll(el, lastPosition.current);
       if (node) heldAnchor.current = { node, offset: node.getBoundingClientRect().top - el.getBoundingClientRect().top };
     }
     // Record our own writes so their delayed scroll events aren't user intent.

@@ -2,8 +2,9 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { readSavedSession } from "./saved-session.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { readSavedSession, streamSavedSession } from "./saved-session.js";
+import type { SavedHistoryFrame } from "./protocol.js";
 
 const folders: string[] = [];
 afterEach(async () => { await Promise.all(folders.splice(0).map((folder) => rm(folder, { recursive: true, force: true }))); });
@@ -90,12 +91,126 @@ describe("saved history without a worker", () => {
       reader.on("close", (code) => code === 0 ? resolve(output) : reject(new Error(error)));
       reader.stdin.end(JSON.stringify({ ...options, sessionFile }));
     });
-    expect(JSON.parse(history).messages[0].blocks[0].text).toBe("Available offline");
+    const frames = history.trim().split("\n").map((line) => JSON.parse(line) as SavedHistoryFrame);
+    expect(frames[0]).toMatchObject({ type: "snapshot", snapshot: { messages: [{ blocks: [{ text: "Available offline" }] }] } });
+    expect(frames.at(-1)).toEqual({ type: "history_previews", previews: [], done: true });
   });
 
   it("reports missing/damaged sessions instead of showing an empty history", async () => {
     await expect(readSavedSession({ ...options, sessionFile: "/missing/session.jsonl" })).rejects.toThrow();
     await expect(readSavedSession({ ...options, sessionFile: await fixture([user("u", null, "No header")]) })).rejects.toThrow(/header/);
     await expect(readSavedSession({ ...options, sessionFile: await fixture([header, user("u", "u", "Cycle")]) })).rejects.toThrow(/circular/);
+  });
+});
+
+describe("streamed image previews", () => {
+  const image = (text: string) => ({ type: "image", mimeType: "image/png", data: Buffer.from(text).toString("base64") });
+  const attached = (id: string, parentId: string | null, images: ReturnType<typeof image>[]) => ({
+    ...user(id, parentId, ""), message: { role: "user", timestamp: 1, content: [{ type: "text", text: `Text ${id}` }, ...images] }
+  });
+
+  it("emits immutable text and pending identities before a blocked resize, then prepares newest first", async () => {
+    const sessionFile = await fixture([header, attached("old", null, [image("old")]), attached("new", "old", [image("new")])]);
+    const original = await readFile(sessionFile, "utf8");
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const calls: string[] = [];
+    const frames: SavedHistoryFrame[] = [];
+    let initial!: () => void;
+    const initialFrame = new Promise<void>((resolve) => { initial = resolve; });
+    const complete = streamSavedSession({ ...options, sessionFile }, (frame) => {
+      frames.push(frame);
+      if (frame.type === "snapshot") initial();
+    }, { resizeImage: async (bytes) => { calls.push(Buffer.from(bytes).toString()); await blocked; return null; } });
+    await initialFrame;
+    const first = frames[0];
+    expect(first.type).toBe("snapshot");
+    if (first.type !== "snapshot") throw new Error("Expected initial snapshot");
+    expect(first.snapshot.messages.map((message) => message.blocks)).toEqual([
+      [{ type: "text", text: "Text old" }, { type: "image", mimeType: "image/png", imageId: "image-1" }],
+      [{ type: "text", text: "Text new" }, { type: "image", mimeType: "image/png", imageId: "image-2" }]
+    ]);
+    await vi.waitFor(() => expect(calls).toEqual(["new"]));
+    expect(frames).toHaveLength(1);
+    expect(JSON.stringify(first)).not.toContain(image("new").data);
+    release();
+    await complete;
+    expect(calls).toEqual(["new", "old"]);
+    expect(frames[1]).toEqual({ type: "history_previews", previews: [
+      { imageId: "image-2", failed: true }, { imageId: "image-1", failed: true }
+    ] });
+    // A consumer may retain the initial snapshot while the next frames arrive.
+    expect(first.snapshot.messages[1].blocks[1]).not.toHaveProperty("failed");
+    expect(frames.at(-1)).toEqual({ type: "history_previews", previews: [], done: true });
+    expect(await readFile(sessionFile, "utf8")).toBe(original);
+  });
+
+  it("flushes completed previews while another resize is still waiting", async () => {
+    const sessionFile = await fixture([header, attached("u", null, [image("slow"), image("fast")])]);
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const frames: SavedHistoryFrame[] = [];
+    const complete = streamSavedSession({ ...options, sessionFile }, (frame) => { frames.push(frame); }, {
+      resizeImage: async (bytes) => { if (Buffer.from(bytes).toString() === "slow") await blocked; return null; }
+    });
+    try {
+      await vi.waitFor(() => expect(frames[1]).toEqual({ type: "history_previews", previews: [{ imageId: "image-2", failed: true }] }), { timeout: 1500 });
+      expect(frames.some((frame) => frame.type === "history_previews" && frame.done)).toBe(false);
+    } finally { release(); await complete; }
+  });
+
+  it("caps batches at eight and settles a throwing decoder without losing text", async () => {
+    const sessionFile = await fixture([header, attached("u", null, Array.from({ length: 18 }, (_, index) => image(String(index))))]);
+    const frames: SavedHistoryFrame[] = [];
+    await streamSavedSession({ ...options, sessionFile }, (frame) => { frames.push(frame); }, {
+      resizeImage: async () => { throw new Error("Bad image"); }
+    });
+    const updates = frames.filter((frame) => frame.type === "history_previews" && !frame.done);
+    expect(updates.map((frame) => frame.previews.length)).toEqual([8, 8, 2]);
+    expect(updates.flatMap((frame) => frame.previews).every((preview) => preview.failed)).toBe(true);
+    expect(frames[0]).toMatchObject({ type: "snapshot", snapshot: { messages: [{ blocks: [expect.objectContaining({ text: "Text u" }), ...Array.from({ length: 18 }, () => expect.any(Object))] }] } });
+  });
+
+  it("keeps user/tool image identities and their separate thumbnail limits", async () => {
+    const sessionFile = await fixture([header, attached("u", null, [image("attached")]), {
+      type: "message", id: "result", parentId: "u", message: { role: "toolResult", toolName: "read", toolCallId: "call", timestamp: 2,
+        content: [{ type: "text", text: "Read picture" }, image("tool")] }
+    }]);
+    const frames: SavedHistoryFrame[] = [];
+    const sizes: number[] = [];
+    await streamSavedSession({ ...options, sessionFile }, (frame) => { frames.push(frame); }, {
+      resizeImage: async (_bytes, _mime, limits) => {
+        sizes.push(limits!.maxWidth!);
+        return { data: "preview", mimeType: "image/jpeg", width: 1, height: 1, originalWidth: 1, originalHeight: 1, wasResized: true };
+      }
+    });
+    expect(sizes).toEqual([480, 512]);
+    expect(frames[0]).toMatchObject({ type: "snapshot", snapshot: { messages: [
+      { blocks: [expect.any(Object), { imageId: "image-1", type: "image", mimeType: "image/png" }] },
+      { blocks: [{ images: [{ imageId: "image-2" }], toolCallId: "call" }] }
+    ] } });
+    expect(frames[1]).toEqual({ type: "history_previews", previews: [
+      { imageId: "image-2", thumbnail: "data:image/jpeg;base64,preview" },
+      { imageId: "image-1", thumbnail: "data:image/jpeg;base64,preview" }
+    ] });
+  });
+
+  it("terminates the deployed reader when the host closes its output pipe", async () => {
+    const sessionFile = await fixture([header, attached("u", null, Array.from({ length: 40 }, () => image("bad image")))]);
+    const reader = spawn(process.execPath, [new URL("../dist/session-reader.js", import.meta.url).pathname], { env: {}, stdio: ["pipe", "pipe", "ignore"] });
+    const closed = new Promise<number | null>((resolve, reject) => { reader.on("error", reject); reader.on("close", resolve); });
+    const deadline = setTimeout(() => reader.kill("SIGKILL"), 5000);
+    reader.stdin.end(JSON.stringify({ ...options, sessionFile }));
+    try {
+      const first = await new Promise<string>((resolve, reject) => {
+        let text = "";
+        reader.stdout.on("data", (chunk) => { text += chunk; if (text.includes("\n")) resolve(text.split("\n")[0]); });
+        reader.on("error", reject);
+        reader.on("close", () => reject(new Error("Reader closed before its snapshot")));
+      });
+      expect(JSON.parse(first).type).toBe("snapshot");
+      reader.stdout.destroy();
+      expect(await closed).toBe(0);
+    } finally { clearTimeout(deadline); reader.kill("SIGKILL"); }
   });
 });

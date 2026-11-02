@@ -4,6 +4,18 @@ import { Markdown } from "./components/Markdown";
 
 vi.mock("./api", () => ({ api: { revealPath: vi.fn().mockResolvedValue(undefined) } }));
 
+// Counting each source ReactMarkdown is asked to parse is how the segment memoization is
+// proven: a growing tail must never send a settled segment through the parser again.
+const { markdownRenders } = vi.hoisted(() => ({ markdownRenders: vi.fn() }));
+vi.mock("react-markdown", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react-markdown")>();
+  const Counted = (options: Parameters<typeof actual.default>[0]) => {
+    markdownRenders(options.children);
+    return actual.default(options);
+  };
+  return { ...actual, default: Counted };
+});
+
 afterEach(cleanup);
 
 // Fresh ink goes through `Markdown`, whose `freshInk` flag carries the trimEnd'ed source
@@ -54,5 +66,54 @@ describe("markdownComponents fresh ink", () => {
     render(<Markdown freshInk>{"Last words.\n"}</Markdown>);
     expect([...document.querySelectorAll(".ink-fresh")].map((span) => span.textContent))
       .toEqual(["Last", "words."]);
+  });
+});
+
+// While `streaming`, Markdown splits the source at stable block boundaries and re-parses only
+// the open tail (src/markdown-segments.ts).
+describe("streaming segmentation", () => {
+  it("re-parses only the open tail as the stream grows", () => {
+    markdownRenders.mockClear();
+    const view = render(<Markdown streaming>{"Settled.\n\nTail words"}</Markdown>);
+    expect(screen.getByText("Settled.")).toBeInTheDocument();
+    expect(screen.getByText("Tail words")).toBeInTheDocument();
+    markdownRenders.mockClear();
+    view.rerender(<Markdown streaming>{"Settled.\n\nTail words keep growing"}</Markdown>);
+    const sources = markdownRenders.mock.calls.map((call) => call[0]);
+    expect(sources).toEqual(["\nTail words keep growing"]);
+    expect(screen.getByText("Settled.")).toBeInTheDocument();
+    expect(screen.getByText("Tail words keep growing")).toBeInTheDocument();
+  });
+
+  it("parses a newly settled segment exactly once", () => {
+    const view = render(<Markdown streaming>{"One.\n\nTwo"}</Markdown>);
+    markdownRenders.mockClear();
+    view.rerender(<Markdown streaming>{"One.\n\nTwo.\n\nThree"}</Markdown>);
+    const sources = markdownRenders.mock.calls.map((call) => call[0]);
+    expect(sources).toEqual(["\nTwo.\n", "\nThree"]);
+  });
+
+  it("keeps fresh ink on the final block only", () => {
+    render(<Markdown streaming freshInk>{"Settled words.\n\nFresh words arriving"}</Markdown>);
+    expect(screen.getByText("Settled words.").querySelectorAll(".ink-fresh")).toHaveLength(0);
+    expect([...document.querySelectorAll(".ink-fresh")].map((span) => span.textContent).join(" "))
+      .toBe("Fresh words arriving");
+    expect(document.querySelectorAll(".ink-caret")).toHaveLength(1);
+  });
+
+  it("highlights a closed fence in a settled segment while the open tail stays plain", () => {
+    const view = render(<Markdown streaming>{"```ts\nconst done = 1\n```\n\n```ts\nconst open = 2"}</Markdown>);
+    const codes = [...view.container.querySelectorAll("pre code")];
+    expect(codes).toHaveLength(2);
+    expect(codes[0]).toHaveClass("hljs");
+    expect(codes[0].textContent).toBe("const done = 1\n");
+    expect(codes[1]).not.toHaveClass("hljs");
+    expect(codes[1].textContent).toBe("const open = 2\n");
+  });
+
+  it("does not segment settled prose", () => {
+    markdownRenders.mockClear();
+    render(<Markdown>{"One.\n\nTwo."}</Markdown>);
+    expect(markdownRenders.mock.calls.map((call) => call[0])).toEqual(["One.\n\nTwo."]);
   });
 });

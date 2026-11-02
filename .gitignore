@@ -17,3 +17,4 @@ coverage/
 .vitest/
 todo.md
 /.zcode
+/docs/performance-review.md

@@ -24,6 +24,7 @@ import { type ComputerUseController, createComputerUseExtension } from "./comput
 import { createAutoTitleExtension, type AutoTitleController } from "./auto-title.js";
 import { createImageBudgetExtension } from "./image-budget.js";
 import { createImageReferencesExtension } from "./image-references.js";
+import { createChatImagesExtension } from "./chat-images.js";
 import { COMPARE_IMAGES_TOOL_NAME, createCompareImagesExtension } from "./compare-images.js";
 import { type GoalController, createGoalExtension } from "./goal/index.js";
 import { type MemoryController, createMemoryExtension } from "./memory/index.js";
@@ -47,6 +48,7 @@ import { VISUAL_TOOL_NAMES, createVisualExtension } from "./visual.js";
 export const SWITCHABLE_BUILTIN_TOOLS: ReadonlySet<string> = new Set([WEB_FETCH_TOOL_NAME, ...VISUAL_TOOL_NAMES, COMPARE_IMAGES_TOOL_NAME, SUGGEST_TASK_TOOL_NAME, ...BROWSER_TOOL_NAMES, ...CANVAS_TOOL_NAMES]);
 
 export interface BuiltinExtensions {
+  images: ReturnType<typeof createChatImagesExtension>["controller"];
   /** Factories handed to `DefaultResourceLoader.extensionFactories`. */
   factories: InlineExtension[];
   /** The same, for a Chat mode chat: the reduced set plus the chat guard. */
@@ -109,6 +111,8 @@ export function createBuiltinExtensions(host: BuiltinHost, options: {
   const autoTitle = createAutoTitleExtension(host);
   const imageBudget: InlineExtension = { name: "wackcode-image-budget", factory: createImageBudgetExtension(), hidden: true };
   const imageReferences: InlineExtension = { name: "wackcode-image-references", factory: createImageReferencesExtension(), hidden: true };
+  const images = createChatImagesExtension(host);
+  const savedImages: InlineExtension = { name: "wackcode-chat-images", factory: images.factory, hidden: true };
   const goal = createGoalExtension(host, () => planMode.controller.getState().mode !== "build");
   const memory = createMemoryExtension(() => options.isChat?.() ? "chat" : "project");
   const browser: InlineExtension = { name: "wackcode-browser", factory: createBrowserExtension(host), hidden: true };
@@ -159,6 +163,7 @@ export function createBuiltinExtensions(host: BuiltinHost, options: {
       { name: "wackcode-skill-creator", factory: skillCreator.factory, hidden: true },
       mcpExtension,
       { name: "wackcode-compaction", factory: createCompactionExtension(host, todo.handle.getState), hidden: true },
+      savedImages,
     ],
     chatFactories: [
       // First, so its tool_call block runs ahead of every other handler.
@@ -178,7 +183,9 @@ export function createBuiltinExtensions(host: BuiltinHost, options: {
       compareImages,
       chatRefs,
       mcpExtension,
+      savedImages,
     ],
+    images: images.controller,
     bashJobs: bashJobs.controller,
     planMode: planMode.controller,
     getExecutionPolicy: () => policy,

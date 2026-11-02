@@ -116,6 +116,17 @@ const server = createServer(async (request, response) => {
   const imageCall = imageFixture?.[1] && offers("read") && !calledTool("read")
     ? { name: "read", arguments: JSON.stringify({ path: imageFixture[1].trim() }) }
     : undefined;
+  const savedImageFixture = /^saved images fixture(?:[ \t]*:[ \t]*([^\n]+))?(?:\n|$)/i.exec(prompt);
+  const savedImageRefs = savedImageFixture ? imageFixtureReferences([latestUser, ...sinceUser]) : [];
+  const savedImageCall = savedImageFixture
+    ? savedImageFixture[1] && offers("read") && !calledTool("read")
+      ? { name: "read", arguments: JSON.stringify({ path: savedImageFixture[1].trim() }) }
+      : offers("list_images") && !calledTool("list_images")
+        ? { name: "list_images", arguments: "{}" }
+        : savedImageRefs.length && offers("read_image") && !calledTool("read_image")
+          ? { name: "read_image", arguments: JSON.stringify({ reference: savedImageRefs[0] }) }
+          : undefined
+    : undefined;
   const comparisonFixture = /^image comparison fixture(?:[ \t]*:[ \t]*([^\n]+))?(?:\n|$)/i.exec(prompt);
   const comparisonRefs = comparisonFixture ? imageFixtureReferences([latestUser, ...sinceUser]) : [];
   const comparisonPaths = comparisonFixture?.[1]?.split(" | ").map((path) => path.trim()).filter(Boolean) ?? [];
@@ -189,7 +200,7 @@ const server = createServer(async (request, response) => {
   const backgroundLaunched = messages.slice(messages.lastIndexOf(latestUser) + 1).some((message) => message.role === "assistant" && message.tool_calls?.some((call) => call.function?.name === "subagent"));
   const resultsArrived = prompt.includes("Job ");
   const backgroundLaunch = background && subagent && !backgroundLaunched && !resultsArrived;
-  if (backgroundLaunch || suggest || canvasCall || visualCall || imageCall || comparisonCall || commitCall || (!background && !suggestFixture && !canvasFixture && !visualFixture && !imageFixture && !comparisonFixture && !child && !resultsArrived && !hasToolResult && body.tools?.length && (!browserMatch || browser) && (!computerMatch || computer))) {
+  if (backgroundLaunch || suggest || canvasCall || visualCall || imageCall || savedImageCall || comparisonCall || commitCall || (!background && !suggestFixture && !canvasFixture && !visualFixture && !imageFixture && !savedImageFixture && !comparisonFixture && !child && !resultsArrived && !hasToolResult && body.tools?.length && (!browserMatch || browser) && (!computerMatch || computer))) {
     send(response, {
       id: "fixture-tool",
       object: "chat.completion.chunk",
@@ -204,8 +215,8 @@ const server = createServer(async (request, response) => {
             id: `fixture-tool-${messages.length}`,
             type: "function",
             function: {
-              name: backgroundLaunch ? "subagent" : comparisonCall ? comparisonCall.name : imageCall ? imageCall.name : canvasCall ? canvasCall.name : visualCall ? visualCall.name : suggest ? "suggest_task" : browser ? browser.name : computer ? computer.name : commitCall ? commitCall.name : search ? "web_search" : "write",
-              arguments: comparisonCall ? comparisonCall.arguments : imageCall ? imageCall.arguments : canvasCall ? canvasCall.arguments : visualCall ? visualCall.arguments : suggest
+              name: backgroundLaunch ? "subagent" : comparisonCall ? comparisonCall.name : savedImageCall ? savedImageCall.name : imageCall ? imageCall.name : canvasCall ? canvasCall.name : visualCall ? visualCall.name : suggest ? "suggest_task" : browser ? browser.name : computer ? computer.name : commitCall ? commitCall.name : search ? "web_search" : "write",
+              arguments: comparisonCall ? comparisonCall.arguments : savedImageCall ? savedImageCall.arguments : imageCall ? imageCall.arguments : canvasCall ? canvasCall.arguments : visualCall ? visualCall.arguments : suggest
                 ? JSON.stringify({
                   title: "Dismiss button stays disabled after a failed save",
                   kind: "bug",
@@ -231,6 +242,12 @@ const server = createServer(async (request, response) => {
       usage: { prompt_tokens: 30, completion_tokens: 12, total_tokens: 42 }
     });
   } else {
+    const savedImageReadCall = sinceUser.flatMap((message) => message.tool_calls ?? []).findLast((call) => call.function?.name === "read_image");
+    const savedImageResult = sinceUser.findLast((message) => message.role === "tool" && message.tool_call_id === savedImageReadCall?.id);
+    const savedImageReply = savedImageFixture
+      ? savedImageResult ? `Reopened the saved image.\n\n${textOf(savedImageResult.content)}\n\n![Saved screenshot](${savedImageRefs[0]})`
+        : "Attach an image, or use `saved images fixture: /absolute/image.png`, to find and reopen its original."
+      : undefined;
     const imageReply = comparisonFixture
       ? !offers("compare_images") ? "Image comparisons are switched off."
         : calledTool("compare_images") ? "The updated layout gives the main action more space."
@@ -242,7 +259,7 @@ const server = createServer(async (request, response) => {
       object: "chat.completion.chunk",
       created: 2,
       model: body.model,
-      choices: [{ index: 0, delta: { role: "assistant", content: imageReply ?? visualReply ?? (canvasFixture ? "Three themes for the billing page are on the canvas: **Base**, **Ember** and **Pine**, plus Base on a phone. Which direction should I take forward?" : suggestFixture ? "Layout fixed. I noted one follow-up below." : browserMatch ? "Browser fixture complete." : computerMatch ? "Computer fixture complete." : commitFixture && hasToolResult ? "Committed in the throwaway repo under /tmp. The transcript's commit row carries git's own summary: the hash in a pill and the message." : child ? "Background fixture child completed." : searchQuery ? "I searched the web; the results are in the card above." : resultsArrived ? "The background child finished; its result has arrived." : background ? "I launched a background helper and finished my own work. You can send another message while it runs." : escape ? "I tried to write `../wackcode-escape.txt`, outside the workspace." : "Created `wackcode-live.txt`.") }, finish_reason: null }]
+      choices: [{ index: 0, delta: { role: "assistant", content: savedImageReply ?? imageReply ?? visualReply ?? (canvasFixture ? "Three themes for the billing page are on the canvas: **Base**, **Ember** and **Pine**, plus Base on a phone. Which direction should I take forward?" : suggestFixture ? "Layout fixed. I noted one follow-up below." : browserMatch ? "Browser fixture complete." : computerMatch ? "Computer fixture complete." : commitFixture && hasToolResult ? "Committed in the throwaway repo under /tmp. The transcript's commit row carries git's own summary: the hash in a pill and the message." : child ? "Background fixture child completed." : searchQuery ? "I searched the web; the results are in the card above." : resultsArrived ? "The background child finished; its result has arrived." : background ? "I launched a background helper and finished my own work. You can send another message while it runs." : escape ? "I tried to write `../wackcode-escape.txt`, outside the workspace." : "Created `wackcode-live.txt`.") }, finish_reason: null }]
     });
     send(response, {
       id: "fixture-done",

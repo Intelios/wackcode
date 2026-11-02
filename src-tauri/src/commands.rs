@@ -3816,7 +3816,14 @@ pub async fn fork_task(
             &provider,
             api_key.as_deref(),
             WorkerOptions {
-                fork_from: Some(json!({ "sessionFile": session_file, "entryId": input.entry_id })),
+                fork_from: Some(json!({
+                    "sessionFile": session_file, "entryId": input.entry_id,
+                    "imagesDir": if source.kind == TaskKind::Chat {
+                        Path::new(&source.workspace_path).join(".wackcode").join("images")
+                    } else {
+                        app_data.join("sessions").join(&source.id).join("images")
+                    }
+                })),
                 wait_ready: true,
             },
         )

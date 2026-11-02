@@ -89,10 +89,10 @@ const BUILTIN_EXTENSIONS: readonly BuiltinExtension[] = [
     kind: "browser"
   },
   {
-    name: "Images in replies",
+    name: "Saved images",
     description:
-      "Lets the agent include selected screenshots, image files it reads and your attachments alongside its reply in Code and Chat. Click an image to open it full size. The saved images stay with the chat, even when their source files move or disappear.",
-    tools: [],
+      "Keeps original attachments, screenshots and tool images with the chat. The agent can find and reopen them later, or use their local files for pixel measurements, and include selected images in its reply. Click an image to open it full size.",
+    tools: ["list_images", "read_image"],
     icon: "image"
   },
   {

@@ -42,8 +42,8 @@ Everything is under the app data directory (`~/Library/Application Support/com.w
 | `web-usage.json` | Settings › Web's usage meter: searches and page reads per provider per month, the last 12 months. Written a few seconds after a change (`web_usage.rs`), never sent anywhere, and not the TokenTrail ledger. |
 | `model-catalog.json` | Validated Models.dev metadata cache; separate from connections and worker state. The bundled snapshot is embedded in Rust. |
 | `subscriptions/<id>/auth.json` (0600) | OAuth credentials, one file per subscription provider. |
-| `sessions/<task>/`, `agent/<task>/` | A chat's Pi session files and Pi agent directory. |
-| `scratch/<task>/` | Workspace for chats without a project, and every Chat mode chat's scratchpad. Deleted with the chat. |
+| `sessions/<task>/`, `agent/<task>/` | A chat's Pi session files and Pi agent directory. Code chats' original image blobs live in `sessions/<task>/images/`. |
+| `scratch/<task>/` | Workspace for chats without a project, and every Chat mode chat's scratchpad. Chat mode's original images live in `.wackcode/images/` inside it. Deleted with the chat. |
 | `checkpoints/<task>/` | The chat's shadow Git repository (see below). |
 | `memory/<name>-<key>/` | Project memory notes, one directory per repository shared by its worktrees. Chat mode's one shared store is `memory/chat-<CHAT_MEMORY_KEY>/` (`memory.rs`): the same shape, so Settings lists it like a project's. |
 | `commands/` | The user's slash commands. |
@@ -139,6 +139,7 @@ Read the invariants at the top of `worker/src/tree.ts` and `src-tauri/src/checkp
 
 - A conversation is a Pi session tree. Retry, edit, rewind and fork create or move between branches; nothing is deleted. Versions of a message are grouped by their *logical parent* (the nearest user, assistant or tool-result ancestor), because Pi inserts other entries between turns.
 - WackCode writes its own custom entries: `wackcode-checkpoint` above every user message, `wackcode-leave` / `wackcode-nav` around every navigation (so a rewind survives a restart), and `wackcode-command-presentation` above command-generated prompts.
+- Finalized image messages carry versioned `wackcodeImages` metadata. It binds original blob identities and dimensions to the exact inline image digest and position; context edits cannot reuse an unrelated original. Forks copy the referenced blobs into their own store before becoming ready, so source-chat deletion cannot remove their originals. Archive retains them; normal chat cleanup deletes them.
 - Checkpoints are a private shadow Git repository per chat under app data. It borrows the project's objects via `alternates`, stores snapshots as bare tree objects (no commits, hooks or signing), and ignores the system and global Git config (no hooks, filters or fsmonitor). A restore only touches paths that differ, never files the snapshot doesn't hold (ignored, over 25 MB, or untracked). It must never write objects or refs into the project's own repository.
 
 ## Usage ledger

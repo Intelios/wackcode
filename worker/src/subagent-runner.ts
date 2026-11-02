@@ -261,7 +261,7 @@ export class SubagentRunner {
       extensionFactories: [
         { name: "wackcode-bash-jobs", factory: bashJobs.factory, hidden: true },
         // A child reads files too; its images must not grow past a gateway's body cap either.
-        { name: "wackcode-image-budget", factory: createImageBudgetExtension(), hidden: true },
+        { name: "wackcode-image-budget", factory: createImageBudgetExtension(false), hidden: true },
         ...request.extensions
       ],
       appendSystemPromptOverride: (base) => [...base, request.spec.prompt],

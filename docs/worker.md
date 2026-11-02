@@ -129,15 +129,36 @@ turn, whatever the model, so a chat's images are bounded twice:
   `inputLimits.images.resize` from `image-limits.ts`, and Pi applies it to prompt images and to
   every tool result's images (`read` of a picture, browser and computer screenshots, MCP). Pi
   adds a dimension note whenever it resizes, so screenshot coordinates stay mappable. The same
-  limits run over the composer's attachments in `prepareImages`.
+  limits run over the composer's attachments in `chat-images.preparePrompt`. Before resizing,
+  `saved-images.ts` writes the original bytes to a private, content-addressed file. The final
+  `chat-images` extension captures all tool-result images before Pi normalizes them. The parent
+  SDK `read` override disables its own initial resize so file images reach that hook intact;
+  Pi's session-level normalization stays enabled. Resized copies retain dimension notes.
 - **The request**, on every model call. `builtin/image-budget.ts` runs on the `context` hook with
   a total byte budget for a chat's images. Older tool images become a placeholder first, then
   older images the user attached; the newest image always survives, so the tool that just
   finished still reaches the model. Removals happen in whole chunks so the rewritten prefix
   stays byte-identical between calls and the prompt cache keeps hitting.
 
-The budget never changes the session: it rewrites only the copy Pi sends, so the transcript, the
-lightbox and `tool_image` keep every original. Sub-agents load it too.
+The budget never changes the session: it rewrites only the copy Pi sends. Sessions retain bounded
+viewing copies plus versioned, worker-owned original-image metadata. Snapshots retain thumbnails
+only. The lightbox's existing `tool_image` / `message_image` requests resolve original files on
+demand, still bypassing the prompt queue. Sub-agents load the budget too, with placeholders that
+ask them to reread source files rather than use the parent's image tools.
+
+Both parent chat kinds always have `list_images` and `read_image`, including in Plan / Ultra Plan.
+`list_images` walks the display branch with context edits and omissions applied, independently
+of compaction, newest first (offset 0, limit 20, maximum 100). It returns references, sources,
+timestamps and dimensions. `read_image` accepts only one supplied reference and returns the
+original's local file path, MIME type, dimensions and a bounded viewing copy; non-vision models
+receive text only. Reopens reuse original blobs and are excluded from catalogue results. Pruned
+image placeholders point to these tools; a lost reference can be rediscovered after compaction.
+
+Original blobs have a 20 MiB per-file limit and private permissions. Their metadata binds each
+image to its exact session copy; retries preserve these records and removals reindex them.
+Legacy images can be materialized from their session copies, explicitly marked as having no
+preserved original resolution. Missing or changed originals also report this limitation when
+reopened; storage failures are reported rather than silently claiming an original was saved.
 
 Before the budget, parent chats also run `builtin/image-references.ts`. It matches each
 request's user and tool-result images to one saved source in Pi's session projection, by role,
@@ -150,7 +171,7 @@ markers rather than passing another chat's references along.
 
 ## Built-in extensions (`worker/src/builtin/`)
 
-WackCode's own extensions load as inline factories, so they bypass the package trust gate by construction. They are: `ask-user-question`, `auto-title`, `bash-jobs`, `browser`, `canvas`, `chat-refs`, `compare-images`, `computer-use`, `goal`, `image-budget`, `image-references`, `mcp`, `memory`, `plan-mode`, `skill-creator`, `subagents`, `suggest-task`, `todo`, `visual`, `web-fetch`, `web-search`, and `chat-mode`, a guard with no tools of its own that only Chat mode chats load.
+WackCode's own extensions load as inline factories, so they bypass the package trust gate by construction. They are: `ask-user-question`, `auto-title`, `bash-jobs`, `browser`, `canvas`, `chat-refs`, `chat-images`, `compare-images`, `computer-use`, `goal`, `image-budget`, `image-references`, `mcp`, `memory`, `plan-mode`, `skill-creator`, `subagents`, `suggest-task`, `todo`, `visual`, `web-fetch`, `web-search`, and `chat-mode`, a guard with no tools of its own that only Chat mode chats load.
 
 - Adding or renaming one also updates `BUILTIN_EXTENSIONS` in `src/components/PackagesSection.tsx`, which shows them so nobody installs a duplicate package.
 - Sub-agents never get browser, computer-use, MCP, memory, visual, image-comparison, canvas or suggestion tools, or skills. A child session loads its role's tool allowlist, its own shell check-in extension and the extensions the built-in hands it.

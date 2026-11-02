@@ -196,6 +196,7 @@ export function createPlanModeExtension(host: BuiltinHost, mcpTools?: PlanModeMc
         event.toolName === READ_CHAT_TOOL_NAME ||
         (VISUAL_TOOL_NAMES as readonly string[]).includes(event.toolName) ||
         event.toolName === COMPARE_IMAGES_TOOL_NAME ||
+        event.toolName === "list_images" || event.toolName === "read_image" ||
         event.toolName === SUGGEST_TASK_TOOL_NAME ||
         (CANVAS_TOOL_NAMES as readonly string[]).includes(event.toolName) ||
         (MEMORY_TOOL_NAMES as readonly string[]).includes(event.toolName) ||

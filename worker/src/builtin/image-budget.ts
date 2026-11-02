@@ -9,7 +9,7 @@
  *
  * This rewrites only the copy Pi sends (the `context` hook), never the session itself: the
  * transcript, the lightbox and `tool_image` keep every original. Older tool images go first —
- * the agent can take a new screenshot or read the file again — and only then images the user
+ * the parent can reopen its saved image (children can reread their source file) — and only then images the user
  * attached. The newest image is always kept, so the output of the tool call that just finished
  * reaches the model; the rest of its message only goes once every older image has.
  *
@@ -26,8 +26,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 export const MAX_CONTEXT_IMAGE_BYTES = 3 * 1024 * 1024;
 /** Images removed per step, so the model-facing prefix is stable for a few turns. */
 export const PRUNE_CHUNK = 3;
-export const PRUNED_TOOL_IMAGE_TEXT = "[Earlier image removed to keep this request small. Read the file or take a new screenshot if you need to see it again.]";
-export const PRUNED_USER_IMAGE_TEXT = "[An image the user attached earlier was removed to keep this request small. Ask them to attach it again if you need it.]";
+export const PRUNED_TOOL_IMAGE_TEXT = "[Earlier image omitted from this request. Use read_image with its saved reference to reopen it, or list_images to find it.]";
+export const PRUNED_USER_IMAGE_TEXT = "[Earlier attachment omitted from this request. Use read_image with its saved reference to reopen it, or list_images to find it. The saved image does not need to be attached again.]";
 
 type ImageKind = "tool" | "user";
 
@@ -95,7 +95,8 @@ function removalOrder(slots: readonly ImageSlot[]): ImageSlot[] {
 export function pruneImages<T>(
   messages: readonly T[],
   budget = MAX_CONTEXT_IMAGE_BYTES,
-  chunk = PRUNE_CHUNK
+  chunk = PRUNE_CHUNK,
+  canReopen = true
 ): T[] | undefined {
   const slots = imageSlots(messages);
   let total = slots.reduce((sum, slot) => sum + slot.bytes, 0);
@@ -132,7 +133,9 @@ export function pruneImages<T>(
       ...(value as Record<string, unknown>),
       content: content.map((block, blockIndex) => {
         const kind = blocks.get(blockIndex);
-        return kind ? { type: "text", text: kind === "tool" ? PRUNED_TOOL_IMAGE_TEXT : PRUNED_USER_IMAGE_TEXT } : block;
+        return kind ? { type: "text", text: canReopen
+          ? kind === "tool" ? PRUNED_TOOL_IMAGE_TEXT : PRUNED_USER_IMAGE_TEXT
+          : "[Earlier image omitted to keep this request small. Read the source file again if you need to see it.]" } : block;
       })
     } as unknown as T;
   });
@@ -140,10 +143,10 @@ export function pruneImages<T>(
 }
 
 /** The extension that applies the budget to every request, in coding and Chat mode chats alike. */
-export function createImageBudgetExtension() {
+export function createImageBudgetExtension(canReopen = true) {
   return function imageBudget(pi: ExtensionAPI) {
     pi.on("context", (event) => {
-      const messages = pruneImages(event.messages);
+      const messages = pruneImages(event.messages, MAX_CONTEXT_IMAGE_BYTES, PRUNE_CHUNK, canReopen);
       return messages ? { messages } : undefined;
     });
   };

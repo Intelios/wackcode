@@ -6,31 +6,17 @@
  * no reference. This extension belongs only to parent chats, before image-budget pruning.
  */
 import type { ExtensionAPI, SessionProjection } from "@earendil-works/pi-coding-agent";
-
-export interface ImageReference { entryId: string; index: number }
+import { imageReferenceUrl, storedImageRecord, type StoredImage } from "../saved-images.js";
+export { imageReferenceUrl, parseImageReference, type ImageReference } from "../saved-images.js";
 
 const ENTRY_ID = /^[A-Za-z0-9_-]{1,256}$/;
-const REFERENCE = /^wackcode-image:\/\/entry\/([A-Za-z0-9_-]{1,256})\/(0|[1-9]\d*)$/;
 
 const validEntryId = (entryId: string) => ENTRY_ID.exec(entryId)?.[0] === entryId;
 
-export const IMAGE_REPLY_GUIDANCE = 'Images: show selected pictures with ![description](reference "Optional caption"), copying the supplied reference. Select useful images; never invent references. Read local images with an available read tool first; file paths and remote image URLs cannot display. Do not claim to inspect images you cannot see.';
-
-export function parseImageReference(value: unknown): ImageReference | undefined {
-  if (typeof value !== "string") return undefined;
-  const match = REFERENCE.exec(value);
-  if (!match || match[0] !== value) return undefined;
-  const index = Number(match[2]);
-  return Number.isSafeInteger(index) ? { entryId: match[1], index } : undefined;
-}
-
-export function imageReferenceUrl(entryId: string, index: number): string | undefined {
-  return validEntryId(entryId) && Number.isSafeInteger(index) && index >= 0
-    ? `wackcode-image://entry/${entryId}/${index}` : undefined;
-}
+export const IMAGE_REPLY_GUIDANCE = 'Images: ![description](reference "Optional caption"). Reopen with read_image; find with list_images. Select useful images; never invent references. Read local images with an available read tool first; file paths and remote image URLs cannot display. Do not claim to inspect images you cannot see.';
 
 interface Image { data: string; mimeType: string }
-interface Source { entryId: string; images: Image[] }
+interface Source { entryId: string; images: Image[]; records: Array<StoredImage | undefined> }
 interface MessageLike { role?: unknown; timestamp?: unknown; toolCallId?: unknown; content?: unknown }
 
 function imageMessage(value: unknown): { message: MessageLike; key: string; images: Image[] } | undefined {
@@ -61,7 +47,8 @@ export function annotateImageReferences<T>(messages: readonly T[], projection: P
       const candidate = imageMessage(raw);
       if (!candidate) continue;
       const matches = sources.get(candidate.key) ?? [];
-      matches.push({ entryId: entry.sourceEntry.id, images: candidate.images });
+      matches.push({ entryId: entry.sourceEntry.id, images: candidate.images,
+        records: candidate.images.map((image, index) => storedImageRecord(raw, index, { ...image, type: "image" })) });
       sources.set(candidate.key, matches);
     }
   }
@@ -71,7 +58,11 @@ export function annotateImageReferences<T>(messages: readonly T[], projection: P
     if (!candidate) return value;
     const matches = (sources.get(candidate.key) ?? []).filter((source) => sameImages(source.images, candidate.images));
     if (matches.length !== 1) return value;
-    const references = candidate.images.map((_, index) => `Image ${index + 1}: ${imageReferenceUrl(matches[0].entryId, index)}`);
+    const references = candidate.images.map((_, index) => {
+      const record = matches[0].records[index];
+      const size = record ? ` (${record.quality ? "saved copy" : "original"} ${record.width} × ${record.height}; viewing copy ${record.viewWidth} × ${record.viewHeight})` : "";
+      return `Image ${index + 1}: ${imageReferenceUrl(matches[0].entryId, index)}${size}`;
+    });
     const text = `\n\n<wackcode-image-references-v1>\n${references.join("\n")}\n</wackcode-image-references-v1>`;
     const content = candidate.message.content as Array<{ type?: unknown; text?: unknown }>;
     if (content.at(-1)?.type === "text" && content.at(-1)?.text === text) return value;

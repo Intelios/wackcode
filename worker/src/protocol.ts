@@ -543,7 +543,7 @@ export interface InitCommand {
    * Fork: when the task has no session file of its own yet, build it from this chat's session
    * as the path from the root to `entryId` (default: that session's leaf), like Pi's `/fork`.
    */
-  forkFrom?: { sessionFile: string; entryId?: string };
+  forkFrom?: { sessionFile: string; entryId?: string; imagesDir?: string };
   /** Sub-agents, when the user has turned them on. Absent or null: the `subagent` tool stays off. */
   subagents?: SubagentRuntimeConfig | null;
   /** Custom built-in prompt texts from Settings; absent means every prompt stays at its default. */

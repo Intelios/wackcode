@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { deflateSync } from "node:zlib";
+import { deflateSync, inflateSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -18,7 +18,7 @@ type SnapshotView = {
     role?: string;
     timestamp?: number;
     blocks: Array<{
-      type: string; text?: string; toolName?: string; toolCallId?: string; details?: unknown; imageId?: string; thumbnail?: string; mimeType?: string;
+      type: string; text?: string; toolName?: string; toolCallId?: string; details?: unknown; imageId?: string; thumbnail?: string; mimeType?: string; isError?: boolean;
       durationMs?: number; startedAt?: number; images?: Array<{ imageId: string; thumbnail?: string; failed?: true }>;
     }>;
     entryId?: string;
@@ -757,7 +757,8 @@ function initCommand(
       models: [{
         id: "shared-model",
         name: "Shared model",
-        contextWindow: 16_384,
+        // Leave room for the full app tool catalogue; small-window cases set their own limit.
+        contextWindow: 32_768,
         maxTokens: 321,
         reasoning: true,
         thinkingLevels: ["off", "high"],
@@ -803,7 +804,7 @@ function launchWorker(baseUrl: string, apiKey: string, workspace: string, taskId
 }
 
 /** A solid-colour RGB PNG, built by hand so the tests need no image fixtures. */
-function solidPng(width: number, height: number): string {
+function solidPng(width: number, height: number, markerX?: number): string {
   const crcTable = Array.from({ length: 256 }, (_, n) => {
     let c = n;
     for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
@@ -827,6 +828,7 @@ function solidPng(width: number, height: number): string {
   header.writeUInt32BE(height, 4);
   header.set([8, 2, 0, 0, 0], 8);
   const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(width * 3, 0x5a)]);
+  if (markerX !== undefined) row.set([255, 0, 127], 1 + markerX * 3);
   const pixels = deflateSync(Buffer.concat(Array.from({ length: height }, () => row)));
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
@@ -1193,6 +1195,7 @@ describe("Pi worker integration", () => {
       "edit",
       "find",
       "grep",
+      "list_images",
       "ls",
       "memory_forget",
       "memory_recall",
@@ -1201,6 +1204,7 @@ describe("Pi worker integration", () => {
       "preview_visual",
       "read",
       "read_chat",
+      "read_image",
       "show_visual",
       "skill_creator",
       "subagent",
@@ -1252,13 +1256,13 @@ describe("Pi worker integration", () => {
         "browser_console"
       ]
     });
-    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.length === 16);
+    await worker.waitFor((output) => emitted(output) && output.view?.activeTools?.length === 18);
     // `find`/`grep` availability varies by host; the companion stays on even without bash.
     const beforeSecondRun = provider.requests.length;
     worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-2", message: "Again." });
     await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && output.snapshot === undefined && provider.requests.length > beforeSecondRun);
 
-    expect(offered(provider.requests[beforeSecondRun])).toEqual(["ask_user_question", "bash_job", "canvas", "canvas_guide", "canvas_look", "compare_images", "edit", "plan_mode_complete", "preview_visual", "read", "read_chat", "show_visual", "skill_creator", "suggest_task", "todo", "write"]);
+    expect(offered(provider.requests[beforeSecondRun])).toEqual(["ask_user_question", "bash_job", "canvas", "canvas_guide", "canvas_look", "compare_images", "edit", "list_images", "plan_mode_complete", "preview_visual", "read", "read_chat", "read_image", "show_visual", "skill_creator", "suggest_task", "todo", "write"]);
     expect(worker.child.exitCode).toBeNull();
   });
 
@@ -1311,7 +1315,7 @@ describe("Pi worker integration", () => {
     const first = await initializeWorker(provider.baseUrl, "switch-secret", workspace, "switch-task");
     cleanup.push(() => first.worker.shutdown());
     first.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "switch-run", message: "First model." });
-    await first.worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) => message.role === "assistant") === true);
+    await first.worker.waitFor((output) => output.type === "run_state" && output.runId === "switch-run" && output.state === "idle");
     const sessionFile = first.worker.view?.sessionFile;
     expect(sessionFile).toBeTruthy();
     await first.worker.shutdown();
@@ -1401,7 +1405,7 @@ describe("Pi worker integration", () => {
     const first = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "missing-model-task");
     cleanup.push(() => first.worker.shutdown());
     first.worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "first-run", message: "Run once." });
-    await first.worker.waitFor((output) => emitted(output) && output.view?.messages.some((message) => message.role === "assistant") === true);
+    await first.worker.waitFor((output) => output.type === "run_state" && output.runId === "first-run" && output.state === "idle");
     const sessionFile = first.worker.view?.sessionFile;
     expect(sessionFile).toBeTruthy();
     await first.worker.shutdown();
@@ -3499,6 +3503,99 @@ describe("inline image replies", () => {
 });
 
 describe("image attachments", () => {
+  it.each([
+    ["code", "build"], ["code", "plan"], ["code", "ultraplan"], ["chat", "build"],
+  ] as const)("reopens original images in %s/%s through edits, compaction, restart and independent forks", async (kind, mode) => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-original-images-"));
+    const forkWorkspace = await mkdtemp(join(tmpdir(), "wackcode-fork-images-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }), () => rm(forkWorkspace, { recursive: true, force: true }));
+    const original = solidPng(2400, 16, 2300);
+    const second = solidPng(2600, 20);
+    const toolOriginal = solidPng(2400, 24);
+    const sourcePath = join(workspace, "source.png");
+    await writeFile(sourcePath, Buffer.from(toolOriginal, "base64"));
+    const taskId = `originals-${kind}-${mode}`;
+    const initial = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, taskId, undefined, undefined, undefined, mode, true, { kind });
+    cleanup.push(() => initial.worker.shutdown());
+    const run = async (worker: WorkerHarness, message: string, extra = {}) => {
+      const runId = crypto.randomUUID();
+      worker.send({ id: crypto.randomUUID(), type: "prompt", runId, message, ...extra });
+      await worker.waitFor((output) => output.type === "run_state" && output.runId === runId && output.state === "idle");
+    };
+    const request = async (worker: WorkerHarness, command: Record<string, unknown>) => {
+      const id = crypto.randomUUID();
+      worker.send({ id, ...command });
+      return worker.waitFor((output) => output.type === "response" && output.id === id);
+    };
+    const latestResult = (worker: WorkerHarness, name: string) => worker.view!.messages.flatMap((message) => message.blocks)
+      .findLast((block) => block.type === "tool-result" && block.toolName === name)!;
+    const list = async (worker: WorkerHarness) => {
+      await run(worker, "mcp: list_images {}");
+      return JSON.parse(latestResult(worker, "list_images").text!);
+    };
+    const reopen = async (worker: WorkerHarness, reference: string) => {
+      await run(worker, `mcp: read_image ${JSON.stringify({ reference })}`);
+      const result = latestResult(worker, "read_image");
+      expect(result.isError).not.toBe(true);
+      return /^Local file: (.+)$/m.exec(result.text!)![1];
+    };
+    await run(initial.worker, "image reply: source.png", { images: [original, second].map((data) => ({ type: "image", data, mimeType: "image/png" })) });
+    const source = initial.worker.view!.messages.find((message) => message.role === "user")!;
+    const tool = initial.worker.view!.messages.find((message) => message.role === "tool" && message.blocks.some((block) => block.toolName === "read"))!;
+    expect((await request(initial.worker, { type: "message_image", entryId: source.entryId, index: 0 })).result).toMatchObject({ data: original });
+    expect((await request(initial.worker, { type: "tool_image", toolCallId: tool.blocks[0].toolCallId, index: 0 })).result).toMatchObject({ data: toolOriginal });
+    await rm(sourcePath);
+    expect((await list(initial.worker)).total).toBe(3);
+    const originalPath = await reopen(initial.worker, `wackcode-image://entry/${source.entryId}/0`);
+    const bytes = await readFile(originalPath);
+    expect(bytes).toEqual(Buffer.from(original, "base64"));
+    expect(bytes.readUInt32BE(16)).toBe(2400);
+    const pixels = inflateSync(bytes.subarray(41, 41 + bytes.readUInt32BE(33)));
+    expect([...pixels.subarray(1 + 2300 * 3, 1 + 2300 * 3 + 3)]).toEqual([255, 0, 127]);
+    expect(originalPath.startsWith(kind === "chat" ? join(workspace, ".wackcode", "images") : join(workspace, ".sessions", taskId, "images"))).toBe(true);
+    expect((await list(initial.worker)).total).toBe(3);
+    expect(JSON.stringify(initial.worker.view)).not.toContain(original);
+    expect(JSON.stringify(provider.requests.map((request) => request.body))).not.toContain(original);
+
+    const editedRun = crypto.randomUUID();
+    initial.worker.send({ id: crypto.randomUUID(), type: "resend", runId: editedRun, entryId: source.entryId, message: "Keep the second screenshot.", removeImages: [0] });
+    await initial.worker.waitFor((output) => output.type === "run_state" && output.runId === editedRun && output.state === "idle");
+    const edited = initial.worker.view!.messages.find((message) => message.role === "user")!;
+    const reference = `wackcode-image://entry/${edited.entryId}/0`;
+    expect((await request(initial.worker, { type: "message_image", entryId: edited.entryId, index: 0 })).result).toMatchObject({ data: second });
+    expect((await list(initial.worker)).total).toBe(1);
+    const sessionFile = initial.worker.view!.sessionFile!;
+    await initial.worker.shutdown();
+    const lines = (await readFile(sessionFile, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    const lastAnswer = [...lines].reverse().find((entry) => entry.type === "message" && entry.message.role === "assistant");
+    lines.push({ type: "compaction", id: "images-compaction", parentId: lines.at(-1).id, timestamp: new Date().toISOString(), summary: "A screenshot is saved with this chat.", firstKeptEntryId: lastAnswer.id, tokensBefore: 1000 });
+    await writeFile(sessionFile, lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
+    const cold = await readSavedSession({ sessionFile, taskId, mode, thinkingLevel: "high" });
+    expect(cold.messages.find((message) => message.entryId === edited.entryId)?.blocks.some((block) => block.type === "image")).toBe(true);
+    expect(JSON.stringify(cold)).not.toContain(second);
+    const restored = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, taskId, sessionFile, undefined, undefined, mode, true, { kind });
+    cleanup.push(() => restored.worker.shutdown());
+    expect((await list(restored.worker)).total).toBe(1);
+    expect(await readFile(await reopen(restored.worker, reference))).toEqual(Buffer.from(second, "base64"));
+
+    const imagesDir = kind === "chat" ? join(workspace, ".wackcode", "images") : join(workspace, ".sessions", taskId, "images");
+    const fork = await initializeWorker(provider.baseUrl, "alpha-secret", forkWorkspace, `fork-${taskId}`, undefined, undefined, undefined, mode, true,
+      { kind, forkFrom: { sessionFile, imagesDir } });
+    cleanup.push(() => fork.worker.shutdown());
+    await restored.worker.shutdown();
+    await rm(workspace, { recursive: true, force: true });
+    const forkPath = await reopen(fork.worker, reference);
+    expect(forkPath.startsWith(forkWorkspace)).toBe(true);
+    expect(await readFile(forkPath)).toEqual(Buffer.from(second, "base64"));
+    expect((await list(fork.worker)).total).toBe(1);
+    expect((await request(fork.worker, { type: "navigate", entryId: edited.entryId, target: "before", kind: "rewind" })).success).toBe(true);
+    expect((await list(fork.worker)).total).toBe(0);
+    await run(fork.worker, `mcp: read_image ${JSON.stringify({ reference })}`);
+    expect(latestResult(fork.worker, "read_image").text).toContain("not available on this chat's current branch");
+  });
+
   it("resizes an attached image with Pi's pipeline, sends it to a vision model, and previews it", async () => {
     const provider = await startMockProvider();
     cleanup.push(provider.close);
@@ -4967,7 +5064,7 @@ describe("sub-agents", () => {
       const roleTools = (ready.snapshot?.tools ?? []).filter((tool) => tool.available && scout.tools.includes(tool.name)).map((tool) => tool.name);
       expect(tools).toEqual([...roleTools, "bash_job"].sort());
       // A child has no transcript to draw in, so visual replies and task suggestions stay out too.
-      for (const hidden of ["edit", "write", "subagent", "todo", "ask_user_question", "plan_mode_complete", "show_visual", "compare_images", "suggest_task"]) {
+      for (const hidden of ["edit", "write", "subagent", "todo", "ask_user_question", "plan_mode_complete", "show_visual", "compare_images", "list_images", "read_image", "suggest_task"]) {
         expect(tools).not.toContain(hidden);
       }
     }
@@ -6022,7 +6119,7 @@ describe("chat references", () => {
 
 describe("Chat mode", () => {
   const ALLOWED = new Set([
-    "read", "write", "edit", "ls", "grep", "find", "web_fetch", "web_search", "ask_user_question", "read_chat", "show_visual", "preview_visual", "compare_images",
+    "read", "write", "edit", "ls", "grep", "find", "web_fetch", "web_search", "ask_user_question", "read_chat", "show_visual", "preview_visual", "compare_images", "list_images", "read_image",
     "memory_save", "memory_recall", "memory_forget",
     "browser_open", "browser_snapshot", "browser_act", "browser_screenshot", "browser_console",
   ]);

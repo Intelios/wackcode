@@ -177,6 +177,17 @@ asset-protocol access is added. Chat mode can reuse its attachments and tool ima
 local files still pass through its confined `read` tool. Other chats receive descriptive image
 markers through `read_chat`, never reusable image references.
 
+**Reusable originals.** Original attachments and image-tool results are preserved locally before
+resizing, separately from session viewing copies. `list_images` and `read_image` accept no file
+paths or remote URLs: their identifiers resolve only against the current display branch, including
+context edits and omissions. Code's files live beside its session; Chat mode's files live inside
+its scratchpad, with every store read/write routed through `confine`. Blob names are validated,
+files have private permissions, reads refuse symlinks/non-regular files, and content hashes detect
+changed originals. Reopening sends only a bounded viewing copy to the configured vision model;
+no new origin or asset-protocol scope is involved. Forks own copies and deletion removes the
+chat's image store. Sub-agents receive no image catalogue tools, but can read a file path their
+parent explicitly shares using their existing file tools.
+
 ## Computer use
 
 Off by default. Rust `computer_use/` is the security boundary; the worker's tools only describe requests.

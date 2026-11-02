@@ -274,6 +274,10 @@ export function summarizeTool(call: NormalizedBlock, result?: NormalizedBlock): 
       return { kind: "other", activeVerb: "Drawing", doneVerb: "Drew", subject: str(toolArgs.title) };
     case COMPARE_IMAGES_TOOL_NAME:
       return { kind: "other", activeVerb: "Comparing images", doneVerb: "Compared images", subject: str(toolArgs.title) };
+    case "list_images":
+      return { kind: "other", activeVerb: "Finding saved images", doneVerb: "Found saved images", subject: "" };
+    case "read_image":
+      return { kind: "other", activeVerb: "Reopening image", doneVerb: "Reopened image", subject: "" };
     case SUGGEST_TASK_TOOL_NAME:
       return { kind: "other", activeVerb: "Spotting", doneVerb: "Spotted", subject: str(toolArgs.title) };
     case CANVAS_TOOL_NAME: {

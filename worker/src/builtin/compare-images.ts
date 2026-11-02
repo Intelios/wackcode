@@ -4,8 +4,8 @@
  * screenshot remains available after compaction. Only parent chats load this extension.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { transcriptEntries } from "../transcript.js";
 import type { EntryLike } from "../tree.js";
+import { resolveSavedImage } from "../saved-images.js";
 import { parseImageReference } from "./image-references.js";
 import { MAX_VISUAL_TITLE } from "./visual.js";
 
@@ -58,14 +58,7 @@ export function normalizeCompareImagesParams(input: unknown): { ok: true; compar
 }
 
 export function savedComparisonImage(reference: string, branch: EntryLike[]): boolean {
-  const parsed = parseImageReference(reference);
-  if (!parsed) return false;
-  const entry = transcriptEntries(branch).find((entry) => entry.entryId === parsed.entryId);
-  const message = entry?.raw as { role?: string; toolCallId?: string; content?: unknown } | undefined;
-  if (!message || (message.role !== "user" && message.role !== "toolResult") || !Array.isArray(message.content)) return false;
-  if (message.role === "toolResult" && !message.toolCallId) return false;
-  const image = message.content.filter((block) => block?.type === "image")[parsed.index];
-  return typeof image?.data === "string" && !!image.data && typeof image.mimeType === "string" && !!image.mimeType;
+  return resolveSavedImage(reference, branch) !== undefined;
 }
 
 export function createCompareImagesExtension() {

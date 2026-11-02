@@ -42,6 +42,8 @@ export function useToolDisclosure(entryKey?: string) {
 
 const TOOL_ICONS: Record<string, IconName> = {
   read: "file",
+  read_image: "image",
+  list_images: "image",
   edit: "pencil",
   write: "filePlus",
   bash: "terminal",

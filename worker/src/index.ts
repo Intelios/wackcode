@@ -4,9 +4,9 @@ import { setUsagePublisher, trackSession, withUsage } from "./usage.js";
 import { existsSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 // Type-only: erased at build time, so Pi still loads solely through the dynamic import in initialize().
-import type { CompactionResult, PromptTemplate, ResourceLoader, SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { CompactionResult, PromptTemplate, ResourceLoader, SessionEntry, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { SWITCHABLE_BUILTIN_TOOLS, createBuiltinExtensions } from "./builtin/index.js";
 import { chatToolAllowed } from "./builtin/chat-mode/policy.js";
 import { DEFAULT_CHAT_PROMPT, buildChatGuide, chatGuideDate } from "./builtin/chat-mode/prompt.js";
@@ -34,7 +34,7 @@ import { sameExecutionPolicy } from "./execution-policy.js";
 import { promptOverrides, setPromptOverrides } from "./prompt-overrides.js";
 import { isUltra, piThinkingLevel, ultraPrompt } from "./builtin/ultra.js";
 import { teamPrompt } from "./builtin/team.js";
-import { INLINE_IMAGE_LIMITS } from "./image-limits.js";
+import { ImageStore, resolveSavedImage, savedImages, storedImageRecord, type StoredImage } from "./saved-images.js";
 import { describeProviderError } from "./provider-error.js";
 import { SubagentRunner } from "./subagent-runner.js";
 import { SubagentStreams, isSubagentTranscript } from "./subagent-stream.js";
@@ -1325,25 +1325,6 @@ function createExtensionUIContext(): Record<string, unknown> {
 }
 
 /**
- * Pi's CLI runs attachments through `processImage` (resize to Pi's inline limits) before they
- * reach a session, but `session.prompt` itself forwards images untouched. `processImage` is not
- * exported, so this repeats it with the exported `resizeImage` and WackCode's own inline limits,
- * the same ones `models.json` declares for Pi. The dimension note Pi adds for tool reads is left
- * out: it is for coordinate mapping, and here it would show up in the user's own message.
- */
-async function prepareImages(images: ImageContent[] | undefined): Promise<ImageContent[]> {
-  if (!images?.length) return [];
-  if (!piModule) throw new Error("Worker is not initialized");
-  const prepared: ImageContent[] = [];
-  for (const image of images) {
-    const resized = await piModule.resizeImage(Buffer.from(image.data, "base64"), image.mimeType, INLINE_IMAGE_LIMITS);
-    if (!resized) throw new Error("An attached image could not be read, or could not be resized below the inline image size limit.");
-    prepared.push({ type: "image", data: resized.data, mimeType: resized.mimeType });
-  }
-  return prepared;
-}
-
-/**
  * Layer the app's live settings over the loader:
  *
  * - The user's custom core (Settings → Prompts) replaces the loader's system prompt, falling
@@ -1468,6 +1449,9 @@ async function initialize(command: InitCommand): Promise<void> {
 
   const pi = await import("@earendil-works/pi-coding-agent");
   piModule = pi;
+  const imageDirectory = chatKind ? join(command.cwd, ".wackcode", "images") : join(command.sessionDir, "images");
+  const imageStore = new ImageStore({ directory: imageDirectory, cwd: command.cwd, isChat: chatKind, resizeImage: pi.resizeImage, convertToPng: pi.convertToPng });
+  builtins.images.configure(imageStore);
   piAiModule = await import("@earendil-works/pi-ai");
   modelRuntime = await createModelRuntime(pi, command.provider, command.agentDir, {
     apiKey: command.apiKey,
@@ -1522,6 +1506,11 @@ async function initialize(command: InitCommand): Promise<void> {
     const leaf = command.forkFrom.entryId ?? sessionManager.getLeafId();
     if (!leaf) throw new Error("The chat being forked has nothing to fork yet.");
     sessionManager.createBranchedSession(leaf);
+    const sourceDirectory = command.forkFrom.imagesDir ?? join(dirname(command.forkFrom.sessionFile), "images");
+    const sourceStore = new ImageStore({ directory: sourceDirectory, cwd: chatKind ? resolve(sourceDirectory, "../..") : command.cwd,
+      isChat: chatKind, resizeImage: pi.resizeImage, convertToPng: pi.convertToPng });
+    const unavailable = await imageStore.copyFrom(sourceStore, sessionManager.getBranch());
+    if (unavailable) notice(`${unavailable} original image file${unavailable === 1 ? " could" : "s could"} not be copied into this fork. Their saved viewing copies remain available.`, "warning");
     sessionStartEvent = { type: "session_start", reason: "fork", previousSessionFile: command.forkFrom.sessionFile };
   } else {
     sessionManager = pi.SessionManager.create(command.cwd, command.sessionDir);
@@ -1574,7 +1563,7 @@ async function initialize(command: InitCommand): Promise<void> {
     excludeTools: chatKind ? [...UNSUPPORTED_TOOLS, "bash"] : UNSUPPORTED_TOOLS,
     // SDK overrides win over package tools named bash, so no extension can accidentally
     // replace the harness's bounded waits. It remains an ordinary denylist-controlled tool.
-    customTools: chatKind ? [] : [builtins.bashJobs.tool(command.cwd)],
+    customTools: [pi.createReadToolDefinition(command.cwd, { autoResizeImages: false }) as ToolDefinition, ...(chatKind ? [] : [builtins.bashJobs.tool(command.cwd)])],
     sessionManager,
     settingsManager,
     resourceLoader: withAppLayers(resourceLoader),
@@ -1834,7 +1823,8 @@ async function runPrompt(
   images: ImageContent[] | undefined,
   checkpoint: CheckpointRef | null | undefined,
   literal = false,
-  commandPresentation?: CommandPresentation
+  commandPresentation?: CommandPresentation,
+  retainedImages?: Array<StoredImage | null>
 ): Promise<PromptOutcome> {
   if (!session || !taskId) throw new Error("Worker is not initialized");
   if (chatModelMissing()) throw new Error(missingModelReason);
@@ -1849,7 +1839,7 @@ async function runPrompt(
   send({ type: "run_state", taskId, runId, startedAt, state: "running" });
   response(commandId, true);
   try {
-    const prepared = await prepareImages(images);
+    const prepared = await builtins.images.preparePrompt(images, retainedImages);
     await prepareMcpServers();
     // Stopped while MCP servers were starting: the abort already reported the run idle, and
     // nothing of this prompt has been recorded.
@@ -1887,6 +1877,7 @@ async function runPrompt(
     send({ type: "run_finished", taskId, runId, outcome });
     send({ type: "run_state", taskId, runId, state: "idle" });
   }
+  builtins.images.clearPrompt();
   stopRequested = false;
   emitBoundary();
   scheduleQueuedPrompt();
@@ -2019,9 +2010,10 @@ async function resend(command: Extract<WorkerCommand, { type: "resend" }>): Prom
   const blocks = Array.isArray(content) ? content : [{ type: "text" as const, text: String(content ?? "") }];
   const original = blocks.map((block) => block.type === "text" ? block.text : "").join("");
   const removed = new Set(command.removeImages ?? []);
-  const images = blocks
-    .filter((block): block is ImageContent => block.type === "image")
+  const attached = blocks.filter((block): block is ImageContent => block.type === "image");
+  const retainedImages = attached.map((image, position) => storedImageRecord(entry.message, position, image) ?? null)
     .filter((_, position) => !removed.has(position));
+  const images = attached.filter((_, position) => !removed.has(position));
   const text = command.message ?? original;
   if (!text.trim()) throw new Error("Message is required");
   if (images.length > 0 && !(session.model?.input as string[] | undefined)?.includes("image")) {
@@ -2031,7 +2023,7 @@ async function resend(command: Extract<WorkerCommand, { type: "resend" }>): Prom
   await navigate(command.entryId, "before", "resend", command.leave);
   // This is already the exact stored prompt. Treat it literally so a retry never resolves a
   // template again (or turns an edited leading slash into a command).
-  await runPrompt(command.id, command.runId, runStartedAt(command.startedAt), text, images, command.checkpoint, true, retryPresentation);
+  await runPrompt(command.id, command.runId, runStartedAt(command.startedAt), text, images, command.checkpoint, true, retryPresentation, retainedImages);
 }
 
 async function handle(command: WorkerCommand): Promise<void> {
@@ -2055,13 +2047,13 @@ async function handle(command: WorkerCommand): Promise<void> {
       respond(command.id, refreshCommandCatalog());
       return;
     } else if (command.type === "tool_image") {
-      respond(command.id, toolResultImage(command.toolCallId, command.index ?? 0));
+      respond(command.id, await toolResultImage(command.toolCallId, command.index ?? 0));
       return;
     } else if (command.type === "visual_document") {
       respond(command.id, visualDocument(transcriptEntries(session.sessionManager.getBranch()).map((entry) => entry.raw), command.toolCallId));
       return;
     } else if (command.type === "message_image") {
-      respond(command.id, userMessageImage(command.entryId, command.index ?? 0));
+      respond(command.id, await userMessageImage(command.entryId, command.index ?? 0));
       return;
     } else if (command.type === "execute_command") {
       refuseInChat("That command");
@@ -2507,18 +2499,15 @@ const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "
  * `index` among that result's images, the position its preview has in the block's `images`.
  * Only the conversation as it stands is searched.
  */
-function toolResultImage(toolCallId: string, index: number): ImageContent | null {
+async function toolResultImage(toolCallId: string, index: number): Promise<ImageContent | null> {
   if (!session) return null;
-  const path = session.sessionManager.getBranch();
-  const messages = transcriptEntries(path).map((entry) => entry.raw) as Record<string, unknown>[];
-  for (let position = messages.length - 1; position >= 0; position -= 1) {
-    const message = messages[position];
-    if (message?.role !== "toolResult" || message.toolCallId !== toolCallId) continue;
-    if (!Array.isArray(message.content)) return null;
-    const image = (message.content as Record<string, unknown>[]).filter((block) => block?.type === "image")[index];
-    return image && typeof image.data === "string" && typeof image.mimeType === "string" ? { type: "image", data: image.data, mimeType: image.mimeType } : null;
-  }
-  return null;
+  const branch = session.sessionManager.getBranch();
+  const entry = [...transcriptEntries(branch)].reverse().find((entry) => {
+    const message = entry.raw as { role?: string; toolCallId?: string };
+    return message.role === "toolResult" && message.toolCallId === toolCallId;
+  });
+  const saved = entry ? savedImages(branch).find((image) => image.entryId === entry.entryId && image.index === index) : undefined;
+  return saved ? builtins.images.store().original(saved) : null;
 }
 
 /**
@@ -2527,15 +2516,10 @@ function toolResultImage(toolCallId: string, index: number): ImageContent | null
  * the keys the transcript renders with — because snapshots carry only thumbnails and the
  * preview's worker-local id says nothing across a restart.
  */
-function userMessageImage(entryId: string, index: number): ImageContent | null {
+async function userMessageImage(entryId: string, index: number): Promise<ImageContent | null> {
   if (!session) return null;
-  const entry = transcriptEntries(session.sessionManager.getBranch()).find((entry) => entry.entryId === entryId);
-  const message = entry?.raw as Record<string, unknown> | undefined;
-  if (message?.role !== "user") return null;
-  const content = message.content;
-  if (!Array.isArray(content)) return null;
-  const image = (content as Record<string, unknown>[]).filter((block) => block?.type === "image")[index];
-  return image && typeof image.data === "string" && typeof image.mimeType === "string" ? { type: "image", data: image.data, mimeType: image.mimeType } : null;
+  const saved = resolveSavedImage(`wackcode-image://entry/${entryId}/${index}`, session.sessionManager.getBranch());
+  return saved?.role === "user" ? builtins.images.store().original(saved) : null;
 }
 
 /**

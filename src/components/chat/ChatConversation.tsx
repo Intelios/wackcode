@@ -9,7 +9,7 @@
  * finds its place. Clusters and dividers come from `chat-clusters.ts`; the reply that
  * answers a user message is keyed by that message, so its rows survive the partial→saved swap.
  */
-import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { NormalizedBlock, NormalizedMessage, SessionSnapshot, TaskRecord } from "../../types";
 import { useFollowScroll } from "../../hooks/useFollowScroll";
@@ -61,7 +61,7 @@ function moodOf(partial: NormalizedMessage | undefined, compaction: boolean): { 
   return { mood: "typing" };
 }
 
-export function ChatConversation({ task, messages, partial, running, compaction, viewState, historyReady, actionsEnabled, vision, modelName, notes, onMessageAction, onReveal, loadImage, chatLinks, onVisualSend, onVisualLink }: ChatConversationProps) {
+export const ChatConversation = memo(function ChatConversation({ task, messages, partial, running, compaction, viewState, historyReady, actionsEnabled, vision, modelName, notes, onMessageAction, onReveal, loadImage, chatLinks, onVisualSend, onVisualLink }: ChatConversationProps) {
   const loadToolImage = useContext(ToolImageSource);
   const imageScope = useReplyImageScope(messages, loadImage, loadToolImage);
   const reduce = useReducedMotion() ?? false;
@@ -201,5 +201,5 @@ export function ChatConversation({ task, messages, partial, running, compaction,
       </AnimatePresence>
     </div>
   );
-}
+});
 

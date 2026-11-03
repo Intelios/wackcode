@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ModelRef, ProviderRecord, ReasoningEffort, SubagentModel, ThinkingLevel } from "../types";
 import { favoriteModelEntries, modelIsReady, pickThinkingLevel, reasoningLevels } from "../model-utils";
 import { Icon } from "./Icons";
@@ -73,7 +73,7 @@ const MAX_FX_DOTS = [
   { left: "96%", top: "55%", size: 2.4, dur: "2.8s", delay: "-1.9s" }
 ];
 
-export function ModelPicker({
+export const ModelPicker = memo(function ModelPicker({
   providers,
   providerId,
   modelId,
@@ -459,9 +459,9 @@ export function ModelPicker({
       </Popover>
     </>
   );
-}
+});
 
-export function ReasoningToggle({
+export const ReasoningToggle = memo(function ReasoningToggle({
   providers,
   providerId,
   modelId,
@@ -609,4 +609,4 @@ export function ReasoningToggle({
       </Popover>
     </>
   );
-}
+});

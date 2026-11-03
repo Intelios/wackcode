@@ -6,17 +6,18 @@ import { encodeContexts, restoreContexts } from "../../browser-context";
  * and stats. Its `@` picker is chats only: Chat mode may reference other Chat mode chats, and has
  * no workspace files to point into (`chat-refs.ts`).
  *
- * Drafts live in App (`useComposerDrafts`) and every async update captures its draft key, as
+ * Drafts live in App's store (`useComposerDrafts`), with only the composer subscribed. Every
+ * async update captures its draft key, as
  * in Composer.tsx: a late send failure or queue restore writes back to the chat it came from.
  * The attachment tray and queued rows are the shared pieces in `../composer/`.
  */
-import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type SetStateAction } from "react";
+import { memo, forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type SetStateAction } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ImageContent, ProviderRecord, QueuedMessage, ReasoningEffort, RestoredPrompt, TaskStatus } from "../../types";
 import { attachmentProblem, attachFiles, filesFrom, largePasteText, pastedTextFile, splitFileSection, type FileAttachment } from "../../attachment-utils";
 import { activeMention, type ChatMentionSuggestion, type MentionSuggestion } from "../../mention-utils";
 import { chatMentionToken, encodeChatRefs, rankChats, survivingChatRefs } from "../../chat-refs";
-import { EMPTY_DRAFT, type ComposerDraft, type ComposerDraftState } from "../../hooks/useComposerDrafts";
+import { EMPTY_DRAFT, useComposerDraftValue, type ComposerDraft, type ComposerDraftState } from "../../hooks/useComposerDrafts";
 import { AttachmentTray } from "../composer/AttachmentTray";
 import { PasteNotice } from "../composer/PasteNotice";
 import { QueuedRows, queuedDisplay, useQueueActions } from "../composer/QueuedRows";
@@ -65,12 +66,13 @@ interface ChatComposerProps extends ModelFavoritesProps {
   onTyping?: (typing: boolean) => void;
 }
 
-export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(function ChatComposer({
+export const ChatComposer = memo(forwardRef<ChatComposerHandle, ChatComposerProps>(function ChatComposer({
   draftState, status, backgroundWorking = false, providers, providerId, modelId, thinkingLevel, favoriteModels, favoriteSaving, onSetFavorite,
   placeholder, agentName, disabled, frozen, hero, queuedMessages, seed, mentionChats, onConfigure, onSend, onSteer, onDequeue, onStop, onOpenSettings, onTyping
 }, handle) {
   const reduce = useReducedMotion() ?? false;
-  const { key: draftKey, value, update: updateDraft } = draftState;
+  const { key: draftKey, update: updateDraft } = draftState;
+  const value = useComposerDraftValue(draftState)!;
   const { text: draft, images, files } = value;
   const contexts = value.browserContexts ?? [];
   const chatRefs = value.chatRefs ?? [];
@@ -399,4 +401,4 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
       {shownImage && <ImageLightbox preview={shownImage.url} alt={`Attached image ${shownImage.index + 1}`} onClose={() => setShownImage(null)} />}
     </div>
   );
-});
+}));

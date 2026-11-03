@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { memo, useId, useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import type { GitBranches, GitCheckoutKind, ProjectRecord, RunInfo, TaskRecord } from "../types";
 import { RunButton } from "./RunButton";
@@ -47,7 +47,7 @@ interface ChatHeaderProps {
   onCheckoutBranch: (name: string, kind: GitCheckoutKind) => Promise<void>;
 }
 
-export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStopRun, onShowRunOutput, build, onSaveBuildCommand, onBuild, onStopBuild, onShowBuildOutput, git, onListBranches, onCheckoutBranch, changesCount, changesOpen, browserOpen, onToggleChanges, onToggleBrowser, terminalOpen, onToggleTerminal, gamesOpen, onToggleGames, panelOpen, onTogglePanel, onRename, onTaskAction, titlePulse = 0 }: ChatHeaderProps) {
+export const ChatHeader = memo(function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStopRun, onShowRunOutput, build, onSaveBuildCommand, onBuild, onStopBuild, onShowBuildOutput, git, onListBranches, onCheckoutBranch, changesCount, changesOpen, browserOpen, onToggleChanges, onToggleBrowser, terminalOpen, onToggleTerminal, gamesOpen, onToggleGames, panelOpen, onTogglePanel, onRename, onTaskAction, titlePulse = 0 }: ChatHeaderProps) {
   const contextMenu = useContextMenu();
   const [renaming, setRenaming] = useState(false);
   const [value, setValue] = useState(task.name);
@@ -142,4 +142,4 @@ export function ChatHeader({ task, project, run, onSaveRunCommand, onRun, onStop
       </div>
     </header>
   );
-}
+});

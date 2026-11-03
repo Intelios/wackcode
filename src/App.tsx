@@ -2,7 +2,7 @@ import { restoreContexts } from "./browser-context";
 import type { RestoredPrompt } from "./types";
 import { attachmentProblem } from "./attachment-utils";
 import { chatRefCandidates } from "./chat-refs";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type SetStateAction } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type ReactNode, type SetStateAction } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -24,6 +24,7 @@ import { APP_SLASH_COMMANDS, appCommandsFor, commandMatchesName } from "./comman
 import { AREA_KEY, areaDirection, parseArea, taskArea, tasksInArea, type Area } from "./areas";
 import { performChatNavigation, withoutResolvedDialog } from "./menu-navigation";
 import { applyHistoryPreviews } from "./history-previews";
+import { useStableCallbacks, type CallbackProps } from "./hooks/useStableCallbacks";
 import { useComposerDrafts } from "./hooks/useComposerDrafts";
 import { useChatTabs } from "./hooks/useChatTabs";
 import { activateTab, addDraftTab, bindTab, closeTab, cycleTab, draftTab, findTab, openChatTab, patchTab, removeDraftProject, removeTaskTabs, reopenTab, reorderTab, switchTabArea, tabsInArea, type ChatDraft, type TabPanelState } from "./chat-tabs";
@@ -3250,25 +3251,102 @@ export default function App() {
     onReorder: (id: string, index: number) => tabs.update((state) => reorderTab(state, id, index))
   }), [tabs.update]);
 
-  const tabItems: ChatTabItem[] = tabsInArea(tabs.state, area).map((tab) => {
-    const task = data.tasks.find((item) => item.id === tab.taskId);
-    const choice = task ?? tab.draft?.choice;
-    const provider = data.providers.find((item) => item.id === choice?.providerId);
-    return {
-      id: tab.id, title: task?.name ?? "New chat",
-      project: tab.area === "chat" ? "Chat" : data.projects.find((item) => item.id === (task?.projectId ?? tab.draft?.projectId))?.name ?? "No project",
-      model: provider?.models.find((item) => item.id === choice?.modelId)?.name ?? choice?.modelId ?? "Choose a model",
-      titlePulse: task ? titlePulses[task.id] : undefined,
-      status: task && pendingDialogTaskIds.has(task.id) ? "waiting" : tab.error || (task && (task.lastError || runtimes[task.id]?.error)) ? "error"
-        : tab.sending || task?.status === "running" || task?.status === "stopping" ? "working" : tab.completed ? "completed" : "idle"
-    };
-  });
-
-  if (booting) return <div className="boot-screen"><div className="brand-mark"><DuckMark /></div><span>Starting WackCode</span></div>;
+  const runtimeErrorIds = JSON.stringify(Object.keys(runtimes).filter((id) => runtimes[id]?.error));
+  const tabItems = useMemo<ChatTabItem[]>(() => {
+    const errors = new Set<string>(JSON.parse(runtimeErrorIds));
+    return tabsInArea(tabs.state, area).map((tab) => {
+      const task = data.tasks.find((item) => item.id === tab.taskId);
+      const choice = task ?? tab.draft?.choice;
+      const provider = data.providers.find((item) => item.id === choice?.providerId);
+      return {
+        id: tab.id, title: task?.name ?? "New chat",
+        project: tab.area === "chat" ? "Chat" : data.projects.find((item) => item.id === (task?.projectId ?? tab.draft?.projectId))?.name ?? "No project",
+        model: provider?.models.find((item) => item.id === choice?.modelId)?.name ?? choice?.modelId ?? "Choose a model",
+        titlePulse: task ? titlePulses[task.id] : undefined,
+        status: task && pendingDialogTaskIds.has(task.id) ? "waiting" : tab.error || (task && (task.lastError || errors.has(task.id))) ? "error"
+          : tab.sending || task?.status === "running" || task?.status === "stopping" ? "working" : tab.completed ? "completed" : "idle"
+      };
+    });
+  }, [tabs.state, area, data.tasks, data.providers, data.projects, titlePulses, pendingDialogTaskIds, runtimeErrorIds]);
 
   // A list fetched for another chat or project never shows here.
   const composerMentions = mentions?.source === (mentionSource().source ?? "") ? mentions : undefined;
   const draftCatalog = !selectedTask && draftSlash?.projectId === (draft?.projectId ?? null) ? draftSlash : undefined;
+
+  // Stable event props let shell surfaces skip partial frames without closing over an old
+  // selection. Calls already in flight still retain the chat/draft they started with.
+  const sidebarHandlers = useStableCallbacks<CallbackProps<ComponentProps<typeof Sidebar>>>({
+    onSwitchArea: enterArea, onSelectTask: selectTask,
+    onNewChat: (project) => { openDraft(project?.id ?? null); }, onNewDraft: () => { openDraft(); },
+    onAddProject: () => void addProject(), onToggleArchived: () => setArchivedOpen((value) => !value),
+    onToggleProjectCollapsed: toggleProjectCollapsed, onOpenSettings: openSettings,
+    onTaskAction: (task, action) => void taskAction(task, action),
+    onProjectAction: (project, action) => void projectAction(project, action),
+    onRenameTask: (taskId, name) => void renameTask(taskId, name),
+    onArchiveAll: archiveAll, onDeleteAllArchived: deleteAllArchived
+  });
+  const headerHandlers = useStableCallbacks<CallbackProps<ComponentProps<typeof ChatHeader>>>({
+    onSaveRunCommand: (command) => selectedProject ? saveRunCommand(selectedProject.id, command) : Promise.reject("Choose a project first."),
+    onRun: () => selectedTask ? launchRun(selectedTask.id) : Promise.resolve(),
+    onStopRun: () => selectedRun ? stopRun(selectedRun) : Promise.resolve(),
+    onShowRunOutput: () => showRunOutput(),
+    onSaveBuildCommand: (command) => selectedProject ? saveRunCommand(selectedProject.id, command, "build") : Promise.reject("Choose a project first."),
+    onBuild: () => selectedTask ? launchRun(selectedTask.id, "build") : Promise.resolve(),
+    onStopBuild: () => selectedBuild ? stopRun(selectedBuild) : Promise.resolve(),
+    onShowBuildOutput: () => showRunOutput("build"),
+    onListBranches: () => api.gitBranches({ taskId: selectedTask!.id }),
+    onCheckoutBranch: (name, kind) => checkoutBranch({ taskId: selectedTask!.id }, name, kind),
+    onToggleChanges: toggleChanges, onToggleBrowser: toggleBrowser, onToggleTerminal: toggleTerminal,
+    onTogglePanel: togglePanel, onToggleGames: toggleGames,
+    onRename: (name) => { if (selectedTask) void renameTask(selectedTask.id, name); },
+    onTaskAction: sidebarHandlers.onTaskAction
+  });
+  const headerBranch = changes ? changes.isGit ? changes.branch : undefined : selectedTask?.branch || undefined;
+  const headerGit = useMemo(() => headerBranch === undefined ? undefined : { branch: headerBranch }, [headerBranch]);
+  const composerHandlers = useStableCallbacks<CallbackProps<ComponentProps<typeof Composer>>>({
+    onSetFavorite: setModelFavorite,
+    onCompact: () => { if (selectedTask) void compactNow(selectedTask.id); },
+    onModeChange: (mode) => void setTaskMode(mode),
+    onConfigure: selectedTask ? (patch) => void configure(patch) : configureDraft,
+    onSend: (message, images, files, queue) => sendPrompt(message, { images, files, queue }),
+    onLiteral: (message, images, files) => sendPrompt(message, { images, files, literal: true }),
+    onRequestCommands: requestSlashCommands, onRequestMentions: () => void requestMentions(),
+    onCommand: sendSlash, onSteer: steerMessage, onDequeue: dequeueMessages,
+    onStop: () => void stopTask(), onOpenSettings: openSettings
+  });
+  const projectHandlers = useStableCallbacks<CallbackProps<ComponentProps<typeof ProjectBar>>>({
+    onSelectProject: setDraftProject, onSetPinned: setProjectPinned, onToggleWorktree: setDraftWorktree,
+    onAddProject: () => void addProject(), onListBranches: listProjectBranches,
+    onCheckoutBranch: (projectId, name, kind) => checkoutBranch({ projectId }, name, kind)
+  });
+  const teamHandlers = useStableCallbacks({
+    onOpenSettings: openSubagentSettings, onTeamChange: (team: SubagentModel | null) => void setTaskTeam(team)
+  });
+  const composerTeam = selectedTask?.team ?? draft?.team ?? null;
+  const teamDefault = data.subagents.teamDefault ?? null;
+  const teamAvailable = teamProblem(composerTeam);
+  const teamProps = useMemo(() => ({ team: composerTeam, teamDefault, teamAvailable, ...teamHandlers }),
+    [composerTeam, teamDefault, teamAvailable, teamHandlers]);
+  const composerCommands = useMemo(() => [...enabledAppCommands, ...(selectedTask ? runtime?.slashCommands ?? [] : draftCatalog?.commands ?? [])],
+    [enabledAppCommands, Boolean(selectedTask), runtime?.slashCommands, draftCatalog?.commands]);
+  const composerHeader = useMemo(() => !selectedTask ? <ProjectBar projects={data.projects}
+    projectId={draft?.projectId ?? null} useWorktree={draft?.useWorktree ?? false} pinned={pinnedProjects}
+    glass={effectiveComposerStyle === "classicGlass"} {...projectHandlers} /> : undefined,
+    [Boolean(selectedTask), data.projects, draft?.projectId, draft?.useWorktree, pinnedProjects, effectiveComposerStyle, projectHandlers]);
+
+  const chatHandlers = useStableCallbacks<CallbackProps<ChatAreaProps>>({
+    onSetFavorite: setModelFavorite, onMessageAction, onVisualSend, onVisualLink,
+    onReveal: (path) => { void api.revealPath(path, true).catch((reason) => setGlobalError(String(reason))); },
+    loadImage: loadMessageImage, onToggleBrowser: toggleBrowser,
+    onRename: (name) => { if (selectedTask) void renameTask(selectedTask.id, name); },
+    onTaskAction: sidebarHandlers.onTaskAction,
+    onConfigure: selectedTask ? (patch) => void configure(patch) : configureDraft,
+    // Chat mode expands no commands, including text starting with a slash.
+    onSend: (message, images, files, queue) => sendPrompt(message, { images, files, queue, literal: true }),
+    onSteer: steerMessage, onDequeue: dequeueMessages, onStop: () => void stopTask(), onOpenSettings: openSettings
+  });
+
+  if (booting) return <div className="boot-screen"><div className="brand-mark"><DuckMark /></div><span>Starting WackCode</span></div>;
 
   // The Chat area's whole surface (ChatArea): the same state and handlers the Code view uses,
   // with problems shown as system bubbles in the conversation instead of banners.
@@ -3311,27 +3389,12 @@ export default function App() {
     thinkingLevel: selectedTask?.thinkingLevel ?? draftChoice?.thinkingLevel,
     favoriteModels: data.favoriteModels,
     favoriteSaving,
-    onSetFavorite: setModelFavorite,
     draftState: composerDrafts.forChat(composerDraftKey),
     composerDisabled: Boolean(selectedTask?.archived || composerTab?.sending) || (selectedTask ? pendingDialogTaskIds.has(selectedTask.id) : false),
     handoff: transitioning?.composerKey === composerDraftKey ? transitioning.message : undefined,
     seed: selectedTask && composerSeed?.taskId === selectedTask.id ? composerSeed : undefined,
     panel: showChatTabBar ? { id: "chat-tab-panel", labelledBy: activeTab ? `tab-${activeTab.id}` : undefined } : undefined,
-    onMessageAction,
-    onVisualSend,
-    onVisualLink,
-    onReveal: (path) => { void api.revealPath(path, true).catch((reason) => setGlobalError(String(reason))); },
-    loadImage: loadMessageImage,
-    onToggleBrowser: toggleBrowser,
-    onRename: (name) => { if (chatTask) void renameTask(chatTask.id, name); },
-    onTaskAction: (task, action) => void taskAction(task, action),
-    onConfigure: selectedTask ? (patch) => void configure(patch) : configureDraft,
-    // Literal: chat text starting with / is just text — Chat mode expands no commands.
-    onSend: (message, images, files, queue) => sendPrompt(message, { images, files, queue, literal: true }),
-    onSteer: steerMessage,
-    onDequeue: dequeueMessages,
-    onStop: () => void stopTask(),
-    onOpenSettings: openSettings
+    ...chatHandlers
   } : undefined;
 
   return (
@@ -3434,32 +3497,18 @@ export default function App() {
       ) : (
         <>
       <Sidebar
+        {...sidebarHandlers}
         projects={data.projects}
         pinnedProjectIds={pinnedProjects}
         devBuild={devBuild}
         area={area}
         areaAttention={areaAttention}
-        onSwitchArea={enterArea}
         tasks={areaTasks}
         selectedTaskId={selectedTaskId}
         archivedOpen={archivedOpen}
         pendingDialogTaskIds={pendingDialogTaskIds}
         titlePulses={titlePulses}
         collapsedProjectIds={collapsedProjects}
-        onSelectTask={selectTask}
-        onNewChat={(project) => { openDraft(project?.id ?? null); }}
-        onNewDraft={() => { openDraft(); }}
-        onAddProject={() => void addProject()}
-        onToggleArchived={() => {
-          setArchivedOpen((value) => !value);
-        }}
-        onToggleProjectCollapsed={toggleProjectCollapsed}
-        onOpenSettings={openSettings}
-        onTaskAction={(task, action) => void taskAction(task, action)}
-        onProjectAction={(project, action) => void projectAction(project, action)}
-        onRenameTask={(taskId, name) => void renameTask(taskId, name)}
-        onArchiveAll={archiveAll}
-        onDeleteAllArchived={deleteAllArchived}
         hidden={!shell.sidebarShown}
       />
       <SidebarToggle open={shell.sidebarShown} autoHidden={shell.sidebarAutoHidden} onToggle={toggleSidebar} />
@@ -3480,34 +3529,18 @@ export default function App() {
           <motion.div key="chat" className="chat-view" role={showChatTabBar ? "tabpanel" : undefined} id={showChatTabBar ? "chat-tab-panel" : undefined} aria-labelledby={showChatTabBar ? `tab-${activeTab?.id}` : undefined} initial={false} exit={{ opacity: 0, transition: { duration: reduce ? 0 : 0.18, ease: EASE } }}>
             <motion.div initial={reduce ? false : { opacity: 0, y: -36 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reduce ? 0 : 0.45, delay: reduce ? 0 : 0.05, ease: EASE }}>
               <ChatHeader
+              {...headerHandlers}
               task={selectedTask}
+              git={headerGit}
               project={selectedProject}
               run={selectedRun}
-              onSaveRunCommand={(command) => selectedProject ? saveRunCommand(selectedProject.id, command) : Promise.reject("Choose a project first.")}
-              onRun={() => launchRun(selectedTask.id)}
-              onStopRun={() => selectedRun ? stopRun(selectedRun) : Promise.resolve()}
-              onShowRunOutput={() => showRunOutput()}
               build={selectedBuild}
-              onSaveBuildCommand={(command) => selectedProject ? saveRunCommand(selectedProject.id, command, "build") : Promise.reject("Choose a project first.")}
-              onBuild={() => launchRun(selectedTask.id, "build")}
-              onStopBuild={() => selectedBuild ? stopRun(selectedBuild) : Promise.resolve()}
-              onShowBuildOutput={() => showRunOutput("build")}
-              git={changes ? (changes.isGit ? { branch: changes.branch } : undefined) : selectedTask.branch ? { branch: selectedTask.branch } : undefined}
-              onListBranches={() => api.gitBranches({ taskId: selectedTask.id })}
-              onCheckoutBranch={(name, kind) => checkoutBranch({ taskId: selectedTask.id }, name, kind)}
               changesCount={changes?.files.length}
               changesOpen={panelView?.kind === "changes"}
               browserOpen={panelView?.kind === "browser"}
-              onToggleChanges={toggleChanges}
-              onToggleBrowser={toggleBrowser}
               terminalOpen={panelView?.kind === "terminal"}
-              onToggleTerminal={toggleTerminal}
               gamesOpen={panelView?.kind === "games"}
               panelOpen={panelView !== null}
-              onTogglePanel={togglePanel}
-              onToggleGames={toggleGames}
-              onRename={(name) => void renameTask(selectedTask.id, name)}
-              onTaskAction={(task, action) => void taskAction(task, action)}
               titlePulse={titlePulses[selectedTask.id] ?? 0}
               />
             </motion.div>
@@ -3652,6 +3685,10 @@ export default function App() {
             {/* One persistent composer: it layout-animates between the centered hero slot and
                 the docked chat slot, so it can never vanish mid-transition. */}
             <Composer
+              {...composerHandlers}
+              team={teamProps}
+              header={composerHeader}
+              commands={composerCommands}
               comet={!selectedTask || transitioning !== undefined}
               frozen={transitioning?.composerKey === composerDraftKey ? transitioning.message : undefined}
               // Liquid Glass styles need the macOS 26 material; a config copied from another Mac
@@ -3681,63 +3718,27 @@ export default function App() {
               providers={configuredProviders}
               favoriteModels={data.favoriteModels}
               favoriteSaving={favoriteSaving}
-              onSetFavorite={setModelFavorite}
               stats={selectedTask ? runtime?.snapshot?.stats : undefined}
-              onCompact={selectedTask ? () => void compactNow(selectedTask.id) : undefined}
               compactDisabledReason={selectedTask ? compactBlockedReason(selectedTask, runtime) : undefined}
               popoverSide={selectedTask ? "top" : "bottom"}
-              header={!selectedTask ? (
-                <ProjectBar
-                  projects={data.projects}
-                  projectId={draft?.projectId ?? null}
-                  useWorktree={draft?.useWorktree ?? false}
-                  pinned={pinnedProjects}
-                  glass={effectiveComposerStyle === "classicGlass"}
-                  onSelectProject={setDraftProject}
-                  onSetPinned={setProjectPinned}
-                  onToggleWorktree={setDraftWorktree}
-                  onAddProject={() => void addProject()}
-                  onListBranches={listProjectBranches}
-                  onCheckoutBranch={(projectId, name, kind) => checkoutBranch({ projectId }, name, kind)}
-                />
-              ) : undefined}
               placeholder={!selectedTask ? "Describe a task or ask a question…" : undefined}
               agentName={agentName(data.appearance)}
               mode={currentMode}
               disabled={Boolean(selectedTask?.archived || composerTab?.sending) || (selectedTask ? pendingDialogTaskIds.has(selectedTask.id) : false)}
               executionPolicy={data.executionPolicy ?? DEFAULT_EXECUTION_POLICY}
               appliedExecutionPolicy={runtime?.snapshot?.executionPolicy}
-              onModeChange={(mode) => void setTaskMode(mode)}
-              team={{
-                team: selectedTask?.team ?? draft?.team ?? null,
-                teamDefault: data.subagents.teamDefault ?? null,
-                teamAvailable: teamProblem(selectedTask?.team ?? draft?.team ?? null),
-                onOpenSettings: openSubagentSettings,
-                onTeamChange: (team) => void setTaskTeam(team)
-              }}
-              onConfigure={selectedTask ? (patch) => void configure(patch) : configureDraft}
-              onSend={(message, images, files, queue) => sendPrompt(message, { images, files, queue })}
-              onLiteral={(message, images, files) => sendPrompt(message, { images, files, literal: true })}
               // The Chat area has its own composer (ChatArea); this one is Code's alone.
-              commands={[...enabledAppCommands, ...(selectedTask ? runtime?.slashCommands ?? [] : draftCatalog?.commands ?? [])]}
               commandsReady={selectedTask ? runtime?.slashCommands !== undefined : draftCatalog?.commands !== undefined}
               commandsLoading={selectedTask ? runtime?.slashCommandsLoading : draftCatalog?.loading}
               commandsError={selectedTask ? runtime?.slashCommandsError : draftCatalog?.error}
-              onRequestCommands={requestSlashCommands}
               mentionFiles={composerMentions?.files}
               mentionChats={mentionChats}
               mentionsLoading={composerMentions?.loading}
               mentionsError={composerMentions?.error}
               mentionsTruncated={composerMentions?.truncated}
-              onRequestMentions={() => void requestMentions()}
-              onCommand={sendSlash}
               queuedMessages={runtime?.queued}
-              onSteer={steerMessage}
-              onDequeue={dequeueMessages}
               draftState={composerDrafts.forChat(composerDraftKey)}
               seed={selectedTask && composerSeed?.taskId === selectedTask.id ? composerSeed : undefined}
-              onStop={() => void stopTask()}
-              onOpenSettings={openSettings}
             />
           </div>
         )}

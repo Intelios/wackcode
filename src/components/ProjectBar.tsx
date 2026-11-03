@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { LayoutGroup, motion, useReducedMotion } from "motion/react";
 import type { GitBranches, GitCheckoutKind, ProjectRecord } from "../types";
 import { BranchPicker } from "./BranchPicker";
@@ -20,7 +21,7 @@ interface ProjectBarProps {
   onCheckoutBranch: (projectId: string, name: string, kind: GitCheckoutKind) => Promise<void>;
 }
 
-export function ProjectBar({ projects, projectId, useWorktree, pinned, glass = false, onSelectProject, onSetPinned, onToggleWorktree, onAddProject, onListBranches, onCheckoutBranch }: ProjectBarProps) {
+export const ProjectBar = memo(function ProjectBar({ projects, projectId, useWorktree, pinned, glass = false, onSelectProject, onSetPinned, onToggleWorktree, onAddProject, onListBranches, onCheckoutBranch }: ProjectBarProps) {
   const reduce = useReducedMotion();
   const project = projects.find((item) => item.id === projectId);
   const canWorktree = Boolean(project?.gitHasHead);
@@ -81,4 +82,4 @@ export function ProjectBar({ projects, projectId, useWorktree, pinned, glass = f
       </LayoutGroup>
     </div>
   );
-}
+});

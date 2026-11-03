@@ -3,7 +3,7 @@
  * auto-title glint, the browser toggle and the chat menu. No project, branch, run or Git
  * chrome; the scratchpad lives in the menu and in the replies that write to it.
  */
-import { useState } from "react";
+import { memo, useState } from "react";
 import type { TaskRecord } from "../../types";
 import { Icon } from "../Icons";
 import { MenuButton } from "../ui/MenuButton";
@@ -26,7 +26,7 @@ interface ChatAreaHeaderProps {
   titlePulse?: number;
 }
 
-export function ChatAreaHeader({ task, live, thinking, browserOpen, onToggleBrowser, onRename, onTaskAction, titlePulse = 0 }: ChatAreaHeaderProps) {
+export const ChatAreaHeader = memo(function ChatAreaHeader({ task, live, thinking, browserOpen, onToggleBrowser, onRename, onTaskAction, titlePulse = 0 }: ChatAreaHeaderProps) {
   const contextMenu = useContextMenu();
   const [renaming, setRenaming] = useState(false);
   const [value, setValue] = useState(task.name);
@@ -65,4 +65,4 @@ export function ChatAreaHeader({ task, live, thinking, browserOpen, onToggleBrow
       <MenuButton label="Chat menu" items={menu} />
     </header>
   );
-}
+});

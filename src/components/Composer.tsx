@@ -1,5 +1,5 @@
 import { encodeContexts, restoreContexts } from "../browser-context";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode, type SetStateAction } from "react";
+import { createContext, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode, type SetStateAction } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { DEFAULT_EXECUTION_POLICY } from "../execution-policy";
 import { DEFAULT_AGENT_NAME } from "../agentName";
@@ -9,7 +9,7 @@ import { attachmentProblem, attachFiles, filesFrom, largePasteText, pastedTextFi
 import { activeMention, mentionValue, type ChatMentionSuggestion, type MentionSuggestion } from "../mention-utils";
 import { chatMentionToken, encodeChatRefs, rankSuggestions, survivingChatRefs } from "../chat-refs";
 import { activeSlashCommand, commandMatchesName } from "../command-utils";
-import { EMPTY_DRAFT, type ComposerDraft, type ComposerDraftState } from "../hooks/useComposerDrafts";
+import { EMPTY_DRAFT, useComposerDraftValue, type ComposerDraft, type ComposerDraftState } from "../hooks/useComposerDrafts";
 import { Icon, type IconName } from "./Icons";
 import { ContextPanel } from "./ContextPanel";
 import { ModelPicker, ReasoningToggle, type ModelFavoritesProps, type TeamPillProps } from "./ModelPicker";
@@ -120,9 +120,17 @@ interface ComposerProps extends ModelFavoritesProps {
   agentName?: string;
 }
 
-export function Composer({ draftState, status, backgroundWorking = false, providerId, modelId, thinkingLevel, providers, favoriteModels, favoriteSaving, onSetFavorite, stats, onCompact, compactDisabledReason, header, placeholder, popoverSide = "top", mode, executionPolicy = DEFAULT_EXECUTION_POLICY, appliedExecutionPolicy, onModeChange, onConfigure, team, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, mentionFiles, mentionChats, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, queuedMessages, onSteer, onDequeue, onStop, onOpenSettings, disabled, seed, comet, frozen, composerStyle = "classic", agentName = DEFAULT_AGENT_NAME, pills }: ComposerProps) {
+// The live status slot updates independently of the editor. A partial must not rebuild
+// the textarea, attachment tray and model controls just to update a floating pill.
+const LivePillsContext = createContext<ReactNode>(undefined);
+function LivePills() { return useContext(LivePillsContext); }
+export function Composer({ pills, ...props }: ComposerProps) {
+  return <LivePillsContext.Provider value={pills}><ComposerEditor {...props} /></LivePillsContext.Provider>;
+}
+
+const ComposerEditor = memo(function ComposerEditor({ draftState, status, backgroundWorking = false, providerId, modelId, thinkingLevel, providers, favoriteModels, favoriteSaving, onSetFavorite, stats, onCompact, compactDisabledReason, header, placeholder, popoverSide = "top", mode, executionPolicy = DEFAULT_EXECUTION_POLICY, appliedExecutionPolicy, onModeChange, onConfigure, team, onSend, commands = [], commandsReady, commandsLoading, commandsError, onRequestCommands, onCommand, onLiteral, mentionFiles, mentionChats, mentionsLoading, mentionsError, mentionsTruncated, onRequestMentions, queuedMessages, onSteer, onDequeue, onStop, onOpenSettings, disabled, seed, comet, frozen, composerStyle = "classic", agentName = DEFAULT_AGENT_NAME }: Omit<ComposerProps, "pills">) {
   const [localDraft, setLocalDraft] = useState<ComposerDraft>(EMPTY_DRAFT);
-  const value = draftState?.value ?? localDraft;
+  const value = useComposerDraftValue(draftState) ?? localDraft;
   const updateDraft = draftState?.update ?? setLocalDraft;
   const { text: draft, images: attachments, files } = value;
   const contexts = value.browserContexts ?? [];
@@ -741,7 +749,7 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
       <AnimatePresence initial={false} mode="popLayout">
         {header && <motion.div key="composer-header" className="composer-header" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, y: -12, transition: { duration: 0.18, ease: EASE } }} transition={{ duration: 0.25, ease: EASE }}>{header}</motion.div>}
       </AnimatePresence>
-      {pills}
+      <LivePills />
       <motion.div
         className={`composer composer-${composerStyle}${comet ? " comet" : ""}${frozen !== undefined ? " frozen" : ""}`}
         aria-disabled={disabled || undefined}
@@ -803,4 +811,4 @@ export function Composer({ draftState, status, backgroundWorking = false, provid
       {shownImage && <ImageLightbox preview={shownImage.url} alt={`Attached image ${shownImage.index + 1}`} onClose={() => setShownImage(null)} />}
     </div>
   );
-}
+});

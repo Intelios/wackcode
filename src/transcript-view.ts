@@ -23,6 +23,12 @@ export function captureScroll(element: HTMLElement, following: boolean): ScrollP
   return { following, top: element.scrollTop, anchors };
 }
 
+/** The live element for a captured anchor key — promotes a saved row back into a held anchor. */
+export function findAnchor(element: HTMLElement, key: string): HTMLElement | undefined {
+  return Array.from(element.querySelectorAll<HTMLElement>("[data-transcript-anchor]"))
+    .find((node) => node.dataset.transcriptAnchor === key);
+}
+
 export function restoreScroll(element: HTMLElement, position: ScrollPosition): HTMLElement | undefined {
   const max = Math.max(0, element.scrollHeight - element.clientHeight);
   if (position.following) { element.scrollTop = max; return; }

@@ -14,22 +14,27 @@
  * Everything else stays in the open tail: an indented-code line or a lazy continuation belongs
  * to the block it trails until a blank line arrives.
  *
- * Fence detection mirrors `openFenceTail` (markdown-components.tsx): up to three leading
+ * Fence detection follows CommonMark closely enough for gating: up to three leading
  * spaces (four means indented code, not a fence), a closer needs the same character at least
  * the opener's length with whitespace-only info, and a backtick info string containing a
  * backtick never opens a fence.
  *
  * Contract: `segments.join("")` is exactly `source`; boundaries only move forward as the
- * stream grows; the last segment is the open tail and may be the whole source.
+ * stream grows; the last segment is the open tail and may be the whole source. `fenceTail`
+ * is the content of the fence still being written (empty string when the opener just
+ * arrived), undefined when no fence is open — `Markdown` renders it plain instead of
+ * re-highlighting every frame, so the scan doubles as the streamingTail lookup and a
+ * second pass like the old `openFenceTail` isn't needed.
  */
 
-export function streamSegments(source: string): string[] {
+export function streamSegments(source: string): { segments: string[]; fenceTail?: string } {
   const segments: string[] = [];
   let start = 0;
   // Where the stable boundary sits while blank lines stream in: the first blank of a run.
   let pendingCut = -1;
   let fence = "";
   let fenceChar = "";
+  let fenceStart = -1;
   let offset = 0;
   // `end` steps past each line's newline, so `offset` is always the line's start; a final
   // line without a newline makes `end` overshoot by one, which `slice` clamps.
@@ -51,6 +56,8 @@ export function streamSegments(source: string): string[] {
       pendingCut = -1;
       fence = match[1];
       fenceChar = match[1][0];
+      // `end` steps past this line's newline, so the tail is everything after the opener.
+      fenceStart = end;
     } else if (/^\s*$/.test(line)) {
       // The boundary sits at the blank line's start: the settled segment keeps its own
       // terminating newline and the rest of the whitespace run leads the tail.
@@ -64,5 +71,7 @@ export function streamSegments(source: string): string[] {
   }
   const tail = source.slice(start);
   if (/\S/.test(tail)) segments.push(tail);
-  return segments;
+  // An open fence always ends inside the final segment: boundaries are only cut outside
+  // fences, so the content after its opener can't have settled into an earlier segment.
+  return { segments, fenceTail: fence ? source.slice(fenceStart) : undefined };
 }

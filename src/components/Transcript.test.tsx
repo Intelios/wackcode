@@ -1068,8 +1068,9 @@ describe("Transcript scroll rail", () => {
     const { container } = render(<Transcript messages={[user("u1", "First task"), user("u2", "Second task")]} running={false} />);
     const scroller = await overflow(container);
     const second = scroller.querySelectorAll<HTMLElement>("[data-turn]")[1];
+    // The rail re-reads offsets only when the last turn's row moved — a fold or reflow
+    // above it — not merely because the transcript grew. This mock is that signal.
     Object.defineProperty(second, "offsetTop", { configurable: true, value: 800 });
-    // Turn offsets are only re-read when content size changed — bump scrollHeight to signal it.
     Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 2_100 });
     const scrollTo = vi.fn();
     Object.defineProperty(scroller, "scrollTo", { configurable: true, value: scrollTo });
@@ -1077,6 +1078,31 @@ describe("Transcript scroll rail", () => {
     await flushFrame();
     fireEvent.click(screen.getByRole("button", { name: "Turn 2: Second task" }));
     expect(scrollTo).toHaveBeenCalledWith({ top: 780, behavior: "smooth" });
+  });
+
+  it("re-reads turn offsets only when the last turn's row moves", async () => {
+    const { container } = render(<Transcript messages={[user("u1", "First task"), user("u2", "Second task")]} running={false} />);
+    const scroller = await overflow(container);
+    const lastTurn = scroller.querySelectorAll<HTMLElement>("[data-turn]")[1];
+    const walk = vi.spyOn(HTMLElement.prototype, "querySelectorAll");
+    const turnWalks = () => walk.mock.calls.filter(([selector]) => selector === "[data-turn]").length;
+    try {
+      fireEvent.scroll(scroller);
+      await flushFrame();
+      walk.mockClear();
+      // Growth below the last turn — streaming — leaves the measured offsets valid.
+      Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 2_300 });
+      fireEvent.scroll(scroller);
+      await flushFrame();
+      expect(turnWalks()).toBe(0);
+      // A fold above moves the last turn's row; that is what invalidates them.
+      Object.defineProperty(lastTurn, "offsetTop", { configurable: true, value: 640 });
+      fireEvent.scroll(scroller);
+      await flushFrame();
+      expect(turnWalks()).toBe(1);
+    } finally {
+      walk.mockRestore();
+    }
   });
 
   it("scrubs proportionally when the rail is pressed", async () => {

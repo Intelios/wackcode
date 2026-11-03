@@ -72,16 +72,31 @@ export function ScrollRail({ target, turns, liveTurnId, detached, onNavigate, on
   // Whether the next coalesced measure must re-read turn offsets; pure scrolls can't
   // move them, so we only pay that layout cost when content (or the turn list) changed.
   const pendingTops = useRef(true);
+  // Streamed growth lands below the last turn's row, so existing turn tops can only move
+  // when the last one does. One offsetTop read decides whether a content resize deserves
+  // the O(turns) rewalk — a fold or image loading above moves it, appended text doesn't.
+  const lastTurnEl = useRef<HTMLElement | null>(null);
 
   const measure = useCallback((measureTops = true) => {
     const el = target.current;
     if (!el) return;
     const prev = metricsRef.current;
+    const current = turnsRef.current;
+    const last = lastTurnEl.current;
+    const lastMoved = Boolean(current.length)
+      && (!last || !el.contains(last) || last.offsetTop !== prev?.tops[current.length - 1]);
     let tops = prev?.tops ?? [];
-    if (measureTops || !prev || prev.scrollHeight !== el.scrollHeight || tops.length !== turnsRef.current.length) {
+    if (current.length === 0) {
+      tops = [];
+    } else if (measureTops || !prev || lastMoved || tops.length !== current.length) {
       const offsets = new Map<string, number>();
-      for (const node of el.querySelectorAll<HTMLElement>("[data-turn]")) offsets.set(node.dataset.turn!, node.offsetTop);
-      tops = turnsRef.current.map((turn) => offsets.get(turn.id) ?? Number.NaN);
+      let lastNode: HTMLElement | null = null;
+      for (const node of el.querySelectorAll<HTMLElement>("[data-turn]")) {
+        offsets.set(node.dataset.turn!, node.offsetTop);
+        if (node.dataset.turn === current[current.length - 1].id) lastNode = node;
+      }
+      lastTurnEl.current = lastNode;
+      tops = current.map((turn) => offsets.get(turn.id) ?? Number.NaN);
     }
     const next: Metrics = {
       scrollTop: el.scrollTop,
@@ -135,11 +150,12 @@ export function ScrollRail({ target, turns, liveTurnId, detached, onNavigate, on
       }, 140);
       schedule(false);
     };
-    const onWheel = () => { schedule(); wake(); };
+    const onWheel = () => { schedule(false); wake(); };
     el.addEventListener("scroll", onScroll, { passive: true });
     el.addEventListener("wheel", onWheel, { passive: true });
     // The content grows while streaming and on resize; element turns appear with new messages.
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => schedule(true));
+    // Resizes alone don't move turn rows — `measure` re-reads offsets only if the last one moved.
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => schedule(false));
     observer?.observe(el);
     if (el.firstElementChild) observer?.observe(el.firstElementChild);
     return () => {

@@ -1,5 +1,5 @@
 import { useCallback, useLayoutEffect, useRef, useState, type WheelEvent } from "react";
-import { captureScroll, restoreScroll, type TranscriptViewState } from "../transcript-view";
+import { captureScroll, findAnchor, restoreScroll, type ScrollPosition, type TranscriptViewState } from "../transcript-view";
 
 const BOTTOM_EPSILON = 1;
 
@@ -21,23 +21,55 @@ export function useFollowScroll(memory?: TranscriptViewState, historyReady = tru
   const lastTop = useRef(0);
   const heldAnchor = useRef<{ node: HTMLElement; offset: number } | null>(null);
   const observed = useRef<{ element: HTMLElement; content: Element | null; observer: ResizeObserver } | null>(null);
+  const anchorTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [detached, setDetached] = useState(!following.current);
 
+  // Cheap save: position and pinning update on every scroll event, but the anchor list
+  // is only walked by captureAnchors — a rect per row is too much for a scroll handler.
   const savePosition = useCallback(() => {
     const el = ref.current;
     if (el && ready.current && !restoring.current) {
-      const position = captureScroll(el, following.current);
+      const anchors = following.current ? [] : (lastPosition.current?.anchors ?? []);
+      const position: ScrollPosition = { following: following.current, top: el.scrollTop, anchors };
       lastPosition.current = position;
       if (memory) memory.position = position;
     }
   }, [memory]);
 
+  // The full save: walks every anchor row, and promotes the nearest one back into the
+  // live held anchor so reconcile corrects reflows without a stale-position fallback.
+  const captureAnchors = useCallback(() => {
+    const el = ref.current;
+    if (el && ready.current && !restoring.current) {
+      const position = captureScroll(el, following.current);
+      lastPosition.current = position;
+      if (memory) memory.position = position;
+      const nearest = position.anchors[0];
+      const node = nearest ? findAnchor(el, nearest.key) : undefined;
+      heldAnchor.current = nearest && node ? { node, offset: nearest.offset } : null;
+    }
+  }, [memory]);
+
+  // Trailing capture: one walk at most every idle window during a gesture, and a final
+  // one after the last scroll event — not the per-event capture this used to be.
+  const scheduleAnchorCapture = useCallback(() => {
+    if (anchorTimer.current) return;
+    anchorTimer.current = setTimeout(() => {
+      anchorTimer.current = undefined;
+      captureAnchors();
+    }, 140);
+  }, [captureAnchors]);
+
   const pauseFollowing = useCallback(() => {
     heldAnchor.current = null;
-    following.current = false;
-    setDetached(true);
-    savePosition();
-  }, [savePosition]);
+    // The anchor walk belongs to the detach transition; while already detached, the
+    // scroll-idle capture keeps the saved position fresh without per-event cost.
+    if (following.current) {
+      following.current = false;
+      setDetached(true);
+      captureAnchors();
+    }
+  }, [captureAnchors]);
 
   const onWheel = (event: WheelEvent<HTMLDivElement>) => {
     const el = ref.current;
@@ -49,6 +81,7 @@ export function useFollowScroll(memory?: TranscriptViewState, historyReady = tru
       if (!/^(auto|scroll)$/.test(getComputedStyle(node).overflowY)) continue;
       if (event.deltaY < 0 ? node.scrollTop > 0 : node.scrollTop + node.clientHeight < node.scrollHeight) return;
     }
+    // A wheel that reaches the transcript means the user is moving: release the held row.
     heldAnchor.current = null;
     if (event.deltaY < 0 && el.scrollHeight > el.clientHeight + BOTTOM_EPSILON) pauseFollowing();
   };
@@ -56,7 +89,14 @@ export function useFollowScroll(memory?: TranscriptViewState, historyReady = tru
   const onScroll = () => {
     const el = ref.current;
     if (!el) return;
-    if (el.scrollTop !== lastTop.current) heldAnchor.current = null;
+    if (el.scrollTop !== lastTop.current) {
+      // The user moved, so the held row moved with the viewport — refresh its offset
+      // rather than dropping it, or a mid-scroll reflow would restore a stale position.
+      const held = heldAnchor.current;
+      heldAnchor.current = held && el.contains(held.node)
+        ? { node: held.node, offset: held.node.getBoundingClientRect().top - el.getBoundingClientRect().top }
+        : null;
+    }
     const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
     // At the bottom, a smaller scrollTop can also mean content was collapsed.
     if (el.scrollTop < lastTop.current && gap > BOTTOM_EPSILON) pauseFollowing();
@@ -66,6 +106,7 @@ export function useFollowScroll(memory?: TranscriptViewState, historyReady = tru
     }
     lastTop.current = el.scrollTop;
     savePosition();
+    if (!following.current) scheduleAnchorCapture();
   };
 
   const reconcile = useCallback(() => {
@@ -120,7 +161,11 @@ export function useFollowScroll(memory?: TranscriptViewState, historyReady = tru
     if (content) observer.observe(content);
     observed.current = { element: el, content, observer };
   });
-  useLayoutEffect(() => () => { savePosition(); observed.current?.observer.disconnect(); }, [savePosition]);
+  useLayoutEffect(() => () => {
+    if (anchorTimer.current) clearTimeout(anchorTimer.current);
+    captureAnchors();
+    observed.current?.observer.disconnect();
+  }, [captureAnchors]);
 
   const jumpToLatest = () => {
     heldAnchor.current = null;

@@ -8,7 +8,8 @@
  * URLs through `api.revealPath`.
  *
  * `streamingTail` gates streaming: it carries the content of a fence that is still being
- * written (openFenceTail), and any block matching it renders plain so a growing fence neither
+ * written (the `fenceTail` streamSegments computes while splitting, markdown-segments.ts),
+ * and any block matching it renders plain so a growing fence neither
  * re-tokenises on every smooth-text frame nor pops into colour mid-write. Settled text has no
  * tail and always highlights.
  */
@@ -33,34 +34,6 @@ interface ComponentsOptions {
    *  `sourceLength` is the markdown source's length with trailing whitespace trimmed, so the
    *  last block still owns the write head while the source ends in newlines. */
   freshInk?: { sourceLength: number };
-}
-
-/**
- * The content of a trailing unterminated fenced block in `source`, or undefined when every
- * fence is closed. Mirrors CommonMark's fence rules closely enough for gating: up to three
- * leading spaces, a closing fence needs the same character, at least the opening length, and
- * nothing but whitespace after it. Backtick fences also close on any info string containing a
- * backtick, which CommonMark forbids in openers.
- */
-export function openFenceTail(source: string): string | undefined {
-  const lines = source.split("\n");
-  let open = -1;
-  let fence = "";
-  let fenceChar = "";
-  for (const [index, line] of lines.entries()) {
-    const match = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-    if (!fence) {
-      if (match && !(match[1][0] === "`" && /`/.test(match[2]))) {
-        fence = match[1];
-        fenceChar = match[1][0];
-        open = index;
-      }
-    } else if (match && match[1][0] === fenceChar && match[1].length >= fence.length && !/\S/.test(match[2])) {
-      fence = "";
-    }
-  }
-  if (!fence) return undefined;
-  return lines.slice(open + 1).join("\n");
 }
 
 /** The plain text a hast code element renders to. */

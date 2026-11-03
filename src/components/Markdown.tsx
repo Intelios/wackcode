@@ -1,7 +1,7 @@
 import { memo, useMemo } from "react";
 import ReactMarkdown, { defaultUrlTransform, type UrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { markdownComponents, openFenceTail } from "../markdown-components";
+import { markdownComponents } from "../markdown-components";
 import { streamSegments } from "../markdown-segments";
 import { parseReplyImageReference } from "../reply-images";
 
@@ -15,21 +15,22 @@ const replyImageUrlTransform: UrlTransform = (value, key, node) => {
 
 interface MarkdownProps {
   children: string;
+  /** The source is still being written: segment it and leave the open tail streaming. */
   streaming?: boolean;
   freshInk?: boolean;
   replyImages?: boolean;
 }
 
 /** One markdown source, one react-markdown processor: memoization is what makes segments free. */
-const MarkdownBlock = memo(function MarkdownBlock({ children, streaming, freshInk, replyImages = false }: MarkdownProps) {
+const MarkdownBlock = memo(function MarkdownBlock({ children, streamingTail, freshInk, replyImages = false }: Omit<MarkdownProps, "streaming"> & { streamingTail?: string }) {
   const components = useMemo(
     () => markdownComponents({
-      streamingTail: streaming ? openFenceTail(children) : undefined,
+      streamingTail,
       replyImages,
       // trimEnd: a final block still owns the write head while the source ends in newlines.
       freshInk: freshInk ? { sourceLength: children.trimEnd().length } : undefined
     }),
-    [children, streaming, freshInk, replyImages]
+    [children, streamingTail, freshInk, replyImages]
   );
   return (
     <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml components={components} urlTransform={replyImages ? replyImageUrlTransform : undefined}>{children}</ReactMarkdown>
@@ -49,14 +50,15 @@ const MarkdownBlock = memo(function MarkdownBlock({ children, streaming, freshIn
  * segments always resolves to the document's own reading.
  */
 export const Markdown = memo(function Markdown({ children, streaming, freshInk, replyImages = false }: MarkdownProps) {
-  const segments = useMemo(() => (streaming ? streamSegments(children) : undefined), [children, streaming]);
-  if (!segments) return <MarkdownBlock freshInk={freshInk} replyImages={replyImages}>{children}</MarkdownBlock>;
+  const split = useMemo(() => (streaming ? streamSegments(children) : undefined), [children, streaming]);
+  if (!split) return <MarkdownBlock freshInk={freshInk} replyImages={replyImages}>{children}</MarkdownBlock>;
+  const { segments, fenceTail } = split;
   return (
     <>
       {segments.map((segment, index) => {
         const tail = index === segments.length - 1;
         return (
-          <MarkdownBlock key={index} streaming={tail} freshInk={tail && freshInk} replyImages={replyImages}>
+          <MarkdownBlock key={index} streamingTail={tail ? fenceTail : undefined} freshInk={tail && freshInk} replyImages={replyImages}>
             {segment}
           </MarkdownBlock>
         );

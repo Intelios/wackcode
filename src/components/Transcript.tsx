@@ -718,7 +718,9 @@ function WorkingPresence({ label }: { label: string }) {
 
 function activityLabel(activity?: string): string {
   if (!activity) return "Working…";
-  if (activity.startsWith("tool_execution")) return "";
+  // A completed tool no longer supplies live feedback: keep presence through the
+  // next provider request, including responses that never stream reasoning.
+  if (activity.startsWith("tool_execution") && activity !== "tool_execution_end") return "";
   if (activity === "mcp_connect_start") return "Starting MCP servers…";
   if (activity.startsWith("auto_retry") || activity.startsWith("summarization_retry")) return "Retrying…";
   return "Working…";

@@ -104,6 +104,18 @@ describe("Transcript model switches", () => {
 });
 
 describe("Transcript pending echo", () => {
+  it("keeps waiting presence after a question tool finishes until new output arrives", () => {
+    const messages: NormalizedMessage[] = [
+      { id: "u", role: "user", blocks: [{ type: "text", text: "Plan this" }] },
+      { id: "a", role: "assistant", blocks: [{ type: "tool-call", toolName: "ask_user_question", toolCallId: "q", arguments: {} }] },
+      { id: "r", role: "tool", blocks: [{ type: "tool-result", toolCallId: "q", text: "Answered" }] }
+    ];
+    const { rerender } = render(<Transcript messages={messages} running activity="tool_execution_end" />);
+    expect(screen.getByText("Working…")).toBeInTheDocument();
+    rerender(<Transcript messages={messages} running activity="tool_execution_end"
+      partial={{ id: "next", role: "assistant", blocks: [{ type: "text", text: "Next question" }] }} />);
+    expect(screen.queryByText("Working…")).toBeNull();
+  });
   it("shows a just-sent message as the active turn while the run has no recorded message yet", () => {
     const startedAt = 1_000;
     const echo: NormalizedMessage = {

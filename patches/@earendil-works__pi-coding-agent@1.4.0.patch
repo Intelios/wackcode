@@ -1,0 +1,17 @@
+diff --git a/dist/utils/image-resize-core.js b/dist/utils/image-resize-core.js
+index 36de6548d62cd719e454a5ad3cc0573ec8cdb38f..baad5b19197adee866c7923020b4168fedfd21e1 100644
+--- a/dist/utils/image-resize-core.js
++++ b/dist/utils/image-resize-core.js
+@@ -76,9 +76,12 @@ export async function resizeImageInProcess(inputBytes, mimeType, options) {
+         function tryEncodings(width, height, jpegQualities) {
+             const resized = photon.resize(image, width, height, photon.SamplingFilter.Lanczos3);
+             try {
++                // Preserve format preference; do not encode candidates that cannot be selected.
+                 const candidates = [encodeCandidate(resized.get_bytes(), "image/png")];
++                if (candidates[0].encodedSize < opts.maxBytes) return candidates;
+                 for (const quality of jpegQualities) {
+                     candidates.push(encodeCandidate(resized.get_bytes_jpeg(quality), "image/jpeg"));
++                    if (candidates[candidates.length - 1].encodedSize < opts.maxBytes) return candidates;
+                 }
+                 return candidates;
+             }

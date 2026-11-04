@@ -26,6 +26,66 @@ function message(id: string, image = view, record?: StoredImage, role = "user", 
 }
 
 describe("saved image files", () => {
+  it("shares concurrent views, isolates returned objects, and evicts old viewing copies", async () => {
+    const h = await setup();
+    let calls = 0;
+    const store = new ImageStore({ ...h.store.options, resizeImage: async () => { calls++; return resizeImage(); } });
+    const [a, b] = await Promise.all([store.view(original), store.view(original)]);
+    a.data = "mutated";
+    expect(b.data).toBe(view.data);
+    expect((await store.view(original)).data).toBe(view.data);
+    expect(calls).toBe(1);
+    for (let i = 0; i < 16; i++) await store.view({ ...original, data: `other-${i}` });
+    await store.view(original);
+    expect(calls).toBe(18);
+  });
+
+  it("bounds cached bytes and retries failed decodes", async () => {
+    const h = await setup();
+    let calls = 0;
+    const store = new ImageStore({ ...h.store.options, resizeImage: async () => {
+      calls++;
+      if (calls === 1) throw new Error("Decode failed");
+      return { ...await resizeImage(), data: "x".repeat(9 * 1024 * 1024) };
+    } });
+    await expect(store.view(original)).rejects.toThrow("Decode failed");
+    await store.view(original);
+    await store.view({ ...original, data: "another" });
+    await store.view(original);
+    expect(calls).toBe(4);
+  });
+
+  it("verifies changed original files even when their viewing copy is cached", async () => {
+    const { store, directory } = await setup(true);
+    const prepared = await store.prepare(original);
+    const saved = resolveSavedImage("wackcode-image://entry/cached/0", [message("cached", view, prepared.record)])!;
+    await store.load(saved);
+    await writeFile(join(directory, prepared.record.blob), "changed");
+    await expect(store.original(saved)).rejects.toThrow("changed");
+    expect((await store.load(saved)).quality).toBe("saved-copy");
+  });
+
+  it("does not reuse a decode across MIME types or stores", async () => {
+    const h = await setup();
+    let calls = 0;
+    const options = { ...h.store.options, resizeImage: async () => { calls++; return resizeImage(); } };
+    const store = new ImageStore(options);
+    await store.view(original);
+    await store.view({ ...original, mimeType: "image/jpeg" });
+    await new ImageStore(options).view(original);
+    expect(calls).toBe(3);
+  });
+
+  it("rechecks Chat confinement after warming the viewing cache", async () => {
+    const h = await setup(true);
+    const outside = await setup();
+    await h.store.prepare(original);
+    await rm(h.directory, { recursive: true });
+    await symlink(outside.cwd, h.directory);
+    await expect(h.store.prepare(original)).rejects.toThrow("outside");
+    expect(await readdir(outside.cwd)).toEqual([]);
+  });
+
   it("keeps byte-identical originals outside the viewing copy, deduplicates them, and writes private files", async () => {
     const { store, directory } = await setup();
     const prepared = await store.prepare(original);

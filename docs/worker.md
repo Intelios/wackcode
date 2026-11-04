@@ -83,6 +83,7 @@ The transcript reaches the host as a full `snapshot`, then as `snapshot_delta`s 
 - A delta is an optimization, never a requirement: when a change can't be expressed as "remove these ids, then replace or append these messages", `diffMessages` (`delta.ts`) returns undefined and a full snapshot goes out. Compaction forces a full snapshot. Keep that fallback.
 - A new field that changes mid-run needs `SnapshotDelta` (worker) and `applySnapshotDelta` (`src/chat-utils.ts`) updates.
 - Snapshots carry small image previews, never originals; the lightbox fetches the original with `tool_image`, or `message_image` for one the user attached to a message. Every tool result's images get previews on its result block (`images`, in the result's own order, which is what `tool_image` indexes by), whichever tool returned them; one that can't be previewed is marked `failed` rather than left pending.
+- Code and Chat image stores retain at most 16 viewing copies / 16 MiB of base64 payload per store, keyed by content, MIME type and inline limits. Concurrent identical decodes share work; original-file reads, confinement and integrity checks never use that cache. The pnpm patch to Pi's resize worker stops encoding once the first acceptable format is found, preserving its format order and size limits.
 - Compaction rows use Pi's saved entry ids and summaries. Their after-count estimates Pi's
   projection at that entry, so later messages cannot change an old boundary's count. Tool-result
   images and saved sub-agent transcripts remain fetchable throughout the displayed branch.

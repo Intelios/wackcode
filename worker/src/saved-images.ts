@@ -19,6 +19,8 @@ export const MAX_STORED_IMAGE_BYTES = 20 * 1024 * 1024;
 const ENTRY_ID = /^[A-Za-z0-9_-]{1,256}$/;
 const REFERENCE = /^wackcode-image:\/\/entry\/([A-Za-z0-9_-]{1,256})\/(0|[1-9]\d*)$/;
 const BLOB = /^[a-f0-9]{64}\.(?:png|jpg|gif|webp|bmp|avif|ico|bin)$/;
+const VIEW_CACHE_ENTRIES = 16;
+const VIEW_CACHE_BYTES = 16 * 1024 * 1024;
 
 export interface ImageReference { entryId: string; index: number }
 export function parseImageReference(value: unknown): ImageReference | undefined {
@@ -115,6 +117,12 @@ export interface PreparedImage { image: ImageContent; record: StoredImage; resiz
 export interface LoadedImage extends PreparedImage { path: string; quality: "original" | "saved-copy"; warning?: string }
 
 export class ImageStore {
+  // Per-store, content-addressed viewing copies only. Never cache filesystem reads:
+  // load/save must still enforce confinement and verify original blobs on every access.
+  // Limits participate in the key; failed conversions are never retained.
+  private readonly views = new Map<string, ResizedImage>();
+  private viewBytes = 0;
+  private readonly viewing = new Map<string, Promise<ResizedImage>>();
   constructor(readonly options: ImageStoreOptions) {}
 
   private async checkedPath(path: string, operation: "read" | "write"): Promise<string> {
@@ -168,6 +176,34 @@ export class ImageStore {
   }
 
   async view(image: ImageContent): Promise<ResizedImage> {
+    const key = `${JSON.stringify(INLINE_IMAGE_LIMITS)}:${imageHash(image)}`;
+    const cached = this.views.get(key);
+    if (cached) {
+      this.views.delete(key);
+      this.views.set(key, cached);
+      return { ...cached };
+    }
+    let pending = this.viewing.get(key);
+    if (!pending) {
+      pending = this.resizeView(image).then((result) => {
+        const bytes = result.data.length;
+        if (bytes <= VIEW_CACHE_BYTES) {
+          this.views.set(key, { ...result });
+          this.viewBytes += bytes;
+          while (this.views.size > VIEW_CACHE_ENTRIES || this.viewBytes > VIEW_CACHE_BYTES) {
+            const oldest = this.views.keys().next().value!;
+            this.viewBytes -= this.views.get(oldest)!.data.length;
+            this.views.delete(oldest);
+          }
+        }
+        return result;
+      }).finally(() => { this.viewing.delete(key); });
+      this.viewing.set(key, pending);
+    }
+    return { ...await pending };
+  }
+
+  private async resizeView(image: ImageContent): Promise<ResizedImage> {
     let result = await this.options.resizeImage(Buffer.from(image.data, "base64"), image.mimeType, INLINE_IMAGE_LIMITS);
     if (!result) {
       const converted = await this.options.convertToPng(image.data, image.mimeType);

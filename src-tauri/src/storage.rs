@@ -101,6 +101,7 @@ fn legacy_background_entry(content: &str, appearance: &crate::models::Appearance
         x: field("imageX", 500),
         y: field("imageY", 500),
         name,
+        theme: None,
     })
 }
 
@@ -260,7 +261,7 @@ mod tests {
         let legacy = r#"{"version":1,"appearance":{"backdrop":"image","backgroundImage":"kept.png","imageZoom":180,"imageX":300,"imageY":700}}"#;
         let appearance: AppearanceConfig = serde_json::from_str::<crate::models::AppData>(legacy).unwrap().appearance;
         let entry = legacy_background_entry(legacy, &appearance).unwrap();
-        assert_eq!(entry, BackgroundImage { name: "kept.png".into(), zoom: 180, x: 300, y: 700 });
+        assert_eq!(entry, BackgroundImage { name: "kept.png".into(), zoom: 180, x: 300, y: 700, theme: None });
         // Files from before cropping, and configs with no image, centre or carry nothing over.
         let bare = r#"{"version":1,"appearance":{"backdrop":"image","backgroundImage":"kept.png"}}"#;
         let appearance: AppearanceConfig = serde_json::from_str::<crate::models::AppData>(bare).unwrap().appearance;
@@ -338,7 +339,7 @@ mod tests {
             background: Some("#14111b".into()),
             backdrop: BackdropMode::Image,
             background_image: Some("kept.png".into()),
-            background_images: vec![BackgroundImage { name: "kept.png".into(), zoom: 160, x: 250, y: 750 }],
+            background_images: vec![BackgroundImage { name: "kept.png".into(), zoom: 160, x: 250, y: 750, theme: None }],
             shuffle_backgrounds: false,
             image_dim: 50,
             image_blur: 7,
@@ -382,7 +383,7 @@ mod tests {
         assert_eq!(data.appearance.composer_style, ComposerStyle::Classic);
         assert_eq!((data.appearance.image_dim, data.appearance.image_blur, data.appearance.glass_tint), (65, 12, 40));
         // Files from before image cropping show the picture centred and uncropped.
-        assert_eq!(BackgroundImage::fresh("a.png".into()), BackgroundImage { name: "a.png".into(), zoom: 100, x: 500, y: 500 });
+        assert_eq!(BackgroundImage::fresh("a.png".into()), BackgroundImage { name: "a.png".into(), zoom: 100, x: 500, y: 500, theme: None });
         // Unpicked colours stay absent, so a future default still reaches this user.
         let saved = serde_json::to_string(&data.appearance).unwrap();
         assert!(!saved.contains("accent") && !saved.contains("\"backgroundImage\""), "{saved}");

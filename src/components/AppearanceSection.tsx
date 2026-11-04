@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { DEFAULT_ACCENT, DEFAULT_BACKGROUND, THEME_PRESETS, accentGradient, clampBackground, presetFill, resolveTheme, swatchTint } from "../theme";
+import { DEFAULT_ACCENT, DEFAULT_BACKGROUND, THEME_PRESETS, accentGradient, clampBackground, presetById, presetFill, presetForColours, resolveTheme, storedAccent, storedBackground, swatchTint } from "../theme";
 import { DEFAULT_AGENT_NAME, agentName } from "../agentName";
+import { imageLinkedTo, linkImageToTheme } from "../background-links";
 import type { ImageCrop } from "../backdrop-crop";
-import type { AppearanceConfig, BackdropMode, ComposerStyle, GlassStyle, ThinkingTimerPrecision } from "../types";
+import type { AppearanceConfig, BackgroundImageEntry, BackdropMode, ComposerStyle, GlassStyle, ThinkingTimerPrecision } from "../types";
 import { Icon } from "./Icons";
 import { PonderingDuck } from "./PonderingDuck";
 import { BackdropCropEditor } from "./BackdropCropEditor";
+import { Menu, type MenuEntry } from "./ui/Menu";
+import { Popover } from "./ui/Popover";
 import { Tooltip } from "./ui/Tooltip";
 
 interface AppearanceSectionProps {
@@ -99,12 +102,6 @@ const enter = (index: number) => ({ "--i": index } as CSSProperties);
 
 const same = (first: string | null | undefined, second: string) => (first ?? "").toLowerCase() === second.toLowerCase();
 
-/** What to save for a picked background: darkened for readability, and null for the default. */
-function storedBackground(picked: string): string | null {
-  const shown = clampBackground(picked);
-  return same(shown, DEFAULT_BACKGROUND) ? null : shown;
-}
-
 export function AppearanceSection({ config, glassSupported, backgroundImageUrlFor, onChange, onPreview, onChooseImage, onRemoveImage, onSelectImage, onShuffleImage }: AppearanceSectionProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -145,6 +142,23 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrlFo
     else void save({ ...config, backdrop });
   }
 
+  /** Picking a preset an image is linked to shows that image — switching the backdrop to
+   *  Image when it isn't already — once the colours have saved. */
+  function pickPreset(preset: (typeof THEME_PRESETS)[number]): void {
+    setDarkened(false);
+    const linked = imageLinkedTo(config, preset.id);
+    const next: AppearanceConfig = {
+      ...config,
+      accent: storedAccent(preset.accent),
+      background: storedBackground(preset.background),
+      ...(linked ? { backdrop: "image" as BackdropMode } : {})
+    };
+    void run(async () => {
+      await onChange(next);
+      if (linked) await onSelectImage(linked.name);
+    });
+  }
+
   function withBackground(picked: string): AppearanceConfig {
     // Stored darkened, so Rust paints the native window the colour the page shows.
     setDarkened(!same(clampBackground(picked), picked));
@@ -158,8 +172,6 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrlFo
       image.name === config.backgroundImage ? { ...image, zoom: crop.zoom, x: crop.x, y: crop.y } : image)
   });
 
-  const withAccent = (picked: string): AppearanceConfig => ({ ...config, accent: same(picked, DEFAULT_ACCENT) ? null : picked.toLowerCase() });
-
   return (
     <div className="settings-scroll appearance-page">
       <div className="appearance-inner">
@@ -168,7 +180,7 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrlFo
           <div className="theme-presets" role="radiogroup" aria-label="Theme presets">
             {THEME_PRESETS.map((preset, index) => {
               const variables = resolveTheme(preset).variables;
-              const checked = same(accent, preset.accent) && same(background, preset.background);
+              const checked = presetForColours(accent, background)?.id === preset.id;
               return (
                 <button
                   type="button"
@@ -178,7 +190,7 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrlFo
                   className="theme-preset"
                   style={{ "--k": index } as CSSProperties}
                   disabled={busy}
-                  onClick={() => { setDarkened(false); void save({ ...withAccent(preset.accent), background: storedBackground(preset.background) }); }}
+                  onClick={() => pickPreset(preset)}
                 >
                   <span className="theme-preset-preview" style={{ background: preset.background }} aria-hidden="true">
                     <span className="theme-preset-sidebar" style={{ background: variables["--wc-sidebar"], borderColor: variables["--border"] }} />
@@ -204,8 +216,8 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrlFo
               choices={THEME_PRESETS.map((preset) => ({ name: preset.name, value: preset.accent, fill: preset.gradient ? presetFill(preset) : undefined }))}
               isDefault={!config.accent}
               disabled={busy}
-              onPick={(value) => void save(withAccent(value))}
-              onPreview={(value) => onPreview(withAccent(value))}
+              onPick={(value) => void save({ ...config, accent: storedAccent(value) })}
+              onPreview={(value) => onPreview({ ...config, accent: storedAccent(value) })}
               onReset={() => void save({ ...config, accent: null })}
             />
             <ColourRow
@@ -321,38 +333,44 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrlFo
                 <div className="row-actions">
                   <button type="button" className="secondary-button" disabled={busy} onClick={() => void run(onChooseImage)}><Icon name="plus" /> Add…</button>
                 </div>
+                {config.backgroundImages.length > 0 && (
+                  <div className="background-strip" role="list" aria-label="Saved backgrounds">
+                    {config.backgroundImages.map((image, index) => {
+                      const url = backgroundImageUrlFor(image.name);
+                      const current = image.name === config.backgroundImage;
+                      return (
+                        <div className={`background-item ${current ? "current" : ""}`} role="listitem" key={image.name}>
+                          <button
+                            type="button"
+                            className="background-thumb"
+                            aria-label={`Background ${index + 1}${current ? " (showing)" : ""}`}
+                            aria-pressed={current}
+                            disabled={busy || !url}
+                            style={url ? { backgroundImage: `url("${url}")` } : undefined}
+                            onClick={() => { if (!current) void run(() => onSelectImage(image.name)); }}
+                          />
+                          {/* Revealed on hover and on keyboard focus, like every hover-only control. */}
+                          <button
+                            type="button"
+                            className="background-thumb-remove"
+                            aria-label={`Remove background ${index + 1}`}
+                            disabled={busy}
+                            onClick={() => void run(() => onRemoveImage(image.name))}
+                          >
+                            <Icon name="close" />
+                          </button>
+                          <ThemeLinkBadge
+                            image={image}
+                            index={index}
+                            disabled={busy}
+                            onLink={(presetId) => void save(linkImageToTheme(config, image.name, presetId))}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-              {config.backgroundImages.length > 0 && (
-                <div className="background-strip" role="list" aria-label="Saved backgrounds">
-                  {config.backgroundImages.map((image, index) => {
-                    const url = backgroundImageUrlFor(image.name);
-                    const current = image.name === config.backgroundImage;
-                    return (
-                      <div className="background-item" role="listitem" key={image.name}>
-                        <button
-                          type="button"
-                          className={`background-thumb ${current ? "current" : ""}`}
-                          aria-label={`Background ${index + 1}${current ? " (showing)" : ""}`}
-                          aria-pressed={current}
-                          disabled={busy || !url}
-                          style={url ? { backgroundImage: `url("${url}")` } : undefined}
-                          onClick={() => { if (!current) void run(() => onSelectImage(image.name)); }}
-                        />
-                        {/* Revealed on hover and on keyboard focus, like every hover-only control. */}
-                        <button
-                          type="button"
-                          className="background-thumb-remove"
-                          aria-label={`Remove background ${index + 1}`}
-                          disabled={busy}
-                          onClick={() => void run(() => onRemoveImage(image.name))}
-                        >
-                          <Icon name="close" />
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
               {config.backgroundImages.length > 1 && (
                 <div className="tool-setting appearance-setting">
                   <div className="tool-setting-text">
@@ -800,5 +818,52 @@ function SliderRow({ label, description, value, max, unit, disabled, onPreview, 
         <output>{value}{unit}</output>
       </div>
     </div>
+  );
+}
+
+interface ThemeLinkBadgeProps {
+  image: BackgroundImageEntry;
+  /** Zero-based position, for the accessible name. */
+  index: number;
+  disabled: boolean;
+  onLink: (presetId: string | null) => void;
+}
+
+/** The pill on an image card naming the theme it is linked to; it opens the preset menu. */
+function ThemeLinkBadge({ image, index, disabled, onLink }: ThemeLinkBadgeProps) {
+  const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLButtonElement>(null);
+  const preset = presetById(image.theme);
+  const items: MenuEntry[] = [
+    ...THEME_PRESETS.map((option) => ({
+      label: option.name,
+      icon: <span className="theme-menu-swatch" style={{ background: presetFill(option) }} aria-hidden="true" />,
+      selected: image.theme === option.id,
+      onSelect: () => onLink(option.id)
+    })),
+    "separator",
+    { label: "No theme", selected: !preset, onSelect: () => onLink(null) }
+  ];
+  return (
+    <>
+      <button
+        ref={anchorRef}
+        type="button"
+        className={`theme-badge ${preset ? "" : "none"}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`Theme for background ${index + 1}`}
+        title={preset ? `Linked to ${preset.name}` : "Link this image to a theme"}
+        disabled={disabled}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <Icon name="palette" />
+        <span>{preset ? preset.name : "No theme"}</span>
+        <Icon name="chevron" className="theme-badge-chevron" />
+      </button>
+      <Popover anchor={anchorRef} open={open} onClose={() => setOpen(false)} align="start" side="top">
+        <Menu items={items} onClose={() => setOpen(false)} label={`Theme for background ${index + 1}`} />
+      </Popover>
+    </>
   );
 }

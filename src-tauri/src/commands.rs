@@ -5639,6 +5639,16 @@ fn validate_appearance_config(
         if entry.x > 1000 || entry.y > 1000 {
             return Err("Image position must be between 0 and 1000.".into());
         }
+        // The theme link is a preset id the renderer picked from its own list; a slug check
+        // keeps a hand-edited file from smuggling anything stranger through the echo.
+        if let Some(theme) = &entry.theme {
+            let slug = !theme.is_empty()
+                && theme.len() <= 32
+                && theme.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+            if !slug {
+                return Err("A background's theme must be a theme preset id.".into());
+            }
+        }
         background_images.push(entry);
     }
     let config = AppearanceConfig {
@@ -6233,7 +6243,7 @@ mod tests {
             background: Some("#14111b".into()),
             backdrop: BackdropMode::Image,
             background_image: Some("kept.png".into()),
-            background_images: vec![BackgroundImage { name: "kept.png".into(), zoom: 160, x: 250, y: 750 }],
+            background_images: vec![BackgroundImage { name: "kept.png".into(), zoom: 160, x: 250, y: 750, theme: None }],
             shuffle_backgrounds: true,
             image_dim: 50,
             image_blur: 7,
@@ -6330,7 +6340,7 @@ mod tests {
         };
         let with = |zoom, x, y| {
             let mut config = library(&["a.png"]);
-            config.background_images[0] = BackgroundImage { name: "a.png".into(), zoom, x, y };
+            config.background_images[0] = BackgroundImage { name: "a.png".into(), zoom, x, y, theme: None };
             config
         };
         let current = library(&["a.png"]);
@@ -6354,8 +6364,8 @@ mod tests {
         // Re-cropping and reordering what Rust stored is exactly the crop editor's save.
         let recropped = AppearanceConfig {
             background_images: vec![
-                BackgroundImage { name: "b.png".into(), zoom: 200, x: 100, y: 900 },
-                BackgroundImage { name: "a.png".into(), zoom: 150, x: 0, y: 1000 },
+                BackgroundImage { name: "b.png".into(), zoom: 200, x: 100, y: 900, theme: None },
+                BackgroundImage { name: "a.png".into(), zoom: 150, x: 0, y: 1000, theme: None },
             ],
             ..current.clone()
         };
@@ -6368,6 +6378,30 @@ mod tests {
         let mut doubled = current.clone();
         doubled.background_images.push(BackgroundImage::fresh("a.png".into()));
         assert!(validate_appearance_config(doubled, &current, true).unwrap_err().contains("once"));
+    }
+
+    #[test]
+    fn the_theme_link_echoes_only_as_a_preset_slug() {
+        let current = AppearanceConfig {
+            background_images: vec![BackgroundImage::fresh("a.png".into())],
+            ..AppearanceConfig::default()
+        };
+        // Linking an image to a theme rides the same echo as re-cropping it.
+        let linked = AppearanceConfig {
+            background_images: vec![BackgroundImage { name: "a.png".into(), zoom: 100, x: 500, y: 500, theme: Some("mono".into()) }],
+            ..current.clone()
+        };
+        assert_eq!(validate_appearance_config(linked.clone(), &current, true).unwrap(), linked);
+        // Anything that is not a short lowercase slug is refused.
+        for bad in ["", "Mono", "../../secrets.json", "a b", &"x".repeat(33)] {
+            let mut entry = BackgroundImage::fresh("a.png".into());
+            entry.theme = Some(bad.to_string());
+            let input = AppearanceConfig { background_images: vec![entry], ..current.clone() };
+            assert!(validate_appearance_config(input, &current, true).is_err(), "{bad}");
+        }
+        // A theme absent from an older file loads as unlinked.
+        let legacy = r#"{"name":"a.png","zoom":120,"x":10,"y":20}"#;
+        assert_eq!(serde_json::from_str::<BackgroundImage>(legacy).unwrap().theme, None);
     }
 
     #[test]

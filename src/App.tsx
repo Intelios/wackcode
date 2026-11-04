@@ -42,10 +42,10 @@ import { AssistantNameContext, agentName } from "./agentName";
 import { DynamicBackdrop, type DynamicBackdropHandle } from "./components/DynamicBackdrop";
 import { backgroundPhase, isBackgroundClick } from "./dynamic-background";
 import { Backdrop } from "./components/Backdrop";
+import { linkedThemeConfig, shownEntry } from "./background-links";
 import type {
   AppData,
   AutoTitleConfig,
-  BackgroundImageEntry,
   AppearanceConfig,
   BrowserState,
   CommandsConfig,
@@ -253,11 +253,6 @@ interface SubscriptionLoginState {
   deviceCode?: { userCode: string; verificationUri: string };
   message?: string;
   error?: string;
-}
-
-/** The library entry currently shown: `backgroundImage` must name one, or nothing renders. */
-function shownBackground(appearance: AppearanceConfig): BackgroundImageEntry | undefined {
-  return appearance.backgroundImages.find((image) => image.name === appearance.backgroundImage);
 }
 
 /** What the chat and the side panel's sub-agent transcripts read from Settings › Appearance. */
@@ -1162,6 +1157,12 @@ export default function App() {
       setComputerUseSupported(payload.computerUseSupported === true);
       setDevBuild(payload.devBuild === true);
       savedAppearance.current = payload.data.appearance;
+      // Shuffle-on-open already rotated the image in Rust before bootstrap answered, so this
+      // launch did change the image (exactly when shuffle had another one to pick): the shown
+      // image's linked theme applies. Without a rotation the saved colours stand.
+      if (payload.data.appearance.shuffleBackgrounds && payload.data.appearance.backgroundImage && payload.data.appearance.backgroundImages.length > 1) {
+        void applyLinkedTheme(payload.data.appearance);
+      }
       const projectId = lastProjectId(payload.data.projects);
       setLegacyDraft({ projectId, useWorktree: false });
       if (payload.data.providers.length === 0) openSettings();
@@ -1179,11 +1180,13 @@ export default function App() {
   }, []);
 
   // Shuffle-on-open rotates the background in Rust while the window is hidden; follow it so the
-  // swap crossfades in through the Backdrop instead of waiting for the next bootstrap.
+  // swap crossfades in through the Backdrop instead of waiting for the next bootstrap. The
+  // rotation is an image change, so the new image's linked theme applies too.
   useEffect(() => {
     const unlisten = listen<AppearanceConfig>("background-shuffled", ({ payload }) => {
       savedAppearance.current = payload;
       setData((current) => ({ ...current, appearance: payload }));
+      void applyLinkedTheme(payload);
     });
     return () => { void unlisten.then((stop) => stop()); };
   }, []);
@@ -2154,7 +2157,7 @@ export default function App() {
     if (booting) return;
     // Image mode without a saved image to show (it failed to import, or was removed) looks
     // like Solid, not a hole.
-    const appearance = data.appearance.backdrop === "image" && !shownBackground(data.appearance) ? { ...data.appearance, backdrop: "solid" as const } : data.appearance;
+    const appearance = data.appearance.backdrop === "image" && !shownEntry(data.appearance) ? { ...data.appearance, backdrop: "solid" as const } : data.appearance;
     const theme = applyTheme(appearance);
     cacheTheme(appearance);
     // Artboards Rust renders for canvas_look wear the same theme as the ones on screen.
@@ -2180,30 +2183,49 @@ export default function App() {
     }
   }
 
+  /** The image wins: when the shown image changed, apply the theme it is linked to, if any.
+   *  Best effort — the image change itself already succeeded, so a failed save just leaves the
+   *  colours as they were. */
+  async function applyLinkedTheme(config: AppearanceConfig) {
+    const linked = linkedThemeConfig(config);
+    if (!linked) return;
+    try {
+      const saved = await api.setAppearanceConfig(linked);
+      savedAppearance.current = saved;
+      setData((current) => ({ ...current, appearance: saved }));
+    } catch {
+      // Keep the current colours.
+    }
+  }
+
   /** Rust opens the picker and stores the copies; a cancelled picker changes nothing. */
   async function chooseBackgroundImage() {
     const saved = await api.chooseBackgroundImage();
     if (!saved) return;
     savedAppearance.current = saved;
     setData((current) => ({ ...current, appearance: saved }));
+    void applyLinkedTheme(saved);
   }
 
   async function removeBackgroundImage(name?: string) {
     const saved = await api.removeBackgroundImage(name);
     savedAppearance.current = saved;
     setData((current) => ({ ...current, appearance: saved }));
+    void applyLinkedTheme(saved);
   }
 
   async function selectBackgroundImage(name: string) {
     const saved = await api.selectBackgroundImage(name);
     savedAppearance.current = saved;
     setData((current) => ({ ...current, appearance: saved }));
+    void applyLinkedTheme(saved);
   }
 
   async function shuffleBackgroundImage() {
     const saved = await api.shuffleBackgroundImage();
     savedAppearance.current = saved;
     setData((current) => ({ ...current, appearance: saved }));
+    void applyLinkedTheme(saved);
   }
 
   async function setExecutionPolicy(config: ExecutionPolicyConfig) {
@@ -3312,7 +3334,7 @@ export default function App() {
     (name: string): string | undefined => (appDataPath ? convertFileSrc(`${appDataPath}/backgrounds/${name}`) : undefined),
     [appDataPath]
   );
-  const shownImage = shownBackground(data.appearance);
+  const shownImage = shownEntry(data.appearance);
   const backgroundImageUrl = shownImage ? backgroundImageUrlFor(shownImage.name) : undefined;
 
   const tabImpl = useRef({ select: selectWorkspaceTab, close: closeWorkspaceTab, reopen: reopenWorkspaceTab,

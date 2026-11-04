@@ -800,6 +800,9 @@ export interface BackgroundImageEntry {
   /** Where the visible part sits, 0–1000: 0 is flush left / top, 1000 flush right / bottom. */
   x: number;
   y: number;
+  /** The theme preset this image is linked to (`THEME_PRESETS` id), if any. Showing the image
+   *  applies that theme; picking that theme shows this image. One image per preset. */
+  theme?: string | null;
 }
 
 /** What sits behind the app's panels. Exclusive: glass shows the desktop an image would cover. */

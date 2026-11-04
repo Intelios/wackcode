@@ -336,3 +336,66 @@ describe("dynamic backgrounds", () => {
     await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ dynamicIntensity: 83 })));
   });
 });
+
+describe("theme links", () => {
+  const linkedLibrary = () => ({
+    ...imageLibrary(["a.png", "b.png"], "b.png"),
+    backgroundImages: [
+      { name: "a.png", zoom: 100, x: 500, y: 500, theme: "mono" },
+      { name: "b.png", zoom: 100, x: 500, y: 500 }
+    ]
+  });
+
+  it("badges each image with its linked theme, or No theme", () => {
+    renderSection(linkedLibrary(), { urls: { "a.png": "asset://localhost/a.png", "b.png": "asset://localhost/b.png" } });
+    expect(screen.getByRole("button", { name: "Theme for background 1" })).toHaveTextContent("Mono");
+    expect(screen.getByRole("button", { name: "Theme for background 2" })).toHaveTextContent("No theme");
+  });
+
+  it("links an image to a theme from the badge menu, moving the preset off the image that held it", async () => {
+    const { onChange } = renderSection(
+      {
+        ...imageLibrary(["a.png", "b.png"]),
+        backgroundImages: [
+          { name: "a.png", zoom: 100, x: 500, y: 500 },
+          { name: "b.png", zoom: 100, x: 500, y: 500, theme: "mono" }
+        ]
+      },
+      { urls: { "a.png": "asset://localhost/a.png", "b.png": "asset://localhost/b.png" } }
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Theme for background 1" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Mono/ }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      backgroundImages: [
+        { name: "a.png", zoom: 100, x: 500, y: 500, theme: "mono" },
+        { name: "b.png", zoom: 100, x: 500, y: 500, theme: null }
+      ]
+    })));
+  });
+
+  it("unlinks an image through No theme", async () => {
+    const { onChange } = renderSection(linkedLibrary(), { urls: { "a.png": "asset://localhost/a.png" } });
+    fireEvent.click(screen.getByRole("button", { name: "Theme for background 1" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /No theme/ }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      backgroundImages: [
+        { name: "a.png", zoom: 100, x: 500, y: 500, theme: null },
+        { name: "b.png", zoom: 100, x: 500, y: 500 }
+      ]
+    })));
+  });
+
+  it("switches the backdrop to Image and shows the linked image when its preset is picked", async () => {
+    const { onChange, onSelectImage } = renderSection({ ...linkedLibrary(), backdrop: "solid" });
+    fireEvent.click(screen.getByRole("radio", { name: "Mono" }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ accent: "#e6e6e6", background: "#111111", backdrop: "image" })));
+    await waitFor(() => expect(onSelectImage).toHaveBeenCalledWith("a.png"));
+  });
+
+  it("picks a preset without a linked image without touching the backdrop or the shown image", async () => {
+    const { onChange, onSelectImage } = renderSection({ ...imageLibrary(["a.png"]), backdrop: "solid" });
+    fireEvent.click(screen.getByRole("radio", { name: "Mono" }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ accent: "#e6e6e6", background: "#111111", backdrop: "solid" })));
+    expect(onSelectImage).not.toHaveBeenCalled();
+  });
+});

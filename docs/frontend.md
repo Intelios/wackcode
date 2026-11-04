@@ -513,3 +513,17 @@ and the background-colour veil eases as it climbs so the motion shows behind cha
 hidden/unfocused window or zero intensity cancels the loop. Reduce Motion draws
 one still composition and ignores pulses. Theme/style changes rebuild the paint resources;
 activity and scene changes retain them. The veil protects unboxed text.
+
+## Image backgrounds
+
+`Backdrop` paints the shown entry of `appearance.backgroundImages` — validated copies in
+`<app data>/backgrounds/`, served only through the asset protocol — with that entry's crop.
+`backgroundImage` names the shown entry and only Rust's image commands (choose, select, remove,
+shuffle) change it; Settings re-crops and re-links entries through the appearance echo, which
+validates names, ranges and the theme slug in `validate_appearance_config`.
+
+An entry may link to a theme preset (`theme`: a `THEME_PRESETS` id, one image per preset).
+Picking that preset shows the linked image; any change of the shown image applies its linked
+theme — `linkedThemeConfig` in `background-links.ts`, applied in App after the image commands and
+the `background-shuffled` event. Shuffle-on-open counts as an image change; a launch without one
+keeps the saved colours.

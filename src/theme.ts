@@ -76,6 +76,37 @@ export function presetFill(input: { accent: string; gradient?: string[] }, angle
   return input.gradient ? `linear-gradient(${angle}deg, ${input.gradient.join(", ")})` : input.accent;
 }
 
+/** Two hex colours are the same colour, whatever their case or shorthand. */
+function sameColour(first: string, second: string): boolean {
+  const a = parseHex(first);
+  const b = parseHex(second);
+  return a !== undefined && b !== undefined && toHex(a) === toHex(b);
+}
+
+/** The preset a colour pair is exactly — absent colours count as the defaults — or undefined
+ *  for a custom combination, which no image can link to. */
+export function presetForColours(accent?: string | null, background?: string | null): (typeof THEME_PRESETS)[number] | undefined {
+  const pickedAccent = accent ?? DEFAULT_ACCENT;
+  const pickedBackground = background ?? DEFAULT_BACKGROUND;
+  return THEME_PRESETS.find((preset) => sameColour(pickedAccent, preset.accent) && sameColour(pickedBackground, preset.background));
+}
+
+/** The preset with this id; anything else, including a hand-edited id, matches nothing. */
+export function presetById(id?: string | null): (typeof THEME_PRESETS)[number] | undefined {
+  return id ? THEME_PRESETS.find((preset) => preset.id === id) : undefined;
+}
+
+/** What to save for a picked accent: null for the default, so a future default still reaches the user. */
+export function storedAccent(picked: string): string | null {
+  return sameColour(picked, DEFAULT_ACCENT) ? null : picked.toLowerCase();
+}
+
+/** What to save for a picked background: darkened for readability, null for the default. */
+export function storedBackground(picked: string): string | null {
+  const shown = clampBackground(picked);
+  return sameColour(shown, DEFAULT_BACKGROUND) ? null : shown;
+}
+
 type Rgb = [number, number, number];
 type Lab = [number, number, number];
 interface Lch {

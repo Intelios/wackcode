@@ -6035,7 +6035,7 @@ body:has(.app-shell[data-screen="workspace"]) .visual-card-mark { background: tr
 
 /* Settings that come in pairs sit side by side, which kills the long single row and keeps
    related choices together (accent next to background, dim next to blur). */
-.appearance-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 8px; }
+.appearance-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px; }
 .appearance-pair .tool-setting + .tool-setting { margin-top: 0; }
 /* A slider row wraps its track under the label, which needs the row direction. A colour card
    stacks instead (label over swatches), so wrapping must be kept off it: in a column container
@@ -6187,9 +6187,10 @@ body:has(.app-shell[data-screen="workspace"]) .visual-card-mark { background: tr
   .composer-art { transition: none; }
 }
 
-/* Below the tiles, whatever a mode adds sits in one soft inset block. */
-.appearance-subgroup { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in srgb, var(--surface) 55%, transparent); }
+/* Below the tiles, whatever a mode adds sits in one soft inset block, its rows on one rhythm. */
+.appearance-subgroup { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--surface) 55%, transparent); }
 .appearance-subgroup .tool-setting { background: var(--surface); }
+.appearance-subgroup .tool-setting + .tool-setting { margin-top: 0; }
 
 /* Chat toggles: a miniature of the transcript itself, drawn from the switch's current state. */
 .chat-preview-card {
@@ -6277,6 +6278,9 @@ body:has(.app-shell[data-screen="workspace"]) .visual-card-mark { background: tr
 .swatch-custom:focus-within { outline: 2px solid color-mix(in srgb, var(--wc-accent) 75%, transparent); outline-offset: 2px; }
 .swatch-reset { margin-left: 2px; }
 .swatch-reset:disabled { opacity: .3; cursor: default; background: none; color: var(--text-soft); }
+/* Your images: one card holding the header row and the library strip on the well, so the
+   thumbnails read as a collection instead of floating loose under it. */
+.background-image-setting { flex-wrap: wrap; row-gap: 10px; }
 .background-image-setting .row-actions { flex: 0 0 auto; }
 .background-image-setting .secondary-button { height: 30px; font-size: 11.5px; }
 /* Position editor (BackdropCropEditor.tsx): a miniature of the window with the picture in it. */
@@ -6304,20 +6308,29 @@ body:has(.app-shell[data-screen="workspace"]) .visual-card-mark { background: tr
 .crop-zoom input[type="range"] { width: auto; flex: 1; }
 .crop-zoom-icon { width: 14px; height: 14px; flex: 0 0 auto; color: var(--text-dim); }
 .crop-controls .row-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-/* The saved-background strip (AppearanceSection.tsx): one cover-fit card per image. The shown
-   one wears the accent; the remove button appears on hover and keyboard focus alike. */
-.background-strip { display: flex; flex-wrap: wrap; gap: 10px; }
-.background-item { position: relative; }
+/* The library strip: a grid of image cards on the well, one per saved background. */
+.background-strip {
+  flex: 1 1 100%; display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 8px;
+  padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--wc-well);
+}
+/* One card per image: the cover-fit thumb above, the theme badge below, the shown one accented. */
+.background-item {
+  position: relative; display: flex; flex-direction: column; gap: 6px; padding: 6px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
+  transition: border-color .15s var(--ease);
+}
+.background-item:hover { border-color: var(--border-bright); }
+.background-item.current { border-color: var(--wc-accent); box-shadow: 0 0 0 1px var(--wc-accent); }
 .background-item .background-thumb {
-  width: 88px; height: 54px; padding: 0; border: 1px solid var(--border-bright); border-radius: 6px;
-  background-color: var(--wc-well); background-size: cover; background-position: center;
-  cursor: pointer; transition: border-color .15s var(--ease), transform .15s var(--ease);
+  width: 100%; height: auto; aspect-ratio: 16 / 10; padding: 0; border: 1px solid var(--border); border-radius: 5px;
+  background-color: var(--bg); background-size: cover; background-position: center;
+  cursor: pointer; transition: transform .15s var(--ease);
 }
 .background-item .background-thumb:hover { transform: translateY(-1px); }
-.background-item .background-thumb.current { border-color: var(--wc-accent); box-shadow: 0 0 0 1px var(--wc-accent); }
 .background-item .background-thumb:focus-visible { outline: 2px solid color-mix(in srgb, var(--wc-accent) 75%, transparent); outline-offset: 2px; }
+/* Revealed on hover and on keyboard focus alike, inside the card's top-right corner. */
 .background-thumb-remove {
-  position: absolute; top: -7px; right: -7px; display: grid; place-items: center; width: 20px; height: 20px;
+  position: absolute; top: 10px; right: 10px; display: grid; place-items: center; width: 20px; height: 20px;
   padding: 0; border: 1px solid var(--border-bright); border-radius: 50%;
   background: var(--surface); color: var(--text-soft); cursor: pointer;
   opacity: 0; transition: opacity .15s var(--ease);
@@ -6325,6 +6338,23 @@ body:has(.app-shell[data-screen="workspace"]) .visual-card-mark { background: tr
 .background-thumb-remove svg { width: 11px; height: 11px; }
 .background-item:hover .background-thumb-remove, .background-thumb-remove:focus-visible { opacity: 1; }
 .background-thumb-remove:hover { color: var(--text); border-color: var(--text-soft); }
+/* The theme-link pill under the thumb: accent-tinted while a theme is linked, quiet when not. */
+.theme-badge {
+  display: inline-flex; align-items: center; gap: 5px; align-self: flex-start; height: 24px; padding: 0 8px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--wc-well);
+  color: var(--text-dim); font-size: 10.5px; font-weight: 550; cursor: pointer;
+  transition: border-color .15s var(--ease), color .15s var(--ease);
+}
+.theme-badge svg { width: 11px; height: 11px; flex: 0 0 auto; }
+.theme-badge:hover:not(:disabled) { border-color: var(--border-bright); color: var(--text); }
+.theme-badge:not(.none) {
+  border-color: var(--wc-accent-line-soft); color: var(--wc-accent);
+  background: color-mix(in srgb, var(--wc-accent) 8%, var(--wc-well));
+}
+.theme-badge-chevron { transition: transform .15s var(--ease); }
+.theme-badge[aria-expanded="true"] .theme-badge-chevron { transform: rotate(90deg); }
+.theme-badge:focus-visible { outline: 2px solid color-mix(in srgb, var(--wc-accent) 75%, transparent); outline-offset: 2px; }
+.theme-menu-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgb(255 255 255 / 24%); }
 .appearance-slider { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
 .appearance-slider output { width: 44px; text-align: right; color: var(--text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
 /* Undoes the global text-input styling; --fill is the thumb's position, set inline. */

@@ -639,12 +639,16 @@ pub struct BackgroundImage {
     pub x: u16,
     #[serde(default = "default_image_focus")]
     pub y: u16,
+    /// The theme preset this image is linked to (a `THEME_PRESETS` id from the renderer), if
+    /// any. Showing the image applies that theme; picking that theme shows this image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
 }
 
 impl BackgroundImage {
-    /// A freshly imported image starts centred at cover fit.
+    /// A freshly imported image starts centred at cover fit, linked to no theme.
     pub fn fresh(name: String) -> Self {
-        Self { name, zoom: default_image_zoom(), x: default_image_focus(), y: default_image_focus() }
+        Self { name, zoom: default_image_zoom(), x: default_image_focus(), y: default_image_focus(), theme: None }
     }
 }
 

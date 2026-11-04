@@ -2028,7 +2028,7 @@ pub struct AppInfo {
     pub active_workers: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitChangeFile {
     pub path: String,
@@ -2085,7 +2085,7 @@ pub struct WorkspaceFiles {
     pub truncated: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitChanges {
     pub is_git: bool,

@@ -2,7 +2,21 @@ use crate::models::{
     GitBranch, GitBranches, GitChangeFile, GitChanges, GitDiffHunk, GitDiffLine,
     GitDiffSection, GitPublishInfo,
 };
-use std::{fs, hash::{Hash, Hasher}, io::{Read, Write}, path::{Component, Path, PathBuf}, process::{Command, Stdio}, thread, time::{Duration, Instant}};
+use std::{
+    collections::HashMap,
+    fs,
+    hash::{Hash, Hasher},
+    io::{Read, Write},
+    os::unix::fs::MetadataExt,
+    path::{Component, Path, PathBuf},
+    process::{Command, Stdio},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, OnceLock,
+    },
+    thread,
+    time::{Duration, Instant},
+};
 
 const MAX_DIFF_BYTES: usize = 240_000;
 const BINARY_SCAN_BYTES: usize = 8_192;
@@ -105,16 +119,62 @@ pub fn remove_worktree(git_root: &Path, worktree_path: &Path) -> Result<(), Stri
     Ok(())
 }
 
+/// One Changes snapshot. A refresh costs a `rev-parse`, a `status` and at most two batched
+/// diffs (staged + working); when the fingerprint says nothing moved since the last scan the
+/// cached snapshot is returned instead, so an unchanged tree never runs `git diff` at all.
 pub fn changes(path: &Path) -> Result<GitChanges, String> {
-    let info = inspect_project(path);
-    let Some(root) = info.root else {
+    let timing = std::env::var_os("WACKCODE_GIT_TIMING").is_some();
+    let mut mark = Instant::now();
+    // One rev-parse answers root, git dir and common dir (worktrees get per-worktree and
+    // shared paths respectively). Not a repository → cheap exit. `--abbrev-ref HEAD` would
+    // fail on a repo with no commits, so the branch is read from HEAD's file instead.
+    let probe = git_output(path, &[
+        "rev-parse",
+        "--path-format=absolute",
+        "--show-toplevel",
+        "--absolute-git-dir",
+        "--git-common-dir",
+    ]);
+    let mut lines = probe.as_deref().unwrap_or_default().lines();
+    let (Some(root), Some(git_dir), Some(common_dir)) = (
+        lines.next().map(PathBuf::from),
+        lines.next().map(PathBuf::from),
+        lines.next().map(PathBuf::from),
+    ) else {
         return Ok(GitChanges { is_git: false, root: None, branch: None, files: Vec::new(), changes_revision: String::new() });
     };
+    // `ref: refs/heads/name`, `ref: refs/remotes/name` or a bare sha (detached) → branch,
+    // matching `branch --show-current` without a second git process.
+    let branch = fs::read_to_string(git_dir.join("HEAD")).ok()
+        .and_then(|head| head.trim().strip_prefix("ref: ").map(str::to_string))
+        .and_then(|reference| reference.rsplit("/").next().map(str::to_string));
+    scan_mark(timing, &mut mark, "rev-parse");
+
     let status_output = git_bytes(&root, &["status", "--porcelain=v1", "-z", "--untracked-files=all"])?;
     let records = parse_status(&status_output);
+    scan_mark(timing, &mut mark, "status");
+
+    let fingerprint = changes_fingerprint(&status_output, &records, &root, &git_dir, &common_dir, branch.as_deref());
+    if let Some(cached) = cached_changes(&root, fingerprint) {
+        scan_mark(timing, &mut mark, "cache hit");
+        return Ok((*cached).clone());
+    }
+    scan_mark(timing, &mut mark, "fingerprint");
+
+    // Two diffs cover every tracked record: `diff --git` chunks are attributed to records by
+    // the exact header line git prints for them; anything unmatched (conflicts included)
+    // falls back to a per-file diff inside build_change, so the worst case is today's cost.
+    let staged_needed = records.iter().any(|record| record.x != b' ' && record.x != b'?' && status_label(record.x, record.y) != "conflict");
+    let working_needed = records.iter().any(|record| record.y != b' ' && record.y != b'?' && status_label(record.x, record.y) != "conflict");
+    let staged_raw = if staged_needed { git_diff_all(&root, true)? } else { String::new() };
+    let working_raw = if working_needed { git_diff_all(&root, false)? } else { String::new() };
+    let staged_chunks = split_diff(&staged_raw);
+    let working_chunks = split_diff(&working_raw);
+    scan_mark(timing, &mut mark, "diffs");
+
     let mut files = Vec::with_capacity(records.len());
     for record in records {
-        files.push(build_change(&root, record)?);
+        files.push(build_change(&root, record, &staged_chunks, &working_chunks)?);
     }
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for file in &files {
@@ -124,13 +184,174 @@ pub fn changes(path: &Path) -> Result<GitChanges, String> {
             section.revision.hash(&mut hasher);
         }
     }
-    Ok(GitChanges {
+    let result = GitChanges {
         is_git: true,
         root: Some(root.to_string_lossy().into_owned()),
-        branch: current_branch(&root),
+        branch,
         files,
         changes_revision: format!("{:016x}", hasher.finish()),
-    })
+    };
+    store_changes(&root, fingerprint, &result);
+    scan_mark(timing, &mut mark, "sections");
+    Ok(result)
+}
+
+fn scan_mark(timing: bool, mark: &mut Instant, phase: &'static str) {
+    if timing {
+        eprintln!("git::changes {phase}: {:?}", mark.elapsed());
+    }
+    *mark = Instant::now();
+}
+
+/// Cached snapshots share a root across chats in the same checkout; a handful of roots is
+/// more than enough for every open project and worktree at once.
+struct CachedChanges {
+    fingerprint: u64,
+    tick: u64,
+    result: Arc<GitChanges>,
+}
+
+const MAX_CACHED_CHANGES: usize = 32;
+
+fn changes_cache() -> &'static Mutex<HashMap<PathBuf, CachedChanges>> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedChanges>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+static CHANGES_TICK: AtomicU64 = AtomicU64::new(0);
+
+fn cached_changes(root: &Path, fingerprint: u64) -> Option<Arc<GitChanges>> {
+    let key = root.canonicalize().ok()?;
+    let cache = changes_cache().lock().unwrap_or_else(|error| error.into_inner());
+    cache.get(&key).filter(|entry| entry.fingerprint == fingerprint).map(|entry| entry.result.clone())
+}
+
+fn store_changes(root: &Path, fingerprint: u64, result: &GitChanges) {
+    let Ok(key) = root.canonicalize() else { return };
+    let mut cache = changes_cache().lock().unwrap_or_else(|error| error.into_inner());
+    if cache.len() >= MAX_CACHED_CHANGES && !cache.contains_key(&key) {
+        let oldest = cache.iter().min_by_key(|(_, entry)| entry.tick).map(|(key, _)| key.clone());
+        if let Some(oldest) = oldest { cache.remove(&oldest); }
+    }
+    let tick = CHANGES_TICK.fetch_add(1, Ordering::Relaxed);
+    cache.insert(key, CachedChanges { fingerprint, tick, result: Arc::new(result.clone()) });
+}
+
+/// Cheap staleness check: the status bytes themselves plus everything that could change the
+/// answer without showing up in them — worktree file stats, the index (staging and commits),
+/// and the config/info files that steer status and diff. Any mutation bumps at least one of
+/// these, so writers never need to invalidate the cache explicitly.
+fn changes_fingerprint(
+    status: &[u8],
+    records: &[StatusRecord],
+    root: &Path,
+    git_dir: &Path,
+    common_dir: &Path,
+    branch: Option<&str>,
+) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    status.hash(&mut hasher);
+    branch.hash(&mut hasher);
+    for record in records {
+        hash_stat(&mut hasher, &root.join(&record.path));
+    }
+    hash_stat(&mut hasher, &git_dir.join("index"));
+    hash_stat(&mut hasher, &git_dir.join("config.worktree"));
+    hash_stat(&mut hasher, &git_dir.join("info").join("exclude"));
+    hash_stat(&mut hasher, &git_dir.join("info").join("attributes"));
+    hash_stat(&mut hasher, &common_dir.join("config"));
+    hash_stat(&mut hasher, &common_dir.join("info").join("exclude"));
+    hash_stat(&mut hasher, &common_dir.join("info").join("attributes"));
+    hasher.finish()
+}
+
+fn hash_stat(hasher: &mut impl Hasher, path: &Path) {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            true.hash(hasher);
+            metadata.mtime().hash(hasher);
+            metadata.ctime().hash(hasher);
+            metadata.size().hash(hasher);
+            metadata.file_type().is_symlink().hash(hasher);
+        }
+        Err(_) => false.hash(hasher),
+    }
+}
+
+/// `git diff` cut at its chunk boundaries into (header tail, chunk). `diff --cc`,
+/// `diff --combined` and `* Unmerged path` lines bound chunks too but match no plain record,
+/// so conflicted output can never leak into another file's preview.
+fn split_diff(raw: &str) -> Vec<(Option<&str>, &str)> {
+    let mut chunks = Vec::new();
+    let mut offset = 0;
+    let mut start = 0;
+    let mut key: Option<&str> = None;
+    for line in raw.split_inclusive('\n') {
+        let text = line.strip_suffix('\n').unwrap_or(line);
+        let boundary = if let Some(tail) = text.strip_prefix("diff --git ") {
+            Some(Some(tail))
+        } else if text.starts_with("diff --cc ") || text.starts_with("diff --combined ") || text.starts_with("* Unmerged path ") {
+            Some(None)
+        } else {
+            None
+        };
+        if let Some(next_key) = boundary {
+            if start < offset {
+                chunks.push((key, &raw[start..offset]));
+            }
+            start = offset;
+            key = next_key;
+        }
+        offset += line.len();
+    }
+    if start < raw.len() {
+        chunks.push((key, &raw[start..]));
+    }
+    chunks
+}
+
+/// The `a/old b/new` token pair after `diff --git ` that git prints for a record's layer,
+/// quoted exactly like git quotes it.
+fn diff_key(old: &str, new: &str) -> String {
+    format!("{} {}", git_quote_path(&format!("a/{old}")), git_quote_path(&format!("b/{new}")))
+}
+
+fn layer_diff<'a>(chunks: &'a [(Option<&str>, &str)], key: &str) -> Option<&'a str> {
+    chunks.iter().find(|(tail, _)| *tail == Some(key)).map(|(_, chunk)| *chunk)
+}
+
+/// Git's quoting for path tokens: plain unless the bytes need it; then a C-quoted string with
+/// the named escapes and octal for control and non-ASCII bytes (`core.quotePath`). A path
+/// this misses simply falls back to its own `git diff`.
+fn git_quote_path(token: &str) -> String {
+    if !token.bytes().any(|byte| byte < 0x20 || byte == 0x7F || byte >= 0x80 || byte == b'"' || byte == b'\\') {
+        return token.to_string();
+    }
+    const NAMED: [(u8, &str); 7] = [
+        (0x07, "\\a"),
+        (0x08, "\\b"),
+        (0x0C, "\\f"),
+        (b'\n', "\\n"),
+        (b'\r', "\\r"),
+        (b'\t', "\\t"),
+        (0x0B, "\\v"),
+    ];
+    let mut quoted = String::with_capacity(token.len() + 2);
+    quoted.push('"');
+    for byte in token.bytes() {
+        if let Some((_, escape)) = NAMED.iter().find(|(raw, _)| *raw == byte) {
+            quoted.push_str(escape);
+        } else if byte == b'"' || byte == b'\\' {
+            quoted.push('\\');
+            quoted.push(byte as char);
+        } else if byte < 0x20 || byte == 0x7F || byte >= 0x80 {
+            quoted.push_str(&format!("\\{byte:03o}"));
+        } else {
+            quoted.push(byte as char);
+        }
+    }
+    quoted.push('"');
+    quoted
 }
 
 #[derive(Debug)]
@@ -162,7 +383,12 @@ fn parse_status(bytes: &[u8]) -> Vec<StatusRecord> {
     records
 }
 
-fn build_change(root: &Path, record: StatusRecord) -> Result<GitChangeFile, String> {
+fn build_change(
+    root: &Path,
+    record: StatusRecord,
+    staged_chunks: &[(Option<&str>, &str)],
+    working_chunks: &[(Option<&str>, &str)],
+) -> Result<GitChangeFile, String> {
     let untracked = record.x == b'?' && record.y == b'?';
     let staged = !untracked && record.x != b' ';
     let unstaged = !untracked && record.y != b' ';
@@ -176,10 +402,12 @@ fn build_change(root: &Path, record: StatusRecord) -> Result<GitChangeFile, Stri
     if untracked {
         if fs::symlink_metadata(&file_path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
             diff = "Symbolic link (target is not previewed)".into();
+        } else if binary {
+            // The 8 KiB sniff already answered; the size is all the preview wants, so a large
+            // binary is never read at all.
+            let size = fs::metadata(&file_path).map(|metadata| metadata.len()).unwrap_or(0);
+            diff = format!("Binary file · {size} bytes");
         } else { match fs::read(&file_path) {
-            Ok(content) if binary => {
-                diff = format!("Binary file · {} bytes", content.len());
-            }
             Ok(content) => {
                 let text = String::from_utf8_lossy(&content);
                 // The preview loop below stops at MAX_DIFF_BYTES; keep the true total for the UI.
@@ -202,14 +430,22 @@ fn build_change(root: &Path, record: StatusRecord) -> Result<GitChangeFile, Stri
     } else {
         if staged {
             diff.push_str("# Staged changes\n");
-            let raw = git_diff(root, true, &record.path)?;
+            let key = diff_key(record.old_path.as_deref().unwrap_or(&record.path), &record.path);
+            let raw = match layer_diff(staged_chunks, &key) {
+                Some(chunk) => chunk.to_string(),
+                None => git_diff(root, true, &record.path)?,
+            };
             sections.push(section("staged", &raw));
             diff.push_str(&raw);
         }
         if unstaged {
             if !diff.is_empty() { diff.push('\n'); }
             diff.push_str("# Working tree changes\n");
-            let raw = git_diff(root, false, &record.path)?;
+            let key = diff_key(&record.path, &record.path);
+            let raw = match layer_diff(working_chunks, &key) {
+                Some(chunk) => chunk.to_string(),
+                None => git_diff(root, false, &record.path)?,
+            };
             sections.push(section("working", &raw));
             diff.push_str(&raw);
         }
@@ -294,11 +530,22 @@ fn section(layer: &str, raw: &str) -> GitDiffSection {
 }
 
 fn git_diff(root: &Path, cached: bool, path: &str) -> Result<String, String> {
+    git_diff_args(root, cached, Some(path))
+}
+
+/// Every diff for one layer in a single process. No `--binary`: the base85 patch it emits is
+/// always thrown away for `Binary file · N bytes`, so passing it only paid to encode binaries.
+fn git_diff_all(root: &Path, cached: bool) -> Result<String, String> {
+    git_diff_args(root, cached, None)
+}
+
+fn git_diff_args(root: &Path, cached: bool, path: Option<&str>) -> Result<String, String> {
     let mut command = Command::new("git");
     // `--no-color`: a user's `color.ui=always` would otherwise break the hunk parser.
-    command.args(["-C"]).arg(root).args(["diff", "--no-ext-diff", "--no-color", "--binary"]);
+    command.args(["-C"]).arg(root).args(["diff", "--no-ext-diff", "--no-color"]);
     if cached { command.arg("--cached"); }
-    let output = command.arg("--").arg(path).output().map_err(|error| error.to_string())?;
+    if let Some(path) = path { command.arg("--").arg(path); }
+    let output = command.output().map_err(|error| error.to_string())?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
@@ -610,9 +857,16 @@ pub fn remote_repo(path: &Path, remote: &str) -> Result<String, String> {
 
 fn is_binary_file(path: &Path) -> bool {
     if fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) { return false; }
-    fs::read(path)
-        .ok()
-        .is_some_and(|bytes| bytes.iter().take(BINARY_SCAN_BYTES).any(|byte| *byte == 0))
+    read_head(path, BINARY_SCAN_BYTES as u64)
+        .is_some_and(|bytes| bytes.contains(&0))
+}
+
+/// The first `limit` bytes of a file — a sniff, not a read; directories come back empty.
+fn read_head(path: &Path, limit: u64) -> Option<Vec<u8>> {
+    let file = fs::File::open(path).ok()?;
+    let mut buffer = Vec::new();
+    file.take(limit).read_to_end(&mut buffer).ok()?;
+    Some(buffer)
 }
 
 fn status_label(x: u8, y: u8) -> &'static str {
@@ -1041,5 +1295,202 @@ mod tests {
         assert_eq!(current_branch(&root).as_deref(), Some("feature"));
         assert_eq!(checkout(&root, "topic/new", "create").unwrap().as_deref(), Some("topic/new"));
         assert_eq!(fs::read_to_string(root.join("file.txt")).unwrap(), "edited\n");
+    }
+
+    #[test]
+    fn quotes_paths_the_way_git_does() {
+        assert_eq!(git_quote_path("a/plain.txt"), "a/plain.txt");
+        // Spaces are not quoted; control characters, quotes, backslashes and non-ASCII are.
+        assert_eq!(git_quote_path("a/sp ace.txt"), "a/sp ace.txt");
+        assert_eq!(git_quote_path("a/new\nline.txt"), "\"a/new\\nline.txt\"");
+        assert_eq!(git_quote_path("a/quote\".txt"), "\"a/quote\\\".txt\"");
+        assert_eq!(git_quote_path("a/back\\slash.txt"), "\"a/back\\\\slash.txt\"");
+        // é is 0xC3 0xA9 in UTF-8 → octal escapes per byte, two é's each escape twice.
+        assert_eq!(git_quote_path("a/été.txt"), "\"a/\\303\\251t\\303\\251.txt\"");
+    }
+
+    #[test]
+    fn batched_diffs_reach_their_records_including_renames_and_spaces() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        init_repo(root);
+        commit_file(root, "plain.txt", "one\n", "initial");
+        commit_file(root, "sp ace.txt", "two\n", "second");
+        commit_file(root, "new\nline.txt", "three\n", "third");
+        run(root, &["mv", "plain.txt", "ren amed.txt"]);
+        fs::write(root.join("sp ace.txt"), "two\nmore\n").unwrap();
+        fs::write(root.join("new\nline.txt"), "three\nmore\n").unwrap();
+        // `a b/file.txt` and `file.txt` is the pair a naive `b/` suffix match would confuse.
+        fs::create_dir_all(root.join("a b")).unwrap();
+        fs::write(root.join("a b/file.txt"), "nested\n").unwrap();
+        fs::write(root.join("file.txt"), "flat\n").unwrap();
+
+        let result = changes(root).unwrap();
+        let file = |path: &str| result.files.iter().find(|file| file.path == path).unwrap();
+        // Staged rename: the staged section holds the rename chunk attributed by old→new pair.
+        let renamed = file("ren amed.txt");
+        assert_eq!(renamed.status, "renamed");
+        assert_eq!(renamed.old_path.as_deref(), Some("plain.txt"));
+        let staged = renamed.sections.iter().find(|section| section.layer == "staged").unwrap();
+        assert!(staged.diff.contains("rename from plain.txt"), "{}", staged.diff);
+        assert!(staged.diff.contains("rename to ren amed.txt"));
+        // Space and newline paths get their own chunks, not a fallback's.
+        let spaced = file("sp ace.txt").sections.iter().find(|section| section.layer == "working").unwrap();
+        assert!(spaced.diff.contains("+more"), "{}", spaced.diff);
+        let newline = file("new\nline.txt").sections.iter().find(|section| section.layer == "working").unwrap();
+        assert!(newline.diff.contains("+more"), "{}", newline.diff);
+        for path in ["a b/file.txt", "file.txt"] {
+            let untracked = file(path);
+            assert!(untracked.sections[0].diff.contains("+"), "{path}");
+        }
+    }
+
+    #[test]
+    fn conflicted_files_fall_back_to_their_own_diff() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        init_repo(root);
+        commit_file(root, "base.txt", "base\n", "initial");
+        commit_file(root, "fight.txt", "one\n", "second");
+        run(root, &["switch", "-c", "other"]);
+        commit_file(root, "fight.txt", "other\n", "other");
+        run(root, &["switch", "main"]);
+        commit_file(root, "fight.txt", "main\n", "main");
+        assert!(Command::new("git").arg("-C").arg(root).args(["merge", "other"]).output().is_ok_and(|output| !output.status.success()));
+        fs::write(root.join("base.txt"), "base\nmore\n").unwrap();
+
+        let result = changes(root).unwrap();
+        let conflicted = result.files.iter().find(|file| file.status == "conflict").unwrap();
+        // Whatever git prints for an unmerged path is preserved verbatim by the fallback.
+        let expected = git_diff(root, false, "fight.txt").unwrap();
+        let working = conflicted.sections.iter().find(|section| section.layer == "working").unwrap();
+        assert_eq!(working.diff, expected);
+        // A `diff --cc` or unmerged chunk must not bleed into the clean file's section.
+        let clean = result.files.iter().find(|file| file.path == "base.txt").unwrap();
+        let clean_working = clean.sections.iter().find(|section| section.layer == "working").unwrap();
+        assert!(clean_working.diff.contains("+more"), "{}", clean_working.diff);
+        assert!(!clean_working.diff.contains("fight.txt"));
+    }
+
+    #[test]
+    fn cache_hit_reuses_the_snapshot_and_any_mutation_misses() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        init_repo(root);
+        commit_file(root, "tracked.txt", "one\n", "initial");
+        fs::write(root.join("tracked.txt"), "one\ntwo\n").unwrap();
+
+        let first = changes(root).unwrap();
+        let second = changes(root).unwrap();
+        assert_eq!(first.changes_revision, second.changes_revision);
+        assert_eq!(first.files[0].sections[0].revision, second.files[0].sections[0].revision);
+
+        // A worktree rewrite changes the answer.
+        fs::write(root.join("tracked.txt"), "one\nthree\n").unwrap();
+        let third = changes(root).unwrap();
+        assert!(third.files[0].sections.iter().any(|section| section.diff.contains("+three")),
+            "a stale cache would have served `+two`");
+        assert_ne!(first.changes_revision, third.changes_revision);
+
+        // Staging flips the file's section layers.
+        run(root, &["add", "tracked.txt"]);
+        let staged = changes(root).unwrap();
+        assert!(staged.files[0].staged);
+        assert!(staged.files[0].sections.iter().any(|section| section.layer == "staged"));
+
+        // A clean tree caches too; a branch switch on identical files still reports the new branch.
+        run(root, &["commit", "-qm", "all"]);
+        let clean = changes(root).unwrap();
+        assert!(clean.files.is_empty());
+        run(root, &["switch", "-c", "topic"]);
+        let switched = changes(root).unwrap();
+        assert_eq!(switched.branch.as_deref(), Some("topic"));
+
+        // A new untracked file appears on the next refresh.
+        fs::write(root.join("fresh.txt"), "hi\n").unwrap();
+        assert!(changes(root).unwrap().files.iter().any(|file| file.path == "fresh.txt"));
+    }
+
+    #[test]
+    fn untracked_binary_reports_its_true_size_from_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        init_repo(root);
+        let size = 64 * 1024usize;
+        fs::write(root.join("big.bin"), vec![0u8; size]).unwrap();
+        let result = changes(root).unwrap();
+        let binary = result.files.iter().find(|file| file.path == "big.bin").unwrap();
+        assert!(binary.binary);
+        assert!(binary.sections[0].diff.contains(&format!("{size} bytes")), "{}", binary.sections[0].diff);
+        // Only the first 8 KiB is sniffed: a NUL later than that is text by contract (and
+        // proves the sniff reads the head, not the whole file).
+        let mut text = vec![b'a'; BINARY_SCAN_BYTES + 10];
+        text.push(0);
+        fs::write(root.join("late.dat"), &text).unwrap();
+        let result = changes(root).unwrap();
+        let late = result.files.iter().find(|file| file.path == "late.dat").unwrap();
+        assert!(!late.binary);
+        assert!(late.sections[0].diff.contains("+"), "{}", late.sections[0].diff);
+        // …while a NUL inside the window marks the file binary.
+        let mut data = vec![b'b'; BINARY_SCAN_BYTES];
+        data[10] = 0;
+        fs::write(root.join("early.dat"), &data).unwrap();
+        assert!(changes(root).unwrap().files.iter().any(|file| file.path == "early.dat" && file.binary));
+    }
+
+    /// Scan cost of one Changes refresh: `cargo test changes_scan_benchmark -- --ignored --nocapture`.
+    /// `dirty` perturbs a file between calls so every scan is cold; `steady` repeats calls on an
+    /// unchanged tree. A tool-heavy run hits the dirty case several times per turn.
+    #[test]
+    #[ignore = "benchmark only"]
+    fn changes_scan_benchmark() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        init_repo(root);
+        for index in 0..20 {
+            let name = if index == 0 { "a b/spaced.txt".into() } else { format!("file_{index:02}.txt") };
+            let parent = root.join(&name);
+            fs::create_dir_all(parent.parent().unwrap()).unwrap();
+            fs::write(&parent, format!("line one\nline two\n{index}\n")).unwrap();
+        }
+        run(root, &["add", "-A"]);
+        run(root, &["commit", "-qm", "initial"]);
+        for index in 0..20 {
+            let name = if index == 0 { "a b/spaced.txt".into() } else { format!("file_{index:02}.txt") };
+            fs::write(root.join(&name), format!("line one\nline two\n{index}\nchanged\n")).unwrap();
+        }
+        fs::write(root.join("new one.txt"), "new\ntext\nfile\n").unwrap();
+        fs::write(root.join("new two.txt"), "another\n").unwrap();
+        fs::write(root.join("new binary.bin"), vec![0u8; 1_000_000]).unwrap();
+        fs::write(root.join("note.md"), "# note\n").unwrap();
+        fs::write(root.join("data.csv"), "a,b,c\n1,2,3\n").unwrap();
+
+        let median = |mut samples: Vec<u128>| -> u128 {
+            samples.sort();
+            samples[samples.len() / 2]
+        };
+        // Cold scans: each iteration edits a tracked file first.
+        let mut dirty = Vec::new();
+        for round in 0..30 {
+            fs::write(root.join("file_19.txt"), format!("round {round}\nline two\n19\nchanged\n")).unwrap();
+            let start = Instant::now();
+            let result = changes(root).unwrap();
+            dirty.push(start.elapsed().as_micros());
+            assert_eq!(result.files.len(), 25);
+        }
+        // Steady refreshes: nothing changes between calls.
+        let mut steady = Vec::new();
+        for _ in 0..30 {
+            let start = Instant::now();
+            changes(root).unwrap();
+            steady.push(start.elapsed().as_micros());
+        }
+        eprintln!(
+            "changes_scan_benchmark: dirty median {:.1}ms mean {:.1}ms | steady median {:.1}ms mean {:.1}ms",
+            median(dirty.clone()) as f64 / 1000.0,
+            dirty.iter().sum::<u128>() as f64 / dirty.len() as f64 / 1000.0,
+            median(steady.clone()) as f64 / 1000.0,
+            steady.iter().sum::<u128>() as f64 / steady.len() as f64 / 1000.0,
+        );
     }
 }

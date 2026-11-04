@@ -1095,3 +1095,65 @@ describe("App suggested tasks", () => {
     expect(screen.queryByText(/suggested-task-v1/)).toBeNull();
   });
 });
+
+describe("Changes refresh coalescing", () => {
+  const cleanChanges = () => ({ isGit: true, root: "/tmp/a", branch: "main", files: [], changesRevision: "rev" });
+  const toolEnd = (taskId: string, toolName: string) =>
+    worker({ type: "activity", taskId, event: "tool_execution_end", detail: { toolName, toolCallId: `${toolName}-1` } });
+
+  it("debounces a burst of write-tool ends into one scan, while read-only tools skip it", async () => {
+    bootstrap();
+    await screen.findByRole("button", { name: "Settings" });
+    chat("a");
+    await waitFor(() => expect(api.gitChanges).toHaveBeenCalledWith({ taskId: "a" }));
+    vi.mocked(api.gitChanges).mockClear();
+
+    for (const name of ["read", "web_fetch", "browser_open", "list_images"]) await toolEnd("a", name);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 700)); });
+    expect(api.gitChanges).not.toHaveBeenCalled();
+
+    for (const name of ["edit", "write", "bash", "edit", "write"]) await toolEnd("a", name);
+    await waitFor(() => expect(api.gitChanges).toHaveBeenCalledTimes(1), { timeout: 2000 });
+  });
+
+  it("flushes the pending refresh when the run finishes", async () => {
+    bootstrap();
+    await screen.findByRole("button", { name: "Settings" });
+    chat("a");
+    await waitFor(() => expect(api.gitChanges).toHaveBeenCalledWith({ taskId: "a" }));
+    vi.mocked(api.gitChanges).mockClear();
+
+    await toolEnd("a", "edit");
+    await worker({ type: "run_finished", taskId: "a", runId: "run", outcome: "completed" });
+    await waitFor(() => expect(api.gitChanges).toHaveBeenCalledTimes(1));
+    // The flushed timer must not fire a second scan.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 700)); });
+    expect(api.gitChanges).toHaveBeenCalledTimes(1);
+  });
+
+  it("an event for another chat does not schedule a scan, and a queued refresh reruns once", async () => {
+    bootstrap();
+    await screen.findByRole("button", { name: "Settings" });
+    chat("a");
+    await waitFor(() => expect(api.gitChanges).toHaveBeenCalledWith({ taskId: "a" }));
+    vi.mocked(api.gitChanges).mockClear();
+
+    await toolEnd("b", "edit");
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 700)); });
+    expect(api.gitChanges).not.toHaveBeenCalled();
+
+    // Two refreshes while one is in flight collapse into a single follow-up.
+    const pending = deferred<ReturnType<typeof cleanChanges>>();
+    vi.mocked(api.gitChanges).mockReturnValueOnce(pending.promise);
+    await act(async () => { window.dispatchEvent(new Event("focus")); });
+    await waitFor(() => expect(api.gitChanges).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      window.dispatchEvent(new Event("focus"));
+    });
+    await act(async () => pending.resolve(cleanChanges()));
+    await waitFor(() => expect(api.gitChanges).toHaveBeenCalledTimes(2));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+    expect(api.gitChanges).toHaveBeenCalledTimes(2);
+  });
+});

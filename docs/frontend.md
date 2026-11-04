@@ -408,7 +408,10 @@ A messenger UI for `kind: "chat"` chats, mounted as one `ChatArea` in place of t
 
 `ChangesPanel` reads the selected Code chat’s checkout, including its worktree. `App` owns
 Git calls and refreshes; the panel, file list, diff and commit dock are presentational.
-Chat mode never exposes this view or calls Git.
+Chat mode never exposes this view or calls Git. A `tool_execution_end` asks for a refresh
+through `scheduleChangesRefresh` — known read-only tools are skipped, the rest debounce and
+`run_finished` flushes — and `refreshChanges` itself collapses overlapping calls into one
+follow-up, so a tool-heavy run costs about one scan instead of one per call.
 
 - Diff comments belong to the chat (`diffComments[taskId]`); Address comments sends them to
   that chat and clears them only after the prompt succeeds.

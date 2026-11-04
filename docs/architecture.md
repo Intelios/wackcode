@@ -131,7 +131,7 @@ not. Commands must remain in the foreground; detached daemons are outside this l
 Every Git command takes `task_id` or `project_id` and resolves it with `git_target` (`commands.rs`): a chat's workspace (the Changes panel) or a project's folder (the draft's branch picker). `TaskLocks` is held only for a chat target.
 
 - **Writes** go through `locked_checkout`: `idle_checkout` (no chat may be running in that checkout), then `GitLocks`, then `idle_checkout` again, because a chat can start while the command waits for the lock.
-- **Reads** (`git_changes`, branch lists and publish info) take neither lock. They inspect local state only.
+- **Reads** (`git_changes`, branch lists and publish info) take neither lock. They inspect local state only. `git::changes` is served from a stat-fingerprinted snapshot cache (`git.rs`): a refresh costs `rev-parse` + `status` plus one batched `git diff` per layer, and skips diffs entirely while the fingerprint matches. Every mutation bumps the index or a file stat, so writers never invalidate it explicitly.
 - **Network** (`git_push`, every `gh` call) runs through `git_cli`, which applies the login-shell environment so the user's credential helper and ssh-agent work. `git.rs` stays pure and synchronous.
 - `git_generate_message` keeps `task_id`: the chat's own worker and model write the message.
 

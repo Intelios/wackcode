@@ -164,6 +164,20 @@ const EASE: [number, number, number, number] = [0.33, 1, 0.68, 1];
 const REVIEW_PROMPT = "Review all current uncommitted changes, including staged, unstaged, and untracked files. Delegate the review to the Reviewer sub-agent. Report its findings with file and line references. Do not make fixes or edit files.";
 const NO_COMMENTS: DiffComment[] = [];
 
+/** Tools that cannot dirty the checkout, so their end doesn't need a Changes refresh. Keep it
+ * an allowlist of known read-only names — anything new or unknown refreshes, never skips. */
+const TOOLS_CANNOT_DIRTY = new Set([
+  "read", "grep", "find", "ls",
+  "web_fetch", "web_search",
+  "read_image", "list_images", "read_chat",
+  "browser_open", "browser_snapshot", "browser_act", "browser_screenshot", "browser_console",
+  "ask_user_question", "todo",
+  "canvas", "canvas_look", "canvas_guide",
+  "show_visual", "preview_visual", "compare_images",
+  "plan_mode_enter", "plan_mode_complete",
+  "suggest_task",
+]);
+
 /** Pending diff comments as a prompt: fix them in Build, plan the fixes otherwise. */
 function commentsPrompt(comments: DiffComment[], mode: TaskMode): string {
   const list = comments.map((comment) => `${comment.path}:${comment.line} (${comment.layer}, ${comment.side}; ${comment.revision}): ${comment.text}\nSource: ${comment.excerpt}`).join("\n\n");
@@ -308,6 +322,11 @@ export default function App() {
   const [changes, setChanges] = useState<GitChanges>();
   const [changesLoading, setChangesLoading] = useState(false);
   const changesRequest = useRef(0);
+  // Scans still in flight per chat, and chats that asked for another refresh meanwhile;
+  // one debounced tool-end refresh is pending at a time.
+  const changesInFlight = useRef(new Set<string>());
+  const changesPending = useRef(new Set<string>());
+  const changesTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [legacyPanelTabs, setLegacyPanelTabs] = useState<PanelTabs>(rememberedPanelTabs);
   const [legacyPanelWidth, setLegacyPanelWidth] = useState<number | null>(() => loadJSON<number | null>(PANEL_WIDTH_KEY, null));
   const [canvasWidth, setCanvasWidth] = useState<number | null>(() => loadJSON<number | null>(CANVAS_PANEL_WIDTH_KEY, null));
@@ -1090,17 +1109,48 @@ export default function App() {
   const refreshChanges = useCallback(async (taskId = selectedTaskRef.current) => {
     // A Chat mode chat's scratchpad is not a checkout; the host would refuse the request.
     if (!taskId || chatTaskIds.current.has(taskId)) return;
-    const request = ++changesRequest.current;
-    setChangesLoading(true);
+    // Overlapping calls queue one follow-up instead of stacking scans on the host.
+    if (changesInFlight.current.has(taskId)) {
+      changesPending.current.add(taskId);
+      return;
+    }
+    changesInFlight.current.add(taskId);
     try {
-      const next = await api.gitChanges({ taskId });
-      if (selectedTaskRef.current === taskId && changesRequest.current === request) setChanges(next);
-    } catch (reason) {
-      if (selectedTaskRef.current === taskId && changesRequest.current === request) setGlobalError(String(reason));
+      do {
+        changesPending.current.delete(taskId);
+        const request = ++changesRequest.current;
+        setChangesLoading(true);
+        try {
+          const next = await api.gitChanges({ taskId });
+          if (selectedTaskRef.current === taskId && changesRequest.current === request) setChanges(next);
+        } catch (reason) {
+          if (selectedTaskRef.current === taskId && changesRequest.current === request) setGlobalError(String(reason));
+        } finally {
+          if (selectedTaskRef.current === taskId && changesRequest.current === request) setChangesLoading(false);
+        }
+      } while (changesPending.current.has(taskId));
     } finally {
-      if (selectedTaskRef.current === taskId && changesRequest.current === request) setChangesLoading(false);
+      changesInFlight.current.delete(taskId);
     }
   }, []);
+
+  // A tool call can dirty the checkout, but a burst of them is one refresh's work: debounce
+  // the ends. Tools that cannot write are skipped at the call site.
+  const scheduleChangesRefresh = useCallback((taskId: string) => {
+    clearTimeout(changesTimer.current);
+    changesTimer.current = setTimeout(() => {
+      changesTimer.current = undefined;
+      if (selectedTaskRef.current === taskId) void refreshChanges(taskId);
+    }, 400);
+  }, [refreshChanges]);
+
+  // When a run settles, one scan catches up — including trees dirtied without any tool end
+  // (restores, read-only-tool-only runs), not just whatever was still debouncing.
+  const flushChangesRefresh = useCallback((taskId: string) => {
+    clearTimeout(changesTimer.current);
+    changesTimer.current = undefined;
+    void refreshChanges(taskId);
+  }, [refreshChanges]);
 
   useEffect(() => {
     let active = true;
@@ -1277,6 +1327,7 @@ export default function App() {
           }));
         }
       } else if (payload.type === "run_finished") {
+        if (taskId === selectedTaskRef.current) flushChangesRefresh(taskId);
         if (payload.outcome === "completed") tabs.update((state) => {
           const tab = state.tabs.find((item) => item.taskId === taskId);
           return tab && (state.activeId !== tab.id || tabScreensHidden.current) ? patchTab(state, tab.id, { completed: true }) : state;
@@ -1330,7 +1381,9 @@ export default function App() {
           // Only the selected chat's panel: a background chat's refresh would bump the request
           // counter and set loading without ever clearing it, and selecting that chat later
           // refreshes changes anyway.
-          if (taskId === selectedTaskRef.current) void refreshChanges(taskId);
+          if (taskId === selectedTaskRef.current && !TOOLS_CANNOT_DIRTY.has(String(liveToolName))) {
+            scheduleChangesRefresh(taskId);
+          }
         }
       } else if (payload.type === "worker_error") {
         patchRuntime(taskId, { error: payload.message });
@@ -1384,7 +1437,7 @@ export default function App() {
       }
     }).then((stop) => { unlisten = stop; });
     return () => unlisten?.();
-  }, [patchTask, patchRuntime, refreshChanges, appendNotice, updateBrowser]);
+  }, [patchTask, patchRuntime, refreshChanges, scheduleChangesRefresh, flushChangesRefresh, appendNotice, updateBrowser]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -1421,6 +1474,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // A pending tool-end refresh is for the chat that was selected when it was queued.
+    clearTimeout(changesTimer.current);
+    changesTimer.current = undefined;
     setChanges(undefined);
     if (!selectedTaskId) return;
     void refreshChanges(selectedTaskId);

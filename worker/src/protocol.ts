@@ -896,9 +896,10 @@ export interface HistoryPreview {
   failed?: true;
 }
 
-/** The keyless reader's NDJSON stream; the host adds its task and load identifiers. */
+/** The keyless reader's NDJSON stream; the host adds its task and load identifiers.
+ * `messageCount` rides beside the snapshot so the host logs it without parsing the tree. */
 export type SavedHistoryFrame =
-  | { type: "snapshot"; snapshot: SessionSnapshot }
+  | { type: "snapshot"; snapshot: SessionSnapshot; messageCount?: number }
   | { type: "history_previews"; previews: HistoryPreview[]; done?: true };
 
 export interface NormalizedBlock {

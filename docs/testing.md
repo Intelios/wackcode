@@ -18,6 +18,12 @@ Run `pnpm test:worker` after any protocol change. Some tests are guards rather t
 
 Pure logic belongs in a colocated `*.test.ts` next to a small module (`chat-utils.ts`, `side-panel.ts`, `scroll-rail.ts`…) rather than inside a component. Rust keeps pure policy separate for the same reason (`computer_use/policy.rs`, `geometry.rs`, `keys.rs`, `outline.rs`).
 
+## Benchmarks
+
+- `node scripts/benchmark-history.mjs` times the cold saved-history reader end to end (first snapshot, preview tail, total, peak RSS) on a disposable fixture; `--runs N`, `--fixture <session.jsonl>` for a real file, `--report <path>` to keep the JSON. Never commit real session output.
+- `WACKCODE_PERF=1 npx vitest run src/App.performance.test.tsx -t '<scenario>' --maxWorkers=1` runs the opt-in renderer hot-path benchmarks, including cold-snapshot mount.
+- In a dev build, `history timing:` records land on the app's stderr (reader phases + the display snapshot/commit/paint/previews-done figure).
+
 ## The running app
 
 - **Start** with `pnpm dev:background`. It is idempotent, prints `Ready` once the app is up, and logs to `/tmp/wackcode-dev.log`. **Stop** with `pnpm dev:stop`. Don't launch the app any other way. `pnpm dev:reset` stops it and moves its data folder to the Trash.

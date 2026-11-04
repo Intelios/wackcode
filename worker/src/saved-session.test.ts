@@ -171,6 +171,38 @@ describe("streamed image previews", () => {
     expect(frames[0]).toMatchObject({ type: "snapshot", snapshot: { messages: [{ blocks: [expect.objectContaining({ text: "Text u" }), ...Array.from({ length: 18 }, () => expect.any(Object))] }] } });
   });
 
+  it("runs decodes through the pool at its concurrency, never beyond it", async () => {
+    const sessionFile = await fixture([header, attached("u", null, Array.from({ length: 9 }, (_, index) => image(String(index))))]);
+    let running = 0;
+    let peak = 0;
+    const order: string[] = [];
+    const pool = {
+      concurrency: 3,
+      closed: false,
+      submit: async (bytes: Uint8Array) => {
+        running += 1;
+        peak = Math.max(peak, running);
+        order.push(Buffer.from(bytes).toString());
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        running -= 1;
+        return { data: "preview", mimeType: "image/jpeg", width: 1, height: 1, originalWidth: 1, originalHeight: 1, wasResized: true };
+      },
+      close() { this.closed = true; }
+    };
+    const frames: SavedHistoryFrame[] = [];
+    await streamSavedSession({ ...options, sessionFile }, (frame) => { frames.push(frame); }, { decodePool: pool });
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(3);
+    // Jobs launch newest-first; completion order may interleave.
+    expect(order[0]).toBe("8");
+    expect(pool.closed).toBe(true);
+    const delivered = frames.filter((frame) => frame.type === "history_previews" && !frame.done)
+      .flatMap((frame) => frame.previews);
+    expect(delivered).toHaveLength(9);
+    expect(delivered.every((preview) => preview.thumbnail === "data:image/jpeg;base64,preview")).toBe(true);
+    expect(frames.at(-1)).toEqual({ type: "history_previews", previews: [], done: true });
+  });
+
   it("keeps user/tool image identities and their separate thumbnail limits", async () => {
     const sessionFile = await fixture([header, attached("u", null, [image("attached")]), {
       type: "message", id: "result", parentId: "u", message: { role: "toolResult", toolName: "read", toolCallId: "call", timestamp: 2,

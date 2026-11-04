@@ -303,7 +303,7 @@ export default function App() {
   const [runtimes, setRuntimes] = useState<Record<string, TaskRuntime>>({});
   const [historyReload, setHistoryReload] = useState(0);
   // Development measurements contain only durations/counts; no session text or image data.
-  const historyTiming = useRef<{ taskId: string; historyId: string; started: number; received?: number; committed?: number }>(undefined);
+  const historyTiming = useRef<{ taskId: string; historyId: string; started: number; received?: number; committed?: number; painted?: number; previewsDone?: number; messages?: number; reported?: boolean }>(undefined);
   const historySelection = useRef<{ taskId: string; at: number }>(undefined);
   const [changes, setChanges] = useState<GitChanges>();
   const [changesLoading, setChangesLoading] = useState(false);
@@ -1167,6 +1167,7 @@ export default function App() {
         const timing = historyTiming.current;
         if (import.meta.env.DEV && payload.historyId && timing?.historyId === payload.historyId) {
           timing.received = performance.now();
+          timing.messages = snapshot.messages.length;
           performance.mark("wackcode:history:snapshot");
         }
         // Keep the previous plan/todo objects when they are unchanged: the transcript's message
@@ -1204,6 +1205,15 @@ export default function App() {
           const next = applyHistoryPreviews(previous, payload);
           return next && next !== previous ? { ...current, [taskId]: next } : current;
         });
+        const timing = historyTiming.current;
+        if (import.meta.env.DEV && payload.done && timing?.historyId === payload.historyId) {
+          timing.previewsDone = performance.now();
+          // The post-paint report may already have gone out without this tail figure.
+          if (timing.reported && timing.received !== undefined && timing.committed !== undefined && timing.painted !== undefined) {
+            void api.recordHistoryTiming(timing.received - timing.started, timing.committed - timing.started,
+              timing.painted - timing.started, timing.messages ?? 0, timing.previewsDone - timing.started).catch(() => undefined);
+          }
+        }
       } else if (payload.type === "snapshot_delta") {
         setRuntimes((current) => {
           const runtime = current[taskId];
@@ -1449,9 +1459,12 @@ export default function App() {
     requestAnimationFrame(() => requestAnimationFrame(() => {
       if (historyTiming.current !== timing || selectedTaskRef.current !== timing.taskId) return;
       const painted = performance.now();
+      timing.painted = painted;
+      timing.reported = true;
       performance.mark("wackcode:history:paint");
       void api.recordHistoryTiming(timing.received! - timing.started, timing.committed! - timing.started,
-        painted - timing.started, runtime?.snapshot?.messages.length ?? 0).catch(() => undefined);
+        painted - timing.started, timing.messages ?? runtime?.snapshot?.messages.length ?? 0,
+        timing.previewsDone !== undefined ? timing.previewsDone - timing.started : undefined).catch(() => undefined);
     }));
   }, [selectedTaskId, runtime?.snapshot]);
 

@@ -2,7 +2,7 @@
 //! previews stream afterward. A load ticket owns cancellation and process cleanup, and every
 //! emission is serialized with live-worker readiness and replacement by a newer cold load.
 use crate::{
-    models::{HistoryPreview, TaskRecord},
+    models::{HistoryPreview, ModelRecord, TaskRecord, ToolCatalogEntry},
     worker,
 };
 use nix::{
@@ -162,17 +162,22 @@ impl Drop for LoadTicket {
     }
 }
 
+/// One NDJSON line from the reader. The snapshot arrives as raw JSON: the host forwards
+/// it verbatim to the renderer instead of paying a full Value parse and re-serialize on
+/// multi-megabyte transcripts. Preview batches stay typed; they are small.
 #[derive(Debug, Deserialize)]
-#[serde(tag = "type")]
-enum HistoryFrame {
-    #[serde(rename = "snapshot")]
-    Snapshot { snapshot: Value },
-    #[serde(rename = "history_previews")]
-    Previews {
-        previews: Vec<HistoryPreview>,
-        #[serde(default)]
-        done: bool,
-    },
+#[serde(rename_all = "camelCase")]
+pub struct HistoryFrame {
+    #[serde(rename = "type")]
+    pub kind: String,
+    #[serde(default)]
+    pub snapshot: Option<Box<serde_json::value::RawValue>>,
+    #[serde(default)]
+    pub message_count: Option<u64>,
+    #[serde(default)]
+    pub previews: Vec<HistoryPreview>,
+    #[serde(default)]
+    pub done: bool,
 }
 
 pub struct HistoryReader {
@@ -182,7 +187,7 @@ pub struct HistoryReader {
 }
 
 pub struct InitialHistory {
-    pub snapshot: Value,
+    pub snapshot: Box<serde_json::value::RawValue>,
     pub reader: HistoryReader,
 }
 
@@ -220,6 +225,13 @@ impl HistoryReader {
         .transpose()
     }
 
+    async fn next_of(&mut self, kind: &str) -> Result<Option<HistoryFrame>, String> {
+        match self.next().await? {
+            Some(frame) if frame.kind == kind => Ok(Some(frame)),
+            _ => Ok(None),
+        }
+    }
+
     pub async fn stop(mut self) {
         // Clear the registered PID before reaping so a concurrent cancellation cannot signal
         // a PID after the OS has recycled it. kill_on_drop remains the async-abort fallback.
@@ -232,8 +244,8 @@ impl HistoryReader {
     pub fn stream(mut self, app: AppHandle) {
         tauri::async_runtime::spawn(async move {
             loop {
-                let (previews, done) = match self.next().await {
-                    Ok(Some(HistoryFrame::Previews { previews, done })) => (previews, done),
+                let (previews, done) = match self.next_of("history_previews").await {
+                    Ok(Some(frame)) => (frame.previews, frame.done),
                     // Cancellation is already stale and emission below is ignored. EOF,
                     // malformed output or a stuck image ends the remaining pending previews.
                     _ => (Vec::new(), true),
@@ -260,6 +272,8 @@ pub async fn read(
     app: &AppHandle,
     task: &TaskRecord,
     context_window: Option<u64>,
+    model: Option<&ModelRecord>,
+    tools: &[ToolCatalogEntry],
     load: LoadTicket,
 ) -> Result<Option<InitialHistory>, String> {
     if !load.is_current() {
@@ -316,8 +330,13 @@ pub async fn read(
             }
         });
     }
+    // Host-owned fields travel with the request so the reader can stamp them onto the
+    // snapshot itself; Rust then forwards the snapshot bytes untouched.
     let input = json!({ "taskId": task.id, "sessionFile": task.session_file, "mode": task.mode,
-        "thinkingLevel": task.thinking_level, "contextWindow": context_window, "debugTimings": cfg!(debug_assertions) });
+        "thinkingLevel": task.thinking_level, "contextWindow": context_window, "debugTimings": cfg!(debug_assertions),
+        "model": { "provider": task.provider_id, "id": task.model_id, "name": model.map(|model| &model.name) },
+        "availableThinkingLevels": model.map(|model| &model.thinking_levels).cloned().unwrap_or_default(),
+        "modelMissing": model.is_none(), "tools": tools });
     let mut reader = HistoryReader {
         load,
         child,
@@ -328,16 +347,16 @@ pub async fn read(
         return Err("Could not send this chat to the saved-history reader.".into());
     }
     drop(stdin);
-    match reader.next().await {
-        Ok(Some(HistoryFrame::Snapshot { snapshot })) if snapshot.is_object() => {
+    match reader.next_of("snapshot").await {
+        Ok(Some(frame)) if frame.snapshot.is_some() => {
             if cfg!(debug_assertions) {
                 eprintln!(
                     "history timing: {}",
                     json!({ "phase": "initial", "durationMs": started.elapsed().as_secs_f64() * 1000.0,
-                "messages": snapshot.get("messages").and_then(Value::as_array).map_or(0, Vec::len) })
+                "messages": frame.message_count.unwrap_or(0) })
                 );
             }
-            Ok(Some(InitialHistory { snapshot, reader }))
+            Ok(Some(InitialHistory { snapshot: frame.snapshot.unwrap(), reader }))
         }
         result => {
             let cancelled = !reader.load.is_current();
@@ -356,7 +375,7 @@ fn timing_record(value: &Value) -> Option<Value> {
     let phase = value.get("phase")?.as_str()?;
     if !matches!(
         phase,
-        "projection" | "previews" | "initial" | "snapshot" | "prepare"
+        "projection" | "previews" | "initial" | "snapshot" | "prepare" | "read" | "normalize" | "stats"
     ) {
         return None;
     }
@@ -382,15 +401,18 @@ pub fn developer_record_history_timing(
     commit_ms: f64,
     paint_ms: f64,
     message_count: usize,
+    previews_done_ms: Option<f64>,
 ) {
     if [snapshot_ms, commit_ms, paint_ms]
         .iter()
         .all(|value| value.is_finite() && *value >= 0.0)
+        && previews_done_ms.is_none_or(|value| value.is_finite() && value >= 0.0)
     {
         eprintln!(
             "history timing: {}",
             json!({ "phase": "display", "snapshotMs": snapshot_ms,
-            "commitMs": commit_ms, "paintMs": paint_ms, "messages": message_count })
+            "commitMs": commit_ms, "paintMs": paint_ms, "messages": message_count,
+            "previewsDoneMs": previews_done_ms })
         );
     }
 }
@@ -440,16 +462,17 @@ mod tests {
             let state = HistoryState::default();
             let (mut reader, mut stdin, _) = fixture_reader(&state, "first").await;
             stdin
-                .write_all(b"{\"type\":\"snapshot\",\"snapshot\":{\"messages\":[]}}\n")
+                .write_all(b"{\"type\":\"snapshot\",\"snapshot\":{\"messages\":[]},\"messageCount\":0}\n")
                 .await
                 .unwrap();
-            assert!(matches!(
-                tokio::time::timeout(Duration::from_secs(1), reader.next())
-                    .await
-                    .unwrap()
-                    .unwrap(),
-                Some(HistoryFrame::Snapshot { .. })
-            ));
+            let frame = tokio::time::timeout(Duration::from_secs(1), reader.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(frame.kind, "snapshot");
+            assert_eq!(frame.message_count, Some(0));
+            assert!(frame.snapshot.is_some());
             assert!(reader.child.try_wait().unwrap().is_none());
             state.cancel("chat", None);
             assert!(reader.next().await.unwrap().is_none());

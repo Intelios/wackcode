@@ -4,10 +4,12 @@
  * projection; context statistics still use Pi's pinned compaction-aware model projection.
  * Migrations happen in memory only; opening history must never rewrite the session file.
  */
-import { readFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { createInterface } from "node:readline";
 import type { FileEntry, SessionEntry, SessionProjection } from "@earendil-works/pi-coding-agent";
-import type { HistoryPreview, NormalizedBlock, ReasoningEffort, SavedHistoryFrame, SessionSnapshot, TaskMode } from "./protocol.js";
+import type { HistoryPreview, NormalizedBlock, ReasoningEffort, SavedHistoryFrame, SessionSnapshot, TaskMode, ThinkingLevel, ToolCatalogEntry } from "./protocol.js";
 import { normalizeMessage, RESULT_THUMBNAIL_OPTIONS, THUMBNAIL_OPTIONS } from "./message-normalization.js";
+import { createPreviewPool } from "./preview-decode.js";
 import { transcriptEntries, transcriptMessages } from "./transcript.js";
 import { buildTreeIndex, modelSwitchesOnPath, undoTarget, type EntryLike } from "./tree.js";
 import { resolveRunTimings } from "./run-timing.js";
@@ -20,8 +22,8 @@ import { backgroundCalls, interruptedDetails, projectBackgroundCards } from "./b
 type Pi = typeof import("@earendil-works/pi-coding-agent");
 // Import the data-only module, bypassing Pi's CLI/SDK entry point. These paths are part of
 // the pinned Pi installation shipped in the app, and exercised by the integration suite.
-const piBase = () => import.meta.resolve("@earendil-works/pi-coding-agent");
-const sessionHelpers = () => import(new URL("core/session-manager.js", piBase()).href) as Promise<Pick<Pi, "parseSessionEntries" | "migrateSessionEntries" | "buildSessionProjection">>;
+export const piBase = () => import.meta.resolve("@earendil-works/pi-coding-agent");
+const sessionHelpers = () => import(new URL("core/session-manager.js", piBase()).href) as Promise<Pick<Pi, "migrateSessionEntries" | "buildSessionProjection">>;
 
 export interface SavedSessionOptions {
   sessionFile?: string | null;
@@ -29,6 +31,11 @@ export interface SavedSessionOptions {
   mode: TaskMode;
   thinkingLevel: ReasoningEffort;
   contextWindow?: number;
+  /** Host-owned metadata stamped onto the snapshot so Rust forwards its bytes untouched. */
+  model?: { provider: string; id: string; name?: string | null };
+  availableThinkingLevels?: ThinkingLevel[];
+  modelMissing?: boolean;
+  tools?: ToolCatalogEntry[];
   /** Host-owned development flag. Logs contain durations/counts only, never session contents. */
   debugTimings?: boolean;
 }
@@ -42,15 +49,31 @@ interface PreviewJob {
 /** Test injection keeps the ordering contract verifiable without depending on image speed. */
 interface SavedSessionDependencies {
   resizeImage?: Pi["resizeImage"];
+  /** Stands in for the production pool so tests can observe bounded concurrency. */
+  decodePool?: { submit: Pi["resizeImage"]; concurrency: number; close(): void };
 }
 
 async function prepareSavedSession(options: SavedSessionOptions): Promise<{ snapshot: SessionSnapshot; jobs: PreviewJob[] }> {
   const started = performance.now();
+  let phaseStart = started;
+  const mark = (phase: string, extra: Record<string, number> = {}) => {
+    if (!options.debugTimings) return;
+    const now = performance.now();
+    process.stderr.write(`history timing: ${JSON.stringify({ phase, durationMs: Math.round(now - phaseStart), ...extra })}\n`);
+    phaseStart = now;
+  };
   let fileEntries: FileEntry[] = [];
   if (options.sessionFile) {
-    const text = await readFile(options.sessionFile, "utf8");
+    // Stream the file a line at a time: session files run past 100 MB and holding the
+    // whole text beside the parsed entries doubles peak memory for no benefit.
+    const lines = createInterface({ input: createReadStream(options.sessionFile, { encoding: "utf8" }), crlfDelay: Infinity });
+    for await (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        fileEntries.push(JSON.parse(line) as FileEntry);
+      } catch { /* Malformed lines are skipped, same as Pi's parser. */ }
+    }
     const pi = await sessionHelpers();
-    fileEntries = pi.parseSessionEntries(text);
     if (!fileEntries.some((entry) => entry?.type === "session")) throw new Error("This chat's saved session has no session header.");
     pi.migrateSessionEntries(fileEntries);
   }
@@ -70,6 +93,7 @@ async function prepareSavedSession(options: SavedSessionOptions): Promise<{ snap
   path.reverse();
   const context = entries.length ? (await sessionHelpers()).buildSessionProjection(entries, leaf?.id ?? null) : undefined;
 
+  mark("read", { messages: fileEntries.length });
   // Register image identities without importing a decoder or touching pixels. The first
   // snapshot must be usable before ANY thumbnail work starts, including a decoder import.
   const previews = new WeakMap<object, NormalizedBlock>();
@@ -104,6 +128,7 @@ async function prepareSavedSession(options: SavedSessionOptions): Promise<{ snap
   const messages = projectBackgroundCards(baseMessages, cards, new WeakMap());
   const positions = new Map(messages.flatMap((message, position) => message.entryId ? [[message.entryId, position] as const] : []));
   const users = messages.filter((message) => message.role === "user" && message.entryId);
+  mark("normalize", { messages: messages.length, images: jobs.length });
   const plan = restorePlanState(path);
   const mode = path.some((entry) => entry.type === "custom" && entry.customType === PLAN_STATE_ENTRY_TYPE) ? plan.active ?? "build" : options.mode;
   const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
@@ -124,12 +149,15 @@ async function prepareSavedSession(options: SavedSessionOptions): Promise<{ snap
     modelSwitches: modelSwitchesOnPath(path as EntryLike[], positions, messages.length),
     runTimings: resolveRunTimings(path, users.map((message) => message.entryId!), users.map((message) => message.id)),
     tree: { leafId: leaf?.id ?? null, undo: undoTarget(leaf as EntryLike | undefined) },
-    stats: { tokens, cost, ...(context && options.contextWindow ? await contextStats(context, path, options.contextWindow, tokens) : {}) }, thinkingLevel: options.thinkingLevel, availableThinkingLevels: [],
-    tools: [], activeTools: [],
+    stats: { tokens, cost, ...(context && options.contextWindow ? await contextStats(context, path, options.contextWindow, tokens) : {}) }, thinkingLevel: options.thinkingLevel,
+    availableThinkingLevels: options.availableThinkingLevels ?? [],
+    ...(options.model ? { model: { ...options.model, name: options.model.name ?? undefined } } : {}),
+    ...(options.modelMissing ? { modelMissing: true as const } : {}),
+    tools: options.tools ?? [], activeTools: [],
     planState: { mode, phase: plan.plan !== undefined ? "ready" : "planning", ...(plan.plan !== undefined ? { plan: plan.plan } : {}) },
     todoState: { tasks: replayFromBranch(path).tasks }, goalState: restoreGoalState(path)
   };
-  if (options.debugTimings) process.stderr.write(`history timing: ${JSON.stringify({ phase: "prepare", durationMs: Math.round(performance.now() - started), messages: messages.length, images: jobs.length })}\n`);
+  mark("stats", { messages: messages.length, images: jobs.length });
   return { snapshot, jobs };
 }
 
@@ -140,9 +168,14 @@ async function prepareSavedSession(options: SavedSessionOptions): Promise<{ snap
  */
 export async function streamSavedSession(options: SavedSessionOptions, emit: (frame: SavedHistoryFrame) => void | Promise<void>, dependencies: SavedSessionDependencies = {}): Promise<void> {
   const { snapshot, jobs } = await prepareSavedSession(options);
-  await emit({ type: "snapshot", snapshot });
+  await emit({ type: "snapshot", snapshot, messageCount: snapshot.messages.length });
   const started = performance.now();
-  let resize = dependencies.resizeImage;
+  // Tests inject a decoder; production goes through the persistent pool — the serial
+  // one-worker-per-image path it replaced cost ~140 ms per saved screenshot.
+  const pool = dependencies.resizeImage ? undefined : dependencies.decodePool ?? createPreviewPool(piBase());
+  const decode = dependencies.resizeImage
+    ?? ((bytes: Uint8Array, mimeType: string, opts: typeof THUMBNAIL_OPTIONS) => pool!.submit(bytes, mimeType, opts));
+  const maxInflight = () => Math.max(1, pool?.concurrency ?? 1);
   let pending: HistoryPreview[] = [];
   let timer: ReturnType<typeof setTimeout> | undefined;
   let writes = Promise.resolve();
@@ -156,25 +189,44 @@ export async function streamSavedSession(options: SavedSessionOptions, emit: (fr
     // surface the failure at the next await rather than leaking an unhandled rejection.
     void writes.catch(() => undefined);
   };
-  try {
-    for (let index = jobs.length - 1; index >= 0; index -= 1) {
-      // Do not build an unbounded backlog if the host stops draining its pipe.
-      await writes;
-      const job = jobs[index];
+  const inflight = new Set<Promise<void>>();
+  const launch = (job: PreviewJob) => {
+    const run = (async () => {
       const preview: HistoryPreview = { imageId: job.preview.imageId! };
       try {
-        if (typeof job.block.data === "string" && job.block.data) {
-          resize ??= (await import(new URL("utils/image-resize.js", piBase()).href)).resizeImage as Pi["resizeImage"];
-          const resized = await resize(Buffer.from(job.block.data, "base64"), job.preview.mimeType!, job.options);
-          if (resized) preview.thumbnail = `data:${resized.mimeType};base64,${resized.data}`;
-        }
+        const resized = await decode(Buffer.from(job.block.data as string, "base64"), job.preview.mimeType!, job.options);
+        if (resized) preview.thumbnail = `data:${resized.mimeType};base64,${resized.data}`;
+        else preview.failed = true;
       } catch { /* An unreadable image cannot hide the rest of the transcript. */ }
       if (!preview.thumbnail) preview.failed = true;
       pending.push(preview);
       if (pending.length >= 8) flush();
       else timer ??= setTimeout(flush, 200);
+    })();
+    inflight.add(run);
+    void run.then(() => inflight.delete(run));
+  };
+  try {
+    for (let index = jobs.length - 1; index >= 0; index -= 1) {
+      // Do not build an unbounded backlog if the host stops draining its pipe.
+      await writes;
+      if (inflight.size >= maxInflight()) await Promise.race(inflight);
+      const job = jobs[index];
+      if (typeof job.block.data !== "string" || !job.block.data) {
+        pending.push({ imageId: job.preview.imageId!, failed: true });
+        if (pending.length >= 8) flush();
+        else timer ??= setTimeout(flush, 200);
+        continue;
+      }
+      launch(job);
+      // The job's base64 string is the only reference left once decode has copied it;
+      // drop it so hundreds of megabytes of image text do not sit live for the whole stream.
+      delete job.block.data;
     }
+    await Promise.all(inflight);
   } finally {
+    // Decoders that ran the WASM codec keep their parent's loop alive even unref'd.
+    pool?.close();
     flush();
     await writes;
   }

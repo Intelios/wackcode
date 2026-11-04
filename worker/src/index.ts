@@ -1,4 +1,6 @@
 import { transcriptEntries, transcriptMessages, type CachedMessage } from "./transcript.js";
+import { piBase as savedPiBase } from "./saved-session.js";
+import { createPreviewPool, type PreviewPool } from "./preview-decode.js";
 import { spawnSync } from "node:child_process";
 import { setUsagePublisher, trackSession, withUsage } from "./usage.js";
 import { existsSync } from "node:fs";
@@ -656,8 +658,10 @@ interface ImagePreview {
 // reads (the array is copied, its entries are not), so each image is previewed once per worker.
 const imagePreviews = new WeakMap<object, ImagePreview>();
 let nextImageId = 0;
-// One preview at a time: each resize spawns a thread, and a restored session may hold dozens.
+// One preview at a time keeps decoder work bounded when a restored session holds dozens.
+// The persistent pool's workers replace spawning a fresh thread per image.
 let previewQueue = Promise.resolve();
+let previewPool: PreviewPool | undefined;
 
 function imageBlock(block: Record<string, unknown>, options = THUMBNAIL_OPTIONS): NormalizedBlock {
   const mimeType = typeof block.mimeType === "string" ? block.mimeType : "image/png";
@@ -671,9 +675,10 @@ function imageBlock(block: Record<string, unknown>, options = THUMBNAIL_OPTIONS)
       previewQueue = previewQueue
         .then(async () => {
           if (!piModule) return;
+          previewPool ??= createPreviewPool(savedPiBase());
           // Tools return whatever they like (an MCP server's SVG, a truncated file), so a
           // preview that can't be made is an outcome too, not something to wait on forever.
-          const resized = await piModule.resizeImage(Buffer.from(data, "base64"), mimeType, options).catch(() => undefined);
+          const resized = await previewPool.submit(Buffer.from(data, "base64"), mimeType, options).catch(() => null);
           if (resized) created.url = `data:${resized.mimeType};base64,${resized.data}`;
           else created.failed = true;
           // The owning message's cached normalization still shows the preview as pending; drop

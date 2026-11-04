@@ -212,9 +212,12 @@ Opening an existing task deduplicates its tab. Closing
 never stops a worker, terminal, browser or project command, and tabs do not change reaping.
 
 Only the selected transcript and panel mount. `transcript-view.ts` stores follow-latest,
-anchor keys/viewport offsets, a clamped scroll fallback and disclosure sets per task.
-`useFollowScroll` waits for cold-history rows before restoring; when an anchor disappears
-it uses the nearest surviving saved row. Settings remounts restore the same reading state.
+anchor keys/viewport offsets, a clamped scroll fallback, disclosure sets and the reveal
+depth per task. Long transcripts mount a tail window (~8 of ~40+ turns); scrolling near the
+top reveals older chunks with the reading anchor held, and rail ticks for unmounted turns
+seek by revealing them. `useFollowScroll` waits for cold-history rows before restoring;
+when an anchor disappears it uses the nearest surviving saved row. Settings remounts
+restore the same reading state.
 Browser/Terminal/Run/sub-agent selection, panel width and the Changes entry belong to the
 tab. The panel keys by tab to retire an outgoing native browser before another mounts;
 sub-agent watches still use the single serialized watch queue.
@@ -479,7 +482,7 @@ stored evidence. An attached chip is inspectable/removable; drawing layers end a
 
 ## Scroll rail
 
-`.conversation-scroll`'s native scrollbar stays hidden; `ScrollRail` replaces it with a turn timeline. Two things are load-bearing: `.conversation-scroll`'s `position: relative`, and the `data-turn` markers on `.msg.user`. Tick offsets come from `offsetTop`, which must resolve in scroll-content coordinates.
+`.conversation-scroll`'s native scrollbar stays hidden; `ScrollRail` replaces it with a turn timeline. Two things are load-bearing: `.conversation-scroll`'s `position: relative`, and the `data-turn` markers on `.msg.user`. Tick offsets come from `offsetTop`, which must resolve in scroll-content coordinates. Ticks for turns the tail window has not mounted yet render dimmed at an estimated position and reveal their turn on click.
 
 ## Window
 

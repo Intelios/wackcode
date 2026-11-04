@@ -1772,6 +1772,8 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
   background: var(--text-faint); transition: background .15s var(--ease), width .15s var(--ease);
 }
 .scroll-rail-tick.current::before, .scroll-rail-tick:hover::before { width: 9px; background: var(--text-dim); }
+/* A turn the transcript has not mounted yet: same tick, dimmed, at an estimated spot. */
+.scroll-rail-tick.unmounted::before { opacity: .45; }
 .scroll-rail:hover .scroll-rail-tick::before { width: 9px; }
 .scroll-rail-tick.live::before {
   width: 9px; background: var(--wc-accent-fill);

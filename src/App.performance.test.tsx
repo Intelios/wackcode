@@ -138,6 +138,41 @@ benchmark("App hot-path benchmark", () => {
     samples.sort((a, b) => a - b);
     console.log(JSON.stringify({ scenario: "partial", chats, count, chars, median: samples[Math.floor(samples.length / 2)], mean: samples.reduce((a, b) => a + b, 0) / samples.length, renders: Object.fromEntries(Object.keys(renders).map((key) => [key, renders[key] - (before[key] ?? 0)])) }));
   });
+  // Cold history: one snapshot lands the whole saved transcript in a single commit.
+  // Fifty user turns × (thinking + 4 tool rounds + answer) mirrors a large saved session.
+  it.each([[true, 551], [false, 551]])("cold mount: 551 messages, collapseCompletedWork=%s", async (collapse, expected) => {
+    const messages: NormalizedMessage[] = [];
+    for (let turn = 0; turn < 50; turn++) {
+      messages.push({ id: `u${turn}`, entryId: `u${turn}`, role: "user", timestamp: 1_000 + turn * 100_000,
+        blocks: [{ type: "text", text: `Saved request ${turn}: please inspect and continue.` }] });
+      messages.push({ id: `w${turn}`, entryId: `w${turn}`, role: "assistant", timestamp: 1_500 + turn * 100_000,
+        blocks: [{ type: "thinking", text: "Reasoning about the saved request. ".repeat(8), durationMs: 900 }] });
+      for (let step = 0; step < 4; step++) {
+        messages.push({ id: `c${turn}-${step}`, entryId: `c${turn}-${step}`, role: "assistant", timestamp: 2_000 + turn * 100_000 + step,
+          stopReason: "toolUse", blocks: [{ type: "tool-call", toolName: "read", toolCallId: `call-${turn}-${step}`, arguments: { path: `src/file-${step}.ts` } }] });
+        messages.push({ id: `r${turn}-${step}`, entryId: `r${turn}-${step}`, role: "tool", timestamp: 2_500 + turn * 100_000 + step,
+          blocks: [{ type: "tool-result", toolName: "read", toolCallId: `call-${turn}-${step}`, text: "Result output line.\n".repeat(40) }] });
+      }
+      messages.push({ id: `a${turn}`, entryId: `a${turn}`, role: "assistant", timestamp: 9_000 + turn * 100_000,
+        stopReason: "stop", turn: { userEntryId: `u${turn}`, endEntryId: `a${turn}` },
+        blocks: [{ type: "text", text: `Completed turn ${turn}.\n\n` + "Explanation with **markup** and `code`.\n\n".repeat(8) }] });
+      if (turn === 24) messages.push({ id: "compact", entryId: "compact", role: "system", blocks: [],
+        compaction: { summary: "## Next steps\nContinue.", tokensBefore: 90_000, estimatedTokensAfter: 12_000 } });
+    }
+    expect(messages.length).toBe(expected);
+    const saved = { ...snapshot(messages), runTimings: messages.filter((m) => m.role === "user").map((m) => ({ userMessageId: m.id, durationMs: 2_500 })) };
+    const samples: number[] = [];
+    for (let i = 0; i < 7; i++) {
+      bootstrap(false, false, { appearance: { ...DEFAULT_APPEARANCE, chatTabs: false, collapseCompletedWork: collapse } });
+      fireEvent.click(await screen.findByRole("button", { name: "Chat a" }));
+      const start = performance.now();
+      await worker({ type: "snapshot", taskId: "a", historyId: `h${i}`, snapshot: saved });
+      samples.push(performance.now() - start);
+      cleanup();
+    }
+    samples.sort((a, b) => a - b);
+    console.log(JSON.stringify({ scenario: "cold-mount", collapseCompletedWork: collapse, messages: messages.length, median: samples[Math.floor(samples.length / 2)], mean: samples.reduce((a, b) => a + b, 0) / samples.length }));
+  });
   it.each([[1, 0], [40, 240]])("typing: %i chats, %i messages", async (chats, count) => {
     bootstrap(false, false, { tasks: Array.from({ length: chats }, (_, i) => task(i ? `chat-${i}` : "a")) });
     fireEvent.click(await screen.findByRole("button", { name: "Chat a" }));

@@ -267,8 +267,8 @@ export const api = {
   }) => invoke<TaskRecord>("configure_task", { input }),
   openTask: (taskId: string, historyId?: string) => invoke<void>("open_task", { taskId, historyId }),
   cancelHistory: (taskId: string, historyId: string) => invoke<void>("cancel_history", { taskId, historyId }),
-  recordHistoryTiming: (snapshotMs: number, commitMs: number, paintMs: number, messageCount: number) =>
-    invoke<void>("developer_record_history_timing", { snapshotMs, commitMs, paintMs, messageCount }),
+  recordHistoryTiming: (snapshotMs: number, commitMs: number, paintMs: number, messageCount: number, previewsDoneMs?: number) =>
+    invoke<void>("developer_record_history_timing", { snapshotMs, commitMs, paintMs, messageCount, previewsDoneMs }),
   /** Native accelerators also work while the per-chat WKWebView has focus. */
   setChatTabMenu: (input: { tabsEnabled: boolean; enabled: boolean; tabCount: number; canReopen: boolean }) =>
     invoke<void>("set_chat_tab_menu", { input }),

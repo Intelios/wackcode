@@ -6,7 +6,7 @@
  * node scripts/benchmark-history.mjs --runs 5 --keep-fixture
  * node scripts/benchmark-history.mjs --reader /tmp/old/dist/session-reader.js --fixture /tmp/session.jsonl
  */
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -101,12 +101,38 @@ async function createFixture() {
   return { messages: position, images: 100, imageBytes: image.length };
 }
 
+// The reader's own phase records arrive on stderr as "history timing: {…}" lines
+// (only with debugTimings). Collect them verbatim; they hold durations and counts, never content.
+const timingOf = (line) => {
+  if (!line.startsWith("history timing: ")) return undefined;
+  try { return JSON.parse(line.slice(16)); } catch { return undefined; }
+};
+
+// Peak RSS of the reader child, sampled with `ps` every ~60 ms while it runs.
+function watchRss(pid) {
+  let peak = 0, stopped = false;
+  const tick = () => {
+    if (stopped) return;
+    execFile("ps", ["-o", "rss=", "-p", String(pid)], (error, stdout) => {
+      const rss = Number(stdout.trim());
+      if (!error && Number.isFinite(rss)) peak = Math.max(peak, rss);
+    });
+    timer = setTimeout(tick, 60);
+    timer.unref?.();
+  };
+  let timer = setTimeout(tick, 60);
+  timer.unref?.();
+  return { stop: () => { stopped = true; clearTimeout(timer); }, peak: () => peak };
+}
+
 async function run() {
   const started = performance.now();
   const child = spawn(process.execPath, [reader], { env: {}, stdio: ["pipe", "pipe", "pipe"] });
   activeReader = child;
+  const rss = watchRss(child.pid);
   const deadline = setTimeout(() => child.kill("SIGKILL"), 120_000);
   let pending = "", firstSnapshotMs, outputBytes = 0, frames = 0, previewCount = 0, error = "";
+  const timings = [];
   const accept = (line) => {
     if (!line.trim()) return;
     const frame = JSON.parse(line);
@@ -121,19 +147,26 @@ async function run() {
     let newline;
     while ((newline = pending.indexOf("\n")) !== -1) { accept(pending.slice(0, newline)); pending = pending.slice(newline + 1); }
   });
-  child.stderr.on("data", (chunk) => { error = (error + chunk).slice(-2000); });
-  child.stdin.end(JSON.stringify({ sessionFile, taskId: "history-benchmark", mode: "build", thinkingLevel: "off", contextWindow: 200_000 }));
+  child.stderr.on("data", (chunk) => {
+    error = (error + chunk).slice(-2000);
+    for (const line of String(chunk).split("\n")) {
+      const timing = timingOf(line);
+      if (timing) timings.push(timing);
+    }
+  });
+  child.stdin.end(JSON.stringify({ sessionFile, taskId: "history-benchmark", mode: "build", thinkingLevel: "off", contextWindow: 200_000, debugTimings: true }));
   let code, signal;
   try {
     [code, signal] = await once(child, "close");
   } finally {
     clearTimeout(deadline);
+    rss.stop();
     activeReader = undefined;
   }
   if (pending.trim()) accept(pending);
   if (code !== 0) throw new Error(`Reader exited ${code ?? signal}: ${error}`);
   if (firstSnapshotMs === undefined) throw new Error("Reader emitted no snapshot.");
-  return { firstSnapshotMs: Math.round(firstSnapshotMs), completeMs: Math.round(performance.now() - started), outputBytes, frames, previewCount };
+  return { firstSnapshotMs: Math.round(firstSnapshotMs), completeMs: Math.round(performance.now() - started), peakRssKb: rss.peak(), outputBytes, frames, previewCount, timings };
 }
 
 try {
@@ -145,7 +178,7 @@ try {
     process.stderr.write(`Run ${i + 1}: first snapshot ${measurement.firstSnapshotMs} ms; complete ${measurement.completeMs} ms\n`);
   }
   const median = (key) => [...measurements].sort((a, b) => a[key] - b[key])[Math.floor(measurements.length / 2)][key];
-  const report = { reader, sessionFile, sessionBytes: (await stat(sessionFile)).size, ...fixture, runs: measurements, medianFirstSnapshotMs: median("firstSnapshotMs"), medianCompleteMs: median("completeMs") };
+  const report = { reader, sessionFile, sessionBytes: (await stat(sessionFile)).size, ...fixture, runs: measurements, medianFirstSnapshotMs: median("firstSnapshotMs"), medianCompleteMs: median("completeMs"), medianPeakRssKb: median("peakRssKb") };
   if (value("--report")) await writeFile(resolve(value("--report")), JSON.stringify(report, null, 2) + "\n");
   process.stdout.write(JSON.stringify(report, null, 2) + "\n");
 } finally {

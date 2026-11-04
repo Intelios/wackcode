@@ -164,6 +164,17 @@ const EMPTY_LINKS: ReadonlyMap<string, SuggestionLink> = new Map();
 const EMPTY_SUGGESTIONS: ReadonlySet<string> = new Set();
 const NO_CANVASES: CanvasScope = { boards: new Map() };
 
+/**
+ * The tail-windowed transcript: opening a saved chat mounts only the newest few turns
+ * because each one costs React work plus markdown/layout. Scrolling up (or a rail tick
+ * aimed before the window) reveals the previous chunk with the reading anchor held.
+ * Counts are in user turns, not messages — tool calls live inside their turn.
+ */
+const TURN_WINDOW_THRESHOLD = 40;
+const TURN_WINDOW = 8;
+/** Wheel/scroll distance from the top that starts revealing older turns. */
+const REVEAL_EDGE_PX = 600;
+
 type LocalAction = MessageAction | { type: "start-edit"; id: string } | { type: "cancel-edit" };
 
 function StreamingText({ text }: { text: string }) {
@@ -717,7 +728,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
   const loadToolImage = useContext(ToolImageSource);
   const imageScope = useReplyImageScope(messages, loadImage, loadToolImage, Boolean(taskId));
   const scroll = useFollowScroll(viewState, historyReady);
-  const { ref, onScroll, onWheel, detached, pauseFollowing, jumpToLatest } = scroll;
+  const { ref, onScroll, onWheel, detached, pauseFollowing, jumpToLatest, keepAnchor } = scroll;
   const [expandedWork, setExpandedWork] = useState(() => viewState?.work ?? new Set<string>());
   const [expandedCompactions, setExpandedCompactions] = useState(() => viewState?.compactions ?? new Set<string>());
   const [editingId, setEditingId] = useState<string>();
@@ -862,6 +873,83 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
     running, activeRun, partial, status, settledUserIds: new Set(timingsByMessage.keys())
   }), [messages, layout, results, callIds, switchesByPosition, running, activeRun, partial, status, timingsByMessage]);
 
+  // Tail window: turns before `revealed` from the end never mount. Ordered user indices
+  // match the rail's turn list, so a rail ordinal and a map position agree.
+  const startKeys = useMemo(() => [...workTurns.keys()], [workTurns]);
+  const windowed = startKeys.length > TURN_WINDOW_THRESHOLD;
+  const initialReveal = () => {
+    if (!windowed) return startKeys.length;
+    const position = viewState?.position;
+    let needed = Math.min(TURN_WINDOW, startKeys.length);
+    if (position && !position.following && position.anchors.length) {
+      // A detached reading position must land on a mounted row: reveal through the deepest
+      // turn a saved anchor can belong to, or everything when it is unrecognizable.
+      const indexById = new Map(messages.map((message, index) => [message.id, index]));
+      const switchIndex = new Map(modelSwitches.map((entry) => [entry.id, entry.at]));
+      let deepest: number | undefined;
+      for (const anchor of position.anchors) {
+        let messageIndex: number | undefined;
+        if (anchor.key.startsWith("message:")) {
+          messageIndex = indexById.get(anchor.key.slice(8).split(":")[0]);
+        } else if (anchor.key.startsWith("work:")) {
+          const at = indexById.get(anchor.key.slice(5));
+          if (at !== undefined && startKeys.includes(at)) messageIndex = at;
+        } else if (anchor.key.startsWith("switch:")) {
+          messageIndex = switchIndex.get(anchor.key.slice(7));
+        }
+        if (messageIndex === undefined) return startKeys.length;
+        let ordinal = startKeys.findIndex((start) => start > messageIndex!) - 1;
+        if (messageIndex >= (startKeys.at(-1) ?? -1)) ordinal = startKeys.length - 1;
+        deepest = Math.max(deepest ?? -1, Math.max(0, ordinal));
+      }
+      needed = deepest === undefined ? startKeys.length : Math.max(needed, startKeys.length - deepest);
+    }
+    // A remembered depth wins over re-hiding turns the user already revealed.
+    return Math.min(startKeys.length, Math.max(needed, viewState?.revealed ?? 0));
+  };
+  const [revealed, setRevealed] = useState(initialReveal);
+  const pendingSeek = useRef<string | undefined>(undefined);
+  useLayoutEffect(() => {
+    if (viewState) viewState.revealed = revealed;
+  }, [viewState, revealed]);
+  useLayoutEffect(() => {
+    setRevealed(initialReveal);
+    pendingSeek.current = undefined;
+    // The window is per chat; message churn (preview batches, deltas) must not reset it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopeKey]);
+  const hiddenCount = windowed ? Math.max(0, startKeys.length - revealed) : 0;
+  const hiddenBefore = hiddenCount > 0 ? startKeys[hiddenCount - 1] : -1;
+
+  // Reveal the chunk above the window with the reading row held at its viewport offset.
+  const maybeReveal = useCallback(() => {
+    if (hiddenCount <= 0) return;
+    const el = ref.current;
+    if (!el || el.scrollTop > REVEAL_EDGE_PX) return;
+    const reading = [...el.querySelectorAll<HTMLElement>("[data-transcript-anchor]")]
+      .find((node) => node.getBoundingClientRect().bottom > el.getBoundingClientRect().top);
+    if (reading) keepAnchor(reading, reading.getBoundingClientRect().top - el.getBoundingClientRect().top);
+    pauseFollowing();
+    setRevealed((count) => Math.min(startKeys.length, count + TURN_WINDOW));
+  }, [hiddenCount, startKeys.length, keepAnchor, pauseFollowing, ref]);
+
+  const seekTurn = useCallback((ordinal: number) => {
+    if (ordinal < hiddenCount) {
+      pendingSeek.current = turns[ordinal]?.id;
+      setRevealed((count) => Math.min(startKeys.length, Math.max(count, startKeys.length - ordinal)));
+    }
+  }, [hiddenCount, startKeys.length, turns]);
+  useLayoutEffect(() => {
+    const id = pendingSeek.current;
+    const el = ref.current;
+    if (!id || !el) return;
+    const node = el.querySelector<HTMLElement>(`[data-turn="${id}"]`);
+    if (node) {
+      pendingSeek.current = undefined;
+      el.scrollTop = Math.max(0, node.offsetTop - 20);
+    }
+  }, [revealed, ref]);
+
   const renderCompaction = (message: NormalizedMessage) => {
     const key = JSON.stringify([scopeKey, message.id]);
     const row = <CompactionRow message={message} open={expandedCompactions.has(key)} onToggle={() => {
@@ -930,7 +1018,8 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
     <div className="transcript-zone">
       {/* `layoutScroll`: chips flying into an Explored head are measured in page space, so the
           scroller's offset must be part of the measurement or follow-scrolling skews the flight. */}
-      <motion.div data-dynamic-space className="conversation-scroll" ref={ref} onScroll={onScroll} onWheel={onWheel} layoutScroll>
+      <motion.div data-dynamic-space className="conversation-scroll" ref={ref}
+        onScroll={() => { onScroll(); maybeReveal(); }} onWheel={(event) => { onWheel(event); if (event.deltaY < 0) maybeReveal(); }} layoutScroll>
         <ThinkingExpansion.Provider value={expandedThinking}>
           <ExploreExpansion.Provider value={expandedGroups}>
           <ExploreLaneWait.Provider value={laneWait}>
@@ -948,6 +1037,9 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
                     {message.role === "tool" ? renderOrphans(message) : renderMessage(message)}
                   </Fragment>
                 ) : null;
+                // Turns before the reveal window mount no rows; a keyed Fragment keeps the
+                // list stable while scrolling unveils them.
+                if (messageIndex <= hiddenBefore) return <Fragment key={message.versions?.group ?? message.id} />;
                 // The logical version key preserves focus on the user's version switcher.
                 // The disclosure preference uses the actual entry/outcome instead.
                 const key = message.versions?.group ?? message.id;
@@ -1001,7 +1093,7 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
           </ExploreExpansion.Provider>
         </ThinkingExpansion.Provider>
       </motion.div>
-      <ScrollRail target={ref} turns={turns} liveTurnId={liveTurnId} detached={detached} onNavigate={pauseFollowing} onJumpToLatest={jumpToLatest} />
+      <ScrollRail target={ref} turns={turns} liveTurnId={liveTurnId} detached={detached} onNavigate={pauseFollowing} onJumpToLatest={jumpToLatest} hiddenTurns={hiddenCount} onSeekTurn={seekTurn} />
     </div>
   );
 }

@@ -1299,3 +1299,50 @@ describe("Transcript suggested tasks", () => {
     expect(screen.queryByText(/suggested-task-v1/)).toBeNull();
   });
 });
+
+describe("Transcript tail window", () => {
+  const longHistory = (turns = 45): NormalizedMessage[] => Array.from({ length: turns }, (_, index) => ([
+    { id: `u${index}`, entryId: `u${index}`, role: "user" as const, timestamp: index * 100, blocks: [{ type: "text" as const, text: `Request ${index}` }] },
+    { id: `a${index}`, entryId: `a${index}`, role: "assistant" as const, timestamp: index * 100 + 1, stopReason: "stop", turn: { userEntryId: `u${index}`, endEntryId: `a${index}` },
+      blocks: [{ type: "text" as const, text: `Answer ${index}` }] }
+  ])).flat();
+  const scroller = () => document.querySelector(".conversation-scroll") as HTMLElement;
+
+  it("mounts only the last few turns of a long saved transcript, then reveals on scroll-up", () => {
+    render(<Transcript messages={longHistory()} running={false} scopeKey="long" />);
+    expect(document.querySelectorAll(".msg.user")).toHaveLength(8);
+    expect(screen.getByText("Request 44")).toBeInTheDocument();
+    expect(screen.getByText("Request 37")).toBeInTheDocument();
+    expect(screen.queryByText("Request 36")).not.toBeInTheDocument();
+    act(() => { fireEvent.scroll(scroller()); });
+    expect(document.querySelectorAll(".msg.user")).toHaveLength(16);
+    expect(screen.getByText("Request 36")).toBeInTheDocument();
+    expect(screen.getByText("Request 29")).toBeInTheDocument();
+  });
+
+  it("reveals everything for short transcripts and keeps the saved depth across remounts", () => {
+    const viewState = {};
+    const view = render(<Transcript messages={longHistory(20)} running={false} scopeKey="short" viewState={viewState} />);
+    expect(document.querySelectorAll(".msg.user")).toHaveLength(20);
+    view.unmount();
+    const remembered = {};
+    const deep = render(<Transcript messages={longHistory()} running={false} scopeKey="deep" viewState={remembered} />);
+    act(() => { fireEvent.scroll(scroller()); });
+    expect((remembered as { revealed?: number }).revealed).toBe(16);
+    deep.unmount();
+    render(<Transcript messages={longHistory()} running={false} scopeKey="deep" viewState={remembered} />);
+    expect(document.querySelectorAll(".msg.user")).toHaveLength(16);
+  });
+
+  it("does not collapse the window when a preview batch replaces the message objects", () => {
+    const history = longHistory();
+    const view = render(<Transcript messages={history} running={false} scopeKey="churn" />);
+    act(() => { fireEvent.scroll(scroller()); });
+    expect(document.querySelectorAll(".msg.user")).toHaveLength(16);
+    const churned = history.map((message) => ({ ...message, blocks: message.blocks.map((block) => ({ ...block })) }));
+    view.rerender(<Transcript messages={churned} running={false} scopeKey="churn" />);
+    expect(document.querySelectorAll(".msg.user")).toHaveLength(16);
+    expect(screen.getByText("Request 36")).toBeInTheDocument();
+    expect(screen.queryByText("Request 28")).not.toBeInTheDocument();
+  });
+});

@@ -30,6 +30,10 @@ interface Props {
   onNavigate?: () => void;
   /** Scrolls to the latest message and re-pins follow mode. */
   onJumpToLatest?: () => void;
+  /** Leading turns the transcript has not mounted yet; their ticks are estimated. */
+  hiddenTurns?: number;
+  /** A click on an unmounted turn's tick: reveal it, then the transcript scrolls there. */
+  onSeekTurn?: (ordinal: number) => void;
 }
 
 function scrollElementTo(el: HTMLElement, top: number, smooth: boolean) {
@@ -51,7 +55,7 @@ function sameMetrics(a: Metrics, b: Metrics): boolean {
  * stays the single owner of bottom-pinning. The rail is always mounted (even
  * empty) so its height can be measured before the transcript overflows.
  */
-export function ScrollRail({ target, turns, liveTurnId, detached, onNavigate, onJumpToLatest }: Props) {
+export function ScrollRail({ target, turns, liveTurnId, detached, onNavigate, onJumpToLatest, hiddenTurns = 0, onSeekTurn }: Props) {
   const reduced = useReducedMotion();
   const railRef = useRef<HTMLDivElement>(null);
   const lineRef = useRef<HTMLDivElement | null>(null);
@@ -212,6 +216,11 @@ export function ScrollRail({ target, turns, liveTurnId, detached, onNavigate, on
   };
 
   const goToTurn = (index: number) => {
+    if (index < hiddenTurns) {
+      onNavigate?.();
+      onSeekTurn?.(index);
+      return;
+    }
     const el = target.current;
     if (!el || !metrics) return;
     const top = metrics.tops[index];
@@ -240,29 +249,39 @@ export function ScrollRail({ target, turns, liveTurnId, detached, onNavigate, on
         <>
           <div className="scroll-rail-track" />
           <div ref={lineRef} className="scroll-rail-line" style={{ height: readY }} />
-          {turns.map((turn, index) => {
-            const top = metrics.tops[index];
-            if (Number.isNaN(top)) return null;
-            const classes = ["scroll-rail-tick"];
-            if (index === current) classes.push("current");
-            if (turn.id === liveTurnId) classes.push("live");
-            return (
-              <button
-                key={turn.id}
-                type="button"
-                tabIndex={-1}
-                className={classes.join(" ")}
-                style={{ transform: `translateY(${tickOffset(top, metrics.scrollHeight, metrics.railHeight)}px)` }}
-                aria-label={`Turn ${index + 1}${turn.excerpt ? `: ${turn.excerpt}` : ""}`}
-                onPointerEnter={() => setHovered(index)}
-                onPointerLeave={() => setHovered((value) => (value === index ? null : value))}
-                onFocus={() => setHovered(index)}
-                onBlur={() => setHovered((value) => (value === index ? null : value))}
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={() => goToTurn(index)}
-              />
-            );
-          })}
+          {(() => {
+            // Hidden turns have no measured top: spread their ticks evenly through the
+            // rail space above the first mounted turn's tick.
+            const firstMounted = metrics.tops[hiddenTurns];
+            const ceiling = firstMounted === undefined || Number.isNaN(firstMounted) ? 0
+              : tickOffset(firstMounted, metrics.scrollHeight, metrics.railHeight);
+            const estimate = (index: number) => (ceiling * (index + 1)) / (hiddenTurns + 1);
+            return turns.map((turn, index) => {
+              const hidden = index < hiddenTurns;
+              const top = metrics.tops[index];
+              if (hidden ? ceiling <= 0 : Number.isNaN(top)) return null;
+              const classes = ["scroll-rail-tick"];
+              if (hidden) classes.push("unmounted");
+              if (index === current) classes.push("current");
+              if (turn.id === liveTurnId) classes.push("live");
+              return (
+                <button
+                  key={turn.id}
+                  type="button"
+                  tabIndex={-1}
+                  className={classes.join(" ")}
+                  style={{ transform: `translateY(${hidden ? estimate(index) : tickOffset(top, metrics.scrollHeight, metrics.railHeight)}px)` }}
+                  aria-label={`Turn ${index + 1}${turn.excerpt ? `: ${turn.excerpt}` : ""}`}
+                  onPointerEnter={() => setHovered(index)}
+                  onPointerLeave={() => setHovered((value) => (value === index ? null : value))}
+                  onFocus={() => setHovered(index)}
+                  onBlur={() => setHovered((value) => (value === index ? null : value))}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={() => goToTurn(index)}
+                />
+              );
+            });
+          })()}
           {onJumpToLatest && (
             <button
               type="button"

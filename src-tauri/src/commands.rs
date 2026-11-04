@@ -2577,6 +2577,8 @@ pub async fn open_task(
             .map_err(|_| "Metadata lock was poisoned".to_string())?;
         // Model metadata is cosmetic here: missing connections and signed-out subscriptions
         // must still open. No credential lookup or model validation belongs on this path.
+        // The registry is a live-worker feature; the saved reader stamps the latest cached
+        // catalogue onto the snapshot instead.
         let model = data
             .providers
             .iter()
@@ -2590,26 +2592,19 @@ pub async fn open_task(
             .cloned();
         (model, data.tool_catalog.clone())
     };
-    let Some(crate::history::InitialHistory { mut snapshot, reader }) = crate::history::read(
+    let Some(crate::history::InitialHistory { snapshot, reader }) = crate::history::read(
         &app,
         &task,
         model.as_ref().and_then(|model| model.context_window),
+        model.as_ref(),
+        &tools,
         load,
     )
     .await? else {
         return Ok(());
     };
-    snapshot["model"] = json!({ "provider": task.provider_id, "id": task.model_id, "name": model.as_ref().map(|model| &model.name) });
-    snapshot["availableThinkingLevels"] = json!(model
-        .as_ref()
-        .map(|model| &model.thinking_levels)
-        .cloned()
-        .unwrap_or_default());
-    if model.is_none() {
-        snapshot["modelMissing"] = json!(true);
-    }
-    // The registry is a live-worker feature; retain the latest cached catalogue.
-    snapshot["tools"] = json!(tools);
+    // The reader already stamped model/tools/modelMissing onto the snapshot; forward its
+    // bytes untouched rather than re-parsing a multi-megabyte transcript.
     let emitted = app.state::<worker::WorkerState>().emit_history_if_cold(
         &app, &task.id, reader.history_id(),
         json!({ "type": "snapshot", "taskId": task.id, "historyId": reader.history_id(), "snapshot": snapshot }),

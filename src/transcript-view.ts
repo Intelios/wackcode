@@ -13,6 +13,8 @@ export interface TranscriptViewState {
   thinking?: Set<string>;
   exploration?: Set<string>;
   tools?: Set<string>;
+  /** How many trailing turns the tail window has revealed; the rest mount on scroll-up. */
+  revealed?: number;
 }
 
 export function captureScroll(element: HTMLElement, following: boolean): ScrollPosition {

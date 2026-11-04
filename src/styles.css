@@ -148,7 +148,7 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 }
 
 /* Image backdrop (Backdrop.tsx). Two stacked copies crossfade on opacity only, which is cheap:
-   a vivid hero copy that fades out above the composer on the new-chat screen, and a blurred,
+   a vivid full-window copy on the new-chat screen, and a blurred,
    dimmed copy behind chats and Settings. Animating the blur itself would re-rasterize. */
 .backdrop { position: absolute; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; background: var(--bg); }
 /* The crop (backdrop-crop.ts): the picture is cover-fitted, magnified by --backdrop-zoom, and
@@ -174,10 +174,6 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .backdrop-layer { position: absolute; inset: 0; opacity: 0; transition: opacity .45s var(--ease); will-change: opacity; }
 .backdrop-layer::before { content: ""; position: absolute; inset: 0; }
 .backdrop-layer::after { content: ""; position: absolute; inset: 0; background: var(--bg); }
-.backdrop-hero::before {
-  -webkit-mask-image: linear-gradient(to bottom, black 0%, black 26%, transparent 74%);
-  mask-image: linear-gradient(to bottom, black 0%, black 26%, transparent 74%);
-}
 .backdrop-hero::after { opacity: calc(var(--backdrop-dim) * .35); }
 /* Scaled so the blur's soft edge falls outside the window. */
 .backdrop-chat::before { filter: blur(var(--backdrop-blur)); transform: scale(1.08); }

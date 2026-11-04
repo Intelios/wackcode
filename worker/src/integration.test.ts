@@ -951,6 +951,25 @@ describe("Pi worker integration", () => {
     expect(worker.view?.messages ?? []).toHaveLength(0);
     expect(JSON.stringify(worker.outputs) + worker.stderr).not.toContain("alpha-secret");
   });
+  it("sends the system prompt as a system message on an endpoint the catalogue doesn't know", async () => {
+    // Pi treats an unknown host as a lenient OpenAI endpoint and uses `developer` for a reasoning
+    // model, which vLLM-style role unions reject with a 422. The compat WackCode writes must pin
+    // the leading prompt to `system`.
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-system-role-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "system-role-task");
+    cleanup.push(() => worker.shutdown());
+
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "run-1", message: "Create the fixture." });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle");
+
+    const roles = (provider.requests[0].body.messages as { role?: string }[]).map((message) => message.role);
+    expect(roles[0]).toBe("system");
+    expect(roles).not.toContain("developer");
+  });
+
   it("makes an isolated title request on the chosen connection without delaying the main run", async () => {
     const provider = await startMockProvider();
     cleanup.push(provider.close);

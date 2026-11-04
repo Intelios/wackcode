@@ -43,11 +43,34 @@ describe("custom-connection compat lookup", () => {
   });
 
   it("only matches entries speaking the model's own API", () => {
-    expect(builtinCompat("openai-completions", "claude-opus-4-6", "https://api.anthropic.com/v1")).toBeUndefined();
+    // A Messages catalogue entry never colours a Completions model of the same ID.
+    expect(builtinCompat("openai-completions", "claude-opus-4-6", "https://api.anthropic.com/v1"))
+      .not.toHaveProperty("forceAdaptiveThinking");
   });
 
   it("returns undefined for IDs outside the catalogue", () => {
     expect(builtinCompat("anthropic-messages", "totally-unknown-9", "https://api.anthropic.com")).toBeUndefined();
+  });
+
+  it("pins an unlisted model on an unlisted host to the system role", () => {
+    // Pi sends a reasoning model's system prompt as `developer` on any host it doesn't know;
+    // vLLM's strict role union answers that 422, while `system` works on every one of them.
+    expect(builtinCompat("openai-completions", "my-local-9b", "http://127.0.0.1:8000/v1"))
+      .toEqual({ supportsDeveloperRole: false });
+    expect(builtinCompat("openai-responses", "my-local-9b", "http://127.0.0.1:8000/v1"))
+      .toEqual({ supportsDeveloperRole: false });
+  });
+
+  it("keeps the developer role on a host the catalogue lists for the model", () => {
+    expect(builtinCompat("openai-responses", "gpt-5", "https://api.openai.com/v1"))
+      .not.toHaveProperty("supportsDeveloperRole");
+  });
+
+  it("adds the system role to a compat copied from another host", () => {
+    // The leanest gpt-5 entry is a gateway's, and its silence on the developer role must not be
+    // read as support on an endpoint the catalogue can't vouch for.
+    expect(builtinCompat("openai-completions", "gpt-5", "https://mirror.example"))
+      .toMatchObject({ supportsDeveloperRole: false });
   });
 
   it("marks a Claude newer than the catalogue adaptive, wherever it is hosted", () => {
@@ -62,7 +85,8 @@ describe("custom-connection compat lookup", () => {
   it("leaves older or differently-named unknowns alone", () => {
     expect(builtinCompat("anthropic-messages", "claude-haiku-4-1", "https://api.anthropic.com")).toBeUndefined();
     expect(builtinCompat("anthropic-messages", "claude-3-7-sonnet", "https://api.anthropic.com")).toBeUndefined();
-    expect(builtinCompat("openai-completions", "claude-haiku-9-9", "https://api.anthropic.com/v1")).toBeUndefined();
+    expect(builtinCompat("openai-completions", "claude-haiku-9-9", "https://api.anthropic.com/v1"))
+      .not.toHaveProperty("forceAdaptiveThinking");
     expect(builtinCompat("anthropic-messages", "my-haiku-5-5", "https://mirror.example")).toBeUndefined();
   });
 
@@ -99,11 +123,11 @@ describe("custom-connection compat lookup", () => {
   });
 
   it("leaves dedicated Model Garden deployments and other APIs on aiplatform alone", () => {
-    // Outside …/endpoints/openapi the host runs vLLM/TGI containers, which keep Pi's
-    // defaults and any catalogue match (here: OpenRouter's entry for the same ID).
+    // Outside …/endpoints/openapi the host runs vLLM/TGI containers, which keep any catalogue
+    // match — and, like any unlisted host, must not be sent the `developer` role.
     expect(builtinCompat("openai-completions", "meta/llama-4-maverick",
       "https://us-central1-aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/endpoints/99"))
-      .toMatchObject({ thinkingFormat: "openrouter" });
+      .toMatchObject({ thinkingFormat: "openrouter", supportsDeveloperRole: false });
     expect(builtinCompat("anthropic-messages", "claude-opus-4-6",
       "https://aiplatform.googleapis.com/v1beta1/projects/p/locations/g/endpoints/openapi"))
       .toMatchObject({ forceAdaptiveThinking: true });

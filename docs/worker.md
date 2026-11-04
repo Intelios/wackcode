@@ -42,7 +42,10 @@ catalogue data cannot supply `compat`, headers or credentials. Subscription list
 A custom connection's `models.json` re-declares its models, so Pi's request shaping
 (`forceAdaptiveThinking`, `supportsStore`, `maxTokensField`…) is lost unless `builtinCompat`
 (`catalog-models.ts`) re-derives it: Google's strict OpenAI-compatible hosts get a fixed shape,
-otherwise the bundled catalogue's entry is copied over. Two stream-level instrumentations wrap
+otherwise the bundled catalogue's entry is copied over. A model the catalogue cannot place on
+the connection's host also gets `supportsDeveloperRole: false`: Pi's default for an unrecognized
+URL is the newer `developer` role, which strict OpenAI-compatible servers (vLLM's request union,
+for one) reject with a 422, while every one of them accepts `system`. Two stream-level instrumentations wrap
 the runtime's `stream`/`streamSimple`/`streamDeferred` (`model-runtime.ts`):
 `instrumentOpenCodeHeaders` adds OpenCode's session headers, and
 `instrumentGoogleThoughtSignatures` (`thought-signatures.ts`) round-trips the `extra_content`

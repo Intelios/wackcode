@@ -108,10 +108,25 @@ function googleOpenAiCompat(api: string, baseUrl: string | undefined): Record<st
 }
 
 /**
+ * What a model on an endpoint the bundled catalogue doesn't list gets. Pi treats an unrecognized
+ * URL as a lenient OpenAI endpoint and, for a reasoning model, sends the system prompt as a
+ * `developer` message; servers that validate roles strictly (vLLM's request union, for one)
+ * answer 422 because only `system`, `user`, `assistant` and `tool` exist there. `system` is
+ * accepted by every OpenAI-shaped endpoint, OpenAI's own models included, so an unlisted host is
+ * pinned to it. The Messages and Google APIs have no such role and are left alone.
+ */
+function unlistedHostCompat(api: string, baseUrl: string | undefined): Record<string, unknown> | undefined {
+  if (!baseUrl || (api !== "openai-completions" && api !== "openai-responses")) return undefined;
+  return { supportsDeveloperRole: false };
+}
+
+/**
  * The `compat` for a configured model: Google's strict request shape when the connection points
- * at one of its OpenAI-compatible hosts, else the bundled catalogue's entry. Undefined when
- * neither applies — the model then behaves exactly as before (Pi's defaults). `api` is the API
- * the model will actually speak (its own override, else the connection's), so e.g. a Completions
+ * at one of its OpenAI-compatible hosts, else the bundled catalogue's entry. A model on a host
+ * the catalogue doesn't list keeps the entry's quirks but gets the portable OpenAI shape too
+ * (see `unlistedHostCompat`). Undefined when nothing applies — the Messages API on an unknown
+ * host, say — and the model then behaves exactly as before (Pi's defaults). `api` is the API the
+ * model will actually speak (its own override, else the connection's), so e.g. a Completions
  * entry never colours a Messages model of the same ID. Between candidate entries for one ID a
  * matching base-URL host wins, then the leanest compat: a gateway that serves another vendor's
  * model but supports only part of its surface should send the smallest request shape rather
@@ -120,6 +135,7 @@ function googleOpenAiCompat(api: string, baseUrl: string | undefined): Record<st
 export function builtinCompat(api: string, modelId: string, baseUrl?: string): Record<string, unknown> | undefined {
   const google = googleOpenAiCompat(api, baseUrl);
   if (google) return google;
+  const unlisted = unlistedHostCompat(api, baseUrl);
   const index = catalogCompatIndex();
   const host = hostOf(baseUrl);
   // Every catalogue entry the configured ID could name, tagged by how specific that spelling is.
@@ -129,7 +145,7 @@ export function builtinCompat(api: string, modelId: string, baseUrl?: string): R
       if (entry.api === api) candidates.push({ rank, entry });
     }
   });
-  if (!candidates.length) return adaptiveFallbackCompat(api, modelId);
+  if (!candidates.length) return adaptiveFallbackCompat(api, modelId) ?? unlisted;
   // A catalogue entry on the connection's own host is authoritative — including one that
   // deliberately lists the model with no compat — so it settles the question on its own.
   // Otherwise only compat-bearing entries shape the request: the most specific ID spelling wins,
@@ -146,8 +162,8 @@ export function builtinCompat(api: string, modelId: string, baseUrl?: string): R
         && Object.keys(candidate.entry.compat).length < Object.keys(best.entry.compat).length)
       ? candidate
       : best, undefined);
-  if (!pick) return undefined;
-  const compat = { ...pick.entry.compat };
+  if (!pick) return unlisted;
+  const compat = { ...(sameHost.length ? undefined : unlisted), ...pick.entry.compat };
   // Adaptive thinking describes the model, not the provider that listed it leanest: if the same
   // model ID requires it anywhere in the pool (e.g. a Fireworks-hosted model whose lean Vercel
   // mirror omits the flag), budget thinking would 400 on this connection too.

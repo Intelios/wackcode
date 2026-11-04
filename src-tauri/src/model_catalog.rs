@@ -152,6 +152,7 @@ fn endpoint(provider_id: &str, provider: &Value, model: &Value) -> (Option<Strin
             "openai" => Some("https://api.openai.com/v1"),
             "anthropic" => Some("https://api.anthropic.com"),
             "google" => Some("https://generativelanguage.googleapis.com/v1beta"),
+            "mistral" => Some("https://api.mistral.ai/v1"),
             _ => None,
         });
     let base = hint
@@ -164,9 +165,13 @@ fn endpoint(provider_id: &str, provider: &Value, model: &Value) -> (Option<Strin
                 && url.fragment().is_none()
         })
         .map(|url| url.to_string());
-    // The first-party OpenAI API exposes both supported surfaces.
+    // The first-party OpenAI API exposes both supported surfaces. Mistral's own API speaks its
+    // native chunk format (mistral-conversations), which Chat Completions compatibility mangles
+    // — typed content chunks stringify as "[object Object]" — so it comes first.
     let formats = if provider_id == "openai" {
         vec!["openai-completions".into(), "openai-responses".into()]
+    } else if provider_id == "mistral" {
+        vec!["mistral-conversations".into(), "openai-completions".into()]
     } else {
         format.into_iter().map(str::to_string).collect()
     };

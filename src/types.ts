@@ -1,4 +1,4 @@
-export type ApiFormat = "openai-completions" | "openai-responses" | "anthropic-messages" | "google-generative-ai";
+export type ApiFormat = "openai-completions" | "openai-responses" | "anthropic-messages" | "google-generative-ai" | "mistral-conversations";
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 /**
  * A chat's reasoning choice: one of the model's levels, or Ultra — the model's highest level plus

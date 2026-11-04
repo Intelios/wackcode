@@ -481,10 +481,10 @@ pub struct DiscoverModelsInput {
     pub provider_id: String,
 }
 
-/// Where a connection's model list lives. A Messages connection keeps `/v1` out of its base URL
-/// (the client adds `/v1/messages` itself), so its list sits behind the same prefix — Anthropic's
-/// Models API and OpenCode Go's `…/zen/go/v1/models` answer there, while `{base}/models` is the
-/// website's 404 page.
+/// Where a connection's model list lives. A Messages or Mistral connection keeps `/v1` out of
+/// its base URL (the client adds the versioned path itself), so its list sits behind the same
+/// prefix — Anthropic's Models API and OpenCode Go's `…/zen/go/v1/models` answer there, while
+/// `{base}/models` is the website's 404 page.
 fn model_list_url(base_url: &str, api_format: &str) -> String {
     let base = normalize_base_url(base_url, api_format);
     if api_format == "google-generative-ai" {
@@ -493,7 +493,7 @@ fn model_list_url(base_url: &str, api_format: &str) -> String {
             return url.to_string();
         }
     }
-    if api_format == "anthropic-messages" {
+    if api_format == "anthropic-messages" || api_format == "mistral-conversations" {
         format!("{base}/v1/models")
     } else {
         format!("{base}/models")
@@ -5338,11 +5338,13 @@ fn view_task_and_provider(
 }
 
 /// The APIs a custom connection, or one of its models, may speak. `anthropic-messages` posts to
-/// `{baseUrl}/v1/messages`, so a Messages base URL leaves off the `/v1` that the OpenAI formats
+/// `{baseUrl}/v1/messages` and `mistral-conversations` to `{baseUrl}/v1/chat/completions`, so a
+/// Messages or Mistral base URL leaves off the `/v1` that the OpenAI formats
 /// keep — `normalize_base_url` enforces that at save and on every load (OpenCode Go: `…/zen/go`
 /// for Messages, `…/zen/go/v1` for Completions). Google keeps `/v1` or `/v1beta` too.
-const API_FORMATS: [&str; 4] = [
+const API_FORMATS: [&str; 5] = [
     "openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai",
+    "mistral-conversations",
 ];
 
 fn validate_models(models: &[ModelRecord]) -> Result<(), String> {
@@ -6634,6 +6636,7 @@ mod tests {
         assert!(validate_models(&[model(Some("openai-responses"))]).is_ok());
         assert!(validate_models(&[model(Some("anthropic-messages"))]).is_ok());
         assert!(validate_models(&[model(Some("google-generative-ai"))]).is_ok());
+        assert!(validate_models(&[model(Some("mistral-conversations"))]).is_ok());
         assert!(validate_models(&[model(None)]).is_ok());
         assert!(validate_models(&[model(Some(""))]).is_err());
         assert!(validate_models(&[model(Some("grpc"))])
@@ -6740,6 +6743,16 @@ mod tests {
         assert_eq!(
             clean("https://opencode.ai/zen/go/v1", "openai-completions"),
             "https://opencode.ai/zen/go/v1"
+        );
+        // Mistral's client appends `v1/chat/completions`, so a pasted version path or whole
+        // endpoint comes off the same way.
+        assert_eq!(
+            clean("https://api.mistral.ai/v1", "mistral-conversations"),
+            "https://api.mistral.ai"
+        );
+        assert_eq!(
+            clean("https://api.mistral.ai/v1/chat/completions", "mistral-conversations"),
+            "https://api.mistral.ai"
         );
     }
 
@@ -6907,6 +6920,10 @@ mod tests {
         assert_eq!(
             model_list_url("https://api.example.com/v1", "openai-completions"),
             "https://api.example.com/v1/models"
+        );
+        assert_eq!(
+            model_list_url("https://api.mistral.ai", "mistral-conversations"),
+            "https://api.mistral.ai/v1/models"
         );
     }
 

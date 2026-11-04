@@ -122,6 +122,23 @@ describe("connection models in Pi", () => {
     expect((await findModel(runtime, connection, "named"))?.baseUrl).toBe("https://opencode.ai/zen/go");
   });
 
+  it("repairs a Mistral connection whose saved base URL kept the /v1", async () => {
+    // Mistral's client appends `v1/chat/completions` itself, so a connection pasted with `/v1`
+    // normalizes down — an unnormalized record would double the path (`…/v1/v1/chat/…`).
+    const connection = provider({ api: "mistral-conversations", baseUrl: "https://api.mistral.ai/v1" });
+    const runtime = await load(connection);
+    expect(runtime.getError()).toBeUndefined();
+    expect((await findModel(runtime, connection, "named"))?.baseUrl).toBe("https://api.mistral.ai");
+  });
+
+  it("gives a Mistral model on an OpenAI connection the base URL its client needs", async () => {
+    const connection = provider({ models: [model("glm", "GLM"), { ...model("large", "Large 4"), api: "mistral-conversations" }] });
+    const runtime = await load(connection);
+    expect(runtime.getError()).toBeUndefined();
+    expect((await findModel(runtime, connection, "glm"))?.baseUrl).toBe("http://127.0.0.1:9/v1");
+    expect((await findModel(runtime, connection, "large"))?.baseUrl).toBe("http://127.0.0.1:9");
+  });
+
   it.each(["openai-completions", "anthropic-messages", "google-generative-ai"] as const)("loads a Gemini model on a %s connection with the right versioned base", async (api) => {
     const connection = provider({ api,
       baseUrl: `https://opencode.ai/inference/go${api === "anthropic-messages" ? "" : "/v1"}`,

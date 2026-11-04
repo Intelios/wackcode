@@ -7,7 +7,7 @@ export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
  */
 export const ULTRA_EFFORT = "ultra";
 export type ReasoningEffort = ThinkingLevel | typeof ULTRA_EFFORT;
-export type ApiFormat = "openai-completions" | "openai-responses" | "anthropic-messages" | "google-generative-ai";
+export type ApiFormat = "openai-completions" | "openai-responses" | "anthropic-messages" | "google-generative-ai" | "mistral-conversations";
 
 /**
  * The agent's working mode. "plan" is the plan-first mode, read-only by default; "ultraplan" is the same

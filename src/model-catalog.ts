@@ -36,6 +36,7 @@ function endpointKey(baseUrl: string, api: ApiFormat): string | undefined {
     if (!["https:", "http:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) return;
     let path = url.pathname.replace(/\/+$/, "");
     if (api === "anthropic-messages") path = path.replace(/\/v1\/messages$/i, "").replace(/\/v1$/i, "");
+    if (api === "mistral-conversations") path = path.replace(/\/v1\/chat\/completions$/i, "").replace(/\/v1$/i, "");
     if (api === "google-generative-ai") path = path.replace(/(\/(?:v1|v1beta|v1alpha))\/models(?:\/[^/]+)?$/, "$1");
     return url.origin + path;
   } catch { return; }

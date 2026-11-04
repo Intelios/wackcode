@@ -119,7 +119,9 @@ pub enum ProviderKind {
 /// Canonical form of a connection's base URL for the API it speaks. The Messages client appends
 /// `/v1/messages` itself, so an anthropic-messages base URL leaves `/v1` off and any endpoint
 /// suffix pasted from a gateway's docs (OpenCode Go: `…/zen/go/v1/messages`) is trimmed —
-/// otherwise the request doubles the path and lands on the gateway's HTML 404 page. The OpenAI
+/// otherwise the request doubles the path and lands on the gateway's HTML 404 page. The Mistral
+/// client likewise appends `v1/chat/completions`, so its base URL drops `/v1` (and a pasted
+/// `/v1/chat/completions`) the same way. The OpenAI
 /// formats expect `/v1` in the base URL and are left untouched. Google also keeps its version,
 /// but drops a pasted `/models[/<id>[:action]]` endpoint. Only versioned Google paths qualify;
 /// unrelated paths and queries stay intact (except the streaming action's `alt=sse`). Fragments
@@ -175,12 +177,15 @@ pub fn normalize_base_url(base_url: &str, api_format: &str) -> String {
         }
     }
     let mut value = base_url.trim_end_matches('/').to_string();
-    if api_format == "anthropic-messages" {
-        for suffix in ["/v1/messages", "/v1"] {
-            if value.to_ascii_lowercase().ends_with(suffix) {
-                value.truncate(value.len() - suffix.len());
-                break;
-            }
+    let suffixes: &[&str] = match api_format {
+        "anthropic-messages" => &["/v1/messages", "/v1"],
+        "mistral-conversations" => &["/v1/chat/completions", "/v1"],
+        _ => &[],
+    };
+    for suffix in suffixes {
+        if value.to_ascii_lowercase().ends_with(suffix) {
+            value.truncate(value.len() - suffix.len());
+            break;
         }
     }
     value

@@ -71,9 +71,13 @@ function resolveModelBaseUrl(provider: WorkerProvider, model: WorkerModel): stri
       base = url.toString();
     }
   }
+  // Messages and Mistral clients add the versioned path themselves, so their base URL keeps
+  // `/v1` off; a per-model override that names one gets the same repair Rust applies at save.
   const resolved = api === "anthropic-messages"
     ? base.replace(/\/v1\/messages$/i, "").replace(/\/v1$/i, "")
-    : api !== provider.api && !/\/v\d[^/]*$/i.test(base) ? `${base}/v1` : base;
+    : api === "mistral-conversations"
+      ? base.replace(/\/v1\/chat\/completions$/i, "").replace(/\/v1$/i, "")
+      : api !== provider.api && !/\/v\d[^/]*$/i.test(base) ? `${base}/v1` : base;
   return resolved === saved ? undefined : resolved;
 }
 

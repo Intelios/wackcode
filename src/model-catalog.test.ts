@@ -38,6 +38,16 @@ describe("model catalog lookup", () => {
     expect(matchingCatalogProfile(model, "https://google.test.attacker.test/v1beta", "google-generative-ai")).toBeUndefined();
   });
 
+  it("matches Mistral's one profile URL from both its API surfaces", () => {
+    // api.mistral.ai speaks the native chunk format and Chat Completions; its profile carries
+    // the /v1 the Completions surface expects, and matching strips it for the native surface.
+    const mistral = { ...native, baseUrl: "https://api.mistral.ai/v1", apiFormats: ["mistral-conversations" as const, "openai-completions" as const] };
+    const model = { ...entry, profiles: [mistral] };
+    expect(matchingCatalogProfile(model, "https://api.mistral.ai", "mistral-conversations")).toEqual(mistral);
+    expect(matchingCatalogProfile(model, "https://api.mistral.ai/v1/chat/completions", "mistral-conversations")).toEqual(mistral);
+    expect(matchingCatalogProfile(model, "https://api.mistral.ai/v1", "openai-completions")).toEqual(mistral);
+  });
+
   it("applies only metadata to an immutable draft, preserving IDs and API overrides", () => {
     const model: ModelRecord = { id: "custom/alias", name: "Custom", contextWindow: null, maxTokens: null,
       reasoning: false, thinkingLevels: ["off"], thinkingLevelMap: { off: null }, vision: false, apiFormat: "openai-responses" };

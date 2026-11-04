@@ -20,9 +20,10 @@ const API_FORMATS: { value: ApiFormat; label: string }[] = [
   { value: "openai-completions", label: "Chat Completions compatible" },
   { value: "openai-responses", label: "Responses compatible" },
   { value: "anthropic-messages", label: "Messages compatible" },
-  { value: "google-generative-ai", label: "Google Generative AI compatible" }
+  { value: "google-generative-ai", label: "Google Generative AI compatible" },
+  { value: "mistral-conversations", label: "Mistral native API" }
 ];
-const FORMAT_NAMES: Record<ApiFormat, string> = { "openai-completions": "Chat Completions", "openai-responses": "Responses", "anthropic-messages": "Messages", "google-generative-ai": "Google Generative AI" };
+const FORMAT_NAMES: Record<ApiFormat, string> = { "openai-completions": "Chat Completions", "openai-responses": "Responses", "anthropic-messages": "Messages", "google-generative-ai": "Google Generative AI", "mistral-conversations": "Mistral" };
 const ANTHROPIC_GUIDANCE = "https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account";
 /** A discovery with more new IDs than this starts with nothing ticked, and gets a filter. */
 const FOUND_PRESELECT_LIMIT = 10;
@@ -697,12 +698,13 @@ function ConnectionEditor({
               <label>
                 {/* Each SDK adds its own request path; saving trims pasted Messages/Google endpoints. */}
                 <span>Base URL {draft.apiFormat === "anthropic-messages" && <small>/v1/messages is added for you; a pasted /v1 is trimmed</small>}
+                  {draft.apiFormat === "mistral-conversations" && <small>/v1/chat/completions is added for you; a pasted /v1 is trimmed</small>}
                   {draft.apiFormat === "google-generative-ai" && <small>/models/… is added for you; a pasted model endpoint is trimmed</small>}
                 </span>
                 <input
                   value={draft.baseUrl}
                   onChange={(event) => edit({ baseUrl: event.target.value })}
-                  placeholder={draft.apiFormat === "anthropic-messages" ? "https://api.anthropic.com" : draft.apiFormat === "google-generative-ai" ? "https://generativelanguage.googleapis.com/v1beta" : "https://api.example.com/v1"}
+                  placeholder={draft.apiFormat === "anthropic-messages" ? "https://api.anthropic.com" : draft.apiFormat === "mistral-conversations" ? "https://api.mistral.ai" : draft.apiFormat === "google-generative-ai" ? "https://generativelanguage.googleapis.com/v1beta" : "https://api.example.com/v1"}
                   spellCheck={false}
                 />
               </label>

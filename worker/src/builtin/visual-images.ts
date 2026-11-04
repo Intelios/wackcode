@@ -72,10 +72,11 @@ async function readImage(path: string): Promise<Buffer> {
   } finally { await file.close(); }
 }
 
-export async function inlineVisualImages(html: string, options: { isChat?: boolean; cwd?: string } = {}): Promise<{ html: string; inlined: boolean }> {
+export async function inlineVisualImages(html: string, options: { isChat?: boolean; cwd?: string; label?: string } = {}): Promise<{ html: string; inlined: boolean }> {
   const references = imageReferences(html);
   let bytes = Buffer.byteLength(html, "utf8");
-  const pageTooLarge = () => new Error("The finished visual exceeds the 8 MiB page limit. Use smaller images or fewer copies.");
+  const label = options.label ?? "visual";
+  const pageTooLarge = () => new Error(`The finished ${label} exceeds the 8 MiB page limit. Use smaller images or fewer copies.`);
   if (bytes > MAX_VISUAL_PAGE_BYTES) throw pageTooLarge();
   const replacements = new Map<string, string>();
   const failures: string[] = [];

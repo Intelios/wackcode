@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import foldCases from "../worker/src/builtin/canvas/fold-cases.json";
 import type { NormalizedMessage } from "./types";
-import { artboardMention, canvasActivity, canvasTouch, canvasesFromMessages, mergeTouches, resolveArtboardHtml, type CanvasBoard, type CanvasDetails } from "./canvas-state";
+import { artboardMention, canvasActivity, canvasTouch, canvasesFromMessages, dependsOnSavedDocuments, mergeTouches, resolveArtboardHtml, type CanvasBoard, type CanvasDetails } from "./canvas-state";
 
 type Call = { args: unknown; details: CanvasDetails | Record<string, unknown> };
 
@@ -24,6 +24,8 @@ function board(canvas: CanvasBoard) {
       width: artboard.width,
       height: artboard.height ?? null,
       html: resolveArtboardHtml(canvas, artboard),
+      ...(artboard.savedHtml ? { savedHtml: true as const } : {}),
+      ...(artboard.savedCss ? { savedCss: true as const } : {}),
     })),
   };
 }
@@ -35,6 +37,36 @@ describe("canvasesFromMessages (shared with the worker)", () => {
       expect(Object.fromEntries([...boards].map(([id, canvas]) => [id, board(canvas)]))).toEqual(testCase.expect);
     });
   }
+
+  it("marks which artboards depend on saved documents, including a variant through its base", () => {
+    const calls: Call[] = [
+      {
+        args: { title: "Shots", artboards: [
+          { name: "Base", width: 400, html: "<main><img src=\"/tmp/shot.png\"></main>" },
+          { name: "Dusk", width: 400, basedOn: "base", css: "body{}" },
+        ] },
+        details: {
+          v: 1, canvas: "shots", title: "Shots",
+          applied: [{ index: 0, id: "base", op: "add" }, { index: 1, id: "dusk", op: "add", basedOn: "base" }],
+          removed: [],
+          saved: [{ id: "base", html: true }],
+        },
+      },
+    ];
+    const board = canvasesFromMessages(messages(calls)).get("shots")!;
+    const [base, dusk] = board.artboards;
+    expect(base.savedHtml).toBe(true);
+    expect(dependsOnSavedDocuments(board, base)).toBe(true);
+    // The variant's document is its base's saved markup plus its own stylesheet.
+    expect(dependsOnSavedDocuments(board, dusk)).toBe(true);
+    // A revision without images clears the flag, and the variant stops depending on it.
+    const revised = canvasesFromMessages(messages([...calls, {
+      args: { canvas: "shots", artboards: [{ id: "base", html: "<main>plain</main>" }] },
+      details: { v: 1, canvas: "shots", title: "Shots", applied: [{ index: 0, id: "base", op: "update" }], removed: [] },
+    }])).get("shots")!;
+    expect(revised.artboards[0].savedHtml).toBeUndefined();
+    expect(dependsOnSavedDocuments(revised, revised.artboards[1])).toBe(false);
+  });
 
   it("skips a refused call and never mutates an earlier board", () => {
     const calls = foldCases.cases[0].calls as Call[];

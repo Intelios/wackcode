@@ -318,6 +318,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + 
             canvas_render::export_artboard,
             commands::tool_image,
             commands::visual_document,
+            commands::canvas_documents,
             commands::message_image,
             computer_use::computer_use_status,
             computer_use::computer_use_request_permission,

@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import foldCases from "./builtin/canvas/fold-cases.json" with { type: "json" };
 import {
   CANVAS_GUIDE_TOOL_NAME,
@@ -11,10 +14,13 @@ import {
 import {
   MAX_ARTBOARDS_PER_CALL,
   MAX_ARTBOARDS_PER_CANVAS,
+  MAX_ARTBOARD_DOCUMENT_BYTES,
   MAX_ARTBOARD_HTML_BYTES,
+  MAX_CALL_DOCUMENT_BYTES,
   type Canvas,
   type CanvasDetails,
   canvasesFromBranch,
+  documentCapError,
   planCall,
   resolveArtboardHtml,
   slugify,
@@ -59,11 +65,18 @@ function board(canvas: Canvas) {
       width: artboard.width,
       height: artboard.height ?? null,
       html: resolveArtboardHtml(canvas, artboard),
+      ...(artboard.savedHtml ? { savedHtml: true as const } : {}),
+      ...(artboard.savedCss ? { savedCss: true as const } : {}),
     })),
   };
 }
 
 const page = (text: string) => `<main>${text}</main>`;
+
+const PNG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0]);
+let base: string;
+beforeEach(async () => { base = await mkdtemp(join(tmpdir(), "wackcode-canvas-")); });
+afterEach(async () => { await rm(base, { recursive: true, force: true }); });
 
 describe("canvas fold (shared with the renderer)", () => {
   for (const testCase of foldCases.cases) {
@@ -72,7 +85,8 @@ describe("canvas fold (shared with the renderer)", () => {
       expect(Object.fromEntries([...canvases].map(([id, canvas]) => [id, board(canvas)]))).toEqual(testCase.expect);
     });
 
-    it(`${testCase.name}: the tool plans the same details`, () => {
+    // Saved markers come from execute-time image inlining, not planCall; those cases pin the fold only.
+    it.skipIf(testCase.calls.some((call) => call.details.saved?.length))(`${testCase.name}: the tool plans the same details`, () => {
       expect(accept(testCase.calls.map((call) => call.args)).map((call) => call.details)).toEqual(testCase.calls.map((call) => call.details));
     });
   }
@@ -125,16 +139,15 @@ describe("canvas planning", () => {
     expect(one({ name: "A", width: 400 })).toMatchObject({ ok: false, error: expect.stringContaining("needs html, or basedOn") });
     expect(one({ name: "A", width: 100, html: page("x") })).toMatchObject({ ok: false, error: expect.stringContaining("width must be between") });
     expect(one({ name: "A", width: 400, height: 9000, html: page("x") })).toMatchObject({ ok: false, error: expect.stringContaining("height must be between") });
-    expect(one({ name: "A", width: 400, html: "x".repeat(MAX_ARTBOARD_HTML_BYTES + 1) })).toMatchObject({ ok: false, error: expect.stringContaining("over the 64 KiB limit") });
+    expect(one({ name: "A", width: 400, html: "x".repeat(MAX_ARTBOARD_HTML_BYTES + 1) })).toMatchObject({ ok: false, error: expect.stringContaining("over the 1 MiB limit") });
     expect(one({ name: "A", width: "wide", html: page("x") })).toMatchObject({ ok: false, error: "artboards[0].width must be a number of pixels." });
     const many = Array.from({ length: MAX_ARTBOARDS_PER_CALL + 1 }, (_, index) => ({ name: `A${index}`, width: 400, html: page("x") }));
     expect(planCall(empty, { title: "T", artboards: many })).toMatchObject({ ok: false, error: expect.stringContaining(`at most ${MAX_ARTBOARDS_PER_CALL} artboards`) });
   });
 
   it("caps a call's total markup and a canvas's artboard count", () => {
-    const big = "x".repeat(60 * 1024);
-    const heavy = Array.from({ length: 4 }, (_, index) => ({ name: `A${index}`, width: 400, html: big }));
-    expect(planCall(new Map(), { title: "T", artboards: heavy })).toMatchObject({ ok: false, error: expect.stringContaining("over the 192 KiB limit") });
+    const heavy = Array.from({ length: 4 }, (_, index) => ({ name: `A${index}`, width: 400, html: "x".repeat(MAX_ARTBOARD_HTML_BYTES) }));
+    expect(planCall(new Map(), { title: "T", artboards: heavy })).toMatchObject({ ok: false, error: expect.stringContaining("over the 3 MiB limit") });
     const rounds = Array.from({ length: MAX_ARTBOARDS_PER_CANVAS / MAX_ARTBOARDS_PER_CALL }, (_, round) => ({
       ...(round === 0 ? { title: "Full" } : { canvas: "full" }),
       artboards: Array.from({ length: MAX_ARTBOARDS_PER_CALL }, (_, index) => ({ name: `R${round} A${index}`, width: 400, html: page("x") })),
@@ -143,6 +156,18 @@ describe("canvas planning", () => {
     expect(canvases.get("full")?.artboards).toHaveLength(MAX_ARTBOARDS_PER_CANVAS);
     expect(planCall(canvases, { canvas: "full", artboards: [{ name: "One more", width: 400, html: page("x") }] }))
       .toMatchObject({ ok: false, error: expect.stringContaining(`at most ${MAX_ARTBOARDS_PER_CANVAS} artboards`) });
+  });
+
+  it("caps a saved document and a call's total documents", () => {
+    const huge: Canvas = { id: "c", title: "C", artboards: [{ id: "a", name: "A", width: 400, html: "x".repeat(MAX_ARTBOARD_DOCUMENT_BYTES + 1) }] };
+    expect(documentCapError(huge, [{ id: "a", html: huge.artboards[0].html }])).toContain("over the 8 MiB limit");
+    const quarter = "y".repeat(Math.ceil(MAX_CALL_DOCUMENT_BYTES / 4) + 1);
+    const many: Canvas = {
+      id: "c", title: "C",
+      artboards: ["a", "b", "c", "d"].map((id) => ({ id, name: id.toUpperCase(), width: 400, html: quarter })),
+    };
+    expect(documentCapError(many, many.artboards.map((artboard) => ({ id: artboard.id, html: artboard.html })))).toContain("over the 24 MiB limit");
+    expect(documentCapError(many, [])).toBeUndefined();
   });
 
   it("draws a new variant at its base's size unless it gives a width of its own", () => {
@@ -239,6 +264,43 @@ describe("canvas tools", () => {
     expect(part.content[0].text).not.toContain("## Basics");
     expect(canvasGuide(["nope"])).toBe("# Canvas guide");
     expect(CANVAS_GUIDE_SECTIONS).toHaveLength(7);
+  });
+
+  it("inlines local images into the artboards it saves, and the fold keeps the bytes", async () => {
+    const tools = register();
+    const png = join(base, "hero.png");
+    await writeFile(png, PNG);
+    const args = { title: "Photos", artboards: [{ name: "Hero", width: 1440, html: `<main><img src="${png}"></main>` }] };
+    const result = await tools.canvas.execute("call-0", args, undefined, undefined, { sessionManager: { getBranch: () => [] } }) as ToolResult;
+    expect(result.details.documents).toEqual([{ id: "hero", html: expect.stringContaining("data:image/png;base64,") }]);
+    expect(result.content[0].text).toContain("Local images were copied into 1 artboard");
+    expect(JSON.stringify(result.details)).not.toContain(png);
+    const canvas = canvasesFromBranch(branch([{ args, details: result.details as CanvasDetails }])).get("photos")!;
+    expect(canvas.artboards[0]).toMatchObject({ id: "hero", savedHtml: true });
+    expect(canvas.artboards[0].html).toContain("data:image/png;base64,");
+  });
+
+  it("refuses the call when a referenced image is missing", async () => {
+    const tools = register();
+    const missing = join(base, "missing.png");
+    await expect(tools.canvas.execute("call-0", { title: "T", artboards: [{ name: "A", width: 400, html: `<img src="${missing}">` }] }, undefined, undefined, { sessionManager: { getBranch: () => [] } }))
+      .rejects.toThrow(/missing\.png/);
+  });
+
+  it("shortens inlined image data in the markup canvas_look returns", async () => {
+    const tools = register({
+      canvas: async (request: { artboards: Array<{ id: string; width: number }> }) => ({
+        artboards: request.artboards.map((artboard) => ({ id: artboard.id, width: artboard.width, height: 600, contentHeight: 600, errors: [] })),
+      }),
+    });
+    const payload = "A".repeat(400);
+    const calls = accept([{ title: "One", artboards: [{ name: "A", width: 400, html: `<img src="data:image/png;base64,${payload}">` }] }]);
+    const ctx = { sessionManager: { getBranch: () => branch(calls) } };
+    const result = await tools.canvas_look.execute("look", { html: true }, undefined, undefined, ctx) as ToolResult;
+    const text = result.content.filter((block) => block.type === "text").map((block) => block.text).join("\n");
+    expect(text).toContain("shortened to its type and size");
+    expect(text).toContain("data:image/png;base64,…(400 characters)");
+    expect(text).not.toContain(payload);
   });
 
   it("looks at the artboards changed last, with screenshots and a report", async () => {

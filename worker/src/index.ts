@@ -29,6 +29,7 @@ import { buildSkillCreatorPrompt } from "./builtin/skill-creator/guide.js";
 import { buildCanvasPrompt } from "./builtin/canvas/guide.js";
 import type { BuiltinHost, SubagentOutcome } from "./builtin/host.js";
 import { normalizeMessage as normalizeSavedMessage, textFromContent, THUMBNAIL_OPTIONS } from "./message-normalization.js";
+import { canvasDocuments } from "./canvas-documents.js";
 import { visualDocument } from "./visual-document.js";
 import { BACKGROUND_SUBAGENT_MESSAGE, backgroundCalls, interruptedDetails, projectBackgroundCards } from "./builtin/subagents/state.js";
 import { SUBAGENT_TOOL_NAME } from "./builtin/subagents/types.js";
@@ -2065,6 +2066,9 @@ async function handle(command: WorkerCommand): Promise<void> {
     } else if (command.type === "visual_document") {
       respond(command.id, visualDocument(transcriptEntries(session.sessionManager.getBranch()).map((entry) => entry.raw), command.toolCallId));
       return;
+    } else if (command.type === "canvas_documents") {
+      respond(command.id, canvasDocuments(session.sessionManager.getBranch(), command.canvas));
+      return;
     } else if (command.type === "message_image") {
       respond(command.id, await userMessageImage(command.entryId, command.index ?? 0));
       return;
@@ -2505,7 +2509,7 @@ function shutdownProcess(code = 0, commandId?: string): void {
 }
 
 /** Commands the host sends with `worker::request` and whose failures it reports itself. */
-const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "list_commands", "execute_command", "init_agents", "skill_creator", "start_canvas", "compact", "dequeue", "queue_message", "steer_message", "goal_control", "watch_subagent", "tool_image", "visual_document", "message_image", "set_mode"]);
+const REQUEST_COMMANDS = new Set<WorkerCommand["type"]>(["navigate", "resend", "list_commands", "execute_command", "init_agents", "skill_creator", "start_canvas", "compact", "dequeue", "queue_message", "steer_message", "goal_control", "watch_subagent", "tool_image", "visual_document", "canvas_documents", "message_image", "set_mode"]);
 
 /**
  * The original of an image a tool result returned, for the transcript's lightbox: the image at
@@ -2635,6 +2639,7 @@ function bypassesQueue(command: WorkerCommand): boolean {
     case "watch_subagent":
     case "tool_image":
     case "visual_document":
+    case "canvas_documents":
     case "message_image":
       return true;
     case "goal_control":

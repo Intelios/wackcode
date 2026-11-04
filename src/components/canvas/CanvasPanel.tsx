@@ -3,6 +3,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ZOOM_STEP, fitBounds, zoomTo, type Camera, type Size } from "../../canvas-camera";
 import { boundsOf, layoutCanvas } from "../../canvas-layout";
 import { artboardMention, resolveArtboardHtml, type CanvasBoard as Board } from "../../canvas-state";
+import { useCanvasDocuments } from "../../hooks/useCanvasDocuments";
 import { Icon } from "../Icons";
 import { MenuButton } from "../ui/MenuButton";
 import { CanvasBoard } from "./CanvasBoard";
@@ -45,9 +46,21 @@ interface CanvasPanelProps {
   onExport: (artboard: ArtboardExport) => void;
 }
 
+/** A revision's fingerprint: length plus a sampled hash, cheap enough for megabyte documents. */
+function fingerprint(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 7) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
 function signature(board: Board, id: string): string {
   const artboard = board.artboards.find((item) => item.id === id);
-  return artboard ? JSON.stringify([artboard.name, artboard.width, artboard.height, artboard.notes, resolveArtboardHtml(board, artboard)]) : "";
+  if (!artboard) return "";
+  const html = resolveArtboardHtml(board, artboard);
+  return JSON.stringify([artboard.name, artboard.width, artboard.height, artboard.notes, html.length, fingerprint(html)]);
 }
 
 const ease = (t: number) => 1 - (1 - t) ** 3;
@@ -62,6 +75,10 @@ export function CanvasPanel({ taskId, boards, board, session, activity, progress
   const reduce = useReducedMotion() ?? false;
   const state = useCanvasView(session, taskId, board.id);
   const { camera, measured, selected, entered, tool } = state;
+  // Artboards whose markup carries saved images draw from fetched bytes; the folded board
+  // stays the record for arrival motions, so a fetch landing never glints anything.
+  const documents = useCanvasDocuments(taskId, board);
+  const shown = documents.board;
   const root = useRef<HTMLElement>(null);
   const [presenting, setPresenting] = useState(false);
   const [viewport, setViewport] = useState<Size>({ width: 0, height: 0 });
@@ -81,6 +98,12 @@ export function CanvasPanel({ taskId, boards, board, session, activity, progress
   const layout = useMemo(() => layoutCanvas(board, measured), [board, measured]);
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
+  const loadStates = useMemo(() => {
+    if (!documents.unloaded.size) return undefined;
+    const states = new Map<string, "loading" | "failed">();
+    for (const id of documents.unloaded) states.set(id, documents.failed ? "failed" : "loading");
+    return states;
+  }, [documents.unloaded, documents.failed]);
 
   const stopGlide = () => {
     if (glideFrame.current) cancelAnimationFrame(glideFrame.current);
@@ -222,15 +245,15 @@ export function CanvasPanel({ taskId, boards, board, session, activity, progress
 
   const setTool = useCallback((next: CanvasTool) => update({ tool: next }), [update]);
   const exportArtboard = useCallback((id: string, format: "png" | "html") => {
-    const artboard = board.artboards.find((item) => item.id === id);
+    const artboard = shown.artboards.find((item) => item.id === id);
     const placed = layoutRef.current.artboards.find((item) => item.id === id);
-    if (artboard && placed) onExport({ name: artboard.name, html: resolveArtboardHtml(board, artboard), width: placed.width, height: placed.height, format });
-  }, [board, onExport]);
+    if (artboard && placed) onExport({ name: artboard.name, html: resolveArtboardHtml(shown, artboard), width: placed.width, height: placed.height, format });
+  }, [shown, onExport]);
   const presented = useMemo(() => layout.artboards.flatMap((placed) => {
-    const artboard = board.artboards.find((item) => item.id === placed.id);
+    const artboard = shown.artboards.find((item) => item.id === placed.id);
     return artboard ? [{ id: artboard.id, name: artboard.name, group: artboard.group, width: placed.width, height: placed.height,
-      fixedHeight: artboard.height !== undefined, html: resolveArtboardHtml(board, artboard) }] : [];
-  }), [layout, board]);
+      fixedHeight: artboard.height !== undefined, html: resolveArtboardHtml(shown, artboard) }] : [];
+  }), [layout, shown]);
   const present = () => {
     update({ entered: undefined });
     setPresenting(true);
@@ -256,8 +279,10 @@ export function CanvasPanel({ taskId, boards, board, session, activity, progress
     }}>
       <div className="canvas-stage">
         <CanvasBoard
-          board={board}
+          board={shown}
           visible
+          loadStates={loadStates}
+          onRetryLoad={documents.retry}
           tool={tool}
           onTool={setTool}
           layout={layout}

@@ -20,10 +20,12 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { BuiltinHost } from "../host.js";
+import { inlineVisualImages } from "../visual-images.js";
 import { CANVAS_GUIDE_SECTIONS, canvasGuide } from "./guide.js";
 import {
   CANVAS_TOOL_NAME, MAX_ARTBOARDS_PER_CALL, MAX_ARTBOARD_HEIGHT, MAX_ARTBOARD_WIDTH, MAX_CANVAS_TITLE, MIN_ARTBOARD_SIZE,
-  type Artboard, type Canvas, type CanvasDetails, canvasesFromBranch, describeArtboard, planCall, resolveArtboardHtml,
+  type Artboard, type Canvas, type CanvasDetails, type CanvasDocument, canvasesFromBranch, describeArtboard,
+  documentCapError, planCall, resolveArtboardHtml,
 } from "./state.js";
 
 export { CANVAS_TOOL_NAME } from "./state.js";
@@ -48,7 +50,7 @@ const ARTBOARD_SCHEMA = {
     group: { type: "string", description: "Row label; artboards with the same group sit in one row, e.g. \"Themes\" or \"Inbox\"." },
     width: { type: "number", description: `Width in CSS pixels (${MIN_ARTBOARD_SIZE}-${MAX_ARTBOARD_WIDTH}): 1440 desktop, 1280 laptop, 834 tablet, 390 phone. Required for a new artboard, except a variant, which takes its base's size.` },
     height: { type: "number", description: `Height in CSS pixels (${MIN_ARTBOARD_SIZE}-${MAX_ARTBOARD_HEIGHT}) for a fixed screen; omit to fit the content. A variant that gives no width takes its base's height too.` },
-    html: { type: "string", description: "A self-contained HTML body with its own <style> and optional <script>. No network: inline every asset." },
+    html: { type: "string", description: "A self-contained HTML body with its own <style> and optional <script>. No network: inline every asset; local images may use absolute file paths, and their bytes are copied into the chat when the call is accepted." },
     basedOn: { type: "string", description: "Id or name of another artboard on this canvas whose markup this one reuses; pair with css. Not with html." },
     css: { type: "string", description: "CSS appended after the markup, e.g. a :root { --… } theme override for a variant." },
     notes: { type: "string", description: "One line on what this artboard is betting on, shown under its name." },
@@ -99,7 +101,7 @@ function branchCanvases(ctx: unknown): Map<string, Canvas> {
 }
 
 /** What the model reads after a call: what changed, and every artboard's id so it can revise. */
-export function summarizeCall(canvas: Canvas, details: CanvasDetails, created: boolean): string {
+export function summarizeCall(canvas: Canvas, details: CanvasDetails, created: boolean, savedDocuments = 0): string {
   const byId = new Map(canvas.artboards.map((artboard) => [artboard.id, artboard]));
   const lines = [`${created ? "Started" : "Updated"} canvas “${canvas.title}” (id: ${canvas.id}).`];
   const added = details.applied.filter((item) => item.op === "add").map((item) => byId.get(item.id)).filter((item): item is Artboard => !!item);
@@ -107,6 +109,7 @@ export function summarizeCall(canvas: Canvas, details: CanvasDetails, created: b
   if (added.length) lines.push(`Added: ${added.map(describeArtboard).join("; ")}.`);
   if (updated.length) lines.push(`Revised: ${updated.map(describeArtboard).join("; ")}.`);
   if (details.removed.length) lines.push(`Removed: ${details.removed.join(", ")}.`);
+  if (savedDocuments) lines.push(`Local images were copied into ${savedDocuments} artboard${savedDocuments === 1 ? "" : "s"}; the canvas keeps their bytes, so moving or deleting the files won't change what you drew.`);
   lines.push(`On the canvas now (${canvas.artboards.length}): ${canvas.artboards.map((artboard) => artboard.id).join(", ") || "nothing"}.`);
   lines.push("The user sees it in the Canvas tab beside the chat. Check what you changed with canvas_look, then keep your reply short instead of describing what they can see.");
   return lines.join("\n");
@@ -140,6 +143,47 @@ export interface CanvasLookDetails {
 
 const MAX_REPORTED_ERRORS = 5;
 const MAX_ERROR_CHARS = 300;
+
+/**
+ * Local images referenced by absolute path in an artboard's markup or stylesheet are inlined
+ * here and saved in the result, so the artboard outlives the files — the same policy
+ * `show_visual` uses (`visual-images.ts`). Only fields that referenced images are returned,
+ * and the planned canvas carries the inlined bytes so the size caps see the real documents.
+ */
+async function inlineArtboardImages(canvas: Canvas, details: CanvasDetails): Promise<CanvasDocument[]> {
+  const documents: CanvasDocument[] = [];
+  for (const applied of details.applied) {
+    const artboard = canvas.artboards.find((item) => item.id === applied.id);
+    if (!artboard) continue;
+    const document: CanvasDocument = { id: artboard.id };
+    if (artboard.html !== undefined) {
+      const inlined = await inlineVisualImages(artboard.html, { label: "artboard" });
+      if (inlined.inlined) document.html = inlined.html;
+    }
+    if (artboard.css !== undefined) {
+      const inlined = await inlineVisualImages(artboard.css, { label: "artboard" });
+      if (inlined.inlined) document.css = inlined.html;
+    }
+    if (document.html === undefined && document.css === undefined) continue;
+    documents.push(document);
+    if (document.html !== undefined) artboard.html = document.html;
+    if (document.css !== undefined) artboard.css = document.css;
+  }
+  const capError = documentCapError(canvas, documents);
+  if (capError) throw new Error(capError);
+  return documents;
+}
+
+/** Image bytes saved into a document never echo back into the model's context whole. */
+function collapseDataUrls(html: string): { html: string; collapsed: boolean } {
+  let collapsed = false;
+  const shortened = html.replace(/data:([a-z0-9.+-]+\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=]{257,})/gi,
+    (_match, mime: string, payload: string) => {
+      collapsed = true;
+      return `data:${mime};base64,…(${payload.length} characters)`;
+    });
+  return { html: shortened, collapsed };
+}
 
 function reportLine(artboard: Artboard, rendered: CanvasLookArtboard): string {
   const fixed = artboard.height !== undefined;
@@ -176,9 +220,10 @@ export function createCanvasExtension(host: BuiltinHost) {
       async execute(_toolCallId, params: unknown, _signal, _onUpdate, ctx) {
         const planned = planCall(branchCanvases(ctx), params);
         if (!planned.ok) throw new Error(planned.error);
+        const documents = await inlineArtboardImages(planned.canvas, planned.details);
         return {
-          content: [{ type: "text" as const, text: summarizeCall(planned.canvas, planned.details, planned.created) }],
-          details: planned.details,
+          content: [{ type: "text" as const, text: summarizeCall(planned.canvas, planned.details, planned.created, documents.length) }],
+          details: { ...planned.details, ...(documents.length ? { documents } : {}) },
         };
       },
     });
@@ -261,6 +306,8 @@ export function createCanvasExtension(host: BuiltinHost) {
           report.push(entry);
           lines.push(reportLine(artboard, entry));
         }
+        const markup = input.html === true ? picked.map((artboard, index) => ({ artboard, ...collapseDataUrls(documents[index].html) })) : [];
+        if (markup.some((item) => item.collapsed)) lines.push("Inlined image data in the markup below is shortened to its type and size.");
         content.push({ type: "text", text: lines.join("\n") });
         for (const artboard of picked) {
           const image = rendered.find((item) => item?.id === artboard.id)?.image;
@@ -268,10 +315,8 @@ export function createCanvasExtension(host: BuiltinHost) {
           content.push({ type: "text", text: `Screenshot of ${artboard.id} (“${artboard.name}”):` });
           content.push({ type: "image", data: image.data, mimeType: image.mimeType ?? "image/png" });
         }
-        if (input.html === true) {
-          for (const [index, artboard] of picked.entries()) {
-            content.push({ type: "text", text: `Markup of ${artboard.id} (“${artboard.name}”), resolved:\n\n\`\`\`html\n${documents[index].html}\n\`\`\`` });
-          }
+        for (const item of markup) {
+          content.push({ type: "text", text: `Markup of ${item.artboard.id} (“${item.artboard.name}”), resolved:\n\n\`\`\`html\n${item.html}\n\`\`\`` });
         }
         return {
           content,

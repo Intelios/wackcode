@@ -869,6 +869,9 @@ export type WorkerCommand =
   | { id: string; type: "tool_image"; toolCallId: string; index?: number }
   /** Saved visual HTML with inlined images, fetched on demand rather than in snapshots. */
   | { id: string; type: "visual_document"; toolCallId: string }
+  /** A canvas's saved artboard documents (images inlined at call time), fetched on demand
+   *  rather than in snapshots. Bypasses the command queue like `visual_document`. */
+  | { id: string; type: "canvas_documents"; canvas: string }
   /**
    * The original image a user message attached (answered with an `ImageContent` or null), for
    * the transcript's lightbox. Keyed by the message's session entry and the image's position

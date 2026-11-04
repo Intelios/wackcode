@@ -24,7 +24,7 @@ Commands run one at a time on a serial queue, and a prompt holds the queue until
 - `abort`, `extension_ui_response`, `browser_response`, `computer_response`, `web_response`, `chat_response`, `canvas_response`: answers the running run is waiting on.
 - `queue_message`, `dequeue`: the user's steering and follow-up messages.
 - `goal_control` except `set`: pause, resume and clear act on a live loop. `set` starts a run, so it queues.
-- `watch_subagent`, `tool_image`, `message_image`, `visual_document`: read-only peeks; panels and saved visuals can open while a run holds the queue.
+- `watch_subagent`, `tool_image`, `message_image`, `visual_document`, `canvas_documents`: read-only peeks; panels and saved visuals can open while a run holds the queue.
 - `set_subagents` when disabling: cancels children even if the parent is blocked waiting for them.
 
 Before the first `init` settles there is no session to act on, so a bypass command is held on `initSettled` rather than bounced with "Worker is not initialized": the host sends `init` and the first prompt back to back, and a stop or a follow-up sent in that window must survive it. The gate opens one macrotask later — after the microtasks queued behind `init` have run — so a held stop finds the just-started first run live and stops it through the ordinary path, and a held follow-up finds a streaming session to queue onto.
@@ -272,21 +272,35 @@ tools, all read-only, so Plan and Ultra Plan allow them (the plan-mode helper li
   a `name`, a `group` (its row), a `width`, an optional `height` (absent: fit the content) and
   either `html` or `basedOn` another artboard plus `css` appended after it, so theme variants cost
   a few hundred bytes and follow their base; a variant that gives no width takes its base's size
-  (recorded in `applied`, since the arguments lack it). Limits are in `state.ts` (64 KiB per artboard,
-  192 KiB per call, 24 per canvas; a base is never a variant and can't be removed under one).
+  (recorded in `applied`, since the arguments lack it). Limits are in `state.ts` (1 MiB per artboard,
+  3 MiB per call, 24 per canvas; a base is never a variant and can't be removed under one).
 - **`canvas_look`** asks the host to render artboards offscreen, 4 at a time (more are named for
   a next call rather than refused, since Pi rejects a call that breaks a schema's `maxItems`) (`canvas_request`, answered
   by `canvas_response`, which bypasses the queue like the browser channel) and returns a
   screenshot of each when the model has vision, a report (rendered size, overflow, script
   errors), and optionally the resolved markup — what an agent needs to implement a chosen design
-  after compaction.
+  after compaction. Inlined image data in that markup is shortened to its type and size, so
+  an 8 MiB document never dumps base64 into the model's context.
+- **Local images** referenced by absolute path in an artboard's `html` or `css` (quoted attributes
+  and CSS `url(…)`) are inlined at call time by the same policy `show_visual` uses
+  (`builtin/visual-images.ts`): file signatures decide image-ness, 4 MiB per image, and the
+  finished artboard document is capped at 8 MiB (24 MiB per call, `documentCapError`). A missing
+  or invalid image refuses the call naming the path. The inlined bytes are saved in the result's
+  `documents` and never ride snapshots: the shared normalizer replaces them with `saved` markers
+  (which fields of which artboards were inlined), both folds keep the matching `savedHtml`/
+  `savedCss` flags, and `canvas_documents` (a read-only peek, `canvas-documents.ts`) serves the
+  current branch's bytes for one canvas on demand — so an artboard outlives the files it
+  referenced, and the Canvas tab fetches what it draws. Chat images are reachable through
+  `list_images` → `read_image`'s local file.
 
 **The branch is the record.** The markup stays in the call's arguments, which Pi saves; the
-result's `details` (`{ v: 1, canvas, title, applied: [{ index, id, op, basedOn?, width?, height? }], removed }`)
-say which artboard each argument became, with no HTML. `canvasesFromBranch` folds the accepted
+result's `details` (`{ v: 1, canvas, title, applied: [{ index, id, op, basedOn?, width?, height? }], removed,
+documents? }`) say which artboard each argument became, with no HTML except inlined image bytes
+(`documents`, replaced by `saved` markers in snapshots). `canvasesFromBranch` folds the accepted
 calls, so rewinds, forks and restarts need nothing else, and the renderer folds the snapshot the
 same way (`src/canvas-state.ts`). Both suites run the same `fold-cases.json`; keep the two folds
-identical.
+identical — the shared cases carry the snapshot shape, and each suite separately pins the half
+only it can see (the worker applies `documents`' bytes; the renderer fetches them).
 
 - Code chats only: never in `chatFactories`, and `start_canvas` and `/canvas` are refused in Chat
   mode. Sub-agents never get the tools (`childToolNames`): a child has no canvas.

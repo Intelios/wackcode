@@ -19,6 +19,9 @@ interface CanvasArtboardProps {
   html: string;
   /** Its height is fixed; otherwise its frame's reported height is the artboard's. */
   fixedHeight: boolean;
+  /** Its document is saved in the chat: hold the frame while it loads, or show the retry state. */
+  loadState?: "loading" | "failed";
+  onRetryLoad?: () => void;
   /** Mount the frame. Off-screen artboards wait until they are first seen. */
   mounted: boolean;
   selected: boolean;
@@ -42,10 +45,12 @@ interface CanvasArtboardProps {
  * document can't send or open anything; it only reports its size and its script errors.
  */
 export const CanvasArtboard = memo(function CanvasArtboard({
-  placed, name, notes, html, fixedHeight, mounted, selected, entered, motion, onMeasure, onSelect, onZoomTo, onMention, onExport, onPlay, onEscape,
+  placed, name, notes, html, fixedHeight, loadState, onRetryLoad, mounted, selected, entered, motion, onMeasure, onSelect, onZoomTo, onMention, onExport, onPlay, onEscape,
 }: CanvasArtboardProps) {
   const frameRef = useRef<HTMLIFrameElement>(null);
-  const { src, failed, fail, retry } = useStagedVisual(html, "artboard", mounted);
+  const { src, failed: stageFailed, fail, retry: restage } = useStagedVisual(html, "artboard", mounted && loadState === undefined);
+  const failed = stageFailed || loadState === "failed";
+  const retry = loadState === "failed" ? onRetryLoad : restage;
   const [ready, setReady] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   useFrameTheme(frameRef, src);
@@ -53,10 +58,10 @@ export const CanvasArtboard = memo(function CanvasArtboard({
   useEffect(() => { setReady(false); setErrors([]); }, [src]);
 
   useEffect(() => {
-    if (!src || ready) return;
+    if (!src || ready || loadState !== undefined) return;
     const timer = window.setTimeout(fail, LOAD_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
-  }, [src, ready]);
+  }, [src, ready, loadState]);
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {

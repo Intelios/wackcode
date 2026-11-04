@@ -31,13 +31,16 @@ export function canvasProgress(call: NormalizedBlock) {
     const characters = [item.html, item.css].reduce<number>((total, value) => total + (typeof value === "string" ? value.length : 0), 0);
     return [{ id: typeof item.id === "string" ? item.id : undefined, name, characters }];
   });
+  const characters = artboards.reduce((sum, item) => sum + item.characters, 0);
+  const removed = Array.isArray(args.remove) ? args.remove.length : 0;
   return {
     canvasId: typeof args.canvas === "string" ? args.canvas : undefined,
     title: typeof args.title === "string" ? args.title : undefined,
     artboards,
-    characters: artboards.reduce((sum, item) => sum + item.characters, 0),
-    removed: Array.isArray(args.remove) ? args.remove.length : 0,
-    // Metadata changes count as fresh input too, even before the first HTML character.
-    signature: JSON.stringify(args),
+    characters,
+    removed,
+    // Metadata changes count as fresh input too, even before the first HTML character. A cheap
+    // fingerprint, never the arguments: a call can stream megabytes of markup.
+    signature: `${typeof args.canvas === "string" ? args.canvas : typeof args.title === "string" ? args.title : ""}|${entries.length}|${characters}|${artboards.map((item) => item.name).join("\n")}|${removed}`,
   };
 }

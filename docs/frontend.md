@@ -8,7 +8,7 @@
 - **Events:** `App.tsx` is the only place that listens to Tauri events: `worker-event`, `run-event`, `subscription-login-event` and `native-chat-navigation` (the menu bar). A worker protocol change ends in its `worker-event` switch; see [worker.md](worker.md#protocol-changes). `title_changed` carries a `source` — `"opening"` for the first-run stand-in, `"auto"` for the model's title; only the latter bumps `titlePulses`, which drives the header's swipe+glint and the sidebar row's crossfade.
 - **Render isolation:** partials still update App's runtime, including the live canvas and sub-agent projections. `Sidebar`, `ChatHeader`, the chat tab items and composer editor keep stable props across partials. `useStableCallbacks` supplies stable event props that call the latest committed handler; an async call already started retains its originating closure. Code's live composer pills update through a context slot without rendering the editor. In Chat, the header and composer are memoized separately from the live conversation; the header still updates when thinking/live state changes.
 - **`api.ts`** is the only bridge to Rust: one typed `invoke` wrapper per command. Terminal output arrives on a `Channel`, not an event.
-- **Components are presentational.** The exceptions call `api` directly because they wrap one self-contained surface: `SettingsPage.tsx` (and `IntegrationsSection.tsx`, `AboutSection.tsx`), `BrowserPanel.tsx` (positions the native web view), `TerminalPanel.tsx` and `RunPanel.tsx` (stream their PTYs), `hooks/useStagedVisual.ts` (stages a visual reply's or a canvas artboard's document through `stageVisual` for `VisualCard` and `CanvasArtboard`, the one call that fits their own sandboxed surface) and `markdown-components.tsx` (its link override routes http(s) clicks through `revealPath`; the webview cannot open links itself) and `link-opener.ts` (a web_search result opens in the chat's browser preview through App's opener, otherwise through `revealPath`). Don't add more without the same reason.
+- **Components are presentational.** The exceptions call `api` directly because they wrap one self-contained surface: `SettingsPage.tsx` (and `IntegrationsSection.tsx`, `AboutSection.tsx`), `BrowserPanel.tsx` (positions the native web view), `TerminalPanel.tsx` and `RunPanel.tsx` (stream their PTYs), `hooks/useStagedVisual.ts` (stages a visual reply's or a canvas artboard's document through `stageVisual` for `VisualCard` and `CanvasArtboard`, the one call that fits their own sandboxed surface), `hooks/useCanvasDocuments.ts` (fetches a canvas's saved image documents through `canvasDocuments`, the on-demand pair to the snapshots' `saved` markers), and `markdown-components.tsx` (its link override routes http(s) clicks through `revealPath`; the webview cannot open links itself) and `link-opener.ts` (a web_search result opens in the chat's browser preview through App's opener, otherwise through `revealPath`). Don't add more without the same reason.
 - **Reply presentation scope:** App's `.app-shell` has `data-screen="workspace"` or `"settings"` independently of `data-area`. Transparent visual overrides use that marker; expanded visual overlays use explicit `body:has(.app-shell[data-screen="workspace"])` selectors. These rules do not replace the established shell, tool sheets or shared control styling. Decorative backdrops handle contrast with window-wide dimming or tint, never a transcript-sized overlay. Transcript and turn wrappers stay unpositioned so their offsets resolve in the scroll viewport for the scroll rail.
 
 ## Model reference catalog
@@ -128,6 +128,16 @@ Chat mode has no canvas tools and never shows this feedback.
 New artboards still pop, revised ones glint, and the camera follows changes until the user pans
 away, then offers an arrival pill. “Mention in chat” inserts plain text in the draft. Its sandbox
 and worker tools are unchanged.
+
+**Saved image documents.** An artboard whose markup carries images inlined at call time keeps
+its bytes in the call's result, not the snapshot: the fold only marks whose html/css they are
+(`savedHtml`/`savedCss`), and `useCanvasDocuments` fetches the current board's documents
+(`canvas_documents`) for the panel to overlay before staging, exporting, copying or presenting.
+Artboards waiting on their first fetch hold their frame; a failed fetch shows the drawn-failed
+state with a retry that refetches, while a refetch keeps serving the last bytes so a revision
+never blanks the board. Arrival motions read the folded markup, so a fetch landing never glints
+anything. A model-less chat can't fetch, so such artboards show the failed state — the same
+limitation saved visuals have.
 
 **Suggested tasks** (`SuggestionTray.tsx`) are the follow-ups a turn filed with `suggest_task`,
 drawn as one tray under that turn's answer. `layoutWorkTurns` collects the turn's accepted

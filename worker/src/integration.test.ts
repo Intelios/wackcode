@@ -2483,6 +2483,55 @@ describe("built-in extensions", () => {
     expect(restored.worker.outputs.filter((output) => output.type === "worker_error")).toEqual([]);
   });
 
+  it("saves a canvas's inlined images outside snapshots and serves them on demand", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-canvas-documents-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const image = solidPng(32, 24);
+    const imagePath = join(workspace, "local.png");
+    await writeFile(imagePath, Buffer.from(image, "base64"));
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "canvas-documents");
+    cleanup.push(() => worker.shutdown());
+    const html = `<main><img src="${imagePath}" alt="Saved picture"></main>`;
+    const args = { title: "Saved picture", artboards: [{ name: "Hero", width: 1440, html }] };
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "canvas-run", message: `mcp: canvas ${JSON.stringify(args)}` });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "canvas-run" && output.state === "idle");
+    const result = worker.view!.messages.flatMap((message) => message.blocks).find((block) => block.type === "tool-result" && block.toolName === "canvas")!;
+    expect(result.details).toMatchObject({ v: 1, canvas: "saved-picture", saved: [{ id: "hero", html: true }] });
+    expect(result.details).not.toHaveProperty("documents");
+    const sessionFile = worker.view!.sessionFile!;
+    const cold = await readSavedSession({ sessionFile, taskId: "canvas-documents", mode: "build", thinkingLevel: "off" });
+    expect(JSON.stringify(cold.messages)).not.toContain(image);
+    // Snapshot and activity frames carry the authored path, never the copied bytes.
+    expect(JSON.stringify(worker.outputs.filter((output) => emitted(output) || output.type === "ready" || output.type === "activity"))).not.toContain(image);
+
+    // A live model request holds the serial queue. Canvas retrieval must still answer.
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "held-run", message: "wait until stopped" });
+    await provider.waitForSlowRequest();
+    const fetch = crypto.randomUUID();
+    worker.send({ id: fetch, type: "canvas_documents", canvas: "saved-picture" });
+    const answer = await worker.waitFor((output) => output.type === "response" && output.id === fetch);
+    expect(answer).toMatchObject({ success: true, result: {
+      v: 1, canvas: "saved-picture",
+      artboards: [{ id: "hero", html: `<main><img src="data:image/png;base64,${image}" alt="Saved picture"></main>` }],
+    } });
+    worker.send({ id: crypto.randomUUID(), type: "abort" });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "held-run" && output.state === "idle");
+    await worker.shutdown();
+    await rm(imagePath);
+
+    const restored = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "canvas-documents", sessionFile);
+    cleanup.push(() => restored.worker.shutdown());
+    const fetchSaved = crypto.randomUUID();
+    restored.worker.send({ id: fetchSaved, type: "canvas_documents", canvas: "saved-picture" });
+    expect(await restored.worker.waitFor((output) => output.type === "response" && output.id === fetchSaved)).toMatchObject({ success: true, result: answer.result });
+    const missing = crypto.randomUUID();
+    restored.worker.send({ id: missing, type: "canvas_documents", canvas: "missing" });
+    expect(await restored.worker.waitFor((output) => output.type === "response" && output.id === missing)).toMatchObject({ success: false, error: "That canvas is no longer in this chat." });
+    expect(restored.worker.outputs.filter((output) => output.type === "worker_error")).toEqual([]);
+  });
+
   it("keeps computer use off until it is switched on, then round-trips a screenshot while the prompt holds the queue", async () => {
     const provider = await startMockProvider();
     cleanup.push(provider.close);

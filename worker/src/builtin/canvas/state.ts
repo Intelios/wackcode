@@ -8,6 +8,13 @@
  * (`src/canvas-state.ts`); keep the two rules identical (`state.test.ts` and
  * `canvas-state.test.ts` pin the same cases).
  *
+ * Local images are the one field that outgrows its arguments: the tool inlines their bytes at
+ * call time and saves them in the result's `documents`, which snapshots replace with `saved`
+ * (the same entries without the bytes) so the renderer knows to fetch them (`canvas_documents`).
+ * The worker's fold applies the bytes; the renderer's fold keeps only the flags, which say
+ * whose html/css currently comes from a saved document. Both folds run the same shared cases,
+ * which carry the snapshot shape.
+ *
  * Resolution: a variant (`basedOn`) takes its base's current markup, then its own `css` is
  * appended as a `<style>`, so revising a base restyles every variant. A base is never itself a
  * variant, and it can't be removed while a variant depends on it. A new variant that gives no
@@ -18,10 +25,14 @@ export const MAX_CANVAS_TITLE = 60;
 export const MAX_ARTBOARD_NAME = 48;
 export const MAX_ARTBOARD_GROUP = 40;
 export const MAX_ARTBOARD_NOTES = 200;
-export const MAX_ARTBOARD_HTML_BYTES = 64 * 1024;
-export const MAX_ARTBOARD_CSS_BYTES = 8 * 1024;
+export const MAX_ARTBOARD_HTML_BYTES = 1024 * 1024;
+export const MAX_ARTBOARD_CSS_BYTES = 128 * 1024;
 export const MAX_ARTBOARDS_PER_CALL = 6;
-export const MAX_CALL_BYTES = 192 * 1024;
+export const MAX_CALL_BYTES = 3 * 1024 * 1024;
+/** A resolved artboard document, with local images inlined, may grow past its authored markup. */
+export const MAX_ARTBOARD_DOCUMENT_BYTES = 8 * 1024 * 1024;
+/** Everything one call saves into its result, so a single entry stays bounded. */
+export const MAX_CALL_DOCUMENT_BYTES = 24 * 1024 * 1024;
 export const MAX_ARTBOARDS_PER_CANVAS = 24;
 export const MIN_ARTBOARD_SIZE = 200;
 export const MAX_ARTBOARD_WIDTH = 2560;
@@ -39,6 +50,24 @@ export interface Artboard {
   basedOn?: string;
   css?: string;
   notes?: string;
+  /** The html/css currently on this artboard came from a saved document (images inlined). */
+  savedHtml?: true;
+  savedCss?: true;
+}
+
+/** One artboard's field values with local images inlined, kept in the call's result so the
+ *  artboard outlives the files it referenced. */
+export interface CanvasDocument {
+  id: string;
+  html?: string;
+  css?: string;
+}
+
+/** The snapshot shape of a `CanvasDocument`: which fields' bytes live in the saved result. */
+export interface CanvasSavedFields {
+  id: string;
+  html?: true;
+  css?: true;
 }
 
 export interface Canvas {
@@ -69,6 +98,10 @@ export interface CanvasDetails {
   title: string;
   applied: CanvasApplied[];
   removed: string[];
+  /** Markup with local images inlined; snapshots replace this with `saved`. */
+  documents?: CanvasDocument[];
+  /** Which fields of which artboards this call inlined images into, without the bytes. */
+  saved?: CanvasSavedFields[];
 }
 
 export function isCanvasDetails(value: unknown): value is CanvasDetails {
@@ -99,6 +132,42 @@ function fieldsOf(raw: unknown): Fields {
   return fields;
 }
 
+/** A saved field's flag, and its bytes when the result carries them. */
+type SavedEntry = { id: string; html?: string; css?: string; htmlSaved?: true; cssSaved?: true };
+
+/** Which fields of which artboards this call inlined images into. Raw results carry the bytes
+ *  in `documents`; snapshots carry the same entries as `saved` without them. */
+function savedEntries(details: CanvasDetails): Map<string, SavedEntry> {
+  const saved = new Map<string, SavedEntry>();
+  const put = (id: string) => {
+    let entry = saved.get(id);
+    if (!entry) { entry = { id }; saved.set(id, entry); }
+    return entry;
+  };
+  for (const entry of details.documents ?? []) {
+    if (!entry || typeof entry !== "object" || typeof entry.id !== "string") continue;
+    const target = put(entry.id);
+    if (typeof entry.html === "string") { target.html = entry.html; target.htmlSaved = true; }
+    if (typeof entry.css === "string") { target.css = entry.css; target.cssSaved = true; }
+  }
+  for (const entry of details.saved ?? []) {
+    if (!entry || typeof entry !== "object" || typeof entry.id !== "string") continue;
+    const target = put(entry.id);
+    if (entry.html === true) target.htmlSaved = true;
+    if (entry.css === true) target.cssSaved = true;
+  }
+  return saved;
+}
+
+/** Saved markup replaces the authored field it was inlined from; an authored field clears its
+ *  flag, so a plain revision drops its images and a metadata-only one keeps them. */
+function applySavedFields(artboard: Artboard, fields: Fields, saved: SavedEntry | undefined): void {
+  if (fields.html !== undefined) delete artboard.savedHtml;
+  if (fields.css !== undefined) delete artboard.savedCss;
+  if (saved?.htmlSaved) { artboard.savedHtml = true; if (saved.html !== undefined) artboard.html = saved.html; }
+  if (saved?.cssSaved) { artboard.savedCss = true; if (saved.css !== undefined) artboard.css = saved.css; }
+}
+
 /** Applies one entry: new markup makes an artboard plain, a new base makes it a variant. */
 function merge(existing: Artboard | undefined, id: string, fields: Fields): Artboard {
   const next: Artboard = existing ? { ...existing } : { id, name: id, width: 1440 };
@@ -117,6 +186,7 @@ export function applyCall(canvases: Map<string, Canvas>, args: unknown, details:
   const entries = Array.isArray(input.artboards) ? input.artboards : [];
   const canvas = canvases.get(details.canvas) ?? { id: details.canvas, title: details.title, artboards: [], lastChanged: [] };
   canvas.title = details.title;
+  const saved = savedEntries(details);
   for (const applied of details.applied) {
     if (!applied || typeof applied.id !== "string" || typeof applied.index !== "number") continue;
     const fields = fieldsOf(entries[applied.index]);
@@ -125,6 +195,7 @@ export function applyCall(canvases: Map<string, Canvas>, args: unknown, details:
     if (typeof applied.height === "number") fields.height = applied.height;
     const at = canvas.artboards.findIndex((artboard) => artboard.id === applied.id);
     const next = merge(at >= 0 ? canvas.artboards[at] : undefined, applied.id, fields);
+    applySavedFields(next, fields, saved.get(applied.id));
     if (at >= 0) canvas.artboards[at] = next;
     else canvas.artboards.push(next);
   }
@@ -194,9 +265,7 @@ function bytes(value: string | undefined): number {
   return value ? Buffer.byteLength(value, "utf8") : 0;
 }
 
-function kib(count: number): string {
-  return `${Math.round(count / 1024)} KiB`;
-}
+
 
 export type PlannedCall =
   | { ok: true; canvas: Canvas; details: CanvasDetails; created: boolean }
@@ -290,9 +359,9 @@ export function planCall(canvases: ReadonlyMap<string, Canvas>, input: unknown):
     if (fields.html !== undefined && !fields.html.trim()) return fail(`${at}.html must not be empty.`);
     if (fields.html !== undefined && fields.basedOn !== undefined) return fail(`${at} gives both html and basedOn. A variant takes its base's markup; give it css instead.`);
     if (bytes(fields.html) > MAX_ARTBOARD_HTML_BYTES) {
-      return fail(`${at}.html is ${kib(bytes(fields.html))}, over the ${kib(MAX_ARTBOARD_HTML_BYTES)} limit. Draw it with less markup, or move shared styles into a base artboard.`);
+      return fail(`${at}.html is ${sizeOf(bytes(fields.html))}, over the ${sizeOf(MAX_ARTBOARD_HTML_BYTES)} limit. Draw it with less markup, or move shared styles into a base artboard.`);
     }
-    if (bytes(fields.css) > MAX_ARTBOARD_CSS_BYTES) return fail(`${at}.css is over the ${kib(MAX_ARTBOARD_CSS_BYTES)} limit.`);
+    if (bytes(fields.css) > MAX_ARTBOARD_CSS_BYTES) return fail(`${at}.css is over the ${sizeOf(MAX_ARTBOARD_CSS_BYTES)} limit.`);
     callBytes += bytes(fields.html) + bytes(fields.css);
 
     if (!existing) {
@@ -326,7 +395,7 @@ export function planCall(canvases: ReadonlyMap<string, Canvas>, input: unknown):
     applied.push({ index, id: artboardId, op: existing ? "update" : "add", ...(fields.basedOn !== undefined ? { basedOn: fields.basedOn } : {}), ...inherited });
   }
   if (callBytes > MAX_CALL_BYTES) {
-    return fail(`This call carries ${kib(callBytes)} of markup, over the ${kib(MAX_CALL_BYTES)} limit. Split it into smaller calls.`);
+    return fail(`This call carries ${sizeOf(callBytes)} of markup, over the ${sizeOf(MAX_CALL_BYTES)} limit. Split it into smaller calls.`);
   }
 
   const removed: string[] = [];
@@ -357,4 +426,30 @@ export function describeArtboard(artboard: Artboard): string {
   const size = `${artboard.width}×${artboard.height ?? "auto"}`;
   const variant = artboard.basedOn ? `, variant of ${artboard.basedOn}` : "";
   return `${artboard.id} — “${artboard.name}”${artboard.group ? ` [${artboard.group}]` : ""} ${size}${variant}`;
+}
+
+/** "128 KiB", "1 MiB", "1.5 MiB" — the size the refusals and the guide quote. */
+export function sizeOf(count: number): string {
+  const mib = count / (1024 * 1024);
+  return mib >= 1 ? `${mib % 1 ? mib.toFixed(1) : Math.round(mib)} MiB` : `${Math.round(count / 1024)} KiB`;
+}
+
+/** The size backstops for saved documents: each artboard's resolved markup (a variant's is its
+ *  base's, plus its stylesheet) once local images are inlined, and the call's total. Authored
+ *  markup answers to its own tighter limits in `planCall`. */
+export function documentCapError(canvas: Canvas, documents: readonly CanvasDocument[]): string | undefined {
+  let callBytes = 0;
+  for (const document of documents) {
+    const artboard = canvas.artboards.find((item) => item.id === document.id);
+    if (!artboard) continue;
+    const size = bytes(resolveArtboardHtml(canvas, artboard));
+    if (size > MAX_ARTBOARD_DOCUMENT_BYTES) {
+      return `${describeArtboard(artboard)}: its images make the document ${sizeOf(size)}, over the ${sizeOf(MAX_ARTBOARD_DOCUMENT_BYTES)} limit. Use smaller images or fewer copies.`;
+    }
+    callBytes += size;
+  }
+  if (callBytes > MAX_CALL_DOCUMENT_BYTES) {
+    return `This call's saved documents total ${sizeOf(callBytes)}, over the ${sizeOf(MAX_CALL_DOCUMENT_BYTES)} limit. Split the artboards across calls.`;
+  }
+  return undefined;
 }

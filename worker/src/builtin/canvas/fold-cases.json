@@ -1,5 +1,5 @@
 {
-  "note": "Accepted canvas calls (arguments + result details) and what the board holds after them. The worker (state.test) and the renderer (canvas-state.test) both fold these, so their rules stay identical.",
+  "note": "Accepted canvas calls (arguments + result details) and what the board holds after them. The worker (state.test) and the renderer (canvas-state.test) both fold these, so their rules stay identical. Cases carry the snapshot shape: `saved` markers without the documents' bytes, which only the worker's fold ever sees.",
   "cases": [
     {
       "name": "a base and two variants, then the base is revised",
@@ -416,6 +416,268 @@
               "width": 390,
               "height": null,
               "html": "<main>desk</main>"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "a saved field survives a metadata-only revision",
+      "calls": [
+        {
+          "args": {
+            "title": "Photos",
+            "artboards": [
+              {
+                "name": "Hero",
+                "width": 1440,
+                "html": "<main><img src=\"/tmp/hero.png\"></main>"
+              }
+            ]
+          },
+          "details": {
+            "v": 1,
+            "canvas": "photos",
+            "title": "Photos",
+            "removed": [],
+            "applied": [
+              {
+                "index": 0,
+                "id": "hero",
+                "op": "add"
+              }
+            ],
+            "saved": [
+              {
+                "id": "hero",
+                "html": true
+              }
+            ]
+          }
+        },
+        {
+          "args": {
+            "canvas": "photos",
+            "artboards": [
+              {
+                "id": "hero",
+                "name": "Hero 2"
+              }
+            ]
+          },
+          "details": {
+            "v": 1,
+            "canvas": "photos",
+            "title": "Photos",
+            "removed": [],
+            "applied": [
+              {
+                "index": 0,
+                "id": "hero",
+                "op": "update"
+              }
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "photos": {
+          "title": "Photos",
+          "lastChanged": [
+            "hero"
+          ],
+          "artboards": [
+            {
+              "id": "hero",
+              "name": "Hero 2",
+              "group": null,
+              "width": 1440,
+              "height": null,
+              "html": "<main><img src=\"/tmp/hero.png\"></main>",
+              "savedHtml": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "a plain revision clears the saved field",
+      "calls": [
+        {
+          "args": {
+            "title": "Photos",
+            "artboards": [
+              {
+                "name": "Hero",
+                "width": 1440,
+                "html": "<main><img src=\"/tmp/hero.png\"></main>"
+              }
+            ]
+          },
+          "details": {
+            "v": 1,
+            "canvas": "photos",
+            "title": "Photos",
+            "removed": [],
+            "applied": [
+              {
+                "index": 0,
+                "id": "hero",
+                "op": "add"
+              }
+            ],
+            "saved": [
+              {
+                "id": "hero",
+                "html": true
+              }
+            ]
+          }
+        },
+        {
+          "args": {
+            "canvas": "photos",
+            "artboards": [
+              {
+                "id": "hero",
+                "html": "<main>plain</main>"
+              }
+            ]
+          },
+          "details": {
+            "v": 1,
+            "canvas": "photos",
+            "title": "Photos",
+            "removed": [],
+            "applied": [
+              {
+                "index": 0,
+                "id": "hero",
+                "op": "update"
+              }
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "photos": {
+          "title": "Photos",
+          "lastChanged": [
+            "hero"
+          ],
+          "artboards": [
+            {
+              "id": "hero",
+              "name": "Hero",
+              "group": null,
+              "width": 1440,
+              "height": null,
+              "html": "<main>plain</main>"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "a variant's saved css clears independently of its base's saved html",
+      "calls": [
+        {
+          "args": {
+            "title": "Shots",
+            "artboards": [
+              {
+                "name": "Base",
+                "width": 1280,
+                "height": 800,
+                "html": "<main><img src=\"/tmp/shot.png\"></main>"
+              },
+              {
+                "name": "Dusk",
+                "basedOn": "base",
+                "css": "body{background:url('/tmp/tex.png')}"
+              }
+            ]
+          },
+          "details": {
+            "v": 1,
+            "canvas": "shots",
+            "title": "Shots",
+            "removed": [],
+            "applied": [
+              {
+                "index": 0,
+                "id": "base",
+                "op": "add"
+              },
+              {
+                "index": 1,
+                "id": "dusk",
+                "op": "add",
+                "basedOn": "base",
+                "width": 1280,
+                "height": 800
+              }
+            ],
+            "saved": [
+              {
+                "id": "base",
+                "html": true
+              },
+              {
+                "id": "dusk",
+                "css": true
+              }
+            ]
+          }
+        },
+        {
+          "args": {
+            "canvas": "shots",
+            "artboards": [
+              {
+                "id": "dusk",
+                "css": "body{background:#111}"
+              }
+            ]
+          },
+          "details": {
+            "v": 1,
+            "canvas": "shots",
+            "title": "Shots",
+            "removed": [],
+            "applied": [
+              {
+                "index": 0,
+                "id": "dusk",
+                "op": "update"
+              }
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "shots": {
+          "title": "Shots",
+          "lastChanged": [
+            "dusk"
+          ],
+          "artboards": [
+            {
+              "id": "base",
+              "name": "Base",
+              "group": null,
+              "width": 1280,
+              "height": 800,
+              "html": "<main><img src=\"/tmp/shot.png\"></main>",
+              "savedHtml": true
+            },
+            {
+              "id": "dusk",
+              "name": "Dusk",
+              "group": null,
+              "width": 1280,
+              "height": 800,
+              "html": "<main><img src=\"/tmp/shot.png\"></main>\n<style>body{background:#111}</style>"
             }
           ]
         }

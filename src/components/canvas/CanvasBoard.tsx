@@ -26,6 +26,10 @@ interface CanvasBoardProps {
   onViewport: (size: Size) => void;
   selected?: string;
   entered?: string;
+  /** Artboards whose saved documents are still being fetched: hold their frames, or show the
+   *  retry state when the fetch failed. */
+  loadStates?: ReadonlyMap<string, "loading" | "failed">;
+  onRetryLoad?: () => void;
   motions: Readonly<Record<string, ArtboardMotion>>;
   onSelect: (id: string | undefined) => void;
   onEnter: (id: string | undefined) => void;
@@ -72,7 +76,7 @@ function neighbour(layout: CanvasLayout, from: string | undefined, key: string):
  * 100 %; V and H pick the tool.
  */
 export function CanvasBoard({
-  board, visible, tool, onTool, layout, camera, onCamera, onViewport, selected, entered, motions,
+  board, visible, loadStates, onRetryLoad, tool, onTool, layout, camera, onCamera, onViewport, selected, entered, motions,
   onSelect, onEnter, onZoomTo, onMeasure, onMention, onExport, onFit, onZoomStep, onZoomReset,
 }: CanvasBoardProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -259,6 +263,8 @@ export function CanvasBoard({
                   notes={artboard.notes}
                   html={resolveArtboardHtml(board, artboard)}
                   fixedHeight={artboard.height !== undefined}
+                  loadState={loadStates?.get(placed.id)}
+                  onRetryLoad={onRetryLoad}
                   mounted={visible && seen.current.has(placed.id)}
                   selected={selected === placed.id}
                   entered={entered === placed.id}

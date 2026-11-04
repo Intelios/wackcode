@@ -7,7 +7,7 @@ import { createCanvasSession } from "../../canvas-session";
 import { CanvasCard, CanvasScopeContext } from "./CanvasCard";
 
 vi.mock("../../api", () => ({
-  api: { stageVisual: vi.fn().mockResolvedValue("wcvisual://localhost/abc123") }
+  api: { stageVisual: vi.fn().mockResolvedValue("wcvisual://localhost/abc123"), canvasDocuments: vi.fn() }
 }));
 
 const board: CanvasBoard = {
@@ -34,6 +34,7 @@ beforeEach(() => {
   Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => viewportWidth });
   Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: true, get: () => viewportHeight });
   vi.mocked(api.stageVisual).mockClear();
+  vi.mocked(api.canvasDocuments).mockReset();
   localStorage.clear();
 });
 afterEach(() => {
@@ -63,6 +64,30 @@ describe("CanvasPanel", () => {
     expect(calls.every((call) => call[2] === "artboard")).toBe(true);
     // A variant is its base's markup with its own styles after it.
     expect(calls.map((call) => call[0])).toContain("<main>base</main>\n<style>:root{--bg:#000}</style>");
+  });
+
+  it("fetches a saved document's bytes and stages them, including through variants", async () => {
+    vi.mocked(api.canvasDocuments).mockResolvedValue({ v: 1, canvas: "themes", artboards: [{ id: "base", html: "<main>inlined</main>" }] });
+    const saved: CanvasBoard = { ...board, artboards: [{ ...board.artboards[0], savedHtml: true }, ...board.artboards.slice(1)] };
+    panel({ boards: [saved], board: saved });
+    await waitFor(() => expect(api.canvasDocuments).toHaveBeenCalledWith("t1", "themes"));
+    await waitFor(() => expect(api.stageVisual).toHaveBeenCalledTimes(3));
+    const staged = vi.mocked(api.stageVisual).mock.calls.map((call) => call[0]);
+    expect(staged).toContain("<main>inlined</main>");
+    expect(staged).toContain("<main>inlined</main>\n<style>:root{--bg:#000}</style>");
+  });
+
+  it("shows the retry state when saved documents don't come, and a retry fetches again", async () => {
+    vi.mocked(api.canvasDocuments)
+      .mockRejectedValueOnce(new Error("gone"))
+      .mockResolvedValue({ v: 1, canvas: "themes", artboards: [{ id: "base", html: "<main>inlined</main>" }] });
+    const saved: CanvasBoard = { ...board, artboards: [{ ...board.artboards[0], savedHtml: true }, ...board.artboards.slice(1)] };
+    panel({ boards: [saved], board: saved });
+    await waitFor(() => expect(screen.getAllByText("This artboard couldn’t be drawn.")).toHaveLength(3));
+    expect(api.stageVisual).not.toHaveBeenCalled();
+    fireEvent.click(screen.getAllByRole("button", { name: "Try again" })[0]);
+    await waitFor(() => expect(api.canvasDocuments).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(api.stageVisual).toHaveBeenCalledTimes(3));
   });
 
   it("selects with a click or the arrow keys, and mentions an artboard in the draft", () => {

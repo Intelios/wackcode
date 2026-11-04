@@ -194,8 +194,9 @@ enum ExportFormat {
     Html,
 }
 
-/// A resolved artboard is its markup plus a variant's stylesheet; the worker caps both well below this.
-const MAX_EXPORT_HTML: usize = 512 * 1024;
+/// A resolved artboard is its markup plus a variant's stylesheet; local images inlined at call
+/// time can grow it to the same 8 MiB backstop staging uses (`visuals::MAX_STAGE_BYTES`).
+const MAX_EXPORT_HTML: usize = 8 * 1024 * 1024;
 
 fn validate_export(export: &ArtboardExport) -> Result<(), String> {
     if export.html.len() > MAX_EXPORT_HTML {

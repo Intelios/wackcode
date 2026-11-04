@@ -7,7 +7,8 @@
  * Original WackCode text. Keep each section self-contained: the agent may read one alone.
  */
 import {
-  MAX_ARTBOARDS_PER_CALL, MAX_ARTBOARDS_PER_CANVAS, MAX_ARTBOARD_HEIGHT, MAX_ARTBOARD_WIDTH, MIN_ARTBOARD_SIZE,
+  MAX_ARTBOARDS_PER_CALL, MAX_ARTBOARDS_PER_CANVAS, MAX_ARTBOARD_HEIGHT, MAX_ARTBOARD_WIDTH,
+  MAX_ARTBOARD_HTML_BYTES, MAX_CALL_BYTES, MIN_ARTBOARD_SIZE, sizeOf,
 } from "./state.js";
 
 export const CANVAS_GUIDE_SECTIONS = ["basics", "explore", "themes", "fidelity", "craft", "look", "example"] as const;
@@ -24,11 +25,13 @@ A canvas is a board holding artboards: full mockups drawn side by side so they c
 - **Revise in place.** Pass an existing artboard's \`id\` to change only the fields you give; the user sees it update where it stands. Prefer revising to adding near-duplicates.
 - **Variants.** \`basedOn\` makes an artboard take another artboard's markup, and its \`css\` is appended after it. Change the base and every variant follows. A new variant that gives no \`width\` takes its base's whole size; give a \`width\` to show the same markup at another device size. A variant can't be the base of another variant.
 - **Remove** artboards with \`remove: [ids]\`. A base can't be removed while variants depend on it.
-- **Limits:** ${MAX_ARTBOARDS_PER_CALL} artboards per call, ${MAX_ARTBOARDS_PER_CANVAS} per canvas, 64 KiB of markup per artboard, 192 KiB per call. Widths ${MIN_ARTBOARD_SIZE}–${MAX_ARTBOARD_WIDTH} px, heights up to ${MAX_ARTBOARD_HEIGHT} px.
+- **Limits:** ${MAX_ARTBOARDS_PER_CALL} artboards per call, ${MAX_ARTBOARDS_PER_CANVAS} per canvas, ${sizeOf(MAX_ARTBOARD_HTML_BYTES)} of markup per artboard, ${sizeOf(MAX_CALL_BYTES)} per call. Widths ${MIN_ARTBOARD_SIZE}–${MAX_ARTBOARD_WIDTH} px, heights up to ${MAX_ARTBOARD_HEIGHT} px.
 
 **Sizes:** Desktop 1440×900, Laptop 1280×800, Tablet 834×1194, Phone 390×844. A single component sits well at 480–800 wide with no height.
 
 **The document.** Each artboard is its own sandboxed page sized exactly to the artboard, so \`100vh\` and \`100vw\` are the artboard's. It has no network at all: inline every style, script, image and icon (inline SVG, data: URLs) and never reference a URL, a web font or a CDN. Use system font stacks (\`-apple-system, "SF Pro Text", Inter, system-ui, sans-serif\`; \`ui-monospace, "SF Mono", Menlo, monospace\`). Scripts run, so hover states, tabs and small interactions work when the user plays or presents an artboard, but nothing can send a message or open a link from a canvas.
+
+**Images.** Local image files may be referenced by absolute path in quoted attributes (\`src="/Users/you/project/shot.png"\`) and CSS \`url(…)\`. Their bytes are checked and inlined when the call is accepted, then saved with the chat, so the artboard keeps working after the file moves or the chat reopens (PNG, JPEG, GIF, WebP, AVIF, BMP, ICO, SVG; at most 4 MiB each, 8 MiB per finished artboard and 24 MiB per call — keep them modest, a few hundred KB each). A screenshot or attachment already in the chat can be used through \`list_images\` → \`read_image\`, which returns its local file. A missing, renamed or oversized image refuses the whole call, naming the path.
 
 **Background.** An artboard is a screen, not a chat card: paint its own background on \`body\` and size it to fill. The app's theme variables (\`--bg\`, \`--surface\`, \`--text\`, \`--accent\`…) are defined if you are mocking up WackCode itself; for the user's own product, use that product's colours.
 
@@ -77,7 +80,7 @@ When the chat has a project with a UI, the mockups should look like they belong 
 - **Icons** as small inline SVGs in one consistent style, stroke weight and size. Never emoji as UI icons, and never icon fonts.
 - **Avoid the generic look:** no gratuitous gradients, glassmorphism or drop shadows on everything; no hero sections on app screens; no centred-everything layouts for tools. Give each direction a point of view.
 - **States:** empty, loading (skeletons, not spinners everywhere), error and success are part of the design; show at least one when it matters.
-- Keep markup lean: shared styles in one \`<style>\` block, no frameworks, no base64 images larger than they need to be.`,
+- Keep markup lean: shared styles in one \`<style>\` block, no frameworks, no base64 blobs — reference local image files by path instead.`,
 
   look: `## Checking your work (canvas_look)
 
@@ -85,7 +88,7 @@ When the chat has a project with a UI, the mockups should look like they belong 
 
 - Look at what you just drew or changed (4 artboards per call, and it names any others to look at next; omit \`artboards\` for the ones changed last), fix real defects — clipped text, overflow, broken layout, a script error, poor contrast — and look once more if you changed a lot. Don't loop on cosmetic nits.
 - Overflow on a fixed-height screen usually means the content is too tall for the device: tighten it or omit \`height\` if the artboard is meant to be a long page.
-- \`html: true\` also returns each artboard's resolved markup, for implementing a chosen design after the original call has left your context.`,
+- \`html: true\` also returns each artboard's resolved markup, for implementing a chosen design after the original call has left your context. Inlined image data is shortened to its type and size, so the markup stays readable.`,
 
   example: `## Example
 

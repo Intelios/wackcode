@@ -98,6 +98,9 @@ const server = createServer(async (request, response) => {
   // "canvas fixture" draws a base artboard and two theme variants, looks at them, then answers.
   // It also matches inside /canvas's generated prompt ("/canvas canvas fixture").
   const canvasFixture = prompt.toLowerCase().includes("canvas fixture");
+  // "canvas image fixture: <path>" draws one artboard that references a local image by absolute
+  // path, exercising the call-time inlining and the Canvas tab's on-demand document fetch.
+  const canvasImageFixture = /^canvas image fixture(?:[ \t]*:[ \t]*([^\n]+))?(?:\n|$)/i.exec(prompt);
   const sinceUser = messages.slice(messages.lastIndexOf(latestUser) + 1);
   const calledTool = (name) => sinceUser.some((message) => message.role === "assistant" && message.tool_calls?.some((call) => call.function?.name === name));
   const offers = (name) => body.tools?.some((tool) => tool.function?.name === name);
@@ -140,6 +143,11 @@ const server = createServer(async (request, response) => {
         : undefined
     : undefined;
   const canvasArgs = canvasFixtureArguments();
+  const canvasImageCall = canvasImageFixture && offers("canvas") && !calledTool("canvas")
+    ? { name: "canvas", arguments: JSON.stringify(canvasImageFixtureArguments(canvasImageFixture[1]?.trim())) }
+    : canvasImageFixture && offers("canvas_look") && calledTool("canvas") && !calledTool("canvas_look")
+      ? { name: "canvas_look", arguments: JSON.stringify({ canvas: "image-smoke" }) }
+      : undefined;
   const canvasCall = canvasFixture && offers("canvas") && !calledTool("canvas")
     ? { name: "canvas", arguments: JSON.stringify(prompt.toLowerCase().includes("revise")
       ? { canvas: "billing-settings-themes", artboards: [{ ...canvasArgs.artboards[0], id: "base" }] }
@@ -200,7 +208,7 @@ const server = createServer(async (request, response) => {
   const backgroundLaunched = messages.slice(messages.lastIndexOf(latestUser) + 1).some((message) => message.role === "assistant" && message.tool_calls?.some((call) => call.function?.name === "subagent"));
   const resultsArrived = prompt.includes("Job ");
   const backgroundLaunch = background && subagent && !backgroundLaunched && !resultsArrived;
-  if (backgroundLaunch || suggest || canvasCall || visualCall || imageCall || savedImageCall || comparisonCall || commitCall || (!background && !suggestFixture && !canvasFixture && !visualFixture && !imageFixture && !savedImageFixture && !comparisonFixture && !child && !resultsArrived && !hasToolResult && body.tools?.length && (!browserMatch || browser) && (!computerMatch || computer))) {
+  if (backgroundLaunch || suggest || canvasCall || canvasImageCall || visualCall || imageCall || savedImageCall || comparisonCall || commitCall || (!background && !suggestFixture && !canvasFixture && !canvasImageFixture && !visualFixture && !imageFixture && !savedImageFixture && !comparisonFixture && !child && !resultsArrived && !hasToolResult && body.tools?.length && (!browserMatch || browser) && (!computerMatch || computer))) {
     send(response, {
       id: "fixture-tool",
       object: "chat.completion.chunk",
@@ -215,8 +223,8 @@ const server = createServer(async (request, response) => {
             id: `fixture-tool-${messages.length}`,
             type: "function",
             function: {
-              name: backgroundLaunch ? "subagent" : comparisonCall ? comparisonCall.name : savedImageCall ? savedImageCall.name : imageCall ? imageCall.name : canvasCall ? canvasCall.name : visualCall ? visualCall.name : suggest ? "suggest_task" : browser ? browser.name : computer ? computer.name : commitCall ? commitCall.name : search ? "web_search" : "write",
-              arguments: comparisonCall ? comparisonCall.arguments : savedImageCall ? savedImageCall.arguments : imageCall ? imageCall.arguments : canvasCall ? canvasCall.arguments : visualCall ? visualCall.arguments : suggest
+              name: backgroundLaunch ? "subagent" : comparisonCall ? comparisonCall.name : savedImageCall ? savedImageCall.name : imageCall ? imageCall.name : canvasImageCall ? canvasImageCall.name : canvasCall ? canvasCall.name : visualCall ? visualCall.name : suggest ? "suggest_task" : browser ? browser.name : computer ? computer.name : commitCall ? commitCall.name : search ? "web_search" : "write",
+              arguments: comparisonCall ? comparisonCall.arguments : savedImageCall ? savedImageCall.arguments : imageCall ? imageCall.arguments : canvasImageCall ? canvasImageCall.arguments : canvasCall ? canvasCall.arguments : visualCall ? visualCall.arguments : suggest
                 ? JSON.stringify({
                   title: "Dismiss button stays disabled after a failed save",
                   kind: "bug",
@@ -259,7 +267,7 @@ const server = createServer(async (request, response) => {
       object: "chat.completion.chunk",
       created: 2,
       model: body.model,
-      choices: [{ index: 0, delta: { role: "assistant", content: savedImageReply ?? imageReply ?? visualReply ?? (canvasFixture ? "Three themes for the billing page are on the canvas: **Base**, **Ember** and **Pine**, plus Base on a phone. Which direction should I take forward?" : suggestFixture ? "Layout fixed. I noted one follow-up below." : browserMatch ? "Browser fixture complete." : computerMatch ? "Computer fixture complete." : commitFixture && hasToolResult ? "Committed in the throwaway repo under /tmp. The transcript's commit row carries git's own summary: the hash in a pill and the message." : child ? "Background fixture child completed." : searchQuery ? "I searched the web; the results are in the card above." : resultsArrived ? "The background child finished; its result has arrived." : background ? "I launched a background helper and finished my own work. You can send another message while it runs." : escape ? "I tried to write `../wackcode-escape.txt`, outside the workspace." : "Created `wackcode-live.txt`.") }, finish_reason: null }]
+      choices: [{ index: 0, delta: { role: "assistant", content: savedImageReply ?? imageReply ?? visualReply ?? (canvasFixture ? "Three themes for the billing page are on the canvas: **Base**, **Ember** and **Pine**, plus Base on a phone. Which direction should I take forward?" : canvasImageFixture ? "One artboard with a local image is on the canvas: **Photo card**. Its bytes are saved with the chat, so moving or deleting the file won't change what you drew." : suggestFixture ? "Layout fixed. I noted one follow-up below." : browserMatch ? "Browser fixture complete." : computerMatch ? "Computer fixture complete." : commitFixture && hasToolResult ? "Committed in the throwaway repo under /tmp. The transcript's commit row carries git's own summary: the hash in a pill and the message." : child ? "Background fixture child completed." : searchQuery ? "I searched the web; the results are in the card above." : resultsArrived ? "The background child finished; its result has arrived." : background ? "I launched a background helper and finished my own work. You can send another message while it runs." : escape ? "I tried to write `../wackcode-escape.txt`, outside the workspace." : "Created `wackcode-live.txt`.") }, finish_reason: null }]
     });
     send(response, {
       id: "fixture-done",
@@ -370,6 +378,18 @@ const total = requests.reduce((sum, count) => sum + count, 0);
 - Adjust the chart and reset it without sending a message.
 - Tab through its controls, then try Copy and Expand.
 - Read this text over a solid, image, animated, or glass background.`;
+}
+
+/** The canvas image fixture's one drawing call: one artboard around a local image file. */
+function canvasImageFixtureArguments(path) {
+  const src = path || "/tmp/wackcode-canvas-gradient.png";
+  const html = `<style>
+body{margin:0;background:#111;color:#eee;font:14px/1.5 -apple-system,system-ui,sans-serif;display:grid;place-items:center;min-height:100vh}
+.card{background:#1d1d1d;border:1px solid #2c2c2c;border-radius:14px;padding:18px;text-align:center}
+.card img{width:220px;height:220px;border-radius:10px;display:block;margin:0 auto 12px}
+</style>
+<div class="card"><img src="${src}" alt="A local image"><div>Gradient photo</div></div>`;
+  return { title: "Image smoke", artboards: [{ name: "Photo card", group: "Smoke", width: 800, height: 600, notes: "A real image in an artboard", html }] };
 }
 
 /** The canvas fixture's one drawing call: a themable base, two variants and a phone artboard. */

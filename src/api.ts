@@ -138,6 +138,9 @@ export const api = {
   toolImage: (taskId: string, toolCallId: string, index = 0) => invoke<ImageContent | null>("tool_image", { taskId, toolCallId, index }),
   /** A visual's saved document, including images inlined when it was published. */
   visualDocument: (taskId: string, toolCallId: string) => invoke<string>("visual_document", { taskId, toolCallId }),
+  /** A canvas's saved artboard documents (images inlined at call time), fetched on demand. */
+  canvasDocuments: (taskId: string, canvasId: string) =>
+    invoke<{ v: 1; canvas: string; artboards: Array<{ id: string; html?: string; css?: string }> }>("canvas_documents", { taskId, canvasId }),
   /** The original image a sent message attached, or null when it's gone. */
   messageImage: (taskId: string, entryId: string, index = 0) => invoke<ImageContent | null>("message_image", { taskId, entryId, index }),
   /** Stages a visual reply's (or a canvas artboard's) HTML in Rust and returns the `wcvisual:` URL its frame loads. */

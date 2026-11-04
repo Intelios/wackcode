@@ -3,6 +3,7 @@ import type { NormalizedBlock, NormalizedMessage } from "./protocol.js";
 import type { ThinkingDurations } from "./run-timing.js";
 import { withoutTranscripts } from "./builtin/subagents/details.js";
 import { SUBAGENT_TOOL_NAME } from "./builtin/subagents/types.js";
+import { CANVAS_TOOL_NAME } from "./builtin/canvas/state.js";
 import { describeProviderError } from "./provider-error.js";
 
 export const THUMBNAIL_OPTIONS = { maxWidth: 512, maxHeight: 512, maxBytes: 128 * 1024 };
@@ -92,6 +93,22 @@ export function normalizeMessage(message: unknown, index: number, thinking: Thin
         else if (raw.toolName === "show_visual" && raw.details && typeof raw.details === "object" && !Array.isArray(raw.details)) {
           const { html: _document, ...details } = raw.details as Record<string, unknown>;
           block.details = details;
+        } else if (raw.toolName === CANVAS_TOOL_NAME && raw.details && typeof raw.details === "object" && !Array.isArray(raw.details)
+          && Array.isArray((raw.details as Record<string, unknown>).documents)) {
+          // Saved artboard documents ride the result, never the snapshot: keep which fields were
+          // inlined (`saved`) so the fold knows to fetch the bytes on demand.
+          const { documents, ...details } = raw.details as Record<string, unknown>;
+          const saved: Array<{ id: string; html?: true; css?: true }> = [];
+          for (const entry of documents as unknown[]) {
+            if (!entry || typeof entry !== "object") continue;
+            const fields = entry as Record<string, unknown>;
+            if (typeof fields.id !== "string") continue;
+            const html = typeof fields.html === "string";
+            const css = typeof fields.css === "string";
+            if (!html && !css) continue;
+            saved.push({ id: fields.id, ...(html ? { html: true as const } : {}), ...(css ? { css: true as const } : {}) });
+          }
+          block.details = { ...details, saved };
         } else block.details = raw.details;
       }
     }

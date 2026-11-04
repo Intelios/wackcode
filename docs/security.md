@@ -138,6 +138,16 @@ only a size, script errors and Esc. `canvas_look` renders them offscreen in Rust
 script errors, but cannot send or forward links. Only `stage_for_render` can stage a preview;
 the renderer-facing `stage_visual` refuses it.
 
+Local images in artboards follow the `show_visual` policy exactly: absolute paths in quoted
+attributes or CSS `url(...)` are read in the worker — the canvas is Code-area only, so coding
+chats' ordinary read access applies, with no `confine` — and signatures, not extensions, decide
+whether the bytes are images. Each image is limited to 4 MiB, a finished artboard document to
+8 MiB and one call's saved documents to 24 MiB; a missing, renamed or oversized image refuses
+the whole call. The bytes are inlined into the result's `documents`, which snapshots replace with
+`saved` markers; `canvas_documents` retrieves only the requested canvas's current documents on
+the current branch, so deleting the chat deletes the copies and no asset-protocol scope or
+network access is involved.
+
 - **One render webview** (`canvas-render`), shared by artboards and previews, a child of the main window parked offscreen,
   incognito, allowed to navigate only to `wcvisual:` and `about:blank`, with downloads and new
   windows refused and the Tauri globals removed.

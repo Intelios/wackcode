@@ -39,8 +39,9 @@ pub const VISUAL_SCHEME: &str = "wcvisual";
 pub const MAIN_WEBVIEW: &str = "main";
 /// The offscreen webview `canvas_look` renders artboards in (`canvas_render.rs`).
 pub const RENDER_WEBVIEW: &str = "canvas-render";
-/// Authored markup is capped at 128 KiB in the worker; inlined local images can grow the
-/// finished document to 8 MiB. This is the same backstop for every staging path.
+/// Authored markup is capped at 128 KiB in the worker (visual replies) or 1 MiB (canvas
+/// artboards); inlined local images can grow the finished document to 8 MiB. This is the same
+/// backstop for every staging path.
 pub const MAX_STAGE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_ENTRIES: usize = 128;
 const MAX_STORE_BYTES: usize = 48 * 1024 * 1024;

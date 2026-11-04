@@ -6,6 +6,12 @@
  * (`worker/src/builtin/canvas/state.ts`) rule for rule; both test suites run the same cases
  * (`fold-cases.json`), so keep them identical. A variant (`basedOn`) takes its base's current
  * markup with its own `css` appended, so revising a base restyles every variant.
+ *
+ * Local images inlined at call time are the one field snapshots don't carry: the result's
+ * `saved` markers say which artboards' html/css come from documents stored in that call's
+ * result, and the panel fetches the bytes on demand (`useCanvasDocuments`). The flags follow
+ * the worker's fold: an authored field clears its flag, a saved one sets it, and a
+ * metadata-only revision keeps it.
  */
 import type { NormalizedBlock, NormalizedMessage } from "./types";
 
@@ -25,6 +31,17 @@ export interface CanvasArtboard {
   basedOn?: string;
   css?: string;
   notes?: string;
+  /** The html/css currently on this artboard came from a document saved in a call's result. */
+  savedHtml?: true;
+  savedCss?: true;
+}
+
+/** Which fields of which artboards a call inlined images into; snapshots carry this instead of
+ *  the documents' bytes. */
+export interface CanvasSavedFields {
+  id: string;
+  html?: true;
+  css?: true;
 }
 
 export interface CanvasBoard {
@@ -52,6 +69,8 @@ export interface CanvasDetails {
   title: string;
   applied: CanvasApplied[];
   removed: string[];
+  /** Which fields of which artboards this call inlined images into, without the bytes. */
+  saved?: CanvasSavedFields[];
 }
 
 export function isCanvasDetails(value: unknown): value is CanvasDetails {
@@ -91,11 +110,38 @@ function merge(existing: CanvasArtboard | undefined, id: string, fields: Fields)
   return next;
 }
 
+type SavedEntry = { id: string; htmlSaved?: true; cssSaved?: true };
+
+/** Which fields of which artboards this call inlined images into, from the snapshot's `saved`
+ *  markers (the worker's fold reads the same shape, plus the raw result's bytes). */
+function savedEntries(details: CanvasDetails): Map<string, SavedEntry> {
+  const saved = new Map<string, SavedEntry>();
+  for (const entry of details.saved ?? []) {
+    if (!entry || typeof entry !== "object" || typeof entry.id !== "string") continue;
+    const fields = entry as unknown as Record<string, unknown>;
+    const target = saved.get(entry.id) ?? { id: entry.id };
+    if (fields.html === true) target.htmlSaved = true;
+    if (fields.css === true) target.cssSaved = true;
+    saved.set(entry.id, target);
+  }
+  return saved;
+}
+
+/** Saved markup replaces the authored field it was inlined from; an authored field clears its
+ *  flag, so a plain revision drops its images and a metadata-only one keeps them. */
+function applySavedFields(artboard: CanvasArtboard, fields: Fields, saved: SavedEntry | undefined): void {
+  if (fields.html !== undefined) delete artboard.savedHtml;
+  if (fields.css !== undefined) delete artboard.savedCss;
+  if (saved?.htmlSaved) artboard.savedHtml = true;
+  if (saved?.cssSaved) artboard.savedCss = true;
+}
+
 /** One accepted call folded into `boards` (replacing the board it touched, never mutating it). */
 export function applyCanvasCall(boards: Map<string, CanvasBoard>, args: unknown, details: CanvasDetails): void {
   const entries = Array.isArray((args as { artboards?: unknown } | null)?.artboards) ? (args as { artboards: unknown[] }).artboards : [];
   const previous = boards.get(details.canvas);
   const artboards = [...(previous?.artboards ?? [])];
+  const saved = savedEntries(details);
   for (const applied of details.applied) {
     if (!applied || typeof applied.id !== "string" || typeof applied.index !== "number") continue;
     const fields = fieldsOf(entries[applied.index]);
@@ -104,6 +150,7 @@ export function applyCanvasCall(boards: Map<string, CanvasBoard>, args: unknown,
     if (typeof applied.height === "number") fields.height = applied.height;
     const at = artboards.findIndex((artboard) => artboard.id === applied.id);
     const next = merge(at >= 0 ? artboards[at] : undefined, applied.id, fields);
+    applySavedFields(next, fields, saved.get(applied.id));
     if (at >= 0) artboards[at] = next;
     else artboards.push(next);
   }
@@ -137,6 +184,14 @@ export function resolveArtboardHtml(board: CanvasBoard, artboard: CanvasArtboard
   const base = artboard.basedOn ? board.artboards.find((candidate) => candidate.id === artboard.basedOn) : undefined;
   const html = (base ? base.html : artboard.html) ?? "";
   return artboard.css?.trim() ? `${html}\n<style>${artboard.css}</style>` : html;
+}
+
+/** Whether an artboard's document includes bytes saved in call results: its own inlined fields,
+ *  or — for a variant — its base's markup. */
+export function dependsOnSavedDocuments(board: CanvasBoard, artboard: CanvasArtboard): boolean {
+  if (artboard.savedHtml || artboard.savedCss) return true;
+  const base = artboard.basedOn ? board.artboards.find((candidate) => candidate.id === artboard.basedOn) : undefined;
+  return !!base?.savedHtml;
 }
 
 /** What one accepted call did, for its card under the turn (`CanvasCard`). */

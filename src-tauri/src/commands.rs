@@ -2743,6 +2743,38 @@ pub async fn visual_document(
         .ok_or_else(|| "That visual is no longer in this chat.".into())
 }
 
+/// A canvas's saved artboard documents, including local images inlined when each call was
+/// accepted. Snapshots never carry these bytes; the Canvas tab fetches the current board's on
+/// demand. The worker reads its current branch outside its prompt queue, so a saved canvas also
+/// opens while a new reply is running, in either area.
+#[tauri::command]
+pub async fn canvas_documents(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    task_id: String,
+    canvas_id: String,
+) -> Result<Value, String> {
+    if canvas_id.is_empty() || canvas_id.len() > 64 {
+        return Err("That canvas is no longer in this chat.".into());
+    }
+    let (task, provider) = task_and_provider(&state, &task_id)?;
+    let api_key = credential_for(&app, &state, &provider)?;
+    {
+        let lock = task_lock(&app, &task_id);
+        let _guard = lock.lock().await;
+        worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
+    }
+    worker::request(
+        &app,
+        &task_id,
+        json!({
+            "id": Uuid::new_v4().to_string(), "type": "canvas_documents", "canvas": canvas_id
+        }),
+        REQUEST_TIMEOUT,
+    )
+    .await
+}
+
 /// The original image a user message attached, for the transcript's lightbox. Keyed by the
 /// message's session entry and the image's position among its images, the keys the transcript
 /// renders with. The worker reads its own session, bypassing its prompt queue, so this works

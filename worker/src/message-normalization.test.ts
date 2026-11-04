@@ -11,6 +11,30 @@ it("keeps saved visual images out of live and cold snapshots without mutating th
   expect(details.html).toContain("original");
 });
 
+it("keeps saved canvas documents out of snapshots, keeping which fields were inlined", () => {
+  const details = {
+    v: 1, canvas: "themes", title: "Themes",
+    applied: [{ index: 0, id: "base", op: "add" }, { index: 1, id: "dusk", op: "add", basedOn: "base" }],
+    removed: [],
+    documents: [
+      { id: "base", html: '<main><img src="data:image/png;base64,original"></main>' },
+      { id: "dusk", css: "body{background:url('data:image/png;base64,tex')}" },
+      { id: "ignored" },
+    ],
+  };
+  const message = normalizeMessage({ role: "toolResult", toolName: "canvas", toolCallId: "draw", content: [], details }, 0, undefined, imageBlock);
+  expect(message?.blocks[0].details).toEqual({
+    v: 1, canvas: "themes", title: "Themes",
+    applied: [{ index: 0, id: "base", op: "add" }, { index: 1, id: "dusk", op: "add", basedOn: "base" }],
+    removed: [],
+    saved: [{ id: "base", html: true }, { id: "dusk", css: true }],
+  });
+  expect(details.documents[0].html).toContain("original");
+  // A result without documents passes through untouched.
+  const plain = { v: 1, canvas: "themes", title: "Themes", applied: [], removed: [] };
+  expect(normalizeMessage({ role: "toolResult", toolName: "canvas", toolCallId: "draw", content: [], details: plain }, 0, undefined, imageBlock)?.blocks[0].details).toEqual(plain);
+});
+
 describe("normalizeMessage thinking timing", () => {
   it("maps starts and durations by thinking ordinal, not raw content index", () => {
     const normalizeImage = vi.fn(imageBlock);

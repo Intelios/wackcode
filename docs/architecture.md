@@ -43,6 +43,7 @@ Everything is under the app data directory (`~/Library/Application Support/com.w
 | `model-catalog.json` | Validated Models.dev metadata cache; separate from connections and worker state. The bundled snapshot is embedded in Rust. |
 | `subscriptions/<id>/auth.json` (0600) | OAuth credentials, one file per subscription provider. |
 | `sessions/<task>/`, `agent/<task>/` | A chat's Pi session files and Pi agent directory. Code chats' original image blobs live in `sessions/<task>/images/`. |
+| `agent/.mcp-tools-v1/` | Private, advisory MCP tool catalogues shared across workers; no connection configuration, credentials or tool results. Each worker still connects independently. |
 | `scratch/<task>/` | Workspace for chats without a project, and every Chat mode chat's scratchpad. Chat mode's original images live in `.wackcode/images/` inside it. Deleted with the chat. |
 | `checkpoints/<task>/` | The chat's shadow Git repository (see below). |
 | `memory/<name>-<key>/` | Project memory notes, one directory per repository shared by its worktrees. Chat mode's one shared store is `memory/chat-<CHAT_MEMORY_KEY>/` (`memory.rs`): the same shape, so Settings lists it like a project's. |

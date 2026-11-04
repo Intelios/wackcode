@@ -5626,9 +5626,9 @@ describe("MCP servers", () => {
     return { provider, workspace, worker, ready };
   }
 
-  it("starts a stdio server at the first run, offers its tools, and gives it its environment in the workspace", async () => {
+  it("discovers a stdio server before the first model request and gives it its environment in the workspace", async () => {
     const { provider, workspace, worker, ready } = await start("mcp-stdio", [stdioServer()]);
-    // Opening a chat starts nothing.
+    // The ready snapshot precedes uncached discovery.
     expect(ready.snapshot?.tools?.some((tool) => tool.name.startsWith("mcp__"))).toBe(false);
 
     const first = await runPrompt(worker, provider, "mcp: mcp__mock__whoami {}");
@@ -5666,6 +5666,127 @@ describe("MCP servers", () => {
     expect(removed.view?.activeTools?.some((name) => name.startsWith("mcp__"))).toBe(false);
     const plain = await runPrompt(worker, provider, "Plain message.", 1);
     expect(offeredTools(provider.requests[plain]).some((name) => name.startsWith("mcp__"))).toBe(false);
+  });
+
+  /** Warm the shared app-owned catalogue, then hold a new worker's discovery behind a gate. */
+  async function cachedWorker(kind: "code" | "chat" = "code", mode?: TaskMode, twoServers = false) {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-mcp-cache-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const gate = join(workspace, "startup-gate");
+    const toolsFile = join(workspace, "tools.json");
+    const tools = [{ name: "peek", description: "Read a value.", inputSchema: { type: "object", properties: {} }, annotations: { readOnlyHint: true } }];
+    await writeFile(gate, "open");
+    await writeFile(toolsFile, JSON.stringify(tools));
+    const servers = [stdioServer({ args: [MOCK_MCP_SERVER, "--startup-gate", gate, "--tools-file", toolsFile] })];
+    const otherGate = join(workspace, "other-gate");
+    if (twoServers) {
+      await writeFile(otherGate, "open");
+      servers.push(stdioServer({ id: "other", slug: "other", args: [MOCK_MCP_SERVER, "--startup-gate", otherGate, "--tools-file", toolsFile] }));
+    }
+    const warm = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "warm", undefined, undefined, undefined, undefined, undefined, { mcp: servers });
+    cleanup.push(() => warm.worker.shutdown());
+    await runPrompt(warm.worker, provider, "Hello.", 1);
+    await warm.worker.shutdown();
+    await rm(gate);
+    if (twoServers) await rm(otherGate);
+    const next = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "next", undefined, undefined, undefined, mode, undefined, { kind, mcp: servers });
+    cleanup.push(() => next.worker.shutdown());
+    return { provider, workspace, gate, toolsFile, tools, servers, ...next };
+  }
+
+  it.each(["code", "chat"] as const)("starts %s with cached tools while discovery is blocked, and an early call waits for its server", async (kind) => {
+    const { worker, ready, provider, gate } = await cachedWorker(kind, undefined, true);
+    expect(ready.snapshot?.activeTools).toContain("mcp__mock__peek");
+    const before = provider.requests.length;
+    const result = runPrompt(worker, provider, "mcp: mcp__mock__peek {}");
+    await worker.waitFor((output) => output.event === "tool_execution_start" && output.detail?.toolName === "mcp__mock__peek");
+    expect(provider.requests).toHaveLength(before + 1);
+    expect(offeredTools(provider.requests[before])).toContain("mcp__mock__peek");
+    expect(worker.outputs.some((output) => output.event === "mcp_connect_start")).toBe(false);
+    await writeFile(gate, "open");
+    const first = await result;
+    expect(toolResult(provider.requests[first + 1])).toContain("peeked");
+    expect(worker.outputs.some((output) => output.type === "worker_error")).toBe(false);
+  });
+
+  it("cancels an early cached call and reconnects successfully on the next message", async () => {
+    const { worker, provider, gate } = await cachedWorker();
+    const runId = crypto.randomUUID();
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId, message: "mcp: mcp__mock__peek {}" });
+    await worker.waitFor((output) => output.event === "tool_execution_start" && output.detail?.toolName === "mcp__mock__peek");
+    worker.send({ id: crypto.randomUUID(), type: "abort" });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === runId && output.state === "idle", 5_000);
+    await writeFile(gate, "open");
+    const next = await runPrompt(worker, provider, "mcp: mcp__mock__peek {}");
+    expect(toolResult(provider.requests[next + 1])).toContain("peeked");
+    expect(worker.outputs.some((output) => output.type === "worker_error" || output.type === "extension_notice")).toBe(false);
+  });
+
+  it.each(["removed", "schema", "read-only"] as const)("checks a cached tool against the current server when its %s changes", async (change) => {
+    const { worker, provider, gate, toolsFile, tools } = await cachedWorker("code", change === "read-only" ? "plan" : undefined);
+    const result = runPrompt(worker, provider, "mcp: mcp__mock__peek {}");
+    await worker.waitFor((output) => output.event === "tool_execution_start" && output.detail?.toolName === "mcp__mock__peek");
+    const updated = change === "removed" ? [] : [{ ...tools[0],
+      ...(change === "schema" ? { inputSchema: { type: "object", properties: { newInput: { type: "string" } }, required: ["newInput"] } } : {}),
+      ...(change === "read-only" ? { annotations: { readOnlyHint: false } } : {}),
+    }];
+    await writeFile(toolsFile, JSON.stringify(updated));
+    await writeFile(gate, "open");
+    const first = await result;
+    const text = toolResult(provider.requests[first + 1]);
+    expect(text).toContain(change === "removed" ? "no longer offered" : change === "schema" ? "changed its input schema" : "doesn't mark it read-only");
+    expect(text).not.toContain("peeked");
+    // The background connection must not replace schemas in the running registry.
+    expect(offeredTools(provider.requests[first + 1])).toContain("mcp__mock__peek");
+    const next = await runPrompt(worker, provider, "Hello again.", 1);
+    if (change === "removed") expect(offeredTools(provider.requests[next])).not.toContain("mcp__mock__peek");
+    if (change === "schema") {
+      const offered = provider.requests[next].body.tools as Array<{ function: { name: string; parameters: unknown } }>;
+      expect(offered.find((tool) => tool.function.name === "mcp__mock__peek")?.function.parameters).toMatchObject({ required: ["newInput"] });
+    }
+  });
+
+  it("invalidates a cached catalogue when connection credentials change", async () => {
+    const { worker, provider, servers, gate, workspace } = await cachedWorker();
+    await worker.shutdown();
+    const next = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, "changed", undefined, undefined, undefined, undefined, undefined,
+      { mcp: [{ ...servers[0], env: { MOCK_MCP_SECRET: "changed-secret-5678" } }] });
+    cleanup.push(() => next.worker.shutdown());
+    expect(next.ready.snapshot?.activeTools).not.toContain("mcp__mock__peek");
+    const before = provider.requests.length;
+    const result = runPrompt(next.worker, provider, "Hello.", 1);
+    await next.worker.waitFor((output) => output.event === "mcp_connect_start");
+    expect(provider.requests).toHaveLength(before);
+    await writeFile(gate, "open");
+    await result;
+  });
+
+  it("removes a server while its cached connection is still starting", async () => {
+    const { worker, provider } = await cachedWorker();
+    const mark = worker.outputs.length;
+    worker.send({ id: crypto.randomUUID(), type: "set_mcp", servers: [] });
+    await worker.waitFor((output) => worker.outputs.indexOf(output) >= mark && output.type === "snapshot");
+    const first = await runPrompt(worker, provider, "Hello.", 1);
+    expect(offeredTools(provider.requests[first]).some((name) => name.startsWith("mcp__"))).toBe(false);
+    expect(worker.outputs.some((output) => output.type === "worker_error" || output.type === "extension_notice")).toBe(false);
+  });
+
+  it("reports a cached server's failed discovery and excludes it from the next run", async () => {
+    const { worker, provider, gate, toolsFile } = await cachedWorker();
+    const result = runPrompt(worker, provider, "mcp: mcp__mock__peek {}");
+    await worker.waitFor((output) => output.event === "tool_execution_start" && output.detail?.toolName === "mcp__mock__peek");
+    // The server answers, but violates tools/list's schema.
+    await writeFile(toolsFile, "{}");
+    await writeFile(gate, "open");
+    const first = await result;
+    expect(toolResult(provider.requests[first + 1])).toContain("is not connected");
+    expect(worker.outputs.filter((output) => output.type === "extension_notice" && output.level === "warning")).toHaveLength(1);
+    const next = await runPrompt(worker, provider, "Hello again.", 1);
+    expect(offeredTools(provider.requests[next])).not.toContain("mcp__mock__peek");
+    expect(worker.outputs.filter((output) => output.type === "extension_notice" && output.level === "warning")).toHaveLength(1);
+    expect(worker.outputs.some((output) => output.type === "worker_error")).toBe(false);
   });
 
   it("sends an HTTP server its headers, and a Streamable HTTP and an SSE server both work", async () => {

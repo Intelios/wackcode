@@ -178,15 +178,8 @@ interface CommandCatalogEntry {
 let commandCatalog: CommandCatalogEntry[] = [];
 let disabledTools = new Set<string>();
 let subagentRunner: SubagentRunner | undefined;
-/** Aborts the wait for MCP servers at the start of a run, when the user presses Stop. */
-let mcpWait: AbortController | undefined;
-/**
- * Server connections kicked off at `ready`, ahead of the first prompt: stdio servers are slow
- * to spawn, and workers now exist only while work is coming, so the old wait-for-a-run
- * laziness mostly costs the first send. `connecting` mirrors `prepare`'s onConnecting flag,
- * for the activity events; the catch keeps a failed connect from surfacing twice.
- */
-let earlyMcp: { promise: Promise<boolean>; abort: AbortController; connecting: boolean } | undefined;
+/** Background MCP connection lifetime; Stop cancels discovery and early tool waits. */
+let mcpStartup = new AbortController();
 /** Which native host subsystem a request goes to: the per-chat browser, computer use, the skill-creator's managed drafts, Settings › Web's search provider, `read_chat`'s referenced-chat lookup, or `canvas_look`'s offscreen renderer. */
 type NativeChannel = "browser" | "computer" | "skill_creator" | "web" | "chat" | "canvas";
 interface PendingNativeRequest {
@@ -1499,7 +1492,7 @@ async function initialize(command: InitCommand): Promise<void> {
   });
   builtins.configureExecutionPolicy(chatKind ? undefined : command.executionPolicy);
   if (!chatKind) await applySubagents(command.subagents ?? null);
-  builtins.mcp.configure(command.mcp ?? []);
+  await builtins.mcp.configure(command.mcp ?? [], join(dirname(command.agentDir), ".mcp-tools-v1"));
   builtins.computerUse.configure(!chatKind && command.computerUse?.enabled === true);
   builtins.webSearch.configure(command.web);
   commitAttribution = !chatKind && command.git?.commitAttribution === true;
@@ -1777,29 +1770,9 @@ async function initialize(command: InitCommand): Promise<void> {
   workspaceIsGitRepo = await gitProbe;
   emitSnapshot("ready");
 
-  // MCP servers connect ahead of the first prompt instead of inside it: a worker only exists
-  // while work is coming, so spawning them during the ready→prompt gap removes their start
-  // cost from the first send. The first `prepareMcpServers` awaits this flight (Stop included);
-  // a `set_mcp` in the gap is caught by its second pass.
-  const early = { abort: new AbortController(), connecting: false, promise: Promise.resolve(false) as Promise<boolean> };
-  earlyMcp = early;
-  early.promise = builtins.mcp.prepare(early.abort.signal, () => {
-    early.connecting = true;
-    send({ type: "activity", taskId: command.taskId, event: "mcp_connect_start" });
-  }).then((changed) => {
-    if (earlyMcp === early) earlyMcp = undefined;
-    if (early.connecting) send({ type: "activity", taskId: command.taskId, event: "mcp_connect_end" });
-    // Tools only change between runs: a connect that lands mid-run is applied by the next
-    // prepareMcpServers pass instead.
-    if (changed && session && !session.isStreaming && !session.isCompacting) {
-      applyDisabledTools();
-      emitSnapshot();
-    }
-    return changed;
-  }).catch(() => {
-    if (earlyMcp === early) earlyMcp = undefined;
-    return false;
-  });
+  // Cached tools are already in the registry. Reconnect without publishing schema changes
+  // under a running model; prepareMcpServers applies them at the next run boundary.
+  builtins.mcp.start(mcpStartup.signal);
 }
 
 function runStartedAt(requested: number | undefined): number {
@@ -1974,10 +1947,7 @@ async function stopActiveRun(): Promise<void> {
   activeTitleAuth = undefined;
   stopRequested = true;
   cancelPendingDialogs();
-  mcpWait?.abort();
-  // The ready-time flight belongs to whatever run was waiting on it; abort it even when
-  // prepareMcpServers never got to register its own listener.
-  earlyMcp?.abort.abort();
+  mcpStartup.abort();
   if (compacting) {
     session.abortCompaction();
     await builtins.subagents.stopAll();
@@ -1997,41 +1967,21 @@ async function stopActiveRun(): Promise<void> {
   emitSnapshot();
 }
 
-/**
- * Connect the chat's MCP servers before the model is asked anything, so their tools are in the
- * very first request. Runs inside the command queue, so tools never change mid-run. The chat
- * shows "Starting MCP servers…" while anything connects; Stop ends the wait.
- */
+/** Discover uncached servers before the first request; cached servers boot in the background. */
 async function prepareMcpServers(): Promise<void> {
   if (!taskId || stopRequested) return;
-  const id = taskId;
-  mcpWait = new AbortController();
+  if (mcpStartup.signal.aborted) mcpStartup = new AbortController();
   let connecting = false;
-  // The flight kicked off at `ready` is part of this run's MCP wait: it resolves with the same
-  // "tools changed" bit, and Stop aborts it like a connect started here.
-  const abortEarly = () => earlyMcp?.abort.abort();
   try {
-    let changed = false;
-    const early = earlyMcp;
-    if (early) {
-      mcpWait.signal.addEventListener("abort", abortEarly, { once: true });
-      changed = await early.promise;
-      mcpWait.signal.removeEventListener("abort", abortEarly);
-    }
-    // A second pass catches servers configured or dropped while the early flight was running;
-    // nothing pending resolves immediately. Its start/end pair is separate from the early
-    // flight's own events.
-    const more = await builtins.mcp.prepare(mcpWait.signal, () => {
+    if (await builtins.mcp.prepare(mcpStartup.signal, () => {
       connecting = true;
-      send({ type: "activity", taskId: id, event: "mcp_connect_start" });
-    });
-    if (changed || more) {
+      send({ type: "activity", taskId: taskId!, event: "mcp_connect_start" });
+    })) {
       applyDisabledTools();
       emitSnapshot();
     }
   } finally {
-    mcpWait = undefined;
-    if (connecting) send({ type: "activity", taskId: id, event: "mcp_connect_end" });
+    if (connecting) send({ type: "activity", taskId, event: "mcp_connect_end" });
   }
 }
 
@@ -2482,7 +2432,7 @@ async function handle(command: WorkerCommand): Promise<void> {
     } else if (command.type === "set_mcp") {
       // Queued, so a server never disappears under a running call. Servers that were removed,
       // switched off or changed disconnect now; anything new connects at the next run.
-      builtins.mcp.configure(command.servers);
+      await builtins.mcp.configure(command.servers);
       applyDisabledTools();
       emitSnapshot();
     } else if (command.type === "set_skills") {

@@ -21,6 +21,7 @@ Pure logic belongs in a colocated `*.test.ts` next to a small module (`chat-util
 ## Benchmarks
 
 - `node scripts/benchmark-history.mjs` times the cold saved-history reader end to end (first snapshot, preview tail, total, peak RSS) on a disposable fixture; `--runs N`, `--fixture <session.jsonl>` for a real file, `--report <path>` to keep the JSON. Never commit real session output.
+- `MCP_DELAY_MS=5000 RUNS=6 node worker/scripts/bench-startup.mjs` measures worker spawn → first model request with a five-second local MCP boot. Run 0 discovers tools; subsequent workers share only the tool catalogue. It also records actual MCP readiness and verifies the first request carries the MCP tools. See [the experiment](mcp-startup.md).
 - `WACKCODE_PERF=1 npx vitest run src/App.performance.test.tsx -t '<scenario>' --maxWorkers=1` runs the opt-in renderer hot-path benchmarks, including cold-snapshot mount.
 - In a dev build, `history timing:` records land on the app's stderr (reader phases + the display snapshot/commit/paint/previews-done figure).
 

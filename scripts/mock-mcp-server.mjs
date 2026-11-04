@@ -3,12 +3,15 @@
 //   node scripts/mock-mcp-server.mjs                  stdio (what an app "stdio" server runs)
 //   node scripts/mock-mcp-server.mjs --http 43128     Streamable HTTP at /mcp, legacy SSE at /sse (0: any port)
 //   ... --require-auth <token>                        HTTP only: 401 unless "Authorization: Bearer <token>"
+//   ... --startup-delay 5000                          Delay discovery for startup benchmarks
+//   ... --startup-gate /tmp/gate --tools-file /tmp/tools.json   Controllable discovery fixtures
 //
 // Tools: echo (text back), peek (marked read-only), whoami (the Authorization header it saw,
 // $MOCK_MCP_SECRET and its working directory), fail (an error result), and hang (never answers,
 // for timeout and Stop tests).
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
+import { readFile, writeFile } from "node:fs/promises";
 
 const args = process.argv.slice(2);
 const option = (name) => {
@@ -17,6 +20,15 @@ const option = (name) => {
 };
 const httpPort = option("--http");
 const requiredToken = option("--require-auth");
+const startup = (async () => {
+  await new Promise((done) => setTimeout(done, Number(option("--startup-delay") ?? 0)));
+  const gate = option("--startup-gate");
+  if (gate) {
+    while (true) {
+      try { await readFile(gate); break; } catch { await new Promise((done) => setTimeout(done, 10)); }
+    }
+  }
+})();
 
 const TOOLS = [
   {
@@ -41,7 +53,8 @@ const TOOLS = [
 ];
 
 /** Resolves to a JSON-RPC response, `null` for a notification, or never (hang). */
-function handle(message, context) {
+async function handle(message, context) {
+  await startup;
   const { id, method, params } = message;
   if (id === undefined || id === null) return Promise.resolve(null);
   const result = (value) => Promise.resolve({ jsonrpc: "2.0", id, result: value });
@@ -55,7 +68,8 @@ function handle(message, context) {
     case "ping":
       return result({});
     case "tools/list":
-      return result({ tools: TOOLS });
+      if (option("--ready-file")) await writeFile(option("--ready-file"), "ready");
+      return result({ tools: option("--tools-file") ? JSON.parse(await readFile(option("--tools-file"), "utf8")) : TOOLS });
     case "tools/call": {
       const name = params?.name;
       const input = params?.arguments ?? {};

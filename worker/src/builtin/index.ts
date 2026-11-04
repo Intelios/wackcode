@@ -86,7 +86,7 @@ export function createBuiltinExtensions(host: BuiltinHost, options: {
   let policy = DEFAULT_EXECUTION_POLICY;
   let subagents: ReturnType<typeof createSubagentsExtension> | undefined;
   const bashJobs = createBashJobsExtension();
-  const mcp = createMcpExtension(host);
+  const mcp = createMcpExtension(host, () => planMode.controller.getState().mode !== "build" && !policy.unrestrictedPlanning);
   const planMode = createPlanModeExtension({ ...host, publishPlanState(state) {
     subagents?.controller.refresh();
     host.publishPlanState(state);

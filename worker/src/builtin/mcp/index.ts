@@ -2,12 +2,11 @@
  * Built-in MCP client: the user's MCP servers (Settings › MCP servers) as tools named
  * `mcp__<server>__<tool>`.
  *
- * - Servers connect when the worker reports `ready`, ahead of the first prompt (`earlyMcp`
- *   in `index.ts`): a worker only exists while work is coming, so connecting then takes the
- *   spawn cost off the first send instead of adding it. `prepare` re-runs inside each run to
- *   catch servers configured in the gap. A connection then lasts as long as the worker.
- * - Tool sets change only between runs: `prepare` runs before the prompt, and `configure`
- *   (from `set_mcp`) waits in the worker's command queue like every other setting.
+ * - Servers connect at `ready`. A cached catalogue exposes tools before connection finishes;
+ *   only an uncached server holds up the first model request. An early tool call waits for
+ *   its own server, then checks the live tool and planning policy before executing.
+ * - Background connections never register tools. `prepare` publishes the latest catalogue
+ *   between runs; `configure` waits in the command queue like every other setting.
  * - Pi can't unregister a tool, so a tool whose server is off, gone, failed, or that the user
  *   switched off stays registered but inactive (`inactiveTools`), and refuses if called.
  * - A server that fails to connect says so once in the chat and isn't retried for a few
@@ -21,6 +20,7 @@ import type { McpServerSpec } from "../../protocol.js";
 import type { BuiltinHost } from "../host.js";
 import type { McpConnection } from "./client.js";
 import { convertToolResult, mcpToolName, secretValues, toolParameters } from "./tools.js";
+import { cataloguePath, readCatalogue, writeCatalogue } from "./cache.js";
 
 // The MCP SDK is `external` to the worker bundle and only matters once a server actually
 // connects, so client.js (which imports it) loads on first connect rather than at spawn.
@@ -45,6 +45,9 @@ interface Server {
   /** What the connection itself depends on. A change reconnects; a new name or timeout doesn't. */
   key: string;
   status: ServerStatus;
+  /** Undefined means no discovery yet; an empty catalogue is a valid cache hit. */
+  tools?: Tool[];
+  flight?: Promise<void>;
 }
 
 interface Registration {
@@ -53,6 +56,7 @@ interface Registration {
   tool: string;
   /** Re-registering an unchanged tool would still rebuild the system prompt, costing the prompt cache. */
   signature: string;
+  parameters: string;
 }
 
 export interface McpToolDetails {
@@ -63,11 +67,12 @@ export interface McpToolDetails {
 
 export interface McpController {
   /** Apply the enabled servers from Settings. Removed, disabled or changed servers disconnect. */
-  configure(specs: McpServerSpec[]): void;
+  configure(specs: McpServerSpec[], cacheDirectory?: string): Promise<void>;
+  /** Start connections without changing the registry or waiting for discovery. */
+  start(signal: AbortSignal): void;
   /**
-   * Connect every server that isn't connected yet, then register their tools. `onConnecting`
-   * runs first when anything actually has to connect. Resolves to whether the set of usable
-   * tools may have changed, so the caller re-applies the active tools.
+   * Start connections, wait only for servers with no catalogue, and register tools at a run
+   * boundary. `onConnecting` runs only for discovery that blocks the model request.
    */
   prepare(signal: AbortSignal, onConnecting?: () => void): Promise<boolean>;
   /** Registered MCP tools the model must not be offered right now. */
@@ -85,11 +90,12 @@ export interface McpController {
   closeAll(): Promise<void>;
 }
 
-export function createMcpExtension(host: BuiltinHost): { factory: (pi: ExtensionAPI) => void; controller: McpController } {
+export function createMcpExtension(host: BuiltinHost, requiresReadOnly: () => boolean = () => false): { factory: (pi: ExtensionAPI) => void; controller: McpController } {
   const servers = new Map<string, Server>();
   const registrations = new Map<string, Registration>();
   let api: ExtensionAPI | undefined;
   let liveKey = "";
+  let cacheDirectory: string | undefined;
 
   const connectionKey = (spec: McpServerSpec) =>
     JSON.stringify([spec.transport, spec.command ?? "", spec.args ?? [], spec.env ?? {}, spec.url ?? "", spec.headers ?? {}]);
@@ -98,8 +104,8 @@ export function createMcpExtension(host: BuiltinHost): { factory: (pi: Extension
   function liveTools(): Map<string, { server: Server; tool: Tool }> {
     const live = new Map<string, { server: Server; tool: Tool }>();
     for (const server of servers.values()) {
-      if (server.status.kind !== "connected") continue;
-      for (const tool of server.status.connection.tools()) {
+      if (server.status.kind === "failed") continue;
+      for (const tool of server.status.kind === "connected" ? server.status.connection.tools() : server.tools ?? []) {
         if (server.spec.disabledTools.includes(tool.name)) continue;
         live.set(mcpToolName(server.spec.slug, tool.name), { server, tool });
       }
@@ -118,6 +124,7 @@ export function createMcpExtension(host: BuiltinHost): { factory: (pi: Extension
     const abort = new AbortController();
     const onRunAbort = () => abort.abort();
     runSignal.addEventListener("abort", onRunAbort, { once: true });
+    if (runSignal.aborted) abort.abort();
     server.status = { kind: "connecting", abort };
     try {
       const { connectServer } = await loadClient();
@@ -136,6 +143,13 @@ export function createMcpExtension(host: BuiltinHost): { factory: (pi: Extension
         return;
       }
       server.status = { kind: "connected", connection };
+      server.tools = connection.tools();
+      if (cacheDirectory) {
+        const values = [...Object.values(spec.env ?? {}), ...Object.values(spec.headers ?? {})]
+          .flatMap((value) => [value, /^\S+\s+(\S+)$/.exec(value.trim())?.[1] ?? ""]).filter(Boolean);
+        await writeCatalogue(cacheDirectory, cataloguePath(cacheDirectory, server.key), server.tools,
+          (text) => values.some((value) => text.includes(value)) ? "[credential redacted]" : host.redact(text));
+      }
     } catch (error) {
       if (servers.get(spec.id) !== server) return;
       // Stopped by the user: not the server's fault, so the next run simply tries again.
@@ -158,7 +172,7 @@ export function createMcpExtension(host: BuiltinHost): { factory: (pi: Extension
     const parameters = toolParameters(tool.inputSchema);
     const signature = JSON.stringify([server.spec.id, tool.name, label, description, parameters]);
     if (registrations.get(name)?.signature === signature) return false;
-    registrations.set(name, { serverId: server.spec.id, tool: tool.name, signature });
+    registrations.set(name, { serverId: server.spec.id, tool: tool.name, signature, parameters: JSON.stringify(parameters) });
     api.registerTool({
       name,
       label,
@@ -170,7 +184,19 @@ export function createMcpExtension(host: BuiltinHost): { factory: (pi: Extension
         if (!registration || !owner || owner.spec.disabledTools.includes(registration.tool)) {
           throw new Error(`${name} is switched off in Settings › MCP servers.`);
         }
-        if (owner.status.kind !== "connected") throw new Error(`MCP server "${owner.spec.name}" is not connected.`);
+        await waitForConnection(owner, signal);
+        if (owner.status.kind !== "connected") {
+          throw new Error(`MCP server "${owner.spec.name}" is not connected.${owner.status.kind === "failed" ? ` ${owner.status.error}` : ""}`);
+        }
+        const current = owner.status.connection.tools().find((tool) => tool.name === registration.tool);
+        if (!current) throw new Error(`MCP tool "${registration.tool}" is no longer offered by "${owner.spec.name}". Try again with your next message.`);
+        // A cached read-only hint is never an access grant: the server may have changed it.
+        if (requiresReadOnly() && current.annotations?.readOnlyHint !== true) {
+          throw new Error(`Plan mode blocks '${name}': its MCP server doesn't mark it read-only.`);
+        }
+        if (JSON.stringify(toolParameters(current.inputSchema)) !== registration.parameters) {
+          throw new Error(`MCP tool "${registration.tool}" changed its input schema. Try again with your next message.`);
+        }
         const args = params && typeof params === "object" && !Array.isArray(params) ? (params as Record<string, unknown>) : {};
         try {
           const { content, truncated } = convertToolResult(await owner.status.connection.callTool(registration.tool, args, signal));
@@ -181,6 +207,17 @@ export function createMcpExtension(host: BuiltinHost): { factory: (pi: Extension
       },
     });
     return true;
+  }
+
+  async function waitForConnection(server: Server, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) throw new Error("Stopped.");
+    if (!server.flight) return;
+    await new Promise<void>((resolve, reject) => {
+      const abort = () => reject(new Error("Stopped."));
+      signal?.addEventListener("abort", abort, { once: true });
+      server.flight!.then(resolve, reject).finally(() => signal?.removeEventListener("abort", abort));
+    });
+    if (signal?.aborted) throw new Error("Stopped.");
   }
 
   /** Register every live tool that's new or changed. */
@@ -194,7 +231,8 @@ export function createMcpExtension(host: BuiltinHost): { factory: (pi: Extension
   }
 
   const controller: McpController = {
-    configure(specs) {
+    async configure(specs, directory) {
+      if (directory) cacheDirectory = directory;
       const wanted = new Map(specs.map((spec) => [spec.id, spec]));
       for (const [id, server] of servers) {
         const next = wanted.get(id);
@@ -206,20 +244,37 @@ export function createMcpExtension(host: BuiltinHost): { factory: (pi: Extension
       for (const spec of specs) {
         const existing = servers.get(spec.id);
         if (existing) existing.spec = spec;
-        else servers.set(spec.id, { spec, key: connectionKey(spec), status: { kind: "idle" } });
+        else {
+          const key = connectionKey(spec);
+          const tools = cacheDirectory ? await readCatalogue(cataloguePath(cacheDirectory, key)) : undefined;
+          servers.set(spec.id, { spec, key, tools, status: { kind: "idle" } });
+        }
       }
       // A renamed server's tools get their new names now; nothing connects until a run.
       sync();
     },
 
-    async prepare(signal, onConnecting) {
+    start(signal) {
       const now = Date.now();
       const pending = [...servers.values()].filter(
-        (server) => server.status.kind === "idle" || (server.status.kind === "failed" && now - server.status.at >= RETRY_FAILED_AFTER_MS)
+        (server) => !server.flight && (server.status.kind === "idle" || (server.status.kind === "failed" && now - server.status.at >= RETRY_FAILED_AFTER_MS))
       );
       if (pending.length && !signal.aborted) {
+        for (const server of pending) {
+          server.flight = connect(server, signal).finally(() => { server.flight = undefined; });
+        }
+      }
+    },
+
+    async prepare(signal, onConnecting) {
+      // Stop may have released a cached tool's wait before its transport finished closing.
+      await Promise.all([...servers.values()].filter((server) => server.status.kind === "connecting" && server.status.abort.signal.aborted)
+        .map((server) => server.flight));
+      controller.start(signal);
+      const uncached = [...servers.values()].filter((server) => server.tools === undefined && server.flight);
+      if (uncached.length) {
         onConnecting?.();
-        await Promise.all(pending.map((server) => connect(server, signal)));
+        await Promise.all(uncached.map((server) => server.flight));
       }
       return sync();
     },

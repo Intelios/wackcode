@@ -4,7 +4,7 @@
 
 The host runs `dist/worker.js`, a single-file esbuild bundle made after `tsc` (`worker/scripts/bundle.mjs`), because start-up time was mostly Node loading ~2,200 separate files. Every `@earendil-works/pi-coding-agent` import points at Pi's own pre-built bundle (the one its `pi` CLI runs), never at a re-bundled copy: Pi locates its package files, extension aliases and wasm relative to its own location on disk. Don't import Pi under another specifier, or the worker gets a second Pi instance. `manager.js` and `mcp-probe.js` stay unbundled.
 
-The bundle's `external` list is the lazy set: linkedom/turndown/readability (only the web_fetch HTML path, `convert.ts`) and the MCP SDK (only `mcp/client.js`, loaded on first connect) resolve from `node_modules` at first use instead of taxing every spawn — roughly 170 ms of eval saved. Never re-add a static import of them; they stay `dependencies`, so `pnpm deploy` ships them. `scripts/bench-startup.mjs` measures spawn→model-request end to end.
+The bundle's `external` list is the lazy set: linkedom/turndown/readability (only the web_fetch HTML path, `convert.ts`) and the MCP SDK (only `mcp/client.js`, loaded on first connect) resolve from `node_modules` at first use instead of taxing every spawn — roughly 170 ms of eval saved. Never re-add a static import of them; they stay `dependencies`, so `pnpm deploy` ships them. `worker/scripts/bench-startup.mjs` measures spawn→model-request end to end.
 
 ## Protocol changes
 
@@ -105,8 +105,27 @@ The transcript reaches the host as a full `snapshot`, then as `snapshot_delta`s 
 - Never pass `tools:` to the chat's `createAgentSession`: Pi treats it as a registry filter and erases extension tools. Apply the user's denylist with `setActiveToolsByName`, and re-apply it after anything that can re-activate tools (extension `session_start`, `navigateTree`, a roster change).
 - The Settings › Tools denylist covers Pi's tools and package tools. Built-in extension tools are exempt (a disabled `plan_mode_complete` would silently break Plan mode), except the ones in `SWITCHABLE_BUILTIN_TOOLS` (browser, `web_fetch`, the paired `show_visual` / `preview_visual`, `compare_images`, `suggest_task`, and the three canvas tools, which switch together).
 - Sub-agents, memory, computer use and web search have their own settings and keep their tools out through `inactiveTools()`; they never appear on the denylist. `web_search` is offered while `set_web` (or `init`'s `web`) names an active provider, and reaches sub-agents through its own clause in `childToolNames`.
-- MCP tools (`mcp__<server>__<tool>`) have their own per-server and per-tool switches and stay out while their server is off or unreachable. Keep the built-in and MCP switch rules separate.
+- MCP tools (`mcp__<server>__<tool>`) have their own per-server and per-tool switches and stay out while their server is off or known to be unreachable. Keep the built-in and MCP switch rules separate.
 - `powershell` is removed from the registry; `grep`/`find` are reported unavailable when ripgrep/fd are missing (the worker is offline and can't download them).
+
+### MCP startup
+
+MCP connections start at `ready` in both Code and Chat mode. A shared, private tool catalogue
+under `agent/.mcp-tools-v1/` lets a new worker register previously discovered tools before
+their servers finish booting. `prepare` waits only for servers without a catalogue. A first
+tool call waits for its own connection, with Stop cancellation, then checks that the live
+server still offers the tool with the same input schema. Restricted planning checks the live
+read-only hint again at execution; a cached hint never grants access. Background discovery
+never registers tools during a run; updated schemas and failed/removed tools apply at the
+next run boundary. Existing per-server and per-tool switches still apply.
+
+The catalogue contains tool declarations only, never results or connection configuration.
+Its filename fingerprints the exact transport, command/arguments, URL and header/env values;
+changing any of these forces discovery. Files older than seven days, over 4 MiB, malformed,
+symlinked, missing or unwritable fall back to discovery. Schemas containing a credential
+are not cached. Every worker still reconnects: the cache avoids waiting for a known tool
+list, rather than reusing another chat's server process. See [MCP startup experiment](mcp-startup.md)
+for measurements and reproduction.
 
 ### Shell check-ins
 

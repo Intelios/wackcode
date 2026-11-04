@@ -284,6 +284,7 @@ pub async fn probe(app: &AppHandle, server: &McpServerRecord, secrets: &McpSecre
         .kill_on_drop(true);
     crate::shell_env::apply(&mut command).await;
     crate::worker::strip_provider_env(&mut command);
+    crate::worker::node_compile_cache_env(app, &mut command);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;

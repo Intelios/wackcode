@@ -21,6 +21,19 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 // bare specifier, so it has to be a file path.
 const PI_BUNDLE = "../node_modules/@earendil-works/pi-coding-agent/dist/bundle/index.js";
 
+// Libraries only the web_fetch HTML path and the MCP client need, kept out of the bundle and
+// loaded lazily at first use. Bundling them cost every worker spawn ~110 ms and ~60 ms of
+// eval even when the chat never fetched a page or had no MCP servers. They are real
+// dependencies in package.json, so `pnpm deploy` ships them under resources/worker and Node
+// resolves them from node_modules next to dist/ in dev and in the packaged app.
+const lazy = [
+  "linkedom",
+  "turndown",
+  "@mozilla/readability",
+  "@modelcontextprotocol/client",
+  "@modelcontextprotocol/client/*",
+];
+
 await build({
   entryPoints: [join(root, "dist", "index.js")],
   outfile: join(root, "dist", "worker.js"),
@@ -30,6 +43,7 @@ await build({
   target: "node24",
   sourcemap: true,
   logLevel: "warning",
+  external: lazy,
   // CommonJS dependencies call require(); an ES module has none of its own.
   banner: { js: "import { createRequire as __wcCreateRequire } from \"node:module\"; const require = __wcCreateRequire(import.meta.url);" },
   plugins: [{

@@ -1,9 +1,10 @@
 import { transcriptEntries, transcriptMessages, type CachedMessage } from "./transcript.js";
 import { piBase as savedPiBase } from "./saved-session.js";
 import { createPreviewPool, type PreviewPool } from "./preview-decode.js";
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { setUsagePublisher, trackSession, withUsage } from "./usage.js";
-import { existsSync } from "node:fs";
+import { accessSync, constants, existsSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -178,6 +179,13 @@ let disabledTools = new Set<string>();
 let subagentRunner: SubagentRunner | undefined;
 /** Aborts the wait for MCP servers at the start of a run, when the user presses Stop. */
 let mcpWait: AbortController | undefined;
+/**
+ * Server connections kicked off at `ready`, ahead of the first prompt: stdio servers are slow
+ * to spawn, and workers now exist only while work is coming, so the old wait-for-a-run
+ * laziness mostly costs the first send. `connecting` mirrors `prepare`'s onConnecting flag,
+ * for the activity events; the catch keeps a failed connect from surfacing twice.
+ */
+let earlyMcp: { promise: Promise<boolean>; abort: AbortController; connecting: boolean } | undefined;
 /** Which native host subsystem a request goes to: the per-chat browser, computer use, the skill-creator's managed drafts, Settings › Web's search provider, `read_chat`'s referenced-chat lookup, or `canvas_look`'s offscreen renderer. */
 type NativeChannel = "browser" | "computer" | "skill_creator" | "web" | "chat" | "canvas";
 interface PendingNativeRequest {
@@ -418,15 +426,18 @@ const TOOL_BINARIES: Record<string, string> = { grep: "rg", find: "fd" };
 const binaryCache = new Map<string, boolean>();
 
 // Mirrors Pi's own resolution order (utils/tools-manager.ts): its bin directory first,
-// then whatever is on PATH.
+// then whatever is on PATH. A PATH scan instead of a `--version` spawnSync: the probe blocked
+// the worker's event loop (with no timeout) for two subprocesses on every spawn.
 function hasBinary(binary: string): boolean {
   const cached = binaryCache.get(binary);
   if (cached !== undefined) return cached;
   const piBin = join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), "bin", binary);
-  let found = existsSync(piBin);
+  const executable = (path: string) => { try { accessSync(path, constants.X_OK); return true; } catch { return false; } };
+  let found = executable(piBin);
   if (!found) {
-    const probe = spawnSync(binary, ["--version"], { stdio: "ignore" });
-    found = !probe.error;
+    for (const dir of (process.env.PATH ?? "").split(":")) {
+      if (dir && executable(join(dir, binary))) { found = true; break; }
+    }
   }
   binaryCache.set(binary, found);
   return found;
@@ -1442,23 +1453,30 @@ async function initialize(command: InitCommand): Promise<void> {
   taskId = command.taskId;
   workspacePath = command.cwd;
   chatKind = command.kind === "chat";
-  workspaceIsGitRepo = !chatKind && spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
-    cwd: command.cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: 3_000,
-  }).stdout?.trim() === "true";
+  // A pooled worker may have been spawned in a different directory; land on the chat's
+  // workspace before anything that can look at process.cwd() runs. Mirrors the spawn's
+  // current_dir failure: a gone folder fails the init, not the chat later.
+  process.chdir(command.cwd);
+  // Async so it overlaps the imports and setup below instead of blocking the event loop the
+  // way spawnSync did (worst case: the full 3 s timeout on a network or iCloud workspace).
+  const gitProbe = chatKind
+    ? Promise.resolve(false)
+    : promisify(execFile)("git", ["rev-parse", "--is-inside-work-tree"], {
+        cwd: command.cwd,
+        encoding: "utf8",
+        timeout: 3_000,
+      }).then(({ stdout }) => stdout.trim() === "true").catch(() => false);
   activeCredential = command.apiKey;
   activeAuthPath = command.authPath;
   activeProviderId = command.provider.id;
   await mkdir(command.sessionDir, { recursive: true });
 
-  const pi = await import("@earendil-works/pi-coding-agent");
+  const [pi, piAi] = await Promise.all([import("@earendil-works/pi-coding-agent"), import("@earendil-works/pi-ai")]);
   piModule = pi;
+  piAiModule = piAi;
   const imageDirectory = chatKind ? join(command.cwd, ".wackcode", "images") : join(command.sessionDir, "images");
   const imageStore = new ImageStore({ directory: imageDirectory, cwd: command.cwd, isChat: chatKind, resizeImage: pi.resizeImage, convertToPng: pi.convertToPng });
   builtins.images.configure(imageStore);
-  piAiModule = await import("@earendil-works/pi-ai");
   modelRuntime = await createModelRuntime(pi, command.provider, command.agentDir, {
     apiKey: command.apiKey,
     authPath: command.authPath
@@ -1758,7 +1776,32 @@ async function initialize(command: InitCommand): Promise<void> {
       scheduleSnapshot();
     }
   });
+  workspaceIsGitRepo = await gitProbe;
   emitSnapshot("ready");
+
+  // MCP servers connect ahead of the first prompt instead of inside it: a worker only exists
+  // while work is coming, so spawning them during the ready→prompt gap removes their start
+  // cost from the first send. The first `prepareMcpServers` awaits this flight (Stop included);
+  // a `set_mcp` in the gap is caught by its second pass.
+  const early = { abort: new AbortController(), connecting: false, promise: Promise.resolve(false) as Promise<boolean> };
+  earlyMcp = early;
+  early.promise = builtins.mcp.prepare(early.abort.signal, () => {
+    early.connecting = true;
+    send({ type: "activity", taskId: command.taskId, event: "mcp_connect_start" });
+  }).then((changed) => {
+    if (earlyMcp === early) earlyMcp = undefined;
+    if (early.connecting) send({ type: "activity", taskId: command.taskId, event: "mcp_connect_end" });
+    // Tools only change between runs: a connect that lands mid-run is applied by the next
+    // prepareMcpServers pass instead.
+    if (changed && session && !session.isStreaming && !session.isCompacting) {
+      applyDisabledTools();
+      emitSnapshot();
+    }
+    return changed;
+  }).catch(() => {
+    if (earlyMcp === early) earlyMcp = undefined;
+    return false;
+  });
 }
 
 function runStartedAt(requested: number | undefined): number {
@@ -1934,6 +1977,9 @@ async function stopActiveRun(): Promise<void> {
   stopRequested = true;
   cancelPendingDialogs();
   mcpWait?.abort();
+  // The ready-time flight belongs to whatever run was waiting on it; abort it even when
+  // prepareMcpServers never got to register its own listener.
+  earlyMcp?.abort.abort();
   if (compacting) {
     session.abortCompaction();
     await builtins.subagents.stopAll();
@@ -1963,12 +2009,25 @@ async function prepareMcpServers(): Promise<void> {
   const id = taskId;
   mcpWait = new AbortController();
   let connecting = false;
+  // The flight kicked off at `ready` is part of this run's MCP wait: it resolves with the same
+  // "tools changed" bit, and Stop aborts it like a connect started here.
+  const abortEarly = () => earlyMcp?.abort.abort();
   try {
-    const changed = await builtins.mcp.prepare(mcpWait.signal, () => {
+    let changed = false;
+    const early = earlyMcp;
+    if (early) {
+      mcpWait.signal.addEventListener("abort", abortEarly, { once: true });
+      changed = await early.promise;
+      mcpWait.signal.removeEventListener("abort", abortEarly);
+    }
+    // A second pass catches servers configured or dropped while the early flight was running;
+    // nothing pending resolves immediately. Its start/end pair is separate from the early
+    // flight's own events.
+    const more = await builtins.mcp.prepare(mcpWait.signal, () => {
       connecting = true;
       send({ type: "activity", taskId: id, event: "mcp_connect_start" });
     });
-    if (changed) {
+    if (changed || more) {
       applyDisabledTools();
       emitSnapshot();
     }

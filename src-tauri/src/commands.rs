@@ -3212,6 +3212,16 @@ pub async fn goal_control(
     Ok(String::new())
 }
 
+/// Keep one unattached worker warm while a chat composer or chat is on screen, so the first
+/// send does not pay Node's boot plus the bundle's evaluation. The pooled worker is adopted by
+/// whichever task's `ensure_worker` runs next; an unused one is reaped after its TTL.
+#[tauri::command]
+pub async fn prewarm_worker(app: AppHandle, workspace_hint: Option<String>) -> Result<(), String> {
+    app.state::<worker::WorkerPool>()
+        .prewarm(&app, workspace_hint.as_deref())
+        .await
+}
+
 #[tauri::command]
 pub async fn prompt(
     app: AppHandle,

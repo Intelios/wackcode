@@ -2,9 +2,10 @@
  * Built-in MCP client: the user's MCP servers (Settings › MCP servers) as tools named
  * `mcp__<server>__<tool>`.
  *
- * - Servers connect lazily, when a run starts (`prepare`), never when a chat merely opens: every
- *   chat the user clicks gets a worker, and each would otherwise start every stdio server. A
- *   connection then lasts as long as the worker.
+ * - Servers connect when the worker reports `ready`, ahead of the first prompt (`earlyMcp`
+ *   in `index.ts`): a worker only exists while work is coming, so connecting then takes the
+ *   spawn cost off the first send instead of adding it. `prepare` re-runs inside each run to
+ *   catch servers configured in the gap. A connection then lasts as long as the worker.
  * - Tool sets change only between runs: `prepare` runs before the prompt, and `configure`
  *   (from `set_mcp`) waits in the worker's command queue like every other setting.
  * - Pi can't unregister a tool, so a tool whose server is off, gone, failed, or that the user
@@ -18,8 +19,16 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Tool } from "@modelcontextprotocol/client";
 import type { McpServerSpec } from "../../protocol.js";
 import type { BuiltinHost } from "../host.js";
-import { connectServer, type McpConnection } from "./client.js";
+import type { McpConnection } from "./client.js";
 import { convertToolResult, mcpToolName, secretValues, toolParameters } from "./tools.js";
+
+// The MCP SDK is `external` to the worker bundle and only matters once a server actually
+// connects, so client.js (which imports it) loads on first connect rather than at spawn.
+let clientModule: Promise<typeof import("./client.js")> | undefined;
+function loadClient(): Promise<typeof import("./client.js")> {
+  clientModule ??= import("./client.js");
+  return clientModule;
+}
 
 const RETRY_FAILED_AFTER_MS = 5 * 60_000;
 const MAX_DESCRIPTION_CHARS = 2_000;
@@ -111,6 +120,7 @@ export function createMcpExtension(host: BuiltinHost): { factory: (pi: Extension
     runSignal.addEventListener("abort", onRunAbort, { once: true });
     server.status = { kind: "connecting", abort };
     try {
+      const { connectServer } = await loadClient();
       const connection = await connectServer(spec, {
         cwd: host.workspace(),
         signal: abort.signal,

@@ -21,7 +21,7 @@ use std::{
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    process::{ChildStdin, Command},
+    process::{Child, ChildStdin, ChildStderr, ChildStdout, Command},
     sync::{oneshot, Mutex as AsyncMutex},
 };
 
@@ -326,6 +326,146 @@ fn record_worker_crash(state: &MetadataState, task_id: &str, message: &str) -> b
     interrupted
 }
 
+/// A prewarmed worker: Node has already booted and the bundle is already evaluated, so the
+/// first send of a fresh chat skips the ~1 s cold start. At most one waits unattached to any
+/// task; `init` decides which task (and kind) it serves when it is adopted.
+#[derive(Default)]
+pub struct WorkerPool {
+    pooled: AsyncMutex<Option<PooledWorker>>,
+}
+
+/// A spawned Node worker not yet owned by a task.
+pub(crate) struct SpawnedWorker {
+    child: Child,
+    pid: u32,
+    stdin: ChildStdin,
+    stdout: ChildStdout,
+    stderr: ChildStderr,
+}
+
+struct PooledWorker {
+    spawned: SpawnedWorker,
+    spawned_at: Instant,
+    /// The bundle's mtime at spawn, so a rebuilt worker.js never silently serves old code.
+    worker_mtime: Option<std::time::SystemTime>,
+}
+
+/// An adopted worker is dropped from the pool after this long unused rather than holding a
+/// ~145 MB process forever. `prewarm` calls restart the clock by replacing it.
+const POOLED_WORKER_TTL: Duration = Duration::from_secs(10 * 60);
+
+fn worker_entry_mtime(app: &AppHandle) -> Option<std::time::SystemTime> {
+    worker_entry_path(app)
+        .ok()
+        .and_then(|path| std::fs::metadata(path).ok())
+        .and_then(|metadata| metadata.modified().ok())
+}
+
+/// Node's bytecode cache (`NODE_COMPILE_CACHE`, Node 22.1+): compiles worker.js and Pi's
+/// bundle once per build instead of on every spawn. Missing directory just means a slower
+/// first compile, so its creation failure is not the spawn's.
+pub(crate) fn node_compile_cache_env(app: &AppHandle, command: &mut Command) {
+    if let Ok(dir) = app
+        .path()
+        .app_data_dir()
+        .map(|dir| dir.join("node-compile-cache"))
+    {
+        if std::fs::create_dir_all(&dir).is_ok() {
+            command.env("NODE_COMPILE_CACHE", &dir);
+        }
+    }
+}
+
+/// Spawn the bundled worker in `cwd`, not yet attached to a task. Shared by `ensure_worker`
+/// and the prewarm pool; the caller takes the pipes and registers the process.
+async fn spawn_worker_process(app: &AppHandle, cwd: &str) -> Result<SpawnedWorker, String> {
+    let worker_path = worker_entry_path(app)?;
+    let node_path = node_executable_path()?;
+    let mut command = Command::new(node_path);
+    // The user's login-shell environment first, so the agent's tools and stdio MCP servers find
+    // Homebrew, nvm and friends even when the app was opened from Finder. Provider keys are
+    // stripped from it below.
+    crate::shell_env::apply(&mut command).await;
+    command
+        .arg(worker_path)
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .env("PI_TELEMETRY", "0")
+        .env("PI_SKIP_VERSION_CHECK", "1")
+        .env("PI_OFFLINE", "1");
+    strip_provider_env(&mut command);
+    node_compile_cache_env(app, &mut command);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.as_std_mut().process_group(0);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("Could not start the bundled Pi worker: {error}"))?;
+    let pid = child
+        .id()
+        .ok_or_else(|| "The Pi worker did not return a process id".to_string())?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "The Pi worker has no stdin".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "The Pi worker has no stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "The Pi worker has no stderr".to_string())?;
+    Ok(SpawnedWorker { child, pid, stdin, stdout, stderr })
+}
+
+impl WorkerPool {
+    /// Keep one unattached worker ready, so a chat's first send does not pay spawn plus bundle
+    /// evaluation. The renderer calls this while a chat composer or chat is on screen; the
+    /// pooled worker is adopted by whichever task sends next. Best effort: a second call while
+    /// one is already warm just refreshes the stale check.
+    pub async fn prewarm(&self, app: &AppHandle, workspace_hint: Option<&str>) -> Result<(), String> {
+        let mtime = worker_entry_mtime(app);
+        let mut pooled = self.pooled.lock().await;
+        if let Some(existing) = pooled.as_mut() {
+            let alive = existing.spawned.child.try_wait().ok().flatten().is_none();
+            if alive && existing.worker_mtime == mtime && existing.spawned_at.elapsed() < POOLED_WORKER_TTL {
+                return Ok(());
+            }
+        }
+        // Dead, rebuilt or expired: let the old one go (kill_on_drop reaps it) and replace it.
+        pooled.take();
+        let cwd = match workspace_hint {
+            Some(hint) if std::path::Path::new(hint).is_dir() => PathBuf::from(hint),
+            _ => app.path().app_data_dir().map_err(|error| error.to_string())?,
+        };
+        if !cwd.is_dir() {
+            std::fs::create_dir_all(&cwd).map_err(|error| error.to_string())?;
+        }
+        let spawned = spawn_worker_process(app, &cwd.to_string_lossy()).await?;
+        *pooled = Some(PooledWorker { spawned, spawned_at: Instant::now(), worker_mtime: mtime });
+        Ok(())
+    }
+
+    /// Take the pooled worker for a real chat when it is still alive, current and fresh;
+    /// anything else kills it (kill_on_drop) and the caller spawns instead.
+    async fn adopt(&self, worker_mtime: Option<std::time::SystemTime>) -> Option<SpawnedWorker> {
+        let mut pooled = self.pooled.lock().await;
+        let Some(pooled_worker) = pooled.as_mut() else { return None };
+        let alive = pooled_worker.spawned.child.try_wait().ok().flatten().is_none();
+        if !alive || pooled_worker.worker_mtime != worker_mtime || pooled_worker.spawned_at.elapsed() >= POOLED_WORKER_TTL {
+            pooled.take();
+            return None;
+        }
+        pooled.take().map(|worker| worker.spawned)
+    }
+}
+
 pub async fn ensure_worker(
     app: &AppHandle,
     task: &TaskRecord,
@@ -370,47 +510,21 @@ pub async fn ensure_worker_with(
     std::fs::create_dir_all(&agent_dir).map_err(|error| error.to_string())?;
     std::fs::create_dir_all(&session_dir).map_err(|error| error.to_string())?;
 
-    let worker_path = worker_entry_path(app)?;
-    let node_path = node_executable_path()?;
-    let mut command = Command::new(node_path);
-    // The user's login-shell environment first, so the agent's tools and stdio MCP servers find
-    // Homebrew, nvm and friends even when the app was opened from Finder. Provider keys are
-    // stripped from it below.
-    crate::shell_env::apply(&mut command).await;
-    command
-        .arg(worker_path)
-        .current_dir(&task.workspace_path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .env("PI_TELEMETRY", "0")
-        .env("PI_SKIP_VERSION_CHECK", "1")
-        .env("PI_OFFLINE", "1");
-    strip_provider_env(&mut command);
-    #[cfg(unix)]
+    // A prewarmed worker has already paid Node's boot and the bundle's evaluation; adopt it
+    // when it is still alive and still the current build, otherwise spawn the usual way.
+    let spawned = match app
+        .state::<WorkerPool>()
+        .adopt(worker_entry_mtime(app))
+        .await
     {
-        use std::os::unix::process::CommandExt;
-        command.as_std_mut().process_group(0);
-    }
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("Could not start the bundled Pi worker: {error}"))?;
-    let pid = child
-        .id()
-        .ok_or_else(|| "The Pi worker did not return a process id".to_string())?;
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "The Pi worker has no stdin".to_string())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "The Pi worker has no stdout".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "The Pi worker has no stderr".to_string())?;
+        Some(pooled) => pooled,
+        None => spawn_worker_process(app, &task.workspace_path).await?,
+    };
+    let mut child = spawned.child;
+    let pid = spawned.pid;
+    let stdin = spawned.stdin;
+    let stdout = spawned.stdout;
+    let stderr = spawned.stderr;
     let pending: Pending = Arc::default();
     worker_state.insert(
         task.id.clone(),
@@ -1135,6 +1249,7 @@ pub async fn run_manager(app: &AppHandle, command: Value) -> Result<Value, Strin
     for key in PROVIDER_ENVIRONMENT_KEYS {
         command_builder.env_remove(key);
     }
+    node_compile_cache_env(app, &mut command_builder);
     let mut process = command_builder
         .spawn()
         .map_err(|error| format!("Could not start the package manager: {error}"))?;
@@ -1671,6 +1786,72 @@ pub(crate) fn redact_and_limit(message: &str) -> String {
 mod tests {
     use super::*;
     use crate::models::{PackageResourceRecord, ProviderRecord};
+
+    /// A stand-in for a spawned worker: a real child (so liveness is real) that never reads
+    /// stdin, with piped handles like `spawn_worker_process` produces.
+    fn fake_spawned() -> SpawnedWorker {
+        let mut command = Command::new("sleep");
+        command
+            .arg("60")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let mut child = command.spawn().unwrap();
+        SpawnedWorker {
+            pid: child.id().unwrap(),
+            stdin: child.stdin.take().unwrap(),
+            stdout: child.stdout.take().unwrap(),
+            stderr: child.stderr.take().unwrap(),
+            child,
+        }
+    }
+
+    fn pooled_worker(spawned: SpawnedWorker, mtime: Option<std::time::SystemTime>, age: Duration) -> PooledWorker {
+        PooledWorker { spawned, spawned_at: Instant::now() - age, worker_mtime: mtime }
+    }
+
+    #[test]
+    fn an_empty_pool_adopts_nothing() {
+        let pool = WorkerPool::default();
+        assert!(tauri::async_runtime::block_on(pool.adopt(None)).is_none());
+    }
+
+    #[test]
+    fn a_live_current_worker_is_adopted_once() {
+        let pool = WorkerPool::default();
+        let mtime = Some(std::time::SystemTime::now());
+        tauri::async_runtime::block_on(async {
+            *pool.pooled.lock().await = Some(pooled_worker(fake_spawned(), mtime, Duration::ZERO));
+            assert!(pool.adopt(mtime).await.is_some());
+            assert!(pool.adopt(mtime).await.is_none());
+        });
+    }
+
+    #[test]
+    fn a_rebuilt_bundle_or_stale_worker_is_not_adopted() {
+        let pool = WorkerPool::default();
+        let old = Some(std::time::SystemTime::UNIX_EPOCH);
+        let rebuilt = Some(std::time::SystemTime::now());
+        tauri::async_runtime::block_on(async {
+            *pool.pooled.lock().await = Some(pooled_worker(fake_spawned(), old, Duration::ZERO));
+            assert!(pool.adopt(rebuilt).await.is_none());
+            *pool.pooled.lock().await = Some(pooled_worker(fake_spawned(), rebuilt, POOLED_WORKER_TTL + Duration::from_secs(1)));
+            assert!(pool.adopt(rebuilt).await.is_none());
+        });
+    }
+
+    #[test]
+    fn a_dead_worker_is_not_adopted() {
+        let pool = WorkerPool::default();
+        tauri::async_runtime::block_on(async {
+            let mut spawned = fake_spawned();
+            spawned.child.kill().await.unwrap();
+            let _ = spawned.child.wait().await;
+            *pool.pooled.lock().await = Some(pooled_worker(spawned, None, Duration::ZERO));
+            assert!(pool.adopt(None).await.is_none());
+        });
+    }
 
     #[test]
     fn background_work_keeps_git_and_reaper_guards_busy_after_parent_settlement() {

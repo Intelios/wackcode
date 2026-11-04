@@ -48,6 +48,7 @@ pub fn run() {
         // `wcvisual:` (`visuals::navigation_allowed`).
         .plugin(visuals::navigation_plugin())
         .manage(WorkerState::default())
+        .manage(worker::WorkerPool::default())
         .manage(history::HistoryState::default())
         .manage(usage::UsageState::default())
         .manage(browser::BrowserManager::default())
@@ -261,6 +262,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + 
             commands::read_skill_draft,
             commands::compact_task,
             commands::goal_control,
+            commands::prewarm_worker,
             commands::prompt,
             commands::queue_message,
             commands::steer_message,

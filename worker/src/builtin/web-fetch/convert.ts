@@ -3,11 +3,34 @@
  * (the Firefox reader view) to drop navigation, ads and footers, then Turndown to Markdown;
  * pages Readability can't make sense of fall back to their whole cleaned-up body. Text formats
  * pass through unchanged, and anything binary is refused rather than dumped into the context.
+ *
+ * The three HTML libraries are loaded on first use and are `external` to the worker bundle:
+ * ~110 ms of module evaluation that would otherwise tax every worker spawn, including chats
+ * that never fetch a page.
  */
-import { Readability } from "@mozilla/readability";
-import { parseHTML } from "linkedom";
-import TurndownService from "turndown";
+import type { Readability } from "@mozilla/readability";
+import type { parseHTML } from "linkedom";
+import type TurndownService from "turndown";
 import { WebFetchError } from "./fetch.js";
+
+interface HtmlModules {
+  parseHTML: typeof parseHTML;
+  Readability: typeof Readability;
+  TurndownService: typeof TurndownService;
+}
+
+let htmlModules: Promise<HtmlModules> | undefined;
+
+function loadHtmlModules(): Promise<HtmlModules> {
+  htmlModules ??= Promise.all([import("linkedom"), import("@mozilla/readability"), import("turndown")]).then(
+    ([linkedom, readability, turndown]) => ({
+      parseHTML: linkedom.parseHTML,
+      Readability: readability.Readability,
+      TurndownService: turndown.default,
+    })
+  );
+  return htmlModules;
+}
 
 export interface ConvertedPage {
   title?: string;
@@ -21,12 +44,13 @@ export interface ConvertedPage {
 const NOISE_TAGS = ["script", "style", "noscript", "template", "iframe", "object", "embed", "svg", "canvas", "form", "button", "select", "dialog"];
 const FALLBACK_NOISE = ["nav", "header", "footer", "aside"];
 
-export function convertBody(body: Buffer, contentType: string, url: string): ConvertedPage {
+export async function convertBody(body: Buffer, contentType: string, url: string): Promise<ConvertedPage> {
   const mime = contentType.split(";")[0].trim().toLowerCase();
   const charset = /charset\s*=\s*"?([\w-]+)/i.exec(contentType)?.[1];
   if (isHtml(mime) || (!mime && sniffHtml(body))) {
     const html = decodeText(body, charset ?? metaCharset(body));
-    return htmlToMarkdown(html, url);
+    const modules = await loadHtmlModules();
+    return htmlToMarkdown(html, url, modules);
   }
   if (isText(mime) || (!mime && !looksBinary(body))) {
     return { text: decodeText(body, charset).trim(), format: "text" };
@@ -79,8 +103,8 @@ function decodeText(body: Buffer, charset: string | undefined): string {
   }
 }
 
-function htmlToMarkdown(html: string, url: string): ConvertedPage {
-  const turndown = createTurndown();
+function htmlToMarkdown(html: string, url: string, { parseHTML, Readability, TurndownService }: HtmlModules): ConvertedPage {
+  const turndown = createTurndown(TurndownService);
 
   const { document } = parseHTML(html);
   absolutizeLinks(document, url);
@@ -104,8 +128,8 @@ function htmlToMarkdown(html: string, url: string): ConvertedPage {
   return { title: pageTitle, text, format: "html" };
 }
 
-function createTurndown(): TurndownService {
-  const turndown = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced", bulletListMarker: "-", emDelimiter: "*" });
+function createTurndown(Service: typeof TurndownService): TurndownService {
+  const turndown = new Service({ headingStyle: "atx", codeBlockStyle: "fenced", bulletListMarker: "-", emDelimiter: "*" });
   turndown.remove(NOISE_TAGS as TurndownService.Filter);
   // Inline data: images would flood the context with base64. Keep only real images with alt text.
   turndown.addRule("images", {

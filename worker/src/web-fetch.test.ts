@@ -202,8 +202,8 @@ describe("web_fetch conversion", () => {
     <pre><code>pnpm install</code></pre></article>
     <footer>Copyright</footer></body></html>`;
 
-  it("extracts the article as Markdown with absolute links", () => {
-    const page = convertBody(Buffer.from(article), "text/html; charset=utf-8", "https://example.com/guide/");
+  it("extracts the article as Markdown with absolute links", async () => {
+    const page = await convertBody(Buffer.from(article), "text/html; charset=utf-8", "https://example.com/guide/");
     expect(page.format).toBe("html");
     expect(page.title).toBe("Guide");
     expect(page.text).toContain("Install");
@@ -216,17 +216,17 @@ describe("web_fetch conversion", () => {
     expect(page.text).not.toContain("Copyright");
   });
 
-  it("falls back to the whole body for pages Readability rejects", () => {
-    const page = convertBody(Buffer.from("<html><body><nav>Menu</nav><p>Short note.</p></body></html>"), "text/html", "https://example.com/");
+  it("falls back to the whole body for pages Readability rejects", async () => {
+    const page = await convertBody(Buffer.from("<html><body><nav>Menu</nav><p>Short note.</p></body></html>"), "text/html", "https://example.com/");
     expect(page.text).toBe("Short note.");
   });
 
-  it("passes text through, honours charsets, sniffs untyped bodies, and refuses binaries", () => {
-    expect(convertBody(Buffer.from('{"a":1}'), "application/json", "https://x.test/")).toEqual({ text: '{"a":1}', format: "text" });
-    expect(convertBody(Buffer.from([0x63, 0x61, 0x66, 0xe9]), "text/plain; charset=iso-8859-1", "https://x.test/").text).toBe("café");
-    expect(convertBody(Buffer.from("<!DOCTYPE html><html><body><p>Sniffed</p></body></html>"), "", "https://x.test/").text).toBe("Sniffed");
-    expect(() => convertBody(Buffer.from([1, 0, 2]), "", "https://x.test/")).toThrow(WebFetchError);
-    expect(() => convertBody(Buffer.from("PDF"), "application/pdf", "https://x.test/")).toThrow(/application\/pdf/);
+  it("passes text through, honours charsets, sniffs untyped bodies, and refuses binaries", async () => {
+    await expect(convertBody(Buffer.from('{"a":1}'), "application/json", "https://x.test/")).resolves.toEqual({ text: '{"a":1}', format: "text" });
+    expect((await convertBody(Buffer.from([0x63, 0x61, 0x66, 0xe9]), "text/plain; charset=iso-8859-1", "https://x.test/")).text).toBe("café");
+    expect((await convertBody(Buffer.from("<!DOCTYPE html><html><body><p>Sniffed</p></body></html>"), "", "https://x.test/")).text).toBe("Sniffed");
+    await expect(convertBody(Buffer.from([1, 0, 2]), "", "https://x.test/")).rejects.toThrow(WebFetchError);
+    await expect(convertBody(Buffer.from("PDF"), "application/pdf", "https://x.test/")).rejects.toThrow(/application\/pdf/);
   });
 });
 

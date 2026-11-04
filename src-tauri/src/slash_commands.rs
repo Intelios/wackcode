@@ -315,6 +315,7 @@ async fn run_scan(app: &AppHandle, config: &CommandsConfig, skills_config: &Skil
         .env("PI_SKIP_VERSION_CHECK", "1")
         .env("PI_OFFLINE", "1");
     crate::worker::strip_provider_env(&mut command);
+    crate::worker::node_compile_cache_env(app, &mut command);
     let mut child = command.spawn().map_err(|error| format!("Could not read your commands: {error}"))?;
     let mut stdin = child.stdin.take().ok_or("Could not read your commands.")?;
     let mut line = serde_json::to_vec(&json!({ "request": request, "agentDir": agent_dir })).map_err(|error| error.to_string())?;

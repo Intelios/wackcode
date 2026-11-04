@@ -276,6 +276,9 @@ export const api = {
   watchSubagent: (taskId: string, target: SubagentTarget | null) => invoke<void>("watch_subagent", { taskId, target }),
   /** Full keyless `/` catalog for the welcome composer; this never creates a chat. */
   listDraftCommands: (projectId?: string | null) => invoke<SlashCommand[]>("list_draft_commands", { projectId }),
+  /** Keep one unattached worker warm while a composer or chat is on screen, so the first send
+   *  skips Node's boot and the bundle's eval. Best effort: failures are ignored. */
+  prewarmWorker: (workspaceHint?: string) => invoke<void>("prewarm_worker", { workspaceHint }),
   listCommands: (taskId: string) => invoke<SlashCommand[]>("list_commands", { taskId }),
   executeCommand: (input: { taskId: string; commandId: string; args: string; startedAt: number; images?: ImageContent[]; name?: string }) => invoke<string>("execute_command", { input }),
   initAgents: (taskId: string, startedAt: number) => invoke<string>("init_agents", { taskId, startedAt }),

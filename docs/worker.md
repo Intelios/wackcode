@@ -4,6 +4,8 @@
 
 The host runs `dist/worker.js`, a single-file esbuild bundle made after `tsc` (`worker/scripts/bundle.mjs`), because start-up time was mostly Node loading ~2,200 separate files. Every `@earendil-works/pi-coding-agent` import points at Pi's own pre-built bundle (the one its `pi` CLI runs), never at a re-bundled copy: Pi locates its package files, extension aliases and wasm relative to its own location on disk. Don't import Pi under another specifier, or the worker gets a second Pi instance. `manager.js` and `mcp-probe.js` stay unbundled.
 
+The bundle's `external` list is the lazy set: linkedom/turndown/readability (only the web_fetch HTML path, `convert.ts`) and the MCP SDK (only `mcp/client.js`, loaded on first connect) resolve from `node_modules` at first use instead of taxing every spawn — roughly 170 ms of eval saved. Never re-add a static import of them; they stay `dependencies`, so `pnpm deploy` ships them. `scripts/bench-startup.mjs` measures spawn→model-request end to end.
+
 ## Protocol changes
 
 A new or changed command or event touches all of these together:

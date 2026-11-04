@@ -166,7 +166,7 @@ export function createWebFetchExtension(fetchOptions: Omit<FetchOptions, "signal
         status: response.status,
         contentType: response.contentType,
         bodyTruncated: response.bodyTruncated,
-        page: convertBody(response.body, response.contentType, response.finalUrl),
+        page: await convertBody(response.body, response.contentType, response.finalUrl),
       };
     }
     cache.set(key, entry);

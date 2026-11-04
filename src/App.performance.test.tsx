@@ -29,6 +29,7 @@ vi.mock("./api", () => ({ api: {
   computerUseRespondAccess: vi.fn(), computerUseRevokeApp: vi.fn(),
   gitPublishInfo: vi.fn().mockResolvedValue({ branch: "main", upstream: null, remotes: [] }),
   gitChanges: vi.fn().mockResolvedValue({ isGit: false, files: [] }), listDraftCommands: vi.fn().mockResolvedValue([]),
+  prewarmWorker: vi.fn().mockResolvedValue(undefined),
   listCommands: vi.fn().mockResolvedValue([]), getRun: vi.fn(async (_taskId, kind = "run") => ({ kind, cwd: "/tmp", run: null, generation: 0 })),
   saveProjectRunCommand: vi.fn(), saveProjectBuildCommand: vi.fn(), startRun: vi.fn(), stopRun: vi.fn(),
   createTask: vi.fn(), prompt: vi.fn(), setTaskMode: vi.fn(), executeCommand: vi.fn().mockResolvedValue(undefined),

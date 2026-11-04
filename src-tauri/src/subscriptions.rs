@@ -117,6 +117,7 @@ pub async fn refresh_subscription_models(app: AppHandle, state: State<'_, Metada
         .kill_on_drop(true)
         .env("PI_TELEMETRY", "0").env("PI_SKIP_VERSION_CHECK", "1").env("PI_OFFLINE", "1");
     worker::strip_provider_env(&mut command);
+    worker::node_compile_cache_env(&app, &mut command);
     let mut child = command.spawn().map_err(|error| format!("Could not refresh subscription models: {error}"))?;
     let mut stdin = child.stdin.take().ok_or_else(|| "Could not refresh subscription models".to_string())?;
     let input = serde_json::to_vec(&json!({ "providers": targets })).map_err(|error| error.to_string())?;
@@ -215,6 +216,7 @@ pub async fn start_subscription_login(app: AppHandle, state: State<'_, MetadataS
         .env("PI_TELEMETRY", "0").env("PI_SKIP_VERSION_CHECK", "1").env("PI_OFFLINE", "1")
         .env_remove("PI_OAUTH_CALLBACK_HOST");
     worker::strip_provider_env(&mut command);
+    worker::node_compile_cache_env(&app, &mut command);
     use std::os::unix::process::CommandExt;
     command.as_std_mut().process_group(0);
     let mut child = command.spawn().map_err(|error| format!("Could not start subscription sign-in: {error}"))?;

@@ -898,6 +898,23 @@ describe("Pi worker integration", () => {
     expect(worker.outputs.some((output) => output.type === "worker_error")).toBe(false);
   });
 
+  it("initializes and runs from a spawn cwd that isn't the workspace (prewarmed-pool shape)", async () => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-pool-ws-"));
+    const elsewhere = await mkdtemp(join(tmpdir(), "wackcode-pool-spawn-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    cleanup.push(() => rm(elsewhere, { recursive: true, force: true }));
+    // Rust's pool may adopt a worker spawned in another directory; init chdirs onto the task's.
+    const worker = new WorkerHarness(elsewhere);
+    worker.send(initCommand(provider.baseUrl, "alpha-secret", workspace, "pooled-task"));
+    cleanup.push(() => worker.shutdown());
+    await worker.waitFor((output) => output.type === "ready");
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "pooled-run", message: "Hello." });
+    await worker.waitFor((output) => output.type === "run_state" && output.state === "idle" && provider.requests.length >= 1);
+    expect(worker.outputs.some((output) => output.type === "worker_error")).toBe(false);
+  });
+
   it("bounds shutdown when an extension prevents an active run from becoming idle", async () => {
     const provider = await startMockProvider();
     cleanup.push(provider.close);

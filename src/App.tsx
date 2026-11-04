@@ -1740,6 +1740,13 @@ export default function App() {
   const draftProject = data.projects.find((project) => project.id === draft?.projectId);
   const draftChoice = draft ? draft.choice ?? defaultChoice(draft.projectId) : undefined;
 
+  // Keep one unattached worker warm while anything that can send is on screen: the draft
+  // composer's send adopts it for the new chat, and so does a reaped chat's next send.
+  useEffect(() => {
+    const hint = selectedTask?.workspacePath ?? draftProject?.path;
+    void api.prewarmWorker(hint).catch(() => {});
+  }, [selectedTask?.id, selectedTask?.workspacePath, draftProject?.path]);
+
   function lastProjectId(projects = data.projects): string | null {
     // A Chat mode chat never has a project.
     if (areaRef.current === "chat") return null;

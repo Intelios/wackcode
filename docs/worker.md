@@ -477,7 +477,7 @@ how the agent actually reads it.
 
 - A command's key (`commandKey` in `worker/src/slash.ts`) must stay identical across the Settings denylist, `commands-scan.ts` and the worker's catalog.
 - WackCode owns eight names (`APP_COMMAND_NAMES`: `/init`, `/compact`, `/new`, `/name`, `/copy`, `/goal`, `/skill-creator`, `/canvas`). The first entry to claim any other name wins it; a later clash is renamed `<source>:<name>` (`resolveCommandNames`), and a switched-off command frees its name.
-- Skill and command folders are re-read before every run, so edits on disk apply from the next message. Where they may load from is a security rule; see [security.md](security.md#pi-lockdown).
+- Skill and command folders are refreshed before every run behind an `(mtime, size)` stamp (`file-stamps.ts`), so edits on disk apply from the next message without re-reading unchanged trees. Where they may load from is a security rule; see [security.md](security.md#pi-lockdown).
 
 ## Errors and redaction
 

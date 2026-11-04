@@ -192,9 +192,22 @@ fn same_path(left: &Path, right: &Path) -> bool {
 
 /// The project repository the root is the top of, if it is one. Never walks up: a scratch
 /// folder inside a home directory that happens to be a repository is not that repository.
+/// Positive answers are memoized — a repository's top level does not move for a fixed root;
+/// a folder that is not (yet) a repository is asked again each time.
 fn project_repo(root: &Path) -> Option<PathBuf> {
+    static TOP: OnceLock<std::sync::Mutex<std::collections::HashMap<PathBuf, PathBuf>>> = OnceLock::new();
+    if let Some(top) = TOP.get_or_init(Default::default).lock().ok()?.get(root).cloned() {
+        return Some(top);
+    }
     let top = project_git(root, &["rev-parse", "--show-toplevel"])?;
-    same_path(Path::new(&top), root).then(|| PathBuf::from(top))
+    if !same_path(Path::new(&top), root) {
+        return None;
+    }
+    let top = PathBuf::from(top);
+    if let Ok(mut cache) = TOP.get_or_init(Default::default).lock() {
+        cache.insert(root.to_path_buf(), top.clone());
+    }
+    Some(top)
 }
 
 fn refuse_unsafe_root(root: &Path, app_data: &Path) -> Result<(), String> {
@@ -281,17 +294,45 @@ fn ensure_initialized(shadow: &Shadow) -> Result<(), String> {
 /// Write the work tree's current state into the shadow's index and return its tree id.
 fn write_current_tree(shadow: &Shadow) -> Result<String, String> {
     let _ = fs::remove_file(PathBuf::from(format!("{}.lock", shadow.index.display())));
-    let new_files = shadow.git(["ls-files", "-z", "--others", "--exclude-standard"], None)?;
-    let new_files: Vec<String> = new_files.split(|byte| *byte == 0).filter(|path| !path.is_empty())
-        .map(|path| String::from_utf8_lossy(path).into_owned()).collect();
+    // One porcelain scan answers both guard questions (`ls-files --others` for the new-file
+    // cap, `--modified` for the oversize check) in a third of the worktree walks the two
+    // ls-files calls needed. v2 fields: `? path` is untracked; `1 <XY> ... <path>` and
+    // `2 <XY> ... <path>\0<orig>` carry the worktree status in Y — anything but `.` means the
+    // file on disk differs from the index entry. A NUL-separated rename record follows `2`,
+    // and it is skipped below by the split that consumes it.
+    let status = shadow.git(["status", "--porcelain=v2", "-z", "--untracked-files=all"], None)?;
+    let mut new_files = Vec::new();
+    let mut changed = Vec::new();
+    let mut fields = status.split(|byte| *byte == 0);
+    while let Some(record) = fields.next() {
+        if record.is_empty() {
+            continue;
+        }
+        let record = String::from_utf8_lossy(record);
+        let (kind, rest) = record.split_once(' ').unwrap_or(("", ""));
+        match kind {
+            "?" => new_files.push(rest.to_string()),
+            "1" | "2" | "u" => {
+                // Y (second XY column) is the worktree side: `.` means index-clean. The path
+                // is the record's last field and may itself contain spaces, so index to it.
+                let path_index = if kind == "u" { 9 } else if kind == "2" { 8 } else { 7 };
+                if rest.as_bytes().get(1) != Some(&b'.') {
+                    if let Some(path) = rest.splitn(path_index + 1, ' ').nth(path_index) {
+                        changed.push(path.to_string());
+                    }
+                }
+                if kind == "2" {
+                    fields.next();
+                }
+            }
+            _ => {}
+        }
+    }
     if new_files.len() > MAX_NEW_FILES {
         return Err(format!("Checkpoints are off here: {} new files would be copied. Add a .gitignore for generated folders.", new_files.len()));
     }
-    let modified = shadow.git(["ls-files", "-z", "--modified"], None)?;
     let mut oversized = Vec::new();
-    for path in new_files.iter().map(String::as_str).chain(
-        modified.split(|byte| *byte == 0).filter(|path| !path.is_empty()).map(|path| std::str::from_utf8(path).unwrap_or(""))
-    ) {
+    for path in new_files.iter().map(String::as_str).chain(changed.iter().map(String::as_str)) {
         if path.is_empty() { continue; }
         if fs::symlink_metadata(shadow.work_tree.join(path)).is_ok_and(|metadata| metadata.is_file() && metadata.len() > MAX_FILE_BYTES) {
             oversized.push(path.to_string());
@@ -727,6 +768,24 @@ mod tests {
         let result = fixture.restore(&first.id, None);
         assert_eq!(result.skipped, vec!["build".to_string()]);
         assert_eq!(fixture.read("build/cache").unwrap(), b"ignored\n");
+    }
+
+    #[test]
+    fn snapshots_changes_to_files_whose_names_have_spaces() {
+        let fixture = fixture(true);
+        fs::write(fixture.root.join("name with spaces.txt"), "v1\n").unwrap();
+        commit_all(&fixture.root);
+        fixture.snapshot();
+        fs::write(fixture.root.join("name with spaces.txt"), "v2\n").unwrap();
+        fs::write(fixture.root.join("new with spaces.txt"), "fresh\n").unwrap();
+        // Both files land in one snapshot: the modified one through the changed-file arm of
+        // the scan, the new one through the untracked arm.
+        let second = fixture.snapshot();
+        fs::write(fixture.root.join("name with spaces.txt"), "v3\n").unwrap();
+        fs::remove_file(fixture.root.join("new with spaces.txt")).unwrap();
+        fixture.restore(&second.id, None);
+        assert_eq!(fixture.read("name with spaces.txt").unwrap(), b"v2\n");
+        assert_eq!(fixture.read("new with spaces.txt").unwrap(), b"fresh\n");
     }
 
     #[test]

@@ -43,13 +43,20 @@ export const TRIMMED_NOTE = "[Trimmed to keep this chat's history small.]";
 
 export type Redact = (text: string) => string;
 
+/** Remove each of `secrets` from `text`. Exact values only, so ordinary text is untouched. */
+export function redactWith(secrets: readonly string[], text: string): string {
+  let message = text;
+  for (const secret of secrets) if (secret) message = message.split(secret).join("[credential redacted]");
+  return message;
+}
+
 export interface SubagentStreamsOptions {
   /** Send one frame of the watched child's transcript to the host. */
   emit(frame: SubagentStreamFrame): void;
   /** The worker's own message normalizer, so the panel renders a child exactly like the chat. */
   normalize(raw: unknown, position: number, thinking?: ThinkingDurations, starts?: Array<number | null>): NormalizedMessage | undefined;
-  /** A redactor over the worker's current secrets. Taken once per frame, not once per string. */
-  redactor(): Redact;
+  /** The worker's current credentials, for redaction. Taken once per frame, not once per string. */
+  secrets(): readonly string[];
   /** A finished call's saved transcript, read from the chat's session. */
   saved(target: SubagentTarget): SubagentTranscript | undefined;
   intervalMs?: number;
@@ -70,6 +77,11 @@ interface Child {
   ended?: readonly unknown[];
   /** The assistant message it is writing right now. */
   streaming?: unknown;
+  /** Bumped by every event that can move the streaming partial; the rev makes a no-change
+   *  frame free instead of paying normalize+sanitize+stringify just to compare. */
+  partialRev: number;
+  /** The partial last built: its normalized message and the JSON it was compared by. */
+  partialCache?: { rev: number; secrets: readonly string[]; message: NormalizedMessage | null; json: string };
   clock: ThinkingClock;
 }
 
@@ -90,6 +102,8 @@ interface CachedMessage {
   /** The durations it was normalized with: a message cached before its thinking was clocked is
    *  rebuilt once the clock has them. */
   thinking: ThinkingDurations | undefined;
+  /** The secrets this copy was sanitized with; a changed set re-sanitizes. */
+  secrets: readonly string[];
 }
 
 export function targetKey(target: SubagentTarget): string {
@@ -151,6 +165,12 @@ export function sanitizeMessage(message: NormalizedMessage, redact: Redact): Nor
 
 function sizeOf(message: NormalizedMessage): number {
   return JSON.stringify(message).length;
+}
+
+/** Secrets lists are a handful of strings; a content compare keeps sanitized caches valid
+ *  even if the caller rebuilds the array each call. */
+function sameStrings(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
 type Trim = (message: NormalizedMessage, isLast: boolean) => NormalizedMessage | undefined;
@@ -226,7 +246,7 @@ export class SubagentStreams {
   /** A child about to run: the hooks its runner reports through. */
   child(target: SubagentTarget): ChildStream {
     const key = targetKey(target);
-    const child: Child = { target, key, clock: new ThinkingClock() };
+    const child: Child = { target, key, clock: new ThinkingClock(), partialRev: 0 };
     this.children.set(key, child);
     return {
       started: (read) => {
@@ -244,6 +264,7 @@ export class SubagentStreams {
       ended: (messages) => {
         child.ended = messages;
         child.streaming = undefined;
+        child.partialRev += 1;
       },
       finish: () => this.finish(child)
     };
@@ -284,6 +305,7 @@ export class SubagentStreams {
       }
     }
     if (type === "message_start" || type === "message_update" || type === "message_end" || type === "tool_execution_end") {
+      child.partialRev += 1;
       this.changed(child.key);
     }
   }
@@ -294,7 +316,7 @@ export class SubagentStreams {
       this.changed(child.key, true);
       return undefined;
     }
-    const capped = capTranscript(this.transcriptOf(child, this.options.redactor()));
+    const capped = capTranscript(this.transcriptOf(child, this.options.secrets()));
     const transcript: SubagentTranscript = { v: 1, messages: capped.messages, ...(capped.truncated ? { truncated: true } : {}) };
     this.recent.delete(child.key);
     this.recent.set(child.key, transcript);
@@ -304,7 +326,7 @@ export class SubagentStreams {
     return transcript;
   }
 
-  private transcriptOf(child: Child, redact: Redact): NormalizedMessage[] {
+  private transcriptOf(child: Child, secrets: readonly string[]): NormalizedMessage[] {
     const raw = child.ended ?? child.read?.() ?? [];
     const messages: NormalizedMessage[] = [];
     raw.forEach((message, position) => {
@@ -313,10 +335,10 @@ export class SubagentStreams {
       if (role !== "assistant" && role !== "toolResult") return;
       const thinking = child.clock.durations(message);
       let cached = this.cache.get(message);
-      if (!cached || (cached.thinking === undefined && thinking !== undefined)) {
+      if (!cached || !sameStrings(cached.secrets, secrets) || (cached.thinking === undefined && thinking !== undefined)) {
         const normalized = this.options.normalize(message, position, thinking);
         if (!normalized) return;
-        cached = { message: sanitizeMessage(normalized, redact), thinking };
+        cached = { message: sanitizeMessage(normalized, (text) => redactWith(secrets, text)), thinking, secrets };
         this.cache.set(message, cached);
       }
       messages.push(cached.message);
@@ -324,18 +346,30 @@ export class SubagentStreams {
     return messages;
   }
 
-  private partialOf(child: Child, redact: Redact): NormalizedMessage | null {
+  /**
+   * The streaming partial and the JSON frames compare it by. Between events nothing about it
+   * can move — normalize depends only on the message, its position and the thinking clock — so
+   * a flush that follows no event reuses the last build instead of paying for it again.
+   */
+  private partialOf(child: Child, secrets: readonly string[]): { message: NormalizedMessage | null; json: string } {
+    if (child.partialCache && child.partialCache.rev === child.partialRev && sameStrings(child.partialCache.secrets, secrets)) {
+      return child.partialCache;
+    }
     const streaming = child.streaming;
-    if (!streaming || child.ended) return null;
-    const normalized = this.options.normalize(streaming, child.read?.().length ?? 0, child.clock.live(streaming), child.clock.liveStarts(streaming));
-    return normalized ? sanitizeMessage(normalized, redact) : null;
+    const normalized = streaming && !child.ended
+      ? this.options.normalize(streaming, child.read?.().length ?? 0, child.clock.live(streaming), child.clock.liveStarts(streaming))
+      : undefined;
+    const message = normalized ? sanitizeMessage(normalized, (text) => redactWith(secrets, text)) : null;
+    const cache = { rev: child.partialRev, secrets, message, json: message ? JSON.stringify(message) : "" };
+    child.partialCache = cache;
+    return cache;
   }
 
   private view(watch: Watch) {
     const child = this.children.get(watch.key);
     if (child && (child.read || child.ended)) {
-      const redact = this.options.redactor();
-      return { messages: this.transcriptOf(child, redact), partial: this.partialOf(child, redact), live: true, truncated: false, missing: false };
+      const secrets = this.options.secrets();
+      return { messages: this.transcriptOf(child, secrets), partial: this.partialOf(child, secrets), live: true, truncated: false, missing: false };
     }
     const finished = this.recent.get(watch.key) ?? this.options.saved(watch.target);
     if (finished) return { messages: finished.messages, partial: null, live: false, truncated: finished.truncated === true, missing: false };
@@ -360,7 +394,7 @@ export class SubagentStreams {
     const watch = this.watching;
     if (!watch) return;
     const view = this.view(watch);
-    const partialJson = view.partial ? JSON.stringify(view.partial) : "";
+    const partialJson = view.partial?.json ?? "";
     const diff = watch.sent ? diffMessages(watch.sent, view.messages) : undefined;
     if (diff && diff.upserts.length === 0 && diff.removed.length === 0 && partialJson === watch.partialJson
       && view.live === watch.live && view.truncated === watch.truncated && view.missing === watch.missing) return;
@@ -377,7 +411,7 @@ export class SubagentStreams {
       ...(diff ? {} : { reset: true as const }),
       upserts: diff ? diff.upserts : view.messages,
       removed: diff ? diff.removed : [],
-      partial: view.partial,
+      partial: view.partial?.message ?? null,
       live: view.live,
       ...(view.truncated ? { truncated: true } : {}),
       ...(view.missing ? { missing: true } : {})

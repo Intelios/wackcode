@@ -40,7 +40,7 @@ import { teamPrompt } from "./builtin/team.js";
 import { ImageStore, resolveSavedImage, savedImages, storedImageRecord, type StoredImage } from "./saved-images.js";
 import { describeProviderError } from "./provider-error.js";
 import { SubagentRunner } from "./subagent-runner.js";
-import { SubagentStreams, isSubagentTranscript } from "./subagent-stream.js";
+import { SubagentStreams, isSubagentTranscript, redactWith } from "./subagent-stream.js";
 import {
   diffMessages,
   sameGoalState,
@@ -57,6 +57,7 @@ import { MessageQueue } from "./message-queue.js";
 import { inspectInitAgentsResult, prepareInitAgents } from "./init-agents.js";
 import { RUN_TIMING_ENTRY_TYPE, RUN_TIMING_VERSION, resolveRunTimings, type ThinkingDurations } from "./run-timing.js";
 import { ThinkingClock, resolveThinkingDurations } from "./thinking-timing.js";
+import { fileStamp } from "./file-stamps.js";
 import { commandKey, expandTemplate, resolveCommandNames } from "./slash.js";
 import { commandsSignature, loadUserCommands, mergePrompts } from "./user-commands.js";
 import { NO_USER_SKILLS, argumentHint, loadUserSkills, mergeSkills, skillsSignature } from "./user-skills.js";
@@ -278,10 +279,7 @@ const subagentStreams = new SubagentStreams({
     if (taskId) send({ type: "subagent_stream", taskId, ...frame });
   },
   normalize: (raw, position, thinking, starts) => normalizeMessage(raw, position, thinking, starts),
-  redactor: () => {
-    const secrets = credentialSecrets();
-    return (text) => redactWith(secrets, text);
-  },
+  secrets: () => credentialSecrets(),
   saved: savedSubagentTranscript
 });
 
@@ -2609,20 +2607,31 @@ function savedSubagentTranscript(target: SubagentTarget): SubagentTranscript | u
 
 /**
  * Every credential this worker holds: the chat's own key or sign-in, and those of any
- * connection a sub-agent or MCP server uses. Signed-in connections are read from disk, so a
- * caller redacting many strings takes this once (`redactWith`).
+ * connection a sub-agent or MCP server uses. Signed-in connections live in `auth.json` files,
+ * and this runs once per streamed sub-agent frame — so the file contents are cached behind a
+ * (mtime, size) stamp of each file and a fingerprint of the in-memory inputs. A re-sign-in or
+ * token refresh lands a different stamp and is picked up on the next call; the identical array
+ * is returned while nothing moved, which is what the stream's sanitized caches key on.
  */
+let secretsCache: { key: string; secrets: string[] } | undefined;
+
 function credentialSecrets(): string[] {
-  const secrets: string[] = activeCredential ? [activeCredential] : [];
-  if (activeTitleCredential) secrets.push(activeTitleCredential);
+  const live: string[] = [];
+  if (activeCredential) live.push(activeCredential);
+  if (activeTitleCredential) live.push(activeTitleCredential);
   const stored = activeAuthPath && activeProviderId ? [{ providerId: activeProviderId, authPath: activeAuthPath }] : [];
   if (activeTitleAuth) stored.push(activeTitleAuth);
   const extra = subagentRunner?.credentials();
   if (extra) {
-    secrets.push(...extra.apiKeys);
+    live.push(...extra.apiKeys);
     stored.push(...extra.stored);
   }
-  secrets.push(...builtins.mcp.credentials());
+  live.push(...builtins.mcp.credentials());
+  const stamps = stored.map(({ providerId, authPath }) => `${providerId}@${authPath}=${fileStamp(authPath)}`);
+  const key = JSON.stringify([live, stamps]);
+  if (secretsCache?.key === key) return secretsCache.secrets;
+
+  const secrets = [...live];
   if (piModule) {
     for (const { providerId, authPath } of stored) {
       try {
@@ -2635,14 +2644,8 @@ function credentialSecrets(): string[] {
       } catch { /* Never expose a credential-read failure in an error message. */ }
     }
   }
+  secretsCache = { key, secrets };
   return secrets;
-}
-
-/** Remove each of `secrets` from `text`. Exact values only, so ordinary text is untouched. */
-function redactWith(secrets: readonly string[], text: string): string {
-  let message = text;
-  for (const secret of secrets) if (secret) message = message.split(secret).join("[credential redacted]");
-  return message;
 }
 
 /** Remove every credential this worker holds from `text` (see `credentialSecrets`). */

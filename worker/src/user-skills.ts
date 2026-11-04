@@ -15,6 +15,7 @@
  */
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import type { LoadSkillsResult, ResourceDiagnostic, Skill } from "@earendil-works/pi-coding-agent";
+import { fileStamp, skillsTreeStamp } from "./file-stamps.js";
 import type { ScannedDiagnostic, ScannedGroup, ScannedSkill, SkillScanRequest, UserSkillsPayload } from "./protocol.js";
 
 type PiSkillLoaders = Pick<typeof import("@earendil-works/pi-coding-agent"), "loadSkills" | "loadSkillsFromDir" | "parseFrontmatter">;
@@ -44,9 +45,17 @@ function collision(winner: Skill, loser: Skill): ResourceDiagnostic {
   };
 }
 
+/**
+ * The last load's fingerprint and result. Before each run the folders are re-stamped
+ * (stats only); only a moved stamp pays for the real scan and file reads again.
+ */
+let skillsCache: { payload: UserSkillsPayload; stamp: string; result: LoadSkillsResult } | undefined;
+
 /** What a chat loads from the user's folders. Each skill's source is its folder's label. */
 export function loadUserSkills(pi: PiSkillLoaders, payload: UserSkillsPayload | undefined): LoadSkillsResult {
   if (!payload || payload.roots.length === 0) return NO_USER_SKILLS;
+  const stamp = payload.roots.map((root) => skillsTreeStamp(root.path)).join("|");
+  if (skillsCache?.payload === payload && skillsCache.stamp === stamp) return skillsCache.result;
   const disabled = new Set(payload.disabled);
   const byName = new Map<string, Skill>();
   const seen = new Set<string>();
@@ -69,7 +78,9 @@ export function loadUserSkills(pi: PiSkillLoaders, payload: UserSkillsPayload | 
       skills.push(skill);
     }
   }
-  return { skills, diagnostics };
+  const result = { skills, diagnostics };
+  skillsCache = { payload, stamp, result };
+  return result;
 }
 
 /** The user's skills first, then every package skill whose name and file they don't already hold. */
@@ -115,7 +126,19 @@ function scanned(skill: Skill, extra: Partial<ScannedSkill> = {}, parseFrontmatt
  * frontmatter is read again — the same key Pi reads for prompt templates. Display only: never
  * part of `skillsSignature`, so editing it doesn't churn system-prompt rebuilds.
  */
+/** Display hints never change alone, so they ride the same (mtime, size) stamp. */
+const hintCache = new Map<string, { stamp: string; hint: string | undefined }>();
+
 export function argumentHint(skill: Skill, parseFrontmatter: ParseFrontmatter): string | undefined {
+  const stamp = fileStamp(skill.filePath);
+  const cached = hintCache.get(skill.filePath);
+  if (cached?.stamp === stamp) return cached.hint;
+  const hint = readArgumentHint(skill, parseFrontmatter);
+  hintCache.set(skill.filePath, { stamp, hint });
+  return hint;
+}
+
+function readArgumentHint(skill: Skill, parseFrontmatter: ParseFrontmatter): string | undefined {
   try {
     const { frontmatter } = parseFrontmatter(readFileSync(skill.filePath, "utf-8"));
     const value = frontmatter["argument-hint"];

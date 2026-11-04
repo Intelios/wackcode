@@ -135,7 +135,7 @@ serde_json = { version = "1", features = ["raw_value"] }
 tauri = { version = "2", features = ["image-png", "macos-private-api", "protocol-asset", "tray-icon", "unstable"] }
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
-tokio = { version = "1", features = ["io-util", "process", "sync", "time"] }
+tokio = { version = "1", features = ["io-util", "macros", "process", "sync", "time"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 sha2 = "0.10"
 

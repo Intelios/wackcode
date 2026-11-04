@@ -2861,12 +2861,15 @@ pub async fn execute_command(
         &command_opening(input.name.as_deref(), &input.args),
     )?;
     let api_key = credential_for(&app, &state, &provider)?;
-    worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
+    // The checkpoint's worktree scan and the worker (re)spawn are independent work on the way
+    // to one run; do them together instead of back to back.
+    let location = checkpoint_location(&app, &state, &task).ok();
+    let (ensured, checkpoint) = tokio::join!(
+        worker::ensure_worker(&app, &task, &provider, api_key.as_deref()),
+        snapshot_option(&app, &task.id, location.as_ref())
+    );
+    ensured?;
     set_status(&state, &task.id, TaskStatus::Running)?;
-    let checkpoint = match checkpoint_location(&app, &state, &task) {
-        Ok(location) => snapshot_quietly(&app, &task.id, &location).await,
-        Err(_) => None,
-    };
     let run_id = Uuid::new_v4().to_string();
     let auto_title = finish_auto_title(&app, &state, &task.id, title_attempt, &title_config);
     let result = worker::request(
@@ -2905,12 +2908,13 @@ pub async fn init_agents(
     // /init can be a chat's opening run too; the worker titles from the generated prompt.
     let (title_attempt, title_config) = begin_auto_title(&app, &state, &task_id, "/init")?;
     let api_key = credential_for(&app, &state, &provider)?;
-    worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
+    let location = checkpoint_location(&app, &state, &task).ok();
+    let (ensured, checkpoint) = tokio::join!(
+        worker::ensure_worker(&app, &task, &provider, api_key.as_deref()),
+        snapshot_option(&app, &task.id, location.as_ref())
+    );
+    ensured?;
     set_status(&state, &task.id, TaskStatus::Running)?;
-    let checkpoint = match checkpoint_location(&app, &state, &task) {
-        Ok(location) => snapshot_quietly(&app, &task.id, &location).await,
-        Err(_) => None,
-    };
     let run_id = Uuid::new_v4().to_string();
     let auto_title = finish_auto_title(&app, &state, &task.id, title_attempt, &title_config);
     let result = worker::request(
@@ -3001,12 +3005,13 @@ pub async fn start_skill_creator(
         &command_opening(Some("skill-creator"), &request),
     )?;
     let api_key = credential_for(&app, &state, &provider)?;
-    worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
+    let location = checkpoint_location(&app, &state, &task).ok();
+    let (ensured, checkpoint) = tokio::join!(
+        worker::ensure_worker(&app, &task, &provider, api_key.as_deref()),
+        snapshot_option(&app, &task.id, location.as_ref())
+    );
+    ensured?;
     set_status(&state, &task.id, TaskStatus::Running)?;
-    let checkpoint = match checkpoint_location(&app, &state, &task) {
-        Ok(location) => snapshot_quietly(&app, &task.id, &location).await,
-        Err(_) => None,
-    };
     let run_id = Uuid::new_v4().to_string();
     let auto_title = finish_auto_title(&app, &state, &task.id, title_attempt, &title_config);
     let result = worker::request(
@@ -3176,12 +3181,13 @@ pub async fn goal_control(
         let (title_attempt, title_config) =
             begin_auto_title(&app, &state, &task_id, &objective)?;
         let api_key = credential_for(&app, &state, &provider)?;
-        worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
+        let location = checkpoint_location(&app, &state, &task).ok();
+        let (ensured, checkpoint) = tokio::join!(
+            worker::ensure_worker(&app, &task, &provider, api_key.as_deref()),
+            snapshot_option(&app, &task.id, location.as_ref())
+        );
+        ensured?;
         set_status(&state, &task.id, TaskStatus::Running)?;
-        let checkpoint = match checkpoint_location(&app, &state, &task) {
-            Ok(location) => snapshot_quietly(&app, &task.id, &location).await,
-            Err(_) => None,
-        };
         let run_id = Uuid::new_v4().to_string();
         let auto_title = finish_auto_title(&app, &state, &task.id, title_attempt, &title_config);
         let result = worker::request(&app, &task.id, json!({
@@ -3278,14 +3284,15 @@ pub async fn prompt(
         require_vision(&provider, &configured.model_id)?;
     }
     let api_key = credential_for(&app, &state, &provider)?;
-    worker::ensure_worker(&app, &configured, &provider, api_key.as_deref()).await?;
+    let location = checkpoint_location(&app, &state, &configured).ok();
+    let (ensured, checkpoint) = tokio::join!(
+        worker::ensure_worker(&app, &configured, &provider, api_key.as_deref()),
+        snapshot_option(&app, &configured.id, location.as_ref())
+    );
+    ensured?;
     // Running from here on, so nothing that moves the conversation can queue up behind this
     // prompt and run after it. The worker's `run_state` takes over once it starts.
     set_status(&state, &configured.id, TaskStatus::Running)?;
-    let checkpoint = match checkpoint_location(&app, &state, &configured) {
-        Ok(location) => snapshot_quietly(&app, &configured.id, &location).await,
-        Err(_) => None,
-    };
     let run_id = Uuid::new_v4().to_string();
     let started_at = input
         .started_at
@@ -3353,11 +3360,12 @@ pub async fn steer_message(
     refuse_stopping(&task)?;
     let _checkout = checkout_dispatch_guard(&app, &state, &task.id).await;
     let api_key = credential_for(&app, &state, &provider)?;
-    worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
-    let checkpoint = match checkpoint_location(&app, &state, &task) {
-        Ok(location) => snapshot_quietly(&app, &task.id, &location).await,
-        Err(_) => None,
-    };
+    let location = checkpoint_location(&app, &state, &task).ok();
+    let (ensured, checkpoint) = tokio::join!(
+        worker::ensure_worker(&app, &task, &provider, api_key.as_deref()),
+        snapshot_option(&app, &task.id, location.as_ref())
+    );
+    ensured?;
     let started_at = input
         .started_at
         .unwrap_or_else(|| Utc::now().timestamp_millis() as u64);
@@ -3561,13 +3569,13 @@ pub async fn resend_message(
         .cloned()
         .ok_or_else(|| "Connection not found".to_string())?;
     let api_key = credential_for(&app, &state, &provider)?;
-    worker::ensure_worker(&app, &configured, &provider, api_key.as_deref()).await?;
-    set_status(&state, &configured.id, TaskStatus::Running)?;
     let location = checkpoint_location(&app, &state, &configured).ok();
-    let leave = match &location {
-        Some(location) => snapshot_quietly(&app, &configured.id, location).await,
-        None => None,
-    };
+    let (ensured, leave) = tokio::join!(
+        worker::ensure_worker(&app, &configured, &provider, api_key.as_deref()),
+        snapshot_option(&app, &configured.id, location.as_ref())
+    );
+    ensured?;
+    set_status(&state, &configured.id, TaskStatus::Running)?;
     let mut undo = None;
     let outcome = async {
         let checkpoint = match (&input.restore, &location) {
@@ -3622,12 +3630,12 @@ pub async fn navigate_task(
     let (task, provider) = task_and_provider(&state, &input.task_id)?;
     refuse_busy(&task)?;
     let api_key = credential_for(&app, &state, &provider)?;
-    worker::ensure_worker(&app, &task, &provider, api_key.as_deref()).await?;
     let location = checkpoint_location(&app, &state, &task).ok();
-    let leave = match &location {
-        Some(location) => snapshot_quietly(&app, &task.id, location).await,
-        None => None,
-    };
+    let (ensured, leave) = tokio::join!(
+        worker::ensure_worker(&app, &task, &provider, api_key.as_deref()),
+        snapshot_option(&app, &task.id, location.as_ref())
+    );
+    ensured?;
     let result = worker::request(
         &app,
         &task.id,
@@ -5100,6 +5108,18 @@ async fn blocking<T: Send + 'static>(
     tauri::async_runtime::spawn_blocking(work)
         .await
         .map_err(|error| error.to_string())?
+}
+
+/// `snapshot_quietly` where the location may not resolve: no location means no checkpoint.
+async fn snapshot_option(
+    app: &AppHandle,
+    task_id: &str,
+    location: Option<&CheckpointLocation>,
+) -> Option<CheckpointRef> {
+    match location {
+        Some(location) => snapshot_quietly(app, task_id, location).await,
+        None => None,
+    }
 }
 
 /// Take a checkpoint, or say once per chat per session why none can be taken. A chat always

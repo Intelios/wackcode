@@ -16,6 +16,7 @@
  */
 import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { dirStamp } from "../../file-stamps.js";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { MemoryPayload } from "../../protocol.js";
@@ -84,8 +85,13 @@ export interface MemoryForgetDetails {
 // ---------------------------------------------------------------------------------------------
 // Files (sync, like user-skills: the index read happens on the run path, between turns)
 
+/** The last read's folder stamp: notes are re-parsed only when the directory moves. */
+let notesCache: { root: string; stamp: string; notes: MemoryNote[] } | undefined;
+
 /** Every valid note in the directory. Dot-files and the trash folder never load. */
 function readNotes(root: string): MemoryNote[] {
+  const stamp = dirStamp(root);
+  if (notesCache?.root === root && notesCache.stamp === stamp) return notesCache.notes;
   let files: string[];
   try {
     files = readdirSync(root);
@@ -104,6 +110,7 @@ function readNotes(root: string): MemoryNote[] {
     const note = parseMemory(file.slice(0, -3), text);
     if (note) notes.push(note);
   }
+  notesCache = { root, stamp, notes };
   return notes;
 }
 

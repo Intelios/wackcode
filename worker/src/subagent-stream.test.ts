@@ -122,7 +122,7 @@ describe("SubagentStreams", () => {
     streams = new SubagentStreams({
       emit: (frame) => frames.push(frame),
       normalize,
-      redactor: () => (text) => text.split("sk-secret").join("[credential redacted]"),
+      secrets: () => ["sk-secret"],
       saved: (target) => saved.get(`${target.toolCallId}#${target.index}`),
       intervalMs: 10
     });
@@ -257,5 +257,38 @@ describe("SubagentStreams", () => {
     const child = streams.child(target);
     expect(() => child.event({ type: "message_update", message: { role: "assistant", content: "not an array" }, assistantMessageEvent: null })).not.toThrow();
     expect(child.finish()).toBeUndefined();
+  });
+
+  it("reuses the partial between events, rebuilds it on secrets change, and emits nothing then", () => {
+    const secrets = ["sk-secret"];
+    let normalizations = 0;
+    const counting = new SubagentStreams({
+      emit: (frame) => frames.push(frame),
+      normalize: (raw, position, thinking, starts) => { normalizations += 1; return normalize(raw, position, thinking, starts); },
+      secrets: () => secrets,
+      saved: () => undefined,
+      intervalMs: 10
+    });
+    const messages: RawMessage[] = [];
+    const child = counting.child(target);
+    child.started(() => messages);
+    counting.watch(target);
+    const streaming = assistant("Hello");
+    child.event({ type: "message_start", message: streaming });
+    vi.advanceTimersByTime(10);
+    const first = normalizations;
+    expect(first).toBeGreaterThan(0);
+    // Flushes with no intervening event reuse the cached partial instead of rebuilding it.
+    vi.advanceTimersByTime(20);
+    vi.advanceTimersByTime(20);
+    expect(normalizations).toBe(first);
+    // A secrets change re-sanitizes on the next event, but the identical frame doesn't emit.
+    secrets.push("other-secret");
+    child.event({ type: "message_update", message: streaming, assistantMessageEvent: { type: "text_delta", contentIndex: 0 } });
+    const count = frames.length;
+    vi.advanceTimersByTime(10);
+    expect(normalizations).toBe(first + 1);
+    expect(frames).toHaveLength(count);
+    child.finish();
   });
 });

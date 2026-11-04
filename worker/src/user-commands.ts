@@ -11,12 +11,18 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { PromptTemplate } from "@earendil-works/pi-coding-agent";
+import { dirStamp } from "./file-stamps.js";
 
 type PiModule = typeof import("@earendil-works/pi-coding-agent");
+
+/** The last load's folder stamp: unchanged folders are never re-read before a run. */
+let commandsCache: { dir: string; stamp: string; templates: PromptTemplate[] } | undefined;
 
 /** Mirrors Pi's `loadTemplateFromFile`: the filename is the name, frontmatter describes, body expands. */
 export function loadUserCommands(pi: Pick<PiModule, "parseFrontmatter">, dir: string | undefined): PromptTemplate[] {
   if (!dir || !existsSync(dir)) return [];
+  const stamp = dirStamp(dir);
+  if (commandsCache?.dir === dir && commandsCache.stamp === stamp) return commandsCache.templates;
   const templates: PromptTemplate[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const filePath = join(dir, entry.name);
@@ -51,7 +57,9 @@ export function loadUserCommands(pi: Pick<PiModule, "parseFrontmatter">, dir: st
       // An unreadable file just never becomes a command.
     }
   }
-  return templates.sort((a, b) => a.name.localeCompare(b.name));
+  templates.sort((a, b) => a.name.localeCompare(b.name));
+  commandsCache = { dir, stamp, templates };
+  return templates;
 }
 
 /** The user's commands first, so `/name` expands theirs before a package template of the same name. */

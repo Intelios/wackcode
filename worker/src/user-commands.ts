@@ -11,7 +11,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { PromptTemplate } from "@earendil-works/pi-coding-agent";
-import { dirStamp } from "./file-stamps.js";
+import { folderStamp } from "./file-stamps.js";
 
 type PiModule = typeof import("@earendil-works/pi-coding-agent");
 
@@ -21,7 +21,7 @@ let commandsCache: { dir: string; stamp: string; templates: PromptTemplate[] } |
 /** Mirrors Pi's `loadTemplateFromFile`: the filename is the name, frontmatter describes, body expands. */
 export function loadUserCommands(pi: Pick<PiModule, "parseFrontmatter">, dir: string | undefined): PromptTemplate[] {
   if (!dir || !existsSync(dir)) return [];
-  const stamp = dirStamp(dir);
+  const stamp = folderStamp(dir);
   if (commandsCache?.dir === dir && commandsCache.stamp === stamp) return commandsCache.templates;
   const templates: PromptTemplate[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {

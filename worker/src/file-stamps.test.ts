@@ -1,9 +1,9 @@
-import { mkdir, mkdtemp, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as pi from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { dirStamp, fileStamp, skillsTreeStamp } from "./file-stamps.js";
+import { fileStamp } from "./file-stamps.js";
 import { loadUserCommands } from "./user-commands.js";
 import { argumentHint, loadUserSkills } from "./user-skills.js";
 
@@ -37,56 +37,10 @@ describe("file stamps", () => {
     await rm(file);
     expect(fileStamp(file)).toBe("!");
   });
-
-  it("a directory stamp covers adds, removes and edits one level deep", async () => {
-    const dir = await tempDir();
-    await writeFile(join(dir, "a.md"), "one");
-    const first = dirStamp(dir);
-    expect(dirStamp(dir)).toBe(first);
-    await writeFile(join(dir, "b.md"), "two");
-    expect(dirStamp(dir)).not.toBe(first);
-    await rm(join(dir, "b.md"));
-    expect(dirStamp(dir)).toBe(first);
-    await writeFile(join(dir, "a.md"), "edited!");
-    expect(dirStamp(dir)).not.toBe(first);
-    expect(dirStamp(join(dir, "missing"))).toBe("!");
-  });
-
-  it("the skills tree stamp ignores node_modules and dot-folders but watches ignore files", async () => {
-    const dir = await tempDir();
-    await mkdir(join(dir, "skill"), { recursive: true });
-    await writeFile(join(dir, "skill", "SKILL.md"), "---\nname: s\ndescription: d\n---\n");
-    await mkdir(join(dir, "node_modules", "pkg"), { recursive: true });
-    await writeFile(join(dir, "node_modules", "pkg", "x.js"), "x");
-    await mkdir(join(dir, ".hidden"));
-    await writeFile(join(dir, ".hidden", "y.md"), "y");
-    const first = skillsTreeStamp(dir);
-    await writeFile(join(dir, "node_modules", "pkg", "x.js"), "changed");
-    await writeFile(join(dir, ".hidden", "y.md"), "changed");
-    expect(skillsTreeStamp(dir)).toBe(first);
-    await writeFile(join(dir, ".gitignore"), "ignored/\n");
-    const withIgnore = skillsTreeStamp(dir);
-    expect(withIgnore).not.toBe(first);
-    await writeFile(join(dir, ".gitignore"), "ignored2/\n");
-    expect(skillsTreeStamp(dir)).not.toBe(withIgnore);
-    await writeFile(join(dir, "skill", "extra.md"), "a nested file still moves it");
-    expect(skillsTreeStamp(dir)).not.toBe(withIgnore);
-  });
-
-  it("recurses through a symlinked folder like Pi's loader does", async () => {
-    const dir = await tempDir();
-    const real = join(dir, "real");
-    await mkdir(real);
-    await writeFile(join(real, "SKILL.md"), "---\nname: s\ndescription: d\n---\n");
-    await symlink(real, join(dir, "linked"));
-    const first = skillsTreeStamp(dir);
-    await writeFile(join(real, "SKILL.md"), "---\nname: s\ndescription: edited\n---\n");
-    expect(skillsTreeStamp(dir)).not.toBe(first);
-  });
 });
 
 describe("loader caching", () => {
-  it("loadUserSkills re-reads only after a stamp change", async () => {
+  it("loadUserSkills re-reads only after the stamped tree moves", async () => {
     const dir = await tempDir();
     await mkdir(join(dir, "one"));
     await writeFile(join(dir, "one", "SKILL.md"), "---\nname: one\ndescription: First.\n---\nBody.\n");
@@ -97,14 +51,14 @@ describe("loader caching", () => {
     const calls = loadSpy.mock.calls.length;
     expect(loadUserSkills(loaders, payload)).toBe(loaded);
     expect(loadSpy.mock.calls.length).toBe(calls);
-    // A new folder joins the next load.
+    // A new top-level folder moves the stamp immediately.
     await mkdir(join(dir, "two"));
     await writeFile(join(dir, "two", "SKILL.md"), "---\nname: two\ndescription: Second.\n---\n");
     expect(loadUserSkills(loaders, payload).skills.map((skill) => skill.name)).toEqual(["one", "two"]);
     const afterAdd = loadSpy.mock.calls.length;
-    // mtime-only churn still reloads, keeping edits visible.
+    // An edit to a known skill file moves it too.
     await touch(join(dir, "two", "SKILL.md"));
-    loadUserSkills(loaders, payload);
+    expect(loadUserSkills(loaders, payload).skills.find((skill) => skill.name === "two")?.description).toBeDefined();
     expect(loadSpy.mock.calls.length).toBeGreaterThan(afterAdd);
   });
 

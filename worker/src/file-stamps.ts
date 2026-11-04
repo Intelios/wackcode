@@ -24,35 +24,17 @@ export function fileStamp(path: string): string {
 }
 
 /**
- * One level of a directory: every entry stamped shallowly. Used for flat folders
- * (user commands, memory notes): any entry added, removed, renamed or edited moves it.
+ * A folder's top level — every entry stamped shallowly — plus any `extraFiles`
+ * deeper in the tree that the last load touched. For flat folders (commands,
+ * memory notes) this is a complete fingerprint: membership comes from the listing,
+ * edits from each entry's mtime. For recursive readers (skills) it covers every
+ * file the last load discovered plus any add/remove at the top level; deeper
+ * additions are the folder watcher's job (`fs-watch.ts`).
  */
-export function dirStamp(dir: string): string {
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return "!";
-  }
-  entries.sort((a, b) => a.name.localeCompare(b.name));
-  const parts: string[] = [];
-  for (const entry of entries) parts.push(`${entry.name}=${fileStamp(join(dir, entry.name))}`);
-  return parts.join(";");
-}
-
-/**
- * A recursive stamp matching the shape of Pi's `loadSkillsFromDir` discovery:
- * `node_modules` and dot-entries never matter to a load, except the ignore files
- * (`.gitignore`, `.ignore`, `.fdignore`) whose text decides what Pi skips — so they
- * are stamped too. Symlinks follow their target like Pi does. Unlike Pi the walk is
- * stat-only: no file contents are read. Entries Pi would ignore are still stamped,
- * which only ever causes an extra reload, never a missed one.
- */
+/** The dot-files every loader still reads: ignore rules decide what Pi skips. */
 const IGNORE_FILES = new Set([".gitignore", ".ignore", ".fdignore"]);
-const MAX_STAMP_DEPTH = 32;
 
-export function skillsTreeStamp(dir: string, depth = 0): string {
-  if (depth > MAX_STAMP_DEPTH) return "!deep";
+export function folderStamp(dir: string, extraFiles: string[] = []): string {
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
@@ -62,27 +44,12 @@ export function skillsTreeStamp(dir: string, depth = 0): string {
   entries.sort((a, b) => a.name.localeCompare(b.name));
   const parts: string[] = [];
   for (const entry of entries) {
-    if (entry.name === "node_modules") continue;
+    // The readers never touch dot-entries (except ignore files) or node_modules,
+    // so their state cannot affect a load and stays out of the stamp.
     if (entry.name.startsWith(".") && !IGNORE_FILES.has(entry.name)) continue;
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      parts.push(`${entry.name}/=${skillsTreeStamp(path, depth + 1)}`);
-      continue;
-    }
-    if (entry.isSymbolicLink()) {
-      let target;
-      try {
-        target = statSync(path);
-      } catch {
-        parts.push(`${entry.name}=!`);
-        continue;
-      }
-      if (target.isDirectory()) {
-        parts.push(`${entry.name}/=${skillsTreeStamp(path, depth + 1)}`);
-        continue;
-      }
-    }
-    parts.push(`${entry.name}=${fileStamp(path)}`);
+    if (entry.name === "node_modules") continue;
+    parts.push(`${entry.name}=${fileStamp(join(dir, entry.name))}`);
   }
+  for (const file of extraFiles) parts.push(`~${file}=${fileStamp(file)}`);
   return parts.join(";");
 }

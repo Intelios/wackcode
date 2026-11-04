@@ -16,7 +16,7 @@
  */
 import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { dirStamp } from "../../file-stamps.js";
+import { folderStamp } from "../../file-stamps.js";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { MemoryPayload } from "../../protocol.js";
@@ -90,7 +90,7 @@ let notesCache: { root: string; stamp: string; notes: MemoryNote[] } | undefined
 
 /** Every valid note in the directory. Dot-files and the trash folder never load. */
 function readNotes(root: string): MemoryNote[] {
-  const stamp = dirStamp(root);
+  const stamp = folderStamp(root);
   if (notesCache?.root === root && notesCache.stamp === stamp) return notesCache.notes;
   let files: string[];
   try {

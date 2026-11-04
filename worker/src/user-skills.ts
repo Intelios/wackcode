@@ -15,7 +15,8 @@
  */
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import type { LoadSkillsResult, ResourceDiagnostic, Skill } from "@earendil-works/pi-coding-agent";
-import { fileStamp, skillsTreeStamp } from "./file-stamps.js";
+import { fileStamp, folderStamp } from "./file-stamps.js";
+import { onFsChange } from "./fs-watch.js";
 import type { ScannedDiagnostic, ScannedGroup, ScannedSkill, SkillScanRequest, UserSkillsPayload } from "./protocol.js";
 
 type PiSkillLoaders = Pick<typeof import("@earendil-works/pi-coding-agent"), "loadSkills" | "loadSkillsFromDir" | "parseFrontmatter">;
@@ -46,16 +47,31 @@ function collision(winner: Skill, loser: Skill): ResourceDiagnostic {
 }
 
 /**
- * The last load's fingerprint and result. Before each run the folders are re-stamped
- * (stats only); only a moved stamp pays for the real scan and file reads again.
+ * The last load's fingerprint and result. Each root's stamp covers its top level plus
+ * every skill file the last load discovered, so edits and top-level adds/removes are
+ * detected without reading anything. Two gaps stay: a brand-new folder deeper than
+ * one level (covered by `onFsChange` below, at FSEvents' sub-second latency) and an
+ * unchanged-content edit, which is the documented (mtime, size) trade-off.
  */
-let skillsCache: { payload: UserSkillsPayload; stamp: string; result: LoadSkillsResult } | undefined;
+let skillsCache: { key: string; stamps: Map<string, string>; result: LoadSkillsResult; dirty: boolean } | undefined;
+
+function invalidateSkillsCache(): void {
+  if (skillsCache) skillsCache.dirty = true;
+}
 
 /** What a chat loads from the user's folders. Each skill's source is its folder's label. */
 export function loadUserSkills(pi: PiSkillLoaders, payload: UserSkillsPayload | undefined): LoadSkillsResult {
   if (!payload || payload.roots.length === 0) return NO_USER_SKILLS;
-  const stamp = payload.roots.map((root) => skillsTreeStamp(root.path)).join("|");
-  if (skillsCache?.payload === payload && skillsCache.stamp === stamp) return skillsCache.result;
+  const cached = skillsCache;
+  // The payload is keyed by content, not identity: `list_commands` rebuilds an equal
+  // payload each call and must hit the same cache the run path warms.
+  const key = JSON.stringify(payload);
+  if (cached?.key === key && !cached.dirty) {
+    const known = cached.result.skills.map((skill) => skill.filePath);
+    if (payload.roots.every((root) => folderStamp(root.path, known) === cached.stamps.get(root.path))) {
+      return cached.result;
+    }
+  }
   const disabled = new Set(payload.disabled);
   const byName = new Map<string, Skill>();
   const seen = new Set<string>();
@@ -79,13 +95,42 @@ export function loadUserSkills(pi: PiSkillLoaders, payload: UserSkillsPayload | 
     }
   }
   const result = { skills, diagnostics };
-  skillsCache = { payload, stamp, result };
+  const known = result.skills.map((skill) => skill.filePath);
+  const cache: NonNullable<typeof skillsCache> = {
+    key,
+    result,
+    dirty: false,
+    stamps: new Map(payload.roots.map((root) => [root.path, folderStamp(root.path, known)]))
+  };
+  skillsCache = cache;
+  // Deep additions the stamp can't see are covered by the roots' watchers; a root that
+  // cannot be watched stays dirty and reloads every run like the uncached code did.
+  for (const root of payload.roots) {
+    if (!onFsChange(root.path, invalidateSkillsCache)) cache.dirty = true;
+  }
   return result;
 }
+
+/**
+ * `getSkills` is asked several times per run (the prompt, the command catalog, the
+ * tools list); the inputs are the same objects each time, so the merge — and its
+ * per-skill realpath dedupe — is computed once and reused.
+ */
+let mergedCache: { user: LoadSkillsResult; skills: Skill[]; diagnostics: ResourceDiagnostic[]; result: LoadSkillsResult } | undefined;
 
 /** The user's skills first, then every package skill whose name and file they don't already hold. */
 export function mergeSkills(user: LoadSkillsResult, packages: LoadSkillsResult): LoadSkillsResult {
   if (user.skills.length === 0 && user.diagnostics.length === 0) return packages;
+  // Pi's `getSkills` wraps its arrays in a fresh object per call; they are the stable refs.
+  if (mergedCache?.user === user && mergedCache.skills === packages.skills && mergedCache.diagnostics === packages.diagnostics) {
+    return mergedCache.result;
+  }
+  const result = mergeSkillsUncached(user, packages);
+  mergedCache = { user, skills: packages.skills, diagnostics: packages.diagnostics, result };
+  return result;
+}
+
+function mergeSkillsUncached(user: LoadSkillsResult, packages: LoadSkillsResult): LoadSkillsResult {
   const byName = new Map(user.skills.map((skill) => [skill.name, skill]));
   const seen = new Set(user.skills.map((skill) => realPath(skill.filePath)));
   const skills = [...user.skills];

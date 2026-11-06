@@ -12,10 +12,14 @@ interface BackdropProps {
   blur: number;
   /** Which part of the image shows, and how magnified. */
   crop: ImageCrop;
+  /** Automatic protection is committed with its matching foreground, never mid-crossfade. */
+  extraDim?: number;
+  readabilityReady?: boolean;
+  analysedAspect?: number;
 }
 
 /** The image behind the whole window (Settings › Appearance › Backdrop › Image). */
-export function Backdrop({ imageUrl, scene, dim, blur, crop }: BackdropProps) {
+export function Backdrop({ imageUrl, scene, dim, blur, crop, extraDim = 0, readabilityReady = true, analysedAspect }: BackdropProps) {
   // Fade in once decoded rather than popping in half-loaded. The shape is needed to place it.
   const [loaded, setLoaded] = useState<{ url: string; aspect: number }>();
   useEffect(() => {
@@ -24,17 +28,19 @@ export function Backdrop({ imageUrl, scene, dim, blur, crop }: BackdropProps) {
   }, [imageUrl]);
 
   if (!imageUrl) return null;
-  const ready = loaded?.url === imageUrl;
+  const ready = readabilityReady && (analysedAspect !== undefined || loaded?.url === imageUrl);
   const style = {
-    ...cropVariables(sanitizeCrop(crop), loaded?.aspect ?? 1.6),
+    ...cropVariables(sanitizeCrop(crop), analysedAspect ?? (loaded?.url === imageUrl ? loaded.aspect : 1.6)),
     "--backdrop-image": `url("${imageUrl}")`,
     "--backdrop-dim": dim / 100,
-    "--backdrop-blur": `${blur}px`
+    "--backdrop-blur": `${blur}px`,
+    "--backdrop-extra-dim": extraDim
   } as CSSProperties;
   return (
-    <div className={`backdrop ${ready ? "ready" : ""}`} data-scene={scene} style={style} aria-hidden="true">
+    <div className={`backdrop ${ready ? "ready" : ""}`} data-scene={scene} data-auto-readability={analysedAspect !== undefined || !readabilityReady ? "true" : undefined} style={style} aria-hidden="true">
       <div className="backdrop-layer backdrop-hero" />
       <div className="backdrop-layer backdrop-chat" />
+      <div className="backdrop-contrast" />
     </div>
   );
 }

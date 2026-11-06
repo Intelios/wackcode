@@ -602,6 +602,9 @@ pub struct AppearanceConfig {
     /// Show a different saved background each time WackCode opens. Needs more than one image.
     #[serde(default)]
     pub shuffle_backgrounds: bool,
+    /// Automatically keep exposed conversation text readable over image backgrounds.
+    #[serde(default = "default_true")]
+    pub image_auto_readability: bool,
     /// How much the background colour covers the image behind a chat, 0–90 %.
     #[serde(default = "default_image_dim")]
     pub image_dim: u8,
@@ -643,6 +646,16 @@ pub struct BackgroundImage {
     /// any. Showing the image applies that theme; picking that theme shows this image.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+}
+
+/// Whether one decoded frame is sufficient to analyse a saved background's contrast.
+/// Unknown or animated images use conservative protection in the renderer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BackgroundImageMotion {
+    Static,
+    Animated,
+    Unknown,
 }
 
 impl BackgroundImage {
@@ -751,6 +764,7 @@ impl Default for AppearanceConfig {
             background_image: None,
             background_images: Vec::new(),
             shuffle_backgrounds: false,
+            image_auto_readability: true,
             image_dim: default_image_dim(),
             image_blur: default_image_blur(),
             glass_style: GlassStyleSetting::Frosted,

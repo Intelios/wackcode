@@ -4,6 +4,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   AutoTitleConfig,
   AppearanceConfig,
+  BackgroundImageMotion,
   ExecutionPolicyConfig,
   GitConfig,
   AppInfo,
@@ -157,6 +158,8 @@ export const api = {
   selectBackgroundImage: (name: string) => invoke<AppearanceConfig>("select_background_image", { name }),
   /** Shows a different saved image at random — the same choice shuffle makes on open. */
   shuffleBackgroundImage: () => invoke<AppearanceConfig>("shuffle_background_image"),
+  /** Inspects a saved library member only; uncertain images need conservative contrast. */
+  backgroundImageMotion: (name: string) => invoke<BackgroundImageMotion>("background_image_motion", { name }),
   setSubagentConfig: (input: SubagentConfig) => invoke<SubagentConfig>("set_subagent_config", { input }),
   setAutoTitleConfig: (input: AutoTitleConfig) => invoke<AutoTitleConfig>("set_auto_title_config", { input }),
   usageStatus: () => invoke<import("./types").UsageStatus>("usage_status"),

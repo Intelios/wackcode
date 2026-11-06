@@ -109,6 +109,14 @@ describe("AppearanceSection theme", () => {
 });
 
 describe("AppearanceSection backdrop", () => {
+  it("defaults automatic readability on and saves its switch without changing manual dimming", async () => {
+    const { onChange } = renderSection({ ...imageLibrary(["one.png"]), imageDim: 17 });
+    const toggle = screen.getByRole("switch", { name: "Automatic readability" });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(toggle);
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ imageAutoReadability: false, imageDim: 17 })));
+  });
+
   it("goes straight to the image picker when Image has nothing stored yet", async () => {
     const { onChange, onChooseImage } = renderSection();
     fireEvent.click(screen.getByRole("radio", { name: "Image" }));

@@ -1,7 +1,7 @@
 use crate::{
     backgrounds, checkpoints, files, git, glass, mcp,
     models::{
-        AppData, AppearanceConfig, AppInfo, AutoTitleConfig, BackdropMode, BackgroundImage, BootstrapPayload,
+        AppData, AppearanceConfig, AppInfo, AutoTitleConfig, BackdropMode, BackgroundImage, BackgroundImageMotion, BootstrapPayload,
         CheckpointChange, CheckpointRef, ComposerStyle, CreateTaskInput, DiffComment, ExportPlanInput,
         ExecutionPolicyConfig, ExtensionUiResponseInput, FavoriteModelRef, ForkTaskInput, GitBranches, GitChanges, GitConfig,
         GitCheckoutResult, GitGeneratedMessage, GitPrInfo,
@@ -1367,6 +1367,29 @@ pub async fn shuffle_background_image(
     })?;
     glass::sync(&app, &config)?;
     Ok(config)
+}
+
+/// Reads only a saved library member, never a renderer-supplied path. The container check is
+/// local and bounded; a malformed, missing or uninspectable image stays conservative.
+#[tauri::command]
+pub async fn background_image_motion(
+    app: AppHandle,
+    state: State<'_, MetadataState>,
+    name: String,
+) -> Result<BackgroundImageMotion, String> {
+    let images = state
+        .data
+        .lock()
+        .map_err(|_| "Could not inspect that background.".to_string())?
+        .appearance
+        .background_images
+        .clone();
+    let folder = backgrounds::directory(
+        &app.path().app_data_dir().map_err(|_| "Could not inspect that background.".to_string())?,
+    );
+    tauri::async_runtime::spawn_blocking(move || backgrounds::image_motion(&folder, &images, &name))
+        .await
+        .map_err(|_| "Could not inspect that background.".to_string())?
 }
 
 /// Shuffle-on-open, shared by app launch and a window reopened from hidden: rotates the shown
@@ -5703,6 +5726,7 @@ fn validate_appearance_config(
         background_image: current.background_image.clone(),
         background_images,
         shuffle_backgrounds: input.shuffle_backgrounds,
+        image_auto_readability: input.image_auto_readability,
         image_dim: percent("Image dimming", input.image_dim)?,
         image_blur: if input.image_blur <= 40 {
             input.image_blur
@@ -6261,6 +6285,16 @@ mod tests {
         assert!(old.chat_tabs);
         let input = AppearanceConfig { chat_tabs: false, ..old.clone() };
         assert_eq!(validate_appearance_config(input.clone(), &old, true).unwrap(), input);
+    }
+
+    #[test]
+    fn automatic_image_readability_defaults_on_and_validates_both_values() {
+        let old: AppearanceConfig = serde_json::from_str("{}").unwrap();
+        assert!(old.image_auto_readability);
+        for enabled in [false, true] {
+            let input = AppearanceConfig { image_auto_readability: enabled, ..old.clone() };
+            assert_eq!(validate_appearance_config(input.clone(), &old, false).unwrap(), input);
+        }
     }
 
     #[test]

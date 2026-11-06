@@ -33,6 +33,7 @@ export const DEFAULT_APPEARANCE: AppearanceConfig = {
   dynamicIntensity: 50,
   backgroundImages: [],
   shuffleBackgrounds: false,
+  imageAutoReadability: true,
   imageDim: 65,
   imageBlur: 12,
   glassStyle: "frosted",
@@ -265,6 +266,13 @@ export const TOKENS: Record<string, { recipe: Recipe; ref: string }> = {
   "--text-dim": { recipe: "text", ref: "#757e70" },
   "--wc-placeholder": { recipe: "text", ref: "#6d7467" },
   "--text-faint": { recipe: "text", ref: "#5d6458" },
+  // Exposed conversation ink can adapt independently of the solid content/shell palette.
+  "--wc-transcript-text": { recipe: "text", ref: "#e8ece4" },
+  "--wc-transcript-body": { recipe: "text", ref: "#dbe0d7" },
+  "--wc-transcript-soft": { recipe: "text", ref: "#adb5a7" },
+  "--wc-transcript-dim": { recipe: "text", ref: "#757e70" },
+  "--wc-transcript-faint": { recipe: "text", ref: "#5d6458" },
+  "--wc-transcript-accent": { recipe: "accent", ref: "#c2ee4a" },
 
   "--wc-accent-hover": { recipe: "accent", ref: "#d0f664" },
   "--wc-accent-text": { recipe: "accent", ref: "#cce98a" },

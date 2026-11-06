@@ -26,6 +26,8 @@ import { performChatNavigation, withoutResolvedDialog } from "./menu-navigation"
 import { applyHistoryPreviews } from "./history-previews";
 import { useStableCallbacks, type CallbackProps } from "./hooks/useStableCallbacks";
 import { useComposerDrafts } from "./hooks/useComposerDrafts";
+import { useImageReadability } from "./hooks/useImageReadability";
+import { conversationReadabilityConstraints } from "./image-readability-constraints";
 import { useChatTabs } from "./hooks/useChatTabs";
 import { activateTab, addDraftTab, bindTab, closeTab, cycleTab, draftTab, findTab, openChatTab, patchTab, removeDraftProject, removeTaskTabs, reopenTab, reorderTab, switchTabArea, tabsInArea, type ChatDraft, type TabPanelState } from "./chat-tabs";
 import type { TranscriptViewState } from "./transcript-view";
@@ -3336,6 +3338,20 @@ export default function App() {
   );
   const shownImage = shownEntry(data.appearance);
   const backgroundImageUrl = shownImage ? backgroundImageUrlFor(shownImage.name) : undefined;
+  const imageReadabilityRoot = useRef<HTMLDivElement>(null);
+  const imageReadabilityConstraints = useMemo(() => conversationReadabilityConstraints(runtime?.snapshot?.messages ?? [], runtime?.partial),
+    [runtime?.snapshot?.messages, runtime?.partial?.stopReason]);
+  const imageReadability = useImageReadability({
+    root: imageReadabilityRoot,
+    enabled: !booting && !settingsOpen && Boolean(selectedTask) && data.appearance.backdrop === "image"
+      && data.appearance.imageAutoReadability !== false && Boolean(backgroundImageUrl),
+    imageUrl: backgroundImageUrl, imageName: shownImage?.name, inspectMotion: api.backgroundImageMotion,
+    crop: shownImage ? { zoom: shownImage.zoom, x: shownImage.x, y: shownImage.y } : CENTRED,
+    dim: data.appearance.imageDim, blur: data.appearance.imageBlur,
+    accent: data.appearance.accent, background: data.appearance.background,
+    conversationKey: `${area}:${selectedTask?.id ?? ""}`, area,
+    ...imageReadabilityConstraints
+  });
 
   const tabImpl = useRef({ select: selectWorkspaceTab, close: closeWorkspaceTab, reopen: reopenWorkspaceTab,
     new: () => openDraft(selectedTask ? selectedTask.projectId : draft?.projectId) });
@@ -3510,8 +3526,9 @@ export default function App() {
         { label: "Settings…", icon: <Icon name="settings" />, hint: "⌘,", onSelect: openSettings }
       ]}
     >
-    <div className={`app-shell${rebuilding ? " rebuild" : ""}${panelExpanded && canExpand(panelView) ? " panel-expanded" : ""}${showChatTabBar ? " panel-has-tabs" : ""}${!settingsOpen && !shell.sidebarShown ? " sidebar-hidden" : ""}`}
-      style={{ "--sidebar-w": `${settingsOpen ? SIDEBAR_W : sidebarWidth}px` } as CSSProperties}
+    <div ref={imageReadabilityRoot} className={`app-shell${rebuilding ? " rebuild" : ""}${panelExpanded && canExpand(panelView) ? " panel-expanded" : ""}${showChatTabBar ? " panel-has-tabs" : ""}${!settingsOpen && !shell.sidebarShown ? " sidebar-hidden" : ""}`}
+      style={{ "--sidebar-w": `${settingsOpen ? SIDEBAR_W : sidebarWidth}px`, ...imageReadability.result?.variables } as CSSProperties}
+      data-image-readability={imageReadability.result?.polarity}
       data-area={area} data-screen={settingsOpen ? "settings" : "workspace"} data-dynamic-space onClickCapture={(event) => {
       if (event.button === 0 && !settingsOpen && !confirm && !restoreDialog && !subscriptionLogin && isBackgroundClick(event.target)) {
         dynamicBackdrop.current?.ripple(event.clientX, event.clientY);
@@ -3532,6 +3549,9 @@ export default function App() {
           dim={data.appearance.imageDim}
           blur={data.appearance.imageBlur}
           crop={shownImage ? { zoom: shownImage.zoom, x: shownImage.x, y: shownImage.y } : CENTRED}
+          extraDim={imageReadability.result?.extraDim}
+          readabilityReady={imageReadability.ready}
+          analysedAspect={imageReadability.result ? imageReadability.aspect : undefined}
         />
       )}
       {settingsOpen ? (

@@ -188,6 +188,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + 
             commands::remove_background_image,
             commands::select_background_image,
             commands::shuffle_background_image,
+            commands::background_image_motion,
             commands::set_subagent_config,
             commands::set_auto_title_config,
             commands::set_prompt_config,

@@ -381,12 +381,33 @@ mod tests {
         assert_eq!(data.appearance, AppearanceConfig { thinking_preview: false, ..AppearanceConfig::default() });
         assert_eq!(data.appearance.backdrop, BackdropMode::Solid);
         assert_eq!(data.appearance.composer_style, ComposerStyle::Classic);
+        assert!(data.appearance.image_auto_readability);
         assert_eq!((data.appearance.image_dim, data.appearance.image_blur, data.appearance.glass_tint), (65, 12, 40));
         // Files from before image cropping show the picture centred and uncropped.
         assert_eq!(BackgroundImage::fresh("a.png".into()), BackgroundImage { name: "a.png".into(), zoom: 100, x: 500, y: 500, theme: None });
         // Unpicked colours stay absent, so a future default still reaches this user.
         let saved = serde_json::to_string(&data.appearance).unwrap();
         assert!(!saved.contains("accent") && !saved.contains("\"backgroundImage\""), "{saved}");
+    }
+
+    #[test]
+    fn automatic_image_readability_persists_an_explicit_off_preference() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = MetadataState {
+            data: Mutex::new(AppData::default()),
+            data_path: directory.path().join("wackcode.json"),
+            secrets: SecretStore::load(directory.path()).unwrap(),
+        };
+        for enabled in [false, true] {
+            state.mutate(|data| {
+                data.appearance.image_auto_readability = enabled;
+                Ok(())
+            }).unwrap();
+            let saved = fs::read_to_string(&state.data_path).unwrap();
+            let reloaded: AppData = serde_json::from_str(&saved).unwrap();
+            assert_eq!(reloaded.appearance.image_auto_readability, enabled);
+            assert_eq!(reloaded.appearance, state.data.lock().unwrap().appearance);
+        }
     }
 
     #[test]

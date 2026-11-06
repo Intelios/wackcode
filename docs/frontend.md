@@ -537,3 +537,21 @@ Picking that preset shows the linked image; any change of the shown image applie
 theme — `linkedThemeConfig` in `background-links.ts`, applied in App after the image commands and
 the `background-shuffled` event. Shuffle-on-open counts as an image change; a launch without one
 keeps the saved colours.
+
+Image backgrounds have automatic conversation readability on by default
+(`imageAutoReadability`; absent in older settings means on). `useImageReadability` loads only
+the existing asset URL with anonymous CORS and asks App's `backgroundImageMotion` callback
+whether it can sample a static frame. The native command accepts saved library filenames
+only. Animated, unreadable or over-budget images use conservative black/white bounds.
+`image-analysis.ts` reads native-resolution pixels in bounded tiles once per image and keeps
+an extrema atlas; crop, blur and layout changes reuse it without sampling on scroll or text
+streaming. `image-readability.ts` chooses one light/dark foreground palette with at least
+4.5:1 sampled contrast, then adds only the necessary neutral-black opacity after the saved
+background-colour dim. The saved Dim value is a minimum and never rewritten.
+
+Only exposed main-conversation ink reads `--wc-transcript-*`; filled surfaces, side panels and
+visual frame palettes retain their original theme. Successful visuals and stopped labels
+anywhere in the selected history constrain fixed ink without changing on scroll. Visuals use
+full-window samples so Expand stays protected. The whole-window backdrop and foreground commit
+together after analysis, without an unsafe crossfade. No transcript overlay, worker setting,
+network origin or new asset access is involved. Turning the switch off restores manual rendering.

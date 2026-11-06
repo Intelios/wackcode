@@ -406,6 +406,19 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrlFo
                   />
                 ) : null;
               })()}
+              <div className="tool-setting appearance-setting">
+                <div className="tool-setting-text">
+                  <span className="tool-setting-name">Automatic readability</span>
+                  <span className="tool-setting-description">Adjust conversation text colours automatically in Code and Chat. Extra dimming is added when needed; your Dim setting stays the minimum.</span>
+                </div>
+                <button type="button" role="switch" aria-label="Automatic readability"
+                  aria-checked={config.imageAutoReadability !== false}
+                  className={`toggle ${config.imageAutoReadability !== false ? "on" : ""}`}
+                  disabled={busy}
+                  onClick={() => void save({ ...config, imageAutoReadability: config.imageAutoReadability === false })}>
+                  <span />
+                </button>
+              </div>
               <div className="appearance-pair">
                 <SliderRow
                   label="Dim"

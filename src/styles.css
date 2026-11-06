@@ -85,6 +85,12 @@
   --text-dim: #757e70;
   --wc-placeholder: #6d7467;
   --text-faint: #5d6458;
+  --wc-transcript-text: #e8ece4;
+  --wc-transcript-body: #dbe0d7;
+  --wc-transcript-soft: #adb5a7;
+  --wc-transcript-dim: #757e70;
+  --wc-transcript-faint: #5d6458;
+  --wc-transcript-accent: #c2ee4a;
   /* Fixed semantic colours: an accent recolours interaction, never meaning. */
   /* Ultra (Ultra Plan and the Ultra reasoning level): a fixed prism, cyan through peach, so no
      accent can ever match it. The lavender base carries text, tints and lines; the glow is the
@@ -179,6 +185,11 @@ kbd { color: var(--text-dim); font-size: 11px; font-family: inherit; margin-left
 .backdrop-chat::before { filter: blur(var(--backdrop-blur)); transform: scale(1.08); }
 .backdrop-chat::after { opacity: var(--backdrop-dim); }
 .backdrop.ready[data-scene="hero"] .backdrop-hero, .backdrop.ready[data-scene="chat"] .backdrop-chat { opacity: 1; }
+/* This neutral veil follows the user's tint, across the whole window. Commit it and the
+   adaptive foreground together: intermediate image crossfades can have the opposite contrast. */
+.backdrop-contrast { position: absolute; inset: 0; background: #000; opacity: 0; }
+.backdrop.ready[data-scene="chat"] .backdrop-contrast { opacity: var(--backdrop-extra-dim, 0); }
+.backdrop[data-auto-readability="true"] .backdrop-layer { transition: none; }
 [data-backdrop="image"] .draft-title { text-shadow: 0 1px 14px rgb(0 0 0 / 55%); }
 .titlebar-drag { height: 48px; flex: 0 0 48px; }
 /* The sidebar's strip: the traffic lights sit in its first 80px (tauri.conf.json's
@@ -1816,6 +1827,93 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
 .conversation-empty { height: 100%; max-width: 460px; margin: 0 auto; display: flex; flex-direction: column; justify-content: center; text-align: center; padding-bottom: 12%; }
 .conversation-empty h2 { margin: 0 0 8px; font-size: 21px; letter-spacing: -.4px; font-weight: 650; }
 .conversation-empty p { margin: 0; color: var(--text-dim); line-height: 1.55; font-size: 13px; }
+
+/* Image readability changes only exposed conversation ink. Keep the original theme at every
+   filled boundary, including a caption's hover fill: dark ink over a bright picture must never
+   reach a dark bubble, code fence, sheet, or the independently tinted sub-agent panel. The
+   backdrop itself owns the window-wide dimming; neither transcript viewport paints a veil. */
+.app-shell[data-screen="workspace"][data-image-readability] :is(.side-panel, .bubble, .compaction-row, .tool-row, .tool-chip, .tool-detail, .explore-head, .run-duration-chip, .plan-card, .skill-draft-card, .chat-bubble, .chat-chip, .chat-sheet-inner, .chat-system, .chat-typing, .chat-file, .file-chip, .code-block, pre),
+.app-shell[data-screen="workspace"][data-image-readability] .chat-transcript :is(.assistant-text, .thinking-body) th,
+[data-message-bubbles="on"] .app-shell[data-screen="workspace"][data-image-readability] .msg.assistant .assistant-text,
+.app-shell[data-screen="workspace"][data-image-readability] .thinking-row:not(.streaming) > .thinking-head:is(:hover, :focus-visible),
+.app-shell[data-screen="workspace"][data-image-readability] .thinking-row.streaming > .thinking-head:focus-visible:not(:hover),
+.app-shell[data-screen="workspace"][data-image-readability] .thinking-row.open:not(.streaming) > .thinking-head,
+.app-shell[data-screen="workspace"][data-image-readability] .thinking-row.open.streaming > .thinking-head:not(:hover),
+.app-shell[data-screen="workspace"][data-image-readability] .chat-thought-toggle:hover {
+  --wc-transcript-text: var(--text);
+  --wc-transcript-body: var(--wc-text-body);
+  --wc-transcript-soft: var(--text-soft);
+  --wc-transcript-dim: var(--text-dim);
+  --wc-transcript-faint: var(--text-faint);
+  --wc-transcript-accent: var(--wc-accent);
+}
+.app-shell[data-screen="workspace"][data-image-readability] .chat-transcript .assistant-text {
+  color: var(--wc-transcript-body, var(--wc-text-body));
+}
+.app-shell[data-screen="workspace"][data-image-readability] .chat-transcript :is(.assistant-text, .thinking-body) :is(h1, h2, h3, h4, h5, h6),
+.app-shell[data-screen="workspace"][data-image-readability] .chat-transcript .conversation-empty h2 {
+  color: var(--wc-transcript-text, var(--text));
+}
+.app-shell[data-screen="workspace"][data-image-readability] .chat-transcript :is(.assistant-text, .thinking-body) blockquote {
+  color: var(--wc-transcript-soft, var(--text-soft));
+}
+.app-shell[data-screen="workspace"][data-image-readability] .chat-transcript :is(.assistant-text, .thinking-body) a,
+.app-shell[data-screen="workspace"][data-image-readability] .chat-thread .chat-compaction-body a {
+  color: var(--wc-transcript-accent, var(--wc-accent));
+}
+/* Table headings have their own fill even when the surrounding Markdown is transparent. */
+.app-shell[data-screen="workspace"][data-image-readability] .chat-transcript :is(.assistant-text, .thinking-body) th {
+  color: var(--text);
+}
+.app-shell[data-screen="workspace"][data-image-readability] .chat-transcript :is(.thinking-head, .thinking-elapsed, .thinking-body, .msg.system, .compacting-status, .subagent-group-head, .conversation-empty p),
+.app-shell[data-screen="workspace"][data-image-readability] :is(.chat-transcript, .chat-thread) :is(.reply-image-caption, .image-comparison-quality, .visual-sent, .visual-card-note, .visual-frame-state),
+.app-shell[data-screen="workspace"][data-image-readability] .chat-thread :is(.chat-name, .chat-thought-toggle, .chat-thought-text, .chat-compaction > button, .chat-compaction-body > p:first-child) {
+  color: var(--wc-transcript-dim, var(--text-dim));
+}
+.app-shell[data-screen="workspace"][data-image-readability] .chat-transcript :is(.thinking-head:is(:hover, :focus-visible), .thinking-row.open > .thinking-head, .thinking-frame.live .thinking-body, .agent-working-label, .compacting-elapsed, .rewind-bar > span),
+.app-shell[data-screen="workspace"][data-image-readability] .chat-thread :is(.chat-thought-toggle:hover, .chat-compaction > button:hover, .chat-compaction-body > :not(p:first-child)) {
+  color: var(--wc-transcript-soft, var(--text-soft));
+}
+.app-shell[data-screen="workspace"][data-image-readability] .chat-transcript :is(.compacting-sep, .subagent-group-summary, .thinking-head .tool-chevron),
+.app-shell[data-screen="workspace"][data-image-readability] :is(.chat-transcript, .chat-thread) .tool-image-caption,
+.app-shell[data-screen="workspace"][data-image-readability] .chat-thread .chat-divider.quiet {
+  color: var(--wc-transcript-faint, var(--text-faint));
+}
+.app-shell[data-screen="workspace"][data-image-readability] .chat-transcript .version-switcher,
+.app-shell[data-screen="workspace"][data-image-readability] .chat-thread .chat-versions,
+.app-shell[data-screen="workspace"][data-image-readability] .chat-thread .chat-tray-button:not(:hover):not(.done) {
+  color: var(--wc-transcript-dim, var(--text-dim));
+}
+.app-shell[data-screen="workspace"][data-image-readability] .chat-transcript .message-actions .ghost-button:not(:hover):not(:disabled) {
+  color: var(--wc-transcript-soft, var(--text-soft));
+}
+.app-shell[data-screen="workspace"][data-image-readability] .chat-transcript :is(.thinking-icon, .agent-working-duck),
+.app-shell[data-screen="workspace"][data-image-readability] .chat-thread :is(.chat-thought-duck, .chat-compaction > button > svg) {
+  color: var(--wc-transcript-accent, var(--wc-accent));
+}
+.app-shell[data-screen="workspace"][data-image-readability] .chat-transcript :is(.thinking-stream-caret, .ink-caret, .agent-working .work-dots i, .explore-wait .work-dots i) {
+  background: var(--wc-transcript-accent, var(--wc-accent));
+}
+.app-shell[data-screen="workspace"][data-image-readability] .chat-transcript .thinking-head .thinking-shimmer {
+  background-image: linear-gradient(90deg, var(--wc-transcript-dim, var(--text-dim)) 30%, var(--wc-transcript-text, var(--text)) 50%, var(--wc-transcript-dim, var(--text-dim)) 70%);
+}
+.app-shell[data-screen="workspace"][data-image-readability] .chat-transcript .thinking-stream {
+  background-image: linear-gradient(90deg, transparent 0%, var(--wc-transcript-dim, var(--text-dim)) 28%, var(--wc-transcript-soft, var(--text-soft)) 70%, color-mix(in srgb, var(--wc-transcript-accent, var(--wc-accent)) 60%, var(--wc-transcript-text, var(--text))) 100%);
+}
+/* Keep the chosen ink in step with the veil when its polarity changes. Hover fills still
+   ease, but a colour tween through middle grey would briefly lose the measured contrast. */
+.app-shell[data-screen="workspace"][data-image-readability] .chat-transcript .thinking-body { transition: none; }
+.app-shell[data-screen="workspace"][data-image-readability] .chat-transcript .thinking-head { transition: background .15s var(--ease); }
+.app-shell[data-screen="workspace"][data-image-readability] .chat-transcript .thinking-body .ink-fresh {
+  animation-name: transcript-ink-settle;
+}
+@keyframes transcript-ink-settle {
+  from {
+    color: color-mix(in srgb, var(--wc-transcript-accent, var(--wc-accent)) 55%, var(--wc-transcript-text, var(--text)));
+    text-shadow: 0 0 7px color-mix(in srgb, var(--wc-transcript-accent, var(--wc-accent)) 45%, transparent);
+  }
+  to { color: var(--wc-transcript-soft, var(--text-soft)); text-shadow: none; }
+}
 
 /* ── Inline dialog (above composer) ────────────────── */
 .inline-dialog-wrap { flex: 0 0 auto; padding: 0 var(--chat-gutter, 24px) 6px; animation: slide-in-dialog .18s var(--ease); }

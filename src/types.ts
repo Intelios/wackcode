@@ -736,6 +736,8 @@ export interface AppearanceConfig {
   backgroundImages: BackgroundImageEntry[];
   /** Show a different saved background each time WackCode opens. */
   shuffleBackgrounds: boolean;
+  /** Automatically keep exposed conversation text readable over image backgrounds. */
+  imageAutoReadability: boolean;
   /** How much the background colour covers the image behind a chat, 0–90 %. */
   imageDim: number;
   /** Blur of the image behind a chat, 0–40 px. */
@@ -804,6 +806,9 @@ export interface BackgroundImageEntry {
    *  applies that theme; picking that theme shows this image. One image per preset. */
   theme?: string | null;
 }
+
+/** Whether a single frame can safely represent a saved image for contrast analysis. */
+export type BackgroundImageMotion = "static" | "animated" | "unknown";
 
 /** What sits behind the app's panels. Exclusive: glass shows the desktop an image would cover. */
 export type BackdropMode = "solid" | "image" | "glass" | "dynamic";

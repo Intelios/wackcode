@@ -317,7 +317,7 @@ styles keep the pinned `TodoPanel` in the chat column instead.
 
 ## New-chat project picker
 
-`ProjectBar` (the composer's `header` on the welcome screen) hosts `ProjectPicker`, `BranchPicker` and the Local/Worktree toggle. The picker reads and writes the same `pinnedProjects` set as the sidebar, so a pin made anywhere shows everywhere; it never keeps its own copy. Its display rules (`shortPath`, `monogram`, search) are pure functions in `project-display.ts`. ⌘O stays a global shortcut in `App`; the picker's footer only calls `onAddProject`.
+`ProjectBar` (the composer's `header` on the welcome screen) hosts `ProjectPicker`, `BranchPicker`, the Local/Worktree toggle and, when a project is selected, the same Build/Run controls as a chat header. Those draft commands execute in the project's local folder and never create a chat; Worktree applies only to the future chat. Their output can open the side panel while taskless, where only Run and Build tabs are visible. The picker reads and writes the same `pinnedProjects` set as the sidebar, so a pin made anywhere shows everywhere; it never keeps its own copy. Its display rules (`shortPath`, `monogram`, search) are pure functions in `project-display.ts`. ⌘O stays a global shortcut in `App`; the picker's footer only calls `onAddProject`.
 
 ## Attachments
 
@@ -382,7 +382,7 @@ with the pure operations (`openTab`, `toggleTab`, `closeTab`, `hidePanel`, `show
   the older single-view and Changes-flag formats). Browser, canvas and sub-agent tabs belong to one chat
   and drop out when another is selected (`forChat`). With chat tabs enabled, every tab keeps its
   own `PanelTabs` for the session and a new draft starts closed. Run and Build follow the selected
-  checkout and restoring either never launches a command. Only the front tab's page mounts.
+  checkout, or the selected project's local folder on a draft, and restoring either never launches a command. Only the front tab's page mounts.
 - Sub-agent transcripts reach the panel only through `watch_subagent` frames, never through snapshots.
 - **Expand** (`panelExpanded`) spans the main area with the composer docked below, for every view
   (Canvas included), and survives switching tabs.
@@ -447,9 +447,10 @@ The user's own shell, in `src-tauri/src/terminal.rs`. The agent never sees it.
 
 ## Project Run and Build commands
 
-The Code chat header's split Build/Stop and Run/Stop controls share `RunButton`, saving nullable
+The Code chat header's and welcome project bar's split Build/Stop and Run/Stop controls share `RunButton`, saving nullable
 `ProjectRecord.buildCommand` and `runCommand` through `save_project_build_command` and
-`save_project_run_command`. The editors live beside each button; edits affect only the next launch.
+`save_project_run_command`. A chat target executes in that chat's checkout; a draft's project target executes in the
+project's local folder without creating a chat. The editors live beside each button; edits affect only the next launch.
 `App` owns launch/stop callbacks, the `run-event` listener and checkout lookup. `run-state.ts`
 reconciles events and invoke replies by generation/revision, retaining removal watermarks so
 late output-state events cannot resurrect a retired session. Session keys and watermarks include

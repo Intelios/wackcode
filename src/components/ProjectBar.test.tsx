@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProjectRecord } from "../types";
-import { ProjectBar } from "./ProjectBar";
+import { ProjectBar, type ProjectCommandActions } from "./ProjectBar";
 
 afterEach(cleanup);
 
@@ -12,6 +12,10 @@ const projects: ProjectRecord[] = [
 ];
 
 const noPins = new Set<string>();
+const commandActions: ProjectCommandActions = {
+  onSaveRunCommand: async () => {}, onRun: async () => {}, onStopRun: async () => {}, onShowRunOutput: () => {},
+  onSaveBuildCommand: async () => {}, onBuild: async () => {}, onStopBuild: async () => {}, onShowBuildOutput: () => {}
+};
 
 function Harness({ initialProjectId = "p1", worktreeable = true }: { initialProjectId?: string | null; worktreeable?: boolean }) {
   const [projectId, setProjectId] = useState<string | null>(initialProjectId);
@@ -92,6 +96,50 @@ describe("ProjectBar", () => {
     expect(screen.getByRole("button", { name: "Worktree" })).toBeDisabled();
   });
 
+  it("offers the selected project's Run and Build commands without a chat", async () => {
+    const onBuild = vi.fn(async () => {});
+    render(
+      <ProjectBar
+        projects={projects.map((project) => ({ ...project, runCommand: "pnpm dev", buildCommand: "pnpm build" }))}
+        projectId="p1"
+        useWorktree={false}
+        pinned={noPins}
+        commands={{ ...commandActions, onBuild }}
+        onSelectProject={() => undefined}
+        onSetPinned={() => undefined}
+        onToggleWorktree={() => undefined}
+        onAddProject={() => undefined}
+        onListBranches={async () => ({ current: "master", branches: [] })}
+        onCheckoutBranch={async () => undefined}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Build" }));
+    await vi.waitFor(() => expect(onBuild).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("button", { name: "Configure run command" }));
+    expect(screen.getByText("Saved for this project. Runs in its local folder.")).toBeInTheDocument();
+    expect(screen.getByText("/code/tokentrail")).toBeInTheDocument();
+  });
+
+  it("does not offer project commands with no project", () => {
+    render(
+      <ProjectBar
+        projects={projects}
+        projectId={null}
+        useWorktree={false}
+        pinned={noPins}
+        commands={commandActions}
+        onSelectProject={() => undefined}
+        onSetPinned={() => undefined}
+        onToggleWorktree={() => undefined}
+        onAddProject={() => undefined}
+        onListBranches={async () => ({ current: "master", branches: [] })}
+        onCheckoutBranch={async () => undefined}
+      />
+    );
+    expect(screen.queryByRole("group", { name: "Project commands" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
+  });
+
   it("mounts GlassPlatter on pills and project/branch popovers only when glass is enabled", async () => {
     const { container, rerender } = render(
       <ProjectBar
@@ -100,6 +148,7 @@ describe("ProjectBar", () => {
         useWorktree={false}
         pinned={noPins}
         glass
+        commands={commandActions}
         onSelectProject={() => undefined}
         onSetPinned={() => undefined}
         onToggleWorktree={() => undefined}
@@ -108,12 +157,15 @@ describe("ProjectBar", () => {
         onCheckoutBranch={async () => undefined}
       />
     );
-    expect(container.querySelectorAll(".glass-platter")).toHaveLength(3);
+    expect(container.querySelectorAll(".glass-platter")).toHaveLength(5);
     fireEvent.click(screen.getByRole("button", { name: /Switch project/ }));
     expect(document.body.querySelector(".project-pop")).toHaveClass("glass");
     fireEvent.click(screen.getByRole("button", { name: /Switch branch/ }));
     expect(await screen.findByRole("dialog", { name: "Switch branch" })).toBeInTheDocument();
     expect(document.body.querySelector(".branch-pop")).toHaveClass("glass");
+    fireEvent.click(screen.getByRole("button", { name: "Configure run command" }));
+    expect(screen.getByRole("dialog", { name: "Project run command" })).toBeInTheDocument();
+    expect(document.body.querySelector(".popover.glass")).toBeInTheDocument();
 
     rerender(
       <ProjectBar
@@ -121,6 +173,7 @@ describe("ProjectBar", () => {
         projectId="p1"
         useWorktree={false}
         pinned={noPins}
+        commands={commandActions}
         onSelectProject={() => undefined}
         onSetPinned={() => undefined}
         onToggleWorktree={() => undefined}

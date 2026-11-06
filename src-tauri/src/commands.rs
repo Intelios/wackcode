@@ -4294,18 +4294,18 @@ pub async fn remove_project(
         app.state::<terminal::TerminalState>()
             .kill_for_task(&task.id);
     }
-    let (git_root, removed) = {
+    let (project_path, git_root, removed) = {
         let data = state
             .data
             .lock()
             .map_err(|_| "Metadata lock was poisoned".to_string())?;
-        let git_root = data
+        let project = data
             .projects
             .iter()
-            .find(|project| project.id == project_id)
-            .and_then(|project| project.git_root.clone());
+            .find(|project| project.id == project_id);
         (
-            git_root,
+            project.map(|project| project.path.clone()),
+            project.and_then(|project| project.git_root.clone()),
             tasks
                 .iter()
                 .map(|task| task.id.clone())
@@ -4319,6 +4319,11 @@ pub async fn remove_project(
             .retain(|task_id, _| !removed.contains(task_id));
         Ok(())
     })?;
+    // A draft can start Run or Build before the project has any chats.
+    if let Some(project_path) = project_path {
+        app.state::<crate::run_command::RunState>()
+            .release_workspace(&state, &project_path, true).await?;
+    }
     for task in &tasks {
         app.state::<crate::run_command::RunState>()
             .release_workspace(&state, &task.workspace_path, task.worktree_path.is_some()).await?;

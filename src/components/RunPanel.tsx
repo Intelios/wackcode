@@ -129,7 +129,7 @@ export function RunPanel({ kind = "run", run, appearance, configured, onRun, onS
           ], `${title} terminal menu`, false);
         }} />
         {!run && <div className="terminal-notice">
-          <strong>{kind === "build" ? "No build started" : "No command running"}</strong><span>{configured ? `${title} your project to see its output here.` : `Choose a project chat and set its command beside ${title} in the top bar.`}</span>
+          <strong>{kind === "build" ? "No build started" : "No command running"}</strong><span>{configured ? `${title} your project to see its output here.` : `Set a project ${kind} command with the arrow beside ${title}.`}</span>
           {configured && <button type="button" className="secondary-button compact" onClick={onRun}><Icon name={icon} />{title}</button>}
         </div>}
         {error && <div className="terminal-notice" role="alert"><strong>{title} terminal error</strong><span>{error}</span></div>}

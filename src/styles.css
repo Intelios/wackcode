@@ -2297,7 +2297,12 @@ button.mention.chat:focus-visible { outline: 2px solid var(--wc-accent-line-mid)
 .composer-layer .composer-wrap { pointer-events: auto; }
 .composer-layer.hero .composer-wrap { background: none; padding-top: 0; }
 /* new-chat project bar: the project, branch and workspace-location controls share one chip look */
-.project-bar { display: flex; align-items: center; gap: 8px; }
+.project-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.project-bar-commands { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.project-bar .project-run-control, .project-bar .project-run-control .panel-button { height: 30px; }
+/* The draft keeps command setup available even when its column is narrow. */
+.workspace[data-chat-size="narrow"] .project-bar .project-run-control .project-run-more { display: grid; }
+.workspace[data-chat-size="narrow"] .project-bar .project-run-control .project-run-main { border-radius: 999px 0 0 999px; }
 .project-trigger, .project-bar-branch, .project-bar .segmented {
   height: 30px; border: 1px solid var(--border); border-radius: var(--wc-radius-pill); background: var(--surface);
   transition: border-color .15s var(--ease), box-shadow .15s var(--ease), background .15s var(--ease), color .15s var(--ease);
@@ -2704,7 +2709,7 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
 .slash-picker-frame.glass .slash-picker-foot kbd { background: color-mix(in srgb, var(--text) 9%, transparent); }
 
 /* The project bar above the hero composer wears the same refractive glass in miniature. */
-.composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch, .segmented) {
+.composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch, .segmented, .project-run-control) {
   position: relative;
   --glass-inset: -1px;
   --glass-fill: var(--wc-composer);
@@ -2717,7 +2722,7 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
   box-shadow: none;
   transition: transform .14s var(--ease), color .15s var(--ease);
 }
-.composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch, .segmented) > :not(.glass-platter) {
+.composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch, .segmented, .project-run-control) > :not(.glass-platter) {
   position: relative;
   z-index: 1;
 }
@@ -2732,21 +2737,28 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
     color-mix(in srgb, var(--wc-accent) 22%, transparent));
 }
 @media (hover: hover) and (pointer: fine) {
-  .composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch):hover {
+  .composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch, .project-run-control):hover {
     border-color: transparent;
     background: transparent;
     --glass-tint-pct: 55%;
     --glass-sheen-pct: 11%;
   }
 }
-.composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch):active { transform: scale(.985); }
+.composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch, .project-run-control):active { transform: scale(.985); }
+.composer-wrap.glass .project-bar .project-run-control.running {
+  --glass-fill: var(--danger);
+  --glass-tint-pct: 18%;
+  --glass-rim-fill: linear-gradient(176deg,
+    color-mix(in srgb, var(--danger) 52%, transparent),
+    color-mix(in srgb, var(--danger) 20%, transparent));
+}
 .composer-wrap.glass .project-bar .segmented-thumb {
   background: color-mix(in srgb, var(--text) 13%, transparent);
   box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 20%, transparent),
     inset 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent);
 }
 
-/* Classic Liquid Glass popovers: model, context, reasoning, todo, project and branch pickers.
+/* Classic Liquid Glass popovers: model, context, reasoning, todo, project, branch and command editors.
    Popovers portal to document.body, so each component opts in via `<Popover glass={glass}>`.
    The outer portal stays `overflow: visible` for WebKit's hosted lens and outer shadow, while
    `.popover-glass-body` clips and scrolls the content inside. */
@@ -2848,9 +2860,12 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
     background: var(--surface);
     box-shadow: 0 8px 24px rgb(0 0 0 / 22%);
   }
-  .composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch, .segmented) {
+  .composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch, .segmented, .project-run-control) {
     border-color: var(--border);
     background: var(--surface);
+  }
+  .composer-wrap.glass .project-bar .project-run-control.running {
+    background: color-mix(in srgb, var(--danger) 14%, var(--surface));
   }
   .popover.glass {
     border: 1px solid var(--border-bright);
@@ -2866,14 +2881,14 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
 @media (prefers-contrast: more) {
   .composer-classicGlass,
   .composer-wrap.glass .composer-pill,
-  .composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch, .segmented),
+  .composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch, .segmented, .project-run-control),
   .popover.glass,
   .slash-picker-frame.glass {
     --glass-tint-pct: 78%;
   }
   .composer-classicGlass,
   .composer-wrap.glass .composer-pill,
-  .composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch, .segmented) {
+  .composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch, .segmented, .project-run-control) {
     border-color: var(--border-bright);
   }
   .popover.glass,
@@ -2885,7 +2900,7 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
   .glass-platter { display: none; }
   .composer-classicGlass,
   .composer-wrap.glass .composer-pill,
-  .composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch, .segmented),
+  .composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch, .segmented, .project-run-control),
   .popover.glass,
   .slash-picker-frame.glass > .slash-picker {
     background: Canvas;
@@ -2898,11 +2913,11 @@ button.reasoning-toggle.at-ultra .reasoning-icon { width: 12px; height: 12px; }
   .glass-rim,
   .slash-picker-frame.glass,
   .composer-wrap.glass .composer-pill,
-  .composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch, .segmented) {
+  .composer-wrap.glass .project-bar :is(.project-trigger, .project-bar-branch, .segmented, .project-run-control) {
     transition: none;
     animation: none;
   }
-  .composer-wrap.glass :is(.composer-pill-todo, .composer-pill-files, .project-trigger, .project-bar-branch):active,
+  .composer-wrap.glass :is(.composer-pill-todo, .composer-pill-files, .project-trigger, .project-bar-branch, .project-run-control):active,
   .composer-classicGlass :is(.model-pill, .attach-button, .reasoning-toggle, .composer-stats):active:not(:disabled) {
     transform: none;
   }

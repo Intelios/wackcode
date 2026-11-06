@@ -247,7 +247,7 @@ fn spawn(
 
 impl RunState {
     fn start(&self, cwd: &Path, kind: ProjectCommandKind, command: &str, emit: Emit, shell: &str, login: bool) -> Result<RunInfo, String> {
-        let cwd = cwd.canonicalize().map_err(|_| "This chat's folder no longer exists.".to_string())?;
+        let cwd = cwd.canonicalize().map_err(|_| "This command's folder no longer exists.".to_string())?;
         let key = (cwd.clone(), kind);
         let mut sessions = self.sessions.lock().map_err(|_| "Could not lock the runs.".to_string())?;
         if self.shutdown.load(Ordering::SeqCst) { return Err("WackCode is quitting.".into()); }
@@ -331,16 +331,27 @@ fn has_chat(tasks: &[crate::models::TaskRecord], cwd: &Path) -> bool {
     tasks.iter().any(|task| task.kind == TaskKind::Code && !task.archived && task.project_id.is_some() && canonical_folder(Path::new(&task.workspace_path)) == cwd)
 }
 
-fn resolve(state: &MetadataState, task_id: &str, kind: ProjectCommandKind) -> Result<(PathBuf, Option<String>), String> {
+fn resolve(state: &MetadataState, task_id: Option<&str>, project_id: Option<&str>, kind: ProjectCommandKind) -> Result<(PathBuf, Option<String>), String> {
     let data = state.data.lock().map_err(|_| "Could not read the project.".to_string())?;
-    let task = data.tasks.iter().find(|task| task.id == task_id && !task.archived)
-        .ok_or_else(|| "This chat is missing or archived.".to_string())?;
-    if task.kind == TaskKind::Chat { return Err("Project commands are available only in coding chats.".into()); }
-    let project = task.project_id.as_ref().and_then(|id| data.projects.iter().find(|project| &project.id == id))
-        .ok_or_else(|| "Choose a project before running a command.".to_string())?;
-    let cwd = Path::new(&task.workspace_path).canonicalize()
-        .map_err(|_| "This chat's folder no longer exists.".to_string())?;
-    if !cwd.is_dir() { return Err("This chat's folder no longer exists.".into()); }
+    let (project, workspace, owner) = match (task_id, project_id) {
+        (Some(task_id), None) => {
+            let task = data.tasks.iter().find(|task| task.id == task_id && !task.archived)
+                .ok_or_else(|| "This chat is missing or archived.".to_string())?;
+            if task.kind == TaskKind::Chat { return Err("Project commands are available only in coding chats.".into()); }
+            let project = task.project_id.as_ref().and_then(|id| data.projects.iter().find(|project| &project.id == id))
+                .ok_or_else(|| "Choose a project before running a command.".to_string())?;
+            (project, task.workspace_path.clone(), "chat")
+        }
+        (None, Some(project_id)) => {
+            let project = data.projects.iter().find(|project| project.id == project_id)
+                .ok_or_else(|| "This project no longer exists.".to_string())?;
+            (project, project.path.clone(), "project")
+        }
+        _ => return Err("Choose a chat or a project.".into()),
+    };
+    let cwd = Path::new(&workspace).canonicalize()
+        .map_err(|_| format!("This {owner}'s folder no longer exists."))?;
+    if !cwd.is_dir() { return Err(format!("This {owner}'s folder no longer exists.")); }
     let command = match kind { ProjectCommandKind::Run => &project.run_command, ProjectCommandKind::Build => &project.build_command };
     Ok((cwd, command.clone()))
 }
@@ -367,21 +378,35 @@ fn save_command(state: &MetadataState, project_id: &str, kind: ProjectCommandKin
 }
 
 #[tauri::command]
-pub async fn start_run(app: AppHandle, state: State<'_, MetadataState>, runs: State<'_, RunState>, task_id: String, kind: Option<ProjectCommandKind>) -> Result<RunInfo, String> {
+pub async fn start_run(app: AppHandle, state: State<'_, MetadataState>, runs: State<'_, RunState>, task_id: Option<String>, project_id: Option<String>, kind: Option<ProjectCommandKind>) -> Result<RunInfo, String> {
     let kind = kind.unwrap_or_default();
-    let _task = crate::commands::task_lock(&app, &task_id).lock_owned().await;
-    let (cwd, command) = resolve(&state, &task_id, kind)?;
+    let _task = match task_id.as_deref() {
+        Some(task_id) => Some(crate::commands::task_lock(&app, task_id).lock_owned().await),
+        None => None,
+    };
+    let (cwd, command) = resolve(&state, task_id.as_deref(), project_id.as_deref(), kind)?;
     let shell = std::env::var("SHELL").ok().filter(|shell| shell.starts_with('/')).unwrap_or_else(|| "/bin/zsh".into());
-    let runs = runs.inner().clone();
+    let registry = runs.inner().clone();
+    let starting = registry.clone();
     let emit = emitter(&app);
-    tauri::async_runtime::spawn_blocking(move || runs.start(&cwd, kind, command.as_deref().unwrap_or(""), emit, &shell, true))
-        .await.map_err(|e| format!("Could not start the {}: {e}", kind.name()))?
+    let info = tauri::async_runtime::spawn_blocking(move || starting.start(&cwd, kind, command.as_deref().unwrap_or(""), emit, &shell, true))
+        .await.map_err(|e| format!("Could not start the {}: {e}", kind.name()))??;
+    // A project target holds no task lock, so removal may land between resolve and the spawn.
+    // Re-check after the session is registered: a removal that finished earlier is caught here,
+    // and one that finishes later finds the session in `release_workspace`.
+    if let Err(reason) = resolve(&state, task_id.as_deref(), project_id.as_deref(), kind) {
+        if let Ok(session) = registry.by_id(&info.session_id) {
+            let _ = tauri::async_runtime::spawn_blocking(move || session.stop()).await;
+        }
+        return Err(reason);
+    }
+    Ok(info)
 }
 
 #[tauri::command]
-pub fn get_run(state: State<'_, MetadataState>, runs: State<'_, RunState>, task_id: String, kind: Option<ProjectCommandKind>) -> Result<RunLookup, String> {
+pub fn get_run(state: State<'_, MetadataState>, runs: State<'_, RunState>, task_id: Option<String>, project_id: Option<String>, kind: Option<ProjectCommandKind>) -> Result<RunLookup, String> {
     let kind = kind.unwrap_or_default();
-    let (cwd, _) = resolve(&state, &task_id, kind)?;
+    let (cwd, _) = resolve(&state, task_id.as_deref(), project_id.as_deref(), kind)?;
     let sessions = runs.sessions.lock().map_err(|_| "Could not lock the runs.".to_string())?;
     let run = sessions.get(&(cwd.clone(), kind)).map(|s| s.info());
     let generation = runs.generation.load(Ordering::SeqCst);
@@ -488,7 +513,9 @@ mod tests {
         let data: AppData = serde_json::from_slice(&fs::read(&state.data_path).unwrap()).unwrap();
         assert_eq!(data.projects[0].run_command.as_deref(), Some("printf '%s' 'hello world'"));
         assert_eq!(data.projects[0].build_command.as_deref(), Some("printf build"));
-        assert_eq!(resolve(&state, "a", ProjectCommandKind::Build).unwrap().1.as_deref(), Some("printf build"));
+        assert_eq!(resolve(&state, Some("a"), None, ProjectCommandKind::Build).unwrap().1.as_deref(), Some("printf build"));
+        assert_eq!(resolve(&state, None, Some("p"), ProjectCommandKind::Build).unwrap().1.as_deref(), Some("printf build"));
+        assert!(resolve(&state, Some("a"), Some("p"), ProjectCommandKind::Run).is_err());
         let runs = Harness::new();
         let running = runs.start(directory.path(), "sleep 30");
         save_command(&state, "p", ProjectCommandKind::Run, "printf next").unwrap();
@@ -500,6 +527,18 @@ mod tests {
         assert!(state.data.lock().unwrap().projects[0].build_command.is_none());
         assert!(save_command(&state, "p", ProjectCommandKind::Run, "bad\0command").is_err());
         assert!(save_command(&state, "p", ProjectCommandKind::Build, "bad\0command").is_err());
+    }
+
+    #[test]
+    fn a_project_target_resolves_its_local_folder_without_a_chat() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = metadata(directory.path(), vec![]);
+        save_command(&state, "p", ProjectCommandKind::Run, "printf welcome").unwrap();
+        let (cwd, command) = resolve(&state, None, Some("p"), ProjectCommandKind::Run).unwrap();
+        assert_eq!(cwd, directory.path().canonicalize().unwrap());
+        assert_eq!(command.as_deref(), Some("printf welcome"));
+        assert!(resolve(&state, None, Some("missing"), ProjectCommandKind::Run).is_err());
+        assert!(resolve(&state, None, None, ProjectCommandKind::Run).is_err());
     }
 
     #[test]
@@ -692,7 +731,7 @@ mod tests {
         metadata.mutate(|data| { data.tasks[0].workspace_path = new.to_string_lossy().into_owned(); Ok(()) }).unwrap();
         runs.0.release_workspace(&metadata, old.to_str().unwrap(), false).await.unwrap();
         assert!(runs.0.by_id(&run.session_id).is_err());
-        assert!(resolve(&metadata, "a", ProjectCommandKind::Run).unwrap().0.ends_with("new"));
+        assert!(resolve(&metadata, Some("a"), None, ProjectCommandKind::Run).unwrap().0.ends_with("new"));
         });
     }
 
@@ -713,10 +752,10 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let metadata = metadata(directory.path(), vec![task("a", directory.path())]);
         metadata.mutate(|data| { data.tasks[0].archived = true; Ok(()) }).unwrap();
-        assert!(resolve(&metadata, "a", ProjectCommandKind::Run).is_err());
-        assert!(resolve(&metadata, "a", ProjectCommandKind::Build).is_err());
+        assert!(resolve(&metadata, Some("a"), None, ProjectCommandKind::Run).is_err());
+        assert!(resolve(&metadata, Some("a"), None, ProjectCommandKind::Build).is_err());
         metadata.mutate(|data| { data.tasks[0].archived = false; data.tasks[0].kind = TaskKind::Chat; Ok(()) }).unwrap();
-        assert!(resolve(&metadata, "a", ProjectCommandKind::Build).is_err());
+        assert!(resolve(&metadata, Some("a"), None, ProjectCommandKind::Build).is_err());
         let runs = Harness::new();
         assert!(runs.0.start(&directory.path().join("missing"), ProjectCommandKind::Run, "echo never", Arc::new(|_| {}), "/bin/sh", false).is_err());
     }

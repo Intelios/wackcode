@@ -42,6 +42,7 @@ import type {
   PackageSearchResult,
   ProjectRecord,
   ProjectCommandKind,
+  ProjectCommandTarget,
   PromptConfig,
   ProviderRecord,
   QuestionAnswer,
@@ -382,9 +383,9 @@ export const api = {
   revealPath: (path: string, select = false) => invoke<void>("reveal_path", { path, select }),
   saveProjectRunCommand: (projectId: string, command: string) => invoke<ProjectRecord>("save_project_run_command", { projectId, command }),
   saveProjectBuildCommand: (projectId: string, command: string) => invoke<ProjectRecord>("save_project_build_command", { projectId, command }),
-  startRun: (taskId: string, kind: ProjectCommandKind = "run") => invoke<RunInfo>("start_run", { taskId, kind }),
+  startRun: (target: ProjectCommandTarget, kind: ProjectCommandKind = "run") => invoke<RunInfo>("start_run", { ...target, kind }),
   stopRun: (sessionId: string) => invoke<RunInfo>("stop_run", { sessionId }),
-  getRun: (taskId: string, kind: ProjectCommandKind = "run") => invoke<RunLookup>("get_run", { taskId, kind }),
+  getRun: (target: ProjectCommandTarget, kind: ProjectCommandKind = "run") => invoke<RunLookup>("get_run", { ...target, kind }),
   attachRun: (sessionId: string, attachmentId: string, cols: number, rows: number, onFrame: (frame: RunFrame) => void) => {
     const on_frame = new Channel<RunFrame>();
     on_frame.onmessage = onFrame;

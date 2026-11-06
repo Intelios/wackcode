@@ -1769,6 +1769,8 @@ export type TerminalFrame =
   | { type: "busy"; busy: boolean };
 
 export type ProjectCommandKind = "run" | "build";
+/** A chat's checkout, or a project's local folder before a chat exists. */
+export type ProjectCommandTarget = { taskId: string } | { projectId: string };
 export type RunStatus = "running" | "stopping" | "finished" | "failed" | "stopped";
 /** Runtime-only snapshot, shared by canonical checkout folder and command kind. */
 export interface RunInfo {

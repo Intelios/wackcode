@@ -3,6 +3,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ProjectCommandKind, ProjectRecord, RunInfo } from "../types";
 import { runIsActive } from "../run-state";
 import { Icon } from "./Icons";
+import { GlassPlatter } from "./ui/GlassPlatter";
 import { Popover } from "./ui/Popover";
 import { Tooltip } from "./ui/Tooltip";
 
@@ -15,10 +16,14 @@ interface RunButtonProps {
   onRun: () => Promise<void>;
   onStop: () => Promise<void>;
   onShowOutput: () => void;
+  /** Draft commands use the project's local folder rather than a future chat's worktree. */
+  location?: "chat" | "project";
+  popoverSide?: "top" | "bottom";
+  glass?: boolean;
 }
 
-/** The project owns configuration; the selected checkout owns execution. */
-export function RunButton({ kind = "run", project, workspacePath, run, onSave, onRun, onStop, onShowOutput }: RunButtonProps) {
+/** The project owns configuration; a chat checkout or its local project folder owns execution. */
+export function RunButton({ kind = "run", project, workspacePath, run, onSave, onRun, onStop, onShowOutput, location = "chat", popoverSide = "bottom", glass = false }: RunButtonProps) {
   const reduce = useReducedMotion();
   const id = useId();
   const anchor = useRef<HTMLButtonElement>(null);
@@ -59,7 +64,8 @@ export function RunButton({ kind = "run", project, workspacePath, run, onSave, o
   }
 
   return (
-    <div className={"project-run-control " + (active ? "running" : "")}>
+    <div className={`project-run-control${active ? " running" : ""}${glass ? " glass" : ""}`}>
+      {glass && <GlassPlatter />}
       <Tooltip label={active ? "Stop " + run?.command : configuredCommand ?? `Set a project ${kind} command`} side="bottom">
         <button type="button" className="panel-button project-run-main" disabled={disabled}
           aria-label={stopping ? `Stopping ${kind}…` : pending === "start" ? `Starting ${kind}…` : label}
@@ -81,7 +87,7 @@ export function RunButton({ kind = "run", project, workspacePath, run, onSave, o
         onClick={() => open ? setOpen(false) : edit()}>
         <Icon name="chevron" />
       </button>
-      <Popover anchor={anchor} open={open} onClose={() => setOpen(false)} side="bottom" align="end">
+      <Popover anchor={anchor} open={open} onClose={() => setOpen(false)} side={popoverSide} align="end" glass={glass}>
         <form className="run-command-editor" role="dialog" aria-label={`Project ${kind} command`}
           onSubmit={(event) => { event.preventDefault(); if (!disabled) void save(false); }}>
           <div className="run-editor-heading"><span>{title} command</span><strong>{project.name}</strong></div>
@@ -92,7 +98,7 @@ export function RunButton({ kind = "run", project, workspacePath, run, onSave, o
           <p className="run-command-folder" title={workspacePath}><Icon name="folder" />{workspacePath}</p>
           <p className="run-command-help">{active
             ? `Edits apply to the next ${kind}. Chats in this folder share the current ${kind}.`
-            : "Saved for this project. Runs in the current chat’s folder."}</p>
+            : location === "project" ? "Saved for this project. Runs in its local folder." : "Saved for this project. Runs in the current chat’s folder."}</p>
           {error && <p className="run-command-error" role="alert">{error}</p>}
           <div className="run-editor-actions">
             {run && <button type="button" className="text-button" onClick={() => { setOpen(false); onShowOutput(); }}>Show output</button>}

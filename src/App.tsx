@@ -79,6 +79,7 @@ import type {
   PackageResourceKind,
   ProjectRecord,
   ProjectCommandKind,
+  ProjectCommandTarget,
   ProviderRecord,
   RestoreResult,
   RunEvent,
@@ -117,7 +118,7 @@ import { Composer } from "./components/Composer";
 import { Icon } from "./components/Icons";
 import { DuckMark } from "./components/DuckMark";
 import { AreaHop } from "./components/AreaHop";
-import { ProjectBar } from "./components/ProjectBar";
+import { ProjectBar, type ProjectCommandActions } from "./components/ProjectBar";
 import { TextSwap } from "./components/TextSwap";
 import type { McpActions } from "./components/McpSection";
 import { SettingsPage, type SectionId } from "./components/SettingsPage";
@@ -337,7 +338,7 @@ export default function App() {
    *  and the sidebar row's crossfade (TextSwap keys on it). */
   const [titlePulses, setTitlePulses] = useState<Record<string, number>>({});
   const [runs, setRuns] = useState(EMPTY_RUN_REGISTRY);
-  const [runFolder, setRunFolder] = useState<{ taskId: string; workspacePath: string; cwd: string }>();
+  const [runFolder, setRunFolder] = useState<{ workspacePath: string; cwd: string }>();
   /** Bumped to watch the shown sub-agent again (a failed watch, a gap, a restarted worker). */
   const [watchNonce, setWatchNonce] = useState(0);
   /** The chat whose worker streams a sub-agent to the panel, so it can be told to stop. */
@@ -463,9 +464,20 @@ export default function App() {
   const composerKeyRef = useRef(composerDraftKey);
   composerKeyRef.current = composerDraftKey;
   const composerTab = [...tabs.state.tabs, ...tabs.state.closed.map((entry) => entry.tab)].find((tab) => tab.composerKey === composerDraftKey);
+  const draftProject = data.projects.find((project) => project.id === draft?.projectId);
   const selectedProject = data.projects.find((project) => project.id === selectedTask?.projectId);
-  const commandFolder = selectedTask?.kind === "code" && !selectedTask.archived
-    ? runFolder?.workspacePath === selectedTask.workspacePath ? runFolder.cwd : selectedTask.workspacePath : undefined;
+  // Project commands need a project on both sides: a chat without one has no command target,
+  // and its folder may belong to a project whose run must not leak into this chat.
+  const commandTask = selectedTask?.kind === "code" && !selectedTask.archived && selectedProject ? selectedTask : undefined;
+  const commandProject = commandTask ? selectedProject : !selectedTask && area === "code" ? draftProject : undefined;
+  const commandWorkspacePath = commandTask?.workspacePath ?? commandProject?.path;
+  const commandTarget = useMemo<ProjectCommandTarget | undefined>(() => commandTask
+    ? { taskId: commandTask.id }
+    : commandProject ? { projectId: commandProject.id } : undefined, [commandTask?.id, commandProject?.id]);
+  const commandTargetRef = useRef(commandTarget);
+  commandTargetRef.current = commandTarget;
+  const commandFolder = commandWorkspacePath
+    ? runFolder?.workspacePath === commandWorkspacePath ? runFolder.cwd : commandWorkspacePath : undefined;
   const selectedRun = commandFolder ? runs.sessions[runKey(commandFolder, "run")] : undefined;
   const selectedBuild = commandFolder ? runs.sessions[runKey(commandFolder, "build")] : undefined;
   const runtime = selectedTaskId ? runtimes[selectedTaskId] : undefined;
@@ -542,20 +554,25 @@ export default function App() {
   const missingCanvasKey = panelTabs.tabs.find((view) => view.kind === "canvas" && view.taskId === selectedTaskId && canvasMessages !== undefined
     && selectedCanvases.size === 0);
   const visiblePanelTabs = selectedTask?.archived ? [] : panelTabs.tabs.filter((view) => view !== missingSubagentKey && view !== missingCanvasKey
-    && (area !== "chat" || view.kind === "browser") && (!isTaskBound(view) || view.taskId === selectedTaskId));
+    && (area !== "chat" || view.kind === "browser") && (!isTaskBound(view) || view.taskId === selectedTaskId)
+    && (selectedTask !== undefined || ((view.kind === "run" || view.kind === "build") && commandProject !== undefined)));
   const panelView = panelTabs.open
     ? visiblePanelTabs.find((view) => swapKey(view) === panelTabs.active) ?? visiblePanelTabs.at(-1) ?? null
     : null;
-  const shownSubagent = panelView?.kind === "subagent" ? panelView : undefined;
+  // A draft shows output only for a session it actually has; remembered Run/Build tabs wait for
+  // a chat instead of opening over the welcome screen.
+  const panelHasSession = panelView?.kind === "run" ? Boolean(selectedRun) : panelView?.kind === "build" ? Boolean(selectedBuild) : false;
+  const shownPanelView = selectedTask || panelHasSession ? panelView : null;
+  const shownSubagent = shownPanelView?.kind === "subagent" ? shownPanelView : undefined;
   // An expanded panel floats over the chat, so the chat column gets the panel's share.
-  const panelFloats = panelExpanded && canExpand(panelView);
+  const panelFloats = panelExpanded && canExpand(shownPanelView);
   // Until the user drags it, the panel opens wide: half the room beside the sidebar. The Canvas
   // tab keeps its own, roomier width, so a board to look around never squeezes into a diff's.
-  const canvasInFront = panelView?.kind === "canvas";
+  const canvasInFront = shownPanelView?.kind === "canvas";
   const panelPref = canvasInFront ? canvasWidth ?? canvasPanelWidth(windowWidth, sidebarOpen) : panelWidth ?? balancedPanelWidth(windowWidth, sidebarOpen);
   const dragPanelWidth = canvasInFront ? setCanvasWidth : setPanelWidth;
   const userPanelWidth = canvasInFront ? canvasWidth : panelWidth;
-  const shell = solveShell({ windowWidth, sidebarOpen, panelOpen: Boolean(selectedTask && panelView) && !settingsOpen, panelPref });
+  const shell = solveShell({ windowWidth, sidebarOpen, panelOpen: Boolean(shownPanelView) && !settingsOpen, panelPref });
   const sidebarWidth = shell.sidebarShown ? SIDEBAR_W : 0;
   const chatSize = shellChatSize(panelFloats ? windowWidth - sidebarWidth : shell.chatWidth);
   const toggleSidebar = () => {
@@ -1055,25 +1072,31 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!selectedTask?.projectId || selectedTask.kind === "chat" || selectedTask.archived) { setRunFolder(undefined); return; }
+    if (!commandTarget || !commandWorkspacePath) { setRunFolder(undefined); return; }
     let disposed = false;
-    const taskId = selectedTask.id;
-    const workspacePath = selectedTask.workspacePath;
-    void Promise.all([api.getRun(taskId, "run"), api.getRun(taskId, "build")]).then((lookups) => {
+    const target = commandTarget;
+    const workspacePath = commandWorkspacePath;
+    void Promise.all([api.getRun(target, "run"), api.getRun(target, "build")]).then((lookups) => {
       if (disposed) return;
-      setRunFolder({ taskId, workspacePath, cwd: lookups[0].cwd });
+      setRunFolder({ workspacePath, cwd: lookups[0].cwd });
       setRuns((current) => lookups.reduce((registry, lookup) => applyRunEvent(registry, lookup.run ? { type: "changed", run: lookup.run }
         : { type: "removed", kind: lookup.kind, cwd: lookup.cwd, sessionId: "", generation: lookup.generation }), current));
     }).catch((reason) => { if (!disposed) setGlobalError(String(reason)); });
     return () => { disposed = true; };
-  }, [selectedTask?.id, selectedTask?.kind, selectedTask?.workspacePath, selectedTask?.projectId, selectedTask?.archived]);
+  }, [commandTarget, commandWorkspacePath]);
 
-  async function launchRun(taskId: string, kind: ProjectCommandKind = "run") {
-    const run = await api.startRun(taskId, kind);
+  async function launchRun(target: ProjectCommandTarget, kind: ProjectCommandKind = "run") {
+    const originComposerKey = composerDraftKey;
+    const originWorkspacePath = commandWorkspacePath;
+    const run = await api.startRun(target, kind);
     setRuns((current) => applyRunEvent(current, { type: "changed", run }));
-    if (selectedTaskRef.current === taskId) {
-      const task = data.tasks.find((item) => item.id === taskId);
-      if (task) setRunFolder({ taskId, workspacePath: task.workspacePath, cwd: run.cwd });
+    // Only pull the output forward while the same draft or chat still has this target on screen.
+    const currentTarget = commandTargetRef.current;
+    const stillSelected = composerKeyRef.current === originComposerKey && currentTarget && ("taskId" in target
+      ? "taskId" in currentTarget && currentTarget.taskId === target.taskId
+      : "projectId" in currentTarget && currentTarget.projectId === target.projectId);
+    if (stillSelected && originWorkspacePath) {
+      setRunFolder({ workspacePath: originWorkspacePath, cwd: run.cwd });
       showRunOutput(kind);
     }
   }
@@ -1798,7 +1821,6 @@ export default function App() {
     retainedDraftKeys.current = keys;
   }, [tabs.state]);
 
-  const draftProject = data.projects.find((project) => project.id === draft?.projectId);
   const draftChoice = draft ? draft.choice ?? defaultChoice(draft.projectId) : undefined;
 
   // Keep one unattached worker warm while anything that can send is on screen: the draft
@@ -3401,11 +3423,11 @@ export default function App() {
   });
   const headerHandlers = useStableCallbacks<CallbackProps<ComponentProps<typeof ChatHeader>>>({
     onSaveRunCommand: (command) => selectedProject ? saveRunCommand(selectedProject.id, command) : Promise.reject("Choose a project first."),
-    onRun: () => selectedTask ? launchRun(selectedTask.id) : Promise.resolve(),
+    onRun: () => selectedTask ? launchRun({ taskId: selectedTask.id }) : Promise.resolve(),
     onStopRun: () => selectedRun ? stopRun(selectedRun) : Promise.resolve(),
     onShowRunOutput: () => showRunOutput(),
     onSaveBuildCommand: (command) => selectedProject ? saveRunCommand(selectedProject.id, command, "build") : Promise.reject("Choose a project first."),
-    onBuild: () => selectedTask ? launchRun(selectedTask.id, "build") : Promise.resolve(),
+    onBuild: () => selectedTask ? launchRun({ taskId: selectedTask.id }, "build") : Promise.resolve(),
     onStopBuild: () => selectedBuild ? stopRun(selectedBuild) : Promise.resolve(),
     onShowBuildOutput: () => showRunOutput("build"),
     onListBranches: () => api.gitBranches({ taskId: selectedTask!.id }),
@@ -3433,6 +3455,18 @@ export default function App() {
     onAddProject: () => void addProject(), onListBranches: listProjectBranches,
     onCheckoutBranch: (projectId, name, kind) => checkoutBranch({ projectId }, name, kind)
   });
+  const draftCommandHandlers = useStableCallbacks<CallbackProps<ProjectCommandActions>>({
+    onSaveRunCommand: (command) => commandProject ? saveRunCommand(commandProject.id, command) : Promise.reject("Choose a project first."),
+    onRun: () => commandTarget ? launchRun(commandTarget) : Promise.reject("Choose a project first."),
+    onStopRun: () => selectedRun ? stopRun(selectedRun) : Promise.resolve(),
+    onShowRunOutput: () => showRunOutput(),
+    onSaveBuildCommand: (command) => commandProject ? saveRunCommand(commandProject.id, command, "build") : Promise.reject("Choose a project first."),
+    onBuild: () => commandTarget ? launchRun(commandTarget, "build") : Promise.reject("Choose a project first."),
+    onStopBuild: () => selectedBuild ? stopRun(selectedBuild) : Promise.resolve(),
+    onShowBuildOutput: () => showRunOutput("build")
+  });
+  const projectCommands = useMemo<ProjectCommandActions>(() => ({ ...draftCommandHandlers, run: selectedRun, build: selectedBuild }),
+    [draftCommandHandlers, selectedRun, selectedBuild]);
   const teamHandlers = useStableCallbacks({
     onOpenSettings: openSubagentSettings, onTeamChange: (team: SubagentModel | null) => void setTaskTeam(team)
   });
@@ -3445,8 +3479,8 @@ export default function App() {
     [enabledAppCommands, Boolean(selectedTask), runtime?.slashCommands, draftCatalog?.commands]);
   const composerHeader = useMemo(() => !selectedTask ? <ProjectBar projects={data.projects}
     projectId={draft?.projectId ?? null} useWorktree={draft?.useWorktree ?? false} pinned={pinnedProjects}
-    glass={effectiveComposerStyle === "classicGlass"} {...projectHandlers} /> : undefined,
-    [Boolean(selectedTask), data.projects, draft?.projectId, draft?.useWorktree, pinnedProjects, effectiveComposerStyle, projectHandlers]);
+    glass={effectiveComposerStyle === "classicGlass"} commands={projectCommands} {...projectHandlers} /> : undefined,
+    [Boolean(selectedTask), data.projects, draft?.projectId, draft?.useWorktree, pinnedProjects, effectiveComposerStyle, projectHandlers, projectCommands]);
 
   const chatHandlers = useStableCallbacks<CallbackProps<ChatAreaProps>>({
     onSetFavorite: setModelFavorite, onMessageAction, onVisualSend, onVisualLink,
@@ -3514,7 +3548,7 @@ export default function App() {
   return (
     <NavigationScope.Provider value={`${area}:${composerDraftKey}:${settingsOpen}`}>
     <ContextMenuProvider
-      scope={`${area}-${composerDraftKey}-${settingsOpen}-${panelView?.kind ?? ""}-${selectedBusy}-${archivedOpen}-${Boolean(confirm || restoreDialog || subscriptionLogin)}`}
+      scope={`${area}-${composerDraftKey}-${settingsOpen}-${shownPanelView?.kind ?? ""}-${selectedBusy}-${archivedOpen}-${Boolean(confirm || restoreDialog || subscriptionLogin)}`}
       copyText={writeText}
       readText={readText}
       openLink={api.revealPath}
@@ -3526,7 +3560,7 @@ export default function App() {
         { label: "Settings…", icon: <Icon name="settings" />, hint: "⌘,", onSelect: openSettings }
       ]}
     >
-    <div ref={imageReadabilityRoot} className={`app-shell${rebuilding ? " rebuild" : ""}${panelExpanded && canExpand(panelView) ? " panel-expanded" : ""}${showChatTabBar ? " panel-has-tabs" : ""}${!settingsOpen && !shell.sidebarShown ? " sidebar-hidden" : ""}`}
+    <div ref={imageReadabilityRoot} className={`app-shell${rebuilding ? " rebuild" : ""}${panelExpanded && canExpand(shownPanelView) ? " panel-expanded" : ""}${showChatTabBar ? " panel-has-tabs" : ""}${!settingsOpen && !shell.sidebarShown ? " sidebar-hidden" : ""}`}
       style={{ "--sidebar-w": `${settingsOpen ? SIDEBAR_W : sidebarWidth}px`, ...imageReadability.result?.variables } as CSSProperties}
       data-image-readability={imageReadability.result?.polarity}
       data-area={area} data-screen={settingsOpen ? "settings" : "workspace"} data-dynamic-space onClickCapture={(event) => {
@@ -3862,17 +3896,17 @@ export default function App() {
         )}
       </main>
 
-      {selectedTask && <SidePanel
+      {(selectedTask || commandProject) && <SidePanel
         key={tabsEnabled ? activeTab?.id : "panel"}
-        view={panelView}
+        view={shownPanelView}
         width={shell.panelWidth || panelPref}
         onWidthChange={dragPanelWidth}
         onResetWidth={() => dragPanelWidth(null)}
         immediate={windowResizing}
-        label={panelView?.kind === "subagent"
-          ? `SubAgent ${displayAgentName(shownSubagentCall?.details.results[panelView.index]?.agent ?? "")}`.trim()
-          : panelView?.kind === "browser" ? "Browser"
-          : panelTabItems.find((item) => item.view === panelView)?.label ?? "Side panel"}
+        label={shownPanelView?.kind === "subagent"
+          ? `SubAgent ${displayAgentName(shownSubagentCall?.details.results[shownPanelView.index]?.agent ?? "")}`.trim()
+          : shownPanelView?.kind === "browser" ? "Browser"
+          : panelTabItems.find((item) => item.view === shownPanelView)?.label ?? "Side panel"}
         tabs={panelTabItems}
         addable={panelAddItems}
         expanded={panelExpanded}
@@ -3881,7 +3915,21 @@ export default function App() {
         onAddTab={(view) => changePanel((tabs) => openTab(tabs, view))}
         onToggleExpand={togglePanelExpanded}
         onHide={hideSidePanel}
-      >{(view) => view.kind === "browser" ? (
+      >{(view) => {
+        if (view.kind === "run" || view.kind === "build") return (
+          <RunPanel kind={view.kind} run={view.kind === "build" ? selectedBuild : selectedRun} appearance={data.appearance}
+            configured={Boolean(view.kind === "build" ? commandProject?.buildCommand : commandProject?.runCommand)}
+            onRun={() => {
+              const target = commandTarget;
+              if (target) void launchRun(target, view.kind).catch((reason) => setGlobalError(String(reason)));
+            }}
+            onStop={() => {
+              const run = view.kind === "build" ? selectedBuild : selectedRun;
+              if (run) void stopRun(run).catch((reason) => setGlobalError(String(reason)));
+            }} />
+        );
+        if (!selectedTask) return null;
+        return view.kind === "browser" ? (
         <BrowserPanel
           taskId={view.taskId}
           state={browsers[view.taskId]}
@@ -3905,14 +3953,6 @@ export default function App() {
             run: async () => updateBrowser(await api.browserReset(view.taskId))
           })}
         />
-      ) : view.kind === "run" || view.kind === "build" ? (
-        <RunPanel kind={view.kind} run={view.kind === "build" ? selectedBuild : selectedRun} appearance={data.appearance}
-          configured={Boolean(!selectedTask.archived && (view.kind === "build" ? selectedProject?.buildCommand : selectedProject?.runCommand))}
-          onRun={() => void launchRun(selectedTask.id, view.kind).catch((reason) => setGlobalError(String(reason)))}
-          onStop={() => {
-            const run = view.kind === "build" ? selectedBuild : selectedRun;
-            if (run) void stopRun(run).catch((reason) => setGlobalError(String(reason)));
-          }} />
       ) : view.kind === "terminal" ? (
         <TerminalPanel
           key={selectedTask.id}
@@ -3993,7 +4033,7 @@ export default function App() {
         onOpenPr={(url) => { void api.revealPath(url).catch((reason) => setGlobalError(String(reason))); }}
         onComments={saveDiffComments}
         onAddressComments={addressDiffComments}
-      />}</SidePanel>}
+      />;}}</SidePanel>}
         </>
       )}
 

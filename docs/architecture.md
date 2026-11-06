@@ -90,9 +90,12 @@ A `chat` task never has a project or a worktree (`validate_task_kind`). The host
 ## Project Run and Build lifecycle
 
 `RunState` owns one Run and one Build command per canonical workspace folder, separate from chat
-terminals and workers. The registry lock serializes starts; the task lock prevents a launch
-from racing archive/delete/worktree conversion. Commands and working folders are immutable
-runtime snapshots. Only the project's nullable `runCommand` and `buildCommand` are persisted,
+terminals and workers. `start_run`/`get_run` take exactly one chat or project target: a chat uses its
+checkout, while a welcome draft uses the project's local folder without creating a chat. The registry
+lock serializes starts; the task lock prevents a chat-targeted launch from racing archive/delete/worktree
+conversion. A project target holds no task lock, so a launch re-checks its target after the session is
+registered: a removal that finished earlier makes the re-check stop it, and one that finishes later
+finds it in `release_workspace`. Commands and working folders are immutable runtime snapshots. Only the project's nullable `runCommand` and `buildCommand` are persisted,
 via `MetadataState::mutate`. The two commands have independent sessions and output, so a build
 can run beside a dev server. Chat mode cannot launch either command.
 
@@ -106,7 +109,8 @@ finishes, preventing a second launch from overlapping shutdown.
 
 Hiding a panel/window or switching chats keeps a run alive. Archive, delete and moving a chat
 release the old folder only when no unarchived project chat still uses it. Worktree deletion
-stops its run before deleting files. Project removal and app quit also clean up runs; quit
+stops its run before deleting files. Project removal releases the project's local root as well as each
+chat's checkout, so a draft-launched command cannot outlive its project. App quit cleans up runs and
 stops independent checkouts in parallel. Configuration survives restart, sessions/output do
 not. Commands must remain in the foreground; detached daemons are outside this lifecycle.
 

@@ -162,6 +162,81 @@ describe("streamed saved history", () => {
 });
 
 describe("App project builds", () => {
+  it("keeps a remembered output tab closed on the welcome screen until a command runs", async () => {
+    localStorage.setItem("wackcode:sidePanel", JSON.stringify({ tabs: ["run"], active: "run", open: true }));
+    const project = { id: "project", name: "Project", path: "/tmp", gitRoot: null, gitHasHead: false, runCommand: "pnpm dev", buildCommand: null, branch: null, createdAt: "now" };
+    bootstrap(false, false, { projects: [project], tasks: [] });
+    await screen.findByRole("button", { name: "Run" });
+    expect(screen.queryByLabelText("run output")).not.toBeInTheDocument();
+  });
+
+  it("never asks the host for project commands in a chat with no project", async () => {
+    bootstrap(false);
+    fireEvent.click(await screen.findByRole("button", { name: "Chat a" }));
+    await screen.findByRole("heading", { name: "Chat a" });
+    expect(api.getRun).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("shares a draft-launched run with a chat in the same folder", async () => {
+    const project = { id: "project", name: "Project", path: "/tmp/shared", gitRoot: null, gitHasHead: false, runCommand: "pnpm dev", buildCommand: null, branch: null, createdAt: "now" };
+    const running: RunInfo = { kind: "run", sessionId: "shared-run", generation: 1, revision: 1, cwd: "/tmp/shared", command: "pnpm dev", status: "running", exit: null };
+    vi.mocked(api.startRun).mockResolvedValue(running);
+    vi.mocked(api.getRun).mockImplementation(async (target, kind = "run") => ({
+      kind, cwd: "/tmp/shared", generation: "taskId" in target ? 1 : 0, run: "taskId" in target && kind === "run" ? running : null
+    }));
+    bootstrap(false, false, { projects: [project], tasks: [{ ...task("a"), projectId: "project", workspacePath: "/tmp/shared" }] });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Run" }));
+    await waitFor(() => expect(api.startRun).toHaveBeenCalledWith({ projectId: "project" }, "run"));
+    expect(await screen.findByLabelText("run output")).toHaveTextContent("pnpm dev:running");
+    fireEvent.click(screen.getByRole("button", { name: "Chat a" }));
+    await screen.findByRole("heading", { name: "Chat a" });
+    await waitFor(() => expect(api.getRun).toHaveBeenCalledWith({ taskId: "a" }, "run"));
+    expect(await screen.findByLabelText("run output")).toHaveTextContent("pnpm dev:running");
+    expect(within(document.querySelector(".workspace-header") as HTMLElement).getByRole("button", { name: "Stop run" })).toBeInTheDocument();
+  });
+
+  it("does not pull output forward after the draft's project changes mid-launch", async () => {
+    const first = { id: "p1", name: "First", path: "/tmp/one", gitRoot: null, gitHasHead: false, runCommand: "pnpm dev", buildCommand: null, branch: null, createdAt: "now" };
+    const second = { ...first, id: "p2", name: "Second", path: "/tmp/two" };
+    const pending = deferred<RunInfo>();
+    vi.mocked(api.startRun).mockReturnValue(pending.promise);
+    bootstrap(false, false, { projects: [first, second], tasks: [] });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Run" }));
+    await waitFor(() => expect(api.startRun).toHaveBeenCalledWith({ projectId: "p1" }, "run"));
+    fireEvent.click(screen.getByRole("button", { name: /Switch project/ }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Choose project" })).getByText("Second"));
+    await act(async () => pending.resolve({ kind: "run", sessionId: "one", generation: 1, revision: 1, cwd: "/tmp/one", command: "pnpm dev", status: "running", exit: null }));
+    expect(screen.queryByLabelText("run output")).not.toBeInTheDocument();
+  });
+
+  it("configures and launches project commands from the welcome screen without creating a chat", async () => {
+    const project = { id: "project", name: "Project", path: "/tmp", gitRoot: null, gitHasHead: false, runCommand: null, buildCommand: "pnpm build", branch: null, createdAt: "now" };
+    const running: RunInfo = { kind: "run", sessionId: "welcome-run", generation: 1, revision: 1, cwd: "/tmp", command: "pnpm dev", status: "running", exit: null };
+    vi.mocked(api.saveProjectRunCommand).mockResolvedValue({ ...project, runCommand: "pnpm dev" });
+    vi.mocked(api.startRun).mockResolvedValue(running);
+    vi.mocked(api.stopRun).mockResolvedValue({ ...running, revision: 2, status: "stopped" });
+    bootstrap(false, false, { projects: [project], tasks: [] });
+
+    const run = await screen.findByRole("button", { name: "Run" });
+    expect(screen.getByRole("button", { name: "Build" })).toBeInTheDocument();
+    await waitFor(() => expect(api.getRun).toHaveBeenCalledWith({ projectId: "project" }, "run"));
+    fireEvent.click(run);
+    expect(screen.getByText("Saved for this project. Runs in its local folder.")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Command"), { target: { value: "pnpm dev" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save & Run" }));
+
+    await waitFor(() => expect(api.startRun).toHaveBeenCalledWith({ projectId: "project" }, "run"));
+    expect(api.saveProjectRunCommand).toHaveBeenCalledWith("project", "pnpm dev");
+    expect(api.createTask).not.toHaveBeenCalled();
+    expect(api.prompt).not.toHaveBeenCalled();
+    expect(await screen.findByLabelText("run output")).toHaveTextContent("pnpm dev:running");
+    fireEvent.click(screen.getByRole("button", { name: "Stop run" }));
+    await waitFor(() => expect(api.stopRun).toHaveBeenCalledWith("welcome-run"));
+  });
+
   it("saves and launches a build beside Run, shares its output across chats, and stops only the build", async () => {
     const project = { id: "project", name: "Project", path: "/tmp", gitRoot: null, gitHasHead: false, runCommand: "pnpm dev", buildCommand: null, branch: null, createdAt: "now" };
     const run: RunInfo = { kind: "run", sessionId: "server", generation: 1, revision: 1, cwd: "/tmp", command: "pnpm dev", status: "running", exit: null };
@@ -173,10 +248,10 @@ describe("App project builds", () => {
     bootstrap(false, false, { projects: [project], tasks: ["a", "b"].map((id) => ({ ...task(id), projectId: "project", workspacePath: "/tmp" })) });
     fireEvent.click(await screen.findByRole("button", { name: "Chat a" }));
     await screen.findByRole("button", { name: "Stop run" });
-    fireEvent.click(screen.getByRole("button", { name: "Build" }));
+    fireEvent.click(within(document.querySelector(".workspace-header") as HTMLElement).getByRole("button", { name: "Build" }));
     fireEvent.change(screen.getByLabelText("Command"), { target: { value: "pnpm build" } });
     fireEvent.click(screen.getByRole("button", { name: "Save & Build" }));
-    await waitFor(() => expect(api.startRun).toHaveBeenCalledWith("a", "build"));
+    await waitFor(() => expect(api.startRun).toHaveBeenCalledWith({ taskId: "a" }, "build"));
     expect(api.saveProjectBuildCommand).toHaveBeenCalledWith("project", "pnpm build");
     expect(api.saveProjectRunCommand).not.toHaveBeenCalled();
     expect(await screen.findByLabelText("build output")).toHaveTextContent("pnpm build:running");

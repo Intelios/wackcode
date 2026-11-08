@@ -1332,6 +1332,35 @@ describe("Transcript tail window", () => {
     expect(screen.getByText("Request 29")).toBeInTheDocument();
   });
 
+  it("keeps the reading row in place when scrolling reveals older turns", () => {
+    const history = longHistory();
+    const view = render(<Transcript messages={history} running={false} scopeKey="reveal-anchor" />);
+    const el = scroller();
+    const height = () => el.querySelectorAll(".msg.user").length * 200;
+    let top = 0;
+    Object.defineProperties(el, {
+      clientHeight: { configurable: true, value: 500 },
+      scrollHeight: { configurable: true, get: height },
+      scrollTop: { configurable: true, get: () => top, set: (value: number) => { top = Math.max(0, Math.min(value, height() - 500)); } }
+    });
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this === el) return { top: 0, bottom: 500, height: 500 } as DOMRect;
+      const row = /^message:([ua])(\d+)/.exec(this.dataset.transcriptAnchor ?? "");
+      const first = Number(el.querySelector<HTMLElement>("[data-turn]")!.dataset.turn!.slice(1));
+      const y = row ? (Number(row[2]) - first) * 200 + (row[1] === "a" ? 100 : 0) : 0;
+      return { top: y - top, bottom: y - top + 80, height: 80 } as DOMRect;
+    });
+    view.rerender(<Transcript messages={history} running={false} scopeKey="reveal-anchor" />);
+    fireEvent.scroll(el);
+    fireEvent.wheel(el, { deltaY: -1_050 });
+    el.scrollTop = 50;
+    fireEvent.scroll(el);
+
+    expect(el.querySelectorAll(".msg.user")).toHaveLength(16);
+    expect(el.scrollTop).toBe(1_650);
+    expect(screen.getByText("Request 37").closest(".msg")!.getBoundingClientRect().top).toBe(-50);
+  });
+
   it("reveals everything for short transcripts and keeps the saved depth across remounts", () => {
     const viewState = {};
     const view = render(<Transcript messages={longHistory(20)} running={false} scopeKey="short" viewState={viewState} />);

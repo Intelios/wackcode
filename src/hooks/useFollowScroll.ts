@@ -3,6 +3,14 @@ import { captureScroll, findAnchor, restoreScroll, type ScrollPosition, type Tra
 
 const BOTTOM_EPSILON = 1;
 
+// TEMP DEBUG
+const DBG = (typeof window !== "undefined" ? ((window as unknown as { __scrollLog?: unknown[] }).__scrollLog ??= []) : []) as unknown[];
+const dbg = (kind: string, data: Record<string, unknown>) => {
+  if (DBG.length > 4000) return;
+  DBG.push({ t: Math.round(performance.now()), kind, ...data });
+  console.warn(`[scrolldbg] ${kind}`, JSON.stringify(data));
+};
+
 /**
  * Keeps a scroll container pinned to the bottom while content grows, unless the
  * user scrolls up — then a "Jump to latest" affordance is shown instead.
@@ -50,10 +58,10 @@ export function useFollowScroll(memory?: TranscriptViewState, historyReady = tru
     }
   }, [memory]);
 
-  // Trailing capture: one walk at most every idle window during a gesture, and a final
-  // one after the last scroll event — not the per-event capture this used to be.
+  // Capture only after scroll idle. Reacquiring a held row mid-gesture can undo a
+  // compositor scroll before its delayed scroll event reaches us.
   const scheduleAnchorCapture = useCallback(() => {
-    if (anchorTimer.current) return;
+    if (anchorTimer.current) clearTimeout(anchorTimer.current);
     anchorTimer.current = setTimeout(() => {
       anchorTimer.current = undefined;
       captureAnchors();
@@ -73,6 +81,7 @@ export function useFollowScroll(memory?: TranscriptViewState, historyReady = tru
 
   const onWheel = (event: WheelEvent<HTMLDivElement>) => {
     const el = ref.current;
+    dbg("wheel", { deltaY: event.deltaY, top: el ? Math.round(el.scrollTop) : null });
     if (!el || event.defaultPrevented || event.deltaY === 0 || event.ctrlKey || event.metaKey) return;
     if (!(event.target instanceof Element) || !el.contains(event.target)) return;
     // Tool output/previews can scroll independently. A consumed wheel must not release
@@ -81,14 +90,16 @@ export function useFollowScroll(memory?: TranscriptViewState, historyReady = tru
       if (!/^(auto|scroll)$/.test(getComputedStyle(node).overflowY)) continue;
       if (event.deltaY < 0 ? node.scrollTop > 0 : node.scrollTop + node.clientHeight < node.scrollHeight) return;
     }
-    // A wheel that reaches the transcript means the user is moving: release the held row.
-    heldAnchor.current = null;
     if (event.deltaY < 0 && el.scrollHeight > el.clientHeight + BOTTOM_EPSILON) pauseFollowing();
+    // Detaching captures a row, but wheel intent must release it even before the first
+    // scroll event. The idle capture will acquire the user's new reading position.
+    heldAnchor.current = null;
   };
 
   const onScroll = () => {
     const el = ref.current;
     if (!el) return;
+    dbg("scroll", { top: Math.round(el.scrollTop), lastTop: Math.round(lastTop.current), gap: Math.round(el.scrollHeight - el.scrollTop - el.clientHeight), following: following.current, held: heldAnchor.current ? Math.round(heldAnchor.current.node.getBoundingClientRect().top - el.getBoundingClientRect().top - heldAnchor.current.offset) : null });
     if (el.scrollTop !== lastTop.current) {
       // The user moved, so the held row moved with the viewport — refresh its offset
       // rather than dropping it, or a mid-scroll reflow would restore a stale position.
@@ -112,6 +123,8 @@ export function useFollowScroll(memory?: TranscriptViewState, historyReady = tru
   const reconcile = useCallback(() => {
     const el = ref.current;
     if (!el) return;
+    const before = Math.round(el.scrollTop);
+    dbg("reconcile-in", { before, gap: Math.round(el.scrollHeight - el.scrollTop - el.clientHeight), following: following.current, held: heldAnchor.current ? heldAnchor.current.node.dataset.transcriptAnchor : null });
     // A cold history may arrive after the first paint. Keep the saved state intact until
     // there is a real transcript to anchor, rather than saving the empty placeholder.
     const position = restoring.current;
@@ -129,14 +142,15 @@ export function useFollowScroll(memory?: TranscriptViewState, historyReady = tru
       // Anchors are viewport-relative: use rects, never a nested wrapper's offsetTop.
       const delta = anchor.node.getBoundingClientRect().top - el.getBoundingClientRect().top - anchor.offset;
       if (Math.abs(delta) > BOTTOM_EPSILON) el.scrollTop += delta;
-    } else if (lastPosition.current && ready.current) {
-      // A branch change can retire the held row. Resolve the nearest surviving
-      // saved location before replacing that memory with the new layout.
+    } else if (anchor && lastPosition.current && ready.current) {
+      // A branch change can retire a held row. Only restore in that case: a null
+      // anchor was released by the user, and cached offsets predate their gesture.
       const node = restoreScroll(el, lastPosition.current);
       if (node) heldAnchor.current = { node, offset: node.getBoundingClientRect().top - el.getBoundingClientRect().top };
     }
     // Record our own writes so their delayed scroll events aren't user intent.
     lastTop.current = el.scrollTop;
+    if (Math.round(el.scrollTop) !== before) dbg("reconcile-out", { before, after: Math.round(el.scrollTop) });
     savePosition();
   }, [savePosition, memory]);
 

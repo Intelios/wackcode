@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useFollowScroll } from "./useFollowScroll";
 import type { TranscriptViewState } from "../transcript-view";
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 function TranscriptScroller({ chunk = 0 }: { chunk?: number }) {
   const { ref, onScroll, onWheel, detached, jumpToLatest, pauseFollowing, keepAnchor } = useFollowScroll();
@@ -143,6 +143,64 @@ describe("useFollowScroll", () => {
     expect(screen.getByText("Reading history")).toBeInTheDocument();
     for (let i = 0; i < 5; i++) stream(10);
     expect(el.scrollTop).toBe(698);
+  });
+
+  it.each(["before", "after"])("does not restore an old reading position when scroll events arrive %s the stream render", (timing) => {
+    const { el, stream, scroll } = setup();
+    const anchor = screen.getByTestId("anchor");
+    anchor.dataset.transcriptAnchor = "reading";
+    vi.spyOn(anchor, "getBoundingClientRect").mockImplementation(() => ({ top: 700 - el.scrollTop } as DOMRect));
+
+    fireEvent.wheel(el, { deltaY: -20 });
+    el.scrollTop = 680;
+    if (timing === "before") fireEvent.scroll(el);
+    stream(30);
+    expect(el.scrollTop).toBe(680);
+    if (timing === "after") fireEvent.scroll(el);
+
+    // WebKit can move the viewport before delivering its queued scroll event.
+    fireEvent.wheel(el, { deltaY: -20 });
+    el.scrollTop = 660;
+    stream(30);
+    expect(el.scrollTop).toBe(660);
+    fireEvent.scroll(el);
+
+    fireEvent.wheel(el, { deltaY: 10 });
+    scroll(670);
+    stream(30);
+    expect(el.scrollTop).toBe(670);
+    expect(screen.getByText("Reading history")).toBeInTheDocument();
+  });
+
+  it("waits for scrolling to settle before holding a reading row through resize frames", () => {
+    vi.useFakeTimers();
+    const callbacks: Array<() => void> = [];
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(callback: () => void) { callbacks.push(callback); }
+      observe() {}
+      disconnect() {}
+    });
+    const { el, scroll } = setup();
+    const anchor = screen.getByTestId("anchor");
+    anchor.dataset.transcriptAnchor = "reading";
+    let y = 700;
+    vi.spyOn(anchor, "getBoundingClientRect").mockImplementation(() => ({ top: y - el.scrollTop } as DOMRect));
+    const frame = () => act(() => callbacks[callbacks.length - 1]());
+
+    fireEvent.wheel(el, { deltaY: -20 });
+    scroll(680);
+    act(() => vi.advanceTimersByTime(100));
+    fireEvent.wheel(el, { deltaY: -20 });
+    scroll(660);
+    act(() => vi.advanceTimersByTime(100));
+    y += 30;
+    frame();
+    expect(el.scrollTop).toBe(660);
+
+    act(() => vi.advanceTimersByTime(40));
+    y += 30;
+    frame();
+    expect(el.scrollTop).toBe(690);
   });
 
   it("detaches for a small upward scroll even without a wheel event", () => {

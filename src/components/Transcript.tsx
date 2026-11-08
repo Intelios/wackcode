@@ -930,8 +930,8 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
     if (!el || el.scrollTop > REVEAL_EDGE_PX) return;
     const reading = [...el.querySelectorAll<HTMLElement>("[data-transcript-anchor]")]
       .find((node) => node.getBoundingClientRect().bottom > el.getBoundingClientRect().top);
-    if (reading) keepAnchor(reading, reading.getBoundingClientRect().top - el.getBoundingClientRect().top);
     pauseFollowing();
+    if (reading) keepAnchor(reading, reading.getBoundingClientRect().top - el.getBoundingClientRect().top);
     setRevealed((count) => Math.min(startKeys.length, count + TURN_WINDOW));
   }, [hiddenCount, startKeys.length, keepAnchor, pauseFollowing, ref]);
 

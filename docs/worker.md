@@ -163,11 +163,14 @@ turn, whatever the model, so a chat's images are bounded twice:
   `chat-images` extension captures all tool-result images before Pi normalizes them. The parent
   SDK `read` override disables its own initial resize so file images reach that hook intact;
   Pi's session-level normalization stays enabled. Resized copies retain dimension notes.
-- **The request**, on every model call. `builtin/image-budget.ts` runs on the `context` hook with
-  a total byte budget for a chat's images. Older tool images become a placeholder first, then
-  older images the user attached; the newest image always survives, so the tool that just
-  finished still reaches the model. Removals happen in whole chunks so the rewritten prefix
-  stays byte-identical between calls and the prompt cache keeps hitting.
+- **The request**, on every vision-model call. `builtin/image-budget.ts` runs on the `context`
+  hook with a 3 MiB total base64 budget. The latest image-bearing tool batch (including images
+  across several consecutive tool results) and the latest image-bearing user message stay
+  together. Older tool images become placeholders first, then older attachments, in whole
+  chunks that never spill into that working set. If the working set alone is too large,
+  request-only viewing copies are compressed/resized, with updated dimensions, instead of
+  dropping fresh images. Each extension caches at most 16 such copies / 16 MiB; originals and
+  saved session images never change. Non-vision models use Pi's own image downgrade.
 
 The budget never changes the session: it rewrites only the copy Pi sends. Sessions retain bounded
 viewing copies plus versioned, worker-owned original-image metadata. Snapshots retain thumbnails

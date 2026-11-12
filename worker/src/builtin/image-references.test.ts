@@ -84,12 +84,18 @@ describe("image references", () => {
   });
 
   it("leaves model-visible references after image-budget pruning", () => {
-    const messages = [tool("read", image("old-image")), { ...user(image("new-image")), timestamp: 3 }];
-    const annotated = annotateImageReferences(messages, projection(["tool-id", messages[0]], ["user-id", messages[1]]))!;
-    const pruned = pruneImages(annotated, 10, 1)!;
+    const messages = [
+      tool("read", image("old-image")),
+      { role: "assistant", timestamp: 3, content: [] },
+      { ...tool("read", image("latest-tool-image")), timestamp: 4 },
+      { ...user(image("new-image")), timestamp: 5 }
+    ];
+    const annotated = annotateImageReferences(messages, projection(["tool-id", messages[0]], ["latest-tool-id", messages[2]], ["user-id", messages[3]]))!;
+    const pruned = pruneImages(annotated, 30, 1)!;
     expect(pruned[0].content[0]).toEqual(text(PRUNED_TOOL_IMAGE_TEXT));
     expect(pruned[0].content.at(-1)?.text).toContain("wackcode-image://entry/tool-id/0");
-    expect(pruned[1].content.at(-1)?.text).toContain("wackcode-image://entry/user-id/0");
+    expect(pruned[2].content.at(-1)?.text).toContain("wackcode-image://entry/latest-tool-id/0");
+    expect(pruned[3].content.at(-1)?.text).toContain("wackcode-image://entry/user-id/0");
   });
 
   it("installs one parent hook before the budget in both chat kinds", () => {

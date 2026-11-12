@@ -7,7 +7,8 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it } from "vitest";
 import { readSavedSession } from "./saved-session.js";
-import type { ExecutionPolicyConfig, SessionSnapshot, TaskMode } from "./protocol.js";
+import { imageHash, type ImageMetadata } from "./saved-images.js";
+import type { ExecutionPolicyConfig, ImageContent, SessionSnapshot, TaskMode } from "./protocol.js";
 
 interface Checkpoint { id: string; head?: string }
 
@@ -627,7 +628,10 @@ function streamAgentResponse(response: ServerResponse<IncomingMessage>, authoriz
   const shellScript = shellJobScriptOf(lastUserText);
   const shellResults = shellScript ? toolResultContents(body) : [];
   const shellCall = shellScript ? nextShellJobCall(shellScript, shellResults) : undefined;
-  const toolScript = lastUserText.startsWith("tool script: ") ? JSON.parse(lastUserText.slice("tool script: ".length)) as ScriptedToolCall[][] : undefined;
+  // The image-budget fixture can acquire request-only resize notes after its first line.
+  const imageBudgetScript = /^image budget tool script: ([^\n]*)/.exec(lastUserText)?.[1];
+  const toolScript = imageBudgetScript !== undefined ? JSON.parse(imageBudgetScript) as ScriptedToolCall[][]
+    : lastUserText.startsWith("tool script: ") ? JSON.parse(lastUserText.slice("tool script: ".length)) as ScriptedToolCall[][] : undefined;
   let remainingResults = toolScript ? toolResultContents(body).length : 0;
   const scriptCalls = toolScript?.find((batch) => {
     if (remainingResults === 0) return true;
@@ -825,8 +829,8 @@ function launchWorker(baseUrl: string, apiKey: string, workspace: string, taskId
   return worker;
 }
 
-/** A solid-colour RGB PNG, built by hand so the tests need no image fixtures. */
-function solidPng(width: number, height: number, markerX?: number): string {
+/** A hand-built RGB PNG; optional seeded noise exercises byte caps without image fixtures. */
+function solidPng(width: number, height: number, markerX?: number, noiseSeed?: number): string {
   const crcTable = Array.from({ length: 256 }, (_, n) => {
     let c = n;
     for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
@@ -851,7 +855,19 @@ function solidPng(width: number, height: number, markerX?: number): string {
   header.set([8, 2, 0, 0, 0], 8);
   const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(width * 3, 0x5a)]);
   if (markerX !== undefined) row.set([255, 0, 127], 1 + markerX * 3);
-  const pixels = deflateSync(Buffer.concat(Array.from({ length: height }, () => row)));
+  let state = noiseSeed ?? 1;
+  const rows = Array.from({ length: height }, () => {
+    if (noiseSeed === undefined) return row;
+    const noisy = Buffer.from(row);
+    for (let index = 1; index < noisy.length; index++) {
+      state ^= state << 13;
+      state ^= state >>> 17;
+      state ^= state << 5;
+      noisy[index] = state >>> 24;
+    }
+    return noisy;
+  });
+  const pixels = deflateSync(Buffer.concat(rows));
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     chunk("IHDR", header),
@@ -3701,6 +3717,186 @@ describe("inline image replies", () => {
     references.forEach((reference) => expect(JSON.stringify(provider.requests.at(-1)!.body.messages)).not.toContain(reference));
     expect(JSON.stringify(restored.worker.view!.messages)).toContain("No images available.");
     expect(restored.worker.outputs.filter((output) => output.type === "worker_error")).toEqual([]);
+  });
+});
+
+describe("image request budget", () => {
+  const byteCap = 3 * 1024 * 1024;
+  type Picture = { width: number; height: number; image: ImageContent };
+  type SavedSource = {
+    type: string;
+    id: string;
+    message: {
+      role: "user" | "toolResult";
+      toolCallId?: string;
+      content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+      wackcodeImages?: ImageMetadata;
+    };
+  };
+  const picture = (width: number, height: number, seed: number): Picture => ({
+    width, height, image: { type: "image", data: solidPng(width, height, undefined, seed), mimeType: "image/png" },
+  });
+  const prompt = (...batches: ScriptedToolCall[][]) => `image budget tool script: ${JSON.stringify(batches)}\n`;
+  const inlineImages = (source: SavedSource) => source.message.content.filter((part) => part.type === "image") as ImageContent[];
+  const references = (source: SavedSource) => inlineImages(source).map((_, index) => `wackcode-image://entry/${source.id}/${index}`);
+  const requestImages = (request: MockProvider["requests"][number]) => userParts(request)
+    .filter((part) => part.type === "image_url").map((part) => part.image_url!.url!);
+
+  async function sources(worker: WorkerHarness): Promise<SavedSource[]> {
+    const entries = (await readFile(worker.view!.sessionFile!, "utf8")).trim().split("\n").map((line) => JSON.parse(line)) as SavedSource[];
+    return entries.filter((entry) => entry.type === "message"
+      && (entry.message.role === "user" || entry.message.role === "toolResult") && inlineImages(entry).length > 0);
+  }
+
+  /** Read dimensions from the serialized PNG/JPEG itself, not transcript previews or notes. */
+  function imageSize(url: string): { width: number; height: number } {
+    const match = /^data:image\/(png|jpeg);base64,([A-Za-z0-9+/=]+)$/.exec(url);
+    if (!match) throw new Error("Provider request did not contain an inline PNG/JPEG.");
+    const bytes = Buffer.from(match[2], "base64");
+    if (match[1] === "png") return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+    for (let offset = 2; offset + 4 < bytes.length;) {
+      if (bytes[offset] !== 0xff) break;
+      const marker = bytes[offset + 1];
+      offset += 2;
+      if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+        return { width: bytes.readUInt16BE(offset + 5), height: bytes.readUInt16BE(offset + 3) };
+      }
+      const length = bytes.readUInt16BE(offset);
+      if (length < 2) break;
+      offset += length;
+    }
+    throw new Error("Provider request contained a JPEG without dimensions.");
+  }
+
+  function expectImages(request: MockProvider["requests"][number], expected: Picture[]): string[] {
+    const images = requestImages(request);
+    expect(images).toHaveLength(expected.length);
+    expect(new Set(images).size).toBe(expected.length);
+    expect(images.reduce((sum, url) => sum + url.slice(url.indexOf(",") + 1).length, 0)).toBeLessThanOrEqual(byteCap);
+    images.forEach((url, index) => {
+      const size = imageSize(url);
+      const original = expected[index];
+      // Distinct aspect ratios identify every image even when request copies become JPEGs.
+      // A very thin resized source can round its height by a pixel.
+      expect(Math.abs(size.width * original.height / (size.height * original.width) - 1)).toBeLessThan(0.05);
+    });
+    return images;
+  }
+
+  function expectReferences(request: MockProvider["requests"][number], saved: SavedSource[]) {
+    const serialized = JSON.stringify(request.body.messages);
+    for (const source of saved) for (const reference of references(source)) expect(serialized).toContain(reference);
+  }
+
+  async function expectOriginals(workspace: string, taskId: string, kind: "code" | "chat", saved: SavedSource[], expected: Picture[]) {
+    const directory = kind === "chat" ? join(workspace, ".wackcode", "images") : join(workspace, ".sessions", taskId, "images");
+    const images = saved.flatMap((source) => inlineImages(source).map((image, index) => ({ image, record: source.message.wackcodeImages?.images[index] })));
+    expect(images).toHaveLength(expected.length);
+    for (const [index, { image, record }] of images.entries()) {
+      expect(record).toBeTruthy();
+      expect(record!.inlineHash).toBe(imageHash(image));
+      expect(record).toMatchObject({ width: expected[index].width, height: expected[index].height });
+      expect((await readFile(join(directory, record!.blob))).equals(Buffer.from(expected[index].image.data, "base64"))).toBe(true);
+      if (expected[index].width <= 1600) expect(imageHash(image)).toBe(imageHash(expected[index].image));
+    }
+    expect(JSON.stringify(saved)).not.toContain("wackcode-image-references-v1");
+    expect(JSON.stringify(saved)).not.toContain("wackcode-image://");
+    expect(JSON.stringify(saved)).not.toContain("Earlier image omitted");
+    expect(JSON.stringify(saved)).not.toContain("Earlier attachment omitted");
+  }
+
+  it.each([
+    ["code", true], ["chat", true], ["code", false], ["chat", false],
+  ] as const)("preserves all eight oversized initial attachments in %s with vision %s", async (kind, vision) => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-attachment-budget-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const pictures = Array.from({ length: 8 }, (_, index) => picture(600 + index * 50, 240, 100 + index));
+    expect(pictures.reduce((sum, value) => sum + value.image.data.length, 0)).toBeGreaterThan(byteCap);
+    const taskId = `attachment-budget-${kind}-${vision}`;
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, taskId,
+      undefined, undefined, undefined, undefined, vision, { kind });
+    cleanup.push(() => worker.shutdown());
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "initial-images", message: prompt(), images: pictures.map((value) => value.image) });
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "initial-images" && output.state === "idle");
+    expect(worker.outputs.filter((output) => output.type === "worker_error")).toEqual([]);
+    expect(provider.requests).toHaveLength(1);
+    const saved = await sources(worker);
+    expect(saved).toHaveLength(1);
+    expectReferences(provider.requests[0], saved);
+    if (vision) {
+      const images = expectImages(provider.requests[0], pictures);
+      expect(images.some((url, index) => !url.endsWith(pictures[index].image.data))).toBe(true);
+    } else {
+      expect(requestImages(provider.requests[0])).toEqual([]);
+      expect(userParts(provider.requests[0]).filter((part) => part.text === "(image omitted: model does not support images)")).toHaveLength(1);
+      // Budgeting a blind model must be a no-op; Pi, not WackCode, supplies the placeholders.
+      expect(JSON.stringify(provider.requests[0].body.messages)).not.toContain("Earlier attachment omitted");
+    }
+    await expectOriginals(workspace, taskId, kind, saved, pictures);
+  });
+
+  it.each(["code", "chat"] as const)("keeps the latest four-read image batch and attachment through text-only results in %s", async (kind) => {
+    const provider = await startMockProvider();
+    cleanup.push(provider.close);
+    const workspace = await mkdtemp(join(tmpdir(), "wackcode-tool-image-budget-"));
+    cleanup.push(() => rm(workspace, { recursive: true, force: true }));
+    const attachment = picture(600, 480, 200);
+    const first = [picture(780, 300, 201), picture(960, 300, 202), picture(1140, 300, 203), picture(1800, 32, 204)];
+    const later = [picture(660, 320, 301), picture(840, 320, 302), picture(1020, 320, 303), picture(1200, 320, 304)];
+    const files = [...first, ...later].map((value, index) => ({ ...value, path: `noise-${index}.png` }));
+    for (const file of files) await writeFile(join(workspace, file.path), Buffer.from(file.image.data, "base64"));
+    await writeFile(join(workspace, "notes.txt"), "A follow-up result without any images.\n");
+    const taskId = `tool-image-budget-${kind}`;
+    const { worker } = await initializeWorker(provider.baseUrl, "alpha-secret", workspace, taskId,
+      undefined, undefined, undefined, undefined, true, { kind });
+    cleanup.push(() => worker.shutdown());
+    const reads = (group: typeof files) => group.map((file) => ({ name: "read", args: { path: file.path } }));
+    const textOnly = [{ name: "read", args: { path: "notes.txt" } }];
+    const barrier = provider.holdRequest((request) => request.text.startsWith("image budget tool script: ") && toolResultContents(request.body).length === 4);
+    worker.send({ id: crypto.randomUUID(), type: "prompt", runId: "image-batches", images: [attachment.image],
+      message: prompt(reads(files.slice(0, 4)), textOnly, reads(files.slice(4)), textOnly) });
+    await barrier.arrived;
+    const before = await sources(worker);
+    // Session copies, not merely unbounded input files, must exceed the actual request cap.
+    expect(before.flatMap(inlineImages).reduce((sum, image) => sum + image.data.length, 0)).toBeGreaterThan(byteCap);
+    expect(before).toHaveLength(5);
+    const notes = before.slice(1).map((source) => source.message.content.filter((part) => part.type === "text").map((part) => part.text!));
+    expect(notes[3].some((note) => note.includes("Image resized: original 1800 × 32"))).toBe(true);
+    barrier.release();
+    await worker.waitFor((output) => output.type === "run_state" && output.runId === "image-batches" && output.state === "idle");
+    expect(worker.outputs.filter((output) => output.type === "worker_error")).toEqual([]);
+    expect(provider.requests).toHaveLength(5);
+    expectImages(provider.requests[0], [attachment]);
+    const firstImages = expectImages(provider.requests[1], [attachment, ...first]);
+    expectImages(provider.requests[2], [attachment, ...first]);
+    const laterImages = expectImages(provider.requests[3], [attachment, ...later]);
+    expectImages(provider.requests[4], [attachment, ...later]);
+    expect(laterImages.slice(1).some((url) => firstImages.slice(1).includes(url))).toBe(false);
+    const after = await sources(worker);
+    expect(after.filter((source) => before.some((earlier) => earlier.id === source.id))).toEqual(before);
+    // One assistant emits all four read calls. A later assistant starts the next batch;
+    // consecutive results from different calls in one response must not be treated as old.
+    const assistantBatches = ((provider.requests[3].body.messages ?? []) as ProviderMessage[])
+      .filter((message) => message.role === "assistant" && message.tool_calls?.length)
+      .map((message) => message.tool_calls!.length);
+    expect(assistantBatches).toEqual([4, 1, 4]);
+    for (const [index, request] of provider.requests.entries()) {
+      expectReferences(request, index === 0 ? before.slice(0, 1) : index < 3 ? before : after);
+      if (index === 0) continue;
+      const messages = request.body.messages as Array<ProviderMessage & { tool_call_id?: string }>;
+      before.slice(1).forEach((source, sourceIndex) => {
+        const result = messages.find((message) => message.role === "tool" && message.tool_call_id === source.message.toolCallId);
+        const text = typeof result?.content === "string" ? result.content : JSON.stringify(result?.content);
+        for (const note of notes[sourceIndex]) expect(text).toContain(note);
+      });
+    }
+    const finalMessages = JSON.stringify(provider.requests[4].body.messages);
+    expect(finalMessages).toContain("Earlier image omitted from this request");
+    expect(finalMessages).not.toContain("Earlier attachment omitted");
+    await expectOriginals(workspace, taskId, kind, after, [attachment, ...first, ...later]);
+    for (const file of files) expect((await readFile(join(workspace, file.path))).equals(Buffer.from(file.image.data, "base64"))).toBe(true);
   });
 });
 

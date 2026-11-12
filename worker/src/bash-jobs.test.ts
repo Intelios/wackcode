@@ -226,9 +226,13 @@ describe("bounded shell check-ins", () => {
     const root = await mkdtemp(join(tmpdir(), "wackcode-shell-job-"));
     cleanup.push(() => rm(root, { recursive: true, force: true }));
     const h = harness(undefined, root);
-    const initial = await h.bash({ command: "printf 'started'; (sleep 0.3; touch escaped.txt) & wait", yieldTimeout: 0.03 });
+    const initial = await h.bash({ command: "printf 'started'; (sleep 0.3; touch escaped.txt) & wait", yieldTimeout: 0 });
     const id = jobId(initial);
-    expect(text(initial)).toContain("started");
+    await vi.waitFor(async () => {
+      const status = await h.manage({ action: "status", jobId: id });
+      expect(jobId(status)).toBe(id);
+      expect(text(status)).toContain("started");
+    }, { timeout: 5_000 });
     const stopped = await h.manage({ action: "stop", jobId: id, waitSeconds: 0 });
     expect(stopped.details).toMatchObject({ shellJob: { status: "stopped" } });
     expect(stopped.isError).toBe(false);

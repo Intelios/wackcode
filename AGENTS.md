@@ -41,7 +41,7 @@ WackCode is a native macOS coding agent: a Rust app drawn with GPUI, with its ow
 - **Security is not a trade-off.** Never add a network origin, let a credential travel anywhere but `secrets.json` and the request that needs it, or let the automation socket into a release build. If a change seems to need one, stop and say so. Full list: [docs/security.md](docs/security.md).
 - **GPUI stays in `wack-ui` and `apps/`.** Nothing in `wack-core` or below may depend on it: the UI is a viewport onto the engine.
 - **One GPUI revision.** Every GPUI crate shares the rev pinned in the root `Cargo.toml`. Bumping it is its own task, never part of feature work ([docs/gpui.md](docs/gpui.md)).
-- **Theme tokens only.** Views read colours from `Theme` (`crates/wack-ui/src/theme.rs`) and never write a raw colour; a test there guards it.
+- **Theme tokens only.** Views read colours from `Theme` (`crates/wack-ui/src/theme.rs`) and never write a raw colour; a test there guards it. Text styles likewise come from `Type` (`typography.rs`), never a raw size.
 
 ## Design
 

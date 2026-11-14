@@ -4,10 +4,18 @@
 
 #[cfg(feature = "automation")]
 pub mod automation;
+pub mod colour;
+pub mod composer;
+pub mod fixtures;
+pub mod icon;
 pub mod scenes;
 pub mod shell;
+pub mod sidebar;
+pub mod specimen;
 pub mod tags;
 pub mod theme;
+pub mod transcript;
+pub mod typography;
 
 use gpui::App;
 

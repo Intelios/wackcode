@@ -9,7 +9,7 @@ use wack_ui::shell::Shell;
 actions!(wackcode, [Quit]);
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    gpui_platform::application().with_assets(wack_ui::icon::Assets).run(|cx: &mut App| {
         wack_ui::init(cx);
 
         cx.on_action(|_: &Quit, cx| cx.quit());

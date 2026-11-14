@@ -56,6 +56,7 @@ Each file's header comment states its invariants; this is the map.
 Built so far:
 
 - The workspace, the pinned GPUI dependency, a themed window, and the gallery.
+- The design checkpoint for the harness: the theme derived from appearance, theme colour and accent (`theme.rs`, `colour.rs`); the type scale (`typography.rs`); icons; and the sidebar, composer, transcript and screens drawn from sample data. They hold no state and nothing is wired to the engine yet.
 - The agent core, headless: the three provider formats, the loop, deferred tool loading, sessions, compaction, the seven core tools, connections, and the `wack` CLI.
 
 Known gaps in the agent core, to close as the features that need them arrive:

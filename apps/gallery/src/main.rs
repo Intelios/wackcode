@@ -6,8 +6,9 @@
 //!
 //! ```text
 //! cargo snap --list
-//! cargo snap shell --theme dark --out /tmp/shell.png
-//! cargo snap shell --tags                 # also print each tagged element's bounds
+//! cargo snap new-chat --theme dark --out /tmp/new-chat.png
+//! cargo snap chat --colour '#2f5bd6' --accent '#ff8fb8'   # any theme colour and accent
+//! cargo snap chat --tags                  # also print each tagged element's bounds
 //! cargo snap --all --out-dir target/gallery
 //! ```
 
@@ -15,14 +16,15 @@ use std::{path::PathBuf, process::ExitCode, sync::Arc};
 
 use gpui::{AppContext, HeadlessAppContext};
 use wack_ui::{
+    icon::Assets,
     scenes::{self, Scene, SceneRoot},
     tags,
-    theme::{Appearance, Theme},
+    theme::{Appearance, DEFAULT_ACCENT, DEFAULT_THEME_COLOUR, Theme, ThemeInput},
 };
 
 const USAGE: &str = "usage: gallery --list
-       gallery <scene> [--theme light|dark] [--out <file.png>] [--tags]
-       gallery --all [--out-dir <dir>] [--tags]";
+       gallery <scene> [--theme light|dark] [--colour <#hex>] [--accent <#hex>] [--out <file.png>] [--tags]
+       gallery --all [--colour <#hex>] [--accent <#hex>] [--out-dir <dir>] [--tags]";
 
 fn main() -> ExitCode {
     match run(std::env::args().skip(1).collect()) {
@@ -40,6 +42,8 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let mut list = false;
     let mut print_tags = false;
     let mut theme = Appearance::Dark;
+    let mut theme_colour = DEFAULT_THEME_COLOUR.to_string();
+    let mut accent = DEFAULT_ACCENT.to_string();
     let mut out = None;
     let mut out_dir = PathBuf::from("target/gallery");
 
@@ -57,6 +61,8 @@ fn run(args: Vec<String>) -> Result<(), String> {
                     other => return Err(format!("Unknown theme \"{other}\": use light or dark.")),
                 }
             }
+            "--colour" => theme_colour = value("--colour")?,
+            "--accent" => accent = value("--accent")?,
             "--out" => out = Some(PathBuf::from(value("--out")?)),
             "--out-dir" => out_dir = PathBuf::from(value("--out-dir")?),
             flag if flag.starts_with("--") => {
@@ -94,13 +100,18 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let text_system = gpui_platform::current_platform(true).text_system();
     let mut cx = HeadlessAppContext::with_platform(
         text_system,
-        Arc::new(()),
+        Arc::new(Assets),
         gpui_platform::current_headless_renderer,
     );
     cx.update(wack_ui::init);
 
     for (scene, appearance, path) in renders {
-        cx.update(|cx| cx.set_global(Theme::new(appearance)));
+        let input = ThemeInput {
+            appearance,
+            theme_colour: theme_colour.clone(),
+            accent: accent.clone(),
+        };
+        cx.update(|cx| cx.set_global(Theme::derive(input)));
         let window = cx
             .open_window(scene.size, |window, cx| {
                 let view = scene.build(window, cx);

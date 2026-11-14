@@ -10,10 +10,13 @@ Every view state worth looking at is a **scene** in `crates/wack-ui/src/scenes.r
 
 ```sh
 cargo snap --list                              # what scenes exist
-cargo snap shell --theme dark                  # writes target/gallery/shell-dark.png
-cargo snap shell --theme light --out /tmp/a.png
+cargo snap chat --theme dark                   # writes target/gallery/chat-dark.png
+cargo snap chat --theme light --out /tmp/a.png
+cargo snap chat --colour '#2f5bd6' --accent '#ff8fb8'   # a user's theme colour and accent
 cargo snap --all                               # every scene, light and dark
 ```
+
+Scenes render from sample data in `crates/wack-ui/src/fixtures.rs`: a believable session, so lengths and rhythm are real. The `specimen` scene shows every text style and colour token in the theme it is rendered with. A view must look right with any theme colour and accent, so try at least one vivid pair as well as the default.
 
 Rendering is headless: GPUI's test platform with the real Metal renderer and the real macOS text system. No window opens and nothing takes focus, so it works from any shell. Images are rendered at 2x.
 

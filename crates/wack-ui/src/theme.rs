@@ -104,6 +104,8 @@ pub struct Theme {
     pub accent_wash: Hsla,
     /// Focus rings and the selected row's edge.
     pub accent_line: Hsla,
+    /// Selected text, drawn under the glyphs.
+    pub selection: Hsla,
 
     // Meaning: fixed, never follows the accent.
     pub danger: Hsla,
@@ -278,6 +280,7 @@ impl Theme {
             accent_text: hsla(accent_text),
             accent_wash: hsla(accent_wash),
             accent_line: hsla(accent_line),
+            selection: Hsla { a: if dark { 0.32 } else { 0.42 }, ..to_hsla(accent_fill) },
             danger: fixed.danger.into(),
             warning: fixed.warning.into(),
             success: fixed.success.into(),

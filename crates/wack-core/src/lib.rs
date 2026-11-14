@@ -16,3 +16,12 @@ pub use run::{Job, RunEvent, RunSetup, run};
 pub use store::{
     Chat, Connection, Model, ModelChoice, NewConnection, Project, Resolved, Store, title_from,
 };
+
+// What the UI needs from the layers below, so it depends on the engine alone.
+pub use wack_agent::{Control, Event, HistoryEntry, Outcome, TOOL_SEARCH, history};
+pub use wack_llm::{Effort, Message, RetryNotice, Role, Usage, WireFormat};
+
+/// The provider-neutral conversation model, for code that reads messages.
+pub mod llm {
+    pub use wack_llm::Block;
+}

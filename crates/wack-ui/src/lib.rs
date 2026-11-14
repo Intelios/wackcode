@@ -6,20 +6,26 @@
 pub mod automation;
 pub mod colour;
 pub mod composer;
+pub mod conversation;
 pub mod fixtures;
+pub mod highlight;
 pub mod icon;
+pub mod markdown;
 pub mod scenes;
 pub mod shell;
 pub mod sidebar;
 pub mod specimen;
 pub mod tags;
+pub mod text_field;
 pub mod theme;
 pub mod transcript;
 pub mod typography;
+pub mod work;
 
 use gpui::App;
 
 /// Sets up everything the views need before the first window opens.
 pub fn init(cx: &mut App) {
     theme::init(cx);
+    text_field::init(cx);
 }

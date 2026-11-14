@@ -1,13 +1,18 @@
 //! Sample data for gallery scenes: a believable WackCode session, so a scene shows real lengths
 //! and real rhythm rather than lorem ipsum.
 
+use std::{collections::HashSet, path::Path};
+
+use serde_json::json;
+use wack_core::{Event, Outcome, Usage};
+
 use crate::{
     composer::ComposerData,
+    conversation::Conversation,
     shell::ProjectInfo,
     sidebar::{ChatRow, ChatState, ProjectRow, SidebarData},
-    transcript::{
-        Block, Diff, DiffLine, Item, LineKind, Meta, Span, Target, Token, Work, WorkRow,
-    },
+    transcript::Item,
+    work::{self, ReplyCache},
 };
 
 /// Which chat the sidebar shows as selected.
@@ -99,135 +104,96 @@ pub fn composer_working() -> ComposerData {
 pub const FINISHED_TITLE: &str = "Fix the SSE decoder tail";
 pub const WORKING_TITLE: &str = "Honour Retry-After";
 
+const CWD: &str = "/Users/you/Documents/GitHub/wackcode";
+const START: u64 = 1_800_000_000_000;
+
+fn call(conversation: &mut Conversation, id: &str, name: &str, input: serde_json::Value, result: Option<&str>, at: u64) {
+    conversation.apply(&Event::ToolCall { id: id.into(), name: name.into(), input }, at);
+    if let Some(content) = result {
+        conversation.apply(&Event::ToolResult { id: id.into(), name: name.into(), content: content.into(), is_error: false }, at);
+    }
+}
+
+const REPLY: &str = "Fixed. **The decoder now flushes what it has buffered when the stream ends**, so a final event without its blank line is delivered instead of dropped.
+
+- `Decoder::finish` returns the pending event, and `HttpProvider::stream` calls it once the body is exhausted.
+- A stream that stops halfway through a field still yields nothing: half an event is never guessed at.
+
+```rust
+#[test]
+fn flushes_an_unterminated_final_event() {
+    let mut decoder = Decoder::default();
+    decoder.push(b\"data: {\\\"done\\\":true}\");
+    // No blank line: the stream just ends.
+    assert_eq!(decoder.finish().unwrap().data, \"{\\\"done\\\":true}\");
+    assert_eq!(decoder.finish(), None);
+}
+```
+
+All six SSE tests pass, including the `0`-byte body case.";
+
+/// The first turn of the sample chat, run through the same code as a real one.
+fn finished(conversation: &mut Conversation) {
+    conversation.send("The SSE decoder drops the last event when a stream ends without a blank line. Fix it and add a test.", START);
+    conversation.apply(
+        &Event::Thinking("The decoder only emits on a blank line, so a final event with no terminator never leaves the buffer.".into()),
+        START,
+    );
+    let file = "x\n".repeat(214);
+    call(conversation, "read-1", "read", json!({ "path": format!("{CWD}/crates/wack-llm/src/sse.rs") }), Some(&file), START);
+    call(conversation, "grep-1", "grep", json!({ "pattern": "finish", "path": "crates/wack-llm" }), Some("a\nb\nc"), START);
+    call(
+        conversation,
+        "edit-1",
+        "edit",
+        json!({ "path": "crates/wack-llm/src/sse.rs", "edits": [{
+            "old_text": "    /// Called once the body is exhausted.\n    pub fn finish(&mut self) {}",
+            "new_text": "    /// Called once the body is exhausted.\n    pub fn finish(&mut self) -> Option<Event> {\n        if self.data.is_empty() {\n            return None;\n        }\n        Some(self.take_event())\n    }"
+        }] }),
+        Some("Edited crates/wack-llm/src/sse.rs (1 change)."),
+        START,
+    );
+    call(conversation, "bash-1", "bash", json!({ "command": "cargo test -p wack-llm sse" }), Some("test result: ok. 6 passed; 0 failed"), START);
+    conversation.apply(&Event::Text(REPLY.into()), START);
+    let usage = Usage { input: 1_400, output: 2_800, cache_read: 11_000, cache_write: 0 };
+    conversation.apply(&Event::Reply { usage: Some(usage) }, START);
+    conversation.finish(&Ok(Outcome::Done), START + 19_000);
+}
+
+fn items(conversation: &Conversation, open: &[&str], now: u64) -> Vec<Item> {
+    let open: HashSet<String> = open.iter().map(|key| key.to_string()).collect();
+    work::items(conversation, Path::new(CWD), &open, now, &mut ReplyCache::default())
+}
+
+/// A finished turn with its work log open on the edit's diff.
 pub fn finished_turn() -> Vec<Item> {
-    use Token::{Comment, Keyword, Plain, Title};
-    vec![
-        Item::Prompt(
-            "The SSE decoder drops the last event when a stream ends without a blank line. \
-             Fix it and add a test."
-                .into(),
-        ),
-        Item::Work(Work {
-            summary: "Worked for 19s".into(),
-            live: false,
-            open: true,
-            rows: vec![
-                row(
-                    "Thought",
-                    Target::Words(
-                        "The decoder only emits on a blank line, so a final event with no \
-                         terminator never leaves the buffer."
-                            .into(),
-                    ),
-                    Meta::Note("2.1s".into()),
-                ),
-                row("Read", Target::Code("crates/wack-llm/src/sse.rs".into()), Meta::Note("214 lines".into())),
-                row(
-                    "Searched",
-                    Target::Words("“finish” in crates/wack-llm".into()),
-                    Meta::Note("3 results".into()),
-                ),
-                WorkRow {
-                    verb: "Edited",
-                    target: Target::Code("crates/wack-llm/src/sse.rs".into()),
-                    meta: Meta::Lines { added: 6, removed: 1 },
-                    diff: Some(Diff {
-                        path: "crates/wack-llm/src/sse.rs".into(),
-                        lines: vec![
-                            line(LineKind::Context, 88, "    /// Called once the body is exhausted."),
-                            line(LineKind::Removed, 89, "    pub fn finish(&mut self) {}"),
-                            line(LineKind::Added, 89, "    pub fn finish(&mut self) -> Option<Event> {"),
-                            line(LineKind::Added, 90, "        if self.data.is_empty() {"),
-                            line(LineKind::Added, 91, "            return None;"),
-                            line(LineKind::Added, 92, "        }"),
-                            line(LineKind::Added, 93, "        Some(self.take_event())"),
-                            line(LineKind::Added, 94, "    }"),
-                        ],
-                    }),
-                },
-                row("Ran", Target::Code("cargo test -p wack-llm sse".into()), Meta::Note("6 passed".into())),
-            ],
-        }),
-        Item::Reply(vec![
-            Block::Paragraph(vec![
-                Span::Text("Fixed. "),
-                Span::Strong("The decoder now flushes what it has buffered when the stream ends"),
-                Span::Text(", so a final event without its blank line is delivered instead of dropped."),
-            ]),
-            Block::Bullets(vec![
-                vec![
-                    Span::Code("Decoder::finish"),
-                    Span::Text(" returns the pending event, and "),
-                    Span::Code("HttpProvider::stream"),
-                    Span::Text(" calls it once the body is exhausted."),
-                ],
-                vec![Span::Text(
-                    "A stream that stops halfway through a field still yields nothing: half an \
-                     event is never guessed at.",
-                )],
-            ]),
-            Block::Code {
-                language: "rust".into(),
-                lines: vec![
-                    vec![(Token::Meta, "#[test]")],
-                    vec![(Keyword, "fn "), (Title, "flushes_an_unterminated_final_event"), (Plain, "() {")],
-                    vec![(Plain, "    "), (Keyword, "let mut "), (Plain, "decoder = Decoder::default();")],
-                    vec![(Plain, "    decoder.push("), (Token::String, "b\"data: {\\\"done\\\":true}\""), (Plain, ");")],
-                    vec![(Plain, "    "), (Comment, "// No blank line: the stream just ends.")],
-                    vec![(Plain, "    assert_eq!(decoder.finish().unwrap().data, "), (Token::String, "\"{\\\"done\\\":true}\""), (Plain, ");")],
-                    vec![(Plain, "    assert_eq!(decoder.finish(), "), (Keyword, "None"), (Plain, ");")],
-                    vec![(Plain, "}")],
-                ],
-            },
-            Block::Paragraph(vec![Span::Text("All six SSE tests pass, including the "), Span::Code("0"), Span::Text("-byte body case.")]),
-        ]),
-        Item::Footer("19s  ·  GLM-5.3 Flash  ·  12.4k tokens".into()),
-    ]
+    let mut conversation = Conversation::default();
+    finished(&mut conversation);
+    items(&conversation, &["turn-1", "edit-1"], START + 30_000)
 }
 
+/// The same chat with a second turn under way.
 pub fn working_turn() -> Vec<Item> {
-    // The turn before, as it looks once finished: work folded to one line.
-    let mut items: Vec<Item> = finished_turn()
-        .into_iter()
-        .map(|item| match item {
-            Item::Work(work) => Item::Work(Work { open: false, ..work }),
-            other => other,
-        })
-        .collect();
-    items.push(Item::Prompt(
-        "Make retries honour Retry-After when the server sends it, in seconds or as a date."
-            .into(),
-    ));
-    items.push(Item::Work(Work {
-        summary: "Working  ·  8s".into(),
-        live: true,
-        open: true,
-        rows: vec![
-            row(
-                "Thought",
-                Target::Words(
-                    "Retry-After can be a number of seconds or an HTTP date; both have to cap \
-                     at the backoff ceiling."
-                        .into(),
-                ),
-                Meta::Note("1.4s".into()),
-            ),
-            row("Read", Target::Code("crates/wack-llm/src/retry.rs".into()), Meta::Note("142 lines".into())),
-            row("Read", Target::Code("crates/wack-llm/src/error.rs".into()), Meta::Note("96 lines".into())),
-            row("Edited", Target::Code("crates/wack-llm/src/retry.rs".into()), Meta::Lines { added: 24, removed: 3 }),
-            row("Ran", Target::Code("cargo test -p wack-llm retry".into()), Meta::Running),
-        ],
-    }));
-    items.push(Item::Reply(vec![Block::Paragraph(vec![
-        Span::Text("Retry-After is now read from both 429 and 503 responses. Running the retry tests to check the date form"),
-    ])]));
-    items
-}
-
-fn row(verb: &'static str, target: Target, meta: Meta) -> WorkRow {
-    WorkRow { verb, target, meta, diff: None }
-}
-
-fn line(kind: LineKind, number: u32, text: &'static str) -> DiffLine {
-    DiffLine { kind, number: Some(number), text: text.into() }
+    let mut conversation = Conversation::default();
+    finished(&mut conversation);
+    let now = START + 60_000;
+    conversation.send("Make retries honour Retry-After when the server sends it, in seconds or as a date.", now - 8_000);
+    conversation.apply(
+        &Event::Thinking("Retry-After can be a number of seconds or an HTTP date; both have to cap at the backoff ceiling.".into()),
+        now,
+    );
+    let file = "x\n".repeat(142);
+    call(&mut conversation, "read-2", "read", json!({ "path": "crates/wack-llm/src/retry.rs" }), Some(&file), now);
+    call(&mut conversation, "read-3", "read", json!({ "path": "crates/wack-llm/src/error.rs" }), Some(&"x\n".repeat(96)), now);
+    call(
+        &mut conversation,
+        "edit-2",
+        "edit",
+        json!({ "path": "crates/wack-llm/src/retry.rs", "edits": [{ "old_text": "a\nb\nc", "new_text": "a\nB\nC\nD\nc" }] }),
+        Some("Edited."),
+        now,
+    );
+    call(&mut conversation, "bash-2", "bash", json!({ "command": "cargo test -p wack-llm retry" }), None, now);
+    conversation.apply(&Event::Text("Retry-After is now read from both 429 and 503 responses. Running the retry tests to check the date form".into()), now);
+    items(&conversation, &[], now)
 }

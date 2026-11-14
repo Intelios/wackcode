@@ -7,12 +7,16 @@ publish.workspace = true
 
 [features]
 # Compiles in the dev-only automation socket (docs/testing.md). Never enabled in a release build.
-automation = ["gpui/test-support", "dep:serde", "dep:serde_json", "dep:image", "dep:async-channel"]
+automation = ["gpui/test-support", "dep:serde", "dep:image", "dep:async-channel"]
 
 [dependencies]
 wack-core.workspace = true
 gpui.workspace = true
+unicode-segmentation = "1"
+serde_json.workspace = true
+pulldown-cmark = { version = "0.13", default-features = false }
+# Grammars only, with the pure-Rust regex engine: colours come from the theme, not syntect.
+syntect = { version = "5", default-features = false, features = ["default-syntaxes", "regex-fancy"] }
 serde = { workspace = true, optional = true }
-serde_json = { workspace = true, optional = true }
 async-channel = { version = "2", optional = true }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }

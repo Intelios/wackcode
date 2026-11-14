@@ -60,7 +60,7 @@ Built so far:
 
 Known gaps in the agent core, to close as the features that need them arrive:
 
-- The OpenAI Responses format is tested against recorded streams only, not a live endpoint.
+- Only the Chat Completions format has run against a live endpoint (the Testing connection: multi-tool tasks, resume across models, stop mid-command, a message sent mid-run). The Anthropic and OpenAI Responses formats are tested against recorded streams only.
 - Tool results are text only: `read` refuses images.
 - `bash` inherits the environment of the process that started it. Resolving the user's login-shell environment (for an app launched from the Dock) comes with the app.
 - Nothing writes the usage ledger yet.

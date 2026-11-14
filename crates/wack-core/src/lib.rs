@@ -8,6 +8,7 @@
 //! So far: the data folder, the secret store, connections, projects, chats, and running the agent
 //! for a chat (`run`).
 
+pub mod git;
 pub mod run;
 pub mod secrets;
 pub mod store;

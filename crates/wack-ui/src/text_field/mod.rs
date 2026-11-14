@@ -170,7 +170,7 @@ impl Focusable for TextField {
 impl TextField {
     pub fn new(kind: Type, placeholder: impl Into<SharedString>, cx: &mut Context<Self>) -> Self {
         Self {
-            focus: cx.focus_handle(),
+            focus: cx.focus_handle().tab_stop(true),
             buffer: Buffer::default(),
             placeholder: placeholder.into(),
             kind,

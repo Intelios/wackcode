@@ -27,9 +27,9 @@ All three crates must share the same `rev`. Two different revisions in one build
 
 ## Text input
 
-GPUI ships no text field. The composer and every other text field will build on `gpui-base`, the unstyled half of Zeron's fork of gpui-component (`zeronsh/gpui-component`, Apache-2.0): it supplies editing, selection, undo and IME, and WackCode draws everything visible itself. That fork pins the same `zui` revision we do, so **the two revisions move together**: bump both or neither. Vendoring only the input module was rejected: it is about 600 KiB of source tangled with the rest of the crate.
+GPUI ships no text field, so WackCode has its own: `crates/wack-ui/src/text_field/`. `edit.rs` holds the text, selection, undo and IME composition as plain, tested Rust; `mod.rs` draws it and talks to macOS through GPUI's `EntityInputHandler`, which is what makes input methods, dictation and the character palette work. It started from zui's `examples/input.rs`.
 
-The dependency is added with the first text field (the composer), and that is when it gets proven in the running app, IME included.
+`gpui-base` (Zeron's unstyled gpui-component) was the plan, but it pins an older zui revision than ours, and Cargo will not patch a git dependency to another revision of the same repository. Owning the field also means one fewer revision to move in step with.
 
 ## Bumping
 

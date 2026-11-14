@@ -12,6 +12,8 @@ automation = ["gpui/test-support", "dep:serde", "dep:image", "dep:async-channel"
 [dependencies]
 wack-core.workspace = true
 gpui.workspace = true
+gpui_tokio.workspace = true
+futures.workspace = true
 unicode-segmentation = "1"
 serde_json.workspace = true
 pulldown-cmark = { version = "0.13", default-features = false }

@@ -51,13 +51,21 @@ Each file's header comment states its invariants; this is the map.
 - **Features** hook in through `agent::Feature` (`before_request`, `on_tool_call`, `after_turn`): compiled in, no extension runtime.
 - **`wack-core/store.rs`** holds connections in `state.json` and their keys in `secrets.json`; `Store::provider` is the only place a key leaves the secret store.
 
+## The UI layer
+
+- **`app.rs`** (`AppState`) owns the engine's `Store`, what is selected, and a `ChatSession` for every chat opened since launch. Every change goes through its methods.
+- **`chat.rs`** (`ChatSession`) is one chat's live state: its conversation, the transcript items built from it, its composer, and the run on Tokio. Runs are numbered so a finished run's task can never touch the next one.
+- **`actions.rs`** lists what the user can do as GPUI actions. Views dispatch them; `shell.rs` handles them by calling `AppState`, so views hold no handle on the app and gallery scenes stay inert.
+- **`conversation.rs`** folds saved history and live events into turns; **`work.rs`** turns those into the rows the transcript draws; both are pure and tested.
+
 ## Status
 
 Built so far:
 
 - The workspace, the pinned GPUI dependency, a themed window, and the gallery.
-- The design checkpoint for the harness: the theme derived from appearance, theme colour and accent (`theme.rs`, `colour.rs`); the type scale (`typography.rs`); icons; and the sidebar, composer, transcript and screens drawn from sample data. They hold no state and nothing is wired to the engine yet.
+- The theme derived from appearance, theme colour and accent (`theme.rs`, `colour.rs`); the type scale (`typography.rs`); icons.
 - The agent core, headless: the three provider formats, the loop, deferred tool loading, sessions, compaction, the seven core tools, connections, and the `wack` CLI.
+- The minimal harness, wired to the engine: projects (add, pin, remove) and their chats in the sidebar; the new-chat screen; a streaming transcript with work logs, diffs and highlighted code; the composer with queue (↩ while working), steering (⌘↩), stop (Esc), the context meter and Compact; the model and effort menus; Settings › Providers. Verified in the dev app against the Testing connection.
 
 Known gaps in the agent core, to close as the features that need them arrive:
 
@@ -66,11 +74,15 @@ Known gaps in the agent core, to close as the features that need them arrive:
 - `bash` inherits the environment of the process that started it. Resolving the user's login-shell environment (for an app launched from the Dock) comes with the app.
 - Nothing writes the usage ledger yet.
 
+Known gaps in the harness:
+
+- Renaming a chat and searching chats are not built.
+- A stopped turn reads "Stopped." only until the app restarts: the session file does not record it.
+
 Next, in order:
 
-1. The minimal harness: sidebar with pinned projects, composer, model picker, streaming transcript, provider settings.
-2. Panes and chat tabs: the pane tree and solver, Changes, Terminal.
-3. Identity: theme colour and accent, image backdrop, motion.
+1. Panes and chat tabs: the pane tree and solver, Changes, Terminal.
+2. Identity: theme colour and accent, image backdrop, motion.
 
 After that foundation, features return in this order: Plan and Ultra Plan with the question dialog, todo list and Ultra reasoning; Memory, Build and Run, auto titles, skills and slash commands, background shell jobs, commit / push / PR, the usage ledger writer; MCP and web tools; sub-agents and task suggestions; the browser pane, visual replies and canvas; the Chat area; computer use, the skill creator, signature motion and Liquid Glass.
 

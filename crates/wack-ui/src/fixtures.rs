@@ -7,7 +7,7 @@ use serde_json::json;
 use wack_core::{Event, Outcome, Usage};
 
 use crate::{
-    composer::ComposerData,
+    composer::{ComposerData, Input, Meter, Waiting},
     conversation::Conversation,
     shell::ProjectInfo,
     sidebar::{ChatRow, ChatState, ProjectRow, SidebarData},
@@ -25,23 +25,28 @@ pub enum Selected {
 
 pub fn sidebar(selected: Selected) -> SidebarData {
     let chat = |title: &'static str, age: &'static str, state, this: Selected| ChatRow {
+        id: title.into(),
         title: title.into(),
         age: age.into(),
         state,
         selected: selected == this && this != Selected::None,
     };
-    let closed = |name: &'static str, chats: usize| ProjectRow {
+    let closed = |name: &'static str, chats: usize, pinned: bool| ProjectRow {
+        id: name.into(),
         name: name.into(),
         chats: (0..chats)
             .map(|_| chat("", "", ChatState::Idle, Selected::None))
             .collect(),
         open: false,
+        pinned,
     };
     SidebarData {
         pinned: vec![
             ProjectRow {
+                id: "wackcode".into(),
                 name: "wackcode".into(),
                 open: true,
+                pinned: true,
                 chats: vec![
                     chat("Fix the SSE decoder tail", "now", ChatState::Idle, Selected::Finished),
                     chat("Honour Retry-After", "8s", ChatState::Working, Selected::Working),
@@ -50,15 +55,15 @@ pub fn sidebar(selected: Selected) -> SidebarData {
                     chat("Kill the whole process group", "3d", ChatState::Idle, Selected::None),
                 ],
             },
-            closed("wackchatter", 3),
-            closed("TokenTrail", 2),
+            closed("wackchatter", 3, true),
+            closed("TokenTrail", 2, true),
         ],
         projects: vec![
-            closed("Media-Logger", 4),
-            closed("Godot-Bench", 1),
-            closed("godot-terraria", 6),
-            closed("cargo-cleaner", 0),
-            closed("WackWebsite", 2),
+            closed("Media-Logger", 4, false),
+            closed("Godot-Bench", 1, false),
+            closed("godot-terraria", 6, false),
+            closed("cargo-cleaner", 0, false),
+            closed("WackWebsite", 2, false),
         ],
     }
 }
@@ -71,35 +76,91 @@ pub fn project() -> ProjectInfo {
     }
 }
 
+fn drawn(text: Option<&'static str>, placeholder: &'static str) -> Input {
+    Input::Drawn { text: text.map(Into::into), placeholder: placeholder.into() }
+}
+
+fn meter(label: &'static str) -> Option<Meter> {
+    // Compact is offered from a quarter full (shell::meter), so not at these levels.
+    Some(Meter { label: label.into(), high: false, can_compact: false })
+}
+
 pub fn composer_empty(roomy: bool) -> ComposerData {
     ComposerData {
-        text: None,
-        placeholder: "Describe a task, or ask about the code".into(),
-        model: "GLM-5.3 Flash".into(),
-        effort: "Medium".into(),
-        context: None,
+        input: drawn(None, crate::app::NEW_CHAT_PLACEHOLDER),
+        model: "GLM-5.3-Flash".into(),
+        effort: Some("Medium".into()),
+        meter: None,
         working: false,
-        queued: Vec::new(),
+        waiting: Vec::new(),
         roomy,
+        menu: None,
     }
 }
 
-pub fn composer_after_turn() -> ComposerData {
-    ComposerData {
-        text: Some("Now make retries honour Retry-After".into()),
-        context: Some(0.14),
-        ..composer_empty(false)
-    }
+/// After a turn, with `input` holding the next message.
+pub fn composer_after_turn(input: Input) -> ComposerData {
+    ComposerData { input, meter: meter("14% context"), ..composer_empty(false) }
 }
 
 pub fn composer_working() -> ComposerData {
     ComposerData {
-        context: Some(0.21),
+        input: drawn(None, crate::chat::FOLLOW_UP_PLACEHOLDER),
+        meter: meter("21% context"),
         working: true,
-        queued: vec!["Also cap the wait at 60 seconds, whatever the server asks for.".into()],
+        waiting: vec![
+            Waiting { text: "Check the date form against RFC 9110 too.".into(), steering: true },
+            Waiting { text: "Also cap the wait at 60 seconds, whatever the server asks for.".into(), steering: false },
+        ],
         ..composer_empty(false)
     }
 }
+
+/// Two connections, as Settings › Providers lists them.
+pub fn connections() -> Vec<wack_core::Connection> {
+    use wack_core::{Connection, Model, WireFormat};
+    let model = |id: &str, window: Option<u64>| Model { id: id.into(), context_window: window };
+    vec![
+        Connection {
+            id: "c1".into(),
+            name: "Work".into(),
+            format: WireFormat::AnthropicMessages,
+            base_url: "https://api.anthropic.com".into(),
+            models: vec![model("claude-opus-5-5", Some(1_000_000)), model("claude-sonnet-5-5", Some(1_000_000))],
+        },
+        Connection {
+            id: "c2".into(),
+            name: "Local".into(),
+            format: WireFormat::OpenaiChat,
+            base_url: "http://localhost:1234/v1".into(),
+            models: vec![model("qwen/qwen3-coder-30b", Some(128_000))],
+        },
+    ]
+}
+
+/// The model menu open over the composer, from [`connections`].
+pub fn model_menu() -> crate::composer::MenuData {
+    use crate::composer::{Choice, MenuData, MenuGroup, MenuItem};
+    let groups = connections()
+        .into_iter()
+        .map(|connection| MenuGroup {
+            title: Some(connection.name.clone().into()),
+            items: connection
+                .models
+                .iter()
+                .map(|model| MenuItem {
+                    label: crate::shell::model_name(&model.id).into(),
+                    detail: model.context_window.map(|window| work::count(window).into()),
+                    selected: model.id == "claude-opus-5-5",
+                    choice: Choice::Model { connection: connection.id.clone(), model: model.id.clone() },
+                })
+                .collect(),
+        })
+        .collect();
+    MenuData { kind: crate::app::Menu::Model, groups }
+}
+
+pub const NEXT_MESSAGE: &str = "Now make retries honour Retry-After";
 
 pub const FINISHED_TITLE: &str = "Fix the SSE decoder tail";
 pub const WORKING_TITLE: &str = "Honour Retry-After";

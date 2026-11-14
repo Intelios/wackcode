@@ -4,7 +4,11 @@ use gpui::{
     App, Bounds, KeyBinding, Menu, MenuItem, SystemMenuType, TitlebarOptions, WindowBounds,
     WindowOptions, actions, point, prelude::*, px, size,
 };
-use wack_ui::shell::Shell;
+use wack_ui::{
+    actions::{AddFolder, NewChat, OpenSettings},
+    shell::Shell,
+    text_field,
+};
 
 actions!(wackcode, [Quit]);
 
@@ -14,11 +18,25 @@ fn main() {
 
         cx.on_action(|_: &Quit, cx| cx.quit());
         cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
-        cx.set_menus([Menu::new("WackCode").items([
-            MenuItem::os_submenu("Services", SystemMenuType::Services),
-            MenuItem::separator(),
-            MenuItem::action("Quit WackCode", Quit),
-        ])]);
+        cx.set_menus([
+            Menu::new("WackCode").items([
+                MenuItem::action("Settings…", OpenSettings),
+                MenuItem::separator(),
+                MenuItem::os_submenu("Services", SystemMenuType::Services),
+                MenuItem::separator(),
+                MenuItem::action("Quit WackCode", Quit),
+            ]),
+            Menu::new("File").items([MenuItem::action("New Chat", NewChat), MenuItem::action("Add Folder…", AddFolder)]),
+            Menu::new("Edit").items([
+                MenuItem::action("Undo", text_field::Undo),
+                MenuItem::action("Redo", text_field::Redo),
+                MenuItem::separator(),
+                MenuItem::action("Cut", text_field::Cut),
+                MenuItem::action("Copy", text_field::Copy),
+                MenuItem::action("Paste", text_field::Paste),
+                MenuItem::action("Select All", text_field::SelectAll),
+            ]),
+        ]);
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
                 cx.quit();

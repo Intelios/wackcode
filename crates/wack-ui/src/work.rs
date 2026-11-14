@@ -16,11 +16,12 @@ const DETAIL_LINES: usize = 60;
 /// Unchanged lines kept around an edit's change.
 const CONTEXT_LINES: usize = 2;
 
-/// Parsed replies, so a long chat is not parsed again on every frame. Keyed by entry index and
-/// the reply's length: a streaming reply only grows.
+/// Parsed replies, so a chat is not parsed again every time it is rebuilt. Keyed by entry index
+/// and checked against the whole text: a reply can be moved into the work log and replaced by
+/// one of the same length.
 #[derive(Default)]
 pub struct ReplyCache {
-    parsed: Vec<Option<(usize, Rc<Vec<markdown::Block>>)>>,
+    parsed: Vec<Option<(String, Rc<Vec<markdown::Block>>)>>,
 }
 
 impl ReplyCache {
@@ -29,10 +30,10 @@ impl ReplyCache {
             self.parsed.resize(index + 1, None);
         }
         match &self.parsed[index] {
-            Some((length, blocks)) if *length == text.len() => blocks.clone(),
+            Some((parsed, blocks)) if parsed == text => blocks.clone(),
             _ => {
                 let blocks = Rc::new(markdown::parse(text));
-                self.parsed[index] = Some((text.len(), blocks.clone()));
+                self.parsed[index] = Some((text.to_string(), blocks.clone()));
                 blocks
             }
         }
@@ -43,7 +44,26 @@ impl ReplyCache {
 /// logs; a live turn's log is always open.
 pub fn items(conversation: &Conversation, cwd: &Path, open: &HashSet<String>, now: u64, cache: &mut ReplyCache) -> Vec<Item> {
     let mut items = Vec::new();
-    for (index, entry) in conversation.entries.iter().enumerate() {
+    for index in 0..conversation.entries.len() {
+        entry_items(conversation, index, cwd, open, now, cache, &mut items);
+    }
+    items
+}
+
+/// The items for one entry, appended to `items`. A chat rebuilds only the entries that changed.
+pub fn entry_items(
+    conversation: &Conversation,
+    index: usize,
+    cwd: &Path,
+    open: &HashSet<String>,
+    now: u64,
+    cache: &mut ReplyCache,
+    items: &mut Vec<Item>,
+) {
+    let Some(entry) = conversation.entries.get(index) else {
+        return;
+    };
+    {
         match entry {
             Entry::Prompt { text, steered } => items.push(Item::Prompt { text: text.clone().into(), steered: *steered }),
             Entry::Compacted => items.push(Item::Compacted),
@@ -86,7 +106,6 @@ pub fn items(conversation: &Conversation, cwd: &Path, open: &HashSet<String>, no
             }
         }
     }
-    items
 }
 
 /// "Working · 8s", "Worked for 19s", or "Worked" when the times were not saved.
@@ -109,8 +128,9 @@ pub fn summary(turn: &Turn, now: u64) -> String {
 /// The facts under a finished turn: how long, how many tokens.
 fn footer(turn: &Turn) -> Option<String> {
     let mut parts = Vec::new();
+    // Under a second is not worth saying: it is a turn that failed at once.
     if let (Some(started), Some(ended)) = (turn.started, turn.ended)
-        && ended > started
+        && ended >= started + 1000
     {
         parts.push(duration(ended - started));
     }

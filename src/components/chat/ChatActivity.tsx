@@ -1,7 +1,7 @@
 /**
  * Chat mode's tool calls as little chips in the agent's reply ("Looked up example.com"). A
  * chip opens a soft sheet with the same detail the Code transcript shows (`ToolDetail`), and a
- * settled run of several calls folds into one "Did N things" chip. Images a tool returned (a
+ * settled run of several calls folds into one summary chip. Images a tool returned (a
  * screenshot, a picture it read) show inline.
  * Labels and folding are pure (`chat-activity.ts`); this file only renders them.
  */
@@ -68,12 +68,17 @@ export function ActivityChips({ calls, results, live }: { calls: NormalizedBlock
         <Chip key={activity.key} activity={activity} open={open === activity.key} onToggle={() => setOpen((current) => current === activity.key ? undefined : activity.key)} />
       ));
     }
+    const stackIcons: Activity["icon"][] = [];
+    for (const activity of group.activities) {
+      if (!stackIcons.includes(activity.icon)) stackIcons.push(activity.icon);
+      if (stackIcons.length >= 3) break;
+    }
     return (
       <motion.button key={group.key} type="button" className="chat-chip fold" aria-expanded={false}
         onClick={() => setUnfolded((current) => new Set(current).add(group.key))}
         initial={false} animate={{ opacity: 1, scale: 1 }} transition={POP}>
         <span className="chat-chip-stack" aria-hidden="true">
-          {group.activities.slice(0, 3).map((activity) => <Icon key={activity.key} name={activity.icon} />)}
+          {stackIcons.map((icon) => <Icon key={icon} name={icon} />)}
         </span>
         <span className="chat-chip-label">{group.label}</span>
       </motion.button>

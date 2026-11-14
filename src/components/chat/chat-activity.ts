@@ -98,19 +98,148 @@ export function activitiesOf(calls: NormalizedBlock[], results: Map<string, Norm
   });
 }
 
-/** Runs this long or longer fold into a "Did N things" chip once they have all settled. */
+/** Runs this long or longer fold into a specific summary chip once they have all settled. */
 export const FOLD_AT = 3;
 
 export type ActivityGroup =
   | { type: "single"; activity: Activity }
   | { type: "fold"; key: string; activities: Activity[]; label: string };
 
+type ChatBucket = "write" | "edit" | "web_fetch" | "web_search" | "browser" | "mcp" | "read" | "search" | "memory" | "other";
+
+const CHAT_BUCKET_TIER: Record<ChatBucket, 1 | 2 | 3> = {
+  write: 1,
+  edit: 1,
+  web_fetch: 2,
+  web_search: 2,
+  browser: 2,
+  mcp: 2,
+  read: 3,
+  search: 3,
+  memory: 3,
+  other: 3
+};
+
+/**
+ * Conversational, path-deduplicated summary for a folded run of Chat mode calls
+ * (e.g. "Jotted down 2 files, looked up 2 pages", keeping Chat's casual register).
+ */
+export function summarizeActivityFold(activities: Activity[]): string {
+  interface Acc {
+    key: ChatBucket;
+    tier: 1 | 2 | 3;
+    order: number;
+    paths: Set<string>;
+    singleName?: string;
+    count: number;
+    memoryRead?: boolean;
+    memoryWrite?: boolean;
+  }
+  const buckets = new Map<ChatBucket, Acc>();
+  let order = 0;
+
+  const touch = (key: ChatBucket): Acc => {
+    let acc = buckets.get(key);
+    if (!acc) {
+      acc = { key, tier: CHAT_BUCKET_TIER[key], order: order++, paths: new Set(), count: 0 };
+      buckets.set(key, acc);
+    }
+    acc.count += 1;
+    return acc;
+  };
+
+  for (const activity of activities) {
+    const a = args(activity.call);
+    const name = activity.call.toolName ?? "tool";
+    switch (name) {
+      case "write":
+      case "edit":
+      case "read": {
+        const acc = touch(name);
+        const rawPath = str(a.path);
+        if (rawPath) {
+          acc.paths.add(rawPath);
+          if (acc.paths.size === 1) acc.singleName = baseName(rawPath);
+          else acc.singleName = undefined;
+        }
+        break;
+      }
+      case "web_fetch":
+        touch("web_fetch");
+        break;
+      case "web_search":
+        touch("web_search");
+        break;
+      case "ls":
+      case "grep":
+      case "find":
+        touch("search");
+        break;
+      case "memory_recall": {
+        const acc = touch("memory");
+        acc.memoryRead = true;
+        break;
+      }
+      case "memory_save":
+      case "memory_forget": {
+        const acc = touch("memory");
+        acc.memoryWrite = true;
+        break;
+      }
+      case "browser_open":
+      case "browser_snapshot":
+      case "browser_act":
+      case "browser_screenshot":
+      case "browser_console":
+        touch("browser");
+        break;
+      default:
+        touch(mcpToolParts(name) ? "mcp" : "other");
+        break;
+    }
+  }
+
+  const sizeOf = (acc: Acc) => acc.paths.size || acc.count;
+  const sorted = [...buckets.values()].sort((a, b) => a.tier - b.tier || sizeOf(b) - sizeOf(a) || a.order - b.order);
+
+  const phrase = (acc: Acc): string => {
+    const n = sizeOf(acc);
+    switch (acc.key) {
+      case "read":
+        return acc.singleName && acc.count === n && n === 1 ? `read ${acc.singleName}` : `read ${n} ${n === 1 ? "file" : "files"}`;
+      case "write":
+        return acc.singleName && n === 1 ? `jotted down ${acc.singleName}` : `jotted down ${n} ${n === 1 ? "file" : "files"}`;
+      case "edit":
+        return acc.singleName && n === 1 ? `updated ${acc.singleName}` : `updated ${n} ${n === 1 ? "file" : "files"}`;
+      case "web_fetch":
+        return `looked up ${n} ${n === 1 ? "page" : "pages"}`;
+      case "web_search":
+        return n === 1 ? "searched the web" : `searched the web ${n} times`;
+      case "search":
+        return n === 1 ? "checked files" : `checked ${n} times`;
+      case "memory":
+        return acc.memoryRead && acc.memoryWrite ? "used memory" : acc.memoryWrite ? "updated memory" : "recalled memory";
+      case "browser":
+        return `browsed ${n} ${n === 1 ? "step" : "steps"}`;
+      case "mcp":
+        return `used ${n} ${n === 1 ? "tool" : "tools"}`;
+      case "other":
+        return `did ${n} ${n === 1 ? "thing" : "things"}`;
+    }
+  };
+
+  const shown = sorted.slice(0, 2).map(phrase);
+  const overflow = sorted.slice(2).reduce((sum, acc) => sum + sizeOf(acc), 0);
+  const text = overflow > 0 ? `${shown.join(", ")}, +${overflow} more` : shown.join(", ");
+  return text ? text[0].toUpperCase() + text.slice(1) : `Did ${activities.length} things`;
+}
+
 /** Settled runs of `FOLD_AT`+ calls fold; live calls, failures and screenshots always show. */
 export function groupActivities(activities: Activity[]): ActivityGroup[] {
   const groups: ActivityGroup[] = [];
   let run: Activity[] = [];
   const flush = () => {
-    if (run.length >= FOLD_AT) groups.push({ type: "fold", key: `fold:${run[0].key}`, activities: run, label: `Did ${run.length} things` });
+    if (run.length >= FOLD_AT) groups.push({ type: "fold", key: `fold:${run[0].key}`, activities: run, label: summarizeActivityFold(run) });
     else run.forEach((activity) => groups.push({ type: "single", activity }));
     run = [];
   };

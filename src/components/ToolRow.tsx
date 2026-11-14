@@ -1,13 +1,15 @@
 import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { NormalizedBlock } from "../types";
+import { displayPath } from "../chat-utils";
+import { formatReadRanges, type CoalescedCallStep } from "../explore-utils";
 import { SCREENSHOT_TOOL_NAMES, splitPathSubject, summarizeTool, toolPresentation, type ToolSummary } from "../tool-utils";
 import { motionAllowed } from "../hooks/useSmoothText";
 import { Icon } from "./Icons";
 import { OrbitSpinner } from "./OrbitSpinner";
 import { QuillMark } from "./QuillMark";
 import { RollingNumber } from "./RollingNumber";
-import { ToolDetail, ToolExpansion, ToolText, toolIcon, useToolDisclosure } from "./ToolDetail";
+import { CoalescedToolDetail, ToolDetail, ToolExpansion, ToolText, toolIcon, useToolDisclosure } from "./ToolDetail";
 import { ImageLightbox } from "./ui/ImageLightbox";
 
 export { ToolDetail, ToolExpansion };
@@ -109,8 +111,8 @@ function useCallFace(call: NormalizedBlock, result: NormalizedBlock | undefined,
   return { summary, failed, pending, shownResult, expandable };
 }
 
-/** Verb, subject (directory dimmed so the file name survives truncation), +/− and failure. */
-function CallWords({ summary, pending, failed }: { summary: ToolSummary; pending: boolean; failed: boolean }) {
+/** Verb, subject (directory dimmed so the file name survives truncation), ranges, +/− and failure. */
+function CallWords({ summary, pending, failed, rangeText }: { summary: ToolSummary; pending: boolean; failed: boolean; rangeText?: string }) {
   /** Only real file paths get a dir/name split; commands, patterns and URLs are left whole. */
   const pathParts = summary.kind === "read" || summary.kind === "edit" || summary.kind === "write" ? splitPathSubject(summary.subject) : undefined;
   return (
@@ -122,6 +124,7 @@ function CallWords({ summary, pending, failed }: { summary: ToolSummary; pending
           <span className="tool-row-subject-name">{pathParts ? pathParts.name : summary.subject}</span>
         </code>
       )}
+      {rangeText && <span className="tool-row-ranges">({rangeText})</span>}
       {(summary.additions || summary.deletions) ? (
         <span className="tool-row-stats">
           {summary.additions ? <em className="add"><RollingNumber prefix="+" value={summary.additions} /></em> : null}
@@ -170,11 +173,22 @@ export interface ChipCall {
   running?: boolean;
   /** Shared-element id: set where this chip may fly into an Explored head (`explore-utils.ts` flyId). */
   flyId?: string;
+  /** Coalesced line ranges for multi-slice reads of the same file. */
+  rangeText?: string;
+  /** Coalesced sub-calls belonging to this chip (for opening stacked details). */
+  coalesced?: { key: string; call: NormalizedBlock; result?: NormalizedBlock }[];
+  /** Override done/active summary stats when coalesced. */
+  summaryOverride?: ToolSummary;
+  failedOverride?: boolean;
 }
 
 function ToolChip({ entry, open, onToggle }: { entry: ChipCall; open: boolean; onToggle: () => void }) {
   const { call, result, liveText, running } = entry;
-  const { summary, failed, pending, expandable } = useCallFace(call, result, liveText, running);
+  const face = useCallFace(call, result, liveText, running);
+  const summary = entry.summaryOverride ?? face.summary;
+  const failed = entry.failedOverride ?? face.failed;
+  const pending = running ? (entry.coalesced ? entry.coalesced.some((c) => !c.result) : face.pending) : false;
+  const expandable = face.expandable || Boolean(entry.coalesced?.some((c) => c.result?.text || (c.result?.details as Record<string, unknown> | undefined)?.diff));
   const animate = useTranscriptMotion();
   const pops = usePopsIn(call.toolCallId, pending);
   const status = pending ? "live" : failed ? "failed" : "done";
@@ -196,7 +210,7 @@ function ToolChip({ entry, open, onToggle }: { entry: ChipCall; open: boolean; o
       transition={{ ...POP, layout: FLY }}
     >
       <Icon name={toolIcon(call, result, summary)} className="tool-row-icon" />
-      <CallWords summary={summary} pending={pending} failed={failed} />
+      <CallWords summary={summary} pending={pending} failed={failed} rangeText={entry.rangeText} />
       <OrbitSpinner active={pending} failed={failed} className="tool-chip-spinner" />
     </motion.button>
   );
@@ -204,7 +218,9 @@ function ToolChip({ entry, open, onToggle }: { entry: ChipCall; open: boolean; o
 
 function Sheet({ entry, animate }: { entry: ChipCall; animate: boolean }) {
   const { shownResult, pending } = useCallFace(entry.call, entry.result, entry.liveText, entry.running);
-  const body = <ToolDetail call={entry.call} result={shownResult} live={pending} />;
+  const body = entry.coalesced?.length
+    ? <CoalescedToolDetail entries={entry.coalesced} live={pending} />
+    : <ToolDetail call={entry.call} result={shownResult} live={pending} />;
   if (!animate) return <div className="tool-sheet">{body}</div>;
   return (
     <motion.div className="tool-sheet" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={SHEET}>
@@ -271,15 +287,35 @@ export function ToolRow(props: ToolRowProps) {
   return toolPresentation(props.call) === "chip" ? <ToolChips entries={[props]} /> : <ToolCallRow {...props} />;
 }
 
-function ToolCallRow({ call, result, liveText, running }: ToolRowProps) {
+function ToolCallRow({
+  call,
+  result,
+  liveText,
+  running,
+  compact = false,
+  coalesced,
+  summaryOverride,
+  failedOverride,
+  rangeText
+}: ToolRowProps & {
+  compact?: boolean;
+  coalesced?: { key: string; call: NormalizedBlock; result?: NormalizedBlock }[];
+  summaryOverride?: ToolSummary;
+  failedOverride?: boolean;
+  rangeText?: string;
+}) {
   const [open, toggle] = useToolDisclosure(call.toolCallId ? `tool:${call.toolCallId}` : undefined);
-  const { summary, failed, pending, shownResult, expandable } = useCallFace(call, result, liveText, running);
+  const face = useCallFace(call, result, liveText, running);
+  const summary = summaryOverride ?? face.summary;
+  const failed = failedOverride ?? face.failed;
+  const pending = running ? (coalesced ? coalesced.some((c) => !c.result) : face.pending) : false;
+  const expandable = face.expandable || Boolean(coalesced?.some((c) => c.result?.text || (c.result?.details as Record<string, unknown> | undefined)?.diff || c.call.toolName === "write"));
   const animate = useTranscriptMotion();
   const pops = usePopsIn(call.toolCallId, pending);
 
   return (
     <motion.div
-      className={`tool-row ${summary.kind === "bash" ? "command" : ""} ${summary.kind === "commit" ? "commit" : ""} ${open ? "open" : ""} ${failed && !summary.commit ? "error" : ""}`}
+      className={`tool-row ${summary.kind === "bash" ? "command" : ""} ${summary.kind === "commit" ? "commit" : ""} ${compact ? "work-subrow" : ""} ${open ? "open" : ""} ${failed && !summary.commit ? "error" : ""}`}
       initial={animate && pops ? { opacity: 0, scale: 0.96, y: 4 } : false}
       animate={{ opacity: 1, scale: 1, y: 0 }}
       transition={POP}
@@ -292,7 +328,7 @@ function ToolCallRow({ call, result, liveText, running }: ToolRowProps) {
         ) : (
           <Icon name={toolIcon(call, result, summary)} className="tool-row-icon" />
         )}
-        {summary.kind === "commit" ? <CommitWords summary={summary} pending={pending} failed={failed} /> : <CallWords summary={summary} pending={pending} failed={failed} />}
+        {summary.kind === "commit" ? <CommitWords summary={summary} pending={pending} failed={failed} /> : <CallWords summary={summary} pending={pending} failed={failed} rangeText={rangeText} />}
         <span className="tool-row-status">
           <OrbitSpinner active={pending} failed={failed} />
           {expandable && <Icon name="chevron" className="tool-chevron" />}
@@ -303,13 +339,87 @@ function ToolCallRow({ call, result, liveText, running }: ToolRowProps) {
         <AnimatePresence initial={false}>
           {open && expandable && (
             <motion.div key="detail" className="tool-row-reveal" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={SHEET}>
-              <ToolDetail call={call} result={shownResult} live={pending} head={false} />
+              {coalesced?.length
+                ? <CoalescedToolDetail entries={coalesced} live={pending} head={false} />
+                : <ToolDetail call={call} result={face.shownResult} live={pending} head={false} />}
             </motion.div>
           )}
         </AnimatePresence>
-      ) : open && expandable && <ToolDetail call={call} result={shownResult} live={pending} head={false} />}
+      ) : open && expandable && (
+        coalesced?.length
+          ? <CoalescedToolDetail entries={coalesced} live={pending} head={false} />
+          : <ToolDetail call={call} result={face.shownResult} live={pending} head={false} />
+      )}
     </motion.div>
   );
+}
+
+/** Builds a `ChipCall` or row props from a `CoalescedCallStep` (combining ranges or +/- stats). */
+export function buildCoalescedProps(
+  step: CoalescedCallStep,
+  results: Map<string, NormalizedBlock>,
+  liveToolText?: Record<string, string>,
+  running = false
+): ChipCall & { compactable: boolean } {
+  const first = step.items[0];
+  const entries = step.items.map((item) => {
+    const id = item.block.toolCallId;
+    const result = id ? results.get(id) : undefined;
+    const live = running && item.live && !result;
+    const fallbackText = live && id ? liveToolText?.[id] : undefined;
+    const effectiveResult = result ?? (fallbackText ? { type: "tool-result" as const, text: fallbackText } : undefined);
+    return { key: item.key, call: item.block, result: effectiveResult };
+  });
+  const last = entries[entries.length - 1];
+  const baseSummary = summarizeTool(first.block, last.result);
+  const rangeText = formatReadRanges(step.ranges) || undefined;
+  let summaryOverride: ToolSummary | undefined;
+  if (step.kind === "edit" || step.kind === "write") {
+    summaryOverride = {
+      ...baseSummary,
+      kind: step.kind,
+      activeVerb: step.kind === "write" ? "Writing" : "Editing",
+      doneVerb: step.created ? "Created" : step.kind === "write" ? "Wrote" : "Edited",
+      subject: step.path ? displayPath(step.path) : baseSummary.subject,
+      additions: step.additions || undefined,
+      deletions: step.deletions || undefined
+    };
+  }
+  const activeId = entries.find((e) => !e.result)?.call.toolCallId;
+  const activeLiveText = activeId ? liveToolText?.[activeId] : undefined;
+  return {
+    call: first.block,
+    result: last.result,
+    liveText: activeLiveText,
+    running: running && step.items.some((item) => item.live),
+    flyId: step.flyId,
+    rangeText,
+    coalesced: entries.length > 1 ? entries : undefined,
+    summaryOverride,
+    failedOverride: step.failed,
+    compactable: true
+  };
+}
+
+/** Renders a coalesced step either as a standalone bare row/chip or a compact timeline sub-row inside a group. */
+export function CoalescedRow({
+  step,
+  results,
+  liveToolText,
+  running,
+  compact = false
+}: {
+  step: CoalescedCallStep;
+  results: Map<string, NormalizedBlock>;
+  liveToolText?: Record<string, string>;
+  running: boolean;
+  compact?: boolean;
+}) {
+  const props = buildCoalescedProps(step, results, liveToolText, running);
+  if (toolPresentation(props.call) === "chip") {
+    return <ToolChips entries={[props]} />;
+  }
+  return <ToolCallRow {...props} compact={compact} />;
 }
 
 /** Fallback row for a tool result that never matched a call (rare). */

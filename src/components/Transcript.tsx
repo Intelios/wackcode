@@ -8,6 +8,7 @@ import { motionAllowed, useSmoothText } from "../hooks/useSmoothText";
 import { formatRunDuration } from "../chat-utils";
 import { blockKey, flyId, layoutTranscript, tailGroupKey, type TranscriptSlot } from "../explore-utils";
 import { completedPlan, layoutWorkTurns, type WorkRow } from "../completed-work";
+import { summarizeTurnFileChanges } from "../turn-changes";
 import { splitFileSection, type FileAttachment } from "../attachment-utils";
 import { chatMentionToken } from "../chat-refs";
 import { splitMentions } from "../mention-utils";
@@ -35,7 +36,8 @@ import { CanvasProgress } from "./canvas/CanvasProgress";
 import { CANVAS_TOOL_NAME } from "../canvas-state";
 import { SubagentGroup } from "./SubagentChip";
 import { ThinkingExpansion, ThinkingRow } from "./ThinkingRow";
-import { FLY, OrphanResult, ToolChips, ToolExpansion, ToolImageSource, ToolRow, useTranscriptMotion, type ChipCall } from "./ToolRow";
+import { buildCoalescedProps, CoalescedRow, FLY, OrphanResult, ToolChips, ToolExpansion, ToolImageSource, ToolRow, useTranscriptMotion, type ChipCall } from "./ToolRow";
+import { TurnChangesCard } from "./TurnChangesCard";
 import { PonderingDuck } from "./PonderingDuck";
 import { useContextMenu } from "./ui/ContextMenu";
 import { useNavigationDismiss } from "./ui/NavigationScope";
@@ -110,6 +112,10 @@ interface Props {
   suggestions?: SuggestionScopeInput;
   /** This chat's canvases and how a card opens one in the side panel. */
   canvases?: CanvasScope;
+  /** Open the workspace Changes drawer from a per-turn summary card. */
+  onOpenChanges?: () => void;
+  /** Show per-turn "Edited N files" summary cards below settled turns (omitted in sub-agent views). */
+  showTurnChangesCard?: boolean;
 }
 
 /** Everything about suggested tasks the transcript cannot know by itself. */
@@ -418,6 +424,20 @@ function renderSlots(
       );
       continue;
     }
+    if (slot.type === "coalesced") {
+      const props = buildCoalescedProps(slot.step, results, liveToolText, live);
+      if (toolPresentation(props.call) === "chip") {
+        strip.push(props);
+      } else {
+        flush();
+        nodes.push(
+          <div key={`coalesced:${slot.step.key}`} className="block-slot">
+            <CoalescedRow step={slot.step} results={results} liveToolText={liveToolText} running={live} />
+          </div>
+        );
+      }
+      continue;
+    }
     const block = message.blocks[slot.index];
     const special = block.type === "tool-call" ? renderSpecialCall(block, results, liveToolDetails, live, planState, onPlanAction, running, skillCard) : undefined;
     if (block.type === "tool-call" && special === undefined && toolPresentation(block) === "chip") {
@@ -478,12 +498,16 @@ function signature(
     message.commandPresentation,
     message.turn,
     message.blocks.map((block) => callInputs(block, results, liveToolText, liveToolDetails)),
-    // An exploration group also renders blocks from the later messages its run spans.
-    slots.map((slot) => slot.type === "block" ? slot.index : [
-      slot.group.key,
-      slot.group.items.map((item) => [item.key, item.live, item.streaming, signatureBlock(item.block), callInputs(item.block, results, liveToolText, liveToolDetails)]),
-      (slot.group.trailing ?? []).map((item) => [item.key, item.streaming, signatureBlock(item.block)])
-    ])
+    // An exploration group or coalesced run also renders blocks from later messages its run spans.
+    slots.map((slot) => slot.type === "block"
+      ? slot.index
+      : slot.type === "coalesced"
+        ? [`coalesced:${slot.step.key}`, slot.step.items.map((item) => [item.key, item.live, item.streaming, signatureBlock(item.block), callInputs(item.block, results, liveToolText, liveToolDetails)])]
+        : [
+            slot.group.key,
+            slot.group.items.map((item) => [item.key, item.live, item.streaming, signatureBlock(item.block), callInputs(item.block, results, liveToolText, liveToolDetails)]),
+            (slot.group.trailing ?? []).map((item) => [item.key, item.streaming, signatureBlock(item.block)])
+          ])
   ]);
 }
 
@@ -511,8 +535,18 @@ function cachedSignature(
     if (inputs) deps.push(...inputs);
   };
   message.blocks.forEach(pushInputs);
-  deps.push(slots.map((slot) => slot.type === "block" ? slot.index : `group:${slot.group.key}`).join(","));
+  deps.push(slots.map((slot) =>
+    slot.type === "block" ? slot.index
+      : slot.type === "coalesced" ? `coalesced:${slot.step.key}`
+        : `group:${slot.group.key}`).join(","));
   for (const slot of slots) {
+    if (slot.type === "coalesced") {
+      for (const item of slot.step.items) {
+        deps.push(item.block, item.live, item.streaming);
+        pushInputs(item.block);
+      }
+      continue;
+    }
     if (slot.type !== "explore") continue;
     for (const item of slot.group.items) {
       deps.push(item.block, item.live, item.streaming);
@@ -726,7 +760,7 @@ function activityLabel(activity?: string): string {
   return "Working…";
 }
 
-export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, compaction, runTimings = [], collapseCompletedWork = true, hideLiveDuration = false, scopeKey = "", viewState, historyReady = true, status, liveToolText, liveToolDetails, planState, onPlanAction, onVisualSend, onVisualLink, skillDrafts, skillDraftsSaving, taskId, onSkillAction, loadSkillDocument, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind, loadImage, chatLinks, empty, suggestions, canvases }: Props) {
+export function Transcript({ messages, modelSwitches = [], partial, running, activity, activeRun, compaction, runTimings = [], collapseCompletedWork = true, hideLiveDuration = false, scopeKey = "", viewState, historyReady = true, status, liveToolText, liveToolDetails, planState, onPlanAction, onVisualSend, onVisualLink, skillDrafts, skillDraftsSaving, taskId, onSkillAction, loadSkillDocument, actionsEnabled = false, vision = false, modelName, onMessageAction, onUndoRewind, loadImage, chatLinks, empty, suggestions, canvases, onOpenChanges, showTurnChangesCard = true }: Props) {
   const loadToolImage = useContext(ToolImageSource);
   const imageScope = useReplyImageScope(messages, loadImage, loadToolImage, Boolean(taskId));
   const scroll = useFollowScroll(viewState, historyReady);
@@ -836,8 +870,8 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
     viewState.tools = expandedTools;
   }, [viewState, expandedWork, expandedCompactions, expandedThinking, expandedGroups, expandedTools]);
   const layout = useMemo(
-    () => layoutTranscript(messages, partial, { grouping, liveMessageId: running ? lastAssistantId : undefined }),
-    [messages, partial, grouping, running, lastAssistantId]
+    () => layoutTranscript(messages, partial, { grouping, liveMessageId: running ? lastAssistantId : undefined, results, running }),
+    [messages, partial, grouping, running, lastAssistantId, results]
   );
 
   const activeUserId = useMemo(() => activeRun
@@ -1048,13 +1082,23 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
                 const expansionKey = JSON.stringify([scopeKey, turn.key]);
                 const duration = message.id === activeUserId ? (hideLiveDuration ? null : <RunDuration startedAt={activeRun?.startedAt} />)
                   : timingsByMessage.has(message.id) ? <RunDuration durationMs={timingsByMessage.get(message.id)} /> : null;
+                const turnChanges = showTurnChangesCard && turn.settled
+                  ? summarizeTurnFileChanges(messages, turn.userIndex + 1, turn.endIndex, results, {
+                      layout,
+                      foldedByWorkTurn: Boolean(collapseCompletedWork && turn.folded)
+                    })
+                  : undefined;
+                const after = turn.canvases.length > 0 || (turn.settled && turn.suggestions.length > 0) || turnChanges ? (
+                  <>
+                    {turnChanges && <TurnChangesCard summary={turnChanges} onOpenChanges={onOpenChanges} />}
+                    {turn.canvases.map((touch, index) => <CanvasCard key={touch.canvas} touch={touch} index={index} />)}
+                    {turn.settled && turn.suggestions.length > 0 && <SuggestionTray suggestions={turn.suggestions} />}
+                  </>
+                ) : undefined;
                 return <Fragment key={key}>
                   {renderSwitches(messageIndex)}
                   <WorkTurn turn={turn} scopeKey={scopeKey} user={renderMessage(message)} duration={duration} durationMs={timingsByMessage.get(message.id)}
-                    after={turn.canvases.length > 0 || (turn.settled && turn.suggestions.length > 0) ? <>
-                      {turn.canvases.map((touch, index) => <CanvasCard key={touch.canvas} touch={touch} index={index} />)}
-                      {turn.settled && turn.suggestions.length > 0 && <SuggestionTray suggestions={turn.suggestions} />}
-                    </> : undefined}
+                    after={after}
                     enabled={collapseCompletedWork} open={expandedWork.has(expansionKey)} renderRows={renderRows} scroll={scroll}
                     onAutoCollapse={() => setExpandedWork((current) => {
                       if (!current.has(expansionKey)) return current;

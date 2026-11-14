@@ -78,8 +78,8 @@ const CHAT_OPTIONS: { key: "chatTabs" | "thinkingPreview" | "messageBubbles" | "
   },
   {
     key: "groupExploration",
-    label: "Group exploration",
-    description: () => "Fold runs of file reads, searches and listings into one “Explored” chip you can expand.",
+    label: "Group work steps",
+    description: () => "Fold runs of reads, edits, searches and commands into one summary row you can expand.",
     preview: "explore"
   },
   {
@@ -90,11 +90,11 @@ const CHAT_OPTIONS: { key: "chatTabs" | "thinkingPreview" | "messageBubbles" | "
   }
 ];
 
-/** The miniature exploration: one folded chip when grouped, each call its own chip when not. */
-const MINI_EXPLORATION: { icon: "file" | "search" | "folder"; verb: string; subject: string }[] = [
+/** The miniature grouped work preview: one folded summary when grouped, separate items when not. */
+const MINI_EXPLORATION: { icon: "pencil" | "file" | "terminal"; verb: string; subject: string }[] = [
   { icon: "file", verb: "Read", subject: "App.tsx" },
-  { icon: "search", verb: "Searched", subject: "useTheme" },
-  { icon: "folder", verb: "Listed", subject: "src" }
+  { icon: "pencil", verb: "Edited", subject: "App.tsx" },
+  { icon: "terminal", verb: "Ran", subject: "pnpm test" }
 ];
 
 /** A group's place in the page's entrance: they rise in one after another (styles.css). */
@@ -592,10 +592,10 @@ export function AppearanceSection({ config, glassSupported, backgroundImageUrlFo
                         {on ? (
                           <span className="mini-tool mini-chip mini-fold">
                             <span className="mini-stack">
-                              <Icon name="file" /><Icon name="search" /><Icon name="folder" />
+                              <Icon name="pencil" /><Icon name="terminal" /><Icon name="file" />
                             </span>
-                            <span className="mini-tool-verb">Explored</span>
-                            <span className="mini-tool-subject">· 1 file, 1 search, 1 list</span>
+                            <span className="mini-tool-verb">Edited 1 file,</span>
+                            <span className="mini-tool-subject">ran 1 command, read 1 file</span>
                             <Icon name="chevron" className="mini-tool-chevron" />
                           </span>
                         ) : (

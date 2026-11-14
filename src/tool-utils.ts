@@ -183,6 +183,13 @@ export function parseVisualArgs(call: NormalizedBlock): { title: string; html: s
   return { title, html };
 }
 
+/** The result is authoritative: rejected or unfinished plan calls are never plan cards. */
+export function completedPlan(result?: NormalizedBlock): string | undefined {
+  if (result?.isError) return undefined;
+  const details = result?.details as { plan?: unknown } | undefined;
+  return typeof details?.plan === "string" && details.plan.trim() ? details.plan : undefined;
+}
+
 /** Saved visual metadata stays small; the document with images never travels in a snapshot. */
 export function parseVisualDetails(value: unknown): VisualResultDetails | undefined {
   if (!value || typeof value !== "object") return undefined;

@@ -234,8 +234,8 @@ describe("ChatArea", () => {
     const calls = [1, 2, 3].map((n) => ({ type: "tool-call" as const, toolName: "web_fetch", toolCallId: `t${n}`, arguments: { url: `http://${n}.example.com` } }));
     renderArea({ task: task(), runtime: { snapshot: {} as never } as TaskRuntime,
       messages: [msg("u1", "user", "Hi"), msg("a1", "assistant", "Done", { blocks: [{ type: "text", text: "Done" }, ...calls.map((c) => ({ ...c, isError: false }))] })] });
-    expect(screen.getByRole("button", { name: /Did 3 things/ })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Did 3 things/ }));
+    expect(screen.getByRole("button", { name: /Looked up 3 pages/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Looked up 3 pages/ }));
     expect(screen.getAllByText(/Looked up/)).toHaveLength(3);
   });
 });

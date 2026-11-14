@@ -768,16 +768,16 @@ describe("SettingsPage appearance section", () => {
     await waitFor(() => expect(again.onSetAppearance).toHaveBeenCalledWith({ ...DEFAULT_APPEARANCE, messageBubbles: false }));
   });
 
-  it("switches exploration grouping off and back on", async () => {
+  it("switches work grouping off and back on", async () => {
     const { onSetAppearance } = renderAppearance({ ...DEFAULT_APPEARANCE, groupExploration: true });
-    const toggle = screen.getByRole("switch", { name: "Group exploration" });
+    const toggle = screen.getByRole("switch", { name: "Group work steps" });
     expect(toggle).toHaveAttribute("aria-checked", "true");
     fireEvent.click(toggle);
     await waitFor(() => expect(onSetAppearance).toHaveBeenCalledWith({ ...DEFAULT_APPEARANCE, groupExploration: false }));
     cleanup();
 
     const again = renderAppearance({ ...DEFAULT_APPEARANCE, groupExploration: false });
-    fireEvent.click(screen.getByRole("switch", { name: "Group exploration" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Group work steps" }));
     await waitFor(() => expect(again.onSetAppearance).toHaveBeenCalledWith({ ...DEFAULT_APPEARANCE, groupExploration: true }));
   });
 

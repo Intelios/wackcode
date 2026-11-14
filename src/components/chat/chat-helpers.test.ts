@@ -66,7 +66,7 @@ describe("activities", () => {
     const results = new Map(["a", "b", "c", "e"].map((id) => [id, result(id)]));
     results.set("s", result("s", { images: [{ imageId: "i" }] }));
     const groups = groupActivities(activitiesOf(["a", "b", "c", "s", "e", "live"].map((id) => call(id, "read")), results, true));
-    expect(groups.map((group) => group.type === "fold" ? group.label : group.activity.key)).toEqual(["Did 3 things", "s", "e", "live"]);
+    expect(groups.map((group) => group.type === "fold" ? group.label : group.activity.key)).toEqual(["Read 3 files", "s", "e", "live"]);
   });
 });
 

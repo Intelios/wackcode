@@ -449,3 +449,32 @@ export function ToolDetail({ call, result, live = false, head = true }: { call: 
   }
   return <div className={`tool-detail${failed ? " failed" : ""}${live ? " live" : ""}`}>{sheet}</div>;
 }
+
+/** Stacked detail sheets for coalesced same-file calls or multi-edit file summaries. */
+export function CoalescedToolDetail({
+  entries,
+  live = false,
+  head = false
+}: {
+  entries: { key: string; call: NormalizedBlock; result?: NormalizedBlock }[];
+  live?: boolean;
+  head?: boolean;
+}) {
+  if (entries.length === 1) {
+    const only = entries[0];
+    return <ToolDetail call={only.call} result={only.result} live={live && !only.result} head={head} />;
+  }
+  return (
+    <div className="tool-detail-stack">
+      {entries.map((entry) => (
+        <ToolDetail
+          key={entry.key}
+          call={entry.call}
+          result={entry.result}
+          live={live && !entry.result}
+          head={entry.call.toolName === "read" || head}
+        />
+      ))}
+    </div>
+  );
+}

@@ -634,6 +634,7 @@ export default function App() {
     if (panelExpanded && !shownTab(change(panelTabsRef.current))) setPanelExpanded(false);
   }, [panelExpanded, setPanelTabs, setPanelExpanded]);
   const toggleChanges = useCallback(() => changePanel((tabs) => toggleTab(tabs, CHANGES_VIEW)), [changePanel]);
+  const openChangesTab = useCallback(() => changePanel((tabs) => openTab(tabs, CHANGES_VIEW)), [changePanel]);
   const toggleBrowser = useCallback(() => {
     const taskId = selectedTaskRef.current;
     if (taskId) changePanel((tabs) => toggleTab(tabs, { kind: "browser", taskId }));
@@ -3760,6 +3761,7 @@ export default function App() {
               chatLinks={chatLinks}
               suggestions={selectedSuggestions}
               canvases={canvasScope}
+              onOpenChanges={openChangesTab}
             />
             </ToolImageSource.Provider>
             </SubagentPanelLink.Provider>

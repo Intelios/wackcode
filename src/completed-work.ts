@@ -1,6 +1,6 @@
 import type { NormalizedBlock, NormalizedMessage, TaskStatus } from "./types";
 import type { TranscriptLayout, TranscriptSlot } from "./explore-utils";
-import { SHOW_VISUAL_TOOL_NAME, SKILL_CREATOR_TOOL_NAME, parseSkillPreviewDetails } from "./tool-utils";
+import { SHOW_VISUAL_TOOL_NAME, SKILL_CREATOR_TOOL_NAME, completedPlan, parseSkillPreviewDetails } from "./tool-utils";
 import { SUGGEST_TASK_TOOL_NAME, suggestionFromCall, type SuggestionCard } from "./suggestions";
 import { CANVAS_TOOL_NAME, canvasTouch, mergeTouches, type CanvasTouch } from "./canvas-state";
 import { COMPARE_IMAGES_TOOL_NAME, completedImageComparison } from "./image-comparisons";
@@ -40,12 +40,7 @@ export interface WorkTurn {
   canvases: CanvasTouch[];
 }
 
-/** The result is authoritative: rejected or unfinished plan calls are never plan cards. */
-export function completedPlan(result?: NormalizedBlock): string | undefined {
-  if (result?.isError) return undefined;
-  const details = result?.details as { plan?: unknown } | undefined;
-  return typeof details?.plan === "string" && details.plan.trim() ? details.plan : undefined;
-}
+export { completedPlan };
 
 /** Same rule for skill-creator previews: only a finished, valid result is a review card. */
 export function completedSkillDraft(result?: NormalizedBlock): boolean {

@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { NormalizedMessage } from "../types";
+import type { NormalizedBlock, NormalizedMessage } from "../types";
 import { composeFileSection } from "../attachment-utils";
 import { encodeChatRefs } from "../chat-refs";
 import { ExploreGroupingEnabled } from "./ExploreGroup";
@@ -886,7 +886,7 @@ describe("Transcript tool chips", () => {
   const call = (id: string, toolName: string, args: Record<string, unknown> = {}) => ({ type: "tool-call" as const, toolName, toolCallId: id, arguments: args });
   const done = (...ids: string[]): NormalizedMessage => ({ id: `tool-${ids.join("-")}`, role: "tool", blocks: ids.map((id) => ({ type: "tool-result" as const, toolCallId: id, text: `${id} output` })) });
 
-  it("flows neighbouring chip calls into one strip, which a row or prose breaks", () => {
+  it("flows neighbouring chip calls into one strip when grouping is off, broken by rows or prose", () => {
     const assistant: NormalizedMessage = { id: "a-1", role: "assistant", timestamp: 2_000, blocks: [
       call("m1", "memory_save", { title: "Book taste" }),
       call("f1", "web_fetch", { url: "https://example.com/page" }),
@@ -894,7 +894,11 @@ describe("Transcript tool chips", () => {
       call("x1", "mcp__blender__look"),
       { type: "text", text: "Done." }
     ] };
-    const { container } = render(<Transcript messages={[assistant, done("m1", "f1", "e1", "x1")]} running={false} />);
+    const { container } = render(
+      <ExploreGroupingEnabled.Provider value={false}>
+        <Transcript messages={[assistant, done("m1", "f1", "e1", "x1")]} running={false} />
+      </ExploreGroupingEnabled.Provider>
+    );
     const strips = container.querySelectorAll(".tool-chips");
     expect(strips).toHaveLength(2);
     expect(within(strips[0] as HTMLElement).getByRole("button", { name: /Saved memory.*Book taste/ })).toHaveClass("tool-chip");
@@ -906,10 +910,14 @@ describe("Transcript tool chips", () => {
     expect(edit.closest(".tool-chips")).toBeNull();
   });
 
-  it("gives each message its own strip", () => {
+  it("gives each message its own strip when grouping is off", () => {
     const first: NormalizedMessage = { id: "a-1", role: "assistant", timestamp: 2_000, blocks: [call("m1", "memory_save", { title: "One" })] };
     const second: NormalizedMessage = { id: "a-2", role: "assistant", timestamp: 3_000, blocks: [call("m2", "memory_recall", { names: ["two"] })] };
-    const { container } = render(<Transcript messages={[first, done("m1"), second, done("m2")]} running={false} />);
+    const { container } = render(
+      <ExploreGroupingEnabled.Provider value={false}>
+        <Transcript messages={[first, done("m1"), second, done("m2")]} running={false} />
+      </ExploreGroupingEnabled.Provider>
+    );
     expect(container.querySelectorAll(".tool-chips")).toHaveLength(2);
   });
 
@@ -917,7 +925,11 @@ describe("Transcript tool chips", () => {
     const assistant: NormalizedMessage = { id: "a-1", role: "assistant", timestamp: 2_000, blocks: [
       call("m1", "memory_save", { title: "Book taste" }), call("f1", "web_fetch", { url: "https://example.com" })
     ] };
-    const { container } = render(<Transcript messages={[assistant, done("m1", "f1")]} running={false} />);
+    const { container } = render(
+      <ExploreGroupingEnabled.Provider value={false}>
+        <Transcript messages={[assistant, done("m1", "f1")]} running={false} />
+      </ExploreGroupingEnabled.Provider>
+    );
     const memory = screen.getByRole("button", { name: /Saved memory/ });
     const fetch = screen.getByRole("button", { name: /Fetched/ });
     fireEvent.click(memory);
@@ -940,6 +952,90 @@ describe("Transcript tool chips", () => {
     expect(status).toHaveTextContent("Working…");
     expect(status.querySelector(".ponder-duck.live")).not.toBeNull();
     expect(container.querySelectorAll(".work-dots i")).toHaveLength(3);
+  });
+});
+
+describe("Transcript unified work grouping and turn file changes", () => {
+  const user: NormalizedMessage = { id: "u-1", entryId: "u-1", role: "user", timestamp: 1_000, blocks: [{ type: "text", text: "Implement and commit" }] };
+  const call = (id: string, toolName: string, args: Record<string, unknown> = {}): NormalizedBlock =>
+    ({ type: "tool-call", toolName, toolCallId: id, arguments: args });
+  const result = (id: string, extra: Partial<NormalizedBlock> = {}): NormalizedMessage =>
+    ({ id: `t-${id}`, role: "tool", blocks: [{ type: "tool-result", toolCallId: id, text: `${id} ok`, ...extra }] });
+
+  it("groups reads, bridging narration, edits and non-commit commands while leaving git commits standalone", () => {
+    const a1: NormalizedMessage = { id: "a-1", role: "assistant", timestamp: 2_000, blocks: [
+      call("r1", "read", { path: "src/App.tsx", offset: 1, limit: 50 }),
+      call("r2", "read", { path: "src/App.tsx", offset: 80, limit: 41 }),
+      { type: "text", text: "Applying the fix now." },
+      call("e1", "edit", { path: "src/App.tsx", oldText: "a", newText: "b" }),
+      call("b1", "bash", { command: "pnpm test" }),
+      call("c1", "bash", { command: 'git commit -m "Fix app"' })
+    ] };
+    const resMessages = [
+      result("r1", { text: "Showing lines 1-50 of 200\nline1" }),
+      result("r2", { text: "Showing lines 80-120 of 200\nline80" }),
+      result("e1", { details: { diff: "-old\n+new1\n+new2" } }),
+      result("b1", { text: "All tests pass" }),
+      result("c1", { text: "[main 1a2b3c4] Fix app\n 1 file changed, 2 insertions(+), 1 deletion(-)" })
+    ];
+    const answer: NormalizedMessage = { id: "a-2", role: "assistant", timestamp: 3_000, stopReason: "stop", blocks: [{ type: "text", text: "All fixed and committed." }], turn: { userEntryId: "u-1", endEntryId: "a-2" } };
+    const { container } = render(
+      <Transcript messages={[user, a1, ...resMessages, answer]} running={false} collapseCompletedWork={false} />
+    );
+
+    const head = screen.getByRole("button", { name: /Edited 1 file, ran 1 command, read 1 file · 1 note/ });
+    expect(head).toHaveAttribute("aria-expanded", "false");
+    expect(container.querySelector(".explore-head .tool-row-stats")).toHaveTextContent("+2−1");
+    // Git commit broke out cleanly as its own milestone row outside the work group.
+    expect(screen.getByRole("button", { name: /Committed.*Fix app/ }).closest(".tool-row")).toHaveClass("commit");
+    // Edited 1 file inside collapsed work group still surfaces the TurnChangesCard below.
+    expect(screen.getByRole("region", { name: "Edited 1 file" })).toBeInTheDocument();
+
+    fireEvent.click(head);
+    expect(screen.getByText("Applying the fix now.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Read.*App\.tsx.*\(1–50, 80–120\)/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Edited.*App\.tsx/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Ran.*pnpm test/ })).toBeInTheDocument();
+  });
+
+  it("renders consecutive edits on the same file as a single bare coalesced row without redundant card", () => {
+    const a1: NormalizedMessage = { id: "a-1", role: "assistant", timestamp: 2_000, blocks: [
+      call("e1", "edit", { path: "src/App.tsx" }),
+      call("e2", "edit", { path: "src/App.tsx" })
+    ] };
+    const { container } = render(
+      <Transcript
+        messages={[
+          user,
+          a1,
+          result("e1", { details: { diff: "-a\n+b" } }),
+          result("e2", { details: { diff: "+c" } }),
+          { id: "a-2", role: "assistant", timestamp: 3_000, stopReason: "stop", blocks: [{ type: "text", text: "Done." }] }
+        ]}
+        running={false}
+        collapseCompletedWork={false}
+      />
+    );
+    expect(container.querySelector(".explore-group")).toBeNull();
+    const row = screen.getByRole("button", { name: /Edited.*App\.tsx/ });
+    expect(row.closest(".tool-row")).not.toBeNull();
+    expect(row.querySelector(".tool-row-stats")).toHaveTextContent("+2−1");
+    // Suppresses redundant "Edited 1 file" card when the sole edited file is visible bare.
+    expect(screen.queryByRole("region", { name: "Edited 1 file" })).toBeNull();
+  });
+
+  it("caps live steps inside .explore-live at 3 and keeps a +N running badge", () => {
+    const a1: NormalizedMessage = { id: "a-1", role: "assistant", timestamp: 2_000, blocks: [
+      call("r1", "read", { path: "one.ts" }),
+      call("r2", "read", { path: "two.ts" }),
+      call("r3", "read", { path: "three.ts" }),
+      call("r4", "read", { path: "four.ts" }),
+      call("r5", "read", { path: "five.ts" })
+    ] };
+    const { container } = render(<Transcript messages={[user]} partial={a1} running />);
+    const live = container.querySelector(".explore-live") as HTMLElement;
+    expect(live.querySelectorAll(".tool-chip.live")).toHaveLength(3);
+    expect(within(live).getByText("+2 running")).toBeInTheDocument();
   });
 });
 

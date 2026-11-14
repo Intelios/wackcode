@@ -9,9 +9,11 @@
   Bring your own model. No account, no backend, no telemetry.
 </p>
 
-<p align="center">macOS 12+ · Apple Silicon · Tauri 2, React and Rust. (Windows support coming soon)</p>
+<p align="center">macOS 12+ · Apple Silicon · Tauri 2, React and Rust.</p>
 
 ![WackCode's new-chat screen: the sidebar lists projects and their chats, and the centred composer offers the project, its branch, a Local/Worktree toggle, the model picker and the Build/Plan switch.](docs/images/hero.png)
+
+Note: This is the 2.5-Legacy branch which is designed to keep a way to access the legacy Tauri based 2.0 era of the app as it has extra features and also 3.0 may have compatability issues with 2.0 data.
 
 WackCode gives the Pi coding agent a proper home on your Mac. Open a project, describe what you want, and watch the agent read, edit and run things. You can steer it mid-run, rewind when it goes the wrong way, review its diff, and commit, push or open a PR without leaving the window.
 

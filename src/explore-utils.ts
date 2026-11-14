@@ -12,6 +12,7 @@ import {
   parseVisualArgs,
   SHOW_VISUAL_TOOL_NAME,
   SKILL_CREATOR_TOOL_NAME,
+  splitPathSubject,
   SUBAGENT_TOOL_NAME,
   summarizeTool,
   WEB_FETCH_TOOL_NAME,
@@ -61,7 +62,6 @@ export interface CoalescedReadRange {
 export interface CoalescedCallStep {
   type: "call";
   key: string;
-  flyId: string;
   kind: "read" | "edit" | "write" | "other";
   items: ExploreItem[];
   path?: string;
@@ -76,7 +76,7 @@ export interface CoalescedCallStep {
 
 export type CoalescedStep =
   | CoalescedCallStep
-  | { type: "thinking"; key: string; flyId: string; item: ExploreItem; live: boolean }
+  | { type: "thinking"; key: string; item: ExploreItem; live: boolean }
   | { type: "note"; key: string; item: ExploreItem; text: string };
 
 /** What an assistant message renders, in order: one block, a coalesced single-file run, or a group. */
@@ -235,7 +235,6 @@ export function coalesceWorkItems(items: ExploreItem[], results: Map<string, Nor
       steps.push({
         type: "thinking",
         key: item.key,
-        flyId: flyId(item),
         item,
         live: item.live && block.durationMs === undefined
       });
@@ -268,7 +267,6 @@ export function coalesceWorkItems(items: ExploreItem[], results: Map<string, Nor
       steps.push({
         type: "call",
         key: block.toolCallId ?? item.key,
-        flyId: flyId(item),
         kind: "read",
         items: [item],
         ...(path ? { path } : {}),
@@ -308,7 +306,6 @@ export function coalesceWorkItems(items: ExploreItem[], results: Map<string, Nor
       steps.push({
         type: "call",
         key: block.toolCallId ?? item.key,
-        flyId: flyId(item),
         kind: name === "write" ? "write" : "edit",
         items: [item],
         ...(path ? { path } : {}),
@@ -325,9 +322,9 @@ export function coalesceWorkItems(items: ExploreItem[], results: Map<string, Nor
     steps.push({
       type: "call",
       key: block.toolCallId ?? item.key,
-      flyId: flyId(item),
       kind: "other",
       items: [item],
+      ...(path ? { path } : {}),
       live: pending,
       failed,
       images,
@@ -446,62 +443,6 @@ export function layoutTranscript(
   return layout;
 }
 
-export interface ExploreCounts {
-  files: number;
-  images: number;
-  searches: number;
-  lists: number;
-  commands: number;
-  failed: number;
-}
-
-export function exploreCounts(group: ExploreGroup, results: Map<string, NormalizedBlock>): ExploreCounts {
-  const counts: ExploreCounts = { files: 0, images: 0, searches: 0, lists: 0, commands: 0, failed: 0 };
-  const files = new Set<string>();
-  const images = new Set<string>();
-  for (const { block } of group.items) {
-    if (block.type !== "tool-call") continue;
-    const kind = kindOf(block);
-    if (kind === "file") {
-      const path = (block.arguments as { path?: unknown } | undefined)?.path;
-      const pictured = block.toolCallId !== undefined && Boolean(results.get(block.toolCallId)?.images?.length);
-      (pictured ? images : files).add(typeof path === "string" ? `path:${path}` : `call:${JSON.stringify(block.arguments ?? null)}`);
-    } else if (kind === "search") counts.searches += 1;
-    else if (kind === "list") counts.lists += 1;
-    else if (kind === "command") counts.commands += 1;
-    if (block.toolCallId && results.get(block.toolCallId)?.isError) counts.failed += 1;
-  }
-  counts.files = files.size;
-  counts.images = images.size;
-  return counts;
-}
-
-const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
-
-/** "3 files, 1 image, 2 searches, 1 list". */
-export function exploreLabel(counts: ExploreCounts): string {
-  return [
-    counts.files ? plural(counts.files, "file", "files") : "",
-    counts.images ? plural(counts.images, "image", "images") : "",
-    counts.searches ? plural(counts.searches, "search", "searches") : "",
-    counts.lists ? plural(counts.lists, "list", "lists") : "",
-    counts.commands ? plural(counts.commands, "command", "commands") : ""
-  ].filter(Boolean).join(", ");
-}
-
-const NOUNS: [keyof Omit<ExploreCounts, "failed">, string, string][] = [
-  ["files", "file", "files"],
-  ["images", "image", "images"],
-  ["searches", "search", "searches"],
-  ["lists", "list", "lists"],
-  ["commands", "command", "commands"]
-];
-
-/** `exploreLabel` in pieces, so the head can roll each number as calls join. */
-export function exploreLabelParts(counts: ExploreCounts): { key: string; count: number; noun: string }[] {
-  return NOUNS.filter(([key]) => counts[key] > 0).map(([key, one, many]) => ({ key, count: counts[key], noun: counts[key] === 1 ? one : many }));
-}
-
 export type WorkBucketKey =
   | "create"
   | "edit"
@@ -523,7 +464,7 @@ export type WorkBucketKey =
   | "other";
 
 export interface WorkSummaryPart {
-  key: string;
+  key: WorkBucketKey;
   tier: 1 | 2 | 3;
   leadVerb: string;
   trailVerb: string;
@@ -534,28 +475,15 @@ export interface WorkSummaryPart {
 }
 
 export interface WorkSummary {
-  isPureExploration: boolean;
-  /** Pure-exploration counts & parts (for backward-compatible read-only heads). */
-  exploreCounts: ExploreCounts;
-  exploreParts: { key: string; count: number; noun: string }[];
-  /** Priority-sorted tiered parts for mixed/mutation work groups. */
+  /** Priority-sorted tiered parts for the work group, without overflow truncation. */
   parts: WorkSummaryPart[];
-  overflowCount: number;
   notes: number;
   additions: number;
   deletions: number;
   failed: number;
 }
 
-export function isPureExplorationGroup(group: ExploreGroup): boolean {
-  for (const item of group.items) {
-    if (item.block.type === "text") return false;
-    if (item.block.type === "tool-call" && !kindOf(item.block)) return false;
-  }
-  return true;
-}
-
-function workBucketForStep(step: CoalescedCallStep, results: Map<string, NormalizedBlock>): WorkBucketKey {
+function workBucketForStep(step: CoalescedCallStep): WorkBucketKey {
   const firstCall = step.items[0].block;
   const name = firstCall.toolName ?? "";
   if (step.kind === "write") {
@@ -583,8 +511,6 @@ function workBucketForStep(step: CoalescedCallStep, results: Map<string, Normali
   if (name === "todo") return "todo";
   if (name === "ask_user_question") return "ask";
   if (mcpToolParts(name)) return "mcp";
-  // Unused param guard kept clean; results used below for failure/memory check if needed.
-  void results;
   return "other";
 }
 
@@ -641,20 +567,39 @@ const BUCKET_TIER: Record<WorkBucketKey, 1 | 2 | 3> = {
   other: 3
 };
 
+function singlePathName(acc: BucketAcc): string | undefined {
+  if (acc.paths.size !== 1 || acc.pathless > 0) return undefined;
+  const [raw] = acc.paths;
+  const clean = raw.replace(/^\.\//, "").replace(/\/+$/, "");
+  if (!clean || clean === ".") return undefined;
+  return splitPathSubject(clean).name || clean;
+}
+
 function formatBucketPart(acc: BucketAcc): WorkSummaryPart {
   const total = acc.paths.size || acc.pathless ? acc.paths.size + acc.pathless : acc.count;
   const word = (one: string, many: string) => total === 1 ? one : many;
+  const named = singlePathName(acc);
   switch (acc.key) {
     case "create":
-      return { key: "create", tier: 1, leadVerb: "Created", trailVerb: "created", count: total, noun: word("file", "files") };
+      return named
+        ? { key: "create", tier: 1, leadVerb: "Created", trailVerb: "created", noun: "", leadPhrase: `Created ${named}`, trailPhrase: `created ${named}` }
+        : { key: "create", tier: 1, leadVerb: "Created", trailVerb: "created", count: total, noun: word("file", "files") };
     case "edit":
-      return { key: "edit", tier: 1, leadVerb: "Edited", trailVerb: "edited", count: total, noun: word("file", "files") };
+      return named
+        ? { key: "edit", tier: 1, leadVerb: "Edited", trailVerb: "edited", noun: "", leadPhrase: `Edited ${named}`, trailPhrase: `edited ${named}` }
+        : { key: "edit", tier: 1, leadVerb: "Edited", trailVerb: "edited", count: total, noun: word("file", "files") };
     case "write":
-      return { key: "write", tier: 1, leadVerb: "Wrote", trailVerb: "wrote", count: total, noun: word("file", "files") };
+      return named
+        ? { key: "write", tier: 1, leadVerb: "Wrote", trailVerb: "wrote", noun: "", leadPhrase: `Wrote ${named}`, trailPhrase: `wrote ${named}` }
+        : { key: "write", tier: 1, leadVerb: "Wrote", trailVerb: "wrote", count: total, noun: word("file", "files") };
     case "command":
-      return { key: "command", tier: 2, leadVerb: "Ran", trailVerb: "ran", count: total, noun: word("command", "commands") };
+      return total === 1
+        ? { key: "command", tier: 2, leadVerb: "Ran", trailVerb: "ran", noun: "", leadPhrase: "Ran a command", trailPhrase: "ran a command" }
+        : { key: "command", tier: 2, leadVerb: "Ran", trailVerb: "ran", count: total, noun: "commands" };
     case "browser":
-      return { key: "browser", tier: 2, leadVerb: "Browsed", trailVerb: "browsed", count: total, noun: word("step", "steps") };
+      return total === 1
+        ? { key: "browser", tier: 2, leadVerb: "Checked", trailVerb: "checked", noun: "", leadPhrase: "Checked browser", trailPhrase: "checked browser" }
+        : { key: "browser", tier: 2, leadVerb: "Ran", trailVerb: "ran", count: total, noun: "browser steps" };
     case "computer":
       if (total === 1) return { key: "computer", tier: 2, leadVerb: "Used", trailVerb: "used", noun: "", leadPhrase: "Used computer", trailPhrase: "used computer" };
       return { key: "computer", tier: 2, leadVerb: "Used", trailVerb: "used", count: total, noun: "app actions" };
@@ -671,13 +616,21 @@ function formatBucketPart(acc: BucketAcc): WorkSummaryPart {
         ? { key: "ask", tier: 2, leadVerb: "Asked", trailVerb: "asked", noun: "", leadPhrase: "Asked you", trailPhrase: "asked you" }
         : { key: "ask", tier: 2, leadVerb: "Asked", trailVerb: "asked", count: total, noun: "questions" };
     case "read":
-      return { key: "read", tier: 3, leadVerb: "Read", trailVerb: "read", count: total, noun: word("file", "files") };
+      return named
+        ? { key: "read", tier: 3, leadVerb: "Read", trailVerb: "read", noun: "", leadPhrase: `Read ${named}`, trailPhrase: `read ${named}` }
+        : { key: "read", tier: 3, leadVerb: "Read", trailVerb: "read", count: total, noun: word("file", "files") };
     case "image":
-      return { key: "image", tier: 3, leadVerb: "Viewed", trailVerb: "viewed", count: total, noun: word("image", "images") };
+      return named
+        ? { key: "image", tier: 3, leadVerb: "Viewed", trailVerb: "viewed", noun: "", leadPhrase: `Viewed ${named}`, trailPhrase: `viewed ${named}` }
+        : { key: "image", tier: 3, leadVerb: "Viewed", trailVerb: "viewed", count: total, noun: word("image", "images") };
     case "search":
-      return { key: "search", tier: 3, leadVerb: "Searched", trailVerb: "searched", count: total, noun: word("search", "searches") };
+      return total === 1
+        ? { key: "search", tier: 3, leadVerb: "Searched", trailVerb: "searched", noun: "", leadPhrase: "Searched once", trailPhrase: "searched once" }
+        : { key: "search", tier: 3, leadVerb: "Searched", trailVerb: "searched", count: total, noun: "times" };
     case "list":
-      return { key: "list", tier: 3, leadVerb: "Listed", trailVerb: "listed", count: total, noun: word("folder", "folders") };
+      return named
+        ? { key: "list", tier: 3, leadVerb: "Listed", trailVerb: "listed", noun: "", leadPhrase: `Listed ${named}`, trailPhrase: `listed ${named}` }
+        : { key: "list", tier: 3, leadVerb: "Listed", trailVerb: "listed", count: total, noun: word("folder", "folders") };
     case "web_search":
       if (total === 1) return { key: "web_search", tier: 3, leadVerb: "Searched", trailVerb: "searched", noun: "", leadPhrase: "Searched the web", trailPhrase: "searched the web" };
       return { key: "web_search", tier: 3, leadVerb: "Searched the web", trailVerb: "searched the web", count: total, noun: "times" };
@@ -702,13 +655,10 @@ function formatBucketPart(acc: BucketAcc): WorkSummaryPart {
 
 /**
  * Tiered, path-deduplicated summary for any unified work group.
- * Pure read-only exploration preserves `"Explored N files, M searches"`; mixed/mutation work
- * prioritizes mutations (`Edited`) > commands/integrations > reads/searches and totals `+A −D`.
+ * Prioritizes mutations (`Created WorldLook.cs`, `Edited App.tsx`) > commands/integrations >
+ * reads/searches/listings, lists every populated bucket without truncation, and totals `+A −D`.
  */
 export function summarizeWorkGroup(group: ExploreGroup, results: Map<string, NormalizedBlock>): WorkSummary {
-  const pure = isPureExplorationGroup(group);
-  const eCounts = exploreCounts(group, results);
-  const eParts = exploreLabelParts(eCounts);
   const steps = coalesceWorkItems(group.items, results);
 
   const buckets = new Map<WorkBucketKey, BucketAcc>();
@@ -731,11 +681,10 @@ export function summarizeWorkGroup(group: ExploreGroup, results: Map<string, Nor
       if (item.block.toolCallId && results.get(item.block.toolCallId)?.isError) failed += 1;
     }
 
-    let bKey = workBucketForStep(step, results);
+    let bKey = workBucketForStep(step);
     if (bKey === "create" && step.path) createdPaths.add(step.path);
-    // If a file created earlier in the same group is later edited, keep it counted once under edits/creates.
+    // If a file created earlier in the same group is later edited, keep it counted once under creates.
     if (bKey === "edit" && step.path && createdPaths.has(step.path)) bKey = "create";
-    // When both `edit` and existing-file `write` happen, merge existing-file writes cleanly into `edit`.
     const existing = buckets.get(bKey);
     const acc = existing ?? { key: bKey, tier: BUCKET_TIER[bKey], order: order++, paths: new Set<string>(), pathless: 0, count: 0 };
     if (!existing) buckets.set(bKey, acc);
@@ -744,6 +693,9 @@ export function summarizeWorkGroup(group: ExploreGroup, results: Map<string, Nor
     if (bKey === "create" || bKey === "edit" || bKey === "write" || bKey === "read" || bKey === "image") {
       if (step.path) acc.paths.add(step.path);
       else acc.pathless += 1;
+    } else if (bKey === "list") {
+      const target = (step.path ?? ".").replace(/\/+$/, "") || ".";
+      acc.paths.add(target);
     }
     if (bKey === "memory") {
       const name = step.items[0].block.toolName;
@@ -752,7 +704,7 @@ export function summarizeWorkGroup(group: ExploreGroup, results: Map<string, Nor
     }
   }
 
-  // Merge non-created `write` into `edit` if `edit` is also present so we don't say "Edited 1 file, wrote 1 file".
+  // Merge non-created `write` into `edit` if `edit` is also present so we don't say "Edited X, wrote Y".
   const editAcc = buckets.get("edit");
   const writeAcc = buckets.get("write");
   if (editAcc && writeAcc) {
@@ -766,17 +718,8 @@ export function summarizeWorkGroup(group: ExploreGroup, results: Map<string, Nor
   const sorted = [...buckets.values()].sort((a, b) =>
     a.tier - b.tier || countOf(b) - countOf(a) || BUCKET_RANK[a.key] - BUCKET_RANK[b.key] || a.order - b.order);
 
-  const maxParts = sorted.length > 3 ? 2 : 3;
-  const shown = sorted.slice(0, maxParts);
-  const hidden = sorted.slice(maxParts);
-  const overflowCount = hidden.reduce((sum, acc) => sum + countOf(acc), 0);
-
   return {
-    isPureExploration: pure,
-    exploreCounts: eCounts,
-    exploreParts: eParts,
-    parts: shown.map(formatBucketPart),
-    overflowCount,
+    parts: sorted.map(formatBucketPart),
     notes,
     additions,
     deletions,
@@ -785,10 +728,6 @@ export function summarizeWorkGroup(group: ExploreGroup, results: Map<string, Nor
 }
 
 export function workSummaryText(summary: WorkSummary): string {
-  if (summary.isPureExploration) {
-    const label = exploreLabel(summary.exploreCounts);
-    return label ? `Explored ${label}` : "Explored";
-  }
   const clauses = summary.parts.map((part, index) => {
     if (index === 0 && part.leadPhrase) return part.leadPhrase;
     if (index > 0 && part.trailPhrase) return part.trailPhrase;
@@ -796,9 +735,6 @@ export function workSummaryText(summary: WorkSummary): string {
     const body = part.count !== undefined ? `${part.count} ${part.noun}` : part.noun;
     return [verb, body].filter(Boolean).join(" ");
   });
-  if (summary.overflowCount > 0) {
-    clauses.push(`and ${summary.overflowCount} ${summary.overflowCount === 1 ? "more step" : "more steps"}`);
-  }
   const head = clauses.join(", ") || "Worked";
   const suffix: string[] = [];
   if (summary.notes > 0) suffix.push(`${summary.notes} ${summary.notes === 1 ? "note" : "notes"}`);
@@ -852,80 +788,6 @@ export function liveTailWindow(
 }
 
 /**
- * The shared-element id a block flies under when it joins a group: the chip or reasoning row
- * outside the group and its landing mark in the head carry the same id (`ExploreGroup.tsx`).
- */
-export function flyId(item: Pick<ExploreItem, "block" | "key">): string {
-  return item.block.type === "thinking" ? `think:${item.key}` : `call:${item.block.toolCallId ?? item.key}`;
-}
-
-export type ExploreMark =
-  | ExploreKind
-  | "edit"
-  | "write"
-  | "image"
-  | "web"
-  | "browser"
-  | "computer"
-  | "memory"
-  | "mcp"
-  | "other"
-  | "note"
-  | "thought";
-
-const MARK_ORDER: ExploreMark[] = [
-  "write",
-  "edit",
-  "file",
-  "image",
-  "search",
-  "list",
-  "command",
-  "web",
-  "browser",
-  "computer",
-  "memory",
-  "mcp",
-  "other",
-  "note",
-  "thought"
-];
-
-function markForItem(item: ExploreItem, results: Map<string, NormalizedBlock>): ExploreMark | undefined {
-  const { block } = item;
-  if (block.type === "thinking") return "thought";
-  if (block.type === "text") return "note";
-  if (block.type !== "tool-call") return undefined;
-  const result = block.toolCallId ? results.get(block.toolCallId) : undefined;
-  const name = block.toolName ?? "";
-  if (name === "write") return "write";
-  if (name === "edit") return "edit";
-  const explore = kindOf(block);
-  if (explore) return explore === "file" && result?.images?.length ? "image" : explore;
-  if (name === "read_image" || name === "list_images") return result?.images?.length ? "image" : "file";
-  if (name === "bash") return "command";
-  if (name === WEB_FETCH_TOOL_NAME || name === WEB_SEARCH_TOOL_NAME) return "web";
-  if (name.startsWith("browser_")) return "browser";
-  if (name.startsWith("computer_")) return "computer";
-  if (name === "memory_save" || name === "memory_recall" || name === "memory_forget") return "memory";
-  if (mcpToolParts(name)) return "mcp";
-  return "other";
-}
-
-/**
- * The head's icon stack: one mark per kind the group holds, in a fixed order so marks never
- * shuffle, each carrying the fly id of the newest item of its kind.
- */
-export function exploreMarks(group: ExploreGroup, results: Map<string, NormalizedBlock>): { mark: ExploreMark; id: string }[] {
-  const latest = new Map<ExploreMark, string>();
-  for (const item of group.items) {
-    const mark = markForItem(item, results);
-    if (mark) latest.set(mark, flyId(item));
-  }
-  return MARK_ORDER.filter((mark) => latest.has(mark)).map((mark) => ({ mark, id: latest.get(mark)! }));
-}
-
-/**
  * The group a running transcript currently ends with, if any: the last assistant slot drawn
  * since the latest user or system message.
  */
@@ -951,7 +813,7 @@ const MULTI_ACTIVE: Partial<Record<string, [string, string]>> = {
   web_search: ["Searching the web", "times"]
 };
 
-/** The call(s) in flight, as the header shows while running: "Reading src/App.tsx" or "Editing 2 files". */
+/** The call(s) in flight while running: "Reading src/App.tsx", "Fix build errors", or "Editing 2 files". */
 export function exploreActivity(group: ExploreGroup, results: Map<string, NormalizedBlock>): string | undefined {
   const pending = exploreLiveItems(group, results);
   if (!pending.length) return undefined;
@@ -964,5 +826,6 @@ export function exploreActivity(group: ExploreGroup, results: Map<string, Normal
   }
   const latest = pending[pending.length - 1];
   const summary = summarizeTool(latest.block);
+  if (summary.subjectIsProse) return summary.subject;
   return summary.subject ? `${summary.activeVerb} ${summary.subject}` : summary.activeVerb;
 }

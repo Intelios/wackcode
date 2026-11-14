@@ -62,6 +62,21 @@ describe("summarizeTool", () => {
     const summary = summarizeTool(call("bash", { command: "pnpm test" }));
     expect(summary.doneVerb).toBe("Ran");
     expect(summary.subject).toBe("pnpm test");
+    expect(summary.subjectIsProse).toBeFalsy();
+  });
+
+  it("uses optional bash prose description while keeping git commit summary precedence", () => {
+    const described = summarizeTool(call("bash", { command: "pnpm test", description: "Run the test suite" }));
+    expect(described.subject).toBe("Run the test suite");
+    expect(described.subjectIsProse).toBe(true);
+
+    const blankDesc = summarizeTool(call("bash", { command: "pnpm test", description: "   " }));
+    expect(blankDesc.subject).toBe("pnpm test");
+    expect(blankDesc.subjectIsProse).toBeFalsy();
+
+    const commit = summarizeTool(call("bash", { command: 'git commit -m "Fix"', description: "Commit fix" }));
+    expect(commit.kind).toBe("commit");
+    expect(commit.subjectIsProse).toBeFalsy();
   });
 
   it("summarizes a commit by git's own words once it lands", () => {

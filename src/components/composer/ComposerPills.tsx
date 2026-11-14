@@ -83,7 +83,7 @@ export function runDetail({ liveToolCalls, partial, compaction, activity }: Pick
     const summary = summarizeTool(latest);
     // A command or path is the detail on its own; other tools read as verb + subject, and a
     // subject-less call (plan, preview) reads as its verb alone.
-    if (summary.kind === "bash") return { subject: summary.subject || summary.activeVerb, subjectMono: Boolean(summary.subject) };
+    if (summary.kind === "bash") return { subject: summary.subject || summary.activeVerb, subjectMono: Boolean(summary.subject) && !summary.subjectIsProse };
     if (!summary.subject) return { subject: summary.activeVerb };
     return { verb: summary.activeVerb, subject: summary.subject, subjectMono: summary.kind === "read" || summary.kind === "write" || summary.kind === "edit" || summary.kind === "search" };
   }

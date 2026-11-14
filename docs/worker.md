@@ -130,7 +130,8 @@ for measurements and reproduction.
 ### Shell check-ins
 
 `builtin/bash-jobs.ts` wraps Pi's shell tool as an SDK override (`customTools`), preserving the
-ordinary bash denylist and Plan-mode policy. SDK overrides win over extension tools of the same
+ordinary bash denylist and Plan-mode policy and adding an optional plain-English `description`
+parameter for transcript display. SDK overrides win over extension tools of the same
 name. Pi still owns process spawning, the shell environment, UTF-8 output, truncation/spill files
 and process-group cancellation.
 

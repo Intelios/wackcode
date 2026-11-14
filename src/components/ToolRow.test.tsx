@@ -178,6 +178,25 @@ describe("ToolRow", () => {
     expect(subject.querySelector(".tool-row-subject-name")?.textContent).toBe("cd src && pnpm test");
   });
 
+  it("renders bash prose descriptions in sans-serif while still expanding silent commands to inspect the raw shell command", () => {
+    const call = { ...editCall, toolName: "bash", arguments: { command: "dotnet build --no-restore", description: "Register Billbored on the phone and build" } };
+    render(<ToolRow call={call} result={{ type: "tool-result", toolCallId: editCall.toolCallId, text: "" }} />);
+    expect(document.querySelector(".tool-row-prose")?.textContent).toBe("Register Billbored on the phone and build");
+    expect(document.querySelector(".tool-row-subject")).toBeNull();
+
+    const head = screen.getByRole("button", { name: /Register Billbored on the phone and build/ });
+    expect(head).not.toBeDisabled();
+    fireEvent.click(head);
+    expect(document.querySelector(".tool-detail")?.textContent).toContain("dotnet build --no-restore");
+    expect(screen.getByRole("button", { name: "Copy command" })).toBeInTheDocument();
+  });
+
+  it("renders uniform .work-step-row items instead of pill chips when variant='step'", () => {
+    const view = render(<ToolRow call={{ ...editCall, toolName: "read", arguments: { path: "src/App.tsx" } }} variant="step" />);
+    expect(view.container.querySelector(".tool-row.work-step-row")).toBeInTheDocument();
+    expect(view.container.querySelector(".tool-chip")).toBeNull();
+  });
+
   it("falls back to plain diff text without a language", () => {
     const noLangCall = { ...editCall, arguments: { path: "artifact.unknownext" } };
     render(<ToolRow call={noLangCall} result={editResult} />);

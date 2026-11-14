@@ -74,8 +74,10 @@ export interface ToolSummary {
   activeVerb: string;
   /** Label once finished, e.g. "Edited". */
   doneVerb: string;
-  /** Path or command shown after the verb. */
+  /** Path, command, or prose description shown after (or in place of) the verb. */
   subject: string;
+  /** True when `subject` is plain-English prose (e.g. a bash `description`), rendered in UI font rather than mono. */
+  subjectIsProse?: boolean;
   additions?: number;
   deletions?: number;
   /** How many files a commit changed, when git said so; drawn before the ± stats. */
@@ -253,6 +255,10 @@ export function summarizeTool(call: NormalizedBlock, result?: NormalizedBlock): 
           deletions: commit?.deletions,
           commit: commit ? { hash: commit.hash } : undefined
         };
+      }
+      const description = str(toolArgs.description).replace(/\s+/g, " ").trim();
+      if (description) {
+        return { kind: "bash", activeVerb: "Running", doneVerb: "Ran", subject: description, subjectIsProse: true };
       }
       return { kind: "bash", activeVerb: "Running", doneVerb: "Ran", subject: command };
     }

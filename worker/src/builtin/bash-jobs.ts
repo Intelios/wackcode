@@ -160,12 +160,13 @@ export function createBashJobsExtension(operations: BashOperations = createLocal
         ...base.parameters,
         properties: {
           ...base.parameters.properties,
+          description: { type: "string", description: "Short plain-English summary of why this command runs, sentence case (e.g. 'Run unit tests' or 'Fix the build errors')." },
           yieldTimeout: { type: "number", minimum: 0, description: `Seconds to wait before returning a running job (default ${BASH_CHECKIN_SECONDS}, capped at ${BASH_CHECKIN_SECONDS}). Use 0 for an immediate check-in.` },
         },
       },
       outputSchema: OUTPUT_SCHEMA,
       async execute(toolCallId, params: unknown, signal, onUpdate, ctx) {
-        const input = params as { command: string; timeout?: number; yieldTimeout?: number };
+        const input = params as { command: string; timeout?: number; yieldTimeout?: number; description?: string };
         const seconds = waitSeconds(input.yieldTimeout);
         if (signal?.aborted) throw new Error("Command aborted");
         if ([...jobs.values()].filter((job) => job.status === "running").length >= MAX_RUNNING_JOBS) {

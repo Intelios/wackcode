@@ -176,7 +176,7 @@ describe("ThinkingRow live timer", () => {
       { key: "b", block: { type: "tool-call", toolName: "read", arguments: { path: "b.ts" } }, live: false, streaming: false }
     ] }} results={new Map()} running />);
     act(() => vi.advanceTimersByTime(3_000));
-    fireEvent.click(screen.getByRole("button", { name: /Explored.*2 files/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Read.*2 files/ }));
     expect(screen.getByRole("button", { name: "Thinking… 5s" })).toBeInTheDocument();
   });
 

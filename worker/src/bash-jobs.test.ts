@@ -297,6 +297,22 @@ describe("bounded shell check-ins", () => {
     await expect(second.manage({ action: "stop", jobId: id })).rejects.toThrow("no longer available");
     await expect(first.manage({ action: "wait", jobId: "unknown" })).rejects.toThrow("do not assume");
     expect(readOnlyDecision("bash_job", { action: "stop", jobId: id }, "/project")).toBeUndefined();
-    expect(readOnlyDecision("bash", { command: "rm important.txt" }, "/project")).toMatchObject({ block: true });
+    expect(readOnlyDecision("bash", { command: "rm important.txt", description: "Delete file" }, "/project")).toMatchObject({ block: true });
+    expect(readOnlyDecision("bash", { command: "git status", description: "Check git status" }, "/project")).toBeUndefined();
+  });
+
+  it("exposes optional plain-English description on bash without making it required", async () => {
+    vi.useFakeTimers();
+    const { operations, commands } = backend();
+    const h = harness(operations);
+    const tool = h.controller.tool(tmpdir());
+    const schema = tool.parameters as { properties?: Record<string, unknown>; required?: string[] };
+    expect(schema.properties?.description).toMatchObject({ type: "string" });
+    expect(schema.required ?? []).toContain("command");
+    expect(schema.required ?? []).not.toContain("description");
+    const run = h.bash({ command: "echo ok", description: "Verify echo output" });
+    await vi.advanceTimersByTimeAsync(0);
+    commands[0].finish(0);
+    await expect(run).resolves.toMatchObject({ structuredContent: { status: "completed", exit_code: 0 } });
   });
 });

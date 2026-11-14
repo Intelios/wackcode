@@ -777,9 +777,10 @@ describe("Transcript exploration groups", () => {
 
     // A later message extends the run, so the earlier message has to re-render with the group.
     view.rerender(<Transcript messages={[user, first, result("r1"), second, result("g1"), answer]} running={false} collapseCompletedWork={false} />);
-    const head = screen.getByRole("button", { name: "Explored 1 file, 1 search" });
+    const head = screen.getByRole("button", { name: "Read one.ts, searched once" });
     expect(head).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByRole("button", { name: /one\.ts/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Searching.*needle/ })).not.toBeInTheDocument();
+    expect(view.container.querySelector(".explore-body")).toBeNull();
     expect(screen.getByText("Reading first.")).toBeInTheDocument();
     expect(screen.getByText("All done.")).toBeInTheDocument();
     // The message that only held the grep renders nothing of its own.
@@ -787,8 +788,9 @@ describe("Transcript exploration groups", () => {
 
     fireEvent.click(head);
     expect(head).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("button", { name: /Read.*one\.ts/ })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Searched.*needle/ }));
+    const body = view.container.querySelector(".explore-body") as HTMLElement;
+    expect(within(body).getByRole("button", { name: /Read.*one\.ts/ })).toBeInTheDocument();
+    fireEvent.click(within(body).getByRole("button", { name: /Searched.*needle/ }));
     expect(screen.getByText("contents")).toBeInTheDocument();
   });
 
@@ -799,30 +801,31 @@ describe("Transcript exploration groups", () => {
       images: [{ imageId: "image-1", thumbnail: "data:image/png;base64,cHJldmlldw==" }]
     }] };
     const view = render(<Transcript messages={[user, first, result("r1"), shot, pictured, answer]} running={false} collapseCompletedWork={false} />);
-    const head = screen.getByRole("button", { name: "Explored 1 file, 1 image" });
+    const head = screen.getByRole("button", { name: "Read one.ts, viewed shot.png" });
     const strip = view.container.querySelector(".explore-images");
     expect(strip).toContainElement(screen.getByRole("button", { name: "Open image shot.png" }));
     expect(strip?.querySelector("figcaption")).toHaveTextContent("shot.png");
 
     fireEvent.click(head);
     expect(view.container.querySelector(".explore-images")).not.toBeInTheDocument();
-    expect(view.container.querySelector(".explore-body .tool-chips .tool-images")).toContainElement(screen.getByRole("button", { name: "Open image shot.png" }));
+    expect(view.container.querySelector(".explore-body .tool-row .tool-images")).toContainElement(screen.getByRole("button", { name: "Open image shot.png" }));
     expect(view.container.querySelector(".explore-body figcaption")).not.toBeInTheDocument();
   });
 
   it("names the call in flight while exploring, keeps its open state once saved, then shows counts", () => {
     const streaming: NormalizedMessage = { ...second, id: "streaming-3000" };
     const view = render(<Transcript messages={[user, first, result("r1")]} running partial={streaming} />);
-    const head = screen.getByRole("button", { name: /^Exploring Searching needle/ });
-    expect(screen.getByLabelText("Running")).toBeInTheDocument();
+    const head = screen.getByRole("button", { name: "Read one.ts" });
+    expect(within(view.container.querySelector(".explore-live") as HTMLElement).getByLabelText("Running")).toBeInTheDocument();
+    expect(view.container.querySelector(".explore-head .orbit-spinner.live")).not.toBeNull();
     fireEvent.click(head);
 
     // Pi saves the streamed message and starts the tool: the group stays open and live.
     view.rerender(<Transcript messages={[user, first, result("r1"), second]} running />);
-    expect(screen.getByRole("button", { name: /^Exploring Searching needle/ })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "Read one.ts" })).toHaveAttribute("aria-expanded", "true");
 
     view.rerender(<Transcript messages={[user, first, result("r1"), second, { ...result("g1"), blocks: [{ type: "tool-result", toolCallId: "g1", isError: true, text: "bad" }] }]} running={false} />);
-    expect(screen.getByRole("button", { name: "Explored 1 file, 1 search 1 failed" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "Read one.ts, searched once 1 failed" })).toHaveAttribute("aria-expanded", "true");
     expect(screen.queryByLabelText("Running")).not.toBeInTheDocument();
   });
 
@@ -831,43 +834,77 @@ describe("Transcript exploration groups", () => {
     const view = render(<Transcript messages={[user, first, result("r1")]} running partial={streaming} />);
     const live = view.container.querySelector(".explore-live");
     expect(live).not.toBeNull();
-    expect(within(live as HTMLElement).getByRole("button", { name: /Searching.*needle/ })).toHaveClass("tool-chip", "live");
-    // Only what has landed is in the head's stack: the read.
-    expect(view.container.querySelectorAll(".explore-head .explore-mark")).toHaveLength(1);
+    expect(within(live as HTMLElement).getByRole("button", { name: /Searching.*needle/ }).closest(".tool-row")).toHaveClass("work-step-row", "live");
+    // No overlapping .explore-mark stack; the OrbitSpinner signals live work in the head.
+    expect(view.container.querySelectorAll(".explore-head .explore-mark")).toHaveLength(0);
+    expect(view.container.querySelector(".explore-head .orbit-spinner.live")).not.toBeNull();
 
     view.rerender(<Transcript messages={[user, first, result("r1"), second, result("g1")]} running={false} collapseCompletedWork={false} />);
     expect(view.container.querySelector(".explore-live")).toBeNull();
-    expect(screen.getByRole("button", { name: "Explored 1 file, 1 search" })).toBeInTheDocument();
-    expect(Array.from(view.container.querySelectorAll(".explore-head .explore-mark")).map((mark) => mark.classList[1])).toEqual(["file", "search"]);
+    expect(screen.getByRole("button", { name: "Read one.ts, searched once" })).toBeInTheDocument();
+    expect(view.container.querySelector(".explore-head .orbit-spinner.live")).toBeNull();
   });
 
   it("keeps the run's next step in the lane under the head, and waits there instead of below", () => {
     // The search landed and the model hasn't answered yet: the wait sits in the group's lane.
     const view = render(<Transcript messages={[user, first, result("r1"), second, result("g1")]} running />);
-    const head = screen.getByRole("button", { name: "Exploring 1 file, 1 search" });
-    expect(within(view.container.querySelector(".explore-live") as HTMLElement).getByRole("status", { name: "Working…" })).toBeInTheDocument();
+    const head = screen.getByRole("button", { name: "Read one.ts, searched once · Working…" });
+    expect(head).toHaveTextContent(/Working…/);
+    expect(view.container.querySelector(".explore-wait")).toBeNull();
+    expect(view.container.querySelector(".explore-head .orbit-spinner.live")).not.toBeNull();
     expect(view.container.querySelector(".agent-working")).toBeNull();
 
     // Reasoning after the last call takes the wait's place in the lane.
     view.rerender(<Transcript messages={[user, first, result("r1"), second, result("g1")]} running partial={{ id: "s-5000", role: "assistant", timestamp: 5_000, blocks: [{ type: "thinking", text: "Next", startedAt: 1 }] }} />);
     expect(within(view.container.querySelector(".explore-live") as HTMLElement).getByRole("button", { name: /Thinking/ })).toBeInTheDocument();
-    expect(head).toHaveAccessibleName("Exploring 1 file, 1 search");
+    expect(head).toHaveAccessibleName("Read one.ts, searched once");
+    expect(head).not.toHaveTextContent(/Working…/);
+    expect(view.container.querySelector(".explore-head .orbit-spinner.live")).not.toBeNull();
 
     // Prose ends the run: the reasoning is back outside, and the head has explored.
     view.rerender(<Transcript messages={[user, first, result("r1"), second, result("g1")]} running partial={{ id: "s-5000", role: "assistant", timestamp: 5_000, blocks: [{ type: "thinking", text: "Next", durationMs: 100 }, { type: "text", text: "Here it is" }] }} />);
     expect(view.container.querySelector(".explore-live")).toBeNull();
-    expect(screen.getByRole("button", { name: "Explored 1 file, 1 search" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Read one.ts, searched once" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Thought for/ })).toBeInTheDocument();
   });
 
   it("opens to its calls as one chip strip, with reasoning between them in order", () => {
     const thought: NormalizedMessage = { id: "a-2500", role: "assistant", timestamp: 2_500, blocks: [{ type: "thinking", text: "Now search", durationMs: 1_000 }, read("r2", "src/two.ts")] };
     const view = render(<Transcript messages={[user, first, result("r1"), thought, result("r2"), second, result("g1"), answer]} running={false} collapseCompletedWork={false} />);
-    fireEvent.click(screen.getByRole("button", { name: "Explored 2 files, 1 search" }));
+    fireEvent.click(screen.getByRole("button", { name: "Read 2 files, searched once" }));
     const body = view.container.querySelector(".explore-body")!;
-    const parts = Array.from(body.children).map((child) => child.classList.contains("tool-chips")
-      ? `chips:${child.querySelectorAll(".tool-chip").length}` : child.classList.contains("thinking-row") ? "thought" : child.className);
-    expect(parts).toEqual(["chips:1", "thought", "chips:2"]);
+    const parts = Array.from(body.children).map((child) => child.classList.contains("work-step-row")
+      ? "step" : child.classList.contains("thinking-row") ? "thought" : child.className);
+    expect(parts).toEqual(["step", "thought", "step", "step"]);
+  });
+
+  it("renders optional bash prose descriptions in work-step rows and keeps the command inspectable", () => {
+    const describedBash = {
+      type: "tool-call" as const,
+      toolName: "bash",
+      toolCallId: "b1",
+      arguments: { command: "dotnet build --no-restore", description: "Register Billbored on the phone and build" }
+    };
+    const msg: NormalizedMessage = {
+      id: "a-2500",
+      role: "assistant",
+      timestamp: 2_500,
+      blocks: [read("r1", "src/one.ts"), describedBash]
+    };
+    const view = render(
+      <Transcript
+        messages={[user, msg, result("r1"), result("b1", "")]}
+        running={false}
+        collapseCompletedWork={false}
+      />
+    );
+    const head = screen.getByRole("button", { name: "Ran a command, read one.ts" });
+    fireEvent.click(head);
+    const body = view.container.querySelector(".explore-body") as HTMLElement;
+    expect(body.querySelector(".work-step-row .tool-row-prose")?.textContent).toBe("Register Billbored on the phone and build");
+    const stepButton = within(body).getByRole("button", { name: /Register Billbored on the phone and build/ });
+    fireEvent.click(stepButton);
+    expect(body.querySelector(".tool-detail")?.textContent).toContain("dotnet build --no-restore");
   });
 
   it("keeps every call on its own row when switched off", () => {
@@ -983,7 +1020,7 @@ describe("Transcript unified work grouping and turn file changes", () => {
       <Transcript messages={[user, a1, ...resMessages, answer]} running={false} collapseCompletedWork={false} />
     );
 
-    const head = screen.getByRole("button", { name: /Edited 1 file, ran 1 command, read 1 file · 1 note/ });
+    const head = screen.getByRole("button", { name: /Edited App\.tsx, ran a command, read App\.tsx · 1 note/ });
     expect(head).toHaveAttribute("aria-expanded", "false");
     expect(container.querySelector(".explore-head .tool-row-stats")).toHaveTextContent("+2−1");
     // Git commit broke out cleanly as its own milestone row outside the work group.
@@ -994,7 +1031,7 @@ describe("Transcript unified work grouping and turn file changes", () => {
     fireEvent.click(head);
     expect(screen.getByText("Applying the fix now.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Read.*App\.tsx.*\(1–50, 80–120\)/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Edited.*App\.tsx/ })).toBeInTheDocument();
+    expect(within(container.querySelector(".explore-body") as HTMLElement).getByRole("button", { name: /Edited.*App\.tsx/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Ran.*pnpm test/ })).toBeInTheDocument();
   });
 
@@ -1034,7 +1071,7 @@ describe("Transcript unified work grouping and turn file changes", () => {
     ] };
     const { container } = render(<Transcript messages={[user]} partial={a1} running />);
     const live = container.querySelector(".explore-live") as HTMLElement;
-    expect(live.querySelectorAll(".tool-chip.live")).toHaveLength(3);
+    expect(live.querySelectorAll(".work-step-row.live")).toHaveLength(3);
     expect(within(live).getByText("+2 running")).toBeInTheDocument();
   });
 });

@@ -2,12 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   coalesceWorkItems,
   exploreActivity,
-  exploreCounts,
-  exploreLabel,
-  exploreLabelParts,
   exploreLiveItems,
-  exploreMarks,
-  flyId,
   formatReadRanges,
   isBridgingNarration,
   layoutTranscript,
@@ -211,11 +206,10 @@ describe("coalescing, bridging narration, tiered summaries, and live window", ()
       ]
     };
     const summary = summarizeWorkGroup(group, results);
-    expect(summary.isPureExploration).toBe(false);
     expect(summary.additions).toBe(5);
     expect(summary.deletions).toBe(1);
     expect(summary.notes).toBe(1);
-    expect(workSummaryText(summary)).toBe("Created 1 file, edited 1 file, and 3 more steps · 1 note");
+    expect(workSummaryText(summary)).toBe("Created new.ts, edited a.ts, ran a command, read a.ts, fetched 1 page · 1 note");
   });
 
   it("pluralizes multi-tool live activity and caps live tail window at 3 steps while pinning failed calls", () => {
@@ -245,41 +239,47 @@ describe("exploration summary", () => {
     items: blocks.map((block, index) => ({ block, key: String(index), streaming: false, live }))
   });
 
-  it("counts distinct files, searches, listings and other commands", () => {
+  it("names a single touched file per bucket and drops cutoff copy", () => {
     const ls: NormalizedBlock = { type: "tool-call", toolName: "ls", toolCallId: "l1", arguments: { path: "src" } };
-    const log: NormalizedBlock = { type: "tool-call", toolName: "bash", toolCallId: "c1", arguments: { command: "git log -3" } };
-    const counts = exploreCounts(group([read("r1", "a.ts"), read("r2", "a.ts"), read("r3", "b.ts"), grep("g1"), ls, log, thinking("hm")]), new Map());
-    expect(counts).toEqual({ files: 2, images: 0, searches: 1, lists: 1, commands: 1, failed: 0 });
-    expect(exploreLabel(counts)).toBe("2 files, 1 search, 1 list, 1 command");
-    expect(exploreLabel({ files: 1, images: 0, searches: 2, lists: 0, commands: 0, failed: 0 })).toBe("1 file, 2 searches");
+    const createdResults = new Map<string, NormalizedBlock>([["w1", { type: "tool-result", toolCallId: "w1", details: { created: true } }]]);
+    const created = summarizeWorkGroup(group([write("w1", "Game/WorldLook.cs"), bash("b1", "dotnet build")]), createdResults);
+    expect(workSummaryText(created)).toBe("Created WorldLook.cs, ran a command");
+
+    const wrote = summarizeWorkGroup(group([write("w1", "Game/WorldLook.cs")]), new Map());
+    expect(workSummaryText(wrote)).toBe("Wrote WorldLook.cs");
+
+    const edited = summarizeWorkGroup(group([edit("e1", "src/App.tsx"), read("r1", "src/main.ts")]), new Map());
+    expect(workSummaryText(edited)).toBe("Edited App.tsx, read main.ts");
+
+    const explored = summarizeWorkGroup(group([read("r1", "a.ts"), read("r2", "a.ts"), read("r3", "b.ts"), grep("g1"), ls, bash("c1", "git log -3"), thinking("hm")]), new Map());
+    expect(workSummaryText(explored)).toBe("Ran a command, read 2 files, searched once, listed src");
   });
 
-  it("counts a read that came back as a picture as an image, not a file", () => {
+  it("uses natural plurals and singular wording for searches, commands, and images", () => {
     const pictured = (id: string): [string, NormalizedBlock] => [id, { type: "tool-result", toolCallId: id, images: [{ imageId: id }] }];
     const results = new Map<string, NormalizedBlock>([pictured("r2"), pictured("r3"), ["r1", { type: "tool-result", toolCallId: "r1", text: "ok" }]]);
-    const counts = exploreCounts(group([read("r1", "a.ts"), read("r2", "shot.png"), read("r3", "shot.png"), read("r4", "b.ts")]), results);
-    expect(counts).toMatchObject({ files: 2, images: 1 });
-    expect(exploreLabel(counts)).toBe("2 files, 1 image");
-    expect(exploreLabel({ ...counts, files: 0, images: 2 })).toBe("2 images");
+    const singleImage = summarizeWorkGroup(group([read("r1", "a.ts"), read("r2", "shot.png"), read("r3", "shot.png"), read("r4", "b.ts")]), results);
+    expect(workSummaryText(singleImage)).toBe("Read 2 files, viewed shot.png");
+
+    const multiImages = summarizeWorkGroup(group([read("r2", "a.png"), read("r3", "b.png")]), results);
+    expect(workSummaryText(multiImages)).toBe("Viewed 2 images");
+
+    const multiSearches = summarizeWorkGroup(group([read("r1", "a.ts"), grep("g1"), grep("g2"), bash("b1", "pnpm test"), bash("b2", "pnpm check")]), new Map());
+    expect(workSummaryText(multiSearches)).toBe("Ran 2 commands, searched 2 times, read a.ts");
   });
 
   it("counts failed calls", () => {
     const results = new Map<string, NormalizedBlock>([["r1", { type: "tool-result", toolCallId: "r1", isError: true }]]);
-    expect(exploreCounts(group([read("r1"), read("r2")]), results).failed).toBe(1);
+    expect(summarizeWorkGroup(group([read("r1"), read("r2")]), results).failed).toBe(1);
   });
 
-  it("names the latest call still in flight, only while live", () => {
+  it("names the latest call still in flight, preferring bash prose description while live", () => {
     const results = new Map<string, NormalizedBlock>([["r1", { type: "tool-result", toolCallId: "r1" }]]);
+    const describedBash: NormalizedBlock = { type: "tool-call", toolName: "bash", toolCallId: "b1", arguments: { command: "pnpm test", description: "Run the test suite" } };
     expect(exploreActivity(group([read("r1", "a.ts"), grep("g1")], true), results)).toBe("Searching x");
+    expect(exploreActivity(group([read("r1", "a.ts"), describedBash], true), results)).toBe("Run the test suite");
     expect(exploreActivity(group([read("r1", "a.ts"), grep("g1")], false), results)).toBeUndefined();
     expect(exploreActivity(group([read("r1", "a.ts")], true), results)).toBeUndefined();
-  });
-
-  it("splits the label into rolling parts that read the same as the label", () => {
-    const counts = { files: 2, images: 1, searches: 0, lists: 1, commands: 0, failed: 1 };
-    const parts = exploreLabelParts(counts);
-    expect(parts).toEqual([{ key: "files", count: 2, noun: "files" }, { key: "images", count: 1, noun: "image" }, { key: "lists", count: 1, noun: "list" }]);
-    expect(parts.map((part) => `${part.count} ${part.noun}`).join(", ")).toBe(exploreLabel(counts));
   });
 
   it("keeps calls in flight out of the head until they land", () => {
@@ -291,17 +291,5 @@ describe("exploration summary", () => {
     const saved = group([read("r1"), grep("g1")]);
     expect(exploreLiveItems(saved, results)).toEqual([]);
     expect(settledGroup(saved, results)).toBe(saved);
-  });
-
-  it("stacks one mark per kind in a fixed order, each flying under its newest item's id", () => {
-    const ls: NormalizedBlock = { type: "tool-call", toolName: "ls", toolCallId: "l1", arguments: { path: "src" } };
-    const results = new Map<string, NormalizedBlock>([["r2", { type: "tool-result", toolCallId: "r2", images: [{ imageId: "i" }] }]]);
-    const marks = exploreMarks(group([grep("g1"), read("r1"), thinking("hm"), read("r2", "shot.png"), ls, read("r3")]), results);
-    expect(marks).toEqual([
-      { mark: "file", id: "call:r3" }, { mark: "image", id: "call:r2" }, { mark: "search", id: "call:g1" },
-      { mark: "list", id: "call:l1" }, { mark: "thought", id: "think:2" }
-    ]);
-    expect(flyId({ block: thinking("x"), key: "7:1" })).toBe("think:7:1");
-    expect(flyId({ block: read("r9"), key: "7:2" })).toBe("call:r9");
   });
 });

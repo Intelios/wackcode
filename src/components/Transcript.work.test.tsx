@@ -215,7 +215,7 @@ describe("Transcript completed work", () => {
     expect(screen.getByText("Third")).toBeInTheDocument();
     fireEvent.click(reveal());
     const region = screen.getByRole("region", { name: "Work transcript" });
-    expect(within(region).getByRole("button", { name: "Explored 1 file, 1 search" })).toBeInTheDocument();
+    expect(within(region).getByRole("button", { name: "Read one.ts, searched once" })).toBeInTheDocument();
     expect(within(region).getByText("First")).toBeInTheDocument();
     fireEvent.click(within(region).getByRole("button", { name: /mystery result/ }));
     expect(within(region).getByText("Orphan output")).toBeInTheDocument();

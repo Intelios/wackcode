@@ -71,12 +71,8 @@ export function ToolImages({ call, result, caption = false }: { call: Normalized
   );
 }
 
-/**
- * Chat's springs (ChatActivity.tsx): chips pop in, and fly into an Explored head. The fly is
- * critically damped: an overshoot would squash the landing mark below its size and back.
- */
+/** Motion curves shared across chips and expandable tool sheets. */
 const POP = { type: "spring", stiffness: 520, damping: 28 } as const;
-export const FLY = { type: "spring", stiffness: 380, damping: 36, mass: 0.8 } as const;
 const SHEET = { duration: 0.24, ease: [0.33, 1, 0.68, 1] } as const;
 
 /** True where transcript motion may play: not reduced, and a real browser (jsdom stays still). */
@@ -107,7 +103,14 @@ function useCallFace(call: NormalizedBlock, result: NormalizedBlock | undefined,
   const failed = result?.isError === true;
   const pending = Boolean(running && !result);
   const shownResult = result ?? (pending && liveText ? { type: "tool-result" as const, text: liveText } : undefined);
-  const expandable = Boolean(shownResult?.text || (result?.details as Record<string, unknown> | undefined)?.diff || summary.kind === "write" || summary.kind === "other");
+  const expandable = Boolean(
+    shownResult?.text
+    || (result?.details as Record<string, unknown> | undefined)?.diff
+    || summary.kind === "write"
+    || summary.kind === "bash"
+    || summary.kind === "commit"
+    || summary.kind === "other"
+  );
   return { summary, failed, pending, shownResult, expandable };
 }
 
@@ -115,14 +118,21 @@ function useCallFace(call: NormalizedBlock, result: NormalizedBlock | undefined,
 function CallWords({ summary, pending, failed, rangeText }: { summary: ToolSummary; pending: boolean; failed: boolean; rangeText?: string }) {
   /** Only real file paths get a dir/name split; commands, patterns and URLs are left whole. */
   const pathParts = summary.kind === "read" || summary.kind === "edit" || summary.kind === "write" ? splitPathSubject(summary.subject) : undefined;
+  const prose = summary.subjectIsProse === true && Boolean(summary.subject);
   return (
     <>
-      <span className="tool-row-verb">{pending ? summary.activeVerb : summary.doneVerb}</span>
-      {summary.subject && (
-        <code className={`tool-row-subject ${pathParts?.dir ? "has-dir" : ""}`} title={summary.subject}>
-          {pathParts?.dir && <span className="tool-row-subject-dir">{pathParts.dir}</span>}
-          <span className="tool-row-subject-name">{pathParts ? pathParts.name : summary.subject}</span>
-        </code>
+      {prose ? (
+        <span className={`tool-row-prose ${pending ? "live" : ""}`} title={summary.subject}>{summary.subject}</span>
+      ) : (
+        <>
+          <span className="tool-row-verb">{pending ? summary.activeVerb : summary.doneVerb}</span>
+          {summary.subject && (
+            <code className={`tool-row-subject ${pathParts?.dir ? "has-dir" : ""}`} title={summary.subject}>
+              {pathParts?.dir && <span className="tool-row-subject-dir">{pathParts.dir}</span>}
+              <span className="tool-row-subject-name">{pathParts ? pathParts.name : summary.subject}</span>
+            </code>
+          )}
+        </>
       )}
       {rangeText && <span className="tool-row-ranges">({rangeText})</span>}
       {(summary.additions || summary.deletions) ? (
@@ -171,8 +181,6 @@ export interface ChipCall {
   result?: NormalizedBlock;
   liveText?: string;
   running?: boolean;
-  /** Shared-element id: set where this chip may fly into an Explored head (`explore-utils.ts` flyId). */
-  flyId?: string;
   /** Coalesced line ranges for multi-slice reads of the same file. */
   rangeText?: string;
   /** Coalesced sub-calls belonging to this chip (for opening stacked details). */
@@ -199,15 +207,10 @@ function ToolChip({ entry, open, onToggle }: { entry: ChipCall; open: boolean; o
       aria-expanded={open}
       disabled={!expandable}
       onClick={() => expandable && onToggle()}
-      layoutId={animate ? entry.flyId : undefined}
-      // Only the hand-off into a head moves it, never its own re-renders (a growing label). The
-      // value must differ from the head mark's: motion only resumes a shared element from a
-      // predecessor whose layoutDependency differs (NodeStack.promote).
-      layoutDependency="chip"
       style={{ borderRadius: 999 }}
       initial={animate && pops ? { opacity: 0, scale: 0.8, y: 4 } : false}
       animate={{ opacity: 1, scale: 1, y: 0 }}
-      transition={{ ...POP, layout: FLY }}
+      transition={POP}
     >
       <Icon name={toolIcon(call, result, summary)} className="tool-row-icon" />
       <CallWords summary={summary} pending={pending} failed={failed} rangeText={entry.rangeText} />
@@ -277,6 +280,7 @@ interface ToolRowProps {
   result?: NormalizedBlock;
   liveText?: string;
   running?: boolean;
+  variant?: "default" | "step";
 }
 
 /**
@@ -284,7 +288,9 @@ interface ToolRowProps {
  * everything else is a chip (`toolPresentation`), on its own strip when drawn alone.
  */
 export function ToolRow(props: ToolRowProps) {
-  return toolPresentation(props.call) === "chip" ? <ToolChips entries={[props]} /> : <ToolCallRow {...props} />;
+  return props.variant !== "step" && toolPresentation(props.call) === "chip"
+    ? <ToolChips entries={[props]} />
+    : <ToolCallRow {...props} />;
 }
 
 function ToolCallRow({
@@ -292,13 +298,12 @@ function ToolCallRow({
   result,
   liveText,
   running,
-  compact = false,
+  variant = "default",
   coalesced,
   summaryOverride,
   failedOverride,
   rangeText
 }: ToolRowProps & {
-  compact?: boolean;
   coalesced?: { key: string; call: NormalizedBlock; result?: NormalizedBlock }[];
   summaryOverride?: ToolSummary;
   failedOverride?: boolean;
@@ -309,13 +314,16 @@ function ToolCallRow({
   const summary = summaryOverride ?? face.summary;
   const failed = failedOverride ?? face.failed;
   const pending = running ? (coalesced ? coalesced.some((c) => !c.result) : face.pending) : false;
-  const expandable = face.expandable || Boolean(coalesced?.some((c) => c.result?.text || (c.result?.details as Record<string, unknown> | undefined)?.diff || c.call.toolName === "write"));
+  const expandable = face.expandable || Boolean(coalesced?.some((c) => c.result?.text || (c.result?.details as Record<string, unknown> | undefined)?.diff || c.call.toolName === "write" || c.call.toolName === "bash"));
   const animate = useTranscriptMotion();
   const pops = usePopsIn(call.toolCallId, pending);
+  const pictured = coalesced
+    ? coalesced.filter((entry) => entry.result?.images?.length)
+    : result?.images?.length ? [{ key: call.toolCallId ?? "0", call, result }] : [];
 
   return (
     <motion.div
-      className={`tool-row ${summary.kind === "bash" ? "command" : ""} ${summary.kind === "commit" ? "commit" : ""} ${compact ? "work-subrow" : ""} ${open ? "open" : ""} ${failed && !summary.commit ? "error" : ""}`}
+      className={`tool-row ${summary.kind === "bash" ? "command" : ""} ${summary.kind === "commit" ? "commit" : ""} ${variant === "step" ? "work-step-row" : ""} ${pending ? "live" : ""} ${open ? "open" : ""} ${failed && !summary.commit ? "error" : ""}`}
       initial={animate && pops ? { opacity: 0, scale: 0.96, y: 4 } : false}
       animate={{ opacity: 1, scale: 1, y: 0 }}
       transition={POP}
@@ -334,7 +342,7 @@ function ToolCallRow({
           {expandable && <Icon name="chevron" className="tool-chevron" />}
         </span>
       </button>
-      {result?.images?.length ? <ToolImages call={call} result={result} /> : null}
+      {pictured.map((entry) => entry.result ? <ToolImages key={entry.key} call={entry.call} result={entry.result} /> : null)}
       {animate ? (
         <AnimatePresence initial={false}>
           {open && expandable && (
@@ -392,7 +400,6 @@ export function buildCoalescedProps(
     result: last.result,
     liveText: activeLiveText,
     running: running && step.items.some((item) => item.live),
-    flyId: step.flyId,
     rangeText,
     coalesced: entries.length > 1 ? entries : undefined,
     summaryOverride,
@@ -401,25 +408,25 @@ export function buildCoalescedProps(
   };
 }
 
-/** Renders a coalesced step either as a standalone bare row/chip or a compact timeline sub-row inside a group. */
+/** Renders a coalesced step either as a standalone bare row/chip or a unified step row inside `ExploreGroup`. */
 export function CoalescedRow({
   step,
   results,
   liveToolText,
   running,
-  compact = false
+  variant = "default"
 }: {
   step: CoalescedCallStep;
   results: Map<string, NormalizedBlock>;
   liveToolText?: Record<string, string>;
   running: boolean;
-  compact?: boolean;
+  variant?: "default" | "step";
 }) {
   const props = buildCoalescedProps(step, results, liveToolText, running);
-  if (toolPresentation(props.call) === "chip") {
+  if (variant !== "step" && toolPresentation(props.call) === "chip") {
     return <ToolChips entries={[props]} />;
   }
-  return <ToolCallRow {...props} compact={compact} />;
+  return <ToolCallRow {...props} variant={variant} />;
 }
 
 /** Fallback row for a tool result that never matched a call (rare). */

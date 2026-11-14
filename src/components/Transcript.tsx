@@ -6,16 +6,15 @@ import { AssistantNameContext } from "../agentName";
 import { useFollowScroll } from "../hooks/useFollowScroll";
 import { motionAllowed, useSmoothText } from "../hooks/useSmoothText";
 import { formatRunDuration } from "../chat-utils";
-import { blockKey, flyId, layoutTranscript, tailGroupKey, type TranscriptSlot } from "../explore-utils";
+import { blockKey, layoutTranscript, tailGroupKey, type TranscriptSlot } from "../explore-utils";
 import { completedPlan, layoutWorkTurns, type WorkRow } from "../completed-work";
 import { summarizeTurnFileChanges } from "../turn-changes";
 import { splitFileSection, type FileAttachment } from "../attachment-utils";
 import { chatMentionToken } from "../chat-refs";
 import { splitMentions } from "../mention-utils";
-import { SUBAGENT_TOOL_NAME, SHOW_VISUAL_TOOL_NAME, SKILL_CREATOR_TOOL_NAME, currentVisualIds, exploreKind, parseSkillPreviewDetails, parseSubagentDetails, parseVisualArgs, pendingSubagentDetails, toolPresentation } from "../tool-utils";
+import { SUBAGENT_TOOL_NAME, SHOW_VISUAL_TOOL_NAME, SKILL_CREATOR_TOOL_NAME, currentVisualIds, parseSkillPreviewDetails, parseSubagentDetails, parseVisualArgs, pendingSubagentDetails, toolPresentation } from "../tool-utils";
 import { hasVisibleMessages, latestTurn, messageText } from "../tree-utils";
 import { ExploreExpansion, ExploreGroup, ExploreGroupingEnabled, ExploreLaneWait } from "./ExploreGroup";
-import { ThoughtFlightScope } from "./thoughtFlight";
 import { Icon } from "./Icons";
 import { Markdown } from "./Markdown";
 import { ReplyImageScope, useReplyImageScope } from "./ReplyImage";
@@ -36,7 +35,7 @@ import { CanvasProgress } from "./canvas/CanvasProgress";
 import { CANVAS_TOOL_NAME } from "../canvas-state";
 import { SubagentGroup } from "./SubagentChip";
 import { ThinkingExpansion, ThinkingRow } from "./ThinkingRow";
-import { buildCoalescedProps, CoalescedRow, FLY, OrphanResult, ToolChips, ToolExpansion, ToolImageSource, ToolRow, useTranscriptMotion, type ChipCall } from "./ToolRow";
+import { buildCoalescedProps, CoalescedRow, OrphanResult, ToolChips, ToolExpansion, ToolImageSource, ToolRow, useTranscriptMotion, type ChipCall } from "./ToolRow";
 import { TurnChangesCard } from "./TurnChangesCard";
 import { PonderingDuck } from "./PonderingDuck";
 import { useContextMenu } from "./ui/ContextMenu";
@@ -371,8 +370,7 @@ function renderBlock(
 ): ReactNode {
   if (block.type === "thinking") {
     // A streamed block is still being written until the worker has clocked its end.
-    // Reasoning outside a group may yet be taken in: its duck then flies into the head.
-    return <ThinkingRow text={block.text ?? ""} durationMs={block.durationMs} startedAt={block.startedAt} live={running && streaming === true && block.durationMs === undefined} expansionKey={key} flyId={flyId({ block, key })} />;
+    return <ThinkingRow text={block.text ?? ""} durationMs={block.durationMs} startedAt={block.startedAt} live={running && streaming === true && block.durationMs === undefined} expansionKey={key} />;
   }
   if (block.type === "tool-call") {
     const special = renderSpecialCall(block, results, liveToolDetails, live, planState, onPlanAction, running, skillCard);
@@ -446,9 +444,7 @@ function renderSlots(
         call: block,
         result,
         liveText: block.toolCallId ? liveToolText?.[block.toolCallId] : undefined,
-        running: live && !result,
-        // Exploration may yet be taken into a group: it flies into the head when it is.
-        flyId: exploreKind(block) ? flyId({ block, key: blockKey(message, slot.index) }) : undefined
+        running: live && !result
       });
       continue;
     }
@@ -1052,14 +1048,11 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
 
   return (
     <div className="transcript-zone">
-      {/* `layoutScroll`: chips flying into an Explored head are measured in page space, so the
-          scroller's offset must be part of the measurement or follow-scrolling skews the flight. */}
       <motion.div data-dynamic-space className="conversation-scroll" ref={ref}
-        onScroll={() => { onScroll(); maybeReveal(); }} onWheel={(event) => { onWheel(event); if (event.deltaY < 0) maybeReveal(); }} layoutScroll>
+        onScroll={() => { onScroll(); maybeReveal(); }} onWheel={(event) => { onWheel(event); if (event.deltaY < 0) maybeReveal(); }}>
         <ThinkingExpansion.Provider value={expandedThinking}>
           <ExploreExpansion.Provider value={expandedGroups}>
           <ExploreLaneWait.Provider value={laneWait}>
-          <ThoughtFlightScope>
           <ToolExpansion.Provider value={toolExpansions}>
           <VisualCardScope.Provider value={visualScope}>
           <SuggestionScopeContext.Provider value={suggestionScope}>
@@ -1134,7 +1127,6 @@ export function Transcript({ messages, modelSwitches = [], partial, running, act
           </SuggestionScopeContext.Provider>
           </VisualCardScope.Provider>
           </ToolExpansion.Provider>
-          </ThoughtFlightScope>
           </ExploreLaneWait.Provider>
           </ExploreExpansion.Provider>
         </ThinkingExpansion.Provider>

@@ -7,8 +7,12 @@ publish.workspace = true
 
 [dependencies]
 wack-agent.workspace = true
+wack-core.workspace = true
 wack-tools.workspace = true
 wack-llm.workspace = true
+libc.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
 
 [[bin]]
 name = "wack"

@@ -44,6 +44,27 @@ A failure answers `{"ok":false,"error":"…"}` with a sentence saying what went 
 
 The dev app keeps its data in `~/Library/Application Support/com.wackcode.desktop.dev/`, apart from the installed app's `com.wackcode.desktop`. The installed app's folder is the owner's real data: never read or write it.
 
+## The agent without the app
+
+Agent behaviour is tested with a scripted provider (`wack_llm::testing::ScriptedProvider`): a test lists the replies the model will give, runs the loop, and checks the requests it sent and the session it left. See the tests in `crates/wack-agent/src/agent.rs`. A new loop behaviour gets a test there.
+
+`cargo wack` runs the same agent from a shell, with the seven core tools, against a real or local provider:
+
+```sh
+cargo wack connect                             # asks for name, type, address, model; the key is typed hidden
+cargo wack connections
+cargo wack run "what does this project do?"    # works in the current folder
+cargo wack run --connection "Name" --model id --effort high --cwd ../scratch "…"
+cargo wack run --resume <session file> "carry on"
+cargo wack --data-dir /tmp/x connect …         # a throwaway data folder, for a local mock server
+```
+
+A debug build shares the dev app's data folder, so a connection added here is there for `cargo dev` too. While a run is going, a typed line is sent to the agent as a message, and Ctrl-C stops the run. The tools really run: use a scratch folder for anything that edits files.
+
 ## Real LLMs
 
-Use only the connection named **Testing (AI Agents may use this too)**, added inside the dev app. Never read its key from `secrets.json`, and never use another connection: it may cost the owner money.
+Use only the connection named **Testing (AI Agents may use this too)**. The owner adds it, in the dev app or with `cargo wack connect`; never copy it from another folder. Never read its key from `secrets.json`, and never use another connection: it may cost the owner money.
+
+```sh
+cargo wack run --connection "Testing (AI Agents may use this too)" --cwd <scratch folder> "…"
+```

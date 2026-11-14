@@ -15,8 +15,11 @@ Never add a network origin silently. Call it out explicitly, and list it here.
 
 - API keys persist only in `secrets.json` (mode 0600) in the app's data folder.
 - A key travels from `secrets.json` to the request that needs it and nowhere else: never into `state.json`, a session file, an environment variable, a command line, a log, an error message or the usage ledger.
-- Processes the agent starts (the `bash` tool, PTYs, Run and Build) inherit the user's login-shell environment with provider key variables removed.
-- Error text shown to the user or written to disk is redacted first.
+- No function returns a key. `Store::provider` (`wack-core`) reads it and hands back the provider that sends the requests.
+- A key is never a command-line argument. `wack connect` asks for it at a hidden prompt, or reads it from a pipe.
+- Processes the agent starts (the `bash` tool; later PTYs, Run and Build) have provider key variables removed from their environment (`SECRET_ENV` in `wack-tools/src/bash.rs`).
+- Error text shown to the user or written to disk is redacted first: the HTTP client removes the key from any error a server echoes back.
+- TLS trusts the system certificate store.
 
 ## The automation socket
 

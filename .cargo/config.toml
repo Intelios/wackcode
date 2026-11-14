@@ -3,6 +3,8 @@
 dev = "run -p wackcode --features automation"
 # Render UI scenes to PNG files: `cargo snap --list`, `cargo snap shell --theme dark`.
 snap = "run -p gallery --"
+# The agent without the app: `cargo wack connect`, `cargo wack run "…"` (see docs/testing.md).
+wack = "run -q -p wack-cli --"
 
 [env]
 # Where `cargo dev` opens the automation socket. Only a build with the `automation` feature reads

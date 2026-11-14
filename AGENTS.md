@@ -70,6 +70,7 @@ WackCode should feel like a distinctive macOS app with its own character, never 
 | `cargo clippy --workspace` | Lints. |
 | `cargo snap --list`, `cargo snap <scene> --theme dark` | Render a UI scene to a PNG and look at it. |
 | `cargo dev` | Run the dev app, with the automation socket compiled in. |
+| `cargo wack run "…"` | Run the agent without the app ([docs/testing.md](docs/testing.md)). |
 | `cargo deny check licenses` | After adding or bumping a dependency. |
 
-**Real LLMs:** use only the connection named **Testing (AI Agents may use this too)**, through the app, and never read its key from `secrets.json`. Any other connection may cost the owner money. The dev app has its own data folder: the Testing connection must be added *inside the dev app*, never copied from another folder.
+**Real LLMs:** use only the connection named **Testing (AI Agents may use this too)**, through the app or `cargo wack`, and never read its key from `secrets.json`. Any other connection may cost the owner money. The dev app has its own data folder: the Testing connection must be added *inside the dev app*, never copied from another folder.

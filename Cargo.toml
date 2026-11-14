@@ -1,0 +1,42 @@
+[workspace]
+resolver = "3"
+members = ["apps/*", "crates/*"]
+
+[workspace.package]
+version = "3.0.0-dev.0"
+edition = "2024"
+publish = false
+
+[workspace.dependencies]
+wack-llm = { path = "crates/wack-llm" }
+wack-agent = { path = "crates/wack-agent" }
+wack-tools = { path = "crates/wack-tools" }
+wack-core = { path = "crates/wack-core" }
+wack-ui = { path = "crates/wack-ui" }
+
+# GPUI comes from one pinned revision of zeronsh/zui, a standalone extraction of Zed's GPUI that
+# adds backdrop blur, edge fade and transparent-window support. All three crates must share the
+# same rev. Bumping it is its own task, never part of feature work: see docs/gpui.md.
+gpui = { git = "https://github.com/zeronsh/zui", rev = "15ee7082c4f910618be306166436a6d9fe0451be" }
+gpui_platform = { git = "https://github.com/zeronsh/zui", rev = "15ee7082c4f910618be306166436a6d9fe0451be", features = [
+    # Shaders compile at launch, so building needs only the Command Line Tools, not full Xcode.
+    "runtime_shaders",
+] }
+gpui_tokio = { git = "https://github.com/zeronsh/zui", rev = "15ee7082c4f910618be306166436a6d9fe0451be" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+
+[profile.dev]
+# Line tables keep file:line in panics without the multi-gigabyte cost of full debug info.
+debug = "line-tables-only"
+
+# GPUI is unusably slow unoptimized, so dependencies are always optimized; our crates stay fast to build.
+[profile.dev.package."*"]
+opt-level = 2
+debug = false
+
+[profile.release]
+lto = "thin"
+strip = "symbols"

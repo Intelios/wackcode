@@ -1,0 +1,16 @@
+[package]
+name = "wackcode"
+description = "WackCode: a native macOS coding agent."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[features]
+# Dev only: compiles in the automation socket (docs/testing.md). `cargo dev` turns it on.
+automation = ["wack-ui/automation", "gpui_platform/test-support"]
+
+[dependencies]
+wack-ui.workspace = true
+wack-core.workspace = true
+gpui.workspace = true
+gpui_platform = { workspace = true, features = ["font-kit"] }

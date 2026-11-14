@@ -1,0 +1,18 @@
+[package]
+name = "wack-ui"
+description = "GPUI views, the pane tree and layout solver, theme and components."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[features]
+# Compiles in the dev-only automation socket (docs/testing.md). Never enabled in a release build.
+automation = ["gpui/test-support", "dep:serde", "dep:serde_json", "dep:image", "dep:async-channel"]
+
+[dependencies]
+wack-core.workspace = true
+gpui.workspace = true
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+async-channel = { version = "2", optional = true }
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }

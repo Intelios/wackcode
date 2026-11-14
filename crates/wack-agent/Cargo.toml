@@ -1,0 +1,9 @@
+[package]
+name = "wack-agent"
+description = "The agent loop, tool registry, prompt assembly, sessions and compaction."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+wack-llm.workspace = true

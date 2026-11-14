@@ -1,0 +1,11 @@
+[package]
+name = "wack-core"
+description = "The engine: projects, chats, settings, secrets, Git, PTYs and events."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+wack-agent.workspace = true
+wack-tools.workspace = true
+wack-llm.workspace = true

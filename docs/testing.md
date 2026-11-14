@@ -1,77 +1,49 @@
-# Testing
+# Checking your work
 
-## Suites
+## Tests
 
-| Command | Covers | Where tests live |
-|---|---|---|
-| `pnpm test:web` | Renderer logic and components (Vitest + jsdom) | Colocated `src/**/*.test.ts(x)`; components use Testing Library role-based queries |
-| `pnpm test:worker` | The worker end to end: a real worker process against an inline mock provider | `worker/src/*.test.ts` (`integration.test.ts` is the big one) |
-| `pnpm test:rust` | Rust host | Inline `#[cfg(test)]` modules, using `tempfile` for disk |
-| `pnpm test` | All three | |
-| `pnpm check` | Compile only: frontend, worker, `cargo check` | |
+`cargo test --workspace` runs everything. Pure logic is tested in inline `#[cfg(test)]` modules next to the code, with `tempfile` for anything that touches disk.
 
-Run `pnpm test:worker` after any protocol change. Some tests are guards rather than behaviour checks; fix the code, not the guard:
+## The gallery: looking at UI without the app
 
-- `theme.test.ts`: `:root` defaults match `TOKENS`, and no raw colour appears below `:root`.
-- `builtin.test.ts`: the Plan contract's pinned hash. Changing it re-appends the contract to every saved Plan chat.
-- `slash.test.ts`: command keys and name resolution shared with Settings.
+Every view state worth looking at is a **scene** in `crates/wack-ui/src/scenes.rs`: a view, in a known state, at a known size. The `gallery` binary renders scenes to PNG files.
 
-Pure logic belongs in a colocated `*.test.ts` next to a small module (`chat-utils.ts`, `side-panel.ts`, `scroll-rail.ts`…) rather than inside a component. Rust keeps pure policy separate for the same reason (`computer_use/policy.rs`, `geometry.rs`, `keys.rs`, `outline.rs`).
+```sh
+cargo snap --list                              # what scenes exist
+cargo snap shell --theme dark                  # writes target/gallery/shell-dark.png
+cargo snap shell --theme light --out /tmp/a.png
+cargo snap --all                               # every scene, light and dark
+```
 
-## Benchmarks
+Rendering is headless: GPUI's test platform with the real Metal renderer and the real macOS text system. No window opens and nothing takes focus, so it works from any shell. Images are rendered at 2x.
 
-- `node scripts/benchmark-history.mjs` times the cold saved-history reader end to end (first snapshot, preview tail, total, peak RSS) on a disposable fixture; `--runs N`, `--fixture <session.jsonl>` for a real file, `--report <path>` to keep the JSON. Never commit real session output.
-- `MCP_DELAY_MS=5000 RUNS=6 node worker/scripts/bench-startup.mjs` measures worker spawn → first model request with a five-second local MCP boot. Run 0 discovers tools; subsequent workers share only the tool catalogue. It also records actual MCP readiness and verifies the first request carries the MCP tools. See [the experiment](mcp-startup.md).
-- `WACKCODE_PERF=1 npx vitest run src/App.performance.test.tsx -t '<scenario>' --maxWorkers=1` runs the opt-in renderer hot-path benchmarks, including cold-snapshot mount.
-- In a dev build, `history timing:` records land on the app's stderr (reader phases + the display snapshot/commit/paint/previews-done figure).
+When you change a view: add or update its scene, render it in both themes, and look at the result. A UI change is not verified until you have looked at it.
 
-## The running app
+Elements that matter to tests carry a tag: end the element's builder chain with `.tag("title-strip")` (`crates/wack-ui/src/tags.rs`). `cargo snap <scene> --tags` prints each tag's bounds, and the automation socket aims clicks by tag, so tag anything a test needs to find.
 
-- **Start** with `pnpm dev:background`. It is idempotent, prints `Ready` once the app is up, and logs to `/tmp/wackcode-dev.log`. **Stop** with `pnpm dev:stop`. Don't launch the app any other way. `pnpm dev:reset` stops it and moves its data folder to the Trash.
-- **Don't restart between tests.** Frontend edits hot-reload; Rust edits rebuild and relaunch the app automatically; worker edits need `pnpm build:worker` and then a new chat.
-- **The dev app is its own app.** `tauri dev` merges `tauri.dev.conf.json`, so it runs as **WackCode Dev**, bundle id `com.wackcode.desktop.dev`, with its own data folder (`~/Library/Application Support/com.wackcode.desktop.dev/` — credentials and the Testing connection must be added there, never copied) and an amber Dock icon. The installed app keeps `com.wackcode.desktop`; the two run side by side and never share state.
-- **Bundled build:** only when a test needs the bundled worker and resources, use `pnpm build:desktop:debug` and its `.app`, and never while the dev app is running.
+## The dev app
 
-## Driving the dev app
+`cargo dev` runs the app with the `automation` feature. Use it for what the gallery cannot show: real windows, focus, typing, IME, resizing, animation.
 
-`scripts/wackdev/server.mjs` is a stdio MCP server agents use to operate the dev app — no coordinates, no real mouse, and never the installed app. Register it in the *everyday* WackCode under Settings › MCP servers as `node <repo>/scripts/wackdev/server.mjs` (the same command works in Claude Code). Its tools: `status`, `start`, `stop`, `tree`, `find`, `press`, `focus`, `type`, `key`, `scroll`, `wait_for`, `shot`.
+It opens a Unix socket at `target/automation.sock` (set by `WACKCODE_AUTOMATION` in `.cargo/config.toml`; the path must stay under about 100 characters). Send one JSON object per line and read one back:
 
-- Call `tree` before acting; refs (`e3-12`) stay valid until the next `tree`/`find`. Acting on a `name` works too — an ambiguous name errors and lists the candidate refs.
-- Use `wait_for` instead of sleeping while a run streams or a sheet animates.
-- `shot` captures only the dev window, even while covered; `tree` is still the better way to read controls.
-- Every call refuses unless a process with bundle id `com.wackcode.desktop.dev` is running from this checkout's `src-tauri/target/` with a "WackCode Dev" window (the rule is in `src-tauri/wackdev/src/driver/target.rs`). A dev app running as the bare `target/debug/wackcode` binary has no bundle id and can't be targeted — `status` says so; `pnpm dev:stop`/`dev:background` sweeps and replaces it.
-- The built-in computer-use tools can also drive the dev app — it's a normal app to them (grant it through the access card like any other), while WackCode itself stays blocked.
-- Accessibility and Screen Recording are charged to the app that launched the server — the everyday WackCode, or the terminal for Claude Code. `status` reports which is missing.
-- If a control can't be named precisely, that's an accessibility bug: give it an `aria-label` in the app rather than reaching for coordinates.
-- `pnpm build:worker`/`cargo` edits don't touch the driver; `src-tauri/wackdev/` is rebuilt lazily by the server (`cargo build -p wackdev --bin wackdev-helper`).
-- Rebuilding the helper while `pnpm dev:background` is up makes `tauri dev` rebuild and relaunch the app (it watches `src-tauri/wackdev` too); occasionally that relaunch comes up without its webview — a plain `pnpm dev:stop` + `pnpm dev:background` fixes it. Never set `AXManualAccessibility` on this app: it removes the windows from `AXWindows` until relaunch.
-- The minimal dev bundle is signed and verified after packaging. Its ad-hoc signature changes
-  when Rust is rebuilt, so computer-use approvals may need renewing then. For permission and
-  relaunch testing, use the bundled debug app: it has its own frontend and starts normally
-  through Finder without the dev server.
+```sh
+cargo dev &                                    # from the repo root
+ask() { echo "$1" | nc -U -w 5 target/automation.sock; }
+ask '{"cmd":"tree"}'                           # window size and every tag's bounds
+ask '{"cmd":"screenshot","path":"/abs/out.png"}'
+ask '{"cmd":"click","tag":"send"}'             # or {"x":10,"y":20}; optional "count", "right"
+ask '{"cmd":"type","text":"hello"}'            # into whatever has focus
+ask '{"cmd":"key","keys":"cmd-n enter"}'
+ask '{"cmd":"resize","width":900,"height":600}'
+ask '{"cmd":"appearance","theme":"light"}'
+ask '{"cmd":"quit"}'
+```
 
-## Models
+A failure answers `{"ok":false,"error":"…"}` with a sentence saying what went wrong. Screenshots show what the app drew, at 2x, without the traffic lights (the system draws those). The full protocol is in `crates/wack-ui/src/automation.rs`.
 
-- **Real LLMs:** use only the connection named **Testing (AI Agents may use this too)** (under Providers in the composer's model picker), through the app. Never read its key from `secrets.json`. Don't send prompts through any other connection or subscription sign-in: they may cost the owner money. For the dev app, the connection lives in *its* data folder — add it in the dev app's own Settings.
-- **Deterministic output:** `pnpm mock:provider` serves a Chat Completions endpoint at `http://127.0.0.1:43127/v1`. A prompt containing "wait until stopped" hangs until cancelled, for testing cancellation.
-- "saved images fixture" finds and reopens an attached or previously saved image with `list_images` / `read_image`, returning its original dimensions and local path. In Code, `saved images fixture: /absolute/image.png` first reads that file; in Chat it must be inside the scratchpad. Verify a large image stays full size on disk while the viewing copy and transcript previews stay small.
-- "dynamic background fixture" streams reasoning for eight seconds, then a long reply for forty seconds without tool calls, in either area. Use it for background motion, typing and scroll checks; Stop cancels it.
-- "visual reply fixture" draws a transparent chart with a local scale/reset control, then a deliberately filled product mockup, and finishes with Markdown (inline code, table, quote, code fence and list). Works in Code and Chat; if visual replies are switched off it only answers in Markdown and writes no files. Check alignment and readability across solid, image, dynamic and glass backdrops; the chart blends into prose, the mockup keeps its authored surface, keyboard focus stays visible, and Copy/Expand still work. Its controls never send a message.
-- "escape fixture" aims the write one folder above the workspace (`../wackcode-escape.txt`). In a Chat mode chat the tool row shows the scratchpad refusal and no file appears.
-- Canvas without a paid provider: "canvas fixture" (or `/canvas canvas fixture`) draws one canvas — a base artboard, two `basedOn` theme variants and a phone — then calls `canvas_look` on it and answers. Check that the Canvas tab opens on its own during the run at the roomy width (and that a reloaded chat with a canvas does not open it), the transcript shows a card per turn, and the card reopens the tab on that turn's artboards. Pan, pinch-zoom, Select/Hand (V/H), the zoom menu, Play and Esc, Present (←/→, Esc), Download as PNG and HTML (cancel too), and the switcher with two canvases. Switch to Changes and back (each keeps its width; the board keeps its camera), drag the canvas width and relaunch, Expand, narrow/wide windows, theme/backdrop/reduced motion, and rewind past the call closing the tab.
-- "slow canvas fixture" streams the drawing call over several seconds. Before any canvas is accepted, the transcript shows the current artboard and received character count, and the Classic composer's pill names canvas work. "slow canvas fixture pause" pauses input for 18 seconds: the progress card reports no new content after 15 seconds and resumes when input returns. Stop must retire progress without creating a canvas. Follow with "slow canvas fixture revise pause" to see progress in the Canvas panel while its accepted artboard stays visible.
-- "canvas image fixture: /absolute/image.png" (the path defaults to `/tmp/wackcode-canvas-gradient.png`) draws one artboard whose markup references that local image by absolute path, then calls `canvas_look` on it. The call inlines the bytes and saves them with the chat, so check the artboard renders the image in the Canvas tab, Download as PNG and HTML carry it, and — after deleting the source file and relaunching the dev app — the reopened canvas still draws it. A missing path must refuse the whole call naming it.
-- Suggested tasks without a paid provider: "suggest fixture" files one `suggest_task` (`bug`, titled "Dismiss button stays disabled after a failed save"), then answers. Try Start here, Start in new chat, dismiss and restore on the card under the reply.
-- Commit rows without a paid provider: "commit fixture" runs one all-Git `bash` call that commits `--allow-empty` into a throwaway repo at `/tmp/wackcode-commit-fixture`, so no open workspace's Git is touched. Check the commit row's milestone look — "Committing" while it runs, then git's own summary (hash pill, message) once it lands — and that its sheet opens into the command and git's output. An `--allow-empty` commit prints no stats line.
-- Inline reply images without a paid provider: attach an image and send "image reply fixture", or send "image reply fixture: /absolute/path/image.png" to read a local image first. The mock includes up to three supplied references among its answer text, with captions. Both areas work; a local file in Chat must be inside that chat's scratchpad. Check the lightbox, completed-work folding and reopening the chat after deleting the source file.
-- Image comparisons without a paid provider: attach two images and send "image comparison fixture", or use "image comparison fixture: /absolute/before.png | /absolute/after.png". Reads use the real tool and Chat's scratchpad confinement. The mock publishes one comparison with Original / Updated labels; disabling the built-in produces only a short reply and never a write. Check dragging outside the frame, arrow keys and Home/End, mismatched proportions, Expand, synchronized zoom/pan, focus restoration, navigation dismissal, work folding, and reopening after deleting the source files. Check default, Mono and a colourful preset, image and supported Liquid Glass backdrops, narrow windows and reduced motion.
-- Browser tools without a paid provider: with the local mock connection, `browser fixture: browser_act {"kind":"set_viewport","viewport":"phone"}` drives the real per-chat browser. The same prefix accepts `browser_open`, `browser_snapshot`, `browser_screenshot` and `browser_console` with JSON arguments, honoring tool switches and browser control.
-- Computer tools without a paid provider: with Computer use enabled and the local mock connection selected, `computer fixture: computer_snapshot {"app":"TextEdit"}` goes through the real host and its access card. The same prefix accepts `computer_apps`, `computer_open`, `computer_screenshot` and `computer_act`. Check Always allow in a second coding chat and after relaunch; Settings › Computer use's Ask again must bring the card back. Built-in blocked apps must stay blocked even with a saved approval.
-- Web search without a paid provider: add a **SearXNG** provider in Settings › Web at `http://127.0.0.1:43127` (no key), switch Web Search on, and send "search fixture: <query>". The mock calls `web_search`, answers `/search?format=json` with three fixture results, and Settings' Test search works against it too.
-- With sub-agents enabled, "background fixture" launches `worker` (or the first available role) for 25 seconds, answers immediately, then resumes with its result. "background fixture until stopped" keeps the child running for Stop tests. Give that role the mock model and disable automatic titles during mock testing. Use a disposable workspace; ordinary fixture prompts write `wackcode-live.txt`.
+The dev app keeps its data in `~/Library/Application Support/com.wackcode.desktop.dev/`, apart from the installed app's `com.wackcode.desktop`. The installed app's folder is the owner's real data: never read or write it.
 
-## MCP
+## Real LLMs
 
-- stdio: add `node <repo>/scripts/mock-mcp-server.mjs` as a server.
-- HTTP/SSE: run `pnpm mock:mcp`, then add `http://127.0.0.1:43128/mcp` (HTTP) or `http://127.0.0.1:43128/sse` (SSE).
-- The dev-app driver: `node <repo>/scripts/wackdev/server.mjs` — see *Driving the dev app* above.
+Use only the connection named **Testing (AI Agents may use this too)**, added inside the dev app. Never read its key from `secrets.json`, and never use another connection: it may cost the owner money.

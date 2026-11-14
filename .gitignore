@@ -1,20 +1,9 @@
-node_modules/
-.pnpm-store/
-dist/
 .DS_Store
 *.log
-*.tsbuildinfo
 
-# Tauri / Rust
-src-tauri/target/
-src-tauri/binaries/*
-!src-tauri/binaries/.gitkeep
-src-tauri/resources/worker/
-src-tauri/resources/npm/
+# Rust
+/target/
 
-# Test output
-coverage/
-.vitest/
+# Local, never committed
 todo.md
 /.zcode
-/docs/performance-review.md

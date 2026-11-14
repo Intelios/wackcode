@@ -1,154 +1,56 @@
 # Architecture
 
-How WackCode's processes fit together, where state lives, and the rules that keep them consistent. For the worker's internals see [worker.md](worker.md); for the renderer see [frontend.md](frontend.md).
+WackCode 3 is one Rust process. There is no Node worker, no IPC protocol and no web view.
 
-## Processes
+## Crates
 
-| Process | Code | Holds credentials? | Network? |
-|---|---|---|---|
-| Renderer (WKWebView) | `src/` | Never | Never; CSP allows IPC only |
-| Rust host | `src-tauri/src/` | Reads `secrets.json` / `auth.json` | User-triggered actions, and the search provider a chat's `web_search` (or routed `web_fetch`) asks for (see [security.md](security.md)) |
-| Chat worker, one per chat | `worker/src/index.ts` | Only what arrives over its stdin | Provider, MCP, `web_fetch`; Pi runs with `PI_OFFLINE` |
-| Package manager | `worker/src/manager.ts` | Never | npm registry and package sources |
-| Skills scan | `worker/src/skills-scan.ts` | Never | Never; reads files only |
-| Commands scan | `worker/src/commands-scan.ts` | Never | Never; runs trusted extension code offline |
-| MCP probe (Test connection) | `worker/src/mcp-probe.ts` | That one server's values | That one server |
-| Saved history | `worker/src/session-reader.ts` | Never | Never; read-only session projection |
-| Subscription models, at launch | `worker/src/subscription-models.ts` | Reads the signed-in `auth.json` files Rust names | Never; static catalogue, no token refresh |
+```
+apps/wackcode      the app binary: opens the window, hands it to wack-ui
+apps/gallery       renders UI scenes to PNG files
+crates/wack-ui     views, pane tree, layout solver, theme        (GPUI)
+crates/wack-core   engine: projects, chats, settings, secrets, Git, PTYs, events
+crates/wack-agent  turn loop, tool registry, prompt assembly, sessions, compaction
+crates/wack-tools  read, write, edit, bash, grep, find, ls
+crates/wack-llm    provider wire formats, streaming events, usage, retries
+crates/wack-cli    `wack`: the agent without the app
+```
 
-Each chat worker runs one Pi session in-process. Sub-agents are in-memory child sessions inside the same worker (`subagent-runner.ts`), not separate processes. Helpers do one job each. A background child outlives its parent run, but remains owned by the chat worker: aggregate chat status stays busy until children and their result continuations finish. Stop and worker shutdown cancel all children; jobs never restart automatically. The dev app runs them from `worker/dist/`; the bundle runs `resources/worker/dist/` on a pinned Node runtime (`runtime-lock.json`).
-Resource selection follows Tauri's development mode, so a packaged debug build also uses
-the bundled runtime and scripts when opened from Finder.
+Dependencies point downwards only: `wack-ui` → `wack-core` → `wack-agent` → `wack-llm`, with `wack-tools` beside the agent.
 
-Native subsystems live in Rust and never in a worker: the per-chat browser (`browser.rs`, a child `WKWebView` inside a scaled AppKit container), the terminal (`terminal.rs`), project commands (`run_command.rs`), computer use (`computer_use/`), the window backdrop (`glass.rs`), and the menu bar duck (`menu_bar.rs`). A worker asks for browser and computer work over the protocol (`browser_request`, `computer_request`); the host does it and enforces the rules. Web search works the same way (`web_request`, `web.rs`): Rust holds the provider's key, calls it, and counts the request in `web-usage.json`.
+## The one boundary that matters
 
-Computer use's agent cursor is a native, nonactivating AppKit panel, drawn on the main thread.
-The engine publishes only dispatched action kinds and screen-point geometry; AX handles stay
-on its thread. One latest action owns the marker globally, guarded by run generation, action
-sequence and cancellation token. Covered targets hide it; moved targets invalidate it. Stop
-and disposal retire ownership before queued UI callbacks run. After 600 ms it keeps the
-completed action label (“Clicked”, “Typed”, etc.) in a subdued, compact name pill. The renderer supplies resolved
-persona/theme tokens via `computer_use_cursor_appearance`; these and `showAgentCursor` are
-cosmetic settings and never reach the worker or its fingerprint.
+**Nothing below `wack-ui` may depend on GPUI.** The UI is a viewport onto the engine: it calls typed async commands and subscribes to typed event streams. That keeps the choice of UI framework confined to one crate, and it is why the agent can run and be tested with no window at all (`wack-cli`).
 
-## Where state lives
+The engine runs on Tokio. `gpui_tokio` bridges the two, so a view can await engine work.
 
-Everything is under the app data directory (`~/Library/Application Support/com.wackcode.desktop/`), except the user's skills in `~/.agents/skills`. The dev app (`tauri.dev.conf.json`) is `com.wackcode.desktop.dev` and gets a sibling folder of its own, so the two never share state.
+State lives in models, not views. Closing a pane or switching a tab must never lose a terminal's scrollback or a diff's selection.
 
-| Path | What |
-|---|---|
-| `wackcode.json` | Settings, projects, chats. Written only through `MetadataState::mutate` (`storage.rs`). |
-| `secrets.json` (0600) | API keys, MCP header/env values keyed `mcp:<id>`, and search provider keys keyed `search:<id>`. |
-| `web-usage.json` | Settings › Web's usage meter: searches and page reads per provider per month, the last 12 months. Written a few seconds after a change (`web_usage.rs`), never sent anywhere, and not the TokenTrail ledger. |
-| `model-catalog.json` | Validated Models.dev metadata cache; separate from connections and worker state. The bundled snapshot is embedded in Rust. |
-| `subscriptions/<id>/auth.json` (0600) | OAuth credentials, one file per subscription provider. |
-| `sessions/<task>/`, `agent/<task>/` | A chat's Pi session files and Pi agent directory. Code chats' original image blobs live in `sessions/<task>/images/`. |
-| `agent/.mcp-tools-v1/` | Private, advisory MCP tool catalogues shared across workers; no connection configuration, credentials or tool results. Each worker still connects independently. |
-| `scratch/<task>/` | Workspace for chats without a project, and every Chat mode chat's scratchpad. Chat mode's original images live in `.wackcode/images/` inside it. Deleted with the chat. |
-| `checkpoints/<task>/` | The chat's shadow Git repository (see below). |
-| `memory/<name>-<key>/` | Project memory notes, one directory per repository shared by its worktrees. Chat mode's one shared store is `memory/chat-<CHAT_MEMORY_KEY>/` (`memory.rs`): the same shape, so Settings lists it like a project's. |
-| `commands/` | The user's slash commands. |
-| `pi/` | Installed packages: Pi's `settings.json` plus `npm/` and `git/`. |
-| `backgrounds/` | Validated copies of chosen background images; the only asset-protocol scope. |
-| `usage/v1/` | The usage ledger ([wackcode-usage-v1.md](wackcode-usage-v1.md)); never deleted with a chat. |
+## Where data lives
 
-The renderer keeps only UI conveniences in `localStorage` (`wackcode:*` keys such as the last model, the side panel's view and width, collapsed and pinned projects).
+```
+~/Library/Application Support/com.wackcode.desktop/     (.dev for the dev app)
+  usage/v1/...              the TokenTrail ledger: a published contract, see wackcode-usage-v1.md
+  v3/state.json             projects, chats, settings
+  v3/secrets.json           API keys, mode 0600
+  v3/sessions/<chat>.jsonl  one append-only file per chat
+  v3/backgrounds/           backdrop images
+```
 
-Settings' model catalogue belongs to Rust (`model_catalog.rs`), independent of Pi. Listing reads
-the newest valid bundled/cached snapshot offline; only **Refresh catalog** downloads from
-Models.dev. Applying specifications edits a connection draft, never workers or saved models.
-Both Code and Chat keep using the saved connection metadata. See [model-catalog.md](model-catalog.md).
+Version 3 keeps everything of its own under `v3/` and never reads or writes version 2's files, which share the same folder.
 
-`MetadataState::mutate` restores the previous execution policy and computer-use settings on a failed operation or write, while holding the lock. Failed permission saves cannot silently change access. Other runtime state, such as a worker crash interruption, intentionally remains updated even when saving fails.
+## Status
 
-## Chat kinds
+Built so far:
 
-`TaskRecord.kind` is `code` (the default, and every chat saved before Chat mode) or `chat`. It is set at creation, inherited by forks, and never changes, so it stays out of the worker fingerprint.
+- The workspace, the pinned GPUI dependency, a themed window, and the gallery.
 
-A `chat` task never has a project or a worktree (`validate_task_kind`). The host sends its kind in `init`, and treats it differently in a handful of places, all in `worker.rs` and `commands.rs`:
+Next, in order:
 
-- **Init payload:** no package resources (`resources_for`, used for the fingerprint too), no sub-agents, skills, commands, computer use or mode.
-- **Broadcasts:** coding-only settings go through `broadcast_coding`, which skips Chat mode workers. The sub-agent payload carries other connections' credentials, so this one is a rule, not a tidy-up.
-- **Mirrors:** a Chat mode worker's snapshot never updates `tool_catalog` (Settings › Tools prunes the saved denylist against it, and a reduced registry would switch coding tools back on) or the task's `mode`.
-- **Refusals:** `refuse_chat` guards the coding-only commands and `task_workspace`, which every task-targeted Git command resolves through. The worker refuses the same things on its side.
+1. The agent core, headless: provider formats, the loop, deferred tool loading, sessions, compaction, the seven core tools, the `wack` CLI.
+2. The minimal harness: sidebar with pinned projects, composer, model picker, streaming transcript, provider settings.
+3. Panes and chat tabs: the pane tree and solver, Changes, Terminal.
+4. Identity: theme colour and accent, image backdrop, motion.
 
-`last_activity_at` is stamped from each run's own `startedAt`, which every `running` frame repeats. The Chat area orders by it; `updated_at` also moves on a rename, an archive or a model change.
+After that foundation, features return in this order: Plan and Ultra Plan with the question dialog, todo list and Ultra reasoning; Memory, Build and Run, auto titles, skills and slash commands, background shell jobs, commit / push / PR, the usage ledger writer; MCP and web tools; sub-agents and task suggestions; the browser pane, visual replies and canvas; the Chat area; computer use, the skill creator, signature motion and Liquid Glass.
 
-## Shared types
-
-- A type that crosses layers changes in `src-tauri/src/models.rs`, `src/types.ts` and, if the worker sees it, `worker/src/protocol.ts` together.
-- New optional Rust fields need `#[serde(default)]` so existing `wackcode.json` files load. Runtime-only fields (like `ProjectRecord.branch`) also need `skip_deserializing`.
-- Some defaults are mirrored by hand: `DEFAULT_APPEARANCE` in `theme.ts` mirrors `AppearanceConfig::default()`, and `DEFAULT_BACKGROUND` also lives in `glass.rs`.
-
-## New Tauri command
-
-1. Write it in the matching Rust module, returning `Result<T, String>` with a user-facing error sentence.
-2. Register it in `generate_handler!` in `lib.rs`.
-3. Add one typed wrapper in `src/api.ts`.
-4. Add any new plugin permission in `src-tauri/capabilities/default.json`.
-
-## Project Run and Build lifecycle
-
-`RunState` owns one Run and one Build command per canonical workspace folder, separate from chat
-terminals and workers. `start_run`/`get_run` take exactly one chat or project target: a chat uses its
-checkout, while a welcome draft uses the project's local folder without creating a chat. The registry
-lock serializes starts; the task lock prevents a chat-targeted launch from racing archive/delete/worktree
-conversion. A project target holds no task lock, so a launch re-checks its target after the session is
-registered: a removal that finished earlier makes the re-check stop it, and one that finishes later
-finds it in `release_workspace`. Commands and working folders are immutable runtime snapshots. Only the project's nullable `runCommand` and `buildCommand` are persisted,
-via `MetadataState::mutate`. The two commands have independent sessions and output, so a build
-can run beside a dev server. Chat mode cannot launch either command.
-
-Commands run on a PTY through the user's interactive login shell, with the whole command as
-one argument. `pty_output.rs` shares UTF-8 decoding, bounded scrollback and PTY sizing with
-manual terminals. A separate child waiter reports completion independently of PTY EOF.
-Stop signals the foreground process group, then escalates to TERM after two seconds and KILL
-after another second for remaining job/shell groups on the run's PTY, including background
-jobs the foreground command is waiting for. Detached sessions are excluded. The run remains Stopping until cleanup
-finishes, preventing a second launch from overlapping shutdown.
-
-Hiding a panel/window or switching chats keeps a run alive. Archive, delete and moving a chat
-release the old folder only when no unarchived project chat still uses it. Worktree deletion
-stops its run before deleting files. Project removal releases the project's local root as well as each
-chat's checkout, so a draft-launched command cannot outlive its project. App quit cleans up runs and
-stops independent checkouts in parallel. Configuration survives restart, sessions/output do
-not. Commands must remain in the foreground; detached daemons are outside this lifecycle.
-
-## Worker lifecycle (`worker.rs`)
-
-- **History:** `open_task` asks an existing worker for its live snapshot; otherwise `history.rs` streams the saved session through a keyless, read-only helper. The task lock covers the initial text/state snapshot only; thumbnail batches follow in the background under a per-load `historyId`, outside live revisions. Navigation, replacement, live-worker takeover and app exit retire the reader. History never needs a connection or workspace and never starts a worker.
-- **Spawn:** any command that talks to a chat's worker goes through `ensure_worker`, which starts one if needed. Never assume a worker is running.
-- **Prewarm pool:** `prewarm_worker` (the renderer calls it while a composer or chat is on screen) keeps one unattached Node process alive in `WorkerPool`, already past bundle evaluation. `ensure_worker` adopts it when alive, current (worker.js mtime) and fresh (10-minute TTL), so a first send pays only `init`. Adoption is kind-agnostic; the worker's own `init` chdirs onto the task's workspace.
-- **Fingerprint:** provider, model and the trusted package resources resolved at spawn. When it changes, the worker is killed and respawned, even mid-run. Settings that apply live (tools, prompts, execution policy, sub-agents, MCP, skills, commands, memory, computer use, a provider's on/off switch) travel in `init` and in `set_*` commands and must stay out of the fingerprint.
-- **Idle reaper:** stops a worker 15 minutes after its last output, never the open chat (`SelectedTask`) and never the newest four. It takes the chat's task lock and re-checks status, so it can't race a run.
-- **Stopping vs crashing:** intentional stops remove the worker from the registry *before* signalling, so any exit while still registered is reported as a crash. `killpg` takes down the worker's whole process group, including stdio MCP servers.
-- **Compile cache:** every Node spawn (worker, manager, scans, MCP probe, subscription helpers) gets `NODE_COMPILE_CACHE` under app data, so repeat spawns skip V8 compilation of the bundle.
-- **Host disconnect:** Code and Chat workers stop on stdin EOF or a stdout error, even if the host crashes or the dev app is rebuilt. Shutdown bypasses the prompt queue and init gate, cancels owned work, and has a three-second exit deadline. Never report a broken stdout pipe back through stdout: doing so can create an exception loop.
-
-## Locks
-
-- **`TaskLocks`** (`commands.rs`): any command that sends a chat work, moves its conversation, or touches its checkpoints holds that chat's lock.
-- **`GitLocks`**: one per checkout root. Git writes from the Changes panel (commit, discard, push), branch switches and prompt dispatch (which snapshots a checkpoint) take it, so chats sharing a folder never interleave those operations.
-- **Native UI:** release shared state locks before constructing or updating native menus. Tauri's menu calls can wait for the main thread, whose focus and geometry callbacks read metadata. The menu bar queues a coalesced refresh on main and builds from owned rows after releasing its locks; this applies to both Code and Chat activity.
-
-## Git targets
-
-Every Git command takes `task_id` or `project_id` and resolves it with `git_target` (`commands.rs`): a chat's workspace (the Changes panel) or a project's folder (the draft's branch picker). `TaskLocks` is held only for a chat target.
-
-- **Writes** go through `locked_checkout`: `idle_checkout` (no chat may be running in that checkout), then `GitLocks`, then `idle_checkout` again, because a chat can start while the command waits for the lock.
-- **Reads** (`git_changes`, branch lists and publish info) take neither lock. They inspect local state only. `git::changes` is served from a stat-fingerprinted snapshot cache (`git.rs`): a refresh costs `rev-parse` + `status` plus one batched `git diff` per layer, and skips diffs entirely while the fingerprint matches. Every mutation bumps the index or a file stat, so writers never invalidate it explicitly.
-- **Network** (`git_push`, every `gh` call) runs through `git_cli`, which applies the login-shell environment so the user's credential helper and ssh-agent work. `git.rs` stays pure and synchronous.
-- `git_generate_message` keeps `task_id`: the chat's own worker and model write the message.
-
-## Session tree and checkpoints
-
-Read the invariants at the top of `worker/src/tree.ts` and `src-tauri/src/checkpoints.rs` before changing either. In short:
-
-- A conversation is a Pi session tree. Retry, edit, rewind and fork create or move between branches; nothing is deleted. Versions of a message are grouped by their *logical parent* (the nearest user, assistant or tool-result ancestor), because Pi inserts other entries between turns.
-- WackCode writes its own custom entries: `wackcode-checkpoint` above every user message, `wackcode-leave` / `wackcode-nav` around every navigation (so a rewind survives a restart), and `wackcode-command-presentation` above command-generated prompts.
-- Finalized image messages carry versioned `wackcodeImages` metadata. It binds original blob identities and dimensions to the exact inline image digest and position; context edits cannot reuse an unrelated original. Forks copy the referenced blobs into their own store before becoming ready, so source-chat deletion cannot remove their originals. Archive retains them; normal chat cleanup deletes them.
-- Checkpoints are a private shadow Git repository per chat under app data. It borrows the project's objects via `alternates`, stores snapshots as bare tree objects (no commits, hooks or signing), and ignores the system and global Git config (no hooks, filters or fsmonitor). A restore only touches paths that differ, never files the snapshot doesn't hold (ignored, over 25 MB, or untracked). It must never write objects or refs into the project's own repository.
-
-## Usage ledger
-
-`worker/src/usage.ts` instruments every model runtime and emits `usage_record`; `src-tauri/src/usage.rs` validates and appends it to `usage/v1/`. The Rust `UsageRecord` uses `deny_unknown_fields`, so a new field lands in both at once. The format is a published contract that TokenTrail reads ([wackcode-usage-v1.md](wackcode-usage-v1.md)): changes are additive, and records never carry prompts, responses, titles, URLs or credentials.
+Update this section as each piece lands.

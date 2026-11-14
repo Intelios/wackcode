@@ -1,0 +1,10 @@
+[alias]
+# The dev app, with the automation socket compiled in (see docs/testing.md).
+dev = "run -p wackcode --features automation"
+# Render UI scenes to PNG files: `cargo snap --list`, `cargo snap shell --theme dark`.
+snap = "run -p gallery --"
+
+[env]
+# Where `cargo dev` opens the automation socket. Only a build with the `automation` feature reads
+# it. Keep the path short: a Unix socket path is limited to about 100 characters.
+WACKCODE_AUTOMATION = "target/automation.sock"

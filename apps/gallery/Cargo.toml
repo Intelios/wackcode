@@ -1,0 +1,12 @@
+[package]
+name = "gallery"
+description = "Renders WackCode UI scenes to PNG files, so agents and people can check UI work without the app."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+wack-ui = { workspace = true, features = ["automation"] }
+gpui = { workspace = true, features = ["test-support"] }
+gpui_platform = { workspace = true, features = ["font-kit", "test-support"] }
+image = { version = "0.25", default-features = false, features = ["png"] }

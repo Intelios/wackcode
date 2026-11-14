@@ -2,8 +2,9 @@
 //!
 //! Three system faces, no bundled fonts:
 //!
-//! - **New York** (the system serif) for display: screen titles and the user's own words in the
-//!   transcript. It is what makes a page read as WackCode at a glance.
+//! - **New York** (the system serif) for display: screen titles and section labels. It is what
+//!   makes a page read as WackCode at a glance. Not for the user's messages: the owner tried the
+//!   prompt in the serif and rejected it.
 //! - **SF Pro** (the system UI font) for everything you operate: rows, controls, running text.
 //! - **SF Mono** for paths, commands and code.
 //!
@@ -64,7 +65,7 @@ impl Type {
         match self {
             Type::Display => style(DISPLAY_FONT, 44., 50., FontWeight::MEDIUM),
             Type::Title => style(DISPLAY_FONT, 24., 30., FontWeight::MEDIUM),
-            Type::Prompt => style(DISPLAY_FONT, 18., 27., FontWeight::NORMAL),
+            Type::Prompt => style(UI_FONT, 16., 24., FontWeight::MEDIUM),
             Type::Label => TypeStyle {
                 italic: true,
                 ..style(DISPLAY_FONT, 13.5, 18., FontWeight::NORMAL)

@@ -58,7 +58,7 @@ fn type_column(theme: &Theme) -> impl IntoElement {
         .child(sample(Type::Title, "Title · New York 24 medium", "Settings › Providers", theme.text))
         .child(sample(
             Type::Prompt,
-            "Prompt · New York 18",
+            "Prompt · SF Pro 16 medium",
             "The SSE decoder drops the last event when a stream ends without a blank line.",
             theme.text,
         ))

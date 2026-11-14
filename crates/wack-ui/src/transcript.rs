@@ -1,6 +1,7 @@
 //! The transcript: one chat read as a document.
 //!
-//! - The user's message is set in the serif, like a heading for the turn that follows.
+//! - The user's message leads its turn: larger, heavier and brighter than the reply, with no
+//!   bubble around it.
 //! - The agent's work is a log, not a stack of cards: a verb column ("Read", "Ran", "Edited")
 //!   and what it acted on, hung from one hairline. An edit can open into its diff in place.
 //! - The reply is running text in the UI face, with code in mono.

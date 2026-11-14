@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="src-tauri/icons/128x128@2x.png" width="128" height="128" alt="WackCode's app icon: a black rubber duck on a lime tile">
+  <img src="apps/wackcode/icons/128x128@2x.png" width="128" height="128" alt="WackCode's app icon: a black rubber duck on a lime tile">
 </p>
 
 <h1 align="center">WackCode</h1>

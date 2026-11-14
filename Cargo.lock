@@ -6281,7 +6281,10 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
+ "wack-agent",
  "wack-llm",
+ "wack-tools",
 ]
 
 [[package]]

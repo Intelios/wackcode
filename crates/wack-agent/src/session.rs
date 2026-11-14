@@ -32,6 +32,10 @@ enum Entry {
         message: Message,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         usage: Option<Usage>,
+        /// When the message was saved, in milliseconds since 1970. Display only: the transcript
+        /// shows how long a turn took from it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<u64>,
     },
     /// Everything before this line is replaced by `summary`, except the last `keep` messages.
     Compaction {
@@ -110,7 +114,7 @@ impl Session {
         for entry in entries {
             match entry {
                 Entry::Meta { .. } => {}
-                Entry::Message { message, usage } => session.remember(message, usage),
+                Entry::Message { message, usage, .. } => session.remember(message, usage),
                 Entry::Compaction { summary, keep } => session.apply_compaction(summary, keep),
                 Entry::ToolsLoaded { names } => session.loaded.extend(names),
             }
@@ -162,7 +166,7 @@ impl Session {
 
     /// Adds a message. `usage` is the provider's count for an assistant reply.
     pub fn push(&mut self, message: Message, usage: Option<Usage>) -> Result<(), String> {
-        self.append(&Entry::Message { message: message.clone(), usage })?;
+        self.append(&Entry::Message { message: message.clone(), usage, at: Some(now_millis()) })?;
         self.remember(message, usage);
         Ok(())
     }
@@ -214,6 +218,35 @@ impl Session {
             None => estimate_tokens(&self.messages),
         }
     }
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|time| time.as_millis() as u64).unwrap_or(0)
+}
+
+/// One step of a chat as the user saw it, for drawing the transcript. Unlike
+/// [`Session::messages`], nothing is dropped at a compaction.
+#[derive(Clone, Debug, PartialEq)]
+pub enum HistoryEntry {
+    Message { message: Message, usage: Option<Usage>, at: Option<u64> },
+    /// The conversation before this point was summarised for the model.
+    Compacted,
+}
+
+/// Reads a whole chat for display. Read-only: unlike [`Session::open`] it repairs nothing, so it
+/// is safe while a run is writing to the same file.
+pub fn history(path: &Path) -> Result<Vec<HistoryEntry>, String> {
+    let bytes = std::fs::read(path).map_err(|error| format!("Could not read the chat: {error}"))?;
+    let complete = bytes.iter().rposition(|byte| *byte == b'\n').map_or(0, |index| index + 1);
+    let mut entries = Vec::new();
+    for line in String::from_utf8_lossy(&bytes[..complete]).lines() {
+        match serde_json::from_str::<Entry>(line) {
+            Ok(Entry::Message { message, usage, at }) => entries.push(HistoryEntry::Message { message, usage, at }),
+            Ok(Entry::Compaction { .. }) => entries.push(HistoryEntry::Compacted),
+            Ok(Entry::Meta { .. } | Entry::ToolsLoaded { .. }) | Err(_) => {}
+        }
+    }
+    Ok(entries)
 }
 
 #[cfg(test)]
@@ -290,6 +323,30 @@ mod tests {
             assert_eq!(texts[1..], ["three", "four"]);
             assert_eq!(session.summary(), Some(&summary));
         }
+    }
+
+    #[test]
+    fn history_keeps_everything_with_times() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("chat.jsonl");
+        let mut session = Session::create(&path, folder.path()).unwrap();
+        session.push(Message::user("one"), None).unwrap();
+        session.compact(Summary { body: "so far".into(), ..Summary::default() }, 0).unwrap();
+        session.push(Message::user("two"), None).unwrap();
+        // A line from before messages carried a time still reads.
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"old\"}]}}\n")
+            .unwrap();
+
+        let entries = history(&path).unwrap();
+        assert_eq!(entries.len(), 4);
+        assert!(matches!(&entries[0], HistoryEntry::Message { message, at: Some(_), .. } if message.text() == "one"));
+        assert_eq!(entries[1], HistoryEntry::Compacted);
+        assert!(matches!(&entries[3], HistoryEntry::Message { at: None, .. }));
+        assert_eq!(Session::open(&path).unwrap().messages().len(), 3);
     }
 
     #[test]

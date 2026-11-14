@@ -1,8 +1,12 @@
-//! The app's own data: where it lives and the provider connections in it.
+//! The app's own data: where it lives, the provider connections, projects and chats.
 //!
 //! `state.json` describes a connection (name, address, models); its key is in `secrets.json`
 //! under the connection's id and is read only to build the provider that sends requests. No
 //! function here returns a key.
+//!
+//! A chat's conversation is its session file (`sessions/<file>`); `state.json` holds only what
+//! the sidebar needs to list it. Every change is saved at once, written whole and renamed into
+//! place, so a crash leaves the old file or the new one, never half of either.
 
 use std::{
     fs,
@@ -12,7 +16,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use wack_llm::{HttpProvider, WireFormat};
+use wack_llm::{Effort, HttpProvider, WireFormat};
 
 use crate::secrets::SecretStore;
 
@@ -40,10 +44,101 @@ pub struct NewConnection {
     pub models: Vec<Model>,
 }
 
+/// A folder the user works in.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Project {
+    pub id: String,
+    pub path: PathBuf,
+    /// The folder's name, shown in the sidebar.
+    pub name: String,
+    #[serde(default)]
+    pub pinned: bool,
+}
+
+/// Which model a chat talks to. Any part may be missing: the defaults fill it in.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ModelChoice {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<Effort>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Chat {
+    pub id: String,
+    /// The project's id.
+    pub project: String,
+    pub title: String,
+    /// The session file's name inside the sessions folder.
+    pub session: String,
+    /// Milliseconds since 1970.
+    pub created: u64,
+    pub updated: u64,
+    #[serde(default)]
+    pub choice: ModelChoice,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 struct State {
     #[serde(default)]
     connections: Vec<Connection>,
+    #[serde(default)]
+    projects: Vec<Project>,
+    #[serde(default)]
+    chats: Vec<Chat>,
+    /// The last model the user picked; new chats start with it.
+    #[serde(default)]
+    defaults: ModelChoice,
+}
+
+/// A connection and model resolved from a [`ModelChoice`], ready to build a run.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Resolved {
+    pub connection: Connection,
+    pub model: Model,
+    pub effort: Option<Effort>,
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|time| time.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// An id that sorts by creation time and never repeats within one process, even for two ids
+/// made in the same nanosecond.
+fn new_id(prefix: &str) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|time| time.as_nanos() as u64)
+        .unwrap_or(0);
+    let previous = LAST
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |last| {
+            Some(stamp.max(last + 1))
+        })
+        .unwrap_or(0);
+    format!("{prefix}-{:x}", stamp.max(previous + 1))
+}
+
+/// A chat's title from its first message: the first line, cut at a word near 60 characters.
+pub fn title_from(prompt: &str) -> String {
+    let line = prompt
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("New chat");
+    if line.chars().count() <= 60 {
+        return line.to_string();
+    }
+    let cut: String = line.chars().take(60).collect();
+    let at = cut.rfind(' ').filter(|at| *at > 30).unwrap_or(cut.len());
+    format!("{}…", cut[..at].trim_end_matches([',', '.', ':', ';', ' ']))
 }
 
 pub struct Store {
@@ -57,28 +152,43 @@ impl Store {
     /// so nothing under development can touch the data of the installed app.
     pub fn default_folder() -> Result<PathBuf, String> {
         let home = std::env::var_os("HOME").ok_or("Could not find your home folder.")?;
-        let app = if cfg!(debug_assertions) { "com.wackcode.desktop.dev" } else { "com.wackcode.desktop" };
-        Ok(Path::new(&home).join("Library/Application Support").join(app).join("v3"))
+        let app = if cfg!(debug_assertions) {
+            "com.wackcode.desktop.dev"
+        } else {
+            "com.wackcode.desktop"
+        };
+        Ok(Path::new(&home)
+            .join("Library/Application Support")
+            .join(app)
+            .join("v3"))
     }
 
     pub fn open(folder: &Path) -> Result<Self, String> {
-        fs::create_dir_all(folder).map_err(|error| format!("Could not create WackCode's data folder: {error}"))?;
+        fs::create_dir_all(folder)
+            .map_err(|error| format!("Could not create WackCode's data folder: {error}"))?;
         let _ = fs::set_permissions(folder, fs::Permissions::from_mode(0o700));
         let path = folder.join("state.json");
         let state = if path.exists() {
-            let content = fs::read_to_string(&path).map_err(|error| format!("Could not read WackCode's settings: {error}"))?;
-            serde_json::from_str(&content).map_err(|error| format!("WackCode's settings file is damaged: {error}"))?
+            let content = fs::read_to_string(&path)
+                .map_err(|error| format!("Could not read WackCode's settings: {error}"))?;
+            serde_json::from_str(&content)
+                .map_err(|error| format!("WackCode's settings file is damaged: {error}"))?
         } else {
             State::default()
         };
-        Ok(Self { folder: folder.to_path_buf(), state, secrets: SecretStore::load(folder)? })
+        Ok(Self {
+            folder: folder.to_path_buf(),
+            state,
+            secrets: SecretStore::load(folder)?,
+        })
     }
 
     fn save(&self) -> Result<(), String> {
         let failed = |error: std::io::Error| format!("Could not save WackCode's settings: {error}");
         let path = self.folder.join("state.json");
         let temporary = path.with_extension("json.tmp");
-        let json = serde_json::to_vec_pretty(&self.state).map_err(|error| format!("Could not save WackCode's settings: {error}"))?;
+        let json = serde_json::to_vec_pretty(&self.state)
+            .map_err(|error| format!("Could not save WackCode's settings: {error}"))?;
         fs::write(&temporary, json).map_err(failed)?;
         fs::rename(&temporary, &path).map_err(failed)
     }
@@ -93,7 +203,10 @@ impl Store {
 
     /// A connection by its name (any letter case) or id.
     pub fn connection(&self, name: &str) -> Option<&Connection> {
-        self.state.connections.iter().find(|connection| connection.id == name || connection.name.eq_ignore_ascii_case(name))
+        self.state
+            .connections
+            .iter()
+            .find(|connection| connection.id == name || connection.name.eq_ignore_ascii_case(name))
     }
 
     pub fn add_connection(&mut self, new: NewConnection, key: &str) -> Result<Connection, String> {
@@ -112,7 +225,10 @@ impl Store {
         let models: Vec<Model> = new
             .models
             .into_iter()
-            .map(|model| Model { id: model.id.trim().to_string(), ..model })
+            .map(|model| Model {
+                id: model.id.trim().to_string(),
+                ..model
+            })
             .filter(|model| !model.id.is_empty())
             .collect();
         if models.is_empty() {
@@ -121,9 +237,8 @@ impl Store {
         if key.is_empty() {
             return Err("Enter the API key.".to_string());
         }
-        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|time| time.as_nanos()).unwrap_or(0);
         let connection = Connection {
-            id: format!("connection-{stamp:x}"),
+            id: new_id("connection"),
             name: name.to_string(),
             format: new.format,
             base_url: base_url.to_string(),
@@ -137,15 +252,211 @@ impl Store {
     }
 
     pub fn remove_connection(&mut self, id: &str) -> Result<(), String> {
-        self.state.connections.retain(|connection| connection.id != id);
+        self.state
+            .connections
+            .retain(|connection| connection.id != id);
         self.save()?;
         self.secrets.remove(id)
+    }
+
+    pub fn projects(&self) -> &[Project] {
+        &self.state.projects
+    }
+
+    pub fn project(&self, id: &str) -> Option<&Project> {
+        self.state.projects.iter().find(|project| project.id == id)
+    }
+
+    /// Adds a folder as a project, or returns the project it already is.
+    pub fn add_project(&mut self, path: &Path) -> Result<Project, String> {
+        let path = path
+            .canonicalize()
+            .map_err(|error| format!("Could not open {}: {error}", path.display()))?;
+        if !path.is_dir() {
+            return Err(format!("{} is not a folder.", path.display()));
+        }
+        if let Some(existing) = self
+            .state
+            .projects
+            .iter()
+            .find(|project| project.path == path)
+        {
+            return Ok(existing.clone());
+        }
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        let project = Project {
+            id: new_id("project"),
+            path,
+            name,
+            pinned: false,
+        };
+        self.state.projects.push(project.clone());
+        self.save()?;
+        Ok(project)
+    }
+
+    /// Takes a project and its chats off the list. Their session files stay on disk.
+    pub fn remove_project(&mut self, id: &str) -> Result<(), String> {
+        self.state.projects.retain(|project| project.id != id);
+        self.state.chats.retain(|chat| chat.project != id);
+        self.save()
+    }
+
+    pub fn set_pinned(&mut self, id: &str, pinned: bool) -> Result<(), String> {
+        let project = self
+            .state
+            .projects
+            .iter_mut()
+            .find(|project| project.id == id)
+            .ok_or("That project is gone.")?;
+        project.pinned = pinned;
+        self.save()
+    }
+
+    /// A project's chats, most recently used first.
+    pub fn chats(&self, project: &str) -> Vec<&Chat> {
+        let mut chats: Vec<&Chat> = self
+            .state
+            .chats
+            .iter()
+            .filter(|chat| chat.project == project)
+            .collect();
+        chats.sort_by_key(|chat| std::cmp::Reverse(chat.updated));
+        chats
+    }
+
+    pub fn chat(&self, id: &str) -> Option<&Chat> {
+        self.state.chats.iter().find(|chat| chat.id == id)
+    }
+
+    /// Lists a new chat. Its session file is created by its first run.
+    pub fn create_chat(
+        &mut self,
+        project: &str,
+        title: &str,
+        choice: ModelChoice,
+    ) -> Result<Chat, String> {
+        if self.project(project).is_none() {
+            return Err("That project is gone.".to_string());
+        }
+        let id = new_id("chat");
+        let now = now_millis();
+        let chat = Chat {
+            session: format!("{id}.jsonl"),
+            id,
+            project: project.to_string(),
+            title: title.to_string(),
+            created: now,
+            updated: now,
+            choice,
+        };
+        self.state.chats.push(chat.clone());
+        self.save()?;
+        Ok(chat)
+    }
+
+    pub fn session_path(&self, chat: &Chat) -> PathBuf {
+        self.sessions_folder().join(&chat.session)
+    }
+
+    /// Marks a chat as just used, so it moves to the top of its project.
+    pub fn touch_chat(&mut self, id: &str) -> Result<(), String> {
+        if let Some(chat) = self.state.chats.iter_mut().find(|chat| chat.id == id) {
+            chat.updated = now_millis();
+            self.save()?;
+        }
+        Ok(())
+    }
+
+    pub fn rename_chat(&mut self, id: &str, title: &str) -> Result<(), String> {
+        let title = title.trim();
+        if title.is_empty() {
+            return Err("Give the chat a name.".to_string());
+        }
+        let chat = self
+            .state
+            .chats
+            .iter_mut()
+            .find(|chat| chat.id == id)
+            .ok_or("That chat is gone.")?;
+        chat.title = title.to_string();
+        self.save()
+    }
+
+    /// Deletes a chat and its conversation file.
+    pub fn delete_chat(&mut self, id: &str) -> Result<(), String> {
+        let Some(chat) = self.chat(id).cloned() else {
+            return Ok(());
+        };
+        self.state.chats.retain(|listed| listed.id != id);
+        self.save()?;
+        match fs::remove_file(self.session_path(&chat)) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                Err(format!("Could not delete the chat's file: {error}"))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Sets a chat's model, or the default for new chats when `chat` is `None`. Picking a model
+    /// for a chat also makes it the default, since it is the user's latest choice.
+    pub fn set_choice(&mut self, chat: Option<&str>, choice: ModelChoice) -> Result<(), String> {
+        if let Some(id) = chat
+            && let Some(listed) = self.state.chats.iter_mut().find(|listed| listed.id == id)
+        {
+            listed.choice = choice.clone();
+        }
+        self.state.defaults = choice;
+        self.save()
+    }
+
+    pub fn defaults(&self) -> &ModelChoice {
+        &self.state.defaults
+    }
+
+    /// The connection and model a choice means today. A missing or removed connection falls back
+    /// to the default and then to the first connection; a missing model to the connection's first.
+    pub fn resolve(&self, choice: &ModelChoice) -> Option<Resolved> {
+        let defaults = &self.state.defaults;
+        let connection = [choice.connection.as_deref(), defaults.connection.as_deref()]
+            .into_iter()
+            .flatten()
+            .find_map(|id| {
+                self.state
+                    .connections
+                    .iter()
+                    .find(|connection| connection.id == id)
+            })
+            .or_else(|| self.state.connections.first())?;
+        let model = [choice.model.as_deref(), defaults.model.as_deref()]
+            .into_iter()
+            .flatten()
+            .find_map(|id| connection.models.iter().find(|model| model.id == id))
+            .or_else(|| connection.models.first())?;
+        let effort = if choice.connection.is_some() || choice.model.is_some() {
+            choice.effort
+        } else {
+            defaults.effort
+        };
+        Some(Resolved {
+            connection: connection.clone(),
+            model: model.clone(),
+            effort,
+        })
     }
 
     /// The provider that sends this connection's requests. This is the one place a key leaves
     /// the secret store, and it goes straight into the provider that needs it.
     pub fn provider(&self, connection: &Connection) -> Result<HttpProvider, String> {
-        let key = self.secrets.get(&connection.id).ok_or_else(|| format!("The connection {} has no API key. Add it again.", connection.name))?;
+        let key = self.secrets.get(&connection.id).ok_or_else(|| {
+            format!(
+                "The connection {} has no API key. Add it again.",
+                connection.name
+            )
+        })?;
         HttpProvider::new(connection.format, &connection.base_url, key)
     }
 }
@@ -159,7 +470,16 @@ mod tests {
             name: name.into(),
             format: WireFormat::OpenaiChat,
             base_url: "https://llm.example/v1/".into(),
-            models: vec![Model { id: " big-model ".into(), context_window: Some(200_000) }, Model { id: "".into(), context_window: None }],
+            models: vec![
+                Model {
+                    id: " big-model ".into(),
+                    context_window: Some(200_000),
+                },
+                Model {
+                    id: "".into(),
+                    context_window: None,
+                },
+            ],
         }
     }
 
@@ -167,13 +487,24 @@ mod tests {
     fn a_connection_is_saved_with_its_key_kept_apart() {
         let folder = tempfile::tempdir().unwrap();
         let mut store = Store::open(folder.path()).unwrap();
-        let added = store.add_connection(new("Testing"), " sk-secret-value \n").unwrap();
+        let added = store
+            .add_connection(new("Testing"), " sk-secret-value \n")
+            .unwrap();
         assert_eq!(added.base_url, "https://llm.example/v1");
-        assert_eq!(added.models, [Model { id: "big-model".into(), context_window: Some(200_000) }]);
+        assert_eq!(
+            added.models,
+            [Model {
+                id: "big-model".into(),
+                context_window: Some(200_000)
+            }]
+        );
 
         let state = fs::read_to_string(folder.path().join("state.json")).unwrap();
         assert!(state.contains("Testing") && state.contains("openai-chat"));
-        assert!(!state.contains("sk-secret-value"), "the key must never reach state.json");
+        assert!(
+            !state.contains("sk-secret-value"),
+            "the key must never reach state.json"
+        );
 
         let reopened = Store::open(folder.path()).unwrap();
         let found = reopened.connection("testing").unwrap();
@@ -182,18 +513,182 @@ mod tests {
     }
 
     #[test]
+    fn projects_are_added_once_pinned_and_removed_with_their_chats() {
+        let folder = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        let project = store.add_project(work.path()).unwrap();
+        assert_eq!(
+            store.add_project(&work.path().join(".")).unwrap().id,
+            project.id,
+            "the same folder is one project"
+        );
+        assert!(store.add_project(&work.path().join("missing")).is_err());
+
+        store.set_pinned(&project.id, true).unwrap();
+        let first = store
+            .create_chat(&project.id, "First", ModelChoice::default())
+            .unwrap();
+        let second = store
+            .create_chat(&project.id, "Second", ModelChoice::default())
+            .unwrap();
+        assert_ne!(first.id, second.id);
+        store.touch_chat(&first.id).unwrap();
+        let titles: Vec<&str> = store
+            .chats(&project.id)
+            .iter()
+            .map(|chat| chat.title.as_str())
+            .collect();
+        assert_eq!(
+            titles,
+            ["First", "Second"],
+            "the chat used last comes first"
+        );
+
+        let reopened = Store::open(folder.path()).unwrap();
+        assert!(reopened.project(&project.id).unwrap().pinned);
+        assert_eq!(reopened.chats(&project.id).len(), 2);
+
+        store.remove_project(&project.id).unwrap();
+        assert!(store.projects().is_empty());
+        assert!(store.chat(&first.id).is_none());
+    }
+
+    #[test]
+    fn deleting_a_chat_deletes_its_file() {
+        let folder = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        let project = store.add_project(work.path()).unwrap();
+        let chat = store
+            .create_chat(&project.id, "Doomed", ModelChoice::default())
+            .unwrap();
+        let path = store.session_path(&chat);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "{}\n").unwrap();
+        store.delete_chat(&chat.id).unwrap();
+        assert!(!path.exists());
+        assert!(store.chat(&chat.id).is_none());
+    }
+
+    #[test]
+    fn a_choice_resolves_through_the_defaults() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        assert_eq!(
+            store.resolve(&ModelChoice::default()),
+            None,
+            "nothing to talk to yet"
+        );
+        let first = store.add_connection(new("First"), "k1").unwrap();
+        let mut two_models = new("Second");
+        two_models.models = vec![
+            Model {
+                id: "a".into(),
+                context_window: None,
+            },
+            Model {
+                id: "b".into(),
+                context_window: Some(64_000),
+            },
+        ];
+        let second = store.add_connection(two_models, "k2").unwrap();
+
+        let resolved = store.resolve(&ModelChoice::default()).unwrap();
+        assert_eq!(
+            resolved.connection.id, first.id,
+            "with no default, the first connection"
+        );
+
+        let picked = ModelChoice {
+            connection: Some(second.id.clone()),
+            model: Some("b".into()),
+            effort: Some(Effort::High),
+        };
+        store.set_choice(None, picked).unwrap();
+        let resolved = store.resolve(&ModelChoice::default()).unwrap();
+        assert_eq!(
+            (
+                resolved.model.id.as_str(),
+                resolved.model.context_window,
+                resolved.effort
+            ),
+            ("b", Some(64_000), Some(Effort::High))
+        );
+
+        let gone = ModelChoice {
+            connection: Some("connection-gone".into()),
+            model: Some("zzz".into()),
+            effort: None,
+        };
+        let resolved = store.resolve(&gone).unwrap();
+        assert_eq!(
+            resolved.connection.id, second.id,
+            "a removed connection falls back to the default"
+        );
+        assert_eq!(resolved.model.id, "b");
+    }
+
+    #[test]
+    fn titles_come_from_the_first_line() {
+        assert_eq!(
+            title_from("\n  Fix the decoder\nand more"),
+            "Fix the decoder"
+        );
+        let long =
+            "Make retries honour Retry-After when the server sends it, in seconds or as a date";
+        let title = title_from(long);
+        assert!(
+            title.ends_with('…') && title.chars().count() <= 61,
+            "{title}"
+        );
+        assert_eq!(title_from("   "), "New chat");
+    }
+
+    #[test]
     fn bad_connections_are_refused_and_removal_forgets_the_key() {
         let folder = tempfile::tempdir().unwrap();
         let mut store = Store::open(folder.path()).unwrap();
         assert!(store.add_connection(new("Testing"), "").is_err());
-        assert!(store.add_connection(NewConnection { base_url: "llm.example".into(), ..new("A") }, "k").is_err());
-        assert!(store.add_connection(NewConnection { models: vec![], ..new("B") }, "k").is_err());
+        assert!(
+            store
+                .add_connection(
+                    NewConnection {
+                        base_url: "llm.example".into(),
+                        ..new("A")
+                    },
+                    "k"
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .add_connection(
+                    NewConnection {
+                        models: vec![],
+                        ..new("B")
+                    },
+                    "k"
+                )
+                .is_err()
+        );
         assert!(store.connections().is_empty());
 
-        let added = store.add_connection(new("Testing"), "sk-secret-value").unwrap();
-        assert!(store.add_connection(new("TESTING"), "k").unwrap_err().contains("already"));
+        let added = store
+            .add_connection(new("Testing"), "sk-secret-value")
+            .unwrap();
+        assert!(
+            store
+                .add_connection(new("TESTING"), "k")
+                .unwrap_err()
+                .contains("already")
+        );
         store.remove_connection(&added.id).unwrap();
         assert!(store.connections().is_empty());
-        assert!(!fs::read_to_string(folder.path().join("secrets.json")).unwrap().contains("sk-secret-value"));
+        assert!(
+            !fs::read_to_string(folder.path().join("secrets.json"))
+                .unwrap()
+                .contains("sk-secret-value")
+        );
     }
 }

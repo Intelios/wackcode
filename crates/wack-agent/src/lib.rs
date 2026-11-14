@@ -14,5 +14,5 @@ pub mod tool;
 
 pub use agent::{Agent, Control, Event, EventSink, Feature, Outcome, Profile, Settings, Verdict};
 pub use registry::{Registry, TOOL_SEARCH};
-pub use session::Session;
+pub use session::{HistoryEntry, Session, history};
 pub use tool::{Loading, Tool, ToolContext, ToolSpec};

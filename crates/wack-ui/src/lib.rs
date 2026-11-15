@@ -25,6 +25,7 @@ pub mod plan_card;
 pub mod question;
 pub mod scenes;
 pub mod settings;
+pub mod settings_kit;
 pub mod shell;
 pub mod sidebar;
 pub mod specimen;

@@ -1,7 +1,12 @@
-//! Settings: a full page with its own navigation down the left, one section at a time.
+//! Settings: one section at a time on the stage, its navigation in the sidebar's pane.
 //!
-//! Settings › Providers is here: the connections to model APIs, and the form that adds one.
-//! Settings › Appearance is `appearance_page.rs`.
+//! The navigation groups the sections (Look, Models, Agent, Reach) and lists those still to come,
+//! dimmed, so it is laid out for the dozen-odd sections planned. Each page is a head and cards of
+//! rows, built from `settings_kit.rs`.
+//!
+//! Settings › Providers is here: the connections to model APIs, each with an on / off switch (off
+//! keeps the key and models, out of the model menu), and the form that adds one, folded away
+//! behind "New connection" until asked for. Settings › Appearance is `appearance_page.rs`.
 //!
 //! A key is typed into a masked field, handed to the store once, and the field is cleared: it is
 //! never drawn, copied or kept anywhere else (docs/security.md). Adding a connection sends
@@ -10,16 +15,21 @@
 //! The form's fields live in [`ProviderForm`], owned by the app state, so leaving Settings
 //! half-way keeps what was typed. The page itself draws from plain data and dispatches actions.
 
-use gpui::{App, AppContext, Entity, Pixels, SharedString, Window, div, prelude::*, px};
+use std::f32::consts::PI;
+
+use gpui::{App, AppContext, Entity, Pixels, SharedString, Transformation, div, prelude::*, px, radians};
 use wack_core::{Connection, Model, NewConnection, WireFormat};
 
 use crate::{
-    actions::{AddConnection, ChooseFormat, OpenSettingsSection, RemoveConnection},
+    actions::{AddConnection, ChooseFormat, CloseConnectionForm, CloseSettings, OpenConnectionForm, OpenSettingsSection, RemoveConnection, SwitchConnection},
     appearance_page::{self, AppearanceData},
+    icon::Icon,
+    settings_kit::{PAGE_WIDTH, card, dispatch, head, pill, row as settings_row, segmented},
     shell::model_name,
     tags::Tag,
     text_field::TextField,
     theme::Theme,
+    tools_page::switch,
     typography::{Type, Typography},
     work,
 };
@@ -32,6 +42,8 @@ pub struct ProviderForm {
     pub key: Entity<TextField>,
     pub format: WireFormat,
     pub error: Option<SharedString>,
+    /// "New connection" was pressed. With no connections yet the form shows regardless.
+    pub open: bool,
 }
 
 impl ProviderForm {
@@ -45,6 +57,7 @@ impl ProviderForm {
             key: cx.new(|cx| TextField::new(Type::Ui, "Paste the key", cx).masked()),
             format: WireFormat::OpenaiChat,
             error: None,
+            open: false,
         }
     }
 
@@ -74,6 +87,7 @@ impl ProviderForm {
             field.update(cx, |field, cx| field.set_text("", cx));
         }
         self.error = None;
+        self.open = false;
     }
 }
 
@@ -97,10 +111,18 @@ pub fn format_name(format: WireFormat) -> &'static str {
     }
 }
 
+/// A connection as its row shows it.
+#[derive(Clone, Debug)]
+pub struct ConnectionRow {
+    pub connection: Connection,
+    /// A key is kept for it. The key itself never reaches the page.
+    pub has_key: bool,
+}
+
 /// Everything the page shows.
 #[derive(Clone)]
 pub struct ProvidersData {
-    pub connections: Vec<Connection>,
+    pub connections: Vec<ConnectionRow>,
     pub name: Entity<TextField>,
     pub address: Entity<TextField>,
     pub models: Entity<TextField>,
@@ -108,12 +130,17 @@ pub struct ProvidersData {
     pub key: Entity<TextField>,
     pub format: WireFormat,
     pub error: Option<SharedString>,
+    /// The new-connection form is on the page.
+    pub form_open: bool,
 }
 
 impl ProvidersData {
-    pub fn new(connections: &[Connection], form: &ProviderForm) -> Self {
+    pub fn new(connections: &[Connection], has_key: impl Fn(&str) -> bool, form: &ProviderForm) -> Self {
         Self {
-            connections: connections.to_vec(),
+            connections: connections
+                .iter()
+                .map(|connection| ConnectionRow { connection: connection.clone(), has_key: has_key(&connection.id) })
+                .collect(),
             name: form.name.clone(),
             address: form.address.clone(),
             models: form.models.clone(),
@@ -121,13 +148,9 @@ impl ProvidersData {
             key: form.key.clone(),
             format: form.format,
             error: form.error.clone(),
+            form_open: form.open || connections.is_empty(),
         }
     }
-}
-
-fn dispatch(action: impl gpui::Action) -> impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static {
-    let action = action.boxed_clone();
-    move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx)
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -148,7 +171,31 @@ impl Section {
             Section::Tools => "Tools",
         }
     }
+
+    fn tag(self) -> &'static str {
+        match self {
+            Section::Appearance => "section-appearance",
+            Section::Providers => "section-providers",
+            Section::Tools => "section-tools",
+        }
+    }
 }
+
+/// The navigation's groups. `None` is a section still to come: listed, dimmed, not yet a place
+/// to go, so the shape of Settings is clear from the start and the list never reflows as they
+/// arrive.
+/// A section in the navigation: where it goes (none yet for one to come), and its name.
+type Entry = (Option<Section>, &'static str);
+
+const GROUPS: [(&str, &[Entry]); 4] = [
+    ("Look", &[(Some(Section::Appearance), "Appearance")]),
+    ("Models", &[(Some(Section::Providers), "Providers"), (None, "Prompts")]),
+    (
+        "Agent",
+        &[(Some(Section::Tools), "Tools"), (None, "Memory"), (None, "Skills"), (None, "Commands"), (None, "Sub-agents"), (None, "Git")],
+    ),
+    ("Reach", &[(None, "MCP servers"), (None, "Web"), (None, "Computer use")]),
+];
 
 /// Everything the Settings page shows.
 #[derive(Clone)]
@@ -180,70 +227,147 @@ pub fn strip(section: Section, inset: Pixels, ground: Option<gpui::Hsla>, theme:
         .child(pill(div()).typography(Type::Small).text_color(theme.text_faint).child("esc to close"))
 }
 
-/// The navigation's width, the gap after it, and the open section's widest line.
-const NAV_WIDTH: f32 = 150.;
-const NAV_GAP: f32 = 40.;
-const CONTENT_WIDTH: f32 = 720.;
-
-/// The page: the sections down the left (across the top when narrow), the one open beside them.
-pub fn page(data: SettingsData, inset: Pixels, narrow: bool, theme: &Theme) -> impl IntoElement {
-    let nav = div()
-        .flex_none()
+/// The navigation, in the sidebar's pane while Settings is open: back to the chats, then the
+/// sections in their groups. `connections` is counted beside Providers.
+pub fn nav(section: Section, connections: usize, theme: &Theme) -> impl IntoElement {
+    let back = div()
+        .id("settings-back")
+        .h(px(30.))
+        .px(px(10.))
+        .rounded_full()
         .flex()
-        .when(narrow, |nav| nav.gap(px(22.)))
-        .when(!narrow, |nav| nav.w(px(NAV_WIDTH)).flex_col().items_start().gap(px(10.)).pt(px(8.)))
-        .children(Section::ALL.map(|section| {
-            appearance_page::word(format!("section-{}", section.name()), section.name(), section == data.section, theme)
-                .on_click(dispatch(OpenSettingsSection { section }))
-        }));
-    let content = match data.section {
+        .items_center()
+        .gap(px(8.))
+        .cursor_pointer()
+        .hover(|row| row.bg(theme.hover))
+        .on_click(dispatch(CloseSettings))
+        .child(Icon::ChevronRight.view(px(13.), theme.text_dim).with_transformation(Transformation::rotate(radians(PI))))
+        .child(div().flex_1().typography(Type::Ui).text_color(theme.text_soft).child("Back to chats"))
+        .child(div().typography(Type::Small).text_color(theme.text_faint).child("esc"))
+        .tag("settings-back");
+
+    let mut list = div().flex().flex_col().gap(px(1.)).px(px(10.)).pb(px(16.));
+    for (group, entries) in GROUPS {
+        list = list.child(div().px(px(10.)).pt(px(16.)).pb(px(4.)).typography(Type::Label).text_color(theme.text_dim).child(group));
+        for (target, name) in entries.iter().copied() {
+            let row = div().h(px(30.)).px(px(10.)).rounded_full().flex().items_center().gap(px(8.));
+            list = list.child(match target {
+                Some(target) => {
+                    let lit = target == section;
+                    row.id(SharedString::from(format!("section-{name}")))
+                        .cursor_pointer()
+                        .when(lit, |row| row.bg(theme.accent_wash))
+                        .when(!lit, |row| row.hover(|row| row.bg(theme.hover)))
+                        .on_click(dispatch(OpenSettingsSection { section: target }))
+                        .child(
+                            div()
+                                .flex_1()
+                                .typography(if lit { Type::UiStrong } else { Type::Ui })
+                                .text_color(if lit { theme.accent_text } else { theme.text_soft })
+                                .child(name),
+                        )
+                        .when(target == Section::Providers && connections > 0, |row| {
+                            row.child(div().typography(Type::Small).text_color(theme.text_faint).child(connections.to_string()))
+                        })
+                        .tag(target.tag())
+                        .into_any_element()
+                }
+                None => row
+                    .child(div().flex_1().typography(Type::Ui).text_color(theme.text_faint).child(name))
+                    .child(div().typography(Type::Small).text_color(theme.text_faint).child("soon"))
+                    .into_any_element(),
+            });
+        }
+    }
+    div()
+        .flex_1()
+        .min_h_0()
+        .w_full()
+        .flex()
+        .flex_col()
+        .child(div().flex_none().px(px(10.)).pt(px(4.)).child(back))
+        .child(div().id("settings-nav").flex_1().min_h_0().overflow_y_scroll().child(list))
+}
+
+/// The page, centred on the stage. With the sidebar put away the sections are a row of pills
+/// above it instead (`inline_nav`), since the sidebar's pane is where they otherwise live.
+pub fn page(data: SettingsData, inline_nav: bool, narrow: bool, theme: &Theme) -> impl IntoElement {
+    let section = data.section;
+    let nav = inline_nav.then(|| {
+        let choices: Vec<(Section, &'static str)> = Section::ALL.iter().map(|section| (*section, section.name())).collect();
+        div().pb(px(26.)).flex().child(segmented("section", &choices, section, |section| Box::new(OpenSettingsSection { section }), theme))
+    });
+    let content = match section {
         Section::Appearance => appearance_page::page(data.appearance, theme).into_any_element(),
         Section::Providers => providers(data.providers, theme).into_any_element(),
         Section::Tools => crate::tools_page::page(data.tools, theme).into_any_element(),
     };
     div().id("settings-page").size_full().overflow_y_scroll().child(
         div()
-            .pl(inset)
-            .pr(px(if narrow { 24. } else { 48. }))
+            .w_full()
+            .px(px(if narrow { 24. } else { 48. }))
             .pt(px(28.))
             .pb(px(64.))
             .flex()
-            .when(narrow, |page| page.flex_col().gap(px(26.)))
-            .when(!narrow, |page| page.gap(px(NAV_GAP)))
-            .child(nav)
-            .child(div().flex_1().min_w_0().max_w(px(CONTENT_WIDTH)).child(content)),
+            .justify_center()
+            .child(div().flex_1().min_w_0().max_w(px(PAGE_WIDTH)).flex().flex_col().children(nav).child(content)),
     )
 }
 
 fn providers(data: ProvidersData, theme: &Theme) -> impl IntoElement {
-    let mut list = div().flex().flex_col();
-    if data.connections.is_empty() {
-        list = list.child(
-            div()
-                .py(px(14.))
-                .typography(Type::Body)
-                .text_color(theme.text_dim)
-                .child("No connections yet. Add one below to start chatting."),
-        );
+    let on = data.connections.iter().filter(|row| row.connection.enabled).count();
+    let action = (!data.form_open).then(|| {
+        pill("new-connection", "New connection", Some(Icon::Plus), true, theme)
+            .on_click(dispatch(OpenConnectionForm))
+            .tag("new-connection")
+            .into_any_element()
+    });
+    let mut connections = None;
+    if !data.connections.is_empty() {
+        let mut list = card(Some("Connections"), Some(format!("{on} on").into()), Some("Off keeps the key and models, out of the model menu"), theme);
+        for (index, row) in data.connections.iter().enumerate() {
+            list = list.child(connection_row(index, row, theme));
+        }
+        connections = Some(list);
     }
-    for (index, connection) in data.connections.iter().enumerate() {
-        list = list.child(connection_row(index, connection, theme));
-    }
-
+    let adding = data.form_open.then(|| form(&data, theme));
     div()
-            .flex()
-            .flex_col()
-            .child(div().typography(Type::Title).text_color(theme.text).child("Providers"))
-            .child(div().pt(px(8.)).max_w(px(560.)).typography(Type::Body).text_color(theme.text_soft).child(
-                "Connections to model APIs. A key is kept in WackCode’s own secrets file and only ever \
-                 sent to the address it belongs to.",
-            ))
-            .child(div().pt(px(24.)).child(list))
-            .child(div().pt(px(40.)).typography(Type::Heading).text_color(theme.text).child("Add a connection"))
-            .child(form(data, theme))
+        .flex()
+        .flex_col()
+        .gap(px(18.))
+        .child(head(
+            "Providers",
+            "Connections to model APIs. A key is kept in WackCode’s own secrets file and only ever sent to the address it belongs to.",
+            action,
+            theme,
+        ))
+        .children(adding)
+        .children(connections)
 }
 
-fn connection_row(index: usize, connection: &Connection, theme: &Theme) -> impl IntoElement {
+/// A round monogram: the name's first letter.
+fn monogram(name: &str, on: bool, theme: &Theme) -> impl IntoElement {
+    let letter: String = name.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().collect()).unwrap_or_default();
+    div()
+        .flex_none()
+        .size(px(30.))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(if on { theme.accent_wash } else { theme.hover })
+        .typography(Type::UiStrong)
+        .text_color(if on { theme.accent_text } else { theme.text_faint })
+        .child(letter)
+}
+
+/// Tags for the automation socket, which takes only fixed names.
+const SWITCH_TAGS: [&str; 4] = ["switch-connection-0", "switch-connection-1", "switch-connection-2", "switch-connection-3"];
+const REMOVE_TAGS: [&str; 4] = ["remove-connection-0", "remove-connection-1", "remove-connection-2", "remove-connection-3"];
+
+fn connection_row(index: usize, row: &ConnectionRow, theme: &Theme) -> impl IntoElement {
+    let connection = &row.connection;
+    let on = connection.enabled;
     let host = connection.base_url.trim_start_matches("https://").trim_start_matches("http://").to_string();
     let models = connection
         .models
@@ -254,128 +378,117 @@ fn connection_row(index: usize, connection: &Connection, theme: &Theme) -> impl 
         })
         .collect::<Vec<_>>()
         .join("   ·   ");
+    let count = connection.models.len();
+    let status = if row.has_key {
+        div().typography(Type::Small).text_color(theme.text_faint).child(format!("Key saved · {count} model{}", if count == 1 { "" } else { "s" }))
+    } else {
+        div().typography(Type::Small).text_color(theme.warning).child("No key")
+    };
+    let id = connection.id.clone();
     div()
         .id(("connection", index))
         .group("connection")
-        .py(px(14.))
+        .px(px(18.))
+        .py(px(13.))
         .border_t_1()
         .border_color(theme.border)
         .flex()
-        .items_start()
-        .gap(px(16.))
+        .items_center()
+        .gap(px(14.))
+        .child(monogram(&connection.name, on, theme))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .gap(px(4.))
-                .child(div().typography(Type::UiStrong).text_color(theme.text).child(connection.name.clone()))
+                .gap(px(2.))
+                .child(div().typography(Type::UiStrong).text_color(if on { theme.text } else { theme.text_dim }).child(connection.name.clone()))
                 .child(
                     div()
                         .flex()
-                        .gap(px(10.))
+                        .gap(px(8.))
                         .typography(Type::Small)
                         .text_color(theme.text_dim)
-                        .child(format_name(connection.format))
-                        .child(div().text_color(theme.text_faint).child("·"))
-                        .child(div().min_w_0().truncate().child(host)),
+                        .child(div().flex_none().child(format_name(connection.format)))
+                        .child(div().flex_none().text_color(theme.text_faint).child("·"))
+                        .child(div().min_w_0().truncate().typography(Type::Mono).child(host)),
                 )
-                .child(div().pt(px(2.)).typography(Type::Mono).text_color(theme.text_soft).child(models)),
+                .child(div().pt(px(2.)).truncate().typography(Type::Mono).text_color(if on { theme.text_soft } else { theme.text_faint }).child(models)),
         )
+        .child(status.flex_none())
         .child(
             div()
                 .id(("remove-connection", index))
                 .flex_none()
-                .typography(Type::Small)
-                .text_color(theme.text_faint)
-                .hover(|word| word.text_color(theme.danger))
-                .on_click(dispatch(RemoveConnection { id: connection.id.clone() }))
-                .child("Remove"),
+                .size(px(26.))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .invisible()
+                .group_hover("connection", |button| button.visible())
+                .hover(|button| button.bg(theme.hover))
+                .tooltip(crate::tooltip::tip("Remove, and delete its key"))
+                .on_click(dispatch(RemoveConnection { id: id.clone() }))
+                .child(Icon::Trash.view(px(14.), theme.text_dim))
+                .tag(REMOVE_TAGS.get(index).copied().unwrap_or("remove-connection")),
+        )
+        .child(
+            div()
+                .id(("switch-connection", index))
+                .flex_none()
+                .cursor_pointer()
+                .on_click(dispatch(SwitchConnection { id, on: !on }))
+                .child(switch(on, theme))
+                .tag(SWITCH_TAGS.get(index).copied().unwrap_or("switch-connection")),
         )
 }
 
-fn form(data: ProvidersData, theme: &Theme) -> impl IntoElement {
-    let label_width = px(120.);
-    let row = |label: &'static str, control: gpui::AnyElement, note: Option<&'static str>| {
-        div()
-            .pt(px(14.))
-            .flex()
-            .items_start()
-            .child(div().w(label_width).flex_none().pt(px(7.)).typography(Type::Ui).text_color(theme.text_soft).child(label))
-            .child(
-                div().flex_1().min_w_0().flex().flex_col().gap(px(5.)).child(control).when_some(note, |column, note| {
-                    column.child(div().typography(Type::Small).text_color(theme.text_faint).child(note))
-                }),
-            )
-    };
+fn form(data: &ProvidersData, theme: &Theme) -> impl IntoElement {
     let field = |field: Entity<TextField>| {
         div()
-            .w_full()
-            .px(px(10.))
+            .w(px(FIELD_WIDTH))
+            .px(px(12.))
             .py(px(6.))
-            .rounded(px(8.))
-            .bg(theme.surface)
+            .rounded_full()
+            .bg(theme.window)
             .border_1()
             .border_color(theme.border)
             .child(field)
             .into_any_element()
     };
-    let formats = div()
+    let formats: Vec<(WireFormat, &'static str)> =
+        [WireFormat::OpenaiChat, WireFormat::OpenaiResponses, WireFormat::AnthropicMessages].map(|format| (format, format_name(format))).to_vec();
+    let formats = segmented("format", &formats, data.format, |format| Box::new(ChooseFormat { format }), theme);
+    let buttons = div()
+        .px(px(18.))
+        .py(px(14.))
+        .border_t_1()
+        .border_color(theme.border)
         .flex()
-        .gap(px(18.))
-        .pt(px(6.))
-        .children([WireFormat::OpenaiChat, WireFormat::OpenaiResponses, WireFormat::AnthropicMessages].map(|format| {
-            let chosen = format == data.format;
-            div()
-                .id(format_name(format))
-                .pb(px(3.))
-                .border_b_2()
-                .border_color(if chosen { theme.accent } else { gpui::Hsla { a: 0., ..theme.window } })
-                .typography(if chosen { Type::UiStrong } else { Type::Ui })
-                .text_color(if chosen { theme.text } else { theme.text_dim })
-                .hover(|word| word.text_color(theme.text))
-                .on_click(dispatch(ChooseFormat { format }))
-                .child(format_name(format))
-        }))
-        .into_any_element();
-
-    div()
-        .flex()
-        .flex_col()
-        .max_w(label_width + px(520.))
-        .child(row("Name", field(data.name), None))
-        .child(row("Format", formats, Some("Chat Completions suits most servers, including local ones.")))
-        .child(row("Address", field(data.address), Some("The API’s base address, without /chat/completions.")))
-        .child(row("Models", field(data.models), Some("Model ids, separated by commas or spaces.")))
-        .child(row("Context", field(data.context), Some("Tokens each model can read, such as 200k. Optional; it decides when chats compact.")))
-        .child(row("API key", field(data.key), None))
-        .child(
-            div()
-                .pt(px(20.))
-                .pl(label_width)
-                .flex()
-                .items_center()
-                .gap(px(16.))
-                .child(
-                    div()
-                        .id("add-connection")
-                        .h(px(32.))
-                        .px(px(14.))
-                        .rounded(px(8.))
-                        .flex()
-                        .items_center()
-                        .bg(theme.accent)
-                        .hover(|button| button.bg(theme.accent_hover))
-                        .on_click(dispatch(AddConnection))
-                        .child(div().typography(Type::UiStrong).text_color(theme.on_accent).child("Add connection"))
-                        .tag("add-connection"),
-                )
-                .when_some(data.error, |row, error| {
-                    row.child(div().flex_1().min_w_0().typography(Type::Ui).text_color(theme.danger).child(error))
-                }),
-        )
+        .items_center()
+        .gap(px(10.))
+        .child(pill("add-connection", "Add connection", None, true, theme).on_click(dispatch(AddConnection)).tag("add-connection"))
+        .when(!data.connections.is_empty(), |row| {
+            row.child(pill("cancel-connection", "Cancel", None, false, theme).on_click(dispatch(CloseConnectionForm)).tag("cancel-connection"))
+        })
+        .when_some(data.error.clone(), |row, error| {
+            row.child(div().flex_1().min_w_0().typography(Type::Ui).text_color(theme.danger).child(error))
+        });
+    let note = if data.connections.is_empty() { Some("Add one to start chatting") } else { None };
+    card(Some("New connection"), None, note, theme)
+        .child(settings_row("Name", None).control(field(data.name.clone())).view(theme))
+        .child(settings_row("Format", Some("Chat Completions suits most servers, including local ones.")).control(formats).stacked().view(theme))
+        .child(settings_row("Address", Some("The API’s base address, without /chat/completions.")).control(field(data.address.clone())).view(theme))
+        .child(settings_row("Models", Some("Model ids, separated by commas or spaces.")).control(field(data.models.clone())).view(theme))
+        .child(settings_row("Context", Some("Tokens each model can read, such as 200k. Optional; it decides when chats compact.")).control(field(data.context.clone())).view(theme))
+        .child(settings_row("API key", Some("Sent only to the address above.")).control(field(data.key.clone())).view(theme))
+        .child(buttons)
 }
+
+/// The width of the form's text fields.
+const FIELD_WIDTH: f32 = 280.;
 
 #[cfg(test)]
 mod tests {

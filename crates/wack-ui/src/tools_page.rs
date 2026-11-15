@@ -1,12 +1,13 @@
-//! Settings › Tools: what the agent's tools may do. For now one switch, version 2's "Remove Plan /
-//! Ultra Plan read-only restrictions", which asks before it turns on: it lets a planning run
-//! change things. Turning it off needs no asking.
+//! Settings › Tools: what the agent's tools may do. For now one switch in the Planning card,
+//! version 2's "Remove Plan / Ultra Plan read-only restrictions", which asks inside the card
+//! before it turns on: it lets a planning run change things. Turning it off needs no asking.
 
 use gpui::{div, prelude::*, px};
 
 use crate::{
     actions::{CancelUnrestrictedPlanning, ConfirmUnrestrictedPlanning, ToggleUnrestrictedPlanning},
     button::{Button, Kind},
+    settings_kit::{card, head, row},
     tags::Tag,
     theme::Theme,
     typography::{Type, Typography},
@@ -35,35 +36,20 @@ pub fn switch(on: bool, theme: &Theme) -> impl IntoElement {
 }
 
 pub fn page(data: ToolsData, theme: &Theme) -> impl IntoElement {
-    let row = div()
+    let control = div()
         .id("unrestricted-planning")
-        .pt(px(30.))
-        .flex()
-        .items_start()
-        .gap(px(16.))
         .cursor_pointer()
         .on_click(|_, window, cx| window.dispatch_action(Box::new(ToggleUnrestrictedPlanning), cx))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap(px(4.))
-                .child(div().typography(Type::Heading).text_color(theme.text).child("Remove Plan / Ultra Plan read-only restrictions"))
-                .child(div().max_w(px(520.)).typography(Type::Ui).text_color(theme.text_dim).child(
-                    "Both planning modes can use all enabled tools, including tools that change connected services. The interview, plan review and approval before implementation still apply.",
-                )),
-        )
-        .child(div().pt(px(2.)).child(switch(data.unrestricted_planning, theme)))
+        .child(switch(data.unrestricted_planning, theme))
         .tag("unrestricted-planning");
 
     let confirm = data.confirming.then(|| {
         div()
-            .mt(px(16.))
-            .p(px(16.))
+            .mx(px(18.))
+            .mb(px(16.))
+            .p(px(14.))
             .rounded(px(12.))
-            .bg(theme.surface)
+            .bg(theme.window)
             .border_1()
             .border_color(theme.border_strong)
             .flex()
@@ -91,10 +77,17 @@ pub fn page(data: ToolsData, theme: &Theme) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
-        .child(div().typography(Type::Title).text_color(theme.text).child("Tools"))
-        .child(div().pt(px(8.)).max_w(px(560.)).typography(Type::Body).text_color(theme.text_soft).child(
-            "What the agent may do while it plans. Building always has every tool.",
-        ))
-        .child(row)
-        .children(confirm)
+        .child(head("Tools", "What the agent may do while it plans. Building always has every tool.", None, theme))
+        .child(
+            card(Some("Planning"), None, None, theme)
+                .child(
+                    row(
+                        "Remove Plan / Ultra Plan read-only restrictions",
+                        Some("Both planning modes can use all enabled tools, including tools that change connected services. The interview, plan review and approval before implementation still apply."),
+                    )
+                    .control(control)
+                    .view(theme),
+                )
+                .children(confirm),
+        )
 }

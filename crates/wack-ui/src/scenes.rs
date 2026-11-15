@@ -430,22 +430,27 @@ pub fn all() -> Vec<Scene> {
         },
         Scene {
             name: "settings-providers",
-            description: "Settings › Providers: two connections and the add form with a problem to fix.",
+            description: "Settings › Providers: two connections, Local switched off, the form folded away.",
+            size: size(px(1180.), px(820.)),
+            build: |_, cx| providers_scene(Providers::Listed, false, cx),
+        },
+        Scene {
+            name: "settings-providers-form",
+            description: "Settings › Providers with the new-connection form open and a problem to fix.",
+            size: size(px(1180.), px(1100.)),
+            build: |_, cx| providers_scene(Providers::Adding, false, cx),
+        },
+        Scene {
+            name: "settings-providers-empty",
+            description: "Settings › Providers with no connections yet: the form is the page.",
             size: size(px(1180.), px(900.)),
-            build: |_, cx| {
-                let mut form = ProviderForm::new(cx);
-                form.name.update(cx, |field, cx| field.set_text("OpenRouter", cx));
-                form.address.update(cx, |field, cx| field.set_text("openrouter.ai/api/v1", cx));
-                form.key.update(cx, |field, cx| field.set_text("not-a-real-key", cx));
-                form.error = Some("The address must start with https:// or http://.".into());
-                let data = SettingsData {
-                    section: Section::Providers,
-                    providers: ProvidersData::new(&fixtures::connections(), &form),
-                    appearance: fixtures::appearance(None, cx),
-                    tools: Default::default(),
-                };
-                cx.new(|_| Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(data))).into()
-            },
+            build: |_, cx| providers_scene(Providers::Empty, false, cx),
+        },
+        Scene {
+            name: "settings-providers-small",
+            description: "The smallest window with the sidebar away: the sections become a row of pills above the page.",
+            size: size(px(716.), px(720.)),
+            build: |_, cx| providers_scene(Providers::Listed, true, cx),
         },
         Scene {
             name: "settings-tools",
@@ -455,7 +460,7 @@ pub fn all() -> Vec<Scene> {
                 let form = ProviderForm::new(cx);
                 let data = SettingsData {
                     section: Section::Tools,
-                    providers: ProvidersData::new(&fixtures::connections(), &form),
+                    providers: ProvidersData::new(&fixtures::connections(), |_| true, &form),
                     appearance: fixtures::appearance(None, cx),
                     tools: crate::tools_page::ToolsData { unrestricted_planning: false, confirming: true },
                 };
@@ -615,12 +620,48 @@ fn over(picture: crate::backdrop::Picture, cx: &mut App) -> crate::backdrop::Pic
     picture
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum Providers {
+    Listed,
+    Adding,
+    Empty,
+}
+
+/// Settings › Providers in one of its states.
+fn providers_scene(state: Providers, sidebar_hidden: bool, cx: &mut App) -> AnyView {
+    let mut form = ProviderForm::new(cx);
+    let mut connections = fixtures::connections();
+    connections[1].enabled = false;
+    match state {
+        Providers::Listed => {}
+        Providers::Adding => {
+            form.open = true;
+            form.name.update(cx, |field, cx| field.set_text("OpenRouter", cx));
+            form.address.update(cx, |field, cx| field.set_text("openrouter.ai/api/v1", cx));
+            form.key.update(cx, |field, cx| field.set_text("not-a-real-key", cx));
+            form.error = Some("The address must start with https:// or http://.".into());
+        }
+        Providers::Empty => connections.clear(),
+    }
+    let data = SettingsData {
+        section: Section::Providers,
+        providers: ProvidersData::new(&connections, |id| id != "c2", &form),
+        appearance: fixtures::appearance(None, cx),
+        tools: Default::default(),
+    };
+    cx.new(|_| {
+        let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(data));
+        if sidebar_hidden { shell.without_sidebar() } else { shell }
+    })
+    .into()
+}
+
 /// Settings › Appearance, drawn over `backdrop` when there is one.
 fn settings_scene(backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> AnyView {
     let form = ProviderForm::new(cx);
     let data = SettingsData {
         section: Section::Appearance,
-        providers: ProvidersData::new(&fixtures::connections(), &form),
+        providers: ProvidersData::new(&fixtures::connections(), |_| true, &form),
         appearance: fixtures::appearance(backdrop.clone(), cx),
         tools: Default::default(),
     };

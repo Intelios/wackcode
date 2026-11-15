@@ -136,6 +136,7 @@ pub fn connections() -> Vec<wack_core::Connection> {
             format: WireFormat::AnthropicMessages,
             base_url: "https://api.anthropic.com".into(),
             models: vec![model("claude-opus-5-5", Some(1_000_000)), model("claude-sonnet-5-5", Some(1_000_000))],
+            enabled: true,
         },
         Connection {
             id: "c2".into(),
@@ -143,6 +144,7 @@ pub fn connections() -> Vec<wack_core::Connection> {
             format: WireFormat::OpenaiChat,
             base_url: "http://localhost:1234/v1".into(),
             models: vec![model("qwen/qwen3-coder-30b", Some(128_000))],
+            enabled: true,
         },
     ]
 }

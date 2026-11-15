@@ -50,7 +50,7 @@ Each file's header comment states its invariants; this is the map.
 - **The prompt** (`prompt.rs`): the profile's core text, a guide to this chat (date, folder, tool list), then `AGENTS.md` / `CLAUDE.md` from the working directory and every folder above it. Built once per run.
 - **Features** hook in through `agent::Feature` (`on_run_start`, `notes`, `before_request`, `on_tool_call`, `after_turn`, `on_run_end`, `state_to_save`, `summary_sections`): compiled in, no extension runtime. A feature keeps its state in the session (`Entry::State`, latest per key, kept through compaction) and tells the model things through app notes (user-role messages the transcript hides and compaction never quotes as the user's words). A tool can end the run (`ToolSpec::ends_run`) or wait on the user (`ToolContext::user`, answered through `Control::answer`).
 - **Plan and Ultra Plan, questions, todos** (`plan/`, `ask.rs`, `todo/`, assembled by `kit.rs`), ported from version 2 with its prompts: the mode contract is a note, re-sent only when the mode in force differs from the last one the model saw; while planning, a tool runs only if it changes nothing (`parallel_safe`) or, for `bash`, passes the shell policy (`plan/policy.rs`, fail-closed), unless Settings › Tools lifts that. `plan_mode_complete` ends the run with the plan saved as state `plan`; a new user message consumes it. The tool list and system prompt never change between modes, so the prompt cache holds. **Ultra** reasoning is `wack_core::Reasoning::Ultra`: the provider gets its maximum effort and the system prompt gains `prompt::ULTRA_PROMPT`; it never reaches `wack-llm`.
-- **`wack-core/store.rs`** holds connections in `state.json` and their keys in `secrets.json`; `Store::provider` is the only place a key leaves the secret store.
+- **`wack-core/store.rs`** holds connections in `state.json` and their keys in `secrets.json`; `Store::provider` is the only place a key leaves the secret store. A connection switched off stays stored with its key but is skipped by `Store::resolve`, the model menu and `wack run`.
 
 ## The UI layer
 
@@ -97,7 +97,7 @@ Known gaps in the harness:
 
 Known gaps in identity:
 
-- The UI redesign (docs/redesign.md) is under way: the frame, stage and glass are built; the sidebar, transcript, composer and Settings restyles are not.
+- The UI redesign (docs/redesign.md) is under way: the frame, stage, glass, sidebar, transcript, composer and Settings are built; WackCode 2's themes are next.
 
 - The window's own controls follow macOS's light or dark, not the one chosen in Settings.
 

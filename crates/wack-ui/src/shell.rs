@@ -40,7 +40,7 @@ use gpui::{
 use crate::{
     actions::{
         self, ActivatePane, AddConnection, AddFolder, Back, ChooseAccent, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, ToggleWaiting, ChooseFocus, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning,
-        ChooseBlur, ChooseDim, ChooseFormat, ChooseMode, ChooseModel, ChooseTexture, ChooseThemeColour, CloseChatTab, CloseMenu, ClosePane,
+        ChooseBlur, ChooseDim, ChooseFormat, OpenConnectionForm, CloseConnectionForm, SwitchConnection, ChooseMode, ChooseModel, ChooseTexture, ChooseThemeColour, CloseChatTab, CloseMenu, ClosePane,
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, EqualizeSplit, FocusNext, FocusPrevious, MovePane,
         NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveBackdrop, RemoveConnection, RemoveProject, ResetDockSize,
@@ -213,6 +213,12 @@ impl Shell {
         }
     }
 
+    /// A scene with its sidebar put away.
+    pub fn without_sidebar(mut self) -> Self {
+        self.scene_sidebar_hidden = true;
+        self
+    }
+
     /// A scene's chat panes, and whether its sidebar is hidden.
     pub fn with_panes(mut self, panes: ChatPanes, sidebar_hidden: bool) -> Self {
         self.scene_panes = Some(panes);
@@ -351,8 +357,8 @@ impl Shell {
 
     fn open_menu(&mut self, menu: Menu, cx: &mut Context<Self>) {
         self.with_app(cx, |app, cx| {
-            // With nothing to pick from, the place to go is where connections are added.
-            if app.store().connections().is_empty() {
+            // With nothing to pick from, the place to go is where connections are added or switched on.
+            if app.store().enabled_connections().next().is_none() {
                 app.settings_section = Section::Providers;
                 app.select(Selection::Settings, cx);
             } else {
@@ -743,6 +749,11 @@ impl Render for Shell {
             }
         };
         let gutter = FRAME_GUTTER;
+        // While Settings is open the sidebar's pane holds its navigation.
+        let settings_nav = match &screen {
+            Screen::Settings(data) => Some((data.section, data.providers.connections.len())),
+            _ => None,
+        };
         let sidebar = solution.sidebar.then(|| {
             div().flex_none().w(gutter + SIDEBAR_WIDTH).h_full().p(gutter).flex().flex_col().child(pane(
                 div()
@@ -754,7 +765,10 @@ impl Render for Shell {
                         TITLE_STRIP_HEIGHT - gutter,
                         div().size_full().flex().justify_end().pt(px(2.)).pr(px(10.)).child(sidebar_toggle(&theme)),
                     ))
-                    .child(Sidebar::new(sidebar_data))
+                    .child(match settings_nav {
+                        Some((section, connections)) => settings::nav(section, connections, &theme).into_any_element(),
+                        None => Sidebar::new(sidebar_data).into_any_element(),
+                    })
                     .into_any_element(),
                 false,
             ))
@@ -789,7 +803,7 @@ impl Render for Shell {
                         .key_context(actions::FORM_CONTEXT)
                         .on_action(|_: &FocusNext, window, cx| window.focus_next(cx))
                         .on_action(|_: &FocusPrevious, window, cx| window.focus_prev(cx))
-                        .child(arrive(id, settings::page(data, inset, narrow, &theme).into_any_element()))
+                        .child(arrive(id, settings::page(data, !solution.sidebar, narrow, &theme).into_any_element()))
                         .into_any_element(),
                 )
             }
@@ -950,6 +964,23 @@ impl Render for Shell {
                 .on_action(cx.listener(|shell, _: &ToggleTodos, _, cx| shell.with_session(cx, |session, cx| session.toggle_todos(cx))))
                 .on_action(cx.listener(|shell, _: &ToggleWaiting, _, cx| shell.with_session(cx, |session, cx| session.toggle_waiting(cx))))
                 .on_action(cx.listener(|shell, _: &AddConnection, _, cx| shell.with_app(cx, |app, cx| app.add_connection(cx))))
+                .on_action(cx.listener(|shell, _: &OpenConnectionForm, window, cx| {
+                    // The form opens ready to type its name.
+                    let Some(app) = shell.app() else {
+                        return;
+                    };
+                    let name = app.update(cx, |app, cx| {
+                        app.open_connection_form(cx);
+                        app.form.name.clone()
+                    });
+                    let handle = name.read(cx).focus_handle(cx);
+                    window.defer(cx, move |window, cx| window.focus(&handle, cx));
+                }))
+                .on_action(cx.listener(|shell, _: &CloseConnectionForm, _, cx| shell.with_app(cx, |app, cx| app.close_connection_form(cx))))
+                .on_action(cx.listener(|shell, action: &SwitchConnection, _, cx| {
+                    let (id, on) = (action.id.clone(), action.on);
+                    shell.with_app(cx, |app, cx| app.set_connection_enabled(&id, on, cx));
+                }))
                 .on_action(cx.listener(|shell, action: &ChooseFormat, _, cx| {
                     let format = action.format;
                     shell.with_app(cx, |app, cx| app.set_format(format, cx));
@@ -1137,7 +1168,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
             let appearance = store.appearance();
             Screen::Settings(SettingsData {
                 section: app.settings_section,
-                providers: ProvidersData::new(store.connections(), &app.form),
+                providers: ProvidersData::new(store.connections(), |id| store.has_key(id), &app.form),
                 appearance: AppearanceData {
                     mode: appearance.mode,
                     theme_colour: appearance.theme_colour.clone().unwrap_or_else(|| DEFAULT_THEME_COLOUR.into()),
@@ -1263,8 +1294,7 @@ fn menu_data(app: &AppState, resolved: Option<&wack_core::Resolved>) -> Option<M
     let groups = match kind {
         Menu::Model => app
             .store()
-            .connections()
-            .iter()
+            .enabled_connections()
             .map(|connection| MenuGroup {
                 title: Some(connection.name.clone().into()),
                 items: connection

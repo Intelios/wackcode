@@ -436,7 +436,7 @@ impl AppState {
         match &self.selection {
             Selection::NewChat(_) => Some(self.draft.clone()),
             Selection::Chat(chat) => self.sessions.get(chat).map(|session| session.read(cx).composer.clone()),
-            Selection::Settings => (self.settings_section == Section::Providers).then(|| self.form.name.clone()),
+            Selection::Settings => (self.settings_section == Section::Providers && self.form_showing()).then(|| self.form.name.clone()),
             Selection::Welcome => None,
         }
     }
@@ -924,6 +924,30 @@ impl AppState {
         match result {
             Ok(_) => self.form.clear(cx),
             Err(message) => self.form.error = Some(message.into()),
+        }
+        cx.notify();
+    }
+
+    /// The new-connection form is on the page: asked for, or there is nothing else to show.
+    pub fn form_showing(&self) -> bool {
+        self.form.open || self.store.connections().is_empty()
+    }
+
+    pub fn open_connection_form(&mut self, cx: &mut Context<Self>) {
+        self.form.open = true;
+        cx.notify();
+    }
+
+    /// Cancel: the form folds away and forgets what was typed.
+    pub fn close_connection_form(&mut self, cx: &mut Context<Self>) {
+        self.form.clear(cx);
+        cx.notify();
+    }
+
+    /// Switches a connection on or off; chats that used one switched off fall back to another.
+    pub fn set_connection_enabled(&mut self, id: &str, on: bool, cx: &mut Context<Self>) {
+        if let Err(message) = self.store.set_connection_enabled(id, on) {
+            self.form.error = Some(message.into());
         }
         cx.notify();
     }

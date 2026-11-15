@@ -28,6 +28,9 @@ actions!(
         Back,
         /// Adds the connection the Settings form describes.
         AddConnection,
+        /// Settings › Providers: show the form that adds a connection, or fold it away.
+        OpenConnectionForm,
+        CloseConnectionForm,
         OpenModelMenu,
         OpenEffortMenu,
         CloseMenu,
@@ -90,6 +93,14 @@ actions!(
 #[action(namespace = wackcode, no_json)]
 pub struct ChooseFormat {
     pub format: WireFormat,
+}
+
+/// Switches a connection on or off. Off keeps its key and models, out of the model menu.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct SwitchConnection {
+    pub id: String,
+    pub on: bool,
 }
 
 /// Asks first.

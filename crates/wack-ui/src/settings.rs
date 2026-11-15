@@ -160,20 +160,24 @@ pub struct SettingsData {
 }
 
 /// The title strip's words: `Settings › Providers`.
-pub fn strip(section: Section, inset: Pixels, theme: &Theme) -> impl IntoElement {
+/// Over a picture the strip's words sit on `ground`, the panes' glass, so they read on the frame.
+pub fn strip(section: Section, inset: Pixels, ground: Option<gpui::Hsla>, theme: &Theme) -> impl IntoElement {
+    let pill = |content: gpui::Div| content.h(px(28.)).px(px(12.)).rounded_full().flex().items_center().when_some(ground, |pill, ground| pill.bg(ground));
     div()
         .size_full()
-        .pl(inset)
-        .pr(px(20.))
+        .pl((inset - px(12.)).max(px(4.)))
+        .pr(px(4.))
         .flex()
         .items_center()
-        .gap(px(8.))
         .typography(Type::UiStrong)
-        .child(div().text_color(theme.text_dim).child("Settings"))
-        .child(div().text_color(theme.text_faint).child("›"))
-        .child(div().text_color(theme.text).child(section.name()))
+        .child(
+            pill(div().gap(px(8.)))
+                .child(div().text_color(theme.text_dim).child("Settings"))
+                .child(div().text_color(theme.text_faint).child("›"))
+                .child(div().text_color(theme.text).child(section.name())),
+        )
         .child(div().flex_1())
-        .child(div().typography(Type::Small).text_color(theme.text_faint).child("esc to close"))
+        .child(pill(div()).typography(Type::Small).text_color(theme.text_faint).child("esc to close"))
 }
 
 /// The navigation's width, the gap after it, and the open section's widest line.

@@ -7,7 +7,7 @@ use gpui::{
 use wack_ui::{
     actions::{AddFolder, CloseTab, NewChat, NewTerminal, NextTab, OpenSettings, PreviousTab, ToggleChanges, ToggleSidebar, ToggleTerminal},
     panes::solve::{CONTENT_MIN_HEIGHT, WINDOW_MIN_WIDTH},
-    shell::{Shell, TITLE_STRIP_HEIGHT},
+    shell::{FRAME_GUTTER, Shell, TITLE_STRIP_HEIGHT, TRAFFIC_LIGHTS},
     text_field,
 };
 
@@ -68,12 +68,16 @@ fn main() {
             titlebar: Some(TitlebarOptions {
                 title: Some("WackCode".into()),
                 appears_transparent: true,
-                traffic_light_position: Some(point(px(14.), px(13.))),
+                traffic_light_position: Some(point(px(TRAFFIC_LIGHTS.0), px(TRAFFIC_LIGHTS.1))),
             }),
             // The shell draws the title strip and moves the window itself (`wack_ui::shell`).
             app_owns_titlebar_drag: true,
             // The solver keeps the transcript readable down to this size (`panes::solve`).
-            window_min_size: Some(size(px(WINDOW_MIN_WIDTH), px(CONTENT_MIN_HEIGHT) + TITLE_STRIP_HEIGHT)),
+            // and the frame's gutters go round that.
+            window_min_size: Some(size(
+                px(WINDOW_MIN_WIDTH) + FRAME_GUTTER * 2.,
+                px(CONTENT_MIN_HEIGHT) + TITLE_STRIP_HEIGHT + FRAME_GUTTER,
+            )),
             ..Default::default()
         };
         if let Err(error) = cx.open_window(options, |window, cx| {

@@ -105,7 +105,7 @@ impl RenderOnce for Sidebar {
 
         div()
             .flex_none()
-            .w(SIDEBAR_WIDTH)
+            .w_full()
             .flex_1()
             .min_h_0()
             .flex()

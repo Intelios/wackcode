@@ -23,7 +23,6 @@ use crate::{
     actions::{ActivatePane, ClosePaneId, EqualizeSplit, MovePane, NewTerminalWith, ResetDockSize},
     icon::Icon,
     motion,
-    shell::TITLE_STRIP_HEIGHT,
     tags::Tag,
     theme::Theme,
     typography::{Type, Typography},
@@ -152,12 +151,14 @@ pub fn drop_target(layout: &Layout, solution: &Solution, dragged: PaneId, x: f32
     (moved != *layout).then_some(found)
 }
 
-/// Everything the docks draw, positioned in the content area (below the title strip, right of
-/// the sidebar). `left` is where that area starts in the window.
+/// Everything the docks draw, positioned in the stage. The solution is in the solver's space
+/// (`shell::solver_space`), `width` × `height`; `left` is where the stage starts in it.
 pub struct Frame<'a> {
     pub panes: &'a ChatPanes,
     pub solution: &'a Solution,
     pub left: f32,
+    pub width: f32,
+    pub height: f32,
     /// The tab being dragged and the mouse in content coordinates, while a tab is dragged.
     pub dragging: Option<(PaneId, Point<Pixels>)>,
 }
@@ -165,8 +166,21 @@ pub struct Frame<'a> {
 pub fn docks(frame: &Frame, theme: &Theme, cx: &App) -> Vec<AnyElement> {
     let place = |rect: Rect| div().absolute().left(px(rect.x - frame.left)).top(px(rect.y)).w(px(rect.width)).h(px(rect.height));
     let mut elements = Vec::new();
+    // A dock is a step back from the stage, and rounds the stage's corners it reaches. Over a
+    // picture it is a tint on the stage's glass.
+    let corner = px(crate::shell::PANE_RADIUS);
+    let ground = if theme.veil > 0. { gpui::Hsla { a: 0.5, ..theme.dock } } else { theme.dock };
     for rect in [frame.solution.right, frame.solution.bottom].into_iter().flatten() {
-        elements.push(place(rect).bg(theme.dock).into_any_element());
+        let (right, bottom) = (rect.right() >= frame.width - 0.5, rect.bottom() >= frame.height - 0.5);
+        let (top, left) = (rect.y <= 0.5, rect.x <= frame.left + 0.5);
+        elements.push(
+            place(rect)
+                .bg(ground)
+                .when(top && right, |dock| dock.rounded_tr(corner))
+                .when(bottom && right, |dock| dock.rounded_br(corner))
+                .when(bottom && left, |dock| dock.rounded_bl(corner))
+                .into_any_element(),
+        );
     }
     for stack_place in &frame.solution.stacks {
         if let Some(stack) = frame.panes.layout.stack(stack_place.dock, &stack_place.path) {
@@ -195,7 +209,7 @@ pub fn docks(frame: &Frame, theme: &Theme, cx: &App) -> Vec<AnyElement> {
                 .size_full()
                 .on_drop(move |tab: &DraggedTab, window, cx| {
                     let mouse = window.mouse_position();
-                    let (x, y) = (f32::from(mouse.x), f32::from(mouse.y - TITLE_STRIP_HEIGHT));
+                    let (x, y) = crate::shell::to_solver(f32::from(mouse.x), f32::from(mouse.y));
                     if let Some((target, _)) = drop_target(&layout, &solution, tab.pane, x, y) {
                         window.dispatch_action(Box::new(MovePane { pane: tab.pane, target }), cx);
                     }

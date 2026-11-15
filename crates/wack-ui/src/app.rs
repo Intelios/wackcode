@@ -270,9 +270,10 @@ impl AppState {
                 app.importing = false;
                 match result {
                     Ok(mut backdrop) => {
-                        // A new picture keeps the dim and texture the old one had.
+                        // A new picture keeps the dim, blur and texture the old one had.
                         if let Some(old) = &app.store.appearance().backdrop {
                             backdrop.dim = old.dim;
+                            backdrop.blur = old.blur;
                             backdrop.texture = old.texture;
                         }
                         app.set_appearance(|appearance| appearance.backdrop = Some(backdrop), cx);
@@ -297,6 +298,7 @@ impl AppState {
             height: backdrop.height,
             focus: (backdrop.focus_x, backdrop.focus_y),
             dim: backdrop.dim as f32 / 100.,
+            blur: backdrop.blur as f32,
             texture: backdrop.texture,
             shade: backdrop.shade.unwrap_or([0, 255]),
         })

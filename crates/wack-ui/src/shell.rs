@@ -12,9 +12,17 @@
 //! chat's docks are placed from the window's size on every frame, so the transcript keeps its
 //! minimum width at any size the window allows, and the sidebar steps aside before a dock shrinks.
 //!
-//! Over an image backdrop the softened picture lies behind the whole window and the sidebar and
-//! title strip are see-through over it; the new-chat and welcome screens also show it clear
-//! across the top, dissolving around their block (`backdrop.rs`).
+//! The window is a frame around two panes: the sidebar, and the stage holding the screen (the
+//! transcript and its docks, a new chat, Settings). The title strip with the chat tabs runs across
+//! the frame above the stage. Every edge keeps [`FRAME_GUTTER`]: the solver works in the frame's
+//! inner space ([`solver_space`]), and anything that turns the mouse into a layout position goes
+//! through [`to_solver`].
+//!
+//! Over an image backdrop the picture fills the window, blurred and dimmed as the user chose, and
+//! both panes are frosted glass over it (`glass.rs`); text outside them (the tabs) sits on pills
+//! of the same glass. The new-chat and welcome screens also show the picture clear across the top
+//! of the stage, dissolving around their block (`backdrop.rs`). Without a picture the frame is the
+//! sidebar's colour and the stage is the lit window.
 //!
 //! The shell draws from plain data ([`SidebarData`], [`Screen`]). In the app that data is read
 //! from [`AppState`] on every frame and the shell handles the actions its views dispatch; a
@@ -31,7 +39,7 @@ use gpui::{
 use crate::{
     actions::{
         self, ActivatePane, AddConnection, AddFolder, Back, ChooseAccent, ChooseBackdrop, ChooseEffort, ChooseFocus, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning,
-        ChooseDim, ChooseFormat, ChooseMode, ChooseModel, ChooseTexture, ChooseThemeColour, CloseChatTab, CloseMenu, ClosePane,
+        ChooseBlur, ChooseDim, ChooseFormat, ChooseMode, ChooseModel, ChooseTexture, ChooseThemeColour, CloseChatTab, CloseMenu, ClosePane,
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, EqualizeSplit, FocusNext, FocusPrevious, MovePane,
         NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveBackdrop, RemoveConnection, RemoveProject, ResetDockSize,
@@ -41,6 +49,7 @@ use crate::{
     appearance_page::AppearanceData,
     backdrop::{self, Cutout, Picture},
     edge_fade::faded,
+    glass::{GLASS_BLUR, glass},
     chat::ChatSession,
     composer::{Choice, Composer, ComposerData, Input, MenuData, MenuGroup, MenuItem, Meter, Waiting},
     motion,
@@ -59,7 +68,25 @@ use crate::{
 };
 
 /// Height of the strip across the top that holds the traffic lights and drags the window.
-pub const TITLE_STRIP_HEIGHT: Pixels = px(40.);
+pub const TITLE_STRIP_HEIGHT: Pixels = px(44.);
+/// The frame kept around the panes, and between the sidebar and the stage.
+pub const FRAME_GUTTER: Pixels = px(8.);
+/// The panes' corners.
+pub const PANE_RADIUS: f32 = 14.;
+/// Where macOS draws the traffic lights: inside the sidebar pane, centred on the title strip.
+pub const TRAFFIC_LIGHTS: (f32, f32) = (20., 16.);
+
+/// The pane solver's space for a window of `width` × `height`: the window less the frame's
+/// gutters and the title strip. The sidebar and the stage tile it.
+pub fn solver_space(width: f32, height: f32) -> (f32, f32) {
+    let gutter = f32::from(FRAME_GUTTER);
+    (width - 2. * gutter, height - f32::from(TITLE_STRIP_HEIGHT) - gutter)
+}
+
+/// A window position in the solver's space.
+pub fn to_solver(x: f32, y: f32) -> (f32, f32) {
+    (x - f32::from(FRAME_GUTTER), y - f32::from(TITLE_STRIP_HEIGHT))
+}
 /// Where content starts, measured from the main column's left edge.
 pub const CONTENT_INSET: Pixels = px(64.);
 /// The transcript's widest line.
@@ -455,7 +482,7 @@ impl Shell {
             return;
         };
         let viewport = window.viewport_size();
-        let (width, height) = (f32::from(viewport.width), f32::from(viewport.height - TITLE_STRIP_HEIGHT));
+        let (width, height) = solver_space(f32::from(viewport.width), f32::from(viewport.height));
         let stepped_aside = !app.read(cx).sidebar_hidden()
             && self.current_session(cx).is_some_and(|session| {
                 matches!(app.read(cx).selection(), Selection::Chat(_))
@@ -480,22 +507,21 @@ impl Shell {
     fn resize(&mut self, event: &DragMoveEvent<Resizing>, window: &mut Window, cx: &mut Context<Self>) {
         let resizing = event.drag(cx).clone();
         let viewport = window.viewport_size();
-        let (width, height) = (f32::from(viewport.width), f32::from(viewport.height));
-        let (x, y) = (f32::from(event.event.position.x), f32::from(event.event.position.y));
+        let (width, height) = solver_space(f32::from(viewport.width), f32::from(viewport.height));
+        let (x, y) = to_solver(f32::from(event.event.position.x), f32::from(event.event.position.y));
         match resizing {
             Resizing::Dock(Dock::Right) => {
                 let size = (width - x).clamp(DOCK_MIN_WIDTH, solve::widest_dock(width).max(DOCK_MIN_WIDTH));
                 self.change_layout(cx, |layout| layout.set_size(Dock::Right, Some(size.round())));
             }
             Resizing::Dock(Dock::Bottom) => {
-                let content = height - f32::from(TITLE_STRIP_HEIGHT);
-                let size = (height - y).clamp(DOCK_MIN_HEIGHT, solve::tallest_dock(content).max(DOCK_MIN_HEIGHT));
+                let size = (height - y).clamp(DOCK_MIN_HEIGHT, solve::tallest_dock(height).max(DOCK_MIN_HEIGHT));
                 self.change_layout(cx, |layout| layout.set_size(Dock::Bottom, Some(size.round())));
             }
             Resizing::Split { dock, path, index, axis, start, total } => {
                 let (at, minimum) = match axis {
                     Axis::Row => (x, STACK_MIN_WIDTH),
-                    Axis::Column => (y - f32::from(TITLE_STRIP_HEIGHT), STACK_MIN_HEIGHT),
+                    Axis::Column => (y, STACK_MIN_HEIGHT),
                 };
                 if total < 2. * minimum {
                     return;
@@ -623,9 +649,10 @@ impl Render for Shell {
             _ => self.scene_sidebar_hidden,
         };
 
-        // The solver places everything below the title strip from the window's size.
+        // The solver places the sidebar and the stage inside the frame from the window's size.
         let viewport = window.viewport_size();
-        let (width, height) = (f32::from(viewport.width), f32::from(viewport.height - TITLE_STRIP_HEIGHT));
+        let (window_width, window_height) = (f32::from(viewport.width), f32::from(viewport.height));
+        let (width, height) = solver_space(window_width, window_height);
         let mouse = window.mouse_position();
         let (solution, dock_elements, words) = {
             let empty = ChatPanes::new(Layout::default(), Default::default());
@@ -643,7 +670,12 @@ impl Render for Shell {
                 panes,
                 solution: &solution,
                 left,
-                dragging: self.dragging.map(|pane| (pane, point(mouse.x, mouse.y - TITLE_STRIP_HEIGHT))),
+                width,
+                height,
+                dragging: self.dragging.map(|pane| {
+                    let (x, y) = to_solver(f32::from(mouse.x), f32::from(mouse.y));
+                    (pane, point(px(x), px(y)))
+                }),
             };
             let docks = dock::docks(&frame, &theme, cx);
             let words = matches!(screen, Screen::Chat { .. }).then(|| PaneWords::read(panes, cx));
@@ -656,40 +688,22 @@ impl Render for Shell {
         let roomy_strip = width - f32::from(left) >= ROOMY_STRIP;
         let inset = if narrow { NARROW_INSET } else { CONTENT_INSET };
 
-        let lights = div().flex().gap(px(8.)).pl(px(14.)).pt(px(14.)).when(self.traffic_light_stand_ins, |lights| {
-            lights.children((0..3).map(|_| div().size(px(12.)).rounded_full().bg(theme.border_strong)))
-        });
-        // The picture, when there is one: softened behind everything, and clear across the top
-        // of the new-chat and welcome screens.
+        // The picture, when there is one: blurred and dimmed behind everything, and clear across
+        // the top of the stage on the new-chat and welcome screens.
         let picture = match &self.source {
             Source::Live(app) => app.read(cx).backdrop(),
             _ => self.scene_backdrop.clone(),
         };
+        let over_picture = picture.is_some();
         let cutout = Cutout::default();
-        let whole = Rect { x: 0., y: 0., width, height: f32::from(viewport.height) };
+        let whole = Rect { x: 0., y: 0., width: window_width, height: window_height };
         let (behind, hero) = match &picture {
             Some(picture) => {
                 let behind = backdrop::behind(picture, whole, theme.window, theme.veil);
                 let hero_screen = matches!(screen, Screen::Welcome { .. } | Screen::NewChat { .. });
                 let light = theme.appearance == crate::theme::Appearance::Light;
                 let artwork = if hero_screen { backdrop::artwork(picture, light, cx) } else { None };
-                // From the window's top edge, under the strip, as Zeron does: starting below the
-                // strip leaves a hard band across the window.
-                let area = Rect {
-                    x: f32::from(left),
-                    y: 0.,
-                    width: width - f32::from(left),
-                    height: backdrop::hero_height(whole.height),
-                };
-                // A soft scrim under the strip keeps tab names readable over a bright picture
-                // without drawing a band across it.
-                let scrim = div().absolute().top_0().left(left).right_0().h(TITLE_STRIP_HEIGHT + px(40.)).bg(
-                    gpui::linear_gradient(
-                        180.,
-                        gpui::linear_color_stop(Hsla { a: 0.55, ..theme.window }, 0.),
-                        gpui::linear_color_stop(Hsla { a: 0., ..theme.window }, 1.),
-                    ),
-                );
+                let hero_height = backdrop::hero_height(window_height) - f32::from(TITLE_STRIP_HEIGHT);
                 let hero = artwork.map(|artwork| {
                     motion::fade_in(
                         "hero",
@@ -698,37 +712,47 @@ impl Render for Shell {
                             .left_0()
                             .top_0()
                             .size_full()
-                            .child(backdrop::hero(artwork, picture, whole, area, cutout.clone()))
-                            .child(scrim),
+                            .child(backdrop::hero(artwork, picture, whole, hero_height, PANE_RADIUS, cutout.clone())),
                     )
                 });
                 (Some(behind), hero)
             }
             None => (None, None),
         };
-        // Over a picture the sidebar is a tint, so the picture shows through it.
-        let sidebar_ground = if picture.is_some() { Hsla { a: 0.62, ..theme.sidebar } } else { theme.sidebar };
+        // The panes: frosted glass over a picture; without one, the sidebar lies flat on the frame
+        // beside the lit stage.
+        let pane = |child: gpui::AnyElement, stage: bool| -> gpui::AnyElement {
+            if over_picture {
+                glass(PANE_RADIUS, GLASS_BLUR, Hsla { a: theme.glass, ..theme.window }, theme.border, child).into_any_element()
+            } else if stage {
+                glass(PANE_RADIUS, 0., theme.window, theme.border, child).into_any_element()
+            } else {
+                child
+            }
+        };
+        let gutter = FRAME_GUTTER;
         let sidebar = solution.sidebar.then(|| {
-            div()
-                .flex_none()
-                .w(SIDEBAR_WIDTH)
-                .h_full()
-                .flex()
-                .flex_col()
-                .bg(sidebar_ground)
-                .child(drag_strip(
-                    "sidebar-strip",
-                    div().size_full().flex().justify_between().child(lights).child(
-                        div().pt(px(9.)).pr(px(10.)).child(sidebar_toggle(&theme)),
-                    ),
-                ))
-                .child(Sidebar::new(sidebar_data))
+            div().flex_none().w(gutter + SIDEBAR_WIDTH).h_full().p(gutter).flex().flex_col().child(pane(
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .child(drag_strip(
+                        "sidebar-strip",
+                        TITLE_STRIP_HEIGHT - gutter,
+                        div().size_full().flex().justify_end().pt(px(2.)).pr(px(10.)).child(sidebar_toggle(&theme)),
+                    ))
+                    .child(Sidebar::new(sidebar_data))
+                    .into_any_element(),
+                false,
+            ))
         });
 
         // A screen arrives as it is opened; a chat does not, so switching tabs never moves text.
         let arrive = |id: String, body: gpui::AnyElement| {
             motion::enter(ElementId::Name(id.into()), div().size_full().child(body)).into_any_element()
         };
+        let strip_ground = over_picture.then_some(Hsla { a: theme.glass, ..theme.window });
         let (strip, body) = match screen {
             Screen::Welcome { notice } => {
                 (div(), arrive("arrive-welcome".into(), welcome(notice, cutout.clone(), &theme).into_any_element()))
@@ -736,16 +760,16 @@ impl Render for Shell {
             Screen::NewChat { project, composer, notice } => {
                 let id = format!("arrive-new-chat-{}", project.path);
                 let body = new_chat(project, composer, notice, cutout.clone(), &theme).into_any_element();
-                (tab_strip(&strip, None, inset, &theme), arrive(id, body))
+                (tab_strip(&strip, None, strip_ground, &theme), arrive(id, body))
             }
             Screen::Chat { project, body, composer, .. } => (
-                tab_strip(&strip, Some((roomy_strip.then_some(project), words.unwrap_or_default())), inset, &theme),
+                tab_strip(&strip, Some((roomy_strip.then_some(project), words.unwrap_or_default())), strip_ground, &theme),
                 chat(body, composer, narrow, transcript_height).into_any_element(),
             ),
             Screen::Settings(data) => {
                 let id = format!("arrive-settings-{}", data.section.name());
                 (
-                    div().size_full().child(settings::strip(data.section, inset, &theme)),
+                    div().size_full().child(settings::strip(data.section, inset, strip_ground, &theme)),
                     div()
                         .size_full()
                         .key_context(actions::FORM_CONTEXT)
@@ -764,24 +788,16 @@ impl Render for Shell {
             div()
                 .size_full()
                 .flex()
-                .child(
-                    div()
-                        .flex_none()
-                        .flex()
-                        .child(div().w(px(70.)).child(div().flex().gap(px(8.)).pl(px(14.)).pt(px(14.)).when(
-                            self.traffic_light_stand_ins,
-                            |lights| lights.children((0..3).map(|_| div().size(px(12.)).rounded_full().bg(theme.border_strong))),
-                        )))
-                        .child(div().pt(px(9.)).child(sidebar_toggle(&theme))),
-                )
+                .child(div().flex_none().w(px(TRAFFIC_LIGHTS.0 + 56.) - gutter))
+                .child(div().flex_none().pt(px(10.)).child(sidebar_toggle(&theme)))
                 .child(div().flex_1().min_w_0().child(strip))
         };
 
         let transcript = solution.transcript;
         let content = div()
-            .flex_1()
-            .min_h_0()
+            .size_full()
             .relative()
+            .children(hero)
             .child(
                 div()
                     .absolute()
@@ -792,6 +808,7 @@ impl Render for Shell {
                     .child(body),
             )
             .children(dock_elements);
+        let stage = pane(div().flex_1().min_h_0().w_full().child(content).into_any_element(), true);
         let main = div()
             .relative()
             .flex_1()
@@ -799,9 +816,21 @@ impl Render for Shell {
             .h_full()
             .flex()
             .flex_col()
-            .when(picture.is_none(), |main| main.bg(theme.window))
-            .child(drag_strip("title-strip", strip))
-            .child(content);
+            .pr(gutter)
+            .pb(gutter)
+            .when(!solution.sidebar, |main| main.pl(gutter))
+            .child(drag_strip("title-strip", TITLE_STRIP_HEIGHT, strip))
+            .child(stage);
+        // The gallery has no window controls: neutral circles stand where macOS draws them.
+        let lights = self.traffic_light_stand_ins.then(|| {
+            div()
+                .absolute()
+                .left(px(TRAFFIC_LIGHTS.0))
+                .top(px(TRAFFIC_LIGHTS.1))
+                .flex()
+                .gap(px(8.))
+                .children((0..3).map(|_| div().size(px(12.)).rounded_full().bg(theme.border_strong)))
+        });
 
         tags::root(
             div()
@@ -923,6 +952,10 @@ impl Render for Shell {
                     let dim = action.dim;
                     shell.change_backdrop(cx, |backdrop| backdrop.dim = dim);
                 }))
+                .on_action(cx.listener(|shell, action: &ChooseBlur, _, cx| {
+                    let blur = action.blur;
+                    shell.change_backdrop(cx, |backdrop| backdrop.blur = blur);
+                }))
                 .on_action(cx.listener(|shell, action: &ChooseTexture, _, cx| {
                     let texture = action.texture;
                     shell.change_backdrop(cx, |backdrop| backdrop.texture = texture);
@@ -980,13 +1013,13 @@ impl Render for Shell {
                 .relative()
                 .size_full()
                 .flex()
-                .bg(theme.window)
+                .bg(if over_picture { theme.window } else { theme.sidebar })
                 .text_color(theme.text)
                 .typography(Type::Ui)
                 .children(behind)
-                .children(hero)
                 .children(sidebar)
-                .child(main),
+                .child(main)
+                .children(lights),
         )
     }
 }
@@ -1302,12 +1335,12 @@ fn meter(tokens: u64, window: Option<u64>, has_messages: bool) -> Meter {
     }
 }
 
-fn drag_strip(name: &'static str, content: impl IntoElement) -> impl IntoElement {
+fn drag_strip(name: &'static str, height: Pixels, content: impl IntoElement) -> impl IntoElement {
     div()
         .id(name)
         .flex_none()
         .w_full()
-        .h(TITLE_STRIP_HEIGHT)
+        .h(height)
         .window_control_area(WindowControlArea::Drag)
         .on_mouse_down(MouseButton::Left, |event, window, _| {
             if event.click_count == 2 {
@@ -1460,9 +1493,10 @@ fn sidebar_toggle(theme: &Theme) -> impl IntoElement {
         .tag("toggle-sidebar")
 }
 
-/// The open chats as words across the strip, the one in front in strong type with a short rule
-/// under it. On a chat, its project and the pane words sit at the right.
-fn tab_strip(strip: &StripData, chat: Option<(Option<ProjectInfo>, PaneWords)>, inset: Pixels, theme: &Theme) -> gpui::Div {
+/// The open chats as pills across the strip, the one in front lit. On a chat, its project and the
+/// pane words sit at the right. Over a picture everything sits on `ground`, the panes' glass, so
+/// it reads on the frame.
+fn tab_strip(strip: &StripData, chat: Option<(Option<ProjectInfo>, PaneWords)>, ground: Option<Hsla>, theme: &Theme) -> gpui::Div {
     let tab = |id: Option<SharedString>, title: SharedString, active: bool, state: ChatState| {
         let group: SharedString = format!("chat-tab-{}", id.as_deref().unwrap_or("new")).into();
         let close = match &id {
@@ -1475,14 +1509,19 @@ fn tab_strip(strip: &StripData, chat: Option<(Option<ProjectInfo>, PaneWords)>, 
             .group(group.clone())
             .occlude()
             .relative()
+            .flex_none()
             .min_w(px(64.))
             .max_w(px(220.))
-            .h_full()
+            .h(px(28.))
             .pl(px(12.))
-            .pr(px(4.))
+            .pr(px(5.))
+            .rounded_full()
             .flex()
             .items_center()
             .gap(px(6.))
+            .when_some(ground, |tab, ground| tab.bg(ground))
+            .when(active, |tab| tab.bg(ground.unwrap_or(theme.window)).border_1().border_color(theme.border_strong))
+            .when(!active, |tab| tab.hover(|tab| tab.bg(theme.hover)))
             .when_some(select, |tab, select| tab.on_click(move |_, window, cx| window.dispatch_action(Box::new(select.clone()), cx)))
             .when(state != ChatState::Idle, |tab| {
                 tab.child(div().flex_none().size(px(6.)).rounded_full().bg(match state {
@@ -1504,7 +1543,7 @@ fn tab_strip(strip: &StripData, chat: Option<(Option<ProjectInfo>, PaneWords)>, 
                     .id(SharedString::from(format!("close-{}", id.as_deref().unwrap_or("new"))))
                     .flex_none()
                     .size(px(18.))
-                    .rounded(px(5.))
+                    .rounded_full()
                     .flex()
                     .items_center()
                     .justify_center()
@@ -1517,9 +1556,6 @@ fn tab_strip(strip: &StripData, chat: Option<(Option<ProjectInfo>, PaneWords)>, 
                     })
                     .child(Icon::Close.view(px(11.), theme.text_dim)),
             )
-            .when(active, |tab| {
-                tab.child(div().absolute().bottom_0().left(px(12.)).right(px(22.)).h(px(2.)).rounded(px(1.)).bg(theme.accent_line))
-            })
             .tag(if active { "chat-tab-active" } else { "chat-tab" })
     };
     let mut tabs: Vec<_> = strip.tabs.iter().map(|data| tab(Some(data.id.clone()), data.title.clone(), data.active, data.state)).collect();
@@ -1551,10 +1587,13 @@ fn tab_strip(strip: &StripData, chat: Option<(Option<ProjectInfo>, PaneWords)>, 
     let right = chat.map(|(project, words)| {
         div()
             .min_w_0()
-            .h_full()
+            .h(px(28.))
+            .rounded_full()
             .flex()
             .items_center()
-            .pr(px(10.))
+            .pl(px(6.))
+            .pr(px(4.))
+            .when_some(ground, |right, ground| right.bg(ground))
             .when_some(project, |right, project| {
                 right.child(
                     div()
@@ -1574,11 +1613,11 @@ fn tab_strip(strip: &StripData, chat: Option<(Option<ProjectInfo>, PaneWords)>, 
     });
     div()
         .size_full()
-        .pl((inset - px(12.)).max(px(4.)))
+        .pl(px(4.))
         .flex()
         .items_center()
         .gap(px(8.))
-        .child(div().flex_1().min_w_0().h_full().flex().overflow_hidden().children(tabs))
+        .child(div().flex_1().min_w_0().h_full().flex().items_center().gap(px(4.)).overflow_hidden().children(tabs))
         .children(right)
 }
 

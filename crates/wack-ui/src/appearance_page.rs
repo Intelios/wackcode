@@ -9,7 +9,7 @@ use gpui::{Entity, Hsla, ObjectFit, SharedString, div, img, prelude::*, px};
 use wack_core::Mode;
 
 use crate::{
-    actions::{ChooseAccent, ChooseBackdrop, ChooseDim, ChooseFocus, ChooseMode, ChooseTexture, ChooseThemeColour, RemoveBackdrop},
+    actions::{ChooseAccent, ChooseBackdrop, ChooseBlur, ChooseDim, ChooseFocus, ChooseMode, ChooseTexture, ChooseThemeColour, RemoveBackdrop},
     backdrop::Picture,
     tags::Tag,
     text_field::TextField,
@@ -18,7 +18,9 @@ use crate::{
 };
 
 /// How much the picture is dimmed behind a conversation, in percent, and the names offered.
-pub const DIMS: [(u8, &str); 4] = [(45, "Light"), (65, "Medium"), (80, "Strong"), (90, "Most")];
+/// The picture's dims and blurs on offer. Text sits on glass over the picture, so even none reads.
+pub const DIMS: [(u8, &str); 5] = [(0, "None"), (20, "Light"), (40, "Medium"), (60, "Strong"), (80, "Most")];
+pub const BLURS: [(u8, &str); 5] = [(0, "None"), (8, "Light"), (16, "Soft"), (28, "Heavy"), (40, "Most")];
 
 #[derive(Clone)]
 pub struct AppearanceData {
@@ -92,7 +94,7 @@ pub fn page(data: AppearanceData, theme: &Theme) -> impl IntoElement {
         ))
         .child(section(
             "Backdrop",
-            "A picture behind the window: clear across the top of a new chat, softened and dimmed behind a conversation so text stays easy to read.",
+            "A picture behind the window: clear across the top of a new chat, and under frosted glass everywhere else. The glass keeps text readable on its own; blur and dim set how the picture looks around it.",
             backdrop(&data, theme),
         ))
         .when_some(data.notice.clone(), |page, notice| {
@@ -219,6 +221,10 @@ fn backdrop(data: &AppearanceData, theme: &Theme) -> gpui::AnyElement {
         let chosen = (picture.dim * 100.).round() as u8 == dim;
         word(format!("dim-{label}"), label, chosen, theme).on_click(dispatch(ChooseDim { dim }))
     }));
+    let blurs = div().flex().gap(px(16.)).children(BLURS.map(|(blur, label)| {
+        let chosen = picture.blur.round() as u8 == blur;
+        word(format!("blur-{label}"), label, chosen, theme).on_click(dispatch(ChooseBlur { blur }))
+    }));
     let textures = div().flex().flex_wrap().gap(px(16.)).children(wack_core::Texture::ALL.map(|texture| {
         word(format!("texture-{}", texture.name()), texture.name(), picture.texture == texture, theme)
             .on_click(dispatch(ChooseTexture { texture }))
@@ -247,6 +253,7 @@ fn backdrop(data: &AppearanceData, theme: &Theme) -> gpui::AnyElement {
                 .flex_col()
                 .gap(px(16.))
                 .child(div().flex().items_center().child(label("Texture")).child(textures))
+                .child(div().flex().items_center().child(label("Blur")).child(blurs))
                 .child(div().flex().items_center().child(label("Dim")).child(dims))
                 .child(div().flex().items_start().child(label("Keep")).child(focus))
                 .child(

@@ -15,6 +15,7 @@ pub mod composer;
 pub mod conversation;
 pub mod edge_fade;
 pub mod fixtures;
+pub mod glass;
 pub mod highlight;
 pub mod icon;
 pub mod markdown;

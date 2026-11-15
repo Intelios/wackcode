@@ -139,8 +139,8 @@ pub fn all() -> Vec<Scene> {
         },
         Scene {
             name: "chat-panes-narrow",
-            description: "The smallest window, 700 points: the sidebar steps aside and the transcript keeps its minimum.",
-            size: size(px(700.), px(720.)),
+            description: "The smallest window, 716 points: the sidebar steps aside and the transcript keeps its minimum.",
+            size: size(px(716.), px(720.)),
             build: |_, cx| {
                 let mut layout = Layout::default();
                 let changes = layout.open(PaneKind::Changes);
@@ -278,8 +278,8 @@ pub fn all() -> Vec<Scene> {
         Scene {
             name: "question-small",
             description: "The question card in the smallest window the app allows.",
-            size: size(px(700.), px(480.)),
-            build: |_, cx| question_scene(false, None, size(px(700.), px(480.)), cx),
+            size: size(px(716.), px(492.)),
+            build: |_, cx| question_scene(false, None, size(px(716.), px(492.)), cx),
         },
         Scene {
             name: "plan-card",
@@ -325,7 +325,7 @@ pub fn all() -> Vec<Scene> {
         Scene {
             name: "todo-queue-small",
             description: "A todo list and a long queue in the smallest window: the queue scrolls.",
-            size: size(px(700.), px(480.)),
+            size: size(px(716.), px(492.)),
             build: |_, cx| {
                 cx.new(|_| {
                     let waiting = (1..=6)
@@ -344,7 +344,7 @@ pub fn all() -> Vec<Scene> {
         Scene {
             name: "todo-question-small",
             description: "A todo list, a question and a queued message in the smallest window.",
-            size: size(px(700.), px(480.)),
+            size: size(px(716.), px(492.)),
             build: |_, cx| {
                 cx.new(|_| {
                     let mode = wack_core::AgentMode::Plan;

@@ -499,6 +499,7 @@ pub fn backdrop(texture: wack_core::Texture) -> crate::backdrop::Picture {
         height: backdrop.height,
         focus: (0.5, 0.5),
         dim: wack_core::appearance::DEFAULT_DIM as f32 / 100.,
+        blur: wack_core::appearance::DEFAULT_BLUR as f32,
         texture,
         shade: backdrop.shade.unwrap_or([0, 255]),
     }

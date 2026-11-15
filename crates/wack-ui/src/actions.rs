@@ -255,11 +255,18 @@ pub struct ChooseAccent {
     pub hex: Option<String>,
 }
 
-/// How much the backdrop is dimmed behind a conversation, in percent.
+/// How much the backdrop is dimmed, in percent.
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]
 pub struct ChooseDim {
     pub dim: u8,
+}
+
+/// How much the backdrop is blurred, in points.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseBlur {
+    pub blur: u8,
 }
 
 /// How the backdrop is drawn on the new-chat screen.

@@ -13,10 +13,13 @@
 //! - **Accent** paints interaction only: buttons, focus, selection, links. Text drawn in the accent
 //!   is moved in lightness until it reads on the window.
 //!
-//! Over a picture (the fourth input, [`Ground`]) ink must also read on the window's colour laid
-//! over the picture's worst part. The quieter steps of ink move towards the loud end by one shared
-//! amount, keeping their order; only when that is not enough is the picture dimmed beyond the
-//! user's choice ([`Theme::veil`]). Without a picture, the ramp is used as it stands.
+//! Over a picture (the fourth input, [`Ground`]) the picture is dimmed exactly as the user chose
+//! ([`Theme::veil`]), and text sits on glass panes over it: the window's colour at
+//! [`Theme::glass`] over the blurred picture. Ink must read on that glass over the picture's
+//! worst part. The glass is never thinner than [`GLASS_MIN`]; the quieter steps of ink move
+//! towards the loud end by one shared amount, keeping their order, and only when that is not
+//! enough does the glass thicken. Without a picture the panes are solid and the ramp is used as
+//! it stands.
 //!
 //! Meaning colours (danger, warning, success, diff) are fixed per appearance and never follow the
 //! accent. Syntax colours keep their own hues so code stays readable, leaning slightly towards the
@@ -72,7 +75,7 @@ impl ThemeInput {
 /// A picture behind the window, as the theme sees it: text is kept readable over all of it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ground {
-    /// How much of the window's colour the user lays over the picture, 0 to 1.
+    /// How much of the window's colour the user lays over the picture, 0 to 1. Drawn exactly.
     pub dim: f32,
     /// How dark and how light the softened picture gets, 0 to 255
     /// (`wack_core::appearance::shade`).
@@ -172,11 +175,19 @@ pub struct Theme {
     pub ansi: [Hsla; 16],
 
     /// How much of the window's colour lies over a picture behind the window, 0 to 1: the user's
-    /// dim, or more where the picture is too bright or dark for text otherwise. 0 with none.
+    /// dim, exactly. 0 with none.
     pub veil: f32,
+    /// How much of the window's colour the glass panes (the sidebar and the stage) lay over the
+    /// dimmed picture, 0 to 1: at least [`GLASS_MIN`], more where the picture is too bright or
+    /// dark for text otherwise. 1 with no picture, where the panes are solid.
+    pub glass: f32,
 }
 
 impl Global for Theme {}
+
+/// The thinnest the glass panes get over a picture: enough of the picture shows to feel it, and
+/// the blur under the glass does the rest.
+pub const GLASS_MIN: f32 = 0.72;
 
 /// Theme-colour chroma at or above this tints the neutrals fully; below it, proportionally less.
 const FULL_TINT_CHROMA: f64 = 0.14;
@@ -267,14 +278,15 @@ impl Theme {
         let neutral = |step: &Step| Lch::new(step.l, step.c * tint, tint_source.h);
         let window = neutral(&ramp.window).to_srgb();
 
-        // Over a picture, ink is drawn on the window's colour laid over it, so it must read over
-        // the picture's worst part too (`over_picture`). Without one, the ramp is used as it is.
-        let (lift, veil, text_ground) = match input.ground {
+        // Over a picture, ink is drawn on glass over the dimmed picture, so it must read over the
+        // picture's worst part too (`over_picture`). Without one, the ramp is used as it is.
+        let (lift, veil, glass, text_ground) = match input.ground {
             Some(ground) => {
-                let (lift, veil) = over_picture(ground, ramp, window, dark, &neutral);
-                (lift, veil, worst_ground(ground, window, veil, dark))
+                let (lift, cover) = over_picture(ground, ramp, window, dark, &neutral);
+                let dim = (ground.dim as f64).clamp(0., MAX_DIM);
+                (lift, dim, glass_over(dim, cover), worst_ground(ground, window, cover, dark))
             }
-            None => (0., 0., window),
+            None => (0., 0., 1., window),
         };
         let text_step = |step: &Step| neutral(&lifted(step, lift, dark));
 
@@ -387,6 +399,7 @@ impl Theme {
             terminal_text: hsla(neutral(&ramp.text_body)),
             ansi,
             veil: veil as f32,
+            glass: glass as f32,
             input,
         }
     }
@@ -521,6 +534,21 @@ fn picture_floors(inks: [Srgb; 5], window: Srgb) -> [f64; 5] {
     floors
 }
 
+/// The most a picture is dimmed (`wack_core::appearance::MAX_DIM`): below whole, so the glass
+/// over it always has a share to take.
+const MAX_DIM: f64 = 0.9;
+
+/// How much of the window's colour lies over the picture altogether, where glass at `glass` sits
+/// on a picture dimmed by `dim`.
+fn cover_of(dim: f64, glass: f64) -> f64 {
+    1. - (1. - dim) * (1. - glass)
+}
+
+/// The glass that, over a picture dimmed by `dim`, makes `cover` altogether.
+fn glass_over(dim: f64, cover: f64) -> f64 {
+    (1. - (1. - cover) / (1. - dim)).clamp(GLASS_MIN as f64, 1.)
+}
+
 /// What ink sits on over the worst part of a picture: the window's colour at `veil` over the
 /// picture's lightest shade (light ink) or its darkest (dark ink), blended as the window draws.
 fn worst_ground(ground: Ground, window: Srgb, veil: f64, dark: bool) -> Srgb {
@@ -529,9 +557,10 @@ fn worst_ground(ground: Ground, window: Srgb, veil: f64, dark: bool) -> Srgb {
     Srgb { r: mix(window.r), g: mix(window.g), b: mix(window.b) }
 }
 
-/// After WackCode 2's picture readability: the least lift, and the least veil from the user's
-/// dim upwards, at which every step of ink clears its floor over the picture's worst part. The
-/// picture keeps the user's dim unless even the most lift is not enough.
+/// After WackCode 2's picture readability: the least lift, and the least cover (the dim and the
+/// glass together) from the thinnest glass upwards, at which every step of ink clears its floor
+/// over the picture's worst part. The glass stays at its thinnest unless even the most lift is
+/// not enough.
 fn over_picture(ground: Ground, ramp: &Ramp, window: Srgb, dark: bool, neutral: &dyn Fn(&Step) -> Lch) -> (f64, f64) {
     let steps = [&ramp.text, &ramp.text_body, &ramp.text_soft, &ramp.text_dim, &ramp.text_faint];
     let floors = picture_floors(steps.map(|step| neutral(step).to_srgb()), window);
@@ -553,9 +582,10 @@ fn over_picture(ground: Ground, ramp: &Ramp, window: Srgb, dark: bool, neutral: 
         }
         high
     };
-    // With the veil whole the ground is the window itself, where every step reads.
-    let veil = least((ground.dim as f64).clamp(0., 1.), 1., &|veil| reads(MAX_LIFT, veil));
-    (least(0., MAX_LIFT, &|lift| reads(lift, veil)), veil)
+    // With the cover whole the ground is the window itself, where every step reads.
+    let thinnest = cover_of((ground.dim as f64).clamp(0., MAX_DIM), GLASS_MIN as f64);
+    let cover = least(thinnest, 1., &|cover| reads(MAX_LIFT, cover));
+    (least(0., MAX_LIFT, &|lift| reads(lift, cover)), cover)
 }
 
 /// The user's choices the theme is derived from (Settings › Appearance), kept so a change of the
@@ -717,8 +747,9 @@ mod tests {
         }
     }
 
-    /// Over any picture, at any dim, every step of ink clears its floor over the picture's worst
-    /// part, keeps its order, and the picture is dimmed further only when ink alone cannot do it.
+    /// Over any picture, at any dim, every step of ink clears its floor on the glass over the
+    /// picture's worst part and keeps its order; the dim is drawn as chosen, and the glass
+    /// thickens past its thinnest only when ink alone cannot do it.
     #[test]
     fn text_reads_over_any_picture() {
         for base in themes() {
@@ -727,9 +758,11 @@ mod tests {
                     let ground = Ground { dim, shade };
                     let theme = Theme::derive(ThemeInput { ground: Some(ground), ..base.input.clone() });
                     let label = format!("{:?} over {shade:?} at {dim}", base.input.appearance);
-                    assert!(theme.veil >= dim, "{label}: the veil is never thinner than chosen");
+                    assert_eq!(theme.veil, dim, "{label}: the dim is drawn as chosen");
+                    assert!(theme.glass >= GLASS_MIN, "{label}: the glass is never thinner than its thinnest");
                     let dark = theme.appearance == Appearance::Dark;
-                    let behind = worst_ground(ground, srgb(theme.window), theme.veil as f64, dark);
+                    let cover = cover_of(dim as f64, theme.glass as f64);
+                    let behind = worst_ground(ground, srgb(theme.window), cover, dark);
                     let inks = [theme.text, theme.text_body, theme.text_soft, theme.text_dim, theme.text_faint];
                     let plain = [base.text, base.text_body, base.text_soft, base.text_dim, base.text_faint];
                     let floors = picture_floors(plain.map(srgb), srgb(base.window));
@@ -751,8 +784,8 @@ mod tests {
             ..ThemeInput::new(Appearance::Dark)
         });
         let plain = Theme::new(Appearance::Dark);
-        assert_eq!((calm.text_dim, calm.text_faint, calm.veil), (plain.text_dim, plain.text_faint, 0.65));
-        assert_eq!(plain.veil, 0., "no picture, no veil");
+        assert_eq!((calm.text_dim, calm.text_faint, calm.veil, calm.glass), (plain.text_dim, plain.text_faint, 0.65, GLASS_MIN));
+        assert_eq!((plain.veil, plain.glass), (0., 1.), "no picture: no veil, solid panes");
     }
 
     #[test]

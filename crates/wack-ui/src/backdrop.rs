@@ -1,13 +1,13 @@
 //! The image backdrop, after WackCode 2 and Zeron.
 //!
-//! - **Behind everything** ([`behind`]): on every screen the picture fills the window, softened
-//!   (the blurred copy made on import) and dimmed towards the window's colour, so text over it
-//!   stays easy to read. The sidebar and title strip are see-through over it; the composer,
-//!   cards and docks keep solid grounds.
+//! - **Behind everything** ([`behind`]): on every screen the picture fills the window, blurred
+//!   and dimmed towards the window's colour exactly as the user chose. The sidebar and the stage
+//!   are glass panes over it (`glass.rs`), thick enough that text on them reads; only the window's
+//!   frame around them shows the picture as chosen.
 //! - **The hero** ([`hero`]): on the new-chat and welcome screens the picture also shows clear
-//!   across the top of the main column, as it is or through a texture. It fades out down its
-//!   whole height and is feathered away around the centred block, so it dissolves into the
-//!   softened picture beneath without an edge.
+//!   across the top of the stage, as it is or through a texture. It fades out down its whole
+//!   height and is feathered away around the centred block, so it dissolves into the glass
+//!   without an edge.
 //!
 //! Invariants:
 //! - Both layers are fitted to the whole window with the same focus ([`cover`]), so the clear
@@ -16,6 +16,8 @@
 //!   window or moving the block rasterizes nothing.
 //! - A texture is worked out once per picture, texture, and light or dark, off the UI thread,
 //!   and kept ([`artwork`]). Until it is ready the hero is simply not drawn.
+//! - A heavy blur starts from the softened copy made on import, so the GPU only blurs the rest
+//!   of the way ([`SOFT_COPY_BLUR`]).
 //!
 //! The textures and the hero's mask are adapted from Zeron (MIT, github.com/zeronsh/zeron,
 //! `crates/ui/src/new_thread_background_effects.rs` and `new_thread_background_mask.rs`).
@@ -23,8 +25,8 @@
 use std::{cell::Cell, path::PathBuf, rc::Rc, sync::Arc};
 
 use gpui::{
-    App, Bounds, Global, Hsla, ImageAlphaMask, ObjectFit, Pixels, RenderImage, SharedString, Window, canvas, div,
-    img, point, prelude::*, px, size,
+    App, Bounds, Corners, Global, Hsla, ImageAlphaMask, ObjectFit, Pixels, RenderImage, SharedString, Window, canvas,
+    div, img, point, prelude::*, px, size,
 };
 use wack_core::Texture;
 
@@ -51,9 +53,10 @@ pub struct Picture {
     pub width: u32,
     pub height: u32,
     pub focus: (f32, f32),
-    /// 0–1: how much of the window's colour the user lays over the softened picture. It is drawn
-    /// with the theme's `veil`, which is this or more where text would not otherwise read.
+    /// 0–1: how much of the window's colour the user lays over the picture, drawn exactly.
     pub dim: f32,
+    /// How soft the picture is, in points.
+    pub blur: f32,
     pub texture: Texture,
     /// How dark and how light the softened copy gets, 0–255 (`wack_core::appearance::shade`).
     pub shade: [u8; 2],
@@ -87,9 +90,25 @@ pub fn hero_height(content_height: f32) -> f32 {
     (content_height * HERO_SHARE).clamp(0., HERO_MAX)
 }
 
-/// The softened, dimmed picture across the whole `window`.
-pub fn behind(picture: &Picture, window: Rect, ground: Hsla, veil: f32) -> impl IntoElement + use<> {
+/// About how soft the copy made on import already is, in points across a laptop's window.
+pub const SOFT_COPY_BLUR: f32 = 14.;
+
+/// Which copy of the picture to draw for a blur of `blur` points, and how much more the GPU must
+/// blur it: blurs add in squares, so the softened copy covers its share of a heavy one.
+pub fn blur_plan(blur: f32) -> (bool, f32) {
+    if blur >= SOFT_COPY_BLUR {
+        (true, (blur * blur - SOFT_COPY_BLUR * SOFT_COPY_BLUR).sqrt())
+    } else {
+        (false, blur.max(0.))
+    }
+}
+
+/// The picture across the whole `window`, blurred and dimmed as the user chose: `dim` of
+/// `ground` (the window's colour) over it.
+pub fn behind(picture: &Picture, window: Rect, ground: Hsla, dim: f32) -> impl IntoElement + use<> {
     let drawn = cover(window, (picture.width, picture.height), picture.focus);
+    let (soft, blur) = blur_plan(picture.blur);
+    let path = if soft { &picture.soft_path } else { &picture.path };
     div()
         .absolute()
         .left_0()
@@ -98,7 +117,7 @@ pub fn behind(picture: &Picture, window: Rect, ground: Hsla, veil: f32) -> impl 
         .h(px(window.height))
         .overflow_hidden()
         .child(
-            img(PathBuf::from(picture.soft_path.as_ref()))
+            img(PathBuf::from(path.as_ref()))
                 .absolute()
                 .left(px(drawn.x))
                 .top(px(drawn.y))
@@ -106,12 +125,27 @@ pub fn behind(picture: &Picture, window: Rect, ground: Hsla, veil: f32) -> impl 
                 .h(px(drawn.height))
                 .object_fit(ObjectFit::Fill),
         )
-        .child(div().absolute().left_0().top_0().size_full().bg(Hsla { a: veil.clamp(0., 1.), ..ground }))
+        .when(blur > 0.5, |behind| {
+            behind.child(
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window: &mut Window, _| {
+                        window.paint_layer(bounds, |window| window.paint_backdrop_blur(bounds, Corners::default(), px(blur)));
+                    },
+                )
+                .absolute()
+                .left_0()
+                .top_0()
+                .size_full(),
+            )
+        })
+        .child(div().absolute().left_0().top_0().size_full().bg(Hsla { a: dim.clamp(0., 1.), ..ground }))
 }
 
-/// The clear picture over `area` (window coordinates), fitted to the whole `window` like
-/// [`behind`], fading out downwards and feathered away around `cutout`.
-pub fn hero(artwork: Arc<RenderImage>, picture: &Picture, window: Rect, area: Rect, cutout: Cutout) -> impl IntoElement + use<> {
+/// The clear picture filling its parent, fitted to the whole `window` like [`behind`], fading out
+/// downwards and feathered away around `cutout`; its top corners rounded by `radius`, to sit in
+/// the stage.
+pub fn hero(artwork: Arc<RenderImage>, picture: &Picture, window: Rect, height: f32, radius: f32, cutout: Cutout) -> impl IntoElement + use<> {
     let fitted = cover(window, (picture.width, picture.height), picture.focus);
     canvas(
         |_, _, _| {},
@@ -138,14 +172,15 @@ pub fn hero(artwork: Arc<RenderImage>, picture: &Picture, window: Rect, area: Re
                     bottom_fade: fade,
                 },
             };
-            let _ = window.paint_image_fitted_masked(bounds, fitted, Default::default(), artwork, 0, false, Some(mask));
+            let corners = Corners { top_left: px(radius), top_right: px(radius), ..Default::default() };
+            let _ = window.paint_image_fitted_masked(bounds, fitted, corners, artwork, 0, false, Some(mask));
         },
     )
     .absolute()
-    .left(px(area.x))
-    .top(px(area.y))
-    .w(px(area.width))
-    .h(px(area.height))
+    .left_0()
+    .top_0()
+    .w_full()
+    .h(px(height))
 }
 
 /// A picture decoded once, small enough to texture quickly.
@@ -397,6 +432,10 @@ mod tests {
     #[test]
     fn the_hero_takes_most_of_the_height_up_to_a_limit() {
         assert_eq!(hero_height(500.), 360.);
+        assert_eq!(blur_plan(0.), (false, 0.));
+        assert_eq!(blur_plan(8.), (false, 8.));
+        let (soft, more) = blur_plan(40.);
+        assert!(soft && (more - (40f32 * 40. - SOFT_COPY_BLUR * SOFT_COPY_BLUR).sqrt()).abs() < 0.01);
         assert_eq!(hero_height(2000.), HERO_MAX);
     }
 }

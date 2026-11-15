@@ -30,10 +30,15 @@ use serde::{Deserialize, Serialize};
 pub const MAX_BACKDROP_EDGE: u32 = 5120;
 /// The largest picture WackCode will open, on either side.
 const MAX_SOURCE_EDGE: u32 = 20_000;
-/// The most a backdrop can be dimmed behind a conversation, in percent.
+/// The most a backdrop can be dimmed, in percent.
 pub const MAX_DIM: u8 = 90;
-/// How much a backdrop is dimmed behind a conversation unless the user chooses otherwise.
-pub const DEFAULT_DIM: u8 = 65;
+/// How much a backdrop is dimmed unless the user chooses otherwise. Text sits on glass over the
+/// picture, so the picture itself needs little.
+pub const DEFAULT_DIM: u8 = 20;
+/// The most a backdrop can be blurred, in points.
+pub const MAX_BLUR: u8 = 40;
+/// How much a backdrop is blurred unless the user chooses otherwise, in points.
+pub const DEFAULT_BLUR: u8 = 8;
 /// The softened copy's long side, in pixels: it is blurred, so it loses nothing by being small.
 const SOFT_EDGE: u32 = 1024;
 /// The softened copy's blur, in its own pixels: about 12 points across a laptop's window.
@@ -88,10 +93,13 @@ pub struct Backdrop {
     pub focus_x: f32,
     #[serde(default = "middle")]
     pub focus_y: f32,
-    /// How much of the window's colour covers the picture behind a conversation, 0 to
-    /// [`MAX_DIM`] percent. The new-chat screen shows it clearer.
+    /// How much of the window's colour covers the picture, 0 to [`MAX_DIM`] percent. Drawn
+    /// exactly as chosen; the glass over it thickens on its own where text needs it.
     #[serde(default = "default_dim")]
     pub dim: u8,
+    /// How soft the picture is, 0 to [`MAX_BLUR`] points.
+    #[serde(default = "default_blur")]
+    pub blur: u8,
     #[serde(default)]
     pub texture: Texture,
     /// How dark and how light the softened picture gets ([`shade`]), so the theme can keep text
@@ -108,6 +116,10 @@ fn default_dim() -> u8 {
     DEFAULT_DIM
 }
 
+fn default_blur() -> u8 {
+    DEFAULT_BLUR
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Appearance {
     #[serde(default)]
@@ -122,7 +134,7 @@ pub struct Appearance {
 
 impl Appearance {
     /// The same choices, checked: a colour that is not `#rrggbb` is refused, and the backdrop's
-    /// focus and dim are kept in range.
+    /// focus, dim and blur are kept in range.
     pub fn checked(mut self) -> Result<Self, String> {
         for colour in [&mut self.theme_colour, &mut self.accent].into_iter().flatten() {
             *colour = hex_colour(colour).ok_or_else(|| format!("“{colour}” is not a colour. Write it as #rrggbb."))?;
@@ -132,6 +144,7 @@ impl Appearance {
             backdrop.focus_x = unit(backdrop.focus_x);
             backdrop.focus_y = unit(backdrop.focus_y);
             backdrop.dim = backdrop.dim.min(MAX_DIM);
+            backdrop.blur = backdrop.blur.min(MAX_BLUR);
             if backdrop.file.contains('/') || backdrop.file.starts_with('.') {
                 return Err("That backdrop is not one of WackCode’s.".into());
             }
@@ -261,6 +274,7 @@ pub fn import_backdrop(source: &Path, backgrounds: &Path) -> Result<Backdrop, St
         focus_x: 0.5,
         focus_y: 0.5,
         dim: DEFAULT_DIM,
+        blur: DEFAULT_BLUR,
         texture: Texture::None,
         shade: Some(shade(&soft)),
     })
@@ -306,16 +320,16 @@ mod tests {
         assert!(backgrounds.join(&backdrop.file).exists());
         let soft = image::open(backgrounds.join(soft_name(&backdrop.file))).unwrap();
         assert_eq!((soft.width(), soft.height()), (SOFT_EDGE, SOFT_EDGE / 2), "the softened copy is small");
-        assert_eq!(backdrop.dim, DEFAULT_DIM);
+        assert_eq!((backdrop.dim, backdrop.blur), (DEFAULT_DIM, DEFAULT_BLUR));
 
         let wild = Appearance {
-            backdrop: Some(Backdrop { focus_x: 7., focus_y: f32::NAN, dim: 200, ..backdrop.clone() }),
+            backdrop: Some(Backdrop { focus_x: 7., focus_y: f32::NAN, dim: 200, blur: 99, ..backdrop.clone() }),
             ..Appearance::default()
         }
         .checked()
         .unwrap();
         let kept = wild.backdrop.unwrap();
-        assert_eq!((kept.focus_x, kept.focus_y, kept.dim), (1., 0.5, MAX_DIM));
+        assert_eq!((kept.focus_x, kept.focus_y, kept.dim, kept.blur), (1., 0.5, MAX_DIM, MAX_BLUR));
 
         fs::write(backgrounds.join("old.jpg"), b"x").unwrap();
         tidy_backgrounds(&backgrounds, Some(&backdrop.file));

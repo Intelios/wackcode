@@ -296,6 +296,36 @@ pub fn tool_row(tool: &ToolStep, cwd: &Path, live: bool) -> WorkRow {
             None,
             None,
         ),
+        wack_core::ask::ASK_USER_QUESTION => {
+            let questions = input.as_ref().and_then(|input| wack_core::ask::normalize(input).ok()).unwrap_or_default();
+            let answers = ok.and_then(|text| wack_core::ask::parse_answers(&questions, text));
+            let target = match questions.as_slice() {
+                [] => String::new(),
+                [only] => only.header.clone(),
+                [first, rest @ ..] => format!("{} and {} more", first.header, rest.len()),
+            };
+            let outcome = ok.map(|text| {
+                if answers.is_some() {
+                    "answered"
+                } else if text.contains("stop answering questions") {
+                    "wrapped up"
+                } else {
+                    "no answer"
+                }
+            });
+            (
+                "Asked",
+                Target::Words(target.into()),
+                outcome.map(Into::into),
+                (!questions.is_empty()).then(|| Detail::Asked(crate::question::asked(&questions, answers.as_deref()))),
+            )
+        }
+        wack_core::todo::TODO => ("Todo", Target::Words(todo_words(input.as_ref()).into()), None, None),
+        wack_core::plan::PLAN_MODE_ENTER => {
+            let ultra = input.as_ref().and_then(|input| input.get("mode")).and_then(Value::as_str) == Some("ultraplan");
+            ("Plan", Target::Words(if ultra { "switched to Ultra Plan" } else { "switched to Plan mode" }.into()), None, None)
+        }
+        wack_core::plan::PLAN_MODE_COMPLETE => ("Plan", Target::Words("submitted for review".into()), None, None),
         other => (
             other,
             Target::Code(input.as_ref().map(|input| input.to_string()).unwrap_or_default().into()),
@@ -318,6 +348,32 @@ pub fn tool_row(tool: &ToolStep, cwd: &Path, live: bool) -> WorkRow {
         },
     };
     WorkRow { key: tool.id.clone().into(), verb: verb.to_string().into(), target, meta, detail, open: false }
+}
+
+/// What a todo call did, in a few words: "added “Write the tests”", "finished #3".
+fn todo_words(input: Option<&Value>) -> String {
+    let Some(input) = input else {
+        return String::new();
+    };
+    let id = input.get("id").and_then(Value::as_u64).map(|id| format!("#{id}")).unwrap_or_default();
+    let subject = input.get("subject").and_then(Value::as_str).map(|subject| format!("“{}”", subject.trim()));
+    match input.get("action").and_then(Value::as_str).unwrap_or("") {
+        "create" => format!("added {}", subject.unwrap_or_default()),
+        "update" => {
+            let verb = match input.get("status").and_then(Value::as_str) {
+                Some("in_progress") => "started",
+                Some("completed") => "finished",
+                Some("deleted") => "dropped",
+                Some("pending") => "reopened",
+                _ => "updated",
+            };
+            format!("{verb} {}", subject.unwrap_or(id))
+        }
+        "delete" => format!("dropped {id}"),
+        "get" => format!("looked at {id}"),
+        "clear" => "cleared the list".into(),
+        _ => "listed".into(),
+    }
 }
 
 fn tail(text: &str, lines: usize) -> String {
@@ -376,6 +432,32 @@ mod tests {
             input: Some(input),
             result: result.map(|(text, is_error)| ToolResult { text: text.into(), is_error }),
         }
+    }
+
+    #[test]
+    fn a_question_reads_as_asked_with_the_picks_marked() {
+        let input = json!({ "questions": [{
+            "id": "store", "header": "Storage", "question": "Where should drafts live?",
+            "options": [{ "label": "Disk", "description": "Survives restarts" }, { "label": "Memory", "description": "Simpler" }]
+        }] });
+        let result = "The user answered your questions:\n\n**Storage** — Where should drafts live?\n- Disk";
+        let row = tool_row(&tool("ask_user_question", input.clone(), Some((result, false))), Path::new("/"), false);
+        assert_eq!(row.verb.as_ref(), "Asked");
+        assert!(matches!(&row.target, Target::Words(words) if words.as_ref() == "Storage"));
+        assert!(matches!(&row.meta, Meta::Note(note) if note.as_ref() == "answered"));
+        let Some(Detail::Asked(asked)) = &row.detail else { panic!("no record") };
+        assert_eq!(asked[0].options.iter().map(|option| option.picked).collect::<Vec<_>>(), [true, false]);
+
+        let cancelled = tool_row(&tool("ask_user_question", input, Some(("The user dismissed the questions.", false))), Path::new("/"), false);
+        assert!(matches!(&cancelled.meta, Meta::Note(note) if note.as_ref() == "no answer"));
+    }
+
+    #[test]
+    fn todo_calls_say_what_they_did() {
+        assert_eq!(todo_words(Some(&json!({ "action": "create", "subject": "Write the tests" }))), "added “Write the tests”");
+        assert_eq!(todo_words(Some(&json!({ "action": "update", "id": 3, "status": "completed" }))), "finished #3");
+        assert_eq!(todo_words(Some(&json!({ "action": "update", "id": 3, "status": "in_progress" }))), "started #3");
+        assert_eq!(todo_words(Some(&json!({ "action": "clear" }))), "cleared the list");
     }
 
     #[test]

@@ -261,6 +261,27 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "question",
+            description: "Plan mode asking two questions, the first answered, with an earlier answer opened in the work log.",
+            size: WINDOW,
+            build: |_, cx| question_scene(false, None, WINDOW, cx),
+        },
+        Scene {
+            name: "question-ultra",
+            description: "Ultra Plan's question card, with Write the plan now, over a backdrop.",
+            size: WINDOW,
+            build: |_, cx| {
+                let picture = over(fixtures::backdrop(wack_core::Texture::None), cx);
+                question_scene(true, Some(picture), WINDOW, cx)
+            },
+        },
+        Scene {
+            name: "question-small",
+            description: "The question card in the smallest window the app allows.",
+            size: size(px(700.), px(480.)),
+            build: |_, cx| question_scene(false, None, size(px(700.), px(480.)), cx),
+        },
+        Scene {
             name: "settings-providers",
             description: "Settings › Providers: two connections and the add form with a problem to fix.",
             size: size(px(1180.), px(900.)),
@@ -364,6 +385,29 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| cx.new(|_| Specimen).into(),
         },
     ]
+}
+
+/// A chat in Plan or Ultra Plan with the question card open.
+fn question_scene(ultra: bool, backdrop: Option<crate::backdrop::Picture>, _size: Size<Pixels>, cx: &mut App) -> AnyView {
+    let mode = if ultra { wack_core::AgentMode::UltraPlan } else { wack_core::AgentMode::Plan };
+    cx.new(|_| {
+        let composer = ComposerData {
+            mode,
+            working: true,
+            question: Some(fixtures::question(ultra)),
+            ..fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::app::placeholder(mode, false).into() })
+        };
+        let shell = Shell::showing_tabs(
+            fixtures::sidebar(Selected::Working),
+            Screen::Chat { title: fixtures::WORKING_TITLE.into(), project: fixtures::project(), body: Body::Items(fixtures::asking_turn()), composer },
+            fixtures::strip(Some(fixtures::WORKING_TITLE)),
+        );
+        match backdrop {
+            Some(picture) => shell.with_backdrop(picture),
+            None => shell,
+        }
+    })
+    .into()
 }
 
 /// `picture`, with the theme made ready for text over it, as the app's theme is.

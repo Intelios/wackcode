@@ -448,6 +448,10 @@ impl AppState {
                         session.unread = false;
                         cx.notify();
                     }
+                    // Coming back to a question puts focus back on it.
+                    if let Some(asking) = &session.asking {
+                        session.focus_request = Some(asking.focus.clone());
+                    }
                 });
                 self.open_projects.insert(chat.project.clone());
                 self.look_up_branch(&chat.project, cx);

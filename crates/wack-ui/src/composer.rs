@@ -57,6 +57,8 @@ pub struct ComposerData {
     pub roomy: bool,
     /// The model or effort menu, when open.
     pub menu: Option<MenuData>,
+    /// The question the agent is waiting on, drawn above everything else in the column.
+    pub question: Option<crate::question::QuestionData>,
 }
 
 #[derive(Clone, Debug)]
@@ -222,11 +224,15 @@ impl RenderOnce for Composer {
             .child(controls)
             .tag("composer");
 
-        let mut column = div().w_full().flex().flex_col().gap(px(6.));
+        // Inside a capped column the card stays whole and the question gives way first.
+        let mut column = div().w_full().min_h_0().flex().flex_col().gap(px(6.));
+        if let Some(question) = data.question {
+            column = column.child(div().min_h_0().flex().flex_col().pb(px(4.)).child(crate::question::QuestionCard::new(question)));
+        }
         for (index, waiting) in data.waiting.into_iter().enumerate() {
             column = column.child(waiting_row(index, waiting, &theme));
         }
-        column.child(card)
+        column.child(div().flex_none().child(card))
     }
 }
 
@@ -628,7 +634,7 @@ fn brain_swell(t: f32) -> f32 {
 }
 
 /// Eased steps between `(time, value)` keys.
-fn keyframes(keys: &[(f32, f32)], t: f32) -> f32 {
+pub fn keyframes(keys: &[(f32, f32)], t: f32) -> f32 {
     let t = t.clamp(0., 1.);
     for pair in keys.windows(2) {
         let ((t0, v0), (t1, v1)) = (pair[0], pair[1]);

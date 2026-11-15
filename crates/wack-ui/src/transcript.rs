@@ -81,6 +81,8 @@ pub enum Detail {
     Output(SharedString),
     /// A thought in full.
     Text(SharedString),
+    /// What the agent asked, with the user's picks.
+    Asked(Vec<crate::question::Asked>),
 }
 
 #[derive(Clone, Debug)]
@@ -282,6 +284,7 @@ fn detail_view(detail: &Detail, key: &SharedString, theme: &Theme) -> AnyElement
             .text_color(theme.text_soft)
             .child(text.clone())
             .into_any_element(),
+        Detail::Asked(asked) => div().pl(px(VERB_WIDTH + 10.)).py(px(4.)).child(crate::question::asked_view(asked, theme)).into_any_element(),
         Detail::Text(text) => div()
             .pl(px(VERB_WIDTH + 10.))
             .typography(Type::Ui)

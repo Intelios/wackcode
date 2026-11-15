@@ -15,6 +15,8 @@
 //!   to the model straight away as steering (⌘↩); `steering` holds those not yet delivered.
 //!   Neither is ever silently dropped: when a run ends without sending them, the app puts them
 //!   back in the composer.
+//! - A question the agent asks (`asking`) is answered exactly once: answering, cancelling,
+//!   stopping or the run ending all clear it. Its drafts live here, so switching chats keeps them.
 
 use std::{
     collections::HashSet,
@@ -24,14 +26,18 @@ use std::{
 };
 
 use futures::{StreamExt, channel::mpsc};
-use gpui::{AppContext, Context, Entity, EventEmitter, ListAlignment, ListState, SharedString, Task, px};
+use gpui::{AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, ListAlignment, ListState, SharedString, Subscription, Task, px};
 use gpui_tokio::Tokio;
-use wack_core::{Control, Event, HistoryEntry, Job, Outcome, RunEvent, RunSetup};
+use wack_core::{
+    Control, Event, HistoryEntry, Job, Outcome, RunEvent, RunSetup,
+    ask::{Answer, Question},
+};
 
 use crate::{
     conversation::{Conversation, Entry},
     panes::{ChatPanes, Layout, PaneKind, PaneModel},
-    text_field::TextField,
+    question::{self, Draft},
+    text_field::{TextField, TextFieldEvent},
     transcript::Item,
     typography::Type,
     work::{self, ReplyCache},
@@ -71,6 +77,39 @@ pub struct ChatSession {
     pub context_tokens: Option<u64>,
     /// Finished while the user was elsewhere.
     pub unread: bool,
+    /// The question the agent is waiting on.
+    pub asking: Option<Asking>,
+    /// Where focus should go at the next frame: the question card as it arrives, the composer
+    /// after it closes.
+    pub focus_request: Option<FocusHandle>,
+}
+
+/// A question the agent is waiting on, and the answers so far.
+pub struct Asking {
+    id: String,
+    pub questions: Vec<Question>,
+    /// Offer "Write the plan now" (Ultra Plan).
+    pub wrap_up: bool,
+    pub tab: usize,
+    /// The chosen options, per question.
+    selected: Vec<Vec<String>>,
+    /// The "Other" fields, per question.
+    pub others: Vec<Entity<TextField>>,
+    /// The options take focus, so 1–4 reach them.
+    pub focus: FocusHandle,
+    /// Picks so far: each nods the duck.
+    pub nods: usize,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl Asking {
+    pub fn drafts(&self, cx: &gpui::App) -> Vec<Draft> {
+        self.selected
+            .iter()
+            .zip(&self.others)
+            .map(|(selected, other)| Draft { selected: selected.clone(), custom: other.read(cx).text().to_string() })
+            .collect()
+    }
 }
 
 struct Running {
@@ -124,6 +163,8 @@ impl ChatSession {
             runs_started: 0,
             context_tokens,
             unread: false,
+            asking: None,
+            focus_request: None,
         };
         chat.refresh_from(0);
         chat.panes.sync(cx, |_, cx| cx.notify());
@@ -183,7 +224,8 @@ impl ChatSession {
 
         self.runs_started += 1;
         let number = self.runs_started;
-        let control = Control::new();
+        // Someone is at the window to answer questions.
+        let control = Control::with_user();
         let (sender, mut receiver) = mpsc::unbounded::<RunEvent>();
         let sink: Arc<dyn Fn(RunEvent) + Send + Sync> = Arc::new(move |event| {
             let _ = sender.unbounded_send(event);
@@ -228,6 +270,137 @@ impl ChatSession {
     pub fn stop(&mut self, cx: &mut Context<Self>) {
         if let Some(run) = &self.run {
             run.control.stop();
+            self.close_question(cx);
+            cx.notify();
+        }
+    }
+
+    /// The agent asked: shows the card, and gives it focus.
+    fn ask(&mut self, id: String, questions: Vec<Question>, wrap_up: bool, cx: &mut Context<Self>) {
+        let mut others = Vec::new();
+        let mut subscriptions = Vec::new();
+        for index in 0..questions.len() {
+            let field = cx.new(|cx| TextField::new(Type::Ui, "Other — type a custom answer", cx).multiline(4));
+            subscriptions.push(cx.subscribe(&field, move |chat, field, event: &TextFieldEvent, cx| match event {
+                // Typing an answer of one's own replaces the choices.
+                TextFieldEvent::Changed => {
+                    if let Some(asking) = &mut chat.asking
+                        && !field.read(cx).text().trim().is_empty()
+                        && let Some(selected) = asking.selected.get_mut(index)
+                        && !selected.is_empty()
+                    {
+                        selected.clear();
+                    }
+                    cx.notify();
+                }
+                TextFieldEvent::Enter => chat.next_question(cx),
+                TextFieldEvent::SendNow => chat.submit_answers(cx),
+            }));
+            others.push(field);
+        }
+        let focus = cx.focus_handle();
+        self.focus_request = Some(focus.clone());
+        self.asking = Some(Asking {
+            id,
+            selected: vec![Vec::new(); questions.len()],
+            questions,
+            wrap_up,
+            tab: 0,
+            others,
+            focus,
+            nods: 0,
+            _subscriptions: subscriptions,
+        });
+        cx.notify();
+    }
+
+    /// Picks option `index` of the question on show.
+    pub fn pick_option(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(asking) = &mut self.asking else {
+            return;
+        };
+        let tab = asking.tab;
+        let Some(label) = asking.questions[tab].options.get(index).map(|option| option.label.clone()) else {
+            return;
+        };
+        let mut draft = Draft { selected: asking.selected[tab].clone(), custom: asking.others[tab].read(cx).text().to_string() };
+        question::pick(&asking.questions[tab], &mut draft, &label);
+        asking.selected[tab] = draft.selected;
+        asking.nods += 1;
+        let other = asking.others[tab].clone();
+        if !other.read(cx).text().is_empty() {
+            other.update(cx, |other, cx| other.set_text("", cx));
+        }
+        cx.notify();
+    }
+
+    pub fn show_question(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(asking) = &mut self.asking
+            && index < asking.questions.len()
+        {
+            asking.tab = index;
+            self.focus_request = Some(asking.focus.clone());
+            cx.notify();
+        }
+    }
+
+    /// ↩ on the card: the next question once this one is answered, or Submit on the last.
+    pub fn next_question(&mut self, cx: &mut Context<Self>) {
+        let Some(asking) = &self.asking else {
+            return;
+        };
+        let drafts = asking.drafts(cx);
+        let tab = asking.tab;
+        if tab + 1 == asking.questions.len() {
+            self.submit_answers(cx);
+        } else if drafts[tab].answered() {
+            self.show_question(tab + 1, cx);
+        }
+    }
+
+    pub fn previous_question(&mut self, cx: &mut Context<Self>) {
+        if let Some(tab) = self.asking.as_ref().map(|asking| asking.tab)
+            && tab > 0
+        {
+            self.show_question(tab - 1, cx);
+        }
+    }
+
+    /// Sends the answers, once every question has one.
+    pub fn submit_answers(&mut self, cx: &mut Context<Self>) {
+        let Some(asking) = &self.asking else {
+            return;
+        };
+        if let Some(answers) = question::answers(&asking.questions, &asking.drafts(cx)) {
+            self.answer(Answer::Answered(answers), cx);
+        }
+    }
+
+    pub fn cancel_question(&mut self, cx: &mut Context<Self>) {
+        self.answer(Answer::Cancelled, cx);
+    }
+
+    /// Ultra Plan's "Write the plan now".
+    pub fn wrap_up(&mut self, cx: &mut Context<Self>) {
+        if self.asking.as_ref().is_some_and(|asking| asking.wrap_up) {
+            self.answer(Answer::WrapUp, cx);
+        }
+    }
+
+    fn answer(&mut self, answer: Answer, cx: &mut Context<Self>) {
+        let Some(asking) = &self.asking else {
+            return;
+        };
+        if let Some(run) = &self.run {
+            run.control.answer(&asking.id, answer);
+        }
+        self.close_question(cx);
+    }
+
+    /// Takes the card away and hands focus back to the composer.
+    fn close_question(&mut self, cx: &mut Context<Self>) {
+        if self.asking.take().is_some() {
+            self.focus_request = Some(self.composer.read(cx).focus_handle(cx));
             cx.notify();
         }
     }
@@ -282,6 +455,9 @@ impl ChatSession {
                         Event::Steered(_) => self.steering.clear(),
                         // A tool may have changed files.
                         Event::ToolResult { .. } => self.panes.refresh_changes(cx),
+                        Event::Question { id, questions, wrap_up } => {
+                            self.ask(id.clone(), questions.clone(), *wrap_up, cx);
+                        }
                         _ => {}
                     }
                     self.conversation.apply(&event, now);
@@ -300,6 +476,7 @@ impl ChatSession {
                     if let Some(run) = self.run.take() {
                         run.events.detach();
                     }
+                    self.close_question(cx);
                     self.panes.refresh_changes(cx);
                     finished = Some(result);
                 }

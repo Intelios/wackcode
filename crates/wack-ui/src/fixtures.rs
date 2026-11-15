@@ -97,6 +97,7 @@ pub fn composer_empty(roomy: bool) -> ComposerData {
         waiting: Vec::new(),
         roomy,
         menu: None,
+        question: None,
     }
 }
 
@@ -259,6 +260,65 @@ pub fn working_turn() -> Vec<Item> {
     call(&mut conversation, "bash-2", "bash", json!({ "command": "cargo test -p wack-llm retry" }), None, now);
     conversation.apply(&Event::Text("Retry-After is now read from both 429 and 503 responses. Running the retry tests to check the date form".into()), now);
     items(&conversation, &[], now)
+}
+
+/// A planning turn that asked a question and is waiting on the next.
+pub fn asking_turn() -> Vec<Item> {
+    let mut conversation = Conversation::default();
+    let now = START + 60_000;
+    conversation.send("Plan how drafts should survive a crash.", now - 20_000);
+    call(&mut conversation, "read-q", "read", json!({ "path": "crates/wack-ui/src/chat.rs" }), Some(&"x\n".repeat(390)), now - 15_000);
+    call(
+        &mut conversation,
+        "ask-1",
+        "ask_user_question",
+        json!({ "questions": [{ "id": "scope", "header": "Scope", "question": "Should drafts of new chats survive too?",
+            "options": [{ "label": "Every draft", "description": "New chats and replies alike." },
+                        { "label": "Replies only", "description": "A new chat's draft is short-lived." }] }] }),
+        Some("The user answered your questions:\n\n**Scope** — Should drafts of new chats survive too?\n- Every draft"),
+        now - 9_000,
+    );
+    call(&mut conversation, "ask-2", "ask_user_question", json!({ "questions": questions_json() }), None, now);
+    items(&conversation, &["ask-1"], now)
+}
+
+fn questions_json() -> serde_json::Value {
+    json!([
+        { "id": "store", "header": "Storage", "question": "Where should a draft be kept while you type?",
+          "options": [
+            { "label": "Beside the chat (Recommended)", "description": "One small file per chat in the session folder, written as you pause." },
+            { "label": "In state.json", "description": "With the other chat settings; simplest, but rewrites the whole file." },
+            { "label": "Memory only", "description": "Nothing on disk: a crash loses the draft." }
+          ] },
+        { "id": "when", "header": "Timing", "question": "When should it be written?",
+          "options": [
+            { "label": "After a pause", "description": "Half a second after the last key." },
+            { "label": "On every key", "description": "Never loses a letter; more writes." }
+          ], "multiSelect": false }
+    ])
+}
+
+/// The questions the card is asking in the scenes.
+pub fn questions() -> Vec<wack_core::ask::Question> {
+    wack_core::ask::normalize(&json!({ "questions": questions_json() })).unwrap_or_default()
+}
+
+/// The question card, first question answered with a preset, as Plan or Ultra Plan shows it.
+pub fn question(ultra: bool) -> crate::question::QuestionData {
+    let questions = questions();
+    let drafts = vec![
+        crate::question::Draft { selected: vec!["Beside the chat (Recommended)".into()], custom: String::new() },
+        crate::question::Draft::default(),
+    ];
+    crate::question::QuestionData {
+        questions,
+        tab: 0,
+        drafts,
+        wrap_up: ultra,
+        other: drawn(None, "Other — type a custom answer"),
+        focus: None,
+        nods: 0,
+    }
 }
 
 /// The title strip's tabs, with `active` in front (or the new-chat tab when `None`).

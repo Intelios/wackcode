@@ -30,7 +30,7 @@ use gpui::{
 
 use crate::{
     actions::{
-        self, ActivatePane, AddConnection, AddFolder, Back, ChooseAccent, ChooseBackdrop, ChooseEffort, ChooseFocus, CycleAgentMode, SetAgentMode,
+        self, ActivatePane, AddConnection, AddFolder, Back, ChooseAccent, ChooseBackdrop, ChooseEffort, ChooseFocus, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion,
         ChooseDim, ChooseFormat, ChooseMode, ChooseModel, ChooseTexture, ChooseThemeColour, CloseChatTab, CloseMenu, ClosePane,
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, EqualizeSplit, FocusNext, FocusPrevious, MovePane,
         NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
@@ -340,7 +340,21 @@ impl Shell {
             app.update(cx, |app, cx| app.close_settings(cx));
             return;
         }
+        // An open question is dismissed before the run is stopped.
+        if let Some(session) = self.current_session(cx)
+            && session.read(cx).asking.is_some()
+        {
+            session.update(cx, |session, cx| session.cancel_question(cx));
+            return;
+        }
         self.stop(&Stop, window, cx);
+    }
+
+    /// Runs `change` on the chat on screen.
+    fn with_session(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut ChatSession, &mut Context<ChatSession>)) {
+        if let Some(session) = self.current_session(cx) {
+            session.update(cx, change);
+        }
     }
 
     /// The chat on screen, if any.
@@ -589,6 +603,12 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::get(cx).clone();
         self.focus_field(window, cx);
+        // A question card takes focus as it arrives, and gives it back to the composer as it goes.
+        if let Some(session) = self.current_session(cx)
+            && let Some(handle) = session.update(cx, |session, _| session.focus_request.take())
+        {
+            window.defer(cx, move |window, cx| window.focus(&handle, cx));
+        }
         if !cx.has_active_drag() {
             self.dragging = None;
         }
@@ -631,6 +651,7 @@ impl Render for Shell {
         };
         let left = if solution.sidebar { SIDEBAR_WIDTH } else { px(0.) };
         let narrow = solution.transcript.width < NARROW_TRANSCRIPT;
+        let transcript_height = solution.transcript.height;
         // The project's name yields to the tabs when the strip is short of room.
         let roomy_strip = width - f32::from(left) >= ROOMY_STRIP;
         let inset = if narrow { NARROW_INSET } else { CONTENT_INSET };
@@ -719,7 +740,7 @@ impl Render for Shell {
             }
             Screen::Chat { project, body, composer, .. } => (
                 tab_strip(&strip, Some((roomy_strip.then_some(project), words.unwrap_or_default())), inset, &theme),
-                chat(body, composer, narrow).into_any_element(),
+                chat(body, composer, narrow, transcript_height).into_any_element(),
             ),
             Screen::Settings(data) => {
                 let id = format!("arrive-settings-{}", data.section.name());
@@ -825,6 +846,21 @@ impl Render for Shell {
                     let (connection, model) = (action.connection.clone(), action.model.clone());
                     shell.with_app(cx, |app, cx| app.choose(Some(connection), Some(model), None, cx));
                 }))
+                .on_action(cx.listener(|shell, action: &PickOption, _, cx| {
+                    let index = action.index;
+                    shell.with_session(cx, |session, cx| session.pick_option(index, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &ShowQuestion, _, cx| {
+                    let index = action.index;
+                    shell.with_session(cx, |session, cx| session.show_question(index, cx));
+                }))
+                .on_action(cx.listener(|shell, _: &NextQuestion, _, cx| shell.with_session(cx, |session, cx| session.next_question(cx))))
+                .on_action(cx.listener(|shell, _: &PreviousQuestion, _, cx| {
+                    shell.with_session(cx, |session, cx| session.previous_question(cx))
+                }))
+                .on_action(cx.listener(|shell, _: &SubmitAnswers, _, cx| shell.with_session(cx, |session, cx| session.submit_answers(cx))))
+                .on_action(cx.listener(|shell, _: &CancelQuestion, _, cx| shell.with_session(cx, |session, cx| session.cancel_question(cx))))
+                .on_action(cx.listener(|shell, _: &WrapUpQuestion, _, cx| shell.with_session(cx, |session, cx| session.wrap_up(cx))))
                 .on_action(cx.listener(|shell, action: &SetAgentMode, _, cx| {
                     let mode = action.mode;
                     shell.with_app(cx, |app, cx| app.set_agent_mode(mode, cx));
@@ -1049,6 +1085,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                         waiting: Vec::new(),
                         roomy: true,
                         menu: menu_data(app, resolved.as_ref()),
+                        question: None,
                     },
                     notice: app.notice.clone(),
                 }
@@ -1083,6 +1120,15 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     waiting,
                     roomy: false,
                     menu: menu_data(app, resolved.as_ref()),
+                    question: state.asking.as_ref().map(|asking| crate::question::QuestionData {
+                        questions: asking.questions.clone(),
+                        tab: asking.tab,
+                        drafts: asking.drafts(cx),
+                        wrap_up: asking.wrap_up,
+                        other: Input::Field(asking.others[asking.tab.min(asking.others.len() - 1)].clone()),
+                        focus: Some(asking.focus.clone()),
+                        nods: asking.nods,
+                    }),
                 },
             }
         }
@@ -1515,7 +1561,10 @@ fn column(child: impl IntoElement, narrow: bool) -> impl IntoElement {
         .child(div().w_full().max_w(TRANSCRIPT_MAX_WIDTH).child(child))
 }
 
-fn chat(body: Body, composer: ComposerData, narrow: bool) -> impl IntoElement {
+/// How much of the transcript stays in view however much the composer column holds.
+const TRANSCRIPT_KEPT: f32 = 72.;
+
+fn chat(body: Body, composer: ComposerData, narrow: bool, height: f32) -> impl IntoElement {
     let transcript = match body {
         Body::Items(items) => div()
             .size_full()
@@ -1572,7 +1621,17 @@ fn chat(body: Body, composer: ComposerData, narrow: bool) -> impl IntoElement {
                 .px(gutter(narrow) - px(16.))
                 .pt(DOCK_FADE)
                 .pb(px(18.))
-                .child(div().w_full().max_w(TRANSCRIPT_MAX_WIDTH + px(32.)).child(Composer::new(composer))),
+                .child(
+                    div()
+                        .w_full()
+                        .max_w(TRANSCRIPT_MAX_WIDTH + px(32.))
+                        // The column (question, waiting messages, composer) never takes the whole
+                        // chat: what it holds scrolls inside itself instead.
+                        .max_h(px((height - TRANSCRIPT_KEPT - f32::from(DOCK_FADE) - 18.).max(140.)))
+                        .flex()
+                        .flex_col()
+                        .child(Composer::new(composer)),
+                ),
         )
 }
 

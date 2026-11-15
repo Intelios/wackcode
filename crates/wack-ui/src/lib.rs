@@ -8,6 +8,7 @@ pub mod appearance_page;
 #[cfg(feature = "automation")]
 pub mod automation;
 pub mod backdrop;
+pub mod button;
 pub mod chat;
 pub mod colour;
 pub mod composer;
@@ -19,6 +20,7 @@ pub mod icon;
 pub mod markdown;
 pub mod motion;
 pub mod panes;
+pub mod question;
 pub mod scenes;
 pub mod settings;
 pub mod shell;
@@ -40,5 +42,6 @@ pub fn init(cx: &mut App) {
     theme::init(cx);
     text_field::init(cx);
     actions::init(cx);
+    question::init(cx);
     gpui_tokio::init(cx);
 }

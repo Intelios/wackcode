@@ -52,6 +52,14 @@ actions!(
         TerminalBackTab,
         /// ⇧Tab: Build → Plan → Ultra Plan → Build, for the chat on screen or the new chat.
         CycleAgentMode,
+        /// The question card: the next question, or Submit on the last.
+        NextQuestion,
+        PreviousQuestion,
+        SubmitAnswers,
+        /// Dismisses the question; the agent carries on without an answer.
+        CancelQuestion,
+        /// Ultra Plan's "Write the plan now".
+        WrapUpQuestion,
         /// Picks a picture for the backdrop.
         ChooseBackdrop,
         RemoveBackdrop,
@@ -187,6 +195,20 @@ pub struct EqualizeSplit {
 #[action(namespace = wackcode, no_json)]
 pub struct OpenSettingsSection {
     pub section: crate::settings::Section,
+}
+
+/// Picks the question card's option at `index` (0-based; keys 1–4).
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct PickOption {
+    pub index: usize,
+}
+
+/// Shows the question card's question at `index`.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ShowQuestion {
+    pub index: usize,
 }
 
 /// Build, Plan or Ultra Plan, for the chat on screen or the new chat. Ignored while it works.

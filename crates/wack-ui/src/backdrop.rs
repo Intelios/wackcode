@@ -5,18 +5,16 @@
 //!   are glass panes over it (`glass.rs`), thick enough that text on them reads; only the window's
 //!   frame around them shows the picture as chosen.
 //! - **The hero** ([`hero`]): on the new-chat and welcome screens the whole stage shows the
-//!   picture clear, as it is or through a texture, undimmed: the owner wants to see it there. Only
-//!   a tight, feathered patch around the screen's heading is cleared, so the glass beneath shows
-//!   through and the heading reads. When the first message is sent the hero fades away and the
-//!   glass is left (the shell eases it, `motion::Ease`).
+//!   picture clear, as it is or through a texture, undimmed and uncut: the owner wants to see it
+//!   there, and a patch of glass behind the heading read as a dim. The screen's smaller words sit
+//!   on frosted pills instead (`shell::on_ground`). When the first message is sent the hero fades
+//!   away and the glass is left (the shell eases it, `motion::Ease`).
 //!
 //! Invariants:
 //! - Both layers are fitted to the whole window with the same focus ([`cover`]), so the clear
 //!   picture lies exactly over the soft one, and neither moves when the sidebar comes and goes.
 //! - The hero stays inside the stage. The frame, the sidebar and the title strip's pills keep the
 //!   blurred, dimmed picture the theme's readability sums assume (`Theme::glass`).
-//! - The hero's mask is drawn by the GPU (`Window::paint_image_fitted_masked`): resizing the
-//!   window or moving the heading rasterizes nothing.
 //! - A texture is worked out once per picture, texture, and light or dark, off the UI thread,
 //!   and kept ([`artwork`]). Until it is ready the hero is simply not drawn. The plain picture is
 //!   kept larger than a textured one ([`PLAIN_EDGE`]), since it is shown clear across a Retina
@@ -27,10 +25,10 @@
 //! The textures and the hero's mask are adapted from Zeron (MIT, github.com/zeronsh/zeron,
 //! `crates/ui/src/new_thread_background_effects.rs` and `new_thread_background_mask.rs`).
 
-use std::{cell::Cell, path::PathBuf, rc::Rc, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
 use gpui::{
-    App, Bounds, Corners, Global, Hsla, ImageAlphaMask, ObjectFit, Pixels, RenderImage, SharedString, Window, canvas,
+    App, Bounds, Corners, Global, Hsla, ObjectFit, Pixels, RenderImage, SharedString, Window, canvas,
     div, img, point, prelude::*, px, size,
 };
 use wack_core::Texture;
@@ -41,14 +39,8 @@ use crate::panes::Rect;
 const ARTWORK_EDGE: u32 = 2048;
 /// The long side of the plain picture the hero shows: enough for a full-screen Retina window.
 pub const PLAIN_EDGE: u32 = 3840;
-/// How far the glass around the heading fades into the clear picture, in points.
-const CUTOUT_FEATHER: f32 = 64.;
 /// How many textures and decoded pictures are kept.
 const KEPT: usize = 4;
-
-/// Where the centred block is, measured while the frame is laid out and read when the hero is
-/// painted, so the mask follows the block in the same frame.
-pub type Cutout = Rc<Cell<Option<Bounds<Pixels>>>>;
 
 /// What the shell needs to draw a backdrop.
 #[derive(Clone, Debug, PartialEq)]
@@ -144,22 +136,14 @@ pub fn behind(picture: &Picture, window: Rect, ground: Hsla, dim: f32) -> impl I
 }
 
 /// The clear picture filling its parent (the stage), fitted to the whole `window` like
-/// [`behind`], with `radius`-rounded corners. The patch around `cutout`, when one was measured,
-/// fades away so the glass beneath shows through.
-pub fn hero(artwork: Arc<RenderImage>, picture: &Picture, window: Rect, radius: f32, cutout: Cutout) -> impl IntoElement + use<> {
+/// [`behind`], with `radius`-rounded corners.
+pub fn hero(artwork: Arc<RenderImage>, picture: &Picture, window: Rect, radius: f32) -> impl IntoElement + use<> {
     let fitted = cover(window, (picture.width, picture.height), picture.focus);
     canvas(
         |_, _, _| {},
         move |bounds: Bounds<Pixels>, _, window: &mut Window, _| {
             let fitted = Bounds::new(point(px(fitted.x), px(fitted.y)), size(px(fitted.width), px(fitted.height)));
-            let mask = cutout.get().map(|heading| ImageAlphaMask {
-                bounds: heading,
-                radius: px(24.),
-                feather: px(CUTOUT_FEATHER),
-                clearance: px(12.),
-                bottom_fade: None,
-            });
-            let _ = window.paint_image_fitted_masked(bounds, fitted, Corners::all(px(radius)), artwork, 0, false, mask);
+            let _ = window.paint_image_fitted(bounds, fitted, Corners::all(px(radius)), artwork, 0, false);
         },
     )
     .absolute()

@@ -33,7 +33,7 @@ use std::rc::Rc;
 
 use gpui::{
     App, Context, DragMoveEvent, ElementId, Entity, FocusHandle, Focusable, Hsla, ListState, MouseButton, PathPromptOptions, Pixels,
-    PromptLevel, SharedString, Subscription, Window, WindowControlArea, canvas, div, list,
+    PromptLevel, SharedString, Subscription, Window, WindowControlArea, div, list,
     point, prelude::*, px, relative,
 };
 
@@ -48,7 +48,7 @@ use crate::{
     },
     app::{AppState, Menu, Selection, shown_path},
     appearance_page::AppearanceData,
-    backdrop::{self, Cutout, Picture},
+    backdrop::{self, Picture},
     edge_fade::faded,
     glass::{GLASS_BLUR, glass},
     chat::ChatSession,
@@ -710,7 +710,6 @@ impl Render for Shell {
         if clearing {
             window.request_animation_frame();
         }
-        let cutout = Cutout::default();
         let whole = Rect { x: 0., y: 0., width: window_width, height: window_height };
         let (behind, hero) = match &picture {
             Some(picture) => {
@@ -725,7 +724,7 @@ impl Render for Shell {
                             .left_0()
                             .top_0()
                             .size_full()
-                            .child(backdrop::hero(artwork, picture, whole, PANE_RADIUS, cutout.clone())),
+                            .child(backdrop::hero(artwork, picture, whole, PANE_RADIUS)),
                     ))
                 });
                 (Some(behind), hero)
@@ -768,12 +767,13 @@ impl Render for Shell {
         let strip_ground = over_picture.then_some(Hsla { a: theme.glass, ..theme.window });
         let (strip, body) = match screen {
             Screen::Welcome { notice } => {
-                (div(), arrive("arrive-welcome".into(), welcome(notice, cutout.clone(), &theme).into_any_element()))
+                let ground = (clearness > 0.).then_some(Hsla { a: theme.cover(), ..theme.window });
+                (div(), arrive("arrive-welcome".into(), welcome(notice, ground, &theme).into_any_element()))
             }
             Screen::NewChat { project, composer, notice } => {
                 let id = format!("arrive-new-chat-{}", project.path);
                 let ground = (clearness > 0.).then_some(Hsla { a: theme.cover(), ..theme.window });
-                let body = new_chat(project, composer, notice, cutout.clone(), ground, &theme).into_any_element();
+                let body = new_chat(project, composer, notice, ground, &theme).into_any_element();
                 (tab_strip(&strip, None, strip_ground, &theme), arrive(id, body))
             }
             Screen::Chat { project, body, composer, .. } => (
@@ -1368,7 +1368,7 @@ fn drag_strip(name: &'static str, height: Pixels, content: impl IntoElement) -> 
 }
 
 /// The words above a screen's display line, with the duck.
-fn kicker(text: &'static str, theme: &Theme) -> impl IntoElement {
+fn kicker(text: &'static str, theme: &Theme) -> gpui::Div {
     div()
         .flex()
         .items_center()
@@ -1386,16 +1386,41 @@ fn on_ground(child: gpui::Div, ground: Option<Hsla>, theme: &Theme) -> gpui::Any
     }
 }
 
+/// A screen's display line. Over the clear picture (`halo`) it is ringed by faint copies of
+/// itself in the window's colour, a halo that keeps it legible on any part of the picture without
+/// laying anything over it (GPUI draws no text shadow).
+fn display_line(text: SharedString, halo: bool, theme: &Theme) -> gpui::Div {
+    // Rings of copies, fading outwards, so the halo has no edge of its own.
+    const RINGS: [(f32, f32); 3] = [(0.9, 0.32), (1.9, 0.18), (3.0, 0.08)];
+    const STEPS: usize = 12;
+    let copies = halo.then(|| {
+        RINGS.iter().flat_map(|&(radius, alpha)| {
+            (0..STEPS).map(move |step| {
+                let angle = step as f32 * std::f32::consts::TAU / STEPS as f32;
+                (radius * angle.cos(), radius * angle.sin(), alpha)
+            })
+        })
+    });
+    div()
+        .relative()
+        .typography(Type::Display)
+        .children(copies.into_iter().flatten().map(|(dx, dy, alpha)| {
+            div()
+                .absolute()
+                .left(px(dx))
+                .top(px(dy))
+                .size_full()
+                .text_color(Hsla { a: alpha, ..theme.window })
+                .child(text.clone())
+        }))
+        .child(div().relative().text_color(theme.text).child(text))
+}
+
 /// A problem under a screen's block, on `ground` over the clear picture ([`on_ground`]).
 fn notice_line(notice: Option<SharedString>, ground: Option<Hsla>, theme: &Theme) -> impl IntoElement {
     div().when_some(notice, |line, notice| {
         line.pt(px(14.)).child(on_ground(div().typography(Type::Ui).text_color(theme.danger).child(notice), ground, theme))
     })
-}
-
-/// Reports a screen's heading's bounds to the hero while the frame is laid out (`backdrop::Cutout`).
-fn measured(cutout: Cutout) -> impl IntoElement {
-    canvas(move |bounds, _, _| cutout.set(Some(bounds)), |_, _, _, _| {}).absolute().left_0().top_0().size_full()
 }
 
 /// A block in the middle of the column, a little above centre.
@@ -1411,7 +1436,9 @@ fn centred(block: impl IntoElement) -> gpui::Div {
         .child(div().flex_none().h(relative(0.08)))
 }
 
-fn welcome(notice: Option<SharedString>, cutout: Cutout, theme: &Theme) -> impl IntoElement {
+/// The first-launch screen. Over the clear picture its smaller words sit on frosted pills
+/// (`ground`, [`on_ground`]); the display line stands on the picture.
+fn welcome(notice: Option<SharedString>, ground: Option<Hsla>, theme: &Theme) -> impl IntoElement {
     centred(
         div()
             .relative()
@@ -1419,15 +1446,16 @@ fn welcome(notice: Option<SharedString>, cutout: Cutout, theme: &Theme) -> impl 
             .flex()
             .flex_col()
             .items_center()
-            .child(measured(cutout))
-            .child(kicker("Welcome to WackCode", theme))
-            .child(div().pt(px(10.)).typography(Type::Display).text_color(theme.text).child("Open a folder to begin."))
-            .child(
-                div().pt(px(14.)).text_center().typography(Type::Body).text_color(theme.text_soft).child(
+            .child(on_ground(kicker("Welcome to WackCode", theme), ground, theme))
+            .child(div().pt(px(10.)).child(display_line("Open a folder to begin.".into(), ground.is_some(), theme)))
+            .child(div().pt(px(14.)).child(on_ground(
+                div().text_center().typography(Type::Body).text_color(theme.text_soft).child(
                     "WackCode works inside a folder on your Mac: it reads, edits and runs \
                      what is there. Add one, then start a chat in it.",
                 ),
-            )
+                ground,
+                theme,
+            )))
             .child(
                 div()
                     .pt(px(28.))
@@ -1450,19 +1478,18 @@ fn welcome(notice: Option<SharedString>, cutout: Cutout, theme: &Theme) -> impl 
                             .child(div().typography(Type::UiStrong).text_color(theme.on_accent).child("Add folder…"))
                             .tag("add-folder-button"),
                     )
-                    .child(div().typography(Type::Small).text_color(theme.text_faint).child("⌘O")),
+                    .child(on_ground(div().typography(Type::Small).text_color(theme.text_faint).child("⌘O"), ground, theme)),
             )
             .child(notice_line(notice, None, theme)),
     )
 }
 
-/// The new-chat screen. `ground` is the glass the words under the composer sit on over the clear
-/// picture.
+/// The new-chat screen. Over the clear picture its smaller words sit on frosted pills (`ground`,
+/// [`on_ground`]); the project's name stands on the picture.
 fn new_chat(
     project: ProjectInfo,
     composer: ComposerData,
     notice: Option<SharedString>,
-    cutout: Cutout,
     ground: Option<Hsla>,
     theme: &Theme,
 ) -> impl IntoElement {
@@ -1481,20 +1508,10 @@ fn new_chat(
             .flex()
             .flex_col()
             .items_center()
-            // Only the heading is cleared of the picture: the composer is a card of its own.
-            .child(
-                div()
-                    .relative()
-                    .max_w_full()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .child(measured(cutout))
-                    .child(kicker("New chat in", theme))
-                    .child(div().pt(px(6.)).typography(Type::Display).text_color(theme.text).child(project.name.clone()))
-                    // Held to the block's width, so a long path ends in an ellipsis instead of spilling out.
-                    .child(project_line(&project, theme).max_w_full().pt(px(8.))),
-            )
+            .child(on_ground(kicker("New chat in", theme), ground, theme))
+            .child(div().pt(px(6.)).child(display_line(project.name.clone(), ground.is_some(), theme)))
+            // Held to the block's width, so a long path ends in an ellipsis instead of spilling out.
+            .child(div().max_w_full().pt(px(8.)).child(on_ground(project_line(&project, theme).max_w_full(), ground, theme)))
             .child(div().w_full().pt(px(30.)).child(Composer::new(composer)))
             .child(
                 div().pt(px(12.)).child(on_ground(

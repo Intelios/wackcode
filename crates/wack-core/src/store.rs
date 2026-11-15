@@ -532,6 +532,16 @@ impl Store {
         self.state.chats.iter().find(|chat| chat.id == id)
     }
 
+    /// The project of the chat used most recently: where a fresh launch opens its new chat
+    /// when nothing else remembers a project.
+    pub fn last_used_project(&self) -> Option<&Project> {
+        self.state
+            .chats
+            .iter()
+            .max_by_key(|chat| chat.updated)
+            .and_then(|chat| self.project(&chat.project))
+    }
+
     /// Lists a new chat. Its session file is created by its first run.
     pub fn create_chat(
         &mut self,
@@ -831,6 +841,7 @@ mod tests {
         let reopened = Store::open(folder.path()).unwrap();
         assert!(reopened.project(&project.id).unwrap().pinned);
         assert_eq!(reopened.chats(&project.id).len(), 2);
+        assert_eq!(store.last_used_project().map(|project| project.id.as_str()), Some(project.id.as_str()));
 
         store.remove_project(&project.id).unwrap();
         assert!(store.projects().is_empty());

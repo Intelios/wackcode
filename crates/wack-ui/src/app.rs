@@ -134,7 +134,15 @@ impl AppState {
         let selection = match store.projects() {
             [] => Selection::Welcome,
             projects => {
-                let id = ui.last_project.as_deref().and_then(|id| store.project(id)).or_else(|| projects.first()).unwrap().id.clone();
+                let id = ui
+                    .last_project
+                    .as_deref()
+                    .and_then(|id| store.project(id))
+                    .or_else(|| store.last_used_project())
+                    .or_else(|| projects.first())
+                    .unwrap()
+                    .id
+                    .clone();
                 Selection::NewChat(id)
             }
         };

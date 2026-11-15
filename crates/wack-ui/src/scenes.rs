@@ -214,13 +214,14 @@ pub fn all() -> Vec<Scene> {
             name: "settings-appearance-backdrop",
             description: "Settings › Appearance with a backdrop chosen, drawn over it.",
             size: size(px(1440.), px(900.)),
-            build: |_, cx| settings_scene(Some(fixtures::backdrop(wack_core::Texture::None)), cx),
+            build: |_, cx| settings_scene(Some(over(fixtures::backdrop(wack_core::Texture::None), cx)), cx),
         },
         Scene {
             name: "new-chat-backdrop",
             description: "The new-chat screen over a backdrop: clear across the top, dissolving around the centred block.",
             size: WINDOW,
             build: |_, cx| {
+                let picture = over(fixtures::backdrop(wack_core::Texture::None), cx);
                 cx.new(|_| {
                     Shell::showing_tabs(
                         fixtures::sidebar(Selected::None),
@@ -231,7 +232,7 @@ pub fn all() -> Vec<Scene> {
                         },
                         fixtures::strip(None),
                     )
-                    .with_backdrop(fixtures::backdrop(wack_core::Texture::None))
+                    .with_backdrop(picture)
                 })
                 .into()
             },
@@ -241,6 +242,7 @@ pub fn all() -> Vec<Scene> {
             description: "The new-chat screen over a backdrop drawn through the ASCII texture.",
             size: WINDOW,
             build: |_, cx| {
+                let picture = over(fixtures::backdrop(wack_core::Texture::Ascii), cx);
                 cx.new(|_| {
                     Shell::showing_tabs(
                         fixtures::sidebar(Selected::None),
@@ -251,7 +253,7 @@ pub fn all() -> Vec<Scene> {
                         },
                         fixtures::strip(None),
                     )
-                    .with_backdrop(fixtures::backdrop(wack_core::Texture::Ascii))
+                    .with_backdrop(picture)
                 })
                 .into()
             },
@@ -261,6 +263,7 @@ pub fn all() -> Vec<Scene> {
             description: "A finished turn over a backdrop, at a laptop's full-screen size.",
             size: size(px(1512.), px(945.)),
             build: |_, cx| {
+                let picture = over(fixtures::backdrop(wack_core::Texture::None), cx);
                 cx.new(|_| {
                     Shell::showing_tabs(
                         fixtures::sidebar(Selected::Finished),
@@ -275,7 +278,7 @@ pub fn all() -> Vec<Scene> {
                         },
                         fixtures::strip(Some(fixtures::FINISHED_TITLE)),
                     )
-                    .with_backdrop(fixtures::backdrop(wack_core::Texture::None))
+                    .with_backdrop(picture)
                 })
                 .into()
             },
@@ -287,6 +290,13 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| cx.new(|_| Specimen).into(),
         },
     ]
+}
+
+/// `picture`, with the theme made ready for text over it, as the app's theme is.
+fn over(picture: crate::backdrop::Picture, cx: &mut App) -> crate::backdrop::Picture {
+    let input = crate::theme::ThemeInput { ground: Some(picture.ground()), ..crate::theme::Theme::get(cx).input.clone() };
+    cx.set_global(crate::theme::Theme::derive(input));
+    picture
 }
 
 /// Settings › Appearance, drawn over `backdrop` when there is one.

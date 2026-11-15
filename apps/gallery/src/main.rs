@@ -112,6 +112,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
             appearance,
             theme_colour: theme_colour.clone(),
             accent: accent.clone(),
+            ground: None,
         };
         cx.update(|cx| cx.set_global(Theme::derive(input)));
         let window = cx

@@ -360,7 +360,9 @@ pub fn backdrop(texture: wack_core::Texture) -> crate::backdrop::Picture {
     let imported = std::fs::read_to_string(&record)
         .ok()
         .and_then(|text| serde_json::from_str::<(String, wack_core::Backdrop)>(&text).ok())
-        .filter(|(from, backdrop)| *from == source.to_string_lossy() && folder.join(&backdrop.file).exists());
+        .filter(|(from, backdrop)| {
+            *from == source.to_string_lossy() && folder.join(&backdrop.file).exists() && backdrop.shade.is_some()
+        });
     let backdrop = match imported {
         Some((_, backdrop)) => backdrop,
         None => {
@@ -385,6 +387,7 @@ pub fn backdrop(texture: wack_core::Texture) -> crate::backdrop::Picture {
         focus: (0.5, 0.5),
         dim: wack_core::appearance::DEFAULT_DIM as f32 / 100.,
         texture,
+        shade: backdrop.shade.unwrap_or([0, 255]),
     }
 }
 

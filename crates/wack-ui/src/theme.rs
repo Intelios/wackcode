@@ -13,6 +13,11 @@
 //! - **Accent** paints interaction only: buttons, focus, selection, links. Text drawn in the accent
 //!   is moved in lightness until it reads on the window.
 //!
+//! Over a picture (the fourth input, [`Ground`]) ink must also read on the window's colour laid
+//! over the picture's worst part. The quieter steps of ink move towards the loud end by one shared
+//! amount, keeping their order; only when that is not enough is the picture dimmed beyond the
+//! user's choice ([`Theme::veil`]). Without a picture, the ramp is used as it stands.
+//!
 //! Meaning colours (danger, warning, success, diff) are fixed per appearance and never follow the
 //! accent. Syntax colours keep their own hues so code stays readable, leaning slightly towards the
 //! accent so it looks at home in any theme.
@@ -49,6 +54,8 @@ pub struct ThemeInput {
     pub theme_colour: String,
     /// `#rrggbb`; an unreadable value falls back to the default.
     pub accent: String,
+    /// The picture behind the window, if there is one.
+    pub ground: Option<Ground>,
 }
 
 impl ThemeInput {
@@ -57,7 +64,25 @@ impl ThemeInput {
             appearance,
             theme_colour: DEFAULT_THEME_COLOUR.into(),
             accent: DEFAULT_ACCENT.into(),
+            ground: None,
         }
+    }
+}
+
+/// A picture behind the window, as the theme sees it: text is kept readable over all of it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ground {
+    /// How much of the window's colour the user lays over the picture, 0 to 1.
+    pub dim: f32,
+    /// How dark and how light the softened picture gets, 0 to 255
+    /// (`wack_core::appearance::shade`).
+    pub shade: [u8; 2],
+}
+
+impl Ground {
+    pub fn of(backdrop: &wack_core::Backdrop) -> Self {
+        // Unmeasured, the picture could be anything from black to white.
+        Self { dim: backdrop.dim as f32 / 100., shade: backdrop.shade.unwrap_or([0, 255]) }
     }
 }
 
@@ -134,6 +159,10 @@ pub struct Theme {
     /// bright eight. Their own hues, leaning slightly towards the accent; never muted, because
     /// red and green in a terminal carry meaning.
     pub ansi: [Hsla; 16],
+
+    /// How much of the window's colour lies over a picture behind the window, 0 to 1: the user's
+    /// dim, or more where the picture is too bright or dark for text otherwise. 0 with none.
+    pub veil: f32,
 }
 
 impl Global for Theme {}
@@ -227,12 +256,23 @@ impl Theme {
         let neutral = |step: &Step| Lch::new(step.l, step.c * tint, tint_source.h);
         let window = neutral(&ramp.window).to_srgb();
 
+        // Over a picture, ink is drawn on the window's colour laid over it, so it must read over
+        // the picture's worst part too (`over_picture`). Without one, the ramp is used as it is.
+        let (lift, veil, text_ground) = match input.ground {
+            Some(ground) => {
+                let (lift, veil) = over_picture(ground, ramp, window, dark, &neutral);
+                (lift, veil, worst_ground(ground, window, veil, dark))
+            }
+            None => (0., 0., window),
+        };
+        let text_step = |step: &Step| neutral(&lifted(step, lift, dark));
+
         // The accent fill is the user's colour exactly; only text drawn in it is adjusted.
         let accent = accent_source;
         let accent_hover = accent.with_l(accent.l + if dark { 0.05 } else { -0.05 });
         let accent_text = readable_on(
             if dark { accent } else { accent.with_c(accent.c.max(0.12)) },
-            window,
+            text_ground,
             4.5,
         );
         let ink = Lch::new(0.16, (accent.c * 0.3).min(0.06), accent.h).to_srgb();
@@ -302,11 +342,11 @@ impl Theme {
             hover: hsla(neutral(&ramp.hover)),
             border: hsla(neutral(&ramp.border)),
             border_strong: hsla(neutral(&ramp.border_strong)),
-            text: hsla(neutral(&ramp.text)),
-            text_body: hsla(neutral(&ramp.text_body)),
-            text_soft: hsla(neutral(&ramp.text_soft)),
-            text_dim: hsla(neutral(&ramp.text_dim)),
-            text_faint: hsla(neutral(&ramp.text_faint)),
+            text: hsla(text_step(&ramp.text)),
+            text_body: hsla(text_step(&ramp.text_body)),
+            text_soft: hsla(text_step(&ramp.text_soft)),
+            text_dim: hsla(text_step(&ramp.text_dim)),
+            text_faint: hsla(text_step(&ramp.text_faint)),
             accent: to_hsla(accent_fill),
             accent_hover: hsla(accent_hover),
             on_accent: to_hsla(on_accent),
@@ -331,6 +371,7 @@ impl Theme {
             dock: hsla(neutral(&ramp.sidebar)),
             terminal_text: hsla(neutral(&ramp.text_body)),
             ansi,
+            veil: veil as f32,
             input,
         }
     }
@@ -417,6 +458,67 @@ fn to_hsla(colour: Srgb) -> Hsla {
     Rgba { r: colour.r as f32, g: colour.g as f32, b: colour.b as f32, a: 1. }.into()
 }
 
+/// The least contrast each step of ink keeps over the worst part of a picture: text, body, soft,
+/// dim and faint. Lower than on the window, since the worst part is seldom right under the text;
+/// and never more than the step has on the plain window, so a quiet step stays quiet.
+const PICTURE_FLOORS: [f64; 5] = [6., 5., 4.5, 3.5, 3.];
+/// How far ink may move towards its loud end before the picture is dimmed further instead: past
+/// this the steps would be too close to tell apart.
+const MAX_LIFT: f64 = 0.6;
+
+/// `step` moved `lift` of the way towards the loud end: white in dark, black in light. One lift
+/// moves every step, so the quieter ones move most and the order is kept.
+fn lifted(step: &Step, lift: f64, dark: bool) -> Step {
+    let end = if dark { 1. } else { 0. };
+    Step { l: step.l + (end - step.l) * lift, c: step.c }
+}
+
+/// [`PICTURE_FLOORS`] for the steps of ink as drawn on the plain `window`.
+fn picture_floors(inks: [Srgb; 5], window: Srgb) -> [f64; 5] {
+    let mut floors = PICTURE_FLOORS;
+    for (floor, ink) in floors.iter_mut().zip(inks) {
+        *floor = floor.min(contrast(ink, window));
+    }
+    floors
+}
+
+/// What ink sits on over the worst part of a picture: the window's colour at `veil` over the
+/// picture's lightest shade (light ink) or its darkest (dark ink), blended as the window draws.
+fn worst_ground(ground: Ground, window: Srgb, veil: f64, dark: bool) -> Srgb {
+    let shade = ground.shade[if dark { 1 } else { 0 }] as f64 / 255.;
+    let mix = |channel: f64| channel * veil + shade * (1. - veil);
+    Srgb { r: mix(window.r), g: mix(window.g), b: mix(window.b) }
+}
+
+/// After WackCode 2's picture readability: the least lift, and the least veil from the user's
+/// dim upwards, at which every step of ink clears its floor over the picture's worst part. The
+/// picture keeps the user's dim unless even the most lift is not enough.
+fn over_picture(ground: Ground, ramp: &Ramp, window: Srgb, dark: bool, neutral: &dyn Fn(&Step) -> Lch) -> (f64, f64) {
+    let steps = [&ramp.text, &ramp.text_body, &ramp.text_soft, &ramp.text_dim, &ramp.text_faint];
+    let floors = picture_floors(steps.map(|step| neutral(step).to_srgb()), window);
+    let reads = |lift: f64, veil: f64| {
+        let behind = worst_ground(ground, window, veil, dark);
+        steps
+            .iter()
+            .zip(floors)
+            .all(|(step, floor)| contrast(neutral(&lifted(step, lift, dark)).to_srgb(), behind) >= floor)
+    };
+    // The least passing value in `low..=high`, which passes at `high`.
+    let least = |mut low: f64, mut high: f64, passes: &dyn Fn(f64) -> bool| {
+        if passes(low) {
+            return low;
+        }
+        for _ in 0..24 {
+            let middle = (low + high) / 2.;
+            if passes(middle) { high = middle } else { low = middle }
+        }
+        high
+    };
+    // With the veil whole the ground is the window itself, where every step reads.
+    let veil = least((ground.dim as f64).clamp(0., 1.), 1., &|veil| reads(MAX_LIFT, veil));
+    (least(0., MAX_LIFT, &|lift| reads(lift, veil)), veil)
+}
+
 /// The user's choices the theme is derived from (Settings › Appearance), kept so a change of the
 /// system's appearance can be followed without asking the store.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -434,6 +536,7 @@ pub fn input_for(choice: &wack_core::Appearance, system: Appearance) -> ThemeInp
         },
         theme_colour: choice.theme_colour.clone().unwrap_or_else(|| DEFAULT_THEME_COLOUR.into()),
         accent: choice.accent.clone().unwrap_or_else(|| DEFAULT_ACCENT.into()),
+        ground: choice.backdrop.as_ref().map(Ground::of),
     }
 }
 
@@ -527,6 +630,7 @@ mod tests {
                     appearance,
                     theme_colour: theme_colour.into(),
                     accent: accent.into(),
+                    ground: None,
                 }));
             }
         }
@@ -574,12 +678,51 @@ mod tests {
         }
     }
 
+    /// Over any picture, at any dim, every step of ink clears its floor over the picture's worst
+    /// part, keeps its order, and the picture is dimmed further only when ink alone cannot do it.
+    #[test]
+    fn text_reads_over_any_picture() {
+        for base in themes() {
+            for shade in [[0, 255], [40, 215], [10, 60], [190, 250], [119, 119]] {
+                for dim in [0., 0.45, 0.65, 0.9] {
+                    let ground = Ground { dim, shade };
+                    let theme = Theme::derive(ThemeInput { ground: Some(ground), ..base.input.clone() });
+                    let label = format!("{:?} over {shade:?} at {dim}", base.input.appearance);
+                    assert!(theme.veil >= dim, "{label}: the veil is never thinner than chosen");
+                    let dark = theme.appearance == Appearance::Dark;
+                    let behind = worst_ground(ground, srgb(theme.window), theme.veil as f64, dark);
+                    let inks = [theme.text, theme.text_body, theme.text_soft, theme.text_dim, theme.text_faint];
+                    let plain = [base.text, base.text_body, base.text_soft, base.text_dim, base.text_faint];
+                    let floors = picture_floors(plain.map(srgb), srgb(base.window));
+                    for (index, (ink, floor)) in inks.iter().zip(floors).enumerate() {
+                        let ratio = contrast(srgb(*ink), behind);
+                        assert!(ratio >= floor - 0.05, "ink {index} is {ratio:.2} in {label}");
+                    }
+                    let lightness: Vec<f64> = inks.iter().map(|ink| srgb(*ink).to_lch().l).collect();
+                    assert!(
+                        lightness.windows(2).all(|pair| if dark { pair[0] >= pair[1] } else { pair[0] <= pair[1] }),
+                        "the steps keep their order in {label}: {lightness:?}"
+                    );
+                }
+            }
+        }
+        // A picture darker than the window, under light text, needs nothing changed.
+        let calm = Theme::derive(ThemeInput {
+            ground: Some(Ground { dim: 0.65, shade: [0, 5] }),
+            ..ThemeInput::new(Appearance::Dark)
+        });
+        let plain = Theme::new(Appearance::Dark);
+        assert_eq!((calm.text_dim, calm.text_faint, calm.veil), (plain.text_dim, plain.text_faint, 0.65));
+        assert_eq!(plain.veil, 0., "no picture, no veil");
+    }
+
     #[test]
     fn a_grey_theme_colour_gives_true_greys() {
         let theme = Theme::derive(ThemeInput {
             appearance: Appearance::Dark,
             theme_colour: "#808080".into(),
             accent: DEFAULT_ACCENT.into(),
+            ground: None,
         });
         for token in [theme.window, theme.surface, theme.text, theme.text_dim] {
             assert!(srgb(token).to_lch().c < 0.002);
@@ -593,6 +736,7 @@ mod tests {
             appearance: Appearance::Dark,
             theme_colour: "#2f5bd6".into(),
             accent: "#ff3b30".into(),
+            ground: None,
         });
         assert_eq!(base.danger, other.danger);
         assert_eq!(base.success, other.success);
@@ -606,6 +750,7 @@ mod tests {
             appearance: Appearance::Light,
             theme_colour: "olive".into(),
             accent: "".into(),
+            ground: None,
         });
         let default = Theme::new(Appearance::Light);
         assert_eq!(broken.window, default.window);

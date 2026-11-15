@@ -199,11 +199,28 @@ impl Store {
         } else {
             State::default()
         };
-        Ok(Self {
+        let mut store = Self {
             folder: folder.to_path_buf(),
             state,
             secrets: SecretStore::load(folder)?,
-        })
+        };
+        store.measure_backdrop();
+        Ok(store)
+    }
+
+    /// A backdrop imported before pictures were measured is measured once, now. A picture that
+    /// cannot be read stays unmeasured, and the theme then allows for anything behind the text.
+    fn measure_backdrop(&mut self) {
+        let Some(backdrop) = &self.state.appearance.backdrop else { return };
+        if backdrop.shade.is_some() {
+            return;
+        }
+        let soft = self.backdrop_soft_path(backdrop);
+        let shade = crate::appearance::measure(&soft).or_else(|_| crate::appearance::measure(&self.backdrop_path(backdrop)));
+        if let (Ok(shade), Some(backdrop)) = (shade, &mut self.state.appearance.backdrop) {
+            backdrop.shade = Some(shade);
+            let _ = self.save();
+        }
     }
 
     fn save(&self) -> Result<(), String> {
@@ -799,5 +816,22 @@ mod tests {
         assert!(!store.backdrop_path(&first).exists(), "the copy goes with the setting");
         let missing = Appearance { backdrop: Some(first), ..Appearance::default() };
         assert!(store.set_appearance(missing).is_err(), "a picture that is gone is refused");
+    }
+
+    #[test]
+    fn a_picture_imported_before_measuring_is_measured_on_open() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        let picture = folder.path().join("grey.png");
+        image::RgbImage::from_pixel(40, 20, image::Rgb([119, 119, 119])).save(&picture).unwrap();
+        let backdrop = crate::appearance::import_backdrop(&picture, &store.backgrounds_folder()).unwrap();
+        let unmeasured = Backdrop { shade: None, ..backdrop };
+        store.set_appearance(Appearance { backdrop: Some(unmeasured), ..Appearance::default() }).unwrap();
+
+        let reopened = Store::open(folder.path()).unwrap();
+        let [dark, light] = reopened.appearance().backdrop.as_ref().unwrap().shade.expect("measured on open");
+        assert!(dark.abs_diff(119) <= 2 && light.abs_diff(119) <= 2, "{dark} to {light}");
+        let again = Store::open(folder.path()).unwrap();
+        assert!(again.appearance().backdrop.as_ref().unwrap().shade.is_some(), "and the measure is saved");
     }
 }

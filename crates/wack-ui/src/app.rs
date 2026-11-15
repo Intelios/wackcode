@@ -280,6 +280,7 @@ impl AppState {
             focus: (backdrop.focus_x, backdrop.focus_y),
             dim: backdrop.dim as f32 / 100.,
             texture: backdrop.texture,
+            shade: backdrop.shade.unwrap_or([0, 255]),
         })
     }
 

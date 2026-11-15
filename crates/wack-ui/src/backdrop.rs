@@ -51,9 +51,19 @@ pub struct Picture {
     pub width: u32,
     pub height: u32,
     pub focus: (f32, f32),
-    /// 0–1: how much of the window's colour covers the softened picture.
+    /// 0–1: how much of the window's colour the user lays over the softened picture. It is drawn
+    /// with the theme's `veil`, which is this or more where text would not otherwise read.
     pub dim: f32,
     pub texture: Texture,
+    /// How dark and how light the softened copy gets, 0–255 (`wack_core::appearance::shade`).
+    pub shade: [u8; 2],
+}
+
+impl Picture {
+    /// The picture as the theme needs it, to keep text readable over it.
+    pub fn ground(&self) -> crate::theme::Ground {
+        crate::theme::Ground { dim: self.dim, shade: self.shade }
+    }
 }
 
 /// The picture drawn to cover `frame`, keeping `focus` (0–1 across and down) in view.
@@ -78,7 +88,7 @@ pub fn hero_height(content_height: f32) -> f32 {
 }
 
 /// The softened, dimmed picture across the whole `window`.
-pub fn behind(picture: &Picture, window: Rect, ground: Hsla) -> impl IntoElement + use<> {
+pub fn behind(picture: &Picture, window: Rect, ground: Hsla, veil: f32) -> impl IntoElement + use<> {
     let drawn = cover(window, (picture.width, picture.height), picture.focus);
     div()
         .absolute()
@@ -96,7 +106,7 @@ pub fn behind(picture: &Picture, window: Rect, ground: Hsla) -> impl IntoElement
                 .h(px(drawn.height))
                 .object_fit(ObjectFit::Fill),
         )
-        .child(div().absolute().left_0().top_0().size_full().bg(Hsla { a: picture.dim.clamp(0., 0.9), ..ground }))
+        .child(div().absolute().left_0().top_0().size_full().bg(Hsla { a: veil.clamp(0., 1.), ..ground }))
 }
 
 /// The clear picture over `area` (window coordinates), fitted to the whole `window` like

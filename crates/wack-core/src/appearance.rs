@@ -11,6 +11,9 @@
 //!   than a screenful.
 //! - Beside it is a softened copy ([`soft_name`]): small and blurred once, on import, so the
 //!   picture behind a conversation costs nothing to soften while the window draws.
+//! - A backdrop carries how dark and light its softened copy gets ([`shade`]), measured on
+//!   import (or on the first launch after, for one imported before), so the theme can keep text
+//!   readable over it without opening the picture.
 //! - Copies no setting refers to are deleted when the setting changes.
 
 use std::{
@@ -91,6 +94,10 @@ pub struct Backdrop {
     pub dim: u8,
     #[serde(default)]
     pub texture: Texture,
+    /// How dark and how light the softened picture gets ([`shade`]), so the theme can keep text
+    /// readable over all of it. Measured on import; `None` for a picture not yet measured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shade: Option<[u8; 2]>,
 }
 
 fn middle() -> f32 {
@@ -164,6 +171,48 @@ fn soft_copy(picture: &image::DynamicImage) -> image::RgbImage {
     image::imageops::blur(&small, SOFT_BLUR)
 }
 
+/// How dark and how light a softened picture gets, as brightness from 0 to 255: the grey of the
+/// same luminance below which 2%, and above which 2%, of its pixels lie. Text is kept readable
+/// against that range rather than against a stray speck.
+pub fn shade(picture: &image::RgbImage) -> [u8; 2] {
+    let linear: Vec<f64> = (0..=255u8)
+        .map(|value| {
+            let value = value as f64 / 255.;
+            if value <= 0.04045 { value / 12.92 } else { ((value + 0.055) / 1.055).powf(2.4) }
+        })
+        .collect();
+    let mut luminance: Vec<f64> = picture
+        .pixels()
+        .map(|pixel| {
+            let [r, g, b] = pixel.0;
+            0.2126 * linear[r as usize] + 0.7152 * linear[g as usize] + 0.0722 * linear[b as usize]
+        })
+        .collect();
+    if luminance.is_empty() {
+        return [0, 255];
+    }
+    let cut = luminance.len() / 50;
+    let last = luminance.len() - 1;
+    let dark = *luminance.select_nth_unstable_by(cut, f64::total_cmp).1;
+    let light = *luminance.select_nth_unstable_by(last - cut, f64::total_cmp).1;
+    let encode = |y: f64| {
+        let value = if y <= 0.0031308 { 12.92 * y } else { 1.055 * y.powf(1. / 2.4) - 0.055 };
+        (value * 255.).round().clamp(0., 255.) as u8
+    };
+    [encode(dark), encode(light)]
+}
+
+/// [`shade`] for a picture on disk: a backdrop's softened copy.
+pub fn measure(path: &Path) -> Result<[u8; 2], String> {
+    let picture = image::open(path).map_err(|error| format!("Could not open the backdrop: {error}."))?;
+    let picture = if picture.width().max(picture.height()) > SOFT_EDGE {
+        picture.resize(SOFT_EDGE, SOFT_EDGE, FilterType::Triangle)
+    } else {
+        picture
+    };
+    Ok(shade(&picture.to_rgb8()))
+}
+
 fn write_jpeg(picture: &image::RgbImage, path: &Path) -> Result<(), String> {
     let mut encoded = Vec::new();
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, 92)
@@ -213,6 +262,7 @@ pub fn import_backdrop(source: &Path, backgrounds: &Path) -> Result<Backdrop, St
         focus_y: 0.5,
         dim: DEFAULT_DIM,
         texture: Texture::None,
+        shade: Some(shade(&soft)),
     })
 }
 
@@ -272,6 +322,30 @@ mod tests {
         assert!(!backgrounds.join("old.jpg").exists());
         assert!(backgrounds.join(&backdrop.file).exists());
         assert!(backgrounds.join(soft_name(&backdrop.file)).exists(), "the softened copy is kept with it");
+    }
+
+    #[test]
+    fn a_picture_is_measured_from_its_darkest_to_its_lightest() {
+        // Half black, half white, with a speck of the other in each: the specks are ignored.
+        let picture = image::RgbImage::from_fn(100, 100, |x, y| {
+            let white = (x < 50) != (x == 10 && y == 10);
+            image::Rgb(if white { [255; 3] } else { [0; 3] })
+        });
+        assert_eq!(shade(&picture), [0, 255]);
+        let grey = image::RgbImage::from_pixel(10, 10, image::Rgb([119, 119, 119]));
+        assert_eq!(shade(&grey), [119, 119], "a grey is measured as itself");
+        // Pure green is far darker than pure white, and measured so.
+        let green = image::RgbImage::from_pixel(10, 10, image::Rgb([0, 255, 0]));
+        let [dark, light] = shade(&green);
+        assert_eq!(dark, light);
+        assert!((210..=225).contains(&dark), "{dark}");
+
+        let folder = tempfile::tempdir().unwrap();
+        let source = folder.path().join("dusk.png");
+        image::RgbImage::from_fn(200, 100, |x, _| image::Rgb([x as u8, x as u8, x as u8])).save(&source).unwrap();
+        let backdrop = import_backdrop(&source, folder.path()).unwrap();
+        let [dark, light] = backdrop.shade.expect("an imported picture is measured");
+        assert!(dark < 30 && light > 170, "{dark} to {light}");
     }
 
     #[test]

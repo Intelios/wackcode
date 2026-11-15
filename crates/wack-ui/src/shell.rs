@@ -648,7 +648,7 @@ impl Render for Shell {
         let whole = Rect { x: 0., y: 0., width, height: f32::from(viewport.height) };
         let (behind, hero) = match &picture {
             Some(picture) => {
-                let behind = backdrop::behind(picture, whole, theme.window);
+                let behind = backdrop::behind(picture, whole, theme.window, theme.veil);
                 let hero_screen = matches!(screen, Screen::Welcome { .. } | Screen::NewChat { .. });
                 let light = theme.appearance == crate::theme::Appearance::Light;
                 let artwork = if hero_screen { backdrop::artwork(picture, light, cx) } else { None };

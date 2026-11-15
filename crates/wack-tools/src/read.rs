@@ -35,10 +35,12 @@ impl Tool for Read {
             loading: Loading::Always,
             parallel_safe: true,
             hint: "read a file's contents".into(),
+            guidelines: Vec::new(),
+            ends_run: false,
         }
     }
 
-    async fn run(&self, input: Value, context: &ToolContext) -> Result<String, String> {
+    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<String, String> {
         let input: Input = parse(input)?;
         let path = resolve(&context.cwd, &input.path);
         let size = tokio::fs::metadata(&path).await.map_err(|error| format!("Could not read {}: {error}.", input.path))?;
@@ -89,12 +91,11 @@ impl Tool for Read {
 
 #[cfg(test)]
 mod tests {
-    use tokio_util::sync::CancellationToken;
 
     use super::*;
 
-    fn context(folder: &tempfile::TempDir) -> ToolContext {
-        ToolContext { cwd: folder.path().to_path_buf(), cancel: CancellationToken::new() }
+    fn context(folder: &tempfile::TempDir) -> ToolContext<'static> {
+        ToolContext::detached(folder.path().to_path_buf())
     }
 
     #[tokio::test]

@@ -5,19 +5,31 @@
 //!   happens: a refusal, a failure, or the user stopping the run.
 //! - The session is written before anything acts on it, so a crash never loses a step that ran.
 //! - The system prompt and the start of the tool list never change during a run (prompt caching).
+//! - A feature's notes are saved before the user's message at the start of a run, so the user's
+//!   request is always the last thing the model reads; later in a run they follow the tool
+//!   results.
+//! - Whether a tool may run is judged when it is about to run, not when the reply arrives: a call
+//!   that changes the mode decides for the calls after it in the same reply.
 //!
 //! Nothing here asks the user for approval before a tool runs: that is out of scope by design.
 //! `Feature::on_tool_call` exists for modes that forbid tools outright (a plan mode, a confined
-//! chat), not for prompts.
+//! chat), not for prompts. A tool can still put a question of its own to the user and wait for
+//! the answer ([`crate::tool::User`]): the question leaves as [`Event::Question`] and the answer
+//! comes back through [`Control::answer`].
 
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
+    future::Future,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
 };
 
 use futures::future::join_all;
 use serde_json::Value;
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use wack_llm::{
     Block, Delta, Effort, ErrorKind, Message, Provider, Request, RetryNotice, Role, StopReason, SystemPart, Usage,
@@ -25,11 +37,12 @@ use wack_llm::{
 };
 
 use crate::{
+    ask::{Answer, Question},
     compaction::{self, Summary},
     prompt,
     registry::{Registry, TOOL_SEARCH},
-    session::Session,
-    tool::{Loading, Tool, ToolContext},
+    session::{Note, Session},
+    tool::{Loading, Tool, ToolContext, ToolSpec, User},
 };
 
 /// Compaction starts when the conversation fills this share of the model's context window.
@@ -61,6 +74,9 @@ pub struct Settings {
     /// The model's context size in tokens, when known. Without it compaction still happens, but
     /// only once the provider refuses a request as too long.
     pub context_window: Option<u64>,
+    /// Ultra: the user asked for the most thorough work the model can do. It adds an instruction
+    /// to the system prompt; the effort itself is `effort`, which the caller sets to the top.
+    pub ultra: bool,
 }
 
 pub enum Verdict {
@@ -71,28 +87,107 @@ pub enum Verdict {
 
 /// A compiled-in feature's hooks into the loop. All default to doing nothing.
 pub trait Feature: Send + Sync {
-    /// Called with each request just before it is sent.
+    /// Called when a run starts, before the user's message is saved.
+    fn on_run_start(&self) {}
+
+    /// Messages the model is owed before its next request (a mode contract). Called before the
+    /// user's message is saved, before every request after that, and after a compaction; the
+    /// loop saves what comes back. Return nothing once the session shows the model was told.
+    fn notes(&self, _session: &Session) -> Vec<Note> {
+        Vec::new()
+    }
+
+    /// Called with each request just before it is sent. Changes here are never saved.
     fn before_request(&self, _request: &mut Request) {}
 
-    /// Called before each tool runs.
-    fn on_tool_call(&self, _name: &str, _input: &Value) -> Verdict {
+    /// Called just before a tool runs.
+    fn on_tool_call(&self, _tool: &ToolSpec, _input: &Value) -> Verdict {
         Verdict::Allow
     }
 
     /// Called with each reply once it is saved.
     fn after_turn(&self, _reply: &Message) {}
+
+    /// Called when the model finishes on its own, with its last reply's text. A returned
+    /// sentence is shown to the user as a notice.
+    fn on_run_end(&self, _reply: &str) -> Option<String> {
+        None
+    }
+
+    /// State to save in the session, as `(key, value)`. The loop asks at the start and end of a
+    /// run and after every batch of tools, and writes only what changed.
+    fn state_to_save(&self) -> Vec<(String, Value)> {
+        Vec::new()
+    }
+
+    /// Text to add to a compaction's summary in code, each with its own heading.
+    fn summary_sections(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
-/// How the user reaches into a run from outside: to stop it, or to send a message while it works.
+/// How the user reaches into a run from outside: to stop it, to send a message while it works,
+/// or to answer a question a tool asked.
 #[derive(Clone, Default)]
 pub struct Control {
     cancel: CancellationToken,
     steering: Arc<Mutex<VecDeque<String>>>,
+    interactive: Arc<AtomicBool>,
+    questions: Arc<Questions>,
+}
+
+#[derive(Default)]
+struct Questions {
+    next: AtomicU64,
+    waiting: Mutex<HashMap<String, oneshot::Sender<Answer>>>,
+}
+
+/// Forgets a question nobody will answer: the run was stopped while it waited.
+struct Waiting<'a> {
+    questions: &'a Questions,
+    id: String,
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        self.questions.waiting.lock().unwrap().remove(&self.id);
+    }
 }
 
 impl Control {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A control for a run someone is watching, who can answer questions.
+    pub fn with_user() -> Self {
+        let control = Self::default();
+        control.interactive.store(true, Ordering::SeqCst);
+        control
+    }
+
+    pub fn interactive(&self) -> bool {
+        self.interactive.load(Ordering::SeqCst)
+    }
+
+    /// Answers the question with this id. False when it is no longer waiting.
+    pub fn answer(&self, id: &str, answer: Answer) -> bool {
+        match self.questions.waiting.lock().unwrap().remove(id) {
+            Some(sender) => sender.send(answer).is_ok(),
+            None => false,
+        }
+    }
+
+    /// Registers a question and returns its id with the wait for its answer.
+    pub(crate) fn open_question(&self) -> (String, impl Future<Output = Answer> + '_) {
+        let id = format!("q{}", self.questions.next.fetch_add(1, Ordering::SeqCst) + 1);
+        let (sender, receiver) = oneshot::channel();
+        self.questions.waiting.lock().unwrap().insert(id.clone(), sender);
+        let waiting = Waiting { questions: &self.questions, id: id.clone() };
+        (id, async move {
+            let _waiting = waiting;
+            receiver.await.unwrap_or(Answer::Cancelled)
+        })
     }
 
     /// Stops the run. Running tools are cut off and the reply being written is dropped.
@@ -137,6 +232,13 @@ pub enum Event {
     Steered(String),
     Compacting,
     Compacted { usage: Option<Usage> },
+    /// A tool is waiting for the user to answer. Answer with [`Control::answer`]. `wrap_up`
+    /// offers Ultra Plan's "Write the plan now".
+    Question { id: String, questions: Vec<Question>, wrap_up: bool },
+    /// A feature saved its state: the todo list, the plan awaiting review.
+    State { key: String, value: Value },
+    /// Something the user should know that is not part of the conversation.
+    Notice(String),
 }
 
 pub type EventSink<'a> = &'a (dyn Fn(Event) + Send + Sync);
@@ -161,7 +263,7 @@ pub struct Agent {
 }
 
 enum Planned {
-    Run { tool: Arc<dyn Tool>, parallel_safe: bool },
+    Run { tool: Arc<dyn Tool>, spec: ToolSpec },
     Settled(Result<String, String>),
 }
 
@@ -175,7 +277,10 @@ impl Agent {
     ) -> Self {
         let cwd = session.cwd().to_path_buf();
         let specs: Vec<_> = registry.specs().collect();
-        let system = prompt::system(&profile.prompt, &cwd, &prompt::today(), &specs);
+        let mut system = prompt::system(&profile.prompt, &cwd, &prompt::today(), &specs);
+        if settings.ultra {
+            system.push(SystemPart { text: prompt::ULTRA_PROMPT.to_string() });
+        }
         Self { provider, registry, session, settings, features: Vec::new(), system, cwd }
     }
 
@@ -191,6 +296,11 @@ impl Agent {
     /// Runs one user message to completion: until the model stops calling tools, or the user
     /// stops it. An `Err` is a failure the user has to see; the session stays valid either way.
     pub async fn run(&mut self, prompt: &str, control: &Control, events: EventSink<'_>) -> Result<Outcome, String> {
+        for feature in &self.features {
+            feature.on_run_start();
+        }
+        self.save_state(events)?;
+        self.save_notes()?;
         self.session.push(Message::user(prompt), None)?;
         let mut compacted_for_overflow = false;
         loop {
@@ -205,6 +315,8 @@ impl Agent {
                     return Ok(Outcome::Stopped);
                 }
             }
+            // A tool may have changed the mode, or a compaction summarised a note away.
+            self.save_notes()?;
 
             let request = self.request();
             let written = Mutex::new(String::new());
@@ -270,6 +382,13 @@ impl Agent {
                     events(Event::Steered(text));
                     continue;
                 }
+                let reply = response.message.text();
+                for feature in &self.features {
+                    if let Some(notice) = feature.on_run_end(&reply) {
+                        events(Event::Notice(notice));
+                    }
+                }
+                self.save_state(events)?;
                 return Ok(match response.stop {
                     StopReason::MaxTokens => Outcome::CutOff,
                     StopReason::Refusal => Outcome::Refused,
@@ -281,15 +400,50 @@ impl Agent {
             let mut content = self.run_tools(&calls, cut_off, control, events).await?;
             if control.stopped() {
                 self.session.push(Message { role: Role::User, content }, None)?;
+                self.save_state(events)?;
                 return Ok(Outcome::Stopped);
             }
-            if let Some(text) = control.take_steering() {
+            let ended = self.ends_run(&calls, &content);
+            let steered = control.take_steering();
+            if let Some(text) = &steered {
                 // Results come first: a provider reads the message's start as the calls' answers.
                 content.push(Block::Text { text: text.clone() });
-                events(Event::Steered(text));
+                events(Event::Steered(text.clone()));
             }
             self.session.push(Message { role: Role::User, content }, None)?;
+            self.save_state(events)?;
+            // What the user just sent still deserves an answer, so it keeps the run going.
+            if ended && steered.is_none() {
+                return Ok(Outcome::Done);
+            }
         }
+    }
+
+    /// Whether a tool that ends the run succeeded in this batch.
+    fn ends_run(&self, calls: &[(String, String, Value)], results: &[Block]) -> bool {
+        calls.iter().zip(results).any(|((_, name, _), result)| {
+            self.registry.get(name).is_some_and(|(spec, _)| spec.ends_run) && matches!(result, Block::ToolResult { is_error: false, .. })
+        })
+    }
+
+    /// Saves the notes features owe the model.
+    fn save_notes(&mut self) -> Result<(), String> {
+        let notes: Vec<Note> = self.features.iter().flat_map(|feature| feature.notes(&self.session)).collect();
+        for note in notes {
+            self.session.push_note(note)?;
+        }
+        Ok(())
+    }
+
+    /// Saves each feature's state that changed, and tells whoever is watching.
+    fn save_state(&mut self, events: EventSink<'_>) -> Result<(), String> {
+        let states: Vec<(String, Value)> = self.features.iter().flat_map(|feature| feature.state_to_save()).collect();
+        for (key, value) in states {
+            if self.session.set_state(&key, value.clone())? {
+                events(Event::State { key, value });
+            }
+        }
+        Ok(())
     }
 
     fn request(&self) -> Request {
@@ -327,18 +481,16 @@ impl Agent {
                 Planned::Settled(Err("The reply reached its length limit before this tool call was complete, so it did not run. Call it again, with a smaller input if it was large.".to_string()))
             } else if !input.is_object() {
                 Planned::Settled(Err("The tool's input was not valid JSON, so it did not run. Call it again with complete input.".to_string()))
-            } else if let Some(reason) = self.denied(name, input) {
-                Planned::Settled(Err(reason))
             } else if name == TOOL_SEARCH {
                 Planned::Settled(self.tool_search(input))
             } else if let Some((spec, tool)) = self.registry.get(name) {
-                let (deferred, parallel_safe, tool) = (spec.loading == Loading::Deferred, spec.parallel_safe, tool.clone());
-                if deferred {
+                let (spec, tool) = (spec.clone(), tool.clone());
+                if spec.loading == Loading::Deferred {
                     // Also on the provider's own search path, so a chat that later moves to a
                     // provider without one still offers the tools it was using.
                     self.session.load_tool(name)?;
                 }
-                Planned::Run { tool, parallel_safe }
+                Planned::Run { tool, spec }
             } else {
                 Planned::Settled(Err(format!("There is no tool named {name}.")))
             };
@@ -346,7 +498,8 @@ impl Agent {
             plans.push(plan);
         }
 
-        let context = ToolContext { cwd: self.cwd.clone(), cancel: control.cancel.clone() };
+        let context = ToolContext { cwd: self.cwd.clone(), cancel: control.cancel.clone(), user: User::new(control.clone(), events) };
+        let features = &self.features;
         let run_one = |index: usize| {
             let (id, name, input) = &calls[index];
             let plan = &plans[index];
@@ -355,13 +508,18 @@ impl Agent {
                 let result = match plan {
                     Planned::Settled(result) => result.clone(),
                     Planned::Run { .. } if control.stopped() => Err(STOPPED.to_string()),
-                    Planned::Run { tool, .. } => {
-                        tokio::select! {
-                            biased;
-                            () = control.cancel.cancelled() => Err(STOPPED.to_string()),
-                            result = tool.run(input.clone(), context) => result,
+                    // Judged now, not when the reply arrived: an earlier call in this reply may
+                    // have changed what is allowed.
+                    Planned::Run { tool, spec } => match denied(features, spec, input) {
+                        Some(reason) => Err(reason),
+                        None => {
+                            tokio::select! {
+                                biased;
+                                () = control.cancel.cancelled() => Err(STOPPED.to_string()),
+                                result = tool.run(input.clone(), context) => result,
+                            }
                         }
-                    }
+                    },
                 };
                 let (content, is_error) = match result {
                     Ok(content) => (content, false),
@@ -374,7 +532,7 @@ impl Agent {
 
         // Calls run in the model's order. Neighbours that are all safe to run side by side do;
         // anything that changes state runs alone, after what came before it has finished.
-        let safe = |index: usize| matches!(plans[index], Planned::Run { parallel_safe: true, .. });
+        let safe = |index: usize| matches!(&plans[index], Planned::Run { spec, .. } if spec.parallel_safe);
         let mut results = Vec::with_capacity(calls.len());
         let mut index = 0;
         while index < calls.len() {
@@ -388,13 +546,6 @@ impl Agent {
             index = end;
         }
         Ok(results)
-    }
-
-    fn denied(&self, name: &str, input: &Value) -> Option<String> {
-        self.features.iter().find_map(|feature| match feature.on_tool_call(name, input) {
-            Verdict::Allow => None,
-            Verdict::Deny(reason) => Some(reason),
-        })
     }
 
     /// Our own tool search, for providers without one. Found tools join the next request.
@@ -438,8 +589,10 @@ impl Agent {
         }
         events(Event::Compacting);
         let budget = self.settings.context_window.map_or(DEFAULT_SUMMARY_BUDGET_CHARS, |window| window as usize * 2);
-        let request =
-            compaction::request(&self.settings.model, self.session.summary(), &messages[start..cut], focus, budget);
+        // The app's own notes are neither the conversation nor the user's words.
+        let conversation: Vec<Message> =
+            (start..cut).filter(|index| !self.session.is_note(*index)).map(|index| messages[index].clone()).collect();
+        let request = compaction::request(&self.settings.model, self.session.summary(), &conversation, focus, budget);
         let retrying = |notice: RetryNotice| events(Event::Retrying(notice));
         let response = tokio::select! {
             biased;
@@ -452,7 +605,8 @@ impl Agent {
         if body.trim().is_empty() {
             return Err("The model returned an empty summary.".to_string());
         }
-        let summary = Summary::build(self.session.summary(), &messages[start..cut], body);
+        let mut summary = Summary::build(self.session.summary(), &conversation, body);
+        summary.sections = self.features.iter().flat_map(|feature| feature.summary_sections()).collect();
         let keep = messages.len() - cut;
         self.session.compact(summary, keep)?;
         events(Event::Compacted { usage: response.usage });
@@ -460,12 +614,17 @@ impl Agent {
     }
 }
 
+/// Why this call may not run, if a feature forbids it.
+fn denied(features: &[Box<dyn Feature>], tool: &ToolSpec, input: &Value) -> Option<String> {
+    features.iter().find_map(|feature| match feature.on_tool_call(tool, input) {
+        Verdict::Allow => None,
+        Verdict::Deny(reason) => Some(reason),
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::atomic::{AtomicBool, AtomicUsize, Ordering},
-        time::Duration,
-    };
+    use std::{sync::atomic::AtomicUsize, time::Duration};
 
     use async_trait::async_trait;
     use serde_json::json;
@@ -486,6 +645,8 @@ mod tests {
             loading,
             parallel_safe,
             hint: format!("use {name} for {name} things"),
+            guidelines: Vec::new(),
+            ends_run: false,
         }
     }
 
@@ -498,7 +659,7 @@ mod tests {
             spec(self.0, self.1, true)
         }
 
-        async fn run(&self, input: Value, _: &ToolContext) -> Result<String, String> {
+        async fn run(&self, input: Value, _: &ToolContext<'_>) -> Result<String, String> {
             Ok(input["text"].as_str().unwrap_or("ok").to_string())
         }
     }
@@ -512,7 +673,7 @@ mod tests {
             spec("together", Loading::Always, true)
         }
 
-        async fn run(&self, _: Value, _: &ToolContext) -> Result<String, String> {
+        async fn run(&self, _: Value, _: &ToolContext<'_>) -> Result<String, String> {
             self.0.wait().await;
             Ok("met".to_string())
         }
@@ -531,7 +692,7 @@ mod tests {
             spec("alone", Loading::Always, false)
         }
 
-        async fn run(&self, _: Value, _: &ToolContext) -> Result<String, String> {
+        async fn run(&self, _: Value, _: &ToolContext<'_>) -> Result<String, String> {
             let inside = self.inside.fetch_add(1, Ordering::SeqCst) + 1;
             self.most.fetch_max(inside, Ordering::SeqCst);
             tokio::time::sleep(Duration::from_millis(5)).await;
@@ -561,7 +722,7 @@ mod tests {
             spec("forever", Loading::Always, false)
         }
 
-        async fn run(&self, _: Value, _: &ToolContext) -> Result<String, String> {
+        async fn run(&self, _: Value, _: &ToolContext<'_>) -> Result<String, String> {
             let _guard = Guard(self.abandoned.clone());
             self.started.notify_one();
             std::future::pending().await
@@ -578,7 +739,7 @@ mod tests {
     fn rig_with(provider: ScriptedProvider, tools: Vec<Arc<dyn Tool>>, context_window: Option<u64>) -> Rig {
         let folder = tempfile::tempdir().unwrap();
         let session = Session::create(&folder.path().join("chat.jsonl"), folder.path()).unwrap();
-        let settings = Settings { model: "test-model".into(), effort: None, max_output_tokens: None, context_window };
+        let settings = Settings { model: "test-model".into(), effort: None, max_output_tokens: None, context_window, ultra: false };
         let agent = Agent::new(
             Arc::new(provider.clone()),
             Arc::new(Registry::new(tools).unwrap()),
@@ -870,7 +1031,7 @@ mod tests {
         drop(rig.agent);
 
         let provider = ScriptedProvider::new(vec![say("Picking up where I left off.")]);
-        let settings = Settings { model: "test-model".into(), effort: None, max_output_tokens: None, context_window: None };
+        let settings = Settings { model: "test-model".into(), effort: None, max_output_tokens: None, context_window: None, ultra: false };
         let session = Session::open(&path).unwrap();
         assert_eq!(session.cwd(), cwd);
         let mut agent = Agent::new(
@@ -895,8 +1056,8 @@ mod tests {
             request.system.push(SystemPart { text: "Read-only mode.".into() });
         }
 
-        fn on_tool_call(&self, name: &str, _: &Value) -> Verdict {
-            if name == "alone" { Verdict::Deny("This mode does not allow changes.".into()) } else { Verdict::Allow }
+        fn on_tool_call(&self, tool: &ToolSpec, _: &Value) -> Verdict {
+            if tool.name == "alone" { Verdict::Deny("This mode does not allow changes.".into()) } else { Verdict::Allow }
         }
     }
 
@@ -923,6 +1084,319 @@ mod tests {
         assert_eq!(results[3], ("fine".to_string(), false));
         assert_eq!(alone.most.load(Ordering::SeqCst), 0);
         assert_eq!(rig.provider.requests()[0].system.last().unwrap().text, "Read-only mode.");
+    }
+
+    /// Ends the run when it succeeds; fails when told to.
+    struct Finish;
+
+    #[async_trait]
+    impl Tool for Finish {
+        fn spec(&self) -> ToolSpec {
+            ToolSpec { ends_run: true, ..spec("finish", Loading::Always, false) }
+        }
+
+        async fn run(&self, input: Value, _: &ToolContext<'_>) -> Result<String, String> {
+            if input["fail"] == true { Err("Not yet.".to_string()) } else { Ok("Submitted.".to_string()) }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_tool_that_ends_the_run_is_answered_and_nothing_more_is_asked() {
+        let steps = vec![call(&[("a", "finish", json!({ "fail": true }))]), call(&[("b", "finish", json!({}))])];
+        let mut rig = rig(steps, vec![Arc::new(Finish)]);
+        assert_eq!(rig.run("go", &Control::new()).await, Ok(Outcome::Done));
+        // The failed call did not end the run; the second did, with its result saved.
+        assert_eq!(rig.provider.requests().len(), 2);
+        assert_eq!(rig.results(), [("Not yet.".to_string(), true), ("Submitted.".to_string(), false)]);
+        assert_calls_answered(rig.agent.session().messages());
+        assert_eq!(rig.agent.session().messages().len(), 5);
+    }
+
+    #[tokio::test]
+    async fn a_message_sent_as_the_run_would_end_keeps_it_going() {
+        let steps = vec![call(&[("a", "finish", json!({}))]), say("Revised.")];
+        let mut rig = rig(steps, vec![Arc::new(Finish)]);
+        let control = Control::new();
+        control.steer("one change first");
+        assert_eq!(rig.run("go", &control).await, Ok(Outcome::Done));
+        assert_eq!(rig.provider.requests().len(), 2);
+    }
+
+    /// Asks the user one question and returns what came back.
+    struct Asks;
+
+    #[async_trait]
+    impl Tool for Asks {
+        fn spec(&self) -> ToolSpec {
+            spec("asks", Loading::Always, false)
+        }
+
+        async fn run(&self, _: Value, context: &ToolContext<'_>) -> Result<String, String> {
+            if !context.user.present() {
+                return Ok("nobody".to_string());
+            }
+            let question = Question {
+                id: "colour".into(),
+                header: "Colour".into(),
+                question: "Which colour?".into(),
+                options: Vec::new(),
+                multi_select: false,
+            };
+            Ok(format!("{:?}", context.user.ask(vec![question], true).await))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_tool_can_ask_the_user_and_wait_for_the_answer() {
+        let steps = vec![call(&[("a", "asks", json!({}))]), say("Blue it is."), call(&[("b", "asks", json!({}))]), say("Fine.")];
+        let mut rig = rig(steps, vec![Arc::new(Asks)]);
+
+        let control = Control::with_user();
+        let (answerer, events) = (control.clone(), rig.events.clone());
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                let asked = events.lock().unwrap().iter().find_map(|event| match event {
+                    Event::Question { id, questions, wrap_up: true } if questions[0].id == "colour" => Some(id.clone()),
+                    _ => None,
+                });
+                if let Some(id) = asked {
+                    assert!(answerer.answer(&id, Answer::WrapUp));
+                    assert!(!answerer.answer(&id, Answer::Cancelled), "a question is answered once");
+                    return;
+                }
+            }
+        });
+        let outcome = tokio::time::timeout(Duration::from_secs(5), rig.run("go", &control)).await.unwrap();
+        assert_eq!(outcome, Ok(Outcome::Done));
+        assert_eq!(rig.results()[0], ("WrapUp".to_string(), false));
+
+        // With nobody watching, the tool is told so instead of waiting for ever.
+        assert_eq!(rig.run("again", &Control::new()).await, Ok(Outcome::Done));
+        assert_eq!(rig.results()[1], ("nobody".to_string(), false));
+    }
+
+    #[tokio::test]
+    async fn stopping_while_a_question_waits_drops_it() {
+        let mut rig = rig(vec![call(&[("a", "asks", json!({}))])], vec![Arc::new(Asks)]);
+        let control = Control::with_user();
+        let (stopper, events) = (control.clone(), rig.events.clone());
+        tokio::spawn(async move {
+            while !events.lock().unwrap().iter().any(|event| matches!(event, Event::Question { .. })) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            stopper.stop();
+        });
+        let outcome = tokio::time::timeout(Duration::from_secs(5), rig.run("go", &control)).await.unwrap();
+        assert_eq!(outcome, Ok(Outcome::Stopped));
+        assert_eq!(rig.results(), [(STOPPED.to_string(), true)]);
+        assert!(!control.answer("q1", Answer::Cancelled), "nothing is left waiting");
+    }
+
+    /// A mode a tool switches on mid-reply: once on, `alone` may not run.
+    #[derive(Clone, Default)]
+    struct Lockable(Arc<AtomicBool>);
+
+    #[async_trait]
+    impl Tool for Lockable {
+        fn spec(&self) -> ToolSpec {
+            spec("lock", Loading::Always, false)
+        }
+
+        async fn run(&self, _: Value, _: &ToolContext<'_>) -> Result<String, String> {
+            self.0.store(true, Ordering::SeqCst);
+            Ok("Locked.".to_string())
+        }
+    }
+
+    impl Feature for Lockable {
+        fn on_tool_call(&self, tool: &ToolSpec, _: &Value) -> Verdict {
+            if self.0.load(Ordering::SeqCst) && tool.name == "alone" { Verdict::Deny("Locked.".into()) } else { Verdict::Allow }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_call_is_judged_when_it_runs_so_an_earlier_call_in_the_reply_can_forbid_it() {
+        let (alone, lock) = (Arc::new(Alone::default()), Lockable::default());
+        let steps = vec![call(&[("a", "alone", json!({})), ("b", "lock", json!({})), ("c", "alone", json!({}))]), say("Done.")];
+        let mut rig = rig(steps, vec![alone.clone(), Arc::new(lock.clone())]);
+        rig.agent = rig.agent.with_feature(Box::new(lock));
+        assert_eq!(rig.run("go", &Control::new()).await, Ok(Outcome::Done));
+        let results = rig.results();
+        assert_eq!(results[0], ("ran".to_string(), false));
+        assert_eq!(results[2], ("Locked.".to_string(), true));
+    }
+
+    /// Counts tool batches as its state, and owes the model one note per session.
+    #[derive(Default)]
+    struct Keeper {
+        batches: AtomicUsize,
+    }
+
+    impl Feature for Keeper {
+        fn notes(&self, session: &Session) -> Vec<Note> {
+            if session.latest_note("rules").is_some() {
+                return Vec::new();
+            }
+            vec![Note { tag: "rules".into(), text: "House rules.".into() }]
+        }
+
+        fn after_turn(&self, reply: &Message) {
+            if reply.tool_uses().next().is_some() {
+                self.batches.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        fn state_to_save(&self) -> Vec<(String, Value)> {
+            vec![("batches".into(), json!(self.batches.load(Ordering::SeqCst)))]
+        }
+
+        fn summary_sections(&self) -> Vec<String> {
+            vec![format!("## Batches\n{}", self.batches.load(Ordering::SeqCst))]
+        }
+
+        fn on_run_end(&self, reply: &str) -> Option<String> {
+            reply.contains("oops").then(|| "The reply said oops.".to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn notes_come_before_the_users_message_and_state_is_saved_as_it_changes() {
+        let steps = vec![call(&[("a", "echo", json!({ "text": "one" }))]), say("Done, oops."), say("Again.")];
+        let mut rig = rig(steps, vec![Arc::new(Echo("echo", Loading::Always))]);
+        rig.agent = rig.agent.with_feature(Box::new(Keeper::default()));
+        assert_eq!(rig.run("go", &Control::new()).await, Ok(Outcome::Done));
+
+        let first = &rig.provider.requests()[0].messages;
+        assert_eq!(first[0].text(), "House rules.");
+        assert_eq!(first[1].text(), "go", "the user's message is last");
+        let saved: Vec<Value> = rig
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|event| match event {
+                Event::State { key, value } if key == "batches" => Some(value.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(saved, [json!(0), json!(1)], "written when it changes, not at every step");
+        assert!(rig.saw(|event| *event == Event::Notice("The reply said oops.".into())));
+
+        // The note is owed once: the next run does not repeat it.
+        assert_eq!(rig.run("more", &Control::new()).await, Ok(Outcome::Done));
+        let texts: Vec<String> = rig.provider.requests()[2].messages.iter().map(Message::text).collect();
+        assert_eq!(texts.iter().filter(|text| *text == "House rules.").count(), 1);
+        assert_eq!(Session::open(rig.agent.session().path()).unwrap().state("batches"), Some(&json!(1)));
+    }
+
+    #[tokio::test]
+    async fn a_compaction_keeps_feature_sections_and_the_note_is_sent_again() {
+        let mut rig = rig(vec![say("First."), say("Summary body."), say("Second.")], vec![]);
+        rig.agent = rig.agent.with_feature(Box::new(Keeper::default()));
+        assert_eq!(rig.run("go", &Control::new()).await, Ok(Outcome::Done));
+        rig.agent.compact(None, true, &Control::new(), &|_| {}).await.unwrap();
+
+        // The summariser is not shown the app's note, and the summary never quotes it.
+        let summarised = rig.provider.requests()[1].messages[0].text();
+        assert!(!summarised.contains("House rules."));
+        let summary = rig.agent.session().messages()[0].text();
+        assert!(summary.contains("## Batches\n0"));
+        assert!(summary.contains("<user-message>\ngo\n</user-message>") && !summary.contains("House rules."));
+
+        assert_eq!(rig.run("next", &Control::new()).await, Ok(Outcome::Done));
+        let texts: Vec<String> = rig.provider.requests()[2].messages.iter().map(Message::text).collect();
+        assert_eq!(texts[1..], ["House rules.", "next"]);
+    }
+
+    #[tokio::test]
+    async fn a_planning_run_refuses_changes_asks_and_ends_with_a_plan_for_review() {
+        use crate::{
+            kit::Kit,
+            plan::{AgentMode, Contract, PLAN_STATE, PlanState, prompt as plan_prompt},
+        };
+
+        let alone = Arc::new(Alone::default());
+        let build = |session: Session, provider: &ScriptedProvider, mode: AgentMode, alone: Arc<Alone>| {
+            let kit = Kit::new(&session, Some(mode), false);
+            let mut tools: Vec<Arc<dyn Tool>> = vec![alone, Arc::new(Echo("echo", Loading::Always))];
+            tools.extend(kit.tools());
+            let settings = Settings { model: "m".into(), effort: None, max_output_tokens: None, context_window: None, ultra: false };
+            let agent = Agent::new(Arc::new(provider.clone()), Arc::new(Registry::new(tools).unwrap()), session, &Profile::code(), settings);
+            kit.attach(agent)
+        };
+        let question = json!({ "questions": [{ "id": "scope", "header": "Scope", "question": "How far?", "options": [
+            { "label": "Small", "description": "Just the bug." }, { "label": "Large", "description": "The module." }
+        ] }] });
+        let provider = ScriptedProvider::new(vec![
+            call(&[("a", "alone", json!({})), ("b", "echo", json!({ "text": "read" }))]),
+            call(&[("c", crate::ask::ASK_USER_QUESTION, question)]),
+            call(&[("d", crate::plan::PLAN_MODE_COMPLETE, json!({ "plan": "# Fix\n\n1. Do it" }))]),
+            say("Implemented."),
+        ]);
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("chat.jsonl");
+        let mut agent = build(Session::create(&path, folder.path()).unwrap(), &provider, AgentMode::Plan, alone.clone());
+
+        let control = Control::with_user();
+        let seen: Arc<Mutex<Vec<Event>>> = Arc::default();
+        let (answerer, events) = (control.clone(), seen.clone());
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                let asked = events.lock().unwrap().iter().find_map(|event| match event {
+                    Event::Question { id, wrap_up, .. } => Some((id.clone(), *wrap_up)),
+                    _ => None,
+                });
+                if let Some((id, wrap_up)) = asked {
+                    assert!(!wrap_up, "only Ultra Plan offers to wrap up");
+                    let picked = crate::ask::QuestionAnswer { question_id: "scope".into(), selected: vec!["Small".into()], custom: None };
+                    answerer.answer(&id, Answer::Answered(vec![picked]));
+                    return;
+                }
+            }
+        });
+        let sink = seen.clone();
+        let outcome = tokio::time::timeout(Duration::from_secs(5), agent.run("Plan the fix", &control, &move |event| sink.lock().unwrap().push(event)))
+            .await
+            .unwrap();
+        assert_eq!(outcome, Ok(Outcome::Done));
+
+        // The contract came first, the request last; the same tools as any other mode.
+        let requests = provider.requests();
+        assert_eq!(requests.len(), 3, "submitting the plan ended the run");
+        assert_eq!(requests[0].messages[0].text(), plan_prompt::contract(Contract::Plan));
+        assert_eq!(requests[0].messages[1].text(), "Plan the fix");
+        let results: Vec<(String, bool)> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|event| match event {
+                Event::ToolResult { content, is_error, .. } => Some((content.clone(), *is_error)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(results[0], ("Plan mode blocks the mutating tool 'alone'.".to_string(), true));
+        assert_eq!(results[1], ("read".to_string(), false));
+        assert_eq!(results[2].0, "The user answered your questions:\n\n**Scope** — How far?\n- Small");
+        assert_eq!(results[3], ("**Proposed Plan**\n\n# Fix\n\n1. Do it".to_string(), false));
+        assert_eq!(alone.most.load(Ordering::SeqCst), 0);
+        let waiting = PlanState { mode: AgentMode::Plan, plan: Some("# Fix\n\n1. Do it".into()) };
+        assert!(seen.lock().unwrap().contains(&Event::State { key: PLAN_STATE.into(), value: waiting.to_value() }));
+        drop(agent);
+
+        // Approved: the next run is in Build. The model is told planning is over, the proposal
+        // is consumed, and changes run again.
+        let mut agent = build(Session::open(&path).unwrap(), &provider, AgentMode::Build, alone.clone());
+        assert_eq!(PlanState::from_value(agent.session().state(PLAN_STATE).unwrap()), Some(waiting));
+        assert_eq!(agent.run("Implement the plan.", &Control::new(), &|_| {}).await, Ok(Outcome::Done));
+        let sent = &provider.requests()[3].messages;
+        assert_calls_answered(sent);
+        let tail: Vec<String> = sent[sent.len() - 2..].iter().map(Message::text).collect();
+        assert_eq!(tail, [plan_prompt::contract(Contract::Normal), "Implement the plan.".to_string()]);
+        assert_eq!(agent.session().state(PLAN_STATE), Some(&json!({ "mode": "build" })));
+        assert_eq!(requests[0].tools, provider.requests()[3].tools, "the tool list is the same in every mode");
+        assert_eq!(requests[0].system, provider.requests()[3].system);
     }
 
     #[tokio::test]

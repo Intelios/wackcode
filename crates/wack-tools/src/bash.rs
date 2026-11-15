@@ -116,10 +116,12 @@ impl Tool for Bash {
             loading: Loading::Always,
             parallel_safe: false,
             hint: "run a shell command: builds, tests, Git, anything the other tools don't cover".into(),
+            guidelines: Vec::new(),
+            ends_run: false,
         }
     }
 
-    async fn run(&self, input: Value, context: &ToolContext) -> Result<String, String> {
+    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<String, String> {
         let input: Input = parse(input)?;
         let limit = Duration::from_secs(input.timeout.unwrap_or(DEFAULT_TIMEOUT).clamp(1, MAX_TIMEOUT));
 
@@ -183,12 +185,11 @@ impl Tool for Bash {
 
 #[cfg(test)]
 mod tests {
-    use tokio_util::sync::CancellationToken;
 
     use super::*;
 
-    fn context(folder: &tempfile::TempDir) -> ToolContext {
-        ToolContext { cwd: folder.path().to_path_buf(), cancel: CancellationToken::new() }
+    fn context(folder: &tempfile::TempDir) -> ToolContext<'static> {
+        ToolContext::detached(folder.path().to_path_buf())
     }
 
     fn alive(pid: i32) -> bool {

@@ -20,7 +20,7 @@ use std::{
 use std::time::Duration;
 
 use gpui::{App, AppContext, Context, Entity, SharedString, Subscription, Task};
-use wack_core::{Appearance, Chat, Effort, Job, ModelChoice, Outcome, Project, Store, Ui, WireFormat, title_from};
+use wack_core::{AgentMode, Appearance, Chat, Job, ModelChoice, Outcome, Project, Reasoning, Store, Ui, WireFormat, title_from};
 
 use crate::{
     backdrop::Picture,
@@ -577,7 +577,7 @@ impl AppState {
             cx.notify();
             return;
         }
-        let chat = match self.store.create_chat(&project, &title_from(&text), choice) {
+        let chat = match self.store.create_chat(&project, &title_from(&text), choice, AgentMode::Build) {
             Ok(chat) => chat,
             Err(message) => {
                 self.notice = Some(message.into());
@@ -809,7 +809,7 @@ impl AppState {
     }
 
     /// Sets the model for the chat on screen (and as the default for new chats).
-    pub fn choose(&mut self, connection: Option<String>, model: Option<String>, effort: Option<Option<Effort>>, cx: &mut Context<Self>) {
+    pub fn choose(&mut self, connection: Option<String>, model: Option<String>, effort: Option<Option<Reasoning>>, cx: &mut Context<Self>) {
         let (chat, choice) = self.current_choice();
         let resolved = self.store.resolve(&choice);
         let current_effort = resolved.as_ref().and_then(|resolved| resolved.effort);

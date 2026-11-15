@@ -12,7 +12,7 @@ use gpui::{
     AnchoredPositionMode, App, Entity, Focusable, Hsla, MouseButton, SharedString, Window, anchored, deferred, div,
     point, prelude::*, px,
 };
-use wack_core::Effort;
+use wack_core::Reasoning;
 
 use crate::{
     actions::{ChooseEffort, ChooseModel, CloseMenu, Compact, OpenEffortMenu, OpenModelMenu, Send, Stop, Unqueue},
@@ -71,7 +71,7 @@ pub struct MenuItem {
 #[derive(Clone, Debug)]
 pub enum Choice {
     Model { connection: String, model: String },
-    Effort(Option<Effort>),
+    Effort(Option<Reasoning>),
 }
 
 #[derive(Clone, Debug)]

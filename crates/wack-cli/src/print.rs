@@ -2,12 +2,18 @@
 
 use std::{
     io::{IsTerminal, Write},
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 
 use serde_json::Value;
-use wack_agent::Event;
+use wack_agent::{
+    Event,
+    plan::{PLAN_STATE, PlanState},
+    todo::{Status, TODO_STATE, TodoList},
+};
 use wack_llm::Usage;
+
+use crate::asking::Asking;
 
 const RESULT_LINES: usize = 6;
 
@@ -15,7 +21,7 @@ fn colour() -> bool {
     std::io::stdout().is_terminal()
 }
 
-fn paint(code: &str, text: &str) -> String {
+pub fn paint(code: &str, text: &str) -> String {
     if colour() { format!("\x1b[{code}m{text}\x1b[0m") } else { text.to_string() }
 }
 
@@ -32,14 +38,14 @@ struct State {
     replies: u32,
 }
 
-#[derive(Default)]
 pub struct Printer {
     state: Mutex<State>,
+    asking: Arc<Asking>,
 }
 
 impl Printer {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(asking: Arc<Asking>) -> Self {
+        Self { state: Mutex::default(), asking }
     }
 
     pub fn event(&self, event: Event) {
@@ -94,6 +100,27 @@ impl Printer {
                 println!("{}", dim("Compacting the conversation…"));
             }
             Event::Compacted { .. } => println!("{}", dim("Compacted.")),
+            Event::Question { id, questions, wrap_up } => {
+                Self::break_line(&mut state);
+                self.asking.ask(id, questions, wrap_up);
+            }
+            Event::State { key, value } if key == PLAN_STATE => {
+                if let Some(PlanState { mode, plan: Some(plan) }) = PlanState::from_value(&value) {
+                    Self::break_line(&mut state);
+                    println!("\n{}\n\n{plan}\n", paint("1;35", &format!("Proposed plan ({})", mode.label())));
+                }
+            }
+            Event::State { key, value } if key == TODO_STATE => {
+                if let Some(list) = TodoList::from_value(&value) {
+                    Self::break_line(&mut state);
+                    println!("{}", dim(&todo_line(&list)));
+                }
+            }
+            Event::State { .. } => {}
+            Event::Notice(text) => {
+                Self::break_line(&mut state);
+                println!("{}", paint("33", &text));
+            }
         }
         let _ = std::io::stdout().flush();
     }
@@ -123,6 +150,17 @@ impl Printer {
             "{} replies · {} in · {} out · {} cache read · {} cache write",
             state.replies, usage.input, usage.output, usage.cache_read, usage.cache_write
         )
+    }
+}
+
+/// The todo list in a line: how far along it is and what is being done now.
+fn todo_line(list: &TodoList) -> String {
+    let total = list.visible().count();
+    let done = list.visible().filter(|task| task.status == Status::Completed).count();
+    let doing = list.visible().find(|task| task.status == Status::InProgress);
+    match doing {
+        Some(task) => format!("todo {done}/{total} · {}", task.active_form.as_deref().unwrap_or(&task.subject)),
+        None => format!("todo {done}/{total}"),
     }
 }
 

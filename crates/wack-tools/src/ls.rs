@@ -31,10 +31,12 @@ impl Tool for Ls {
             loading: Loading::Always,
             parallel_safe: true,
             hint: "list what is in a folder".into(),
+            guidelines: Vec::new(),
+            ends_run: false,
         }
     }
 
-    async fn run(&self, input: Value, context: &ToolContext) -> Result<String, String> {
+    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<String, String> {
         let input: Input = parse(input)?;
         let shown = input.path.as_deref().unwrap_or(".");
         let path = resolve(&context.cwd, shown);
@@ -62,7 +64,6 @@ impl Tool for Ls {
 
 #[cfg(test)]
 mod tests {
-    use tokio_util::sync::CancellationToken;
 
     use super::*;
 
@@ -74,7 +75,7 @@ mod tests {
         for file in ["Zed.md", "apple.txt", ".env"] {
             std::fs::write(folder.path().join(file), "").unwrap();
         }
-        let context = ToolContext { cwd: folder.path().to_path_buf(), cancel: CancellationToken::new() };
+        let context = ToolContext::detached(folder.path().to_path_buf());
         assert_eq!(Ls.run(json!({}), &context).await.unwrap(), ".env\napple.txt\nempty/\nsrc/\nZed.md");
         assert_eq!(Ls.run(json!({ "path": "empty" }), &context).await.unwrap(), "(The folder is empty.)");
         assert!(Ls.run(json!({ "limit": 2 }), &context).await.unwrap().ends_with("[2 of 5 entries shown. Set a higher limit to see the rest.]"));

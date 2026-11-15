@@ -30,10 +30,12 @@ impl Tool for Write {
             loading: Loading::Always,
             parallel_safe: false,
             hint: "create a file or replace one entirely".into(),
+            guidelines: Vec::new(),
+            ends_run: false,
         }
     }
 
-    async fn run(&self, input: Value, context: &ToolContext) -> Result<String, String> {
+    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<String, String> {
         let input: Input = parse(input)?;
         let path = resolve(&context.cwd, &input.path);
         if let Some(folder) = path.parent() {
@@ -49,14 +51,13 @@ impl Tool for Write {
 
 #[cfg(test)]
 mod tests {
-    use tokio_util::sync::CancellationToken;
 
     use super::*;
 
     #[tokio::test]
     async fn creates_folders_and_replaces_files() {
         let folder = tempfile::tempdir().unwrap();
-        let context = ToolContext { cwd: folder.path().to_path_buf(), cancel: CancellationToken::new() };
+        let context = ToolContext::detached(folder.path().to_path_buf());
         let created = Write.run(json!({ "path": "src/deep/a.rs", "content": "one\ntwo\n" }), &context).await.unwrap();
         assert_eq!(created, "Created src/deep/a.rs (2 lines).");
         let replaced = Write.run(json!({ "path": "src/deep/a.rs", "content": "three" }), &context).await.unwrap();

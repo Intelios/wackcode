@@ -17,14 +17,32 @@ pub mod store;
 pub mod terminal;
 
 pub use appearance::{Appearance, Backdrop, Mode, Texture};
-pub use run::{Job, RunEvent, RunSetup, run};
+pub use run::{Job, RunEvent, RunSetup, discard_plan, run, save_plan};
 pub use store::{
-    Chat, Connection, Model, ModelChoice, NewConnection, Project, Resolved, Store, Ui, title_from,
+    Chat, Connection, Model, ModelChoice, NewConnection, Project, Reasoning, Resolved, Store, Ui, title_from,
 };
 
 // What the UI needs from the layers below, so it depends on the engine alone.
-pub use wack_agent::{Control, Event, HistoryEntry, Outcome, TOOL_SEARCH, history};
-pub use wack_llm::{Effort, Message, RetryNotice, Role, Usage, WireFormat};
+pub use wack_agent::{AgentMode, Control, Event, HistoryEntry, Outcome, TOOL_SEARCH, history};
+pub use wack_llm::{Message, RetryNotice, Role, Usage, WireFormat};
+
+/// Asking the user: the questions a tool raises and the answers that go back.
+pub mod ask {
+    pub use wack_agent::ask::{ASK_USER_QUESTION, Answer, MAX_ANSWER_LENGTH, Question, QuestionAnswer, QuestionOption, normalize, parse_answers};
+}
+
+/// Plan mode: the state the session saves and the names the transcript looks for.
+pub mod plan {
+    pub use wack_agent::plan::{
+        PLAN_MODE_COMPLETE, PLAN_MODE_ENTER, PLAN_STATE, PlanState, normalize_plan,
+        proposed::{Proposed, parse as parse_proposed},
+    };
+}
+
+/// The todo list as the session saves it.
+pub mod todo {
+    pub use wack_agent::todo::{Status, TODO, TODO_STATE, Task, TodoList, clean};
+}
 
 /// The provider-neutral conversation model, for code that reads messages.
 pub mod llm {

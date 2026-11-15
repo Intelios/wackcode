@@ -170,6 +170,7 @@ impl Conversation {
                     conversation.entries.push(Entry::Compacted);
                 }
                 HistoryEntry::Message { message, usage, at } => conversation.replay(message, *usage, *at),
+                HistoryEntry::Note { .. } | HistoryEntry::State { .. } => {}
             }
         }
         conversation.close_turn(None);
@@ -292,7 +293,7 @@ impl Conversation {
                     *text = "Compacted the conversation to make room".into();
                 }
             }
-            Event::Steered(_) => {}
+            Event::Steered(_) | Event::Question { .. } | Event::State { .. } | Event::Notice(_) => {}
         }
     }
 

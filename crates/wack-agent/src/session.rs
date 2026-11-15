@@ -4,6 +4,13 @@
 //! line, which opening drops. History is linear: there is no branching, rewinding or editing, so
 //! the file is only ever appended to. A compaction is one more line; what came before it stays in
 //! the file but is no longer sent to the model.
+//!
+//! Two kinds of line belong to features rather than the conversation:
+//! - A **note** is a message the app wrote for the model (a mode contract). It is sent as a
+//!   user-role message, but the session knows it is not the user's: the transcript hides it and a
+//!   compaction never quotes it as the user's words.
+//! - A **state** line is a feature's saved state (the todo list, the plan awaiting review). The
+//!   latest line per key wins, and a compaction never touches it.
 
 use std::{
     fs::{File, OpenOptions},
@@ -13,6 +20,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use wack_llm::{Block, Message, Role, Usage};
 
 use crate::compaction::{Summary, estimate_tokens};
@@ -36,6 +44,9 @@ enum Entry {
         /// shows how long a turn took from it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         at: Option<u64>,
+        /// Set when the app wrote this message, not the user: what kind of note it is.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
     },
     /// Everything before this line is replaced by `summary`, except the last `keep` messages.
     Compaction {
@@ -46,6 +57,19 @@ enum Entry {
     ToolsLoaded {
         names: Vec<String>,
     },
+    /// A feature's saved state. The latest line for a key replaces the ones before it.
+    State {
+        key: String,
+        value: Value,
+    },
+}
+
+/// A message the app writes for the model. `tag` says what it is ("contract:plan"), so a feature
+/// can tell whether the model has already been told.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Note {
+    pub tag: String,
+    pub text: String,
 }
 
 pub struct Session {
@@ -54,8 +78,13 @@ pub struct Session {
     cwd: PathBuf,
     /// What the next request sends. After a compaction the first message is the summary.
     messages: Vec<Message>,
+    /// One per message: the note's tag when the app wrote it.
+    notes: Vec<Option<String>>,
+    /// Every note tag ever written, including those since summarised away.
+    noted: Vec<String>,
     summary: Option<Summary>,
     loaded: Vec<String>,
+    states: Vec<(String, Value)>,
     /// The provider's count from the latest reply, and how many messages it covered.
     usage: Option<(Usage, usize)>,
 }
@@ -76,8 +105,11 @@ impl Session {
             file,
             cwd: cwd.to_path_buf(),
             messages: Vec::new(),
+            notes: Vec::new(),
+            noted: Vec::new(),
             summary: None,
             loaded: Vec::new(),
+            states: Vec::new(),
             usage: None,
         };
         let created = SystemTime::now().duration_since(UNIX_EPOCH).map(|time| time.as_secs()).unwrap_or(0);
@@ -109,14 +141,25 @@ impl Session {
         if version > VERSION {
             return Err("This session was written by a newer version of WackCode.".to_string());
         }
-        let mut session =
-            Self { path: path.to_path_buf(), file, cwd, messages: Vec::new(), summary: None, loaded: Vec::new(), usage: None };
+        let mut session = Self {
+            path: path.to_path_buf(),
+            file,
+            cwd,
+            messages: Vec::new(),
+            notes: Vec::new(),
+            noted: Vec::new(),
+            summary: None,
+            loaded: Vec::new(),
+            states: Vec::new(),
+            usage: None,
+        };
         for entry in entries {
             match entry {
                 Entry::Meta { .. } => {}
-                Entry::Message { message, usage, .. } => session.remember(message, usage),
+                Entry::Message { message, usage, note, .. } => session.remember(message, usage, note),
                 Entry::Compaction { summary, keep } => session.apply_compaction(summary, keep),
                 Entry::ToolsLoaded { names } => session.loaded.extend(names),
+                Entry::State { key, value } => session.remember_state(key, value),
             }
         }
         session.repair()?;
@@ -149,26 +192,81 @@ impl Session {
             .map_err(|error| format!("Could not save the chat: {error}"))
     }
 
-    fn remember(&mut self, message: Message, usage: Option<Usage>) {
+    fn remember(&mut self, message: Message, usage: Option<Usage>, note: Option<String>) {
         self.messages.push(message);
+        if let Some(tag) = &note
+            && !self.noted.contains(tag)
+        {
+            self.noted.push(tag.clone());
+        }
+        self.notes.push(note);
         if let Some(usage) = usage {
             self.usage = Some((usage, self.messages.len()));
         }
     }
 
+    fn remember_state(&mut self, key: String, value: Value) {
+        match self.states.iter_mut().find(|(known, _)| *known == key) {
+            Some(state) => state.1 = value,
+            None => self.states.push((key, value)),
+        }
+    }
+
     fn apply_compaction(&mut self, summary: Summary, keep: usize) {
-        let tail = self.messages.split_off(self.messages.len() - keep.min(self.messages.len()));
+        let from = self.messages.len() - keep.min(self.messages.len());
+        let tail = self.messages.split_off(from);
+        let tail_notes = self.notes.split_off(from);
         self.messages = vec![Message::user(summary.render())];
         self.messages.extend(tail);
+        self.notes = vec![None];
+        self.notes.extend(tail_notes);
         self.summary = Some(summary);
         self.usage = None;
     }
 
     /// Adds a message. `usage` is the provider's count for an assistant reply.
     pub fn push(&mut self, message: Message, usage: Option<Usage>) -> Result<(), String> {
-        self.append(&Entry::Message { message: message.clone(), usage, at: Some(now_millis()) })?;
-        self.remember(message, usage);
+        self.append(&Entry::Message { message: message.clone(), usage, at: Some(now_millis()), note: None })?;
+        self.remember(message, usage, None);
         Ok(())
+    }
+
+    /// Adds a message the app wrote for the model.
+    pub fn push_note(&mut self, note: Note) -> Result<(), String> {
+        let message = Message::user(note.text);
+        self.append(&Entry::Message { message: message.clone(), usage: None, at: Some(now_millis()), note: Some(note.tag.clone()) })?;
+        self.remember(message, None, Some(note.tag));
+        Ok(())
+    }
+
+    /// The newest note the model can still see whose tag starts with `prefix`.
+    pub fn latest_note(&self, prefix: &str) -> Option<&str> {
+        self.notes.iter().rev().flatten().map(String::as_str).find(|tag| tag.starts_with(prefix))
+    }
+
+    /// Whether a note with this prefix was ever written, even if since summarised away.
+    pub fn ever_noted(&self, prefix: &str) -> bool {
+        self.noted.iter().any(|tag| tag.starts_with(prefix))
+    }
+
+    /// Whether message `index` is the app's note rather than part of the conversation.
+    pub fn is_note(&self, index: usize) -> bool {
+        self.notes.get(index).is_some_and(Option::is_some)
+    }
+
+    /// A feature's saved state.
+    pub fn state(&self, key: &str) -> Option<&Value> {
+        self.states.iter().find(|(known, _)| known == key).map(|(_, value)| value)
+    }
+
+    /// Saves a feature's state. Returns false, writing nothing, when it has not changed.
+    pub fn set_state(&mut self, key: &str, value: Value) -> Result<bool, String> {
+        if self.state(key) == Some(&value) {
+            return Ok(false);
+        }
+        self.append(&Entry::State { key: key.to_string(), value: value.clone() })?;
+        self.remember_state(key.to_string(), value);
+        Ok(true)
     }
 
     /// Replaces all but the last `keep` messages with a summary.
@@ -231,6 +329,10 @@ pub enum HistoryEntry {
     Message { message: Message, usage: Option<Usage>, at: Option<u64> },
     /// The conversation before this point was summarised for the model.
     Compacted,
+    /// The app told the model something here (a mode contract). Not shown as a message.
+    Note { tag: String },
+    /// A feature saved its state here.
+    State { key: String, value: Value },
 }
 
 /// Reads a whole chat for display. Read-only: unlike [`Session::open`] it repairs nothing, so it
@@ -241,8 +343,10 @@ pub fn history(path: &Path) -> Result<Vec<HistoryEntry>, String> {
     let mut entries = Vec::new();
     for line in String::from_utf8_lossy(&bytes[..complete]).lines() {
         match serde_json::from_str::<Entry>(line) {
-            Ok(Entry::Message { message, usage, at }) => entries.push(HistoryEntry::Message { message, usage, at }),
+            Ok(Entry::Message { note: Some(tag), .. }) => entries.push(HistoryEntry::Note { tag }),
+            Ok(Entry::Message { message, usage, at, note: None }) => entries.push(HistoryEntry::Message { message, usage, at }),
             Ok(Entry::Compaction { .. }) => entries.push(HistoryEntry::Compacted),
+            Ok(Entry::State { key, value }) => entries.push(HistoryEntry::State { key, value }),
             Ok(Entry::Meta { .. } | Entry::ToolsLoaded { .. }) | Err(_) => {}
         }
     }
@@ -347,6 +451,43 @@ mod tests {
         assert_eq!(entries[1], HistoryEntry::Compacted);
         assert!(matches!(&entries[3], HistoryEntry::Message { at: None, .. }));
         assert_eq!(Session::open(&path).unwrap().messages().len(), 3);
+    }
+
+    #[test]
+    fn notes_and_state_survive_reopening_and_compaction() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("chat.jsonl");
+        let mut session = Session::create(&path, folder.path()).unwrap();
+        session.push_note(Note { tag: "contract:plan".into(), text: "Plan rules".into() }).unwrap();
+        session.push(Message::user("one"), None).unwrap();
+        assert!(session.set_state("todo", json!({ "tasks": [1] })).unwrap());
+        assert!(!session.set_state("todo", json!({ "tasks": [1] })).unwrap(), "an unchanged state writes nothing");
+        assert!(session.set_state("todo", json!({ "tasks": [1, 2] })).unwrap());
+        assert!(session.is_note(0) && !session.is_note(1));
+        assert_eq!(session.latest_note("contract:"), Some("contract:plan"));
+
+        // The note is summarised away; the state is not.
+        session.compact(Summary { body: "so far".into(), ..Summary::default() }, 1).unwrap();
+        session.push_note(Note { tag: "contract:normal".into(), text: "Normal rules".into() }).unwrap();
+        for session in [session, Session::open(&path).unwrap()] {
+            assert_eq!(session.latest_note("contract:"), Some("contract:normal"));
+            assert!(session.ever_noted("contract:plan"));
+            assert_eq!(session.state("todo"), Some(&json!({ "tasks": [1, 2] })));
+            assert!(!session.is_note(0) && !session.is_note(1) && session.is_note(2));
+            assert_eq!(session.messages()[2].text(), "Normal rules");
+        }
+
+        let kinds: Vec<String> = history(&path)
+            .unwrap()
+            .iter()
+            .map(|entry| match entry {
+                HistoryEntry::Message { message, .. } => format!("message {}", message.text()),
+                HistoryEntry::Compacted => "compacted".to_string(),
+                HistoryEntry::Note { tag } => format!("note {tag}"),
+                HistoryEntry::State { key, .. } => format!("state {key}"),
+            })
+            .collect();
+        assert_eq!(kinds, ["note contract:plan", "message one", "state todo", "state todo", "compacted", "note contract:normal"]);
     }
 
     #[test]

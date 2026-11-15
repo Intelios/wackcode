@@ -3,8 +3,10 @@
 //!
 //! The three parts are built once when an agent starts and never change during its run, so the
 //! provider's prompt cache holds from the first request to the last. The core text is ported from
-//! version 2 with the features that have not been rebuilt yet (plan modes, todo list, skills,
-//! memory) left out; each returns with its feature.
+//! version 2 with the features that have not been rebuilt yet (skills, memory) left out; each
+//! returns with its feature. Plan mode never changes this prompt: its rules arrive as a note in
+//! the conversation (`plan::contract`). Ultra is the one switch that does, and it is fixed for a
+//! run.
 
 use std::path::{Path, PathBuf};
 
@@ -18,6 +20,7 @@ pub const CODE_PROMPT: &str = "You are a coding agent working inside WackCode, a
 - The user reads your replies as Markdown in a chat transcript. Tool calls show as compact cards they can expand; your thinking and raw tool output are usually collapsed, so anything they need to know must be in your text.
 - Every file you change appears in the user's Changes panel. Nothing you do can be rewound by the app: editing files, running commands, using Git, and anything outside the project may not be reversible.
 - Later in this prompt you'll find a guide to this chat's tools, and possibly project instructions (AGENTS.md, CLAUDE.md). Project instructions override these defaults where they conflict; the user's own messages take precedence.
+- While Plan mode or Ultra Plan is on, the app adds a mode contract to the conversation. Follow it over these defaults until the mode ends.
 - Long chats are compacted automatically. Keep working; never wrap up early or hand off because a conversation feels long.
 
 # Doing tasks
@@ -54,6 +57,7 @@ pub const CODE_PROMPT: &str = "You are a coding agent working inside WackCode, a
 # Using tools
 - Prefer dedicated file and search tools over shell commands when one fits. Use the shell for builds, tests, Git and system commands.
 - Make independent tool calls in parallel in one response; run dependent ones in sequence.
+- For multi-step work, keep a todo list and tick items off as you finish each one, not in batches. Follow the current mode contract when planning.
 - When a tool call is refused or fails, read why and adjust instead of retrying the same call.
 
 # Communicating
@@ -64,6 +68,14 @@ pub const CODE_PROMPT: &str = "You are a coding agent working inside WackCode, a
 - Reference code as `path/to/file.ts:42`, relative to the project.
 - Correct an earlier mistake plainly, and only when it changes something for the user. No long apologies.
 - Stop when the content stops: no closing offers, no recap of what you just said.";
+
+/// What an Ultra chat's system prompt gains, word for word from version 2.
+pub const ULTRA_PROMPT: &str = "# Ultra
+The user set this chat to Ultra: you are running at your highest reasoning effort, and speed and cost are not the goal. Optimise for the most exhaustive, correct answer — not the fastest or cheapest.
+- Investigate fully before you act or conclude. Read the relevant files and context rather than assuming, and follow each lead to the end.
+- Weigh alternatives and edge cases, and check your reasoning for gaps before you commit to an answer.
+- Verify thoroughly: run the checks that would catch you being wrong, and don't settle for the first answer that looks plausible.
+- Ultra changes how hard you work, not what you may do. Every other instruction still applies, and your replies stay as clear and readable as usual.";
 
 /// An instruction file larger than this is cut: it is sent with every request.
 const MAX_CONTEXT_FILE_CHARS: usize = 60_000;
@@ -88,6 +100,15 @@ pub fn guide(cwd: &Path, today: &str, tools: &[&ToolSpec]) -> String {
     if !always.is_empty() {
         lines.extend([String::new(), "## Tools".to_string()]);
         lines.extend(always);
+    }
+    let guidelines: Vec<String> = tools
+        .iter()
+        .filter(|tool| tool.loading == Loading::Always)
+        .flat_map(|tool| tool.guidelines.iter().map(|guideline| format!("- {guideline}")))
+        .collect();
+    if !guidelines.is_empty() {
+        lines.extend([String::new(), "## Using these tools".to_string()]);
+        lines.extend(guidelines);
     }
     let deferred = list(Loading::Deferred);
     if !deferred.is_empty() {
@@ -177,6 +198,8 @@ mod tests {
             loading,
             parallel_safe: true,
             hint: format!("what {name} is for"),
+            guidelines: vec![format!("Use {name} with care.")],
+            ends_run: false,
         }
     }
 
@@ -191,6 +214,9 @@ mod tests {
         assert!(tools.contains("- read: what read is for"));
         assert!(more.contains("- browser: what browser is for"));
         assert!(!guide.contains("Long description"));
+        // Only a loaded tool's rules are listed.
+        let (_, rules) = tools.split_once("## Using these tools").unwrap();
+        assert_eq!(rules.trim(), "- Use read with care.");
     }
 
     #[test]
@@ -225,8 +251,22 @@ mod tests {
 
     #[test]
     fn the_core_prompt_names_nothing_that_version_3_dropped() {
-        for gone in ["checkpoint", "rewind project", "todo list", "Plan mode", "skills", "saved memory"] {
+        for gone in ["checkpoint", "rewind project", "skills", "saved memory"] {
             assert!(!CODE_PROMPT.contains(gone), "the prompt still mentions {gone}");
+        }
+        // The planning texts are version 2's, less what version 3 does not have yet.
+        use crate::plan::{Contract, prompt};
+        let texts = [
+            prompt::contract(Contract::Plan),
+            prompt::contract(Contract::UltraPlan),
+            prompt::contract(Contract::Normal),
+            prompt::UNRESTRICTED_ACCESS.to_string(),
+            ULTRA_PROMPT.to_string(),
+        ];
+        for text in texts {
+            for gone in ["package", "sub-agent", "Sub-agent", "MCP", "browser", "computer", "checkpoint", "skills"] {
+                assert!(!text.contains(gone), "a planning prompt still mentions {gone}");
+            }
         }
     }
 }

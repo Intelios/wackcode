@@ -57,10 +57,12 @@ impl Tool for Grep {
             loading: Loading::Always,
             parallel_safe: true,
             hint: "search file contents by regular expression".into(),
+            guidelines: Vec::new(),
+            ends_run: false,
         }
     }
 
-    async fn run(&self, input: Value, context: &ToolContext) -> Result<String, String> {
+    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<String, String> {
         let input: Input = parse(input)?;
         let root = resolve(&context.cwd, input.path.as_deref().unwrap_or("."));
         let cancel = context.cancel.clone();
@@ -178,7 +180,7 @@ mod tests {
     }
 
     async fn grep(folder: &tempfile::TempDir, input: Value) -> String {
-        let context = ToolContext { cwd: folder.path().to_path_buf(), cancel: CancellationToken::new() };
+        let context = ToolContext::detached(folder.path().to_path_buf());
         Grep.run(input, &context).await.unwrap()
     }
 
@@ -216,7 +218,7 @@ mod tests {
     #[tokio::test]
     async fn a_bad_pattern_is_explained() {
         let folder = project();
-        let context = ToolContext { cwd: folder.path().to_path_buf(), cancel: CancellationToken::new() };
+        let context = ToolContext::detached(folder.path().to_path_buf());
         assert!(Grep.run(json!({ "pattern": "(" }), &context).await.unwrap_err().contains("not a valid regular expression"));
         assert!(Grep.run(json!({ "pattern": "x", "path": "nowhere" }), &context).await.unwrap_err().contains("does not exist"));
     }

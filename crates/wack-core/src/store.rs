@@ -16,6 +16,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+use wack_agent::AgentMode;
 use wack_llm::{Effort, HttpProvider, WireFormat};
 
 use crate::{
@@ -58,6 +59,51 @@ pub struct Project {
     pub pinned: bool,
 }
 
+/// How hard the model should think: one of the provider's own effort levels, or Ultra.
+///
+/// Ultra is WackCode's, never a provider's: it sends the top effort and adds an instruction to
+/// the system prompt. It is kept out of `wack_llm::Effort` so no wire format can ever send it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Reasoning {
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
+    Ultra,
+}
+
+impl Reasoning {
+    /// The effort the provider is asked for. Each wire format lowers it to what it supports.
+    pub fn effort(self) -> Effort {
+        match self {
+            Self::Low => Effort::Low,
+            Self::Medium => Effort::Medium,
+            Self::High => Effort::High,
+            Self::Xhigh => Effort::Xhigh,
+            Self::Max | Self::Ultra => Effort::Max,
+        }
+    }
+
+    pub fn is_ultra(self) -> bool {
+        self == Self::Ultra
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        if text == "ultra" {
+            return Some(Self::Ultra);
+        }
+        Some(match Effort::parse(text)? {
+            Effort::Low => Self::Low,
+            Effort::Medium => Self::Medium,
+            Effort::High => Self::High,
+            Effort::Xhigh => Self::Xhigh,
+            Effort::Max => Self::Max,
+        })
+    }
+}
+
 /// Which model a chat talks to. Any part may be missing: the defaults fill it in.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ModelChoice {
@@ -66,7 +112,7 @@ pub struct ModelChoice {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effort: Option<Effort>,
+    pub effort: Option<Reasoning>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -82,6 +128,10 @@ pub struct Chat {
     pub updated: u64,
     #[serde(default)]
     pub choice: ModelChoice,
+    /// Build, Plan or Ultra Plan. This is the truth between runs; the session file records only
+    /// what the model has been told so far.
+    #[serde(default)]
+    pub mode: AgentMode,
     /// Where the chat's panes are, as the UI wrote it. The engine keeps it without reading it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<serde_json::Value>,
@@ -115,6 +165,9 @@ struct State {
     ui: Ui,
     #[serde(default)]
     appearance: Appearance,
+    /// Settings › Tools: Plan and Ultra Plan may change things. Off unless the user lifts it.
+    #[serde(default)]
+    planning_unrestricted: bool,
 }
 
 /// A connection and model resolved from a [`ModelChoice`], ready to build a run.
@@ -122,7 +175,7 @@ struct State {
 pub struct Resolved {
     pub connection: Connection,
     pub model: Model,
-    pub effort: Option<Effort>,
+    pub effort: Option<Reasoning>,
 }
 
 fn now_millis() -> u64 {
@@ -378,6 +431,7 @@ impl Store {
         project: &str,
         title: &str,
         choice: ModelChoice,
+        mode: AgentMode,
     ) -> Result<Chat, String> {
         if self.project(project).is_none() {
             return Err("That project is gone.".to_string());
@@ -392,6 +446,7 @@ impl Store {
             created: now,
             updated: now,
             choice,
+            mode,
             layout: None,
         };
         self.state.chats.push(chat.clone());
@@ -424,6 +479,29 @@ impl Store {
             .find(|chat| chat.id == id)
             .ok_or("That chat is gone.")?;
         chat.title = title.to_string();
+        self.save()
+    }
+
+    /// Switches a chat between Build, Plan and Ultra Plan. It applies from the chat's next run.
+    pub fn set_mode(&mut self, id: &str, mode: AgentMode) -> Result<(), String> {
+        let chat = self.state.chats.iter_mut().find(|chat| chat.id == id).ok_or("That chat is gone.")?;
+        if chat.mode == mode {
+            return Ok(());
+        }
+        chat.mode = mode;
+        self.save()
+    }
+
+    /// Whether Plan and Ultra Plan may change things (Settings › Tools).
+    pub fn planning_unrestricted(&self) -> bool {
+        self.state.planning_unrestricted
+    }
+
+    pub fn set_planning_unrestricted(&mut self, unrestricted: bool) -> Result<(), String> {
+        if self.state.planning_unrestricted == unrestricted {
+            return Ok(());
+        }
+        self.state.planning_unrestricted = unrestricted;
         self.save()
     }
 
@@ -626,10 +704,10 @@ mod tests {
 
         store.set_pinned(&project.id, true).unwrap();
         let first = store
-            .create_chat(&project.id, "First", ModelChoice::default())
+            .create_chat(&project.id, "First", ModelChoice::default(), AgentMode::Build)
             .unwrap();
         let second = store
-            .create_chat(&project.id, "Second", ModelChoice::default())
+            .create_chat(&project.id, "Second", ModelChoice::default(), AgentMode::Build)
             .unwrap();
         assert_ne!(first.id, second.id);
         store.touch_chat(&first.id).unwrap();
@@ -660,7 +738,7 @@ mod tests {
         let mut store = Store::open(folder.path()).unwrap();
         let project = store.add_project(work.path()).unwrap();
         let chat = store
-            .create_chat(&project.id, "Doomed", ModelChoice::default())
+            .create_chat(&project.id, "Doomed", ModelChoice::default(), AgentMode::Build)
             .unwrap();
         let path = store.session_path(&chat);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -702,7 +780,7 @@ mod tests {
         let picked = ModelChoice {
             connection: Some(second.id.clone()),
             model: Some("b".into()),
-            effort: Some(Effort::High),
+            effort: Some(Reasoning::High),
         };
         store.set_choice(None, picked).unwrap();
         let resolved = store.resolve(&ModelChoice::default()).unwrap();
@@ -712,7 +790,7 @@ mod tests {
                 resolved.model.context_window,
                 resolved.effort
             ),
-            ("b", Some(64_000), Some(Effort::High))
+            ("b", Some(64_000), Some(Reasoning::High))
         );
 
         let gone = ModelChoice {
@@ -726,6 +804,33 @@ mod tests {
             "a removed connection falls back to the default"
         );
         assert_eq!(resolved.model.id, "b");
+    }
+
+    #[test]
+    fn mode_reasoning_and_the_planning_setting_are_saved() {
+        let folder = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        let project = store.add_project(work.path()).unwrap();
+        let choice = ModelChoice { effort: Some(Reasoning::Ultra), ..ModelChoice::default() };
+        let chat = store.create_chat(&project.id, "Plan it", choice, AgentMode::Plan).unwrap();
+        store.set_mode(&chat.id, AgentMode::UltraPlan).unwrap();
+        store.set_planning_unrestricted(true).unwrap();
+
+        let store = Store::open(folder.path()).unwrap();
+        let chat = store.chat(&chat.id).unwrap();
+        assert_eq!(chat.mode, AgentMode::UltraPlan);
+        assert_eq!(chat.choice.effort, Some(Reasoning::Ultra));
+        assert!(store.planning_unrestricted());
+
+        // Ultra is the top effort plus an instruction; the provider never hears the word.
+        assert_eq!(Reasoning::Ultra.effort(), Effort::Max);
+        assert_eq!(Reasoning::parse("ultra"), Some(Reasoning::Ultra));
+        assert_eq!(Reasoning::parse("xhigh"), Some(Reasoning::Xhigh));
+        assert_eq!(serde_json::to_string(&Reasoning::Xhigh).unwrap(), "\"xhigh\"");
+        // A chat saved before modes existed is a Build chat.
+        let old: Chat = serde_json::from_str(r#"{"id":"c","project":"p","title":"t","session":"c.jsonl","created":1,"updated":1,"choice":{"effort":"high"}}"#).unwrap();
+        assert_eq!((old.mode, old.choice.effort), (AgentMode::Build, Some(Reasoning::High)));
     }
 
     #[test]

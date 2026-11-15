@@ -384,7 +384,7 @@ fn last_context(history: &[HistoryEntry]) -> Option<u64> {
         match entry {
             HistoryEntry::Compacted => return None,
             HistoryEntry::Message { usage: Some(usage), .. } => return Some(usage.context_tokens() + usage.output),
-            HistoryEntry::Message { .. } => {}
+            HistoryEntry::Message { .. } | HistoryEntry::Note { .. } | HistoryEntry::State { .. } => {}
         }
     }
     None

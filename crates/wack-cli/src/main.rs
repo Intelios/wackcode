@@ -5,6 +5,7 @@
 //! command prints one, and none takes one as an argument, where it would land in shell history.
 
 mod args;
+mod asking;
 mod print;
 mod terminal;
 
@@ -16,9 +17,9 @@ use std::{
 };
 
 use args::Args;
-use wack_agent::{Agent, Control, Outcome, Profile, Registry, Session, Settings};
-use wack_core::{Model, NewConnection, Store};
-use wack_llm::{Effort, WireFormat};
+use wack_agent::{Agent, AgentMode, Control, Kit, Outcome, Profile, Registry, Session, Settings};
+use wack_core::{Model, NewConnection, Reasoning, Store};
+use wack_llm::WireFormat;
 
 const HELP: &str = "wack: the WackCode agent without the app
 
@@ -30,13 +31,16 @@ const HELP: &str = "wack: the WackCode agent without the app
   wack run [options] <prompt>  Run the agent in the current folder.
       --connection <name>      Which connection to use (needed when there are several).
       --model <id>             Defaults to the connection's first model.
-      --effort low|medium|high|xhigh|max
+      --effort low|medium|high|xhigh|max|ultra
+      --mode build|plan|ultraplan   Plan and Ultra Plan only read, ask, and end with a plan.
+                               A resumed run keeps its mode unless you give one.
       --cwd <folder>           Work in another folder.
       --resume <session file>  Continue an earlier run.
 
   --data-dir <folder>          Use another data folder (for tests).
 
-While a run is going, type a line and press Return to send the agent a message. Ctrl-C stops the run.";
+While a run is going, type a line and press Return to send the agent a message, or to answer a
+question it asked. Ctrl-C stops the run.";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -153,7 +157,11 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     let wanted = args.value("--connection")?;
     let model = args.value("--model")?;
     let effort = match args.value("--effort")? {
-        Some(effort) => Some(Effort::parse(&effort).ok_or("The effort must be low, medium, high, xhigh or max.")?),
+        Some(effort) => Some(Reasoning::parse(&effort).ok_or("The effort must be low, medium, high, xhigh, max or ultra.")?),
+        None => None,
+    };
+    let mode = match args.value("--mode")? {
+        Some(mode) => Some(AgentMode::parse(&mode).ok_or("The mode must be build, plan or ultraplan.")?),
         None => None,
     };
     let cwd = args.value("--cwd")?;
@@ -196,12 +204,31 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
             Session::create(&store.sessions_folder().join(format!("{stamp:x}.jsonl")), &cwd)?
         }
     };
-    let registry = Arc::new(Registry::new(wack_tools::core_tools())?);
-    let settings = Settings { model: model.id.clone(), effort, max_output_tokens: None, context_window: model.context_window };
-    let mut agent = Agent::new(Arc::new(store.provider(connection)?), registry, session, &Profile::code(), settings);
-    eprintln!("{}", print::dim(&format!("{} · {} · {}", connection.name, model.id, agent.session().cwd().display())));
+    let kit = Kit::new(&session, mode, store.planning_unrestricted());
+    let mut tools = wack_tools::core_tools();
+    tools.extend(kit.tools());
+    let registry = Arc::new(Registry::new(tools)?);
+    let settings = Settings {
+        model: model.id.clone(),
+        effort: effort.map(Reasoning::effort),
+        max_output_tokens: None,
+        context_window: model.context_window,
+        ultra: effort.is_some_and(Reasoning::is_ultra),
+    };
+    let mut agent = kit.attach(Agent::new(Arc::new(store.provider(connection)?), registry, session, &Profile::code(), settings));
+    let mut header = format!("{} · {} · {}", connection.name, model.id, agent.session().cwd().display());
+    if kit.plan.mode().planning() {
+        header.push_str(&format!(" · {}", kit.plan.mode().label()));
+    }
+    if effort.is_some_and(Reasoning::is_ultra) {
+        header.push_str(" · Ultra");
+    }
+    eprintln!("{}", print::dim(&header));
 
-    let control = Control::new();
+    // Only a person at the keyboard can answer a question.
+    let listening = !piped && terminal::interactive();
+    let control = if listening { Control::with_user() } else { Control::new() };
+    let asking = Arc::new(asking::Asking::default());
     let stopper = control.clone();
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
@@ -212,18 +239,19 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
             std::process::exit(130);
         }
     });
-    if !piped && terminal::interactive() {
-        let steering = control.clone();
+    if listening {
+        let (steering, asking) = (control.clone(), asking.clone());
         std::thread::spawn(move || {
             for line in std::io::stdin().lines().map_while(Result::ok) {
-                if !line.trim().is_empty() {
+                // A line answers the question on screen, if there is one.
+                if !asking.answer(&line, &steering) && !line.trim().is_empty() {
                     steering.steer(line);
                 }
             }
         });
     }
 
-    let printer = print::Printer::new();
+    let printer = print::Printer::new(asking);
     let outcome = agent.run(&prompt, &control, &|event| printer.event(event)).await;
     printer.finish();
     eprintln!("{}", print::dim(&format!("{}\nsession: {}", printer.usage_line(), agent.session().path().display())));

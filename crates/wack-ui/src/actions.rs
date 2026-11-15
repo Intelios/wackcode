@@ -5,7 +5,7 @@
 //! where nothing handles them, clicks simply do nothing.
 
 use gpui::{Action, App, KeyBinding, actions};
-use wack_core::{Effort, WireFormat};
+use wack_core::{Reasoning, WireFormat};
 
 use crate::panes::{Dock, PaneId, Target, dock::PANE_CONTEXT, terminal::TERMINAL_CONTEXT};
 
@@ -79,7 +79,7 @@ pub struct ChooseModel {
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]
 pub struct ChooseEffort {
-    pub effort: Option<Effort>,
+    pub effort: Option<Reasoning>,
 }
 
 #[derive(Clone, Debug, PartialEq, Action)]

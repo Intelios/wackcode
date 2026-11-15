@@ -1127,9 +1127,9 @@ fn menu_data(app: &AppState, resolved: Option<&wack_core::Resolved>) -> Option<M
             })
             .collect(),
         Menu::Effort => {
-            use wack_core::Effort;
+            use wack_core::Reasoning;
             let current = resolved.and_then(|resolved| resolved.effort);
-            let item = |effort: Option<Effort>, label: &'static str, detail: Option<&'static str>| MenuItem {
+            let item = |effort: Option<Reasoning>, label: &'static str, detail: Option<&'static str>| MenuItem {
                 label: label.into(),
                 detail: detail.map(Into::into),
                 selected: current == effort,
@@ -1139,11 +1139,12 @@ fn menu_data(app: &AppState, resolved: Option<&wack_core::Resolved>) -> Option<M
                 title: Some("Reasoning effort".into()),
                 items: vec![
                     item(None, "Default", Some("the provider’s")),
-                    item(Some(Effort::Low), "Low", None),
-                    item(Some(Effort::Medium), "Medium", None),
-                    item(Some(Effort::High), "High", None),
-                    item(Some(Effort::Xhigh), "Extra high", None),
-                    item(Some(Effort::Max), "Max", None),
+                    item(Some(Reasoning::Low), "Low", None),
+                    item(Some(Reasoning::Medium), "Medium", None),
+                    item(Some(Reasoning::High), "High", None),
+                    item(Some(Reasoning::Xhigh), "Extra high", None),
+                    item(Some(Reasoning::Max), "Max", None),
+                    item(Some(Reasoning::Ultra), "Ultra", Some("the most thorough work")),
                 ],
             }]
         }
@@ -1163,11 +1164,12 @@ fn model_words(resolved: Option<&wack_core::Resolved>) -> (SharedString, Option<
             Some(
                 match resolved.effort {
                     None => "Default effort",
-                    Some(wack_core::Effort::Low) => "Low",
-                    Some(wack_core::Effort::Medium) => "Medium",
-                    Some(wack_core::Effort::High) => "High",
-                    Some(wack_core::Effort::Xhigh) => "Extra high",
-                    Some(wack_core::Effort::Max) => "Max",
+                    Some(wack_core::Reasoning::Low) => "Low",
+                    Some(wack_core::Reasoning::Medium) => "Medium",
+                    Some(wack_core::Reasoning::High) => "High",
+                    Some(wack_core::Reasoning::Xhigh) => "Extra high",
+                    Some(wack_core::Reasoning::Max) => "Max",
+                    Some(wack_core::Reasoning::Ultra) => "Ultra",
                 }
                 .into(),
             ),

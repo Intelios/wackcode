@@ -39,10 +39,12 @@ impl Tool for Find {
             loading: Loading::Always,
             parallel_safe: true,
             hint: "find files and folders by name or glob".into(),
+            guidelines: Vec::new(),
+            ends_run: false,
         }
     }
 
-    async fn run(&self, input: Value, context: &ToolContext) -> Result<String, String> {
+    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<String, String> {
         let input: Input = parse(input)?;
         let root = resolve(&context.cwd, input.path.as_deref().unwrap_or("."));
         if !root.is_dir() {
@@ -85,7 +87,6 @@ impl Tool for Find {
 
 #[cfg(test)]
 mod tests {
-    use tokio_util::sync::CancellationToken;
 
     use super::*;
 
@@ -100,7 +101,7 @@ mod tests {
         for file in ["src/main.rs", "src/ui/view.rs", "src/ui/view.css", "node_modules/pkg/index.rs", "README.md"] {
             std::fs::write(root.join(file), "").unwrap();
         }
-        let context = ToolContext { cwd: root.to_path_buf(), cancel: CancellationToken::new() };
+        let context = ToolContext::detached(root.to_path_buf());
         let find = |input: Value| Find.run(input, &context);
 
         assert_eq!(find(json!({ "pattern": "*.rs" })).await.unwrap(), "src/main.rs\nsrc/ui/view.rs");

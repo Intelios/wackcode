@@ -47,10 +47,12 @@ impl Tool for Edit {
             loading: Loading::Always,
             parallel_safe: false,
             hint: "change parts of an existing file by exact text replacement".into(),
+            guidelines: Vec::new(),
+            ends_run: false,
         }
     }
 
-    async fn run(&self, input: Value, context: &ToolContext) -> Result<String, String> {
+    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<String, String> {
         let input: Input = parse(input)?;
         let path = resolve(&context.cwd, &input.path);
         let bytes = tokio::fs::read(&path).await.map_err(|error| format!("Could not read {}: {error}.", input.path))?;
@@ -112,7 +114,6 @@ fn apply(original: &str, edits: &[Change]) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use tokio_util::sync::CancellationToken;
 
     use super::*;
 
@@ -149,7 +150,7 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("a.rs");
         std::fs::write(&path, "alpha\nbeta\n").unwrap();
-        let context = ToolContext { cwd: folder.path().to_path_buf(), cancel: CancellationToken::new() };
+        let context = ToolContext::detached(folder.path().to_path_buf());
 
         let input = json!({ "path": "a.rs", "edits": [{ "old_text": "alpha", "new_text": "ALPHA" }, { "old_text": "gamma", "new_text": "x" }] });
         assert!(Edit.run(input, &context).await.is_err());

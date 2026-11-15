@@ -72,7 +72,7 @@ pub fn todo_panel(data: TodoData, theme: &Theme) -> impl IntoElement {
         .flex()
         .items_center()
         .gap(px(8.))
-        .child(div().size(px(6.)).rounded_full().bg(if live { theme.accent } else { theme.border_strong }))
+        .child(div().size(px(6.)).rounded_full().bg(if live { theme.accent_text } else { theme.border_strong }))
         .child(div().typography(Type::UiStrong).text_color(theme.text_soft).child("Todos"))
         .child(div().typography(Type::Small).text_color(theme.text_faint).child(format!("{}/{}", view.done, view.total)))
         .when(view.hidden_done > 0 && !data.folded, |head| {
@@ -91,6 +91,8 @@ pub fn todo_panel(data: TodoData, theme: &Theme) -> impl IntoElement {
     let rows = (!data.folded).then(|| {
         div()
             .id("todo-rows")
+            .flex_shrink(1.)
+            .min_h_0()
             .max_h(px(MAX_ROWS_HEIGHT))
             .overflow_y_scroll()
             .flex()
@@ -103,6 +105,8 @@ pub fn todo_panel(data: TodoData, theme: &Theme) -> impl IntoElement {
         .mx(px(14.))
         .px(px(12.))
         .py(px(8.))
+        .min_h_0()
+        .overflow_hidden()
         .flex()
         .flex_col()
         .gap(px(6.))
@@ -110,7 +114,7 @@ pub fn todo_panel(data: TodoData, theme: &Theme) -> impl IntoElement {
         .bg(theme.sidebar)
         .border_1()
         .border_color(theme.border)
-        .child(head)
+        .child(head.flex_none())
         .children(rows)
         .tag("todo-panel")
 }

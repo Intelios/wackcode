@@ -835,20 +835,13 @@ impl AppState {
             if !selected {
                 session.unread = true;
             }
-            // Steering that arrived as the run ended goes first: it was written before the queue.
-            let mut waiting = std::mem::take(&mut session.steering);
-            waiting.append(&mut session.queue);
-            cx.notify();
-            // A run that ends with a plan to review holds the queue: sending would consume the
-            // plan unseen, so what waited goes back to the composer.
+            let steering = std::mem::take(&mut session.steering);
+            let queue = std::mem::take(&mut session.queue);
             let holding = session.awaiting_plan().is_some();
-            if matches!(result, Ok(Outcome::Done)) && !waiting.is_empty() && !holding {
-                let next = waiting.remove(0);
-                session.queue = waiting;
-                (Vec::new(), Some(next))
-            } else {
-                (waiting, None)
-            }
+            let after = after_run(matches!(result, Ok(Outcome::Done)), holding, steering, queue);
+            session.queue = after.queue;
+            cx.notify();
+            (after.unsent, after.next)
         });
         if !unsent.is_empty() {
             restore(&session, unsent, cx);
@@ -993,6 +986,31 @@ impl AppState {
 }
 
 /// Puts messages back in a chat's composer, ahead of anything already there.
+/// What happens to the messages waiting when a run ends.
+#[derive(Debug, PartialEq)]
+struct AfterRun {
+    /// Sent now.
+    next: Option<String>,
+    /// Still queued behind it.
+    queue: Vec<String>,
+    /// Handed back to the composer.
+    unsent: Vec<String>,
+}
+
+/// A run that finished sends the next waiting message; one that failed or was stopped hands them
+/// all back. So does a run that ends with a plan to review: sending would consume the plan unseen.
+/// Steering that arrived as the run ended goes first: it was written before the queue.
+fn after_run(done: bool, holding_plan: bool, steering: Vec<String>, queue: Vec<String>) -> AfterRun {
+    let mut waiting = steering;
+    waiting.extend(queue);
+    if done && !holding_plan && !waiting.is_empty() {
+        let next = waiting.remove(0);
+        AfterRun { next: Some(next), queue: waiting, unsent: Vec::new() }
+    } else {
+        AfterRun { next: None, queue: Vec::new(), unsent: waiting }
+    }
+}
+
 fn restore(session: &Entity<ChatSession>, messages: Vec<String>, cx: &mut App) {
     let composer = session.read(cx).composer.clone();
     composer.update(cx, |composer, cx| {
@@ -1020,6 +1038,17 @@ pub fn shown_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_plan_to_review_holds_the_queue() {
+        let words = |list: &[&str]| list.iter().map(|text| text.to_string()).collect::<Vec<_>>();
+        let sent = after_run(true, false, words(&["steer"]), words(&["a", "b"]));
+        assert_eq!(sent, AfterRun { next: Some("steer".into()), queue: words(&["a", "b"]), unsent: Vec::new() });
+        let held = after_run(true, true, Vec::new(), words(&["a", "b"]));
+        assert_eq!(held, AfterRun { next: None, queue: Vec::new(), unsent: words(&["a", "b"]) });
+        let stopped = after_run(false, false, Vec::new(), words(&["a"]));
+        assert_eq!(stopped.unsent, words(&["a"]));
+    }
 
     #[test]
     fn paths_in_the_home_folder_start_with_a_tilde() {

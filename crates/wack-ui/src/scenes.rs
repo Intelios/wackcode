@@ -323,6 +323,25 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "todo-queue-small",
+            description: "A todo list and a long queue in the smallest window: the queue scrolls.",
+            size: size(px(700.), px(480.)),
+            build: |_, cx| {
+                cx.new(|_| {
+                    let waiting = (1..=6)
+                        .map(|n| crate::composer::Waiting { text: format!("Queued message number {n}, waiting for the run.").into(), steering: n == 1 })
+                        .collect();
+                    let composer = ComposerData { working: true, todos: Some(fixtures::todos()), waiting, ..fixtures::composer_working() };
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::Working),
+                        Screen::Chat { title: fixtures::WORKING_TITLE.into(), project: fixtures::project(), body: Body::Items(fixtures::working_turn()), composer },
+                        fixtures::strip(Some(fixtures::WORKING_TITLE)),
+                    )
+                })
+                .into()
+            },
+        },
+        Scene {
             name: "todo-question-small",
             description: "A todo list, a question and a queued message in the smallest window.",
             size: size(px(700.), px(480.)),

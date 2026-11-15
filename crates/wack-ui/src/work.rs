@@ -104,6 +104,9 @@ pub fn entry_items(
                         notice: current.then(|| conversation.plan_view.notice.clone().map(Into::into)).flatten(),
                     }));
                 }
+                for notice in &turn.notices {
+                    items.push(Item::Notice { text: notice.clone().into(), failed: false });
+                }
                 match &turn.end {
                     Some(TurnEnd::Stopped) => items.push(Item::Notice { text: "Stopped.".into(), failed: false }),
                     Some(TurnEnd::CutOff) => items.push(Item::Notice {
@@ -476,6 +479,24 @@ mod tests {
 
         let cancelled = tool_row(&tool("ask_user_question", input, Some(("The user dismissed the questions.", false))), Path::new("/"), false);
         assert!(matches!(&cancelled.meta, Meta::Note(note) if note.as_ref() == "no answer"));
+    }
+
+    #[test]
+    fn a_plan_proposed_in_prose_shows_as_the_card_not_twice() {
+        assert_eq!(without_proposed_plan("Here it is.\n<proposed_plan>\n1. Do it\n</proposed_plan>\nThoughts?"), "Here it is.\n\nThoughts?");
+        assert_eq!(without_proposed_plan("No block here."), "No block here.");
+
+        let mut conversation = Conversation::default();
+        conversation.send("Plan it", 1);
+        conversation.apply(&wack_core::Event::Text("Ready.\n<proposed_plan>\n1. Do it\n</proposed_plan>".into()), 2);
+        conversation.apply(&wack_core::Event::State { key: "plan".into(), value: json!({ "mode": "plan", "plan": "1. Do it" }) }, 3);
+        conversation.finish(&Ok(wack_core::Outcome::Done), 4);
+        let items = items(&conversation, Path::new("/"), &HashSet::new(), 5, &mut ReplyCache::default());
+        let plans: Vec<_> = items.iter().filter_map(|item| if let Item::Plan(card) = item { Some(card) } else { None }).collect();
+        assert_eq!(plans.len(), 1);
+        assert!(plans[0].current);
+        let replies = items.iter().filter(|item| matches!(item, Item::Reply(_))).count();
+        assert_eq!(replies, 1, "the prose before the block stays");
     }
 
     #[test]

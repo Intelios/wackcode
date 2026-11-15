@@ -92,6 +92,7 @@ pub fn composer_empty(roomy: bool) -> ComposerData {
         effort: Some("Medium".into()),
         ultra_effort: false,
         mode: wack_core::AgentMode::Build,
+        key: "scene".into(),
         meter: None,
         working: false,
         waiting: Vec::new(),

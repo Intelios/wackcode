@@ -45,6 +45,9 @@ pub struct Turn {
     pub retrying: Option<String>,
     /// The plan this turn proposed for review.
     pub proposal: Option<Proposal>,
+    /// Things the app told the user during the turn, such as a plan it could not read. Shown
+    /// after the reply; not saved, so they do not come back after a relaunch.
+    pub notices: Vec<String>,
     /// Live thinking deltas join the last thought until anything else happens.
     thinking_open: bool,
 }
@@ -376,11 +379,8 @@ impl Conversation {
                 let (key, value) = (key.clone(), value.clone());
                 self.apply_state(&key, &value);
             }
-            Event::Notice(text) => {
-                let text = text.clone();
-                turn.settle_reply();
-                turn.steps.push(Step::Event(text));
-            }
+            // Never settles the reply: a notice at the end of a run must not fold it away.
+            Event::Notice(text) => turn.notices.push(text.clone()),
             Event::Steered(_) | Event::Question { .. } => {}
         }
     }
@@ -422,6 +422,19 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn a_notice_at_the_end_of_a_run_keeps_the_reply() {
+        let mut conversation = Conversation::default();
+        conversation.send("Plan it", 1);
+        conversation.apply(&Event::Text("Here is my plan, badly tagged.".into()), 2);
+        conversation.apply(&Event::Notice("The plan could not be read.".into()), 3);
+        conversation.finish(&Ok(Outcome::Done), 4);
+        let Some(Entry::Turn(turn)) = conversation.entries.last() else { panic!("no turn") };
+        assert_eq!(turn.reply, "Here is my plan, badly tagged.");
+        assert!(turn.steps.is_empty());
+        assert_eq!(turn.notices, vec!["The plan could not be read."]);
+    }
 
     fn plan_state(mode: &str, plan: Option<&str>) -> Event {
         let mut value = json!({ "mode": mode });

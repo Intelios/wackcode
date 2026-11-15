@@ -2,7 +2,7 @@
 //! modal, so the transcript stays readable while the user thinks. Ported from version 2's
 //! `QuestionDialog.tsx`.
 //!
-//! Rules (each one v2's, each one tested below or in `chat.rs`):
+//! Rules (each one v2's; the draft logic is tested below, the rest was driven in the dev app):
 //! - One question at a time, with numbered tabs when there are several; a tab shows a check
 //!   once its question is answered.
 //! - Picking never advances on its own. Next moves on once the question is answered; Submit

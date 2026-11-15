@@ -48,6 +48,9 @@ pub struct ComposerData {
     pub ultra_effort: bool,
     /// Build, Plan or Ultra Plan.
     pub mode: AgentMode,
+    /// Whose composer this is (a chat's id, or the new chat's), so switching chats never plays
+    /// the toggle's slide.
+    pub key: SharedString,
     /// "14% context", or a token count when the model's window is unknown.
     pub meter: Option<Meter>,
     pub working: bool,
@@ -183,7 +186,7 @@ impl RenderOnce for Composer {
             .items_center()
             .gap(px(14.))
             .child(Icon::Plus.view(px(16.), theme.text_dim))
-            .child(ModeToggle { mode: data.mode, locked: data.working })
+            .child(ModeToggle { mode: data.mode, locked: data.working, key: data.key.clone() })
             // In a narrow composer the model's name gives way first; the send button never does.
             .child(picker("model", Word::Plain(data.model.clone()), theme.text_soft, OpenModelMenu, menu_for(Menu::Model), viewport, &theme));
         if let Some(effort) = data.effort.clone() {
@@ -235,7 +238,7 @@ impl RenderOnce for Composer {
         if let Some(todos) = data.todos
             && !(asking && short)
         {
-            column = column.child(div().flex_none().child(crate::todo_panel::todo_panel(todos, &theme)));
+            column = column.child(div().flex_shrink(1.).min_h(px(40.)).flex().flex_col().child(crate::todo_panel::todo_panel(todos, &theme)));
         }
         if let Some(question) = data.question {
             column = column.child(
@@ -251,10 +254,13 @@ impl RenderOnce for Composer {
                 };
                 column = column.child(div().flex_none().child(waiting_row(usize::MAX, summary, &theme)));
             }
-        } else {
+        } else if !data.waiting.is_empty() {
+            // A long queue scrolls inside itself.
+            let mut rows = div().id("waiting").flex_shrink(1.).min_h(px(36.)).max_h(px(WAITING_MAX_HEIGHT)).overflow_y_scroll().flex().flex_col().gap(px(6.));
             for (index, waiting) in data.waiting.into_iter().enumerate() {
-                column = column.child(div().flex_none().child(waiting_row(index, waiting, &theme)));
+                rows = rows.child(div().flex_none().child(waiting_row(index, waiting, &theme)));
             }
+            column = column.child(rows);
         }
         column.child(div().flex_none().child(card))
     }
@@ -322,6 +328,8 @@ fn meter_view(meter: Meter, working: bool, theme: &Theme) -> impl IntoElement {
         })
 }
 
+/// About three waiting messages; more scroll.
+const WAITING_MAX_HEIGHT: f32 = 118.;
 /// Below this window height an open question has the column to itself.
 const SHORT_WINDOW: f32 = 600.;
 /// The least an open question card keeps: its head, a little of its body, its buttons.
@@ -499,13 +507,14 @@ struct Shown {
 struct ModeToggle {
     mode: AgentMode,
     locked: bool,
+    key: SharedString,
 }
 
 impl RenderOnce for ModeToggle {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = Theme::get(cx).clone();
         let mode = self.mode;
-        let shown = window.use_keyed_state("mode-toggle", cx, |_, _| Shown { mode, from: mode, switches: 0 });
+        let shown = window.use_keyed_state(SharedString::from(format!("mode-toggle-{}", self.key)), cx, |_, _| Shown { mode, from: mode, switches: 0 });
         let (from, switches) = shown.update(cx, |shown, _| {
             if shown.mode != mode {
                 shown.from = shown.mode;

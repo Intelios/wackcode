@@ -27,8 +27,10 @@ pub mod specimen;
 pub mod tags;
 pub mod text_field;
 pub mod theme;
+pub mod tooltip;
 pub mod transcript;
 pub mod typography;
+pub mod ultra;
 pub mod work;
 
 use gpui::App;

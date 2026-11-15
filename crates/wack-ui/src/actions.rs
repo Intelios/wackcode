@@ -48,6 +48,10 @@ actions!(
         PreviousTab,
         /// Esc typed into a terminal, which goes to the shell rather than stepping back.
         TerminalEscape,
+        /// ⇧Tab typed into a terminal, which goes to the shell rather than switching mode.
+        TerminalBackTab,
+        /// ⇧Tab: Build → Plan → Ultra Plan → Build, for the chat on screen or the new chat.
+        CycleAgentMode,
         /// Picks a picture for the backdrop.
         ChooseBackdrop,
         RemoveBackdrop,
@@ -185,6 +189,14 @@ pub struct OpenSettingsSection {
     pub section: crate::settings::Section,
 }
 
+/// Build, Plan or Ultra Plan, for the chat on screen or the new chat. Ignored while it works.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct SetAgentMode {
+    pub mode: wack_core::AgentMode,
+}
+
+/// Light or dark appearance.
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]
 pub struct ChooseMode {
@@ -252,6 +264,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-tab", NextTab, Some(CONTEXT)),
         KeyBinding::new("ctrl-shift-tab", PreviousTab, Some(CONTEXT)),
         KeyBinding::new("escape", TerminalEscape, Some(TERMINAL_CONTEXT)),
+        KeyBinding::new("shift-tab", CycleAgentMode, Some(CONTEXT)),
+        KeyBinding::new("shift-tab", TerminalBackTab, Some(TERMINAL_CONTEXT)),
     ]);
 }
 

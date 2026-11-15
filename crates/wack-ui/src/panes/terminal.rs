@@ -23,7 +23,7 @@ use gpui::{
 use wack_core::terminal::{Cell, Colour, CursorKind, SelectionKind, Snapshot, Terminal, TerminalEvent};
 
 use crate::{
-    actions::TerminalEscape,
+    actions::{TerminalBackTab, TerminalEscape},
     text_field,
     theme::Theme,
     typography::{Type, Typography},
@@ -281,6 +281,7 @@ impl Render for TerminalPane {
             .key_context(TERMINAL_CONTEXT)
             .on_key_down(cx.listener(Self::key_down))
             .on_action(cx.listener(|pane, _: &TerminalEscape, _, cx| pane.write(b"\x1b".to_vec(), cx)))
+            .on_action(cx.listener(|pane, _: &TerminalBackTab, _, cx| pane.write(b"\x1b[Z".to_vec(), cx)))
             .on_action(cx.listener(|pane, _: &text_field::Copy, _, cx| pane.copy(cx)))
             .on_action(cx.listener(|pane, _: &text_field::Paste, _, cx| pane.paste(cx)))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))

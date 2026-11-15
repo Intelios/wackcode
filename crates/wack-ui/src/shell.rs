@@ -30,7 +30,7 @@ use gpui::{
 
 use crate::{
     actions::{
-        self, ActivatePane, AddConnection, AddFolder, Back, ChooseAccent, ChooseBackdrop, ChooseEffort, ChooseFocus,
+        self, ActivatePane, AddConnection, AddFolder, Back, ChooseAccent, ChooseBackdrop, ChooseEffort, ChooseFocus, CycleAgentMode, SetAgentMode,
         ChooseDim, ChooseFormat, ChooseMode, ChooseModel, ChooseTexture, ChooseThemeColour, CloseChatTab, CloseMenu, ClosePane,
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, EqualizeSplit, FocusNext, FocusPrevious, MovePane,
         NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
@@ -825,6 +825,11 @@ impl Render for Shell {
                     let (connection, model) = (action.connection.clone(), action.model.clone());
                     shell.with_app(cx, |app, cx| app.choose(Some(connection), Some(model), None, cx));
                 }))
+                .on_action(cx.listener(|shell, action: &SetAgentMode, _, cx| {
+                    let mode = action.mode;
+                    shell.with_app(cx, |app, cx| app.set_agent_mode(mode, cx));
+                }))
+                .on_action(cx.listener(|shell, _: &CycleAgentMode, _, cx| shell.with_app(cx, |app, cx| app.cycle_agent_mode(cx))))
                 .on_action(cx.listener(|shell, action: &ChooseEffort, _, cx| {
                     let effort = action.effort;
                     shell.with_app(cx, |app, cx| app.choose(None, None, Some(effort), cx));
@@ -1037,6 +1042,8 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                         input: Input::Field(app.draft.clone()),
                         model,
                         effort,
+                        ultra_effort: is_ultra(resolved.as_ref()),
+                        mode: app.new_chat_mode,
                         meter: None,
                         working: false,
                         waiting: Vec::new(),
@@ -1069,6 +1076,8 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     input: Input::Field(state.composer.clone()),
                     model,
                     effort,
+                    ultra_effort: is_ultra(resolved.as_ref()),
+                    mode: chat.mode,
                     meter,
                     working: state.running(),
                     waiting,
@@ -1126,30 +1135,32 @@ fn menu_data(app: &AppState, resolved: Option<&wack_core::Resolved>) -> Option<M
                     .collect(),
             })
             .collect(),
-        Menu::Effort => {
-            use wack_core::Reasoning;
-            let current = resolved.and_then(|resolved| resolved.effort);
-            let item = |effort: Option<Reasoning>, label: &'static str, detail: Option<&'static str>| MenuItem {
-                label: label.into(),
-                detail: detail.map(Into::into),
-                selected: current == effort,
-                choice: Choice::Effort(effort),
-            };
-            vec![MenuGroup {
-                title: Some("Reasoning effort".into()),
-                items: vec![
-                    item(None, "Default", Some("the provider’s")),
-                    item(Some(Reasoning::Low), "Low", None),
-                    item(Some(Reasoning::Medium), "Medium", None),
-                    item(Some(Reasoning::High), "High", None),
-                    item(Some(Reasoning::Xhigh), "Extra high", None),
-                    item(Some(Reasoning::Max), "Max", None),
-                    item(Some(Reasoning::Ultra), "Ultra", Some("the most thorough work")),
-                ],
-            }]
-        }
+        Menu::Effort => effort_groups(resolved.and_then(|resolved| resolved.effort)),
     };
     Some(MenuData { kind, groups })
+}
+
+/// The effort menu, with `current` ticked.
+pub fn effort_groups(current: Option<wack_core::Reasoning>) -> Vec<MenuGroup> {
+    use wack_core::Reasoning;
+    let item = |effort: Option<Reasoning>, label: &'static str, detail: Option<&'static str>| MenuItem {
+        label: label.into(),
+        detail: detail.map(Into::into),
+        selected: current == effort,
+        choice: Choice::Effort(effort),
+    };
+    vec![MenuGroup {
+        title: Some("Reasoning effort".into()),
+        items: vec![
+            item(None, "Default", Some("the provider’s")),
+            item(Some(Reasoning::Low), "Low", None),
+            item(Some(Reasoning::Medium), "Medium", None),
+            item(Some(Reasoning::High), "High", None),
+            item(Some(Reasoning::Xhigh), "Extra high", None),
+            item(Some(Reasoning::Max), "Max", None),
+            item(Some(Reasoning::Ultra), "Ultra", Some("the most thorough work")),
+        ],
+    }]
 }
 
 fn first_line(text: &str) -> SharedString {
@@ -1176,6 +1187,10 @@ fn model_words(resolved: Option<&wack_core::Resolved>) -> (SharedString, Option<
         ),
         None => ("No model".into(), None),
     }
+}
+
+fn is_ultra(resolved: Option<&wack_core::Resolved>) -> bool {
+    resolved.and_then(|resolved| resolved.effort).is_some_and(|effort| effort.is_ultra())
 }
 
 /// `zai-org/GLM-5.3-Flash` reads as `GLM-5.3-Flash`.

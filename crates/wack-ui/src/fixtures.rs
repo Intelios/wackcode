@@ -90,6 +90,8 @@ pub fn composer_empty(roomy: bool) -> ComposerData {
         input: drawn(None, crate::app::NEW_CHAT_PLACEHOLDER),
         model: "GLM-5.3-Flash".into(),
         effort: Some("Medium".into()),
+        ultra_effort: false,
+        mode: wack_core::AgentMode::Build,
         meter: None,
         working: false,
         waiting: Vec::new(),

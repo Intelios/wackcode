@@ -187,6 +187,80 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "composer-modes",
+            description: "The composer in Build, Plan and Ultra Plan, with Ultra effort, and locked by a run.",
+            size: size(px(760.), px(700.)),
+            build: |_, cx| {
+                use wack_core::AgentMode;
+                let drawn = |mode| Input::Drawn { text: None, placeholder: crate::app::placeholder(mode, false).into() };
+                let composer = |mode: AgentMode| ComposerData { mode, input: drawn(mode), ..fixtures::composer_after_turn(drawn(mode)) };
+                let rows = vec![
+                    ("Build", composer(AgentMode::Build)),
+                    ("Plan", composer(AgentMode::Plan)),
+                    ("Ultra Plan, Ultra effort", ComposerData { effort: Some("Ultra".into()), ultra_effort: true, ..composer(AgentMode::UltraPlan) }),
+                    ("Ultra Plan while working", ComposerData { working: true, ..composer(AgentMode::UltraPlan) }),
+                ];
+                cx.new(|_| ComposerSheet { rows }).into()
+            },
+        },
+        Scene {
+            name: "effort-menu",
+            description: "The effort menu with Ultra chosen, over a chat in Ultra Plan.",
+            size: WINDOW,
+            build: |_, cx| {
+                cx.new(|_| {
+                    let mode = wack_core::AgentMode::UltraPlan;
+                    let drawn = Input::Drawn { text: None, placeholder: crate::app::placeholder(mode, false).into() };
+                    let composer = ComposerData {
+                        mode,
+                        effort: Some("Ultra".into()),
+                        ultra_effort: true,
+                        menu: Some(crate::composer::MenuData {
+                            kind: crate::app::Menu::Effort,
+                            groups: crate::shell::effort_groups(Some(wack_core::Reasoning::Ultra)),
+                        }),
+                        ..fixtures::composer_after_turn(drawn)
+                    };
+                    Shell::showing(
+                        fixtures::sidebar(Selected::Finished),
+                        Screen::Chat {
+                            title: fixtures::FINISHED_TITLE.into(),
+                            project: fixtures::project(),
+                            body: Body::Items(fixtures::finished_turn()),
+                            composer,
+                        },
+                    )
+                })
+                .into()
+            },
+        },
+        Scene {
+            name: "new-chat-ultra-plan",
+            description: "The new-chat screen in Ultra Plan, over a backdrop.",
+            size: WINDOW,
+            build: |_, cx| {
+                let picture = over(fixtures::backdrop(wack_core::Texture::None), cx);
+                cx.new(|_| {
+                    let mode = wack_core::AgentMode::UltraPlan;
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::None),
+                        Screen::NewChat {
+                            project: fixtures::project(),
+                            composer: ComposerData {
+                                mode,
+                                input: Input::Drawn { text: None, placeholder: crate::app::placeholder(mode, true).into() },
+                                ..fixtures::composer_empty(true)
+                            },
+                            notice: None,
+                        },
+                        fixtures::strip(None),
+                    )
+                    .with_backdrop(picture)
+                })
+                .into()
+            },
+        },
+        Scene {
             name: "settings-providers",
             description: "Settings › Providers: two connections and the add form with a problem to fix.",
             size: size(px(1180.), px(900.)),
@@ -346,6 +420,26 @@ fn panes_scene(layout: Layout, ids: &[u32], sidebar_hidden: bool, cx: &mut App) 
         .with_panes(panes, sidebar_hidden)
     })
     .into()
+}
+
+/// Composers in a column, each under a caption: for comparing one control's states.
+struct ComposerSheet {
+    rows: Vec<(&'static str, ComposerData)>,
+}
+
+impl Render for ComposerSheet {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use crate::typography::Typography;
+        let theme = crate::theme::Theme::get(cx).clone();
+        gpui::div().size_full().bg(theme.window).p(px(32.)).flex().flex_col().gap(px(22.)).children(self.rows.iter().map(|(caption, data)| {
+            gpui::div()
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .child(gpui::div().typography(Type::Label).text_color(theme.text_dim).child(*caption))
+                .child(crate::composer::Composer::new(data.clone()))
+        }))
+    }
 }
 
 pub fn find(name: &str) -> Option<Scene> {

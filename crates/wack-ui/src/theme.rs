@@ -141,6 +141,17 @@ pub struct Theme {
     pub diff_removed: Hsla,
     pub diff_removed_ground: Hsla,
 
+    // Ultra (Ultra Plan and the Ultra reasoning level): a fixed prism, cyan through peach, so no
+    // accent can ever match it. Like the meaning colours, it never follows the accent.
+    /// The lavender base: Ultra's text, tints and lines.
+    pub ultra: Hsla,
+    /// The bright core: the mark's centre pixel, and Ultra's primary button when hovered.
+    pub ultra_glow: Hsla,
+    /// Text and icons drawn on `ultra`.
+    pub on_ultra: Hsla,
+    /// The prism's stops, in order: cyan, violet, orchid, pink, peach.
+    pub ultra_spectrum: [Hsla; 5],
+
     // Code.
     pub code_ground: Hsla,
     pub code_keyword: Hsla,
@@ -361,6 +372,10 @@ impl Theme {
             diff_added_ground: fixed.diff_added_ground.into(),
             diff_removed: fixed.diff_removed.into(),
             diff_removed_ground: fixed.diff_removed_ground.into(),
+            ultra: fixed.ultra.into(),
+            ultra_glow: fixed.ultra_glow.into(),
+            on_ultra: fixed.on_ultra.into(),
+            ultra_spectrum: fixed.ultra_spectrum.map(Into::into),
             code_ground: hsla(neutral(&ramp.code_ground)),
             code_keyword: hsla(code_keyword),
             code_string: hsla(syntax(64., 0.07)),
@@ -374,6 +389,16 @@ impl Theme {
             veil: veil as f32,
             input,
         }
+    }
+
+    /// The prism `along` (0–1) of the way from cyan to peach, blending between its stops.
+    pub fn ultra_at(&self, along: f32) -> Hsla {
+        let stops = &self.ultra_spectrum;
+        let along = along.clamp(0., 1.) * (stops.len() - 1) as f32;
+        let low = (along.floor() as usize).min(stops.len() - 2);
+        let mix = along - low as f32;
+        let (a, b) = (stops[low].to_rgb(), stops[low + 1].to_rgb());
+        Rgba { r: a.r + (b.r - a.r) * mix, g: a.g + (b.g - a.g) * mix, b: a.b + (b.b - a.b) * mix, a: 1. }.into()
     }
 
     /// One of a terminal's 256 indexed colours: the ANSI sixteen, then the standard 6×6×6 cube
@@ -422,6 +447,10 @@ struct Meaning {
     diff_added_ground: Rgba,
     diff_removed: Rgba,
     diff_removed_ground: Rgba,
+    ultra: Rgba,
+    ultra_glow: Rgba,
+    on_ultra: Rgba,
+    ultra_spectrum: [Rgba; 5],
 }
 
 fn meaning(dark: bool) -> Meaning {
@@ -434,6 +463,11 @@ fn meaning(dark: bool) -> Meaning {
             diff_added_ground: rgb(0x152219),
             diff_removed: rgb(0xf0958b),
             diff_removed_ground: rgb(0x2b1918),
+            // Version 2's prism, which was drawn on dark grounds.
+            ultra: rgb(0xcfc6ff),
+            ultra_glow: rgb(0xf6f2ff),
+            on_ultra: rgb(0x17142a),
+            ultra_spectrum: [rgb(0x7fd8ff), rgb(0xa9a6ff), rgb(0xe59cff), rgb(0xff9fc6), rgb(0xffc48a)],
         }
     } else {
         Meaning {
@@ -444,6 +478,11 @@ fn meaning(dark: bool) -> Meaning {
             diff_added_ground: rgb(0xdff2e2),
             diff_removed: rgb(0xb3281f),
             diff_removed_ground: rgb(0xfae3e0),
+            // The same prism, deepened until it reads on a light ground.
+            ultra: rgb(0x5546c4),
+            ultra_glow: rgb(0x3a2d9a),
+            on_ultra: rgb(0xffffff),
+            ultra_spectrum: [rgb(0x0a84bd), rgb(0x5a50e0), rgb(0xa23ccb), rgb(0xcf3576), rgb(0xbf6410)],
         }
     }
 }
@@ -742,6 +781,8 @@ mod tests {
         assert_eq!(base.success, other.success);
         assert_eq!(base.diff_added, other.diff_added);
         assert_eq!(base.diff_removed_ground, other.diff_removed_ground);
+        assert_eq!(base.ultra, other.ultra);
+        assert_eq!(base.ultra_spectrum, other.ultra_spectrum);
     }
 
     #[test]

@@ -33,6 +33,18 @@ use crate::{
 };
 
 pub const NEW_CHAT_PLACEHOLDER: &str = "Describe a task, or ask about the code";
+pub const PLAN_PLACEHOLDER: &str = "Describe the work — in Plan mode WackCode inspects and proposes a plan for your approval…";
+pub const ULTRA_PLAN_PLACEHOLDER: &str = "Describe the work — in Ultra Plan WackCode interviews you one question at a time…";
+
+/// What an empty composer says: the planning modes explain themselves.
+pub fn placeholder(mode: AgentMode, new_chat: bool) -> &'static str {
+    match mode {
+        AgentMode::Plan => PLAN_PLACEHOLDER,
+        AgentMode::UltraPlan => ULTRA_PLAN_PLACEHOLDER,
+        AgentMode::Build if new_chat => NEW_CHAT_PLACEHOLDER,
+        AgentMode::Build => crate::chat::FOLLOW_UP_PLACEHOLDER,
+    }
+}
 
 /// A menu open over the composer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,6 +76,8 @@ pub struct AppState {
     branches: HashMap<String, Option<String>>,
     /// The new-chat composer, shared by every project.
     pub draft: Entity<TextField>,
+    /// The mode the new chat starts in.
+    pub new_chat_mode: AgentMode,
     /// Why the last chat could not start, shown under the new-chat composer.
     pub notice: Option<SharedString>,
     /// Settings › Providers' add form.
@@ -165,6 +179,7 @@ impl AppState {
             open_projects: HashSet::new(),
             branches: HashMap::new(),
             draft,
+            new_chat_mode: AgentMode::Build,
             notice: None,
             form,
             menu: None,
@@ -577,7 +592,7 @@ impl AppState {
             cx.notify();
             return;
         }
-        let chat = match self.store.create_chat(&project, &title_from(&text), choice, AgentMode::Build) {
+        let chat = match self.store.create_chat(&project, &title_from(&text), choice, self.new_chat_mode) {
             Ok(chat) => chat,
             Err(message) => {
                 self.notice = Some(message.into());
@@ -585,9 +600,66 @@ impl AppState {
                 return;
             }
         };
-        self.draft.update(cx, |draft, cx| draft.set_text("", cx));
+        // The next new chat starts in Build again: a chat's mode is its own.
+        self.new_chat_mode = AgentMode::Build;
+        self.draft.update(cx, |draft, cx| {
+            draft.set_text("", cx);
+            draft.set_placeholder(placeholder(AgentMode::Build, true), cx);
+        });
         self.select(Selection::Chat(chat.id.clone()), cx);
         self.run(&chat.id, Job::Prompt(text), cx);
+    }
+
+    /// The mode of the composer on screen, and whether it is locked by a run.
+    pub fn mode_on_screen(&self, cx: &App) -> (AgentMode, bool) {
+        match &self.selection {
+            Selection::Chat(id) => {
+                let mode = self.store.chat(id).map_or(AgentMode::Build, |chat| chat.mode);
+                let locked = self.sessions.get(id).is_some_and(|session| session.read(cx).running());
+                (mode, locked)
+            }
+            _ => (self.new_chat_mode, false),
+        }
+    }
+
+    /// Switches the composer on screen to `mode`. A chat that is working keeps its mode.
+    pub fn set_agent_mode(&mut self, mode: AgentMode, cx: &mut Context<Self>) {
+        match self.selection.clone() {
+            Selection::NewChat(_) => {
+                self.new_chat_mode = mode;
+                self.draft.update(cx, |draft, cx| draft.set_placeholder(placeholder(mode, true), cx));
+            }
+            Selection::Chat(id) => {
+                if self.mode_on_screen(cx).1 {
+                    return;
+                }
+                self.set_chat_mode(&id, mode, cx);
+            }
+            _ => return,
+        }
+        cx.notify();
+    }
+
+    /// Records a chat's mode, whoever changed it, and shows it in its composer.
+    fn set_chat_mode(&mut self, id: &str, mode: AgentMode, cx: &mut Context<Self>) {
+        if self.store.chat(id).is_some_and(|chat| chat.mode != mode)
+            && let Err(message) = self.store.set_mode(id, mode)
+        {
+            self.notice = Some(message.into());
+        }
+        if let Some(session) = self.sessions.get(id) {
+            let composer = session.read(cx).composer.clone();
+            composer.update(cx, |composer, cx| composer.set_placeholder(placeholder(mode, false), cx));
+        }
+        cx.notify();
+    }
+
+    /// ⇧Tab: Build → Plan → Ultra Plan → Build.
+    pub fn cycle_agent_mode(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.selection, Selection::Chat(_) | Selection::NewChat(_)) {
+            let next = crate::composer::next_mode(self.mode_on_screen(cx).0);
+            self.set_agent_mode(next, cx);
+        }
     }
 
     /// ↩ in a chat's composer: send now, or queue behind the run. With `steer` (⌘↩) a message
@@ -720,6 +792,8 @@ impl AppState {
         let session = cx.new(|cx| ChatSession::load(&chat.id, cwd, &path, layout, cx));
         let id = chat.id.clone();
         let composer = session.read(cx).composer.clone();
+        let mode = chat.mode;
+        composer.update(cx, |composer, cx| composer.set_placeholder(placeholder(mode, false), cx));
         let subscriptions = vec![
             cx.observe(&session, |_, _, cx| cx.notify()),
             cx.subscribe(&session, {

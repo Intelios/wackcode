@@ -645,7 +645,7 @@ impl AppState {
     }
 
     /// Records a chat's mode, whoever changed it, and shows it in its composer.
-    fn set_chat_mode(&mut self, id: &str, mode: AgentMode, cx: &mut Context<Self>) {
+    pub fn set_chat_mode(&mut self, id: &str, mode: AgentMode, cx: &mut Context<Self>) {
         if self.store.chat(id).is_some_and(|chat| chat.mode != mode)
             && let Err(message) = self.store.set_mode(id, mode)
         {
@@ -656,6 +656,56 @@ impl AppState {
             composer.update(cx, |composer, cx| composer.set_placeholder(placeholder(mode, false), cx));
         }
         cx.notify();
+    }
+
+    /// Approve & implement: the chat on screen goes back to Build and is told to implement the
+    /// plan awaiting review.
+    pub fn approve_plan(&mut self, cx: &mut Context<Self>) {
+        let Selection::Chat(id) = self.selection.clone() else {
+            return;
+        };
+        let Some(session) = self.sessions.get(&id).cloned() else {
+            return;
+        };
+        if session.read(cx).running() || session.read(cx).awaiting_plan().is_none() {
+            return;
+        }
+        self.set_chat_mode(&id, AgentMode::Build, cx);
+        self.run(&id, Job::Prompt(crate::plan_card::IMPLEMENT.into()), cx);
+    }
+
+    /// Writes the plan awaiting review to PLAN.md in the chat's project.
+    pub fn save_plan(&mut self, cx: &mut Context<Self>) {
+        let Selection::Chat(id) = self.selection.clone() else {
+            return;
+        };
+        let (Some(session), Some(chat)) = (self.sessions.get(&id).cloned(), self.store.chat(&id)) else {
+            return;
+        };
+        let Some(project) = self.store.project(&chat.project).map(|project| project.path.clone()) else {
+            return;
+        };
+        let Some(plan) = session.read(cx).awaiting_plan() else {
+            return;
+        };
+        let notice = match wack_core::save_plan(&project, &plan) {
+            Ok(path) => format!("Plan saved to {}", shown_path(&path)),
+            Err(message) => message,
+        };
+        session.update(cx, |session, cx| session.plan_notice(notice, cx));
+    }
+
+    /// Discards the plan awaiting review; the chat returns to Build.
+    pub fn discard_plan(&mut self, cx: &mut Context<Self>) {
+        let Selection::Chat(id) = self.selection.clone() else {
+            return;
+        };
+        let Some(session) = self.sessions.get(&id).cloned() else {
+            return;
+        };
+        if let Err(message) = session.update(cx, |session, cx| session.discard_plan(cx)) {
+            session.update(cx, |session, cx| session.plan_notice(message, cx));
+        }
     }
 
     /// ⇧Tab: Build → Plan → Ultra Plan → Build.
@@ -767,7 +817,10 @@ impl AppState {
             let mut waiting = std::mem::take(&mut session.steering);
             waiting.append(&mut session.queue);
             cx.notify();
-            if matches!(result, Ok(Outcome::Done)) && !waiting.is_empty() {
+            // A run that ends with a plan to review holds the queue: sending would consume the
+            // plan unseen, so what waited goes back to the composer.
+            let holding = session.awaiting_plan().is_some();
+            if matches!(result, Ok(Outcome::Done)) && !waiting.is_empty() && !holding {
                 let next = waiting.remove(0);
                 session.queue = waiting;
                 (Vec::new(), Some(next))
@@ -805,6 +858,7 @@ impl AppState {
                 move |app, _, event: &ChatEvent, cx| match event {
                     ChatEvent::Finished(result) => app.finished(&id, result, cx),
                     ChatEvent::LayoutChanged => app.layout_changed(&id, cx),
+                    ChatEvent::ModeChanged(mode) => app.set_chat_mode(&id, *mode, cx),
                 }
             }),
             cx.subscribe(&composer, {

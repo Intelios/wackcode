@@ -85,8 +85,24 @@ pub fn entry_items(
                         key: key.into(),
                     }));
                 }
-                if !turn.reply.trim().is_empty() {
-                    items.push(Item::Reply(cache.get(index, &turn.reply)));
+                // A plan proposed in prose shows as the card, not twice.
+                let reply = match &turn.proposal {
+                    Some(_) => without_proposed_plan(&turn.reply),
+                    None => turn.reply.clone(),
+                };
+                if !reply.trim().is_empty() {
+                    items.push(Item::Reply(cache.get(index, &reply)));
+                }
+                if let Some(proposal) = &turn.proposal {
+                    let current = conversation.awaiting == Some(index);
+                    items.push(Item::Plan(crate::plan_card::PlanCard {
+                        key: format!("plan-{index}").into(),
+                        blocks: Rc::new(markdown::parse(&proposal.text)),
+                        ultra: proposal.ultra,
+                        current,
+                        confirming_discard: current && conversation.plan_view.confirming_discard,
+                        notice: current.then(|| conversation.plan_view.notice.clone().map(Into::into)).flatten(),
+                    }));
                 }
                 match &turn.end {
                     Some(TurnEnd::Stopped) => items.push(Item::Notice { text: "Stopped.".into(), failed: false }),
@@ -348,6 +364,16 @@ pub fn tool_row(tool: &ToolStep, cwd: &Path, live: bool) -> WorkRow {
         },
     };
     WorkRow { key: tool.id.clone().into(), verb: verb.to_string().into(), target, meta, detail, open: false }
+}
+
+/// `reply` without its `<proposed_plan>` block.
+fn without_proposed_plan(reply: &str) -> String {
+    match (reply.find("<proposed_plan>"), reply.find("</proposed_plan>")) {
+        (Some(start), Some(end)) if end > start => {
+            format!("{}{}", &reply[..start], &reply[end + "</proposed_plan>".len()..]).trim().to_string()
+        }
+        _ => reply.to_string(),
+    }
 }
 
 /// What a todo call did, in a few words: "added “Write the tests”", "finished #3".

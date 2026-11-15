@@ -57,8 +57,10 @@ pub struct ComposerData {
     pub roomy: bool,
     /// The model or effort menu, when open.
     pub menu: Option<MenuData>,
-    /// The question the agent is waiting on, drawn above everything else in the column.
+    /// The question the agent is waiting on, drawn above the waiting messages.
     pub question: Option<crate::question::QuestionData>,
+    /// The agent's todo list, at the top of the column.
+    pub todos: Option<crate::todo_panel::TodoData>,
 }
 
 #[derive(Clone, Debug)]
@@ -226,11 +228,33 @@ impl RenderOnce for Composer {
 
         // Inside a capped column the card stays whole and the question gives way first.
         let mut column = div().w_full().min_h_0().flex().flex_col().gap(px(6.));
-        if let Some(question) = data.question {
-            column = column.child(div().min_h_0().flex().flex_col().pb(px(4.)).child(crate::question::QuestionCard::new(question)));
+        // While a question is open it comes first: the todo list folds to its head and the
+        // waiting messages to one line, and in a short window both step aside for it.
+        let asking = data.question.is_some();
+        let short = f32::from(viewport.height) < SHORT_WINDOW;
+        if let Some(todos) = data.todos
+            && !(asking && short)
+        {
+            column = column.child(div().flex_none().child(crate::todo_panel::todo_panel(todos, &theme)));
         }
-        for (index, waiting) in data.waiting.into_iter().enumerate() {
-            column = column.child(waiting_row(index, waiting, &theme));
+        if let Some(question) = data.question {
+            column = column.child(
+                div().min_h(px(QUESTION_MIN_HEIGHT)).flex_shrink(1.).flex().flex_col().pb(px(4.)).child(crate::question::QuestionCard::new(question)),
+            );
+        }
+        if asking && !data.waiting.is_empty() {
+            if !short {
+                let count = data.waiting.len();
+                let summary = Waiting {
+                    text: if count == 1 { "1 message waiting".into() } else { format!("{count} messages waiting").into() },
+                    steering: false,
+                };
+                column = column.child(div().flex_none().child(waiting_row(usize::MAX, summary, &theme)));
+            }
+        } else {
+            for (index, waiting) in data.waiting.into_iter().enumerate() {
+                column = column.child(div().flex_none().child(waiting_row(index, waiting, &theme)));
+            }
         }
         column.child(div().flex_none().child(card))
     }
@@ -259,7 +283,7 @@ fn waiting_row(index: usize, waiting: Waiting, theme: &Theme) -> impl IntoElemen
                 .child(if waiting.steering { "Steering" } else { "Next" }),
         )
         .child(div().flex_1().min_w_0().truncate().typography(Type::Ui).text_color(theme.text_soft).child(waiting.text))
-        .when(!waiting.steering, |row| {
+        .when(!waiting.steering && index != usize::MAX, |row| {
             row.child(
                 div()
                     .id(("unqueue", index))
@@ -297,6 +321,11 @@ fn meter_view(meter: Meter, working: bool, theme: &Theme) -> impl IntoElement {
             )
         })
 }
+
+/// Below this window height an open question has the column to itself.
+const SHORT_WINDOW: f32 = 600.;
+/// The least an open question card keeps: its head, a little of its body, its buttons.
+const QUESTION_MIN_HEIGHT: f32 = 196.;
 
 /// What a picker shows.
 enum Word {

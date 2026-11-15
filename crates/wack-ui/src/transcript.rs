@@ -33,6 +33,8 @@ pub enum Item {
     Footer(SharedString),
     Notice { text: SharedString, failed: bool },
     Compacted,
+    /// A proposed plan: the transcript's hero card.
+    Plan(crate::plan_card::PlanCard),
 }
 
 #[derive(Clone, Debug)]
@@ -153,6 +155,7 @@ pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Hand
             .into_any_element(),
         Item::Work(work) => work_log(work, theme, handlers).into_any_element(),
         Item::Reply(blocks) => reply(blocks, theme, handlers).into_any_element(),
+        Item::Plan(card) => crate::plan_card::plan_card(card, theme, handlers).into_any_element(),
         Item::Footer(text) => div().typography(Type::Small).text_color(theme.text_faint).child(text.clone()).into_any_element(),
         Item::Notice { text, failed } => div()
             .typography(Type::Ui)
@@ -364,7 +367,7 @@ pub fn diff_line(line: &DiffLine, theme: &Theme) -> AnyElement {
         .into_any_element()
 }
 
-fn reply(blocks: &[markdown::Block], theme: &Theme, handlers: &Handlers) -> impl IntoElement {
+pub(crate) fn reply(blocks: &[markdown::Block], theme: &Theme, handlers: &Handlers) -> impl IntoElement {
     let mut column = div().flex().flex_col().gap(px(12.));
     for (index, block) in blocks.iter().enumerate() {
         column = column.child(block_view(block, &format!("b{index}"), theme, handlers));

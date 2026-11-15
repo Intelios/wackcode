@@ -52,11 +52,15 @@ pub enum ChatEvent {
     Finished(Result<Outcome, String>),
     /// The panes moved, opened or closed: worth saving.
     LayoutChanged,
+    /// The mode in force changed without the user: the agent entered Plan, or a plan was
+    /// discarded.
+    ModeChanged(wack_core::AgentMode),
 }
 
 pub struct ChatSession {
     pub id: String,
     cwd: PathBuf,
+    session_path: PathBuf,
     conversation: Conversation,
     /// Keys of the work logs and rows the user opened.
     open: HashSet<String>,
@@ -82,6 +86,10 @@ pub struct ChatSession {
     /// Where focus should go at the next frame: the question card as it arrives, the composer
     /// after it closes.
     pub focus_request: Option<FocusHandle>,
+    /// Tasks already done when the current run started: they fold behind "+N done".
+    pub todo_faded: HashSet<u64>,
+    /// The folded tasks are shown anyway.
+    pub todo_show_done: bool,
 }
 
 /// A question the agent is waiting on, and the answers so far.
@@ -149,6 +157,7 @@ impl ChatSession {
         let mut chat = Self {
             id: id.to_string(),
             cwd: cwd.clone(),
+            session_path: session_path.to_path_buf(),
             conversation,
             open: HashSet::new(),
             cache: ReplyCache::default(),
@@ -165,6 +174,8 @@ impl ChatSession {
             unread: false,
             asking: None,
             focus_request: None,
+            todo_faded: HashSet::new(),
+            todo_show_done: false,
         };
         chat.refresh_from(0);
         chat.panes.sync(cx, |_, cx| cx.notify());
@@ -221,6 +232,11 @@ impl ChatSession {
             Job::Prompt(text) => self.conversation.send(text, now_millis()),
             Job::Compact => self.conversation.begin_compaction(),
         }
+
+        // What was done before this run folds away.
+        self.todo_faded = crate::todo_panel::completed_ids(&self.conversation.todos);
+        self.todo_show_done = false;
+        self.conversation.plan_view = Default::default();
 
         self.runs_started += 1;
         let number = self.runs_started;
@@ -442,7 +458,8 @@ impl ChatSession {
             return;
         }
         let now = now_millis();
-        let from = self.conversation.entries.len().saturating_sub(1);
+        let mut from = self.conversation.entries.len().saturating_sub(1);
+        let (awaiting_before, mode_before) = (self.conversation.awaiting, self.conversation.plan.mode);
         let mut finished = None;
         for event in batch {
             match event {
@@ -482,11 +499,78 @@ impl ChatSession {
                 }
             }
         }
+        // A plan that stopped awaiting a decision loses its actions, wherever it is.
+        if self.conversation.awaiting != awaiting_before
+            && let Some(before) = awaiting_before
+        {
+            from = from.min(before);
+        }
         self.refresh_from(from);
+        if self.conversation.plan.mode != mode_before {
+            cx.emit(ChatEvent::ModeChanged(self.conversation.plan.mode));
+        }
         if let Some(result) = finished {
             cx.emit(ChatEvent::Finished(result));
         }
         cx.notify();
+    }
+
+    /// The text of the plan awaiting review.
+    pub fn awaiting_plan(&self) -> Option<String> {
+        self.conversation.awaiting_plan().map(|proposal| proposal.text.clone())
+    }
+
+    /// Rebuilds the card of the plan awaiting review.
+    fn refresh_plan_card(&mut self, cx: &mut Context<Self>) {
+        if let Some(index) = self.conversation.awaiting {
+            self.refresh_entry(index);
+        }
+        cx.notify();
+    }
+
+    /// Discard was pressed: the card asks first.
+    pub fn ask_discard_plan(&mut self, cx: &mut Context<Self>) {
+        if self.conversation.awaiting.is_some() && !self.running() {
+            self.conversation.plan_view.confirming_discard = true;
+            self.refresh_plan_card(cx);
+        }
+    }
+
+    pub fn keep_plan(&mut self, cx: &mut Context<Self>) {
+        self.conversation.plan_view.confirming_discard = false;
+        self.refresh_plan_card(cx);
+    }
+
+    /// A word under the plan card's buttons, after Copy or Save.
+    pub fn plan_notice(&mut self, text: String, cx: &mut Context<Self>) {
+        self.conversation.plan_view.notice = Some(text);
+        self.refresh_plan_card(cx);
+    }
+
+    /// Abandons the plan awaiting review and returns the chat to Build. The conversation is kept.
+    pub fn discard_plan(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
+        if self.running() {
+            return Err("Wait for the agent to finish first.".into());
+        }
+        wack_core::discard_plan(&self.session_path)?;
+        let before = self.conversation.awaiting;
+        self.conversation.discard_plan();
+        if let Some(index) = before {
+            self.refresh_entry(index);
+        }
+        cx.emit(ChatEvent::ModeChanged(wack_core::AgentMode::Build));
+        cx.notify();
+        Ok(())
+    }
+
+    /// Shows the folded tasks.
+    pub fn show_done_todos(&mut self, cx: &mut Context<Self>) {
+        self.todo_show_done = true;
+        cx.notify();
+    }
+
+    pub fn todos(&self) -> &wack_core::todo::TodoList {
+        &self.conversation.todos
     }
 
     /// Keeps "Working · 8s" counting.

@@ -282,6 +282,72 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| question_scene(false, None, size(px(700.), px(480.)), cx),
         },
         Scene {
+            name: "plan-card",
+            description: "A plan awaiting review in Plan mode.",
+            size: WINDOW,
+            build: |_, cx| plan_scene(false, false, None, cx),
+        },
+        Scene {
+            name: "plan-card-ultra",
+            description: "A plan from Ultra Plan awaiting review, over a backdrop.",
+            size: WINDOW,
+            build: |_, cx| {
+                let picture = over(fixtures::backdrop(wack_core::Texture::None), cx);
+                plan_scene(true, false, Some(picture), cx)
+            },
+        },
+        Scene {
+            name: "plan-card-discard",
+            description: "Discard pressed: the plan card asks in its footer.",
+            size: WINDOW,
+            build: |_, cx| plan_scene(false, true, None, cx),
+        },
+        Scene {
+            name: "todo-list",
+            description: "A Build run keeping a todo list: one task folded, one under way, dependencies shown.",
+            size: WINDOW,
+            build: |_, cx| {
+                cx.new(|_| {
+                    let composer = ComposerData {
+                        working: true,
+                        todos: Some(fixtures::todos()),
+                        ..fixtures::composer_working()
+                    };
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::Working),
+                        Screen::Chat { title: fixtures::WORKING_TITLE.into(), project: fixtures::project(), body: Body::Items(fixtures::working_turn()), composer },
+                        fixtures::strip(Some(fixtures::WORKING_TITLE)),
+                    )
+                })
+                .into()
+            },
+        },
+        Scene {
+            name: "todo-question-small",
+            description: "A todo list, a question and a queued message in the smallest window.",
+            size: size(px(700.), px(480.)),
+            build: |_, cx| {
+                cx.new(|_| {
+                    let mode = wack_core::AgentMode::Plan;
+                    let mut todos = fixtures::todos();
+                    todos.folded = true;
+                    let composer = ComposerData {
+                        mode,
+                        working: true,
+                        question: Some(fixtures::question(false)),
+                        todos: Some(todos),
+                        ..fixtures::composer_working()
+                    };
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::Working),
+                        Screen::Chat { title: fixtures::WORKING_TITLE.into(), project: fixtures::project(), body: Body::Items(fixtures::asking_turn()), composer },
+                        fixtures::strip(Some(fixtures::WORKING_TITLE)),
+                    )
+                })
+                .into()
+            },
+        },
+        Scene {
             name: "settings-providers",
             description: "Settings › Providers: two connections and the add form with a problem to fix.",
             size: size(px(1180.), px(900.)),
@@ -385,6 +451,32 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| cx.new(|_| Specimen).into(),
         },
     ]
+}
+
+/// A chat whose last run proposed a plan.
+fn plan_scene(ultra: bool, confirming: bool, backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> AnyView {
+    let mode = if ultra { wack_core::AgentMode::UltraPlan } else { wack_core::AgentMode::Plan };
+    cx.new(|_| {
+        let composer = ComposerData {
+            mode,
+            ..fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::app::placeholder(mode, false).into() })
+        };
+        let shell = Shell::showing_tabs(
+            fixtures::sidebar(Selected::Finished),
+            Screen::Chat {
+                title: fixtures::FINISHED_TITLE.into(),
+                project: fixtures::project(),
+                body: Body::Items(fixtures::plan_turn(ultra, confirming)),
+                composer,
+            },
+            fixtures::strip(Some(fixtures::FINISHED_TITLE)),
+        );
+        match backdrop {
+            Some(picture) => shell.with_backdrop(picture),
+            None => shell,
+        }
+    })
+    .into()
 }
 
 /// A chat in Plan or Ultra Plan with the question card open.

@@ -7,9 +7,18 @@
 //! - Inside a turn, thinking, tool calls and any text written before a tool call are the turn's
 //!   work. Text after the last tool call is the reply. While a reply streams it is the reply; if
 //!   a tool call follows, it moves into the work as a note.
+//! - Feature state saved in the session (`plan`, `todo`) is folded in as it comes, so the mode in
+//!   force, the plan awaiting review and the todo list read the same after a relaunch as live.
+//!   A plan is shown on the turn that proposed it; only the one still awaiting a decision
+//!   (`awaiting`) offers actions. A new message, Discard or Approve clears it.
 
 use serde_json::Value;
-use wack_core::{Event, HistoryEntry, Message, Outcome, RetryNotice, Role, Usage, llm::Block};
+use wack_core::{
+    AgentMode, Event, HistoryEntry, Message, Outcome, RetryNotice, Role, Usage,
+    llm::Block,
+    plan::{PLAN_STATE, PlanState},
+    todo::{TODO_STATE, TodoList},
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Entry {
@@ -34,6 +43,8 @@ pub struct Turn {
     pub end: Option<TurnEnd>,
     /// A retry is pending: what went wrong and when it tries again.
     pub retrying: Option<String>,
+    /// The plan this turn proposed for review.
+    pub proposal: Option<Proposal>,
     /// Live thinking deltas join the last thought until anything else happens.
     thinking_open: bool,
 }
@@ -72,9 +83,29 @@ pub enum TurnEnd {
     Failed(String),
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct Proposal {
+    pub text: String,
+    /// Proposed in Ultra Plan: drawn in the prism.
+    pub ultra: bool,
+}
+
+/// The plan card's passing state: a Discard waiting to be confirmed, a word after Copy or Save.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PlanView {
+    pub confirming_discard: bool,
+    pub notice: Option<String>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Conversation {
     pub entries: Vec<Entry>,
+    /// The mode in force and the plan awaiting review, as the session last recorded them.
+    pub plan: PlanState,
+    /// The entry whose turn holds the plan awaiting review.
+    pub awaiting: Option<usize>,
+    pub todos: TodoList,
+    pub plan_view: PlanView,
 }
 
 impl Turn {
@@ -170,7 +201,8 @@ impl Conversation {
                     conversation.entries.push(Entry::Compacted);
                 }
                 HistoryEntry::Message { message, usage, at } => conversation.replay(message, *usage, *at),
-                HistoryEntry::Note { .. } | HistoryEntry::State { .. } => {}
+                HistoryEntry::State { key, value } => conversation.apply_state(key, value),
+                HistoryEntry::Note { .. } => {}
             }
         }
         conversation.close_turn(None);
@@ -224,6 +256,53 @@ impl Conversation {
                 }
             }
         }
+    }
+
+    /// Folds in a feature's saved state.
+    pub fn apply_state(&mut self, key: &str, value: &Value) {
+        match key {
+            PLAN_STATE => {
+                let Some(state) = PlanState::from_value(value) else {
+                    return;
+                };
+                match &state.plan {
+                    Some(text) if self.plan.plan.as_ref() != Some(text) || self.awaiting.is_none() => {
+                        let ultra = state.mode == AgentMode::UltraPlan;
+                        let index = self.entries.iter().rposition(|entry| matches!(entry, Entry::Turn(_)));
+                        if let Some(index) = index
+                            && let Entry::Turn(turn) = &mut self.entries[index]
+                        {
+                            turn.proposal = Some(Proposal { text: text.clone(), ultra });
+                        }
+                        self.awaiting = index;
+                        self.plan_view = PlanView::default();
+                    }
+                    Some(_) => {}
+                    None => {
+                        self.awaiting = None;
+                        self.plan_view = PlanView::default();
+                    }
+                }
+                self.plan = state;
+            }
+            TODO_STATE => self.todos = TodoList::from_value(value).unwrap_or_default(),
+            _ => {}
+        }
+    }
+
+    /// The plan awaiting review, if any.
+    pub fn awaiting_plan(&self) -> Option<&Proposal> {
+        match self.entries.get(self.awaiting?) {
+            Some(Entry::Turn(turn)) => turn.proposal.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// The user discarded the plan: back to Build, the proposal kept but inert.
+    pub fn discard_plan(&mut self) {
+        self.plan = PlanState { mode: AgentMode::Build, plan: None };
+        self.awaiting = None;
+        self.plan_view = PlanView::default();
     }
 
     /// The turn still being written to, if the last entry is one.
@@ -293,7 +372,16 @@ impl Conversation {
                     *text = "Compacted the conversation to make room".into();
                 }
             }
-            Event::Steered(_) | Event::Question { .. } | Event::State { .. } | Event::Notice(_) => {}
+            Event::State { key, value } => {
+                let (key, value) = (key.clone(), value.clone());
+                self.apply_state(&key, &value);
+            }
+            Event::Notice(text) => {
+                let text = text.clone();
+                turn.settle_reply();
+                turn.steps.push(Step::Event(text));
+            }
+            Event::Steered(_) | Event::Question { .. } => {}
         }
     }
 
@@ -334,6 +422,51 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    fn plan_state(mode: &str, plan: Option<&str>) -> Event {
+        let mut value = json!({ "mode": mode });
+        if let Some(plan) = plan {
+            value["plan"] = json!(plan);
+        }
+        Event::State { key: PLAN_STATE.into(), value }
+    }
+
+    #[test]
+    fn a_proposed_plan_awaits_review_until_a_new_message() {
+        let mut conversation = Conversation::default();
+        conversation.send("Plan the cache", 1);
+        conversation.apply(&plan_state("ultraplan", None), 2);
+        conversation.apply(&plan_state("ultraplan", Some("1. Do it")), 3);
+        conversation.finish(&Ok(Outcome::Done), 4);
+        assert_eq!(conversation.awaiting, Some(1));
+        assert_eq!(conversation.awaiting_plan().map(|plan| (plan.text.as_str(), plan.ultra)), Some(("1. Do it", true)));
+        assert_eq!(conversation.plan.mode, AgentMode::UltraPlan);
+
+        // The same state saved again changes nothing; a new message consumes it.
+        conversation.apply_state(PLAN_STATE, &json!({ "mode": "ultraplan", "plan": "1. Do it" }));
+        assert_eq!(conversation.awaiting, Some(1));
+        conversation.send("Make it smaller", 5);
+        conversation.apply(&plan_state("ultraplan", None), 6);
+        assert_eq!(conversation.awaiting, None);
+        // The earlier proposal stays on its turn, inert.
+        assert!(matches!(&conversation.entries[1], Entry::Turn(turn) if turn.proposal.is_some()));
+    }
+
+    #[test]
+    fn discarding_returns_to_build_and_saved_state_replays() {
+        let history = vec![
+            HistoryEntry::Message { message: Message::user("Plan it"), usage: None, at: Some(1) },
+            HistoryEntry::Message { message: assistant(vec![Block::Text { text: "Here it is.".into() }]), usage: None, at: Some(2) },
+            HistoryEntry::State { key: PLAN_STATE.into(), value: json!({ "mode": "plan", "plan": "Steps" }) },
+            HistoryEntry::State { key: TODO_STATE.into(), value: json!({ "tasks": [{ "id": 1, "subject": "Write", "status": "pending" }], "nextId": 2 }) },
+        ];
+        let mut conversation = Conversation::from_history(&history);
+        assert_eq!(conversation.awaiting, Some(1));
+        assert_eq!(conversation.todos.tasks.len(), 1);
+        conversation.discard_plan();
+        assert_eq!(conversation.awaiting, None);
+        assert_eq!(conversation.plan.mode, AgentMode::Build);
+    }
 
     fn assistant(blocks: Vec<Block>) -> Message {
         Message { role: Role::Assistant, content: blocks }

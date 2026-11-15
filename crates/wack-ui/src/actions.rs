@@ -60,6 +60,18 @@ actions!(
         CancelQuestion,
         /// Ultra Plan's "Write the plan now".
         WrapUpQuestion,
+        /// The plan awaiting review: switch to Build and implement it.
+        ApprovePlan,
+        /// Writes the plan awaiting review to PLAN.md in the project.
+        SavePlan,
+        CopyPlan,
+        /// Asks to discard the plan awaiting review; `ConfirmDiscardPlan` does it.
+        DiscardPlan,
+        ConfirmDiscardPlan,
+        /// Keeps the plan after all.
+        KeepPlan,
+        /// Shows the todo list's folded tasks.
+        ShowDoneTodos,
         /// Picks a picture for the backdrop.
         ChooseBackdrop,
         RemoveBackdrop,

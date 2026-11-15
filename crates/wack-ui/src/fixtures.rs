@@ -98,6 +98,7 @@ pub fn composer_empty(roomy: bool) -> ComposerData {
         roomy,
         menu: None,
         question: None,
+        todos: None,
     }
 }
 
@@ -319,6 +320,55 @@ pub fn question(ultra: bool) -> crate::question::QuestionData {
         focus: None,
         nods: 0,
     }
+}
+
+const PLAN: &str = "## Keep drafts across a crash
+
+1. **Save as you pause.** `ChatSession` writes the composer's text to `drafts/<chat>.txt` half a second after the last key.
+2. **Restore on open.** `ChatSession::load` reads the file back into the composer, then removes it.
+3. **Clear on send.** Sending, or emptying the field, deletes the file.
+4. **Test it.** A `tempfile` test for each step, and a gallery scene with a restored draft.
+
+Assumptions: new chats keep their draft too; nothing is written for an empty field.";
+
+/// A planning turn that ended with a proposal awaiting review.
+pub fn plan_turn(ultra: bool, confirming_discard: bool) -> Vec<Item> {
+    let mut conversation = Conversation::default();
+    let now = START + 60_000;
+    let mode = if ultra { "ultraplan" } else { "plan" };
+    conversation.send("Plan how drafts should survive a crash.", now - 40_000);
+    call(&mut conversation, "read-p", "read", json!({ "path": "crates/wack-ui/src/chat.rs" }), Some(&"x\n".repeat(390)), now - 35_000);
+    call(&mut conversation, "grep-p", "grep", json!({ "pattern": "set_text" }), Some(&"x\n".repeat(12)), now - 30_000);
+    call(&mut conversation, "plan-p", "plan_mode_complete", json!({ "plan": PLAN }), Some("Plan submitted for review."), now - 2_000);
+    conversation.apply(&Event::State { key: "plan".into(), value: json!({ "mode": mode, "plan": PLAN }) }, now - 1_000);
+    conversation.finish(&Ok(Outcome::Done), now);
+    conversation.plan_view.confirming_discard = confirming_discard;
+    items(&conversation, &[], now)
+}
+
+/// A todo list part-way through a run: one task done before it, one during it, one under way.
+pub fn todos() -> crate::todo_panel::TodoData {
+    use wack_core::todo::{Status, Task, TodoList};
+    let task = |id, subject: &str, status, active: Option<&str>, blocked_by: Vec<u64>| Task {
+        id,
+        subject: subject.into(),
+        description: None,
+        active_form: active.map(Into::into),
+        status,
+        blocked_by,
+    };
+    let list = TodoList {
+        tasks: vec![
+            task(1, "Read how the composer saves its text", Status::Completed, None, vec![]),
+            task(2, "Write the draft beside the chat", Status::Completed, None, vec![]),
+            task(3, "Restore the draft when the chat opens", Status::InProgress, Some("restoring drafts"), vec![2]),
+            task(4, "Delete the draft once it is sent", Status::Pending, None, vec![2]),
+            task(5, "Add the gallery scene", Status::Pending, None, vec![]),
+        ],
+        next_id: 6,
+    };
+    let faded = [1].into_iter().collect();
+    crate::todo_panel::TodoData { view: crate::todo_panel::view(&list, &faded, false), busy: true, folded: false }
 }
 
 /// The title strip's tabs, with `active` in front (or the new-chat tab when `None`).

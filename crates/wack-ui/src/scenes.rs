@@ -361,6 +361,22 @@ pub fn all() -> Vec<Scene> {
                     section: Section::Providers,
                     providers: ProvidersData::new(&fixtures::connections(), &form),
                     appearance: fixtures::appearance(None, cx),
+                    tools: Default::default(),
+                };
+                cx.new(|_| Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(data))).into()
+            },
+        },
+        Scene {
+            name: "settings-tools",
+            description: "Settings › Tools, asking before planning loses its read-only restrictions.",
+            size: size(px(1180.), px(760.)),
+            build: |_, cx| {
+                let form = ProviderForm::new(cx);
+                let data = SettingsData {
+                    section: Section::Tools,
+                    providers: ProvidersData::new(&fixtures::connections(), &form),
+                    appearance: fixtures::appearance(None, cx),
+                    tools: crate::tools_page::ToolsData { unrestricted_planning: false, confirming: true },
                 };
                 cx.new(|_| Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(data))).into()
             },
@@ -516,6 +532,7 @@ fn settings_scene(backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> A
         section: Section::Appearance,
         providers: ProvidersData::new(&fixtures::connections(), &form),
         appearance: fixtures::appearance(backdrop.clone(), cx),
+        tools: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(data));

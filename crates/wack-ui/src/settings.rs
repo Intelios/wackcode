@@ -135,15 +135,17 @@ pub enum Section {
     #[default]
     Appearance,
     Providers,
+    Tools,
 }
 
 impl Section {
-    pub const ALL: [Section; 2] = [Section::Appearance, Section::Providers];
+    pub const ALL: [Section; 3] = [Section::Appearance, Section::Providers, Section::Tools];
 
     pub fn name(self) -> &'static str {
         match self {
             Section::Appearance => "Appearance",
             Section::Providers => "Providers",
+            Section::Tools => "Tools",
         }
     }
 }
@@ -154,6 +156,7 @@ pub struct SettingsData {
     pub section: Section,
     pub providers: ProvidersData,
     pub appearance: AppearanceData,
+    pub tools: crate::tools_page::ToolsData,
 }
 
 /// The title strip's words: `Settings › Providers`.
@@ -192,6 +195,7 @@ pub fn page(data: SettingsData, inset: Pixels, narrow: bool, theme: &Theme) -> i
     let content = match data.section {
         Section::Appearance => appearance_page::page(data.appearance, theme).into_any_element(),
         Section::Providers => providers(data.providers, theme).into_any_element(),
+        Section::Tools => crate::tools_page::page(data.tools, theme).into_any_element(),
     };
     div().id("settings-page").size_full().overflow_y_scroll().child(
         div()

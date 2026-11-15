@@ -31,6 +31,7 @@ pub mod tags;
 pub mod text_field;
 pub mod theme;
 pub mod todo_panel;
+pub mod tools_page;
 pub mod tooltip;
 pub mod transcript;
 pub mod typography;

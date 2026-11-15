@@ -30,7 +30,7 @@ use gpui::{
 
 use crate::{
     actions::{
-        self, ActivatePane, AddConnection, AddFolder, Back, ChooseAccent, ChooseBackdrop, ChooseEffort, ChooseFocus, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan,
+        self, ActivatePane, AddConnection, AddFolder, Back, ChooseAccent, ChooseBackdrop, ChooseEffort, ChooseFocus, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning,
         ChooseDim, ChooseFormat, ChooseMode, ChooseModel, ChooseTexture, ChooseThemeColour, CloseChatTab, CloseMenu, ClosePane,
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, EqualizeSplit, FocusNext, FocusPrevious, MovePane,
         NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
@@ -861,6 +861,18 @@ impl Render for Shell {
                 .on_action(cx.listener(|shell, _: &SubmitAnswers, _, cx| shell.with_session(cx, |session, cx| session.submit_answers(cx))))
                 .on_action(cx.listener(|shell, _: &CancelQuestion, _, cx| shell.with_session(cx, |session, cx| session.cancel_question(cx))))
                 .on_action(cx.listener(|shell, _: &WrapUpQuestion, _, cx| shell.with_session(cx, |session, cx| session.wrap_up(cx))))
+                .on_action(cx.listener(|shell, _: &ToggleUnrestrictedPlanning, _, cx| {
+                    shell.with_app(cx, |app, cx| app.toggle_unrestricted_planning(cx))
+                }))
+                .on_action(cx.listener(|shell, _: &ConfirmUnrestrictedPlanning, _, cx| {
+                    shell.with_app(cx, |app, cx| app.set_unrestricted_planning(true, cx))
+                }))
+                .on_action(cx.listener(|shell, _: &CancelUnrestrictedPlanning, _, cx| {
+                    shell.with_app(cx, |app, cx| {
+                        app.confirming_unrestricted = false;
+                        cx.notify();
+                    })
+                }))
                 .on_action(cx.listener(|shell, _: &ShowDoneTodos, _, cx| shell.with_session(cx, |session, cx| session.show_done_todos(cx))))
                 .on_action(cx.listener(|shell, _: &DiscardPlan, _, cx| shell.with_session(cx, |session, cx| session.ask_discard_plan(cx))))
                 .on_action(cx.listener(|shell, _: &KeepPlan, _, cx| shell.with_session(cx, |session, cx| session.keep_plan(cx))))
@@ -1078,6 +1090,10 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     backdrop: app.backdrop(),
                     importing: app.importing,
                     notice: app.appearance_notice.clone(),
+                },
+                tools: crate::tools_page::ToolsData {
+                    unrestricted_planning: store.planning_unrestricted(),
+                    confirming: app.confirming_unrestricted,
                 },
             })
         }

@@ -72,6 +72,10 @@ actions!(
         KeepPlan,
         /// Shows the todo list's folded tasks.
         ShowDoneTodos,
+        /// Settings › Tools: turns unrestricted planning off, or asks before turning it on.
+        ToggleUnrestrictedPlanning,
+        ConfirmUnrestrictedPlanning,
+        CancelUnrestrictedPlanning,
         /// Picks a picture for the backdrop.
         ChooseBackdrop,
         RemoveBackdrop,

@@ -92,6 +92,8 @@ pub struct AppState {
     pub appearance_notice: Option<SharedString>,
     /// A backdrop picture is being read.
     pub importing: bool,
+    /// Settings › Tools is asking before planning loses its restrictions.
+    pub confirming_unrestricted: bool,
     /// Chats open as tabs, in order.
     tabs: Vec<String>,
     sidebar_hidden: bool,
@@ -184,6 +186,7 @@ impl AppState {
             form,
             menu: None,
             settings_section: Section::default(),
+            confirming_unrestricted: false,
             theme_field,
             accent_field,
             appearance_notice: None,
@@ -706,6 +709,24 @@ impl AppState {
         if let Err(message) = session.update(cx, |session, cx| session.discard_plan(cx)) {
             session.update(cx, |session, cx| session.plan_notice(message, cx));
         }
+    }
+
+    /// Settings › Tools' switch: off at once, on only after the user confirms.
+    pub fn toggle_unrestricted_planning(&mut self, cx: &mut Context<Self>) {
+        if self.store.planning_unrestricted() {
+            self.set_unrestricted_planning(false, cx);
+        } else {
+            self.confirming_unrestricted = !self.confirming_unrestricted;
+            cx.notify();
+        }
+    }
+
+    pub fn set_unrestricted_planning(&mut self, unrestricted: bool, cx: &mut Context<Self>) {
+        self.confirming_unrestricted = false;
+        if let Err(message) = self.store.set_planning_unrestricted(unrestricted) {
+            self.notice = Some(message.into());
+        }
+        cx.notify();
     }
 
     /// ⇧Tab: Build → Plan → Ultra Plan → Build.

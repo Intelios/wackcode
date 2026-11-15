@@ -48,6 +48,9 @@ actions!(
         PreviousTab,
         /// Esc typed into a terminal, which goes to the shell rather than stepping back.
         TerminalEscape,
+        /// Picks a picture for the backdrop.
+        ChooseBackdrop,
+        RemoveBackdrop,
     ]
 );
 
@@ -174,6 +177,47 @@ pub struct EqualizeSplit {
     pub dock: Dock,
     pub path: Vec<usize>,
     pub index: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct OpenSettingsSection {
+    pub section: crate::settings::Section,
+}
+
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseMode {
+    pub mode: wack_core::Mode,
+}
+
+/// `None` goes back to the default.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseThemeColour {
+    pub hex: Option<String>,
+}
+
+/// `None` goes back to the default.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseAccent {
+    pub hex: Option<String>,
+}
+
+/// How far the backdrop is toned towards the window's colour, in percent.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseVeil {
+    pub veil: u8,
+}
+
+/// The part of the backdrop kept in view: 0, 1 or 2 across and down.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseFocus {
+    pub across: u8,
+    pub down: u8,
 }
 
 const CONTEXT: &str = "Shell";

@@ -8,7 +8,7 @@ use gpui::{AnyView, App, Context, Pixels, Size, Window, prelude::*, px, size};
 use crate::{
     composer::{ComposerData, Input},
     panes::{ChangesPane, ChatPanes, Dock, Edge, Layout, PaneKind, PaneModel, Target, TerminalPane},
-    settings::{ProviderForm, ProvidersData},
+    settings::{ProviderForm, ProvidersData, Section, SettingsData},
     fixtures::{self, Selected},
     shell::{Body, Screen, Shell},
     specimen::Specimen,
@@ -196,8 +196,68 @@ pub fn all() -> Vec<Scene> {
                 form.address.update(cx, |field, cx| field.set_text("openrouter.ai/api/v1", cx));
                 form.key.update(cx, |field, cx| field.set_text("not-a-real-key", cx));
                 form.error = Some("The address must start with https:// or http://.".into());
-                let data = ProvidersData::new(&fixtures::connections(), &form);
+                let data = SettingsData {
+                    section: Section::Providers,
+                    providers: ProvidersData::new(&fixtures::connections(), &form),
+                    appearance: fixtures::appearance(None, cx),
+                };
                 cx.new(|_| Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(data))).into()
+            },
+        },
+        Scene {
+            name: "settings-appearance",
+            description: "Settings › Appearance with the default colours and no backdrop yet.",
+            size: size(px(1180.), px(900.)),
+            build: |_, cx| settings_scene(None, cx),
+        },
+        Scene {
+            name: "settings-appearance-backdrop",
+            description: "Settings › Appearance with a backdrop chosen, drawn over it.",
+            size: size(px(1440.), px(900.)),
+            build: |_, cx| settings_scene(Some(fixtures::backdrop()), cx),
+        },
+        Scene {
+            name: "new-chat-backdrop",
+            description: "The new-chat screen over a backdrop: the block stays solid and the picture dissolves around it.",
+            size: WINDOW,
+            build: |_, cx| {
+                cx.new(|_| {
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::None),
+                        Screen::NewChat {
+                            project: fixtures::project(),
+                            composer: fixtures::composer_empty(true),
+                            notice: None,
+                        },
+                        fixtures::strip(None),
+                    )
+                    .with_backdrop(fixtures::backdrop())
+                })
+                .into()
+            },
+        },
+        Scene {
+            name: "chat-backdrop",
+            description: "A finished turn over a backdrop, at a laptop's full-screen size.",
+            size: size(px(1512.), px(945.)),
+            build: |_, cx| {
+                cx.new(|_| {
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::Finished),
+                        Screen::Chat {
+                            title: fixtures::FINISHED_TITLE.into(),
+                            project: fixtures::project(),
+                            body: Body::Items(fixtures::finished_turn()),
+                            composer: fixtures::composer_after_turn(Input::Drawn {
+                                text: None,
+                                placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into(),
+                            }),
+                        },
+                        fixtures::strip(Some(fixtures::FINISHED_TITLE)),
+                    )
+                    .with_backdrop(fixtures::backdrop())
+                })
+                .into()
             },
         },
         Scene {
@@ -207,6 +267,24 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| cx.new(|_| Specimen).into(),
         },
     ]
+}
+
+/// Settings › Appearance, drawn over `backdrop` when there is one.
+fn settings_scene(backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> AnyView {
+    let form = ProviderForm::new(cx);
+    let data = SettingsData {
+        section: Section::Appearance,
+        providers: ProvidersData::new(&fixtures::connections(), &form),
+        appearance: fixtures::appearance(backdrop.clone(), cx),
+    };
+    cx.new(|_| {
+        let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(data));
+        match backdrop {
+            Some(picture) => shell.with_backdrop(picture),
+            None => shell,
+        }
+    })
+    .into()
 }
 
 /// The finished chat with `layout`'s panes showing fixture models.

@@ -185,7 +185,11 @@ fn work_log(work: &Work, theme: &Theme, handlers: &Handlers) -> impl IntoElement
         .when(!work.live, |header| {
             header.cursor_pointer().on_click(move |_, window, cx| toggle(key.clone(), window, cx))
         })
-        .child(Icon::Duck.view(px(14.), if work.live { theme.accent_text } else { theme.text_dim }))
+        .child(if work.live {
+            crate::motion::paddling(div().child(Icon::Duck.view(px(14.), theme.accent_text))).into_any_element()
+        } else {
+            Icon::Duck.view(px(14.), theme.text_dim).into_any_element()
+        })
         .child(
             div()
                 .typography(if work.live { Type::UiStrong } else { Type::Ui })

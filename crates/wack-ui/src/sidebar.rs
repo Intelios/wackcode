@@ -272,7 +272,7 @@ fn chat_row(chat: ChatRow, theme: &Theme) -> impl IntoElement {
     let group: SharedString = format!("chat-{}", chat.id).into();
     let id = chat.id.to_string();
     let marker = div().flex_none().w(px(14.)).flex().justify_center().map(|marker| match chat.state {
-        ChatState::Working => marker.child(Icon::Duck.view(px(12.), theme.accent_text)),
+        ChatState::Working => marker.child(crate::motion::paddling(div().child(Icon::Duck.view(px(12.), theme.accent_text)))),
         ChatState::Unread => marker.child(div().size(px(6.)).rounded_full().bg(theme.accent_text)),
         ChatState::Idle => marker,
     });

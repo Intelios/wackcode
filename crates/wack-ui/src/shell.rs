@@ -11,6 +11,10 @@
 //! chat's docks are placed from the window's size on every frame, so the transcript keeps its
 //! minimum width at any size the window allows, and the sidebar steps aside before a dock shrinks.
 //!
+//! Over an image backdrop the main column shows the picture, and every place text lives stays a
+//! solid island of window colour that dissolves into it ([`islands`], `backdrop.rs`). A change
+//! to a screen's measures belongs in its island too.
+//!
 //! The shell draws from plain data ([`SidebarData`], [`Screen`]). In the app that data is read
 //! from [`AppState`] on every frame and the shell handles the actions its views dispatch; a
 //! gallery scene hands it fixed data instead and handles nothing.
@@ -18,31 +22,36 @@
 use std::rc::Rc;
 
 use gpui::{
-    App, Context, DragMoveEvent, Entity, Focusable, Hsla, ListState, MouseButton, PathPromptOptions, Pixels, PromptLevel,
-    SharedString, Window, WindowControlArea, div, linear_color_stop, linear_gradient, list, point, prelude::*, px, relative,
+    App, Context, DragMoveEvent, ElementId, Entity, FocusHandle, Focusable, Hsla, ListState, MouseButton, PathPromptOptions, Pixels,
+    PromptLevel, SharedString, Subscription, Window, WindowControlArea, div, linear_color_stop, linear_gradient, list,
+    point, prelude::*, px, relative,
 };
 
 use crate::{
     actions::{
-        self, ActivatePane, AddConnection, AddFolder, Back, ChooseEffort, ChooseFormat, ChooseModel, CloseChatTab, CloseMenu,
-        ClosePane, ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, EqualizeSplit, FocusNext, FocusPrevious,
-        MovePane, NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
-        PinProject, PreviousTab, RemoveConnection, RemoveProject, ResetDockSize, SelectChat, Send, Stop, ToggleChanges,
-        ToggleProject, ToggleSidebar, ToggleTerminal, Unqueue,
+        self, ActivatePane, AddConnection, AddFolder, Back, ChooseAccent, ChooseBackdrop, ChooseEffort, ChooseFocus,
+        ChooseFormat, ChooseMode, ChooseModel, ChooseThemeColour, ChooseVeil, CloseChatTab, CloseMenu, ClosePane,
+        ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, EqualizeSplit, FocusNext, FocusPrevious, MovePane,
+        NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
+        OpenSettingsSection, PinProject, PreviousTab, RemoveBackdrop, RemoveConnection, RemoveProject, ResetDockSize,
+        SelectChat, Send, Stop, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, Unqueue,
     },
     app::{AppState, Menu, Selection, shown_path},
+    appearance_page::AppearanceData,
+    backdrop::{self, Picture, Veil},
     chat::ChatSession,
     composer::{Choice, Composer, ComposerData, Input, MenuData, MenuGroup, MenuItem, Meter, Waiting},
+    motion,
     panes::{
-        Axis, ChatPanes, Dock, Layout, PaneId, PaneKind, PaneModel,
+        Axis, ChatPanes, Dock, Layout, PaneId, PaneKind, PaneModel, Rect,
         dock::{self, DraggedTab, Resizing},
         solve::{self, DOCK_MIN_HEIGHT, DOCK_MIN_WIDTH, STACK_MIN_HEIGHT, STACK_MIN_WIDTH, TRANSCRIPT_MIN_WIDTH, solve},
     },
-    settings::{self, ProvidersData},
+    settings::{self, ProvidersData, Section, SettingsData},
     icon::Icon,
     sidebar::{ChatRow, ChatState, ProjectRow, SIDEBAR_WIDTH, Sidebar, SidebarData},
     tags::{self, Tag},
-    theme::Theme,
+    theme::{DEFAULT_ACCENT, DEFAULT_THEME_COLOUR, Theme},
     transcript::{self, Handlers, Item, Transcript},
     typography::{Type, Typography},
 };
@@ -60,6 +69,12 @@ const NARROW_TRANSCRIPT: f32 = 600.;
 const NARROW_INSET: Pixels = px(32.);
 /// The main column's width from which the title strip also names the chat's project.
 const ROOMY_STRIP: f32 = 980.;
+/// The new-chat and welcome blocks: how far down the column they hang, as a share of its
+/// height, and their widest line.
+const NEW_CHAT_DROP: f32 = 0.22;
+const NEW_CHAT_WIDTH: f32 = 640.;
+const WELCOME_DROP: f32 = 0.26;
+const WELCOME_WIDTH: f32 = 560.;
 
 #[derive(Clone, Debug)]
 pub struct ProjectInfo {
@@ -84,7 +99,7 @@ pub enum Screen {
     Welcome { notice: Option<SharedString> },
     NewChat { project: ProjectInfo, composer: ComposerData, notice: Option<SharedString> },
     Chat { title: SharedString, project: ProjectInfo, body: Body, composer: ComposerData },
-    Settings(ProvidersData),
+    Settings(SettingsData),
     /// The data folder could not be opened.
     Failed(SharedString),
 }
@@ -106,10 +121,18 @@ pub struct Shell {
     /// A scene's panes and sidebar preference; the app's come from the chat and the store.
     scene_panes: Option<ChatPanes>,
     scene_sidebar_hidden: bool,
+    /// A scene's backdrop; the app's comes from the store.
+    scene_backdrop: Option<Picture>,
+    veil: Veil,
+    _activation: Option<Subscription>,
+    /// Holds focus while a screen has no text field, so its clicks and keys reach the shell.
+    focus: Option<FocusHandle>,
+    /// The duck's next paddle step is on its way.
+    paddling: bool,
 }
 
 impl Shell {
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let source = match AppState::open_store() {
             Ok(store) => {
                 let app = cx.new(|cx| AppState::new(store, cx));
@@ -118,6 +141,12 @@ impl Shell {
             }
             Err(message) => Source::Failed(message.into()),
         };
+        motion::follow_system(cx);
+        let activation = cx.observe_window_activation(window, |_, window, cx| {
+            if window.is_window_active() {
+                motion::follow_system(cx);
+            }
+        });
         Self {
             source,
             traffic_light_stand_ins: false,
@@ -125,6 +154,11 @@ impl Shell {
             dragging: None,
             scene_panes: None,
             scene_sidebar_hidden: false,
+            scene_backdrop: None,
+            veil: Veil::default(),
+            _activation: Some(activation),
+            focus: Some(cx.focus_handle()),
+            paddling: false,
         }
     }
 
@@ -140,6 +174,11 @@ impl Shell {
             dragging: None,
             scene_panes: None,
             scene_sidebar_hidden: false,
+            scene_backdrop: None,
+            veil: Veil::default(),
+            _activation: None,
+            focus: None,
+            paddling: false,
         }
     }
 
@@ -147,6 +186,12 @@ impl Shell {
     pub fn with_panes(mut self, panes: ChatPanes, sidebar_hidden: bool) -> Self {
         self.scene_panes = Some(panes);
         self.scene_sidebar_hidden = sidebar_hidden;
+        self
+    }
+
+    /// A scene drawn over a backdrop.
+    pub fn with_backdrop(mut self, picture: Picture) -> Self {
+        self.scene_backdrop = Some(picture);
         self
     }
 
@@ -277,6 +322,7 @@ impl Shell {
         self.with_app(cx, |app, cx| {
             // With nothing to pick from, the place to go is where connections are added.
             if app.store().connections().is_empty() {
+                app.settings_section = Section::Providers;
                 app.select(Selection::Settings, cx);
             } else {
                 app.toggle_menu(menu, cx);
@@ -448,7 +494,10 @@ impl Shell {
         }
     }
 
-    /// Gives the current screen's text field focus once, when the screen changes.
+    /// Gives the current screen's text field focus once, when the screen changes. On a screen
+    /// without one the shell itself takes focus: typing never lands in a field that is not
+    /// drawn, and actions still start inside the shell (with nothing focused, GPUI dispatches
+    /// from the window's root, above every handler).
     fn focus_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(app) = self.app() else {
             return;
@@ -459,12 +508,82 @@ impl Shell {
             return;
         }
         self.focused = Some(selection);
-        if let Some(field) = app.active_field(cx) {
-            window.defer(cx, move |window, cx| {
-                let handle = field.read(cx).focus_handle(cx);
-                window.focus(&handle, cx);
-            });
+        let handle = match app.active_field(cx) {
+            Some(field) => Some(field.read(cx).focus_handle(cx)),
+            None => self.focus.clone(),
+        };
+        if let Some(handle) = handle {
+            window.defer(cx, move |window, cx| window.focus(&handle, cx));
         }
+    }
+
+    /// While an agent works, the duck takes a paddle step every [`motion::PADDLE_STEP`]; each
+    /// step redraws the window, which schedules the next. Under Reduce Motion it stays at rest.
+    fn paddle(&mut self, sidebar: &SidebarData, cx: &mut Context<Self>) {
+        let working = sidebar.pinned.iter().chain(&sidebar.projects).flat_map(|project| &project.chats).any(|chat| chat.state == ChatState::Working);
+        if !working || cx.reduce_motion() || !matches!(self.source, Source::Live(_)) {
+            motion::paddle_rest();
+            return;
+        }
+        if !self.paddling {
+            self.paddling = true;
+            cx.spawn(async move |shell, cx| {
+                cx.background_executor().timer(motion::PADDLE_STEP).await;
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.paddling = false;
+                    motion::paddle_on();
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+    }
+
+    fn open_settings_section(&mut self, action: &OpenSettingsSection, _: &mut Window, cx: &mut Context<Self>) {
+        let section = action.section;
+        self.with_app(cx, |app, cx| {
+            app.settings_section = section;
+            cx.notify();
+        });
+        // The new section's field, if it has one, takes focus.
+        self.focused = None;
+    }
+
+    fn choose_backdrop(&mut self, _: &ChooseBackdrop, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(app) = self.app() else {
+            return;
+        };
+        if app.read(cx).importing {
+            return;
+        }
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Choose".into()),
+        });
+        cx.spawn(async move |_, cx| {
+            if let Ok(Ok(Some(paths))) = paths.await
+                && let Some(path) = paths.into_iter().next()
+            {
+                app.update(cx, |app, cx| app.import_backdrop(path, cx));
+            }
+        })
+        .detach();
+    }
+
+    /// Changes the backdrop's settings, when there is one.
+    fn change_backdrop(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut wack_core::Backdrop)) {
+        self.with_app(cx, |app, cx| {
+            app.set_appearance(
+                |appearance| {
+                    if let Some(backdrop) = &mut appearance.backdrop {
+                        change(backdrop);
+                    }
+                },
+                cx,
+            )
+        });
     }
 }
 
@@ -480,6 +599,7 @@ impl Render for Shell {
             Source::Fixed(fixed) => fixed.as_ref().clone(),
             Source::Failed(message) => (SidebarData::default(), Screen::Failed(message.clone()), StripData::default()),
         };
+        self.paddle(&sidebar_data, cx);
         let sidebar_hidden = match &self.source {
             Source::Live(app) => app.read(cx).sidebar_hidden(),
             _ => self.scene_sidebar_hidden,
@@ -537,25 +657,46 @@ impl Render for Shell {
                 .child(Sidebar::new(sidebar_data))
         });
 
+        // Over a backdrop, where text lives stays solid and the picture dissolves around it.
+        let picture = match &self.source {
+            Source::Live(app) => app.read(cx).backdrop(),
+            _ => self.scene_backdrop.clone(),
+        };
+        let backdrop = picture.map(|picture| {
+            let main = Rect { x: f32::from(left), y: 0., width: width - f32::from(left), height: f32::from(viewport.height) };
+            let islands = islands(&screen, solution.transcript, main, f32::from(inset), narrow);
+            let cells = self.veil.cells(main, islands);
+            let whole = Rect { x: 0., y: 0., width, height: f32::from(viewport.height) };
+            backdrop::view(picture, whole, main, cells, theme.window)
+        });
+
+        // A screen arrives as it is opened; a chat does not, so switching tabs never moves text.
+        let arrive = |id: String, body: gpui::AnyElement| {
+            motion::enter(ElementId::Name(id.into()), div().size_full().child(body)).into_any_element()
+        };
         let (strip, body) = match screen {
-            Screen::Welcome { notice } => (div(), welcome(notice, inset, &theme).into_any_element()),
+            Screen::Welcome { notice } => (div(), arrive("arrive-welcome".into(), welcome(notice, inset, &theme).into_any_element())),
             Screen::NewChat { project, composer, notice } => {
-                (tab_strip(&strip, None, inset, &theme), new_chat(project, composer, notice, inset, &theme).into_any_element())
+                let id = format!("arrive-new-chat-{}", project.path);
+                (tab_strip(&strip, None, inset, &theme), arrive(id, new_chat(project, composer, notice, inset, &theme).into_any_element()))
             }
             Screen::Chat { project, body, composer, .. } => (
                 tab_strip(&strip, Some((roomy_strip.then_some(project), words.unwrap_or_default())), inset, &theme),
                 chat(body, composer, inset, narrow, &theme).into_any_element(),
             ),
-            Screen::Settings(data) => (
-                div().size_full().child(settings::strip(&theme)),
-                div()
-                    .size_full()
-                    .key_context(actions::FORM_CONTEXT)
-                    .on_action(|_: &FocusNext, window, cx| window.focus_next(cx))
-                    .on_action(|_: &FocusPrevious, window, cx| window.focus_prev(cx))
-                    .child(settings::page(data, &theme))
-                    .into_any_element(),
-            ),
+            Screen::Settings(data) => {
+                let id = format!("arrive-settings-{}", data.section.name());
+                (
+                    div().size_full().child(settings::strip(data.section, inset, &theme)),
+                    div()
+                        .size_full()
+                        .key_context(actions::FORM_CONTEXT)
+                        .on_action(|_: &FocusNext, window, cx| window.focus_next(cx))
+                        .on_action(|_: &FocusPrevious, window, cx| window.focus_prev(cx))
+                        .child(arrive(id, settings::page(data, inset, narrow, &theme).into_any_element()))
+                        .into_any_element(),
+                )
+            }
             Screen::Failed(message) => (div(), failed(message, inset, &theme).into_any_element()),
         };
         // With the sidebar away, the strip makes room for the traffic lights and offers it back.
@@ -594,18 +735,21 @@ impl Render for Shell {
             )
             .children(dock_elements);
         let main = div()
+            .relative()
             .flex_1()
             .min_w_0()
             .h_full()
             .flex()
             .flex_col()
-            .bg(theme.window)
+            .when(backdrop.is_none(), |main| main.bg(theme.window))
+            .children(backdrop)
             .child(drag_strip("title-strip", strip))
             .child(content);
 
         tags::root(
             div()
                 .key_context(actions::context())
+                .when_some(self.focus.as_ref(), |root, focus| root.track_focus(focus))
                 .on_action(cx.listener(|shell, _: &NewChat, _, cx| shell.with_app(cx, |app, cx| app.new_chat(None, cx))))
                 .on_action(cx.listener(|shell, action: &NewChatIn, _, cx| {
                     let project = action.project.clone();
@@ -655,6 +799,31 @@ impl Render for Shell {
                     shell.with_app(cx, |app, cx| app.set_format(format, cx));
                 }))
                 .on_action(cx.listener(Self::remove_connection))
+                .on_action(cx.listener(Self::open_settings_section))
+                .on_action(cx.listener(|shell, action: &ChooseMode, _, cx| {
+                    let mode = action.mode;
+                    shell.with_app(cx, |app, cx| app.set_appearance(|appearance| appearance.mode = mode, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &ChooseThemeColour, _, cx| {
+                    let hex = action.hex.clone();
+                    shell.with_app(cx, |app, cx| app.set_colour(false, hex, true, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &ChooseAccent, _, cx| {
+                    let hex = action.hex.clone();
+                    shell.with_app(cx, |app, cx| app.set_colour(true, hex, true, cx));
+                }))
+                .on_action(cx.listener(Self::choose_backdrop))
+                .on_action(cx.listener(|shell, _: &RemoveBackdrop, _, cx| {
+                    shell.with_app(cx, |app, cx| app.set_appearance(|appearance| appearance.backdrop = None, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &ChooseVeil, _, cx| {
+                    let veil = action.veil;
+                    shell.change_backdrop(cx, |backdrop| backdrop.veil = veil);
+                }))
+                .on_action(cx.listener(|shell, action: &ChooseFocus, _, cx| {
+                    let (across, down) = (action.across.min(2) as f32 / 2., action.down.min(2) as f32 / 2.);
+                    shell.change_backdrop(cx, |backdrop| (backdrop.focus_x, backdrop.focus_y) = (across, down));
+                }))
                 .on_action(cx.listener(|shell, action: &Unqueue, _, cx| {
                     if let Some(chat) = shell.selected_chat(cx) {
                         let index = action.index;
@@ -797,7 +966,23 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
     };
     let screen = match app.selection() {
         Selection::Welcome => Screen::Welcome { notice: app.notice.clone() },
-        Selection::Settings => Screen::Settings(ProvidersData::new(store.connections(), &app.form)),
+        Selection::Settings => {
+            let appearance = store.appearance();
+            Screen::Settings(SettingsData {
+                section: app.settings_section,
+                providers: ProvidersData::new(store.connections(), &app.form),
+                appearance: AppearanceData {
+                    mode: appearance.mode,
+                    theme_colour: appearance.theme_colour.clone().unwrap_or_else(|| DEFAULT_THEME_COLOUR.into()),
+                    accent: appearance.accent.clone().unwrap_or_else(|| DEFAULT_ACCENT.into()),
+                    theme_field: app.theme_field.clone(),
+                    accent_field: app.accent_field.clone(),
+                    backdrop: app.backdrop(),
+                    importing: app.importing,
+                    notice: app.appearance_notice.clone(),
+                },
+            })
+        }
         Selection::NewChat(project) => match info(project) {
             Some(project) => {
                 let choice = store.defaults().clone();
@@ -1013,10 +1198,10 @@ fn welcome(notice: Option<SharedString>, inset: Pixels, theme: &Theme) -> impl I
         .flex_col()
         .pl(inset)
         .pr(px(48.))
-        .child(div().h(relative(0.26)))
+        .child(div().h(relative(WELCOME_DROP)))
         .child(
             div()
-                .max_w(px(560.))
+                .max_w(px(WELCOME_WIDTH))
                 .flex()
                 .flex_col()
                 .child(kicker("Welcome to WackCode", theme))
@@ -1075,10 +1260,10 @@ fn new_chat(
         .flex_col()
         .pl(inset)
         .pr(px(48.))
-        .child(div().h(relative(0.22)))
+        .child(div().h(relative(NEW_CHAT_DROP)))
         .child(
             div()
-                .max_w(px(640.))
+                .max_w(px(NEW_CHAT_WIDTH))
                 .flex()
                 .flex_col()
                 .child(kicker("New chat in", theme))
@@ -1266,6 +1451,33 @@ fn column(child: impl IntoElement, inset: Pixels, narrow: bool) -> impl IntoElem
         .child(div().max_w(TRANSCRIPT_MAX_WIDTH).child(child))
 }
 
+/// The widest a chat's column gets: the transcript's line or the composer, with their margins.
+fn column_width(inset: Pixels) -> Pixels {
+    inset + TRANSCRIPT_MAX_WIDTH + px(48.)
+}
+
+/// Where text lives on each screen, in window coordinates: over a backdrop these stay solid and
+/// the picture dissolves around them (`backdrop.rs`). They follow the screens' own measures, so
+/// a change to a screen's layout belongs here too.
+fn islands(screen: &Screen, transcript: Rect, main: Rect, inset: f32, narrow: bool) -> Vec<Rect> {
+    let strip = Rect { x: main.x, y: 0., width: main.width, height: f32::from(TITLE_STRIP_HEIGHT) };
+    // Every screen's column runs the full height: the space above a hanging block is narrower
+    // than two dissolves, so it would only ever be a band of dots, never the picture.
+    let column = |width: f32| Rect {
+        x: transcript.x,
+        y: f32::from(TITLE_STRIP_HEIGHT) + transcript.y,
+        width: width.min(transcript.width),
+        height: transcript.height,
+    };
+    let body = match screen {
+        Screen::Chat { .. } => column(f32::from(column_width(px(inset)))),
+        Screen::NewChat { .. } => column(inset + NEW_CHAT_WIDTH + 24.),
+        Screen::Welcome { .. } | Screen::Failed(_) => column(inset + WELCOME_WIDTH + 24.),
+        Screen::Settings(_) => column(f32::from(settings::width(px(inset), narrow))),
+    };
+    vec![strip, body]
+}
+
 fn chat(body: Body, composer: ComposerData, inset: Pixels, narrow: bool, theme: &Theme) -> impl IntoElement {
     let clear = Hsla { a: 0., ..theme.window };
     let transcript = match body {
@@ -1316,7 +1528,8 @@ fn chat(body: Body, composer: ComposerData, inset: Pixels, narrow: bool, theme: 
                 .relative()
                 .child(transcript)
                 // Text scrolls out under the title strip through a short fade, not a hard edge.
-                .child(div().absolute().top_0().left_0().right_0().h(px(28.)).bg(linear_gradient(
+                // Both fades stay within the column, so a backdrop beside it is never tinted.
+                .child(div().absolute().top_0().left_0().w_full().max_w(column_width(inset)).h(px(28.)).bg(linear_gradient(
                     180.,
                     linear_color_stop(theme.window, 0.),
                     linear_color_stop(clear, 1.),
@@ -1325,6 +1538,8 @@ fn chat(body: Body, composer: ComposerData, inset: Pixels, narrow: bool, theme: 
         .child(
             div()
                 .flex_none()
+                .w_full()
+                .max_w(column_width(inset))
                 // Reaches up over the transcript, so text passes under the composer through a fade.
                 .mt(-DOCK_FADE)
                 .pl(inset - px(16.))
@@ -1343,9 +1558,9 @@ fn failed(message: SharedString, inset: Pixels, theme: &Theme) -> impl IntoEleme
         .flex_col()
         .pl(inset)
         .pr(px(48.))
-        .child(div().h(relative(0.26)))
+        .child(div().h(relative(WELCOME_DROP)))
         .child(kicker("WackCode could not start", theme))
-        .child(div().pt(px(10.)).max_w(px(560.)).typography(Type::Body).text_color(theme.text_soft).child(message))
+        .child(div().pt(px(10.)).max_w(px(WELCOME_WIDTH)).typography(Type::Body).text_color(theme.text_soft).child(message))
 }
 
 #[cfg(test)]
@@ -1374,6 +1589,19 @@ mod tests {
         assert_eq!(unknown.label.as_ref(), "41.2k context");
         assert!(!unknown.can_compact);
         assert!(meter(60_000, Some(0), true).can_compact, "a zero window counts as unknown");
+    }
+
+    #[test]
+    fn text_keeps_a_solid_ground_over_a_backdrop() {
+        let main = Rect { x: 260., y: 0., width: 1252., height: 945. };
+        let transcript = Rect { x: 260., y: 0., width: 1252., height: 905. };
+        let screen = Screen::Welcome { notice: None };
+        let wide = islands(&screen, transcript, main, 64., false);
+        assert_eq!(wide[0], Rect { x: 260., y: 0., width: 1252., height: 40. }, "the title strip, all across");
+        assert_eq!(wide[1], Rect { x: 260., y: 40., width: 64. + WELCOME_WIDTH + 24., height: 905. });
+        // A transcript narrower than the text's widest line is covered completely.
+        let narrow = islands(&screen, Rect { width: 400., ..transcript }, main, 32., true);
+        assert_eq!(narrow[1].width, 400.);
     }
 
     #[test]

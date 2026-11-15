@@ -308,16 +308,18 @@ fn picker(
                 window.dispatch_action(Box::new(CloseMenu), cx);
             }),
         );
-        picker.child(deferred(backdrop).with_priority(1)).child(deferred(menu_view(menu, theme)).with_priority(2))
+        // The card rises into place inside a box that holds its position above the word.
+        let card = div().absolute().bottom(px(28.)).left(px(-12.)).child(crate::motion::enter(
+            gpui::ElementId::Name(format!("arrive-{tag}-menu").into()),
+            menu_view(menu, theme),
+        ));
+        picker.child(deferred(backdrop).with_priority(1)).child(deferred(card).with_priority(2))
     })
 }
 
-fn menu_view(menu: MenuData, theme: &Theme) -> impl IntoElement {
+fn menu_view(menu: MenuData, theme: &Theme) -> gpui::Stateful<gpui::Div> {
     let mut card = div()
         .id("menu")
-        .absolute()
-        .bottom(px(28.))
-        .left(px(-12.))
         .min_w(px(260.))
         .max_w(px(420.))
         .py(px(6.))

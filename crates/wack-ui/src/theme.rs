@@ -417,15 +417,83 @@ fn to_hsla(colour: Srgb) -> Hsla {
     Rgba { r: colour.r as f32, g: colour.g as f32, b: colour.b as f32, a: 1. }.into()
 }
 
+/// The user's choices the theme is derived from (Settings › Appearance), kept so a change of the
+/// system's appearance can be followed without asking the store.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Preference(wack_core::Appearance);
+
+impl Global for Preference {}
+
+/// The theme for the user's choices, given the system's current appearance.
+pub fn input_for(choice: &wack_core::Appearance, system: Appearance) -> ThemeInput {
+    ThemeInput {
+        appearance: match choice.mode {
+            wack_core::Mode::System => system,
+            wack_core::Mode::Light => Appearance::Light,
+            wack_core::Mode::Dark => Appearance::Dark,
+        },
+        theme_colour: choice.theme_colour.clone().unwrap_or_else(|| DEFAULT_THEME_COLOUR.into()),
+        accent: choice.accent.clone().unwrap_or_else(|| DEFAULT_ACCENT.into()),
+    }
+}
+
+/// Derives the theme from the user's choices and redraws every window with it.
+pub fn apply(choice: &wack_core::Appearance, cx: &mut App) {
+    cx.set_global(Preference(choice.clone()));
+    let theme = Theme::derive(input_for(choice, cx.window_appearance().into()));
+    if *Theme::get(cx) != theme {
+        cx.set_global(theme);
+        cx.refresh_windows();
+    }
+}
+
 /// Keeps the theme in step with the system's light or dark appearance for as long as `window`
-/// lives. The app calls this for its window; the gallery does not, so a scene keeps the theme it
-/// was asked to render in.
+/// lives, unless the user chose one. The app calls this for its window; the gallery does not, so
+/// a scene keeps the theme it was asked to render in.
 pub fn follow_system_appearance(window: &mut Window) {
     window
         .observe_window_appearance(|window, cx| {
-            Theme::set_appearance(window.appearance().into(), cx)
+            let choice = cx.try_global::<Preference>().map(|preference| preference.0.clone()).unwrap_or_default();
+            let theme = Theme::derive(input_for(&choice, window.appearance().into()));
+            if *Theme::get(cx) != theme {
+                cx.set_global(theme);
+                cx.refresh_windows();
+            }
         })
         .detach();
+}
+
+/// Colours offered as theme colours: tints for the neutrals, from none to strong.
+pub const THEME_SWATCHES: &[&str] = &[
+    DEFAULT_THEME_COLOUR,
+    "#808080",
+    "#5d6b7c",
+    "#3e5a8c",
+    "#4b7470",
+    "#5b7a4c",
+    "#8a7a58",
+    "#8c5a44",
+    "#7d5574",
+    "#5a4c8a",
+];
+
+/// Colours offered as accents.
+pub const ACCENT_SWATCHES: &[&str] = &[
+    DEFAULT_ACCENT,
+    "#6ee7b7",
+    "#6cc4ff",
+    "#5b7cff",
+    "#a78bfa",
+    "#ff8fb8",
+    "#ff7a59",
+    "#ffc94a",
+    "#e8e8e8",
+    "#ff4d5e",
+];
+
+/// A swatch's colour, to draw it.
+pub fn swatch(hex: &str) -> Hsla {
+    Srgb::from_hex(hex).map(to_hsla).unwrap_or_default()
 }
 
 pub(crate) fn init(cx: &mut App) {

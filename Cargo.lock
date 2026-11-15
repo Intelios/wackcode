@@ -6423,6 +6423,7 @@ name = "wack-core"
 version = "3.0.0-dev.0"
 dependencies = [
  "alacritty_terminal",
+ "image",
  "serde",
  "serde_json",
  "tempfile",
@@ -6470,6 +6471,7 @@ dependencies = [
  "gpui",
  "gpui_tokio",
  "image",
+ "objc2-app-kit 0.3.2",
  "pulldown-cmark",
  "serde",
  "serde_json",

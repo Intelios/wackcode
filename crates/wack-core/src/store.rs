@@ -18,7 +18,10 @@ use std::{
 use serde::{Deserialize, Serialize};
 use wack_llm::{Effort, HttpProvider, WireFormat};
 
-use crate::secrets::SecretStore;
+use crate::{
+    appearance::{Appearance, Backdrop},
+    secrets::SecretStore,
+};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Model {
@@ -110,6 +113,8 @@ struct State {
     defaults: ModelChoice,
     #[serde(default)]
     ui: Ui,
+    #[serde(default)]
+    appearance: Appearance,
 }
 
 /// A connection and model resolved from a [`ModelChoice`], ready to build a run.
@@ -412,6 +417,38 @@ impl Store {
         }
         chat.layout = layout;
         self.save()
+    }
+
+    pub fn appearance(&self) -> &Appearance {
+        &self.state.appearance
+    }
+
+    /// Changes how the app looks. Colours must be `#rrggbb`; a backdrop must be one
+    /// [`crate::appearance::import_backdrop`] wrote into [`Store::backgrounds_folder`]. Copies no
+    /// longer used are deleted.
+    pub fn set_appearance(&mut self, appearance: Appearance) -> Result<(), String> {
+        let appearance = appearance.checked()?;
+        if let Some(backdrop) = &appearance.backdrop
+            && !self.backdrop_path(backdrop).exists()
+        {
+            return Err("The backdrop’s picture is missing. Choose it again.".into());
+        }
+        if self.state.appearance == appearance {
+            return Ok(());
+        }
+        self.state.appearance = appearance;
+        self.save()?;
+        let keep = self.state.appearance.backdrop.as_ref().map(|backdrop| backdrop.file.clone());
+        crate::appearance::tidy_backgrounds(&self.backgrounds_folder(), keep.as_deref());
+        Ok(())
+    }
+
+    pub fn backgrounds_folder(&self) -> PathBuf {
+        self.folder.join("backgrounds")
+    }
+
+    pub fn backdrop_path(&self, backdrop: &Backdrop) -> PathBuf {
+        self.backgrounds_folder().join(&backdrop.file)
     }
 
     pub fn ui(&self) -> &Ui {
@@ -730,5 +767,32 @@ mod tests {
                 .unwrap()
                 .contains("sk-secret-value")
         );
+    }
+
+    #[test]
+    fn appearance_is_kept_and_unused_pictures_are_deleted() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        let picture = folder.path().join("sky.png");
+        image::RgbImage::from_pixel(40, 20, image::Rgb([30, 90, 200])).save(&picture).unwrap();
+        let first = crate::appearance::import_backdrop(&picture, &store.backgrounds_folder()).unwrap();
+        let appearance = Appearance {
+            mode: crate::Mode::Dark,
+            accent: Some("#FF8FB8".into()),
+            backdrop: Some(first.clone()),
+            ..Appearance::default()
+        };
+        store.set_appearance(appearance).unwrap();
+        assert_eq!(store.appearance().accent.as_deref(), Some("#ff8fb8"));
+        assert!(store.backdrop_path(&first).exists());
+
+        let reopened = Store::open(folder.path()).unwrap();
+        assert_eq!(reopened.appearance().backdrop.as_ref(), Some(&first));
+
+        let without = Appearance { backdrop: None, ..store.appearance().clone() };
+        store.set_appearance(without).unwrap();
+        assert!(!store.backdrop_path(&first).exists(), "the copy goes with the setting");
+        let missing = Appearance { backdrop: Some(first), ..Appearance::default() };
+        assert!(store.set_appearance(missing).is_err(), "a picture that is gone is refused");
     }
 }

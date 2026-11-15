@@ -345,3 +345,69 @@ test result: \x1b[32mok\x1b[0m. 4 passed; 0 failed; 0 ignored; 0 measured; 61 fi
  \x1b[31mD\x1b[0m notes/decoder.txt\r\n\
 \x1b[31m??\x1b[0m crates/wack-llm/tests/tail.rs\r\n\
 \x1b[1;32m➜\x1b[0m  \x1b[1;36mwackcode\x1b[0m \x1b[1;34mgit:(\x1b[31m3.0-Remake\x1b[34m) \x1b[33m✗\x1b[0m ";
+
+/// The gallery's backdrop: a dusk landscape drawn once into `target/gallery`, so backdrop scenes
+/// show a real picture's light and detail without shipping a photo.
+pub fn backdrop() -> crate::backdrop::Picture {
+    let (width, height) = (2400, 1500);
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).unwrap_or(Path::new("."));
+    let path = workspace.join("target/gallery/fixture-backdrop-1.png");
+    if !path.exists() {
+        let _ = std::fs::create_dir_all(workspace.join("target/gallery"));
+        let picture = image::RgbImage::from_fn(width, height, |x, y| dusk(x as f32 / width as f32, y as f32 / height as f32));
+        let _ = picture.save(&path);
+    }
+    crate::backdrop::Picture { path: path.to_string_lossy().to_string().into(), width, height, focus: (0.5, 0.5), veil: 0. }
+}
+
+/// One pixel of the dusk picture, at `u` across and `v` down.
+fn dusk(u: f32, v: f32) -> image::Rgb<u8> {
+    let mix = |a: [f32; 3], b: [f32; 3], t: f32| {
+        let t = t.clamp(0., 1.);
+        [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
+    };
+    // Night blue at the top, through violet, to a warm glow at the horizon.
+    let (night, violet, glow) = ([0.09, 0.10, 0.24], [0.42, 0.27, 0.52], [0.98, 0.58, 0.34]);
+    let mut colour = if v < 0.4 { mix(night, violet, v / 0.4) } else { mix(violet, glow, (v - 0.4) / 0.24) };
+    // A low sun with a soft halo.
+    let distance = (((u - 0.70) * 1.6).powi(2) + (v - 0.60).powi(2)).sqrt();
+    colour = mix(colour, [1.0, 0.86, 0.62], (1. - distance / 0.25).max(0.).powi(2) * 0.8);
+    if distance < 0.045 {
+        colour = [1.0, 0.93, 0.78];
+    }
+    // Three ridges, each nearer one darker.
+    let ridges = [(0.60, 0.035, [0.47, 0.31, 0.50], 3.1), (0.70, 0.05, [0.27, 0.18, 0.37], 1.7), (0.82, 0.06, [0.11, 0.09, 0.20], 1.1)];
+    for (index, (base, height, ink, frequency)) in ridges.into_iter().enumerate() {
+        let phase = index as f32 * 1.9;
+        let wave = |scale: f32| (u * frequency * scale * std::f32::consts::TAU + phase * scale).sin();
+        let line = base - height * (wave(1.) * 0.6 + wave(2.7) * 0.3 + wave(9.) * 0.1);
+        if v > line {
+            colour = mix(ink, [0.05, 0.04, 0.10], (v - line) / 0.6);
+        }
+    }
+    // A fine grain, like film.
+    let grain = ((u * 9137.1 + v * 3271.7).sin() * 43758.5).fract() * 0.02 - 0.01;
+    image::Rgb(colour.map(|channel| ((channel + grain).clamp(0., 1.) * 255.).round() as u8))
+}
+
+/// Settings › Appearance as first opened: the default colours, and `backdrop` if given.
+pub fn appearance(backdrop: Option<crate::backdrop::Picture>, cx: &mut gpui::App) -> crate::appearance_page::AppearanceData {
+    use gpui::AppContext;
+    let field = |hex: &'static str, cx: &mut gpui::App| {
+        cx.new(|cx| {
+            let mut field = crate::text_field::TextField::new(crate::typography::Type::Mono, hex, cx);
+            field.set_text(hex, cx);
+            field
+        })
+    };
+    crate::appearance_page::AppearanceData {
+        mode: wack_core::Mode::System,
+        theme_colour: crate::theme::DEFAULT_THEME_COLOUR.into(),
+        accent: crate::theme::DEFAULT_ACCENT.into(),
+        theme_field: field(crate::theme::DEFAULT_THEME_COLOUR, cx),
+        accent_field: field(crate::theme::DEFAULT_ACCENT, cx),
+        backdrop,
+        importing: false,
+        notice: None,
+    }
+}

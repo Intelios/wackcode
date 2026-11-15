@@ -6,14 +6,17 @@
 //! `wack-ui`.
 //!
 //! So far: the data folder, the secret store, connections, projects, chats, running the agent for
-//! a chat (`run`), what changed in a project (`git`), and terminals (`terminal`).
+//! a chat (`run`), what changed in a project (`git`), terminals (`terminal`), and how the app looks
+//! (`appearance`).
 
+pub mod appearance;
 pub mod git;
 pub mod run;
 pub mod secrets;
 pub mod store;
 pub mod terminal;
 
+pub use appearance::{Appearance, Backdrop, Mode};
 pub use run::{Job, RunEvent, RunSetup, run};
 pub use store::{
     Chat, Connection, Model, ModelChoice, NewConnection, Project, Resolved, Store, Ui, title_from,

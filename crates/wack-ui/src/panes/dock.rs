@@ -22,6 +22,7 @@ use super::{
 use crate::{
     actions::{ActivatePane, ClosePaneId, EqualizeSplit, MovePane, NewTerminalWith, ResetDockSize},
     icon::Icon,
+    motion,
     shell::TITLE_STRIP_HEIGHT,
     tags::Tag,
     theme::Theme,
@@ -296,13 +297,19 @@ fn stack_view(place: &StackPlace, stack: &Stack, panes: &ChatPanes, theme: &Them
         Some(PaneModel::Terminal(model)) => model.clone().into_any_element(),
         None => div().into_any_element(),
     };
+    // The pane in front arrives from the side its dock opens on.
+    let (from_right, from_below) = match place.dock {
+        Dock::Right => (28., 0.),
+        Dock::Bottom => (0., 20.),
+    };
+    let content = motion::slide_in(("pane-arrive", active.id as usize), div().size_full().child(content), from_right, from_below);
     div()
         .size_full()
         .flex()
         .flex_col()
         .key_context(PANE_CONTEXT)
         .child(header)
-        .child(div().flex_1().min_h_0().child(content))
+        .child(div().flex_1().min_h_0().overflow_hidden().child(content))
         .into_any_element()
 }
 

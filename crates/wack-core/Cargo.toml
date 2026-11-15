@@ -12,6 +12,7 @@ wack-tools.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 alacritty_terminal.workspace = true
+image.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

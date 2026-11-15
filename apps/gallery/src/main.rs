@@ -104,6 +104,8 @@ fn run(args: Vec<String>) -> Result<(), String> {
         gpui_platform::current_headless_renderer,
     );
     cx.update(wack_ui::init);
+    // A snapshot shows where every movement comes to rest, never a frame mid-way.
+    cx.update(|cx| cx.set_reduce_motion(true));
 
     for (scene, appearance, path) in renders {
         let input = ThemeInput {
@@ -118,7 +120,15 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 cx.new(|_| SceneRoot::new(view))
             })
             .map_err(|error| format!("Could not open a window for \"{}\": {error}", scene.name))?;
-        cx.run_until_parked();
+        // Pictures load while the first frame draws; once they have, draw again so they show.
+        for _ in 0..2 {
+            cx.run_until_parked();
+            cx.update_window(window.into(), |_, window, cx| {
+                window.refresh();
+                window.draw(cx).clear();
+            })
+            .map_err(|error| format!("Could not draw \"{}\": {error}", scene.name))?;
+        }
         let image = cx
             .capture_screenshot(window.into())
             .map_err(|error| format!("Could not render \"{}\": {error}", scene.name))?;

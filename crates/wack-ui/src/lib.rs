@@ -4,8 +4,10 @@
 
 pub mod actions;
 pub mod app;
+pub mod appearance_page;
 #[cfg(feature = "automation")]
 pub mod automation;
+pub mod backdrop;
 pub mod chat;
 pub mod colour;
 pub mod composer;
@@ -14,6 +16,7 @@ pub mod fixtures;
 pub mod highlight;
 pub mod icon;
 pub mod markdown;
+pub mod motion;
 pub mod panes;
 pub mod scenes;
 pub mod settings;

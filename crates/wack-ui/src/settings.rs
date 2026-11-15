@@ -1,4 +1,7 @@
-//! Settings › Providers: the connections to model APIs, and the form that adds one.
+//! Settings: a full page with its own navigation down the left, one section at a time.
+//!
+//! Settings › Providers is here: the connections to model APIs, and the form that adds one.
+//! Settings › Appearance is `appearance_page.rs`.
 //!
 //! A key is typed into a masked field, handed to the store once, and the field is cleared: it is
 //! never drawn, copied or kept anywhere else (docs/security.md). Adding a connection sends
@@ -7,12 +10,13 @@
 //! The form's fields live in [`ProviderForm`], owned by the app state, so leaving Settings
 //! half-way keeps what was typed. The page itself draws from plain data and dispatches actions.
 
-use gpui::{App, AppContext, Entity, SharedString, Window, div, prelude::*, px};
+use gpui::{App, AppContext, Entity, Pixels, SharedString, Window, div, prelude::*, px};
 use wack_core::{Connection, Model, NewConnection, WireFormat};
 
 use crate::{
-    actions::{AddConnection, ChooseFormat, RemoveConnection},
-    shell::{CONTENT_INSET, model_name},
+    actions::{AddConnection, ChooseFormat, OpenSettingsSection, RemoveConnection},
+    appearance_page::{self, AppearanceData},
+    shell::model_name,
     tags::Tag,
     text_field::TextField,
     theme::Theme,
@@ -126,11 +130,37 @@ fn dispatch(action: impl gpui::Action) -> impl Fn(&gpui::ClickEvent, &mut Window
     move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx)
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Section {
+    #[default]
+    Appearance,
+    Providers,
+}
+
+impl Section {
+    pub const ALL: [Section; 2] = [Section::Appearance, Section::Providers];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Section::Appearance => "Appearance",
+            Section::Providers => "Providers",
+        }
+    }
+}
+
+/// Everything the Settings page shows.
+#[derive(Clone)]
+pub struct SettingsData {
+    pub section: Section,
+    pub providers: ProvidersData,
+    pub appearance: AppearanceData,
+}
+
 /// The title strip's words: `Settings › Providers`.
-pub fn strip(theme: &Theme) -> impl IntoElement {
+pub fn strip(section: Section, inset: Pixels, theme: &Theme) -> impl IntoElement {
     div()
         .size_full()
-        .pl(CONTENT_INSET)
+        .pl(inset)
         .pr(px(20.))
         .flex()
         .items_center()
@@ -138,12 +168,52 @@ pub fn strip(theme: &Theme) -> impl IntoElement {
         .typography(Type::UiStrong)
         .child(div().text_color(theme.text_dim).child("Settings"))
         .child(div().text_color(theme.text_faint).child("›"))
-        .child(div().text_color(theme.text).child("Providers"))
+        .child(div().text_color(theme.text).child(section.name()))
         .child(div().flex_1())
         .child(div().typography(Type::Small).text_color(theme.text_faint).child("esc to close"))
 }
 
-pub fn page(data: ProvidersData, theme: &Theme) -> impl IntoElement {
+/// The navigation's width, the gap after it, and the open section's widest line.
+const NAV_WIDTH: f32 = 150.;
+const NAV_GAP: f32 = 40.;
+const CONTENT_WIDTH: f32 = 720.;
+
+/// How far from the main column's left edge the page's text can reach.
+pub fn width(inset: Pixels, narrow: bool) -> Pixels {
+    let navigation = if narrow { 0. } else { NAV_WIDTH + NAV_GAP };
+    inset + px(navigation + CONTENT_WIDTH + 24.)
+}
+
+/// The page: the sections down the left (across the top when narrow), the one open beside them.
+pub fn page(data: SettingsData, inset: Pixels, narrow: bool, theme: &Theme) -> impl IntoElement {
+    let nav = div()
+        .flex_none()
+        .flex()
+        .when(narrow, |nav| nav.gap(px(22.)))
+        .when(!narrow, |nav| nav.w(px(NAV_WIDTH)).flex_col().items_start().gap(px(10.)).pt(px(8.)))
+        .children(Section::ALL.map(|section| {
+            appearance_page::word(format!("section-{}", section.name()), section.name(), section == data.section, theme)
+                .on_click(dispatch(OpenSettingsSection { section }))
+        }));
+    let content = match data.section {
+        Section::Appearance => appearance_page::page(data.appearance, theme).into_any_element(),
+        Section::Providers => providers(data.providers, theme).into_any_element(),
+    };
+    div().id("settings-page").size_full().overflow_y_scroll().child(
+        div()
+            .pl(inset)
+            .pr(px(if narrow { 24. } else { 48. }))
+            .pt(px(28.))
+            .pb(px(64.))
+            .flex()
+            .when(narrow, |page| page.flex_col().gap(px(26.)))
+            .when(!narrow, |page| page.gap(px(NAV_GAP)))
+            .child(nav)
+            .child(div().flex_1().min_w_0().max_w(px(CONTENT_WIDTH)).child(content)),
+    )
+}
+
+fn providers(data: ProvidersData, theme: &Theme) -> impl IntoElement {
     let mut list = div().flex().flex_col();
     if data.connections.is_empty() {
         list = list.child(
@@ -158,13 +228,7 @@ pub fn page(data: ProvidersData, theme: &Theme) -> impl IntoElement {
         list = list.child(connection_row(index, connection, theme));
     }
 
-    div().id("settings-page").size_full().overflow_y_scroll().child(
-        div()
-            .pl(CONTENT_INSET)
-            .pr(px(48.))
-            .pt(px(28.))
-            .pb(px(64.))
-            .max_w(CONTENT_INSET + px(720.))
+    div()
             .flex()
             .flex_col()
             .child(div().typography(Type::Title).text_color(theme.text).child("Providers"))
@@ -174,8 +238,7 @@ pub fn page(data: ProvidersData, theme: &Theme) -> impl IntoElement {
             ))
             .child(div().pt(px(24.)).child(list))
             .child(div().pt(px(40.)).typography(Type::Heading).text_color(theme.text).child("Add a connection"))
-            .child(form(data, theme)),
-    )
+            .child(form(data, theme))
 }
 
 fn connection_row(index: usize, connection: &Connection, theme: &Theme) -> impl IntoElement {

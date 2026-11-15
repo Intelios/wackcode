@@ -20,12 +20,14 @@ use std::{
 use std::time::Duration;
 
 use gpui::{App, AppContext, Context, Entity, SharedString, Subscription, Task};
-use wack_core::{Chat, Effort, Job, ModelChoice, Outcome, Project, Store, Ui, WireFormat, title_from};
+use wack_core::{Appearance, Chat, Effort, Job, ModelChoice, Outcome, Project, Store, Ui, WireFormat, title_from};
 
 use crate::{
+    backdrop::Picture,
     chat::{ChatEvent, ChatSession, now_millis},
     panes::Layout,
-    settings::ProviderForm,
+    settings::{ProviderForm, Section},
+    theme::{self, DEFAULT_ACCENT, DEFAULT_THEME_COLOUR},
     text_field::{TextField, TextFieldEvent},
     typography::Type,
 };
@@ -67,6 +69,15 @@ pub struct AppState {
     /// Settings › Providers' add form.
     pub form: ProviderForm,
     pub menu: Option<Menu>,
+    /// The section Settings shows.
+    pub settings_section: Section,
+    /// Settings › Appearance's hex fields, for colours the chips do not offer.
+    pub theme_field: Entity<TextField>,
+    pub accent_field: Entity<TextField>,
+    /// Why the last appearance change could not be made.
+    pub appearance_notice: Option<SharedString>,
+    /// A backdrop picture is being read.
+    pub importing: bool,
     /// Chats open as tabs, in order.
     tabs: Vec<String>,
     sidebar_hidden: bool,
@@ -96,7 +107,33 @@ impl AppState {
             }
         });
         let form = ProviderForm::new(cx);
+        let theme_field = cx.new(|cx| TextField::new(Type::Mono, DEFAULT_THEME_COLOUR, cx));
+        let accent_field = cx.new(|cx| TextField::new(Type::Mono, DEFAULT_ACCENT, cx));
         let mut subscriptions = vec![draft_subscription];
+        for (field, accent) in [(&theme_field, false), (&accent_field, true)] {
+            subscriptions.push(cx.subscribe(field, move |app, field, event, cx| {
+                let text = field.read(cx).text().to_string();
+                match event {
+                    // A complete colour applies as it is typed, so the page previews it.
+                    // Writing the colour in use into the field changes nothing.
+                    TextFieldEvent::Changed => {
+                        if let Some(hex) = wack_core::appearance::hex_colour(&text).filter(|_| text.trim().trim_start_matches('#').len() == 6)
+                            && hex != app.colour(accent)
+                        {
+                            app.set_colour(accent, Some(hex), false, cx);
+                        }
+                    }
+                    TextFieldEvent::Enter | TextFieldEvent::SendNow => match wack_core::appearance::hex_colour(&text) {
+                        Some(hex) => app.set_colour(accent, Some(hex), true, cx),
+                        None if text.trim().is_empty() => app.set_colour(accent, None, true, cx),
+                        None => {
+                            app.appearance_notice = Some(format!("“{}” is not a colour. Write it as #rrggbb.", text.trim()).into());
+                            cx.notify();
+                        }
+                    },
+                }
+            }));
+        }
         for field in form.fields() {
             subscriptions.push(cx.subscribe(field, |app, _, event, cx| match event {
                 TextFieldEvent::Enter | TextFieldEvent::SendNow => app.add_connection(cx),
@@ -131,14 +168,116 @@ impl AppState {
             notice: None,
             form,
             menu: None,
+            settings_section: Section::default(),
+            theme_field,
+            accent_field,
+            appearance_notice: None,
+            importing: false,
             tabs,
             sidebar_hidden: ui.sidebar_hidden,
             unsaved_layouts: HashSet::new(),
             saving_layouts: None,
             _subscriptions: subscriptions,
         };
+        theme::apply(app.store.appearance(), cx);
+        app.show_colours(cx);
         app.select(selection, cx);
         app
+    }
+
+    /// Changes how the app looks; the theme follows at once.
+    pub fn set_appearance(&mut self, change: impl FnOnce(&mut Appearance), cx: &mut Context<Self>) {
+        let mut appearance = self.store.appearance().clone();
+        change(&mut appearance);
+        match self.store.set_appearance(appearance) {
+            Ok(()) => {
+                self.appearance_notice = None;
+                theme::apply(self.store.appearance(), cx);
+            }
+            Err(message) => self.appearance_notice = Some(message.into()),
+        }
+        cx.notify();
+    }
+
+    /// Sets the theme colour or the accent; `None` is the default. `show` also writes the colour
+    /// into its hex field (not while the user is typing there).
+    pub fn set_colour(&mut self, accent: bool, hex: Option<String>, show: bool, cx: &mut Context<Self>) {
+        // The default chosen by hand is kept as the default, so it follows any later change to it.
+        let default = if accent { DEFAULT_ACCENT } else { DEFAULT_THEME_COLOUR };
+        let hex = hex.filter(|hex| !hex.eq_ignore_ascii_case(default));
+        self.set_appearance(
+            |appearance| {
+                if accent {
+                    appearance.accent = hex;
+                } else {
+                    appearance.theme_colour = hex;
+                }
+            },
+            cx,
+        );
+        if show {
+            self.show_colours(cx);
+        }
+    }
+
+    /// The theme colour or accent in use, as `#rrggbb`.
+    pub fn colour(&self, accent: bool) -> String {
+        let appearance = self.store.appearance();
+        let (chosen, default) =
+            if accent { (&appearance.accent, DEFAULT_ACCENT) } else { (&appearance.theme_colour, DEFAULT_THEME_COLOUR) };
+        chosen.clone().unwrap_or_else(|| default.into())
+    }
+
+    /// Writes the colours in use into their hex fields.
+    fn show_colours(&mut self, cx: &mut Context<Self>) {
+        for (field, hex) in [(self.theme_field.clone(), self.colour(false)), (self.accent_field.clone(), self.colour(true))] {
+            field.update(cx, |field, cx| {
+                if field.text() != hex {
+                    field.set_text(&hex, cx);
+                }
+            });
+        }
+    }
+
+    /// Reads a picture off the UI thread and makes it the backdrop.
+    pub fn import_backdrop(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let folder = self.store.backgrounds_folder();
+        self.importing = true;
+        self.appearance_notice = None;
+        cx.notify();
+        let import = cx.background_spawn(async move { wack_core::appearance::import_backdrop(&path, &folder) });
+        cx.spawn(async move |app, cx| {
+            let result = import.await;
+            let _ = app.update(cx, |app, cx| {
+                app.importing = false;
+                match result {
+                    Ok(mut backdrop) => {
+                        // A new picture keeps the veil the old one had.
+                        if let Some(old) = &app.store.appearance().backdrop {
+                            backdrop.veil = old.veil;
+                        }
+                        app.set_appearance(|appearance| appearance.backdrop = Some(backdrop), cx);
+                    }
+                    Err(message) => {
+                        app.appearance_notice = Some(message.into());
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// The backdrop to draw, if there is one.
+    pub fn backdrop(&self) -> Option<Picture> {
+        let backdrop = self.store.appearance().backdrop.as_ref()?;
+        Some(Picture {
+            path: self.store.backdrop_path(backdrop).to_string_lossy().to_string().into(),
+            width: backdrop.width,
+            height: backdrop.height,
+            focus: (backdrop.focus_x, backdrop.focus_y),
+            veil: backdrop.veil as f32 / 100.,
+        })
     }
 
     pub fn store(&self) -> &Store {
@@ -273,7 +412,7 @@ impl AppState {
         match &self.selection {
             Selection::NewChat(_) => Some(self.draft.clone()),
             Selection::Chat(chat) => self.sessions.get(chat).map(|session| session.read(cx).composer.clone()),
-            Selection::Settings => Some(self.form.name.clone()),
+            Selection::Settings => (self.settings_section == Section::Providers).then(|| self.form.name.clone()),
             Selection::Welcome => None,
         }
     }

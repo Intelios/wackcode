@@ -18,7 +18,9 @@ cargo snap --all                               # every scene, light and dark
 
 Scenes render from sample data in `crates/wack-ui/src/fixtures.rs`: a believable session, so lengths and rhythm are real. The `specimen` scene shows every text style and colour token in the theme it is rendered with. A view must look right with any theme colour and accent, so try at least one vivid pair as well as the default.
 
-Rendering is headless: GPUI's test platform with the real Metal renderer and the real macOS text system. No window opens and nothing takes focus, so it works from any shell. Images are rendered at 2x.
+Rendering is headless: GPUI's test platform with the real Metal renderer and the real macOS text system. No window opens and nothing takes focus, so it works from any shell. Images are rendered at 2x. The gallery draws a scene twice so pictures loaded by the first frame show, and renders with Reduce Motion on, so every movement is shown where it comes to rest.
+
+Backdrop scenes (`*-backdrop`) draw over a dusk landscape that `fixtures::backdrop` paints once into `target/gallery/`. The owner usually runs with a backdrop, so a view that can sit beside open space should be checked over one too.
 
 When you change a view: add or update its scene, render it in both themes, and look at the result. A UI change is not verified until you have looked at it.
 

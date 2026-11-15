@@ -59,6 +59,8 @@ Each file's header comment states its invariants; this is the map.
 - **`conversation.rs`** folds saved history and live events into turns; **`work.rs`** turns those into the rows the transcript draws; both are pure and tested.
 - **`panes/`** is the pane system. `layout.rs` is a chat's two docks (right of the transcript, and along the bottom under both) as a tree of weighted splits and tab stacks; `solve.rs` turns the window size and that tree into rectangles for the sidebar, the transcript and every stack. Both are pure and property-tested: everything tiles exactly, the transcript never drops below 420 × 240 at any window the app allows (700 × 480 and up), and the sidebar steps aside before a dock is clamped. `dock.rs` draws the result; `changes.rs` and `terminal.rs` are the two panes. Each chat owns its panes (`ChatPanes` in `ChatSession`), so they outlast switching chats, and its layout is saved to `state.json` shortly after it changes.
 - **Terminals** run in the engine (`wack-core/terminal.rs`, on `alacritty_terminal`): a login shell in the project folder, its screen handed to the UI as a plain `Snapshot`. The UI paints the grid itself, with the ANSI colours as theme tokens.
+- **Appearance** is kept by the engine (`wack-core/appearance.rs`: light or dark, theme colour, accent, backdrop) and turned into the theme by `theme::apply`. A chosen picture is copied into `v3/backgrounds/` as WackCode's own JPEG, so the original can move. **`backdrop.rs`** draws it behind the main column: every place text lives is a solid *island* of window colour (the title strip, the screen's column; `shell::islands`), and each island's edge dissolves into the picture through an ordered dither of 3-point cells. The cells are pure geometry, tested, and worked out again only when the window's shape changes.
+- **Motion** is in one place, `motion.rs`: arrivals on a critically damped spring (screens, menus, a settings section), dock panes sliding in from their edge, and the working duck's stepped paddle. Everything follows macOS's Reduce Motion, read at launch and whenever the window comes forward.
 
 ## Status
 
@@ -68,6 +70,7 @@ Built so far:
 - The theme derived from appearance, theme colour and accent (`theme.rs`, `colour.rs`); the type scale (`typography.rs`); icons.
 - The agent core, headless: the three provider formats, the loop, deferred tool loading, sessions, compaction, the seven core tools, connections, and the `wack` CLI.
 - The minimal harness, wired to the engine: projects (add, pin, remove) and their chats in the sidebar; the new-chat screen; a streaming transcript with work logs, diffs and highlighted code; the composer with queue (↩ while working), steering (⌘↩), stop (Esc), the context meter and Compact; the model and effort menus; Settings › Providers. Verified in the dev app against the Testing connection.
+- Identity: Settings as a full page with its sections down the left; Settings › Appearance with light or dark, theme colour and accent (paint chips and a hex field, applied as you choose), and an image backdrop with a veil and a focus point, drawn over the open space with the dither dissolve; the motion kit. Verified in the dev app in light and dark, with and without a backdrop.
 - Panes and chat tabs: per-chat docks that split, stack, tab and resize (drag a tab onto a stack's middle or edge, drag the lines, double-click a line to reset it); the Changes pane (files changed since the last commit and their diffs, refreshed when shown, after each tool and each run); the Terminal pane; chat tabs across the title strip, saved with the chat in front and whether the sidebar is hidden. Keys: ⌘⇧G Changes, ⌃` terminal, ⌃⇧` new terminal, ⌃⌘S sidebar, ⌘W closes the focused pane or the tab, ⌘⇧[ ⌘⇧] or ⌃⇥ between tabs. Verified in the dev app from 700 to 2,500 points wide.
 
 Known gaps in the agent core, to close as the features that need them arrive:
@@ -85,10 +88,11 @@ Known gaps in the harness:
 - A terminal saved in a layout comes back as a fresh shell after a relaunch; its scrollback is not kept.
 - The terminal has no IME composition, no mouse reporting to programs, and no links yet. Scrolling with the wheel is built but has not been driven by the automation socket, which cannot scroll.
 
-Next, in order:
+Known gaps in identity:
 
-1. Identity: theme colour and accent, image backdrop, motion.
+- A window narrower than the column shows no picture: at the default size with the sidebar open, only a dissolving edge shows beside a chat. The picture shows best with the sidebar hidden or a wide window.
+- The window's own controls follow macOS's light or dark, not the one chosen in Settings.
 
-After that foundation, features return in this order: Plan and Ultra Plan with the question dialog, todo list and Ultra reasoning; Memory, Build and Run, auto titles, skills and slash commands, background shell jobs, commit / push / PR, the usage ledger writer; MCP and web tools; sub-agents and task suggestions; the browser pane, visual replies and canvas; the Chat area; computer use, the skill creator, signature motion and Liquid Glass.
+The foundation is complete once the owner signs off its look. Features then return in this order: Plan and Ultra Plan with the question dialog, todo list and Ultra reasoning; Memory, Build and Run, auto titles, skills and slash commands, background shell jobs, commit / push / PR, the usage ledger writer; MCP and web tools; sub-agents and task suggestions; the browser pane, visual replies and canvas; the Chat area; computer use, the skill creator, signature motion and Liquid Glass.
 
 Update this section as each piece lands.

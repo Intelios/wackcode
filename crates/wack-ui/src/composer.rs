@@ -8,8 +8,8 @@
 //! Above the card, a row of status pills: what the run is doing and for how long, the todo list,
 //! the waiting messages. The list and the messages open above their pills and fold back into
 //! them (`ChatSession::todos_open`, `waiting_open`). An open question comes first: it stacks
-//! above the pills, the waiting messages stay folded, and in a short window the todo list stays
-//! shut.
+//! above the pills, and while it is open the pills only report, with the list and the messages
+//! folded into them.
 //!
 //! The mode toggle (Build | Plan) sits first in the controls, a recessed track with a pill that
 //! slides to the mode in force. Clicking Plan again switches to Ultra Plan and back; ⇧Tab cycles
@@ -274,20 +274,20 @@ impl RenderOnce for Composer {
         // Inside a capped column the card stays whole and the question gives way first.
         let mut column = div().w_full().min_h_0().flex().flex_col().gap(px(6.));
         let asking = data.question.is_some();
-        let short = f32::from(viewport.height) < SHORT_WINDOW;
+        // While a question is open the pills only report: the question has the room.
+        let todos_open = data.todos_open && !asking;
         let todo_pill = data.todos.as_ref().map(|todos| {
             let view = &todos.view;
             let live = todos.busy && view.active;
-            status_pill("todos-pill", data.todos_open, &theme)
-                .on_click(dispatch(ToggleTodos))
+            status_pill("todos-pill", todos_open, !asking, &theme)
+                .when(!asking, |pill| pill.on_click(dispatch(ToggleTodos)))
                 .child(div().size(px(6.)).rounded_full().bg(if live { theme.accent_text } else { theme.border_strong }))
                 .child(div().typography(Type::Small).text_color(theme.text_soft).child(format!("{} of {} tasks", view.done, view.total)))
-                .child(if data.todos_open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(11.), theme.text_faint))
+                .when(!asking, |pill| pill.child(if todos_open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(11.), theme.text_faint)))
                 .tag("todos-pill")
         });
         if let Some(todos) = data.todos
-            && data.todos_open
-            && !(asking && short)
+            && todos_open
         {
             column = column.child(div().flex_shrink(1.).min_h(px(40.)).flex().flex_col().child(crate::todo_panel::todo_panel(todos, &theme)));
         }
@@ -304,10 +304,12 @@ impl RenderOnce for Composer {
                 (steering, 0) => format!("{steering} steering"),
                 (steering, queued) => format!("{steering} steering · {queued} queued"),
             };
-            status_pill("waiting-pill", data.waiting_open && !asking, &theme)
-                .on_click(dispatch(ToggleWaiting))
+            status_pill("waiting-pill", data.waiting_open && !asking, !asking, &theme)
+                .when(!asking, |pill| pill.on_click(dispatch(ToggleWaiting)))
                 .child(div().typography(Type::Small).text_color(theme.text_soft).child(words))
-                .child(if data.waiting_open && !asking { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(11.), theme.text_faint))
+                .when(!asking, |pill| {
+                    pill.child(if data.waiting_open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(11.), theme.text_faint))
+                })
                 .tag("waiting-pill")
         });
         if data.waiting_open && !asking && !data.waiting.is_empty() {
@@ -369,8 +371,8 @@ fn pill(tag: &'static str) -> gpui::Stateful<gpui::Div> {
     div().id(tag).h(px(28.)).px(px(10.)).rounded_full().flex().items_center().gap(px(4.))
 }
 
-/// A status pill over the card that opens what it stands for; lit while open.
-fn status_pill(tag: &'static str, open: bool, theme: &Theme) -> gpui::Stateful<gpui::Div> {
+/// A status pill over the card that opens what it stands for (when `opens`); lit while open.
+fn status_pill(tag: &'static str, open: bool, opens: bool, theme: &Theme) -> gpui::Stateful<gpui::Div> {
     div()
         .id(tag)
         .flex_none()
@@ -383,7 +385,7 @@ fn status_pill(tag: &'static str, open: bool, theme: &Theme) -> gpui::Stateful<g
         .bg(theme.surface)
         .border_1()
         .border_color(if open { theme.border_strong } else { theme.border })
-        .hover(|pill| pill.border_color(theme.border_strong))
+        .when(opens, |pill| pill.hover(|pill| pill.border_color(theme.border_strong)))
 }
 
 /// A message waiting above the card. A queued one can be taken back to edit.
@@ -450,8 +452,6 @@ fn meter_view(meter: Meter, working: bool, theme: &Theme) -> impl IntoElement {
 
 /// About three waiting messages; more scroll.
 const WAITING_MAX_HEIGHT: f32 = 118.;
-/// Below this window height an open question has the column to itself.
-const SHORT_WINDOW: f32 = 600.;
 /// The least an open question card keeps: its head, a little of its body, its buttons.
 const QUESTION_MIN_HEIGHT: f32 = 196.;
 
@@ -671,6 +671,8 @@ fn effort_slider(menu: MenuData, model: SharedString, theme: &Theme) -> impl Int
 
     div()
         .id("effort-slider")
+        // Presses inside stay inside: the click-away layer beneath must not close the slider.
+        .occlude()
         .w(px(SLIDER_WIDTH))
         .p(px(SLIDER_PAD))
         .pb(px(10.))
@@ -693,6 +695,7 @@ const STOP_LABEL: f32 = 46.;
 fn menu_view(menu: MenuData, theme: &Theme) -> gpui::Stateful<gpui::Div> {
     let mut card = div()
         .id("menu")
+        .occlude()
         .min_w(px(260.))
         .max_w(px(420.))
         .py(px(6.))

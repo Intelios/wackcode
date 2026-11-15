@@ -410,8 +410,7 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| {
                 cx.new(|_| {
                     let mode = wack_core::AgentMode::Plan;
-                    let mut todos = fixtures::todos();
-                    todos.folded = true;
+                    let todos = fixtures::todos();
                     let composer = ComposerData {
                         mode,
                         working: true,

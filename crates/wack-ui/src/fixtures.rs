@@ -373,7 +373,7 @@ pub fn todos() -> crate::todo_panel::TodoData {
         next_id: 6,
     };
     let faded = [1].into_iter().collect();
-    crate::todo_panel::TodoData { view: crate::todo_panel::view(&list, &faded, false), busy: true, folded: false }
+    crate::todo_panel::TodoData { view: crate::todo_panel::view(&list, &faded, false), busy: true }
 }
 
 /// The title strip's tabs, with `active` in front (or the new-chat tab when `None`).

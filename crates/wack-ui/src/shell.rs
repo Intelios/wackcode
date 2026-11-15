@@ -1224,7 +1224,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     }),
                     todos: {
                         let view = crate::todo_panel::view(state.todos(), &state.todo_faded, state.todo_show_done);
-                        (view.total > 0).then(|| crate::todo_panel::TodoData { view, busy: state.running(), folded: state.asking.is_some() })
+                        (view.total > 0).then(|| crate::todo_panel::TodoData { view, busy: state.running() })
                     },
                     activity: state.running().then(|| state.activity()).flatten(),
                     todos_open: state.todos_open,

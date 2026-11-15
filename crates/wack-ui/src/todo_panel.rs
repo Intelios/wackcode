@@ -1,10 +1,10 @@
-//! The todo list, pinned above the composer while the agent keeps one. Ported from version 2's
-//! `TodoPanel.tsx`.
+//! The todo list, opened above the composer from its status pill ("2 of 4 tasks", `composer.rs`)
+//! while the agent keeps one. Ported from version 2's `TodoPanel.tsx`.
 //!
 //! Tasks done in the current run stay in view; when the next run starts they fold behind
 //! "+N done" ([`view`]), so the list shows what is left. `#id`s appear only once some task
 //! depends on another, since that is the only time they mean anything. While a question card is
-//! open the list folds to its one-line head, leaving the room to the question.
+//! open the list stays folded into its pill, leaving the room to the question.
 
 use std::collections::HashSet;
 
@@ -61,8 +61,6 @@ pub struct TodoData {
     pub view: TodoView,
     /// The agent is working: the head's dot is lit while tasks remain.
     pub busy: bool,
-    /// Only the head, while a question needs the room.
-    pub folded: bool,
 }
 
 pub fn todo_panel(data: TodoData, theme: &Theme) -> impl IntoElement {
@@ -75,7 +73,7 @@ pub fn todo_panel(data: TodoData, theme: &Theme) -> impl IntoElement {
         .child(div().size(px(6.)).rounded_full().bg(if live { theme.accent_text } else { theme.border_strong }))
         .child(div().typography(Type::UiStrong).text_color(theme.text_soft).child("Todos"))
         .child(div().typography(Type::Small).text_color(theme.text_faint).child(format!("{}/{}", view.done, view.total)))
-        .when(view.hidden_done > 0 && !data.folded, |head| {
+        .when(view.hidden_done > 0, |head| {
             head.child(
                 div()
                     .id("todo-show-done")
@@ -88,34 +86,32 @@ pub fn todo_panel(data: TodoData, theme: &Theme) -> impl IntoElement {
             )
         });
 
-    let rows = (!data.folded).then(|| {
-        div()
-            .id("todo-rows")
-            .flex_shrink(1.)
-            .min_h_0()
-            .max_h(px(MAX_ROWS_HEIGHT))
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .gap(px(3.))
-            .children(view.shown.iter().map(|task| row(task, view.show_ids, theme)))
-    });
+    let rows = div()
+        .id("todo-rows")
+        .flex_shrink(1.)
+        .min_h_0()
+        .max_h(px(MAX_ROWS_HEIGHT))
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .gap(px(3.))
+        .children(view.shown.iter().map(|task| row(task, view.show_ids, theme)));
 
     div()
-        .mx(px(14.))
-        .px(px(12.))
-        .py(px(8.))
+        .mx(px(4.))
+        .px(px(14.))
+        .py(px(10.))
         .min_h_0()
         .overflow_hidden()
         .flex()
         .flex_col()
         .gap(px(6.))
-        .rounded(px(10.))
-        .bg(theme.sidebar)
+        .rounded(px(14.))
+        .bg(theme.surface)
         .border_1()
         .border_color(theme.border)
         .child(head.flex_none())
-        .children(rows)
+        .child(rows)
         .tag("todo-panel")
 }
 
